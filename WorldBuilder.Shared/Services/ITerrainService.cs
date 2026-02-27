@@ -21,7 +21,7 @@ namespace WorldBuilder.Shared.Services {
 
         bool IsSWtoNEcut(uint globalCellX, uint globalCellY);
 
-        Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue)>> SmoothTerrain(
+        Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue, uint OriginalEntryValue, uint NewEntryValue)>> SmoothTerrain(
             TerrainDocument terrainDoc, DocumentManager docManager, float[] heightTable,
             Vector3 centerPosition, float brushRadius, float strength,
             Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue)>> pendingChanges);

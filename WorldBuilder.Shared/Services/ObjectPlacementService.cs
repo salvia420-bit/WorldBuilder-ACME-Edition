@@ -41,10 +41,10 @@ namespace WorldBuilder.Shared.Services {
             ITerrainService terrainService, TerrainDocument terrainDoc,
             DocumentManager docManager, float[] heightTable,
             StaticObject obj, (Vector3 Min, Vector3 Max)? modelBounds,
-            out Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue)>> terrainChanges,
+            out Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue, uint OriginalEntryValue, uint NewEntryValue)>> terrainChanges,
             out Dictionary<ushort, TerrainEntry[]> originalDataSnapshots) {
 
-            terrainChanges = new Dictionary<ushort, List<(int, byte, byte)>>();
+            terrainChanges = new Dictionary<ushort, List<(int, byte, byte, uint, uint)>>();
             originalDataSnapshots = new Dictionary<ushort, TerrainEntry[]>();
 
             if (!modelBounds.HasValue) return null;
@@ -83,7 +83,7 @@ namespace WorldBuilder.Shared.Services {
                 if (!landblockDataCache.TryGetValue(lbId, out var data)) continue;
 
                 if (!terrainChanges.TryGetValue(lbId, out var list)) {
-                    list = new List<(int, byte, byte)>();
+                    list = new List<(int, byte, byte, uint, uint)>();
                     terrainChanges[lbId] = list;
                 }
 
@@ -91,7 +91,9 @@ namespace WorldBuilder.Shared.Services {
 
                 byte original = data[vIndex].Height;
                 if (original == targetHeight) continue;
-                list.Add((vIndex, original, targetHeight));
+
+                var newEntry = data[vIndex] with { Height = targetHeight };
+                list.Add((vIndex, original, targetHeight, data[vIndex].ToUInt(), newEntry.ToUInt()));
             }
 
             if (terrainChanges.Count == 0) return heightTable[targetHeight];
@@ -108,7 +110,7 @@ namespace WorldBuilder.Shared.Services {
         public int AdjustNearbyObjectHeights(
             ITerrainService terrainService, TerrainDocument terrainDoc,
             DocumentManager docManager, float[] heightTable,
-            Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue)>> changes,
+            Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue, uint OriginalEntryValue, uint NewEntryValue)>> changes,
             Dictionary<ushort, TerrainEntry[]> originalDataSnapshots,
             StaticObject placedBuilding) {
 
@@ -156,6 +158,98 @@ namespace WorldBuilder.Shared.Services {
             }
 
             return totalAdjusted;
+        }
+
+        public float? PlaceBuildingAndFlattenTerrain(
+            ITerrainService terrainService, TerrainDocument terrainDoc,
+            DocumentManager docManager, float[] heightTable,
+            StaticObject obj, (Vector3 Min, Vector3 Max)? modelBounds,
+            out Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue, uint OriginalEntryValue, uint NewEntryValue)>> terrainChanges) {
+
+            float? result = FlattenTerrainUnderBuilding(
+                terrainService, terrainDoc, docManager, heightTable,
+                obj, modelBounds, out terrainChanges, out var snapshots);
+
+            if (terrainChanges.Count > 0) {
+                // Apply terrain changes to the document (caller must also update GPU/scene)
+                var batch = new Dictionary<ushort, Dictionary<byte, uint>>();
+                foreach (var (lbId, changeList) in terrainChanges) {
+                    var lbBatch = new Dictionary<byte, uint>();
+                    batch[lbId] = lbBatch;
+                    foreach (var change in changeList) {
+                        lbBatch[(byte)change.VertexIndex] = change.NewEntryValue;
+                    }
+                }
+                terrainDoc.UpdateLandblocksBatchInternal(batch, out _);
+
+                AdjustNearbyObjectHeights(terrainService, terrainDoc, docManager, heightTable, terrainChanges, snapshots, obj);
+
+                result = terrainService.GetHeightAtPosition(terrainDoc, docManager, heightTable, obj.Origin.X, obj.Origin.Y);
+            }
+
+            return result;
+        }
+
+        public void MoveObjects(
+            ITerrainService terrainService, TerrainDocument terrainDoc, DocumentManager docManager, float[] heightTable,
+            IEnumerable<(ushort LbKey, int Index, Vector3 OriginalPos)> objects, Vector3 delta) {
+
+            foreach (var (lbKey, index, originalPos) in objects) {
+                var newPosition = originalPos + delta;
+
+                // Snap Z to terrain height, preserving original height offset
+                float terrainZ = terrainService.GetHeightAtPosition(terrainDoc, docManager, heightTable, newPosition.X, newPosition.Y);
+                float originalOffset = originalPos.Z - terrainService.GetHeightAtPosition(terrainDoc, docManager, heightTable, originalPos.X, originalPos.Y);
+                newPosition.Z = terrainZ + originalOffset;
+
+                var docId = $"landblock_{lbKey:X4}";
+                var doc = docManager.GetOrCreateDocumentAsync<LandblockDocument>(docId).GetAwaiter().GetResult();
+                if (doc != null && index < doc.StaticObjectCount) {
+                    var obj = doc.GetStaticObject(index);
+                    var updated = new StaticObject {
+                        Id = obj.Id,
+                        IsSetup = obj.IsSetup,
+                        Origin = newPosition,
+                        Orientation = obj.Orientation,
+                        Scale = obj.Scale
+                    };
+                    doc.UpdateStaticObject(index, updated);
+                }
+            }
+        }
+
+        public void RotateObjects(
+            ITerrainService terrainService, TerrainDocument terrainDoc, DocumentManager docManager, float[] heightTable,
+            IEnumerable<(ushort LbKey, int Index, Vector3 OriginalPos, Quaternion OriginalOrientation)> objects, Vector3 groupCentroid, Quaternion rotation) {
+
+            foreach (var (lbKey, index, originalPos, originalOrientation) in objects) {
+                // Rotate position around group centroid
+                var offset = originalPos - groupCentroid;
+                var rotatedOffset = Vector3.Transform(offset, rotation);
+                var newPosition = groupCentroid + rotatedOffset;
+
+                // Snap Z to terrain height, preserving original height offset
+                float terrainZ = terrainService.GetHeightAtPosition(terrainDoc, docManager, heightTable, newPosition.X, newPosition.Y);
+                float originalOffset = originalPos.Z - terrainService.GetHeightAtPosition(terrainDoc, docManager, heightTable, originalPos.X, originalPos.Y);
+                newPosition.Z = terrainZ + originalOffset;
+
+                // Rotate object orientation
+                var newOrientation = Quaternion.Normalize(rotation * originalOrientation);
+
+                var docId = $"landblock_{lbKey:X4}";
+                var doc = docManager.GetOrCreateDocumentAsync<LandblockDocument>(docId).GetAwaiter().GetResult();
+                if (doc != null && index < doc.StaticObjectCount) {
+                    var obj = doc.GetStaticObject(index);
+                    var updated = new StaticObject {
+                        Id = obj.Id,
+                        IsSetup = obj.IsSetup,
+                        Origin = newPosition,
+                        Orientation = newOrientation,
+                        Scale = obj.Scale
+                    };
+                    doc.UpdateStaticObject(index, updated);
+                }
+            }
         }
 
         private static byte FindClosestHeightByte(float[] heightTable, float targetZ) {

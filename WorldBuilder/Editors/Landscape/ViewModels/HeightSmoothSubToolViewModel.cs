@@ -121,13 +121,9 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
                     batchChanges[lbId] = lbChanges;
                 }
 
-                var terrainData = _terrainService.GetLandblockTerrain(Context.TerrainSystem.TerrainDoc, Context.TerrainSystem.DocumentManager, lbId);
-                if (terrainData == null) continue;
-
                 foreach (var change in changeList) {
-                    list.Add(change);
-                    var newEntry = terrainData[change.VertexIndex] with { Height = change.NewValue };
-                    lbChanges[(byte)change.VertexIndex] = newEntry.ToUInt();
+                    list.Add((change.VertexIndex, change.OriginalValue, change.NewValue));
+                    lbChanges[(byte)change.VertexIndex] = change.NewEntryValue;
                 }
             }
 

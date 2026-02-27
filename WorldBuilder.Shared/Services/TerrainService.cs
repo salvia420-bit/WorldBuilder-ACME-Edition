@@ -313,7 +313,7 @@ namespace WorldBuilder.Shared.Services {
             return idx < data.Length ? heightTable[data[idx].Height] : 0f;
         }
 
-        public Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue)>> SmoothTerrain(
+        public Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue, uint OriginalEntryValue, uint NewEntryValue)>> SmoothTerrain(
             TerrainDocument terrainDoc, DocumentManager docManager, float[] heightTable,
             Vector3 centerPosition, float brushRadius, float strength,
             Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue)>> pendingChanges) {
@@ -336,12 +336,12 @@ namespace WorldBuilder.Shared.Services {
                 heightCount++;
             }
 
-            if (heightCount == 0) return new Dictionary<ushort, List<(int, byte, byte)>>();
+            if (heightCount == 0) return new Dictionary<ushort, List<(int, byte, byte, uint, uint)>>();
 
             double avgHeight = heightSum / heightCount;
 
             // Second pass: blend each vertex toward the average
-            var results = new Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue)>>();
+            var results = new Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue, uint OriginalEntryValue, uint NewEntryValue)>>();
 
             foreach (var (lbId, vIndex, _) in affected) {
                 if (!landblockDataCache.TryGetValue(lbId, out var data)) continue;
@@ -349,7 +349,7 @@ namespace WorldBuilder.Shared.Services {
                 if (pendingChanges.TryGetValue(lbId, out var list) && list.Any(c => c.VertexIndex == vIndex)) continue;
 
                 if (!results.TryGetValue(lbId, out var resultList)) {
-                    resultList = new List<(int, byte, byte)>();
+                    resultList = new List<(int, byte, byte, uint, uint)>();
                     results[lbId] = resultList;
                 }
 
@@ -359,7 +359,8 @@ namespace WorldBuilder.Shared.Services {
 
                 if (original == newHeight) continue;
 
-                resultList.Add((vIndex, original, newHeight));
+                var newEntry = data[vIndex] with { Height = newHeight };
+                resultList.Add((vIndex, original, newHeight, data[vIndex].ToUInt(), newEntry.ToUInt()));
             }
 
             return results;

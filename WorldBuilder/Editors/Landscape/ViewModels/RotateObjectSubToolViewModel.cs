@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using Microsoft.Extensions.DependencyInjection;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -7,6 +8,7 @@ using WorldBuilder.Editors.Landscape.Commands;
 using WorldBuilder.Lib;
 using WorldBuilder.Lib.History;
 using WorldBuilder.Shared.Documents;
+using WorldBuilder.Shared.Services;
 
 namespace WorldBuilder.Editors.Landscape.ViewModels {
     public partial class RotateObjectSubToolViewModel : SubToolViewModelBase {
@@ -97,36 +99,11 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
             float angleRad = deltaX * 0.5f * MathF.PI / 180f;
             var rotation = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, angleRad);
 
-            // Apply rotation to every selected object
-            foreach (var (lbKey, index, originalPos, originalOrientation) in _dragEntries) {
-                // Rotate position around group centroid
-                var offset = originalPos - _groupCentroid;
-                var rotatedOffset = Vector3.Transform(offset, rotation);
-                var newPosition = _groupCentroid + rotatedOffset;
+            var placementService = Context.TerrainSystem.Services.GetRequiredService<IObjectPlacementService>();
+            var terrainService = Context.TerrainSystem.Services.GetRequiredService<ITerrainService>();
+            var heightTable = Context.TerrainSystem.Region.LandDefs.LandHeightTable;
 
-                // Snap Z to terrain height, preserving original height offset
-                // (same as Move tool — keeps objects on the ground on sloped terrain)
-                float terrainZ = Context.GetHeightAtPosition(newPosition.X, newPosition.Y);
-                float originalOffset = originalPos.Z - Context.GetHeightAtPosition(originalPos.X, originalPos.Y);
-                newPosition.Z = terrainZ + originalOffset;
-
-                // Rotate object orientation
-                var newOrientation = Quaternion.Normalize(rotation * originalOrientation);
-
-                var docId = $"landblock_{lbKey:X4}";
-                var doc = Context.TerrainSystem.DocumentManager.GetOrCreateDocumentAsync<LandblockDocument>(docId).GetAwaiter().GetResult();
-                if (doc != null && index < doc.StaticObjectCount) {
-                    var obj = doc.GetStaticObject(index);
-                    var updated = new StaticObject {
-                        Id = obj.Id,
-                        IsSetup = obj.IsSetup,
-                        Origin = newPosition,
-                        Orientation = newOrientation,
-                        Scale = obj.Scale
-                    };
-                    doc.UpdateStaticObject(index, updated);
-                }
-            }
+            placementService.RotateObjects(terrainService, Context.TerrainSystem.TerrainDoc, Context.TerrainSystem.DocumentManager, heightTable, _dragEntries, _groupCentroid, rotation);
 
             // Refresh selection state and invalidate rendering
             Context.ObjectSelection.RefreshAllFromDocuments(docId =>

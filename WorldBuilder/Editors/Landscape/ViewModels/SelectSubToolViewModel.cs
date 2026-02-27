@@ -184,7 +184,8 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
             if (doc == null) return;
 
             var obj = doc.GetStaticObject(sel.SelectedObjectIndex);
-            float terrainZ = Context.GetHeightAtPosition(obj.Origin.X, obj.Origin.Y);
+            var heightTable = Context.TerrainSystem.Region.LandDefs.LandHeightTable;
+            float terrainZ = _terrainService.GetHeightAtPosition(Context.TerrainSystem.TerrainDoc, Context.TerrainSystem.DocumentManager, heightTable, obj.Origin.X, obj.Origin.Y);
             if (MathF.Abs(obj.Origin.Z - terrainZ) < 0.001f) return;
 
             var oldPos = obj.Origin;
@@ -406,41 +407,32 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
                 var bounds = Context.TerrainSystem.Scene.AnyObjectManager?.GetBounds(obj.Id, obj.IsSetup);
                 var heightTable = Context.TerrainSystem.Region.LandDefs.LandHeightTable;
 
-                float? result = _objectPlacementService.FlattenTerrainUnderBuilding(
+                float? result = _objectPlacementService.PlaceBuildingAndFlattenTerrain(
                     _terrainService,
                     Context.TerrainSystem.TerrainDoc,
                     Context.TerrainSystem.DocumentManager,
                     heightTable,
                     obj, bounds,
-                    out var changes, out var snapshots);
+                    out var terrainChanges);
 
-                if (changes.Count == 0) return result;
+                if (terrainChanges.Count > 0) {
+                    var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>();
+                    foreach (var (lbId, changeList) in terrainChanges) {
+                        var lbBatch = new Dictionary<byte, uint>();
+                        batchChanges[lbId] = lbBatch;
+                        foreach (var change in changeList) {
+                            lbBatch[(byte)change.VertexIndex] = change.NewEntryValue;
+                        }
+                    }
 
-                var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>();
-                foreach (var (lbId, changeList) in changes) {
-                    var terrainData = _terrainService.GetLandblockTerrain(Context.TerrainSystem.TerrainDoc, Context.TerrainSystem.DocumentManager, lbId);
-                    if (terrainData == null) continue;
-                    if (!batchChanges.TryGetValue(lbId, out var lbChanges)) {
-                        lbChanges = new Dictionary<byte, uint>();
-                        batchChanges[lbId] = lbChanges;
-                    }
-                    foreach (var change in changeList) {
-                        var newEntry = terrainData[change.VertexIndex] with { Height = change.NewValue };
-                        lbChanges[(byte)change.VertexIndex] = newEntry.ToUInt();
-                    }
+                    var modifiedLandblocks = Context.TerrainSystem.UpdateLandblocksBatch(TerrainField.Height, batchChanges);
+                    Context.MarkLandblocksModified(modifiedLandblocks);
+
+                    float interpolatedZ = _terrainService.GetHeightAtPosition(Context.TerrainSystem.TerrainDoc, Context.TerrainSystem.DocumentManager, heightTable, obj.Origin.X, obj.Origin.Y);
+                    return interpolatedZ;
                 }
-                var modifiedLandblocks = Context.TerrainSystem.UpdateLandblocksBatch(TerrainField.Height, batchChanges);
-                Context.MarkLandblocksModified(modifiedLandblocks);
 
-                _objectPlacementService.AdjustNearbyObjectHeights(
-                    _terrainService,
-                    Context.TerrainSystem.TerrainDoc,
-                    Context.TerrainSystem.DocumentManager,
-                    heightTable,
-                    changes, snapshots, obj);
-
-                float interpolatedZ = Context.GetHeightAtPosition(obj.Origin.X, obj.Origin.Y);
-                return interpolatedZ;
+                return result;
             }
             catch (Exception ex) {
                 Console.WriteLine($"[Selector] Error flattening terrain: {ex.Message}");

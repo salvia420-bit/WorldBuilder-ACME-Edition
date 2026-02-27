@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using Microsoft.Extensions.DependencyInjection;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -7,6 +8,7 @@ using WorldBuilder.Editors.Landscape.Commands;
 using WorldBuilder.Lib;
 using WorldBuilder.Lib.History;
 using WorldBuilder.Shared.Documents;
+using WorldBuilder.Shared.Services;
 
 namespace WorldBuilder.Editors.Landscape.ViewModels {
     public partial class MoveObjectSubToolViewModel : SubToolViewModelBase {
@@ -89,29 +91,11 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
             var currentTerrainPos = mouseState.TerrainHit.Value.HitPosition;
             var delta = currentTerrainPos - _dragStartPosition;
 
-            // Move all selected objects by the same delta
-            foreach (var (lbKey, index, originalPos) in _dragEntries) {
-                var newPosition = originalPos + delta;
+            var placementService = Context.TerrainSystem.Services.GetRequiredService<IObjectPlacementService>();
+            var terrainService = Context.TerrainSystem.Services.GetRequiredService<ITerrainService>();
+            var heightTable = Context.TerrainSystem.Region.LandDefs.LandHeightTable;
 
-                // Snap Z to terrain height, preserving original height offset
-                float terrainZ = Context.GetHeightAtPosition(newPosition.X, newPosition.Y);
-                float originalOffset = originalPos.Z - Context.GetHeightAtPosition(originalPos.X, originalPos.Y);
-                newPosition.Z = terrainZ + originalOffset;
-
-                var docId = $"landblock_{lbKey:X4}";
-                var doc = Context.TerrainSystem.DocumentManager.GetOrCreateDocumentAsync<LandblockDocument>(docId).GetAwaiter().GetResult();
-                if (doc != null && index < doc.StaticObjectCount) {
-                    var obj = doc.GetStaticObject(index);
-                    var updated = new StaticObject {
-                        Id = obj.Id,
-                        IsSetup = obj.IsSetup,
-                        Origin = newPosition,
-                        Orientation = obj.Orientation,
-                        Scale = obj.Scale
-                    };
-                    doc.UpdateStaticObject(index, updated);
-                }
-            }
+            placementService.MoveObjects(terrainService, Context.TerrainSystem.TerrainDoc, Context.TerrainSystem.DocumentManager, heightTable, _dragEntries, delta);
 
             // Refresh selection state and invalidate rendering
             Context.ObjectSelection.RefreshAllFromDocuments(docId =>
