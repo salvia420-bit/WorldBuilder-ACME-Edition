@@ -428,5 +428,141 @@ namespace WorldBuilder.Shared.Services {
 
             return result;
         }
+
+        public Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue, uint OriginalEntryValue, uint NewEntryValue)>> RaiseLowerHeight(
+            TerrainDocument terrainDoc, DocumentManager docManager, float[] heightTable,
+            Vector3 centerPosition, float brushRadius, int strength, bool isLowering,
+            Dictionary<ushort, HashSet<int>> processedVertices,
+            Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue)>> pendingChanges) {
+
+            var affected = GetAffectedVertices(terrainDoc, docManager, heightTable, centerPosition, brushRadius);
+            var landblockDataCache = new Dictionary<ushort, TerrainEntry[]>();
+            var results = new Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue, uint OriginalEntryValue, uint NewEntryValue)>>();
+
+            int delta = isLowering ? -strength : strength;
+
+            foreach (var (lbId, vIndex, _) in affected) {
+                if (!landblockDataCache.TryGetValue(lbId, out var data)) {
+                    data = GetLandblockTerrain(terrainDoc, docManager, lbId);
+                    if (data == null) continue;
+                    landblockDataCache[lbId] = data;
+                }
+
+                if (!processedVertices.TryGetValue(lbId, out var processed)) {
+                    processed = new HashSet<int>();
+                    processedVertices[lbId] = processed;
+                }
+                if (!processed.Add(vIndex)) continue;
+
+                if (pendingChanges.TryGetValue(lbId, out var list) && list.Any(c => c.VertexIndex == vIndex)) continue;
+
+                if (!results.TryGetValue(lbId, out var resultList)) {
+                    resultList = new List<(int, byte, byte, uint, uint)>();
+                    results[lbId] = resultList;
+                }
+
+                byte original = data[vIndex].Height;
+                byte newHeight = (byte)Math.Clamp(original + delta, 0, 255);
+                if (original == newHeight) continue;
+
+                var newEntry = data[vIndex] with { Height = newHeight };
+                resultList.Add((vIndex, original, newHeight, data[vIndex].ToUInt(), newEntry.ToUInt()));
+            }
+
+            return results;
+        }
+
+        public Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue, uint OriginalEntryValue, uint NewEntryValue)>> SetHeight(
+            TerrainDocument terrainDoc, DocumentManager docManager, float[] heightTable,
+            Vector3 centerPosition, float brushRadius, byte targetHeight,
+            Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue)>> pendingChanges) {
+
+            var affected = GetAffectedVertices(terrainDoc, docManager, heightTable, centerPosition, brushRadius);
+            var landblockDataCache = new Dictionary<ushort, TerrainEntry[]>();
+            var results = new Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue, uint OriginalEntryValue, uint NewEntryValue)>>();
+
+            foreach (var (lbId, vIndex, _) in affected) {
+                if (!landblockDataCache.TryGetValue(lbId, out var data)) {
+                    data = GetLandblockTerrain(terrainDoc, docManager, lbId);
+                    if (data == null) continue;
+                    landblockDataCache[lbId] = data;
+                }
+
+                if (pendingChanges.TryGetValue(lbId, out var list) && list.Any(c => c.VertexIndex == vIndex)) continue;
+
+                if (!results.TryGetValue(lbId, out var resultList)) {
+                    resultList = new List<(int, byte, byte, uint, uint)>();
+                    results[lbId] = resultList;
+                }
+
+                byte original = data[vIndex].Height;
+                if (original == targetHeight) continue;
+
+                var newEntry = data[vIndex] with { Height = targetHeight };
+                resultList.Add((vIndex, original, targetHeight, data[vIndex].ToUInt(), newEntry.ToUInt()));
+            }
+
+            return results;
+        }
+
+        public Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue, uint OriginalEntryValue, uint NewEntryValue)>> PaintTexture(
+            TerrainDocument terrainDoc, DocumentManager docManager, float[] heightTable,
+            Vector3 centerPosition, float brushRadius, byte newType,
+            Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue)>> pendingChanges) {
+
+            var affected = GetAffectedVertices(terrainDoc, docManager, heightTable, centerPosition, brushRadius);
+            var landblockDataCache = new Dictionary<ushort, TerrainEntry[]>();
+            var results = new Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue, uint OriginalEntryValue, uint NewEntryValue)>>();
+
+            foreach (var (lbId, vIndex, _) in affected) {
+                if (!landblockDataCache.TryGetValue(lbId, out var data)) {
+                    data = GetLandblockTerrain(terrainDoc, docManager, lbId);
+                    if (data == null) continue;
+                    landblockDataCache[lbId] = data;
+                }
+
+                if (pendingChanges.TryGetValue(lbId, out var list) && list.Any(c => c.VertexIndex == vIndex)) continue;
+
+                if (!results.TryGetValue(lbId, out var resultList)) {
+                    resultList = new List<(int, byte, byte, uint, uint)>();
+                    results[lbId] = resultList;
+                }
+
+                byte original = data[vIndex].Type;
+                if (original == newType) continue;
+
+                var newEntry = data[vIndex] with { Type = newType };
+                resultList.Add((vIndex, original, newType, data[vIndex].ToUInt(), newEntry.ToUInt()));
+            }
+
+            return results;
+        }
+
+        public Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue, uint OriginalEntryValue, uint NewEntryValue)>> FloodFillPaint(
+            TerrainDocument terrainDoc, DocumentManager docManager,
+            uint startLbX, uint startLbY, uint startCellX, uint startCellY,
+            byte newType, HashSet<ushort>? allowedLandblocks = null) {
+
+            var vertices = FloodFillVertices(terrainDoc, docManager, startLbX, startLbY, startCellX, startCellY, newType, allowedLandblocks);
+            var results = new Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue, uint OriginalEntryValue, uint NewEntryValue)>>();
+            var landblockDataCache = new Dictionary<ushort, TerrainEntry[]>();
+
+            foreach (var (lbId, vIndex, oldType) in vertices) {
+                if (!landblockDataCache.TryGetValue(lbId, out var data)) {
+                    data = GetLandblockTerrain(terrainDoc, docManager, lbId);
+                    if (data == null) continue;
+                    landblockDataCache[lbId] = data;
+                }
+
+                if (!results.TryGetValue(lbId, out var resultList)) {
+                    resultList = new List<(int, byte, byte, uint, uint)>();
+                    results[lbId] = resultList;
+                }
+                var newEntry = data[vIndex] with { Type = newType };
+                resultList.Add((vIndex, oldType, newType, data[vIndex].ToUInt(), newEntry.ToUInt()));
+            }
+
+            return results;
+        }
     }
 }

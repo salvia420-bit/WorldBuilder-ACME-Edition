@@ -124,40 +124,30 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
         private void ApplyPreviewChanges(Vector3 centerPosition) {
             var terrainService = Context.TerrainSystem.Services.GetRequiredService<ITerrainService>();
             var heightTable = Context.TerrainSystem.Region.LandDefs.LandHeightTable;
-            var affected = terrainService.GetAffectedVertices(Context.TerrainSystem.TerrainDoc, Context.TerrainSystem.DocumentManager, heightTable, centerPosition, BrushRadius);
-            var landblockDataCache = new Dictionary<ushort, TerrainEntry[]>();
+            var changes = terrainService.PaintTexture(
+                Context.TerrainSystem.TerrainDoc,
+                Context.TerrainSystem.DocumentManager,
+                heightTable,
+                centerPosition, BrushRadius, (byte)SelectedTerrainType, _pendingChanges);
 
             // Collect all changes to be applied
             var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>();
-            byte newType = (byte)SelectedTerrainType;
 
-            foreach (var (lbId, vIndex, _) in affected) {
-                if (!landblockDataCache.TryGetValue(lbId, out var data)) {
-                    data = Context.TerrainSystem.GetLandblockTerrain(lbId);
-                    if (data == null) continue;
-                    landblockDataCache[lbId] = data;
-                }
-
+            foreach (var (lbId, changeList) in changes) {
                 if (!_pendingChanges.TryGetValue(lbId, out var list)) {
                     list = new List<(int, byte, byte)>();
                     _pendingChanges[lbId] = list;
                 }
 
-                if (list.Any(c => c.VertexIndex == vIndex)) continue;
-
-                byte original = data[vIndex].Type;
-                if (original == newType) continue;
-
-                list.Add((vIndex, original, newType));
-
-                // Prepare batch change
                 if (!batchChanges.TryGetValue(lbId, out var lbChanges)) {
                     lbChanges = new Dictionary<byte, uint>();
                     batchChanges[lbId] = lbChanges;
                 }
 
-                var newEntry = data[vIndex] with { Type = newType };
-                lbChanges[(byte)vIndex] = newEntry.ToUInt();
+                foreach (var change in changeList) {
+                    list.Add((change.VertexIndex, change.OriginalValue, change.NewValue));
+                    lbChanges[(byte)change.VertexIndex] = change.NewEntryValue;
+                }
             }
 
             // Apply all changes in a single batch operation

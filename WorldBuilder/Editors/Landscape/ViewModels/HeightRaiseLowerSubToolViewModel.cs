@@ -106,43 +106,30 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
         private void ApplyPreviewChanges(Vector3 centerPosition) {
             var terrainService = Context.TerrainSystem.Services.GetRequiredService<ITerrainService>();
             var heightTable = Context.TerrainSystem.Region.LandDefs.LandHeightTable;
-            var affected = terrainService.GetAffectedVertices(Context.TerrainSystem.TerrainDoc, Context.TerrainSystem.DocumentManager, heightTable, centerPosition, BrushRadius);
-            var landblockDataCache = new Dictionary<ushort, TerrainEntry[]>();
+            var changes = terrainService.RaiseLowerHeight(
+                Context.TerrainSystem.TerrainDoc,
+                Context.TerrainSystem.DocumentManager,
+                heightTable,
+                centerPosition, BrushRadius, Strength, _isLowering,
+                _processedVertices, _pendingChanges);
 
             var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>();
-            int delta = _isLowering ? -Strength : Strength;
 
-            foreach (var (lbId, vIndex, _) in affected) {
-                if (!landblockDataCache.TryGetValue(lbId, out var data)) {
-                    data = Context.TerrainSystem.GetLandblockTerrain(lbId);
-                    if (data == null) continue;
-                    landblockDataCache[lbId] = data;
-                }
-
-                if (!_processedVertices.TryGetValue(lbId, out var processed)) {
-                    processed = new HashSet<int>();
-                    _processedVertices[lbId] = processed;
-                }
-                if (!processed.Add(vIndex)) continue;
-
+            foreach (var (lbId, changeList) in changes) {
                 if (!_pendingChanges.TryGetValue(lbId, out var list)) {
                     list = new List<(int, byte, byte)>();
                     _pendingChanges[lbId] = list;
                 }
-
-                byte original = data[vIndex].Height;
-                byte newHeight = (byte)Math.Clamp(original + delta, 0, 255);
-                if (original == newHeight) continue;
-
-                list.Add((vIndex, original, newHeight));
 
                 if (!batchChanges.TryGetValue(lbId, out var lbChanges)) {
                     lbChanges = new Dictionary<byte, uint>();
                     batchChanges[lbId] = lbChanges;
                 }
 
-                var newEntry = data[vIndex] with { Height = newHeight };
-                lbChanges[(byte)vIndex] = newEntry.ToUInt();
+                foreach (var change in changeList) {
+                    list.Add((change.VertexIndex, change.OriginalValue, change.NewValue));
+                    lbChanges[(byte)change.VertexIndex] = change.NewEntryValue;
+                }
             }
 
             if (batchChanges.Count > 0) {
