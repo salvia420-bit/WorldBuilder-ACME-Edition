@@ -5,7 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 
-namespace WorldBuilder.Editors.Dungeon {
+namespace WorldBuilder.Shared.Lib {
     /// <summary>
     /// Computes the world transform for a new cell so that one of its portal
     /// polygons aligns flush with a portal polygon on an existing cell.

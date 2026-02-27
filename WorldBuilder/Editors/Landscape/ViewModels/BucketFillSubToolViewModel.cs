@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using DatReaderWriter.Enums;
 using DatReaderWriter.Types;
+using Microsoft.Extensions.DependencyInjection;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -9,6 +10,7 @@ using WorldBuilder.Editors.Landscape.Commands;
 using WorldBuilder.Lib;
 using WorldBuilder.Lib.History;
 using WorldBuilder.Shared.Documents;
+using WorldBuilder.Shared.Services;
 
 namespace WorldBuilder.Editors.Landscape.ViewModels {
     public partial class BucketFillSubToolViewModel : SubToolViewModelBase {
@@ -58,8 +60,11 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
 
             // Run flood fill to find affected vertices (unconstrained to avoid viewport race conditions)
             byte newType = (byte)SelectedTerrainType;
-            var vertices = FillCommand.FloodFillVertices(
-                Context.TerrainSystem, _currentHitPosition, newType, null);
+        var terrainService = Context.TerrainSystem.Services.GetRequiredService<ITerrainService>();
+        var vertices = terrainService.FloodFillVertices(
+            Context.TerrainSystem.TerrainDoc, Context.TerrainSystem.DocumentManager,
+            _currentHitPosition.LandblockX, _currentHitPosition.LandblockY, (uint)_currentHitPosition.CellX, (uint)_currentHitPosition.CellY,
+            newType, null);
 
             if (vertices.Count == 0) return;
 
@@ -68,7 +73,7 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
             var originals = new Dictionary<ushort, Dictionary<byte, uint>>();
 
             foreach (var (lbID, vertexIndex, oldType) in vertices) {
-                var data = Context.TerrainSystem.GetLandblockTerrain(lbID);
+            var data = terrainService.GetLandblockTerrain(Context.TerrainSystem.TerrainDoc, Context.TerrainSystem.DocumentManager, lbID);
                 if (data == null) continue;
 
                 // Save original value for revert

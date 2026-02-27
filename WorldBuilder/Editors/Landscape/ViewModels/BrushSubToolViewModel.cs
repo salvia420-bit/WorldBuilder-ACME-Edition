@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using DatReaderWriter.Enums;
 using DatReaderWriter.Types;
+using Microsoft.Extensions.DependencyInjection;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -9,6 +10,7 @@ using WorldBuilder.Editors.Landscape.Commands;
 using WorldBuilder.Lib;
 using WorldBuilder.Lib.History;
 using WorldBuilder.Shared.Documents;
+using WorldBuilder.Shared.Services;
 
 namespace WorldBuilder.Editors.Landscape.ViewModels {
     public partial class BrushSubToolViewModel : SubToolViewModelBase {
@@ -120,7 +122,9 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
         }
 
         private void ApplyPreviewChanges(Vector3 centerPosition) {
-            var affected = PaintCommand.GetAffectedVertices(centerPosition, BrushRadius, Context);
+            var terrainService = Context.TerrainSystem.Services.GetRequiredService<ITerrainService>();
+            var heightTable = Context.TerrainSystem.Region.LandDefs.LandHeightTable;
+            var affected = terrainService.GetAffectedVertices(Context.TerrainSystem.TerrainDoc, Context.TerrainSystem.DocumentManager, heightTable, centerPosition, BrushRadius);
             var landblockDataCache = new Dictionary<ushort, TerrainEntry[]>();
 
             // Collect all changes to be applied

@@ -30,6 +30,8 @@ namespace WorldBuilder.Lib.Extensions {
             collection.AddSingleton<ProjectManager>();
             collection.AddSingleton<WorldBuilderSettings>();
             collection.AddSingleton<SplashPageFactory>();
+            collection.AddSingleton<ITerrainService, TerrainService>();
+            collection.AddSingleton<IObjectPlacementService, ObjectPlacementService>();
 
             // splash page
             collection.AddTransient<RecentProject>();

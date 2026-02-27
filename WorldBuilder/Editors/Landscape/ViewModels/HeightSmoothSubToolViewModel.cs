@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using Microsoft.Extensions.DependencyInjection;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -7,6 +8,7 @@ using WorldBuilder.Editors.Landscape.Commands;
 using WorldBuilder.Lib;
 using WorldBuilder.Lib.History;
 using WorldBuilder.Shared.Documents;
+using WorldBuilder.Shared.Services;
 
 namespace WorldBuilder.Editors.Landscape.ViewModels {
     public partial class HeightSmoothSubToolViewModel : SubToolViewModelBase {
@@ -23,10 +25,12 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
         private TerrainRaycast.TerrainRaycastHit _currentHitPosition;
         private TerrainRaycast.TerrainRaycastHit _lastHitPosition;
         private readonly CommandHistory _commandHistory;
+        private readonly ITerrainService _terrainService;
         private readonly Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue)>> _pendingChanges;
 
-        public HeightSmoothSubToolViewModel(TerrainEditingContext context, CommandHistory commandHistory) : base(context) {
+        public HeightSmoothSubToolViewModel(TerrainEditingContext context, CommandHistory commandHistory, ITerrainService terrainService) : base(context) {
             _commandHistory = commandHistory ?? throw new ArgumentNullException(nameof(commandHistory));
+            _terrainService = terrainService ?? throw new ArgumentNullException(nameof(terrainService));
             _pendingChanges = new Dictionary<ushort, List<(int, byte, byte)>>();
         }
 
@@ -97,56 +101,34 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
         }
 
         private void ApplyPreviewChanges(Vector3 centerPosition) {
-            var affected = PaintCommand.GetAffectedVertices(centerPosition, BrushRadius, Context);
-            var landblockDataCache = new Dictionary<ushort, TerrainEntry[]>();
+            var heightTable = Context.TerrainSystem.Region.LandDefs.LandHeightTable;
+            var changes = _terrainService.SmoothTerrain(
+                Context.TerrainSystem.TerrainDoc,
+                Context.TerrainSystem.DocumentManager,
+                heightTable,
+                centerPosition, BrushRadius, Strength, _pendingChanges);
 
-            // First pass: compute the average height of all affected vertices
-            double heightSum = 0;
-            int heightCount = 0;
-
-            foreach (var (lbId, vIndex, _) in affected) {
-                if (!landblockDataCache.TryGetValue(lbId, out var data)) {
-                    data = Context.TerrainSystem.GetLandblockTerrain(lbId);
-                    if (data == null) continue;
-                    landblockDataCache[lbId] = data;
-                }
-
-                heightSum += data[vIndex].Height;
-                heightCount++;
-            }
-
-            if (heightCount == 0) return;
-
-            double avgHeight = heightSum / heightCount;
-
-            // Second pass: blend each vertex toward the average
             var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>();
 
-            foreach (var (lbId, vIndex, _) in affected) {
-                if (!landblockDataCache.TryGetValue(lbId, out var data)) continue;
-
+            foreach (var (lbId, changeList) in changes) {
                 if (!_pendingChanges.TryGetValue(lbId, out var list)) {
                     list = new List<(int, byte, byte)>();
                     _pendingChanges[lbId] = list;
                 }
-
-                if (list.Any(c => c.VertexIndex == vIndex)) continue;
-
-                byte original = data[vIndex].Height;
-                double blended = original + (avgHeight - original) * Strength;
-                byte newHeight = (byte)Math.Clamp((int)Math.Round(blended), 0, 255);
-
-                if (original == newHeight) continue;
-
-                list.Add((vIndex, original, newHeight));
 
                 if (!batchChanges.TryGetValue(lbId, out var lbChanges)) {
                     lbChanges = new Dictionary<byte, uint>();
                     batchChanges[lbId] = lbChanges;
                 }
 
-                var newEntry = data[vIndex] with { Height = newHeight };
-                lbChanges[(byte)vIndex] = newEntry.ToUInt();
+                var terrainData = _terrainService.GetLandblockTerrain(Context.TerrainSystem.TerrainDoc, Context.TerrainSystem.DocumentManager, lbId);
+                if (terrainData == null) continue;
+
+                foreach (var change in changeList) {
+                    list.Add(change);
+                    var newEntry = terrainData[change.VertexIndex] with { Height = change.NewValue };
+                    lbChanges[(byte)change.VertexIndex] = newEntry.ToUInt();
+                }
             }
 
             if (batchChanges.Count > 0) {
