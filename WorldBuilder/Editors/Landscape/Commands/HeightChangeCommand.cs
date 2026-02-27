@@ -1,7 +1,9 @@
+using Microsoft.Extensions.DependencyInjection;
 using System;
 using System.Collections.Generic;
 using System.Numerics;
 using WorldBuilder.Shared.Documents;
+using WorldBuilder.Shared.Services;
 
 namespace WorldBuilder.Editors.Landscape.Commands {
     public class HeightChangeCommand : TerrainVertexChangeCommand {
@@ -26,7 +28,9 @@ namespace WorldBuilder.Editors.Landscape.Commands {
         protected override TerrainEntry SetEntryValue(TerrainEntry entry, byte value) => entry with { Height = value };
 
         private void CollectChanges(Vector3 position, float brushRadius, byte targetHeight) {
-            var affected = PaintCommand.GetAffectedVertices(position, brushRadius, _context);
+            var terrainService = _context.TerrainSystem.Services.GetRequiredService<ITerrainService>();
+            var heightTable = _context.TerrainSystem.Region.LandDefs.LandHeightTable;
+            var affected = terrainService.GetAffectedVertices(_context.TerrainSystem.TerrainDoc, _context.TerrainSystem.DocumentManager, heightTable, position, brushRadius);
             var landblockDataCache = new Dictionary<ushort, TerrainEntry[]>();
 
             foreach (var (lbId, vIndex, _) in affected) {

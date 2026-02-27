@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -6,6 +7,7 @@ using System.Text;
 using System.Threading.Tasks;
 using WorldBuilder.Lib.History;
 using WorldBuilder.Shared.Documents;
+using WorldBuilder.Shared.Services;
 
 namespace WorldBuilder.Editors.Landscape.Commands {
     public abstract class TerrainVertexChangeCommand : ICommand {
@@ -135,8 +137,9 @@ namespace WorldBuilder.Editors.Landscape.Commands {
                     if (localX < 0 || localX > 192f || localY < 0 || localY > 192f) continue;
 
                     // Sample terrain height using AC-accurate triangle interpolation
-                    float oldTerrainZ = TerrainDataManager.SampleHeightTriangle(originalData, heightTable, localX, localY, landblockX, landblockY);
-                    float newTerrainZ = TerrainDataManager.SampleHeightTriangle(terrainData, heightTable, localX, localY, landblockX, landblockY);
+                    var terrainService = _context.TerrainSystem.Services.GetRequiredService<ITerrainService>();
+                    float oldTerrainZ = terrainService.SampleHeightTriangle(originalData, heightTable, localX, localY, landblockX, landblockY);
+                    float newTerrainZ = terrainService.SampleHeightTriangle(terrainData, heightTable, localX, localY, landblockX, landblockY);
 
                     float delta = newTerrainZ - oldTerrainZ;
                     if (Math.Abs(delta) < 0.001f) continue;

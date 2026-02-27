@@ -14,6 +14,7 @@ using WorldBuilder.Lib.History;
 using WorldBuilder.Lib.Settings;
 using WorldBuilder.Shared.Documents;
 using WorldBuilder.Shared.Lib;
+using WorldBuilder.Shared.Services;
 using WorldBuilder.Services;
 using WorldBuilder.Shared.Models;
 using WorldBuilder.ViewModels;
@@ -58,6 +59,8 @@ namespace WorldBuilder.Editors.Landscape {
             collection.AddSingleton<BrushSubToolViewModel>();
             collection.AddSingleton<BucketFillSubToolViewModel>();
             collection.AddSingleton<TexturePaintingToolViewModel>();
+            collection.AddSingleton<ITerrainService, TerrainService>();
+            collection.AddSingleton<IObjectPlacementService, ObjectPlacementService>();
             collection.AddSingleton<HeightRaiseLowerSubToolViewModel>();
             collection.AddSingleton<HeightSetSubToolViewModel>();
             collection.AddSingleton<HeightSmoothSubToolViewModel>();
@@ -89,84 +92,8 @@ namespace WorldBuilder.Editors.Landscape {
         }
 
         public TerrainEntry[]? GetLandblockTerrain(ushort lbKey) {
-            // Start with base terrain
-            var baseTerrain = TerrainDoc.GetLandblockInternal(lbKey);
-            var result = new TerrainEntry[81];
-
-            if (baseTerrain != null) {
-                Array.Copy(baseTerrain, result, 81);
-            }
-            else {
-                for (int i = 0; i < 81; i++) {
-                    result[i] = new TerrainEntry(0);
-                }
-            }
-
-            // Get all visible layers in order (Top -> Bottom for first-non-null per field)
-            var layers = GetVisibleLayers();
-
-            bool hasContent = baseTerrain != null;
-
-            // Track which fields have been claimed per cell
-            var resolved = new byte[81];
-
-            foreach (var layer in layers) {
-                var doc = DocumentManager.GetOrCreateDocumentAsync<LayerDocument>(layer.DocumentId).GetAwaiter()
-                    .GetResult();
-                if (doc is null) continue;
-
-                // Check if this layer has data and masks for this landblock
-                if (!doc.TerrainData.Landblocks.TryGetValue(lbKey, out var sparseCells)) continue;
-                doc.TerrainData.FieldMasks.TryGetValue(lbKey, out var sparseMasks);
-
-                hasContent = true;
-                foreach (var (cellIndex, cellValue) in sparseCells) {
-                    // Determine which fields this layer claims for this cell
-                    byte layerMask = (sparseMasks != null && sparseMasks.TryGetValue(cellIndex, out var m))
-                        ? m
-                        : TerrainFieldMask.All; // No mask = legacy data, treat as all fields
-
-                    // Only apply fields not yet claimed by a higher layer
-                    byte unclaimed = (byte)(layerMask & ~resolved[cellIndex]);
-                    if (unclaimed == 0) continue;
-
-                    var entry = new TerrainEntry(cellValue);
-                    var current = result[cellIndex];
-
-                    result[cellIndex] = new TerrainEntry(
-                        road:    (unclaimed & TerrainFieldMask.Road) != 0    ? entry.Road    : current.Road,
-                        scenery: (unclaimed & TerrainFieldMask.Scenery) != 0 ? entry.Scenery : current.Scenery,
-                        type:    (unclaimed & TerrainFieldMask.Type) != 0    ? entry.Type    : current.Type,
-                        height:  (unclaimed & TerrainFieldMask.Height) != 0  ? entry.Height  : current.Height
-                    );
-
-                    resolved[cellIndex] |= unclaimed;
-                }
-            }
-
-            return hasContent ? result : null;
-        }
-
-        private List<TerrainLayer> GetVisibleLayers() {
-            var result = new List<TerrainLayer>();
-            var items = TerrainDoc.TerrainData.RootItems ?? [];
-            CollectVisibleLayers(items, result);
-            // No reverse -- iterate top-to-bottom for first-non-null per field
-            return result;
-        }
-
-        private void CollectVisibleLayers(IEnumerable<TerrainLayerBase> items, List<TerrainLayer> result) {
-            foreach (var item in items) {
-                if (!item.IsVisible) continue;
-
-                if (item is TerrainLayer layer) {
-                    result.Add(layer);
-                }
-                else if (item is TerrainLayerGroup group) {
-                    // Recursive call references the group's children
-                    CollectVisibleLayers(group.Children, result);
-                }
-            }
+            var terrainService = Services.GetRequiredService<ITerrainService>();
+            return terrainService.GetLandblockTerrain(TerrainDoc, DocumentManager, lbKey);
         }
 
         public void RefreshLayers() {
