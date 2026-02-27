@@ -60,36 +60,33 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
 
             // Run flood fill to find affected vertices (unconstrained to avoid viewport race conditions)
             byte newType = (byte)SelectedTerrainType;
-        var terrainService = Context.TerrainSystem.Services.GetRequiredService<ITerrainService>();
-        var vertices = terrainService.FloodFillVertices(
-            Context.TerrainSystem.TerrainDoc, Context.TerrainSystem.DocumentManager,
-            _currentHitPosition.LandblockX, _currentHitPosition.LandblockY, (uint)_currentHitPosition.CellX, (uint)_currentHitPosition.CellY,
-            newType, null);
+            var terrainService = Context.TerrainSystem.Services.GetRequiredService<ITerrainService>();
+            var changes = terrainService.FloodFillPaint(
+                Context.TerrainSystem.TerrainDoc, Context.TerrainSystem.DocumentManager,
+                _currentHitPosition.LandblockX, _currentHitPosition.LandblockY, (uint)_currentHitPosition.CellX, (uint)_currentHitPosition.CellY,
+                newType, null);
 
-            if (vertices.Count == 0) return;
+            if (changes.Count == 0) return;
 
             // Build batch changes and save originals for revert
             var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>();
             var originals = new Dictionary<ushort, Dictionary<byte, uint>>();
 
-            foreach (var (lbID, vertexIndex, oldType) in vertices) {
-            var data = terrainService.GetLandblockTerrain(Context.TerrainSystem.TerrainDoc, Context.TerrainSystem.DocumentManager, lbID);
-                if (data == null) continue;
-
-                // Save original value for revert
+            foreach (var (lbID, changeList) in changes) {
                 if (!originals.TryGetValue(lbID, out var origLb)) {
                     origLb = new Dictionary<byte, uint>();
                     originals[lbID] = origLb;
                 }
-                origLb[(byte)vertexIndex] = data[vertexIndex].ToUInt();
 
-                // Build new value
                 if (!batchChanges.TryGetValue(lbID, out var lbChanges)) {
                     lbChanges = new Dictionary<byte, uint>();
                     batchChanges[lbID] = lbChanges;
                 }
-                var newEntry = data[vertexIndex] with { Type = newType };
-                lbChanges[(byte)vertexIndex] = newEntry.ToUInt();
+
+                foreach (var change in changeList) {
+                    origLb[(byte)change.VertexIndex] = change.OriginalEntryValue;
+                    lbChanges[(byte)change.VertexIndex] = change.NewEntryValue;
+                }
             }
 
             // Apply preview changes to terrain (shows real texture on terrain)

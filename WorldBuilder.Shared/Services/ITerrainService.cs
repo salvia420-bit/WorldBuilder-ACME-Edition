@@ -30,5 +30,26 @@ namespace WorldBuilder.Shared.Services {
             TerrainDocument terrainDoc, DocumentManager docManager,
             uint startLbX, uint startLbY, uint startCellX, uint startCellY,
             byte newType, HashSet<ushort>? allowedLandblocks = null);
+
+        Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue, uint OriginalEntryValue, uint NewEntryValue)>> RaiseLowerHeight(
+            TerrainDocument terrainDoc, DocumentManager docManager, float[] heightTable,
+            Vector3 centerPosition, float brushRadius, int strength, bool isLowering,
+            Dictionary<ushort, HashSet<int>> processedVertices,
+            Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue)>> pendingChanges);
+
+        Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue, uint OriginalEntryValue, uint NewEntryValue)>> SetHeight(
+            TerrainDocument terrainDoc, DocumentManager docManager, float[] heightTable,
+            Vector3 centerPosition, float brushRadius, byte targetHeight,
+            Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue)>> pendingChanges);
+
+        Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue, uint OriginalEntryValue, uint NewEntryValue)>> PaintTexture(
+            TerrainDocument terrainDoc, DocumentManager docManager, float[] heightTable,
+            Vector3 centerPosition, float brushRadius, byte newType,
+            Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue)>> pendingChanges);
+
+        Dictionary<ushort, List<(int VertexIndex, byte OriginalValue, byte NewValue, uint OriginalEntryValue, uint NewEntryValue)>> FloodFillPaint(
+            TerrainDocument terrainDoc, DocumentManager docManager,
+            uint startLbX, uint startLbY, uint startCellX, uint startCellY,
+            byte newType, HashSet<ushort>? allowedLandblocks = null);
     }
 }
