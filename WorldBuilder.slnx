@@ -14,6 +14,7 @@
   <Project Path="WorldBuilder.Linux/WorldBuilder.Linux.csproj" />
   <Project Path="WorldBuilder.Mac/WorldBuilder.Mac.csproj" />
   <Project Path="WorldBuilder.Shared/WorldBuilder.Shared.csproj" />
+  <Project Path="WorldBuilder.Terminal/WorldBuilder.Terminal.csproj" />
   <Project Path="WorldBuilder.Windows/WorldBuilder.Windows.csproj" />
   <Project Path="WorldBuilder/WorldBuilder.csproj" />
 </Solution>
