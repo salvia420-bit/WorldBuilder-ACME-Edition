@@ -387,10 +387,10 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
             if (inputState.IsKeyDown(Avalonia.Input.Key.D) || ((!shiftHeld && !ctrlHeld) && inputState.IsKeyDown(Avalonia.Input.Key.Right)))
                 camera.ProcessKeyboard(CameraMovement.Right, deltaTime);
 
-            // Vertical Movement (Space = Up, Shift = Down)
+            // Vertical Movement (Space = Up, C = Down)
             if (inputState.IsKeyDown(Avalonia.Input.Key.Space))
                 camera.ProcessKeyboard(CameraMovement.Up, deltaTime);
-            if (shiftHeld)
+            if (inputState.IsKeyDown(Avalonia.Input.Key.C))
                 camera.ProcessKeyboard(CameraMovement.Down, deltaTime);
 
             // Zoom

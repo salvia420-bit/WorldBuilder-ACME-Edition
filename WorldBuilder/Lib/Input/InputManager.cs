@@ -132,6 +132,10 @@ namespace WorldBuilder.Lib.Input {
             list.Add(new InputBinding(InputActions.CameraRotateLeft, Key.Left, KeyModifiers.Shift, "Rotate Left", "Camera"));
             list.Add(new InputBinding(InputActions.CameraRotateRight, Key.Right, KeyModifiers.Shift, "Rotate Right", "Camera"));
 
+            // Camera Vertical Movement
+            list.Add(new InputBinding(InputActions.CameraMoveUp, Key.Space, KeyModifiers.None, "Move Up", "Camera", ignoreModifiers: true));
+            list.Add(new InputBinding(InputActions.CameraMoveDown, Key.C, KeyModifiers.None, "Move Down", "Camera", ignoreModifiers: true));
+
             // Camera Other
             list.Add(new InputBinding(InputActions.CameraToggleMode, Key.Q, KeyModifiers.None, "Toggle Camera Mode", "Camera"));
             list.Add(new InputBinding(InputActions.CameraZoomIn, Key.OemPlus, KeyModifiers.None, "Zoom In", "Camera", ignoreModifiers: true));

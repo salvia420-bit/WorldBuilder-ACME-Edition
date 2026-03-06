@@ -423,7 +423,7 @@ namespace WorldBuilder.Editors.Dungeon {
 
             if (inputState.IsKeyDown(Key.Space))
                 camera.ProcessKeyboard(CameraMovement.Up, deltaTime);
-            if (shiftHeld)
+            if (inputState.IsKeyDown(Key.C))
                 camera.ProcessKeyboard(CameraMovement.Down, deltaTime);
         }
 
