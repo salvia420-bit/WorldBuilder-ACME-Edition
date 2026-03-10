@@ -37,7 +37,8 @@ namespace WorldBuilder.Editors.Dungeon.Views {
 
         protected override void OnGlRender(double deltaTime) {
             if (!_didInit || _viewModel == null) return;
-            _viewModel.RenderFrame(deltaTime, new PixelSize((int)Bounds.Width, (int)Bounds.Height), InputState);
+            var renderSize = CurrentRenderSize;
+            _viewModel.RenderFrame(deltaTime, renderSize, InputState);
         }
 
         protected override void OnGlResize(PixelSize canvasSize) { }

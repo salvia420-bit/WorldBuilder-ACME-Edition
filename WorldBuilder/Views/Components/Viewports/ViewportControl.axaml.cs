@@ -52,7 +52,8 @@ namespace WorldBuilder.Views.Components.Viewports {
             // Context loss usually triggers OnGlInit again.
             // So we rely on OnGlInit.
 
-            _viewModel.RenderAction?.Invoke(deltaTime, new PixelSize((int)Bounds.Width, (int)Bounds.Height), InputState);
+            var renderSize = CurrentRenderSize;
+            _viewModel.RenderAction?.Invoke(deltaTime, renderSize, InputState);
         }
 
         protected override void OnGlResize(PixelSize canvasSize) {

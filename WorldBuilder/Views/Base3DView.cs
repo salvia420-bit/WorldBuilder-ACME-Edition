@@ -40,6 +40,7 @@ namespace WorldBuilder.Views {
         public OpenGLRenderer? Renderer { get; private set; }
 
         private PixelSize _renderSize;
+        protected PixelSize CurrentRenderSize => _renderSize;
 
         protected Base3DView() {
             this.AttachedToVisualTree += OnAttachedToVisualTree;
@@ -389,10 +390,17 @@ namespace WorldBuilder.Views {
                         var grContext = skiaLease.GrContext;
                         if (grContext == null) return;
 
-                        // Calculate control size in physical pixels using the top-level scaling
+                        // Calculate control size in physical pixels from the viewport's logical size.
+                        // Use ceiling so fractional DPI/layout values don't leave unrendered right/bottom strips.
                         var topLevel = TopLevel.GetTopLevel(_parent);
                         var scaling = topLevel?.RenderScaling ?? 1.0;
-                        var controlSize = new PixelSize((int)(_parent._viewport!.Bounds.Width * scaling), (int)(_parent._viewport!.Bounds.Height * scaling));
+                        var viewportBounds = _parent._viewport?.Bounds ?? bounds;
+                        var logicalWidth = Math.Max(1.0, viewportBounds.Width);
+                        var logicalHeight = Math.Max(1.0, viewportBounds.Height);
+                        var controlSize = new PixelSize(
+                            Math.Max(1, (int)Math.Ceiling(logicalWidth * scaling)),
+                            Math.Max(1, (int)Math.Ceiling(logicalHeight * scaling))
+                        );
 
                         using (var platformApiLease = skiaLease.TryLeasePlatformGraphicsApi()) {
                             if (platformApiLease?.Context is not IGlContext glContext) return;
@@ -419,7 +427,10 @@ namespace WorldBuilder.Views {
                                 _parent.OnGlResizeInternal(controlSize);
                             }
 
-                            _parent.InputScale = new Vector2(controlSize.Width / (float)size.Width, controlSize.Height / (float)size.Height);
+                            _parent.InputScale = new Vector2(
+                                controlSize.Width / (float)logicalWidth,
+                                controlSize.Height / (float)logicalHeight
+                            );
 
                             // save current framebuffer
                             gl.GetInteger(GetPName.DrawFramebufferBinding, out int oldFb);
