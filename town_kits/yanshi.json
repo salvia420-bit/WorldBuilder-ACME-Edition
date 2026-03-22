@@ -1,0 +1,1455 @@
+{
+  "townName": "Yanshi",
+  "culture": "Sho",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 180,
+    "lbY": 112,
+    "worldX": 34656.0,
+    "worldY": 21600.0
+  },
+  "landblocks": [
+    [
+      179,
+      111
+    ],
+    [
+      179,
+      112
+    ],
+    [
+      180,
+      112
+    ],
+    [
+      181,
+      109
+    ],
+    [
+      185,
+      111
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 74,
+    "totalNPCs": 3,
+    "totalVendors": 3,
+    "totalPortals": 23,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 38,
+    "totalFurniture": 0,
+    "totalOther": 79
+  },
+  "buildings": [
+    {
+      "setupId": 16788052,
+      "setupIdHex": "0x01002A54",
+      "relativeX": -151.0,
+      "relativeY": -175.0,
+      "worldZ": 20,
+      "numLeaves": 78,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16788051,
+      "setupIdHex": "0x01002A53",
+      "relativeX": -156.0,
+      "relativeY": -204.0,
+      "worldZ": 20,
+      "numLeaves": 48,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16787967,
+      "setupIdHex": "0x010029FF",
+      "relativeX": -156.0,
+      "relativeY": -252.0,
+      "worldZ": 31,
+      "numLeaves": 51,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787960,
+      "setupIdHex": "0x010029F8",
+      "relativeX": -180.0,
+      "relativeY": -252.0,
+      "worldZ": 31,
+      "numLeaves": 42,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787960,
+      "setupIdHex": "0x010029F8",
+      "relativeX": -132.0,
+      "relativeY": -252.0,
+      "worldZ": 41,
+      "numLeaves": 42,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787967,
+      "setupIdHex": "0x010029FF",
+      "relativeX": -108.0,
+      "relativeY": -252.0,
+      "worldZ": 41,
+      "numLeaves": 51,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787959,
+      "setupIdHex": "0x010029F7",
+      "relativeX": -108.0,
+      "relativeY": -228.0,
+      "worldZ": 41,
+      "numLeaves": 42,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787967,
+      "setupIdHex": "0x010029FF",
+      "relativeX": -108.0,
+      "relativeY": -204.0,
+      "worldZ": 41,
+      "numLeaves": 51,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787967,
+      "setupIdHex": "0x010029FF",
+      "relativeX": -132.0,
+      "relativeY": -180.0,
+      "worldZ": 41,
+      "numLeaves": 51,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787967,
+      "setupIdHex": "0x010029FF",
+      "relativeX": -108.0,
+      "relativeY": -156.0,
+      "worldZ": 45,
+      "numLeaves": 51,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787960,
+      "setupIdHex": "0x010029F8",
+      "relativeX": -108.0,
+      "relativeY": -132.0,
+      "worldZ": 55,
+      "numLeaves": 42,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787967,
+      "setupIdHex": "0x010029FF",
+      "relativeX": -108.0,
+      "relativeY": -108.0,
+      "worldZ": 55,
+      "numLeaves": 51,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787967,
+      "setupIdHex": "0x010029FF",
+      "relativeX": -156.0,
+      "relativeY": -108.0,
+      "worldZ": 55,
+      "numLeaves": 51,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787960,
+      "setupIdHex": "0x010029F8",
+      "relativeX": -180.0,
+      "relativeY": -108.0,
+      "worldZ": 65,
+      "numLeaves": 42,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787967,
+      "setupIdHex": "0x010029FF",
+      "relativeX": -204.0,
+      "relativeY": -108.0,
+      "worldZ": 65,
+      "numLeaves": 51,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787967,
+      "setupIdHex": "0x010029FF",
+      "relativeX": -228.0,
+      "relativeY": -108.0,
+      "worldZ": 70,
+      "numLeaves": 51,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787967,
+      "setupIdHex": "0x010029FF",
+      "relativeX": -276.0,
+      "relativeY": -108.0,
+      "worldZ": 70,
+      "numLeaves": 51,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787967,
+      "setupIdHex": "0x010029FF",
+      "relativeX": -276.0,
+      "relativeY": -156.0,
+      "worldZ": 60,
+      "numLeaves": 51,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787959,
+      "setupIdHex": "0x010029F7",
+      "relativeX": -252.0,
+      "relativeY": -156.0,
+      "worldZ": 60,
+      "numLeaves": 42,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787967,
+      "setupIdHex": "0x010029FF",
+      "relativeX": -228.0,
+      "relativeY": -156.0,
+      "worldZ": 60,
+      "numLeaves": 51,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787960,
+      "setupIdHex": "0x010029F8",
+      "relativeX": -228.0,
+      "relativeY": -180.0,
+      "worldZ": 70,
+      "numLeaves": 42,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787967,
+      "setupIdHex": "0x010029FF",
+      "relativeX": -228.0,
+      "relativeY": -204.0,
+      "worldZ": 70,
+      "numLeaves": 51,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787967,
+      "setupIdHex": "0x010029FF",
+      "relativeX": -252.0,
+      "relativeY": -228.0,
+      "worldZ": 60,
+      "numLeaves": 51,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787967,
+      "setupIdHex": "0x010029FF",
+      "relativeX": -276.0,
+      "relativeY": -228.0,
+      "worldZ": 50,
+      "numLeaves": 51,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787960,
+      "setupIdHex": "0x010029F8",
+      "relativeX": -276.0,
+      "relativeY": -252.0,
+      "worldZ": 50,
+      "numLeaves": 42,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787967,
+      "setupIdHex": "0x010029FF",
+      "relativeX": -276.0,
+      "relativeY": -276.0,
+      "worldZ": 40,
+      "numLeaves": 51,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787967,
+      "setupIdHex": "0x010029FF",
+      "relativeX": -228.0,
+      "relativeY": -276.0,
+      "worldZ": 40,
+      "numLeaves": 51,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787960,
+      "setupIdHex": "0x010029F8",
+      "relativeX": -228.0,
+      "relativeY": -252.0,
+      "worldZ": 40,
+      "numLeaves": 42,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787960,
+      "setupIdHex": "0x010029F8",
+      "relativeX": -228.0,
+      "relativeY": -228.0,
+      "worldZ": 30,
+      "numLeaves": 42,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16779267,
+      "setupIdHex": "0x01000803",
+      "relativeX": -180.0,
+      "relativeY": 12.0,
+      "worldZ": 26,
+      "numLeaves": 46,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16779267,
+      "setupIdHex": "0x01000803",
+      "relativeX": -156.0,
+      "relativeY": 12.0,
+      "worldZ": 26,
+      "numLeaves": 46,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16779266,
+      "setupIdHex": "0x01000802",
+      "relativeX": -156.0,
+      "relativeY": -36.0,
+      "worldZ": 26,
+      "numLeaves": 43,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16779267,
+      "setupIdHex": "0x01000803",
+      "relativeX": -156.0,
+      "relativeY": -60.0,
+      "worldZ": 26,
+      "numLeaves": 46,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16779266,
+      "setupIdHex": "0x01000802",
+      "relativeX": -180.0,
+      "relativeY": -36.0,
+      "worldZ": 26,
+      "numLeaves": 43,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16779266,
+      "setupIdHex": "0x01000802",
+      "relativeX": -180.0,
+      "relativeY": -12.0,
+      "worldZ": 26,
+      "numLeaves": 43,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16779266,
+      "setupIdHex": "0x01000802",
+      "relativeX": -156.0,
+      "relativeY": -12.0,
+      "worldZ": 26,
+      "numLeaves": 43,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16779267,
+      "setupIdHex": "0x01000803",
+      "relativeX": -180.0,
+      "relativeY": -60.0,
+      "worldZ": 26,
+      "numLeaves": 46,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16781062,
+      "setupIdHex": "0x01000F06",
+      "relativeX": 30.4,
+      "relativeY": -209.2,
+      "worldZ": 22,
+      "numLeaves": 62,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16781766,
+      "setupIdHex": "0x010011C6",
+      "relativeX": 84.0,
+      "relativeY": -252.0,
+      "worldZ": 22,
+      "numLeaves": 9,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16781161,
+      "setupIdHex": "0x01000F69",
+      "relativeX": 84.0,
+      "relativeY": -132.0,
+      "worldZ": 22,
+      "numLeaves": 43,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16787995,
+      "setupIdHex": "0x01002A1B",
+      "relativeX": -36.0,
+      "relativeY": -108.0,
+      "worldZ": 42,
+      "numLeaves": 48,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16789092,
+      "setupIdHex": "0x01002E64",
+      "relativeX": -12.0,
+      "relativeY": 12.0,
+      "worldZ": 48,
+      "numLeaves": 271,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16788702,
+      "setupIdHex": "0x01002CDE",
+      "relativeX": 12.0,
+      "relativeY": 60.0,
+      "worldZ": 42,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788763,
+      "setupIdHex": "0x01002D1B",
+      "relativeX": 12.0,
+      "relativeY": -84.0,
+      "worldZ": 42,
+      "numLeaves": 96,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16788763,
+      "setupIdHex": "0x01002D1B",
+      "relativeX": -12.0,
+      "relativeY": -84.0,
+      "worldZ": 42,
+      "numLeaves": 96,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16788702,
+      "setupIdHex": "0x01002CDE",
+      "relativeX": -36.0,
+      "relativeY": -84.0,
+      "worldZ": 42,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788702,
+      "setupIdHex": "0x01002CDE",
+      "relativeX": 36.0,
+      "relativeY": 60.0,
+      "worldZ": 42,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788702,
+      "setupIdHex": "0x01002CDE",
+      "relativeX": -60.0,
+      "relativeY": -60.0,
+      "worldZ": 42,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788702,
+      "setupIdHex": "0x01002CDE",
+      "relativeX": -60.0,
+      "relativeY": -36.0,
+      "worldZ": 42,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780651,
+      "setupIdHex": "0x01000D6B",
+      "relativeX": -36.0,
+      "relativeY": -60.0,
+      "worldZ": 42,
+      "numLeaves": 111,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16788702,
+      "setupIdHex": "0x01002CDE",
+      "relativeX": -60.0,
+      "relativeY": 12.0,
+      "worldZ": 42,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780423,
+      "setupIdHex": "0x01000C87",
+      "relativeX": 36.0,
+      "relativeY": -60.0,
+      "worldZ": 42,
+      "numLeaves": 71,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16788702,
+      "setupIdHex": "0x01002CDE",
+      "relativeX": -60.0,
+      "relativeY": -12.0,
+      "worldZ": 42,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788702,
+      "setupIdHex": "0x01002CDE",
+      "relativeX": -36.0,
+      "relativeY": 60.0,
+      "worldZ": 42,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788702,
+      "setupIdHex": "0x01002CDE",
+      "relativeX": -12.0,
+      "relativeY": 60.0,
+      "worldZ": 42,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788763,
+      "setupIdHex": "0x01002D1B",
+      "relativeX": 60.0,
+      "relativeY": 60.0,
+      "worldZ": 42,
+      "numLeaves": 96,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16788763,
+      "setupIdHex": "0x01002D1B",
+      "relativeX": -60.0,
+      "relativeY": 60.0,
+      "worldZ": 42,
+      "numLeaves": 96,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16788702,
+      "setupIdHex": "0x01002CDE",
+      "relativeX": 60.0,
+      "relativeY": 36.0,
+      "worldZ": 42,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788702,
+      "setupIdHex": "0x01002CDE",
+      "relativeX": 60.0,
+      "relativeY": 12.0,
+      "worldZ": 42,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788702,
+      "setupIdHex": "0x01002CDE",
+      "relativeX": 60.0,
+      "relativeY": -12.0,
+      "worldZ": 42,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788702,
+      "setupIdHex": "0x01002CDE",
+      "relativeX": 60.0,
+      "relativeY": -36.0,
+      "worldZ": 42,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788702,
+      "setupIdHex": "0x01002CDE",
+      "relativeX": 60.0,
+      "relativeY": -60.0,
+      "worldZ": 42,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788702,
+      "setupIdHex": "0x01002CDE",
+      "relativeX": 36.0,
+      "relativeY": -84.0,
+      "worldZ": 42,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788763,
+      "setupIdHex": "0x01002D1B",
+      "relativeX": 60.0,
+      "relativeY": -84.0,
+      "worldZ": 42,
+      "numLeaves": 96,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16780598,
+      "setupIdHex": "0x01000D36",
+      "relativeX": 36.0,
+      "relativeY": -12.0,
+      "worldZ": 42,
+      "numLeaves": 134,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780801,
+      "setupIdHex": "0x01000E01",
+      "relativeX": 36.0,
+      "relativeY": 36.0,
+      "worldZ": 42,
+      "numLeaves": 81,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16780564,
+      "setupIdHex": "0x01000D14",
+      "relativeX": -36.0,
+      "relativeY": -36.1,
+      "worldZ": 42,
+      "numLeaves": 60,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16788702,
+      "setupIdHex": "0x01002CDE",
+      "relativeX": -60.0,
+      "relativeY": 36.0,
+      "worldZ": 42,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788763,
+      "setupIdHex": "0x01002D1B",
+      "relativeX": -60.0,
+      "relativeY": -84.0,
+      "worldZ": 42,
+      "numLeaves": 96,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16781062,
+      "setupIdHex": "0x01000F06",
+      "relativeX": 228.0,
+      "relativeY": -300.0,
+      "worldZ": 26,
+      "numLeaves": 62,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16788492,
+      "setupIdHex": "0x01002C0C",
+      "relativeX": 132.0,
+      "relativeY": -180.0,
+      "worldZ": 22,
+      "numLeaves": 12,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788492,
+      "setupIdHex": "0x01002C0C",
+      "relativeX": 108.0,
+      "relativeY": -204.0,
+      "worldZ": 22,
+      "numLeaves": 12,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16793649,
+      "setupIdHex": "0x01004031",
+      "relativeX": 156.0,
+      "relativeY": -540.0,
+      "worldZ": 28,
+      "numLeaves": 73,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16782531,
+      "setupIdHex": "0x010014C3",
+      "relativeX": 732.0,
+      "relativeY": -132.0,
+      "worldZ": 18,
+      "numLeaves": 152,
+      "portalCount": 2
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 20209,
+      "name": "Journeyman Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20213,
+      "name": "Journeyman Scrivener of Item Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 33249,
+      "name": "Beldin the Gem Dealer",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 820,
+      "name": "Shin Ou-Ye the Shopkeep",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 810,
+      "name": "Barkeep Bai Yao Feng",
+      "type": "NPC_Barkeep"
+    },
+    {
+      "wcid": 814,
+      "name": "Ribusha Sennei the Bowyer",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42956,
+      "name": "Trap Floor Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43067,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43575,
+      "name": "Olthoi Tunnel",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 42734,
+      "name": "Sir Draithon",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42955,
+      "name": "Wedding Fireworks Launcher",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42955,
+      "name": "Wedding Fireworks Launcher",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42955,
+      "name": "Wedding Fireworks Launcher",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42955,
+      "name": "Wedding Fireworks Launcher",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42957,
+      "name": "Hoshino Kiri",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42958,
+      "name": "First Enchanted Candle",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42959,
+      "name": "Second Enchanted Candle",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42960,
+      "name": "Third Enchanted Candle",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42961,
+      "name": "Rock Pile",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42962,
+      "name": "Rock Pile",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42963,
+      "name": "Rock Pile",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42964,
+      "name": "Rock Pile",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42965,
+      "name": "Rock Pile",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42966,
+      "name": "Rock Pile",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42967,
+      "name": "Rock Pile",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42968,
+      "name": "Rock Pile",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42969,
+      "name": "Rock Pile",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42970,
+      "name": "Rock Pile",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42971,
+      "name": "Rock Pile",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42972,
+      "name": "Rock Pile",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42973,
+      "name": "Rock Pile",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42974,
+      "name": "Rock Pile",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42975,
+      "name": "Rock Pile",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42976,
+      "name": "Rock Pile",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42977,
+      "name": "Game Coordinator",
+      "type": "Creature"
+    },
+    {
+      "wcid": 34365,
+      "name": "Ookami Kiri",
+      "type": "Creature"
+    },
+    {
+      "wcid": 21338,
+      "name": "Collector",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32510,
+      "name": "Royal Guard Adrana",
+      "type": "Creature"
+    },
+    {
+      "wcid": 5063,
+      "name": "Dai Ya the Scholar",
+      "type": "Creature"
+    },
+    {
+      "wcid": 28094,
+      "name": "Ydnew",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    },
+    {
+      "wcid": 49584,
+      "name": "El'Yst Maggann",
+      "type": "Creature"
+    },
+    {
+      "wcid": 51297,
+      "name": "Virindi Delegate",
+      "type": "Creature"
+    },
+    {
+      "wcid": 21136,
+      "name": "Emissary of Asheron",
+      "type": "Creature"
+    },
+    {
+      "wcid": 24859,
+      "name": "Vincadi",
+      "type": "Creature"
+    },
+    {
+      "wcid": 24858,
+      "name": "Issk",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32966,
+      "name": "Stone of Yanshi",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 42530,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42530,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42530,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42530,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42530,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42530,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42531,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42531,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42531,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42531,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42531,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42531,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42540,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42540,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42540,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42540,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42540,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42540,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42541,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42541,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42541,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42541,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42541,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 42541,
+      "name": "Tulip",
+      "type": "Prop"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 816,
+      "name": "wcid_816",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 819,
+      "name": "wcid_819",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 809,
+      "name": "wcid_809",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 815,
+      "name": "wcid_815",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 817,
+      "name": "wcid_817",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 821,
+      "name": "wcid_821",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 21340,
+      "name": "wcid_21340",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20221,
+      "name": "wcid_20221",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20225,
+      "name": "wcid_20225",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 813,
+      "name": "wcid_813",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 812,
+      "name": "wcid_812",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 721,
+      "name": "wcid_721",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 721,
+      "name": "wcid_721",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 32562,
+      "name": "wcid_32562",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5777,
+      "name": "wcid_5777",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27899,
+      "name": "wcid_27899",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27748,
+      "name": "wcid_27748",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 32564,
+      "name": "wcid_32564",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27547,
+      "name": "wcid_27547",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5085,
+      "name": "wcid_5085",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 45983,
+      "name": "Explorer Finesse Weapons Gem",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 45990,
+      "name": "Explorer Heavy Weapons Gem",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 45981,
+      "name": "Explorer Light Weapons Gem",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 21282,
+      "name": "wcid_21282",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7924,
+      "name": "wcid_7924",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 71207,
+      "name": "Issk Harbinger Tunnels Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 71205,
+      "name": "Vincadi Harbinger Tunnels Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 71241,
+      "name": "Weakened Harbinger Waves Master Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 71208,
+      "name": "Issk Weakened Harbinger Tunnels Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 71206,
+      "name": "Vincadi Weakened Harbinger Tunnels Generator",
+      "type": "Prop"
+    }
+  ]
+}

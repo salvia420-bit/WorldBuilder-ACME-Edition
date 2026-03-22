@@ -1,0 +1,995 @@
+{
+  "townName": "Tou-Tou",
+  "culture": "Sho",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 247,
+    "lbY": 93,
+    "worldX": 47520.0,
+    "worldY": 17952.0
+  },
+  "landblocks": [
+    [
+      245,
+      89
+    ],
+    [
+      246,
+      91
+    ],
+    [
+      246,
+      92
+    ],
+    [
+      247,
+      92
+    ],
+    [
+      247,
+      93
+    ],
+    [
+      247,
+      95
+    ],
+    [
+      248,
+      93
+    ],
+    [
+      248,
+      94
+    ],
+    [
+      249,
+      92
+    ],
+    [
+      249,
+      93
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 18,
+    "totalNPCs": 0,
+    "totalVendors": 0,
+    "totalPortals": 3,
+    "totalLifestones": 0,
+    "totalSigns": 2,
+    "totalCreatures": 27,
+    "totalFurniture": 0,
+    "totalOther": 119
+  },
+  "buildings": [
+    {
+      "setupId": 16781161,
+      "setupIdHex": "0x01000F69",
+      "relativeX": -180.4,
+      "relativeY": -275.1,
+      "worldZ": 20,
+      "numLeaves": 43,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16788063,
+      "setupIdHex": "0x01002A5F",
+      "relativeX": -108.0,
+      "relativeY": -204.0,
+      "worldZ": 20,
+      "numLeaves": 203,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788059,
+      "setupIdHex": "0x01002A5B",
+      "relativeX": -132.0,
+      "relativeY": -204.0,
+      "worldZ": 20,
+      "numLeaves": 104,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16793649,
+      "setupIdHex": "0x01004031",
+      "relativeX": -276.0,
+      "relativeY": 84.0,
+      "worldZ": 20,
+      "numLeaves": 73,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16792832,
+      "setupIdHex": "0x01003D00",
+      "relativeX": -175.5,
+      "relativeY": -59.7,
+      "worldZ": 20,
+      "numLeaves": 145,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16788047,
+      "setupIdHex": "0x01002A4F",
+      "relativeX": -84.0,
+      "relativeY": -204.0,
+      "worldZ": 20,
+      "numLeaves": 137,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788058,
+      "setupIdHex": "0x01002A5A",
+      "relativeX": -36.0,
+      "relativeY": -204.0,
+      "worldZ": 20,
+      "numLeaves": 149,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788061,
+      "setupIdHex": "0x01002A5D",
+      "relativeX": -60.0,
+      "relativeY": -204.0,
+      "worldZ": 20,
+      "numLeaves": 80,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788047,
+      "setupIdHex": "0x01002A4F",
+      "relativeX": -57.8,
+      "relativeY": -224.1,
+      "worldZ": 20,
+      "numLeaves": 137,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788063,
+      "setupIdHex": "0x01002A5F",
+      "relativeX": 12.0,
+      "relativeY": -84.0,
+      "worldZ": 46,
+      "numLeaves": 203,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792832,
+      "setupIdHex": "0x01003D00",
+      "relativeX": 204.0,
+      "relativeY": -276.0,
+      "worldZ": 8,
+      "numLeaves": 145,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16783821,
+      "setupIdHex": "0x010019CD",
+      "relativeX": 108.0,
+      "relativeY": -84.0,
+      "worldZ": 52,
+      "numLeaves": 55,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788064,
+      "setupIdHex": "0x01002A60",
+      "relativeX": 134.9,
+      "relativeY": -67.3,
+      "worldZ": 51,
+      "numLeaves": 92,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16781811,
+      "setupIdHex": "0x010011F3",
+      "relativeX": 228.0,
+      "relativeY": 180.0,
+      "worldZ": 70,
+      "numLeaves": 170,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16792832,
+      "setupIdHex": "0x01003D00",
+      "relativeX": 12.0,
+      "relativeY": -420.0,
+      "worldZ": 76,
+      "numLeaves": 145,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16792832,
+      "setupIdHex": "0x01003D00",
+      "relativeX": -53.1,
+      "relativeY": -490.0,
+      "worldZ": 20,
+      "numLeaves": 145,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781591,
+      "setupIdHex": "0x01001117",
+      "relativeX": 132.0,
+      "relativeY": -612.0,
+      "worldZ": 100,
+      "numLeaves": 85,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16784328,
+      "setupIdHex": "0x01001BC8",
+      "relativeX": -468.0,
+      "relativeY": -564.0,
+      "worldZ": 5,
+      "numLeaves": 1284,
+      "portalCount": 3
+    }
+  ],
+  "npcs": [],
+  "vendors": [],
+  "portals": [
+    {
+      "wcid": 21464,
+      "name": "Haven Residential Halls Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43067,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 45726,
+      "name": "Shadowy Refuge",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [
+    {
+      "wcid": 4535,
+      "name": "Tou-Tou",
+      "type": "Sign_Town"
+    },
+    {
+      "wcid": 4535,
+      "name": "Tou-Tou",
+      "type": "Sign_Town"
+    }
+  ],
+  "creatures": [
+    {
+      "wcid": 4214,
+      "name": "Leather Crafter",
+      "type": "Creature"
+    },
+    {
+      "wcid": 52272,
+      "name": "Royal Guard",
+      "type": "Creature"
+    },
+    {
+      "wcid": 46015,
+      "name": "Royal Guard",
+      "type": "Creature"
+    },
+    {
+      "wcid": 46018,
+      "name": "Royal Guard",
+      "type": "Creature"
+    },
+    {
+      "wcid": 46017,
+      "name": "Royal Guard",
+      "type": "Creature"
+    },
+    {
+      "wcid": 46016,
+      "name": "Umbral Guard",
+      "type": "Creature"
+    },
+    {
+      "wcid": 46014,
+      "name": "Umbral Guard",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44630,
+      "name": "Shadow Soldier",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44629,
+      "name": "Shadow Vortex",
+      "type": "Creature"
+    },
+    {
+      "wcid": 52271,
+      "name": "Shadowy Pillar",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44629,
+      "name": "Shadow Vortex",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44630,
+      "name": "Shadow Soldier",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44630,
+      "name": "Shadow Soldier",
+      "type": "Creature"
+    },
+    {
+      "wcid": 52271,
+      "name": "Shadowy Pillar",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44631,
+      "name": "Shadow Captain",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44650,
+      "name": "Shadow Vortex",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44651,
+      "name": "Pillar of Fire",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44651,
+      "name": "Pillar of Fire",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44629,
+      "name": "Shadow Vortex",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44651,
+      "name": "Pillar of Fire",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44629,
+      "name": "Shadow Vortex",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44651,
+      "name": "Pillar of Fire",
+      "type": "Creature"
+    },
+    {
+      "wcid": 52271,
+      "name": "Shadowy Pillar",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44651,
+      "name": "Pillar of Fire",
+      "type": "Creature"
+    },
+    {
+      "wcid": 52271,
+      "name": "Shadowy Pillar",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44576,
+      "name": "Dark Rock",
+      "type": "Creature"
+    },
+    {
+      "wcid": 39828,
+      "name": "Exploration Marker",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 5148,
+      "name": "wcid_5148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5148,
+      "name": "wcid_5148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 153,
+      "name": "wcid_153",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 165,
+      "name": "wcid_165",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 165,
+      "name": "wcid_165",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6441,
+      "name": "wcid_6441",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27547,
+      "name": "wcid_27547",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 21476,
+      "name": "wcid_21476",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 25990,
+      "name": "wcid_25990",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12774,
+      "name": "wcid_12774",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 14655,
+      "name": "wcid_14655",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12487,
+      "name": "wcid_12487",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 13130,
+      "name": "wcid_13130",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19140,
+      "name": "wcid_19140",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 14676,
+      "name": "wcid_14676",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 13112,
+      "name": "wcid_13112",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12561,
+      "name": "wcid_12561",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 13137,
+      "name": "wcid_13137",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12472,
+      "name": "wcid_12472",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1154,
+      "name": "wcid_1154",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 7924,
+      "name": "wcid_7924",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 7924,
+      "name": "wcid_7924",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5148,
+      "name": "wcid_5148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72202,
+      "name": "Tou-Tou Inner Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 7924,
+      "name": "wcid_7924",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 71341,
+      "name": "Tou-Tou Gift Box Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72201,
+      "name": "Tou-Tou Outer Generator",
+      "type": "Prop"
+    }
+  ]
+}

@@ -1,0 +1,260 @@
+{
+  "townName": "Neydisa",
+  "culture": "Viamontian",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 149,
+    "lbY": 214,
+    "worldX": 28704.0,
+    "worldY": 41184.0
+  },
+  "landblocks": [
+    [
+      149,
+      214
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 12,
+    "totalNPCs": 0,
+    "totalVendors": 1,
+    "totalPortals": 2,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 6,
+    "totalFurniture": 0,
+    "totalOther": 13
+  },
+  "buildings": [
+    {
+      "setupId": 16781591,
+      "setupIdHex": "0x01001117",
+      "relativeX": -276.0,
+      "relativeY": 12.0,
+      "worldZ": 132,
+      "numLeaves": 85,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16780799,
+      "setupIdHex": "0x01000DFF",
+      "relativeX": -12.0,
+      "relativeY": -36.0,
+      "worldZ": 100,
+      "numLeaves": 95,
+      "portalCount": 9
+    },
+    {
+      "setupId": 16780800,
+      "setupIdHex": "0x01000E00",
+      "relativeX": -36.0,
+      "relativeY": -36.0,
+      "worldZ": 100,
+      "numLeaves": 42,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16780802,
+      "setupIdHex": "0x01000E02",
+      "relativeX": -36.0,
+      "relativeY": 12.0,
+      "worldZ": 100,
+      "numLeaves": 76,
+      "portalCount": 7
+    },
+    {
+      "setupId": 16780804,
+      "setupIdHex": "0x01000E04",
+      "relativeX": 12.0,
+      "relativeY": -36.0,
+      "worldZ": 100,
+      "numLeaves": 67,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16780805,
+      "setupIdHex": "0x01000E05",
+      "relativeX": 12.0,
+      "relativeY": -12.0,
+      "worldZ": 100,
+      "numLeaves": 10,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780877,
+      "setupIdHex": "0x01000E4D",
+      "relativeX": -12.0,
+      "relativeY": 12.0,
+      "worldZ": 100,
+      "numLeaves": 42,
+      "portalCount": 7
+    },
+    {
+      "setupId": 16780803,
+      "setupIdHex": "0x01000E03",
+      "relativeX": 12.0,
+      "relativeY": 12.0,
+      "worldZ": 100,
+      "numLeaves": 26,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780811,
+      "setupIdHex": "0x01000E0B",
+      "relativeX": -36.0,
+      "relativeY": -12.0,
+      "worldZ": 100,
+      "numLeaves": 10,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16781591,
+      "setupIdHex": "0x01001117",
+      "relativeX": 252.0,
+      "relativeY": -36.0,
+      "worldZ": 88,
+      "numLeaves": 85,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16781591,
+      "setupIdHex": "0x01001117",
+      "relativeX": 252.0,
+      "relativeY": -12.0,
+      "worldZ": 88,
+      "numLeaves": 85,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16793649,
+      "setupIdHex": "0x01004031",
+      "relativeX": 276.0,
+      "relativeY": 36.0,
+      "worldZ": 84,
+      "numLeaves": 73,
+      "portalCount": 1
+    }
+  ],
+  "npcs": [],
+  "vendors": [
+    {
+      "wcid": 5649,
+      "name": "Lisatha the Bowyer",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 42852,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 9071,
+      "name": "Humming Crystal Portal",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 43073,
+      "name": "Emissary of Asheron",
+      "type": "Creature"
+    },
+    {
+      "wcid": 5898,
+      "name": "Yi Yo-Jin",
+      "type": "Creature"
+    },
+    {
+      "wcid": 5644,
+      "name": "Lady Tallial",
+      "type": "Creature"
+    },
+    {
+      "wcid": 218,
+      "name": "Black Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 1987,
+      "name": "Ghost Wisp",
+      "type": "Creature"
+    },
+    {
+      "wcid": 1987,
+      "name": "Ghost Wisp",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 5647,
+      "name": "wcid_5647",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5646,
+      "name": "wcid_5646",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5648,
+      "name": "wcid_5648",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5861,
+      "name": "wcid_5861",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 174,
+      "name": "wcid_174",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6889,
+      "name": "wcid_6889",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28922,
+      "name": "wcid_28922",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19128,
+      "name": "wcid_19128",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1154,
+      "name": "wcid_1154",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 3951,
+      "name": "wcid_3951",
+      "type": "Unknown"
+    }
+  ]
+}

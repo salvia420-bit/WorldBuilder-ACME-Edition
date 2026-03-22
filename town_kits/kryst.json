@@ -1,0 +1,400 @@
+{
+  "townName": "Kryst",
+  "culture": "Sho",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 233,
+    "lbY": 34,
+    "worldX": 44832.0,
+    "worldY": 6624.0
+  },
+  "landblocks": [
+    [
+      232,
+      34
+    ],
+    [
+      233,
+      34
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 11,
+    "totalNPCs": 0,
+    "totalVendors": 3,
+    "totalPortals": 2,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 9,
+    "totalFurniture": 0,
+    "totalOther": 37
+  },
+  "buildings": [
+    {
+      "setupId": 16784304,
+      "setupIdHex": "0x01001BB0",
+      "relativeX": -324.0,
+      "relativeY": -468.0,
+      "worldZ": 0,
+      "numLeaves": 83,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787565,
+      "setupIdHex": "0x0100286D",
+      "relativeX": -416.9,
+      "relativeY": -341.1,
+      "worldZ": 0,
+      "numLeaves": 116,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16787564,
+      "setupIdHex": "0x0100286C",
+      "relativeX": -300.0,
+      "relativeY": 36.0,
+      "worldZ": 0,
+      "numLeaves": 140,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16786159,
+      "setupIdHex": "0x010022EF",
+      "relativeX": -204.0,
+      "relativeY": -111.9,
+      "worldZ": 26,
+      "numLeaves": 123,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780286,
+      "setupIdHex": "0x01000BFE",
+      "relativeX": -204.0,
+      "relativeY": -36.0,
+      "worldZ": 22,
+      "numLeaves": 56,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780286,
+      "setupIdHex": "0x01000BFE",
+      "relativeX": -132.0,
+      "relativeY": 12.1,
+      "worldZ": 0,
+      "numLeaves": 56,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780286,
+      "setupIdHex": "0x01000BFE",
+      "relativeX": -36.0,
+      "relativeY": -60.0,
+      "worldZ": 18,
+      "numLeaves": 56,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780286,
+      "setupIdHex": "0x01000BFE",
+      "relativeX": -12.0,
+      "relativeY": -12.0,
+      "worldZ": 0,
+      "numLeaves": 56,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780286,
+      "setupIdHex": "0x01000BFE",
+      "relativeX": -84.0,
+      "relativeY": -12.0,
+      "worldZ": 0,
+      "numLeaves": 56,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780286,
+      "setupIdHex": "0x01000BFE",
+      "relativeX": 36.0,
+      "relativeY": -36.0,
+      "worldZ": 0,
+      "numLeaves": 56,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16787995,
+      "setupIdHex": "0x01002A1B",
+      "relativeX": -66.6,
+      "relativeY": 19.4,
+      "worldZ": 0,
+      "numLeaves": 48,
+      "portalCount": 2
+    }
+  ],
+  "npcs": [],
+  "vendors": [
+    {
+      "wcid": 8432,
+      "name": "Vanten the Archmage",
+      "type": "NPC_Archmage"
+    },
+    {
+      "wcid": 8437,
+      "name": "Jeweler Imad Nedjim",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 8435,
+      "name": "Sharon the Skilled, Bowyer",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 43067,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 19718,
+      "name": "Effigy Foundry Portal",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 4213,
+      "name": "Leather Crafter",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32706,
+      "name": "Gharu'ndim War Mage",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32709,
+      "name": "Sho Swordsman",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32707,
+      "name": "Gharu'ndim Warrior",
+      "type": "Creature"
+    },
+    {
+      "wcid": 35213,
+      "name": "Guard Hrothgar",
+      "type": "Creature"
+    },
+    {
+      "wcid": 35606,
+      "name": "Corporal Massein",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32705,
+      "name": "Aluvian Spearman",
+      "type": "Creature"
+    },
+    {
+      "wcid": 3926,
+      "name": "Ivory Crafter",
+      "type": "Creature"
+    },
+    {
+      "wcid": 35603,
+      "name": "Sergeant Brigitta",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 1154,
+      "name": "wcid_1154",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8434,
+      "name": "wcid_8434",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8438,
+      "name": "wcid_8438",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8446,
+      "name": "wcid_8446",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8449,
+      "name": "wcid_8449",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8453,
+      "name": "wcid_8453",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8452,
+      "name": "wcid_8452",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8440,
+      "name": "wcid_8440",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8433,
+      "name": "wcid_8433",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8436,
+      "name": "wcid_8436",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8439,
+      "name": "wcid_8439",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8448,
+      "name": "wcid_8448",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8450,
+      "name": "wcid_8450",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8454,
+      "name": "wcid_8454",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8451,
+      "name": "wcid_8451",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8441,
+      "name": "wcid_8441",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1154,
+      "name": "wcid_1154",
+      "type": "Unknown"
+    }
+  ]
+}

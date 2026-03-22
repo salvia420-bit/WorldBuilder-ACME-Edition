@@ -1,0 +1,258 @@
+{
+  "townName": "Redspire",
+  "culture": "Viamontian",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 24,
+    "lbY": 180,
+    "worldX": 4704.0,
+    "worldY": 34656.0
+  },
+  "landblocks": [
+    [
+      23,
+      178
+    ],
+    [
+      24,
+      180
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 9,
+    "totalNPCs": 2,
+    "totalVendors": 1,
+    "totalPortals": 3,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 10,
+    "totalFurniture": 0,
+    "totalOther": 10
+  },
+  "buildings": [
+    {
+      "setupId": 16786065,
+      "setupIdHex": "0x01002291",
+      "relativeX": -157.1,
+      "relativeY": -419.5,
+      "worldZ": 44,
+      "numLeaves": 196,
+      "portalCount": 18
+    },
+    {
+      "setupId": 16786068,
+      "setupIdHex": "0x01002294",
+      "relativeX": -177.8,
+      "relativeY": -441.7,
+      "worldZ": 44,
+      "numLeaves": 44,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16786068,
+      "setupIdHex": "0x01002294",
+      "relativeX": -134.9,
+      "relativeY": -441.1,
+      "worldZ": 44,
+      "numLeaves": 44,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16786068,
+      "setupIdHex": "0x01002294",
+      "relativeX": -250.1,
+      "relativeY": -376.3,
+      "worldZ": 46,
+      "numLeaves": 44,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16786071,
+      "setupIdHex": "0x01002297",
+      "relativeX": -230.2,
+      "relativeY": -395.4,
+      "worldZ": 46,
+      "numLeaves": 73,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16786068,
+      "setupIdHex": "0x01002294",
+      "relativeX": -185.6,
+      "relativeY": -401.8,
+      "worldZ": 44,
+      "numLeaves": 44,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16791267,
+      "setupIdHex": "0x010036E3",
+      "relativeX": -156.0,
+      "relativeY": -396.0,
+      "worldZ": 44,
+      "numLeaves": 81,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16793649,
+      "setupIdHex": "0x01004031",
+      "relativeX": -84.0,
+      "relativeY": -84.0,
+      "worldZ": 22,
+      "numLeaves": 73,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781737,
+      "setupIdHex": "0x010011A9",
+      "relativeX": -43.1,
+      "relativeY": 220.9,
+      "worldZ": 68,
+      "numLeaves": 127,
+      "portalCount": 1
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 11397,
+      "name": "Milanna Russmad the Mage",
+      "type": "NPC"
+    },
+    {
+      "wcid": 31955,
+      "name": "Janus Roma the Shopkeep",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 11396,
+      "name": "Lam Yi the Jeweler",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 28709,
+      "name": "Destroyed Portal to Sanamar",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42852,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43567,
+      "name": "Olthoi Tunnel",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 32074,
+      "name": "Lucio Murrio",
+      "type": "Creature"
+    },
+    {
+      "wcid": 37440,
+      "name": "Guard Liaza",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32069,
+      "name": "Piero Cenizzi",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32109,
+      "name": "Susana du Loc",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32073,
+      "name": "Andrea Dilazo",
+      "type": "Creature"
+    },
+    {
+      "wcid": 11347,
+      "name": "Ling Xiao the Collector",
+      "type": "Creature"
+    },
+    {
+      "wcid": 31648,
+      "name": "Afra bint Abbas",
+      "type": "Creature"
+    },
+    {
+      "wcid": 11322,
+      "name": "Bachus Flufens",
+      "type": "Creature"
+    },
+    {
+      "wcid": 10842,
+      "name": "Behdo Yii",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32072,
+      "name": "Niccolo Brasi",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 5086,
+      "name": "wcid_5086",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 11395,
+      "name": "wcid_11395",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 11399,
+      "name": "wcid_11399",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 11394,
+      "name": "wcid_11394",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 30063,
+      "name": "wcid_30063",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 71474,
+      "name": "Cindy Holiday Event Spawn",
+      "type": "Prop"
+    }
+  ]
+}

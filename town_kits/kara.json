@@ -1,0 +1,389 @@
+{
+  "townName": "Kara",
+  "culture": "Sho",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 186,
+    "lbY": 23,
+    "worldX": 35808.0,
+    "worldY": 4512.0
+  },
+  "landblocks": [
+    [
+      184,
+      23
+    ],
+    [
+      186,
+      23
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 13,
+    "totalNPCs": 3,
+    "totalVendors": 3,
+    "totalPortals": 2,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 5,
+    "totalFurniture": 0,
+    "totalOther": 32
+  },
+  "buildings": [
+    {
+      "setupId": 16780762,
+      "setupIdHex": "0x01000DDA",
+      "relativeX": -12.0,
+      "relativeY": 84.7,
+      "worldZ": 84,
+      "numLeaves": 73,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16780565,
+      "setupIdHex": "0x01000D15",
+      "relativeX": -60.0,
+      "relativeY": -12.0,
+      "worldZ": 132,
+      "numLeaves": 272,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16780901,
+      "setupIdHex": "0x01000E65",
+      "relativeX": -2.0,
+      "relativeY": -36.0,
+      "worldZ": 132,
+      "numLeaves": 81,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780651,
+      "setupIdHex": "0x01000D6B",
+      "relativeX": -12.0,
+      "relativeY": -12.0,
+      "worldZ": 132,
+      "numLeaves": 111,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780423,
+      "setupIdHex": "0x01000C87",
+      "relativeX": -36.0,
+      "relativeY": -60.0,
+      "worldZ": 132,
+      "numLeaves": 71,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780598,
+      "setupIdHex": "0x01000D36",
+      "relativeX": -12.0,
+      "relativeY": -60.0,
+      "worldZ": 132,
+      "numLeaves": 134,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780900,
+      "setupIdHex": "0x01000E64",
+      "relativeX": -36.0,
+      "relativeY": -0.5,
+      "worldZ": 132,
+      "numLeaves": 37,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16785960,
+      "setupIdHex": "0x01002228",
+      "relativeX": -60.0,
+      "relativeY": 84.0,
+      "worldZ": 82,
+      "numLeaves": 200,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16787995,
+      "setupIdHex": "0x01002A1B",
+      "relativeX": -29.6,
+      "relativeY": -29.8,
+      "worldZ": 132,
+      "numLeaves": 48,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16786054,
+      "setupIdHex": "0x01002286",
+      "relativeX": -516.0,
+      "relativeY": -348.0,
+      "worldZ": 108,
+      "numLeaves": 100,
+      "portalCount": 8
+    },
+    {
+      "setupId": 16786055,
+      "setupIdHex": "0x01002287",
+      "relativeX": -516.0,
+      "relativeY": -372.0,
+      "worldZ": 108,
+      "numLeaves": 96,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16786130,
+      "setupIdHex": "0x010022D2",
+      "relativeX": -540.0,
+      "relativeY": -348.0,
+      "worldZ": 108,
+      "numLeaves": 41,
+      "portalCount": 7
+    },
+    {
+      "setupId": 16786057,
+      "setupIdHex": "0x01002289",
+      "relativeX": -540.0,
+      "relativeY": -372.0,
+      "worldZ": 108,
+      "numLeaves": 116,
+      "portalCount": 7
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 51155,
+      "name": "Koga Hideki",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20208,
+      "name": "Grand Master Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20212,
+      "name": "Grand Master Scrivener of Item Magic",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 27247,
+      "name": "Tatuso of Kara",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 2537,
+      "name": "Archmage Kiko of Kara ",
+      "type": "NPC_Archmage"
+    },
+    {
+      "wcid": 2536,
+      "name": "Shopkeep Kuro of Kara ",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 43067,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 1907,
+      "name": "Sho Roadside",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 43030,
+      "name": "Esmond Fielding",
+      "type": "Creature"
+    },
+    {
+      "wcid": 43028,
+      "name": "Ansar El-Kerdany",
+      "type": "Creature"
+    },
+    {
+      "wcid": 43029,
+      "name": "Niccolo De Luca",
+      "type": "Creature"
+    },
+    {
+      "wcid": 48777,
+      "name": "Grularr Wa'ydo",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 3951,
+      "name": "wcid_3951",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 14867,
+      "name": "wcid_14867",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20224,
+      "name": "wcid_20224",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20220,
+      "name": "wcid_20220",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27246,
+      "name": "wcid_27246",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2538,
+      "name": "wcid_2538",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2539,
+      "name": "wcid_2539",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 721,
+      "name": "wcid_721",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4782,
+      "name": "wcid_4782",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 25827,
+      "name": "wcid_25827",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28919,
+      "name": "wcid_28919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19203,
+      "name": "wcid_19203",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1351,
+      "name": "wcid_1351",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12304,
+      "name": "wcid_12304",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19715,
+      "name": "wcid_19715",
+      "type": "Unknown"
+    }
+  ]
+}

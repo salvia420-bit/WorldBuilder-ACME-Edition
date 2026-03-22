@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net8.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<LangVersion>12</LangVersion>
+		<Nullable>enable</Nullable>
+		<Version>1.2.0</Version>
+		<AssemblyTitle>WorldBuilder.Terminal</AssemblyTitle>
+		<Description>Headless DAT export and world-editing terminal for ACME WorldBuilder</Description>
+		<ServerGarbageCollection>true</ServerGarbageCollection>
+		<UseLocalReferenceBuild Condition="'$(UseLocalReferenceBuild)'==''">false</UseLocalReferenceBuild>
+	</PropertyGroup>
+
+	<ItemGroup Condition="'$(UseLocalReferenceBuild)'!='true'">
+		<PackageReference Include="Chorizite.DatReaderWriter" Version="2.1.2" />
+		<PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+		<PackageReference Include="MemoryPack" Version="1.21.4" />
+		<PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.9" />
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.9" />
+		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="9.0.9" />
+		<PackageReference Include="MySqlConnector" Version="2.5.0" />
+		<PackageReference Include="SkiaSharp" Version="2.88.9" />
+	</ItemGroup>
+
+	<ItemGroup Condition="'$(UseLocalReferenceBuild)'!='true'">
+		<Reference Include="WorldBuilder.Shared">
+			<HintPath>..\WorldBuilder.Shared\bin\Debug\net8.0\WorldBuilder.Shared.dll</HintPath>
+			<Private>true</Private>
+		</Reference>
+		<Reference Include="DatReaderWriter.Extensions">
+			<HintPath>..\DatReaderWriter.Extensions-master\bin\net8.0\DatReaderWriter.Extensions.dll</HintPath>
+			<Private>true</Private>
+		</Reference>
+	</ItemGroup>
+
+	<ItemGroup Condition="'$(UseLocalReferenceBuild)'=='true'">
+		<_LocalBuildReference Include="$(MSBuildThisFileDirectory)bin\Debug\net8.0\*.dll"
+			Exclude="$(MSBuildThisFileDirectory)bin\Debug\net8.0\WorldBuilder.Terminal.dll" />
+		<Reference Include="@(_LocalBuildReference->'%(Filename)')">
+			<HintPath>%(_LocalBuildReference.FullPath)</HintPath>
+			<Private>true</Private>
+		</Reference>
+	</ItemGroup>
+
+</Project>

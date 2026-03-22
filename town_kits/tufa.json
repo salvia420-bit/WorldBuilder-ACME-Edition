@@ -1,0 +1,284 @@
+{
+  "townName": "Tufa",
+  "culture": "Gharu'ndim",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 134,
+    "lbY": 109,
+    "worldX": 25824.0,
+    "worldY": 21024.0
+  },
+  "landblocks": [
+    [
+      134,
+      108
+    ],
+    [
+      134,
+      109
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 12,
+    "totalNPCs": 0,
+    "totalVendors": 2,
+    "totalPortals": 2,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 1,
+    "totalFurniture": 0,
+    "totalOther": 21
+  },
+  "buildings": [
+    {
+      "setupId": 16781020,
+      "setupIdHex": "0x01000EDC",
+      "relativeX": -300.0,
+      "relativeY": -180.0,
+      "worldZ": 10,
+      "numLeaves": 44,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780859,
+      "setupIdHex": "0x01000E3B",
+      "relativeX": -300.0,
+      "relativeY": 36.0,
+      "worldZ": 10,
+      "numLeaves": 125,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781161,
+      "setupIdHex": "0x01000F69",
+      "relativeX": -157.6,
+      "relativeY": 82.7,
+      "worldZ": 14,
+      "numLeaves": 43,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780864,
+      "setupIdHex": "0x01000E40",
+      "relativeX": -156.0,
+      "relativeY": 108.0,
+      "worldZ": 14,
+      "numLeaves": 28,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16781052,
+      "setupIdHex": "0x01000EFC",
+      "relativeX": -132.0,
+      "relativeY": 252.0,
+      "worldZ": 10,
+      "numLeaves": 84,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781052,
+      "setupIdHex": "0x01000EFC",
+      "relativeX": 60.0,
+      "relativeY": -108.0,
+      "worldZ": 10,
+      "numLeaves": 84,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781020,
+      "setupIdHex": "0x01000EDC",
+      "relativeX": 60.0,
+      "relativeY": -132.0,
+      "worldZ": 10,
+      "numLeaves": 44,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781052,
+      "setupIdHex": "0x01000EFC",
+      "relativeX": -60.0,
+      "relativeY": -228.0,
+      "worldZ": 10,
+      "numLeaves": 84,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16786068,
+      "setupIdHex": "0x01002294",
+      "relativeX": 34.2,
+      "relativeY": -106.7,
+      "worldZ": 10,
+      "numLeaves": 44,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16787995,
+      "setupIdHex": "0x01002A1B",
+      "relativeX": 30.2,
+      "relativeY": -129.4,
+      "worldZ": 10,
+      "numLeaves": 48,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16781052,
+      "setupIdHex": "0x01000EFC",
+      "relativeX": -41.4,
+      "relativeY": 84.0,
+      "worldZ": 0,
+      "numLeaves": 84,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781062,
+      "setupIdHex": "0x01000F06",
+      "relativeX": 156.0,
+      "relativeY": -60.0,
+      "worldZ": 10,
+      "numLeaves": 62,
+      "portalCount": 4
+    }
+  ],
+  "npcs": [],
+  "vendors": [
+    {
+      "wcid": 1812,
+      "name": "Archmage Dakila bint Ma'liz",
+      "type": "NPC_Archmage"
+    },
+    {
+      "wcid": 1817,
+      "name": "Bowyer Shurida bint Zaud",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 19716,
+      "name": "Mammet Foundry Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43066,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 145,
+      "name": "wcid_145",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 22572,
+      "name": "wcid_22572",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1823,
+      "name": "wcid_1823",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1818,
+      "name": "wcid_1818",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 171,
+      "name": "wcid_171",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6441,
+      "name": "wcid_6441",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6441,
+      "name": "wcid_6441",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1798,
+      "name": "wcid_1798",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1794,
+      "name": "wcid_1794",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12304,
+      "name": "wcid_12304",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1790,
+      "name": "wcid_1790",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19204,
+      "name": "Nullified Statue of a Skeleton",
+      "type": "Prop"
+    },
+    {
+      "wcid": 1910,
+      "name": "wcid_1910",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1792,
+      "name": "wcid_1792",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 72861,
+      "name": "Menhir Research Ring 19",
+      "type": "Prop"
+    },
+    {
+      "wcid": 8127,
+      "name": "wcid_8127",
+      "type": "Unknown"
+    }
+  ]
+}

@@ -1,0 +1,294 @@
+{
+  "townName": "Greenspire",
+  "culture": "Viamontian",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 43,
+    "lbY": 181,
+    "worldX": 8352.0,
+    "worldY": 34848.0
+  },
+  "landblocks": [
+    [
+      43,
+      180
+    ],
+    [
+      43,
+      181
+    ],
+    [
+      44,
+      181
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 7,
+    "totalNPCs": 1,
+    "totalVendors": 1,
+    "totalPortals": 3,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 12,
+    "totalFurniture": 0,
+    "totalOther": 19
+  },
+  "buildings": [
+    {
+      "setupId": 16781811,
+      "setupIdHex": "0x010011F3",
+      "relativeX": 60.0,
+      "relativeY": -84.0,
+      "worldZ": 28,
+      "numLeaves": 170,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16783222,
+      "setupIdHex": "0x01001776",
+      "relativeX": 37.0,
+      "relativeY": -84.0,
+      "worldZ": 70.5,
+      "numLeaves": 162,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16783222,
+      "setupIdHex": "0x01001776",
+      "relativeX": 60.0,
+      "relativeY": -63.0,
+      "worldZ": 75.5,
+      "numLeaves": 162,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16783222,
+      "setupIdHex": "0x01001776",
+      "relativeX": 83.9,
+      "relativeY": -84.0,
+      "worldZ": 89.2,
+      "numLeaves": 162,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16791274,
+      "setupIdHex": "0x010036EA",
+      "relativeX": 12.0,
+      "relativeY": -12.0,
+      "worldZ": 0,
+      "numLeaves": 96,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16786078,
+      "setupIdHex": "0x0100229E",
+      "relativeX": 131.9,
+      "relativeY": -11.9,
+      "worldZ": 0,
+      "numLeaves": 108,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16786082,
+      "setupIdHex": "0x010022A2",
+      "relativeX": 107.6,
+      "relativeY": -60.2,
+      "worldZ": 0,
+      "numLeaves": 53,
+      "portalCount": 1
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 11392,
+      "name": "Yen Loc Anh the Mage",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 11391,
+      "name": "Misha the Jeweler",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 32087,
+      "name": "Unstable Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 1030,
+      "name": "Destroyed Portal to Yaraq",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42852,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 38820,
+      "name": "Tamara du Cinghalle",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32084,
+      "name": "Enrico di Bellenesse",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32108,
+      "name": "Rico Cellini",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32067,
+      "name": "Romeo Osemmi",
+      "type": "Creature"
+    },
+    {
+      "wcid": 39831,
+      "name": "Exploration Marker",
+      "type": "Creature"
+    },
+    {
+      "wcid": 31957,
+      "name": "Eliza du Curena",
+      "type": "Creature"
+    },
+    {
+      "wcid": 51208,
+      "name": "Virindi Delegate",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32068,
+      "name": "Tito Brickicci",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32071,
+      "name": "Valentina du Lurio",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32070,
+      "name": "Caprice du Bellenesse",
+      "type": "Creature"
+    },
+    {
+      "wcid": 11346,
+      "name": "Shalon ibn Mayar the Collector",
+      "type": "Creature"
+    },
+    {
+      "wcid": 10866,
+      "name": "Mazur ibn Stounis",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 11393,
+      "name": "wcid_11393",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 11389,
+      "name": "wcid_11389",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 30064,
+      "name": "wcid_30064",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 11390,
+      "name": "wcid_11390",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28258,
+      "name": "wcid_28258",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5086,
+      "name": "wcid_5086",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 71466,
+      "name": "Jan Holiday Event Spawn",
+      "type": "Prop"
+    }
+  ]
+}

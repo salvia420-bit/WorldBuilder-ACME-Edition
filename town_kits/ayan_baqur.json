@@ -1,0 +1,540 @@
+{
+  "townName": "Ayan Baqur",
+  "culture": "Gharu'ndim",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 162,
+    "lbY": 56,
+    "worldX": 31200.0,
+    "worldY": 10848.0
+  },
+  "landblocks": [
+    [
+      16,
+      53
+    ],
+    [
+      17,
+      51
+    ],
+    [
+      17,
+      52
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 0,
+    "totalNPCs": 3,
+    "totalVendors": 4,
+    "totalPortals": 6,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 35,
+    "totalFurniture": 0,
+    "totalOther": 50
+  },
+  "buildings": [],
+  "npcs": [
+    {
+      "wcid": 20212,
+      "name": "Grand Master Scrivener of Item Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20208,
+      "name": "Grand Master Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 43353,
+      "name": "Grand Master Scrivener of Void Magic",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 6856,
+      "name": "Berkholt the Burly Barkeep",
+      "type": "NPC_Barkeep"
+    },
+    {
+      "wcid": 6857,
+      "name": "Thiuda the Sharp-Eyed Bowyer",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 6860,
+      "name": "Jeweler Daryam ibn Zubed",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 7241,
+      "name": "Yuan Hanzu",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 38998,
+      "name": "Holtburg Casino VIP Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 39002,
+      "name": "Shoushi Casino VIP Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 39000,
+      "name": "Yaraq Casino VIP Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 4037,
+      "name": "Destroyed Baishi Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 4036,
+      "name": "Destroyed Uziz Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42852,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 38993,
+      "name": "Carenzi Race Bookie",
+      "type": "Creature"
+    },
+    {
+      "wcid": 36866,
+      "name": "Aun Javhalrea, the Game Warden",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30629,
+      "name": "Aludi al-Jaladh",
+      "type": "Creature"
+    },
+    {
+      "wcid": 27267,
+      "name": "Aun Khekierea",
+      "type": "Creature"
+    },
+    {
+      "wcid": 27262,
+      "name": "Aun Aukherea",
+      "type": "Creature"
+    },
+    {
+      "wcid": 4214,
+      "name": "Leather Crafter",
+      "type": "Creature"
+    },
+    {
+      "wcid": 41515,
+      "name": "Anfram Mellow",
+      "type": "Creature"
+    },
+    {
+      "wcid": 41526,
+      "name": "Alishia bint Aldan",
+      "type": "Creature"
+    },
+    {
+      "wcid": 37600,
+      "name": "Vierana du Canamorra",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30509,
+      "name": "Tanami Kei",
+      "type": "Creature"
+    },
+    {
+      "wcid": 38462,
+      "name": "Gaston Shadowbound",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32991,
+      "name": "Harkwull the Discreet",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    },
+    {
+      "wcid": 28690,
+      "name": "Erik Festus",
+      "type": "Creature"
+    },
+    {
+      "wcid": 28686,
+      "name": "Rohula bint Ludun",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32684,
+      "name": "Mekhmet",
+      "type": "Creature"
+    },
+    {
+      "wcid": 33876,
+      "name": "Soju Bo-Ki",
+      "type": "Creature"
+    },
+    {
+      "wcid": 33875,
+      "name": "Lamorda Loschi",
+      "type": "Creature"
+    },
+    {
+      "wcid": 33877,
+      "name": "Hoshar ibn Jalaq",
+      "type": "Creature"
+    },
+    {
+      "wcid": 37599,
+      "name": "Joku Shunja",
+      "type": "Creature"
+    },
+    {
+      "wcid": 35962,
+      "name": "Havala bint Mylos",
+      "type": "Creature"
+    },
+    {
+      "wcid": 3926,
+      "name": "Ivory Crafter",
+      "type": "Creature"
+    },
+    {
+      "wcid": 43074,
+      "name": "Emissary of Asheron",
+      "type": "Creature"
+    },
+    {
+      "wcid": 36534,
+      "name": "Guard Q'alia",
+      "type": "Creature"
+    },
+    {
+      "wcid": 38211,
+      "name": "Laedron the Geomancer",
+      "type": "Creature"
+    },
+    {
+      "wcid": 24153,
+      "name": "Aaminah",
+      "type": "Creature"
+    },
+    {
+      "wcid": 37598,
+      "name": "Qurakh al-Taal",
+      "type": "Creature"
+    },
+    {
+      "wcid": 37445,
+      "name": "Guard Bey",
+      "type": "Creature"
+    },
+    {
+      "wcid": 31970,
+      "name": "Shuthoth",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32813,
+      "name": "Lydda",
+      "type": "Creature"
+    },
+    {
+      "wcid": 6873,
+      "name": "Ulgrim the Unpleasant",
+      "type": "Creature"
+    },
+    {
+      "wcid": 31690,
+      "name": "Dionaea",
+      "type": "Creature"
+    },
+    {
+      "wcid": 35344,
+      "name": "Guard Winterborn",
+      "type": "Creature"
+    },
+    {
+      "wcid": 37400,
+      "name": "Merwart Mundagurg",
+      "type": "Creature"
+    },
+    {
+      "wcid": 35562,
+      "name": "Ennio di Cinghalle",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 72474,
+      "name": "Carenz Races Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6855,
+      "name": "wcid_6855",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6862,
+      "name": "wcid_6862",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6861,
+      "name": "wcid_6861",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6858,
+      "name": "wcid_6858",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20224,
+      "name": "wcid_20224",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20220,
+      "name": "wcid_20220",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6859,
+      "name": "wcid_6859",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6441,
+      "name": "wcid_6441",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 153,
+      "name": "wcid_153",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6441,
+      "name": "wcid_6441",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6077,
+      "name": "wcid_6077",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6871,
+      "name": "wcid_6871",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6867,
+      "name": "wcid_6867",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6868,
+      "name": "wcid_6868",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6869,
+      "name": "wcid_6869",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12304,
+      "name": "wcid_12304",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6870,
+      "name": "wcid_6870",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19207,
+      "name": "wcid_19207",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5774,
+      "name": "wcid_5774",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 3955,
+      "name": "wcid_3955",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 15759,
+      "name": "Linkable Item Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 29678,
+      "name": "wcid_29678",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7924,
+      "name": "wcid_7924",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10722,
+      "name": "wcid_10722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 24143,
+      "name": "wcid_24143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 24142,
+      "name": "wcid_24142",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 24144,
+      "name": "wcid_24144",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 24141,
+      "name": "wcid_24141",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 70890,
+      "name": "Ulgrim Drinking Contest Event Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 71390,
+      "name": "Claude's Mind Branch 1 Stopgap Gen",
+      "type": "Prop"
+    },
+    {
+      "wcid": 71391,
+      "name": "Claude's Mind Branch 2 Stopgap Gen",
+      "type": "Prop"
+    },
+    {
+      "wcid": 71392,
+      "name": "Claude's Mind Branch 3 Stopgap Gen",
+      "type": "Prop"
+    },
+    {
+      "wcid": 71393,
+      "name": "Claude's Mind Branch 4 Stopgap Gen",
+      "type": "Prop"
+    },
+    {
+      "wcid": 19715,
+      "name": "wcid_19715",
+      "type": "Unknown"
+    }
+  ]
+}

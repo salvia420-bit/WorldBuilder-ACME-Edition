@@ -1,0 +1,980 @@
+{
+  "townName": "Cragstone",
+  "culture": "Aluvian",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 166,
+    "lbY": 150,
+    "worldX": 31968.0,
+    "worldY": 28896.0
+  },
+  "landblocks": [
+    [
+      186,
+      158
+    ],
+    [
+      186,
+      160
+    ],
+    [
+      187,
+      155
+    ],
+    [
+      187,
+      157
+    ],
+    [
+      187,
+      159
+    ],
+    [
+      188,
+      157
+    ],
+    [
+      188,
+      158
+    ],
+    [
+      188,
+      159
+    ],
+    [
+      189,
+      159
+    ],
+    [
+      189,
+      160
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 0,
+    "totalNPCs": 9,
+    "totalVendors": 5,
+    "totalPortals": 7,
+    "totalLifestones": 0,
+    "totalSigns": 3,
+    "totalCreatures": 46,
+    "totalFurniture": 21,
+    "totalOther": 89
+  },
+  "buildings": [],
+  "npcs": [
+    {
+      "wcid": 38460,
+      "name": "Arcanum Broker",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20215,
+      "name": "Apprentice Scrivener of Item and War Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20205,
+      "name": "Apprentice Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20206,
+      "name": "Apprentice Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20209,
+      "name": "Journeyman Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20213,
+      "name": "Journeyman Scrivener of Item Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20214,
+      "name": "Scrivener of Item Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20210,
+      "name": "Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20216,
+      "name": "Apprentice Scrivener of Item and War Magic",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 12241,
+      "name": "Steiner's Apprentice Craftsman",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 671,
+      "name": "Scildith Dyrson the Bowyer",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 676,
+      "name": "Merchant Ledine",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 677,
+      "name": "Estorl the Ox, Weaponsmith",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 674,
+      "name": "Jeweler Suya bint Habil",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 1018,
+      "name": "Destroyed Portal to Hebian-To",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 19718,
+      "name": "Effigy Foundry Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 15837,
+      "name": "Sanctum Residential Halls Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 6092,
+      "name": "Cragstone Meeting Hall Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43065,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 53447,
+      "name": "Eldrytch Web Gauntlet",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 37385,
+      "name": "Eldrytch Web Stronghold",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [
+    {
+      "wcid": 468,
+      "name": "Welcome to Cragstone Sign",
+      "type": "Sign_Town"
+    },
+    {
+      "wcid": 468,
+      "name": "Welcome to Cragstone Sign",
+      "type": "Sign_Town"
+    },
+    {
+      "wcid": 468,
+      "name": "Welcome to Cragstone Sign",
+      "type": "Sign_Town"
+    }
+  ],
+  "creatures": [
+    {
+      "wcid": 42983,
+      "name": "Aleesa Stateler",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    },
+    {
+      "wcid": 46356,
+      "name": "Popkin of the Gate",
+      "type": "Creature"
+    },
+    {
+      "wcid": 46296,
+      "name": "Lady Mashal Trianna",
+      "type": "Creature"
+    },
+    {
+      "wcid": 46297,
+      "name": "Lady Kiara Trianna",
+      "type": "Creature"
+    },
+    {
+      "wcid": 46295,
+      "name": "Lady Sherath Trianna",
+      "type": "Creature"
+    },
+    {
+      "wcid": 46294,
+      "name": "Lady Dan'eel Trianna",
+      "type": "Creature"
+    },
+    {
+      "wcid": 39813,
+      "name": "Exploration Marker",
+      "type": "Creature"
+    },
+    {
+      "wcid": 43249,
+      "name": "Emissary of Asheron",
+      "type": "Creature"
+    },
+    {
+      "wcid": 43247,
+      "name": "Guardian Golem",
+      "type": "Creature"
+    },
+    {
+      "wcid": 43247,
+      "name": "Guardian Golem",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30278,
+      "name": "Lenor Turk",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30269,
+      "name": "Robert Crow",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30277,
+      "name": "Burrell Sammrun",
+      "type": "Creature"
+    },
+    {
+      "wcid": 28687,
+      "name": "Kris Cennis",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30276,
+      "name": "Joshun Felden",
+      "type": "Creature"
+    },
+    {
+      "wcid": 40770,
+      "name": "Component Exchanger",
+      "type": "Creature"
+    },
+    {
+      "wcid": 38921,
+      "name": "Arcanum Quota Officer",
+      "type": "Creature"
+    },
+    {
+      "wcid": 38461,
+      "name": "Arcanum Mana-smith",
+      "type": "Creature"
+    },
+    {
+      "wcid": 28684,
+      "name": "Brienne Carlus",
+      "type": "Creature"
+    },
+    {
+      "wcid": 34726,
+      "name": "Garbage Barrel",
+      "type": "Creature"
+    },
+    {
+      "wcid": 34726,
+      "name": "Garbage Barrel",
+      "type": "Creature"
+    },
+    {
+      "wcid": 35445,
+      "name": "Drudge Stalker",
+      "type": "Creature"
+    },
+    {
+      "wcid": 35436,
+      "name": "Drudge Ravener",
+      "type": "Creature"
+    },
+    {
+      "wcid": 35427,
+      "name": "Drudge Lurker",
+      "type": "Creature"
+    },
+    {
+      "wcid": 35445,
+      "name": "Drudge Stalker",
+      "type": "Creature"
+    },
+    {
+      "wcid": 35445,
+      "name": "Drudge Stalker",
+      "type": "Creature"
+    },
+    {
+      "wcid": 41518,
+      "name": "Emily Yarow",
+      "type": "Creature"
+    },
+    {
+      "wcid": 41519,
+      "name": "Gustuv Lansdown",
+      "type": "Creature"
+    },
+    {
+      "wcid": 15810,
+      "name": "Glysander Cartoth",
+      "type": "Creature"
+    },
+    {
+      "wcid": 29766,
+      "name": "Guard Hamdyn",
+      "type": "Creature"
+    },
+    {
+      "wcid": 29772,
+      "name": "Guard Lo Pan",
+      "type": "Creature"
+    },
+    {
+      "wcid": 29769,
+      "name": "Guard Devon",
+      "type": "Creature"
+    },
+    {
+      "wcid": 29767,
+      "name": "Guard Haigh",
+      "type": "Creature"
+    },
+    {
+      "wcid": 41186,
+      "name": "Felizio Calmasi",
+      "type": "Creature"
+    },
+    {
+      "wcid": 29771,
+      "name": "Guard Ellyon",
+      "type": "Creature"
+    },
+    {
+      "wcid": 29768,
+      "name": "Guard Sorchia",
+      "type": "Creature"
+    },
+    {
+      "wcid": 29770,
+      "name": "Guard Fassel",
+      "type": "Creature"
+    },
+    {
+      "wcid": 24248,
+      "name": "Royal Guard",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32618,
+      "name": "Royal Guard Qumasha",
+      "type": "Creature"
+    },
+    {
+      "wcid": 11809,
+      "name": "Lieutenant Kenneth",
+      "type": "Creature"
+    },
+    {
+      "wcid": 34499,
+      "name": "Shan Zhen",
+      "type": "Creature"
+    },
+    {
+      "wcid": 35477,
+      "name": "Oswent the Pale",
+      "type": "Creature"
+    },
+    {
+      "wcid": 35462,
+      "name": "Jarvis Hammerstone",
+      "type": "Creature"
+    },
+    {
+      "wcid": 35839,
+      "name": "Corporal Liao Chen",
+      "type": "Creature"
+    },
+    {
+      "wcid": 38389,
+      "name": "Arturus of the Eldrytch Web",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [
+    {
+      "wcid": 38447,
+      "name": "Mana Forge Advanced Equipment Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38447,
+      "name": "Mana Forge Advanced Equipment Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38447,
+      "name": "Mana Forge Advanced Equipment Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38443,
+      "name": "Mana Forge Mixed Equipment Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38443,
+      "name": "Mana Forge Mixed Equipment Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38443,
+      "name": "Mana Forge Mixed Equipment Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38445,
+      "name": "Mana Forge Magic Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38445,
+      "name": "Mana Forge Magic Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38445,
+      "name": "Mana Forge Magic Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38444,
+      "name": "Mana Forge Armor Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38444,
+      "name": "Mana Forge Armor Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38444,
+      "name": "Mana Forge Armor Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38446,
+      "name": "Mana Forge Weapon Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38446,
+      "name": "Mana Forge Weapon Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38446,
+      "name": "Mana Forge Weapon Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38457,
+      "name": "Mana Forge Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38457,
+      "name": "Mana Forge Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38457,
+      "name": "Mana Forge Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38457,
+      "name": "Mana Forge Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38457,
+      "name": "Mana Forge Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38457,
+      "name": "Mana Forge Chest",
+      "type": "Furniture_Storage"
+    }
+  ],
+  "other": [
+    {
+      "wcid": 12238,
+      "name": "wcid_12238",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7924,
+      "name": "wcid_7924",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28458,
+      "name": "wcid_28458",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 673,
+      "name": "wcid_673",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 672,
+      "name": "wcid_672",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 669,
+      "name": "wcid_669",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 678,
+      "name": "wcid_678",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7240,
+      "name": "wcid_7240",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4775,
+      "name": "wcid_4775",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4777,
+      "name": "wcid_4777",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4780,
+      "name": "wcid_4780",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28475,
+      "name": "wcid_28475",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 25722,
+      "name": "wcid_25722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 681,
+      "name": "wcid_681",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 685,
+      "name": "wcid_685",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 685,
+      "name": "wcid_685",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 682,
+      "name": "wcid_682",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 679,
+      "name": "wcid_679",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 683,
+      "name": "wcid_683",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 680,
+      "name": "wcid_680",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27547,
+      "name": "wcid_27547",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19205,
+      "name": "wcid_19205",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16898,
+      "name": "wcid_16898",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 71480,
+      "name": "Janet Holiday Event Spawn",
+      "type": "Prop"
+    },
+    {
+      "wcid": 71316,
+      "name": "Night Club Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 675,
+      "name": "wcid_675",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20217,
+      "name": "wcid_20217",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20218,
+      "name": "wcid_20218",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20221,
+      "name": "wcid_20221",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20225,
+      "name": "wcid_20225",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20226,
+      "name": "wcid_20226",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20222,
+      "name": "wcid_20222",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 684,
+      "name": "wcid_684",
+      "type": "Unknown"
+    }
+  ]
+}

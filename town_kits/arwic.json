@@ -1,0 +1,702 @@
+{
+  "townName": "Arwic",
+  "culture": "Aluvian",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 176,
+    "lbY": 159,
+    "worldX": 33888.0,
+    "worldY": 30624.0
+  },
+  "landblocks": [
+    [
+      197,
+      167
+    ],
+    [
+      198,
+      169
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 0,
+    "totalNPCs": 7,
+    "totalVendors": 1,
+    "totalPortals": 4,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 35,
+    "totalFurniture": 22,
+    "totalOther": 62
+  },
+  "buildings": [],
+  "npcs": [
+    {
+      "wcid": 20214,
+      "name": "Scrivener of Item Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20210,
+      "name": "Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 45501,
+      "name": "Weapon Imbue Vendor",
+      "type": "NPC"
+    },
+    {
+      "wcid": 45489,
+      "name": "Free Weapon Vendor",
+      "type": "NPC"
+    },
+    {
+      "wcid": 45485,
+      "name": "Melee Rare Vendor",
+      "type": "NPC"
+    },
+    {
+      "wcid": 35811,
+      "name": "Pevilo ibn Djimin",
+      "type": "NPC"
+    },
+    {
+      "wcid": 46425,
+      "name": "Marid",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 698,
+      "name": "Belthew Shearstone the Jeweler",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 43569,
+      "name": "Olthoi Tunnel",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43065,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 1088,
+      "name": "Arwic Mines Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 5486,
+      "name": "Destroyed Al-Jalima Portal",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 4213,
+      "name": "Leather Crafter",
+      "type": "Creature"
+    },
+    {
+      "wcid": 45495,
+      "name": "Emissary of Asheron",
+      "type": "Creature"
+    },
+    {
+      "wcid": 53385,
+      "name": "Professor of Void Magic",
+      "type": "Creature"
+    },
+    {
+      "wcid": 53381,
+      "name": "Professor of War Magic",
+      "type": "Creature"
+    },
+    {
+      "wcid": 49516,
+      "name": "Primalist",
+      "type": "Creature"
+    },
+    {
+      "wcid": 53384,
+      "name": "Professor of Life Magic",
+      "type": "Creature"
+    },
+    {
+      "wcid": 53383,
+      "name": "Professor of Item Magic",
+      "type": "Creature"
+    },
+    {
+      "wcid": 53382,
+      "name": "Professor of Creature Magic",
+      "type": "Creature"
+    },
+    {
+      "wcid": 49515,
+      "name": "Necromancer",
+      "type": "Creature"
+    },
+    {
+      "wcid": 49514,
+      "name": "Naturalist",
+      "type": "Creature"
+    },
+    {
+      "wcid": 45490,
+      "name": "Emissary of Asheron",
+      "type": "Creature"
+    },
+    {
+      "wcid": 45492,
+      "name": "Emissary of Asheron",
+      "type": "Creature"
+    },
+    {
+      "wcid": 43861,
+      "name": "Isin Dule",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42984,
+      "name": "Lord Dargeth",
+      "type": "Creature"
+    },
+    {
+      "wcid": 45480,
+      "name": "Thrown Weapons Mastery",
+      "type": "Creature"
+    },
+    {
+      "wcid": 45477,
+      "name": "Magic Mastery",
+      "type": "Creature"
+    },
+    {
+      "wcid": 45474,
+      "name": "Crossbow Mastery",
+      "type": "Creature"
+    },
+    {
+      "wcid": 45473,
+      "name": "Bow Mastery",
+      "type": "Creature"
+    },
+    {
+      "wcid": 45481,
+      "name": "Two Handed Combat Mastery",
+      "type": "Creature"
+    },
+    {
+      "wcid": 45482,
+      "name": "Unarmed Combat Mastery",
+      "type": "Creature"
+    },
+    {
+      "wcid": 45471,
+      "name": "Sword Mastery",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    },
+    {
+      "wcid": 45479,
+      "name": "Staves Mastery",
+      "type": "Creature"
+    },
+    {
+      "wcid": 45478,
+      "name": "Spears Mastery",
+      "type": "Creature"
+    },
+    {
+      "wcid": 27117,
+      "name": "Translator Aun Laokhe",
+      "type": "Creature"
+    },
+    {
+      "wcid": 45476,
+      "name": "Mace Mastery",
+      "type": "Creature"
+    },
+    {
+      "wcid": 45475,
+      "name": "Dagger Mastery",
+      "type": "Creature"
+    },
+    {
+      "wcid": 45472,
+      "name": "Axe Mastery",
+      "type": "Creature"
+    },
+    {
+      "wcid": 51962,
+      "name": "John",
+      "type": "Creature"
+    },
+    {
+      "wcid": 52139,
+      "name": "Varinia",
+      "type": "Creature"
+    },
+    {
+      "wcid": 46424,
+      "name": "Monroe",
+      "type": "Creature"
+    },
+    {
+      "wcid": 31364,
+      "name": "Jacob Durstan",
+      "type": "Creature"
+    },
+    {
+      "wcid": 46776,
+      "name": "Blackmoor's Page",
+      "type": "Creature"
+    },
+    {
+      "wcid": 39788,
+      "name": "Exploration Marker",
+      "type": "Creature"
+    },
+    {
+      "wcid": 34726,
+      "name": "Garbage Barrel",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 48743,
+      "name": "Legendary Chest",
+      "type": "Furniture_Storage"
+    }
+  ],
+  "other": [
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 3951,
+      "name": "wcid_3951",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28930,
+      "name": "wcid_28930",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28929,
+      "name": "wcid_28929",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 463,
+      "name": "wcid_463",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 694,
+      "name": "wcid_694",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 693,
+      "name": "wcid_693",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 400,
+      "name": "wcid_400",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 695,
+      "name": "wcid_695",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 697,
+      "name": "wcid_697",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 696,
+      "name": "wcid_696",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 703,
+      "name": "wcid_703",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 702,
+      "name": "wcid_702",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20226,
+      "name": "wcid_20226",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20222,
+      "name": "wcid_20222",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28968,
+      "name": "wcid_28968",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 25486,
+      "name": "wcid_25486",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28182,
+      "name": "wcid_28182",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 43862,
+      "name": "wcid_43862",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 43009,
+      "name": "wcid_43009",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 43010,
+      "name": "wcid_43010",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 22934,
+      "name": "wcid_22934",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 43007,
+      "name": "wcid_43007",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 43008,
+      "name": "wcid_43008",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 22207,
+      "name": "wcid_22207",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12304,
+      "name": "wcid_12304",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    }
+  ]
+}

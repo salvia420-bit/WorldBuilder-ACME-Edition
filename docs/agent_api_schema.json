@@ -1,0 +1,1296 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "WorldBuilder.Terminal Agent API Schema",
+    "description": "Machine-readable schema for the WorldBuilder.Terminal JSON-line protocol. An AI agent can load this at startup to discover available commands, required/optional parameters, and response shapes.",
+    "version": "1.2",
+    "protocol": "json-line",
+    "transport": "stdin/stdout",
+    "startup": {
+        "command": "WorldBuilder.Terminal --stdin [--project <path>]",
+        "readyMessage": {
+            "success": true,
+            "command": "ready",
+            "version": "string",
+            "message": "string"
+        }
+    },
+    "requestFormat": {
+        "description": "One JSON object per line on stdin. Must contain a 'command' field.",
+        "required": [
+            "command"
+        ],
+        "example": "{\"command\":\"load\",\"path\":\"C:\\\\project.wbproj\"}"
+    },
+    "responseEnvelope": {
+        "description": "Every response contains 'success' and 'command'. Failures include 'error'.",
+        "successFields": [
+            "success",
+            "command"
+        ],
+        "failureFields": [
+            "success",
+            "command",
+            "error"
+        ]
+    },
+    "serializationRules": {
+        "propertyNaming": "camelCase",
+        "nullHandling": "omitted",
+        "indentation": false,
+        "landblockIdFormat": "0x{hex4}",
+        "modelIdFormat": "0x{hex8}",
+        "quaternionFormat": {
+            "w": "float",
+            "x": "float",
+            "y": "float",
+            "z": "float"
+        },
+        "heightPrecision": 2
+    },
+    "coordinateSystem": {
+        "description": "Right-handed coordinate system. X = East, Y = North, Z = Up.",
+        "landblockSize": 192,
+        "cellSize": 24,
+        "gridPerLandblock": 9,
+        "verticesPerLandblock": 81,
+        "mapGridSize": {
+            "width": 255,
+            "height": 255
+        },
+        "totalLandblocks": 65025,
+        "worldBounds": {
+            "maxX": 48960,
+            "maxY": 48960
+        },
+        "formulas": {
+            "worldOrigin": "lbX * 192, lbY * 192",
+            "landblockId": "(lbX << 8) | lbY",
+            "gridCoordsFromId": "lbX = id >> 8, lbY = id & 0xFF",
+            "vertexWorldPos": "(lbX*192 + gridX*24, lbY*192 + gridY*24)",
+            "landblockFromWorld": "floor(worldX/192), floor(worldY/192)",
+            "vertexFlatIndex": "gridX * 9 + gridY",
+            "heightFromIndex": "heightTable[heightIndex]",
+            "isSetupModel": "(id & 0x02000000) != 0"
+        }
+    },
+    "commands": {
+        "load": {
+            "category": "project",
+            "description": "Load a .wbproj project file. Must be called before terrain/object commands.",
+            "parameters": {
+                "path": {
+                    "type": "string",
+                    "required": true,
+                    "description": "Absolute or relative path to a .wbproj file"
+                }
+            },
+            "response": {
+                "projectName": "string",
+                "projectFile": "string",
+                "projectDir": "string",
+                "datDirectory": "string"
+            }
+        },
+        "export": {
+            "category": "project",
+            "description": "Export modified DAT files to a directory.",
+            "parameters": {
+                "directory": {
+                    "type": "string",
+                    "required": true,
+                    "description": "Output directory for DAT files"
+                },
+                "iteration": {
+                    "type": "int",
+                    "required": false,
+                    "default": "current + 1",
+                    "description": "Portal iteration number"
+                }
+            },
+            "response": {
+                "directory": "string",
+                "iteration": "int?"
+            }
+        },
+        "info": {
+            "category": "project",
+            "description": "Show info about the currently loaded project.",
+            "parameters": {},
+            "response": {
+                "loaded": "bool",
+                "projectName": "string?",
+                "projectFile": "string?",
+                "projectDir": "string?",
+                "datDirectory": "string?",
+                "databasePath": "string?",
+                "portalIteration": "int?"
+            }
+        },
+        "smooth": {
+            "category": "terrain_edit",
+            "description": "Smooth terrain heights within a radius by averaging neighbors.",
+            "parameters": {
+                "x": {
+                    "type": "float",
+                    "required": true,
+                    "description": "World X center"
+                },
+                "y": {
+                    "type": "float",
+                    "required": true,
+                    "description": "World Y center"
+                },
+                "radius": {
+                    "type": "float",
+                    "required": true,
+                    "description": "Radius in world units"
+                },
+                "strength": {
+                    "type": "float",
+                    "required": false,
+                    "default": 0.5,
+                    "range": "0.0-1.0",
+                    "description": "Smoothing strength"
+                }
+            },
+            "response": {
+                "verticesModified": "int",
+                "landblocks": "string[]"
+            }
+        },
+        "raise": {
+            "category": "terrain_edit",
+            "description": "Raise terrain height indices within a radius.",
+            "parameters": {
+                "x": {
+                    "type": "float",
+                    "required": true,
+                    "description": "World X center"
+                },
+                "y": {
+                    "type": "float",
+                    "required": true,
+                    "description": "World Y center"
+                },
+                "radius": {
+                    "type": "float",
+                    "required": true,
+                    "description": "Radius in world units"
+                },
+                "delta": {
+                    "type": "int",
+                    "required": false,
+                    "default": 5,
+                    "description": "Height index increase (clamped to 0-255)"
+                }
+            },
+            "response": {
+                "verticesModified": "int",
+                "delta": "int",
+                "landblocks": "string[]"
+            }
+        },
+        "lower": {
+            "category": "terrain_edit",
+            "description": "Lower terrain height indices within a radius.",
+            "parameters": {
+                "x": {
+                    "type": "float",
+                    "required": true,
+                    "description": "World X center"
+                },
+                "y": {
+                    "type": "float",
+                    "required": true,
+                    "description": "World Y center"
+                },
+                "radius": {
+                    "type": "float",
+                    "required": true,
+                    "description": "Radius in world units"
+                },
+                "delta": {
+                    "type": "int",
+                    "required": false,
+                    "default": 5,
+                    "description": "Height index decrease (clamped to 0-255)"
+                }
+            },
+            "response": {
+                "verticesModified": "int",
+                "delta": "int",
+                "landblocks": "string[]"
+            }
+        },
+        "set-height": {
+            "category": "terrain_edit",
+            "description": "Set all vertices within a radius to an exact height index.",
+            "parameters": {
+                "x": {
+                    "type": "float",
+                    "required": true,
+                    "description": "World X center"
+                },
+                "y": {
+                    "type": "float",
+                    "required": true,
+                    "description": "World Y center"
+                },
+                "radius": {
+                    "type": "float",
+                    "required": true,
+                    "description": "Radius in world units"
+                },
+                "height": {
+                    "type": "byte",
+                    "required": true,
+                    "range": "0-255",
+                    "description": "Target height index"
+                }
+            },
+            "response": {
+                "verticesModified": "int",
+                "targetHeight": "int",
+                "landblocks": "string[]"
+            }
+        },
+        "paint": {
+            "category": "terrain_edit",
+            "description": "Paint terrain texture type within a radius.",
+            "parameters": {
+                "x": {
+                    "type": "float",
+                    "required": true,
+                    "description": "World X center"
+                },
+                "y": {
+                    "type": "float",
+                    "required": true,
+                    "description": "World Y center"
+                },
+                "radius": {
+                    "type": "float",
+                    "required": true,
+                    "description": "Radius in world units"
+                },
+                "type": {
+                    "type": "byte",
+                    "required": true,
+                    "description": "Terrain type index (use get-region to see available types)"
+                }
+            },
+            "response": {
+                "verticesModified": "int",
+                "terrainType": "int",
+                "landblocks": "string[]"
+            }
+        },
+        "fill": {
+            "category": "terrain_edit",
+            "description": "Flood-fill contiguous terrain of the same type from a seed point.",
+            "parameters": {
+                "x": {
+                    "type": "float",
+                    "required": true,
+                    "description": "World X seed point"
+                },
+                "y": {
+                    "type": "float",
+                    "required": true,
+                    "description": "World Y seed point"
+                },
+                "type": {
+                    "type": "byte",
+                    "required": true,
+                    "description": "New terrain type to fill with"
+                }
+            },
+            "response": {
+                "verticesModified": "int",
+                "terrainType": "int",
+                "landblocks": "string[]"
+            }
+        },
+        "road": {
+            "category": "terrain_edit",
+            "description": "Draw a road path between two world positions following terrain-aware routing.",
+            "parameters": {
+                "x1": {
+                    "type": "float",
+                    "required": true,
+                    "description": "Start X"
+                },
+                "y1": {
+                    "type": "float",
+                    "required": true,
+                    "description": "Start Y"
+                },
+                "x2": {
+                    "type": "float",
+                    "required": true,
+                    "description": "End X"
+                },
+                "y2": {
+                    "type": "float",
+                    "required": true,
+                    "description": "End Y"
+                },
+                "value": {
+                    "type": "byte",
+                    "required": false,
+                    "default": 1,
+                    "description": "Road intensity (0 = remove, 1+ = road)"
+                }
+            },
+            "response": {
+                "waypoints": "int",
+                "verticesModified": "int",
+                "roadValue": "int",
+                "landblocks": "string[]"
+            }
+        },
+        "get-height": {
+            "category": "terrain_query",
+            "description": "Query terrain height and vertex metadata at a world position.",
+            "parameters": {
+                "x": {
+                    "type": "float",
+                    "required": true,
+                    "description": "World X coordinate"
+                },
+                "y": {
+                    "type": "float",
+                    "required": true,
+                    "description": "World Y coordinate"
+                }
+            },
+            "response": {
+                "x": "float",
+                "y": "float",
+                "height": "float (world-space, rounded to 2dp)",
+                "heightIndex": "byte?",
+                "terrainType": "byte?",
+                "road": "byte?",
+                "scenery": "byte?",
+                "landblock": "string? (hex)",
+                "vertexIndex": "int?"
+            }
+        },
+        "terrain-info": {
+            "category": "terrain_query",
+            "description": "Statistical summary of a landblock's terrain data.",
+            "parameters": {
+                "lbX": {
+                    "type": "uint",
+                    "required": true,
+                    "range": "0-254",
+                    "description": "Landblock grid X"
+                },
+                "lbY": {
+                    "type": "uint",
+                    "required": true,
+                    "range": "0-254",
+                    "description": "Landblock grid Y"
+                }
+            },
+            "response": {
+                "landblock": "string (hex)",
+                "found": "bool",
+                "lbX": "uint",
+                "lbY": "uint",
+                "worldOriginX": "int",
+                "worldOriginY": "int",
+                "vertexCount": "int (always 81)",
+                "heightMin": "int",
+                "heightMax": "int",
+                "heightAvg": "float",
+                "terrainTypes": [
+                    {
+                        "type": "int",
+                        "count": "int",
+                        "percent": "float"
+                    }
+                ]
+            }
+        },
+        "get-heightmap": {
+            "category": "terrain_query",
+            "description": "Full 9×9 height grid for a landblock in both world and index form.",
+            "parameters": {
+                "lbX": {
+                    "type": "uint",
+                    "required": true,
+                    "range": "0-254"
+                },
+                "lbY": {
+                    "type": "uint",
+                    "required": true,
+                    "range": "0-254"
+                }
+            },
+            "response": {
+                "landblock": "string (hex)",
+                "found": "bool",
+                "gridSize": "int (always 9)",
+                "cellSize": "int (always 24)",
+                "heightsWorld": "float[9][9]",
+                "heightIndices": "int[9][9]"
+            }
+        },
+        "get-terrain-data": {
+            "category": "terrain_query",
+            "description": "Complete per-vertex data for all 81 vertices in a landblock.",
+            "parameters": {
+                "lbX": {
+                    "type": "uint",
+                    "required": true,
+                    "range": "0-254"
+                },
+                "lbY": {
+                    "type": "uint",
+                    "required": true,
+                    "range": "0-254"
+                }
+            },
+            "response": {
+                "landblock": "string (hex)",
+                "found": "bool",
+                "vertexCount": "int",
+                "vertices": [
+                    {
+                        "index": "int (0-80)",
+                        "gridX": "int (0-8)",
+                        "gridY": "int (0-8)",
+                        "heightIndex": "int (0-255)",
+                        "heightWorld": "float",
+                        "terrainType": "int",
+                        "road": "int",
+                        "scenery": "int"
+                    }
+                ]
+            }
+        },
+        "list-objects": {
+            "category": "objects",
+            "description": "List all static objects in a landblock.",
+            "parameters": {
+                "lbX": {
+                    "type": "uint",
+                    "required": true,
+                    "range": "0-254"
+                },
+                "lbY": {
+                    "type": "uint",
+                    "required": true,
+                    "range": "0-254"
+                }
+            },
+            "response": {
+                "landblock": "string (hex)",
+                "count": "int",
+                "objects": [
+                    {
+                        "index": "int",
+                        "modelId": "string (hex)",
+                        "type": "string ('Setup' | 'GfxObj')",
+                        "x": "float",
+                        "y": "float",
+                        "z": "float",
+                        "orientation": {
+                            "w": "float",
+                            "x": "float",
+                            "y": "float",
+                            "z": "float"
+                        },
+                        "scale": {
+                            "x": "float",
+                            "y": "float",
+                            "z": "float"
+                        }
+                    }
+                ]
+            }
+        },
+        "add-object": {
+            "category": "objects",
+            "description": "Place a new static object in a landblock.",
+            "parameters": {
+                "lbX": {
+                    "type": "uint",
+                    "required": true
+                },
+                "lbY": {
+                    "type": "uint",
+                    "required": true
+                },
+                "modelId": {
+                    "type": "string",
+                    "required": true,
+                    "format": "hex (e.g. '0x02001234')",
+                    "description": "Model ID. Prefix 0x02=Setup, 0x01=GfxObj"
+                },
+                "x": {
+                    "type": "float",
+                    "required": true,
+                    "description": "World X position"
+                },
+                "y": {
+                    "type": "float",
+                    "required": true,
+                    "description": "World Y position"
+                },
+                "z": {
+                    "type": "float",
+                    "required": true,
+                    "description": "World Z position"
+                },
+                "qw": {
+                    "type": "float",
+                    "required": false,
+                    "default": 1.0,
+                    "description": "Quaternion W"
+                },
+                "qx": {
+                    "type": "float",
+                    "required": false,
+                    "default": 0.0,
+                    "description": "Quaternion X"
+                },
+                "qy": {
+                    "type": "float",
+                    "required": false,
+                    "default": 0.0,
+                    "description": "Quaternion Y"
+                },
+                "qz": {
+                    "type": "float",
+                    "required": false,
+                    "default": 0.0,
+                    "description": "Quaternion Z"
+                },
+                "scale": {
+                    "type": "float",
+                    "required": false,
+                    "default": 1.0,
+                    "description": "Uniform scale (all axes)"
+                },
+                "scaleX": {
+                    "type": "float",
+                    "required": false,
+                    "default": "scale value",
+                    "description": "Per-axis X scale"
+                },
+                "scaleY": {
+                    "type": "float",
+                    "required": false,
+                    "default": "scale value",
+                    "description": "Per-axis Y scale"
+                },
+                "scaleZ": {
+                    "type": "float",
+                    "required": false,
+                    "default": "scale value",
+                    "description": "Per-axis Z scale"
+                },
+                "snap": {
+                    "type": "bool",
+                    "required": false,
+                    "default": false,
+                    "description": "Snap position to nearest outdoor cell center"
+                }
+            },
+            "response": {
+                "landblock": "string (hex)",
+                "index": "int",
+                "modelId": "string (hex)",
+                "type": "string ('Setup' | 'GfxObj')",
+                "x": "float",
+                "y": "float",
+                "z": "float",
+                "snapped": "bool",
+                "orientation": {
+                    "w": "float",
+                    "x": "float",
+                    "y": "float",
+                    "z": "float"
+                },
+                "scale": {
+                    "x": "float",
+                    "y": "float",
+                    "z": "float"
+                }
+            }
+        },
+        "remove-object": {
+            "category": "objects",
+            "description": "Remove a static object by index. WARNING: Indices shift after removal.",
+            "parameters": {
+                "lbX": {
+                    "type": "uint",
+                    "required": true
+                },
+                "lbY": {
+                    "type": "uint",
+                    "required": true
+                },
+                "index": {
+                    "type": "int",
+                    "required": true,
+                    "description": "0-based object index"
+                }
+            },
+            "response": {
+                "landblock": "string (hex)",
+                "index": "int",
+                "removedModelId": "string (hex)",
+                "removedPosition": {
+                    "x": "float",
+                    "y": "float",
+                    "z": "float"
+                }
+            }
+        },
+        "move-object": {
+            "category": "objects",
+            "description": "Move a static object to a new world position.",
+            "parameters": {
+                "lbX": {
+                    "type": "uint",
+                    "required": true
+                },
+                "lbY": {
+                    "type": "uint",
+                    "required": true
+                },
+                "index": {
+                    "type": "int",
+                    "required": true,
+                    "description": "0-based object index"
+                },
+                "x": {
+                    "type": "float",
+                    "required": true,
+                    "description": "New world X"
+                },
+                "y": {
+                    "type": "float",
+                    "required": true,
+                    "description": "New world Y"
+                },
+                "z": {
+                    "type": "float",
+                    "required": true,
+                    "description": "New world Z"
+                }
+            },
+            "response": {
+                "landblock": "string (hex)",
+                "index": "int",
+                "modelId": "string (hex)",
+                "from": {
+                    "x": "float",
+                    "y": "float",
+                    "z": "float"
+                },
+                "to": {
+                    "x": "float",
+                    "y": "float",
+                    "z": "float"
+                }
+            }
+        },
+        "rotate-object": {
+            "category": "objects",
+            "description": "Set an object's orientation. Provide EITHER quaternion (qw/qx/qy/qz) OR yaw (degrees). This SETS the orientation absolutely — it does not compose with existing rotation.",
+            "parameters": {
+                "lbX": {
+                    "type": "uint",
+                    "required": true
+                },
+                "lbY": {
+                    "type": "uint",
+                    "required": true
+                },
+                "index": {
+                    "type": "int",
+                    "required": true
+                },
+                "qw": {
+                    "type": "float",
+                    "required": "one_of_group",
+                    "group": "orientation",
+                    "description": "Quaternion W"
+                },
+                "qx": {
+                    "type": "float",
+                    "required": "one_of_group",
+                    "group": "orientation",
+                    "description": "Quaternion X"
+                },
+                "qy": {
+                    "type": "float",
+                    "required": "one_of_group",
+                    "group": "orientation",
+                    "description": "Quaternion Y"
+                },
+                "qz": {
+                    "type": "float",
+                    "required": "one_of_group",
+                    "group": "orientation",
+                    "description": "Quaternion Z"
+                },
+                "yaw": {
+                    "type": "float",
+                    "required": "one_of_group",
+                    "group": "orientation",
+                    "description": "Z-axis rotation in degrees (alternative to quaternion)"
+                }
+            },
+            "parameterGroups": {
+                "orientation": {
+                    "description": "Must provide EITHER all quaternion fields (qw,qx,qy,qz) OR yaw",
+                    "options": [
+                        {
+                            "fields": [
+                                "qw",
+                                "qx",
+                                "qy",
+                                "qz"
+                            ],
+                            "description": "Absolute quaternion"
+                        },
+                        {
+                            "fields": [
+                                "yaw"
+                            ],
+                            "description": "Z-axis rotation in degrees"
+                        }
+                    ]
+                }
+            },
+            "response": {
+                "landblock": "string (hex)",
+                "index": "int",
+                "modelId": "string (hex)",
+                "oldOrientation": {
+                    "w": "float",
+                    "x": "float",
+                    "y": "float",
+                    "z": "float"
+                },
+                "newOrientation": {
+                    "w": "float",
+                    "x": "float",
+                    "y": "float",
+                    "z": "float"
+                }
+            }
+        },
+        "query-radius": {
+            "category": "spatial",
+            "description": "Find all static objects within a radius of a world position. Searches across landblock boundaries.",
+            "parameters": {
+                "x": {
+                    "type": "float",
+                    "required": true,
+                    "description": "Center X"
+                },
+                "y": {
+                    "type": "float",
+                    "required": true,
+                    "description": "Center Y"
+                },
+                "radius": {
+                    "type": "float",
+                    "required": true,
+                    "description": "Search radius in world units"
+                },
+                "z": {
+                    "type": "float",
+                    "required": false,
+                    "default": 0.0,
+                    "description": "Center Z (for 3D distance)"
+                },
+                "includeZ": {
+                    "type": "bool",
+                    "required": false,
+                    "default": "auto (true if z≠0)",
+                    "description": "Use 3D distance calculation"
+                }
+            },
+            "response": {
+                "center": {
+                    "x": "float",
+                    "y": "float",
+                    "z": "float"
+                },
+                "radius": "float",
+                "includeZ": "bool",
+                "totalFound": "int",
+                "uniqueModels": "int",
+                "density": "float (count / π*r²)",
+                "objects": [
+                    {
+                        "distance": "float",
+                        "landblock": "string (hex)",
+                        "index": "int",
+                        "modelId": "string (hex)",
+                        "type": "string",
+                        "x": "float",
+                        "y": "float",
+                        "z": "float",
+                        "orientation": {
+                            "w": "float",
+                            "x": "float",
+                            "y": "float",
+                            "z": "float"
+                        }
+                    }
+                ],
+                "modelFrequency": [
+                    {
+                        "modelId": "string (hex)",
+                        "count": "int"
+                    }
+                ]
+            },
+            "notes": "Objects sorted by distance (nearest first). modelFrequency sorted by count (descending)."
+        },
+        "analyze-dungeons": {
+            "category": "dungeon",
+            "description": "Scan all dungeon cells in loaded DATs. Produces room type catalog and starter candidates.",
+            "parameters": {
+                "outputPath": {
+                    "type": "string",
+                    "required": false,
+                    "description": "File path to save full report JSON"
+                }
+            },
+            "response": {
+                "totalLandblocksScanned": "int",
+                "totalCellsScanned": "int",
+                "uniqueRoomTypes": "int",
+                "topStarterCandidates": [
+                    {
+                        "envFileId": "string (hex)",
+                        "cellStructIndex": "int",
+                        "portalCount": "int",
+                        "usageCount": "int",
+                        "sampleDungeonNames": "string[]"
+                    }
+                ],
+                "savedTo": "string?"
+            }
+        },
+        "get-dungeon-info": {
+            "category": "dungeon",
+            "description": "Get full cell layout of a dungeon within a landblock.",
+            "parameters": {
+                "lbX": {
+                    "type": "uint",
+                    "required": true
+                },
+                "lbY": {
+                    "type": "uint",
+                    "required": true
+                }
+            },
+            "response": {
+                "landblock": "string (hex)",
+                "hasDungeon": "bool",
+                "cellCount": "int",
+                "cells": [
+                    {
+                        "cellNumber": "string (hex)",
+                        "environmentId": "string (hex, 0x0Dxxxx prefix in full)",
+                        "cellStructure": "int",
+                        "origin": {
+                            "x": "float",
+                            "y": "float",
+                            "z": "float"
+                        },
+                        "portalCount": "int",
+                        "portals": [
+                            {
+                                "otherCellId": "string (hex)",
+                                "polygonId": "int"
+                            }
+                        ],
+                        "staticObjectCount": "int",
+                        "staticObjects": [
+                            {
+                                "id": "string (hex)",
+                                "x": "float",
+                                "y": "float",
+                                "z": "float"
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        "validate-dungeon": {
+            "category": "validation",
+            "description": "Validate dungeon structural integrity. Diagnostic codes: DNG001-DNG011.",
+            "parameters": {
+                "lbX": {
+                    "type": "uint",
+                    "required": true
+                },
+                "lbY": {
+                    "type": "uint",
+                    "required": true
+                }
+            },
+            "response": "$ref:validationReport"
+        },
+        "validate-landblock": {
+            "category": "validation",
+            "description": "Validate landblock static objects. Diagnostic codes: LBK001-LBK009.",
+            "parameters": {
+                "lbX": {
+                    "type": "uint",
+                    "required": true
+                },
+                "lbY": {
+                    "type": "uint",
+                    "required": true
+                }
+            },
+            "response": "$ref:validationReport"
+        },
+        "validate-terrain": {
+            "category": "validation",
+            "description": "Validate terrain data. Diagnostic codes: TRN001-TRN005.",
+            "parameters": {
+                "lbX": {
+                    "type": "uint",
+                    "required": true
+                },
+                "lbY": {
+                    "type": "uint",
+                    "required": true
+                },
+                "cliffThreshold": {
+                    "type": "float",
+                    "required": false,
+                    "default": 100.0,
+                    "description": "Height delta for cliff warnings (world units)"
+                }
+            },
+            "response": "$ref:validationReport"
+        },
+        "validate-building-portals": {
+            "category": "validation",
+            "description": "Validate building portal links. Diagnostic codes: BLD001-BLD008.",
+            "parameters": {
+                "lbX": {
+                    "type": "uint",
+                    "required": true
+                },
+                "lbY": {
+                    "type": "uint",
+                    "required": true
+                }
+            },
+            "response": "$ref:validationReport"
+        },
+        "validate-all": {
+            "category": "validation",
+            "description": "Run ALL four validators in one call. Recommended validation command for agents.",
+            "parameters": {
+                "lbX": {
+                    "type": "uint",
+                    "required": true
+                },
+                "lbY": {
+                    "type": "uint",
+                    "required": true
+                },
+                "cliffThreshold": {
+                    "type": "float",
+                    "required": false,
+                    "default": 100.0
+                }
+            },
+            "response": "$ref:validationReport"
+        },
+        "list-landblocks": {
+            "category": "world",
+            "description": "List landblocks with terrain data in a coordinate range.",
+            "parameters": {
+                "minX": {
+                    "type": "uint",
+                    "required": false,
+                    "default": 0
+                },
+                "minY": {
+                    "type": "uint",
+                    "required": false,
+                    "default": 0
+                },
+                "maxX": {
+                    "type": "uint",
+                    "required": false,
+                    "default": 254
+                },
+                "maxY": {
+                    "type": "uint",
+                    "required": false,
+                    "default": 254
+                },
+                "limit": {
+                    "type": "int",
+                    "required": false,
+                    "default": 500,
+                    "description": "Max results"
+                }
+            },
+            "response": {
+                "count": "int",
+                "range": {
+                    "minX": "uint",
+                    "minY": "uint",
+                    "maxX": "uint",
+                    "maxY": "uint"
+                },
+                "truncated": "bool",
+                "landblocks": [
+                    {
+                        "landblock": "string (hex)",
+                        "lbX": "uint",
+                        "lbY": "uint",
+                        "worldOriginX": "int",
+                        "worldOriginY": "int",
+                        "heightMin": "int",
+                        "heightMax": "int"
+                    }
+                ]
+            }
+        },
+        "get-world-info": {
+            "category": "world",
+            "description": "World-level constants and project metadata.",
+            "parameters": {},
+            "response": {
+                "projectName": "string",
+                "mapWidth": "int (always 255)",
+                "mapHeight": "int (always 255)",
+                "landblockSize": "int (always 192)",
+                "cellSize": "int (always 24)",
+                "gridPerLandblock": "int (always 9)",
+                "verticesPerLandblock": "int (always 81)",
+                "totalLandblocks": "int (always 65025)",
+                "modifiedLandblocks": "int",
+                "heightTableSize": "int",
+                "heightMin": "float",
+                "heightMax": "float",
+                "portalIteration": "int?"
+            }
+        },
+        "get-region": {
+            "category": "world",
+            "description": "Height lookup table and terrain type names from the game's Region data.",
+            "parameters": {},
+            "response": {
+                "heightTable": "float[] (indexed 0-255, maps height index to world height)",
+                "heightTableSize": "int",
+                "terrainTypeCount": "int?",
+                "terrainTypes": [
+                    {
+                        "index": "int",
+                        "name": "string"
+                    }
+                ]
+            }
+        },
+        "help": {
+            "category": "control",
+            "description": "Returns the command list as structured JSON.",
+            "parameters": {},
+            "response": {
+                "protocol": "string",
+                "version": "string",
+                "description": "string",
+                "commands": [
+                    {
+                        "name": "string",
+                        "args": "string",
+                        "description": "string"
+                    }
+                ]
+            }
+        },
+        "quit": {
+            "category": "control",
+            "description": "Terminate the JSON session. Process exits after sending response.",
+            "aliases": [
+                "exit"
+            ],
+            "parameters": {},
+            "response": {}
+        }
+    },
+    "sharedTypes": {
+        "validationReport": {
+            "description": "Uniform response shape for all validation commands.",
+            "fields": {
+                "landblock": "string (hex)",
+                "isValid": "bool (true if errorCount == 0)",
+                "errorCount": "int",
+                "warningCount": "int",
+                "infoCount": "int",
+                "diagnostics": [
+                    {
+                        "severity": "string ('error' | 'warning' | 'info')",
+                        "code": "string (e.g. 'DNG003', 'LBK005')",
+                        "message": "string (human-readable)",
+                        "context": "string? (additional context)"
+                    }
+                ]
+            }
+        }
+    },
+    "diagnosticCodes": {
+        "dungeon": {
+            "DNG001": {
+                "severity": "error",
+                "description": "Dungeon has no cells"
+            },
+            "DNG002": {
+                "severity": "error",
+                "description": "Duplicate cell number"
+            },
+            "DNG003": {
+                "severity": "error",
+                "description": "Portal references non-existent cell"
+            },
+            "DNG004": {
+                "severity": "warning",
+                "description": "Portal has no return link (asymmetric)"
+            },
+            "DNG005": {
+                "severity": "warning",
+                "description": "VisibleCells references non-existent cell"
+            },
+            "DNG006": {
+                "severity": "error",
+                "description": "Environment ID not found in DAT"
+            },
+            "DNG007": {
+                "severity": "error",
+                "description": "CellStructure index not in Environment"
+            },
+            "DNG008": {
+                "severity": "warning",
+                "description": "Portal polygon ID not in CellStruct"
+            },
+            "DNG009": {
+                "severity": "info",
+                "description": "Unconnected portal slots available"
+            },
+            "DNG010": {
+                "severity": "error",
+                "description": "Degenerate orientation quaternion"
+            },
+            "DNG011": {
+                "severity": "error",
+                "description": "Cells disconnected from main graph"
+            }
+        },
+        "landblock": {
+            "LBK001": {
+                "severity": "info",
+                "description": "No static objects"
+            },
+            "LBK002": {
+                "severity": "warning",
+                "description": "Object outside landblock bounds"
+            },
+            "LBK003": {
+                "severity": "warning",
+                "description": "Object >50 units below terrain"
+            },
+            "LBK004": {
+                "severity": "info",
+                "description": "Object >500 units above terrain (floating)"
+            },
+            "LBK005": {
+                "severity": "error",
+                "description": "Near-zero scale (invisible)"
+            },
+            "LBK006": {
+                "severity": "error",
+                "description": "Degenerate orientation quaternion"
+            },
+            "LBK007": {
+                "severity": "warning",
+                "description": "Unexpected model ID prefix"
+            },
+            "LBK008": {
+                "severity": "error",
+                "description": "Model ID not found in DAT"
+            },
+            "LBK009": {
+                "severity": "warning",
+                "description": "Duplicate object (same model + position)"
+            }
+        },
+        "terrain": {
+            "TRN001": {
+                "severity": "info",
+                "description": "No terrain data for landblock"
+            },
+            "TRN002": {
+                "severity": "warning",
+                "description": "Extreme height cliff between adjacent vertices"
+            },
+            "TRN003": {
+                "severity": "info",
+                "description": "All vertices same terrain type"
+            },
+            "TRN004": {
+                "severity": "info",
+                "description": "All vertices same height (flat)"
+            },
+            "TRN005": {
+                "severity": "warning",
+                "description": "Edge height mismatch with neighbor landblock"
+            }
+        },
+        "building": {
+            "BLD001": {
+                "severity": "info",
+                "description": "No LandBlockInfo"
+            },
+            "BLD002": {
+                "severity": "info",
+                "description": "No buildings in landblock"
+            },
+            "BLD003": {
+                "severity": "error",
+                "description": "Building portal targets non-existent EnvCell"
+            },
+            "BLD004": {
+                "severity": "warning",
+                "description": "EnvCell has no outdoor exit portal"
+            },
+            "BLD005": {
+                "severity": "error",
+                "description": "Interior cell not in DAT"
+            },
+            "BLD006": {
+                "severity": "error",
+                "description": "Interior portal targets non-existent cell"
+            },
+            "BLD007": {
+                "severity": "warning",
+                "description": "VisibleCells references non-existent EnvCell"
+            },
+            "BLD008": {
+                "severity": "warning",
+                "description": "VisibleCells contains unexpected ID"
+            }
+        }
+    }
+}

@@ -1,0 +1,282 @@
+{
+  "townName": "Al-Arqas",
+  "culture": "Gharu'ndim",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 149,
+    "lbY": 113,
+    "worldX": 28704.0,
+    "worldY": 21792.0
+  },
+  "landblocks": [
+    [
+      144,
+      88
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 0,
+    "totalNPCs": 2,
+    "totalVendors": 2,
+    "totalPortals": 3,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 5,
+    "totalFurniture": 0,
+    "totalOther": 36
+  },
+  "buildings": [],
+  "npcs": [
+    {
+      "wcid": 20209,
+      "name": "Journeyman Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20213,
+      "name": "Journeyman Scrivener of Item Magic",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 4680,
+      "name": "Muta al-Mai the Bowyer",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 4683,
+      "name": "Hinnabqiq the Jeweler",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 19717,
+      "name": "Mannikin Foundry Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 6088,
+      "name": "Al-Arqas Meeting Hall Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43066,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 8126,
+      "name": "Gerloc the Defender",
+      "type": "Creature"
+    },
+    {
+      "wcid": 8124,
+      "name": "Gersan the Sureshot",
+      "type": "Creature"
+    },
+    {
+      "wcid": 8125,
+      "name": "Gervena the Oblique",
+      "type": "Creature"
+    },
+    {
+      "wcid": 3918,
+      "name": "Collector",
+      "type": "Creature"
+    },
+    {
+      "wcid": 5152,
+      "name": "Jilsaya bint Dah",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4686,
+      "name": "wcid_4686",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4684,
+      "name": "wcid_4684",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4677,
+      "name": "wcid_4677",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4681,
+      "name": "wcid_4681",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4679,
+      "name": "wcid_4679",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4682,
+      "name": "wcid_4682",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20221,
+      "name": "wcid_20221",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20225,
+      "name": "wcid_20225",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4643,
+      "name": "wcid_4643",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4642,
+      "name": "wcid_4642",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4639,
+      "name": "wcid_4639",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4640,
+      "name": "wcid_4640",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27744,
+      "name": "wcid_27744",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 25951,
+      "name": "wcid_25951",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27251,
+      "name": "wcid_27251",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4645,
+      "name": "wcid_4645",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4645,
+      "name": "wcid_4645",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19199,
+      "name": "Nullified Statue of a Gromnie",
+      "type": "Prop"
+    },
+    {
+      "wcid": 27547,
+      "name": "wcid_27547",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5085,
+      "name": "wcid_5085",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 45983,
+      "name": "Explorer Finesse Weapons Gem",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 45990,
+      "name": "Explorer Heavy Weapons Gem",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 45981,
+      "name": "Explorer Light Weapons Gem",
+      "type": "Unknown"
+    }
+  ]
+}

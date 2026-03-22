@@ -1,0 +1,472 @@
+{
+  "townName": "Baishi",
+  "culture": "Sho",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 210,
+    "lbY": 68,
+    "worldX": 40416.0,
+    "worldY": 13152.0
+  },
+  "landblocks": [
+    [
+      205,
+      65
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 0,
+    "totalNPCs": 2,
+    "totalVendors": 3,
+    "totalPortals": 4,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 5,
+    "totalFurniture": 0,
+    "totalOther": 72
+  },
+  "buildings": [],
+  "npcs": [
+    {
+      "wcid": 20214,
+      "name": "Scrivener of Item Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20210,
+      "name": "Scrivener of Creature Magic",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 2259,
+      "name": "Shopkeep Ginan Wah",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 2257,
+      "name": "Nuru Misho the Jeweler",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 2254,
+      "name": "Bowyer Jyi Zhente",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 19716,
+      "name": "Mammet Foundry Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 19358,
+      "name": "Atrium Residential Halls Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 6091,
+      "name": "Baishi Meeting Hall Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43067,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 41311,
+      "name": "Fiona Woron",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    },
+    {
+      "wcid": 40897,
+      "name": "Ries Woron",
+      "type": "Creature"
+    },
+    {
+      "wcid": 40895,
+      "name": "Carolyn Woron",
+      "type": "Creature"
+    },
+    {
+      "wcid": 31652,
+      "name": "Fergal the Dire",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2252,
+      "name": "wcid_2252",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2256,
+      "name": "wcid_2256",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2260,
+      "name": "wcid_2260",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2258,
+      "name": "wcid_2258",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6082,
+      "name": "wcid_6082",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2255,
+      "name": "wcid_2255",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2251,
+      "name": "wcid_2251",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2261,
+      "name": "wcid_2261",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20226,
+      "name": "wcid_20226",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20222,
+      "name": "wcid_20222",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 174,
+      "name": "wcid_174",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 721,
+      "name": "wcid_721",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 721,
+      "name": "wcid_721",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2272,
+      "name": "wcid_2272",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2274,
+      "name": "wcid_2274",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2269,
+      "name": "wcid_2269",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2270,
+      "name": "wcid_2270",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2273,
+      "name": "wcid_2273",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12304,
+      "name": "wcid_12304",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2275,
+      "name": "wcid_2275",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2266,
+      "name": "wcid_2266",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2267,
+      "name": "wcid_2267",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2271,
+      "name": "wcid_2271",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4771,
+      "name": "wcid_4771",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 15811,
+      "name": "wcid_15811",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4782,
+      "name": "wcid_4782",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4776,
+      "name": "wcid_4776",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19197,
+      "name": "wcid_19197",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19380,
+      "name": "wcid_19380",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27547,
+      "name": "wcid_27547",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2276,
+      "name": "wcid_2276",
+      "type": "Unknown"
+    }
+  ]
+}

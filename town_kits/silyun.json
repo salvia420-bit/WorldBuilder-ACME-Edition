@@ -1,0 +1,468 @@
+{
+  "townName": "Silyun",
+  "culture": "Viamontian",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 39,
+    "lbY": 235,
+    "worldX": 7584.0,
+    "worldY": 45216.0
+  },
+  "landblocks": [
+    [
+      38,
+      236
+    ],
+    [
+      39,
+      234
+    ],
+    [
+      39,
+      235
+    ],
+    [
+      39,
+      236
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 12,
+    "totalNPCs": 2,
+    "totalVendors": 7,
+    "totalPortals": 2,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 20,
+    "totalFurniture": 0,
+    "totalOther": 30
+  },
+  "buildings": [
+    {
+      "setupId": 16791110,
+      "setupIdHex": "0x01003646",
+      "relativeX": -156.0,
+      "relativeY": 228.0,
+      "worldZ": 80,
+      "numLeaves": 202,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16791110,
+      "setupIdHex": "0x01003646",
+      "relativeX": 12.0,
+      "relativeY": 85.0,
+      "worldZ": 80,
+      "numLeaves": 202,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16791076,
+      "setupIdHex": "0x01003624",
+      "relativeX": -36.0,
+      "relativeY": 228.0,
+      "worldZ": 80,
+      "numLeaves": 639,
+      "portalCount": 8
+    },
+    {
+      "setupId": 16791812,
+      "setupIdHex": "0x01003904",
+      "relativeX": -36.0,
+      "relativeY": 156.1,
+      "worldZ": 80,
+      "numLeaves": 583,
+      "portalCount": 14
+    },
+    {
+      "setupId": 16791110,
+      "setupIdHex": "0x01003646",
+      "relativeX": -79.7,
+      "relativeY": 161.0,
+      "worldZ": 80,
+      "numLeaves": 202,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16791813,
+      "setupIdHex": "0x01003905",
+      "relativeX": 13.2,
+      "relativeY": 251.4,
+      "worldZ": 80.1,
+      "numLeaves": 449,
+      "portalCount": 7
+    },
+    {
+      "setupId": 16791110,
+      "setupIdHex": "0x01003646",
+      "relativeX": 6.9,
+      "relativeY": 159.2,
+      "worldZ": 80,
+      "numLeaves": 202,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16791110,
+      "setupIdHex": "0x01003646",
+      "relativeX": -60.0,
+      "relativeY": 132.0,
+      "worldZ": 80,
+      "numLeaves": 202,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16791110,
+      "setupIdHex": "0x01003646",
+      "relativeX": -55.6,
+      "relativeY": 233.5,
+      "worldZ": 80,
+      "numLeaves": 202,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16791814,
+      "setupIdHex": "0x01003906",
+      "relativeX": 12.0,
+      "relativeY": 204.0,
+      "worldZ": 80,
+      "numLeaves": 235,
+      "portalCount": 16
+    },
+    {
+      "setupId": 16791110,
+      "setupIdHex": "0x01003646",
+      "relativeX": 83.8,
+      "relativeY": 108.5,
+      "worldZ": 80,
+      "numLeaves": 202,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16781737,
+      "setupIdHex": "0x010011A9",
+      "relativeX": 420.0,
+      "relativeY": -396.0,
+      "worldZ": 8,
+      "numLeaves": 127,
+      "portalCount": 1
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 31295,
+      "name": "Barkeeper Mallia Quios",
+      "type": "NPC"
+    },
+    {
+      "wcid": 30066,
+      "name": "Bowyer Cecili Blocconda",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 30072,
+      "name": "Benedetta du Lucrezza the Healer",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 30067,
+      "name": "Scribe Copiara Parolinnis",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 30071,
+      "name": "Archmage Pazzescorios di Frodenci",
+      "type": "NPC_Archmage"
+    },
+    {
+      "wcid": 30068,
+      "name": "Aldonti di Soludatis the Jeweler",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 30069,
+      "name": "Agonno Filleteppe the Tailor",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 30070,
+      "name": "Calvinne Sporgenzenni the Shopkeeper",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 30065,
+      "name": "Aidanan Ignarias the Blacksmith",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 32695,
+      "name": "Silyun Chapterhouse",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42852,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 30439,
+      "name": "Fratellodunon Ribellarista",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30438,
+      "name": "Fratellone Ribellarista",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30981,
+      "name": "Lila Fiori",
+      "type": "Creature"
+    },
+    {
+      "wcid": 34259,
+      "name": "Donatello Linante",
+      "type": "Creature"
+    },
+    {
+      "wcid": 28703,
+      "name": "Scorus",
+      "type": "Creature"
+    },
+    {
+      "wcid": 28836,
+      "name": "Chef Martam",
+      "type": "Creature"
+    },
+    {
+      "wcid": 29468,
+      "name": "Huntsman of Silyun",
+      "type": "Creature"
+    },
+    {
+      "wcid": 28680,
+      "name": "Rickard Dumalia",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30436,
+      "name": "Marlan Nessunello",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32628,
+      "name": "Hashina",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30437,
+      "name": "Sacci Mijob",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30434,
+      "name": "Raimonestes Risolu",
+      "type": "Creature"
+    },
+    {
+      "wcid": 41523,
+      "name": "Raphel Detante",
+      "type": "Creature"
+    },
+    {
+      "wcid": 41522,
+      "name": "Carlito Gallo",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32835,
+      "name": "Lucari di Bellenesse",
+      "type": "Creature"
+    },
+    {
+      "wcid": 31651,
+      "name": "Enzo Ilario",
+      "type": "Creature"
+    },
+    {
+      "wcid": 28699,
+      "name": "Grand Mother",
+      "type": "Creature"
+    },
+    {
+      "wcid": 43406,
+      "name": "Lord Tyragar",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30435,
+      "name": "Mendica Scarsolo",
+      "type": "Creature"
+    },
+    {
+      "wcid": 31728,
+      "name": "Mancanza the Wanderer",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 30938,
+      "name": "Door",
+      "type": "Structure"
+    },
+    {
+      "wcid": 4179,
+      "name": "wcid_4179",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 30938,
+      "name": "Door",
+      "type": "Structure"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4179,
+      "name": "wcid_4179",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4179,
+      "name": "wcid_4179",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4179,
+      "name": "wcid_4179",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4179,
+      "name": "wcid_4179",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4179,
+      "name": "wcid_4179",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4179,
+      "name": "wcid_4179",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5401,
+      "name": "wcid_5401",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5401,
+      "name": "wcid_5401",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5401,
+      "name": "wcid_5401",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 30938,
+      "name": "Door",
+      "type": "Structure"
+    },
+    {
+      "wcid": 30938,
+      "name": "Door",
+      "type": "Structure"
+    },
+    {
+      "wcid": 30938,
+      "name": "Door",
+      "type": "Structure"
+    },
+    {
+      "wcid": 30938,
+      "name": "Door",
+      "type": "Structure"
+    },
+    {
+      "wcid": 30938,
+      "name": "Door",
+      "type": "Structure"
+    },
+    {
+      "wcid": 30938,
+      "name": "Door",
+      "type": "Structure"
+    },
+    {
+      "wcid": 30938,
+      "name": "Door",
+      "type": "Structure"
+    },
+    {
+      "wcid": 30044,
+      "name": "wcid_30044",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 43455,
+      "name": "Haebrean Token of the Aura of Hardening",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 43457,
+      "name": "Haebrean Token of the Aura of Invulnerability",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 15759,
+      "name": "Linkable Item Generator",
+      "type": "Prop"
+    }
+  ]
+}

@@ -1,0 +1,572 @@
+{
+  "townName": "Timaru",
+  "culture": "Viamontian",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 30,
+    "lbY": 182,
+    "worldX": 5856.0,
+    "worldY": 35040.0
+  },
+  "landblocks": [
+    [
+      29,
+      182
+    ],
+    [
+      30,
+      182
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 19,
+    "totalNPCs": 0,
+    "totalVendors": 3,
+    "totalPortals": 2,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 4,
+    "totalFurniture": 0,
+    "totalOther": 62
+  },
+  "buildings": [
+    {
+      "setupId": 16781161,
+      "setupIdHex": "0x01000F69",
+      "relativeX": -370.4,
+      "relativeY": -462.8,
+      "worldZ": 0,
+      "numLeaves": 43,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16785878,
+      "setupIdHex": "0x010021D6",
+      "relativeX": -132.0,
+      "relativeY": -12.0,
+      "worldZ": 120,
+      "numLeaves": 162,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16785879,
+      "setupIdHex": "0x010021D7",
+      "relativeX": -108.0,
+      "relativeY": -12.0,
+      "worldZ": 120,
+      "numLeaves": 213,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787083,
+      "setupIdHex": "0x0100268B",
+      "relativeX": -108.0,
+      "relativeY": 35.8,
+      "worldZ": 120,
+      "numLeaves": 35,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16785876,
+      "setupIdHex": "0x010021D4",
+      "relativeX": -132.0,
+      "relativeY": 12.0,
+      "worldZ": 120,
+      "numLeaves": 197,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16785878,
+      "setupIdHex": "0x010021D6",
+      "relativeX": -156.0,
+      "relativeY": 12.0,
+      "worldZ": 120,
+      "numLeaves": 162,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16785881,
+      "setupIdHex": "0x010021D9",
+      "relativeX": -156.0,
+      "relativeY": 36.0,
+      "worldZ": 120,
+      "numLeaves": 178,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16785876,
+      "setupIdHex": "0x010021D4",
+      "relativeX": -132.0,
+      "relativeY": 60.0,
+      "worldZ": 120,
+      "numLeaves": 197,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16785878,
+      "setupIdHex": "0x010021D6",
+      "relativeX": -156.0,
+      "relativeY": 60.0,
+      "worldZ": 120,
+      "numLeaves": 162,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16785879,
+      "setupIdHex": "0x010021D7",
+      "relativeX": -108.0,
+      "relativeY": 84.0,
+      "worldZ": 120,
+      "numLeaves": 213,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16785878,
+      "setupIdHex": "0x010021D6",
+      "relativeX": -132.0,
+      "relativeY": 84.0,
+      "worldZ": 120,
+      "numLeaves": 162,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787245,
+      "setupIdHex": "0x0100272D",
+      "relativeX": -12.0,
+      "relativeY": -468.0,
+      "worldZ": 43,
+      "numLeaves": 48,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16785878,
+      "setupIdHex": "0x010021D6",
+      "relativeX": -84.0,
+      "relativeY": 84.0,
+      "worldZ": 120,
+      "numLeaves": 162,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16785878,
+      "setupIdHex": "0x010021D6",
+      "relativeX": -60.0,
+      "relativeY": 60.0,
+      "worldZ": 120,
+      "numLeaves": 162,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16785876,
+      "setupIdHex": "0x010021D4",
+      "relativeX": -84.0,
+      "relativeY": 60.0,
+      "worldZ": 120,
+      "numLeaves": 197,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16785879,
+      "setupIdHex": "0x010021D7",
+      "relativeX": -59.9,
+      "relativeY": 36.0,
+      "worldZ": 120,
+      "numLeaves": 213,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16785878,
+      "setupIdHex": "0x010021D6",
+      "relativeX": -60.0,
+      "relativeY": 12.0,
+      "worldZ": 120,
+      "numLeaves": 162,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16785878,
+      "setupIdHex": "0x010021D6",
+      "relativeX": -84.0,
+      "relativeY": -12.0,
+      "worldZ": 120,
+      "numLeaves": 162,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16785876,
+      "setupIdHex": "0x010021D4",
+      "relativeX": -84.0,
+      "relativeY": 12.0,
+      "worldZ": 120,
+      "numLeaves": 197,
+      "portalCount": 0
+    }
+  ],
+  "npcs": [],
+  "vendors": [
+    {
+      "wcid": 11407,
+      "name": "Aun Mireona the Shopkeep",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 11405,
+      "name": "Aun Ngaiona the Jeweler",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 11403,
+      "name": "Aun Paikitea the Bowyer",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 42852,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 11959,
+      "name": "Base of the Timaru Plateau Portal",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 39054,
+      "name": "Aun Kimintari",
+      "type": "Creature"
+    },
+    {
+      "wcid": 11349,
+      "name": "Aun Whethura the Crafter",
+      "type": "Creature"
+    },
+    {
+      "wcid": 11348,
+      "name": "Aun Mareura the Collector",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32107,
+      "name": "Aun Ruperea",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 11700,
+      "name": "wcid_11700",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 24055,
+      "name": "wcid_24055",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 24054,
+      "name": "wcid_24054",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 24052,
+      "name": "wcid_24052",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28472,
+      "name": "wcid_28472",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 24053,
+      "name": "wcid_24053",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 11406,
+      "name": "wcid_11406",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 11400,
+      "name": "wcid_11400",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 11404,
+      "name": "wcid_11404",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 11402,
+      "name": "wcid_11402",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5086,
+      "name": "wcid_5086",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 11110,
+      "name": "wcid_11110",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 11111,
+      "name": "wcid_11111",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 11112,
+      "name": "wcid_11112",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 14593,
+      "name": "wcid_14593",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28461,
+      "name": "wcid_28461",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5086,
+      "name": "wcid_5086",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5621,
+      "name": "wcid_5621",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5621,
+      "name": "wcid_5621",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5621,
+      "name": "wcid_5621",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7396,
+      "name": "wcid_7396",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5621,
+      "name": "wcid_5621",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 10933,
+      "name": "wcid_10933",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 11401,
+      "name": "wcid_11401",
+      "type": "Unknown"
+    }
+  ]
+}

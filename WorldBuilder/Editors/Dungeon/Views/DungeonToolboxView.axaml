@@ -1,0 +1,115 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:WorldBuilder.Editors.Dungeon.Tools"
+             mc:Ignorable="d" d:DesignWidth="280" d:DesignHeight="300"
+             x:Class="WorldBuilder.Editors.Dungeon.Tools.Views.DungeonToolboxView"
+             x:DataType="vm:DungeonToolboxViewModel">
+    <UserControl.Styles>
+        <Style Selector="Button.dtool-btn">
+            <Setter Property="Background" Value="#1e1035" />
+            <Setter Property="BorderBrush" Value="#2a1d42" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="5" />
+            <Setter Property="Padding" Value="8,5" />
+            <Setter Property="Foreground" Value="#c0b0d8" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style Selector="Button.dtool-btn:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#2a1545" />
+            <Setter Property="BorderBrush" Value="#3d2a5c" />
+        </Style>
+        <Style Selector="Button.dtool-btn.selected">
+            <Setter Property="Background" Value="#7c4dbd" />
+            <Setter Property="BorderBrush" Value="#9b6dd0" />
+            <Setter Property="Foreground" Value="White" />
+        </Style>
+        <Style Selector="Button.dtool-btn.selected:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#9b6dd0" />
+        </Style>
+        <Style Selector="Button.dsubtool-btn">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="#2a1d42" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Padding" Value="6,3" />
+            <Setter Property="Foreground" Value="#8a7a9e" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style Selector="Button.dsubtool-btn:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#2a1545" />
+        </Style>
+        <Style Selector="Button.dsubtool-btn.selected">
+            <Setter Property="Background" Value="#351a55" />
+            <Setter Property="BorderBrush" Value="#7c4dbd" />
+            <Setter Property="Foreground" Value="#d4a843" />
+        </Style>
+    </UserControl.Styles>
+
+    <DockPanel LastChildFill="True">
+        <!-- Tool Bar -->
+        <Border Padding="6" Background="#18102a" BorderBrush="#2a1d42" BorderThickness="0,0,0,1" DockPanel.Dock="Top">
+            <ItemsControl ItemsSource="{Binding Tools}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <WrapPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Button Margin="0,0,4,0"
+                                Classes="dtool-btn"
+                                Classes.selected="{Binding IsSelected}"
+                                Command="{Binding $parent[UserControl].((vm:DungeonToolboxViewModel)DataContext).SelectToolCommand}"
+                                CommandParameter="{Binding}"
+                                ToolTip.Tip="{Binding Name}">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <TextBlock FontSize="14" Text="{Binding IconGlyph}" />
+                                <TextBlock FontSize="11" VerticalAlignment="Center" Text="{Binding Name}" />
+                            </StackPanel>
+                        </Button>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </Border>
+
+        <!-- Sub-Tool Bar -->
+        <Border Padding="6" BorderBrush="#2a1d42" BorderThickness="0,0,0,1" DockPanel.Dock="Top"
+                IsVisible="{Binding SelectedTool.HasSubTools}">
+            <ItemsControl ItemsSource="{Binding SelectedTool.AllSubTools}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <WrapPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Button Margin="0,0,4,4"
+                                Classes="dsubtool-btn"
+                                Classes.selected="{Binding IsSelected}"
+                                Command="{Binding $parent[UserControl].((vm:DungeonToolboxViewModel)DataContext).SelectSubToolCommand}"
+                                CommandParameter="{Binding}"
+                                ToolTip.Tip="{Binding Name}">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <TextBlock FontSize="13" Text="{Binding IconGlyph}" />
+                                <TextBlock FontSize="11" VerticalAlignment="Center" Text="{Binding Name}" />
+                            </StackPanel>
+                        </Button>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </Border>
+
+        <!-- Tool Status -->
+        <Border Padding="8,4" DockPanel.Dock="Top"
+                IsVisible="{Binding SelectedTool, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <TextBlock Text="{Binding SelectedTool.StatusText}" FontSize="11" Foreground="#8a7a9e" TextWrapping="Wrap" />
+        </Border>
+
+        <!-- Placeholder for future sub-tool option panels -->
+        <Border />
+    </DockPanel>
+</UserControl>

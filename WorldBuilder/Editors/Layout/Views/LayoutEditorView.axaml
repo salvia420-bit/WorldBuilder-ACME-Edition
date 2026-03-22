@@ -1,0 +1,227 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:WorldBuilder.Editors.Layout"
+             mc:Ignorable="d" d:DesignWidth="1400" d:DesignHeight="800"
+             x:Class="WorldBuilder.Editors.Layout.Views.LayoutEditorView"
+             x:DataType="vm:LayoutEditorViewModel">
+
+    <UserControl.Styles>
+        <Style Selector="TextBlock.prop-label">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="#8a7a9e" />
+            <Setter Property="Width" Value="120" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.prop-value">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="#c0b0d8" />
+            <Setter Property="FontFamily" Value="Consolas" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.section-header">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="#c0b0d8" />
+            <Setter Property="Margin" Value="0,10,0,4" />
+        </Style>
+    </UserControl.Styles>
+
+    <DockPanel>
+        <!-- Status bar -->
+        <Border DockPanel.Dock="Top" Background="#120c22" BorderBrush="#2a1d42" BorderThickness="0,0,0,1" Padding="8,4">
+            <TextBlock Text="{Binding StatusText}" FontSize="12" Foreground="#8a7a9e" />
+        </Border>
+
+        <Grid ColumnDefinitions="220,1,280,1,*">
+
+            <!-- Column 0: Layout List -->
+            <DockPanel Grid.Column="0" Background="#1a1030">
+                <Border DockPanel.Dock="Top" Background="#120c22" Padding="6,6"
+                        BorderBrush="#2a1d42" BorderThickness="0,0,0,1">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="UI Layouts" FontSize="13" FontWeight="SemiBold" Foreground="#c0b0d8" />
+                        <TextBox Text="{Binding SearchText}" FontSize="11" Padding="4,3"
+                                 Watermark="Filter by hex ID" />
+                    </StackPanel>
+                </Border>
+                <ListBox ItemsSource="{Binding FilteredLayouts}"
+                         SelectedItem="{Binding SelectedLayout}"
+                         Background="Transparent" FontSize="11">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:LayoutListItem">
+                            <TextBlock Text="{Binding DisplayId}" FontFamily="Consolas"
+                                       Foreground="#c0b0d8" FontSize="11" Margin="4,2" />
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+
+            <GridSplitter Grid.Column="1" Width="1" Background="#2a1d42" ResizeDirection="Columns" />
+
+            <!-- Column 2: Element Tree -->
+            <DockPanel Grid.Column="2" Background="#1a1030">
+                <Border DockPanel.Dock="Top" Background="#120c22" Padding="6,6"
+                        BorderBrush="#2a1d42" BorderThickness="0,0,0,1">
+                    <TextBlock Text="Element Hierarchy" FontSize="13" FontWeight="SemiBold" Foreground="#c0b0d8" />
+                </Border>
+
+                <Panel>
+                    <TextBlock Text="Select a layout from the list"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               FontSize="12" Foreground="#5a4a6e" Opacity="0.6"
+                               IsVisible="{Binding SelectedDetail, Converter={x:Static ObjectConverters.IsNull}}" />
+
+                    <TreeView ItemsSource="{Binding SelectedDetail.RootElements}"
+                              SelectedItem="{Binding SelectedDetail.SelectedElement}"
+                              Background="Transparent" FontSize="11"
+                              IsVisible="{Binding SelectedDetail, Converter={x:Static ObjectConverters.IsNotNull}}"
+                              x:CompileBindings="False">
+                        <TreeView.ItemTemplate>
+                            <TreeDataTemplate ItemsSource="{Binding Children}">
+                                <StackPanel Orientation="Horizontal" Spacing="6" Margin="2,1">
+                                    <TextBlock Text="{Binding DisplayId}" FontFamily="Consolas"
+                                               Foreground="#6ec07a" FontSize="11" />
+                                    <TextBlock Text="{Binding TypeHex}" FontFamily="Consolas"
+                                               Foreground="#5a4a6e" FontSize="10" VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding Width, StringFormat='{}{0}'}" FontSize="10"
+                                               Foreground="#8a7a9e" VerticalAlignment="Center" />
+                                    <TextBlock Text="x" FontSize="10" Foreground="#5a4a6e" VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding Height, StringFormat='{}{0}'}" FontSize="10"
+                                               Foreground="#8a7a9e" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </TreeDataTemplate>
+                        </TreeView.ItemTemplate>
+                    </TreeView>
+                </Panel>
+            </DockPanel>
+
+            <GridSplitter Grid.Column="3" Width="1" Background="#2a1d42" ResizeDirection="Columns" />
+
+            <!-- Column 4: Properties + Visual Preview -->
+            <Grid Grid.Column="4" RowDefinitions="*,1,*" Background="#1a1030">
+
+                <!-- Properties Panel (top) -->
+                <Border Grid.Row="0">
+                    <Panel>
+                        <TextBlock Text="Select an element to view properties"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   FontSize="12" Foreground="#5a4a6e" Opacity="0.6"
+                                   IsVisible="{Binding SelectedDetail.SelectedElement, Converter={x:Static ObjectConverters.IsNull}}"
+                                   x:CompileBindings="False" />
+
+                        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto"
+                                      IsVisible="{Binding SelectedDetail.SelectedElement, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                      x:CompileBindings="False">
+                            <StackPanel Margin="10,6" Spacing="2"
+                                        DataContext="{Binding SelectedDetail.SelectedElement}">
+
+                                <TextBlock Classes="section-header" Text="Identity" />
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock Classes="prop-label" Text="Element ID" />
+                                    <TextBlock Classes="prop-value" Text="{Binding DisplayId}" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock Classes="prop-label" Text="Type" />
+                                    <TextBlock Classes="prop-value" Text="{Binding TypeHex}" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock Classes="prop-label" Text="Read Order" />
+                                    <TextBlock Classes="prop-value" Text="{Binding ReadOrder}" />
+                                </StackPanel>
+
+                                <TextBlock Classes="section-header" Text="Position / Size" />
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock Classes="prop-label" Text="Position" />
+                                    <TextBlock Classes="prop-value">
+                                        <TextBlock.Text>
+                                            <MultiBinding StringFormat="{}{0}, {1}">
+                                                <Binding Path="X" />
+                                                <Binding Path="Y" />
+                                            </MultiBinding>
+                                        </TextBlock.Text>
+                                    </TextBlock>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock Classes="prop-label" Text="Size" />
+                                    <TextBlock Classes="prop-value">
+                                        <TextBlock.Text>
+                                            <MultiBinding StringFormat="{}{0} x {1}">
+                                                <Binding Path="Width" />
+                                                <Binding Path="Height" />
+                                            </MultiBinding>
+                                        </TextBlock.Text>
+                                    </TextBlock>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock Classes="prop-label" Text="Z Level" />
+                                    <TextBlock Classes="prop-value" Text="{Binding ZLevel}" />
+                                </StackPanel>
+
+                                <TextBlock Classes="section-header" Text="Edges (Anchors)" />
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock Classes="prop-label" Text="Left / Top" />
+                                    <TextBlock Classes="prop-value">
+                                        <TextBlock.Text>
+                                            <MultiBinding StringFormat="{}{0} / {1}">
+                                                <Binding Path="LeftEdge" />
+                                                <Binding Path="TopEdge" />
+                                            </MultiBinding>
+                                        </TextBlock.Text>
+                                    </TextBlock>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock Classes="prop-label" Text="Right / Bottom" />
+                                    <TextBlock Classes="prop-value">
+                                        <TextBlock.Text>
+                                            <MultiBinding StringFormat="{}{0} / {1}">
+                                                <Binding Path="RightEdge" />
+                                                <Binding Path="BottomEdge" />
+                                            </MultiBinding>
+                                        </TextBlock.Text>
+                                    </TextBlock>
+                                </StackPanel>
+
+                                <TextBlock Classes="section-header" Text="Inheritance" />
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock Classes="prop-label" Text="Base Layout" />
+                                    <TextBlock Classes="prop-value" Text="{Binding BaseLayoutHex}" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock Classes="prop-label" Text="Base Element" />
+                                    <TextBlock Classes="prop-value" Text="{Binding BaseElement}" />
+                                </StackPanel>
+
+                                <TextBlock Classes="section-header" Text="Contents" />
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock Classes="prop-label" Text="Children" />
+                                    <TextBlock Classes="prop-value" Text="{Binding ChildrenCount}" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <TextBlock Classes="prop-label" Text="States" />
+                                    <TextBlock Classes="prop-value" Text="{Binding StatesCount}" />
+                                </StackPanel>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Panel>
+                </Border>
+
+                <GridSplitter Grid.Row="1" Height="1" Background="#2a1d42"
+                              ResizeDirection="Rows" HorizontalAlignment="Stretch" />
+
+                <!-- Visual Preview (bottom) -->
+                <Border Grid.Row="2" Background="#0d0818"
+                        BorderBrush="#2a1d42" BorderThickness="0,0,0,0">
+                    <DockPanel>
+                        <Border DockPanel.Dock="Top" Background="#120c22" Padding="6,4"
+                                BorderBrush="#2a1d42" BorderThickness="0,0,0,1">
+                            <TextBlock Text="Visual Preview" FontSize="11" FontWeight="SemiBold" Foreground="#c0b0d8" />
+                        </Border>
+                        <vm:LayoutPreviewCanvas x:Name="PreviewCanvas" />
+                    </DockPanel>
+                </Border>
+            </Grid>
+        </Grid>
+    </DockPanel>
+</UserControl>

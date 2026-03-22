@@ -1,0 +1,587 @@
+{
+  "townName": "Glenden Wood",
+  "culture": "Aluvian",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 162,
+    "lbY": 164,
+    "worldX": 31200.0,
+    "worldY": 31584.0
+  },
+  "landblocks": [
+    [
+      161,
+      164
+    ],
+    [
+      162,
+      164
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 19,
+    "totalNPCs": 0,
+    "totalVendors": 3,
+    "totalPortals": 4,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 10,
+    "totalFurniture": 0,
+    "totalOther": 57
+  },
+  "buildings": [
+    {
+      "setupId": 16780318,
+      "setupIdHex": "0x01000C1E",
+      "relativeX": -540.0,
+      "relativeY": 60.0,
+      "worldZ": 86,
+      "numLeaves": 64,
+      "portalCount": 10
+    },
+    {
+      "setupId": 16779312,
+      "setupIdHex": "0x01000830",
+      "relativeX": -516.0,
+      "relativeY": 36.0,
+      "worldZ": 86,
+      "numLeaves": 31,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16781392,
+      "setupIdHex": "0x01001050",
+      "relativeX": -516.0,
+      "relativeY": 12.0,
+      "worldZ": 86,
+      "numLeaves": 67,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16792832,
+      "setupIdHex": "0x01003D00",
+      "relativeX": -199.1,
+      "relativeY": -107.1,
+      "worldZ": 66,
+      "numLeaves": 145,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780318,
+      "setupIdHex": "0x01000C1E",
+      "relativeX": -228.0,
+      "relativeY": 58.7,
+      "worldZ": 49.9,
+      "numLeaves": 64,
+      "portalCount": 10
+    },
+    {
+      "setupId": 16780227,
+      "setupIdHex": "0x01000BC3",
+      "relativeX": -185.3,
+      "relativeY": 64.0,
+      "worldZ": 50,
+      "numLeaves": 36,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16779819,
+      "setupIdHex": "0x01000A2B",
+      "relativeX": -158.5,
+      "relativeY": 39.6,
+      "worldZ": 50,
+      "numLeaves": 29,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16780311,
+      "setupIdHex": "0x01000C17",
+      "relativeX": -203.9,
+      "relativeY": -58.9,
+      "worldZ": 66,
+      "numLeaves": 39,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16779303,
+      "setupIdHex": "0x01000827",
+      "relativeX": -134.4,
+      "relativeY": -7.7,
+      "worldZ": 50.2,
+      "numLeaves": 101,
+      "portalCount": 8
+    },
+    {
+      "setupId": 16779292,
+      "setupIdHex": "0x0100081C",
+      "relativeX": -177.1,
+      "relativeY": 87.5,
+      "worldZ": 50,
+      "numLeaves": 34,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16779312,
+      "setupIdHex": "0x01000830",
+      "relativeX": -273.1,
+      "relativeY": 57.0,
+      "worldZ": 50,
+      "numLeaves": 31,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16787995,
+      "setupIdHex": "0x01002A1B",
+      "relativeX": -137.7,
+      "relativeY": 55.5,
+      "worldZ": 50,
+      "numLeaves": 48,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16788051,
+      "setupIdHex": "0x01002A53",
+      "relativeX": -204.0,
+      "relativeY": -12.0,
+      "worldZ": 56,
+      "numLeaves": 48,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781161,
+      "setupIdHex": "0x01000F69",
+      "relativeX": -154.0,
+      "relativeY": 78.3,
+      "worldZ": 50,
+      "numLeaves": 43,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16785967,
+      "setupIdHex": "0x0100222F",
+      "relativeX": -61.2,
+      "relativeY": 10.5,
+      "worldZ": 50,
+      "numLeaves": 89,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16781522,
+      "setupIdHex": "0x010010D2",
+      "relativeX": 36.0,
+      "relativeY": 180.0,
+      "worldZ": 136,
+      "numLeaves": 35,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16779312,
+      "setupIdHex": "0x01000830",
+      "relativeX": 156.0,
+      "relativeY": -12.0,
+      "worldZ": 68,
+      "numLeaves": 31,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16780227,
+      "setupIdHex": "0x01000BC3",
+      "relativeX": 204.0,
+      "relativeY": 12.0,
+      "worldZ": 80,
+      "numLeaves": 36,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16779312,
+      "setupIdHex": "0x01000830",
+      "relativeX": 156.0,
+      "relativeY": 12.0,
+      "worldZ": 68,
+      "numLeaves": 31,
+      "portalCount": 5
+    }
+  ],
+  "npcs": [],
+  "vendors": [
+    {
+      "wcid": 736,
+      "name": "Ortun Trell the Jeweler",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 2303,
+      "name": "Singud Trell the Archmage",
+      "type": "NPC_Archmage"
+    },
+    {
+      "wcid": 733,
+      "name": "Fletcher Peldin Yewbender",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 19718,
+      "name": "Effigy Foundry Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 19358,
+      "name": "Atrium Residential Halls Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 6094,
+      "name": "Glenden Wood Meeting Hall Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43065,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 32360,
+      "name": "Londigul Ellic the Armorer",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32362,
+      "name": "Tomo Genza",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32394,
+      "name": "Captain Sovano",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32395,
+      "name": "Captain Anrayl",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32396,
+      "name": "Captain Nyino",
+      "type": "Creature"
+    },
+    {
+      "wcid": 3925,
+      "name": "Ivory Crafter",
+      "type": "Creature"
+    },
+    {
+      "wcid": 22893,
+      "name": "Student",
+      "type": "Creature"
+    },
+    {
+      "wcid": 3923,
+      "name": "Wing Collector",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42987,
+      "name": "Messenger for The Stranger",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 7925,
+      "name": "wcid_7925",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 385,
+      "name": "wcid_385",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 739,
+      "name": "wcid_739",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 735,
+      "name": "wcid_735",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 737,
+      "name": "wcid_737",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 731,
+      "name": "wcid_731",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 738,
+      "name": "wcid_738",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 734,
+      "name": "wcid_734",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 22075,
+      "name": "wcid_22075",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 22074,
+      "name": "wcid_22074",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 22076,
+      "name": "wcid_22076",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28185,
+      "name": "wcid_28185",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 174,
+      "name": "wcid_174",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 725,
+      "name": "wcid_725",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 724,
+      "name": "wcid_724",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 727,
+      "name": "wcid_727",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 729,
+      "name": "wcid_729",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 726,
+      "name": "wcid_726",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 728,
+      "name": "wcid_728",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 728,
+      "name": "wcid_728",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19380,
+      "name": "wcid_19380",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27547,
+      "name": "wcid_27547",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 24067,
+      "name": "wcid_24067",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19194,
+      "name": "wcid_19194",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 70060,
+      "name": "Festival Vendor Event Gen",
+      "type": "Prop"
+    },
+    {
+      "wcid": 71460,
+      "name": "Joanne Holiday Event Spawn",
+      "type": "Prop"
+    },
+    {
+      "wcid": 71136,
+      "name": "Ungrim the Unpleasant Event Gen",
+      "type": "Prop"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 913,
+      "name": "wcid_913",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7924,
+      "name": "wcid_7924",
+      "type": "Unknown"
+    }
+  ]
+}

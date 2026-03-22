@@ -1,0 +1,422 @@
+{
+  "townName": "Stonehold",
+  "culture": "Aluvian",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 100,
+    "lbY": 213,
+    "worldX": 19296.0,
+    "worldY": 40992.0
+  },
+  "landblocks": [
+    [
+      99,
+      213
+    ],
+    [
+      100,
+      213
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 11,
+    "totalNPCs": 2,
+    "totalVendors": 2,
+    "totalPortals": 3,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 7,
+    "totalFurniture": 1,
+    "totalOther": 40
+  },
+  "buildings": [
+    {
+      "setupId": 16780227,
+      "setupIdHex": "0x01000BC3",
+      "relativeX": -36.0,
+      "relativeY": 36.0,
+      "worldZ": 78,
+      "numLeaves": 36,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16779312,
+      "setupIdHex": "0x01000830",
+      "relativeX": -12.0,
+      "relativeY": 12.0,
+      "worldZ": 78,
+      "numLeaves": 31,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16779292,
+      "setupIdHex": "0x0100081C",
+      "relativeX": 36.0,
+      "relativeY": 12.0,
+      "worldZ": 78,
+      "numLeaves": 34,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16779292,
+      "setupIdHex": "0x0100081C",
+      "relativeX": -12.0,
+      "relativeY": -36.0,
+      "worldZ": 78,
+      "numLeaves": 34,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16780227,
+      "setupIdHex": "0x01000BC3",
+      "relativeX": 12.0,
+      "relativeY": -12.0,
+      "worldZ": 78,
+      "numLeaves": 36,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16779310,
+      "setupIdHex": "0x0100082E",
+      "relativeX": -38.6,
+      "relativeY": -12.1,
+      "worldZ": 78,
+      "numLeaves": 30,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16785967,
+      "setupIdHex": "0x0100222F",
+      "relativeX": -37.7,
+      "relativeY": -59.7,
+      "worldZ": 78,
+      "numLeaves": 89,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16787995,
+      "setupIdHex": "0x01002A1B",
+      "relativeX": -12.2,
+      "relativeY": -12.8,
+      "worldZ": 78,
+      "numLeaves": 48,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16779303,
+      "setupIdHex": "0x01000827",
+      "relativeX": 12.0,
+      "relativeY": -36.0,
+      "worldZ": 78,
+      "numLeaves": 101,
+      "portalCount": 8
+    },
+    {
+      "setupId": 16781591,
+      "setupIdHex": "0x01001117",
+      "relativeX": 36.0,
+      "relativeY": 228.0,
+      "worldZ": 158,
+      "numLeaves": 85,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16781437,
+      "setupIdHex": "0x0100107D",
+      "relativeX": 348.0,
+      "relativeY": -180.0,
+      "worldZ": 62,
+      "numLeaves": 6,
+      "portalCount": 1
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 20212,
+      "name": "Grand Master Scrivener of Item Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20208,
+      "name": "Grand Master Scrivener of Creature Magic",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 2533,
+      "name": "Gerhi, Bowyer of Stonehold ",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 2534,
+      "name": "Vivaina, Shopkeep of Stonehold ",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 43065,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 19716,
+      "name": "Mammet Foundry Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 1900,
+      "name": "Heartland",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 33966,
+      "name": "Belinda du Loc",
+      "type": "Creature"
+    },
+    {
+      "wcid": 31689,
+      "name": "Drozer",
+      "type": "Creature"
+    },
+    {
+      "wcid": 46338,
+      "name": "Kraytuss Nallah",
+      "type": "Creature"
+    },
+    {
+      "wcid": 33967,
+      "name": "Zahir",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30387,
+      "name": "Suzuhara Baijin",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30627,
+      "name": "Cyphis Suldow",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [
+    {
+      "wcid": 31445,
+      "name": "Dirty Old Crate",
+      "type": "Furniture_Storage"
+    }
+  ],
+  "other": [
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5435,
+      "name": "wcid_5435",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2535,
+      "name": "wcid_2535",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1381,
+      "name": "wcid_1381",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20224,
+      "name": "wcid_20224",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20220,
+      "name": "wcid_20220",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27248,
+      "name": "wcid_27248",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12304,
+      "name": "wcid_12304",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1351,
+      "name": "wcid_1351",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19206,
+      "name": "Nullified Statue of a Tumerok",
+      "type": "Prop"
+    },
+    {
+      "wcid": 23997,
+      "name": "wcid_23997",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 15759,
+      "name": "Linkable Item Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 28336,
+      "name": "wcid_28336",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 14,
+      "name": "Cow",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 14,
+      "name": "Cow",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 14,
+      "name": "Cow",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 14,
+      "name": "Cow",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    }
+  ]
+}

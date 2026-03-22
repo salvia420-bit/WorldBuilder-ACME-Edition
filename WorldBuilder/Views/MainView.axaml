@@ -1,0 +1,155 @@
+<UserControl
+    x:Class="WorldBuilder.Views.MainView"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:editors="clr-namespace:WorldBuilder.Editors.Landscape.Views"
+    xmlns:dungeonEditors="clr-namespace:WorldBuilder.Editors.Dungeon.Views"
+    xmlns:spellEditors="clr-namespace:WorldBuilder.Editors.Spell.Views"
+    xmlns:skillEditors="clr-namespace:WorldBuilder.Editors.Skill.Views"
+    xmlns:spellSetEditors="clr-namespace:WorldBuilder.Editors.SpellSet.Views"
+    xmlns:experienceEditors="clr-namespace:WorldBuilder.Editors.Experience.Views"
+    xmlns:vitalEditors="clr-namespace:WorldBuilder.Editors.Vital.Views"
+    xmlns:charGenEditors="clr-namespace:WorldBuilder.Editors.CharGen.Views"
+    xmlns:landscapeVm="clr-namespace:WorldBuilder.Editors.Landscape.ViewModels"
+    xmlns:dungeonVm="clr-namespace:WorldBuilder.Editors.Dungeon"
+    xmlns:spellVm="clr-namespace:WorldBuilder.Editors.Spell"
+    xmlns:skillVm="clr-namespace:WorldBuilder.Editors.Skill"
+    xmlns:spellSetVm="clr-namespace:WorldBuilder.Editors.SpellSet"
+    xmlns:experienceVm="clr-namespace:WorldBuilder.Editors.Experience"
+    xmlns:vitalVm="clr-namespace:WorldBuilder.Editors.Vital"
+    xmlns:charGenVm="clr-namespace:WorldBuilder.Editors.CharGen"
+    xmlns:layoutEditors="clr-namespace:WorldBuilder.Editors.Layout.Views"
+    xmlns:layoutVm="clr-namespace:WorldBuilder.Editors.Layout"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:vm="clr-namespace:WorldBuilder.ViewModels"
+    xmlns:docking="clr-namespace:WorldBuilder.Lib.Docking;assembly=WorldBuilder"
+    d:DesignHeight="450"
+    d:DesignWidth="800"
+    x:CompileBindings="True"
+    x:DataType="vm:MainViewModel"
+    mc:Ignorable="d">
+    <Design.DataContext>
+        <!--
+            This only sets the DataContext for the previewer in an IDE,
+            to set the actual DataContext for runtime, set the DataContext property in code (look at App.axaml.cs)
+        -->
+        <vm:MainViewModel />
+    </Design.DataContext>
+
+    <DockPanel>
+        <!--  Menu Bar  -->
+        <Border DockPanel.Dock="Top"
+                Background="#120c22"
+                BorderBrush="#2a1d42"
+                BorderThickness="0,0,0,1"
+                Padding="2,0">
+            <Menu>
+                <MenuItem Header="_File">
+                    <MenuItem Command="{Binding OpenExportDatsWindowCommand}" Header="Export Dats..." />
+                    <MenuItem Command="{Binding AnalyzeDungeonRoomsCommand}" Header="Analyze Dungeon Rooms..." />
+                    <Separator />
+                    <MenuItem Command="{Binding OpenSettingsWindowCommand}" Header="Settings..." />
+                    <MenuItem Command="{Binding OpenKeyboardShortcutsCommand}" Header="Keyboard Shortcuts..." />
+                    <Separator />
+                    <MenuItem Command="{Binding ExitCommand}" Header="Exit" InputGesture="{Binding ExitGesture}" />
+                </MenuItem>
+                <MenuItem Header="_Edit">
+                    <MenuItem Command="{Binding UndoCommand}" Header="Undo" InputGesture="{Binding UndoGesture}" />
+                    <MenuItem Command="{Binding RedoCommand}" Header="Redo" InputGesture="{Binding RedoGesture}" />
+                    <Separator />
+                    <MenuItem Command="{Binding CopyCommand}" Header="Copy" InputGesture="{Binding CopyGesture}" />
+                    <MenuItem Command="{Binding PasteCommand}" Header="Paste" InputGesture="{Binding PasteGesture}" />
+                    <MenuItem Command="{Binding DeleteCommand}" Header="Delete" InputGesture="{Binding DeleteGesture}" />
+                </MenuItem>
+                <MenuItem Header="_Navigate">
+                    <MenuItem
+                        Command="{Binding GotoLandblockCommand}"
+                        Header="Go to Landblock..."
+                        InputGesture="{Binding GotoLandblockGesture}" />
+                </MenuItem>
+                <MenuItem Header="E_ditors">
+                    <MenuItem Command="{Binding SwitchToLandscapeEditorCommand}" Header="Landscape Editor" />
+                    <MenuItem Command="{Binding SwitchToDungeonEditorCommand}" Header="Dungeon Editor" />
+                    <Separator />
+                    <MenuItem Command="{Binding SwitchToSpellEditorCommand}" Header="Spell Editor" />
+                    <MenuItem Command="{Binding SwitchToSpellSetEditorCommand}" Header="Spell Set Editor" />
+                    <MenuItem Command="{Binding SwitchToSkillEditorCommand}" Header="Skill Editor" />
+                    <MenuItem Command="{Binding SwitchToExperienceEditorCommand}" Header="Experience Table Editor" />
+                    <MenuItem Command="{Binding SwitchToVitalEditorCommand}" Header="Vital Table Editor" />
+                    <MenuItem Command="{Binding SwitchToCharGenEditorCommand}" Header="Character Creation Editor" />
+                    <Separator />
+                    <MenuItem Command="{Binding SwitchToLayoutEditorCommand}" Header="UI Layout Viewer" />
+                </MenuItem>
+                <MenuItem Header="_Windows" ItemsSource="{Binding DockingPanels}">
+                    <MenuItem.Styles>
+                        <Style Selector="MenuItem > MenuItem" x:DataType="docking:IDockable">
+                            <Setter Property="Header" Value="{Binding Title}" />
+                            <Setter Property="Command" Value="{Binding $parent[Menu].((vm:MainViewModel)DataContext).TogglePanelVisibilityCommand}" />
+                            <Setter Property="CommandParameter" Value="{Binding Id}" />
+                            <Setter Property="Icon">
+                                <Template>
+                                    <CheckBox IsChecked="{Binding IsVisible}" IsHitTestVisible="False" />
+                                </Template>
+                            </Setter>
+                        </Style>
+                    </MenuItem.Styles>
+                </MenuItem>
+            </Menu>
+        </Border>
+
+        <!--  Status Bar  -->
+        <Border DockPanel.Dock="Bottom"
+                Background="#120c22"
+                BorderBrush="#2a1d42"
+                BorderThickness="0,1,0,0"
+                Padding="10,4">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Left"
+                           FontSize="11"
+                           Foreground="#8a7a9e"
+                           VerticalAlignment="Center"
+                           Text="ACME WorldBuilder" />
+                <TextBlock DockPanel.Dock="Right"
+                           HorizontalAlignment="Right"
+                           FontSize="11"
+                           Foreground="#5a4a6e"
+                           VerticalAlignment="Center"
+                           Text="Ready" />
+            </DockPanel>
+        </Border>
+
+        <!--  Editor Content (only one editor is instantiated at a time) -->
+        <ContentControl Content="{Binding ActiveEditor}" x:CompileBindings="False">
+            <ContentControl.DataTemplates>
+                <DataTemplate DataType="{x:Type landscapeVm:LandscapeEditorViewModel}">
+                    <editors:LandscapeEditorView />
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type dungeonVm:DungeonEditorViewModel}">
+                    <dungeonEditors:DungeonEditorView />
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type spellVm:SpellEditorViewModel}">
+                    <spellEditors:SpellEditorView />
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type spellSetVm:SpellSetEditorViewModel}">
+                    <spellSetEditors:SpellSetEditorView />
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type skillVm:SkillEditorViewModel}">
+                    <skillEditors:SkillEditorView />
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type experienceVm:ExperienceEditorViewModel}">
+                    <experienceEditors:ExperienceEditorView />
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type vitalVm:VitalEditorViewModel}">
+                    <vitalEditors:VitalEditorView />
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type charGenVm:CharGenEditorViewModel}">
+                    <charGenEditors:CharGenEditorView />
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type layoutVm:LayoutEditorViewModel}">
+                    <layoutEditors:LayoutEditorView />
+                </DataTemplate>
+            </ContentControl.DataTemplates>
+        </ContentControl>
+    </DockPanel>
+</UserControl>

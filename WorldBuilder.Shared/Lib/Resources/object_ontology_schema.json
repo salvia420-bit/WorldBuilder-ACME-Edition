@@ -1,0 +1,3549 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ACME Object Ontology",
+  "description": "Semantic tagging schema for mapping ACME Object IDs (Setups and GfxObjs) to human-readable categories. Used by the AI agent for semantic constraint enforcement (Phase 6). Each entry maps an object hex ID to tags describing its architecture, biome, and functional type. Entries populated from the ACE source code (WeenieClassName enums, PropertyDataId.Setup references, and DAT file analysis).",
+  "version": "2.0.0",
+  "metadata": {
+    "purpose": "Phase 6 — Semantic Tagging & Constraint Enforcement",
+    "sources": [
+      "ACE-master/Source/ACE.Entity/Enum/WeenieClassName.cs (31,120 entries)",
+      "ACE-master/Source/ACE.Server/Factories/Enum/WeenieClassName.cs (41,891 entries)",
+      "ACE-master/Source/ACE.Entity/Enum/WeenieType.cs (77 types)",
+      "ACE-master/Source/ACE.DatLoader/ (DAT file format definitions)",
+      "ACE-master/Source/ACE.Server/WorldObjects/ (PropertyDataId.Setup references)"
+    ],
+    "id_spaces": {
+      "setupModel": "0x02XXXXXX — 3D composite model (one or more GfxObjs assembled). This is what gets placed as a static object in landblocks.",
+      "gfxObj": "0x01XXXXXX — Single 3D mesh/geometry object. Building block of SetupModels.",
+      "environment": "0x0DXXXXXX — Dungeon room prefab. Contains CellStructures with portal polygons.",
+      "weenieId": "Integer — Game-logic object type. Maps to a SetupModel via PropertyDataId.Setup in the world database. NOT a DAT file ID."
+    },
+    "usage": [
+      "Agent validates placement commands against biome/architecture constraints.",
+      "If an agent is instructed to build a 'Desert Outpost', objects tagged [Biome: Snowy] are rejected.",
+      "Object adjacency rules reference these tags to enforce aesthetic cohesion.",
+      "The weenie-based entries provide semantic names; the actual 0x02 Setup IDs are resolved at runtime from the DAT files."
+    ],
+    "tag_dimensions": {
+      "architecture": "Cultural style (Aluvian, Gharu'ndim, Sho, Viamontian, Empyrean, Generic)",
+      "biome": "Environment compatibility (Temperate, Desert, Snowy, Swamp, Volcanic, Coastal, Underground, Any)",
+      "type": "Functional category (see type_taxonomy below)",
+      "era": "Time period (Pre-Sundering, Post-Portal, Modern, Ancient, Timeless)",
+      "scale": "Relative size classification (Tiny, Small, Medium, Large, Massive)",
+      "creature_family": "Creature race/species (Banderling, Drudge, Mosswart, etc.) — used for generator↔creature linkage",
+      "difficulty_tier": "Level range tier: Starter (1-20), Low (20-40), Medium (40-80), Hard (80-125), Elite (125-200), Legendary (200+)",
+      "behavior": "AI combat pattern: Melee, Caster, Ranged, Mixed, Boss, Passive, Generator"
+    }
+  },
+  "type_taxonomy": {
+    "Structure": {
+      "Building_Residential": "Houses, huts, cottages, villas, mansions, apartments",
+      "Building_Commercial": "Shops, taverns, inns, marketplaces",
+      "Building_Civic": "Town halls, temples, academies, lifestone plazas",
+      "Building_Military": "Guard towers, barracks, forts, outposts",
+      "Building_Ruins": "Crumbled walls, ancient foundations, abandoned structures",
+      "Wall": "Defensive walls, fences, barriers, palisades",
+      "Bridge": "Bridges, walkways, platforms",
+      "Portal": "Portal structures, magical gateways, dungeon entrance frames"
+    },
+    "Scenery": {
+      "Scenery_Tree": "Trees (deciduous, coniferous, palm, etc.)",
+      "Scenery_Bush": "Shrubs, hedges, small vegetation",
+      "Scenery_Rock": "Boulders, rock formations, cliff faces",
+      "Scenery_Water": "Fountains, wells, water features, pools",
+      "Scenery_Misc": "Signs, banners, decorative items, mushroom circles"
+    },
+    "Furniture": {
+      "Furniture_Table": "Tables, desks, workbenches, dinner tables",
+      "Furniture_Chair": "Chairs, stools, benches, thrones, couches",
+      "Furniture_Storage": "Chests, crates, barrels, shelves, coffins, sarcophagi, coffers",
+      "Furniture_Light": "Torches, lanterns, braziers, chandeliers, candles, sconces, cressets, lamps",
+      "Furniture_Bed": "Beds, cots, sleeping mats, bedrolls",
+      "Furniture_Decorative": "Paintings, tapestries, curtains, rugs, ornamental bowls, vases",
+      "Furniture_Functional": "Hearths, firewood, workbenches, cooking fires"
+    },
+    "Dungeon": {
+      "Dungeon_Room": "Standard dungeon rooms",
+      "Dungeon_Corridor": "Hallways, passages",
+      "Dungeon_Staircase": "Stairs, ramps, ladders",
+      "Dungeon_Trap": "Trap elements, pressure plates, tripwires",
+      "Dungeon_Boss": "Boss arena rooms"
+    },
+    "Natural": {
+      "Natural_Terrain": "Terrain modification objects (hills, cliffs)",
+      "Natural_Cave": "Cave entrances, stalactites",
+      "Natural_Crystal": "Crystal formations",
+      "Natural_Mushroom": "Giant mushrooms, fungi, mushroom circles"
+    },
+    "Interactive": {
+      "Interactive_Door": "Doors (cultural variants: Aluvian, Sho, prison, dungeon)",
+      "Interactive_Switch": "Switches, levers, buttons, pressure plates",
+      "Interactive_Container": "Openable chests, crates, coffers with loot",
+      "Interactive_Lifestone": "Lifestones (bind/respawn points)",
+      "Interactive_Portal": "Functional portals (town network, dungeon entrances)",
+      "Interactive_Vendor": "Vendor NPCs and their associated shop signs",
+      "Interactive_Generator": "Creature/item spawn generators"
+    },
+    "Creature": {
+      "Creature_Melee": "Melee-only combat creatures (banderlings, lugians, etc.)",
+      "Creature_Caster": "Spell-casting creatures (virindi, liches, etc.)",
+      "Creature_Mixed": "Creatures with both melee and magic abilities",
+      "Creature_Ranged": "Ranged attack creatures (tumerok archers, etc.)",
+      "Creature_Boss": "Boss-tier named creatures",
+      "Creature_Passive": "Non-hostile ambient creatures (auroch, rabbit, etc.)"
+    },
+    "NPC": {
+      "NPC_QuestGiver": "NPCs that initiate or manage quests (emote-table driven)",
+      "NPC_Vendor": "Shop NPCs with inventory (weenieType 12)",
+      "NPC_Collector": "Item turn-in NPCs for quest rewards",
+      "NPC_Guard": "Town guard NPCs (hostile to creatures, passive to players)",
+      "NPC_Trainer": "Skill/attribute training NPCs",
+      "NPC_Barkeep": "Barkeep and innkeeper NPCs",
+      "NPC_Archmage": "Archmage NPCs (spell component vendors + portal services)"
+    },
+    "Signage": {
+      "Sign_Town": "Town directional signs (e.g. 'Arwic 2 miles')",
+      "Sign_Shop": "Shop signs (blacksmith, bowyer, tailor, grocer, healer, jeweler, pub, scribe)",
+      "Sign_Info": "Bulletin boards, tutorial signs, lore signs, riddle signs"
+    }
+  },
+  "entries": [
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "_comment": "  FURNITURE — LIGHTING (Weenie-based, resolve Setup at runtime)"
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "weenieClassId": 239,
+      "name": "Brazier",
+      "source": "WeenieClassName.brazier",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Light",
+        "era": "Timeless",
+        "scale": "Medium"
+      },
+      "placement_rules": {
+        "min_spacing_from_same": 12.0,
+        "snap_to_grid": false
+      }
+    },
+    {
+      "weenieClassId": 240,
+      "name": "Candelabra",
+      "source": "WeenieClassName.candelabra",
+      "weenieType": "LightSource",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Light",
+        "era": "Post-Portal",
+        "scale": "Small"
+      },
+      "placement_rules": {
+        "min_spacing_from_same": 6.0,
+        "snap_to_grid": false,
+        "indoor_only": true
+      }
+    },
+    {
+      "weenieClassId": 241,
+      "name": "Chandelier",
+      "source": "WeenieClassName.chandelier",
+      "weenieType": "LightSource",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Light",
+        "era": "Post-Portal",
+        "scale": "Medium"
+      },
+      "placement_rules": {
+        "min_spacing_from_same": 12.0,
+        "snap_to_grid": false,
+        "indoor_only": true
+      }
+    },
+    {
+      "weenieClassId": 270,
+      "name": "Candle",
+      "source": "WeenieClassName.candle",
+      "weenieType": "LightSource",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Light",
+        "era": "Timeless",
+        "scale": "Tiny"
+      },
+      "placement_rules": {
+        "min_spacing_from_same": 2.0,
+        "snap_to_grid": false,
+        "indoor_only": true
+      }
+    },
+    {
+      "weenieClassId": 271,
+      "name": "Candlestick",
+      "source": "WeenieClassName.candlestick",
+      "weenieType": "LightSource",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Light",
+        "era": "Timeless",
+        "scale": "Tiny"
+      }
+    },
+    {
+      "weenieClassId": 275,
+      "name": "Cresset",
+      "source": "WeenieClassName.cresset",
+      "weenieType": "LightSource",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Light",
+        "era": "Timeless",
+        "scale": "Medium"
+      },
+      "placement_rules": {
+        "min_spacing_from_same": 12.0,
+        "outdoor_suitable": true
+      }
+    },
+    {
+      "weenieClassId": 283,
+      "name": "Lamp",
+      "source": "WeenieClassName.lamp",
+      "weenieType": "LightSource",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Light",
+        "era": "Timeless",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 284,
+      "name": "Lantern",
+      "source": "WeenieClassName.lantern",
+      "weenieType": "LightSource",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Light",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 289,
+      "name": "Sconce",
+      "source": "WeenieClassName.W_SCONCE_CLASS",
+      "weenieType": "LightSource",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Light",
+        "era": "Timeless",
+        "scale": "Small"
+      },
+      "placement_rules": {
+        "indoor_only": true,
+        "wall_mounted": true
+      }
+    },
+    {
+      "weenieClassId": 290,
+      "name": "Sho Lantern",
+      "source": "WeenieClassName.sholantern",
+      "weenieType": "LightSource",
+      "tags": {
+        "architecture": "Sho",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Light",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 293,
+      "name": "Torch",
+      "source": "WeenieClassName.torch",
+      "weenieType": "LightSource",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Light",
+        "era": "Timeless",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 4128,
+      "name": "Campfire",
+      "source": "WeenieClassName.campfire",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Light",
+        "era": "Timeless",
+        "scale": "Medium"
+      },
+      "placement_rules": {
+        "min_spacing_from_same": 24.0,
+        "outdoor_suitable": true,
+        "random_rotation": true
+      }
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "_comment": "  FURNITURE — SEATING"
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "weenieClassId": 253,
+      "name": "Stool",
+      "source": "WeenieClassName.stool",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Chair",
+        "era": "Timeless",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 268,
+      "name": "Bench",
+      "source": "WeenieClassName.bench",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Chair",
+        "era": "Timeless",
+        "scale": "Medium"
+      }
+    },
+    {
+      "weenieClassId": 272,
+      "name": "Chair",
+      "source": "WeenieClassName.chair",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Chair",
+        "era": "Timeless",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 274,
+      "name": "Couch",
+      "source": "WeenieClassName.couch",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Chair",
+        "era": "Post-Portal",
+        "scale": "Medium"
+      }
+    },
+    {
+      "weenieClassId": 292,
+      "name": "Throne",
+      "source": "WeenieClassName.throne",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Chair",
+        "era": "Ancient",
+        "scale": "Medium"
+      },
+      "placement_rules": {
+        "min_spacing_from_same": 48.0
+      }
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "_comment": "  FURNITURE — TABLES & WORK SURFACES"
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "weenieClassId": 276,
+      "name": "Desk",
+      "source": "WeenieClassName.desk",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Table",
+        "era": "Post-Portal",
+        "scale": "Medium"
+      }
+    },
+    {
+      "weenieClassId": 277,
+      "name": "Dinner Table",
+      "source": "WeenieClassName.dinnertable",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Table",
+        "era": "Post-Portal",
+        "scale": "Medium"
+      }
+    },
+    {
+      "weenieClassId": 257,
+      "name": "Workbench",
+      "source": "WeenieClassName.workbench",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Functional",
+        "era": "Post-Portal",
+        "scale": "Medium"
+      }
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "_comment": "  FURNITURE — DECORATIVE"
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "weenieClassId": 246,
+      "name": "Hearth",
+      "source": "WeenieClassName.hearth",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Temperate",
+          "Snowy"
+        ],
+        "type": "Furniture_Functional",
+        "era": "Post-Portal",
+        "scale": "Medium"
+      },
+      "placement_rules": {
+        "indoor_only": true
+      }
+    },
+    {
+      "weenieClassId": 247,
+      "name": "Painting (Style 1)",
+      "source": "WeenieClassName.painting1",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Decorative",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 248,
+      "name": "Painting (Style 2)",
+      "source": "WeenieClassName.painting2",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Decorative",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 249,
+      "name": "Painting (Style 3)",
+      "source": "WeenieClassName.painting3",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Decorative",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 250,
+      "name": "Painting (Style 4)",
+      "source": "WeenieClassName.painting4",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Decorative",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 255,
+      "name": "Tapestry",
+      "source": "WeenieClassName.tapestry",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Decorative",
+        "era": "Post-Portal",
+        "scale": "Medium"
+      }
+    },
+    {
+      "weenieClassId": 267,
+      "name": "Bedroll",
+      "source": "WeenieClassName.bedroll",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Bed",
+        "era": "Timeless",
+        "scale": "Small"
+      }
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "_comment": "  FURNITURE — STORAGE / CONTAINERS"
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "weenieClassId": 143,
+      "name": "Chest",
+      "source": "WeenieClassName.chest",
+      "weenieType": "Chest",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Storage",
+        "era": "Timeless",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 145,
+      "name": "Coffer",
+      "source": "WeenieClassName.coffer",
+      "weenieType": "Chest",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Storage",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 146,
+      "name": "Coffin",
+      "source": "WeenieClassName.coffin",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Underground",
+          "Swamp"
+        ],
+        "type": "Furniture_Storage",
+        "era": "Ancient",
+        "scale": "Medium"
+      }
+    },
+    {
+      "weenieClassId": 147,
+      "name": "Crate",
+      "source": "WeenieClassName.crate",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Storage",
+        "era": "Timeless",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 167,
+      "name": "Sarcophagus",
+      "source": "WeenieClassName.sarcophagus",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Empyrean",
+        "biome": [
+          "Underground"
+        ],
+        "type": "Furniture_Storage",
+        "era": "Ancient",
+        "scale": "Large"
+      }
+    },
+    {
+      "weenieClassId": 173,
+      "name": "Water Barrel",
+      "source": "WeenieClassName.waterbarrel",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Furniture_Storage",
+        "era": "Post-Portal",
+        "scale": "Medium"
+      }
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "_comment": "  SCENERY — WATER FEATURES"
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "weenieClassId": 153,
+      "name": "Fountain",
+      "source": "WeenieClassName.fountain",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Temperate",
+          "Coastal"
+        ],
+        "type": "Scenery_Water",
+        "era": "Post-Portal",
+        "scale": "Large"
+      },
+      "placement_rules": {
+        "min_spacing_from_same": 96.0,
+        "outdoor_suitable": true
+      }
+    },
+    {
+      "weenieClassId": 165,
+      "name": "Pool",
+      "source": "WeenieClassName.pool",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Scenery_Water",
+        "era": "Timeless",
+        "scale": "Medium"
+      }
+    },
+    {
+      "weenieClassId": 174,
+      "name": "Well",
+      "source": "WeenieClassName.well",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Temperate",
+          "Desert",
+          "Coastal"
+        ],
+        "type": "Scenery_Water",
+        "era": "Post-Portal",
+        "scale": "Medium"
+      },
+      "placement_rules": {
+        "min_spacing_from_same": 192.0,
+        "outdoor_suitable": true,
+        "requires_road_access": true
+      }
+    },
+    {
+      "weenieClassId": 144,
+      "name": "Cistern",
+      "source": "WeenieClassName.cistern",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Gharu'ndim",
+        "biome": [
+          "Desert"
+        ],
+        "type": "Scenery_Water",
+        "era": "Post-Portal",
+        "scale": "Medium"
+      }
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "_comment": "  SCENERY — MISCELLANEOUS"
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "weenieClassId": 287,
+      "name": "Pedestal",
+      "source": "WeenieClassName.pedestal",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Empyrean",
+        "biome": [
+          "Any"
+        ],
+        "type": "Scenery_Misc",
+        "era": "Ancient",
+        "scale": "Medium"
+      }
+    },
+    {
+      "weenieClassId": 252,
+      "name": "Portal Frame",
+      "source": "WeenieClassName.portalframe",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Empyrean",
+        "biome": [
+          "Any"
+        ],
+        "type": "Portal",
+        "era": "Ancient",
+        "scale": "Large"
+      },
+      "placement_rules": {
+        "min_spacing_from_same": 192.0,
+        "snap_to_grid": true
+      }
+    },
+    {
+      "weenieClassId": 553,
+      "name": "Mushroom Circle Generator",
+      "source": "WeenieClassName.mushroomcirclegen",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Temperate",
+          "Swamp"
+        ],
+        "type": "Natural_Mushroom",
+        "era": "Timeless",
+        "scale": "Medium"
+      },
+      "placement_rules": {
+        "outdoor_suitable": true,
+        "random_rotation": true
+      }
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "_comment": "  INTERACTIVE — DOORS (cultural variants)"
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "weenieClassId": 278,
+      "name": "Door (Standard)",
+      "source": "WeenieClassName.door",
+      "weenieType": "Door",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Interactive_Door",
+        "era": "Post-Portal",
+        "scale": "Medium"
+      }
+    },
+    {
+      "weenieClassId": 412,
+      "name": "Door (Aluvian House)",
+      "source": "WeenieClassName.door_aluvian_house",
+      "weenieType": "Door",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Temperate",
+          "Coastal"
+        ],
+        "type": "Interactive_Door",
+        "era": "Post-Portal",
+        "scale": "Medium"
+      }
+    },
+    {
+      "weenieClassId": 720,
+      "name": "Door (Sho Sliding)",
+      "source": "WeenieClassName.doorshoslide",
+      "weenieType": "Door",
+      "tags": {
+        "architecture": "Sho",
+        "biome": [
+          "Temperate"
+        ],
+        "type": "Interactive_Door",
+        "era": "Post-Portal",
+        "scale": "Medium"
+      }
+    },
+    {
+      "weenieClassId": 721,
+      "name": "Door (Sho Left)",
+      "source": "WeenieClassName.doorsholeft",
+      "weenieType": "Door",
+      "tags": {
+        "architecture": "Sho",
+        "biome": [
+          "Temperate"
+        ],
+        "type": "Interactive_Door",
+        "era": "Post-Portal",
+        "scale": "Medium"
+      }
+    },
+    {
+      "weenieClassId": 722,
+      "name": "Door (Sho Right)",
+      "source": "WeenieClassName.doorshoright",
+      "weenieType": "Door",
+      "tags": {
+        "architecture": "Sho",
+        "biome": [
+          "Temperate"
+        ],
+        "type": "Interactive_Door",
+        "era": "Post-Portal",
+        "scale": "Medium"
+      }
+    },
+    {
+      "weenieClassId": 568,
+      "name": "Door (Prison)",
+      "source": "WeenieClassName.doorprison",
+      "weenieType": "Door",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Underground"
+        ],
+        "type": "Interactive_Door",
+        "era": "Ancient",
+        "scale": "Medium"
+      }
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "_comment": "  INTERACTIVE — LIFESTONES & PORTALS"
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "weenieClassId": 509,
+      "name": "Lifestone",
+      "source": "WeenieClassName.lifestone",
+      "weenieType": "LifeStone",
+      "tags": {
+        "architecture": "Empyrean",
+        "biome": [
+          "Any"
+        ],
+        "type": "Interactive_Lifestone",
+        "era": "Ancient",
+        "scale": "Medium"
+      },
+      "placement_rules": {
+        "min_spacing_from_same": 384.0,
+        "snap_to_grid": true,
+        "requires_road_access": true
+      },
+      "adjacency_hints": [
+        {
+          "objectType": "Sign_Town",
+          "min_distance": 6.0,
+          "max_distance": 24.0,
+          "preferred_count": "1"
+        }
+      ]
+    },
+    {
+      "weenieClassId": 1955,
+      "name": "Portal Gateway",
+      "source": "WeenieClassName.portalgateway",
+      "weenieType": "Portal",
+      "tags": {
+        "architecture": "Empyrean",
+        "biome": [
+          "Any"
+        ],
+        "type": "Interactive_Portal",
+        "era": "Ancient",
+        "scale": "Large"
+      },
+      "placement_rules": {
+        "min_spacing_from_same": 192.0,
+        "snap_to_grid": true
+      }
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "_comment": "  INTERACTIVE — SWITCHES & TRAPS"
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "weenieClassId": 269,
+      "name": "Button Switch",
+      "source": "WeenieClassName.buttonswitch",
+      "weenieType": "Switch",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Interactive_Switch",
+        "era": "Timeless",
+        "scale": "Tiny"
+      }
+    },
+    {
+      "weenieClassId": 285,
+      "name": "Lever (Box)",
+      "source": "WeenieClassName.leverboxswitch",
+      "weenieType": "Switch",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Interactive_Switch",
+        "era": "Timeless",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 286,
+      "name": "Lever (Gear)",
+      "source": "WeenieClassName.levergearswitch",
+      "weenieType": "Switch",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Underground"
+        ],
+        "type": "Interactive_Switch",
+        "era": "Ancient",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 298,
+      "name": "Pressure Plate",
+      "source": "WeenieClassName.pressure_plate",
+      "weenieType": "PressurePlate",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Underground"
+        ],
+        "type": "Dungeon_Trap",
+        "era": "Ancient",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 299,
+      "name": "Tripwire",
+      "source": "WeenieClassName.tripwire",
+      "weenieType": "PressurePlate",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Underground"
+        ],
+        "type": "Dungeon_Trap",
+        "era": "Ancient",
+        "scale": "Tiny"
+      }
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "_comment": "  SIGNAGE — TOWN DIRECTION SIGNS (Aluvian region)"
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "weenieClassId": 457,
+      "name": "Signpost",
+      "source": "WeenieClassName.signpost",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Sign_Town",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 459,
+      "name": "Sign — Arwic 1 Mile",
+      "source": "WeenieClassName.sign_arwic1mile",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Temperate"
+        ],
+        "type": "Sign_Town",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 460,
+      "name": "Sign — Arwic 2 Miles",
+      "source": "WeenieClassName.sign_arwic2miles",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Temperate"
+        ],
+        "type": "Sign_Town",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 463,
+      "name": "Sign — Arwic",
+      "source": "WeenieClassName.sign_arwic",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Temperate"
+        ],
+        "type": "Sign_Town",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 464,
+      "name": "Sign — Cragstone 1 Mile",
+      "source": "WeenieClassName.sign_cragstone1mile",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Temperate"
+        ],
+        "type": "Sign_Town",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 468,
+      "name": "Sign — Cragstone",
+      "source": "WeenieClassName.sign_cragstone",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Temperate"
+        ],
+        "type": "Sign_Town",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 471,
+      "name": "Sign — Eastham 1 Mile",
+      "source": "WeenieClassName.sign_eastham1mile",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Temperate",
+          "Coastal"
+        ],
+        "type": "Sign_Town",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 475,
+      "name": "Sign — Eastham",
+      "source": "WeenieClassName.sign_eastham",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Temperate",
+          "Coastal"
+        ],
+        "type": "Sign_Town",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 477,
+      "name": "Sign — Rithwic 1 Mile",
+      "source": "WeenieClassName.sign_rithwic1mile",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Temperate"
+        ],
+        "type": "Sign_Town",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 482,
+      "name": "Sign — Rithwic",
+      "source": "WeenieClassName.sign_rithwic",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Temperate"
+        ],
+        "type": "Sign_Town",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 503,
+      "name": "Sign — Shoushi",
+      "source": "WeenieClassName.sign_shoushi",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Sho",
+        "biome": [
+          "Temperate"
+        ],
+        "type": "Sign_Town",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "_comment": "  SIGNAGE — SHOP SIGNS"
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "weenieClassId": 633,
+      "name": "Tailor Sign",
+      "source": "WeenieClassName.tailorsign",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Any"
+        ],
+        "type": "Sign_Shop",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 634,
+      "name": "Fletcher Sign",
+      "source": "WeenieClassName.fletchersign",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Any"
+        ],
+        "type": "Sign_Shop",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 635,
+      "name": "Healer Sign",
+      "source": "WeenieClassName.healersign",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Any"
+        ],
+        "type": "Sign_Shop",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 636,
+      "name": "Grocer Sign",
+      "source": "WeenieClassName.grocersign",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Any"
+        ],
+        "type": "Sign_Shop",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 637,
+      "name": "Blacksmith Sign",
+      "source": "WeenieClassName.blacksmithsign",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Any"
+        ],
+        "type": "Sign_Shop",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "weenieClassId": 638,
+      "name": "Bowyer Sign",
+      "source": "WeenieClassName.bowyersign",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Any"
+        ],
+        "type": "Sign_Shop",
+        "era": "Post-Portal",
+        "scale": "Small"
+      }
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "_comment": "  SIGNAGE — BULLETIN BOARDS & INFO"
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "weenieClassId": 487,
+      "name": "Arwic Bulletin Board",
+      "source": "WeenieClassName.sign_arwicbulletinboard",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Temperate"
+        ],
+        "type": "Sign_Info",
+        "era": "Post-Portal",
+        "scale": "Medium"
+      }
+    },
+    {
+      "weenieClassId": 488,
+      "name": "Cragstone Bulletin Board",
+      "source": "WeenieClassName.sign_cragstonebulletinboard",
+      "weenieType": "Generic",
+      "tags": {
+        "architecture": "Aluvian",
+        "biome": [
+          "Temperate"
+        ],
+        "type": "Sign_Info",
+        "era": "Post-Portal",
+        "scale": "Medium"
+      }
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "_comment": "  HOUSING — COTTAGES (Weenie IDs 9693–9742 = 50 cottage instances)"
+    },
+    {
+      "_comment": "  Each housing weenie maps to a SetupModel at runtime."
+    },
+    {
+      "_comment": "  Architecture varies per instance, tagged as Generic here."
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "weenieClassId_range": [
+        9693,
+        9742
+      ],
+      "range_count": 50,
+      "name_pattern": "House Cottage {N}",
+      "source": "WeenieClassName.W_HOUSECOTTAGE{N}_CLASS",
+      "weenieType": "House",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Temperate",
+          "Coastal"
+        ],
+        "type": "Building_Residential",
+        "era": "Post-Portal",
+        "scale": "Medium"
+      },
+      "placement_rules": {
+        "min_terrain_flatness": 0.85,
+        "min_spacing_from_same": 48.0,
+        "snap_to_grid": true,
+        "requires_road_access": true
+      },
+      "adjacency_hints": [
+        {
+          "objectType": "Scenery_Tree",
+          "min_distance": 12.0,
+          "max_distance": 96.0,
+          "preferred_count": "2-5"
+        },
+        {
+          "objectType": "Furniture_Light",
+          "min_distance": 0.0,
+          "max_distance": 24.0,
+          "preferred_count": "1-2"
+        }
+      ]
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "_comment": "  HOUSING — VILLAS (Weenie IDs 10493–10542 = 50 villa instances)"
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "weenieClassId_range": [
+        10493,
+        10542
+      ],
+      "range_count": 50,
+      "name_pattern": "House Villa {N}",
+      "source": "WeenieClassName.W_HOUSEVILLA{N}_CLASS",
+      "weenieType": "House",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Temperate",
+          "Coastal"
+        ],
+        "type": "Building_Residential",
+        "era": "Post-Portal",
+        "scale": "Large"
+      },
+      "placement_rules": {
+        "min_terrain_flatness": 0.90,
+        "min_spacing_from_same": 96.0,
+        "snap_to_grid": true,
+        "requires_road_access": true
+      },
+      "adjacency_hints": [
+        {
+          "objectType": "Scenery_Tree",
+          "min_distance": 12.0,
+          "max_distance": 96.0,
+          "preferred_count": "3-8"
+        },
+        {
+          "objectType": "Wall",
+          "min_distance": 24.0,
+          "max_distance": 48.0,
+          "preferred_count": "4-8"
+        }
+      ]
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "_comment": "  KNOWN SETUP MODEL IDs (from DAT / ACE source hardcodes)"
+    },
+    {
+      "_comment": "  These are the actual 0x02XXXXXX IDs placed in landblocks."
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "objectId": "0x02000124",
+      "name": "Arrow (Sight Object)",
+      "isSetup": true,
+      "source": "ACE.Server/WorldObjects/WorldObject.cs:309 — PhysicsObj.makeObject(0x02000124)",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Scenery_Misc",
+        "era": "Timeless",
+        "scale": "Tiny"
+      },
+      "notes": "Used internally for line-of-sight checks. Not a worldbuilding object."
+    },
+    {
+      "objectId": "0x02000EC4",
+      "name": "Corpse (Creature Death)",
+      "isSetup": true,
+      "source": "ACE.Server/WorldObjects/Creature_Death.cs:455",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Scenery_Misc",
+        "era": "Timeless",
+        "scale": "Small"
+      },
+      "notes": "Default corpse model used when a creature dies. Not a placement object."
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "_comment": "  CREATURE GENERATORS (for spawn point placement)"
+    },
+    {
+      "_comment": "  These define WHERE creatures spawn — relevant for zone design."
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "weenieClassId": 381,
+      "name": "Drudge Generator",
+      "source": "WeenieClassName.drudge_generator",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Temperate",
+          "Swamp"
+        ],
+        "type": "Interactive_Generator",
+        "era": "Timeless",
+        "scale": "Tiny"
+      }
+    },
+    {
+      "weenieClassId": 382,
+      "name": "Banderling Generator",
+      "source": "WeenieClassName.banderling_generator",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Temperate",
+          "Snowy"
+        ],
+        "type": "Interactive_Generator",
+        "era": "Timeless",
+        "scale": "Tiny"
+      }
+    },
+    {
+      "weenieClassId": 383,
+      "name": "Mosswart Generator",
+      "source": "WeenieClassName.mosswart_generator",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Swamp",
+          "Temperate"
+        ],
+        "type": "Interactive_Generator",
+        "era": "Timeless",
+        "scale": "Tiny"
+      }
+    },
+    {
+      "weenieClassId": 384,
+      "name": "Olthoi Generator",
+      "source": "WeenieClassName.olthoi_generator",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Underground",
+          "Volcanic"
+        ],
+        "type": "Interactive_Generator",
+        "era": "Ancient",
+        "scale": "Tiny"
+      }
+    },
+    {
+      "weenieClassId": 387,
+      "name": "Lugian Generator",
+      "source": "WeenieClassName.lugian_generator",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Snowy",
+          "Temperate"
+        ],
+        "type": "Interactive_Generator",
+        "era": "Timeless",
+        "scale": "Tiny"
+      }
+    },
+    {
+      "weenieClassId": 388,
+      "name": "Tumerok Generator",
+      "source": "WeenieClassName.tumerok_generator",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Desert",
+          "Temperate"
+        ],
+        "type": "Interactive_Generator",
+        "era": "Timeless",
+        "scale": "Tiny"
+      }
+    },
+    {
+      "weenieClassId": 394,
+      "name": "Undead Generator",
+      "source": "WeenieClassName.undead_generator",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Underground",
+          "Swamp"
+        ],
+        "type": "Interactive_Generator",
+        "era": "Ancient",
+        "scale": "Tiny"
+      }
+    },
+    {
+      "weenieClassId": 399,
+      "name": "Virindi Generator",
+      "source": "WeenieClassName.virindi_generator",
+      "tags": {
+        "architecture": "Generic",
+        "biome": [
+          "Any"
+        ],
+        "type": "Interactive_Generator",
+        "era": "Ancient",
+        "scale": "Tiny"
+      }
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "_comment": "  CREATURE FAMILIES — Derived from Lifestoned weenie data"
+    },
+    {
+      "_comment": "  Each entry documents a creature family with WCID pools,"
+    },
+    {
+      "_comment": "  level ranges, and biome affinities. Used by generators."
+    },
+    {
+      "_comment": "  Source: LSD-Partial-2025-02-23 (19,686 weenie files)"
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "creature_family": "Banderling",
+      "creature_type_id": 2,
+      "level_range": [
+        8,
+        125
+      ],
+      "difficulty_tier": [
+        "Starter",
+        "Low",
+        "Medium",
+        "Hard",
+        "Elite"
+      ],
+      "biome": [
+        "Temperate",
+        "Snowy"
+      ],
+      "behavior": "Melee",
+      "wcid_pool": [
+        {
+          "wcid": 183,
+          "name": "Banderling Raver",
+          "level": 15
+        },
+        {
+          "wcid": 7346,
+          "name": "Banderling Enforcer",
+          "level": 25
+        },
+        {
+          "wcid": 7086,
+          "name": "Banderling Thrasher",
+          "level": 25
+        },
+        {
+          "wcid": 11983,
+          "name": "Banderling Leader",
+          "level": 40
+        },
+        {
+          "wcid": 1240,
+          "name": "Oversized Banderling Ogre",
+          "level": 60
+        },
+        {
+          "wcid": 1241,
+          "name": "Banderling Bloodblade",
+          "level": 80
+        }
+      ],
+      "notes": "79 weenies in LSD. Melee-focused humanoids, often in camps with generators.",
+      "generator_wcid": 382,
+      "lsd_file_count": 79
+    },
+    {
+      "creature_family": "Drudge",
+      "creature_type_id": 3,
+      "level_range": [
+        1,
+        100
+      ],
+      "difficulty_tier": [
+        "Starter",
+        "Low",
+        "Medium",
+        "Hard"
+      ],
+      "biome": [
+        "Temperate",
+        "Swamp"
+      ],
+      "behavior": "Melee",
+      "wcid_pool": [
+        {
+          "wcid": 192,
+          "name": "Drudge Slinker",
+          "level": 1
+        },
+        {
+          "wcid": 193,
+          "name": "Drudge Skulker",
+          "level": 5
+        },
+        {
+          "wcid": 194,
+          "name": "Drudge Lurker",
+          "level": 15
+        },
+        {
+          "wcid": 10775,
+          "name": "Augmented Drudge",
+          "level": 50
+        },
+        {
+          "wcid": 10776,
+          "name": "Unconquered Drudge",
+          "level": 80
+        }
+      ],
+      "notes": "118 weenies in LSD. Starter creatures, aggressive humanoids.",
+      "generator_wcid": 381,
+      "lsd_file_count": 118
+    },
+    {
+      "creature_family": "Mosswart",
+      "creature_type_id": 4,
+      "level_range": [
+        1,
+        80
+      ],
+      "difficulty_tier": [
+        "Starter",
+        "Low",
+        "Medium"
+      ],
+      "biome": [
+        "Swamp",
+        "Temperate"
+      ],
+      "behavior": "Melee",
+      "wcid_pool": [
+        {
+          "wcid": 1256,
+          "name": "Braggart Mosswart",
+          "level": 5
+        },
+        {
+          "wcid": 1257,
+          "name": "Mosswart Overchief",
+          "level": 20
+        },
+        {
+          "wcid": 1258,
+          "name": "Ravenous Mosswart",
+          "level": 40
+        }
+      ],
+      "notes": "71 weenies in LSD. Swamp-dwelling amphibian humanoids.",
+      "generator_wcid": 383,
+      "lsd_file_count": 71
+    },
+    {
+      "creature_family": "Olthoi",
+      "creature_type_id": 1,
+      "level_range": [
+        18,
+        146
+      ],
+      "difficulty_tier": [
+        "Low",
+        "Medium",
+        "Hard",
+        "Elite"
+      ],
+      "biome": [
+        "Underground",
+        "Volcanic"
+      ],
+      "behavior": "Melee",
+      "wcid_pool": [
+        {
+          "wcid": 10912,
+          "name": "Olthoi Grub",
+          "level": 18
+        },
+        {
+          "wcid": 10909,
+          "name": "Olthoi Soldier",
+          "level": 61
+        },
+        {
+          "wcid": 10904,
+          "name": "Olthoi Noble",
+          "level": 79
+        }
+      ],
+      "notes": "417 weenies in LSD (includes variants). Insectoid hive creatures.",
+      "generator_wcid": 384,
+      "lsd_file_count": 417
+    },
+    {
+      "creature_family": "Tusker",
+      "creature_type_id": 8,
+      "level_range": [
+        15,
+        201
+      ],
+      "difficulty_tier": [
+        "Starter",
+        "Low",
+        "Medium",
+        "Hard",
+        "Elite",
+        "Legendary"
+      ],
+      "biome": [
+        "Temperate",
+        "Swamp"
+      ],
+      "behavior": "Melee",
+      "wcid_pool": [
+        {
+          "wcid": 22509,
+          "name": "Tusker Kin",
+          "level": 15
+        },
+        {
+          "wcid": 11,
+          "name": "Male Tusker",
+          "level": 20
+        },
+        {
+          "wcid": 1627,
+          "name": "Tusker Crimsonback",
+          "level": 30
+        },
+        {
+          "wcid": 21525,
+          "name": "Tusker Guard",
+          "level": 80
+        },
+        {
+          "wcid": 11540,
+          "name": "Armored Tusker",
+          "level": 100
+        },
+        {
+          "wcid": 22500,
+          "name": "Oolutanga, the Tusker King",
+          "level": 201
+        }
+      ],
+      "notes": "121 weenies in LSD. Gorilla-like primates, wide level range.",
+      "lsd_file_count": 121
+    },
+    {
+      "creature_family": "Tumerok",
+      "creature_type_id": 6,
+      "level_range": [
+        30,
+        100
+      ],
+      "difficulty_tier": [
+        "Low",
+        "Medium",
+        "Hard"
+      ],
+      "biome": [
+        "Desert",
+        "Temperate"
+      ],
+      "behavior": "Ranged",
+      "wcid_pool": [
+        {
+          "wcid": 11876,
+          "name": "Tumerok Standard Bearer",
+          "level": 30
+        },
+        {
+          "wcid": 11885,
+          "name": "Tumerok Controller",
+          "level": 50
+        },
+        {
+          "wcid": 10806,
+          "name": "Ascendant Tumerok",
+          "level": 80
+        }
+      ],
+      "notes": "91 weenies in LSD. Tribal humanoids, often with ranged attacks.",
+      "generator_wcid": 388,
+      "lsd_file_count": 91
+    },
+    {
+      "creature_family": "Virindi",
+      "creature_type_id": 19,
+      "level_range": [
+        50,
+        130
+      ],
+      "difficulty_tier": [
+        "Medium",
+        "Hard",
+        "Elite"
+      ],
+      "biome": [
+        "Any"
+      ],
+      "behavior": "Caster",
+      "wcid_pool": [
+        {
+          "wcid": 12300,
+          "name": "Singular Virindi Servant",
+          "level": 50
+        },
+        {
+          "wcid": 11622,
+          "name": "Virindi Master",
+          "level": 69
+        },
+        {
+          "wcid": 10956,
+          "name": "Virindi Observer",
+          "level": 90
+        },
+        {
+          "wcid": 10818,
+          "name": "Virindi Executor",
+          "level": 100
+        },
+        {
+          "wcid": 10814,
+          "name": "Virindi Inquisitor",
+          "level": 100
+        }
+      ],
+      "notes": "164 weenies in LSD. Alien energy beings, heavy spellcasters.",
+      "generator_wcid": 399,
+      "lsd_file_count": 164
+    },
+    {
+      "creature_family": "Shadow",
+      "creature_type_id": 22,
+      "level_range": [
+        15,
+        160
+      ],
+      "difficulty_tier": [
+        "Starter",
+        "Low",
+        "Medium",
+        "Hard",
+        "Elite"
+      ],
+      "biome": [
+        "Underground",
+        "Any"
+      ],
+      "behavior": "Mixed",
+      "wcid_pool": [
+        {
+          "wcid": 1756,
+          "name": "Shadow Child",
+          "level": 15
+        },
+        {
+          "wcid": 1758,
+          "name": "Shadow",
+          "level": 30
+        },
+        {
+          "wcid": 1757,
+          "name": "Shadow Lieutenant",
+          "level": 60
+        },
+        {
+          "wcid": 22910,
+          "name": "Pandemonium Shadow",
+          "level": 80
+        },
+        {
+          "wcid": 23090,
+          "name": "Shadow Spectre",
+          "level": 115
+        }
+      ],
+      "notes": "604 weenies in LSD (many variants). Dark magical humanoids.",
+      "lsd_file_count": 604
+    },
+    {
+      "creature_family": "Skeleton",
+      "creature_type_id": 30,
+      "level_range": [
+        8,
+        160
+      ],
+      "difficulty_tier": [
+        "Starter",
+        "Low",
+        "Medium",
+        "Hard",
+        "Elite"
+      ],
+      "biome": [
+        "Underground",
+        "Swamp"
+      ],
+      "behavior": "Melee",
+      "wcid_pool": [
+        {
+          "wcid": 1759,
+          "name": "Skeleton",
+          "level": 8
+        },
+        {
+          "wcid": 1760,
+          "name": "Skeleton Warrior",
+          "level": 20
+        },
+        {
+          "wcid": 1761,
+          "name": "Skeleton Captain",
+          "level": 20
+        },
+        {
+          "wcid": 1762,
+          "name": "Skeleton Lord",
+          "level": 40
+        },
+        {
+          "wcid": 24313,
+          "name": "Armored Skeleton",
+          "level": 100
+        }
+      ],
+      "notes": "122 weenies in LSD. Classic undead warriors.",
+      "lsd_file_count": 122
+    },
+    {
+      "creature_family": "Undead",
+      "creature_type_id": 14,
+      "level_range": [
+        8,
+        200
+      ],
+      "difficulty_tier": [
+        "Starter",
+        "Low",
+        "Medium",
+        "Hard",
+        "Elite",
+        "Legendary"
+      ],
+      "biome": [
+        "Underground",
+        "Swamp"
+      ],
+      "behavior": "Caster",
+      "wcid_pool": [
+        {
+          "wcid": 16,
+          "name": "Undead",
+          "level": 8
+        },
+        {
+          "wcid": 1523,
+          "name": "Undead Curator",
+          "level": 15
+        },
+        {
+          "wcid": 25314,
+          "name": "Undead Mechanic",
+          "level": 67
+        },
+        {
+          "wcid": 24322,
+          "name": "Undead Lieutenant",
+          "level": 100
+        },
+        {
+          "wcid": 24321,
+          "name": "Undead Captain",
+          "level": 135
+        }
+      ],
+      "notes": "38 weenies in LSD. Reanimated corpses, often with magic.",
+      "generator_wcid": 394,
+      "lsd_file_count": 38
+    },
+    {
+      "creature_family": "Lugian",
+      "creature_type_id": 5,
+      "level_range": [
+        20,
+        135
+      ],
+      "difficulty_tier": [
+        "Low",
+        "Medium",
+        "Hard",
+        "Elite"
+      ],
+      "biome": [
+        "Snowy",
+        "Temperate"
+      ],
+      "behavior": "Melee",
+      "wcid_pool": [
+        {
+          "wcid": 1617,
+          "name": "Amploth Lugian",
+          "level": 20
+        },
+        {
+          "wcid": 205,
+          "name": "Obeloth Lugian",
+          "level": 30
+        },
+        {
+          "wcid": 206,
+          "name": "Lithos Lugian",
+          "level": 40
+        },
+        {
+          "wcid": 1618,
+          "name": "Gigas Lugian",
+          "level": 50
+        },
+        {
+          "wcid": 11996,
+          "name": "Lugian Warlord",
+          "level": 60
+        }
+      ],
+      "notes": "65 weenies in LSD. Giant rock-like humanoids.",
+      "generator_wcid": 387,
+      "lsd_file_count": 65
+    },
+    {
+      "creature_family": "Golem",
+      "creature_type_id": 13,
+      "level_range": [
+        1,
+        115
+      ],
+      "difficulty_tier": [
+        "Starter",
+        "Low",
+        "Medium",
+        "Hard"
+      ],
+      "biome": [
+        "Any"
+      ],
+      "behavior": "Melee",
+      "wcid_pool": [
+        {
+          "wcid": 12698,
+          "name": "Sparring Golem",
+          "level": 1
+        },
+        {
+          "wcid": 11528,
+          "name": "Elaniwood Golem",
+          "level": 20
+        },
+        {
+          "wcid": 11531,
+          "name": "Sand Golem",
+          "level": 30
+        },
+        {
+          "wcid": 194,
+          "name": "Copper Golem",
+          "level": 40
+        },
+        {
+          "wcid": 16910,
+          "name": "Obsidian Golem",
+          "level": 60
+        }
+      ],
+      "notes": "258 weenies in LSD. Elemental constructs, biome matches material.",
+      "lsd_file_count": 258
+    },
+    {
+      "creature_family": "Gromnie",
+      "creature_type_id": 15,
+      "level_range": [
+        6,
+        160
+      ],
+      "difficulty_tier": [
+        "Starter",
+        "Low",
+        "Medium",
+        "Hard",
+        "Elite"
+      ],
+      "biome": [
+        "Temperate",
+        "Swamp"
+      ],
+      "behavior": "Melee",
+      "wcid_pool": [
+        {
+          "wcid": 203,
+          "name": "Gromnie Hatchling",
+          "level": 6
+        },
+        {
+          "wcid": 17,
+          "name": "Gromnie",
+          "level": 6
+        },
+        {
+          "wcid": 1613,
+          "name": "Ivory Gromnie",
+          "level": 15
+        },
+        {
+          "wcid": 11526,
+          "name": "Ebon Gromnie",
+          "level": 80
+        }
+      ],
+      "notes": "42 weenies in LSD. Reptilian quadrupeds, color variants.",
+      "lsd_file_count": 42
+    },
+    {
+      "creature_family": "Phyntos Wasp",
+      "creature_type_id": 9,
+      "level_range": [
+        8,
+        135
+      ],
+      "difficulty_tier": [
+        "Starter",
+        "Low",
+        "Medium",
+        "Hard",
+        "Elite"
+      ],
+      "biome": [
+        "Temperate",
+        "Swamp"
+      ],
+      "behavior": "Melee",
+      "wcid_pool": [
+        {
+          "wcid": 215,
+          "name": "Blue Phyntos Wasp",
+          "level": 8
+        },
+        {
+          "wcid": 12,
+          "name": "Red Phyntos Wasp",
+          "level": 8
+        },
+        {
+          "wcid": 217,
+          "name": "Gold Phyntos Wasp",
+          "level": 50
+        }
+      ],
+      "notes": "111 weenies in LSD. Giant insects, color denotes level.",
+      "lsd_file_count": 111
+    },
+    {
+      "creature_family": "Armoredillo",
+      "creature_type_id": 17,
+      "level_range": [
+        8,
+        160
+      ],
+      "difficulty_tier": [
+        "Starter",
+        "Low",
+        "Medium",
+        "Hard",
+        "Elite"
+      ],
+      "biome": [
+        "Temperate",
+        "Desert",
+        "Coastal"
+      ],
+      "behavior": "Melee",
+      "wcid_pool": [
+        {
+          "wcid": 178,
+          "name": "Brown Armoredillo",
+          "level": 8
+        },
+        {
+          "wcid": 177,
+          "name": "Spiny Armoredillo",
+          "level": 8
+        },
+        {
+          "wcid": 19,
+          "name": "Bronze Armoredillo",
+          "level": 20
+        },
+        {
+          "wcid": 2565,
+          "name": "Shore Armoredillo",
+          "level": 30
+        }
+      ],
+      "notes": "31 weenies in LSD. Armored quadruped beasts.",
+      "lsd_file_count": 31
+    },
+    {
+      "creature_family": "Wisp",
+      "creature_type_id": 20,
+      "level_range": [
+        5,
+        285
+      ],
+      "difficulty_tier": [
+        "Starter",
+        "Low",
+        "Medium",
+        "Hard",
+        "Elite",
+        "Legendary"
+      ],
+      "biome": [
+        "Temperate",
+        "Swamp",
+        "Underground"
+      ],
+      "behavior": "Caster",
+      "wcid_pool": [
+        {
+          "wcid": 1535,
+          "name": "Ethereal Wisp",
+          "level": 5
+        },
+        {
+          "wcid": 1986,
+          "name": "Water Wisp",
+          "level": 8
+        },
+        {
+          "wcid": 1988,
+          "name": "Dark Wisp",
+          "level": 20
+        },
+        {
+          "wcid": 21551,
+          "name": "Strife Wisp",
+          "level": 100
+        }
+      ],
+      "notes": "152 weenies in LSD. Floating magical entities.",
+      "lsd_file_count": 152
+    },
+    {
+      "creature_family": "Grievver",
+      "creature_type_id": 44,
+      "level_range": [
+        2,
+        160
+      ],
+      "difficulty_tier": [
+        "Starter",
+        "Low",
+        "Medium",
+        "Hard",
+        "Elite"
+      ],
+      "biome": [
+        "Underground"
+      ],
+      "behavior": "Melee",
+      "wcid_pool": [
+        {
+          "wcid": 12701,
+          "name": "Tunnelling Grievver",
+          "level": 2
+        },
+        {
+          "wcid": 12700,
+          "name": "Grievver Spawn",
+          "level": 2
+        },
+        {
+          "wcid": 28554,
+          "name": "Spiked Grievver",
+          "level": 60
+        },
+        {
+          "wcid": 28553,
+          "name": "Rufous Grievver",
+          "level": 80
+        }
+      ],
+      "notes": "96 weenies in LSD. Multi-legged underground predators.",
+      "lsd_file_count": 96
+    },
+    {
+      "creature_family": "Sclavus",
+      "creature_type_id": 26,
+      "level_range": [
+        15,
+        115
+      ],
+      "difficulty_tier": [
+        "Starter",
+        "Low",
+        "Medium",
+        "Hard"
+      ],
+      "biome": [
+        "Swamp",
+        "Underground"
+      ],
+      "behavior": "Mixed",
+      "wcid_pool": [
+        {
+          "wcid": 2583,
+          "name": "Se Sclavus",
+          "level": 15
+        },
+        {
+          "wcid": 2584,
+          "name": "Aste Sclavus",
+          "level": 20
+        },
+        {
+          "wcid": 2585,
+          "name": "Essa Sclavus",
+          "level": 30
+        },
+        {
+          "wcid": 2586,
+          "name": "Sata Sclavus",
+          "level": 60
+        },
+        {
+          "wcid": 23488,
+          "name": "Ulu Sclavus Lord",
+          "level": 100
+        }
+      ],
+      "notes": "91 weenies in LSD. Reptilian humanoids with caste hierarchy.",
+      "lsd_file_count": 91
+    },
+    {
+      "creature_family": "Monouga",
+      "creature_type_id": 28,
+      "level_range": [
+        8,
+        100
+      ],
+      "difficulty_tier": [
+        "Starter",
+        "Low",
+        "Medium",
+        "Hard"
+      ],
+      "biome": [
+        "Temperate"
+      ],
+      "behavior": "Melee",
+      "wcid_pool": [
+        {
+          "wcid": 2612,
+          "name": "Outcast Monouga",
+          "level": 8
+        },
+        {
+          "wcid": 2574,
+          "name": "Rough Monouga",
+          "level": 20
+        },
+        {
+          "wcid": 2576,
+          "name": "Wild Monouga",
+          "level": 30
+        },
+        {
+          "wcid": 24288,
+          "name": "Cruel Monouga",
+          "level": 80
+        }
+      ],
+      "notes": "51 weenies in LSD. Brutish ape-like creatures.",
+      "lsd_file_count": 51
+    },
+    {
+      "creature_family": "Mattekar",
+      "creature_type_id": 23,
+      "level_range": [
+        15,
+        160
+      ],
+      "difficulty_tier": [
+        "Starter",
+        "Low",
+        "Medium",
+        "Hard",
+        "Elite"
+      ],
+      "biome": [
+        "Snowy"
+      ],
+      "behavior": "Melee",
+      "wcid_pool": [
+        {
+          "wcid": 2580,
+          "name": "White Mattekar",
+          "level": 15
+        },
+        {
+          "wcid": 2582,
+          "name": "Great Mattekar",
+          "level": 20
+        },
+        {
+          "wcid": 12000,
+          "name": "Tundra Mattekar",
+          "level": 80
+        },
+        {
+          "wcid": 22901,
+          "name": "Swarthy Mattekar",
+          "level": 160
+        }
+      ],
+      "notes": "34 weenies in LSD. Arctic yeti-like beasts.",
+      "lsd_file_count": 34
+    },
+    {
+      "creature_family": "Carenzi",
+      "creature_type_id": 55,
+      "level_range": [
+        8,
+        160
+      ],
+      "difficulty_tier": [
+        "Starter",
+        "Low",
+        "Medium",
+        "Hard",
+        "Elite"
+      ],
+      "biome": [
+        "Temperate",
+        "Snowy"
+      ],
+      "behavior": "Melee",
+      "wcid_pool": [
+        {
+          "wcid": 11496,
+          "name": "Carenzi Sentry",
+          "level": 8
+        },
+        {
+          "wcid": 11492,
+          "name": "Carenzi Burrower",
+          "level": 40
+        },
+        {
+          "wcid": 11497,
+          "name": "Carenzi Stalker",
+          "level": 60
+        },
+        {
+          "wcid": 11495,
+          "name": "Rabid Carenzi",
+          "level": 80
+        }
+      ],
+      "notes": "49 weenies in LSD. Burrowing predatory mammals.",
+      "lsd_file_count": 49
+    },
+    {
+      "creature_family": "Moarsman",
+      "creature_type_id": 34,
+      "level_range": [
+        15,
+        160
+      ],
+      "difficulty_tier": [
+        "Starter",
+        "Low",
+        "Medium",
+        "Hard",
+        "Elite"
+      ],
+      "biome": [
+        "Swamp",
+        "Coastal"
+      ],
+      "behavior": "Melee",
+      "wcid_pool": [
+        {
+          "wcid": 27860,
+          "name": "Sallow Moarsman",
+          "level": 15
+        },
+        {
+          "wcid": 23331,
+          "name": "Rank Moarsman",
+          "level": 31
+        },
+        {
+          "wcid": 27854,
+          "name": "Fetid Moarsman",
+          "level": 50
+        },
+        {
+          "wcid": 27853,
+          "name": "Disgusting Moarsman",
+          "level": 80
+        }
+      ],
+      "notes": "122 weenies in LSD. Amphibian swamp dwellers.",
+      "lsd_file_count": 122
+    },
+    {
+      "creature_family": "Ruschk",
+      "creature_type_id": 81,
+      "level_range": [
+        20,
+        220
+      ],
+      "difficulty_tier": [
+        "Low",
+        "Medium",
+        "Hard",
+        "Elite",
+        "Legendary"
+      ],
+      "biome": [
+        "Snowy"
+      ],
+      "behavior": "Melee",
+      "wcid_pool": [
+        {
+          "wcid": 28669,
+          "name": "Barbaric Ruschk",
+          "level": 20
+        },
+        {
+          "wcid": 28666,
+          "name": "Ruschk Slayer",
+          "level": 40
+        },
+        {
+          "wcid": 28671,
+          "name": "Ruschk Shatterer",
+          "level": 60
+        },
+        {
+          "wcid": 28668,
+          "name": "Ruschk Warlord",
+          "level": 100
+        }
+      ],
+      "notes": "59 weenies in LSD. Arctic ice creatures.",
+      "lsd_file_count": 59
+    },
+    {
+      "creature_family": "Burun",
+      "creature_type_id": 75,
+      "level_range": [
+        40,
+        135
+      ],
+      "difficulty_tier": [
+        "Medium",
+        "Hard",
+        "Elite"
+      ],
+      "biome": [
+        "Swamp",
+        "Underground"
+      ],
+      "behavior": "Mixed",
+      "wcid_pool": [
+        {
+          "wcid": 27100,
+          "name": "Burun Ruuk Scamp",
+          "level": 40
+        },
+        {
+          "wcid": 26012,
+          "name": "Burun Ruuk Adept",
+          "level": 50
+        },
+        {
+          "wcid": 26013,
+          "name": "Burun Ruuk Adherent",
+          "level": 80
+        },
+        {
+          "wcid": 26014,
+          "name": "Burun Ruuk Fiend",
+          "level": 100
+        }
+      ],
+      "notes": "35 weenies in LSD. Tribal frog-like humanoids with magic.",
+      "lsd_file_count": 35
+    },
+    {
+      "creature_family": "Mukkir",
+      "creature_type_id": 89,
+      "level_range": [
+        115,
+        220
+      ],
+      "difficulty_tier": [
+        "Elite",
+        "Legendary"
+      ],
+      "biome": [
+        "Underground"
+      ],
+      "behavior": "Melee",
+      "wcid_pool": [
+        {
+          "wcid": 33131,
+          "name": "Mukkir Laktar",
+          "level": 115
+        },
+        {
+          "wcid": 33130,
+          "name": "Mukkir",
+          "level": 160
+        },
+        {
+          "wcid": 31897,
+          "name": "Barbaric Mukkir",
+          "level": 185
+        },
+        {
+          "wcid": 31898,
+          "name": "Umbral Mukkir",
+          "level": 220
+        }
+      ],
+      "notes": "58 weenies in LSD. High-level underground brutes.",
+      "lsd_file_count": 58
+    },
+    {
+      "creature_family": "Gurog",
+      "creature_type_id": 100,
+      "level_range": [
+        150,
+        220
+      ],
+      "difficulty_tier": [
+        "Elite",
+        "Legendary"
+      ],
+      "biome": [
+        "Underground",
+        "Volcanic"
+      ],
+      "behavior": "Melee",
+      "wcid_pool": [
+        {
+          "wcid": 43495,
+          "name": "Gregoria, Gurog Destroyer",
+          "level": 150
+        },
+        {
+          "wcid": 43395,
+          "name": "Gurog Minion",
+          "level": 200
+        },
+        {
+          "wcid": 43396,
+          "name": "Gurog Soldier",
+          "level": 220
+        }
+      ],
+      "notes": "33 weenies in LSD. Endgame massive humanoids.",
+      "lsd_file_count": 33
+    },
+    {
+      "creature_family": "Rynthid",
+      "creature_type_id": 19,
+      "level_range": [
+        200,
+        500
+      ],
+      "difficulty_tier": [
+        "Legendary"
+      ],
+      "biome": [
+        "Any"
+      ],
+      "behavior": "Caster",
+      "wcid_pool": [
+        {
+          "wcid": 51730,
+          "name": "Discorporate Rynthid of Rage",
+          "level": 200
+        },
+        {
+          "wcid": 51736,
+          "name": "Discorporate Rynthid of Torment",
+          "level": 200
+        },
+        {
+          "wcid": 51619,
+          "name": "Rynthid",
+          "level": 500
+        }
+      ],
+      "notes": "114 weenies in LSD. Highest-tier Virindi-related entities.",
+      "lsd_file_count": 114
+    },
+    {
+      "creature_family": "Zefir",
+      "creature_type_id": 29,
+      "level_range": [
+        8,
+        165
+      ],
+      "difficulty_tier": [
+        "Starter",
+        "Low",
+        "Medium",
+        "Hard",
+        "Elite"
+      ],
+      "biome": [
+        "Desert",
+        "Temperate"
+      ],
+      "behavior": "Melee",
+      "wcid_pool": [
+        {
+          "wcid": 2608,
+          "name": "Jibrit Zefir",
+          "level": 8
+        },
+        {
+          "wcid": 2610,
+          "name": "Kilif Zefir",
+          "level": 15
+        },
+        {
+          "wcid": 2611,
+          "name": "Zofrit Zefir",
+          "level": 30
+        },
+        {
+          "wcid": 11533,
+          "name": "Azael Zefir",
+          "level": 80
+        }
+      ],
+      "notes": "23 weenies in LSD. Fast desert creatures.",
+      "lsd_file_count": 23
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "_comment": "  NPC TEMPLATES — Derived from Lifestoned weenie data"
+    },
+    {
+      "_comment": "  Key NPC archetypes found in the ACE world database."
+    },
+    {
+      "_comment": "════════════════════════════════════════════════════════════"
+    },
+    {
+      "npc_archetype": "Shopkeeper",
+      "weenieType": 12,
+      "tags": {
+        "type": "NPC_Vendor",
+        "biome": [
+          "Any"
+        ],
+        "architecture": "Generic"
+      },
+      "sample_wcids": [
+        1045,
+        1355,
+        1833,
+        2232
+      ],
+      "notes": "General goods vendors. Place near residential/commercial buildings."
+    },
+    {
+      "npc_archetype": "Archmage",
+      "weenieType": 12,
+      "tags": {
+        "type": "NPC_Archmage",
+        "biome": [
+          "Any"
+        ],
+        "architecture": "Generic"
+      },
+      "sample_wcids": [
+        1048,
+        1369,
+        1370,
+        1371,
+        1812,
+        1824,
+        2220
+      ],
+      "notes": "Spell component vendors + portal services. Essential for any town."
+    },
+    {
+      "npc_archetype": "Barkeep",
+      "weenieType": 12,
+      "tags": {
+        "type": "NPC_Barkeep",
+        "biome": [
+          "Any"
+        ],
+        "architecture": "Generic"
+      },
+      "sample_wcids": [
+        1813,
+        2221
+      ],
+      "notes": "Innkeeper/barkeep. Place inside tavern buildings."
+    },
+    {
+      "npc_archetype": "Collector",
+      "weenieType": 10,
+      "tags": {
+        "type": "NPC_Collector",
+        "biome": [
+          "Any"
+        ],
+        "architecture": "Generic"
+      },
+      "sample_wcids": [
+        11343,
+        11345,
+        11346,
+        11347,
+        21338
+      ],
+      "notes": "Trophy/item turn-in NPCs. Place in or near civic buildings."
+    },
+    {
+      "npc_archetype": "Agent of the Arcanum",
+      "weenieType": 10,
+      "tags": {
+        "type": "NPC_QuestGiver",
+        "biome": [
+          "Any"
+        ],
+        "architecture": "Generic"
+      },
+      "sample_wcids": [
+        12050
+      ],
+      "notes": "Quest coordination NPC. Place in civic/academic buildings."
+    }
+  ],
+  "constraint_presets": {
+    "Desert_Outpost": {
+      "description": "A small desert settlement with Gharu'ndim architecture",
+      "required_biome": [
+        "Desert"
+      ],
+      "required_architecture": [
+        "Gharu'ndim",
+        "Generic"
+      ],
+      "forbidden_biome": [
+        "Snowy"
+      ],
+      "required_objects": [
+        {
+          "type": "Building_Residential",
+          "count": "1-3"
+        },
+        {
+          "type": "Building_Commercial",
+          "count": "0-1"
+        },
+        {
+          "type": "Furniture_Light",
+          "count": "2-4"
+        },
+        {
+          "type": "Scenery_Water",
+          "count": "1",
+          "notes": "Cistern or well required in desert"
+        }
+      ],
+      "terrain_requirements": {
+        "min_flat_area_cells": 4,
+        "preferred_terrain_types": [
+          3,
+          4
+        ]
+      }
+    },
+    "Aluvian_Village": {
+      "description": "A medium-sized temperate farming village with Aluvian architecture",
+      "required_biome": [
+        "Temperate",
+        "Coastal"
+      ],
+      "required_architecture": [
+        "Aluvian",
+        "Generic"
+      ],
+      "forbidden_biome": [
+        "Desert",
+        "Snowy",
+        "Volcanic"
+      ],
+      "required_objects": [
+        {
+          "type": "Building_Residential",
+          "count": "3-8"
+        },
+        {
+          "type": "Building_Commercial",
+          "count": "1-2"
+        },
+        {
+          "type": "Building_Civic",
+          "count": "0-1"
+        },
+        {
+          "type": "Scenery_Tree",
+          "count": "5-15"
+        },
+        {
+          "type": "Sign_Shop",
+          "count": "2-4"
+        },
+        {
+          "type": "Interactive_Lifestone",
+          "count": "1"
+        },
+        {
+          "type": "Sign_Town",
+          "count": "2-4"
+        }
+      ],
+      "terrain_requirements": {
+        "min_flat_area_cells": 9,
+        "preferred_terrain_types": [
+          0,
+          1,
+          2
+        ],
+        "max_height_variance": 10
+      }
+    },
+    "Sho_Settlement": {
+      "description": "A Sho-style settlement with pagodas and paper lanterns",
+      "required_biome": [
+        "Temperate"
+      ],
+      "required_architecture": [
+        "Sho",
+        "Generic"
+      ],
+      "forbidden_biome": [
+        "Desert",
+        "Snowy"
+      ],
+      "required_objects": [
+        {
+          "type": "Building_Residential",
+          "count": "2-5"
+        },
+        {
+          "type": "Building_Civic",
+          "count": "1"
+        },
+        {
+          "type": "Scenery_Tree",
+          "count": "3-8"
+        },
+        {
+          "type": "Interactive_Lifestone",
+          "count": "1"
+        }
+      ],
+      "terrain_requirements": {
+        "min_flat_area_cells": 6,
+        "preferred_terrain_types": [
+          0,
+          1
+        ]
+      }
+    },
+    "Dungeon_Entrance": {
+      "description": "An entrance to an underground dungeon with atmospheric decoration",
+      "required_biome": [
+        "Any"
+      ],
+      "required_architecture": [
+        "Empyrean",
+        "Generic"
+      ],
+      "required_objects": [
+        {
+          "type": "Portal",
+          "count": "1"
+        },
+        {
+          "type": "Scenery_Rock",
+          "count": "2-6"
+        },
+        {
+          "type": "Furniture_Light",
+          "count": "1-3"
+        }
+      ]
+    },
+    "Monster_Camp": {
+      "description": "A creature spawn camp with ambient decoration",
+      "required_biome": [
+        "Any"
+      ],
+      "required_architecture": [
+        "Generic"
+      ],
+      "required_objects": [
+        {
+          "type": "Interactive_Generator",
+          "count": "1-3"
+        },
+        {
+          "type": "Furniture_Light",
+          "count": "0-2",
+          "notes": "Campfire for humanoid camps"
+        },
+        {
+          "type": "Furniture_Storage",
+          "count": "0-2",
+          "notes": "Crates/barrels for bandit camps"
+        }
+      ],
+      "terrain_requirements": {
+        "min_flat_area_cells": 1
+      }
+    },
+    "Banderling_Camp": {
+      "description": "Banderling hunting camp based on retail LSD spawn patterns (e.g. landblock 0x6AD9)",
+      "derived_from": "LSD spawn map 'Banderling Camp' analysis",
+      "required_biome": [
+        "Temperate",
+        "Snowy"
+      ],
+      "required_architecture": [
+        "Generic"
+      ],
+      "creature_family": "Banderling",
+      "difficulty_tier": "Medium",
+      "required_objects": [
+        {
+          "type": "Interactive_Generator",
+          "count": "1",
+          "wcid": 7924,
+          "notes": "Linkable Monster Generator (5 Min.)"
+        },
+        {
+          "type": "Creature_Melee",
+          "count": "4-8",
+          "wcid_pool": [
+            7346,
+            7086,
+            183
+          ],
+          "notes": "Mix of Enforcers, Thrashers, Ravers"
+        },
+        {
+          "type": "Furniture_Light",
+          "count": "0-1",
+          "wcid": 4128,
+          "notes": "Optional campfire"
+        }
+      ],
+      "spawn_pattern": {
+        "spread_radius": 15.0,
+        "generator_wcid": 7924,
+        "creature_spread": "circular, 10-15 units from generator center"
+      },
+      "terrain_requirements": {
+        "min_flat_area_cells": 2,
+        "preferred_terrain_types": [
+          0,
+          1
+        ]
+      }
+    },
+    "Undead_Crypt": {
+      "description": "Undead-themed dungeon entrance or graveyard area",
+      "derived_from": "LSD creature family analysis",
+      "required_biome": [
+        "Underground",
+        "Swamp"
+      ],
+      "required_architecture": [
+        "Generic",
+        "Empyrean"
+      ],
+      "creature_family": "Undead",
+      "difficulty_tier": "Low",
+      "required_objects": [
+        {
+          "type": "Interactive_Generator",
+          "count": "1-2",
+          "wcid": 394
+        },
+        {
+          "type": "Creature_Melee",
+          "count": "3-6",
+          "wcid_pool": [
+            1759,
+            1760,
+            1761
+          ],
+          "notes": "Skeletons"
+        },
+        {
+          "type": "Creature_Caster",
+          "count": "1-2",
+          "wcid_pool": [
+            16,
+            1523
+          ],
+          "notes": "Undead casters"
+        },
+        {
+          "type": "Furniture_Storage",
+          "count": "1-2",
+          "notes": "Coffins or sarcophagi"
+        },
+        {
+          "type": "Furniture_Light",
+          "count": "2-4",
+          "notes": "Torches or braziers"
+        }
+      ],
+      "terrain_requirements": {
+        "min_flat_area_cells": 2
+      }
+    },
+    "Olthoi_Hive_Entrance": {
+      "description": "Olthoi hive entrance with guard creatures",
+      "derived_from": "LSD creature family analysis",
+      "required_biome": [
+        "Underground",
+        "Volcanic"
+      ],
+      "required_architecture": [
+        "Generic"
+      ],
+      "creature_family": "Olthoi",
+      "difficulty_tier": "Hard",
+      "required_objects": [
+        {
+          "type": "Interactive_Generator",
+          "count": "1",
+          "wcid": 384
+        },
+        {
+          "type": "Creature_Melee",
+          "count": "4-8",
+          "wcid_pool": [
+            10912,
+            10909,
+            10904
+          ]
+        },
+        {
+          "type": "Portal",
+          "count": "1",
+          "notes": "Portal to dungeon interior"
+        }
+      ],
+      "terrain_requirements": {
+        "min_flat_area_cells": 1
+      }
+    },
+    "Starter_Zone": {
+      "description": "Low-level area for new players with tier 1 creatures",
+      "derived_from": "LSD creature level range analysis",
+      "required_biome": [
+        "Temperate"
+      ],
+      "required_architecture": [
+        "Generic"
+      ],
+      "difficulty_tier": "Starter",
+      "required_objects": [
+        {
+          "type": "Interactive_Generator",
+          "count": "2-4"
+        },
+        {
+          "type": "Creature_Melee",
+          "count": "6-12",
+          "notes": "From families: Drudge (L1-15), Banderling (L8-15), Skeleton (L8), Gromnie (L6)"
+        },
+        {
+          "type": "Interactive_Lifestone",
+          "count": "1"
+        },
+        {
+          "type": "Sign_Town",
+          "count": "1-2"
+        }
+      ],
+      "creature_pools": {
+        "drudge": {
+          "wcids": [
+            192,
+            193
+          ],
+          "levels": [
+            1,
+            5
+          ]
+        },
+        "banderling": {
+          "wcids": [
+            183
+          ],
+          "levels": [
+            15
+          ]
+        },
+        "gromnie": {
+          "wcids": [
+            203,
+            17
+          ],
+          "levels": [
+            6
+          ]
+        },
+        "phyntos": {
+          "wcids": [
+            215,
+            12
+          ],
+          "levels": [
+            8
+          ]
+        }
+      },
+      "terrain_requirements": {
+        "min_flat_area_cells": 4,
+        "preferred_terrain_types": [
+          0,
+          1
+        ]
+      }
+    }
+  },
+  "dat_id_ranges": {
+    "_comment": "Reference guide for the DAT file ID prefix conventions",
+    "0x01": {
+      "type": "GfxObj",
+      "description": "Single 3D mesh/geometry. Building blocks of Setups.",
+      "count_estimate": "~10,000"
+    },
+    "0x02": {
+      "type": "SetupModel",
+      "description": "Composite 3D model. One or more GfxObjs assembled. This is what gets placed in landblocks.",
+      "count_estimate": "~5,000"
+    },
+    "0x03": {
+      "type": "Animation",
+      "description": "Animation sequence data.",
+      "count_estimate": "~35,000"
+    },
+    "0x04": {
+      "type": "Palette",
+      "description": "Color palette data.",
+      "count_estimate": "~5,000"
+    },
+    "0x05": {
+      "type": "SurfaceTexture",
+      "description": "Surface texture reference.",
+      "count_estimate": "~4,000"
+    },
+    "0x06": {
+      "type": "Texture",
+      "description": "Texture image data.",
+      "count_estimate": "~9,000"
+    },
+    "0x08": {
+      "type": "Surface",
+      "description": "Material/surface properties.",
+      "count_estimate": "~2,500"
+    },
+    "0x09": {
+      "type": "MotionTable",
+      "description": "Maps animation states to sequences.",
+      "count_estimate": "~1,500"
+    },
+    "0x0A": {
+      "type": "Wave",
+      "description": "Sound effect data.",
+      "count_estimate": "~5,000"
+    },
+    "0x0D": {
+      "type": "Environment",
+      "description": "Dungeon room prefab. Contains CellStructures with portal polygons for dungeon construction.",
+      "count_estimate": "~700"
+    },
+    "0x0E": {
+      "type": "ChatPoseTable",
+      "description": "Chat emote to animation mapping."
+    },
+    "0x0F": {
+      "type": "ObjectHierarchy",
+      "description": "Bone hierarchy for animated models."
+    },
+    "0x10": {
+      "type": "ClothingTable",
+      "description": "Clothing/armor visual definitions."
+    },
+    "0x11": {
+      "type": "DegradeInfo",
+      "description": "Level-of-detail model switching data."
+    },
+    "0x12": {
+      "type": "Scene",
+      "description": "Scenery distribution patterns for terrain types."
+    },
+    "0x13": {
+      "type": "Region/LandBlockInfo",
+      "description": "Region data including height tables and terrain types."
+    },
+    "0x20": {
+      "type": "SoundTable",
+      "description": "Sound effect assignments for world objects."
+    },
+    "0x22": {
+      "type": "EnumMapper",
+      "description": "Enum-to-string mapping tables."
+    },
+    "0x25": {
+      "type": "String/DidMapper",
+      "description": "Various string and ID mapping tables."
+    },
+    "0x30": {
+      "type": "CombatTable",
+      "description": "Combat system configuration tables."
+    },
+    "0x33": {
+      "type": "SpellTable",
+      "description": "Complete spell definitions."
+    },
+    "0x34": {
+      "type": "SpellComponentTable",
+      "description": "Spell component definitions."
+    }
+  },
+  "runtime_enrichment": {
+    "_comment": "This section documents how to enrich this ontology at runtime when DATs are available.",
+    "strategy": "When WorldBuilder.Terminal loads a project, it can scan the cell DAT to extract all unique SetupModel IDs (0x02XXXXXX) that appear as static objects in landblocks. For each, it can read the Setup from the portal DAT to get the list of GfxObj parts, their bounding boxes, and polygon counts. This data can be used to infer scale, complexity, and type.",
+    "auto_classification_hints": {
+      "large_bounding_box": "Buildings (> 10m in any axis)",
+      "tall_narrow": "Trees, poles, towers",
+      "small_flat": "Rugs, floor decorations, road markers",
+      "many_parts": "Complex structures (buildings, vehicles, machines)",
+      "single_part_small": "Simple scenery (rocks, bushes, small props)"
+    },
+    "planned_features": [
+      "DAT scanner tool that enumerates all 0x02 IDs and generates bounding box + part count metadata",
+      "Community crowd-sourced tagging via exported CSV",
+      "LLM-assisted classification using model part names from the DAT string tables"
+    ]
+  }
+}

@@ -1,0 +1,248 @@
+{
+  "townName": "MacNiall's Freehold",
+  "culture": "Aluvian",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 242,
+    "lbY": 34,
+    "worldX": 46560.0,
+    "worldY": 6624.0
+  },
+  "landblocks": [
+    [
+      242,
+      34
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 9,
+    "totalNPCs": 0,
+    "totalVendors": 2,
+    "totalPortals": 2,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 1,
+    "totalFurniture": 0,
+    "totalOther": 20
+  },
+  "buildings": [
+    {
+      "setupId": 16787565,
+      "setupIdHex": "0x0100286D",
+      "relativeX": -427.6,
+      "relativeY": -163.0,
+      "worldZ": 0,
+      "numLeaves": 116,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16787564,
+      "setupIdHex": "0x0100286C",
+      "relativeX": -395.7,
+      "relativeY": -180.2,
+      "worldZ": 0,
+      "numLeaves": 140,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16787564,
+      "setupIdHex": "0x0100286C",
+      "relativeX": -469.7,
+      "relativeY": -153.8,
+      "worldZ": 0,
+      "numLeaves": 140,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780564,
+      "setupIdHex": "0x01000D14",
+      "relativeX": 36.0,
+      "relativeY": 36.0,
+      "worldZ": 18,
+      "numLeaves": 60,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16780598,
+      "setupIdHex": "0x01000D36",
+      "relativeX": 60.0,
+      "relativeY": 84.0,
+      "worldZ": 18,
+      "numLeaves": 134,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16787995,
+      "setupIdHex": "0x01002A1B",
+      "relativeX": 62.8,
+      "relativeY": 42.2,
+      "worldZ": 18,
+      "numLeaves": 48,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16785967,
+      "setupIdHex": "0x0100222F",
+      "relativeX": 12.0,
+      "relativeY": -12.0,
+      "worldZ": 18,
+      "numLeaves": 89,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16785958,
+      "setupIdHex": "0x01002226",
+      "relativeX": 57.4,
+      "relativeY": 134.8,
+      "worldZ": 18,
+      "numLeaves": 170,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780647,
+      "setupIdHex": "0x01000D67",
+      "relativeX": 108.0,
+      "relativeY": -36.0,
+      "worldZ": 18,
+      "numLeaves": 108,
+      "portalCount": 2
+    }
+  ],
+  "npcs": [],
+  "vendors": [
+    {
+      "wcid": 8494,
+      "name": "Lin Hanza the Bowyer",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 8495,
+      "name": "Provisioner Warster the Handy",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 19716,
+      "name": "Mammet Foundry Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43067,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 35605,
+      "name": "Researcher Tharin",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 3955,
+      "name": "wcid_3955",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8496,
+      "name": "wcid_8496",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8493,
+      "name": "wcid_8493",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 721,
+      "name": "wcid_721",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 721,
+      "name": "wcid_721",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28925,
+      "name": "wcid_28925",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 25721,
+      "name": "wcid_25721",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8490,
+      "name": "wcid_8490",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19202,
+      "name": "wcid_19202",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 25714,
+      "name": "wcid_25714",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 71323,
+      "name": "Freehold Gift Box Generator",
+      "type": "Prop"
+    }
+  ]
+}

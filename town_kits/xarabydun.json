@@ -1,0 +1,643 @@
+{
+  "townName": "Xarabydun",
+  "culture": "Gharu'ndim",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 147,
+    "lbY": 75,
+    "worldX": 28320.0,
+    "worldY": 14496.0
+  },
+  "landblocks": [
+    [
+      147,
+      75
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 5,
+    "totalNPCs": 4,
+    "totalVendors": 3,
+    "totalPortals": 5,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 43,
+    "totalFurniture": 0,
+    "totalOther": 56
+  },
+  "buildings": [
+    {
+      "setupId": 16781020,
+      "setupIdHex": "0x01000EDC",
+      "relativeX": 16.3,
+      "relativeY": -40.4,
+      "worldZ": 14,
+      "numLeaves": 44,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780864,
+      "setupIdHex": "0x01000E40",
+      "relativeX": -59.2,
+      "relativeY": -14.0,
+      "worldZ": 16,
+      "numLeaves": 28,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16780859,
+      "setupIdHex": "0x01000E3B",
+      "relativeX": -60.0,
+      "relativeY": -60.0,
+      "worldZ": 14,
+      "numLeaves": 125,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16788463,
+      "setupIdHex": "0x01002BEF",
+      "relativeX": 12.0,
+      "relativeY": -84.0,
+      "worldZ": 16,
+      "numLeaves": 73,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780817,
+      "setupIdHex": "0x01000E11",
+      "relativeX": -36.0,
+      "relativeY": -84.0,
+      "worldZ": 14,
+      "numLeaves": 130,
+      "portalCount": 5
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 35730,
+      "name": "Janier al-Evv",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20210,
+      "name": "Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20214,
+      "name": "Scrivener of Item Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 41752,
+      "name": "Arcanum Salvage Vendor",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 8224,
+      "name": "Archmage Zarri ibn Khaybi",
+      "type": "NPC_Archmage"
+    },
+    {
+      "wcid": 8227,
+      "name": "Bowyer Hanra ibn Zarib",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 8231,
+      "name": "Jeweler Jurraf al-Djiqidh",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 43066,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 32811,
+      "name": "Bookcase",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 8221,
+      "name": "Xarabydun Lifestone Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 8220,
+      "name": "Uninhabited Area Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 8219,
+      "name": "Surface Portal",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 41751,
+      "name": "Ayesha bint'Shashqa",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42716,
+      "name": "Cypher the Apprentice",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42519,
+      "name": "Cara the Apprentice",
+      "type": "Creature"
+    },
+    {
+      "wcid": 19713,
+      "name": "Ciandra, Arcanum Alchemist",
+      "type": "Creature"
+    },
+    {
+      "wcid": 33244,
+      "name": "Talar the Apprentice",
+      "type": "Creature"
+    },
+    {
+      "wcid": 43526,
+      "name": "Fayza",
+      "type": "Creature"
+    },
+    {
+      "wcid": 8370,
+      "name": "Aino Lunnan-Shin",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42116,
+      "name": "Master Craftsman Takahume",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42112,
+      "name": "Atamarr",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42601,
+      "name": "Kaytin",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42618,
+      "name": "Merkitz ibn'Akadh",
+      "type": "Creature"
+    },
+    {
+      "wcid": 41208,
+      "name": "Nurino",
+      "type": "Creature"
+    },
+    {
+      "wcid": 8229,
+      "name": "Fazyad ibn Raymar",
+      "type": "Creature"
+    },
+    {
+      "wcid": 4132,
+      "name": "Russet Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 4132,
+      "name": "Russet Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 4132,
+      "name": "Russet Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 219,
+      "name": "Grey Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 220,
+      "name": "Brown Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 219,
+      "name": "Grey Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 4132,
+      "name": "Russet Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 220,
+      "name": "Brown Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 4132,
+      "name": "Russet Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 219,
+      "name": "Grey Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 1535,
+      "name": "Ethereal Wisp",
+      "type": "Creature"
+    },
+    {
+      "wcid": 4132,
+      "name": "Russet Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 4132,
+      "name": "Russet Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 8222,
+      "name": "Swamp Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 4132,
+      "name": "Russet Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 4132,
+      "name": "Russet Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 219,
+      "name": "Grey Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 220,
+      "name": "Brown Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 4132,
+      "name": "Russet Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 1535,
+      "name": "Ethereal Wisp",
+      "type": "Creature"
+    },
+    {
+      "wcid": 949,
+      "name": "Red Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 4132,
+      "name": "Russet Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 4132,
+      "name": "Russet Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 949,
+      "name": "Red Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 220,
+      "name": "Brown Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 219,
+      "name": "Grey Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 220,
+      "name": "Brown Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 219,
+      "name": "Grey Rat",
+      "type": "Creature"
+    },
+    {
+      "wcid": 5429,
+      "name": "Desert Rabbit",
+      "type": "Creature"
+    },
+    {
+      "wcid": 5429,
+      "name": "Desert Rabbit",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 145,
+      "name": "wcid_145",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1946,
+      "name": "wcid_1946",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1919,
+      "name": "wcid_1919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20222,
+      "name": "wcid_20222",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20226,
+      "name": "wcid_20226",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8230,
+      "name": "wcid_8230",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8226,
+      "name": "wcid_8226",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1821,
+      "name": "wcid_1821",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8225,
+      "name": "wcid_8225",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4452,
+      "name": "wcid_4452",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4452,
+      "name": "wcid_4452",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4458,
+      "name": "wcid_4458",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4452,
+      "name": "wcid_4452",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4452,
+      "name": "wcid_4452",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1291,
+      "name": "wcid_1291",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19460,
+      "name": "wcid_19460",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 24224,
+      "name": "wcid_24224",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19354,
+      "name": "wcid_19354",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 25991,
+      "name": "wcid_25991",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8228,
+      "name": "wcid_8228",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8228,
+      "name": "wcid_8228",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4980,
+      "name": "wcid_4980",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4980,
+      "name": "wcid_4980",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4980,
+      "name": "wcid_4980",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4979,
+      "name": "wcid_4979",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4979,
+      "name": "wcid_4979",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4979,
+      "name": "wcid_4979",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4979,
+      "name": "wcid_4979",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4979,
+      "name": "wcid_4979",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4979,
+      "name": "wcid_4979",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4979,
+      "name": "wcid_4979",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4979,
+      "name": "wcid_4979",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4979,
+      "name": "wcid_4979",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4979,
+      "name": "wcid_4979",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8255,
+      "name": "wcid_8255",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8256,
+      "name": "wcid_8256",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8257,
+      "name": "wcid_8257",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 153,
+      "name": "wcid_153",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 153,
+      "name": "wcid_153",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 171,
+      "name": "wcid_171",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 153,
+      "name": "wcid_153",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6441,
+      "name": "wcid_6441",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5755,
+      "name": "wcid_5755",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6081,
+      "name": "wcid_6081",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6081,
+      "name": "wcid_6081",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 3955,
+      "name": "wcid_3955",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4219,
+      "name": "wcid_4219",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5086,
+      "name": "wcid_5086",
+      "type": "Unknown"
+    }
+  ]
+}

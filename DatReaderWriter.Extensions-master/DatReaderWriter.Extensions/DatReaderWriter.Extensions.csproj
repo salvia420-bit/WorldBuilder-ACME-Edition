@@ -1,0 +1,71 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <TargetFramework>net8.0</TargetFramework>
+        <LangVersion>12</LangVersion>
+        <DebugType>pdbonly</DebugType>
+        <DebugSymbols>true</DebugSymbols>
+        <GenerateDocumentationFile>True</GenerateDocumentationFile>
+        <IsPackable>True</IsPackable>
+        <OutputPath>..\bin\</OutputPath>
+    </PropertyGroup>
+
+    <PropertyGroup>
+        <Title>Chorizite.DatReaderWriter.Extensions</Title>
+        <Product>Chorizite.DatReaderWriter.Extensions</Product>
+        <PackageId>Chorizite.DatReaderWriter.Extensions</PackageId>
+        <Authors>Chorizite</Authors>
+        <Company>Chorizite</Company>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <Description>Extensions for Chorizite.DatReaderWriter for common tasks / helpers.</Description>
+        <RepositoryUrl>https://github.com/Chorizite/DatReaderWriter.Extensions/</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
+        <GeneratePackageOnBuild>False</GeneratePackageOnBuild>
+        <GenerateAssemblyFileVersionAttribute>true</GenerateAssemblyFileVersionAttribute>
+        <GenerateAssemblyInformationalVersionAttribute>true</GenerateAssemblyInformationalVersionAttribute>
+        <GenerateAssemblyVersionAttribute>true</GenerateAssemblyVersionAttribute>
+        <UpdateAssemblyInfo>false</UpdateAssemblyInfo>
+        <UseProjectNamespaceForGitVersionInformation>true</UseProjectNamespaceForGitVersionInformation>
+        <PackageOutputPath>.\..\bin\</PackageOutputPath>
+    </PropertyGroup>
+
+    <Target Name="VSGitVersion" BeforeTargets="GenerateNuspec" Condition="$(MSBuildRuntimeType)=='Full'">
+        <Exec Command="$(NuGetPackageRoot)\gitversion.msbuild\6.3.0\tools\net8.0\gitversion.exe /output json /showvariable SemVer" ConsoleToMSBuild="true">
+            <Output TaskParameter="ConsoleOutput" PropertyName="PackageVersion" />
+        </Exec>
+        <Exec Command="$(NuGetPackageRoot)\gitversion.msbuild\6.3.0\tools\net8.0\gitversion.exe /output json /showvariable Major" ConsoleToMSBuild="true">
+            <Output TaskParameter="ConsoleOutput" PropertyName="AssemblyVersion" />
+        </Exec>
+        <Message Text="Set PackageVersion to $(PackageVersion)" Importance="high" />
+        <Message Text="Delete $(NuGetPackageRoot)$(PackageId)\$(PackageVersion)" Importance="high" />
+        <RemoveDir Directories="$(NuGetPackageRoot)$(PackageId)\$(PackageVersion)" />
+    </Target>
+
+    <Target Name="PreparePackageReleaseNotesFromFile" BeforeTargets="GenerateNuspec" Condition="Exists('../release-notes.md')">
+        <ReadLinesFromFile File="../release-notes.md">
+            <Output TaskParameter="Lines" ItemName="ReleaseNoteLines" />
+        </ReadLinesFromFile>
+
+        <PropertyGroup>
+            <PackageReleaseNotes>@(ReleaseNoteLines, '%0a')</PackageReleaseNotes>
+        </PropertyGroup>
+    </Target>
+
+    <ItemGroup>
+        <None Include="../README.md">
+            <Pack>True</Pack>
+            <PackagePath>\</PackagePath>
+        </None>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Chorizite.DatReaderWriter" Version="2.1.2" />
+        <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+        <PackageReference Include="BCnEncoder.Net" Version="2.2.1" />
+        <PackageReference Include="BCnEncoder.Net.ImageSharp" Version="1.1.2" />
+    </ItemGroup>
+
+</Project>

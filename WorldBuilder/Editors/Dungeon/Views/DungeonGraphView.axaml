@@ -1,0 +1,14 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d" d:DesignWidth="260" d:DesignHeight="600"
+             x:Class="WorldBuilder.Editors.Dungeon.Views.DungeonGraphView"
+             Background="#0e0a1a">
+    <DockPanel>
+        <Border DockPanel.Dock="Top" Padding="6,4" Background="#16102a" BorderBrush="#2a1d42" BorderThickness="0,0,0,1">
+            <TextBlock Text="Dungeon Map" FontSize="11" Foreground="#8a7a9e" />
+        </Border>
+        <Canvas x:Name="GraphCanvas" Background="#0a0614" ClipToBounds="True" />
+    </DockPanel>
+</UserControl>

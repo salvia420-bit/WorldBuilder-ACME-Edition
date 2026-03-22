@@ -1,0 +1,492 @@
+{
+  "townName": "Samsur",
+  "culture": "Gharu'ndim",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 152,
+    "lbY": 124,
+    "worldX": 29280.0,
+    "worldY": 23904.0
+  },
+  "landblocks": [
+    [
+      151,
+      123
+    ],
+    [
+      152,
+      124
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 15,
+    "totalNPCs": 3,
+    "totalVendors": 4,
+    "totalPortals": 3,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 8,
+    "totalFurniture": 0,
+    "totalOther": 44
+  },
+  "buildings": [
+    {
+      "setupId": 16781737,
+      "setupIdHex": "0x010011A9",
+      "relativeX": -612.0,
+      "relativeY": -60.0,
+      "worldZ": 38,
+      "numLeaves": 127,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780817,
+      "setupIdHex": "0x01000E11",
+      "relativeX": -324.0,
+      "relativeY": -396.0,
+      "worldZ": 0,
+      "numLeaves": 130,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16782531,
+      "setupIdHex": "0x010014C3",
+      "relativeX": -324.0,
+      "relativeY": -180.0,
+      "worldZ": 20,
+      "numLeaves": 152,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780817,
+      "setupIdHex": "0x01000E11",
+      "relativeX": -133.1,
+      "relativeY": -108.4,
+      "worldZ": 0,
+      "numLeaves": 130,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16780859,
+      "setupIdHex": "0x01000E3B",
+      "relativeX": -180.5,
+      "relativeY": -131.5,
+      "worldZ": 0,
+      "numLeaves": 125,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780864,
+      "setupIdHex": "0x01000E40",
+      "relativeX": -130.8,
+      "relativeY": -130.9,
+      "worldZ": 0,
+      "numLeaves": 28,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16780864,
+      "setupIdHex": "0x01000E40",
+      "relativeX": -107.9,
+      "relativeY": -109.2,
+      "worldZ": 0,
+      "numLeaves": 28,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16780817,
+      "setupIdHex": "0x01000E11",
+      "relativeX": -107.8,
+      "relativeY": -131.7,
+      "worldZ": 0,
+      "numLeaves": 130,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16786915,
+      "setupIdHex": "0x010025E3",
+      "relativeX": -201.8,
+      "relativeY": -174.3,
+      "worldZ": 0,
+      "numLeaves": 217,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16787995,
+      "setupIdHex": "0x01002A1B",
+      "relativeX": -163.1,
+      "relativeY": -114.5,
+      "worldZ": 0,
+      "numLeaves": 48,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780817,
+      "setupIdHex": "0x01000E11",
+      "relativeX": -155.2,
+      "relativeY": -154.2,
+      "worldZ": 0,
+      "numLeaves": 130,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16781161,
+      "setupIdHex": "0x01000F69",
+      "relativeX": -83.3,
+      "relativeY": -111.7,
+      "worldZ": 0,
+      "numLeaves": 43,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781437,
+      "setupIdHex": "0x0100107D",
+      "relativeX": 204.0,
+      "relativeY": -636.0,
+      "worldZ": 26,
+      "numLeaves": 6,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781062,
+      "setupIdHex": "0x01000F06",
+      "relativeX": 132.0,
+      "relativeY": -348.0,
+      "worldZ": 28,
+      "numLeaves": 62,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16780864,
+      "setupIdHex": "0x01000E40",
+      "relativeX": -324.0,
+      "relativeY": 324.0,
+      "worldZ": 30,
+      "numLeaves": 28,
+      "portalCount": 6
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 20209,
+      "name": "Journeyman Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20213,
+      "name": "Journeyman Scrivener of Item Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 37538,
+      "name": "Royal Quartermaster",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 980,
+      "name": "Jeweler Fathlan ibn Nuril",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 2306,
+      "name": "Da'hir ibn Khayzur the Archmage",
+      "type": "NPC_Archmage"
+    },
+    {
+      "wcid": 977,
+      "name": "Thawasa al-La'ud the Bowyer",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 982,
+      "name": "Shopkeep Julsama bint Sakim",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 22231,
+      "name": "Victory Residential Halls Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 19717,
+      "name": "Mannikin Foundry Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43066,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 37518,
+      "name": "Royal Guard",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    },
+    {
+      "wcid": 3931,
+      "name": "Trophy Smith",
+      "type": "Creature"
+    },
+    {
+      "wcid": 37518,
+      "name": "Royal Guard",
+      "type": "Creature"
+    },
+    {
+      "wcid": 37518,
+      "name": "Royal Guard",
+      "type": "Creature"
+    },
+    {
+      "wcid": 3918,
+      "name": "Collector",
+      "type": "Creature"
+    },
+    {
+      "wcid": 27266,
+      "name": "Aun Akuarea",
+      "type": "Creature"
+    },
+    {
+      "wcid": 39844,
+      "name": "Exploration Marker",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 1109,
+      "name": "wcid_1109",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1109,
+      "name": "wcid_1109",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 979,
+      "name": "wcid_979",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 983,
+      "name": "wcid_983",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 978,
+      "name": "wcid_978",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 981,
+      "name": "wcid_981",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 975,
+      "name": "wcid_975",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 976,
+      "name": "wcid_976",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 973,
+      "name": "wcid_973",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 14930,
+      "name": "wcid_14930",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20225,
+      "name": "wcid_20225",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20221,
+      "name": "wcid_20221",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 22242,
+      "name": "wcid_22242",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 145,
+      "name": "wcid_145",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 153,
+      "name": "wcid_153",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12304,
+      "name": "wcid_12304",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 998,
+      "name": "wcid_998",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 635,
+      "name": "wcid_635",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1002,
+      "name": "wcid_1002",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 999,
+      "name": "wcid_999",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1003,
+      "name": "wcid_1003",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27747,
+      "name": "wcid_27747",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19199,
+      "name": "Nullified Statue of a Gromnie",
+      "type": "Prop"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    }
+  ]
+}

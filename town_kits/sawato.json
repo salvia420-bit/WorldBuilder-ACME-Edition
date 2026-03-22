@@ -1,0 +1,520 @@
+{
+  "townName": "Sawato",
+  "culture": "Sho",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 199,
+    "lbY": 95,
+    "worldX": 38304.0,
+    "worldY": 18336.0
+  },
+  "landblocks": [
+    [
+      191,
+      94
+    ],
+    [
+      199,
+      95
+    ],
+    [
+      201,
+      91
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 7,
+    "totalNPCs": 2,
+    "totalVendors": 6,
+    "totalPortals": 3,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 10,
+    "totalFurniture": 1,
+    "totalOther": 59
+  },
+  "buildings": [
+    {
+      "setupId": 16779732,
+      "setupIdHex": "0x010009D4",
+      "relativeX": -252.0,
+      "relativeY": 60.0,
+      "worldZ": 6,
+      "numLeaves": 107,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16780565,
+      "setupIdHex": "0x01000D15",
+      "relativeX": -132.0,
+      "relativeY": 324.0,
+      "worldZ": 6,
+      "numLeaves": 272,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16787938,
+      "setupIdHex": "0x010029E2",
+      "relativeX": -156.0,
+      "relativeY": 324.0,
+      "worldZ": 6,
+      "numLeaves": 73,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781574,
+      "setupIdHex": "0x01001106",
+      "relativeX": 12.0,
+      "relativeY": -372.0,
+      "worldZ": 6,
+      "numLeaves": 54,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16781566,
+      "setupIdHex": "0x010010FE",
+      "relativeX": 36.0,
+      "relativeY": -180.0,
+      "worldZ": 6,
+      "numLeaves": 6,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781392,
+      "setupIdHex": "0x01001050",
+      "relativeX": -12.0,
+      "relativeY": -12.0,
+      "worldZ": 6,
+      "numLeaves": 67,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781766,
+      "setupIdHex": "0x010011C6",
+      "relativeX": 156.0,
+      "relativeY": 84.0,
+      "worldZ": 6,
+      "numLeaves": 9,
+      "portalCount": 0
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 20210,
+      "name": "Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20214,
+      "name": "Scrivener of Item Magic",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 1369,
+      "name": "Archmage",
+      "type": "NPC_Archmage"
+    },
+    {
+      "wcid": 2295,
+      "name": "Bukai Fu-ya the Bowyer",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 2291,
+      "name": "Ite Kenzen the Barkeeper",
+      "type": "NPC_Barkeep"
+    },
+    {
+      "wcid": 2290,
+      "name": "Archmage Tawa Matema",
+      "type": "NPC_Archmage"
+    },
+    {
+      "wcid": 2300,
+      "name": "Shopkeep Yunen Ye",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 2298,
+      "name": "Chueh Kaigin the Jeweler",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 19716,
+      "name": "Mammet Foundry Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 6105,
+      "name": "Sawato Meeting Hall Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43067,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 39799,
+      "name": "Exploration Marker",
+      "type": "Creature"
+    },
+    {
+      "wcid": 39820,
+      "name": "Exploration Marker",
+      "type": "Creature"
+    },
+    {
+      "wcid": 33839,
+      "name": "Sergeant Huang",
+      "type": "Creature"
+    },
+    {
+      "wcid": 8402,
+      "name": "Tsua Kagemata",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12205,
+      "name": "Tsua's Apprentice",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    },
+    {
+      "wcid": 34305,
+      "name": "Hasin Lin",
+      "type": "Creature"
+    },
+    {
+      "wcid": 35853,
+      "name": "Pau Yajin",
+      "type": "Creature"
+    },
+    {
+      "wcid": 37089,
+      "name": "Nomendar al-Rakh",
+      "type": "Creature"
+    },
+    {
+      "wcid": 40528,
+      "name": "Sign",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [
+    {
+      "wcid": 33828,
+      "name": "Old Footlocker",
+      "type": "Furniture_Storage"
+    }
+  ],
+  "other": [
+    {
+      "wcid": 27244,
+      "name": "wcid_27244",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5085,
+      "name": "wcid_5085",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 24137,
+      "name": "wcid_24137",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2296,
+      "name": "wcid_2296",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2301,
+      "name": "wcid_2301",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2294,
+      "name": "wcid_2294",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2293,
+      "name": "wcid_2293",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2299,
+      "name": "wcid_2299",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2297,
+      "name": "wcid_2297",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20222,
+      "name": "wcid_20222",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20226,
+      "name": "wcid_20226",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 721,
+      "name": "wcid_721",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 174,
+      "name": "wcid_174",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12304,
+      "name": "wcid_12304",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2281,
+      "name": "wcid_2281",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2287,
+      "name": "wcid_2287",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2286,
+      "name": "wcid_2286",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2288,
+      "name": "wcid_2288",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2282,
+      "name": "wcid_2282",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2284,
+      "name": "wcid_2284",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2285,
+      "name": "wcid_2285",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2280,
+      "name": "wcid_2280",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4771,
+      "name": "wcid_4771",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4782,
+      "name": "wcid_4782",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28190,
+      "name": "wcid_28190",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 24160,
+      "name": "wcid_24160",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4788,
+      "name": "wcid_4788",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 25830,
+      "name": "wcid_25830",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4776,
+      "name": "wcid_4776",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19202,
+      "name": "wcid_19202",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2289,
+      "name": "wcid_2289",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27547,
+      "name": "wcid_27547",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 71344,
+      "name": "Holly Jolly Helper Generator",
+      "type": "Prop"
+    }
+  ]
+}

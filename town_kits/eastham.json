@@ -1,0 +1,714 @@
+{
+  "townName": "Eastham",
+  "culture": "Aluvian",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 206,
+    "lbY": 149,
+    "worldX": 39648.0,
+    "worldY": 28704.0
+  },
+  "landblocks": [
+    [
+      204,
+      151
+    ],
+    [
+      206,
+      148
+    ],
+    [
+      206,
+      149
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 17,
+    "totalNPCs": 2,
+    "totalVendors": 5,
+    "totalPortals": 15,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 8,
+    "totalFurniture": 0,
+    "totalOther": 72
+  },
+  "buildings": [
+    {
+      "setupId": 16781020,
+      "setupIdHex": "0x01000EDC",
+      "relativeX": 12.0,
+      "relativeY": -156.0,
+      "worldZ": 20,
+      "numLeaves": 44,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781760,
+      "setupIdHex": "0x010011C0",
+      "relativeX": -60.5,
+      "relativeY": -127.1,
+      "worldZ": 20,
+      "numLeaves": 6,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781760,
+      "setupIdHex": "0x010011C0",
+      "relativeX": -60.3,
+      "relativeY": -113.7,
+      "worldZ": 20,
+      "numLeaves": 6,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16779312,
+      "setupIdHex": "0x01000830",
+      "relativeX": -8.7,
+      "relativeY": -81.3,
+      "worldZ": 20,
+      "numLeaves": 31,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16779292,
+      "setupIdHex": "0x0100081C",
+      "relativeX": -17.7,
+      "relativeY": -55.3,
+      "worldZ": 20,
+      "numLeaves": 34,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16779312,
+      "setupIdHex": "0x01000830",
+      "relativeX": 14.6,
+      "relativeY": 61.4,
+      "worldZ": 20,
+      "numLeaves": 31,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16780227,
+      "setupIdHex": "0x01000BC3",
+      "relativeX": 41.0,
+      "relativeY": -87.6,
+      "worldZ": 20,
+      "numLeaves": 36,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16780311,
+      "setupIdHex": "0x01000C17",
+      "relativeX": -12.9,
+      "relativeY": 12.1,
+      "worldZ": 20,
+      "numLeaves": 39,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16779310,
+      "setupIdHex": "0x0100082E",
+      "relativeX": 57.2,
+      "relativeY": -30.7,
+      "worldZ": 20,
+      "numLeaves": 30,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16780318,
+      "setupIdHex": "0x01000C1E",
+      "relativeX": 60.0,
+      "relativeY": -60.5,
+      "worldZ": 20,
+      "numLeaves": 64,
+      "portalCount": 10
+    },
+    {
+      "setupId": 16779819,
+      "setupIdHex": "0x01000A2B",
+      "relativeX": 61.0,
+      "relativeY": 34.0,
+      "worldZ": 20,
+      "numLeaves": 29,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16786059,
+      "setupIdHex": "0x0100228B",
+      "relativeX": -80.4,
+      "relativeY": -64.0,
+      "worldZ": 20,
+      "numLeaves": 129,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16787995,
+      "setupIdHex": "0x01002A1B",
+      "relativeX": 19.0,
+      "relativeY": -12.0,
+      "worldZ": 20,
+      "numLeaves": 48,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780227,
+      "setupIdHex": "0x01000BC3",
+      "relativeX": -36.0,
+      "relativeY": -12.0,
+      "worldZ": 20,
+      "numLeaves": 36,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16781161,
+      "setupIdHex": "0x01000F69",
+      "relativeX": 62.5,
+      "relativeY": -12.3,
+      "worldZ": 20,
+      "numLeaves": 43,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781522,
+      "setupIdHex": "0x010010D2",
+      "relativeX": 252.0,
+      "relativeY": 60.0,
+      "worldZ": 20,
+      "numLeaves": 35,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780227,
+      "setupIdHex": "0x01000BC3",
+      "relativeX": 468.0,
+      "relativeY": 60.0,
+      "worldZ": 0,
+      "numLeaves": 36,
+      "portalCount": 3
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 20210,
+      "name": "Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20214,
+      "name": "Scrivener of Item Magic",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 651,
+      "name": "Bowyer Bronwin",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 655,
+      "name": "Aderma the Lapidary",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 2302,
+      "name": "Belbeca the Archmage",
+      "type": "NPC_Archmage"
+    },
+    {
+      "wcid": 648,
+      "name": "Byrdara the Barkeeper",
+      "type": "NPC_Barkeep"
+    },
+    {
+      "wcid": 656,
+      "name": "Farnum the Provisioner",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 21401,
+      "name": "Citadel Library",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 21747,
+      "name": "Proving Grounds Extreme",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 21748,
+      "name": "Proving Grounds High",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 21750,
+      "name": "Proving Grounds Mid",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 21749,
+      "name": "Proving Grounds Low",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 21425,
+      "name": "Lightning Ziggurat",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 21399,
+      "name": "Acid Ziggurat",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 21411,
+      "name": "Fire Ziggurat",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 21413,
+      "name": "Frost Ziggurat",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 46924,
+      "name": "Prismatic Ziggurat",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 46925,
+      "name": "Proving Grounds Uber",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 39409,
+      "name": "Patriarch's Valley",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43065,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 19718,
+      "name": "Effigy Foundry Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 6093,
+      "name": "Eastham Meeting Hall Portal",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 39767,
+      "name": "Exploration Marker",
+      "type": "Creature"
+    },
+    {
+      "wcid": 27264,
+      "name": "Aun Tiulerea",
+      "type": "Creature"
+    },
+    {
+      "wcid": 39288,
+      "name": "Asheron's Investigator",
+      "type": "Creature"
+    },
+    {
+      "wcid": 25896,
+      "name": "Samuel, Former Guardian",
+      "type": "Creature"
+    },
+    {
+      "wcid": 41227,
+      "name": "Hei Shou",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12203,
+      "name": "Alexander's Apprentice",
+      "type": "Creature"
+    },
+    {
+      "wcid": 8404,
+      "name": "Alexander the Deft",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 5085,
+      "name": "wcid_5085",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 9594,
+      "name": "wcid_9594",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7925,
+      "name": "wcid_7925",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 9615,
+      "name": "wcid_9615",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 9544,
+      "name": "Eluard the Namer",
+      "type": "Structure"
+    },
+    {
+      "wcid": 475,
+      "name": "wcid_475",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1154,
+      "name": "wcid_1154",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 891,
+      "name": "wcid_891",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27547,
+      "name": "wcid_27547",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28188,
+      "name": "wcid_28188",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4777,
+      "name": "wcid_4777",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4775,
+      "name": "wcid_4775",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8362,
+      "name": "wcid_8362",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 475,
+      "name": "wcid_475",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 475,
+      "name": "wcid_475",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 653,
+      "name": "wcid_653",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 658,
+      "name": "wcid_658",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 652,
+      "name": "wcid_652",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 654,
+      "name": "wcid_654",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 649,
+      "name": "wcid_649",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 650,
+      "name": "wcid_650",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20226,
+      "name": "wcid_20226",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20222,
+      "name": "wcid_20222",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 145,
+      "name": "wcid_145",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 145,
+      "name": "wcid_145",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 145,
+      "name": "wcid_145",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 174,
+      "name": "wcid_174",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 637,
+      "name": "wcid_637",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 643,
+      "name": "wcid_643",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 639,
+      "name": "wcid_639",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 641,
+      "name": "wcid_641",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 640,
+      "name": "wcid_640",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 642,
+      "name": "wcid_642",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 638,
+      "name": "wcid_638",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12304,
+      "name": "wcid_12304",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2048,
+      "name": "wcid_2048",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19194,
+      "name": "wcid_19194",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    }
+  ]
+}

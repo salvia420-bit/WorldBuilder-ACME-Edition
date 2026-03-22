@@ -1,0 +1,480 @@
+{
+  "townName": "Khayyaban",
+  "culture": "Gharu'ndim",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 158,
+    "lbY": 68,
+    "worldX": 30432.0,
+    "worldY": 13152.0
+  },
+  "landblocks": [
+    [
+      158,
+      67
+    ],
+    [
+      158,
+      68
+    ],
+    [
+      170,
+      79
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 11,
+    "totalNPCs": 2,
+    "totalVendors": 4,
+    "totalPortals": 7,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 6,
+    "totalFurniture": 0,
+    "totalOther": 47
+  },
+  "buildings": [
+    {
+      "setupId": 16781161,
+      "setupIdHex": "0x01000F69",
+      "relativeX": -111.1,
+      "relativeY": -256.4,
+      "worldZ": 40,
+      "numLeaves": 43,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781112,
+      "setupIdHex": "0x01000F38",
+      "relativeX": -61.1,
+      "relativeY": -109.0,
+      "worldZ": 46,
+      "numLeaves": 117,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16781020,
+      "setupIdHex": "0x01000EDC",
+      "relativeX": -60.0,
+      "relativeY": -204.0,
+      "worldZ": 50,
+      "numLeaves": 44,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780817,
+      "setupIdHex": "0x01000E11",
+      "relativeX": -59.7,
+      "relativeY": -152.9,
+      "worldZ": 56,
+      "numLeaves": 130,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16786915,
+      "setupIdHex": "0x010025E3",
+      "relativeX": -87.0,
+      "relativeY": -204.7,
+      "worldZ": 50,
+      "numLeaves": 217,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16787995,
+      "setupIdHex": "0x01002A1B",
+      "relativeX": -33.9,
+      "relativeY": -107.5,
+      "worldZ": 46,
+      "numLeaves": 48,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780859,
+      "setupIdHex": "0x01000E3B",
+      "relativeX": -60.0,
+      "relativeY": -84.0,
+      "worldZ": 46,
+      "numLeaves": 125,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780864,
+      "setupIdHex": "0x01000E40",
+      "relativeX": 38.3,
+      "relativeY": -59.2,
+      "worldZ": 36,
+      "numLeaves": 28,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16780817,
+      "setupIdHex": "0x01000E11",
+      "relativeX": 12.0,
+      "relativeY": -12.0,
+      "worldZ": 78,
+      "numLeaves": 130,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16781052,
+      "setupIdHex": "0x01000EFC",
+      "relativeX": -36.0,
+      "relativeY": 12.0,
+      "worldZ": 70,
+      "numLeaves": 84,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780817,
+      "setupIdHex": "0x01000E11",
+      "relativeX": -60.0,
+      "relativeY": 12.0,
+      "worldZ": 70,
+      "numLeaves": 130,
+      "portalCount": 5
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 20210,
+      "name": "Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20214,
+      "name": "Scrivener of Item Magic",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 4702,
+      "name": "Najsuf al-Afan the Shopkeeper",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 4700,
+      "name": "Jeweler Hawtala bint Arsha",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 4694,
+      "name": "Najmima the Archmage",
+      "type": "NPC_Archmage"
+    },
+    {
+      "wcid": 4697,
+      "name": "Bowyer Safruya bint Bilak",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 19718,
+      "name": "Effigy Foundry Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 22231,
+      "name": "Victory Residential Halls Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 4567,
+      "name": "Destroyed Lin Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 5486,
+      "name": "Destroyed Al-Jalima Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43066,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 19369,
+      "name": "Oriel Residential Halls Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 24436,
+      "name": "Matron Hive North",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    },
+    {
+      "wcid": 21170,
+      "name": "Voltarc",
+      "type": "Creature"
+    },
+    {
+      "wcid": 7094,
+      "name": "Synnast",
+      "type": "Creature"
+    },
+    {
+      "wcid": 7095,
+      "name": "Scathisa",
+      "type": "Creature"
+    },
+    {
+      "wcid": 7094,
+      "name": "Synnast",
+      "type": "Creature"
+    },
+    {
+      "wcid": 39803,
+      "name": "Exploration Marker",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4696,
+      "name": "wcid_4696",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4703,
+      "name": "wcid_4703",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4699,
+      "name": "wcid_4699",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4698,
+      "name": "wcid_4698",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 153,
+      "name": "wcid_153",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27244,
+      "name": "wcid_27244",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19204,
+      "name": "Nullified Statue of a Skeleton",
+      "type": "Prop"
+    },
+    {
+      "wcid": 4670,
+      "name": "wcid_4670",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4666,
+      "name": "wcid_4666",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4669,
+      "name": "wcid_4669",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12304,
+      "name": "wcid_12304",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 22242,
+      "name": "wcid_22242",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4668,
+      "name": "wcid_4668",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4701,
+      "name": "wcid_4701",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4695,
+      "name": "wcid_4695",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4704,
+      "name": "wcid_4704",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20226,
+      "name": "wcid_20226",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20222,
+      "name": "wcid_20222",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 153,
+      "name": "wcid_153",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28189,
+      "name": "wcid_28189",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19391,
+      "name": "wcid_19391",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4663,
+      "name": "wcid_4663",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4662,
+      "name": "wcid_4662",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4667,
+      "name": "wcid_4667",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4664,
+      "name": "wcid_4664",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4668,
+      "name": "wcid_4668",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5774,
+      "name": "wcid_5774",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    }
+  ]
+}

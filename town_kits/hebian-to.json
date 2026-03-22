@@ -1,0 +1,1160 @@
+{
+  "townName": "Hebian-To",
+  "culture": "Sho",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 231,
+    "lbY": 77,
+    "worldX": 44448.0,
+    "worldY": 14880.0
+  },
+  "landblocks": [
+    [
+      228,
+      77
+    ],
+    [
+      231,
+      77
+    ],
+    [
+      231,
+      78
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 23,
+    "totalNPCs": 9,
+    "totalVendors": 5,
+    "totalPortals": 6,
+    "totalLifestones": 0,
+    "totalSigns": 1,
+    "totalCreatures": 17,
+    "totalFurniture": 21,
+    "totalOther": 121
+  },
+  "buildings": [
+    {
+      "setupId": 16780919,
+      "setupIdHex": "0x01000E77",
+      "relativeX": -372.0,
+      "relativeY": 12.0,
+      "worldZ": 24,
+      "numLeaves": 81,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780801,
+      "setupIdHex": "0x01000E01",
+      "relativeX": -396.0,
+      "relativeY": 180.0,
+      "worldZ": 12,
+      "numLeaves": 81,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16786159,
+      "setupIdHex": "0x010022EF",
+      "relativeX": -108.3,
+      "relativeY": 132.2,
+      "worldZ": 32,
+      "numLeaves": 123,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16781159,
+      "setupIdHex": "0x01000F67",
+      "relativeX": 84.0,
+      "relativeY": 60.0,
+      "worldZ": 32,
+      "numLeaves": 20,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780565,
+      "setupIdHex": "0x01000D15",
+      "relativeX": -12.0,
+      "relativeY": 252.1,
+      "worldZ": 32,
+      "numLeaves": 272,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16779732,
+      "setupIdHex": "0x010009D4",
+      "relativeX": -54.4,
+      "relativeY": 257.4,
+      "worldZ": 32,
+      "numLeaves": 107,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16780423,
+      "setupIdHex": "0x01000C87",
+      "relativeX": -11.9,
+      "relativeY": 156.0,
+      "worldZ": 32,
+      "numLeaves": 71,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780647,
+      "setupIdHex": "0x01000D67",
+      "relativeX": -36.0,
+      "relativeY": 105.2,
+      "worldZ": 32,
+      "numLeaves": 108,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780598,
+      "setupIdHex": "0x01000D36",
+      "relativeX": 36.2,
+      "relativeY": 204.2,
+      "worldZ": 32,
+      "numLeaves": 134,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780647,
+      "setupIdHex": "0x01000D67",
+      "relativeX": 87.0,
+      "relativeY": 132.0,
+      "worldZ": 32,
+      "numLeaves": 108,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780564,
+      "setupIdHex": "0x01000D14",
+      "relativeX": -59.9,
+      "relativeY": 204.0,
+      "worldZ": 32,
+      "numLeaves": 60,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16780423,
+      "setupIdHex": "0x01000C87",
+      "relativeX": -85.7,
+      "relativeY": 156.5,
+      "worldZ": 32,
+      "numLeaves": 71,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780651,
+      "setupIdHex": "0x01000D6B",
+      "relativeX": 12.1,
+      "relativeY": 108.5,
+      "worldZ": 32,
+      "numLeaves": 111,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780651,
+      "setupIdHex": "0x01000D6B",
+      "relativeX": 36.5,
+      "relativeY": 180.0,
+      "worldZ": 32,
+      "numLeaves": 111,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780651,
+      "setupIdHex": "0x01000D6B",
+      "relativeX": 59.8,
+      "relativeY": 156.1,
+      "worldZ": 32,
+      "numLeaves": 111,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780286,
+      "setupIdHex": "0x01000BFE",
+      "relativeX": 35.8,
+      "relativeY": 252.2,
+      "worldZ": 32,
+      "numLeaves": 56,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780286,
+      "setupIdHex": "0x01000BFE",
+      "relativeX": -84.0,
+      "relativeY": 108.1,
+      "worldZ": 32,
+      "numLeaves": 56,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16787995,
+      "setupIdHex": "0x01002A1B",
+      "relativeX": -40.1,
+      "relativeY": 135.0,
+      "worldZ": 32,
+      "numLeaves": 48,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780801,
+      "setupIdHex": "0x01000E01",
+      "relativeX": -60.0,
+      "relativeY": 132.0,
+      "worldZ": 32,
+      "numLeaves": 81,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16781161,
+      "setupIdHex": "0x01000F69",
+      "relativeX": 12.0,
+      "relativeY": 156.0,
+      "worldZ": 32,
+      "numLeaves": 43,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16785727,
+      "setupIdHex": "0x0100213F",
+      "relativeX": 300.0,
+      "relativeY": -84.0,
+      "worldZ": 32,
+      "numLeaves": 45,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16781760,
+      "setupIdHex": "0x010011C0",
+      "relativeX": -492.0,
+      "relativeY": 36.0,
+      "worldZ": 24,
+      "numLeaves": 6,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16779732,
+      "setupIdHex": "0x010009D4",
+      "relativeX": -540.0,
+      "relativeY": 204.0,
+      "worldZ": 14,
+      "numLeaves": 107,
+      "portalCount": 3
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 38460,
+      "name": "Arcanum Broker",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20210,
+      "name": "Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20209,
+      "name": "Journeyman Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20214,
+      "name": "Scrivener of Item Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20213,
+      "name": "Journeyman Scrivener of Item Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20215,
+      "name": "Apprentice Scrivener of Item and War Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20216,
+      "name": "Apprentice Scrivener of Item and War Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20206,
+      "name": "Apprentice Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20205,
+      "name": "Apprentice Scrivener of Creature Magic",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 857,
+      "name": "Archmage Anyao Zai",
+      "type": "NPC_Archmage"
+    },
+    {
+      "wcid": 856,
+      "name": "Archmage Shikiru Nohon",
+      "type": "NPC_Archmage"
+    },
+    {
+      "wcid": 868,
+      "name": "Muozhen Wa the Jeweler",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 871,
+      "name": "Aldera Brunall Weaponsmith",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 864,
+      "name": "Yatenyu Zhuong the Bowyer",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 15837,
+      "name": "Sanctum Residential Halls Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 37387,
+      "name": "Celestial Hand Stronghold",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 53446,
+      "name": "Celestial Hand Gauntlet",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 19718,
+      "name": "Effigy Foundry Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 6095,
+      "name": "Hebian-to Meeting Hall Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43067,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [
+    {
+      "wcid": 917,
+      "name": "Hebian-to",
+      "type": "Sign_Town"
+    }
+  ],
+  "creatures": [
+    {
+      "wcid": 34726,
+      "name": "Garbage Barrel",
+      "type": "Creature"
+    },
+    {
+      "wcid": 34726,
+      "name": "Garbage Barrel",
+      "type": "Creature"
+    },
+    {
+      "wcid": 40770,
+      "name": "Component Exchanger",
+      "type": "Creature"
+    },
+    {
+      "wcid": 38921,
+      "name": "Arcanum Quota Officer",
+      "type": "Creature"
+    },
+    {
+      "wcid": 38461,
+      "name": "Arcanum Mana-smith",
+      "type": "Creature"
+    },
+    {
+      "wcid": 38388,
+      "name": "Kirina of the Celestial Hand",
+      "type": "Creature"
+    },
+    {
+      "wcid": 28683,
+      "name": "Nawamara Dia",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30274,
+      "name": "Lu Bao",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30273,
+      "name": "Rikshen Ri",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30270,
+      "name": "Ilin Wis",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30272,
+      "name": "Enli Yuo",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30271,
+      "name": "Kyujo Rujen",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30275,
+      "name": "Shujio Milao",
+      "type": "Creature"
+    },
+    {
+      "wcid": 11811,
+      "name": "Shosa Kiroji Matanui",
+      "type": "Creature"
+    },
+    {
+      "wcid": 41521,
+      "name": "Gan Fo",
+      "type": "Creature"
+    },
+    {
+      "wcid": 41520,
+      "name": "Akemi Fei",
+      "type": "Creature"
+    },
+    {
+      "wcid": 40322,
+      "name": "Tanada Sajo",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [
+    {
+      "wcid": 38445,
+      "name": "Mana Forge Magic Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38445,
+      "name": "Mana Forge Magic Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38445,
+      "name": "Mana Forge Magic Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38447,
+      "name": "Mana Forge Advanced Equipment Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38447,
+      "name": "Mana Forge Advanced Equipment Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38447,
+      "name": "Mana Forge Advanced Equipment Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38457,
+      "name": "Mana Forge Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38457,
+      "name": "Mana Forge Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38457,
+      "name": "Mana Forge Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38457,
+      "name": "Mana Forge Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38444,
+      "name": "Mana Forge Armor Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38443,
+      "name": "Mana Forge Mixed Equipment Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38444,
+      "name": "Mana Forge Armor Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38444,
+      "name": "Mana Forge Armor Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38443,
+      "name": "Mana Forge Mixed Equipment Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38443,
+      "name": "Mana Forge Mixed Equipment Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38446,
+      "name": "Mana Forge Weapon Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38446,
+      "name": "Mana Forge Weapon Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38446,
+      "name": "Mana Forge Weapon Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38457,
+      "name": "Mana Forge Chest",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 38457,
+      "name": "Mana Forge Chest",
+      "type": "Furniture_Storage"
+    }
+  ],
+  "other": [
+    {
+      "wcid": 16898,
+      "name": "wcid_16898",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28459,
+      "name": "wcid_28459",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 870,
+      "name": "wcid_870",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 859,
+      "name": "wcid_859",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 866,
+      "name": "wcid_866",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 865,
+      "name": "wcid_865",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 862,
+      "name": "wcid_862",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 869,
+      "name": "wcid_869",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 860,
+      "name": "wcid_860",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 858,
+      "name": "wcid_858",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 867,
+      "name": "wcid_867",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20226,
+      "name": "wcid_20226",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20221,
+      "name": "wcid_20221",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20222,
+      "name": "wcid_20222",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20217,
+      "name": "wcid_20217",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20218,
+      "name": "wcid_20218",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20225,
+      "name": "wcid_20225",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28477,
+      "name": "wcid_28477",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4788,
+      "name": "wcid_4788",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 25722,
+      "name": "wcid_25722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4771,
+      "name": "wcid_4771",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 721,
+      "name": "wcid_721",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 721,
+      "name": "wcid_721",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 174,
+      "name": "wcid_174",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5434,
+      "name": "wcid_5434",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 873,
+      "name": "wcid_873",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 877,
+      "name": "wcid_877",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 880,
+      "name": "wcid_880",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 875,
+      "name": "wcid_875",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 874,
+      "name": "wcid_874",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 876,
+      "name": "wcid_876",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 879,
+      "name": "wcid_879",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 872,
+      "name": "wcid_872",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 881,
+      "name": "wcid_881",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5432,
+      "name": "wcid_5432",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 878,
+      "name": "wcid_878",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5433,
+      "name": "wcid_5433",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27547,
+      "name": "wcid_27547",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19195,
+      "name": "wcid_19195",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 29673,
+      "name": "wcid_29673",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 29672,
+      "name": "wcid_29672",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 29670,
+      "name": "wcid_29670",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 29693,
+      "name": "wcid_29693",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 29681,
+      "name": "wcid_29681",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 29664,
+      "name": "wcid_29664",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 29685,
+      "name": "wcid_29685",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 29689,
+      "name": "wcid_29689",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 29661,
+      "name": "wcid_29661",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 29016,
+      "name": "wcid_29016",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28465,
+      "name": "wcid_28465",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 9265,
+      "name": "wcid_9265",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 71316,
+      "name": "Night Club Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 71253,
+      "name": "Mana Barrier Stopgap Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 70374,
+      "name": "GY Colo Stop Gap! Gen",
+      "type": "Prop"
+    },
+    {
+      "wcid": 71083,
+      "name": "Large Monouga Pit Gen",
+      "type": "Prop"
+    },
+    {
+      "wcid": 71084,
+      "name": "Huge Monouga Pit Gen",
+      "type": "Prop"
+    },
+    {
+      "wcid": 71085,
+      "name": "Giant Monouga Pit Gen",
+      "type": "Prop"
+    },
+    {
+      "wcid": 71107,
+      "name": "Deeper Catacombs Gen",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72222,
+      "name": "Freebooter Keep Stop Gap Gen CH",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72223,
+      "name": "Freebooter Keep Stop Gap Gen EW",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72224,
+      "name": "Freebooter Keep Stop Gap Gen RB",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72232,
+      "name": "Freebooter Keep Contested Gen CH",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72233,
+      "name": "Freebooter Keep Contested Gen EW",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72234,
+      "name": "Freebooter Keep Contested Gen RB",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72369,
+      "name": "Northwatch Keep Stop Gap Gen CH",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72370,
+      "name": "Northwatch Keep Stop Gap Gen EW",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72371,
+      "name": "Northwatch Keep Stop Gap Gen RB",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72353,
+      "name": "Northwatch Keep Contested Gen CH",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72354,
+      "name": "Northwatch Keep Contested Gen EW",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72355,
+      "name": "Northwatch Keep Contested Gen RB",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72814,
+      "name": "Society Infiltration Stopgap Gen CH",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72815,
+      "name": "Society Infiltration Stopgap Gen EW",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72816,
+      "name": "Society Infiltration Stopgap Gen RB",
+      "type": "Prop"
+    },
+    {
+      "wcid": 72017,
+      "name": "Mhoire Lieutenant Generator",
+      "type": "Prop"
+    }
+  ]
+}

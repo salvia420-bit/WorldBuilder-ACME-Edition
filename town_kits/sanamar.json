@@ -1,0 +1,1037 @@
+{
+  "townName": "Sanamar",
+  "culture": "Viamontian",
+  "isStarter": true,
+  "retailCenter": {
+    "lbX": 50,
+    "lbY": 217,
+    "worldX": 9696.0,
+    "worldY": 41760.0
+  },
+  "landblocks": [
+    [
+      50,
+      217
+    ],
+    [
+      50,
+      219
+    ],
+    [
+      51,
+      217
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 51,
+    "totalNPCs": 14,
+    "totalVendors": 9,
+    "totalPortals": 8,
+    "totalLifestones": 0,
+    "totalSigns": 2,
+    "totalCreatures": 19,
+    "totalFurniture": 1,
+    "totalOther": 52
+  },
+  "buildings": [
+    {
+      "setupId": 16792229,
+      "setupIdHex": "0x01003AA5",
+      "relativeX": -204.0,
+      "relativeY": -468.0,
+      "worldZ": 80,
+      "numLeaves": 152,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792229,
+      "setupIdHex": "0x01003AA5",
+      "relativeX": -228.0,
+      "relativeY": -468.0,
+      "worldZ": 80,
+      "numLeaves": 152,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792238,
+      "setupIdHex": "0x01003AAE",
+      "relativeX": -276.0,
+      "relativeY": -468.0,
+      "worldZ": 80,
+      "numLeaves": 97,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": -252.0,
+      "relativeY": -468.0,
+      "worldZ": 80,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": -180.0,
+      "relativeY": -468.0,
+      "worldZ": 80,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792238,
+      "setupIdHex": "0x01003AAE",
+      "relativeX": -156.0,
+      "relativeY": -468.0,
+      "worldZ": 80,
+      "numLeaves": 97,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16791267,
+      "setupIdHex": "0x010036E3",
+      "relativeX": -85.4,
+      "relativeY": -417.4,
+      "worldZ": 80,
+      "numLeaves": 81,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16791267,
+      "setupIdHex": "0x010036E3",
+      "relativeX": -39.7,
+      "relativeY": -296.9,
+      "worldZ": 76.1,
+      "numLeaves": 81,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16791304,
+      "setupIdHex": "0x01003708",
+      "relativeX": 33.9,
+      "relativeY": -9.8,
+      "worldZ": 52,
+      "numLeaves": 181,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": 60.0,
+      "relativeY": -84.0,
+      "worldZ": 52,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": 84.0,
+      "relativeY": 36.0,
+      "worldZ": 52,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": 36.0,
+      "relativeY": -84.0,
+      "worldZ": 52,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": 12.0,
+      "relativeY": 36.0,
+      "worldZ": 52,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": 36.0,
+      "relativeY": 60.0,
+      "worldZ": 52,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": 60.0,
+      "relativeY": 60.0,
+      "worldZ": 52,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16791076,
+      "setupIdHex": "0x01003624",
+      "relativeX": 59.9,
+      "relativeY": 36.3,
+      "worldZ": 52,
+      "numLeaves": 639,
+      "portalCount": 8
+    },
+    {
+      "setupId": 16792238,
+      "setupIdHex": "0x01003AAE",
+      "relativeX": 84.0,
+      "relativeY": 60.0,
+      "worldZ": 52,
+      "numLeaves": 97,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16792238,
+      "setupIdHex": "0x01003AAE",
+      "relativeX": 12.0,
+      "relativeY": -84.0,
+      "worldZ": 52,
+      "numLeaves": 97,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": 84.0,
+      "relativeY": 12.0,
+      "worldZ": 52,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16791076,
+      "setupIdHex": "0x01003624",
+      "relativeX": 36.0,
+      "relativeY": 36.0,
+      "worldZ": 52,
+      "numLeaves": 639,
+      "portalCount": 8
+    },
+    {
+      "setupId": 16791304,
+      "setupIdHex": "0x01003708",
+      "relativeX": 56.8,
+      "relativeY": -36.0,
+      "worldZ": 52,
+      "numLeaves": 181,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16792229,
+      "setupIdHex": "0x01003AA5",
+      "relativeX": 84.0,
+      "relativeY": -36.0,
+      "worldZ": 52,
+      "numLeaves": 152,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": 12.0,
+      "relativeY": -60.0,
+      "worldZ": 52,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": 12.0,
+      "relativeY": -36.0,
+      "worldZ": 52,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": 12.0,
+      "relativeY": -12.0,
+      "worldZ": 52,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": 12.0,
+      "relativeY": 12.0,
+      "worldZ": 52,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16791832,
+      "setupIdHex": "0x01003918",
+      "relativeX": 32.0,
+      "relativeY": -59.4,
+      "worldZ": 52,
+      "numLeaves": 32,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16792323,
+      "setupIdHex": "0x01003B03",
+      "relativeX": 84.0,
+      "relativeY": -12.0,
+      "worldZ": 52,
+      "numLeaves": 110,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16792323,
+      "setupIdHex": "0x01003B03",
+      "relativeX": 84.0,
+      "relativeY": -84.0,
+      "worldZ": 52,
+      "numLeaves": 110,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": 84.0,
+      "relativeY": -60.0,
+      "worldZ": 52,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16791812,
+      "setupIdHex": "0x01003904",
+      "relativeX": 64.7,
+      "relativeY": -64.3,
+      "worldZ": 52,
+      "numLeaves": 583,
+      "portalCount": 14
+    },
+    {
+      "setupId": 16792238,
+      "setupIdHex": "0x01003AAE",
+      "relativeX": 12.0,
+      "relativeY": 60.0,
+      "worldZ": 52,
+      "numLeaves": 97,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16781737,
+      "setupIdHex": "0x010011A9",
+      "relativeX": 12.4,
+      "relativeY": 469.2,
+      "worldZ": 40,
+      "numLeaves": 127,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16791267,
+      "setupIdHex": "0x010036E3",
+      "relativeX": 132.0,
+      "relativeY": -180.0,
+      "worldZ": 58,
+      "numLeaves": 81,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16791075,
+      "setupIdHex": "0x01003623",
+      "relativeX": 130.0,
+      "relativeY": -64.5,
+      "worldZ": 52,
+      "numLeaves": 216,
+      "portalCount": 11
+    },
+    {
+      "setupId": 16792238,
+      "setupIdHex": "0x01003AAE",
+      "relativeX": 204.0,
+      "relativeY": -84.0,
+      "worldZ": 52,
+      "numLeaves": 97,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": 108.0,
+      "relativeY": -12.0,
+      "worldZ": 52,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": 204.0,
+      "relativeY": -60.0,
+      "worldZ": 52,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16791304,
+      "setupIdHex": "0x01003708",
+      "relativeX": 108.2,
+      "relativeY": -61.4,
+      "worldZ": 52,
+      "numLeaves": 181,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": 108.0,
+      "relativeY": -84.0,
+      "worldZ": 52,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16791814,
+      "setupIdHex": "0x01003906",
+      "relativeX": 182.0,
+      "relativeY": -63.4,
+      "worldZ": 52,
+      "numLeaves": 235,
+      "portalCount": 16
+    },
+    {
+      "setupId": 16792229,
+      "setupIdHex": "0x01003AA5",
+      "relativeX": 156.0,
+      "relativeY": -12.0,
+      "worldZ": 52,
+      "numLeaves": 152,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": 132.0,
+      "relativeY": -12.0,
+      "worldZ": 52,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792238,
+      "setupIdHex": "0x01003AAE",
+      "relativeX": 204.0,
+      "relativeY": -12.0,
+      "worldZ": 52,
+      "numLeaves": 97,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": 180.0,
+      "relativeY": -12.0,
+      "worldZ": 52,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792229,
+      "setupIdHex": "0x01003AA5",
+      "relativeX": 156.0,
+      "relativeY": -84.0,
+      "worldZ": 52,
+      "numLeaves": 152,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": 180.0,
+      "relativeY": -84.0,
+      "worldZ": 52,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": 132.0,
+      "relativeY": -84.0,
+      "worldZ": 52,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16792226,
+      "setupIdHex": "0x01003AA2",
+      "relativeX": 204.0,
+      "relativeY": -36.0,
+      "worldZ": 52,
+      "numLeaves": 15,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16781737,
+      "setupIdHex": "0x010011A9",
+      "relativeX": 563.0,
+      "relativeY": 373.5,
+      "worldZ": 22,
+      "numLeaves": 127,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781737,
+      "setupIdHex": "0x010011A9",
+      "relativeX": -349.3,
+      "relativeY": 230.5,
+      "worldZ": 2,
+      "numLeaves": 127,
+      "portalCount": 1
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 30010,
+      "name": "Apprentice Scrivener of Item and War Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 30009,
+      "name": "Apprentice Scrivener of Item and War Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 43354,
+      "name": "Scrivener of Void Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 30021,
+      "name": "Apprentice Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20210,
+      "name": "Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 30025,
+      "name": "Journeyman Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 30029,
+      "name": "Journeyman Scrivener of Item Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 49519,
+      "name": "Keminub",
+      "type": "NPC"
+    },
+    {
+      "wcid": 30022,
+      "name": "Apprentice Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20214,
+      "name": "Scrivener of Item Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 31224,
+      "name": "Shopkeeper",
+      "type": "NPC"
+    },
+    {
+      "wcid": 42431,
+      "name": "Ciriaco",
+      "type": "NPC"
+    },
+    {
+      "wcid": 30031,
+      "name": "Fletcher Mikael di Suinn",
+      "type": "NPC"
+    },
+    {
+      "wcid": 44188,
+      "name": "Contract Broker",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 30039,
+      "name": "Healer Deme du Laur",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 30032,
+      "name": "Scribe Benno di Hergeaux",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 30038,
+      "name": "Archmage Luchessa du Lamiere",
+      "type": "NPC_Archmage"
+    },
+    {
+      "wcid": 30040,
+      "name": "Blacksmith Karlus Loc",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 30036,
+      "name": "Grocer Jaffres Dini",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 30037,
+      "name": "Shopkeeper Tod Burgni",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 30033,
+      "name": "Jeweler Susana Arlean",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 30034,
+      "name": "Tailor Monique du Bressa",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 30035,
+      "name": "Barkeeper Jean Vaden",
+      "type": "NPC_Barkeep"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 42852,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 29095,
+      "name": "Sultry Hovel",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 1027,
+      "name": "Destroyed Portal to Shoushi",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 1020,
+      "name": "Destroyed Portal to Holtburg",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 1030,
+      "name": "Destroyed Portal to Yaraq",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 29094,
+      "name": "Portal Guardian",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 30536,
+      "name": "Beacon Tower",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 28793,
+      "name": "Penguin Den",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [
+    {
+      "wcid": 30042,
+      "name": "To Sanamar",
+      "type": "Sign_Town"
+    },
+    {
+      "wcid": 30042,
+      "name": "To Sanamar",
+      "type": "Sign_Town"
+    }
+  ],
+  "creatures": [
+    {
+      "wcid": 34145,
+      "name": "Trilaine di Ricard",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30073,
+      "name": "Luressi di Maki",
+      "type": "Creature"
+    },
+    {
+      "wcid": 31655,
+      "name": "Alessandro Mardor",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32834,
+      "name": "Turien di Furza",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30267,
+      "name": "Paissen du Kim",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30266,
+      "name": "Stuven di Bonachien",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32820,
+      "name": "Giordonni",
+      "type": "Creature"
+    },
+    {
+      "wcid": 36231,
+      "name": "Malrin",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42723,
+      "name": "Bertrand",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42739,
+      "name": "Tailor's Apprentice",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44894,
+      "name": "Fiorella",
+      "type": "Creature"
+    },
+    {
+      "wcid": 33615,
+      "name": "Pathwarden Thierra Molanti",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44890,
+      "name": "Rufina",
+      "type": "Creature"
+    },
+    {
+      "wcid": 28706,
+      "name": "Rand",
+      "type": "Creature"
+    },
+    {
+      "wcid": 28705,
+      "name": "Anton Sillezi",
+      "type": "Creature"
+    },
+    {
+      "wcid": 28707,
+      "name": "Collector",
+      "type": "Creature"
+    },
+    {
+      "wcid": 28701,
+      "name": "Elena Du Furza",
+      "type": "Creature"
+    },
+    {
+      "wcid": 28704,
+      "name": "Lorca Sammel",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30265,
+      "name": "Fabian Strinjelli",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [
+    {
+      "wcid": 33612,
+      "name": "Viamontian Pathwarden Chest",
+      "type": "Furniture_Storage"
+    }
+  ],
+  "other": [
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 30012,
+      "name": "wcid_30012",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 30011,
+      "name": "wcid_30011",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 30019,
+      "name": "wcid_30019",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20226,
+      "name": "wcid_20226",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 30015,
+      "name": "wcid_30015",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20222,
+      "name": "wcid_20222",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 30063,
+      "name": "wcid_30063",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4179,
+      "name": "wcid_4179",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 30938,
+      "name": "Door",
+      "type": "Structure"
+    },
+    {
+      "wcid": 7925,
+      "name": "wcid_7925",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4179,
+      "name": "wcid_4179",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 30043,
+      "name": "Statue of King Varicci II",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 30938,
+      "name": "Door",
+      "type": "Structure"
+    },
+    {
+      "wcid": 30938,
+      "name": "Door",
+      "type": "Structure"
+    },
+    {
+      "wcid": 30938,
+      "name": "Door",
+      "type": "Structure"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 44209,
+      "name": "wcid_44209",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 29504,
+      "name": "Red Bull of Sanamar",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 32085,
+      "name": "wcid_32085",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 30064,
+      "name": "wcid_30064",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 71316,
+      "name": "Night Club Generator",
+      "type": "Prop"
+    }
+  ]
+}

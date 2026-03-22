@@ -1,0 +1,393 @@
+{
+  "townName": "Plateau Village",
+  "culture": "Neutral",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 73,
+    "lbY": 182,
+    "worldX": 14112.0,
+    "worldY": 35040.0
+  },
+  "landblocks": [
+    [
+      73,
+      182
+    ],
+    [
+      75,
+      178
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 9,
+    "totalNPCs": 2,
+    "totalVendors": 2,
+    "totalPortals": 4,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 7,
+    "totalFurniture": 0,
+    "totalOther": 38
+  },
+  "buildings": [
+    {
+      "setupId": 16779303,
+      "setupIdHex": "0x01000827",
+      "relativeX": -60.0,
+      "relativeY": 60.0,
+      "worldZ": 240,
+      "numLeaves": 101,
+      "portalCount": 8
+    },
+    {
+      "setupId": 16780227,
+      "setupIdHex": "0x01000BC3",
+      "relativeX": -36.0,
+      "relativeY": 12.0,
+      "worldZ": 240,
+      "numLeaves": 36,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16779310,
+      "setupIdHex": "0x0100082E",
+      "relativeX": -84.0,
+      "relativeY": 14.6,
+      "worldZ": 240,
+      "numLeaves": 30,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16780227,
+      "setupIdHex": "0x01000BC3",
+      "relativeX": -79.9,
+      "relativeY": -9.0,
+      "worldZ": 240,
+      "numLeaves": 36,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16786059,
+      "setupIdHex": "0x0100228B",
+      "relativeX": -10.3,
+      "relativeY": 38.5,
+      "worldZ": 240,
+      "numLeaves": 129,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16787995,
+      "setupIdHex": "0x01002A1B",
+      "relativeX": -55.6,
+      "relativeY": 34.9,
+      "worldZ": 240,
+      "numLeaves": 48,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16779303,
+      "setupIdHex": "0x01000827",
+      "relativeX": -84.0,
+      "relativeY": 36.0,
+      "worldZ": 240,
+      "numLeaves": 101,
+      "portalCount": 8
+    },
+    {
+      "setupId": 16781052,
+      "setupIdHex": "0x01000EFC",
+      "relativeX": -12.7,
+      "relativeY": 416.1,
+      "worldZ": 240,
+      "numLeaves": 84,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781591,
+      "setupIdHex": "0x01001117",
+      "relativeX": 204.0,
+      "relativeY": -276.0,
+      "worldZ": 240,
+      "numLeaves": 85,
+      "portalCount": 3
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 20207,
+      "name": "Master Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20211,
+      "name": "Master Scrivener of Item Magic",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 2500,
+      "name": "Avorgild the Shopkeeper",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 2503,
+      "name": "Brenica the Jeweler",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 19716,
+      "name": "Mammet Foundry Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 19369,
+      "name": "Oriel Residential Halls Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 2550,
+      "name": "Plateau Base",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43065,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 45865,
+      "name": "Omarah",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    },
+    {
+      "wcid": 4213,
+      "name": "Leather Crafter",
+      "type": "Creature"
+    },
+    {
+      "wcid": 5874,
+      "name": "Mairisa bint Fuda",
+      "type": "Creature"
+    },
+    {
+      "wcid": 3931,
+      "name": "Trophy Smith",
+      "type": "Creature"
+    },
+    {
+      "wcid": 31692,
+      "name": "Jun Sawashima",
+      "type": "Creature"
+    },
+    {
+      "wcid": 39755,
+      "name": "Exploration Marker",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 6113,
+      "name": "wcid_6113",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2501,
+      "name": "wcid_2501",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20219,
+      "name": "wcid_20219",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20223,
+      "name": "wcid_20223",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12304,
+      "name": "wcid_12304",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28923,
+      "name": "wcid_28923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 25988,
+      "name": "wcid_25988",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19204,
+      "name": "Nullified Statue of a Skeleton",
+      "type": "Prop"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19391,
+      "name": "wcid_19391",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 385,
+      "name": "wcid_385",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 385,
+      "name": "wcid_385",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2502,
+      "name": "wcid_2502",
+      "type": "Unknown"
+    }
+  ]
+}

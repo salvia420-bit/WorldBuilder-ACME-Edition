@@ -1,0 +1,376 @@
+{
+  "townName": "Wai Jhou",
+  "culture": "Sho",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 63,
+    "lbY": 50,
+    "worldX": 12192.0,
+    "worldY": 9696.0
+  },
+  "landblocks": [
+    [
+      63,
+      49
+    ],
+    [
+      63,
+      50
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 7,
+    "totalNPCs": 2,
+    "totalVendors": 4,
+    "totalPortals": 4,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 12,
+    "totalFurniture": 2,
+    "totalOther": 29
+  },
+  "buildings": [
+    {
+      "setupId": 16781811,
+      "setupIdHex": "0x010011F3",
+      "relativeX": -324.0,
+      "relativeY": -228.0,
+      "worldZ": 250,
+      "numLeaves": 170,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16787995,
+      "setupIdHex": "0x01002A1B",
+      "relativeX": -53.8,
+      "relativeY": -105.8,
+      "worldZ": 0,
+      "numLeaves": 48,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16781052,
+      "setupIdHex": "0x01000EFC",
+      "relativeX": -60.0,
+      "relativeY": -180.0,
+      "worldZ": 0,
+      "numLeaves": 84,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780762,
+      "setupIdHex": "0x01000DDA",
+      "relativeX": -11.9,
+      "relativeY": -201.9,
+      "worldZ": 0,
+      "numLeaves": 73,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16780801,
+      "setupIdHex": "0x01000E01",
+      "relativeX": -36.0,
+      "relativeY": -60.0,
+      "worldZ": 0,
+      "numLeaves": 81,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16789092,
+      "setupIdHex": "0x01002E64",
+      "relativeX": -85.7,
+      "relativeY": -84.7,
+      "worldZ": 0,
+      "numLeaves": 271,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16781574,
+      "setupIdHex": "0x01001106",
+      "relativeX": 180.0,
+      "relativeY": -156.0,
+      "worldZ": 148,
+      "numLeaves": 54,
+      "portalCount": 2
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 20208,
+      "name": "Grand Master Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20212,
+      "name": "Grand Master Scrivener of Item Magic",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 2543,
+      "name": "Archmage Dou Ran",
+      "type": "NPC_Archmage"
+    },
+    {
+      "wcid": 24217,
+      "name": "Goku Bai-Akane the Barkeep",
+      "type": "NPC_Barkeep"
+    },
+    {
+      "wcid": 24219,
+      "name": "Nakoro Eshii-Shinjo the Provisioner",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 24218,
+      "name": "Bowyer Xana Bin-Xara",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 42833,
+      "name": "Qalaba'r Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42852,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 42848,
+      "name": "Portal to Kara",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 2385,
+      "name": "Disaster Maze",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 24214,
+      "name": "Aun Teverea",
+      "type": "Creature"
+    },
+    {
+      "wcid": 24212,
+      "name": "Caelis Renning",
+      "type": "Creature"
+    },
+    {
+      "wcid": 24213,
+      "name": "Kreavon",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    },
+    {
+      "wcid": 33277,
+      "name": "Riordin Nightbane",
+      "type": "Creature"
+    },
+    {
+      "wcid": 31376,
+      "name": "Sarkin Killcrane",
+      "type": "Creature"
+    },
+    {
+      "wcid": 31649,
+      "name": "Nona",
+      "type": "Creature"
+    },
+    {
+      "wcid": 38078,
+      "name": "Lacarra Avanthi",
+      "type": "Creature"
+    },
+    {
+      "wcid": 38077,
+      "name": "Zho Heishan",
+      "type": "Creature"
+    },
+    {
+      "wcid": 36536,
+      "name": "Guard Li",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32780,
+      "name": "Xanda Har",
+      "type": "Creature"
+    },
+    {
+      "wcid": 40527,
+      "name": "Encrusted Scroll Case",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [
+    {
+      "wcid": 31445,
+      "name": "Dirty Old Crate",
+      "type": "Furniture_Storage"
+    },
+    {
+      "wcid": 8999,
+      "name": "Steel Chest",
+      "type": "Furniture_Storage"
+    }
+  ],
+  "other": [
+    {
+      "wcid": 20224,
+      "name": "wcid_20224",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20220,
+      "name": "wcid_20220",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 24221,
+      "name": "wcid_24221",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19203,
+      "name": "wcid_19203",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19715,
+      "name": "wcid_19715",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 9288,
+      "name": "wcid_9288",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2542,
+      "name": "wcid_2542",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2541,
+      "name": "wcid_2541",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 24220,
+      "name": "wcid_24220",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 153,
+      "name": "wcid_153",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 24263,
+      "name": "wcid_24263",
+      "type": "Unknown"
+    }
+  ]
+}

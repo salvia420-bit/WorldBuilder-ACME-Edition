@@ -1,0 +1,510 @@
+{
+  "townName": "Qalaba'r",
+  "culture": "Gharu'ndim",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 151,
+    "lbY": 34,
+    "worldX": 29088.0,
+    "worldY": 6624.0
+  },
+  "landblocks": [
+    [
+      151,
+      33
+    ],
+    [
+      151,
+      34
+    ],
+    [
+      154,
+      33
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 16,
+    "totalNPCs": 3,
+    "totalVendors": 4,
+    "totalPortals": 6,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 8,
+    "totalFurniture": 0,
+    "totalOther": 42
+  },
+  "buildings": [
+    {
+      "setupId": 16780817,
+      "setupIdHex": "0x01000E11",
+      "relativeX": 15.0,
+      "relativeY": -35.9,
+      "worldZ": 102,
+      "numLeaves": 130,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16780859,
+      "setupIdHex": "0x01000E3B",
+      "relativeX": 12.9,
+      "relativeY": 11.4,
+      "worldZ": 102,
+      "numLeaves": 125,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780864,
+      "setupIdHex": "0x01000E40",
+      "relativeX": -11.9,
+      "relativeY": -12.2,
+      "worldZ": 102,
+      "numLeaves": 28,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16780817,
+      "setupIdHex": "0x01000E11",
+      "relativeX": 32.7,
+      "relativeY": -12.2,
+      "worldZ": 102,
+      "numLeaves": 130,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16780817,
+      "setupIdHex": "0x01000E11",
+      "relativeX": -34.9,
+      "relativeY": 12.0,
+      "worldZ": 102,
+      "numLeaves": 130,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16786915,
+      "setupIdHex": "0x010025E3",
+      "relativeX": -16.0,
+      "relativeY": 38.3,
+      "worldZ": 102,
+      "numLeaves": 217,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16787995,
+      "setupIdHex": "0x01002A1B",
+      "relativeX": -6.0,
+      "relativeY": 19.4,
+      "worldZ": 102,
+      "numLeaves": 48,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16781161,
+      "setupIdHex": "0x01000F69",
+      "relativeX": -57.7,
+      "relativeY": 37.0,
+      "worldZ": 102,
+      "numLeaves": 43,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780859,
+      "setupIdHex": "0x01000E3B",
+      "relativeX": -61.7,
+      "relativeY": 83.5,
+      "worldZ": 102,
+      "numLeaves": 125,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781020,
+      "setupIdHex": "0x01000EDC",
+      "relativeX": -36.0,
+      "relativeY": 108.0,
+      "worldZ": 102,
+      "numLeaves": 44,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16793649,
+      "setupIdHex": "0x01004031",
+      "relativeX": 540.0,
+      "relativeY": -180.0,
+      "worldZ": 96,
+      "numLeaves": 73,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781062,
+      "setupIdHex": "0x01000F06",
+      "relativeX": 614.6,
+      "relativeY": -57.5,
+      "worldZ": 108,
+      "numLeaves": 62,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16781062,
+      "setupIdHex": "0x01000F06",
+      "relativeX": 614.4,
+      "relativeY": -36.4,
+      "worldZ": 108,
+      "numLeaves": 62,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16781766,
+      "setupIdHex": "0x010011C6",
+      "relativeX": 612.0,
+      "relativeY": -84.0,
+      "worldZ": 108,
+      "numLeaves": 9,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788492,
+      "setupIdHex": "0x01002C0C",
+      "relativeX": 660.0,
+      "relativeY": -36.0,
+      "worldZ": 108,
+      "numLeaves": 12,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788492,
+      "setupIdHex": "0x01002C0C",
+      "relativeX": 636.0,
+      "relativeY": 36.0,
+      "worldZ": 108,
+      "numLeaves": 12,
+      "portalCount": 0
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 20207,
+      "name": "Master Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 43352,
+      "name": "Master Scrivener of Void Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20211,
+      "name": "Master Scrivener of Item Magic",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 1055,
+      "name": "Kuyalal al-A'ma the Jeweler",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 1057,
+      "name": "Suntar al-Tashqat the Shopkeep",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 1052,
+      "name": "Miya bint Atwab the Bowyer",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 1048,
+      "name": "Jumzik al-Budim the Archmage",
+      "type": "NPC_Archmage"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 30555,
+      "name": "Portal to Silyun",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 19716,
+      "name": "Mammet Foundry Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 19358,
+      "name": "Atrium Residential Halls Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 6102,
+      "name": "Qalaba'r Meeting Hall Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43066,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43573,
+      "name": "Olthoi Tunnel",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 36720,
+      "name": "Nomea ibn Makar",
+      "type": "Creature"
+    },
+    {
+      "wcid": 36533,
+      "name": "Guard Taziq",
+      "type": "Creature"
+    },
+    {
+      "wcid": 27265,
+      "name": "Aun Maerirea",
+      "type": "Creature"
+    },
+    {
+      "wcid": 4215,
+      "name": "Leather Crafter",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    },
+    {
+      "wcid": 3931,
+      "name": "Trophy Smith",
+      "type": "Creature"
+    },
+    {
+      "wcid": 32217,
+      "name": "Qath al-Haddash",
+      "type": "Creature"
+    },
+    {
+      "wcid": 3921,
+      "name": "Stone Collector",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1058,
+      "name": "wcid_1058",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1053,
+      "name": "wcid_1053",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1056,
+      "name": "wcid_1056",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1049,
+      "name": "wcid_1049",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1059,
+      "name": "wcid_1059",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1054,
+      "name": "wcid_1054",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1050,
+      "name": "wcid_1050",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20219,
+      "name": "wcid_20219",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20223,
+      "name": "wcid_20223",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1111,
+      "name": "wcid_1111",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1111,
+      "name": "wcid_1111",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 145,
+      "name": "wcid_145",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6441,
+      "name": "wcid_6441",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1065,
+      "name": "wcid_1065",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1064,
+      "name": "wcid_1064",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1063,
+      "name": "wcid_1063",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12304,
+      "name": "wcid_12304",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1067,
+      "name": "wcid_1067",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28918,
+      "name": "wcid_28918",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 25989,
+      "name": "wcid_25989",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19197,
+      "name": "wcid_19197",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19380,
+      "name": "wcid_19380",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27547,
+      "name": "wcid_27547",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 71468,
+      "name": "Natalie Holiday Event Spawn",
+      "type": "Prop"
+    }
+  ]
+}

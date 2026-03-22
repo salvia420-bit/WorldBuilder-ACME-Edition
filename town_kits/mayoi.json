@@ -1,0 +1,493 @@
+{
+  "townName": "Mayoi",
+  "culture": "Sho",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 230,
+    "lbY": 50,
+    "worldX": 44256.0,
+    "worldY": 9696.0
+  },
+  "landblocks": [
+    [
+      229,
+      50
+    ],
+    [
+      230,
+      50
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 14,
+    "totalNPCs": 2,
+    "totalVendors": 3,
+    "totalPortals": 4,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 6,
+    "totalFurniture": 0,
+    "totalOther": 49
+  },
+  "buildings": [
+    {
+      "setupId": 16780762,
+      "setupIdHex": "0x01000DDA",
+      "relativeX": -105.4,
+      "relativeY": -59.1,
+      "worldZ": 28,
+      "numLeaves": 73,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16780647,
+      "setupIdHex": "0x01000D67",
+      "relativeX": -155.9,
+      "relativeY": -57.1,
+      "worldZ": 28,
+      "numLeaves": 108,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780651,
+      "setupIdHex": "0x01000D6B",
+      "relativeX": -131.5,
+      "relativeY": 36.9,
+      "worldZ": 28,
+      "numLeaves": 111,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780286,
+      "setupIdHex": "0x01000BFE",
+      "relativeX": -132.0,
+      "relativeY": -85.1,
+      "worldZ": 28,
+      "numLeaves": 56,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16786159,
+      "setupIdHex": "0x010022EF",
+      "relativeX": -179.7,
+      "relativeY": 86.1,
+      "worldZ": 28,
+      "numLeaves": 123,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16787995,
+      "setupIdHex": "0x01002A1B",
+      "relativeX": -101.5,
+      "relativeY": -85.5,
+      "worldZ": 28,
+      "numLeaves": 48,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16781161,
+      "setupIdHex": "0x01000F69",
+      "relativeX": -157.8,
+      "relativeY": 39.8,
+      "worldZ": 28,
+      "numLeaves": 43,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780565,
+      "setupIdHex": "0x01000D15",
+      "relativeX": 12.0,
+      "relativeY": 36.0,
+      "worldZ": 28,
+      "numLeaves": 272,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16780762,
+      "setupIdHex": "0x01000DDA",
+      "relativeX": -89.6,
+      "relativeY": 65.7,
+      "worldZ": 28,
+      "numLeaves": 73,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16780564,
+      "setupIdHex": "0x01000D14",
+      "relativeX": -59.9,
+      "relativeY": -60.1,
+      "worldZ": 28,
+      "numLeaves": 60,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16780651,
+      "setupIdHex": "0x01000D6B",
+      "relativeX": -12.4,
+      "relativeY": -60.1,
+      "worldZ": 28,
+      "numLeaves": 111,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780762,
+      "setupIdHex": "0x01000DDA",
+      "relativeX": -60.0,
+      "relativeY": -84.0,
+      "worldZ": 28,
+      "numLeaves": 73,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16790381,
+      "setupIdHex": "0x0100336D",
+      "relativeX": 132.0,
+      "relativeY": 204.0,
+      "worldZ": 0,
+      "numLeaves": 38,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16790377,
+      "setupIdHex": "0x01003369",
+      "relativeX": 156.0,
+      "relativeY": 204.0,
+      "worldZ": 0,
+      "numLeaves": 270,
+      "portalCount": 1
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 20210,
+      "name": "Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20214,
+      "name": "Scrivener of Item Magic",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 798,
+      "name": "Shui Tentou the Bowyer",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 795,
+      "name": "Archmage Yuzai Zhen",
+      "type": "NPC_Archmage"
+    },
+    {
+      "wcid": 801,
+      "name": "Jeweler Liman Pon",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 19716,
+      "name": "Mammet Foundry Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 19369,
+      "name": "Oriel Residential Halls Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 6100,
+      "name": "Mayoi Meeting Hall Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43067,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 28682,
+      "name": "Nawamara Ujio",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    },
+    {
+      "wcid": 38151,
+      "name": "Captain Warner",
+      "type": "Creature"
+    },
+    {
+      "wcid": 34016,
+      "name": "Master Liao Oazaka",
+      "type": "Creature"
+    },
+    {
+      "wcid": 31691,
+      "name": "Sara Sen",
+      "type": "Creature"
+    },
+    {
+      "wcid": 37442,
+      "name": "Guard Taizo",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 799,
+      "name": "wcid_799",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1145,
+      "name": "wcid_1145",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 796,
+      "name": "wcid_796",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 800,
+      "name": "wcid_800",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 174,
+      "name": "wcid_174",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28187,
+      "name": "wcid_28187",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19197,
+      "name": "wcid_19197",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 808,
+      "name": "wcid_808",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 807,
+      "name": "wcid_807",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 806,
+      "name": "wcid_806",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 804,
+      "name": "wcid_804",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12304,
+      "name": "wcid_12304",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19391,
+      "name": "wcid_19391",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27547,
+      "name": "wcid_27547",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 802,
+      "name": "wcid_802",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1146,
+      "name": "wcid_1146",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20226,
+      "name": "wcid_20226",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20222,
+      "name": "wcid_20222",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 721,
+      "name": "wcid_721",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 925,
+      "name": "wcid_925",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4776,
+      "name": "wcid_4776",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 15812,
+      "name": "wcid_15812",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 803,
+      "name": "wcid_803",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 805,
+      "name": "wcid_805",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 71476,
+      "name": "Blair Holiday Event Spawn",
+      "type": "Prop"
+    }
+  ]
+}

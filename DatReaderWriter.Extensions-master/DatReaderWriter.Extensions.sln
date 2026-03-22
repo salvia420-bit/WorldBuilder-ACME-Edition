@@ -1,0 +1,22 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DatReaderWriter.Extensions", "DatReaderWriter.Extensions\DatReaderWriter.Extensions.csproj", "{A7529852-D377-4B30-AF0D-744F9E899E6D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DatReaderWriter.Extensions.Tests", "DatReaderWriter.Extensions.Tests\DatReaderWriter.Extensions.Tests.csproj", "{777BA9D3-CF72-4D53-8927-55F4A9658F91}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A7529852-D377-4B30-AF0D-744F9E899E6D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A7529852-D377-4B30-AF0D-744F9E899E6D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A7529852-D377-4B30-AF0D-744F9E899E6D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A7529852-D377-4B30-AF0D-744F9E899E6D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{777BA9D3-CF72-4D53-8927-55F4A9658F91}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{777BA9D3-CF72-4D53-8927-55F4A9658F91}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{777BA9D3-CF72-4D53-8927-55F4A9658F91}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{777BA9D3-CF72-4D53-8927-55F4A9658F91}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

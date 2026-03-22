@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vanquish World — Town Placement Tool</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface2: #232733;
+  --border: #2d3140;
+  --text: #e4e6f0;
+  --text-dim: #888da0;
+  --accent: #6c8cff;
+  --accent-glow: rgba(108,140,255,0.25);
+  --placed: #4cdf8b;
+  --placed-glow: rgba(76,223,139,0.3);
+  --warn: #ffb347;
+  --danger: #ff6b6b;
+  --overworld: #4cdf8b;
+  --envcell: #ffb347;
+  --portal: #c596ff;
+  --sidebar-w: 340px;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { height:100%; overflow:hidden; }
+body {
+  font-family: 'Inter', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+}
+
+/* ─── Sidebar ─── */
+.sidebar {
+  width: var(--sidebar-w);
+  min-width: var(--sidebar-w);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.sidebar-header {
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-header h1 {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  background: linear-gradient(135deg, var(--accent), #a78bfa);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.sidebar-header p {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+.search-box {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.search-box input {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.search-box input:focus { border-color: var(--accent); }
+
+.legend {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.legend-dot.overworld { background: var(--overworld); }
+.legend-dot.envcell { background: var(--envcell); }
+.legend-dot.portal { background: var(--portal); }
+
+.town-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.town-list::-webkit-scrollbar { width: 6px; }
+.town-list::-webkit-scrollbar-track { background: transparent; }
+.town-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.town-item {
+  padding: 7px 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  transition: background 0.15s;
+  user-select: none;
+}
+
+.town-item:hover { background: var(--surface2); }
+.town-item.selected {
+  background: var(--accent-glow);
+  border-left: 3px solid var(--accent);
+  padding-left: 13px;
+}
+.town-item.placed { color: var(--placed); }
+
+.town-type-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.town-name { flex: 1; }
+
+.town-coords {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-family: 'Courier New', monospace;
+}
+
+.town-item.placed .town-coords { color: var(--placed); }
+
+/* ─── Actions bar ─── */
+.actions {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.btn {
+  padding: 7px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn:hover { border-color: var(--accent); background: var(--accent-glow); }
+.btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn.primary:hover { background: #5a7af0; }
+.btn.danger { border-color: var(--danger); color: var(--danger); }
+.btn.danger:hover { background: rgba(255,107,107,0.15); }
+
+.stats {
+  font-size: 10px;
+  color: var(--text-dim);
+  padding: 6px 16px;
+  border-top: 1px solid var(--border);
+}
+
+/* ─── Map Area ─── */
+.map-area {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  cursor: crosshair;
+}
+
+.map-area.placing {
+  cursor: crosshair;
+}
+
+.map-container {
+  position: absolute;
+  transform-origin: 0 0;
+}
+
+.map-container img {
+  display: block;
+  image-rendering: pixelated;
+}
+
+#markers {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* ─── Map markers ─── */
+.marker {
+  position: absolute;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  z-index: 10;
+}
+
+.marker-x {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  text-shadow: 0 0 4px rgba(0,0,0,0.8), 0 0 8px rgba(0,0,0,0.5);
+}
+
+.marker-label {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 9px;
+  font-weight: 600;
+  text-shadow: 0 0 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.7);
+  letter-spacing: 0.3px;
+}
+
+.marker.overworld .marker-x,
+.marker.overworld .marker-label { color: var(--overworld); }
+.marker.envcell .marker-x,
+.marker.envcell .marker-label { color: var(--envcell); }
+.marker.portal .marker-x,
+.marker.portal .marker-label { color: var(--portal); }
+
+/* ─── Hover tooltip ─── */
+.hover-coords {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 11px;
+  font-family: 'Courier New', monospace;
+  color: var(--text);
+  z-index: 100;
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+}
+
+/* ─── Instruction banner ─── */
+.instruction {
+  position: fixed;
+  top: 12px;
+  left: calc(var(--sidebar-w) + 12px);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 12px;
+  z-index: 100;
+  box-shadow: 0 4px 20px var(--accent-glow);
+  max-width: 400px;
+}
+
+.instruction.hidden { display: none; }
+.instruction strong { color: var(--accent); }
+
+/* ─── Grid overlay ─── */
+.grid-toggle {
+  position: fixed;
+  top: 12px;
+  right: 16px;
+  z-index: 100;
+}
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+  <div class="sidebar-header">
+    <h1>🏰 Vanquish Town Placer</h1>
+    <p>Click a town, then click the map to place it</p>
+  </div>
+
+  <div class="search-box">
+    <input type="text" id="searchInput" placeholder="Filter towns..." autocomplete="off">
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot overworld"></div> Overworld</div>
+    <div class="legend-item"><div class="legend-dot envcell"></div> EnvCell (hole)</div>
+    <div class="legend-item"><div class="legend-dot portal"></div> Portal-accessed</div>
+  </div>
+
+  <div class="town-list" id="townList"></div>
+
+  <div class="stats" id="stats">0 / 0 towns placed</div>
+
+  <div class="actions">
+    <button class="btn primary" id="btnExport">Export JSON</button>
+    <button class="btn" id="btnImport">Import JSON</button>
+    <button class="btn danger" id="btnClearAll">Clear All</button>
+    <button class="btn" id="btnUndo">Undo Last</button>
+  </div>
+</div>
+
+<div class="map-area" id="mapArea">
+  <div class="map-container" id="mapContainer">
+    <img id="mapImg" src="../image(3).png" alt="Vanquish World Map">
+  </div>
+  <div id="markers"></div>
+</div>
+
+<div class="hover-coords" id="hoverCoords">LB: (0, 0) | World: (0, 0)</div>
+
+<div class="instruction" id="instruction">
+  Select a town from the sidebar, then click the map to place it.
+</div>
+
+<div class="grid-toggle">
+  <button class="btn" id="btnGrid">Grid</button>
+</div>
+
+<input type="file" id="importFile" accept=".json" style="display:none">
+
+<script>
+// ─── Town data ──────────────────────────────────────────────────────────
+// type: "overworld" = normal surface town with buildings
+//       "envcell"   = accessed via hole in ground (EnvCell linked to overworld)
+//       "portal"    = accessed via portal (dungeon-like, no overworld presence)
+const TOWNS = [
+  // ── Starter towns ──
+  { name: "Holtburg",      type: "overworld", starter: true },
+  { name: "Shoushi",       type: "overworld", starter: true },
+  { name: "Yaraq",         type: "overworld", starter: true },
+  { name: "Sanamar",       type: "overworld", starter: true },
+
+  // ── Major overworld towns ──
+  { name: "Al-Arqas",      type: "overworld" },
+  { name: "Al-Jalima",     type: "overworld" },
+  { name: "Arwic",         type: "overworld" },
+  { name: "Ayan Baqur",    type: "overworld" },
+  { name: "Baishi",        type: "overworld" },
+  { name: "Cragstone",     type: "overworld" },
+  { name: "Dryreach",      type: "overworld" },
+  { name: "Eastham",       type: "overworld" },
+  { name: "Glenden Wood",  type: "overworld" },
+  { name: "Hebian-To",     type: "overworld" },
+  { name: "Kara",          type: "overworld" },
+  { name: "Khayyaban",     type: "overworld" },
+  { name: "Lin",           type: "overworld" },
+  { name: "Lytelthorpe",   type: "overworld" },
+  { name: "Mar'uun",       type: "overworld" },
+  { name: "Mayoi",         type: "overworld" },
+  { name: "Nanto",         type: "overworld" },
+  { name: "Qalaba'r",      type: "overworld" },
+  { name: "Rithwic",       type: "overworld" },
+  { name: "Samsur",        type: "overworld" },
+  { name: "Sawato",        type: "overworld" },
+  { name: "Stonehold",     type: "overworld" },
+  { name: "Tou-Tou",       type: "overworld" },
+  { name: "Tufa",          type: "overworld" },
+  { name: "Uziz",          type: "overworld" },
+  { name: "Wai Jhou",      type: "overworld" },
+  { name: "Yanshi",        type: "overworld" },
+  { name: "Zaikhal",       type: "overworld" },
+  { name: "Silyun",        type: "overworld" },
+  { name: "Timaru",        type: "overworld" },
+
+  // ── Outposts / Forts / Keeps (overworld) ──
+  { name: "Bandit Castle",      type: "overworld" },
+  { name: "Beach Fort",         type: "overworld" },
+  { name: "Candeth Keep",       type: "overworld" },
+  { name: "Danby's Outpost",    type: "overworld" },
+  { name: "Fort Tethana",       type: "overworld" },
+  { name: "MacNiall's Freehold",type: "overworld" },
+  { name: "Neydisa Castle",     type: "overworld" },
+  { name: "Ahurenga",           type: "overworld" },
+  { name: "Bluespire",          type: "overworld" },
+  { name: "Greenspire",         type: "overworld" },
+  { name: "Redspire",           type: "overworld" },
+  { name: "Eastwatch",          type: "overworld" },
+  { name: "Westwatch",          type: "overworld" },
+  { name: "Fiun Outpost",       type: "overworld" },
+  { name: "Kor-Gursha",         type: "overworld" },
+  { name: "Kryst",              type: "overworld" },
+  { name: "Linvak Tukal",       type: "overworld" },
+  { name: "Martine's Retreat",  type: "overworld" },
+  { name: "Oolutanga's Refuge", type: "overworld" },
+  { name: "Plateau Village",    type: "overworld" },
+
+  // ── Special: EnvCell accessed (hole in ground) ──
+  { name: "Xarabydun",          type: "envcell" },
+  { name: "Crater Lake Village",type: "envcell" },
+  { name: "Merwart Village",    type: "envcell" },
+
+  // ── Special: Portal accessed (dungeon-like) ──
+  { name: "Underground City",   type: "portal" },
+];
+
+// ─── State ──────────────────────────────────────────────────────────────
+let placements = {};  // name -> { lbX, lbY }
+let selectedTown = null;
+let undoStack = [];
+
+// Map transform state
+let scale = 1;
+let panX = 0, panY = 0;
+let isPanning = false;
+let panStartX = 0, panStartY = 0;
+let panStartPanX = 0, panStartPanY = 0;
+
+// Image dimensions (set after load)
+let imgW = 1, imgH = 1;
+
+// ─── DOM refs ───────────────────────────────────────────────────────────
+const mapImg = document.getElementById('mapImg');
+const mapArea = document.getElementById('mapArea');
+const mapContainer = document.getElementById('mapContainer');
+const markersDiv = document.getElementById('markers');
+const townListDiv = document.getElementById('townList');
+const searchInput = document.getElementById('searchInput');
+const hoverCoords = document.getElementById('hoverCoords');
+const instruction = document.getElementById('instruction');
+const statsDiv = document.getElementById('stats');
+
+// ─── Init ───────────────────────────────────────────────────────────────
+function initApp() {
+  imgW = mapImg.naturalWidth || 1;
+  imgH = mapImg.naturalHeight || 1;
+  fitMap();
+  renderTownList();
+  updateStats();
+  // Try loading saved placements
+  try {
+    const saved = localStorage.getItem('vanquish_town_placements');
+    if (saved) {
+      placements = JSON.parse(saved);
+      renderTownList();
+      renderMarkers();
+      updateStats();
+    }
+  } catch(e) {}
+}
+
+mapImg.onload = initApp;
+// Fallback: if image was already cached and onload missed
+if (mapImg.complete && mapImg.naturalWidth > 0) {
+  initApp();
+}
+
+function fitMap() {
+  const areaW = mapArea.clientWidth;
+  const areaH = mapArea.clientHeight;
+  scale = Math.min(areaW / imgW, areaH / imgH) * 0.95;
+  panX = (areaW - imgW * scale) / 2;
+  panY = (areaH - imgH * scale) / 2;
+  applyTransform();
+}
+
+function applyTransform() {
+  mapContainer.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+  renderMarkers();
+}
+
+// ─── Town list ──────────────────────────────────────────────────────────
+function renderTownList() {
+  const filter = searchInput.value.toLowerCase();
+  townListDiv.innerHTML = '';
+
+  const filtered = TOWNS.filter(t => t.name.toLowerCase().includes(filter));
+
+  // Group: starters first, then alphabetical
+  const starters = filtered.filter(t => t.starter);
+  const rest = filtered.filter(t => !t.starter).sort((a,b) => a.name.localeCompare(b.name));
+
+  if (starters.length > 0) {
+    const header = document.createElement('div');
+    header.style.cssText = 'padding:6px 16px;font-size:10px;color:var(--text-dim);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;';
+    header.textContent = '⭐ Starter Towns';
+    townListDiv.appendChild(header);
+    starters.forEach(t => townListDiv.appendChild(createTownItem(t)));
+  }
+
+  if (rest.length > 0) {
+    const header = document.createElement('div');
+    header.style.cssText = 'padding:6px 16px;font-size:10px;color:var(--text-dim);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-top:4px;';
+    header.textContent = `All Towns (${rest.length})`;
+    townListDiv.appendChild(header);
+    rest.forEach(t => townListDiv.appendChild(createTownItem(t)));
+  }
+}
+
+function createTownItem(town) {
+  const div = document.createElement('div');
+  div.className = 'town-item';
+  if (selectedTown === town.name) div.classList.add('selected');
+  if (placements[town.name]) div.classList.add('placed');
+
+  const dot = document.createElement('div');
+  dot.className = 'town-type-dot';
+  dot.style.background = `var(--${town.type})`;
+
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'town-name';
+  nameSpan.textContent = town.name;
+
+  const coordsSpan = document.createElement('span');
+  coordsSpan.className = 'town-coords';
+  if (placements[town.name]) {
+    const p = placements[town.name];
+    coordsSpan.textContent = `(${p.lbX}, ${p.lbY})`;
+  }
+
+  div.appendChild(dot);
+  div.appendChild(nameSpan);
+  div.appendChild(coordsSpan);
+
+  div.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (selectedTown === town.name) {
+      selectedTown = null;
+      instruction.classList.add('hidden');
+    } else {
+      selectedTown = town.name;
+      instruction.classList.remove('hidden');
+      instruction.innerHTML = `Placing <strong>${town.name}</strong> — click the map to set position`;
+    }
+    renderTownList();
+    mapArea.classList.toggle('placing', !!selectedTown);
+  });
+
+  // Right-click to remove placement
+  div.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    if (placements[town.name]) {
+      undoStack.push({ action: 'place', name: town.name, pos: { ...placements[town.name] } });
+      delete placements[town.name];
+      save();
+      renderTownList();
+      renderMarkers();
+      updateStats();
+    }
+  });
+
+  return div;
+}
+
+searchInput.addEventListener('input', renderTownList);
+
+// ─── Map interaction ────────────────────────────────────────────────────
+// Pixel coords on image -> landblock coords
+// The map image covers 255x255 landblocks (0-254)
+// AC: X increases left-to-right, Y increases bottom-to-top
+// Image: X left-to-right, Y top-to-bottom (inverted Y)
+function pixelToLB(px, py) {
+  const lbX = Math.floor(px / imgW * 255);
+  const lbY = 254 - Math.floor(py / imgH * 255);  // Y is inverted
+  return { lbX: Math.max(0, Math.min(254, lbX)), lbY: Math.max(0, Math.min(254, lbY)) };
+}
+
+function lbToPixel(lbX, lbY) {
+  const px = (lbX + 0.5) / 255 * imgW;
+  const py = (254 - lbY + 0.5) / 255 * imgH;
+  return { px, py };
+}
+
+function screenToImage(clientX, clientY) {
+  const rect = mapArea.getBoundingClientRect();
+  const sx = clientX - rect.left;
+  const sy = clientY - rect.top;
+  const imgX = (sx - panX) / scale;
+  const imgY = (sy - panY) / scale;
+  return { imgX, imgY };
+}
+
+// Click to place
+mapArea.addEventListener('click', (e) => {
+  if (!selectedTown) return;
+  if (isPanning) return;
+
+  const { imgX, imgY } = screenToImage(e.clientX, e.clientY);
+  if (imgX < 0 || imgX > imgW || imgY < 0 || imgY > imgH) return;
+
+  const { lbX, lbY } = pixelToLB(imgX, imgY);
+
+  // Save undo
+  if (placements[selectedTown]) {
+    undoStack.push({ action: 'place', name: selectedTown, pos: { ...placements[selectedTown] } });
+  } else {
+    undoStack.push({ action: 'remove', name: selectedTown });
+  }
+
+  placements[selectedTown] = { lbX, lbY };
+  save();
+
+  // Auto-advance to next unplaced town
+  const currentIdx = TOWNS.findIndex(t => t.name === selectedTown);
+  let nextTown = null;
+  for (let i = 1; i <= TOWNS.length; i++) {
+    const t = TOWNS[(currentIdx + i) % TOWNS.length];
+    if (!placements[t.name]) { nextTown = t.name; break; }
+  }
+
+  selectedTown = nextTown;
+  if (selectedTown) {
+    instruction.innerHTML = `Placing <strong>${selectedTown}</strong> — click the map to set position`;
+  } else {
+    instruction.innerHTML = `All towns placed! 🎉`;
+    setTimeout(() => instruction.classList.add('hidden'), 2000);
+  }
+  mapArea.classList.toggle('placing', !!selectedTown);
+
+  renderTownList();
+  renderMarkers();
+  updateStats();
+});
+
+// Hover coords
+mapArea.addEventListener('mousemove', (e) => {
+  const { imgX, imgY } = screenToImage(e.clientX, e.clientY);
+  if (imgX >= 0 && imgX <= imgW && imgY >= 0 && imgY <= imgH) {
+    const { lbX, lbY } = pixelToLB(imgX, imgY);
+    const worldX = lbX * 192;
+    const worldY = lbY * 192;
+    hoverCoords.textContent = `LB: (${lbX}, ${lbY}) | World: (${worldX}, ${worldY})`;
+  }
+
+  // Pan
+  if (isPanning) {
+    panX = panStartPanX + (e.clientX - panStartX);
+    panY = panStartPanY + (e.clientY - panStartY);
+    applyTransform();
+  }
+});
+
+// Zoom
+mapArea.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const { imgX, imgY } = screenToImage(e.clientX, e.clientY);
+  const zoomFactor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  const newScale = Math.max(0.3, Math.min(10, scale * zoomFactor));
+
+  // Zoom toward cursor
+  const rect = mapArea.getBoundingClientRect();
+  const mouseX = e.clientX - rect.left;
+  const mouseY = e.clientY - rect.top;
+
+  panX = mouseX - (mouseX - panX) * (newScale / scale);
+  panY = mouseY - (mouseY - panY) * (newScale / scale);
+  scale = newScale;
+  applyTransform();
+}, { passive: false });
+
+// Pan with middle mouse or right mouse
+mapArea.addEventListener('mousedown', (e) => {
+  if (e.button === 1 || e.button === 2) {
+    e.preventDefault();
+    isPanning = true;
+    panStartX = e.clientX;
+    panStartY = e.clientY;
+    panStartPanX = panX;
+    panStartPanY = panY;
+    mapArea.style.cursor = 'grabbing';
+  }
+});
+
+window.addEventListener('mouseup', (e) => {
+  if (isPanning) {
+    isPanning = false;
+    mapArea.style.cursor = selectedTown ? 'crosshair' : 'default';
+  }
+});
+
+mapArea.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// ─── Markers ────────────────────────────────────────────────────────────
+function renderMarkers() {
+  markersDiv.innerHTML = '';
+  for (const [name, pos] of Object.entries(placements)) {
+    const town = TOWNS.find(t => t.name === name);
+    if (!town) continue;
+
+    const { px, py } = lbToPixel(pos.lbX, pos.lbY);
+    // Convert image coords to screen coords
+    const sx = panX + px * scale;
+    const sy = panY + py * scale;
+
+    const marker = document.createElement('div');
+    marker.className = `marker ${town.type}`;
+    marker.style.left = sx + 'px';
+    marker.style.top = sy + 'px';
+
+    const x = document.createElement('div');
+    x.className = 'marker-x';
+    x.textContent = '✕';
+
+    const label = document.createElement('div');
+    label.className = 'marker-label';
+    label.textContent = name;
+
+    marker.appendChild(x);
+    marker.appendChild(label);
+    markersDiv.appendChild(marker);
+  }
+}
+
+// ─── Actions ────────────────────────────────────────────────────────────
+document.getElementById('btnExport').addEventListener('click', () => {
+  const output = {
+    _meta: {
+      tool: "Vanquish Town Placer",
+      exported: new Date().toISOString(),
+      total_placed: Object.keys(placements).length
+    },
+    towns: {}
+  };
+
+  for (const [name, pos] of Object.entries(placements)) {
+    const town = TOWNS.find(t => t.name === name);
+    output.towns[name] = {
+      lbX: pos.lbX,
+      lbY: pos.lbY,
+      worldX: pos.lbX * 192,
+      worldY: pos.lbY * 192,
+      type: town ? town.type : "overworld"
+    };
+  }
+
+  const json = JSON.stringify(output, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'town_placements.json';
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+document.getElementById('btnImport').addEventListener('click', () => {
+  document.getElementById('importFile').click();
+});
+
+document.getElementById('importFile').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    try {
+      const data = JSON.parse(ev.target.result);
+      if (data.towns) {
+        placements = {};
+        for (const [name, pos] of Object.entries(data.towns)) {
+          placements[name] = { lbX: pos.lbX, lbY: pos.lbY };
+        }
+      } else {
+        placements = data;
+      }
+      save();
+      renderTownList();
+      renderMarkers();
+      updateStats();
+    } catch(err) {
+      alert('Invalid JSON file: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+});
+
+document.getElementById('btnClearAll').addEventListener('click', () => {
+  if (Object.keys(placements).length === 0) return;
+  if (!confirm('Clear all town placements?')) return;
+  undoStack.push({ action: 'clearAll', placements: { ...placements } });
+  placements = {};
+  save();
+  renderTownList();
+  renderMarkers();
+  updateStats();
+});
+
+document.getElementById('btnUndo').addEventListener('click', () => {
+  if (undoStack.length === 0) return;
+  const op = undoStack.pop();
+  if (op.action === 'place') {
+    placements[op.name] = op.pos;
+  } else if (op.action === 'remove') {
+    delete placements[op.name];
+  } else if (op.action === 'clearAll') {
+    placements = op.placements;
+  }
+  save();
+  renderTownList();
+  renderMarkers();
+  updateStats();
+});
+
+// Grid toggle
+let showGrid = false;
+document.getElementById('btnGrid').addEventListener('click', () => {
+  showGrid = !showGrid;
+  document.getElementById('btnGrid').style.borderColor = showGrid ? 'var(--accent)' : 'var(--border)';
+  // Grid is rendered on the map image via canvas overlay - skipping for simplicity
+});
+
+// ─── Persistence ────────────────────────────────────────────────────────
+function save() {
+  localStorage.setItem('vanquish_town_placements', JSON.stringify(placements));
+}
+
+function updateStats() {
+  const total = TOWNS.length;
+  const placed = Object.keys(placements).length;
+  statsDiv.textContent = `${placed} / ${total} towns placed`;
+}
+
+// ─── Keyboard shortcuts ─────────────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    selectedTown = null;
+    instruction.classList.add('hidden');
+    mapArea.classList.remove('placing');
+    renderTownList();
+  }
+  if (e.ctrlKey && e.key === 'z') {
+    document.getElementById('btnUndo').click();
+    e.preventDefault();
+  }
+  if (e.key === 'f' && !e.ctrlKey) {
+    searchInput.focus();
+    e.preventDefault();
+  }
+});
+
+// Resize handler
+window.addEventListener('resize', () => {
+  renderMarkers();
+});
+</script>
+
+</body>
+</html>

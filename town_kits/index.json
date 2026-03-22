@@ -1,0 +1,827 @@
+{
+  "version": "1.0",
+  "totalTowns": 41,
+  "starterTowns": 4,
+  "towns": {
+    "Al-Arqas": {
+      "file": "al-arqas.json",
+      "culture": "Gharu'ndim",
+      "isStarter": false,
+      "lbCenter": [
+        149,
+        113
+      ],
+      "summary": {
+        "totalBuildings": 0,
+        "totalNPCs": 2,
+        "totalVendors": 2,
+        "totalPortals": 3,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 5,
+        "totalFurniture": 0,
+        "totalOther": 36
+      }
+    },
+    "Al-Jalima": {
+      "file": "al-jalima.json",
+      "culture": "Gharu'ndim",
+      "isStarter": false,
+      "lbCenter": [
+        172,
+        79
+      ],
+      "summary": {
+        "totalBuildings": 0,
+        "totalNPCs": 3,
+        "totalVendors": 2,
+        "totalPortals": 4,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 4,
+        "totalFurniture": 0,
+        "totalOther": 32
+      }
+    },
+    "Arwic": {
+      "file": "arwic.json",
+      "culture": "Aluvian",
+      "isStarter": false,
+      "lbCenter": [
+        176,
+        159
+      ],
+      "summary": {
+        "totalBuildings": 0,
+        "totalNPCs": 7,
+        "totalVendors": 1,
+        "totalPortals": 4,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 35,
+        "totalFurniture": 22,
+        "totalOther": 62
+      }
+    },
+    "Ayan Baqur": {
+      "file": "ayan_baqur.json",
+      "culture": "Gharu'ndim",
+      "isStarter": false,
+      "lbCenter": [
+        162,
+        56
+      ],
+      "summary": {
+        "totalBuildings": 0,
+        "totalNPCs": 3,
+        "totalVendors": 4,
+        "totalPortals": 6,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 35,
+        "totalFurniture": 0,
+        "totalOther": 50
+      }
+    },
+    "Baishi": {
+      "file": "baishi.json",
+      "culture": "Sho",
+      "isStarter": false,
+      "lbCenter": [
+        210,
+        68
+      ],
+      "summary": {
+        "totalBuildings": 0,
+        "totalNPCs": 2,
+        "totalVendors": 3,
+        "totalPortals": 4,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 5,
+        "totalFurniture": 0,
+        "totalOther": 72
+      }
+    },
+    "Cragstone": {
+      "file": "cragstone.json",
+      "culture": "Aluvian",
+      "isStarter": false,
+      "lbCenter": [
+        166,
+        150
+      ],
+      "summary": {
+        "totalBuildings": 0,
+        "totalNPCs": 9,
+        "totalVendors": 5,
+        "totalPortals": 7,
+        "totalLifestones": 0,
+        "totalSigns": 3,
+        "totalCreatures": 46,
+        "totalFurniture": 21,
+        "totalOther": 89
+      }
+    },
+    "Danby's Outpost": {
+      "file": "danbys_outpost.json",
+      "culture": "Neutral",
+      "isStarter": false,
+      "lbCenter": [
+        91,
+        156
+      ],
+      "summary": {
+        "totalBuildings": 10,
+        "totalNPCs": 1,
+        "totalVendors": 2,
+        "totalPortals": 2,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 5,
+        "totalFurniture": 0,
+        "totalOther": 8
+      }
+    },
+    "Eastham": {
+      "file": "eastham.json",
+      "culture": "Aluvian",
+      "isStarter": false,
+      "lbCenter": [
+        206,
+        149
+      ],
+      "summary": {
+        "totalBuildings": 17,
+        "totalNPCs": 2,
+        "totalVendors": 5,
+        "totalPortals": 15,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 8,
+        "totalFurniture": 0,
+        "totalOther": 72
+      }
+    },
+    "Fort Tethana": {
+      "file": "fort_tethana.json",
+      "culture": "Viamontian",
+      "isStarter": false,
+      "lbCenter": [
+        37,
+        129
+      ],
+      "summary": {
+        "totalBuildings": 39,
+        "totalNPCs": 3,
+        "totalVendors": 1,
+        "totalPortals": 2,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 9,
+        "totalFurniture": 0,
+        "totalOther": 42
+      }
+    },
+    "Glenden Wood": {
+      "file": "glenden_wood.json",
+      "culture": "Aluvian",
+      "isStarter": false,
+      "lbCenter": [
+        162,
+        164
+      ],
+      "summary": {
+        "totalBuildings": 19,
+        "totalNPCs": 0,
+        "totalVendors": 3,
+        "totalPortals": 4,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 10,
+        "totalFurniture": 0,
+        "totalOther": 57
+      }
+    },
+    "Greenspire": {
+      "file": "greenspire.json",
+      "culture": "Viamontian",
+      "isStarter": false,
+      "lbCenter": [
+        43,
+        181
+      ],
+      "summary": {
+        "totalBuildings": 7,
+        "totalNPCs": 1,
+        "totalVendors": 1,
+        "totalPortals": 3,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 12,
+        "totalFurniture": 0,
+        "totalOther": 19
+      }
+    },
+    "Hebian-To": {
+      "file": "hebian-to.json",
+      "culture": "Sho",
+      "isStarter": false,
+      "lbCenter": [
+        231,
+        77
+      ],
+      "summary": {
+        "totalBuildings": 23,
+        "totalNPCs": 9,
+        "totalVendors": 5,
+        "totalPortals": 6,
+        "totalLifestones": 0,
+        "totalSigns": 1,
+        "totalCreatures": 17,
+        "totalFurniture": 21,
+        "totalOther": 121
+      }
+    },
+    "Holtburg": {
+      "file": "holtburg.json",
+      "culture": "Aluvian",
+      "isStarter": true,
+      "lbCenter": [
+        170,
+        179
+      ],
+      "summary": {
+        "totalBuildings": 24,
+        "totalNPCs": 12,
+        "totalVendors": 4,
+        "totalPortals": 6,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 31,
+        "totalFurniture": 1,
+        "totalOther": 92
+      }
+    },
+    "Kara": {
+      "file": "kara.json",
+      "culture": "Sho",
+      "isStarter": false,
+      "lbCenter": [
+        186,
+        23
+      ],
+      "summary": {
+        "totalBuildings": 13,
+        "totalNPCs": 3,
+        "totalVendors": 3,
+        "totalPortals": 2,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 5,
+        "totalFurniture": 0,
+        "totalOther": 32
+      }
+    },
+    "Khayyaban": {
+      "file": "khayyaban.json",
+      "culture": "Gharu'ndim",
+      "isStarter": false,
+      "lbCenter": [
+        158,
+        68
+      ],
+      "summary": {
+        "totalBuildings": 11,
+        "totalNPCs": 2,
+        "totalVendors": 4,
+        "totalPortals": 7,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 6,
+        "totalFurniture": 0,
+        "totalOther": 47
+      }
+    },
+    "Kryst": {
+      "file": "kryst.json",
+      "culture": "Sho",
+      "isStarter": false,
+      "lbCenter": [
+        233,
+        34
+      ],
+      "summary": {
+        "totalBuildings": 11,
+        "totalNPCs": 0,
+        "totalVendors": 3,
+        "totalPortals": 2,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 9,
+        "totalFurniture": 0,
+        "totalOther": 37
+      }
+    },
+    "Lin": {
+      "file": "lin.json",
+      "culture": "Sho",
+      "isStarter": false,
+      "lbCenter": [
+        219,
+        59
+      ],
+      "summary": {
+        "totalBuildings": 16,
+        "totalNPCs": 2,
+        "totalVendors": 5,
+        "totalPortals": 16,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 558,
+        "totalFurniture": 32,
+        "totalOther": 604
+      }
+    },
+    "Lytelthorpe": {
+      "file": "lytelthorpe.json",
+      "culture": "Aluvian",
+      "isStarter": false,
+      "lbCenter": [
+        191,
+        128
+      ],
+      "summary": {
+        "totalBuildings": 24,
+        "totalNPCs": 2,
+        "totalVendors": 4,
+        "totalPortals": 4,
+        "totalLifestones": 0,
+        "totalSigns": 1,
+        "totalCreatures": 3,
+        "totalFurniture": 0,
+        "totalOther": 68
+      }
+    },
+    "MacNiall's Freehold": {
+      "file": "macnialls_freehold.json",
+      "culture": "Aluvian",
+      "isStarter": false,
+      "lbCenter": [
+        242,
+        34
+      ],
+      "summary": {
+        "totalBuildings": 9,
+        "totalNPCs": 0,
+        "totalVendors": 2,
+        "totalPortals": 2,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 1,
+        "totalFurniture": 0,
+        "totalOther": 20
+      }
+    },
+    "Mayoi": {
+      "file": "mayoi.json",
+      "culture": "Sho",
+      "isStarter": false,
+      "lbCenter": [
+        230,
+        50
+      ],
+      "summary": {
+        "totalBuildings": 14,
+        "totalNPCs": 2,
+        "totalVendors": 3,
+        "totalPortals": 4,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 6,
+        "totalFurniture": 0,
+        "totalOther": 49
+      }
+    },
+    "Nanto": {
+      "file": "nanto.json",
+      "culture": "Sho",
+      "isStarter": false,
+      "lbCenter": [
+        229,
+        61
+      ],
+      "summary": {
+        "totalBuildings": 18,
+        "totalNPCs": 2,
+        "totalVendors": 3,
+        "totalPortals": 4,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 30,
+        "totalFurniture": 0,
+        "totalOther": 94
+      }
+    },
+    "Neydisa": {
+      "file": "neydisa.json",
+      "culture": "Viamontian",
+      "isStarter": false,
+      "lbCenter": [
+        149,
+        214
+      ],
+      "summary": {
+        "totalBuildings": 12,
+        "totalNPCs": 0,
+        "totalVendors": 1,
+        "totalPortals": 2,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 6,
+        "totalFurniture": 0,
+        "totalOther": 13
+      }
+    },
+    "Plateau Village": {
+      "file": "plateau_village.json",
+      "culture": "Neutral",
+      "isStarter": false,
+      "lbCenter": [
+        73,
+        182
+      ],
+      "summary": {
+        "totalBuildings": 9,
+        "totalNPCs": 2,
+        "totalVendors": 2,
+        "totalPortals": 4,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 7,
+        "totalFurniture": 0,
+        "totalOther": 38
+      }
+    },
+    "Qalaba'r": {
+      "file": "qalabar.json",
+      "culture": "Gharu'ndim",
+      "isStarter": false,
+      "lbCenter": [
+        151,
+        34
+      ],
+      "summary": {
+        "totalBuildings": 16,
+        "totalNPCs": 3,
+        "totalVendors": 4,
+        "totalPortals": 6,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 8,
+        "totalFurniture": 0,
+        "totalOther": 42
+      }
+    },
+    "Redspire": {
+      "file": "redspire.json",
+      "culture": "Viamontian",
+      "isStarter": false,
+      "lbCenter": [
+        24,
+        180
+      ],
+      "summary": {
+        "totalBuildings": 9,
+        "totalNPCs": 2,
+        "totalVendors": 1,
+        "totalPortals": 3,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 10,
+        "totalFurniture": 0,
+        "totalOther": 10
+      }
+    },
+    "Rithwic": {
+      "file": "rithwic.json",
+      "culture": "Aluvian",
+      "isStarter": false,
+      "lbCenter": [
+        200,
+        140
+      ],
+      "summary": {
+        "totalBuildings": 24,
+        "totalNPCs": 2,
+        "totalVendors": 3,
+        "totalPortals": 3,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 6,
+        "totalFurniture": 0,
+        "totalOther": 77
+      }
+    },
+    "Samsur": {
+      "file": "samsur.json",
+      "culture": "Gharu'ndim",
+      "isStarter": false,
+      "lbCenter": [
+        152,
+        124
+      ],
+      "summary": {
+        "totalBuildings": 15,
+        "totalNPCs": 3,
+        "totalVendors": 4,
+        "totalPortals": 3,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 8,
+        "totalFurniture": 0,
+        "totalOther": 44
+      }
+    },
+    "Sanamar": {
+      "file": "sanamar.json",
+      "culture": "Viamontian",
+      "isStarter": true,
+      "lbCenter": [
+        50,
+        217
+      ],
+      "summary": {
+        "totalBuildings": 51,
+        "totalNPCs": 14,
+        "totalVendors": 9,
+        "totalPortals": 8,
+        "totalLifestones": 0,
+        "totalSigns": 2,
+        "totalCreatures": 19,
+        "totalFurniture": 1,
+        "totalOther": 52
+      }
+    },
+    "Sawato": {
+      "file": "sawato.json",
+      "culture": "Sho",
+      "isStarter": false,
+      "lbCenter": [
+        199,
+        95
+      ],
+      "summary": {
+        "totalBuildings": 7,
+        "totalNPCs": 2,
+        "totalVendors": 6,
+        "totalPortals": 3,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 10,
+        "totalFurniture": 1,
+        "totalOther": 59
+      }
+    },
+    "Shoushi": {
+      "file": "shoushi.json",
+      "culture": "Sho",
+      "isStarter": true,
+      "lbCenter": [
+        218,
+        85
+      ],
+      "summary": {
+        "totalBuildings": 69,
+        "totalNPCs": 12,
+        "totalVendors": 5,
+        "totalPortals": 6,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 23,
+        "totalFurniture": 1,
+        "totalOther": 94
+      }
+    },
+    "Silyun": {
+      "file": "silyun.json",
+      "culture": "Viamontian",
+      "isStarter": false,
+      "lbCenter": [
+        39,
+        235
+      ],
+      "summary": {
+        "totalBuildings": 12,
+        "totalNPCs": 2,
+        "totalVendors": 7,
+        "totalPortals": 2,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 20,
+        "totalFurniture": 0,
+        "totalOther": 30
+      }
+    },
+    "Stonehold": {
+      "file": "stonehold.json",
+      "culture": "Aluvian",
+      "isStarter": false,
+      "lbCenter": [
+        100,
+        213
+      ],
+      "summary": {
+        "totalBuildings": 11,
+        "totalNPCs": 2,
+        "totalVendors": 2,
+        "totalPortals": 3,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 7,
+        "totalFurniture": 1,
+        "totalOther": 40
+      }
+    },
+    "Timaru": {
+      "file": "timaru.json",
+      "culture": "Viamontian",
+      "isStarter": false,
+      "lbCenter": [
+        30,
+        182
+      ],
+      "summary": {
+        "totalBuildings": 19,
+        "totalNPCs": 0,
+        "totalVendors": 3,
+        "totalPortals": 2,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 4,
+        "totalFurniture": 0,
+        "totalOther": 62
+      }
+    },
+    "Tou-Tou": {
+      "file": "tou-tou.json",
+      "culture": "Sho",
+      "isStarter": false,
+      "lbCenter": [
+        247,
+        93
+      ],
+      "summary": {
+        "totalBuildings": 18,
+        "totalNPCs": 0,
+        "totalVendors": 0,
+        "totalPortals": 3,
+        "totalLifestones": 0,
+        "totalSigns": 2,
+        "totalCreatures": 27,
+        "totalFurniture": 0,
+        "totalOther": 119
+      }
+    },
+    "Tufa": {
+      "file": "tufa.json",
+      "culture": "Gharu'ndim",
+      "isStarter": false,
+      "lbCenter": [
+        134,
+        109
+      ],
+      "summary": {
+        "totalBuildings": 12,
+        "totalNPCs": 0,
+        "totalVendors": 2,
+        "totalPortals": 2,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 1,
+        "totalFurniture": 0,
+        "totalOther": 21
+      }
+    },
+    "Uziz": {
+      "file": "uziz.json",
+      "culture": "Gharu'ndim",
+      "isStarter": false,
+      "lbCenter": [
+        162,
+        96
+      ],
+      "summary": {
+        "totalBuildings": 13,
+        "totalNPCs": 1,
+        "totalVendors": 4,
+        "totalPortals": 5,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 2,
+        "totalFurniture": 0,
+        "totalOther": 48
+      }
+    },
+    "Wai Jhou": {
+      "file": "wai_jhou.json",
+      "culture": "Sho",
+      "isStarter": false,
+      "lbCenter": [
+        63,
+        50
+      ],
+      "summary": {
+        "totalBuildings": 7,
+        "totalNPCs": 2,
+        "totalVendors": 4,
+        "totalPortals": 4,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 12,
+        "totalFurniture": 2,
+        "totalOther": 29
+      }
+    },
+    "Xarabydun": {
+      "file": "xarabydun.json",
+      "culture": "Gharu'ndim",
+      "isStarter": false,
+      "lbCenter": [
+        147,
+        75
+      ],
+      "summary": {
+        "totalBuildings": 5,
+        "totalNPCs": 4,
+        "totalVendors": 3,
+        "totalPortals": 5,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 43,
+        "totalFurniture": 0,
+        "totalOther": 56
+      }
+    },
+    "Yanshi": {
+      "file": "yanshi.json",
+      "culture": "Sho",
+      "isStarter": false,
+      "lbCenter": [
+        180,
+        112
+      ],
+      "summary": {
+        "totalBuildings": 74,
+        "totalNPCs": 3,
+        "totalVendors": 3,
+        "totalPortals": 23,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 38,
+        "totalFurniture": 0,
+        "totalOther": 79
+      }
+    },
+    "Yaraq": {
+      "file": "yaraq.json",
+      "culture": "Gharu'ndim",
+      "isStarter": true,
+      "lbCenter": [
+        126,
+        100
+      ],
+      "summary": {
+        "totalBuildings": 21,
+        "totalNPCs": 13,
+        "totalVendors": 4,
+        "totalPortals": 5,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 29,
+        "totalFurniture": 4,
+        "totalOther": 58
+      }
+    },
+    "Zaikhal": {
+      "file": "zaikhal.json",
+      "culture": "Gharu'ndim",
+      "isStarter": false,
+      "lbCenter": [
+        128,
+        143
+      ],
+      "summary": {
+        "totalBuildings": 23,
+        "totalNPCs": 11,
+        "totalVendors": 6,
+        "totalPortals": 9,
+        "totalLifestones": 0,
+        "totalSigns": 0,
+        "totalCreatures": 23,
+        "totalFurniture": 21,
+        "totalOther": 48
+      }
+    }
+  }
+}

@@ -1,0 +1,204 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:WorldBuilder.Editors.Dungeon"
+             mc:Ignorable="d" d:DesignWidth="280" d:DesignHeight="600"
+             x:Class="WorldBuilder.Editors.Dungeon.Views.RoomPaletteView"
+             x:DataType="vm:RoomPaletteViewModel">
+
+    <UserControl.Styles>
+        <!-- Badge style for small info pills -->
+        <Style Selector="Border.info-badge">
+            <Setter Property="CornerRadius" Value="3" />
+            <Setter Property="Padding" Value="4,1" />
+            <Setter Property="Margin" Value="0,0,3,0" />
+        </Style>
+    </UserControl.Styles>
+
+    <DockPanel>
+        <!-- Header -->
+        <Border DockPanel.Dock="Top"
+                Background="#16102a"
+                BorderBrush="#2a1d42"
+                BorderThickness="0,0,0,1"
+                Padding="8,6">
+            <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="Dungeon Pieces"
+                           FontSize="12"
+                           FontWeight="SemiBold"
+                           Foreground="#c0b0d8" />
+                <ToggleButton Grid.Column="1"
+                              IsChecked="{Binding ShowFavoritePrefabsMode}"
+                              ToolTip.Tip="Show only favorite pieces"
+                              Padding="4,2" FontSize="11"
+                              Background="Transparent" BorderThickness="0">
+                    <Panel>
+                        <TextBlock Text="&#x2605;" FontSize="14" Foreground="#c8a832"
+                                   IsVisible="{Binding ShowFavoritePrefabsMode}" />
+                        <TextBlock Text="&#x2606;" FontSize="14" Foreground="#5a4a6e"
+                                   IsVisible="{Binding !ShowFavoritePrefabsMode}" />
+                    </Panel>
+                </ToggleButton>
+            </Grid>
+        </Border>
+
+        <!-- Search -->
+        <Border DockPanel.Dock="Top" Padding="6,4">
+            <TextBox Text="{Binding SearchText}"
+                     Watermark="Search pieces... (name, style, no-roof, roofed)"
+                     FontSize="11" />
+        </Border>
+
+        <!-- Category filter -->
+        <Border DockPanel.Dock="Top" Padding="6,2"
+                IsVisible="{Binding !ShowFavoritePrefabsMode}">
+            <Grid ColumnDefinitions="*,Auto">
+                <ComboBox Grid.Column="0" ItemsSource="{Binding CatalogCategories}"
+                          SelectedItem="{Binding CatalogCategory}"
+                          FontSize="11" HorizontalAlignment="Stretch" />
+                <CheckBox Grid.Column="1" IsChecked="{Binding ShowCompatibleOnly}"
+                          Content="Compatible" FontSize="10" Foreground="#6ec07a"
+                          ToolTip.Tip="Only show pieces that connect to your dungeon's open doorways"
+                          Margin="6,0,0,0" VerticalAlignment="Center" />
+            </Grid>
+        </Border>
+
+        <!-- Status -->
+        <Border DockPanel.Dock="Bottom"
+                Padding="6,4"
+                BorderBrush="#2a1d42"
+                BorderThickness="0,1,0,0">
+            <TextBlock Text="{Binding StatusText}"
+                       FontSize="10"
+                       Foreground="#5a4a6e" />
+        </Border>
+
+        <!-- Building knowledge base indicator -->
+        <Border DockPanel.Dock="Top" Padding="12,16"
+                Background="#1a0e30" IsVisible="{Binding IsBuildingKnowledgeBase}">
+            <StackPanel Spacing="8" HorizontalAlignment="Center">
+                <TextBlock Text="Building Piece Catalog..."
+                           FontSize="14" FontWeight="SemiBold"
+                           Foreground="#4dbdbd" HorizontalAlignment="Center" />
+                <TextBlock Text="{Binding BuildingMessage}"
+                           FontSize="11" Foreground="#6a8a8a"
+                           TextWrapping="Wrap" TextAlignment="Center"
+                           HorizontalAlignment="Center" />
+                <ProgressBar IsIndeterminate="True" Height="4"
+                             Foreground="#4dbdbd" Background="#2a1d42" />
+            </StackPanel>
+        </Border>
+
+        <!-- Piece List -->
+        <ListBox ItemsSource="{Binding PrefabEntries}"
+                 SelectedItem="{Binding SelectedPrefab}"
+                 FontSize="11"
+                 Background="Transparent"
+                 IsVisible="{Binding !IsBuildingKnowledgeBase}">
+            <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:PrefabListEntry">
+                    <Border Margin="2,2" Padding="4,4" CornerRadius="4"
+                            Background="#120c22"
+                            BorderBrush="{Binding CompatibleBrush}"
+                            BorderThickness="1"
+                            PointerEntered="PrefabItem_PointerEntered"
+                            PointerExited="PrefabItem_PointerExited">
+                        <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto">
+
+                            <!-- Thumbnail with overlay badges -->
+                            <Panel Grid.Column="0" Grid.RowSpan="3" Width="84" Height="84" Margin="0,0,6,0">
+                                <Border Background="#FF0E0A16" CornerRadius="4"
+                                        IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNull}}" />
+                                <Image Width="84" Height="84" Source="{Binding Thumbnail}" Stretch="Uniform"
+                                       IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                                <!-- Cell count overlay (top-left) -->
+                                <Border CornerRadius="0,0,4,0" Padding="3,1"
+                                        Background="#CC1a0e30"
+                                        HorizontalAlignment="Left" VerticalAlignment="Top"
+                                        ToolTip.Tip="Number of room cells in this piece">
+                                    <TextBlock Text="{Binding CellCountBadge}" FontSize="9"
+                                               FontWeight="Bold" Foreground="#4dbdbd" />
+                                </Border>
+                                <!-- Door count overlay (top-right) -->
+                                <Border CornerRadius="0,0,0,4" Padding="3,1"
+                                        Background="#CC1a0e30"
+                                        HorizontalAlignment="Right" VerticalAlignment="Top"
+                                        ToolTip.Tip="Number of open doorways available for connections">
+                                    <TextBlock Text="{Binding DoorCountBadge}" FontSize="9"
+                                               FontWeight="Bold" Foreground="#6ec07a" />
+                                </Border>
+                                <!-- Roof warning overlay (bottom-right) -->
+                                <Border CornerRadius="4,0,0,0" Padding="3,1"
+                                        Background="#CC1a0e30"
+                                        HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                        IsVisible="{Binding ShowRoofWarning}"
+                                        ToolTip.Tip="This piece is missing ceiling/roof polygons on some or all cells — you may need to add a roof manually">
+                                    <TextBlock Text="{Binding RoofStatus}" FontSize="8"
+                                               Foreground="{Binding RoofStatusBrush}" />
+                                </Border>
+                                <!-- Favorite star overlay (bottom-left) -->
+                                <Button CornerRadius="0,4,0,0" Padding="2,0"
+                                        Background="#CC1a0e30"
+                                        BorderThickness="0"
+                                        HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                                        ToolTip.Tip="Toggle favorite"
+                                        Click="FavoriteStar_Click"
+                                        Cursor="Hand" Focusable="False">
+                                    <Panel>
+                                        <TextBlock Text="&#x2605;" FontSize="12" Foreground="#c8a832"
+                                                   IsVisible="{Binding IsFavorite}" />
+                                        <TextBlock Text="&#x2606;" FontSize="12" Foreground="#5a4a6e"
+                                                   IsVisible="{Binding !IsFavorite}" />
+                                    </Panel>
+                                </Button>
+                            </Panel>
+
+                            <!-- Row 0: Name -->
+                            <TextBlock Grid.Column="1" Grid.Row="0"
+                                       Text="{Binding DisplayName}"
+                                       Foreground="#c0e0e0"
+                                       FontSize="11"
+                                       FontWeight="SemiBold"
+                                       TextWrapping="Wrap"
+                                       TextTrimming="CharacterEllipsis"
+                                       MaxLines="2" />
+
+                            <!-- Row 1: Info badges row -->
+                            <WrapPanel Grid.Column="1" Grid.Row="1" Margin="0,3,0,0">
+                                <!-- Style badge -->
+                                <Border Classes="info-badge" Background="#1a2a3a"
+                                        IsVisible="{Binding StyleTag, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                    <TextBlock Text="{Binding StyleTag}" FontSize="9" Foreground="#7a9aaa" />
+                                </Border>
+                                <!-- Direction badge -->
+                                <Border Classes="info-badge" Background="#1a2a1a"
+                                        IsVisible="{Binding DirectionSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                        ToolTip.Tip="Open face directions — shows which sides have doorways for connecting other pieces">
+                                    <TextBlock Text="{Binding DirectionSummary}" FontSize="9" Foreground="#8aba8a" />
+                                </Border>
+                                <!-- Usage badge -->
+                                <Border Classes="info-badge" Background="#1a1a2a"
+                                        ToolTip.Tip="How many times this piece pattern appears across all real game dungeons">
+                                    <StackPanel Orientation="Horizontal" Spacing="2">
+                                        <TextBlock Text="used" FontSize="9" Foreground="#5a5a7a" />
+                                        <TextBlock Text="{Binding UsageText}" FontSize="9" Foreground="#7a7a9a" />
+                                    </StackPanel>
+                                </Border>
+                            </WrapPanel>
+
+                            <!-- Row 2: Detail line -->
+                            <TextBlock Grid.Column="1" Grid.Row="2"
+                                       Text="{Binding DetailText}"
+                                       Foreground="#5a6a6a"
+                                       FontSize="10"
+                                       Margin="0,2,0,0"
+                                       TextWrapping="NoWrap"
+                                       TextTrimming="CharacterEllipsis" />
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+    </DockPanel>
+</UserControl>

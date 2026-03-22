@@ -1,0 +1,670 @@
+{
+  "townName": "Lytelthorpe",
+  "culture": "Aluvian",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 191,
+    "lbY": 128,
+    "worldX": 36768.0,
+    "worldY": 24672.0
+  },
+  "landblocks": [
+    [
+      191,
+      128
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 24,
+    "totalNPCs": 2,
+    "totalVendors": 4,
+    "totalPortals": 4,
+    "totalLifestones": 0,
+    "totalSigns": 1,
+    "totalCreatures": 3,
+    "totalFurniture": 0,
+    "totalOther": 68
+  },
+  "buildings": [
+    {
+      "setupId": 16779292,
+      "setupIdHex": "0x0100081C",
+      "relativeX": -108.0,
+      "relativeY": -84.0,
+      "worldZ": 32,
+      "numLeaves": 34,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16785970,
+      "setupIdHex": "0x01002232",
+      "relativeX": -152.6,
+      "relativeY": -61.5,
+      "worldZ": 30,
+      "numLeaves": 209,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16781437,
+      "setupIdHex": "0x0100107D",
+      "relativeX": -12.0,
+      "relativeY": -372.0,
+      "worldZ": 28,
+      "numLeaves": 6,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781665,
+      "setupIdHex": "0x01001161",
+      "relativeX": -12.0,
+      "relativeY": 60.0,
+      "worldZ": 54,
+      "numLeaves": 117,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16781662,
+      "setupIdHex": "0x0100115E",
+      "relativeX": -12.0,
+      "relativeY": 12.0,
+      "worldZ": 54,
+      "numLeaves": 42,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16781665,
+      "setupIdHex": "0x01001161",
+      "relativeX": -60.0,
+      "relativeY": 60.0,
+      "worldZ": 54,
+      "numLeaves": 117,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16781662,
+      "setupIdHex": "0x0100115E",
+      "relativeX": -60.0,
+      "relativeY": 12.0,
+      "worldZ": 54,
+      "numLeaves": 42,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16781604,
+      "setupIdHex": "0x01001124",
+      "relativeX": -36.0,
+      "relativeY": 60.0,
+      "worldZ": 54,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16781604,
+      "setupIdHex": "0x01001124",
+      "relativeX": -12.0,
+      "relativeY": 36.0,
+      "worldZ": 54,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16781604,
+      "setupIdHex": "0x01001124",
+      "relativeX": -60.0,
+      "relativeY": 36.0,
+      "worldZ": 54,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16781616,
+      "setupIdHex": "0x01001130",
+      "relativeX": -36.0,
+      "relativeY": 12.0,
+      "worldZ": 54,
+      "numLeaves": 83,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16781591,
+      "setupIdHex": "0x01001117",
+      "relativeX": -36.0,
+      "relativeY": 36.0,
+      "worldZ": 54,
+      "numLeaves": 85,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16779310,
+      "setupIdHex": "0x0100082E",
+      "relativeX": -12.0,
+      "relativeY": -36.0,
+      "worldZ": 40,
+      "numLeaves": 30,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16780318,
+      "setupIdHex": "0x01000C1E",
+      "relativeX": 60.0,
+      "relativeY": -12.0,
+      "worldZ": 34,
+      "numLeaves": 64,
+      "portalCount": 10
+    },
+    {
+      "setupId": 16780227,
+      "setupIdHex": "0x01000BC3",
+      "relativeX": 40.3,
+      "relativeY": -40.0,
+      "worldZ": 34,
+      "numLeaves": 36,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16779819,
+      "setupIdHex": "0x01000A2B",
+      "relativeX": -13.1,
+      "relativeY": -83.7,
+      "worldZ": 32,
+      "numLeaves": 29,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16780311,
+      "setupIdHex": "0x01000C17",
+      "relativeX": 36.0,
+      "relativeY": -84.0,
+      "worldZ": 34,
+      "numLeaves": 39,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16779303,
+      "setupIdHex": "0x01000827",
+      "relativeX": -60.0,
+      "relativeY": -36.0,
+      "worldZ": 44,
+      "numLeaves": 101,
+      "portalCount": 8
+    },
+    {
+      "setupId": 16779310,
+      "setupIdHex": "0x0100082E",
+      "relativeX": -60.0,
+      "relativeY": -84.0,
+      "worldZ": 36,
+      "numLeaves": 30,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16787995,
+      "setupIdHex": "0x01002A1B",
+      "relativeX": 29.2,
+      "relativeY": -53.5,
+      "worldZ": 34,
+      "numLeaves": 48,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16779303,
+      "setupIdHex": "0x01000827",
+      "relativeX": 60.0,
+      "relativeY": -60.0,
+      "worldZ": 34,
+      "numLeaves": 101,
+      "portalCount": 8
+    },
+    {
+      "setupId": 16781161,
+      "setupIdHex": "0x01000F69",
+      "relativeX": 84.0,
+      "relativeY": -12.0,
+      "worldZ": 34,
+      "numLeaves": 43,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16783358,
+      "setupIdHex": "0x010017FE",
+      "relativeX": 125.5,
+      "relativeY": -137.2,
+      "worldZ": 48,
+      "numLeaves": 67,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16779292,
+      "setupIdHex": "0x0100081C",
+      "relativeX": 325.4,
+      "relativeY": -180.7,
+      "worldZ": 26,
+      "numLeaves": 34,
+      "portalCount": 4
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 20213,
+      "name": "Journeyman Scrivener of Item Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20209,
+      "name": "Journeyman Scrivener of Creature Magic",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 4439,
+      "name": "Taryla the Bowyer",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 4444,
+      "name": "Cemcera the Shopkeeper",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 4436,
+      "name": "Selflora the Barkeep",
+      "type": "NPC_Barkeep"
+    },
+    {
+      "wcid": 4442,
+      "name": "Sathagg the Jeweler",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 19717,
+      "name": "Mannikin Foundry Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 21464,
+      "name": "Haven Residential Halls Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 6099,
+      "name": "Lytelthorpe Meeting Hall Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43065,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [
+    {
+      "wcid": 4425,
+      "name": "Lytelthorpe",
+      "type": "Sign_Town"
+    }
+  ],
+  "creatures": [
+    {
+      "wcid": 25715,
+      "name": "Dame Brinna O'Shea",
+      "type": "Creature"
+    },
+    {
+      "wcid": 25717,
+      "name": "Guard Chandler Hammett",
+      "type": "Creature"
+    },
+    {
+      "wcid": 5046,
+      "name": "Lord Aleval",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4445,
+      "name": "wcid_4445",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4437,
+      "name": "wcid_4437",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4438,
+      "name": "wcid_4438",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4441,
+      "name": "wcid_4441",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4440,
+      "name": "wcid_4440",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4443,
+      "name": "wcid_4443",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20221,
+      "name": "wcid_20221",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20225,
+      "name": "wcid_20225",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4435,
+      "name": "wcid_4435",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 174,
+      "name": "wcid_174",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27547,
+      "name": "wcid_27547",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4416,
+      "name": "wcid_4416",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4422,
+      "name": "wcid_4422",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4421,
+      "name": "wcid_4421",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4418,
+      "name": "wcid_4418",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4775,
+      "name": "wcid_4775",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4772,
+      "name": "wcid_4772",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27743,
+      "name": "wcid_27743",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4420,
+      "name": "wcid_4420",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4420,
+      "name": "wcid_4420",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4417,
+      "name": "wcid_4417",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4426,
+      "name": "wcid_4426",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4423,
+      "name": "wcid_4423",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4415,
+      "name": "wcid_4415",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4424,
+      "name": "wcid_4424",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 568,
+      "name": "wcid_568",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 21476,
+      "name": "wcid_21476",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19200,
+      "name": "wcid_19200",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5085,
+      "name": "wcid_5085",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 45983,
+      "name": "Explorer Finesse Weapons Gem",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 45990,
+      "name": "Explorer Heavy Weapons Gem",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 45981,
+      "name": "Explorer Light Weapons Gem",
+      "type": "Unknown"
+    }
+  ]
+}

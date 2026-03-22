@@ -1,0 +1,271 @@
+{
+  "townName": "Al-Jalima",
+  "culture": "Gharu'ndim",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 172,
+    "lbY": 79,
+    "worldX": 33120.0,
+    "worldY": 15264.0
+  },
+  "landblocks": [
+    [
+      131,
+      136
+    ],
+    [
+      133,
+      136
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 0,
+    "totalNPCs": 3,
+    "totalVendors": 2,
+    "totalPortals": 4,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 4,
+    "totalFurniture": 0,
+    "totalOther": 32
+  },
+  "buildings": [],
+  "npcs": [
+    {
+      "wcid": 51156,
+      "name": "Jibril ibn Rashid",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20210,
+      "name": "Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20214,
+      "name": "Scrivener of Item Magic",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 4691,
+      "name": "Rah bint Khurdig the Bowyer",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 4693,
+      "name": "Su'nah bint Arfiz the Shopkeeper",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 19718,
+      "name": "Effigy Foundry Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43066,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 4572,
+      "name": "Destroyed Portal to Khayyaban",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 4568,
+      "name": "Destroyed Portal to Tou-Tou",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 39768,
+      "name": "Exploration Marker",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12204,
+      "name": "Janda's Apprentice",
+      "type": "Creature"
+    },
+    {
+      "wcid": 8403,
+      "name": "Janda Sulifiya",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 3951,
+      "name": "wcid_3951",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 14866,
+      "name": "wcid_14866",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1148,
+      "name": "wcid_1148",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4658,
+      "name": "wcid_4658",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19204,
+      "name": "Nullified Statue of a Skeleton",
+      "type": "Prop"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 174,
+      "name": "wcid_174",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 153,
+      "name": "wcid_153",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4692,
+      "name": "wcid_4692",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4689,
+      "name": "wcid_4689",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4690,
+      "name": "wcid_4690",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 6083,
+      "name": "wcid_6083",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20226,
+      "name": "wcid_20226",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20222,
+      "name": "wcid_20222",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4655,
+      "name": "wcid_4655",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4657,
+      "name": "wcid_4657",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12304,
+      "name": "wcid_12304",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4653,
+      "name": "wcid_4653",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 15759,
+      "name": "Linkable Item Generator",
+      "type": "Prop"
+    },
+    {
+      "wcid": 23880,
+      "name": "wcid_23880",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 71135,
+      "name": "Al-Jalima Undead Invasion Event Gen",
+      "type": "Prop"
+    }
+  ]
+}

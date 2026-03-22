@@ -1,0 +1,882 @@
+{
+  "townName": "Nanto",
+  "culture": "Sho",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 229,
+    "lbY": 61,
+    "worldX": 44064.0,
+    "worldY": 11808.0
+  },
+  "landblocks": [
+    [
+      228,
+      61
+    ],
+    [
+      229,
+      61
+    ],
+    [
+      229,
+      62
+    ],
+    [
+      230,
+      61
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 18,
+    "totalNPCs": 2,
+    "totalVendors": 3,
+    "totalPortals": 4,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 30,
+    "totalFurniture": 0,
+    "totalOther": 94
+  },
+  "buildings": [
+    {
+      "setupId": 16781737,
+      "setupIdHex": "0x010011A9",
+      "relativeX": -341.3,
+      "relativeY": 160.9,
+      "worldZ": 178,
+      "numLeaves": 127,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16788969,
+      "setupIdHex": "0x01002DE9",
+      "relativeX": -203.2,
+      "relativeY": 42.6,
+      "worldZ": 120,
+      "numLeaves": 66,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16779292,
+      "setupIdHex": "0x0100081C",
+      "relativeX": -229.7,
+      "relativeY": -88.0,
+      "worldZ": 69.9,
+      "numLeaves": 34,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16781437,
+      "setupIdHex": "0x0100107D",
+      "relativeX": 43.7,
+      "relativeY": -355.8,
+      "worldZ": 102,
+      "numLeaves": 6,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780598,
+      "setupIdHex": "0x01000D36",
+      "relativeX": 84.0,
+      "relativeY": 84.0,
+      "worldZ": 96,
+      "numLeaves": 134,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780762,
+      "setupIdHex": "0x01000DDA",
+      "relativeX": 84.0,
+      "relativeY": 36.0,
+      "worldZ": 96,
+      "numLeaves": 73,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16779732,
+      "setupIdHex": "0x010009D4",
+      "relativeX": 84.0,
+      "relativeY": 60.0,
+      "worldZ": 96,
+      "numLeaves": 107,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16780565,
+      "setupIdHex": "0x01000D15",
+      "relativeX": -12.2,
+      "relativeY": 106.7,
+      "worldZ": 118,
+      "numLeaves": 272,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16780423,
+      "setupIdHex": "0x01000C87",
+      "relativeX": 36.0,
+      "relativeY": 107.0,
+      "worldZ": 108,
+      "numLeaves": 71,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780651,
+      "setupIdHex": "0x01000D6B",
+      "relativeX": 180.0,
+      "relativeY": 12.0,
+      "worldZ": 86,
+      "numLeaves": 111,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16779732,
+      "setupIdHex": "0x010009D4",
+      "relativeX": 180.0,
+      "relativeY": 60.0,
+      "worldZ": 86,
+      "numLeaves": 107,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16780801,
+      "setupIdHex": "0x01000E01",
+      "relativeX": 108.0,
+      "relativeY": 36.0,
+      "worldZ": 96,
+      "numLeaves": 81,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16780564,
+      "setupIdHex": "0x01000D14",
+      "relativeX": 156.0,
+      "relativeY": -12.0,
+      "worldZ": 86,
+      "numLeaves": 60,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16785958,
+      "setupIdHex": "0x01002226",
+      "relativeX": 201.7,
+      "relativeY": -35.3,
+      "worldZ": 86,
+      "numLeaves": 170,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16787995,
+      "setupIdHex": "0x01002A1B",
+      "relativeX": 111.7,
+      "relativeY": 65.0,
+      "worldZ": 96,
+      "numLeaves": 48,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780565,
+      "setupIdHex": "0x01000D15",
+      "relativeX": 228.0,
+      "relativeY": 12.0,
+      "worldZ": 94,
+      "numLeaves": 272,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16781161,
+      "setupIdHex": "0x01000F69",
+      "relativeX": 207.6,
+      "relativeY": 58.5,
+      "worldZ": 86,
+      "numLeaves": 43,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16781737,
+      "setupIdHex": "0x010011A9",
+      "relativeX": -516.0,
+      "relativeY": -324.0,
+      "worldZ": 82,
+      "numLeaves": 127,
+      "portalCount": 1
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 20213,
+      "name": "Journeyman Scrivener of Item Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20209,
+      "name": "Journeyman Scrivener of Creature Magic",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 4555,
+      "name": "Wuo Ha the Provisioner",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 4550,
+      "name": "Ye Te the Bowyer",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 4553,
+      "name": "Nun Hong the Jeweler",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 24435,
+      "name": "Matron Hive South",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 19717,
+      "name": "Mannikin Foundry Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 6101,
+      "name": "Nanto Meeting Hall Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43067,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 22257,
+      "name": "Fishing Hole",
+      "type": "Creature"
+    },
+    {
+      "wcid": 22257,
+      "name": "Fishing Hole",
+      "type": "Creature"
+    },
+    {
+      "wcid": 22257,
+      "name": "Fishing Hole",
+      "type": "Creature"
+    },
+    {
+      "wcid": 22257,
+      "name": "Fishing Hole",
+      "type": "Creature"
+    },
+    {
+      "wcid": 22257,
+      "name": "Fishing Hole",
+      "type": "Creature"
+    },
+    {
+      "wcid": 22257,
+      "name": "Fishing Hole",
+      "type": "Creature"
+    },
+    {
+      "wcid": 22257,
+      "name": "Fishing Hole",
+      "type": "Creature"
+    },
+    {
+      "wcid": 22257,
+      "name": "Fishing Hole",
+      "type": "Creature"
+    },
+    {
+      "wcid": 22257,
+      "name": "Fishing Hole",
+      "type": "Creature"
+    },
+    {
+      "wcid": 22257,
+      "name": "Fishing Hole",
+      "type": "Creature"
+    },
+    {
+      "wcid": 22257,
+      "name": "Fishing Hole",
+      "type": "Creature"
+    },
+    {
+      "wcid": 24937,
+      "name": "Chicken",
+      "type": "Creature"
+    },
+    {
+      "wcid": 22257,
+      "name": "Fishing Hole",
+      "type": "Creature"
+    },
+    {
+      "wcid": 25283,
+      "name": "Rooster",
+      "type": "Creature"
+    },
+    {
+      "wcid": 2567,
+      "name": "Brown Rabbit",
+      "type": "Creature"
+    },
+    {
+      "wcid": 22257,
+      "name": "Fishing Hole",
+      "type": "Creature"
+    },
+    {
+      "wcid": 22257,
+      "name": "Fishing Hole",
+      "type": "Creature"
+    },
+    {
+      "wcid": 52181,
+      "name": "Farmer Ar'Oyd",
+      "type": "Creature"
+    },
+    {
+      "wcid": 24937,
+      "name": "Chicken",
+      "type": "Creature"
+    },
+    {
+      "wcid": 22257,
+      "name": "Fishing Hole",
+      "type": "Creature"
+    },
+    {
+      "wcid": 22257,
+      "name": "Fishing Hole",
+      "type": "Creature"
+    },
+    {
+      "wcid": 23336,
+      "name": "Tackle Master",
+      "type": "Creature"
+    },
+    {
+      "wcid": 22257,
+      "name": "Fishing Hole",
+      "type": "Creature"
+    },
+    {
+      "wcid": 22257,
+      "name": "Fishing Hole",
+      "type": "Creature"
+    },
+    {
+      "wcid": 22257,
+      "name": "Fishing Hole",
+      "type": "Creature"
+    },
+    {
+      "wcid": 5122,
+      "name": "Wa Shi",
+      "type": "Creature"
+    },
+    {
+      "wcid": 6890,
+      "name": "Miyako Nujou-Wah ",
+      "type": "Creature"
+    },
+    {
+      "wcid": 35776,
+      "name": "Ook",
+      "type": "Creature"
+    },
+    {
+      "wcid": 5121,
+      "name": "Shin Ro",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 7924,
+      "name": "wcid_7924",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 23340,
+      "name": "wcid_23340",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5408,
+      "name": "wcid_5408",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5408,
+      "name": "wcid_5408",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5408,
+      "name": "wcid_5408",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5408,
+      "name": "wcid_5408",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 14,
+      "name": "Cow",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5408,
+      "name": "wcid_5408",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 618,
+      "name": "Cow",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5408,
+      "name": "wcid_5408",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5408,
+      "name": "wcid_5408",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 23340,
+      "name": "wcid_23340",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5408,
+      "name": "wcid_5408",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4548,
+      "name": "wcid_4548",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 25832,
+      "name": "wcid_25832",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27745,
+      "name": "wcid_27745",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 721,
+      "name": "wcid_721",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4517,
+      "name": "wcid_4517",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4521,
+      "name": "wcid_4521",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4519,
+      "name": "wcid_4519",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4547,
+      "name": "wcid_4547",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1154,
+      "name": "wcid_1154",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4554,
+      "name": "wcid_4554",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4552,
+      "name": "wcid_4552",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4510,
+      "name": "wcid_4510",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4519,
+      "name": "wcid_4519",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4515,
+      "name": "wcid_4515",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4518,
+      "name": "wcid_4518",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5085,
+      "name": "wcid_5085",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 45983,
+      "name": "Explorer Finesse Weapons Gem",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 45990,
+      "name": "Explorer Heavy Weapons Gem",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 45981,
+      "name": "Explorer Light Weapons Gem",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4551,
+      "name": "wcid_4551",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4556,
+      "name": "wcid_4556",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4549,
+      "name": "wcid_4549",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 14930,
+      "name": "wcid_14930",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20225,
+      "name": "wcid_20225",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20221,
+      "name": "wcid_20221",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 721,
+      "name": "wcid_721",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4513,
+      "name": "wcid_4513",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4512,
+      "name": "wcid_4512",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4511,
+      "name": "wcid_4511",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4516,
+      "name": "wcid_4516",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4520,
+      "name": "wcid_4520",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12304,
+      "name": "wcid_12304",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4772,
+      "name": "wcid_4772",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 25987,
+      "name": "wcid_25987",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27547,
+      "name": "wcid_27547",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4519,
+      "name": "wcid_4519",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4519,
+      "name": "wcid_4519",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19201,
+      "name": "wcid_19201",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 174,
+      "name": "wcid_174",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    }
+  ]
+}

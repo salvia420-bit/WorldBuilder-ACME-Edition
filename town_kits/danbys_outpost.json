@@ -1,0 +1,223 @@
+{
+  "townName": "Danby's Outpost",
+  "culture": "Neutral",
+  "isStarter": false,
+  "retailCenter": {
+    "lbX": 91,
+    "lbY": 156,
+    "worldX": 17568.0,
+    "worldY": 30048.0
+  },
+  "landblocks": [
+    [
+      91,
+      156
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 10,
+    "totalNPCs": 1,
+    "totalVendors": 2,
+    "totalPortals": 2,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 5,
+    "totalFurniture": 0,
+    "totalOther": 8
+  },
+  "buildings": [
+    {
+      "setupId": 16790377,
+      "setupIdHex": "0x01003369",
+      "relativeX": -444.0,
+      "relativeY": -180.0,
+      "worldZ": 0,
+      "numLeaves": 270,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16790381,
+      "setupIdHex": "0x0100336D",
+      "relativeX": -420.0,
+      "relativeY": -180.0,
+      "worldZ": 0,
+      "numLeaves": 38,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16781665,
+      "setupIdHex": "0x01001161",
+      "relativeX": 36.0,
+      "relativeY": 60.0,
+      "worldZ": 14,
+      "numLeaves": 117,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16781665,
+      "setupIdHex": "0x01001161",
+      "relativeX": -12.0,
+      "relativeY": 60.0,
+      "worldZ": 14,
+      "numLeaves": 117,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16781604,
+      "setupIdHex": "0x01001124",
+      "relativeX": 36.0,
+      "relativeY": 36.0,
+      "worldZ": 14,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16781616,
+      "setupIdHex": "0x01001130",
+      "relativeX": 12.0,
+      "relativeY": 12.0,
+      "worldZ": 14,
+      "numLeaves": 83,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16781604,
+      "setupIdHex": "0x01001124",
+      "relativeX": -12.0,
+      "relativeY": 36.0,
+      "worldZ": 14,
+      "numLeaves": 24,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16781662,
+      "setupIdHex": "0x0100115E",
+      "relativeX": -12.0,
+      "relativeY": 12.0,
+      "worldZ": 14,
+      "numLeaves": 42,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16781662,
+      "setupIdHex": "0x0100115E",
+      "relativeX": 36.0,
+      "relativeY": 12.0,
+      "worldZ": 14,
+      "numLeaves": 42,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16781604,
+      "setupIdHex": "0x01001124",
+      "relativeX": 12.0,
+      "relativeY": 60.0,
+      "worldZ": 14,
+      "numLeaves": 24,
+      "portalCount": 0
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 40521,
+      "name": "Barkeep Aliece Landlig",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 9677,
+      "name": "Greta Danby the Bowyer",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 9678,
+      "name": "Abia bint Huda the Archmage",
+      "type": "NPC_Archmage"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 42852,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 9685,
+      "name": "Desert March Portal",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 47799,
+      "name": "Colton Reeyan",
+      "type": "Creature"
+    },
+    {
+      "wcid": 37443,
+      "name": "Marcus Danby",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    },
+    {
+      "wcid": 4213,
+      "name": "Leather Crafter",
+      "type": "Creature"
+    },
+    {
+      "wcid": 31284,
+      "name": "Jin Ghao",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [],
+  "other": [
+    {
+      "wcid": 9679,
+      "name": "wcid_9679",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27555,
+      "name": "wcid_27555",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 28924,
+      "name": "wcid_28924",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 9676,
+      "name": "wcid_9676",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 9683,
+      "name": "wcid_9683",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 1154,
+      "name": "wcid_1154",
+      "type": "Unknown"
+    }
+  ]
+}

@@ -1,0 +1,1002 @@
+{
+  "townName": "Holtburg",
+  "culture": "Aluvian",
+  "isStarter": true,
+  "retailCenter": {
+    "lbX": 170,
+    "lbY": 179,
+    "worldX": 32736.0,
+    "worldY": 34464.0
+  },
+  "landblocks": [
+    [
+      169,
+      179
+    ],
+    [
+      169,
+      180
+    ],
+    [
+      170,
+      179
+    ],
+    [
+      170,
+      180
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 24,
+    "totalNPCs": 12,
+    "totalVendors": 4,
+    "totalPortals": 6,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 31,
+    "totalFurniture": 1,
+    "totalOther": 92
+  },
+  "buildings": [
+    {
+      "setupId": 16781737,
+      "setupIdHex": "0x010011A9",
+      "relativeX": -569.8,
+      "relativeY": 39.3,
+      "worldZ": 30,
+      "numLeaves": 127,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780227,
+      "setupIdHex": "0x01000BC3",
+      "relativeX": -538.1,
+      "relativeY": 180.6,
+      "worldZ": 28,
+      "numLeaves": 36,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16788492,
+      "setupIdHex": "0x01002C0C",
+      "relativeX": -540.9,
+      "relativeY": 106.1,
+      "worldZ": 28,
+      "numLeaves": 12,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16781392,
+      "setupIdHex": "0x01001050",
+      "relativeX": -444.0,
+      "relativeY": -204.0,
+      "worldZ": 36,
+      "numLeaves": 67,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16788492,
+      "setupIdHex": "0x01002C0C",
+      "relativeX": -152.0,
+      "relativeY": -154.7,
+      "worldZ": 94,
+      "numLeaves": 12,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780311,
+      "setupIdHex": "0x01000C17",
+      "relativeX": -204.0,
+      "relativeY": -204.0,
+      "worldZ": 94,
+      "numLeaves": 39,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16779303,
+      "setupIdHex": "0x01000827",
+      "relativeX": -108.0,
+      "relativeY": -12.0,
+      "worldZ": 116,
+      "numLeaves": 101,
+      "portalCount": 8
+    },
+    {
+      "setupId": 16780318,
+      "setupIdHex": "0x01000C1E",
+      "relativeX": -203.9,
+      "relativeY": 227.5,
+      "worldZ": 66,
+      "numLeaves": 64,
+      "portalCount": 10
+    },
+    {
+      "setupId": 16780227,
+      "setupIdHex": "0x01000BC3",
+      "relativeX": -256.5,
+      "relativeY": 255.5,
+      "worldZ": 66,
+      "numLeaves": 36,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16779310,
+      "setupIdHex": "0x0100082E",
+      "relativeX": -133.9,
+      "relativeY": 228.7,
+      "worldZ": 66,
+      "numLeaves": 30,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16779312,
+      "setupIdHex": "0x01000830",
+      "relativeX": -183.5,
+      "relativeY": 231.5,
+      "worldZ": 66,
+      "numLeaves": 31,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16779303,
+      "setupIdHex": "0x01000827",
+      "relativeX": -230.5,
+      "relativeY": 229.5,
+      "worldZ": 66,
+      "numLeaves": 101,
+      "portalCount": 8
+    },
+    {
+      "setupId": 16779292,
+      "setupIdHex": "0x0100081C",
+      "relativeX": -155.5,
+      "relativeY": 250.0,
+      "worldZ": 66,
+      "numLeaves": 34,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16779819,
+      "setupIdHex": "0x01000A2B",
+      "relativeX": -157.5,
+      "relativeY": 107.5,
+      "worldZ": 94,
+      "numLeaves": 29,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16780311,
+      "setupIdHex": "0x01000C17",
+      "relativeX": -180.5,
+      "relativeY": 132.0,
+      "worldZ": 94,
+      "numLeaves": 39,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16780227,
+      "setupIdHex": "0x01000BC3",
+      "relativeX": -208.5,
+      "relativeY": 133.5,
+      "worldZ": 94,
+      "numLeaves": 36,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16785970,
+      "setupIdHex": "0x01002232",
+      "relativeX": -126.1,
+      "relativeY": 103.5,
+      "worldZ": 94,
+      "numLeaves": 209,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16787995,
+      "setupIdHex": "0x01002A1B",
+      "relativeX": -222.8,
+      "relativeY": 252.6,
+      "worldZ": 66,
+      "numLeaves": 48,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16781161,
+      "setupIdHex": "0x01000F69",
+      "relativeX": -129.8,
+      "relativeY": 133.7,
+      "worldZ": 94,
+      "numLeaves": 43,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16782531,
+      "setupIdHex": "0x010014C3",
+      "relativeX": -60.0,
+      "relativeY": -12.0,
+      "worldZ": 116,
+      "numLeaves": 152,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16781591,
+      "setupIdHex": "0x01001117",
+      "relativeX": 12.0,
+      "relativeY": -36.0,
+      "worldZ": 112,
+      "numLeaves": 85,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16788969,
+      "setupIdHex": "0x01002DE9",
+      "relativeX": -93.5,
+      "relativeY": 321.1,
+      "worldZ": 28,
+      "numLeaves": 66,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16781392,
+      "setupIdHex": "0x01001050",
+      "relativeX": 179.9,
+      "relativeY": 9.3,
+      "worldZ": 66,
+      "numLeaves": 67,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16788463,
+      "setupIdHex": "0x01002BEF",
+      "relativeX": 396.7,
+      "relativeY": 445.1,
+      "worldZ": 58,
+      "numLeaves": 73,
+      "portalCount": 1
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 20215,
+      "name": "Apprentice Scrivener of Item and War Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 43354,
+      "name": "Scrivener of Void Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20205,
+      "name": "Apprentice Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20209,
+      "name": "Journeyman Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20210,
+      "name": "Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20206,
+      "name": "Apprentice Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20213,
+      "name": "Journeyman Scrivener of Item Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20214,
+      "name": "Scrivener of Item Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20216,
+      "name": "Apprentice Scrivener of Item and War Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 49518,
+      "name": "Asenala",
+      "type": "NPC"
+    },
+    {
+      "wcid": 42428,
+      "name": "Ianto",
+      "type": "NPC"
+    },
+    {
+      "wcid": 44186,
+      "name": "Contract Broker",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 712,
+      "name": "Sedor Wystan the Blacksmith",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 716,
+      "name": "Monyra the Jeweler",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 713,
+      "name": "Sontella Dagroff the Bowyer",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 718,
+      "name": "Shopkeeper Renald the Elder",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 2068,
+      "name": "Drudge Hideout",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 19717,
+      "name": "Mannikin Foundry Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 6096,
+      "name": "Holtburg Meeting Hall Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43065,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 11960,
+      "name": "Destroyed Portal to Redspire",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 14449,
+      "name": "Underground Passage",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 25578,
+      "name": "The Chicken",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44895,
+      "name": "Alcott",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30696,
+      "name": "Tirenia",
+      "type": "Creature"
+    },
+    {
+      "wcid": 37518,
+      "name": "Royal Guard",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42720,
+      "name": "Ealdred",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42736,
+      "name": "Tailor's Apprentice",
+      "type": "Creature"
+    },
+    {
+      "wcid": 33596,
+      "name": "Pathwarden Thorolf",
+      "type": "Creature"
+    },
+    {
+      "wcid": 39746,
+      "name": "Sean the Speedy",
+      "type": "Creature"
+    },
+    {
+      "wcid": 40526,
+      "name": "Bottle",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44891,
+      "name": "Buckminster",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30479,
+      "name": "Alfrin",
+      "type": "Creature"
+    },
+    {
+      "wcid": 5035,
+      "name": "Worcer",
+      "type": "Creature"
+    },
+    {
+      "wcid": 5033,
+      "name": "Flinrala Ryndmad",
+      "type": "Creature"
+    },
+    {
+      "wcid": 12050,
+      "name": "Agent of the Arcanum",
+      "type": "Creature"
+    },
+    {
+      "wcid": 28856,
+      "name": "Renald the Eldest",
+      "type": "Creature"
+    },
+    {
+      "wcid": 39983,
+      "name": "Rand, Game Hunter",
+      "type": "Creature"
+    },
+    {
+      "wcid": 37518,
+      "name": "Royal Guard",
+      "type": "Creature"
+    },
+    {
+      "wcid": 33970,
+      "name": "Dwennon",
+      "type": "Creature"
+    },
+    {
+      "wcid": 3917,
+      "name": "Collector",
+      "type": "Creature"
+    },
+    {
+      "wcid": 37518,
+      "name": "Royal Guard",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30466,
+      "name": "Cooking Forge",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30460,
+      "name": "Lockpick Forge",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30461,
+      "name": "Salvaging Forge",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30467,
+      "name": "Fletching Forge",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30465,
+      "name": "Alchemy Forge",
+      "type": "Creature"
+    },
+    {
+      "wcid": 39748,
+      "name": "Exploration Marker",
+      "type": "Creature"
+    },
+    {
+      "wcid": 14413,
+      "name": "Sir Rylanan",
+      "type": "Creature"
+    },
+    {
+      "wcid": 33805,
+      "name": "Royal Guard",
+      "type": "Creature"
+    },
+    {
+      "wcid": 7,
+      "name": "Drudge Skulker",
+      "type": "Creature"
+    },
+    {
+      "wcid": 7,
+      "name": "Drudge Skulker",
+      "type": "Creature"
+    },
+    {
+      "wcid": 7,
+      "name": "Drudge Skulker",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [
+    {
+      "wcid": 33609,
+      "name": "Aluvian Pathwarden Chest",
+      "type": "Furniture_Storage"
+    }
+  ],
+  "other": [
+    {
+      "wcid": 20226,
+      "name": "wcid_20226",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20217,
+      "name": "wcid_20217",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20225,
+      "name": "wcid_20225",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20221,
+      "name": "wcid_20221",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20218,
+      "name": "wcid_20218",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20222,
+      "name": "wcid_20222",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 921,
+      "name": "wcid_921",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8127,
+      "name": "wcid_8127",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 72851,
+      "name": "Menhir Research Ring 9",
+      "type": "Prop"
+    },
+    {
+      "wcid": 15274,
+      "name": "wcid_15274",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27740,
+      "name": "wcid_27740",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 44190,
+      "name": "wcid_44190",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 32085,
+      "name": "wcid_32085",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 715,
+      "name": "wcid_715",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 2304,
+      "name": "wcid_2304",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 719,
+      "name": "wcid_719",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 717,
+      "name": "wcid_717",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 710,
+      "name": "wcid_710",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 714,
+      "name": "wcid_714",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 14930,
+      "name": "wcid_14930",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 9423,
+      "name": "wcid_9423",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 174,
+      "name": "wcid_174",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12304,
+      "name": "wcid_12304",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 705,
+      "name": "wcid_705",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 708,
+      "name": "wcid_708",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 709,
+      "name": "wcid_709",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 706,
+      "name": "wcid_706",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 704,
+      "name": "wcid_704",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 707,
+      "name": "wcid_707",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27547,
+      "name": "wcid_27547",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19196,
+      "name": "wcid_19196",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 921,
+      "name": "wcid_921",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7924,
+      "name": "wcid_7924",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 385,
+      "name": "wcid_385",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 3955,
+      "name": "wcid_3955",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27268,
+      "name": "wcid_27268",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 14457,
+      "name": "wcid_14457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 14458,
+      "name": "wcid_14458",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7924,
+      "name": "wcid_7924",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12725,
+      "name": "wcid_12725",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 71470,
+      "name": "Michelle Holiday Event Spawn",
+      "type": "Prop"
+    },
+    {
+      "wcid": 3955,
+      "name": "wcid_3955",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 921,
+      "name": "wcid_921",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 794,
+      "name": "wcid_794",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 794,
+      "name": "wcid_794",
+      "type": "Unknown"
+    }
+  ]
+}

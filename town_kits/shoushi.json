@@ -1,0 +1,1382 @@
+{
+  "townName": "Shoushi",
+  "culture": "Sho",
+  "isStarter": true,
+  "retailCenter": {
+    "lbX": 218,
+    "lbY": 85,
+    "worldX": 41952.0,
+    "worldY": 16416.0
+  },
+  "landblocks": [
+    [
+      217,
+      85
+    ],
+    [
+      218,
+      85
+    ],
+    [
+      219,
+      85
+    ],
+    [
+      219,
+      86
+    ]
+  ],
+  "summary": {
+    "totalBuildings": 69,
+    "totalNPCs": 12,
+    "totalVendors": 5,
+    "totalPortals": 6,
+    "totalLifestones": 0,
+    "totalSigns": 0,
+    "totalCreatures": 23,
+    "totalFurniture": 1,
+    "totalOther": 94
+  },
+  "buildings": [
+    {
+      "setupId": 16780762,
+      "setupIdHex": "0x01000DDA",
+      "relativeX": -397.4,
+      "relativeY": -296.8,
+      "worldZ": 32,
+      "numLeaves": 73,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16781437,
+      "setupIdHex": "0x0100107D",
+      "relativeX": -395.3,
+      "relativeY": -275.6,
+      "worldZ": 31.2,
+      "numLeaves": 6,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16788492,
+      "setupIdHex": "0x01002C0C",
+      "relativeX": -449.0,
+      "relativeY": 10.0,
+      "worldZ": 26,
+      "numLeaves": 12,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16781737,
+      "setupIdHex": "0x010011A9",
+      "relativeX": -444.0,
+      "relativeY": 276.0,
+      "worldZ": 30,
+      "numLeaves": 127,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780897,
+      "setupIdHex": "0x01000E61",
+      "relativeX": -116.0,
+      "relativeY": 36.0,
+      "worldZ": 20,
+      "numLeaves": 17,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780897,
+      "setupIdHex": "0x01000E61",
+      "relativeX": -116.0,
+      "relativeY": -12.0,
+      "worldZ": 20,
+      "numLeaves": 17,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780898,
+      "setupIdHex": "0x01000E62",
+      "relativeX": -108.0,
+      "relativeY": -36.0,
+      "worldZ": 20,
+      "numLeaves": 18,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780901,
+      "setupIdHex": "0x01000E65",
+      "relativeX": -116.0,
+      "relativeY": 12.0,
+      "worldZ": 20,
+      "numLeaves": 81,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780898,
+      "setupIdHex": "0x01000E62",
+      "relativeX": -108.0,
+      "relativeY": 60.0,
+      "worldZ": 20,
+      "numLeaves": 18,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780647,
+      "setupIdHex": "0x01000D67",
+      "relativeX": 36.0,
+      "relativeY": 84.4,
+      "worldZ": 20,
+      "numLeaves": 108,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780564,
+      "setupIdHex": "0x01000D14",
+      "relativeX": -59.9,
+      "relativeY": 12.0,
+      "worldZ": 20,
+      "numLeaves": 60,
+      "portalCount": 5
+    },
+    {
+      "setupId": 16780423,
+      "setupIdHex": "0x01000C87",
+      "relativeX": -35.5,
+      "relativeY": 86.9,
+      "worldZ": 20,
+      "numLeaves": 71,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780647,
+      "setupIdHex": "0x01000D67",
+      "relativeX": 60.0,
+      "relativeY": -33.0,
+      "worldZ": 20,
+      "numLeaves": 108,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780286,
+      "setupIdHex": "0x01000BFE",
+      "relativeX": 31.6,
+      "relativeY": -61.9,
+      "worldZ": 20,
+      "numLeaves": 56,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780286,
+      "setupIdHex": "0x01000BFE",
+      "relativeX": -86.9,
+      "relativeY": 36.5,
+      "worldZ": 20,
+      "numLeaves": 56,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16779732,
+      "setupIdHex": "0x010009D4",
+      "relativeX": -54.6,
+      "relativeY": -64.8,
+      "worldZ": 20,
+      "numLeaves": 107,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16780565,
+      "setupIdHex": "0x01000D15",
+      "relativeX": -12.0,
+      "relativeY": 60.0,
+      "worldZ": 20,
+      "numLeaves": 272,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16780598,
+      "setupIdHex": "0x01000D36",
+      "relativeX": 36.8,
+      "relativeY": 12.1,
+      "worldZ": 20,
+      "numLeaves": 134,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780762,
+      "setupIdHex": "0x01000DDA",
+      "relativeX": 65.6,
+      "relativeY": 54.4,
+      "worldZ": 20,
+      "numLeaves": 73,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16780801,
+      "setupIdHex": "0x01000E01",
+      "relativeX": -12.0,
+      "relativeY": -36.0,
+      "worldZ": 20,
+      "numLeaves": 81,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16780651,
+      "setupIdHex": "0x01000D6B",
+      "relativeX": -84.0,
+      "relativeY": -36.2,
+      "worldZ": 20,
+      "numLeaves": 111,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780901,
+      "setupIdHex": "0x01000E65",
+      "relativeX": -12.0,
+      "relativeY": 24.5,
+      "worldZ": 20,
+      "numLeaves": 81,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780900,
+      "setupIdHex": "0x01000E64",
+      "relativeX": -12.0,
+      "relativeY": -92.0,
+      "worldZ": 20,
+      "numLeaves": 37,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780901,
+      "setupIdHex": "0x01000E65",
+      "relativeX": -12.0,
+      "relativeY": -0.5,
+      "worldZ": 20,
+      "numLeaves": 81,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780900,
+      "setupIdHex": "0x01000E64",
+      "relativeX": 12.0,
+      "relativeY": -92.0,
+      "worldZ": 20,
+      "numLeaves": 37,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780897,
+      "setupIdHex": "0x01000E61",
+      "relativeX": -24.5,
+      "relativeY": 12.0,
+      "worldZ": 20,
+      "numLeaves": 17,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780897,
+      "setupIdHex": "0x01000E61",
+      "relativeX": 0.5,
+      "relativeY": 12.0,
+      "worldZ": 20,
+      "numLeaves": 17,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780897,
+      "setupIdHex": "0x01000E61",
+      "relativeX": 92.0,
+      "relativeY": 36.0,
+      "worldZ": 20,
+      "numLeaves": 17,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780900,
+      "setupIdHex": "0x01000E64",
+      "relativeX": -36.0,
+      "relativeY": -92.0,
+      "worldZ": 20,
+      "numLeaves": 37,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780897,
+      "setupIdHex": "0x01000E61",
+      "relativeX": 28.0,
+      "relativeY": 36.0,
+      "worldZ": 20,
+      "numLeaves": 17,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780897,
+      "setupIdHex": "0x01000E61",
+      "relativeX": 12.0,
+      "relativeY": 52.0,
+      "worldZ": 20,
+      "numLeaves": 17,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780898,
+      "setupIdHex": "0x01000E62",
+      "relativeX": -60.0,
+      "relativeY": -12.0,
+      "worldZ": 20,
+      "numLeaves": 18,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780898,
+      "setupIdHex": "0x01000E62",
+      "relativeX": -36.0,
+      "relativeY": -36.0,
+      "worldZ": 20,
+      "numLeaves": 18,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780898,
+      "setupIdHex": "0x01000E62",
+      "relativeX": 60.0,
+      "relativeY": 84.0,
+      "worldZ": 20,
+      "numLeaves": 18,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780898,
+      "setupIdHex": "0x01000E62",
+      "relativeX": 84.0,
+      "relativeY": 60.0,
+      "worldZ": 20,
+      "numLeaves": 18,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780901,
+      "setupIdHex": "0x01000E65",
+      "relativeX": 92.0,
+      "relativeY": 12.0,
+      "worldZ": 20,
+      "numLeaves": 81,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780898,
+      "setupIdHex": "0x01000E62",
+      "relativeX": 84.4,
+      "relativeY": -36.0,
+      "worldZ": 20,
+      "numLeaves": 18,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780898,
+      "setupIdHex": "0x01000E62",
+      "relativeX": -60.0,
+      "relativeY": -84.0,
+      "worldZ": 20,
+      "numLeaves": 18,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780898,
+      "setupIdHex": "0x01000E62",
+      "relativeX": -60.0,
+      "relativeY": 84.0,
+      "worldZ": 20,
+      "numLeaves": 18,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780898,
+      "setupIdHex": "0x01000E62",
+      "relativeX": -84.0,
+      "relativeY": 60.0,
+      "worldZ": 20,
+      "numLeaves": 18,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780898,
+      "setupIdHex": "0x01000E62",
+      "relativeX": -36.0,
+      "relativeY": 60.0,
+      "worldZ": 20,
+      "numLeaves": 18,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780898,
+      "setupIdHex": "0x01000E62",
+      "relativeX": -60.0,
+      "relativeY": 36.0,
+      "worldZ": 20,
+      "numLeaves": 18,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780919,
+      "setupIdHex": "0x01000E77",
+      "relativeX": -84.0,
+      "relativeY": 84.0,
+      "worldZ": 20,
+      "numLeaves": 81,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780919,
+      "setupIdHex": "0x01000E77",
+      "relativeX": 60.0,
+      "relativeY": -60.0,
+      "worldZ": 20,
+      "numLeaves": 81,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780919,
+      "setupIdHex": "0x01000E77",
+      "relativeX": -84.0,
+      "relativeY": -59.9,
+      "worldZ": 20,
+      "numLeaves": 81,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780898,
+      "setupIdHex": "0x01000E62",
+      "relativeX": 36.0,
+      "relativeY": -12.0,
+      "worldZ": 20,
+      "numLeaves": 18,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780898,
+      "setupIdHex": "0x01000E62",
+      "relativeX": 12.0,
+      "relativeY": -36.0,
+      "worldZ": 20,
+      "numLeaves": 18,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780898,
+      "setupIdHex": "0x01000E62",
+      "relativeX": 36.0,
+      "relativeY": -84.0,
+      "worldZ": 20,
+      "numLeaves": 18,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780897,
+      "setupIdHex": "0x01000E61",
+      "relativeX": 92.4,
+      "relativeY": -12.0,
+      "worldZ": 20,
+      "numLeaves": 17,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16787995,
+      "setupIdHex": "0x01002A1B",
+      "relativeX": 9.6,
+      "relativeY": 33.0,
+      "worldZ": 20,
+      "numLeaves": 48,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16781161,
+      "setupIdHex": "0x01000F69",
+      "relativeX": 6.1,
+      "relativeY": 86.6,
+      "worldZ": 20,
+      "numLeaves": 43,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780900,
+      "setupIdHex": "0x01000E64",
+      "relativeX": -12.0,
+      "relativeY": 116.0,
+      "worldZ": 20,
+      "numLeaves": 37,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780900,
+      "setupIdHex": "0x01000E64",
+      "relativeX": 12.0,
+      "relativeY": 116.0,
+      "worldZ": 20,
+      "numLeaves": 37,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780900,
+      "setupIdHex": "0x01000E64",
+      "relativeX": -36.0,
+      "relativeY": 116.0,
+      "worldZ": 20,
+      "numLeaves": 37,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780898,
+      "setupIdHex": "0x01000E62",
+      "relativeX": 36.0,
+      "relativeY": 108.0,
+      "worldZ": 20,
+      "numLeaves": 18,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16780898,
+      "setupIdHex": "0x01000E62",
+      "relativeX": -60.0,
+      "relativeY": 108.0,
+      "worldZ": 20,
+      "numLeaves": 18,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16785958,
+      "setupIdHex": "0x01002226",
+      "relativeX": -84.5,
+      "relativeY": 230.4,
+      "worldZ": 20,
+      "numLeaves": 170,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16780598,
+      "setupIdHex": "0x01000D36",
+      "relativeX": 204.0,
+      "relativeY": -156.0,
+      "worldZ": 20,
+      "numLeaves": 134,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780565,
+      "setupIdHex": "0x01000D15",
+      "relativeX": 132.0,
+      "relativeY": -12.0,
+      "worldZ": 20,
+      "numLeaves": 272,
+      "portalCount": 6
+    },
+    {
+      "setupId": 16782531,
+      "setupIdHex": "0x010014C3",
+      "relativeX": 108.0,
+      "relativeY": 180.0,
+      "worldZ": 20,
+      "numLeaves": 152,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16781591,
+      "setupIdHex": "0x01001117",
+      "relativeX": 132.0,
+      "relativeY": 228.0,
+      "worldZ": 20,
+      "numLeaves": 85,
+      "portalCount": 3
+    },
+    {
+      "setupId": 16788492,
+      "setupIdHex": "0x01002C0C",
+      "relativeX": 444.0,
+      "relativeY": -396.0,
+      "worldZ": 14,
+      "numLeaves": 12,
+      "portalCount": 0
+    },
+    {
+      "setupId": 16788969,
+      "setupIdHex": "0x01002DE9",
+      "relativeX": 316.7,
+      "relativeY": 315.4,
+      "worldZ": 6,
+      "numLeaves": 66,
+      "portalCount": 2
+    },
+    {
+      "setupId": 16781737,
+      "setupIdHex": "0x010011A9",
+      "relativeX": 492.0,
+      "relativeY": -132.0,
+      "worldZ": 8,
+      "numLeaves": 127,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16788463,
+      "setupIdHex": "0x01002BEF",
+      "relativeX": 468.6,
+      "relativeY": 540.5,
+      "worldZ": 16,
+      "numLeaves": 73,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780286,
+      "setupIdHex": "0x01000BFE",
+      "relativeX": -588.0,
+      "relativeY": -300.0,
+      "worldZ": 32,
+      "numLeaves": 56,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16780762,
+      "setupIdHex": "0x01000DDA",
+      "relativeX": -588.0,
+      "relativeY": -252.0,
+      "worldZ": 34,
+      "numLeaves": 73,
+      "portalCount": 4
+    },
+    {
+      "setupId": 16781437,
+      "setupIdHex": "0x0100107D",
+      "relativeX": -588.5,
+      "relativeY": -220.7,
+      "worldZ": 34,
+      "numLeaves": 6,
+      "portalCount": 1
+    },
+    {
+      "setupId": 16792832,
+      "setupIdHex": "0x01003D00",
+      "relativeX": -564.0,
+      "relativeY": 156.0,
+      "worldZ": 40,
+      "numLeaves": 145,
+      "portalCount": 1
+    }
+  ],
+  "npcs": [
+    {
+      "wcid": 49520,
+      "name": "Sacmisi",
+      "type": "NPC"
+    },
+    {
+      "wcid": 44187,
+      "name": "Contract Broker",
+      "type": "NPC"
+    },
+    {
+      "wcid": 42430,
+      "name": "Qing",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20209,
+      "name": "Journeyman Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20210,
+      "name": "Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20215,
+      "name": "Apprentice Scrivener of Item and War Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20205,
+      "name": "Apprentice Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20213,
+      "name": "Journeyman Scrivener of Item Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20214,
+      "name": "Scrivener of Item Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20206,
+      "name": "Apprentice Scrivener of Creature Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 20216,
+      "name": "Apprentice Scrivener of Item and War Magic",
+      "type": "NPC"
+    },
+    {
+      "wcid": 43354,
+      "name": "Scrivener of Void Magic",
+      "type": "NPC"
+    }
+  ],
+  "vendors": [
+    {
+      "wcid": 835,
+      "name": "Ven Ounan the Blacksmith",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 839,
+      "name": "Ai Konaji the Jeweler",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 836,
+      "name": "Zhofon No the Bowyer",
+      "type": "NPC_Vendor"
+    },
+    {
+      "wcid": 832,
+      "name": "Nin Hong the Barkeeper",
+      "type": "NPC_Barkeep"
+    },
+    {
+      "wcid": 842,
+      "name": "Shopkeeper Gonjoku Ryumi",
+      "type": "NPC_Vendor"
+    }
+  ],
+  "portals": [
+    {
+      "wcid": 1018,
+      "name": "Destroyed Portal to Hebian-To",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 11954,
+      "name": "Destroyed Portal to Greenspire",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 43067,
+      "name": "Portal to Town Network",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 19717,
+      "name": "Mannikin Foundry Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 6106,
+      "name": "Shoushi Meeting Hall Portal",
+      "type": "Interactive_Portal"
+    },
+    {
+      "wcid": 14449,
+      "name": "Underground Passage",
+      "type": "Interactive_Portal"
+    }
+  ],
+  "lifestones": [],
+  "signs": [],
+  "creatures": [
+    {
+      "wcid": 32715,
+      "name": "Lo Raen",
+      "type": "Creature"
+    },
+    {
+      "wcid": 5193,
+      "name": "Oi-Tong Ye ",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44897,
+      "name": "Eiichi",
+      "type": "Creature"
+    },
+    {
+      "wcid": 44893,
+      "name": "Benjirou",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42722,
+      "name": "Haruko",
+      "type": "Creature"
+    },
+    {
+      "wcid": 38045,
+      "name": "Hiro Ishigame",
+      "type": "Creature"
+    },
+    {
+      "wcid": 42738,
+      "name": "Tailor's Apprentice",
+      "type": "Creature"
+    },
+    {
+      "wcid": 33969,
+      "name": "Hadiya bint Anan",
+      "type": "Creature"
+    },
+    {
+      "wcid": 34286,
+      "name": "Sayuji Jina",
+      "type": "Creature"
+    },
+    {
+      "wcid": 33614,
+      "name": "Pathwarden Koro Ijida",
+      "type": "Creature"
+    },
+    {
+      "wcid": 31641,
+      "name": "San Ming",
+      "type": "Creature"
+    },
+    {
+      "wcid": 5195,
+      "name": "Lou Ka",
+      "type": "Creature"
+    },
+    {
+      "wcid": 37518,
+      "name": "Royal Guard",
+      "type": "Creature"
+    },
+    {
+      "wcid": 37518,
+      "name": "Royal Guard",
+      "type": "Creature"
+    },
+    {
+      "wcid": 37518,
+      "name": "Royal Guard",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30460,
+      "name": "Lockpick Forge",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30465,
+      "name": "Alchemy Forge",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30461,
+      "name": "Salvaging Forge",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30467,
+      "name": "Fletching Forge",
+      "type": "Creature"
+    },
+    {
+      "wcid": 30466,
+      "name": "Cooking Forge",
+      "type": "Creature"
+    },
+    {
+      "wcid": 28857,
+      "name": "Gonjoku Den",
+      "type": "Creature"
+    },
+    {
+      "wcid": 14414,
+      "name": "Sir Tenshin",
+      "type": "Creature"
+    },
+    {
+      "wcid": 33805,
+      "name": "Royal Guard",
+      "type": "Creature"
+    }
+  ],
+  "furniture": [
+    {
+      "wcid": 33611,
+      "name": "Sho Pathwarden Chest",
+      "type": "Furniture_Storage"
+    }
+  ],
+  "other": [
+    {
+      "wcid": 3951,
+      "name": "wcid_3951",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 7923,
+      "name": "wcid_7923",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19457,
+      "name": "wcid_19457",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 929,
+      "name": "wcid_929",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 509,
+      "name": "wcid_509",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 9422,
+      "name": "wcid_9422",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 843,
+      "name": "wcid_843",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 840,
+      "name": "wcid_840",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 838,
+      "name": "wcid_838",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 831,
+      "name": "wcid_831",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 837,
+      "name": "wcid_837",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 834,
+      "name": "wcid_834",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 153,
+      "name": "wcid_153",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 174,
+      "name": "wcid_174",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 8377,
+      "name": "wcid_8377",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 143,
+      "name": "wcid_143",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 16919,
+      "name": "wcid_16919",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 721,
+      "name": "wcid_721",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 721,
+      "name": "wcid_721",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 722,
+      "name": "wcid_722",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 19196,
+      "name": "wcid_19196",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 852,
+      "name": "wcid_852",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 850,
+      "name": "wcid_850",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 844,
+      "name": "wcid_844",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 845,
+      "name": "wcid_845",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 849,
+      "name": "wcid_849",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 846,
+      "name": "wcid_846",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 853,
+      "name": "wcid_853",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 847,
+      "name": "wcid_847",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 851,
+      "name": "wcid_851",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 848,
+      "name": "wcid_848",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4136,
+      "name": "wcid_4136",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4135,
+      "name": "wcid_4135",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27547,
+      "name": "wcid_27547",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 44208,
+      "name": "wcid_44208",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 27742,
+      "name": "wcid_27742",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4788,
+      "name": "wcid_4788",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 4772,
+      "name": "wcid_4772",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 71478,
+      "name": "Stephanie Holiday Event Spawn",
+      "type": "Prop"
+    },
+    {
+      "wcid": 71416,
+      "name": "House of Pancakes Event Gen",
+      "type": "Prop"
+    },
+    {
+      "wcid": 20221,
+      "name": "wcid_20221",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20222,
+      "name": "wcid_20222",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20225,
+      "name": "wcid_20225",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20226,
+      "name": "wcid_20226",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20217,
+      "name": "wcid_20217",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 20218,
+      "name": "wcid_20218",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 720,
+      "name": "wcid_720",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5086,
+      "name": "wcid_5086",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 412,
+      "name": "wcid_412",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 5086,
+      "name": "wcid_5086",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 12725,
+      "name": "wcid_12725",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 14460,
+      "name": "wcid_14460",
+      "type": "Unknown"
+    },
+    {
+      "wcid": 14459,
+      "name": "wcid_14459",
+      "type": "Unknown"
+    }
+  ]
+}
