@@ -32,10 +32,10 @@ import torch
 # Project paths
 # =====================================================================
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-INPUT_FILE = PROJECT_ROOT / "vanquish_heightmaps.jsonl"
-MODEL_FILE = PROJECT_ROOT / "models" / "v3" / "terrain_diffusion_v3.pt"
-CONFIG_FILE = PROJECT_ROOT / "models" / "v3" / "terrain_v3_config.json"
-BIOME_FILE = PROJECT_ROOT / "data" / "retail_biomes.npy"
+INPUT_FILE = PROJECT_ROOT / "pipeline_data" / "heightmaps" / "vanquish_heightmaps.jsonl"
+MODEL_FILE = PROJECT_ROOT / "pipeline_data" / "models" / "v3" / "terrain_diffusion_v3.pt"
+CONFIG_FILE = PROJECT_ROOT / "pipeline_data" / "models" / "v3" / "terrain_v3_config.json"
+BIOME_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "retail_biomes.npy"
 
 GRID_SIZE = 9
 MAP_SIZE = 255

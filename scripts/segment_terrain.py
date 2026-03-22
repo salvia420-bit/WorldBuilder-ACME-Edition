@@ -20,15 +20,15 @@ from pathlib import Path
 from collections import defaultdict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-HEIGHTMAP_FILE = PROJECT_ROOT / "retail_heightmaps.jsonl"
-BIOME_FILE = PROJECT_ROOT / "data" / "retail_biomes.npy"
-BIOME_INFO_FILE = PROJECT_ROOT / "data" / "retail_biome_info.json"
-WIKI_FEATURES_FILE = PROJECT_ROOT / "data" / "wiki_features.json"
-OCEAN_MASK_FILE = PROJECT_ROOT / "data" / "envcell_grid.npy"
+HEIGHTMAP_FILE = PROJECT_ROOT / "pipeline_data" / "heightmaps" / "retail_heightmaps.jsonl"
+BIOME_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "retail_biomes.npy"
+BIOME_INFO_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "retail_biome_info.json"
+WIKI_FEATURES_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "wiki_features.json"
+OCEAN_MASK_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "envcell_grid.npy"
 
-OUTPUT_MAP = PROJECT_ROOT / "data" / "feature_map.npy"
-OUTPUT_CATALOG = PROJECT_ROOT / "data" / "feature_catalog.json"
-OUTPUT_VISUAL = PROJECT_ROOT / "data" / "feature_map_visual.png"
+OUTPUT_MAP = PROJECT_ROOT / "pipeline_data" / "data" / "feature_map.npy"
+OUTPUT_CATALOG = PROJECT_ROOT / "pipeline_data" / "data" / "feature_catalog.json"
+OUTPUT_VISUAL = PROJECT_ROOT / "pipeline_data" / "data" / "feature_map_visual.png"
 
 MAP_SIZE = 255
 GRID_SIZE = 9

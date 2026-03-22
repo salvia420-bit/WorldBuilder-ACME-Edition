@@ -21,12 +21,12 @@ def parse_args():
     )
     parser.add_argument(
         "--lb-remap",
-        default="population_output/lb_remap.json",
+        default="pipeline_data/population_output/lb_remap.json",
         help="Path to lb_remap.json",
     )
     parser.add_argument(
         "--output",
-        default="population_output/portal_remap_from_lb_remap.sql",
+        default="pipeline_data/population_output/portal_remap_from_lb_remap.sql",
         help="Output SQL path",
     )
     parser.add_argument(

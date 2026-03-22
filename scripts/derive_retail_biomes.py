@@ -21,8 +21,8 @@ import numpy as np
 from collections import Counter
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-HEIGHTMAP_FILE = PROJECT_ROOT / "retail_heightmaps.jsonl"
-OUTPUT_DIR = PROJECT_ROOT / "data"
+HEIGHTMAP_FILE = PROJECT_ROOT / "pipeline_data" / "heightmaps" / "retail_heightmaps.jsonl"
+OUTPUT_DIR = PROJECT_ROOT / "pipeline_data" / "data"
 
 MAP_SIZE = 255
 GRID_SIZE = 9

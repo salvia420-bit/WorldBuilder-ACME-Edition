@@ -4,10 +4,10 @@ quantized image, guaranteeing impassable water remains byte-identical.
 """
 from PIL import Image
 
-ORIGINAL  = "screenshots/world_map.png"
-QUANTIZED = "screenshots/world_map_quantized.png"
-MASK      = "screenshots/ocean_mask.png"
-OUTPUT    = "screenshots/world_map_final.png"
+ORIGINAL  = "pipeline_data/screenshots/world_map.png"
+QUANTIZED = "pipeline_data/screenshots/world_map_quantized.png"
+MASK      = "pipeline_data/screenshots/ocean_mask.png"
+OUTPUT    = "pipeline_data/screenshots/world_map_final.png"
 
 original  = Image.open(ORIGINAL).convert("RGB")
 quantized = Image.open(QUANTIZED).convert("RGB")

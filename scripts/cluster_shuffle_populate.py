@@ -32,13 +32,13 @@ from typing import Dict, List, Optional, Set, Tuple
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 RETAIL_SQL = r"D:\ACE\world-db\ACE-World-Database-v0.9.292.sql"
-DIFFICULTY_GRADIENT = os.path.join(BASE_DIR, "difficulty_gradient.json")
+DIFFICULTY_GRADIENT = os.path.join(BASE_DIR, "pipeline_data", "enrichment", "difficulty_gradient.json")
 
 # ACE DB connection (for weenie type lookups)
 MYSQL = r"C:\Program Files\MariaDB 12.2\bin\mysql.exe"
 
 # Output
-OUTPUT_DIR = os.path.join(BASE_DIR, "population_output")
+OUTPUT_DIR = os.path.join(BASE_DIR, "pipeline_data", "population_output")
 OUTPUT_SQL = os.path.join(OUTPUT_DIR, "vanquish_instances.sql")
 CLUSTER_JSON = os.path.join(OUTPUT_DIR, "clusters.json")
 

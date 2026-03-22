@@ -495,53 +495,22 @@ remap_output/
 
 # TestProject output
 TestProject/output/
-
 # ──────────────────────────────────────────────
 # Pipeline data files (generated/large)
 # ──────────────────────────────────────────────
+# Consolidated pipeline data directory
+pipeline_data/
+
 # Heightmap JSONL files (40-85 MB each)
 *.jsonl
-
-# Large JSON data files
-biome_map.json
-canonical_enrichment.json
-population_plan.json
-difficulty_gradient.json
-retail_dungeon_topology.json
-retail_dungeon_catalog.json
-retail_training_data.jsonl
-retail_baseline.json
-retail_patterns.json
-
-# Building / population data
-building_culture_map.json
-building_placements.jsonl
 
 # Large SQL scripts (generated pipeline output)
 building_remap*.sql
 holtburg_probe.sql
 
-# Pipeline output directories
-population_output/
-screenshots/
-
-# Terrain codebook (small but generated)
-terrain_codebook.json
-
-# ──────────────────────────────────────────────
-# ML models & training artifacts
-# ──────────────────────────────────────────────
-models/*.pt
-models/**/*.pt
-models/training_loss.png
-models/**/*.json
-
 # NumPy / data artifacts
 *.npy
 *.npz
-data/mosaic_heightmaps.jsonl
-data/*.png
-data/*.json
 
 # ──────────────────────────────────────────────
 # Large images & map files

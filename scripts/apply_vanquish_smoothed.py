@@ -20,7 +20,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TERMINAL_EXE = PROJECT_ROOT / "WorldBuilder.Terminal" / "bin" / "Release" / "net8.0" / "WorldBuilder.Terminal.exe"
 PROJECT_FILE = PROJECT_ROOT / "vanquishtest" / "vanquishtest.wbproj"
-HEIGHTMAP_FILE = PROJECT_ROOT / "vanquish_smoothed.jsonl"
+HEIGHTMAP_FILE = PROJECT_ROOT / "pipeline_data" / "heightmaps" / "vanquish_smoothed.jsonl"
 EXPORT_DIR = str(PROJECT_ROOT / "vanquishtest")
 
 

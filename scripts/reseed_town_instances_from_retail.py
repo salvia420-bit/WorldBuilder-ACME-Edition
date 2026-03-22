@@ -25,8 +25,8 @@ from typing import Dict, Iterable, List, Set, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RETAIL_SQL = Path(r"D:\ACE\world-db\ACE-World-Database-v0.9.292.sql")
-DEFAULT_LB_REMAP = ROOT / "population_output" / "lb_remap.json"
-DEFAULT_OUTPUT_SQL = ROOT / "population_output" / "town_instance_reseed.sql"
+DEFAULT_LB_REMAP = ROOT / "pipeline_data" / "population_output" / "lb_remap.json"
+DEFAULT_OUTPUT_SQL = ROOT / "pipeline_data" / "population_output" / "town_instance_reseed.sql"
 DEFAULT_MYSQL = Path(r"C:\Program Files\MariaDB 12.2\bin\mysql.exe")
 
 

@@ -163,12 +163,12 @@ def main():
     parser = argparse.ArgumentParser(description="Remap town-network portal destinations")
     parser.add_argument(
         "--town-placements",
-        default="population_output/town_placements.json",
+        default="pipeline_data/population_output/town_placements.json",
         help="Path to town_placements.json",
     )
     parser.add_argument(
         "--output",
-        default="population_output/portal_town_network_remap.sql",
+        default="pipeline_data/population_output/portal_town_network_remap.sql",
         help="Output SQL path",
     )
     parser.add_argument("--mysql", default=str(MYSQL_DEFAULT), help="Path to mysql.exe")

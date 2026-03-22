@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Numerics;
 using WorldBuilder.Shared.Lib.Dungeon;
 using WorldBuilder.Shared.Lib.Validation;
@@ -2541,11 +2541,11 @@ public class TerminalRepl {
         Console.ForegroundColor = ConsoleColor.Cyan;
         Console.WriteLine("  â•â•â• Extract Retail Heightmaps â•â•â•");
         Console.ResetColor();
-        Console.WriteLine($"  Output: {outputPath ?? "retail_heightmaps.jsonl"}");
+        Console.WriteLine($"  Output: {outputPath ?? "pipeline_data/heightmaps/retail_heightmaps.jsonl"}");
         Console.WriteLine("  Scanning all 255Ã—255 landblocks for terrain vertex data...");
         Console.WriteLine();
 
-        var r = _engine.ExtractRetailHeightmaps(outputPath ?? "retail_heightmaps.jsonl");
+        var r = _engine.ExtractRetailHeightmaps(outputPath ?? "pipeline_data/heightmaps/retail_heightmaps.jsonl");
 
         Console.ForegroundColor = r.Success ? ConsoleColor.Green : ConsoleColor.Red;
         Console.WriteLine(r.Success ? "  âœ“ Export complete!" : $"  âœ— Export failed: {r.Error}");
@@ -2568,11 +2568,11 @@ public class TerminalRepl {
         Console.ForegroundColor = ConsoleColor.Cyan;
         Console.WriteLine("  â•â•â• Compute Vanilla Baseline â•â•â•");
         Console.ResetColor();
-        Console.WriteLine($"  Output: {outputPath ?? "retail_baseline.json"}");
+        Console.WriteLine($"  Output: {outputPath ?? "pipeline_data/enrichment/retail_baseline.json"}");
         Console.WriteLine("  Computing quality metrics from retail data...");
         Console.WriteLine();
 
-        var r = _engine.ComputeVanillaBaseline(outputPath ?? "retail_baseline.json");
+        var r = _engine.ComputeVanillaBaseline(outputPath ?? "pipeline_data/enrichment/retail_baseline.json");
 
         Console.ForegroundColor = r.Success ? ConsoleColor.Green : ConsoleColor.Red;
         Console.WriteLine(r.Success ? "  âœ“ Baseline computed!" : $"  âœ— Computation failed: {r.Error}");
@@ -2608,11 +2608,11 @@ public class TerminalRepl {
         Console.WriteLine("  â•â•â• Analyze Map Image â•â•â•");
         Console.ResetColor();
         Console.WriteLine($"  Image:  {imagePath}");
-        Console.WriteLine($"  Output: {outputPath ?? "biome_map.json"}");
+        Console.WriteLine($"  Output: {outputPath ?? "pipeline_data/enrichment/biome_map.json"}");
         Console.WriteLine("  Classifying each landblock's pixel region into biome categories...");
         Console.WriteLine();
 
-        var r = _engine.AnalyzeMapImage(imagePath, outputPath ?? "biome_map.json");
+        var r = _engine.AnalyzeMapImage(imagePath, outputPath ?? "pipeline_data/enrichment/biome_map.json");
 
         Console.ForegroundColor = r.Success ? ConsoleColor.Green : ConsoleColor.Red;
         Console.WriteLine(r.Success ? "  âœ“ Analysis complete!" : $"  âœ— Analysis failed: {r.Error}");
@@ -2647,7 +2647,7 @@ public class TerminalRepl {
 
     private void HandleCalibrateWorldMap(string[] tokens) {
         if (!CheckProject()) return;
-        string outputPath = tokens.Length >= 2 ? tokens[1] : "terrain_codebook.json";
+        string outputPath = tokens.Length >= 2 ? tokens[1] : "pipeline_data/enrichment/terrain_codebook.json";
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Cyan;
@@ -2696,8 +2696,8 @@ public class TerminalRepl {
             Console.WriteLine("  world_map.png   â€” source image (2041Ã—2041 for exact, or any size) (required)");
             Console.WriteLine("  seed            â€” random seed, 0 = non-deterministic (default: 0)");
             Console.WriteLine();
-            Console.WriteLine("  Example: quick-world terrain_codebook.json new_world.png");
-            Console.WriteLine("  Example: quick-world terrain_codebook.json new_world.png 42");
+            Console.WriteLine("  Example: quick-world pipeline_data/enrichment/terrain_codebook.json new_world.png");
+            Console.WriteLine("  Example: quick-world pipeline_data/enrichment/terrain_codebook.json new_world.png 42");
             return;
         }
 
@@ -2843,9 +2843,9 @@ public class TerminalRepl {
             Console.WriteLine("    --preserve-retail-z  Keep retail origin-to-ground offsets (legacy behavior)");
             Console.WriteLine();
             Console.WriteLine("  Full pipeline:");
-            Console.WriteLine("    1. remap-buildings-v2 population_output/lb_remap.json");
+            Console.WriteLine("    1. remap-buildings-v2 pipeline_data/population_output/lb_remap.json");
             Console.WriteLine("    2. export D:\\ACE\\Dats");
-            Console.WriteLine("    3. remap-buildings-sql population_output/lb_remap.json D:\\ACE\\Dats building_remap_v2.sql --apply");
+            Console.WriteLine("    3. remap-buildings-sql pipeline_data/population_output/lb_remap.json D:\\ACE\\Dats building_remap_v2.sql --apply");
             Console.WriteLine("    4. ace-db reposition");
             return;
         }
@@ -2942,7 +2942,7 @@ public class TerminalRepl {
             Console.WriteLine();
             Console.WriteLine("  --apply   Apply the SQL directly to the database");
             Console.WriteLine();
-            Console.WriteLine("  Example: remap-buildings-sql population_output/lb_remap.json D:\\ACE\\Dats building_remap_v2.sql --apply");
+            Console.WriteLine("  Example: remap-buildings-sql pipeline_data/population_output/lb_remap.json D:\\ACE\\Dats building_remap_v2.sql --apply");
             return;
         }
 

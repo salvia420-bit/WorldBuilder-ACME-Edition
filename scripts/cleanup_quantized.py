@@ -11,10 +11,10 @@ This ensures no ocean-like colors survive on the landmass.
 from PIL import Image
 import math, sys
 
-QUANTIZED = "screenshots/world_map_quantized.png"
-MASK      = "screenshots/ocean_mask.png"
-ORIGINAL  = "screenshots/world_map.png"
-OUTPUT    = "screenshots/world_map_quantized.png"   # overwrite in-place
+QUANTIZED = "pipeline_data/screenshots/world_map_quantized.png"
+MASK      = "pipeline_data/screenshots/ocean_mask.png"
+ORIGINAL  = "pipeline_data/screenshots/world_map.png"
+OUTPUT    = "pipeline_data/screenshots/world_map_quantized.png"   # overwrite in-place
 
 # ── Ocean / impassable water reference colors ────────────────────────
 OCEAN_RGB           = (59, 33, 29)     # #3B211D

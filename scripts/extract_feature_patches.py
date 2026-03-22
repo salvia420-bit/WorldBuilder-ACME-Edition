@@ -16,10 +16,10 @@ import numpy as np
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-HEIGHTMAP_FILE = PROJECT_ROOT / "retail_heightmaps.jsonl"
-FEATURE_MAP_FILE = PROJECT_ROOT / "data" / "feature_map.npy"
-CATALOG_FILE = PROJECT_ROOT / "data" / "feature_catalog.json"
-OUTPUT = PROJECT_ROOT / "data" / "feature_patches.npz"
+HEIGHTMAP_FILE = PROJECT_ROOT / "pipeline_data" / "heightmaps" / "retail_heightmaps.jsonl"
+FEATURE_MAP_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "feature_map.npy"
+CATALOG_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "feature_catalog.json"
+OUTPUT = PROJECT_ROOT / "pipeline_data" / "data" / "feature_patches.npz"
 
 MAP_SIZE = 255
 GRID_SIZE = 9

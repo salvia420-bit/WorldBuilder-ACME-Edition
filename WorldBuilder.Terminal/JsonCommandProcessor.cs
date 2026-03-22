@@ -1285,7 +1285,7 @@ public class JsonCommandProcessor {
     }
 
     private string CmdExtractRetailHeightmaps(System.Text.Json.Nodes.JsonNode node) {
-        string outputPath = node["outputPath"]?.GetValue<string>() ?? "retail_heightmaps.jsonl";
+        string outputPath = node["outputPath"]?.GetValue<string>() ?? "pipeline_data/heightmaps/retail_heightmaps.jsonl";
 
         var r = _engine.ExtractRetailHeightmaps(outputPath);
         return Serialize(new { success = r.Success, command = "extract-retail-heightmaps",
@@ -1297,7 +1297,7 @@ public class JsonCommandProcessor {
     }
 
     private string CmdComputeVanillaBaseline(System.Text.Json.Nodes.JsonNode node) {
-        string outputPath = node["outputPath"]?.GetValue<string>() ?? "retail_baseline.json";
+        string outputPath = node["outputPath"]?.GetValue<string>() ?? "pipeline_data/enrichment/retail_baseline.json";
 
         var r = _engine.ComputeVanillaBaseline(outputPath);
         return Serialize(new { success = r.Success, command = "compute-vanilla-baseline",

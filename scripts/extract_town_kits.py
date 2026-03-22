@@ -29,7 +29,7 @@ DATA_DIR = os.path.join(BASE_DIR, 'data')
 LSD_DIR  = os.path.join(BASE_DIR, 'LSD-Partial-2025-02-23_16-15')
 OUTPUT_DIR = os.path.join(BASE_DIR, 'town_kits')
 
-BUILDING_FILE  = os.path.join(BASE_DIR, 'building_placements.jsonl')
+BUILDING_FILE  = os.path.join(BASE_DIR, 'pipeline_data', 'enrichment', 'building_placements.jsonl')
 SPAWN_FILE     = os.path.join(LSD_DIR, 'spawnmap_summary.jsonl')
 ENRICHMENT_FILE = os.path.join(BASE_DIR, 'canonical_enrichment.json')
 WEENIE_FILE    = os.path.join(LSD_DIR, 'weenie_summary.jsonl')

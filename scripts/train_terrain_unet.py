@@ -35,9 +35,9 @@ from tqdm import tqdm
 # Configuration
 # ─────────────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-HEIGHTMAP_FILE = PROJECT_ROOT / "retail_heightmaps.jsonl"
-BIOME_FILE = PROJECT_ROOT / "biome_map.json"
-MODEL_DIR = PROJECT_ROOT / "models"
+HEIGHTMAP_FILE = PROJECT_ROOT / "pipeline_data" / "heightmaps" / "retail_heightmaps.jsonl"
+BIOME_FILE = PROJECT_ROOT / "pipeline_data" / "enrichment" / "biome_map.json"
+MODEL_DIR = PROJECT_ROOT / "pipeline_data" / "models"
 
 GRID_SIZE = 9          # 9x9 heightmap per landblock
 MAP_SIZE = 255         # 255x255 landblock grid

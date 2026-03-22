@@ -53,7 +53,7 @@ SPAWN_PROBABILITY = {
 
 def load_canonical_enrichment(project_dir):
     """Load and index the canonical enrichment data."""
-    path = os.path.join(project_dir, "canonical_enrichment.json")
+    path = os.path.join(project_dir, "pipeline_data", "enrichment", "canonical_enrichment.json")
     if not os.path.exists(path):
         print(f"  ERROR: {path} not found")
         return None
@@ -124,7 +124,7 @@ def load_canonical_enrichment(project_dir):
 
 def load_building_culture_map(project_dir):
     """Load the building culture map."""
-    path = os.path.join(project_dir, "building_culture_map.json")
+    path = os.path.join(project_dir, "pipeline_data", "enrichment", "building_culture_map.json")
     if not os.path.exists(path):
         return {}
 
@@ -147,7 +147,7 @@ def load_building_culture_map(project_dir):
 
 def load_difficulty_gradient(project_dir):
     """Load the 255x255 difficulty grid."""
-    path = os.path.join(project_dir, "difficulty_gradient.json")
+    path = os.path.join(project_dir, "pipeline_data", "enrichment", "difficulty_gradient.json")
     if not os.path.exists(path):
         print(f"  ERROR: {path} not found")
         return None
@@ -302,7 +302,7 @@ def random_position_in_landblock():
 
 def main():
     project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    output_path = os.path.join(project_dir, "population_plan.json")
+    output_path = os.path.join(project_dir, "pipeline_data", "enrichment", "population_plan.json")
 
     print("=" * 72)
     print("  Population Plan Generator")

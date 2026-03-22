@@ -31,11 +31,11 @@ from PIL import Image
 import colorsys
 
 # --- Paths ---
-INPUT  = sys.argv[1] if len(sys.argv) > 1 else "screenshots/attempt1.png"
-MASK   = sys.argv[2] if len(sys.argv) > 2 else "screenshots/ocean_mask.png"
-OUTPUT = sys.argv[3] if len(sys.argv) > 3 else "screenshots/world_map_ai.png"
+INPUT  = sys.argv[1] if len(sys.argv) > 1 else "pipeline_data/screenshots/attempt1.png"
+MASK   = sys.argv[2] if len(sys.argv) > 2 else "pipeline_data/screenshots/ocean_mask.png"
+OUTPUT = sys.argv[3] if len(sys.argv) > 3 else "pipeline_data/screenshots/world_map_ai.png"
 
-# --- Ocean / Impassable color definitions (from HowToMakeNewWorlds.md) ---
+# --- Ocean / Impassable color definitions (from docs/HowToMakeNewWorlds.md) ---
 OCEAN_COLOR = (59, 33, 29)        # #3B211D
 OCEAN_TOLERANCE = 5               # +-5 per channel
 
@@ -45,7 +45,7 @@ IMPASSABLE_TOLERANCE = 10         # +-10 per channel
 # --- Safe biome replacement colors ---
 # When an ocean-like pixel is found on land, replace it with a contextually
 # appropriate land color. We'll use the nearest approved biome color from
-# the palette defined in HowToMakeNewWorlds.md.
+# the palette defined in docs/HowToMakeNewWorlds.md.
 BIOME_PALETTE = {
     "forest":    (45,  90,  80),
     "grassland": (80, 140, 110),

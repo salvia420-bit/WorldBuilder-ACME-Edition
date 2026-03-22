@@ -9,7 +9,7 @@ import os
 import time
 
 DAT_PATH = r"d:\Clones\WorldBuilder-ACME-Edition-master\vanquishtest\client_cell_1.dat"
-OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "population_output", "vanquish_heights.json")
+OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pipeline_data", "population_output", "vanquish_heights.json")
 
 HEIGHT_SCALE = 2.0
 

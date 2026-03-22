@@ -34,7 +34,7 @@ CREATURE_TYPE_CS     = os.path.join(PROJ_ROOT, "ACE-master", "Source", "ACE.Enti
 WEENIE_SUMMARY_JSONL = os.path.join(PROJ_ROOT, "LSD-Partial-2025-02-23_16-15", "weenie_summary.jsonl")
 SPAWNMAP_JSONL       = os.path.join(PROJ_ROOT, "LSD-Partial-2025-02-23_16-15", "spawnmap_summary.jsonl")
 
-OUTPUT_FILE          = os.path.join(PROJ_ROOT, "canonical_enrichment.json")
+OUTPUT_FILE          = os.path.join(PROJ_ROOT, "pipeline_data", "enrichment", "canonical_enrichment.json")
 
 # ── Intrinsic creature family → biome mapping ────────────────────────────────
 # These are INHERENT properties of each creature family, not derived from where

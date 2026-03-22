@@ -19,7 +19,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WIKI_XML = PROJECT_ROOT / "AcWikisXML" / "asheron.fandom.com xml dumps-20260306T183940Z-3-001" / "asheron.fandom.com xml dumps" / "2025-12-06-asheron_backup2_pages_full.xml"
 LOCATIONS_TXT = PROJECT_ROOT / "WorldBuilder" / "Data" / "Locations.txt"
-OUTPUT = PROJECT_ROOT / "data" / "wiki_features.json"
+OUTPUT = PROJECT_ROOT / "pipeline_data" / "data" / "wiki_features.json"
 
 MAP_SIZE = 255
 

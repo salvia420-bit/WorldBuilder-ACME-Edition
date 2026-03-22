@@ -37,10 +37,10 @@ from tqdm import tqdm
 # Configuration
 # =====================================================================
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-HEIGHTMAP_FILE = PROJECT_ROOT / "retail_heightmaps.jsonl"
-BIOME_FILE = PROJECT_ROOT / "data" / "retail_biomes.npy"
-BIOME_INFO_FILE = PROJECT_ROOT / "data" / "retail_biome_info.json"
-MODEL_DIR = PROJECT_ROOT / "models" / "v3"
+HEIGHTMAP_FILE = PROJECT_ROOT / "pipeline_data" / "heightmaps" / "retail_heightmaps.jsonl"
+BIOME_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "retail_biomes.npy"
+BIOME_INFO_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "retail_biome_info.json"
+MODEL_DIR = PROJECT_ROOT / "pipeline_data" / "models" / "v3"
 
 GRID_SIZE = 9
 MAP_SIZE = 255

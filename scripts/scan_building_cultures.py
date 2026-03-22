@@ -122,8 +122,8 @@ def find_nearest_town(world_x, world_y):
 
 def main():
     project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    building_placements_path = os.path.join(project_dir, "building_placements.jsonl")
-    output_path = os.path.join(project_dir, "building_culture_map.json")
+    building_placements_path = os.path.join(project_dir, "pipeline_data", "enrichment", "building_placements.jsonl")
+    output_path = os.path.join(project_dir, "pipeline_data", "enrichment", "building_culture_map.json")
 
     if not os.path.exists(building_placements_path):
         print("=" * 72)

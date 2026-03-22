@@ -2,7 +2,7 @@
 import json, os
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-with open(os.path.join(BASE_DIR, "population_output", "town_placements.json")) as f:
+with open(os.path.join(BASE_DIR, "pipeline_data", "population_output", "town_placements.json")) as f:
     data = json.load(f)
 towns = data.get("towns", data)
 

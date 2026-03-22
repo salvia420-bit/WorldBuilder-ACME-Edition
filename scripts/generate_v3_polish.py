@@ -33,15 +33,15 @@ from tqdm import tqdm
 # Paths
 # =====================================================================
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-MODEL_FILE = PROJECT_ROOT / "models" / "v3" / "terrain_diffusion_v3.pt"
-CONFIG_FILE = PROJECT_ROOT / "models" / "v3" / "terrain_v3_config.json"
-BIOME_FILE = PROJECT_ROOT / "data" / "retail_biomes.npy"
-BIOME_INFO_FILE = PROJECT_ROOT / "data" / "retail_biome_info.json"
-BIOME_MAP_FILE = PROJECT_ROOT / "biome_map.json"
-RETAIL_FILE = PROJECT_ROOT / "retail_heightmaps.jsonl"
-WORLD_MAP_FILE = PROJECT_ROOT / "screenshots" / "world_map_final.png"
-ENVCELL_FILE = PROJECT_ROOT / "data" / "envcell_analysis.json"
-ENVCELL_GRID_FILE = PROJECT_ROOT / "data" / "envcell_grid.npy"
+MODEL_FILE = PROJECT_ROOT / "pipeline_data" / "models" / "v3" / "terrain_diffusion_v3.pt"
+CONFIG_FILE = PROJECT_ROOT / "pipeline_data" / "models" / "v3" / "terrain_v3_config.json"
+BIOME_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "retail_biomes.npy"
+BIOME_INFO_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "retail_biome_info.json"
+BIOME_MAP_FILE = PROJECT_ROOT / "pipeline_data" / "enrichment" / "biome_map.json"
+RETAIL_FILE = PROJECT_ROOT / "pipeline_data" / "heightmaps" / "retail_heightmaps.jsonl"
+WORLD_MAP_FILE = PROJECT_ROOT / "pipeline_data" / "screenshots" / "world_map_final.png"
+ENVCELL_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "envcell_analysis.json"
+ENVCELL_GRID_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "envcell_grid.npy"
 
 GRID_SIZE = 9
 MAP_SIZE = 255

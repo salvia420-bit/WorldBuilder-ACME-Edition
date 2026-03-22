@@ -16,7 +16,7 @@
         <Product>ACME WorldBuilder</Product>
         <Copyright>2026 ACME</Copyright>
         <ApplicationManifest>app.manifest</ApplicationManifest>
-        <ApplicationIcon>..\acme-wblogo.ico</ApplicationIcon>
+        <ApplicationIcon>..\installer\acme-wblogo.ico</ApplicationIcon>
         <UpdateAssemblyInfo>false</UpdateAssemblyInfo>
     </PropertyGroup>
 

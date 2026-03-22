@@ -20,8 +20,8 @@ from typing import Dict, List, Tuple, Set
 # ── Paths ──
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPT_DIR)
-ENVCELL_GRID = os.path.join(ROOT, "data", "envcell_grid.npy")
-OUTPUT_DIR = os.path.join(ROOT, "population_output")
+ENVCELL_GRID = os.path.join(ROOT, "pipeline_data", "data", "envcell_grid.npy")
+OUTPUT_DIR = os.path.join(ROOT, "pipeline_data", "population_output")
 OUTPUT_JSON = os.path.join(OUTPUT_DIR, "lb_remap.json")
 
 # Import cluster_shuffle_populate for parsing

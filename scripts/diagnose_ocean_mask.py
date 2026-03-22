@@ -11,7 +11,7 @@ Usage:
 import colorsys
 from PIL import Image
 
-INPUT = "screenshots/world_map.png"
+INPUT = "pipeline_data/screenshots/world_map.png"
 
 # Known inland coordinates to test (x, y pixel coords, description)
 TEST_POINTS = [

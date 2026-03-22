@@ -5,9 +5,9 @@ biome palette color, using the ocean_mask to skip ocean pixels.
 from PIL import Image
 import math
 
-INPUT   = "screenshots/world_map_ai.png"
-MASK    = "screenshots/ocean_mask.png"
-OUTPUT  = "screenshots/world_map_quantized.png"
+INPUT   = "pipeline_data/screenshots/world_map_ai.png"
+MASK    = "pipeline_data/screenshots/ocean_mask.png"
+OUTPUT  = "pipeline_data/screenshots/world_map_quantized.png"
 
 # Canonical representative colors for each biome (approximate center of HSB range).
 # These must fall within the ranges documented in the palette table.

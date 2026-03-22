@@ -30,19 +30,19 @@ from pathlib import Path
 from collections import defaultdict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-HEIGHTMAP_FILE = PROJECT_ROOT / "retail_heightmaps.jsonl"
-FEATURE_MAP_FILE = PROJECT_ROOT / "data" / "feature_map.npy"
-CATALOG_FILE = PROJECT_ROOT / "data" / "feature_catalog.json"
-PATCHES_FILE = PROJECT_ROOT / "data" / "feature_patches.npz"
-BIOME_FILE = PROJECT_ROOT / "data" / "retail_biomes.npy"
-ENVCELL_FILE = PROJECT_ROOT / "data" / "envcell_grid.npy"
+HEIGHTMAP_FILE = PROJECT_ROOT / "pipeline_data" / "heightmaps" / "retail_heightmaps.jsonl"
+FEATURE_MAP_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "feature_map.npy"
+CATALOG_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "feature_catalog.json"
+PATCHES_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "feature_patches.npz"
+BIOME_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "retail_biomes.npy"
+ENVCELL_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "envcell_grid.npy"
 
-OUTPUT_HEIGHTMAPS = PROJECT_ROOT / "data" / "mosaic_heightmaps.jsonl"
-OUTPUT_LAYOUT = PROJECT_ROOT / "data" / "mosaic_layout.json"
-OUTPUT_VISUAL = PROJECT_ROOT / "data" / "mosaic_visual.png"
+OUTPUT_HEIGHTMAPS = PROJECT_ROOT / "pipeline_data" / "data" / "mosaic_heightmaps.jsonl"
+OUTPUT_LAYOUT = PROJECT_ROOT / "pipeline_data" / "data" / "mosaic_layout.json"
+OUTPUT_VISUAL = PROJECT_ROOT / "pipeline_data" / "data" / "mosaic_visual.png"
 
 # V3 model paths
-V3_MODEL = PROJECT_ROOT / "models" / "v3" / "terrain_diffusion_v3.pt"
+V3_MODEL = PROJECT_ROOT / "pipeline_data" / "models" / "v3" / "terrain_diffusion_v3.pt"
 
 MAP_SIZE = 255
 GRID_SIZE = 9

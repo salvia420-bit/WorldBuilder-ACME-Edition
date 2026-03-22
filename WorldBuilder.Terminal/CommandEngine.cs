@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Numerics;
 using DatReaderWriter.DBObjs;
 using DatReaderWriter.Options;
@@ -4309,7 +4309,7 @@ public class CommandEngine {
         sw.Start();
 
         if (string.IsNullOrEmpty(outputPath))
-            outputPath = "retail_heightmaps.jsonl";
+            outputPath = "pipeline_data/heightmaps/retail_heightmaps.jsonl";
 
         var terrainDoc = GetTerrainDoc();
         var ht = GetHeightTable();
@@ -4392,7 +4392,7 @@ public class CommandEngine {
         sw.Start();
 
         if (string.IsNullOrEmpty(outputPath))
-            outputPath = "retail_baseline.json";
+            outputPath = "pipeline_data/enrichment/retail_baseline.json";
 
         var terrainDoc = GetTerrainDoc();
         var ht = GetHeightTable();
@@ -4617,7 +4617,7 @@ public class CommandEngine {
         sw.Start();
 
         if (string.IsNullOrEmpty(outputPath))
-            outputPath = "terrain_codebook.json";
+            outputPath = "pipeline_data/enrichment/terrain_codebook.json";
 
         var dats = _projectManager.CurrentProject!.DocumentManager.Dats;
 
@@ -5179,7 +5179,7 @@ public class CommandEngine {
         sw.Start();
 
         if (string.IsNullOrEmpty(outputPath))
-            outputPath = "biome_map.json";
+            outputPath = "pipeline_data/enrichment/biome_map.json";
 
         // â”€â”€â”€ 1. Load the image via SkiaSharp â”€â”€â”€
         if (!File.Exists(imagePath)) {

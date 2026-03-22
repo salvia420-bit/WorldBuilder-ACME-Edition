@@ -34,9 +34,9 @@ from tqdm import tqdm
 # Configuration
 # =====================================================================
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-HEIGHTMAP_FILE = PROJECT_ROOT / "retail_heightmaps.jsonl"
-BIOME_FILE = PROJECT_ROOT / "biome_map.json"
-MODEL_DIR = PROJECT_ROOT / "models" / "v2"
+HEIGHTMAP_FILE = PROJECT_ROOT / "pipeline_data" / "heightmaps" / "retail_heightmaps.jsonl"
+BIOME_FILE = PROJECT_ROOT / "pipeline_data" / "enrichment" / "biome_map.json"
+MODEL_DIR = PROJECT_ROOT / "pipeline_data" / "models" / "v2"
 
 GRID_SIZE = 9
 MAP_SIZE = 255
@@ -601,7 +601,7 @@ def train():
         print(f"    Peak reserved:  {resv:.0f} MB")
 
     # -- Compare with v1 ---------------------------------------------------
-    v1_config_path = PROJECT_ROOT / "models" / "v1" / "terrain_unet_config.json"
+    v1_config_path = PROJECT_ROOT / "pipeline_data" / "models" / "v1" / "terrain_unet_config.json"
     if v1_config_path.exists():
         with open(v1_config_path) as f:
             v1 = json.load(f)

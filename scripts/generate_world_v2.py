@@ -22,8 +22,8 @@ import torch.nn.functional as F
 # Paths
 # =====================================================================
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-BIOME_FILE = PROJECT_ROOT / "biome_map.json"
-MODEL_DIR = PROJECT_ROOT / "models" / "v2"
+BIOME_FILE = PROJECT_ROOT / "pipeline_data" / "enrichment" / "biome_map.json"
+MODEL_DIR = PROJECT_ROOT / "pipeline_data" / "models" / "v2"
 MODEL_PATH = MODEL_DIR / "terrain_unet_v2.pt"
 CONFIG_PATH = MODEL_DIR / "terrain_unet_v2_config.json"
 OUTPUT_DIR = PROJECT_ROOT / "output_demo"

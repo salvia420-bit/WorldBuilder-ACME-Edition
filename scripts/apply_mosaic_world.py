@@ -21,7 +21,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TERMINAL_EXE = PROJECT_ROOT / "WorldBuilder.Terminal" / "bin" / "Release" / "net8.0" / "WorldBuilder.Terminal.exe"
 PROJECT_FILE = PROJECT_ROOT / "TestProject" / "TestProject.wbproj"
-HEIGHTMAP_FILE = PROJECT_ROOT / "data" / "mosaic_heightmaps.jsonl"
+HEIGHTMAP_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "mosaic_heightmaps.jsonl"
 
 
 def send_command(proc, cmd_dict):

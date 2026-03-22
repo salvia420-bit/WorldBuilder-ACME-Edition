@@ -191,7 +191,7 @@ def analyze_retail_spawns(project_dir):
     Uses spawn_map_summary.jsonl + canonical_enrichment.json.
     """
     spawn_path = os.path.join(project_dir, "spawn_map_summary.jsonl")
-    canonical_path = os.path.join(project_dir, "canonical_enrichment.json")
+    canonical_path = os.path.join(project_dir, "pipeline_data", "enrichment", "canonical_enrichment.json")
 
     if not os.path.exists(spawn_path):
         print(f"  ERROR: {spawn_path} not found.")
@@ -259,8 +259,8 @@ def analyze_retail_spawns(project_dir):
 
 def main():
     project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    output_json = os.path.join(project_dir, "difficulty_gradient.json")
-    output_image = os.path.join(project_dir, "difficulty_gradient.png")
+    output_json = os.path.join(project_dir, "pipeline_data", "enrichment", "difficulty_gradient.json")
+    output_image = os.path.join(project_dir, "pipeline_data", "enrichment", "difficulty_gradient.png")
 
     print("=" * 72)
     print("  Difficulty Gradient Generator")
@@ -273,8 +273,8 @@ def main():
         print()
         grid = analyze_retail_spawns(project_dir)
         if grid is not None:
-            retail_json = os.path.join(project_dir, "retail_difficulty_gradient.json")
-            retail_image = os.path.join(project_dir, "retail_difficulty_gradient.png")
+            retail_json = os.path.join(project_dir, "pipeline_data", "enrichment", "retail_difficulty_gradient.json")
+            retail_image = os.path.join(project_dir, "pipeline_data", "enrichment", "retail_difficulty_gradient.png")
             save_gradient_json(grid, [], [], retail_json)
             save_gradient_image(grid, retail_image)
         return

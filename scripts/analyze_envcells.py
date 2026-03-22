@@ -21,7 +21,7 @@ from PIL import Image
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 IMAGE_PATH = PROJECT_ROOT / "image.webp"
-OUTPUT_DIR = PROJECT_ROOT / "data"
+OUTPUT_DIR = PROJECT_ROOT / "pipeline_data" / "data"
 MAP_SIZE = 255
 
 def main():

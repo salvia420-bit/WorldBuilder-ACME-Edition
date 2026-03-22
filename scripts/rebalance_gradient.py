@@ -14,7 +14,7 @@ import math
 import os
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-GRADIENT_PATH = os.path.join(BASE_DIR, "difficulty_gradient.json")
+GRADIENT_PATH = os.path.join(BASE_DIR, "pipeline_data", "enrichment", "difficulty_gradient.json")
 GRID_SIZE = 255
 
 def main():

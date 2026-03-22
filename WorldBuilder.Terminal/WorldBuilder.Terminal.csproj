@@ -30,7 +30,7 @@
 			<Private>true</Private>
 		</Reference>
 		<Reference Include="DatReaderWriter.Extensions">
-			<HintPath>..\DatReaderWriter.Extensions-master\bin\net8.0\DatReaderWriter.Extensions.dll</HintPath>
+			<HintPath>..\DatReaderWriter.Extensions\bin\net8.0\DatReaderWriter.Extensions.dll</HintPath>
 			<Private>true</Private>
 		</Reference>
 	</ItemGroup>

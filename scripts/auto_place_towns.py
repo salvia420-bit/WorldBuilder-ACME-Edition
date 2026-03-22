@@ -11,7 +11,7 @@ import json, math, os, random
 import numpy as np
 
 # ─── Load height data ────────────────────────────────────────────────────
-heights_path = "population_output/vanquish_heights.json"
+heights_path = "pipeline_data/population_output/vanquish_heights.json"
 raw = json.load(open(heights_path))
 
 # Build 255x255 grid of average heights per landblock
@@ -244,7 +244,7 @@ for name, pos in placements.items():
         "type": town.get("type", "overworld")
     }
 
-out_path = "population_output/town_placements.json"
+out_path = "pipeline_data/population_output/town_placements.json"
 with open(out_path, "w") as f:
     json.dump(output, f, indent=2)
 

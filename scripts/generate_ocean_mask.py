@@ -48,8 +48,8 @@ from pathlib import Path
 from PIL import Image
 
 # ── Config ───────────────────────────────────────────────────────────────────
-INPUT_PATH   = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("screenshots/world_map.png")
-OUTPUT_PATH  = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("screenshots/ocean_mask.png")
+INPUT_PATH   = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("pipeline_data/screenshots/world_map.png")
+OUTPUT_PATH  = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("pipeline_data/screenshots/ocean_mask.png")
 OUTPUT_PREVIEW = OUTPUT_PATH.with_name(OUTPUT_PATH.stem + "_preview.png")
 
 # Exact ocean color (#3B211D) and flood-fill tolerance

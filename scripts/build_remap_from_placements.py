@@ -14,7 +14,7 @@ from collections import defaultdict
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # ---- Load data ----
-with open(os.path.join(BASE_DIR, "population_output", "town_placements.json")) as f:
+with open(os.path.join(BASE_DIR, "pipeline_data", "population_output", "town_placements.json")) as f:
     pdata = json.load(f)
     town_placements = pdata.get("towns", pdata)
 
@@ -220,7 +220,7 @@ print(f"Mega-structures filtered by model ID: {skipped_mega}")
 print(f"Building LBs too far from any town: {skipped_no_town}")
 
 # ---- Save ----
-output_path = os.path.join(BASE_DIR, "population_output", "lb_remap.json")
+output_path = os.path.join(BASE_DIR, "pipeline_data", "population_output", "lb_remap.json")
 with open(output_path, "w") as f:
     json.dump(lb_remap, f, indent=2)
 

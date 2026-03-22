@@ -5,9 +5,9 @@
     <File Path=".github/workflows/MakeStableReleaseDraft.yml" />
     <File Path=".github/workflows/UpdateAppCast.yml" />
     <File Path="Directory.Build.props" />
-    <File Path="DotNetCore.nsh" />
+    <File Path="installer/DotNetCore.nsh" />
     <File Path="GitVersion.yml" />
-    <File Path="Installer.nsi" />
+    <File Path="installer/Installer.nsi" />
   </Folder>
   <Project Path="Chorizite.OpenGLSDLBackend/Chorizite.OpenGLSDLBackend.csproj" />
   <Project Path="WorldBuilder.Browser/WorldBuilder.Browser.csproj" />

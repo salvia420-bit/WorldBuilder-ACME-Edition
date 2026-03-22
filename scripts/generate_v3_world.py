@@ -34,13 +34,13 @@ from tqdm import tqdm
 # Project paths
 # =====================================================================
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-RETAIL_FILE = PROJECT_ROOT / "retail_heightmaps.jsonl"
-MODEL_FILE = PROJECT_ROOT / "models" / "v3" / "terrain_diffusion_v3.pt"
-CONFIG_FILE = PROJECT_ROOT / "models" / "v3" / "terrain_v3_config.json"
-BIOME_FILE = PROJECT_ROOT / "data" / "retail_biomes.npy"
-BIOME_INFO_FILE = PROJECT_ROOT / "data" / "retail_biome_info.json"
-ENVCELL_FILE = PROJECT_ROOT / "data" / "envcell_analysis.json"
-ENVCELL_GRID_FILE = PROJECT_ROOT / "data" / "envcell_grid.npy"
+RETAIL_FILE = PROJECT_ROOT / "pipeline_data" / "heightmaps" / "retail_heightmaps.jsonl"
+MODEL_FILE = PROJECT_ROOT / "pipeline_data" / "models" / "v3" / "terrain_diffusion_v3.pt"
+CONFIG_FILE = PROJECT_ROOT / "pipeline_data" / "models" / "v3" / "terrain_v3_config.json"
+BIOME_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "retail_biomes.npy"
+BIOME_INFO_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "retail_biome_info.json"
+ENVCELL_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "envcell_analysis.json"
+ENVCELL_GRID_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "envcell_grid.npy"
 PROJECT_DB = PROJECT_ROOT / "TestProject" / "project.db"
 
 GRID_SIZE = 9

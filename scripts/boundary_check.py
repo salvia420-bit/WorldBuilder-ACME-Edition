@@ -5,8 +5,8 @@ where flood-fill is bleeding and what colors are at the transition.
 import colorsys
 from PIL import Image
 
-img = Image.open("screenshots/world_map.png").convert("RGB")
-mask = Image.open("screenshots/ocean_mask.png").convert("L")
+img = Image.open("pipeline_data/screenshots/world_map.png").convert("RGB")
+mask = Image.open("pipeline_data/screenshots/ocean_mask.png").convert("L")
 px = img.load()
 mx = mask.load()
 
