@@ -2,6 +2,22 @@
 
 World building tool for Asheron's Call — edit terrain, dungeons, spells, skills, and more, and export directly to DAT files. The **ACME Edition** extends the original WorldBuilder with a **headless terminal** and **agent-driven pipeline**, laying the groundwork for AI-powered autonomous world development.
 
+<p align="center">
+  <img src="docs/images/world_map_before.png" width="380" alt="Retail world map (input to AI)">
+  &nbsp;&nbsp;➜&nbsp;&nbsp;
+  <img src="docs/images/world_map_after.png" width="380" alt="AI-generated world map variation">
+</p>
+<p align="center"><em>Left: Retail Dereth map fed to AI image gen &nbsp;|&nbsp; Right: AI-generated world map variation used by the terrain pipeline</em></p>
+
+### GUI — Full Terrain & Object Editor
+
+<p align="center">
+  <img src="docs/images/worldbuilder_gui_1.webp" width="780" alt="WorldBuilder GUI terrain editing">
+</p>
+<p align="center">
+  <img src="docs/images/worldbuilder_gui_2.webp" width="780" alt="WorldBuilder GUI object placement">
+</p>
+
 ---
 
 ## Vision — Agent-Driven Worldbuilding
@@ -200,6 +216,10 @@ Generate your own Asheron's Call world in minutes on a GTX 1070 (or better). The
 └──────────────────┘    └──────────────────┘    └──────────────────┘    └──────────────────┘
 ```
 
+<p align="center">
+  <img src="docs/images/pipeline_diagram.jpg" width="780" alt="World generation pipeline diagram">
+</p>
+
 ### Step 1 — Generate a World Map Image
 
 Use **Google Nano / Banana 2** (or any AI image generator). Take the retail Dereth world map and prompt the AI to create a variation — keeping the same pixel style and color palette but randomizing the terrain layout. The output should be a 2041×2041 PNG.
@@ -238,7 +258,11 @@ The smoother applies variable strength by terrain height band — mountains get 
 
 ### Step 4 — Place Towns (Optional)
 
-Open **[`tools/town_placer.html`](tools/town_placer.html)** in any browser. Drag-and-drop towns onto the map, then export the placement JSON for the downstream remap pipeline. This is the first-ever interactive town repositioning tool for Asheron's Call.
+Open **[`tools/town_placer.html`](tools/town_placer.html)** in any browser. Load your world map image, click to place towns, and export the placement JSON for the downstream remap pipeline. This is the first-ever interactive town repositioning tool for Asheron's Call.
+
+<p align="center">
+  <img src="docs/images/townplacer.png" width="780" alt="Town Placer browser tool">
+</p>
 
 ---
 
