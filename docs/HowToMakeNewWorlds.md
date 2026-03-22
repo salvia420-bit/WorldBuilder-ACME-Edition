@@ -1,19 +1,25 @@
 # How To Make New Worlds
 
-> A complete pipeline for generating new landmass terrain maps compatible with the WorldBuilder ACME Edition terrain agent.  
-> Written for: developers who have access to this repository and want to create a custom world from scratch.
+> The complete pipeline for generating custom Asheron's Call worlds using AI image generation + ML terrain smoothing.
+> Hardware: GTX 1070 (8 GB VRAM) or better. Total time: ~30 minutes for a full world.
 
-
-Note a good seed is : 4050594120
 ---
 
 ## Overview
 
-The WorldBuilder terrain agent reads a **world map image** (`screenshots/world_map.png`) and converts it into a `biome_map.json` file. That JSON is then consumed by `compose-world` to stamp retail heightmaps onto the actual game landblocks.
+The pipeline converts an AI-generated world map image into a playable Asheron's Call world with near-retail terrain quality.
 
-The core constraint is this: **the ocean is sacrosanct**. It is defined by exact pixel colors in the source image. The game engine treats these as impassable, unmodifiable tiles — any deviation from the exact color values will cause misclassification and corrupt the world generation.
+```
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│  1. AI Image     │    │  2. QuickWorld    │    │  3. V3 Smooth    │    │  4. Apply + Town │
+│                  │    │                  │    │                  │    │    Placer         │
+│  Generate new    │───▶│  Image → terrain │───▶│  Fix jagged      │───▶│  Write back to   │
+│  world map with  │    │  type + height   │    │  edges with      │    │  project, place  │
+│  AI (Nano etc.)  │    │  (terminal cmd)  │    │  V3 diffusion    │    │  towns, export   │
+└──────────────────┘    └──────────────────┘    └──────────────────┘    └──────────────────┘
+```
 
-Standard AI image generators (Midjourney, DALL-E, etc.) cannot enforce exact RGB values. They produce smooth gradients. So you must **separate AI creativity from programmatic color enforcement**. This document describes how.
+**Why this works:** The V3 diffusion model was intentionally overtrained on retail heightmaps. At ~15% diffusion strength, this "overtrained" property becomes a feature — it smooths the harsh pixel-aligned edges from QuickWorld while preserving the terrain's macro structure. The result is terrain that looks and feels like retail Asheron's Call.
 
 ---
 
@@ -21,432 +27,288 @@ Standard AI image generators (Midjourney, DALL-E, etc.) cannot enforce exact RGB
 
 Before starting, make sure you have:
 
-- **Python 3.10+** with `Pillow` installed (`pip install Pillow`)
-- **Git** installed
-- **Stable Diffusion WebUI** (AUTOMATIC1111) — see [Step 2](#step-2-setup-stable-diffusion-webui) below
-- The WorldBuilder Terminal built: `dotnet build WorldBuilder.Terminal/WorldBuilder.Terminal.csproj`
-- A source world map image at `screenshots/world_map.png` (2041x2041 pixels)
+- **Retail DAT files** — `cell_1.dat`, `portal.dat`, etc. (the original game data)
+- **.NET 8.0 SDK** — `dotnet build WorldBuilder.Terminal`
+- **Python 3.10+** with PyTorch and NumPy — `pip install torch numpy`
+- **A GPU** — GTX 1070 (8 GB VRAM) or better. CPU works but is much slower.
+- **A WorldBuilder project** — Created from the retail DATs (via the GUI or Terminal)
+
+The repository includes all ML model weights and training data via Git LFS. After cloning, run:
+
+```bash
+git lfs pull
+```
+
+This downloads (~530 MB):
+- V3 diffusion model weights (`pipeline_data/models/v3/terrain_diffusion_v3.pt`)
+- V1 U-Net model weights (`pipeline_data/models/v1/terrain_unet.pt`)
+- Retail heightmap training data (`pipeline_data/heightmaps/retail_heightmaps.jsonl`)
+- Retail biome conditioning data (`pipeline_data/data/retail_biomes.npy`)
+- Retail dungeon topology (`pipeline_data/reference/retail_dungeon_topology.json`)
 
 ---
 
-## The Impassable Color Palette
+## Step 1: Generate a World Map Image
 
-These pixel colors are **hardcoded in the game engine** and must never appear on a landmass.
+Use **Google Nano / Banana 2** (or any AI image generator capable of pixel-level fidelity) to generate a new world map.
 
-| Type | Hex | R | G | B | Tolerance | Detection Method |
+### Approach
+
+1. Take the retail Dereth world map as a reference image (render one via ACViewer `--map`, or take a screenshot from the WorldBuilder GUI map view)
+2. Prompt the AI: *"Keep this pixel perfect but randomize the terrain layout. Maintain the same color palette and ocean boundaries."*
+3. The AI will produce a new world map with different terrain distribution but the same visual style
+
+### Requirements for the Output Image
+
+- **Resolution:** 2041×2041 pixels is ideal (1 pixel = 1 terrain vertex, exact match). Other sizes work but are bilinearly scaled.
+- **Format:** PNG (lossless). Never use JPEG — lossy compression corrupts ocean pixel detection.
+- **Ocean colors must be preserved exactly.** The game engine identifies ocean by exact pixel color (`#3B211D` ±5 per channel). If the AI modifies these pixels, those areas become invisible voids in-game.
+
+> **TIP:** If the AI struggles with exact color preservation, you can generate the land freely and then paste the original ocean pixels back using a mask. The `scripts/generate_ocean_mask.py` script can create a B&W mask from any source map.
+
+### The Impassable Color Palette
+
+These pixel colors are hardcoded in the game engine and **must not appear on landmass pixels**:
+
+| Type | Hex | R | G | B | Tolerance | How Detected |
 |---|---|---|---|---|---|---|
-| **Ocean** | `#3B211D` | 59 | 33 | 29 | +-5 per channel | Flood-fill from image border + interior body detection |
-| **Impassable Water** | `#363C1D` | 54 | 60 | 29 | +-10 per channel | Exact color match (isolated inland bodies) |
+| **Ocean** | `#3B211D` | 59 | 33 | 29 | ±5 per channel | Flood-fill from image border |
+| **Impassable Water** | `#363C1D` | 54 | 60 | 29 | ±10 per channel | Exact color match (inland bodies) |
 
-The ocean tolerance was tightened from +-8 to +-5 because the coastal boundary pixel `#412722` (delta 6 from ocean) is passable land — at +-8 the flood-fill bled into it.
+### The Land Biome Color Palette
 
-> **CAUTION:** If any of these colors appear on your landmass in the source image, those tiles will be classified as ocean and **skipped** by `compose-world` entirely. They will be invisible voids in-game.
-
-> **NOTE:** The original Dereth map has NO pure black padding and NO "coastal grey" border. Previous versions of the mask script used HSB-based rules for these, which caused massive false positives on inland dark teal forest, obsidian/volcanic terrain, and mountain pixels. The current v5 script uses only flood-fill + exact color matching.
-
----
-
-## The Land Biome Color Palette
-
-These are the colors that the `ClassifyBiome` function maps to passable terrain types. When painting a new map (or reviewing AI output), aim for these approximate color characteristics.
+These are the approximate color ranges that `ClassifyBiome` maps to terrain types:
 
 | Biome | Approximate Color | Hue | Sat | Bri | DAT Type ID | DAT Name |
 |---|---|---|---|---|---|---|
-| `forest` | Dark teal | 130–210 deg | >0.12 | 0.20–0.60 | `0x03` | `LushGrass` |
-| `grassland` | Lighter teal/green | 100–210 deg | >0.08 | >0.45 | `0x01` | `Grassland` |
+| `forest` | Dark teal | 130–210° | >0.12 | 0.20–0.60 | `0x03` | `LushGrass` |
+| `grassland` | Lighter teal/green | 100–210° | >0.08 | >0.45 | `0x01` | `Grassland` |
 | `snow` | White / light grey | any | <0.15 | >0.65 | `0x0F` | `Snow` |
-| `swamp` | Dark blue-grey `#132D40` | 185–225 deg | >0.55 | <0.35 | `0x04` | `MarshSparseSwamp` |
-| `water` | Bright blue `#6395CE` | 170–250 deg | >0.45 | >0.75 | `0x10` | `WaterRunning` |
-| `desert` | Warm olive/sandy | 25–70 deg | >0.15 | 0.35–0.70 | `0x0A` | `SandYellow` |
+| `swamp` | Dark blue-grey | 185–225° | >0.55 | <0.35 | `0x04` | `MarshSparseSwamp` |
+| `water` | Bright blue | 170–250° | >0.45 | >0.75 | `0x10` | `WaterRunning` |
+| `desert` | Warm olive/sandy | 25–70° | >0.15 | 0.35–0.70 | `0x0A` | `SandYellow` |
 | `barren` | Mid grey | any | <0.18 | 0.28–0.70 | `0x0D` | `SedimentaryRock` |
 | `obsidian` | Very dark with tint | any | <0.35 | 0.10–0.25 | `0x06` | `ObsidianPlain` |
 | `mountain` | Bright desaturated | any | <0.30 | >0.55 | `0x0E` | `SemiBarrenRock` |
-| `road` | Orange/gold | 15–55 deg | >0.5 | >0.4 | `0x07` | `PackedDirt` |
+| `road` | Orange/gold | 15–55° | >0.5 | >0.4 | `0x07` | `PackedDirt` |
 
-DAT Type IDs are from `ACE.Server.Physics.Common.LandDefs.TerrainType` — the authoritative source in `ACE-master/Source/ACE.Server/Physics/Common/LandDefs.cs`.
+> **NOTE:** These colors don't need to be exact — `quick-world` uses a calibration codebook (built from the actual DAT textures) for classification, not these HSB ranges. The ranges above are for `analyze-map-image`, which is the older approach. The QuickWorld codebook is more accurate.
 
 ---
 
-## Step 1: Isolate the Ocean Mask
+## Step 2: Build the Calibration Codebook
 
-The ocean mask is a strict black-and-white image:
-- **Black** = ocean / impassable water (protected, never painted)
-- **White** = land (AI can generate freely here)
-
-A script already exists to generate this automatically from any source map:
+The codebook maps pixel colors to terrain types and heights. It's built by scanning the retail DAT data.
 
 ```bash
-python scripts/generate_ocean_mask.py screenshots/world_map.png screenshots/ocean_mask.png
+# Start the terminal with your project
+dotnet run --project WorldBuilder.Terminal
+
+# Inside the terminal:
+calibrate-world-map
 ```
 
-This produces two files:
-- `screenshots/ocean_mask.png` -- the actual B&W mask to feed into Stable Diffusion
-- `screenshots/ocean_mask_preview.png` -- a color preview (red=ocean, green=land) for visual verification
+**Output:** `pipeline_data/enrichment/terrain_codebook.json` (~13 KB)
 
-The mask uses a three-pass approach:
-1. **Border flood-fill** -- BFS from every image border pixel, growing through ocean-colored pixels (`#3B211D +-5`). This catches the entire exterior ocean without any false positives on inland terrain, regardless of color similarity.
-2. **Interior ocean detection** -- Scans for remaining ocean-colored pixel clusters not connected to the border. Any contiguous cluster >= 1,000 pixels is marked as ocean (catches large interior ocean bodies like the 458K-pixel inland sea). Small specks stay as land.
-3. **Impassable water exact match** -- Isolated inland water bodies (`#363C1D +-10`) are detected by exact color.
+This file encodes:
+- **Terrain base colors** — the average RGB color of each terrain type's texture (extracted from the DAT)
+- **Height distributions** — per-terrain-type percentile tables mapping brightness → height index
+- **Lighting constants** — the shading parameters used by the ACViewer map renderer
 
-> **TIP:** Open `ocean_mask_preview.png` to visually verify the mask before proceeding. Every landmass should be fully green, every water body fully red. Any red patches inside the landmass mean those pixels will be silently skipped by the terrain agent.
-
-> **WARNING:** Do NOT use per-pixel HSB rules for ocean detection. The dominant Dereth land color (dark teal forest, H~190 S~0.40) and obsidian/volcanic terrain (very dark, R<20) both trigger false positives with HSB-based approaches. Flood-fill from the border is the only reliable method.
+You only need to run this once per set of retail DATs. The codebook is deterministic.
 
 ---
 
-## Step 2: Setup Stable Diffusion WebUI
+## Step 3: QuickWorld — Convert Image to Terrain
 
-> If SD WebUI is already installed and running, skip to Step 3.
+This is the core reverse-engineering step. `quick-world` reads your AI-generated image and the codebook, then stamps every landblock with terrain types and heights.
 
-Stable Diffusion is already set up at `D:\Clones\stable-diffusion-webui\` with a GTX 1070 configuration.
-No reinstallation needed — just launch it:
-
-```
-D:\Clones\stable-diffusion-webui\run.bat
+```bash
+# In the WorldBuilder Terminal (with your project loaded):
+quick-world pipeline_data/enrichment/terrain_codebook.json your_new_world_map.png
 ```
 
-**First launch** will install Python dependencies (5–10 minutes). A browser window opens automatically at `http://127.0.0.1:7860` when ready.
+Or with a seed for reproducibility:
 
-If the first launch fails with `No module named pip`, run:
-```
-cd D:\Clones\stable-diffusion-webui
-call environment.bat
-system\python\python.exe system\python\get-pip.py
-system\python\python.exe -m pip install "setuptools<70"
-```
-Then re-run `run.bat`. The bundled `get-pip.py` bootstraps pip, and setuptools must be < 70 because the CLIP dependency requires the legacy `pkg_resources` module which was removed in setuptools 70+.
-
-### If Setting Up From Scratch (New Machine)
-
-```
-# Windows (NVidia GPU):
-1. Download: https://github.com/AUTOMATIC1111/stable-diffusion-webui/releases/tag/v1.0.0-pre
-   -> sd.webui.zip
-2. Extract to D:\Clones\stable-diffusion-webui\
-3. Run: update.bat         <- pulls latest code
-4. Configure webui\webui-user.bat (see below)
-5. Place a .safetensors model in:
-   webui\models\Stable-diffusion\
-6. Run: run.bat
+```bash
+quick-world pipeline_data/enrichment/terrain_codebook.json your_new_world_map.png 42
 ```
 
-**Recommended `webui-user.bat` for NVidia Pascal (GTX 1070/1080) with 8GB VRAM:**
+### What it does (per vertex, 255×255 landblocks × 81 vertices each):
 
-```batch
-@echo off
-set PYTHON=
-set GIT=
-set VENV_DIR=
-set COMMANDLINE_ARGS=--xformers --medvram --api --no-half-vae --autolaunch
-call webui.bat
-```
-
-| Flag | Purpose |
-|---|---|
-| `--xformers` | Cross-attention speed optimization for Pascal/Turing GPUs |
-| `--medvram` | Prevents out-of-memory on large images / inpainting |
-| `--api` | Enables REST API on port 7860 for scripted inpainting |
-| `--no-half-vae` | Prevents NaN colour artifacts on older NVIDIA cards |
-| `--autolaunch` | Opens browser automatically on start |
-
-**Model already downloaded:**
-`webui\models\Stable-diffusion\v1-5-pruned-emaonly.safetensors` (SD 1.5 base, 3.97 GB)
-
----
-
-## Step 3: Generate New Terrain (Inpainting)
-
-With SD WebUI running at `http://127.0.0.1:7860`:
-
-### In the UI
-
-> **CRITICAL:** Use the **"Inpaint upload"** sub-tab, NOT the regular "Inpaint" tab. The regular Inpaint tab makes you draw the mask by hand with a brush. "Inpaint upload" gives you two upload slots -- one for the image, one for the pre-made mask file.
-
-1. Navigate to **img2img** -> **Inpaint upload**
-2. Upload `screenshots/world_map.png` into the **Image** slot
-3. Upload `screenshots/ocean_mask.png` into the **Mask** slot
-4. Configure settings as shown below
-
-### Settings
-
-| Setting | Value | Why |
-|---|---|---|
-| **Mask mode** | `Inpaint masked` | Paints the WHITE areas of the mask (= land) |
-| **Masked content** | `original` | Keeps existing land colors as starting point -- prevents random color fills |
-| **Inpaint area** | `Only masked` | Only processes land pixels -- much better quality + fits in 8GB VRAM |
-| **Only masked padding** | `32` | Context padding around masked region |
-| **Mask blur** | `4` | Slight feathering at mask edges |
-| **Resize mode** | `Just resize` | Default |
-| **Width** | `512` | Safe for 8GB VRAM. Do NOT try 2041x2041 -- will OOM |
-| **Height** | `512` | Safe for 8GB VRAM |
-| **Sampling method** | `DPM++ 2M Karras` | Use the **Karras** variant -- fewer artifacts |
-| **Sampling steps** | `30` | Higher than default 20 for better quality |
-| **CFG Scale** | `7` | How strictly the AI follows the prompt |
-| **Denoising strength** | `0.75` | How much the AI changes the land. 0.75 = substantial. Lower = more conservative |
-| **Seed** | `-1` | Random. Note the seed of any result you like |
-
-### Recommended Prompts
-
-**Positive prompt:**
-```
-top-down satellite fantasy world map, dark teal forests, snow capped mountains,
-yellow sand desert, winding blue rivers, dark swamp marshland, volcanic obsidian plains,
-detailed terrain texture, painterly style, no text, no labels
-```
-
-**Negative prompt:**
-```
-ocean, sea, water, dark brown, blur, noise, text, labels, grid, borders,
-photo, 3D, realistic
-```
-
-> **IMPORTANT:** Save the seed of any output you like. You can reproduce it exactly by entering the same seed. SD WebUI embeds the seed in the PNG metadata automatically.
+1. **Classifies terrain type** — matches the pixel's RGB to the nearest codebook base color (Euclidean distance)
+2. **Estimates height** — maps pixel brightness (0–1) linearly to height index (0–255), with ±2 random noise for micro-variation
+3. **Scatters scenery** — places 1–4 biome-appropriate objects per landblock (trees, rocks, bushes)
 
 ### Output
 
-Save your result as `screenshots/world_map_ai.png`. This is the raw AI output -- it will have smooth colour gradients that the terrain agent cannot interpret directly. Steps 4 and 5 fix that.
+The terrain is written directly to the project's terrain document in memory. The console shows:
+- Terrain type distribution
+- Number of stamped vs skipped landblocks
+- Approximate color matches (warnings when pixel colors are far from any codebook entry)
 
-> **VRAM NOTE:** If you get CUDA out-of-memory errors, switch `--medvram` to `--lowvram` in `webui-user.bat`, or reduce Width/Height to 256. You can upscale afterward in SD WebUI's **Extras** tab using RealESRGAN.
+**At this point you have a complete world — but with jagged, pixel-aligned terrain boundaries.** Step 4 fixes this.
 
 ---
 
-## Step 4: Quantize to Exact Biome Colors
+## Step 4: Extract Heightmaps for V3 Smoothing
 
-The terrain classifier requires pixels to fall within specific HSB ranges. AI-generated images have soft gradients that straddle multiple biome ranges. This step "snaps" every land pixel to the nearest approved biome color.
+Extract the QuickWorld terrain as JSONL so the Python V3 smoother can process it:
 
-Create `scripts/quantize_biome_colors.py`:
-
-```python
-"""
-Snaps every pixel in the AI-generated landmass to the nearest approved
-biome palette color, using the ocean_mask to skip ocean pixels.
-"""
-from PIL import Image
-import math
-
-INPUT   = "screenshots/world_map_ai.png"
-MASK    = "screenshots/ocean_mask.png"
-OUTPUT  = "screenshots/world_map_quantized.png"
-
-# Canonical representative colors for each biome (approximate center of HSB range).
-# These must fall within the ranges documented in the palette table.
-PALETTE = {
-    "forest":    (45,  90,  80),   # Dark teal
-    "grassland": (80, 140, 110),   # Lighter green-teal
-    "snow":      (230, 235, 240),  # Near-white
-    "swamp":     (19,  45,  64),   # #132D40 - exact Blackmire dark blue
-    "water":     (99, 149, 206),   # #6395CE - bright river blue
-    "desert":    (180, 160, 90),   # Warm sandy olive
-    "barren":    (140, 130, 120),  # Mid grey
-    "obsidian":  (45,  40,  40),   # Very dark with slight tint
-    "mountain":  (190, 185, 180),  # Bright desaturated grey
-    "road":      (210, 155, 60),   # Orange-gold
-}
-
-PALETTE_COLORS = list(PALETTE.values())
-
-def nearest_color(r, g, b):
-    best, best_dist = None, float("inf")
-    for color in PALETTE_COLORS:
-        d = math.sqrt((r-color[0])**2 + (g-color[1])**2 + (b-color[2])**2)
-        if d < best_dist:
-            best_dist, best = d, color
-    return best
-
-img  = Image.open(INPUT).convert("RGB")
-mask = Image.open(MASK).convert("L")
-out  = img.copy()
-
-px_img, px_mask, px_out = img.load(), mask.load(), out.load()
-w, h = img.size
-
-for y in range(h):
-    for x in range(w):
-        if px_mask[x, y] > 128:   # white = land, snap it
-            r, g, b = px_img[x, y]
-            px_out[x, y] = nearest_color(r, g, b)
-        # black = ocean — leave pixel untouched
-
-out.save(OUTPUT)
-print(f"Saved -> {OUTPUT}")
-```
-
-Run it:
 ```bash
-python scripts/quantize_biome_colors.py
-```
-
----
-
-## Step 5: Re-Composite the Ocean
-
-This is the critical safety step. The original ocean pixels must be mathematically identical to the source — no lossy compression, no rounding. This step copies them back pixel-perfect.
-
-Create `scripts/recomposite_ocean.py`:
-
-```python
-"""
-Pastes the exact original ocean pixels from world_map.png back onto the
-quantized image, guaranteeing impassable water remains byte-identical.
-"""
-from PIL import Image
-
-ORIGINAL  = "screenshots/world_map.png"
-QUANTIZED = "screenshots/world_map_quantized.png"
-MASK      = "screenshots/ocean_mask.png"
-OUTPUT    = "screenshots/world_map_final.png"
-
-original  = Image.open(ORIGINAL).convert("RGB")
-quantized = Image.open(QUANTIZED).convert("RGB")
-mask      = Image.open(MASK).convert("L")
-
-# Where mask=0 (black=ocean) -> use original pixel
-# Where mask=255 (white=land) -> use quantized pixel
-final = Image.composite(quantized, original, mask)
-
-final.save(OUTPUT, compress_level=0)   # lossless PNG
-print(f"Saved -> {OUTPUT}")
-print("Ocean pixels are now mathematically identical to the original.")
-```
-
-Run it:
-```bash
-python scripts/recomposite_ocean.py
-```
-
-> **IMPORTANT:** Always save the final composite as **PNG**, never JPEG. JPEG lossy compression will corrupt the exact ocean pixel values and break ocean detection.
-
----
-
-## Step 6: Analyze the New Map
-
-With your final image at `screenshots/world_map_final.png`, run the terrain agent:
-
-```
 # In the WorldBuilder Terminal:
-analyze-map-image screenshots/world_map_final.png biome_map.json
+extract-retail-heightmaps pipeline_data/heightmaps/my_world_heightmaps.jsonl
 ```
 
-This scans every landblock's pixel region, classifies it into a biome, assigns the correct DAT terrain type, and writes `biome_map.json`.
-
-**Expected console output:**
-
-```
-[AnalyzeMapImage] Complete: XXXX land, YYYY ocean, 12 biomes in Zms -> biome_map.json
-
-  Biome Breakdown:
-    forest         : XXXX  (XX.X%)
-    water          : XXXX  (XX.X%)
-    barren         : XXXX  (XX.X%)
-    snow           : XXXX  (XX.X%)
-    ...
-    ocean          : XXXX  (XX.X%)     <- should be close to original
-    impassable_water : XXX  (X.X%)    <- should be close to original
-```
-
-### Reference counts from the original Dereth map
-
-| Biome | Cells | Percent |
-|---|---|---|
-| ocean | 40,572 | 62.4% |
-| forest | 18,838 | 29.0% |
-| water | 1,725 | 2.7% |
-| barren | 1,258 | 1.9% |
-| snow | 1,126 | 1.7% |
-| obsidian | 620 | 1.0% |
-| grassland | 385 | 0.6% |
-| swamp | 282 | 0.4% |
-| impassable_water | 113 | 0.2% |
-| desert | 96 | 0.1% |
-
-> **NOTE:** The ocean and impassable_water counts in your new map should be very close to these reference numbers, since the ocean shape is preserved via the mask. Large deviations indicate re-compositing failed to preserve the ocean correctly.
-
-### Verifying the Output JSON
-
-```powershell
-$j = Get-Content biome_map.json -Raw | ConvertFrom-Json
-$j.summary.biomeCounts | Format-Table biome, count, percent
-$j.terrainTypeMapping | Format-Table biome, terrainTypeId, terrainTypeName
-$j.cells | Select-Object -First 5 | Format-Table lbX, lbY, biome, terrainTypeId, terrainTypeName
-```
+This dumps all 255×255 landblocks as a JSONL file where each line contains:
+- `lbX`, `lbY` — landblock coordinates
+- `heightIndices` — 81 height values (9×9 grid)
+- `terrainTypes` — 81 terrain type IDs
+- `roadFlags` — road presence flags
 
 ---
 
-## Step 7: Compose the World
+## Step 5: V3 Terrain Diffusion Smoothing
 
-Once `biome_map.json` is validated, run terrain composition:
+The V3 model is a conditional DDPM (Denoising Diffusion Probabilistic Model) trained on retail heightmaps. It uses **SDEdit** — start from a noisy version of the input and denoise partially — to smooth terrain while preserving its structure.
 
-```
-compose-world biome_map.json
-```
-
-This stamps retail heightmaps into each landblock based on the biome assigned to it. Ocean and impassable_water cells are automatically skipped.
-
----
-
-## Alternative: Procedural Generation (No AI)
-
-If you don't want to use Stable Diffusion, generate the new map entirely in Python using Perlin noise. This guarantees exact pixel values from the start and skips the inpainting + quantize steps.
-
-The approach:
-1. Load `screenshots/ocean_mask.png` (preserves the exact ocean boundary)
-2. Use Perlin/simplex noise for elevation and moisture maps
-3. Map `(elevation, moisture)` combinations -> biome colors from the palette table above
-4. Apply noise only inside the **white** (land) region of the mask
-5. Save as PNG, then go straight to `analyze-map-image`
-
-Install the noise library:
 ```bash
-pip install noise
+python scripts/smooth_vanquish_v3.py \
+    --input pipeline_data/heightmaps/my_world_heightmaps.jsonl \
+    --output pipeline_data/heightmaps/my_world_smoothed.jsonl \
+    --batch 32
 ```
 
-> **TIP:** You can ask an LLM to write the full Perlin noise script. Provide it the exact hex colors and HSB ranges from the palette table above and this ocean mask file. The LLM should map noise thresholds to colors that fall squarely within the `ClassifyBiome` HSB detection ranges, bypassing quantization entirely.
+### How the smoother works
+
+Each landblock is classified by average height into a terrain zone, and the V3 diffusion strength is set per zone:
+
+| Zone | Height Range | V3 Strength | Why |
+|---|---|---|---|
+| Low / coastal | h < 30 | 15% | Already flat, minimal artifacts |
+| Mid-low / plains | 30–60 | 35% | **Worst QuickWorld artifacts** — needs aggressive smoothing |
+| Mid / hills | 60–100 | 25% | Moderate smoothing for pixel edges |
+| Mid-high / foothills | 100–150 | 20% | Preserve elevation while smoothing |
+| High / mountains | h ≥ 150 | 10% | Preserve dramatic peaks, barely touch |
+
+The model conditions on:
+- **Neighbor heightmaps** — the 4 adjacent landblocks (builds from retail heightmaps for context)
+- **Biome cluster ID** — from `pipeline_data/data/retail_biomes.npy`
+
+### Hardware & Performance
+
+- **GTX 1070 (8 GB VRAM):** ~5 minutes for the full grid at batch size 32
+- **GPU memory:** ~3 GB peak
+- **Batch size:** Default 32. Reduce to 16 or 8 if you hit OOM.
+
+### Output
+
+`my_world_smoothed.jsonl` — same format as the input, with smoothed height indices. Terrain types and road flags are preserved unchanged.
+
+The script prints before/after height statistics so you can verify the smoothing didn't distort the terrain distribution.
 
 ---
 
-## Biome to Terrain Type Reference
+## Step 6: Apply Smoothed Heightmaps
 
-Full mapping from image biome labels to DAT terrain types.
-Source: `ACE-master/Source/ACE.Server/Physics/Common/LandDefs.cs` — `LandDefs.TerrainType` enum.
+Write the V3-smoothed heightmaps back to your project using the Terminal's `--stdin` JSON protocol:
 
-| Biome | Type ID (hex) | Type ID (dec) | DAT Name | Notes |
-|---|---|---|---|---|
-| `forest` | `0x03` | 3 | `LushGrass` | Dense teal — dominant Dereth surface |
-| `grassland` | `0x01` | 1 | `Grassland` | Lighter green areas |
-| `snow` | `0x0F` | 15 | `Snow` | White/bright high-latitude terrain |
-| `swamp` | `0x04` | 4 | `MarshSparseSwamp` | Blackmire dark blue terrain |
-| `water` | `0x10` | 16 | `WaterRunning` | Modifiable rivers and lakes |
-| `desert` | `0x0A` | 10 | `SandYellow` | Sandy/warm desert areas |
-| `barren` | `0x0D` | 13 | `SedimentaryRock` | Grey/rocky terrain |
-| `obsidian` | `0x06` | 6 | `ObsidianPlain` | SW volcanic dark terrain |
-| `mountain` | `0x0E` | 14 | `SemiBarrenRock` | High bright peaks |
-| `road` | `0x07` | 7 | `PackedDirt` | Road surface base |
-| `ocean` | — | — | *(skip)* | Impassable — not written by compose-world |
-| `impassable_water` | — | — | *(skip)* | Impassable inland water — not written |
+```bash
+python scripts/apply_vanquish_smoothed.py
+```
+
+> **NOTE:** This script is currently hardcoded to `projects/vanquishtest/vanquishtest.wbproj`. To use a different project, edit the `PROJECT_FILE` path at the top of the script, or apply manually via the Terminal REPL using `set-landblock-heightmap`.
+
+### What the apply script does
+
+1. Starts `WorldBuilder.Terminal` in `--stdin` mode with the project loaded
+2. For each landblock in the smoothed JSONL:
+   - Sends `set-landblock-heightmap` with the smoothed height values
+   - Sends `set-landblock-terrain` with the terrain types (if present)
+3. Runs `export` to write the modified DATs
+
+Progress is printed every 10 seconds with rate (blocks/sec) and ETA.
+
+### Manual alternative
+
+If you prefer, apply heightmaps via the Terminal REPL by writing your own loop, or use the `--stdin` JSON protocol directly from your own script. The relevant commands are:
+
+```json
+{"command": "set-landblock-heightmap", "lbX": 100, "lbY": 100, "heights": [81 values...]}
+{"command": "set-landblock-terrain", "lbX": 100, "lbY": 100, "types": [81 values...]}
+{"command": "export", "directory": "D:\\ACE\\Dats"}
+```
+
+---
+
+## Step 7: Export DAT Files
+
+If the apply script didn't already export, or you want to export to a different directory:
+
+```bash
+# In the WorldBuilder Terminal:
+export D:\ACE\Dats
+```
+
+This writes the modified `cell_1.dat` (terrain) and optionally object landblock data. Copy these DATs to your ACE server's data directory.
+
+---
+
+## Step 8: Place Towns (Optional)
+
+Open **`tools/town_placer.html`** in any browser. This is a zero-dependency HTML tool that lets you:
+
+1. Select towns from the sidebar (overworld buildings, envcells, portals)
+2. Click to place them on the world map
+3. Drag to reposition
+4. Export the placement as JSON
+
+The exported JSON feeds into the Terminal's building remap pipeline:
+
+```bash
+# In the WorldBuilder Terminal:
+remap-buildings-v2 pipeline_data/population_output/lb_remap.json
+export D:\ACE\Dats
+remap-buildings-sql pipeline_data/population_output/lb_remap.json D:\ACE\Dats building_remap.sql --apply
+ace-db reposition
+```
 
 ---
 
 ## Quick Reference: Full Pipeline
 
 ```bash
-# STEP 1 — Generate ocean mask from source map
-python scripts/generate_ocean_mask.py screenshots/world_map.png screenshots/ocean_mask.png
+# ── STEP 1: Generate world map image with AI (external) ──
+# Use Google Nano / Banana 2 with the retail map as reference
+# Output: your_new_world.png (2041×2041 PNG)
 
-# STEP 2 — Launch Stable Diffusion (first run takes 5-10 mins to install deps)
-D:\Clones\stable-diffusion-webui\run.bat
-#   -> img2img -> "Inpaint upload" -> upload world_map.png + ocean_mask.png -> generate
+# ── STEP 2: Build calibration codebook (once per DAT set) ──
+# In WorldBuilder Terminal:
+calibrate-world-map
 
-# STEP 3 — Quantize AI output to exact palette colors
-python scripts/quantize_biome_colors.py
+# ── STEP 3: Reverse-engineer terrain from image ──
+# In WorldBuilder Terminal:
+quick-world pipeline_data/enrichment/terrain_codebook.json your_new_world.png
 
-# STEP 4 — Restore exact ocean pixels
-python scripts/recomposite_ocean.py
+# ── STEP 4: Extract heightmaps for smoothing ──
+# In WorldBuilder Terminal:
+extract-retail-heightmaps pipeline_data/heightmaps/my_world_heightmaps.jsonl
 
-# STEP 5 — Analyze the final map (in WorldBuilder Terminal)
-analyze-map-image screenshots/world_map_final.png biome_map.json
+# ── STEP 5: V3 terrain diffusion smoothing ──
+python scripts/smooth_vanquish_v3.py \
+    --input pipeline_data/heightmaps/my_world_heightmaps.jsonl \
+    --output pipeline_data/heightmaps/my_world_smoothed.jsonl
 
-# STEP 6 — Compose the world
-compose-world biome_map.json
+# ── STEP 6: Apply smoothed heightmaps + export ──
+# Edit apply_vanquish_smoothed.py to point at your project, then:
+python scripts/apply_vanquish_smoothed.py
+
+# ── STEP 7: (Optional) Place towns ──
+# Open tools/town_placer.html in browser, export placement JSON
+# In WorldBuilder Terminal:
+remap-buildings-v2 pipeline_data/population_output/lb_remap.json
+export D:\ACE\Dats
+ace-db reposition
 ```
 
 ---
@@ -455,43 +317,96 @@ compose-world biome_map.json
 
 | File | Purpose |
 |---|---|
-| `screenshots/world_map.png` | Source map — the reference image (2041x2041) |
-| `screenshots/ocean_mask.png` | B&W mask (black=ocean, white=land) |
-| `screenshots/ocean_mask_preview.png` | Colour preview for visual verification |
-| `screenshots/world_map_ai.png` | Raw AI-generated output (before quantization) |
-| `screenshots/world_map_quantized.png` | After snapping pixels to palette |
-| `screenshots/world_map_final.png` | Final composited image — input to `analyze-map-image` |
-| `biome_map.json` | Output of `analyze-map-image` — input to `compose-world` |
-| `scripts/generate_ocean_mask.py` | Step 1 automation (already written) |
-| `scripts/quantize_biome_colors.py` | Step 3 automation (write from template above) |
-| `scripts/recomposite_ocean.py` | Step 4 automation (write from template above) |
-| `D:\Clones\stable-diffusion-webui\` | SD WebUI installation |
+| `pipeline_data/models/v3/terrain_diffusion_v3.pt` | V3 diffusion model weights (232 MB, Git LFS) |
+| `pipeline_data/models/v3/terrain_v3_config.json` | V3 model configuration |
+| `pipeline_data/models/v1/terrain_unet.pt` | V1 U-Net model weights (62 MB, Git LFS) |
+| `pipeline_data/heightmaps/retail_heightmaps.jsonl` | Retail heightmap training data (61 MB, Git LFS) |
+| `pipeline_data/data/retail_biomes.npy` | Biome conditioning grid (260 KB) |
+| `pipeline_data/data/retail_biome_info.json` | Biome cluster metadata (5 KB) |
+| `pipeline_data/enrichment/terrain_codebook.json` | Calibration codebook (generated by `calibrate-world-map`) |
+| `scripts/smooth_vanquish_v3.py` | V3 smoothing script |
+| `scripts/apply_vanquish_smoothed.py` | Applies smoothed heightmaps to project via Terminal stdin |
+| `scripts/train_terrain_v3.py` | V3 model training script (also defines model classes) |
+| `scripts/derive_retail_biomes.py` | Generates `retail_biomes.npy` from heightmap data |
+| `tools/town_placer.html` | Browser-based town placement tool |
 
 ---
 
 ## Troubleshooting
 
-**Too many cells classified as `ocean` on the landmass**
-The AI generated pixels close to `#3B211D`. Re-run the inpainting with a higher denoising strength, or add `dark brown, dark red` to your negative prompt.
+**CUDA out of memory during V3 smoothing**
+Reduce batch size: `--batch 16` or `--batch 8`. The V3 model uses ~3 GB VRAM at batch 32. If you're on a card with less than 6 GB VRAM, use `--batch 4` or run on CPU (much slower).
 
-**Biome counts look wrong (e.g. too much `barren`, not enough `forest`)**
-Adjust the palette colors in `quantize_biome_colors.py`. Making the `forest` target color slightly darker (lower brightness) will capture more AI output as forest.
+**QuickWorld produces mostly one terrain type**
+The codebook may not match your image's color palette well. Run `calibrate-world-map` with the correct retail DATs loaded, and ensure your AI-generated image uses colors in the same range as the original retail map.
 
-**`compose-world` produces blank/flat terrain**
-Check `biome_map.json` — if `landCells` is 0 or very low, `analyze-map-image` classified everything as ocean. Verify `world_map_final.png` has the ocean re-composited correctly and the land pixels are in the expected colour range.
+**V3 smoothing makes terrain too flat**
+The default strength levels are tuned for typical QuickWorld output. If your terrain is already smooth, the smoother may over-flatten. You can edit the `HEIGHT_BANDS` strength values in `smooth_vanquish_v3.py` — lower values = less smoothing.
 
-**SD WebUI crashes on first inpaint (out of memory)**
-Add `--lowvram` to `webui-user.bat` COMMANDLINE_ARGS instead of `--medvram`, and keep Width/Height at 512. Use "Inpaint area: Only masked" to avoid processing the entire 2041x2041 image. You can upscale afterward in the Extras tab using RealESRGAN.
+**V3 smoothing doesn't fix enough**
+Increase the strength values in `HEIGHT_BANDS`. The mid-low/plains band (30–60) defaults to 35% — try 50% for more aggressive smoothing.
 
-**SD WebUI won't start -- `No module named pip` or `No module named pkg_resources`**
-The bundled Python 3.10 needs pip bootstrapped and an older setuptools. Run:
+**`retail_biomes.npy` is missing**
+This file should be included in the repo. If it's missing, regenerate it:
+
+```bash
+python scripts/derive_retail_biomes.py
 ```
-cd D:\Clones\stable-diffusion-webui
-call environment.bat
-system\python\python.exe system\python\get-pip.py
-system\python\python.exe -m pip install "setuptools<70"
-```
-Then re-run `run.bat`. Setuptools >= 70 removed `pkg_resources` which the CLIP dependency requires.
 
-**Mask not respected -- AI paints over ocean**
-You are likely using the wrong tab. Use **img2img -> "Inpaint upload"** (two upload slots), NOT the regular "Inpaint" tab (brush drawing). Set Mask mode to "Inpaint masked" so the AI paints the white (land) areas of the mask.
+This reads `retail_heightmaps.jsonl` and clusters the terrain into 12 biome types using K-means. Takes about 30 seconds.
+
+**`terrain_codebook.json` is missing**
+Run `calibrate-world-map` in the Terminal with your retail DATs loaded. This scans the DAT textures and terrain data to build the codebook.
+
+**Apply script fails to connect to Terminal**
+Make sure the Terminal is built in Release mode:
+
+```bash
+dotnet build WorldBuilder.Terminal -c Release
+```
+
+The apply script looks for the exe at `WorldBuilder.Terminal/bin/Release/net8.0/WorldBuilder.Terminal.exe`.
+
+---
+
+## Retraining the V3 Model
+
+If you want to retrain the V3 model from scratch (e.g., on different terrain data):
+
+```bash
+# 1. Extract heightmaps from retail DATs
+extract-retail-heightmaps pipeline_data/heightmaps/retail_heightmaps.jsonl
+
+# 2. Derive biome clusters from the heightmap data
+python scripts/derive_retail_biomes.py
+
+# 3. Train the V3 diffusion model
+python scripts/train_terrain_v3.py \
+    --data pipeline_data/heightmaps/retail_heightmaps.jsonl \
+    --output pipeline_data/models/v3/terrain_diffusion_v3.pt
+```
+
+Training takes 10–30 minutes on a GTX 1070. The model converges quickly because the retail terrain data is relatively uniform. This is actually desirable — the V3 model works best as a **smoother** (not a generator) at low diffusion strength.
+
+The training script saves checkpoints and a loss plot (`training_v3.png`). EMA (Exponential Moving Average) weights are used for the final model to ensure stable generation.
+
+---
+
+## Legacy: Stable Diffusion Approach
+
+> **NOTE:** The pipeline described below is the **older approach** that used Stable Diffusion for inpainting. It has been superseded by the AI image generation + QuickWorld + V3 smoothing pipeline above. This section is retained for historical reference.
+
+The original approach was:
+1. Generate an ocean mask from the source map
+2. Use Stable Diffusion WebUI (inpaint upload) to paint new terrain on the land areas
+3. Quantize the AI output to exact biome palette colors
+4. Re-composite the original ocean pixels
+5. Run `analyze-map-image` + `compose-world`
+
+This approach had several limitations:
+- Required Stable Diffusion WebUI installed locally
+- Generated smoother images but lost terrain micro-detail
+- Required manual quantization and ocean re-compositing steps
+- Did not include ML-based terrain smoothing
+
+The modern pipeline (above) is simpler, faster, and produces better results.
