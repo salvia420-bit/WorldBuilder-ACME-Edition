@@ -10,7 +10,7 @@ responses on stdout.
 Prerequisites:
   - .NET SDK installed
   - WorldBuilder.Terminal builds successfully
-  - TestProject/TestProject.wbproj present with DAT files
+  - projects/TestProject/TestProject.wbproj present with DAT files
 
 Usage:
   python tests/test_agent_protocol.py                   # Run all tests
@@ -40,7 +40,7 @@ from typing import Any, Optional
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 TERMINAL_PROJECT = REPO_ROOT / "WorldBuilder.Terminal"
-TEST_PROJECT = REPO_ROOT / "TestProject" / "TestProject.wbproj"
+TEST_PROJECT = REPO_ROOT / "projects" / "TestProject" / "TestProject.wbproj"
 
 # Allow overriding the binary path via env var or CLI arg
 BINARY_PATH = os.environ.get("WORLDBUILDER_BINARY", None)

@@ -30,7 +30,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Input files
 CLUSTERS_JSON = os.path.join(BASE_DIR, "pipeline_data", "population_output", "clusters.json")
-VANQUISH_DAT = os.path.join(BASE_DIR, "vanquishtest", "client_cell_1.dat")
+VANQUISH_DAT = os.path.join(BASE_DIR, "projects", "vanquishtest", "client_cell_1.dat")
 HEIGHT_CACHE_JSON = os.path.join(BASE_DIR, "pipeline_data", "population_output", "vanquish_heights.json")
 DIFFICULTY_GRADIENT = os.path.join(BASE_DIR, "pipeline_data", "enrichment", "difficulty_gradient.json")
 RETAIL_SQL = r"D:\ACE\world-db\ACE-World-Database-v0.9.292.sql"

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-apply_vanquish_smoothed.py — Apply V3-smoothed heightmaps to vanquishtest via Terminal
+apply_vanquish_smoothed.py — Apply V3-smoothed heightmaps to projects/vanquishtest via Terminal
 
 Pipes JSON commands through the terminal's --stdin mode to:
-  1. Load the vanquishtest project
+  1. Load the projects/vanquishtest project
   2. Apply all heightmaps from vanquish_smoothed.jsonl 
-  3. Export to vanquishtest/ DAT files
+  3. Export to projects/vanquishtest/ DAT files
 
 Usage:
     .venv311\\Scripts\\python.exe scripts\\apply_vanquish_smoothed.py [--skip-export]
@@ -19,9 +19,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TERMINAL_EXE = PROJECT_ROOT / "WorldBuilder.Terminal" / "bin" / "Release" / "net8.0" / "WorldBuilder.Terminal.exe"
-PROJECT_FILE = PROJECT_ROOT / "vanquishtest" / "vanquishtest.wbproj"
+PROJECT_FILE = PROJECT_ROOT / "projects" / "vanquishtest" / "vanquishtest.wbproj"
 HEIGHTMAP_FILE = PROJECT_ROOT / "pipeline_data" / "heightmaps" / "vanquish_smoothed.jsonl"
-EXPORT_DIR = str(PROJECT_ROOT / "vanquishtest")
+EXPORT_DIR = str(PROJECT_ROOT / "projects" / "vanquishtest")
 
 
 def send_command(proc, cmd_dict):

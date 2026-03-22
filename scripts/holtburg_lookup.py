@@ -1,6 +1,8 @@
 import json
 
-d = json.load(open(r"d:\Clones\WorldBuilder-ACME-Edition-master\vanquishtest\building_old_cells.json"))
+import os
+_BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+d = json.load(open(os.path.join(_BASE, "projects", "vanquishtest", "building_old_cells.json")))
 entries = []
 for k, v in d.items():
     olb = v["oldLbKey"]

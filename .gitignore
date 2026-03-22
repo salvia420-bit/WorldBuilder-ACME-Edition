@@ -481,20 +481,15 @@ _probe/
 *.dat.BACKUP
 
 # DAT working/output directories
-vanquishtest/
-vanquishtest_fresh/
+projects/
 vanquishdat/
 mosaicdats/
-ac-updates/
 output_*/
 remap_output/
 
 # WorldBuilder project databases & project files (per-machine)
 *.db
 *.wbproj
-
-# TestProject output
-TestProject/output/
 # ──────────────────────────────────────────────
 # Pipeline data files (generated/large)
 # ──────────────────────────────────────────────

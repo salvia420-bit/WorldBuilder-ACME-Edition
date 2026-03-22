@@ -16,7 +16,7 @@
     uses 'dotnet run' against the project.
 
 .PARAMETER ProjectPath
-    Path to a .wbproj file to test with. Defaults to TestProject/TestProject.wbproj.
+    Path to a .wbproj file to test with. Defaults to projects/TestProject/TestProject.wbproj.
 
 .PARAMETER ShowResponses
     Show full JSON responses.
@@ -43,7 +43,7 @@ $RepoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $TerminalProject = Join-Path $RepoRoot "WorldBuilder.Terminal"
 
 if (-not $ProjectPath) {
-    $ProjectPath = Join-Path $RepoRoot "TestProject\TestProject.wbproj"
+    $ProjectPath = Join-Path $RepoRoot "projects\TestProject\TestProject.wbproj"
 }
 
 # ---------------------------------------------------------------

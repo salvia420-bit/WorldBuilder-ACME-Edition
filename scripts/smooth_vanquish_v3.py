@@ -417,9 +417,9 @@ def main():
         print(f"\n  GPU peak memory: {alloc:.2f} GB")
 
     print(f"\n  Next steps:")
-    print(f"    1. Set up vanquishtest project and apply:")
+    print(f"    1. Set up projects/vanquishtest project and apply:")
     print(f"       Use apply_mosaic_world.py pattern or terminal REPL")
-    print(f"    2. Export to vanquishtest/")
+    print(f"    2. Export to projects/vanquishtest/")
     print(f"    3. Compare in ACViewer")
 
 

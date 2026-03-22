@@ -21,7 +21,7 @@ with open(os.path.join(BASE_DIR, "pipeline_data", "population_output", "town_pla
 print(f"Loaded {len(town_placements)} town placements")
 
 # Building data
-old_cells_path = os.path.join(BASE_DIR, "vanquishtest", "building_old_cells.json")
+old_cells_path = os.path.join(BASE_DIR, "projects", "vanquishtest", "building_old_cells.json")
 old_cells = json.load(open(old_cells_path))
 print(f"Loaded {len(old_cells)} building entries")
 

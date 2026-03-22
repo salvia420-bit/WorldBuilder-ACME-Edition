@@ -41,7 +41,7 @@ BIOME_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "retail_biomes.npy"
 BIOME_INFO_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "retail_biome_info.json"
 ENVCELL_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "envcell_analysis.json"
 ENVCELL_GRID_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "envcell_grid.npy"
-PROJECT_DB = PROJECT_ROOT / "TestProject" / "project.db"
+PROJECT_DB = PROJECT_ROOT / "projects" / "TestProject" / "project.db"
 
 GRID_SIZE = 9
 MAP_SIZE = 255
@@ -604,12 +604,12 @@ def generate(args):
 
     print(f"\n  Next steps:")
     print(f"    1. Load in WorldBuilder terminal:")
-    print(f"       wb> load TestProject\\TestProject.wbproj")
+    print(f"       wb> load projects\\TestProject\\TestProject.wbproj")
     print(f"    2. Apply heightmaps from JSONL (use set-landblock-heightmap)")
     print(f"    3. wb> auto-paint")
     print(f"    4. wb> validate-terrain 128 128")
     print(f"    5. wb> ace-db reposition")
-    print(f"    6. wb> export TestProject\\output")
+    print(f"    6. wb> export projects\\TestProject\\output")
 
 
 def main():

@@ -20,7 +20,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TERMINAL_EXE = PROJECT_ROOT / "WorldBuilder.Terminal" / "bin" / "Release" / "net8.0" / "WorldBuilder.Terminal.exe"
-PROJECT_FILE = PROJECT_ROOT / "TestProject" / "TestProject.wbproj"
+PROJECT_FILE = PROJECT_ROOT / "projects" / "TestProject" / "TestProject.wbproj"
 HEIGHTMAP_FILE = PROJECT_ROOT / "pipeline_data" / "data" / "mosaic_heightmaps.jsonl"
 
 
@@ -170,7 +170,7 @@ def main():
 
     # Step 4: Export (unless --skip-export)
     if not skip_export:
-        export_dir = str(PROJECT_ROOT / "TestProject" / "output")
+        export_dir = str(PROJECT_ROOT / "projects" / "TestProject" / "output")
         print(f"\n  Exporting to {export_dir}...")
         t2 = time.time()
         resp = send_command(proc, {"command": "export", "directory": export_dir})
