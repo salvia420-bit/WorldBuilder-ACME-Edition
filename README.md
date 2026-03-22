@@ -174,25 +174,25 @@ Before any procedural generation, the engine must prove sustained throughput:
 - Memory growth and GC pressure analysis over 65K+ operations
 - Throughput degradation detection over sustained runs
 
-### Phase 5 — Procedural World Generation 🔲
+### Phase 5 — ML-Driven World Generation 🔲
 
-CPU-bound prototyping on local hardware, scaling to 4×RTX 4090 cluster for final passes:
+The core approach: feed raw DAT data directly into ML models and let them discover every relationship in Dereth implicitly — terrain-to-object correlations, biome boundaries, building clusters, creature distributions, dungeon layouts. No hand-crafted rules. The model sees object IDs, positions, and spatial context, and learns to place with retail-level accuracy but with variance.
 
-- **Terrain**: Perlin/Simplex/fBm noise with coastline polygon masking and height-to-texture auto-painting
-- **Dungeons**: Graph Grammar / L-System engine (NOT Markov chains — they lack global awareness for valid portal graphs)
-- **Objects**: Constraint-based settlement generation using OntologyService semantic tags
-- **Architecture**: Producer-Consumer pipeline for multi-GPU scaling (GPUs never touch DAT files directly)
+- **Terrain**: Diffusion models trained on retail heightmaps (V3 smoother is the first proof of this — overtrained on retail data, used at low strength)
+- **Object Placement**: Autoregressive scene models that learn which objects co-occur, at what densities, in what terrain contexts — directly from extracted DAT placements
+- **Dungeons**: Graph-based models that learn valid portal topologies and room connectivity from the full retail dungeon corpus
+- **Training Data**: All sourced from the retail DAT files via the Terminal's extraction commands — no manual labeling required
 
+### Phase 6 — Semantic Tagging & Ontology (Optional Track) 🔲
 
-### Phase 6 — Semantic Tagging & Constraint Enforcement ✅
-
-Bridging mathematical placement with aesthetic cohesion:
+An alternative path for agent-driven or rule-based workflows. The `OntologyService` provides human-readable semantic tags for DAT object IDs, enabling AI agents to make explicit placement decisions rather than learning implicitly:
 
 - Object ontology schema with type taxonomy and tag dimensions (architecture, biome, era, function)
 - `OntologyService` auto-classification pipeline (21K+ entries from DAT scan, string table enrichment, material tagging)
-- Constraint presets that reject aesthetically incoherent placements (Desert_Outpost, Aluvian_Village, Sho_Settlement, etc.)
-- Creature family taxonomy with 28 families, level ranges, and biome affinities (sourced from Lifestoned data)
-- Community tagging via CSV export, LLM-assisted classification, and catalog visual enrichment
+- Constraint presets for aesthetic cohesion (Desert_Outpost, Aluvian_Village, Sho_Settlement, etc.)
+- Creature family taxonomy with 28 families, level ranges, and biome affinities
+
+This track is complementary to the ML approach — useful for an agent that builds slowly and deliberately, or for manual curation of generated output. The project can pursue both directions.
 
 ---
 
@@ -201,20 +201,6 @@ Bridging mathematical placement with aesthetic cohesion:
 Generate your own Asheron's Call world in minutes on a GTX 1070 (or better). The pipeline turns any world map image into a near-retail quality playable terrain.
 
 ### The Pipeline
-
-```
-┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
-│  1. AI Image     │    │  2. QuickWorld    │    │  3. V3 Smoother  │    │  4. Town Placer  │
-│                  │    │                  │    │                  │    │                  │
-│  Google Nano /   │───▶│  Terminal cmd:    │───▶│  V3 diffusion    │───▶│  Drag-and-drop   │
-│  Banana 2 or any │    │  quick-world      │    │  at ~15% strength│    │  town placement  │
-│  AI image gen    │    │  <codebook> <img> │    │  fixes jagged    │    │  (browser-based) │
-│                  │    │                  │    │  QuickWorld edges │    │                  │
-│  "Keep this      │    │  Classifies each  │    │                  │    │  tools/           │
-│   pixel perfect  │    │  pixel → terrain  │    │  smooth_vanquish │    │  town_placer.html │
-│   but randomize" │    │  type + height    │    │  _v3.py          │    │                  │
-└──────────────────┘    └──────────────────┘    └──────────────────┘    └──────────────────┘
-```
 
 <p align="center">
   <img src="docs/images/pipeline_diagram.jpg" width="780" alt="World generation pipeline diagram">
