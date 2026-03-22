@@ -517,6 +517,8 @@ pipeline_data/models/v3/*
 pipeline_data/heightmaps/*
 !pipeline_data/reference/
 pipeline_data/reference/*
+!pipeline_data/data/
+pipeline_data/data/*
 
 # ── Un-ignore model weights + configs (Git LFS for .pt files) ──
 !pipeline_data/models/terrain_unet.pt
@@ -537,6 +539,10 @@ pipeline_data/reference/*
 
 # ── Un-ignore retail dungeon topology (Git LFS) ──
 !pipeline_data/reference/retail_dungeon_topology.json
+
+# ── Un-ignore retail biome data (needed by V3 smoother for conditioning) ──
+!pipeline_data/data/retail_biomes.npy
+!pipeline_data/data/retail_biome_info.json
 
 # Large SQL scripts (generated pipeline output — NOT in pipeline_data/)
 building_remap*.sql
