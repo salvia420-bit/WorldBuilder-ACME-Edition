@@ -167,7 +167,6 @@ CPU-bound prototyping on local hardware, scaling to 4×RTX 4090 cluster for fina
 - **Objects**: Constraint-based settlement generation using OntologyService semantic tags
 - **Architecture**: Producer-Consumer pipeline for multi-GPU scaling (GPUs never touch DAT files directly)
 
-See **[`ToDoList.md`](ToDoList.md)** Phases 7–10 for the detailed implementation plan.
 
 ### Phase 6 — Semantic Tagging & Constraint Enforcement ✅
 
