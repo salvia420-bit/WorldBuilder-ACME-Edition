@@ -181,6 +181,128 @@ Bridging mathematical placement with aesthetic cohesion:
 
 ---
 
+## Create Custom Worlds
+
+Generate your own Asheron's Call world in minutes on a GTX 1070 (or better). The pipeline turns any world map image into a near-retail quality playable terrain.
+
+### The Pipeline
+
+```
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│  1. AI Image     │    │  2. QuickWorld    │    │  3. V3 Smoother  │    │  4. Town Placer  │
+│                  │    │                  │    │                  │    │                  │
+│  Google Nano /   │───▶│  Terminal cmd:    │───▶│  V3 diffusion    │───▶│  Drag-and-drop   │
+│  Banana 2 or any │    │  quick-world      │    │  at ~15% strength│    │  town placement  │
+│  AI image gen    │    │  <codebook> <img> │    │  fixes jagged    │    │  (browser-based) │
+│                  │    │                  │    │  QuickWorld edges │    │                  │
+│  "Keep this      │    │  Classifies each  │    │                  │    │  tools/           │
+│   pixel perfect  │    │  pixel → terrain  │    │  smooth_vanquish │    │  town_placer.html │
+│   but randomize" │    │  type + height    │    │  _v3.py          │    │                  │
+└──────────────────┘    └──────────────────┘    └──────────────────┘    └──────────────────┘
+```
+
+### Step 1 — Generate a World Map Image
+
+Use **Google Nano / Banana 2** (or any AI image generator). Take the retail Dereth world map and prompt the AI to create a variation — keeping the same pixel style and color palette but randomizing the terrain layout. The output should be a 2041×2041 PNG.
+
+### Step 2 — Convert Image to Terrain
+
+First, build a calibration codebook from the retail DAT data:
+
+```bash
+# In the WorldBuilder Terminal:
+calibrate-world-map
+```
+
+Then reverse-engineer terrain from your new image:
+
+```bash
+quick-world pipeline_data/enrichment/terrain_codebook.json your_new_world_map.png
+```
+
+`quick-world` classifies each pixel's color to the nearest terrain type (via RGB distance to the codebook), estimates height from brightness, and stamps 255×255 landblocks with terrain + scenery objects. The result is a complete world — but with jagged, pixel-artifact edges at terrain boundaries.
+
+### Step 3 — Smooth with V3 Diffusion
+
+The V3 terrain diffusion model (~232 MB, 50M parameters) was overtrained on retail heightmaps. At ~15% diffusion strength, this "overtrained" property becomes a feature — it smooths the harsh QuickWorld edges while preserving the terrain's structural character:
+
+```bash
+python scripts/smooth_vanquish_v3.py \
+    --model pipeline_data/models/v3/terrain_diffusion_v3.pt \
+    --input pipeline_data/heightmaps/vanquish_heightmaps.jsonl \
+    --output pipeline_data/heightmaps/vanquish_smoothed.jsonl
+```
+
+The smoother applies variable strength by terrain height band — mountains get lighter smoothing (they already look good), while mid-elevation plains (the worst QuickWorld artifacts) get stronger treatment.
+
+**Hardware:** Runs on a GTX 1070 (8 GB VRAM). Inference takes a few minutes for the full 255×255 grid.
+
+### Step 4 — Place Towns (Optional)
+
+Open **[`tools/town_placer.html`](tools/town_placer.html)** in any browser. Drag-and-drop towns onto the map, then export the placement JSON for the downstream remap pipeline. This is the first-ever interactive town repositioning tool for Asheron's Call.
+
+---
+
+## ML Models
+
+Pre-trained model weights are included in the repository via **Git LFS**. When you clone, you get everything.
+
+| Model | Architecture | Size | Purpose | Hardware | Training Script |
+|---|---|---|---|---|---|
+| **V1** | Conditional U-Net | 62 MB | Image → terrain heightmap + texture type | GTX 1070 (10-30 min training) | [`scripts/train_terrain_unet.py`](scripts/train_terrain_unet.py) |
+| **V2** | Conditional U-Net (smaller) | 16 MB | Experimental iteration | — | — |
+| **V3** | Conditional DDPM U-Net | 232 MB | Diffusion-based terrain smoothing | GTX 1070 (few min inference) | [`scripts/train_terrain_v3.py`](scripts/train_terrain_v3.py) |
+
+### Pipeline Data (Git LFS)
+
+The essential pipeline files are tracked via **Git LFS** (~530 MB total). Clone the repo and `git lfs pull` to get everything needed to run the terrain pipeline.
+
+**LFS-tracked files:**
+
+```
+pipeline_data/
+├── models/
+│   ├── terrain_unet.pt              # V1 weights (62 MB)
+│   ├── v1/terrain_unet.pt           # V1 weights (62 MB)
+│   ├── v2/terrain_unet_v2.pt        # V2 weights (16 MB)
+│   └── v3/terrain_diffusion_v3.pt   # V3 diffusion weights (232 MB)
+├── heightmaps/
+│   └── retail_heightmaps.jsonl      # Training data from retail DATs (61 MB)
+└── reference/
+    └── retail_dungeon_topology.json # Dungeon reference data (113 MB)
+```
+
+Model configs (`.json`), training loss plots (`.png`), and other small metadata files are tracked normally (not LFS). Additional pipeline data (enrichment, screenshots, population output) is generated locally and gitignored.
+
+### Retraining
+
+To retrain the V3 model from scratch on your own retail data:
+
+```bash
+# 1. Extract retail heightmaps (requires retail DATs loaded in a project)
+#    In the Terminal:
+extract-retail-heightmaps pipeline_data/heightmaps/retail_heightmaps.jsonl
+
+# 2. Train the V3 diffusion model
+python scripts/train_terrain_v3.py \
+    --data pipeline_data/heightmaps/retail_heightmaps.jsonl \
+    --output pipeline_data/models/v3/terrain_diffusion_v3.pt
+```
+
+Training runs in 10–30 minutes on a GTX 1070. The model converges quickly because the retail terrain data is relatively uniform — this is actually desirable, since the V3 model works best as a smoother (not a generator) at 15% diffusion strength.
+
+---
+
+## Tools
+
+### Town Placer — [`tools/town_placer.html`](tools/town_placer.html)
+
+Interactive, browser-based town placement tool. Open it directly in any browser — no server, no dependencies, no build step. Select towns from the sidebar, click to place them on the world map, and export the placement JSON for the building remap pipeline.
+
+This is the first tool that allows moving Asheron's Call towns to new locations. Exported placements feed into `remap-buildings-v2` in the Terminal.
+
+---
+
 ## GUI Features
 
 The full visual editor is available via the platform-specific projects (`WorldBuilder.Windows`, `.Mac`, `.Linux`). All features listed below are fully functional and unrelated to the agentic extensions.
@@ -422,6 +544,18 @@ WorldBuilder-ACME-Edition/
 ├── WorldBuilder.Windows/      # Windows platform target
 ├── WorldBuilder.Mac/          # macOS platform target
 ├── WorldBuilder.Linux/        # Linux platform target
+├── pipeline_data/             # ML models, heightmaps, training data (Git LFS)
+│   ├── models/                #   V1/V2/V3 model weights + configs
+│   ├── heightmaps/            #   Extracted terrain data (JSONL, 40-85 MB each)
+│   ├── data/                  #   Biome grids, feature catalogs
+│   ├── enrichment/            #   Calibration codebooks, baselines
+│   └── reference/             #   Retail dungeon topology, training data
+├── scripts/                   # Python ML scripts
+│   ├── train_terrain_v3.py    #   Train V3 conditional diffusion model
+│   ├── smooth_vanquish_v3.py  #   Apply V3 smoothing to QuickWorld terrain
+│   └── train_terrain_unet.py  #   Train V1 U-Net model
+├── tools/                     # Browser-based utilities
+│   └── town_placer.html       #   Interactive town placement (zero-dependency)
 ├── docs/                      # API documentation
 │   ├── agent_api_reference.md #   Full command reference (1,400+ lines)
 │   └── agent_api_schema.json  #   JSON schema for all commands

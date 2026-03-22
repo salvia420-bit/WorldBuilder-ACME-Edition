@@ -493,19 +493,54 @@ remap_output/
 # ──────────────────────────────────────────────
 # Pipeline data files (generated/large)
 # ──────────────────────────────────────────────
-# Consolidated pipeline data directory
-pipeline_data/
+# Most of pipeline_data/ is generated or project-specific.
+# Only the essential files for the ML pipeline are tracked via Git LFS.
+#
+# Git negation rule: to un-ignore a file inside an ignored directory,
+# you must un-ignore every parent directory in the path first.
+# We ignore directory *contents* (/*) rather than the directory itself,
+# so that negation rules for children are evaluated.
 
-# Heightmap JSONL files (40-85 MB each)
-*.jsonl
+# Ignore everything inside pipeline_data
+pipeline_data/*
 
-# Large SQL scripts (generated pipeline output)
+# Un-ignore the subdirectories we need (but ignore their contents)
+!pipeline_data/models/
+pipeline_data/models/*
+!pipeline_data/models/v1/
+pipeline_data/models/v1/*
+!pipeline_data/models/v2/
+pipeline_data/models/v2/*
+!pipeline_data/models/v3/
+pipeline_data/models/v3/*
+!pipeline_data/heightmaps/
+pipeline_data/heightmaps/*
+!pipeline_data/reference/
+pipeline_data/reference/*
+
+# ── Un-ignore model weights + configs (Git LFS for .pt files) ──
+!pipeline_data/models/terrain_unet.pt
+!pipeline_data/models/terrain_unet_config.json
+!pipeline_data/models/training_loss.png
+!pipeline_data/models/v1/terrain_unet.pt
+!pipeline_data/models/v1/terrain_unet_config.json
+!pipeline_data/models/v1/training_loss.png
+!pipeline_data/models/v2/terrain_unet_v2.pt
+!pipeline_data/models/v2/terrain_unet_v2_config.json
+!pipeline_data/models/v2/training_v2.png
+!pipeline_data/models/v3/terrain_diffusion_v3.pt
+!pipeline_data/models/v3/terrain_v3_config.json
+!pipeline_data/models/v3/training_v3.png
+
+# ── Un-ignore retail heightmaps (training data, Git LFS) ──
+!pipeline_data/heightmaps/retail_heightmaps.jsonl
+
+# ── Un-ignore retail dungeon topology (Git LFS) ──
+!pipeline_data/reference/retail_dungeon_topology.json
+
+# Large SQL scripts (generated pipeline output — NOT in pipeline_data/)
 building_remap*.sql
 holtburg_probe.sql
-
-# NumPy / data artifacts
-*.npy
-*.npz
 
 # ──────────────────────────────────────────────
 # Large images & map files

@@ -1,0 +1,22 @@
+# ══════════════════════════════════════════════
+# Git LFS — Track large pipeline files
+# ══════════════════════════════════════════════
+# These files are stored in Git LFS so that `git clone` + `git lfs pull`
+# gives you everything needed to run the terrain generation pipeline.
+#
+# Total LFS storage: ~530 MB
+#   - Model weights (V1 62MB × 2, V2 16MB, V3 232MB)
+#   - Retail heightmaps (61 MB)
+#   - Retail dungeon topology (113 MB)
+
+# ── PyTorch model weights ──
+pipeline_data/models/terrain_unet.pt filter=lfs diff=lfs merge=lfs -text
+pipeline_data/models/v1/terrain_unet.pt filter=lfs diff=lfs merge=lfs -text
+pipeline_data/models/v2/terrain_unet_v2.pt filter=lfs diff=lfs merge=lfs -text
+pipeline_data/models/v3/terrain_diffusion_v3.pt filter=lfs diff=lfs merge=lfs -text
+
+# ── Retail heightmap training data ──
+pipeline_data/heightmaps/retail_heightmaps.jsonl filter=lfs diff=lfs merge=lfs -text
+
+# ── Retail dungeon topology reference ──
+pipeline_data/reference/retail_dungeon_topology.json filter=lfs diff=lfs merge=lfs -text

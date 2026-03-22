@@ -1,0 +1,18 @@
+{
+  "model": "TerrainUNet",
+  "in_channels": 17,
+  "base_channels": 64,
+  "grid_size": 9,
+  "num_terrain_types": 32,
+  "height_mean": 64.91183471679688,
+  "height_std": 18.099287043081056,
+  "best_val_loss": 0.2166635603240106,
+  "epochs_trained": 50,
+  "batch_size": 128,
+  "learning_rate": 0.001,
+  "total_samples": 22605,
+  "training_time_seconds": 410.5364637374878,
+  "device": "cuda",
+  "gpu": "NVIDIA GeForce GTX 1070",
+  "parameters": 5430273
+}
