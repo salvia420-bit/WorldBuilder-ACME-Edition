@@ -555,13 +555,15 @@ WorldBuilder-ACME-Edition/
 │   └── train_terrain_unet.py  #   Train V1 U-Net model
 ├── tools/                     # Browser-based utilities
 │   └── town_placer.html       #   Interactive town placement (zero-dependency)
-├── docs/                      # API documentation
+├── docs/                      # Documentation
+│   ├── HowToMakeNewWorlds.md  #   World generation pipeline guide
 │   ├── agent_api_reference.md #   Full command reference (1,400+ lines)
 │   └── agent_api_schema.json  #   JSON schema for all commands
 ├── tests/                     # Integration test suites
 │   ├── test_agent_protocol.py #   Python: 55+ protocol tests
 │   └── Test-AgentProtocol.ps1 #   PowerShell: 25 smoke tests
-└── TestProject/               # Sample project with retail DATs
+└── projects/                  # World projects
+    └── TestProject/           #   Sample project with retail DATs
 ```
 
 ---
@@ -599,6 +601,7 @@ dotnet run --project WorldBuilder.Terminal -- --stdin --project MyWorld.wbproj
 
 ## Thanks
 
+- **Vanquish-6** — this project is forked from [Vanquish-6/WorldBuilder-ACME-Edition](https://github.com/Vanquish-6/WorldBuilder-ACME-Edition)
 - **Trevis** — original WorldBuilder vision and groundwork (DatReaderWriter + the base that this all grew from, before the big refactor...)
 - **Gmriggs** — testing, research, and invaluable AC knowledge
 - **Advan** — testing and bug reports
