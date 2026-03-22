@@ -210,6 +210,15 @@ Generate your own Asheron's Call world in minutes on a GTX 1070 (or better). The
 
 Use **Google Nano / Banana 2** (or any AI image generator). Take the retail Dereth world map and prompt the AI to create a variation — keeping the same pixel style and color palette but randomizing the terrain layout. The output should be a 2041×2041 PNG.
 
+<p align="center">
+  <img src="docs/images/1773102127388.jpg" width="250" alt="AI-generated Dereth variation 1">
+  &nbsp;
+  <img src="docs/images/1773102259481.jpg" width="250" alt="AI-generated Dereth variation 2">
+  &nbsp;
+  <img src="docs/images/1773102439191.jpg" width="250" alt="AI-generated Dereth variation 3">
+</p>
+<p align="center"><em>Three AI-generated world map variations from Nano Banana 2 — same palette, completely different worlds</em></p>
+
 ### Step 2 — Convert Image to Terrain
 
 First, build a calibration codebook from the retail DAT data:
