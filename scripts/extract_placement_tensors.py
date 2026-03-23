@@ -259,9 +259,9 @@ def parse_retail_sql(sql_path: str) -> Tuple[Dict[Tuple[int,int], list], list, D
                     lb_y = (cell_id >> 16) & 0xFF
                     cell_idx = cell_id & 0xFFFF
                     
-                    # Skip interior cells (EnvCell IDs >= 0x100)
-                    if cell_idx >= 0x100:
-                        continue
+                    # Track indoor vs outdoor (EnvCell IDs >= 0x100 are interior)
+                    is_indoor = cell_idx >= 0x100
+                    
                     # Skip invalid landblocks
                     if lb_x < 1 or lb_y < 1:
                         continue
@@ -280,11 +280,12 @@ def parse_retail_sql(sql_path: str) -> Tuple[Dict[Tuple[int,int], list], list, D
                         'qy': float(m.group(9)),
                         'qz': float(m.group(10)),
                         'is_link_child': is_link,
+                        'is_indoor': is_indoor,
                     })
                     total_instances += 1
     
     elapsed = time.time() - t0
-    print(f"    Parsed {total_instances:,} outdoor instances across {len(instances_by_lb)} LBs ")
+    print(f"    Parsed {total_instances:,} instances (outdoor+indoor) across {len(instances_by_lb)} LBs ")
     print(f"    Parsed {total_encounters:,} encounters across {len(encounters_by_lb)} LBs")
     print(f"    + {len(links):,} links in {elapsed:.1f}s")
     
