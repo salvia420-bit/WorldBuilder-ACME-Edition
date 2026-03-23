@@ -42,6 +42,9 @@ namespace WorldBuilder.Editors.Dungeon {
         public bool GridSnapEnabled { get; set; }
         public float GridSnapSize { get; set; } = 5f;
 
+        // Surface alignment
+        public bool AlignToSurface { get; set; }
+
         public event Action? SelectionChanged;
         public event Action? RenderingRefreshNeeded;
         public event Action<string>? StatusTextChanged;

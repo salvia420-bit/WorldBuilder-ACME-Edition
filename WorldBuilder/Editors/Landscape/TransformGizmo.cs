@@ -7,30 +7,36 @@ using WorldBuilder.Lib;
 
 namespace WorldBuilder.Editors.Landscape {
     public enum GizmoMode { Translate, Rotate, Scale }
-    public enum GizmoAxis { None, X, Y, Z, XY, XZ, YZ, All }
+    public enum GizmoAxis { None, X, Y, Z, XY, XZ, YZ, All, ViewAxis }
 
     public class TransformGizmo : IDisposable {
-        private const float ArrowLength = 1.3f;
-        private const float ShaftThickness = 0.07f;
-        private const float TipLength = 0.30f;
-        private const float TipRadius = 0.13f;
-        private const float PlaneHandleSize = 0.35f;
-        private const float PlaneHandleOffset = 0.45f;
-        private const float RingRadius = 1.05f;
-        private const float RingThickness = 0.055f;
-        private const float CubeHalfSize = 0.11f;
-        private const int ConeSides = 12;
-        private const int RingSegments = 48;
-        private const float HitThresholdPx = 24f;
-        private const float ScreenScaleFactor = 0.15f;
+        private const float ArrowLength = 1.5f;
+        private const float ShaftRadius = 0.035f;
+        private const float TipLength = 0.35f;
+        private const float TipRadius = 0.12f;
+        private const float PlaneHandleSize = 0.32f;
+        private const float PlaneHandleOffset = 0.50f;
+        private const float RingRadius = 1.15f;
+        private const float RingTubeRadius = 0.025f;
+        private const float ViewRingRadius = 1.30f;
+        private const float CubeHalfSize = 0.10f;
+        private const float CenterHandleRadius = 0.14f;
+        private const int ConeSides = 24;
+        private const int ShaftSides = 12;
+        private const int RingSegments = 64;
+        private const int TubeSides = 8;
+        private const float HitThresholdPx = 18f;
+        private const float ScreenScaleFactor = 0.14f;
 
-        private static readonly Vector3 Red = new(1.0f, 0.22f, 0.22f);
-        private static readonly Vector3 Green = new(0.22f, 0.95f, 0.22f);
-        private static readonly Vector3 Blue = new(0.30f, 0.45f, 1.0f);
-        private static readonly Vector3 Yellow = new(1.0f, 1.0f, 0.25f);
-        private static readonly Vector3 Magenta = new(1.0f, 0.25f, 1.0f);
-        private static readonly Vector3 Cyan = new(0.25f, 1.0f, 1.0f);
-        private static readonly Vector3 White = new(0.95f, 0.95f, 0.95f);
+        private static readonly Vector3 Red = new(0.90f, 0.18f, 0.18f);
+        private static readonly Vector3 Green = new(0.40f, 0.90f, 0.18f);
+        private static readonly Vector3 Blue = new(0.20f, 0.45f, 0.95f);
+        private static readonly Vector3 Yellow = new(1.0f, 0.95f, 0.20f);
+        private static readonly Vector3 Magenta = new(0.95f, 0.20f, 0.95f);
+        private static readonly Vector3 Cyan = new(0.20f, 0.95f, 0.95f);
+        private static readonly Vector3 White = new(0.92f, 0.92f, 0.92f);
+        private static readonly Vector3 HighlightYellow = new(1.0f, 0.98f, 0.60f);
+        private static readonly Vector3 HighlightWhite = new(1.0f, 1.0f, 1.0f);
 
         public GizmoMode Mode { get; set; } = GizmoMode.Translate;
         public GizmoAxis HoveredAxis { get; private set; } = GizmoAxis.None;
@@ -38,7 +44,10 @@ namespace WorldBuilder.Editors.Landscape {
         public bool IsDragging => ActiveAxis != GizmoAxis.None;
         public bool UseLocalSpace { get; set; }
 
+        public float CurrentRotationAngle { get; private set; }
+
         private uint _vao, _vbo, _ebo;
+        private uint _dynVAO, _dynVBO, _dynEBO;
         private bool _initialized;
         private IShader? _shader;
 
@@ -57,7 +66,6 @@ namespace WorldBuilder.Editors.Landscape {
         private float[] _boxVerts = Array.Empty<float>();
         private uint[] _boxIndices = Array.Empty<uint>();
         private uint _boxVAO, _boxVBO, _boxEBO;
-        private bool _boxDirty = true;
 
         private Vector3 _dragPlaneOrigin;
         private Vector3 _dragPlaneNormal;
@@ -69,6 +77,7 @@ namespace WorldBuilder.Editors.Landscape {
             public GizmoAxis Axis;
             public int IndexOffset;
             public int IndexCount;
+            public float BaseAlpha;
         }
 
         public unsafe void Initialize(GL gl, IShader shader) {
@@ -95,6 +104,16 @@ namespace WorldBuilder.Editors.Landscape {
             gl.BindVertexArray(_boxVAO);
             gl.BindBuffer(GLEnum.ArrayBuffer, _boxVBO);
             gl.BindBuffer(GLEnum.ElementArrayBuffer, _boxEBO);
+            SetupVertexAttribs(gl);
+            gl.BindVertexArray(0);
+
+            gl.GenVertexArrays(1, out _dynVAO);
+            gl.GenBuffers(1, out _dynVBO);
+            gl.GenBuffers(1, out _dynEBO);
+
+            gl.BindVertexArray(_dynVAO);
+            gl.BindBuffer(GLEnum.ArrayBuffer, _dynVBO);
+            gl.BindBuffer(GLEnum.ElementArrayBuffer, _dynEBO);
             SetupVertexAttribs(gl);
             gl.BindVertexArray(0);
 
@@ -133,7 +152,6 @@ namespace WorldBuilder.Editors.Landscape {
             _shader.Bind();
             _shader.SetUniform("uViewProjection", viewProjection);
             _shader.SetUniform("uModel", model);
-            _shader.SetUniform("uAlpha", 1.0f);
 
             gl.BindVertexArray(_vao);
             gl.BindBuffer(GLEnum.ArrayBuffer, _vbo);
@@ -149,10 +167,43 @@ namespace WorldBuilder.Editors.Landscape {
                 bool isHovered = section.Axis == HoveredAxis && !IsDragging;
                 bool isActive = section.Axis == ActiveAxis && IsDragging;
                 bool isDimmed = IsDragging && section.Axis != ActiveAxis;
-                float brightness = isDimmed ? 0.35f : (isHovered || isActive) ? 1.8f : 1.0f;
+
+                float brightness;
+                Vector3 highlightColor;
+                float highlightMix;
+                float alpha = section.BaseAlpha;
+
+                if (isActive) {
+                    brightness = 1.0f;
+                    highlightColor = HighlightWhite;
+                    highlightMix = 0.45f;
+                    alpha = 1.0f;
+                } else if (isHovered) {
+                    brightness = 1.2f;
+                    highlightColor = HighlightYellow;
+                    highlightMix = 0.30f;
+                    alpha = MathF.Min(alpha + 0.2f, 1.0f);
+                } else if (isDimmed) {
+                    brightness = 0.45f;
+                    highlightColor = Vector3.Zero;
+                    highlightMix = 0.0f;
+                    alpha *= 0.5f;
+                } else {
+                    brightness = 1.0f;
+                    highlightColor = Vector3.Zero;
+                    highlightMix = 0.0f;
+                }
+
                 _shader.SetUniform("uBrightness", brightness);
+                _shader.SetUniform("uAlpha", alpha);
+                _shader.SetUniform("uHighlightColor", highlightColor);
+                _shader.SetUniform("uHighlightMix", highlightMix);
                 gl.DrawElements(GLEnum.Triangles, (uint)section.IndexCount, GLEnum.UnsignedInt,
                     (void*)(section.IndexOffset * sizeof(uint)));
+            }
+
+            if (IsDragging && Mode == GizmoMode.Rotate) {
+                RenderRotationArc(gl, viewProjection, camera, gizmoCenter, gizmoOrientation, gizmoScale);
             }
 
             gl.BindVertexArray(0);
@@ -161,6 +212,87 @@ namespace WorldBuilder.Editors.Landscape {
             gl.Enable(EnableCap.CullFace);
             gl.Disable(EnableCap.Blend);
         }
+
+        private unsafe void RenderRotationArc(GL gl, Matrix4x4 viewProjection, ICamera camera,
+            Vector3 gizmoCenter, Quaternion gizmoOrientation, float gizmoScale) {
+            if (_shader == null || MathF.Abs(CurrentRotationAngle) < 0.001f) return;
+
+            var orient = UseLocalSpace
+                ? Matrix4x4.CreateFromQuaternion(gizmoOrientation)
+                : Matrix4x4.Identity;
+            var axisDir = GetAxisDirection(ActiveAxis, orient);
+            var perp1 = GetPerpendicular(axisDir);
+            var perp2 = Vector3.Cross(axisDir, perp1);
+
+            float arcRadius = RingRadius * gizmoScale;
+            float angle = CurrentRotationAngle;
+            int arcSegments = Math.Max(3, (int)(MathF.Abs(angle) / (MathF.PI / 32f)));
+            arcSegments = Math.Min(arcSegments, 128);
+
+            var verts = new List<float>();
+            var indices = new List<uint>();
+
+            uint centerIdx = 0;
+            AddVertex(verts, gizmoCenter, GetAxisColor(ActiveAxis) * 0.6f);
+
+            for (int i = 0; i <= arcSegments; i++) {
+                float t = (float)i / arcSegments;
+                float a = t * angle;
+                var pt = gizmoCenter + (perp1 * MathF.Cos(a) + perp2 * MathF.Sin(a)) * arcRadius;
+                AddVertex(verts, pt, GetAxisColor(ActiveAxis) * 0.6f);
+            }
+
+            for (int i = 0; i < arcSegments; i++) {
+                indices.Add(centerIdx);
+                if (angle >= 0) {
+                    indices.Add(centerIdx + 1 + (uint)i);
+                    indices.Add(centerIdx + 2 + (uint)i);
+                } else {
+                    indices.Add(centerIdx + 2 + (uint)i);
+                    indices.Add(centerIdx + 1 + (uint)i);
+                }
+            }
+
+            if (verts.Count == 0 || indices.Count == 0) return;
+
+            var vertsArr = verts.ToArray();
+            var indicesArr = indices.ToArray();
+
+            _shader.SetUniform("uModel", Matrix4x4.Identity);
+            _shader.SetUniform("uBrightness", 1.0f);
+            _shader.SetUniform("uAlpha", 0.35f);
+            _shader.SetUniform("uHighlightColor", Vector3.Zero);
+            _shader.SetUniform("uHighlightMix", 0.0f);
+
+            gl.BindVertexArray(_dynVAO);
+            gl.BindBuffer(GLEnum.ArrayBuffer, _dynVBO);
+            fixed (float* vp = vertsArr) {
+                gl.BufferData(GLEnum.ArrayBuffer, (nuint)(vertsArr.Length * sizeof(float)), vp, GLEnum.DynamicDraw);
+            }
+            gl.BindBuffer(GLEnum.ElementArrayBuffer, _dynEBO);
+            fixed (uint* ip = indicesArr) {
+                gl.BufferData(GLEnum.ElementArrayBuffer, (nuint)(indicesArr.Length * sizeof(uint)), ip, GLEnum.DynamicDraw);
+            }
+
+            gl.DrawElements(GLEnum.Triangles, (uint)indicesArr.Length, GLEnum.UnsignedInt, null);
+            gl.BindVertexArray(0);
+        }
+
+        private static void AddVertex(List<float> verts, Vector3 pos, Vector3 color) {
+            verts.Add(pos.X); verts.Add(pos.Y); verts.Add(pos.Z);
+            verts.Add(color.X); verts.Add(color.Y); verts.Add(color.Z);
+        }
+
+        private static Vector3 GetAxisColor(GizmoAxis axis) => axis switch {
+            GizmoAxis.X => Red,
+            GizmoAxis.Y => Green,
+            GizmoAxis.Z => Blue,
+            GizmoAxis.XY => Yellow,
+            GizmoAxis.XZ => Magenta,
+            GizmoAxis.YZ => Cyan,
+            GizmoAxis.ViewAxis => White,
+            _ => White
+        };
 
         public unsafe void RenderSelectionBox(GL gl, Matrix4x4 viewProjection, ICamera camera,
             Vector3 min, Vector3 max, Vector3 color) {
@@ -178,6 +310,8 @@ namespace WorldBuilder.Editors.Landscape {
             _shader.SetUniform("uModel", Matrix4x4.Identity);
             _shader.SetUniform("uAlpha", 0.85f);
             _shader.SetUniform("uBrightness", 1.0f);
+            _shader.SetUniform("uHighlightColor", Vector3.Zero);
+            _shader.SetUniform("uHighlightMix", 0.0f);
 
             gl.BindVertexArray(_boxVAO);
             gl.BindBuffer(GLEnum.ArrayBuffer, _boxVBO);
@@ -220,6 +354,11 @@ namespace WorldBuilder.Editors.Landscape {
                 var axisIds = new[] { GizmoAxis.X, GizmoAxis.Y, GizmoAxis.Z };
 
                 if (Mode == GizmoMode.Translate) {
+                    var centerScreenDist = Vector2.Distance(mousePos, centerScreen.Value);
+                    if (centerScreenDist < HitThresholdPx * 1.0f) {
+                        return GizmoAxis.All;
+                    }
+
                     var planeAxes = new[] {
                         (GizmoAxis.XY, Vector3.UnitX, Vector3.UnitY),
                         (GizmoAxis.XZ, Vector3.UnitX, Vector3.UnitZ),
@@ -230,7 +369,7 @@ namespace WorldBuilder.Editors.Landscape {
                         var d2 = Vector3.Transform(a2, orient);
                         var handleCenter = gizmoCenter + (d1 + d2) * (PlaneHandleOffset * gizmoScale);
                         var hScreen = WorldToScreen(handleCenter, viewProjection, sw, sh);
-                        if (hScreen.HasValue && Vector2.Distance(mousePos, hScreen.Value) < HitThresholdPx * 1.2f)
+                        if (hScreen.HasValue && Vector2.Distance(mousePos, hScreen.Value) < HitThresholdPx * 1.4f)
                             return axis;
                     }
                 }
@@ -252,6 +391,16 @@ namespace WorldBuilder.Editors.Landscape {
             }
 
             if (Mode == GizmoMode.Rotate) {
+                float viewRingScreenRadius = 0f;
+                var viewRingSample = gizmoCenter + camera.Right * (ViewRingRadius * gizmoScale);
+                var viewRingScreen = WorldToScreen(viewRingSample, viewProjection, sw, sh);
+                if (viewRingScreen.HasValue) {
+                    viewRingScreenRadius = Vector2.Distance(centerScreen.Value, viewRingScreen.Value);
+                    float viewRingDist = MathF.Abs(Vector2.Distance(mousePos, centerScreen.Value) - viewRingScreenRadius);
+                    if (viewRingDist < HitThresholdPx)
+                        return GizmoAxis.ViewAxis;
+                }
+
                 var axes = new[] { Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ };
                 var axisIds = new[] { GizmoAxis.X, GizmoAxis.Y, GizmoAxis.Z };
                 float closestDist = float.MaxValue;
@@ -289,6 +438,7 @@ namespace WorldBuilder.Editors.Landscape {
             Vector3 gizmoCenter, Quaternion gizmoOrientation) {
             if (axis == GizmoAxis.None) return false;
             ActiveAxis = axis;
+            CurrentRotationAngle = 0f;
 
             float gizmoScale = ComputeScale(camera, gizmoCenter);
             var orient = UseLocalSpace
@@ -296,14 +446,20 @@ namespace WorldBuilder.Editors.Landscape {
                 : Matrix4x4.Identity;
 
             if (Mode == GizmoMode.Translate || Mode == GizmoMode.Scale) {
-                _dragAxisDir = GetAxisDirection(axis, orient);
-                var viewDir = Vector3.Normalize(gizmoCenter - camera.Position);
-
-                if (axis == GizmoAxis.XY || axis == GizmoAxis.XZ || axis == GizmoAxis.YZ) {
-                    _dragPlaneNormal = GetPlaneNormal(axis, orient);
+                if (axis == GizmoAxis.All) {
+                    var viewDir = Vector3.Normalize(gizmoCenter - camera.Position);
+                    _dragPlaneNormal = -viewDir;
+                    _dragAxisDir = Vector3.Zero;
                 } else {
-                    var cross = Vector3.Cross(viewDir, _dragAxisDir);
-                    _dragPlaneNormal = Vector3.Normalize(Vector3.Cross(_dragAxisDir, cross));
+                    _dragAxisDir = GetAxisDirection(axis, orient);
+                    var viewDir = Vector3.Normalize(gizmoCenter - camera.Position);
+
+                    if (axis == GizmoAxis.XY || axis == GizmoAxis.XZ || axis == GizmoAxis.YZ) {
+                        _dragPlaneNormal = GetPlaneNormal(axis, orient);
+                    } else {
+                        var cross = Vector3.Cross(viewDir, _dragAxisDir);
+                        _dragPlaneNormal = Vector3.Normalize(Vector3.Cross(_dragAxisDir, cross));
+                    }
                 }
 
                 _dragPlaneOrigin = gizmoCenter;
@@ -313,7 +469,11 @@ namespace WorldBuilder.Editors.Landscape {
             }
 
             if (Mode == GizmoMode.Rotate) {
-                _dragAxisDir = GetAxisDirection(axis, orient);
+                if (axis == GizmoAxis.ViewAxis) {
+                    _dragAxisDir = Vector3.Normalize(camera.Position - gizmoCenter);
+                } else {
+                    _dragAxisDir = GetAxisDirection(axis, orient);
+                }
                 _dragPlaneNormal = _dragAxisDir;
                 _dragPlaneOrigin = gizmoCenter;
                 var ray = BuildRay(mousePos, camera);
@@ -336,6 +496,11 @@ namespace WorldBuilder.Editors.Landscape {
             if (!hit.HasValue) return Vector3.Zero;
 
             var delta = hit.Value - _dragStartHit;
+
+            if (ActiveAxis == GizmoAxis.All) {
+                return delta;
+            }
+
             if (ActiveAxis == GizmoAxis.X || ActiveAxis == GizmoAxis.Y || ActiveAxis == GizmoAxis.Z) {
                 return _dragAxisDir * Vector3.Dot(delta, _dragAxisDir);
             }
@@ -346,14 +511,15 @@ namespace WorldBuilder.Editors.Landscape {
             if (!IsDragging || Mode != GizmoMode.Rotate) return 0f;
             var ray = BuildRay(mousePos, camera);
             var hit = RayPlaneIntersect(ray.origin, ray.dir, _dragPlaneOrigin, _dragPlaneNormal);
-            if (!hit.HasValue) return 0f;
+            if (!hit.HasValue) return CurrentRotationAngle;
 
             var perp = GetPerpendicular(_dragAxisDir);
             var offset = hit.Value - gizmoCenter;
             float angle = MathF.Atan2(
                 Vector3.Dot(offset, Vector3.Cross(_dragAxisDir, perp)),
                 Vector3.Dot(offset, perp));
-            return angle - _dragStartAngle;
+            CurrentRotationAngle = angle - _dragStartAngle;
+            return CurrentRotationAngle;
         }
 
         public Quaternion GetRotationAxis() {
@@ -384,10 +550,19 @@ namespace WorldBuilder.Editors.Landscape {
 
         public void EndDrag() {
             ActiveAxis = GizmoAxis.None;
+            CurrentRotationAngle = 0f;
         }
 
         public void CancelDrag() {
             ActiveAxis = GizmoAxis.None;
+            CurrentRotationAngle = 0f;
+        }
+
+        public Vector3 GetLocalAxisDirection(GizmoAxis axis, Quaternion orientation) {
+            var orient = UseLocalSpace
+                ? Matrix4x4.CreateFromQuaternion(orientation)
+                : Matrix4x4.Identity;
+            return GetAxisDirection(axis, orient);
         }
 
         private void GetModeGeometry(out float[] verts, out uint[] indices, out AxisSection[] sections) {
@@ -426,9 +601,9 @@ namespace WorldBuilder.Editors.Landscape {
                 int idxOff = indices.Count;
                 var shaftEnd = axis * ArrowLength;
                 var tipEnd = axis * (ArrowLength + TipLength);
-                AddBox(verts, indices, Vector3.Zero, shaftEnd, ShaftThickness, color);
+                AddCylinder(verts, indices, Vector3.Zero, shaftEnd, ShaftRadius, color, ShaftSides);
                 AddCone(verts, indices, shaftEnd, tipEnd, TipRadius, color, ConeSides);
-                sections.Add(new AxisSection { Axis = gizmoAxis, IndexOffset = idxOff, IndexCount = indices.Count - idxOff });
+                sections.Add(new AxisSection { Axis = gizmoAxis, IndexOffset = idxOff, IndexCount = indices.Count - idxOff, BaseAlpha = 1.0f });
             }
 
             var planeData = new[] {
@@ -439,15 +614,21 @@ namespace WorldBuilder.Editors.Landscape {
             foreach (var (gizmoAxis, a1, a2, color) in planeData) {
                 int idxOff = indices.Count;
                 var center = (a1 + a2) * PlaneHandleOffset;
+                float hs = PlaneHandleSize * 0.5f;
                 var corners = new[] {
-                    center + (a1 + a2) * (PlaneHandleSize * 0.5f),
-                    center + (a1 - a2) * (PlaneHandleSize * 0.5f),
-                    center + (-a1 - a2) * (PlaneHandleSize * 0.5f),
-                    center + (-a1 + a2) * (PlaneHandleSize * 0.5f),
+                    center + (a1 + a2) * hs,
+                    center + (a1 - a2) * hs,
+                    center + (-a1 - a2) * hs,
+                    center + (-a1 + a2) * hs,
                 };
                 AddQuad(verts, indices, corners[0], corners[1], corners[2], corners[3], color);
-                sections.Add(new AxisSection { Axis = gizmoAxis, IndexOffset = idxOff, IndexCount = indices.Count - idxOff });
+                AddQuadOutline(verts, indices, corners[0], corners[1], corners[2], corners[3], color * 1.3f, 0.015f);
+                sections.Add(new AxisSection { Axis = gizmoAxis, IndexOffset = idxOff, IndexCount = indices.Count - idxOff, BaseAlpha = 0.45f });
             }
+
+            int centerOff = indices.Count;
+            AddSphere(verts, indices, Vector3.Zero, CenterHandleRadius, White, 12, 8);
+            sections.Add(new AxisSection { Axis = GizmoAxis.All, IndexOffset = centerOff, IndexCount = indices.Count - centerOff, BaseAlpha = 0.85f });
 
             _translateVerts = verts.ToArray();
             _translateIndices = indices.ToArray();
@@ -467,9 +648,13 @@ namespace WorldBuilder.Editors.Landscape {
 
             foreach (var (axis, color, gizmoAxis) in axesData) {
                 int idxOff = indices.Count;
-                AddRing(verts, indices, axis, RingRadius, RingThickness, color, RingSegments);
-                sections.Add(new AxisSection { Axis = gizmoAxis, IndexOffset = idxOff, IndexCount = indices.Count - idxOff });
+                AddTorus(verts, indices, axis, RingRadius, RingTubeRadius, color, RingSegments, TubeSides);
+                sections.Add(new AxisSection { Axis = gizmoAxis, IndexOffset = idxOff, IndexCount = indices.Count - idxOff, BaseAlpha = 0.90f });
             }
+
+            int viewOff = indices.Count;
+            AddTorus(verts, indices, Vector3.UnitZ, ViewRingRadius, RingTubeRadius * 0.7f, White * 0.7f, RingSegments, TubeSides);
+            sections.Add(new AxisSection { Axis = GizmoAxis.ViewAxis, IndexOffset = viewOff, IndexCount = indices.Count - viewOff, BaseAlpha = 0.40f });
 
             _rotateVerts = verts.ToArray();
             _rotateIndices = indices.ToArray();
@@ -490,14 +675,14 @@ namespace WorldBuilder.Editors.Landscape {
             foreach (var (axis, color, gizmoAxis) in axesData) {
                 int idxOff = indices.Count;
                 var shaftEnd = axis * ArrowLength;
-                AddBox(verts, indices, Vector3.Zero, shaftEnd, ShaftThickness, color);
+                AddCylinder(verts, indices, Vector3.Zero, shaftEnd, ShaftRadius, color, ShaftSides);
                 AddCube(verts, indices, shaftEnd, CubeHalfSize, color);
-                sections.Add(new AxisSection { Axis = gizmoAxis, IndexOffset = idxOff, IndexCount = indices.Count - idxOff });
+                sections.Add(new AxisSection { Axis = gizmoAxis, IndexOffset = idxOff, IndexCount = indices.Count - idxOff, BaseAlpha = 1.0f });
             }
 
             int centerOff = indices.Count;
             AddCube(verts, indices, Vector3.Zero, CubeHalfSize * 0.8f, White);
-            sections.Add(new AxisSection { Axis = GizmoAxis.All, IndexOffset = centerOff, IndexCount = indices.Count - centerOff });
+            sections.Add(new AxisSection { Axis = GizmoAxis.All, IndexOffset = centerOff, IndexCount = indices.Count - centerOff, BaseAlpha = 0.90f });
 
             _scaleVerts = verts.ToArray();
             _scaleIndices = indices.ToArray();
@@ -526,34 +711,48 @@ namespace WorldBuilder.Editors.Landscape {
                 (0,4),(1,5),(2,6),(3,7)
             };
             foreach (var (a, b) in edges)
-                AddBox(verts, indices, corners[a], corners[b], t, color);
+                AddCylinder(verts, indices, corners[a], corners[b], t, color, 6);
 
             _boxVerts = verts.ToArray();
             _boxIndices = indices.ToArray();
         }
 
-        private static void AddBox(List<float> verts, List<uint> indices,
-            Vector3 from, Vector3 to, float thickness, Vector3 color) {
+        private static void AddCylinder(List<float> verts, List<uint> indices,
+            Vector3 from, Vector3 to, float radius, Vector3 color, int sides) {
             var dir = to - from;
             float len = dir.Length();
             if (len < 1e-6f) return;
             dir /= len;
-            var p1 = GetPerpendicular(dir) * (thickness * 0.5f);
-            var p2 = Vector3.Normalize(Vector3.Cross(dir, p1)) * (thickness * 0.5f);
+            var p1 = GetPerpendicular(dir);
+            var p2 = Vector3.Cross(dir, p1);
 
             uint b = (uint)(verts.Count / 6);
-            var c = new[] {
-                from - p1 - p2, from + p1 - p2, from + p1 + p2, from - p1 + p2,
-                to - p1 - p2, to + p1 - p2, to + p1 + p2, to - p1 + p2
-            };
-            foreach (var v in c) { verts.Add(v.X); verts.Add(v.Y); verts.Add(v.Z); verts.Add(color.X); verts.Add(color.Y); verts.Add(color.Z); }
 
-            var faces = new uint[] {
-                0,1,2,0,2,3, 4,6,5,4,7,6,
-                0,4,5,0,5,1, 2,6,7,2,7,3,
-                0,3,7,0,7,4, 1,5,6,1,6,2
-            };
-            foreach (var f in faces) indices.Add(b + f);
+            for (int i = 0; i < sides; i++) {
+                float a = 2f * MathF.PI * i / sides;
+                float cos = MathF.Cos(a);
+                float sin = MathF.Sin(a);
+                var offset = p1 * cos * radius + p2 * sin * radius;
+                AddVertex(verts, from + offset, color);
+                AddVertex(verts, to + offset, color);
+            }
+
+            for (int i = 0; i < sides; i++) {
+                uint cur = b + (uint)(i * 2);
+                uint next = b + (uint)(((i + 1) % sides) * 2);
+                indices.Add(cur); indices.Add(next); indices.Add(cur + 1);
+                indices.Add(next); indices.Add(next + 1); indices.Add(cur + 1);
+            }
+
+            uint capBase = (uint)(verts.Count / 6);
+            AddVertex(verts, from, color);
+            AddVertex(verts, to, color);
+            for (int i = 0; i < sides; i++) {
+                uint cur = b + (uint)(i * 2);
+                uint next = b + (uint)(((i + 1) % sides) * 2);
+                indices.Add(capBase); indices.Add(next); indices.Add(cur);
+                indices.Add(capBase + 1); indices.Add(cur + 1); indices.Add(next + 1);
+            }
         }
 
         private static void AddCone(List<float> verts, List<uint> indices,
@@ -563,16 +762,13 @@ namespace WorldBuilder.Editors.Landscape {
             var p2 = Vector3.Cross(dir, p1);
 
             uint b = (uint)(verts.Count / 6);
-            verts.Add(baseCenter.X); verts.Add(baseCenter.Y); verts.Add(baseCenter.Z);
-            verts.Add(color.X); verts.Add(color.Y); verts.Add(color.Z);
-            verts.Add(tip.X); verts.Add(tip.Y); verts.Add(tip.Z);
-            verts.Add(color.X); verts.Add(color.Y); verts.Add(color.Z);
+            AddVertex(verts, baseCenter, color);
+            AddVertex(verts, tip, color * 1.15f);
 
             for (int i = 0; i < sides; i++) {
                 float a = 2f * MathF.PI * i / sides;
                 var pt = baseCenter + p1 * MathF.Cos(a) * radius + p2 * MathF.Sin(a) * radius;
-                verts.Add(pt.X); verts.Add(pt.Y); verts.Add(pt.Z);
-                verts.Add(color.X); verts.Add(color.Y); verts.Add(color.Z);
+                AddVertex(verts, pt, color);
             }
 
             for (int i = 0; i < sides; i++) {
@@ -584,37 +780,120 @@ namespace WorldBuilder.Editors.Landscape {
 
         private static void AddCube(List<float> verts, List<uint> indices,
             Vector3 center, float halfSize, Vector3 color) {
-            AddBox(verts, indices,
-                center - new Vector3(halfSize, 0, 0),
-                center + new Vector3(halfSize, 0, 0),
-                halfSize * 2f, color);
+            uint b = (uint)(verts.Count / 6);
+            var offsets = new Vector3[] {
+                new(-1,-1,-1), new(1,-1,-1), new(1,1,-1), new(-1,1,-1),
+                new(-1,-1, 1), new(1,-1, 1), new(1,1, 1), new(-1,1, 1)
+            };
+            foreach (var o in offsets) AddVertex(verts, center + o * halfSize, color);
+
+            var faces = new uint[] {
+                0,1,2,0,2,3, 4,6,5,4,7,6,
+                0,4,5,0,5,1, 2,6,7,2,7,3,
+                0,3,7,0,7,4, 1,5,6,1,6,2
+            };
+            foreach (var f in faces) indices.Add(b + f);
         }
 
-        private static void AddRing(List<float> verts, List<uint> indices,
-            Vector3 axis, float radius, float thickness, Vector3 color, int segments) {
-            var p1 = GetPerpendicular(axis);
-            var p2 = Vector3.Cross(axis, p1);
+        private static void AddSphere(List<float> verts, List<uint> indices,
+            Vector3 center, float radius, Vector3 color, int slices, int stacks) {
+            uint b = (uint)(verts.Count / 6);
 
-            for (int i = 0; i < segments; i++) {
-                float a1 = 2f * MathF.PI * i / segments;
-                float a2 = 2f * MathF.PI * ((i + 1) % segments) / segments;
-                var pt1 = p1 * MathF.Cos(a1) * radius + p2 * MathF.Sin(a1) * radius;
-                var pt2 = p1 * MathF.Cos(a2) * radius + p2 * MathF.Sin(a2) * radius;
-                AddBox(verts, indices, pt1, pt2, thickness, color);
+            AddVertex(verts, center + new Vector3(0, 0, radius), color);
+
+            for (int i = 1; i < stacks; i++) {
+                float phi = MathF.PI * i / stacks;
+                for (int j = 0; j < slices; j++) {
+                    float theta = 2f * MathF.PI * j / slices;
+                    var pt = center + new Vector3(
+                        MathF.Sin(phi) * MathF.Cos(theta),
+                        MathF.Sin(phi) * MathF.Sin(theta),
+                        MathF.Cos(phi)
+                    ) * radius;
+                    AddVertex(verts, pt, color);
+                }
+            }
+
+            AddVertex(verts, center + new Vector3(0, 0, -radius), color);
+
+            for (int j = 0; j < slices; j++) {
+                uint next = (uint)((j + 1) % slices);
+                indices.Add(b); indices.Add(b + 1 + (uint)j); indices.Add(b + 1 + next);
+            }
+
+            for (int i = 0; i < stacks - 2; i++) {
+                for (int j = 0; j < slices; j++) {
+                    uint cur = b + 1 + (uint)(i * slices + j);
+                    uint next = b + 1 + (uint)(i * slices + (j + 1) % slices);
+                    uint curBelow = b + 1 + (uint)((i + 1) * slices + j);
+                    uint nextBelow = b + 1 + (uint)((i + 1) * slices + (j + 1) % slices);
+                    indices.Add(cur); indices.Add(curBelow); indices.Add(next);
+                    indices.Add(next); indices.Add(curBelow); indices.Add(nextBelow);
+                }
+            }
+
+            uint bottomPole = (uint)(verts.Count / 6 - 1);
+            uint lastRingStart = b + 1 + (uint)((stacks - 2) * slices);
+            for (int j = 0; j < slices; j++) {
+                uint next = (uint)((j + 1) % slices);
+                indices.Add(bottomPole); indices.Add(lastRingStart + next); indices.Add(lastRingStart + (uint)j);
+            }
+        }
+
+        private static void AddTorus(List<float> verts, List<uint> indices,
+            Vector3 axis, float majorRadius, float minorRadius, Vector3 color, int majorSegments, int minorSegments) {
+            var perp1 = GetPerpendicular(axis);
+            var perp2 = Vector3.Cross(axis, perp1);
+
+            uint b = (uint)(verts.Count / 6);
+
+            for (int i = 0; i < majorSegments; i++) {
+                float majorAngle = 2f * MathF.PI * i / majorSegments;
+                var ringCenter = perp1 * MathF.Cos(majorAngle) * majorRadius + perp2 * MathF.Sin(majorAngle) * majorRadius;
+                var ringTangent = Vector3.Normalize(-perp1 * MathF.Sin(majorAngle) + perp2 * MathF.Cos(majorAngle));
+                var ringNormal = Vector3.Normalize(ringCenter);
+                var ringBinormal = Vector3.Cross(ringTangent, ringNormal);
+
+                for (int j = 0; j < minorSegments; j++) {
+                    float minorAngle = 2f * MathF.PI * j / minorSegments;
+                    var pt = ringCenter + (ringNormal * MathF.Cos(minorAngle) + ringBinormal * MathF.Sin(minorAngle)) * minorRadius;
+                    AddVertex(verts, pt, color);
+                }
+            }
+
+            for (int i = 0; i < majorSegments; i++) {
+                int nextI = (i + 1) % majorSegments;
+                for (int j = 0; j < minorSegments; j++) {
+                    int nextJ = (j + 1) % minorSegments;
+                    uint a = b + (uint)(i * minorSegments + j);
+                    uint bv = b + (uint)(i * minorSegments + nextJ);
+                    uint c = b + (uint)(nextI * minorSegments + j);
+                    uint d = b + (uint)(nextI * minorSegments + nextJ);
+                    indices.Add(a); indices.Add(c); indices.Add(bv);
+                    indices.Add(bv); indices.Add(c); indices.Add(d);
+                }
             }
         }
 
         private static void AddQuad(List<float> verts, List<uint> indices,
             Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector3 color) {
             uint baseIdx = (uint)(verts.Count / 6);
-            foreach (var v in new[] { a, b, c, d }) {
-                verts.Add(v.X); verts.Add(v.Y); verts.Add(v.Z);
-                verts.Add(color.X); verts.Add(color.Y); verts.Add(color.Z);
-            }
+            AddVertex(verts, a, color);
+            AddVertex(verts, b, color);
+            AddVertex(verts, c, color);
+            AddVertex(verts, d, color);
             indices.Add(baseIdx); indices.Add(baseIdx + 1); indices.Add(baseIdx + 2);
             indices.Add(baseIdx); indices.Add(baseIdx + 2); indices.Add(baseIdx + 3);
             indices.Add(baseIdx + 2); indices.Add(baseIdx + 1); indices.Add(baseIdx);
             indices.Add(baseIdx + 3); indices.Add(baseIdx + 2); indices.Add(baseIdx);
+        }
+
+        private static void AddQuadOutline(List<float> verts, List<uint> indices,
+            Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector3 color, float thickness) {
+            AddCylinder(verts, indices, a, b, thickness, color, 4);
+            AddCylinder(verts, indices, b, c, thickness, color, 4);
+            AddCylinder(verts, indices, c, d, thickness, color, 4);
+            AddCylinder(verts, indices, d, a, thickness, color, 4);
         }
 
         #endregion
@@ -685,9 +964,7 @@ namespace WorldBuilder.Editors.Landscape {
 
         #endregion
 
-        public void Dispose() {
-            // GPU cleanup is done by SceneContext since it owns the GL context
-        }
+        public void Dispose() { }
 
         public void Dispose(GL gl) {
             if (_vao != 0) gl.DeleteVertexArray(_vao);
@@ -696,6 +973,9 @@ namespace WorldBuilder.Editors.Landscape {
             if (_boxVAO != 0) gl.DeleteVertexArray(_boxVAO);
             if (_boxVBO != 0) gl.DeleteBuffer(_boxVBO);
             if (_boxEBO != 0) gl.DeleteBuffer(_boxEBO);
+            if (_dynVAO != 0) gl.DeleteVertexArray(_dynVAO);
+            if (_dynVBO != 0) gl.DeleteBuffer(_dynVBO);
+            if (_dynEBO != 0) gl.DeleteBuffer(_dynEBO);
         }
     }
 }

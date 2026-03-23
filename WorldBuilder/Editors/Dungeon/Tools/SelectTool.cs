@@ -79,8 +79,16 @@ namespace WorldBuilder.Editors.Dungeon.Tools {
 
                         var startRay = ctx.ComputeRay(mouseState);
                         if (startRay.HasValue) {
-                            var startHit = ctx.Raycast(startRay.Value.origin, startRay.Value.direction);
-                            _gizmoCellHitStart = startHit.Hit ? startHit.HitPosition : worldPos;
+                            _gizmoCellHitStart = worldPos;
+                            if (ctx.Scene.EnvCellManager != null) {
+                                var surfaceHit = ctx.Scene.EnvCellManager.RaycastSurface(startRay.Value.origin, startRay.Value.direction);
+                                if (surfaceHit.Hit)
+                                    _gizmoCellHitStart = surfaceHit.HitPosition;
+                            }
+                            if (_gizmoCellHitStart == worldPos) {
+                                var startHit = ctx.Raycast(startRay.Value.origin, startRay.Value.direction);
+                                if (startHit.Hit) _gizmoCellHitStart = startHit.HitPosition;
+                            }
                         } else {
                             _gizmoCellHitStart = worldPos;
                         }
@@ -365,13 +373,23 @@ namespace WorldBuilder.Editors.Dungeon.Tools {
                 Vector3 delta = Vector3.Zero;
                 bool gotDelta = false;
                 var axis = gizmo.ActiveAxis;
+                Vector3 surfaceNormal = Vector3.UnitZ;
+                bool hasSurfaceNormal = false;
 
                 var ray = ctx.ComputeRay(mouseState);
-                if (ray.HasValue) {
-                    var hit = ctx.Raycast(ray.Value.origin, ray.Value.direction);
-                    if (hit.Hit) {
-                        delta = hit.HitPosition - _gizmoCellHitStart;
+                if (ray.HasValue && ctx.Scene.EnvCellManager != null) {
+                    var surfaceHit = ctx.Scene.EnvCellManager.RaycastSurface(ray.Value.origin, ray.Value.direction);
+                    if (surfaceHit.Hit) {
+                        delta = surfaceHit.HitPosition - _gizmoCellHitStart;
+                        surfaceNormal = surfaceHit.HitNormal;
+                        hasSurfaceNormal = true;
                         gotDelta = true;
+                    } else {
+                        var hit = ctx.Raycast(ray.Value.origin, ray.Value.direction);
+                        if (hit.Hit) {
+                            delta = hit.HitPosition - _gizmoCellHitStart;
+                            gotDelta = true;
+                        }
                     }
                 }
 
@@ -389,6 +407,7 @@ namespace WorldBuilder.Editors.Dungeon.Tools {
                 else if (axis == GizmoAxis.XY) delta.Z = 0;
                 else if (axis == GizmoAxis.XZ) delta.Y = 0;
                 else if (axis == GizmoAxis.YZ) delta.X = 0;
+                else if (axis == GizmoAxis.All) { /* no constraint */ }
 
                 if (ctx.GridSnapEnabled && ctx.GridSnapSize > 0.1f) {
                     float g = ctx.GridSnapSize;
@@ -401,6 +420,13 @@ namespace WorldBuilder.Editors.Dungeon.Tools {
                 var worldNewPos = StabToWorld(newPos, ctx.Document);
                 if (IsInsideAnyCell(worldNewPos, ctx)) {
                     stab.Origin = newPos;
+
+                    if (hasSurfaceNormal && ctx.AlignToSurface) {
+                        var surfaceRot = TerrainEditingContext.AlignToNormal(surfaceNormal);
+                        float yaw = ExtractYaw(_gizmoOrigRot);
+                        var yawRot = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, yaw);
+                        stab.Orientation = Quaternion.Normalize(surfaceRot * yawRot);
+                    }
                 }
             }
             else if (gizmo.Mode == GizmoMode.Rotate) {
@@ -432,6 +458,12 @@ namespace WorldBuilder.Editors.Dungeon.Tools {
                     composite.Add(new MoveStaticObjectCommand(ctx.SelectedObjCellNum, ctx.SelectedObjIndex, delta));
                     hasChange = true;
                 }
+                if (MathF.Abs(Quaternion.Dot(stab.Orientation, _gizmoOrigRot)) < 0.9999f) {
+                    var newRot = stab.Orientation;
+                    stab.Orientation = _gizmoOrigRot;
+                    composite.Add(new SetObjectOrientationCommand(ctx.SelectedObjCellNum, ctx.SelectedObjIndex, _gizmoOrigRot, newRot));
+                    hasChange = true;
+                }
             }
             else if (gizmo.Mode == GizmoMode.Rotate) {
                 if (MathF.Abs(Quaternion.Dot(stab.Orientation, _gizmoOrigRot)) < 0.9999f) {
@@ -457,6 +489,12 @@ namespace WorldBuilder.Editors.Dungeon.Tools {
             cell.StaticObjects[ctx.SelectedObjIndex].Origin = _gizmoOrigPos;
             cell.StaticObjects[ctx.SelectedObjIndex].Orientation = _gizmoOrigRot;
             ctx.RefreshRendering();
+        }
+
+        private static float ExtractYaw(Quaternion q) {
+            float siny = 2.0f * (q.W * q.Z + q.X * q.Y);
+            float cosy = 1.0f - 2.0f * (q.Y * q.Y + q.Z * q.Z);
+            return MathF.Atan2(siny, cosy);
         }
 
         private bool IsInsideAnyCell(Vector3 worldPos, DungeonEditingContext ctx) {

@@ -154,6 +154,7 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
             if (gizmo == null || _gizmoDragEntries.Count == 0) return;
 
             var snapSettings = _context.TerrainSystem.Settings.Landscape.Snap;
+            var (_, orientation) = GetGizmoTransform();
 
             if (gizmo.Mode == GizmoMode.Translate) {
                 Vector3 delta;
@@ -165,12 +166,7 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
                 }
 
                 var axis = gizmo.ActiveAxis;
-                if (axis == GizmoAxis.X) delta = new Vector3(delta.X, 0, 0);
-                else if (axis == GizmoAxis.Y) delta = new Vector3(0, delta.Y, 0);
-                else if (axis == GizmoAxis.Z) delta = new Vector3(0, 0, delta.Z);
-                else if (axis == GizmoAxis.XY) delta.Z = 0;
-                else if (axis == GizmoAxis.XZ) delta.Y = 0;
-                else if (axis == GizmoAxis.YZ) delta.X = 0;
+                delta = ConstrainDeltaToAxis(delta, axis, gizmo, orientation);
 
                 if (snapSettings.SnapToGrid && snapSettings.GridSize > 0) {
                     float g = snapSettings.GridSize;
@@ -178,10 +174,28 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
                     delta.Y = MathF.Round(delta.Y / g) * g;
                 }
 
-                foreach (var (lbKey, index, origPos, _, _) in _gizmoDragEntries) {
-                    var newPos = origPos + delta;
+                bool movesInXY = axis != GizmoAxis.Z;
+                var envCellManager = _context.TerrainSystem.Scene?._envCellManager;
 
-                    if (axis != GizmoAxis.Z) {
+                EnvCellManager.EnvCellSurfaceHit? envSurfaceHit = null;
+                if (envCellManager != null && mouseState.EnvCellHit.HasValue) {
+                    var ray = BuildMouseRay(mouseState.Position, camera);
+                    if (ray.HasValue) {
+                        var hit = envCellManager.RaycastSurface(ray.Value.origin, ray.Value.dir);
+                        if (hit.Hit) envSurfaceHit = hit;
+                    }
+                }
+
+                foreach (var (lbKey, index, origPos, origRot, _) in _gizmoDragEntries) {
+                    var newPos = origPos + delta;
+                    Vector3? surfaceNormal = null;
+
+                    if (envSurfaceHit.HasValue) {
+                        if (movesInXY && snapSettings.SnapToTerrain) {
+                            newPos.Z = envSurfaceHit.Value.HitPosition.Z;
+                        }
+                        surfaceNormal = envSurfaceHit.Value.HitNormal;
+                    } else if (movesInXY) {
                         float terrainZ = _context.GetHeightAtPosition(newPos.X, newPos.Y);
                         if (snapSettings.SnapToTerrain) {
                             newPos.Z = terrainZ;
@@ -191,7 +205,19 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
                         }
                     }
 
-                    UpdateObjectInDocument(lbKey, index, pos: newPos);
+                    float floorZ = _context.GetHeightAtPosition(newPos.X, newPos.Y);
+                    if (newPos.Z < floorZ) newPos.Z = floorZ;
+
+                    Quaternion? newRot = null;
+                    if (snapSettings.AlignToSurface && movesInXY) {
+                        if (surfaceNormal.HasValue) {
+                            newRot = ComputeSurfaceAlignedRotationFromNormal(surfaceNormal.Value, origRot);
+                        } else {
+                            newRot = ComputeSurfaceAlignedRotation(newPos, origRot);
+                        }
+                    }
+
+                    UpdateObjectInDocument(lbKey, index, pos: newPos, rot: newRot);
                 }
             }
             else if (gizmo.Mode == GizmoMode.Rotate) {
@@ -229,6 +255,69 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
             _context.TerrainSystem.Scene.InvalidateStaticObjectsCache();
         }
 
+        private Quaternion ComputeSurfaceAlignedRotation(Vector3 position, Quaternion currentRot) {
+            var normal = _context.GetTerrainNormal(position.X, position.Y);
+            return ComputeSurfaceAlignedRotationFromNormal(normal, currentRot);
+        }
+
+        private static Quaternion ComputeSurfaceAlignedRotationFromNormal(Vector3 normal, Quaternion currentRot) {
+            var surfaceRot = TerrainEditingContext.AlignToNormal(normal);
+            float existingYaw = ExtractYaw(currentRot);
+            var yawRot = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, existingYaw);
+            return Quaternion.Normalize(surfaceRot * yawRot);
+        }
+
+        private static (Vector3 origin, Vector3 dir)? BuildMouseRay(Vector2 mousePos, ICamera camera) {
+            float sw = camera.ScreenSize.X, sh = camera.ScreenSize.Y;
+            if (sw <= 0 || sh <= 0) return null;
+            float ndcX = 2f * mousePos.X / sw - 1f;
+            float ndcY = 2f * mousePos.Y / sh - 1f;
+            var vp = camera.GetViewMatrix() * camera.GetProjectionMatrix();
+            if (!Matrix4x4.Invert(vp, out var vpInv)) return null;
+            var nearW = Vector4.Transform(new Vector4(ndcX, ndcY, -1f, 1f), vpInv);
+            var farW = Vector4.Transform(new Vector4(ndcX, ndcY, 1f, 1f), vpInv);
+            nearW /= nearW.W;
+            farW /= farW.W;
+            var origin = new Vector3(nearW.X, nearW.Y, nearW.Z);
+            var dir = Vector3.Normalize(new Vector3(farW.X, farW.Y, farW.Z) - origin);
+            return (origin, dir);
+        }
+
+        private static float ExtractYaw(Quaternion q) {
+            float siny = 2.0f * (q.W * q.Z + q.X * q.Y);
+            float cosy = 1.0f - 2.0f * (q.Y * q.Y + q.Z * q.Z);
+            return MathF.Atan2(siny, cosy);
+        }
+
+        private static Vector3 ConstrainDeltaToAxis(Vector3 delta, GizmoAxis axis, TransformGizmo gizmo, Quaternion orientation) {
+            if (axis == GizmoAxis.All || axis == GizmoAxis.None)
+                return delta;
+
+            if (!gizmo.UseLocalSpace) {
+                if (axis == GizmoAxis.X) return new Vector3(delta.X, 0, 0);
+                if (axis == GizmoAxis.Y) return new Vector3(0, delta.Y, 0);
+                if (axis == GizmoAxis.Z) return new Vector3(0, 0, delta.Z);
+                if (axis == GizmoAxis.XY) return new Vector3(delta.X, delta.Y, 0);
+                if (axis == GizmoAxis.XZ) return new Vector3(delta.X, 0, delta.Z);
+                if (axis == GizmoAxis.YZ) return new Vector3(0, delta.Y, delta.Z);
+                return delta;
+            }
+
+            var localDir = gizmo.GetLocalAxisDirection(axis, orientation);
+            if (axis == GizmoAxis.X || axis == GizmoAxis.Y || axis == GizmoAxis.Z) {
+                return localDir * Vector3.Dot(delta, localDir);
+            }
+
+            var orient = Matrix4x4.CreateFromQuaternion(orientation);
+            Vector3 planeNormal = axis switch {
+                GizmoAxis.XY => Vector3.Normalize(Vector3.Transform(Vector3.UnitZ, orient)),
+                GizmoAxis.XZ => Vector3.Normalize(Vector3.Transform(Vector3.UnitY, orient)),
+                GizmoAxis.YZ => Vector3.Normalize(Vector3.Transform(Vector3.UnitX, orient)),
+                _ => Vector3.UnitZ
+            };
+            return delta - planeNormal * Vector3.Dot(delta, planeNormal);
+        }
+
         private void UpdateObjectInDocument(ushort lbKey, int index,
             Vector3? pos = null, Quaternion? rot = null, Vector3? scale = null) {
             var docId = $"landblock_{lbKey:X4}";
@@ -260,6 +349,8 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
                 if (gizmo.Mode == GizmoMode.Translate) {
                     if (Vector3.Distance(curr.Origin, origPos) >= 0.01f)
                         commands.Add(new MoveObjectCommand(_context, lbKey, index, origPos, curr.Origin));
+                    if (MathF.Abs(Quaternion.Dot(curr.Orientation, origRot)) < 0.9999f)
+                        commands.Add(new RotateObjectCommand(_context, lbKey, index, origRot, curr.Orientation));
                 }
                 else if (gizmo.Mode == GizmoMode.Rotate) {
                     if (Vector3.Distance(curr.Origin, origPos) >= 0.01f)

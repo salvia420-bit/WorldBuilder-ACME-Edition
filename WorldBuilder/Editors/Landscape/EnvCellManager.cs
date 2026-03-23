@@ -55,6 +55,9 @@ namespace WorldBuilder.Editors.Landscape {
         // Fast lookup from full cell ID to LoadedEnvCell (for portal traversal neighbor lookups)
         private readonly Dictionary<uint, LoadedEnvCell> _cellLookup = new();
 
+        // Collision mesh cache keyed by (envFileId, cellStructure) — shared across cells with same geometry
+        private readonly Dictionary<(uint, ushort), CellCollisionMesh> _collisionMeshCache = new();
+
         // Portal visibility traversal state
         private LoadedEnvCell? _lastCameraCell;
         private int _cellSwitchGraceFrames;
@@ -392,6 +395,15 @@ namespace WorldBuilder.Editors.Landscape {
                 }
             }
 
+            var collisionKey = (envFileId, envCell.CellStructure);
+            CellCollisionMesh? collisionMesh;
+            lock (_cellLock) {
+                if (!_collisionMeshCache.TryGetValue(collisionKey, out collisionMesh)) {
+                    collisionMesh = BuildCollisionMesh(cellStruct, portalPolyIds);
+                    _collisionMeshCache[collisionKey] = collisionMesh;
+                }
+            }
+
             return new PreparedEnvCell {
                 GpuKey = gpuKey,
                 WorldTransform = worldTransform,
@@ -404,7 +416,8 @@ namespace WorldBuilder.Editors.Landscape {
                 Portals = portals,
                 ClipPlanes = clipPlanes,
                 LocalBoundsMin = boundsMin,
-                LocalBoundsMax = boundsMax
+                LocalBoundsMax = boundsMax,
+                CollisionMesh = collisionMesh
             };
         }
 
@@ -412,6 +425,35 @@ namespace WorldBuilder.Editors.Landscape {
             if (cellStruct.VertexArray.Vertices.TryGetValue((ushort)vertexId, out var vertex))
                 return vertex.Origin;
             return null;
+        }
+
+        private static CellCollisionMesh BuildCollisionMesh(CellStruct cellStruct, HashSet<ushort>? portalPolyIds) {
+            var triangles = new List<Vector3>();
+
+            var polys = cellStruct.PhysicsPolygons != null && cellStruct.PhysicsPolygons.Count > 0
+                ? cellStruct.PhysicsPolygons
+                : cellStruct.Polygons;
+
+            foreach (var kvp in polys) {
+                if (portalPolyIds != null && portalPolyIds.Contains(kvp.Key)) continue;
+                var poly = kvp.Value;
+                if (poly.VertexIds.Count < 3) continue;
+
+                var positions = new List<Vector3>();
+                foreach (var vid in poly.VertexIds) {
+                    var pos = GetVertexPosition(cellStruct, vid);
+                    if (pos.HasValue) positions.Add(pos.Value);
+                }
+                if (positions.Count < 3) continue;
+
+                for (int i = 2; i < positions.Count; i++) {
+                    triangles.Add(positions[0]);
+                    triangles.Add(positions[i - 1]);
+                    triangles.Add(positions[i]);
+                }
+            }
+
+            return new CellCollisionMesh(triangles.ToArray());
         }
 
         private PreparedCellStructMesh? PrepareCellStructMesh(CellStruct cellStruct, List<uint> surfaceIds, HashSet<ushort>? portalPolygonIds = null) {
@@ -723,7 +765,8 @@ namespace WorldBuilder.Editors.Landscape {
                     ClipPlanes = prepared.ClipPlanes,
                     InverseWorldTransform = inverseTransform,
                     LocalBoundsMin = prepared.LocalBoundsMin,
-                    LocalBoundsMax = prepared.LocalBoundsMax
+                    LocalBoundsMax = prepared.LocalBoundsMax,
+                    CollisionMesh = prepared.CollisionMesh
                 };
                 cells.Add(loadedCell);
                 lock (_cellLock) { _cellLookup[prepared.CellId] = loadedCell; }
@@ -1414,6 +1457,91 @@ namespace WorldBuilder.Editors.Landscape {
             return distance >= 0;
         }
 
+        public struct EnvCellSurfaceHit {
+            public bool Hit;
+            public LoadedEnvCell Cell;
+            public float Distance;
+            public Vector3 HitPosition;
+            public Vector3 HitNormal;
+        }
+
+        /// <summary>
+        /// Performs ray-triangle intersection against actual env cell mesh geometry.
+        /// Returns the closest surface hit with position and normal.
+        /// </summary>
+        public EnvCellSurfaceHit RaycastSurface(Vector3 rayOrigin, Vector3 rayDirection) {
+            var result = new EnvCellSurfaceHit { Hit = false, Distance = float.MaxValue };
+
+            foreach (var kvp in _loadedCells) {
+                if (FocusedDungeonLB.HasValue && kvp.Key != FocusedDungeonLB.Value) continue;
+
+                foreach (var cell in kvp.Value) {
+                    if (cell.CollisionMesh == null) continue;
+
+                    var localOrigin = Vector3.Transform(rayOrigin, cell.InverseWorldTransform);
+                    var localEnd = Vector3.Transform(rayOrigin + rayDirection, cell.InverseWorldTransform);
+                    var localDir = Vector3.Normalize(localEnd - localOrigin);
+
+                    if (!RayIntersectsAABB(localOrigin, localDir,
+                        cell.LocalBoundsMin, cell.LocalBoundsMax, out _))
+                        continue;
+
+                    var tris = cell.CollisionMesh.Triangles;
+                    for (int i = 0; i < tris.Length; i += 3) {
+                        if (RayIntersectsTriangle(localOrigin, localDir,
+                            tris[i], tris[i + 1], tris[i + 2], out float t)) {
+
+                            var localHit = localOrigin + localDir * t;
+                            var worldHit = Vector3.Transform(localHit, cell.WorldTransform);
+                            float worldDist = Vector3.Distance(rayOrigin, worldHit);
+
+                            if (worldDist < result.Distance) {
+                                var e1 = tris[i + 1] - tris[i];
+                                var e2 = tris[i + 2] - tris[i];
+                                var localNormal = Vector3.Normalize(Vector3.Cross(e1, e2));
+                                var worldNormal = Vector3.Normalize(
+                                    Vector3.TransformNormal(localNormal, cell.WorldTransform));
+
+                                result = new EnvCellSurfaceHit {
+                                    Hit = true,
+                                    Cell = cell,
+                                    Distance = worldDist,
+                                    HitPosition = worldHit,
+                                    HitNormal = worldNormal
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        private static bool RayIntersectsTriangle(Vector3 origin, Vector3 dir,
+            Vector3 v0, Vector3 v1, Vector3 v2, out float t) {
+            t = 0f;
+            const float epsilon = 1e-6f;
+
+            var e1 = v1 - v0;
+            var e2 = v2 - v0;
+            var h = Vector3.Cross(dir, e2);
+            float a = Vector3.Dot(e1, h);
+            if (a > -epsilon && a < epsilon) return false;
+
+            float f = 1.0f / a;
+            var s = origin - v0;
+            float u = f * Vector3.Dot(s, h);
+            if (u < 0.0f || u > 1.0f) return false;
+
+            var q = Vector3.Cross(s, e1);
+            float v = f * Vector3.Dot(dir, q);
+            if (v < 0.0f || u + v > 1.0f) return false;
+
+            t = f * Vector3.Dot(e2, q);
+            return t > epsilon;
+        }
+
         #endregion
 
         /// <summary>
@@ -1435,6 +1563,7 @@ namespace WorldBuilder.Editors.Landscape {
                 }
             }
             _gpuCache.Clear();
+            _collisionMeshCache.Clear();
             _loadedCells.Clear();
             _dungeonOnlyLandblocks.Clear();
             _mixedLandblocks.Clear();
@@ -1528,6 +1657,18 @@ namespace WorldBuilder.Editors.Landscape {
         public Vector3 LocalBoundsMin { get; set; }
         /// <summary>Local-space AABB max, computed from CellStruct vertices for point-in-cell.</summary>
         public Vector3 LocalBoundsMax { get; set; }
+        /// <summary>Collision mesh for ray-triangle surface picking (shared across cells with same geometry).</summary>
+        public CellCollisionMesh? CollisionMesh { get; set; }
+    }
+
+    /// <summary>
+    /// Local-space triangle mesh for ray-triangle surface detection against env cell geometry.
+    /// Built from CellStruct PhysicsPolygons (solid surfaces only, no portals).
+    /// Triangles are stored as a flat array: [v0, v1, v2, v0, v1, v2, ...].
+    /// </summary>
+    public class CellCollisionMesh {
+        public Vector3[] Triangles { get; }
+        public CellCollisionMesh(Vector3[] triangles) { Triangles = triangles; }
     }
 
     /// <summary>
@@ -1620,6 +1761,7 @@ namespace WorldBuilder.Editors.Landscape {
         public Vector3 LocalBoundsMin { get; set; }
         /// <summary>Local-space AABB max, computed from CellStruct vertices.</summary>
         public Vector3 LocalBoundsMax { get; set; }
+        public CellCollisionMesh? CollisionMesh { get; set; }
     }
 
     /// <summary>
