@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>DAT Heightmap Extractor</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0a0e17;
+      color: #c8d6e5;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem;
+    }
+    h1 { color: #00d4ff; font-size: 1.8rem; margin-bottom: 0.5rem; }
+    .subtitle { color: #576574; margin-bottom: 2rem; }
+    #dropzone {
+      width: 600px; max-width: 90vw; height: 200px;
+      border: 3px dashed #1e3a5f; border-radius: 12px;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      cursor: pointer; transition: all 0.3s; background: rgba(0,212,255,0.03);
+    }
+    #dropzone:hover, #dropzone.dragover { border-color: #00d4ff; background: rgba(0,212,255,0.08); }
+    #dropzone .icon { font-size: 3rem; margin-bottom: 0.5rem; }
+    #dropzone .text { color: #576574; }
+    #dropzone .hint { color: #2e4057; font-size: 0.85rem; margin-top: 0.5rem; }
+    #status {
+      width: 600px; max-width: 90vw; margin-top: 1.5rem;
+      background: #111827; border-radius: 8px; padding: 1rem 1.5rem;
+      font-family: 'Consolas', monospace; font-size: 0.9rem; line-height: 1.6;
+      max-height: 400px; overflow-y: auto; display: none;
+    }
+    #status .info { color: #00d4ff; }
+    #status .success { color: #00ff88; }
+    #status .warn { color: #ffa500; }
+    #status .error { color: #ff4444; }
+    #progress-wrap { width: 600px; max-width: 90vw; margin-top: 1rem; display: none; }
+    #progress-bar { width: 100%; height: 8px; background: #1e3a5f; border-radius: 4px; overflow: hidden; }
+    #progress-fill { height: 100%; background: linear-gradient(90deg, #00d4ff, #00ff88); width: 0%; transition: width 0.2s; border-radius: 4px; }
+    #progress-text { text-align: center; margin-top: 0.3rem; color: #576574; font-size: 0.85rem; }
+    #download-btn {
+      margin-top: 1.5rem; padding: 0.8rem 2rem;
+      background: linear-gradient(135deg, #00d4ff, #0088cc);
+      color: #000; font-weight: bold; border: none; border-radius: 8px;
+      cursor: pointer; font-size: 1rem; display: none; transition: transform 0.1s;
+    }
+    #download-btn:hover { transform: scale(1.05); }
+    #canvas-wrap { margin-top: 1.5rem; display: none; }
+    canvas { border: 1px solid #1e3a5f; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>🗻 DAT Heightmap Extractor</h1>
+  <p class="subtitle">Extract terrain heights from client_cell_1.dat → vanquish_heights.json</p>
+  <div id="dropzone">
+    <div class="icon">📁</div>
+    <div class="text">Drop <b>client_cell_1.dat</b> here or click to browse</div>
+    <div class="hint">~335-354 MB — processed entirely in your browser, nothing uploaded</div>
+    <input type="file" id="fileInput" accept=".dat" style="display:none">
+  </div>
+  <div id="progress-wrap">
+    <div id="progress-bar"><div id="progress-fill"></div></div>
+    <div id="progress-text"></div>
+  </div>
+  <div id="status"></div>
+  <button id="download-btn">⬇ Download vanquish_heights.json</button>
+  <div id="canvas-wrap"><canvas id="heightmap" width="256" height="256"></canvas></div>
+
+<script>
+// Based on ACE source: DatDatabase.cs, DatReader.cs, DatDirectoryHeader.cs, DatFile.cs
+// Header at offset 0x140 (DAT_HEADER_OFFSET)
+// BTree nodes: 62 branch uint32s + uint32 entryCount + entries (24 bytes each: flags,id,offset,size,date,iteration)
+// Data is stored in linked sectors: first 4 bytes of each sector = next sector offset (0 if last)
+
+const DAT_HEADER_OFFSET = 0x140;
+const BRANCH_COUNT = 0x3E; // 62
+const DATFILE_ENTRY_SIZE = 24; // 6 x uint32
+const MAX_ENTRIES_PER_NODE = 0x3D; // 61
+let resultJSON = null;
+
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const statusEl = document.getElementById('status');
+const progressWrap = document.getElementById('progress-wrap');
+const progressFill = document.getElementById('progress-fill');
+const progressText = document.getElementById('progress-text');
+const downloadBtn = document.getElementById('download-btn');
+const canvasWrap = document.getElementById('canvas-wrap');
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault(); dropzone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) processFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files.length) processFile(fileInput.files[0]); });
+downloadBtn.addEventListener('click', () => {
+  if (!resultJSON) return;
+  const blob = new Blob([resultJSON], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'vanquish_heights.json';
+  a.click();
+});
+
+function log(msg, cls = '') {
+  statusEl.style.display = 'block';
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = msg;
+  statusEl.appendChild(line);
+  statusEl.scrollTop = statusEl.scrollHeight;
+}
+
+function setProgress(pct, text) {
+  progressWrap.style.display = 'block';
+  progressFill.style.width = pct + '%';
+  progressText.textContent = text;
+}
+
+// Read sector-linked data (like ACE's DatReader.ReadDat)
+// First 4 bytes of each sector = next sector offset. Data follows after.
+function readLinkedData(view, bytes, sectorOffset, totalSize, blockSize) {
+  const result = new Uint8Array(totalSize);
+  let written = 0;
+  let remaining = totalSize;
+  let curOffset = sectorOffset;
+
+  while (remaining > 0 && curOffset > 0 && curOffset + 4 <= bytes.length) {
+    const nextAddr = view.getUint32(curOffset, true);
+    const dataStart = curOffset + 4;
+
+    if (nextAddr === 0) {
+      // Last sector: read remaining bytes
+      const toRead = Math.min(remaining, bytes.length - dataStart);
+      result.set(bytes.subarray(dataStart, dataStart + toRead), written);
+      remaining = 0;
+    } else {
+      // Read blockSize - 4 data bytes from this sector
+      const dataAvail = blockSize - 4;
+      const toRead = Math.min(remaining, dataAvail);
+      result.set(bytes.subarray(dataStart, dataStart + toRead), written);
+      written += toRead;
+      remaining -= toRead;
+      curOffset = nextAddr;
+    }
+  }
+  return result;
+}
+
+// Read one BTree directory node
+function readBTreeNode(view, bytes, sectorOffset, blockSize) {
+  // DatDirectoryHeader size = 62*4 + 4 + 61*24 = 1720
+  const headerSize = BRANCH_COUNT * 4 + 4 + MAX_ENTRIES_PER_NODE * DATFILE_ENTRY_SIZE;
+  const data = readLinkedData(view, bytes, sectorOffset, headerSize, blockSize);
+  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+
+  const branches = [];
+  for (let i = 0; i < BRANCH_COUNT; i++) {
+    branches.push(dv.getUint32(i * 4, true));
+  }
+
+  const entryCount = dv.getUint32(BRANCH_COUNT * 4, true);
+  const entries = [];
+  const eStart = BRANCH_COUNT * 4 + 4;
+
+  for (let i = 0; i < Math.min(entryCount, MAX_ENTRIES_PER_NODE); i++) {
+    const off = eStart + i * DATFILE_ENTRY_SIZE;
+    if (off + DATFILE_ENTRY_SIZE > data.length) break;
+    entries.push({
+      bitFlags:   dv.getUint32(off, true),
+      objectId:   dv.getUint32(off + 4, true),
+      fileOffset: dv.getUint32(off + 8, true),
+      fileSize:   dv.getUint32(off + 12, true),
+    });
+  }
+
+  return { branches, entryCount, entries };
+}
+
+async function processFile(file) {
+  statusEl.innerHTML = '';
+  statusEl.style.display = 'block';
+  downloadBtn.style.display = 'none';
+
+  log(`Loading ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)...`, 'info');
+  const t0 = performance.now();
+
+  const buffer = await file.arrayBuffer();
+  const view = new DataView(buffer);
+  const bytes = new Uint8Array(buffer);
+  log(`  Loaded in ${((performance.now() - t0) / 1000).toFixed(1)}s`, 'info');
+
+  // Read header at offset 0x140
+  log('Reading DAT header (offset 0x140)...', 'info');
+  const fileType   = view.getUint32(DAT_HEADER_OFFSET + 0, true);
+  const blockSize  = view.getUint32(DAT_HEADER_OFFSET + 4, true);
+  const datFileSize = view.getUint32(DAT_HEADER_OFFSET + 8, true);
+  const dataSet    = view.getUint32(DAT_HEADER_OFFSET + 12, true);
+  const dataSubset = view.getUint32(DAT_HEADER_OFFSET + 16, true);
+  const freeHead   = view.getUint32(DAT_HEADER_OFFSET + 20, true);
+  const freeTail   = view.getUint32(DAT_HEADER_OFFSET + 24, true);
+  const freeCount  = view.getUint32(DAT_HEADER_OFFSET + 28, true);
+  const btreeRoot  = view.getUint32(DAT_HEADER_OFFSET + 32, true);
+
+  log(`  FileType: ${fileType}`, 'info');
+  log(`  BlockSize: ${blockSize}`, 'info');
+  log(`  DataSet: ${dataSet} (1=Cell)`, 'info');
+  log(`  BTree root sector: 0x${btreeRoot.toString(16).toUpperCase()}`, 'info');
+
+  if (blockSize < 64 || blockSize > 65536) { log('  ERROR: Bad block size', 'error'); return; }
+  if (btreeRoot === 0 || btreeRoot >= buffer.byteLength) { log('  ERROR: Bad BTree root', 'error'); return; }
+
+  // Walk BTree recursively
+  log('Walking BTree...', 'info');
+  const allFiles = {};
+  const visited = new Set();
+  let nodeCount = 0;
+
+  async function walkTree(sectorOff) {
+    if (visited.has(sectorOff) || sectorOff === 0 || sectorOff >= buffer.byteLength) return;
+    visited.add(sectorOff);
+    nodeCount++;
+
+    if (nodeCount % 200 === 0) {
+      setProgress(Math.min(40, nodeCount / 30), `BTree: ${nodeCount} nodes, ${Object.keys(allFiles).length} files`);
+      await new Promise(r => setTimeout(r, 0));
+    }
+
+    try {
+      const node = readBTreeNode(view, bytes, sectorOff, blockSize);
+
+      for (const e of node.entries) {
+        if (e.objectId > 0 && e.fileOffset > 0 && e.fileOffset < buffer.byteLength) {
+          allFiles[e.objectId] = e;
+        }
+      }
+
+      // If has children (first branch != 0), recurse
+      if (node.branches[0] !== 0) {
+        for (let i = 0; i <= Math.min(node.entryCount, BRANCH_COUNT - 1); i++) {
+          if (node.branches[i] !== 0) {
+            await walkTree(node.branches[i]);
+          }
+        }
+      }
+    } catch (e) { /* skip corrupt */ }
+  }
+
+  await walkTree(btreeRoot);
+
+  const totalFiles = Object.keys(allFiles).length;
+  log(`  BTree: ${nodeCount} nodes, ${totalFiles} file entries`, 'success');
+
+  // Find terrain entries: ObjectId & 0xFFFF == 0xFFFF
+  const terrainFiles = {};
+  for (const idStr in allFiles) {
+    const id = parseInt(idStr);
+    if ((id & 0xFFFF) === 0xFFFF) {
+      const lbX = (id >>> 24) & 0xFF;
+      const lbY = (id >>> 16) & 0xFF;
+      if (lbX > 0 || lbY > 0) {
+        terrainFiles[`${lbX},${lbY}`] = allFiles[id];
+      }
+    }
+  }
+
+  const numTerrain = Object.keys(terrainFiles).length;
+  log(`  Terrain landblock entries: ${numTerrain}`, numTerrain > 0 ? 'success' : 'error');
+
+  if (numTerrain === 0) {
+    log('  ERROR: No terrain entries found. File may not be a cell_1.dat.', 'error');
+    return;
+  }
+
+  // Extract 9x9 height grids
+  log(`Extracting 9×9 height grids...`, 'info');
+  const heights = {};
+  let extracted = 0;
+  let minH = Infinity, maxH = -Infinity;
+  const keys = Object.keys(terrainFiles);
+
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    const entry = terrainFiles[key];
+
+    if (i % 2000 === 0) {
+      setProgress(40 + (i / keys.length) * 55, `Heights: ${extracted}/${i}`);
+      await new Promise(r => setTimeout(r, 0));
+    }
+
+    try {
+      // Read the CellLandblock data via sector chain
+      const lbData = readLinkedData(view, bytes, entry.fileOffset, Math.min(entry.fileSize, 2048), blockSize);
+
+      // CellLandblock format after sector reading:
+      //   uint32 id
+      //   uint32 has_objects  
+      //   ushort[64] terrain (8x8 terrain cells, 128 bytes)
+      //   byte[81] heights (9x9 grid)
+      // Total header before heights: 4 + 4 + 128 = 136 bytes
+
+      // Try the most likely offsets
+      const candidates = [];
+      for (const hOff of [136, 140, 132, 128, 144, 8]) {
+        if (hOff + 81 > lbData.length) continue;
+        
+        const tmpH = [];
+        let sum = 0;
+        for (let j = 0; j < 81; j++) {
+          const v = lbData[hOff + j];
+          tmpH.push(v);
+          sum += v;
+        }
+        const avg = sum / 81;
+        let variance = 0;
+        for (const v of tmpH) variance += (v - avg) * (v - avg);
+        variance /= 81;
+
+        candidates.push({ offset: hOff, heights: tmpH.map(h => h * 2.0), avg, variance });
+      }
+
+      // Pick candidate with highest variance (most realistic terrain data)
+      if (candidates.length > 0) {
+        candidates.sort((a, b) => b.variance - a.variance);
+        const best = candidates[0];
+        // Accept if it looks like terrain data (not all zeros)
+        if (best.avg > 0 || best.variance > 0) {
+          heights[key] = best.heights;
+          extracted++;
+          for (const h of best.heights) {
+            if (h < minH) minH = h;
+            if (h > maxH) maxH = h;
+          }
+        }
+      }
+    } catch (e) { continue; }
+  }
+
+  setProgress(100, 'Done!');
+  log('', '');
+  log('═══ Results ═══', 'success');
+  log(`  Landblocks with heights: ${extracted}`, 'success');
+  if (extracted > 0) {
+    log(`  Height range: ${minH.toFixed(1)} – ${maxH.toFixed(1)}`, 'info');
+  }
+
+  if (extracted === 0) {
+    log('  ERROR: No heights extracted.', 'error');
+    return;
+  }
+
+  resultJSON = JSON.stringify(heights);
+  const jsonMB = (resultJSON.length / 1024 / 1024).toFixed(1);
+  log(`  JSON size: ${jsonMB} MB`, 'info');
+  log(`  Total time: ${((performance.now() - t0) / 1000).toFixed(1)}s`, 'info');
+
+  downloadBtn.style.display = 'inline-block';
+  downloadBtn.textContent = `⬇ Download vanquish_heights.json (${jsonMB} MB)`;
+  renderHeightmap(heights);
+}
+
+function renderHeightmap(heights) {
+  canvasWrap.style.display = 'block';
+  const canvas = document.getElementById('heightmap');
+  canvas.width = 256; canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(256, 256);
+
+  let gMin = Infinity, gMax = -Infinity;
+  for (const k in heights) for (const h of heights[k]) { if (h < gMin) gMin = h; if (h > gMax) gMax = h; }
+  const range = gMax - gMin || 1;
+
+  for (let i = 0; i < img.data.length; i += 4) { img.data[i]=10; img.data[i+1]=20; img.data[i+2]=40; img.data[i+3]=255; }
+
+  for (const [key, arr] of Object.entries(heights)) {
+    const [x, y] = key.split(',').map(Number);
+    const avg = arr.reduce((a,b) => a+b, 0) / arr.length;
+    const n = (avg - gMin) / range;
+    let r,g,b;
+    if (n<0.15){r=30;g=80;b=150;} else if(n<0.3){r=50;g=140;b=60;} else if(n<0.5){r=80;g=160;b=40;}
+    else if(n<0.7){r=140;g=120;b=60;} else if(n<0.85){r=160;g=140;b=100;} else{r=220;g=220;b=230;}
+    const idx = ((255-y)*256+x)*4;
+    if(idx>=0&&idx+3<img.data.length){img.data[idx]=r;img.data[idx+1]=g;img.data[idx+2]=b;img.data[idx+3]=255;}
+  }
+  ctx.putImageData(img, 0, 0);
+  log('  Heightmap preview rendered (256×256)', 'success');
+}
+</script>
+</body>
+</html>
