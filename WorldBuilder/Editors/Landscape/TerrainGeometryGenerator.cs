@@ -6,6 +6,7 @@ using System;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using WorldBuilder.Shared.Documents;
+using WorldBuilder.Shared.Lib;
 
 namespace WorldBuilder.Editors.Landscape {
     public enum CellSplitDirection {
@@ -349,13 +350,11 @@ namespace WorldBuilder.Editors.Landscape {
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static CellSplitDirection CalculateSplitDirection(uint landblockX, uint cellX, uint landblockY, uint cellY) {
-            uint seedA = (landblockX * 8 + cellX) * 214614067u;
-            uint seedB = (landblockY * 8 + cellY) * 1109124029u;
-            uint magicA = seedA + 1813693831u;
-            uint magicB = seedB;
-            float splitDir = magicA - magicB - 1369149221u;
-
-            return splitDir * 2.3283064e-10f >= 0.5f ? CellSplitDirection.SEtoNW : CellSplitDirection.SWtoNE;
+            uint globalCellX = landblockX * 8 + cellX;
+            uint globalCellY = landblockY * 8 + cellY;
+            return TerrainHeightSampler.IsSWtoNEcut(globalCellX, globalCellY)
+                ? CellSplitDirection.SWtoNE
+                : CellSplitDirection.SEtoNW;
         }
 
         public static bool OnRoad(Vector3 obj, TerrainEntry[] entries) {

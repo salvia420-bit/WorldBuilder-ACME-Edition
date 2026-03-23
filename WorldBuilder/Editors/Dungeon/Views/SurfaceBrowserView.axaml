@@ -39,47 +39,53 @@
         </StackPanel>
 
         <ScrollViewer>
-            <ItemsControl ItemsSource="{Binding FilteredItems}">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <WrapPanel Orientation="Horizontal" />
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="vm:SurfaceBrowserItem">
-                        <Button
-                            Margin="2"
-                            Padding="2"
-                            Command="{Binding $parent[UserControl].((vm:SurfaceBrowserViewModel)DataContext).SelectSurfaceCommand}"
-                            CommandParameter="{Binding}"
-                            ToolTip.Tip="{Binding DisplayId}"
-                            Focusable="False"
-                            HorizontalContentAlignment="Center">
-                            <StackPanel Spacing="2" HorizontalAlignment="Center">
-                                <Panel Width="64" Height="64">
-                                    <Border
-                                        Background="#FF2A2A2A"
-                                        CornerRadius="2"
-                                        IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNull}}" />
-                                    <Image
-                                        Width="64"
-                                        Height="64"
-                                        Source="{Binding Thumbnail}"
-                                        Stretch="Uniform"
-                                        IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNotNull}}" />
-                                </Panel>
-                                <TextBlock
-                                    Text="{Binding DisplayId}"
-                                    FontSize="8"
-                                    FontFamily="Consolas"
-                                    HorizontalAlignment="Center"
-                                    TextTrimming="CharacterEllipsis"
-                                    MaxWidth="68" />
-                            </StackPanel>
-                        </Button>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
+            <StackPanel>
+                <ItemsControl ItemsSource="{Binding FilteredItems}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:SurfaceBrowserItem">
+                            <Button
+                                Margin="2"
+                                Padding="2"
+                                Command="{Binding $parent[UserControl].((vm:SurfaceBrowserViewModel)DataContext).SelectSurfaceCommand}"
+                                CommandParameter="{Binding}"
+                                ToolTip.Tip="{Binding DisplayId}"
+                                Focusable="False"
+                                HorizontalContentAlignment="Center">
+                                <StackPanel Spacing="2" HorizontalAlignment="Center">
+                                    <Panel Width="64" Height="64">
+                                        <Border
+                                            Background="#FF2A2A2A"
+                                            CornerRadius="2"
+                                            IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNull}}" />
+                                        <Image
+                                            Width="64"
+                                            Height="64"
+                                            Source="{Binding Thumbnail}"
+                                            Stretch="Uniform"
+                                            IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                                    </Panel>
+                                    <TextBlock
+                                        Text="{Binding DisplayId}"
+                                        FontSize="8"
+                                        FontFamily="Consolas"
+                                        HorizontalAlignment="Center"
+                                        TextTrimming="CharacterEllipsis"
+                                        MaxWidth="68" />
+                                </StackPanel>
+                            </Button>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <Button Content="Load More..." Command="{Binding LoadMoreCommand}"
+                        IsVisible="{Binding CanLoadMore}"
+                        HorizontalAlignment="Center" Margin="4,6"
+                        FontSize="11" Padding="16,5" />
+            </StackPanel>
         </ScrollViewer>
     </DockPanel>
 </UserControl>

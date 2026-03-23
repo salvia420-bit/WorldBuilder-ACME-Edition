@@ -279,6 +279,8 @@ namespace WorldBuilder.Editors.Dungeon {
         }
 
         private void InitDocking() {
+            DockingManager.Clear();
+
             var layouts = Settings.Dungeon.UIState.DockingLayout;
 
             // Clear stale layout entries for panels whose default location changed

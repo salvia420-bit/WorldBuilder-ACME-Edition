@@ -50,11 +50,15 @@ namespace WorldBuilder.Editors.Dungeon {
 
         private readonly IDatReaderWriter _dats;
         private readonly TextureImportService? _textureImport;
+        private const int PageSize = 200;
+
         private uint[] _allSurfaceIds = Array.Empty<uint>();
         private uint[] _dungeonSurfaceIds = Array.Empty<uint>();
         private uint[] _currentCellSurfaceIds = Array.Empty<uint>();
         private uint[] _customSurfaceIds = Array.Empty<uint>();
         private bool _dungeonSurfacesScanned;
+        private int _displayCount = PageSize;
+        private int _totalMatchCount;
 
         [ObservableProperty] private ObservableCollection<SurfaceBrowserItem> _filteredItems = new();
         [ObservableProperty] private string _searchText = "";
@@ -62,6 +66,7 @@ namespace WorldBuilder.Editors.Dungeon {
         [ObservableProperty] private bool _showDungeonOnly = true;
         [ObservableProperty] private bool _showCurrentCellOnly;
         [ObservableProperty] private bool _showCustomOnly;
+        [ObservableProperty] private bool _canLoadMore;
 
         public event EventHandler<ushort>? SurfaceSelected;
 
@@ -100,6 +105,8 @@ namespace WorldBuilder.Editors.Dungeon {
             _allSurfaceIds = ids;
             Status = $"{ids.Length} surfaces loaded";
 
+            Dispatcher.UIThread.Post(ApplyFilter);
+
             _ = ScanDungeonSurfacesAsync();
         }
 
@@ -114,27 +121,22 @@ namespace WorldBuilder.Editors.Dungeon {
                 try {
                     var lbiIds = _dats.Dats.GetAllIdsOfType<LandBlockInfo>().ToArray();
                     if (lbiIds.Length == 0) lbiIds = _dats.Dats.Cell.GetAllIdsOfType<LandBlockInfo>().ToArray();
-                    foreach (var lbiId in lbiIds) {
-                        if (!_dats.TryGet<LandBlockInfo>(lbiId, out var lbi) || lbi.NumCells == 0)
-                            continue;
 
-                        // Only scan landblocks that have dungeon cells not accounted for by buildings
-                        uint lbId = lbiId >> 16;
-                        int buildingCellCount = 0;
-                        foreach (var b in lbi.Buildings) {
-                            buildingCellCount += b.Portals.Count > 0 ? b.Portals.Count * 4 : 2;
-                        }
-                        // Heuristic: if NumCells greatly exceeds what buildings account for, it's a dungeon
-                        if (lbi.NumCells <= (uint)buildingCellCount && lbi.Buildings.Count > 0)
-                            continue;
-
-                        for (uint i = 0; i < lbi.NumCells; i++) {
-                            uint cellId = (lbId << 16) | (0x0100 + i);
-                            if (_dats.TryGet<EnvCell>(cellId, out var envCell)) {
-                                foreach (var surfId in envCell.Surfaces) {
-                                    surfaceSet.Add((uint)(surfId | 0x08000000));
+                    if (lbiIds.Length == 0) {
+                        for (uint x = 0; x < 255; x++) {
+                            for (uint y = 0; y < 255; y++) {
+                                var infoId = (uint)(((x << 8) | y) << 16 | 0xFFFE);
+                                if (_dats.TryGet<LandBlockInfo>(infoId, out var lbi) && lbi.NumCells > 0) {
+                                    CollectDungeonSurfaces(lbi, infoId >> 16, surfaceSet);
                                 }
                             }
+                        }
+                    }
+                    else {
+                        foreach (var lbiId in lbiIds) {
+                            if (!_dats.TryGet<LandBlockInfo>(lbiId, out var lbi) || lbi.NumCells == 0)
+                                continue;
+                            CollectDungeonSurfaces(lbi, lbiId >> 16, surfaceSet);
                         }
                     }
                 }
@@ -149,6 +151,24 @@ namespace WorldBuilder.Editors.Dungeon {
             Console.WriteLine($"[SurfaceBrowser] Found {_dungeonSurfaceIds.Length} unique dungeon surfaces from DAT scan");
 
             Dispatcher.UIThread.Post(ApplyFilter);
+        }
+
+        private void CollectDungeonSurfaces(LandBlockInfo lbi, uint lbId, HashSet<uint> surfaceSet) {
+            int buildingCellCount = 0;
+            foreach (var b in lbi.Buildings) {
+                buildingCellCount += b.Portals.Count > 0 ? b.Portals.Count * 4 : 2;
+            }
+            if (lbi.NumCells <= (uint)buildingCellCount && lbi.Buildings.Count > 0)
+                return;
+
+            for (uint i = 0; i < lbi.NumCells; i++) {
+                uint cellId = (lbId << 16) | (0x0100 + i);
+                if (_dats.TryGet<EnvCell>(cellId, out var envCell)) {
+                    foreach (var surfId in envCell.Surfaces) {
+                        surfaceSet.Add((uint)(surfId | 0x08000000));
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -167,17 +187,26 @@ namespace WorldBuilder.Editors.Dungeon {
             }
         }
 
-        partial void OnSearchTextChanged(string value) => ApplyFilter();
+        partial void OnSearchTextChanged(string value) { _displayCount = PageSize; ApplyFilter(); }
         partial void OnShowDungeonOnlyChanged(bool value) {
             if (value) { ShowCurrentCellOnly = false; ShowCustomOnly = false; }
+            _displayCount = PageSize;
             ApplyFilter();
         }
         partial void OnShowCurrentCellOnlyChanged(bool value) {
             if (value) { ShowDungeonOnly = false; ShowCustomOnly = false; }
+            _displayCount = PageSize;
             ApplyFilter();
         }
         partial void OnShowCustomOnlyChanged(bool value) {
             if (value) { ShowDungeonOnly = false; ShowCurrentCellOnly = false; }
+            _displayCount = PageSize;
+            ApplyFilter();
+        }
+
+        [RelayCommand]
+        private void LoadMore() {
+            _displayCount += PageSize;
             ApplyFilter();
         }
 
@@ -224,7 +253,7 @@ namespace WorldBuilder.Editors.Dungeon {
             else if (ShowCurrentCellOnly && _currentCellSurfaceIds.Length > 0) {
                 surfaces = _currentCellSurfaceIds;
             }
-            else if (ShowDungeonOnly && _dungeonSurfacesScanned) {
+            else if (ShowDungeonOnly && _dungeonSurfacesScanned && _dungeonSurfaceIds.Length > 0) {
                 surfaces = _dungeonSurfaceIds;
             }
             else {
@@ -238,19 +267,24 @@ namespace WorldBuilder.Editors.Dungeon {
                 }
             }
 
-            var result = surfaces.Take(200).ToArray();
-            var items = new ObservableCollection<SurfaceBrowserItem>();
+            var allMatches = surfaces as uint[] ?? surfaces.ToArray();
+            _totalMatchCount = allMatches.Length;
+            var result = allMatches.Take(_displayCount).ToArray();
+            var itemsList = new List<SurfaceBrowserItem>(result.Length);
             foreach (var id in result) {
-                items.Add(new SurfaceBrowserItem(id));
+                itemsList.Add(new SurfaceBrowserItem(id));
             }
-            FilteredItems = items;
+            FilteredItems = new ObservableCollection<SurfaceBrowserItem>(itemsList);
+            CanLoadMore = result.Length < _totalMatchCount;
 
             string filterLabel = ShowCustomOnly ? "custom" :
                                  ShowCurrentCellOnly ? "cell" :
-                                 ShowDungeonOnly ? "dungeon" : "all";
-            Status = $"Showing {result.Length} surfaces ({filterLabel})";
+                                 (ShowDungeonOnly && _dungeonSurfaceIds.Length > 0) ? "dungeon" : "all";
+            Status = result.Length < _totalMatchCount
+                ? $"Showing {result.Length} of {_totalMatchCount} surfaces ({filterLabel})"
+                : $"Showing {result.Length} surfaces ({filterLabel})";
 
-            _ = GenerateThumbnailsAsync(items);
+            _ = GenerateThumbnailsAsync(FilteredItems);
         }
 
         private async Task GenerateThumbnailsAsync(ObservableCollection<SurfaceBrowserItem> items) {
@@ -345,9 +379,13 @@ namespace WorldBuilder.Editors.Dungeon {
         /// </summary>
         internal static WriteableBitmap? DecodeSurfaceToBitmap(uint surfaceId, IDatReaderWriter dats, int maxEdge) {
             try {
-                if (dats.TryGet<RenderSurface>(surfaceId, out var rsDirect) && rsDirect != null) {
-                    var fromRs = TryBitmapFromRenderSurface(rsDirect, dats, maxEdge);
-                    if (fromRs != null) return fromRs;
+                // Only attempt RenderSurface shortcut for 0x06 IDs; 0x08 IDs are Surface
+                // records and TryGet<RenderSurface> on them can throw during deserialization.
+                if ((surfaceId & 0xFF000000) == 0x06000000) {
+                    if (dats.TryGet<RenderSurface>(surfaceId, out var rsDirect) && rsDirect != null) {
+                        var fromRs = TryBitmapFromRenderSurface(rsDirect, dats, maxEdge);
+                        if (fromRs != null) return fromRs;
+                    }
                 }
 
                 if (!dats.TryGet<Surface>(surfaceId, out var surface) || surface == null) return null;
