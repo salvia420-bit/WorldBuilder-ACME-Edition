@@ -561,7 +561,7 @@ def find_max_batch_size(model, config, device, start=None):
     
     # Determine starting batch size based on GPU VRAM
     if start is None:
-        vram_gb = torch.cuda.get_device_properties(0).total_mem / 1024**3
+        vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
         gpu_name = torch.cuda.get_device_name().lower()
         if 'h100' in gpu_name or 'a100' in gpu_name:
             start = 512
@@ -672,7 +672,7 @@ def train(config: dict, resume_path: Optional[str] = None):
     print(f"  Device: {device}")
     if device.type == 'cuda':
         print(f"  GPU: {torch.cuda.get_device_name()}")
-        print(f"  VRAM: {torch.cuda.get_device_properties(0).total_mem / 1024**3:.1f} GB")
+        print(f"  VRAM: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
     
     # ── Model ──
     print("\n[2/5] Building model...")
