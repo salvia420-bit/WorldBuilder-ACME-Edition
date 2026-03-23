@@ -31,7 +31,8 @@ Usage:
     python scripts/train_scene_placer.py --resume pipeline_data/models/resume.pt
     python scripts/train_scene_placer.py --epochs 500 --batch 64
 
-Runs on NVIDIA L4 (24GB VRAM). Estimated ~11h for full training.
+Runs on NVIDIA L4 (24GB), A100 (40/80GB), or H100 (80GB).
+Estimated training time: H100 ~45min, A100 ~2.5h, L4 ~11h.
 """
 
 import argparse
@@ -550,7 +551,7 @@ def compute_diversity_metrics(model, val_loader, config, device):
     }
 
 
-def find_max_batch_size(model, config, device, start=128):
+def find_max_batch_size(model, config, device, start=None):
     """Auto-detect the maximum batch size that fits in GPU memory."""
     print("  Auto-detecting max batch size...")
     
@@ -558,7 +559,23 @@ def find_max_batch_size(model, config, device, start=128):
     max_seq = config['max_seq_len']
     obj_dim = config['obj_dim']
     
-    for batch_size in [start, 96, 64, 48, 32, 24, 16, 8]:
+    # Determine starting batch size based on GPU VRAM
+    if start is None:
+        vram_gb = torch.cuda.get_device_properties(0).total_mem / 1024**3
+        gpu_name = torch.cuda.get_device_name().lower()
+        if 'h100' in gpu_name or 'a100' in gpu_name:
+            start = 512
+            print(f"    Detected high-end GPU ({torch.cuda.get_device_name()}, {vram_gb:.0f}GB) → trying batch 512")
+        elif vram_gb >= 40:
+            start = 256
+            print(f"    Detected {vram_gb:.0f}GB VRAM → trying batch 256")
+        else:
+            start = 128
+            print(f"    Detected {vram_gb:.0f}GB VRAM → trying batch 128")
+    
+    candidates = sorted([s for s in [512, 384, 256, 192, 128, 96, 64, 48, 32, 16, 8] if s <= start], reverse=True)
+    
+    for batch_size in candidates:
         try:
             torch.cuda.empty_cache()
             dummy_ctx = torch.randn(batch_size, ctx_dim, device=device)
