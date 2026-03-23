@@ -114,13 +114,32 @@ def build_wcid_vocabulary(enrichment_path: str) -> Tuple[Dict[int, int], Dict[in
     return wcid_to_idx, idx_to_wcid
 
 
-# ─── Step 2: Load weenie types from ACE DB ───────────────────────────────────
+# ─── Step 2: Load weenie types from ACE DB or SQL dump ───────────────────────
 
-def load_wcid_types() -> Dict[int, int]:
-    """Query the ACE database for wcid -> weenie type mappings."""
-    import subprocess
-    print("  Loading weenie types from ACE database...")
+def load_wcid_types(sql_path: str = None) -> Dict[int, int]:
+    """
+    Get wcid -> weenie type mappings.
     
+    Tries in order:
+      1. Cached JSON file (fast)
+      2. MariaDB query (if available locally)
+      3. Parse from SQL dump (fallback for L4 instances without MariaDB)
+    """
+    import subprocess
+    
+    cache_path = os.path.join(OUTPUT_DIR, "wcid_types_cache.json")
+    
+    # 1. Try cache
+    if os.path.exists(cache_path):
+        print("  Loading weenie types from cache...")
+        with open(cache_path) as f:
+            data = json.load(f)
+        wcid_types = {int(k): v for k, v in data.items()}
+        print(f"    Loaded {len(wcid_types)} cached wcid->type mappings")
+        return wcid_types
+    
+    # 2. Try MariaDB
+    print("  Loading weenie types from ACE database...")
     try:
         result = subprocess.run(
             [MYSQL, "-u", "root", "-pbaltic", "ace_world",
@@ -128,31 +147,67 @@ def load_wcid_types() -> Dict[int, int]:
             capture_output=True, text=True, timeout=30
         )
         
-        wcid_types = {}
         if result.returncode == 0:
+            wcid_types = {}
             lines = result.stdout.strip().split("\n")
             for line in lines[1:]:
                 parts = line.split("\t")
                 if len(parts) == 2:
                     wcid_types[int(parts[0])] = int(parts[1])
-        
-        print(f"    Loaded {len(wcid_types)} wcid->type mappings")
-        return wcid_types
-        
+            
+            # Cache for next time
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+            with open(cache_path, 'w') as f:
+                json.dump(wcid_types, f)
+            
+            print(f"    Loaded {len(wcid_types)} wcid->type mappings (cached)")
+            return wcid_types
     except (FileNotFoundError, subprocess.TimeoutExpired):
-        print("    WARNING: MariaDB not available, using empty type map")
-        return {}
+        pass
+    
+    # 3. Fallback: parse from SQL dump (no MariaDB needed)
+    if sql_path and os.path.exists(sql_path):
+        print("  MariaDB not available — parsing weenie types from SQL dump...")
+        wcid_types = {}
+        weenie_re = re.compile(r"INSERT INTO `weenie`.*?VALUES\s*(.+?);", re.DOTALL)
+        row_re = re.compile(r"\((\d+),'[^']*',(\d+),'[^']*'\)")
+        
+        with open(sql_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                if 'INSERT INTO `weenie`' in line:
+                    for m in row_re.finditer(line):
+                        wcid_types[int(m.group(1))] = int(m.group(2))
+        
+        # Cache
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, 'w') as f:
+            json.dump(wcid_types, f)
+        
+        print(f"    Parsed {len(wcid_types)} wcid->type mappings from SQL")
+        return wcid_types
+    
+    print("    WARNING: No weenie type source available")
+    return {}
 
 
 # ─── Step 3: Parse retail SQL ─────────────────────────────────────────────────
 
-def parse_retail_sql(sql_path: str) -> Tuple[Dict[Tuple[int,int], list], list]:
-    """Parse instance and link data from the SQL dump."""
+def parse_retail_sql(sql_path: str) -> Tuple[Dict[Tuple[int,int], list], list, Dict[Tuple[int,int], list]]:
+    """
+    Parse instance, link, AND encounter data from the SQL dump.
+    
+    Returns:
+        instances_by_lb: {(lb_x, lb_y): [instance_dicts]}
+        links: [link_dicts]
+        encounters_by_lb: {(lb_x, lb_y): [encounter_dicts]}
+    """
     print(f"  Parsing {os.path.basename(sql_path)}...")
     
     instances_by_lb = defaultdict(list)
+    encounters_by_lb = defaultdict(list)
     links = []
-    total = 0
+    total_instances = 0
+    total_encounters = 0
     
     value_re = re.compile(
         r"\((\d+),(\d+),(\d+),"
@@ -164,6 +219,9 @@ def parse_retail_sql(sql_path: str) -> Tuple[Dict[Tuple[int,int], list], list]:
     
     link_re = re.compile(r"\((\d+),(\d+),(\d+),'([^']*)'\)")
     
+    # encounter table: (id, landblock, weenie_Class_Id, cell_X, cell_Y, last_Modified)
+    encounter_re = re.compile(r"\((\d+),(\d+),(\d+),(\d+),(\d+),'([^']*)'\)")
+    
     t0 = time.time()
     with open(sql_path, 'r', encoding='utf-8') as f:
         for line in f:
@@ -174,6 +232,23 @@ def parse_retail_sql(sql_path: str) -> Tuple[Dict[Tuple[int,int], list], list]:
                         'parent_guid': int(m.group(2)),
                         'child_guid': int(m.group(3)),
                     })
+            elif 'INSERT INTO `encounter`' in line:
+                for m in encounter_re.finditer(line):
+                    landblock_id = int(m.group(2))
+                    lb_x = (landblock_id >> 8) & 0xFF
+                    lb_y = landblock_id & 0xFF
+                    
+                    encounters_by_lb[(lb_x, lb_y)].append({
+                        'enc_id': int(m.group(1)),
+                        'wcid': int(m.group(3)),
+                        'cell_x': int(m.group(4)),
+                        'cell_y': int(m.group(5)),
+                        # Position: CellX * 24.0, CellY * 24.0 (from ACE Landblock.cs)
+                        'x': max(0.5, min(191.5, int(m.group(4)) * 24.0)),
+                        'y': max(0.5, min(191.5, int(m.group(5)) * 24.0)),
+                        'z': 0.0,  # Encounters get Z-snapped at runtime
+                    })
+                    total_encounters += 1
             elif 'INSERT INTO `landblock_instance`' in line:
                 for m in value_re.finditer(line):
                     guid = int(m.group(1))
@@ -206,13 +281,14 @@ def parse_retail_sql(sql_path: str) -> Tuple[Dict[Tuple[int,int], list], list]:
                         'qz': float(m.group(10)),
                         'is_link_child': is_link,
                     })
-                    total += 1
+                    total_instances += 1
     
     elapsed = time.time() - t0
-    print(f"    Parsed {total:,} outdoor instances across {len(instances_by_lb)} LBs "
-          f"+ {len(links):,} links in {elapsed:.1f}s")
+    print(f"    Parsed {total_instances:,} outdoor instances across {len(instances_by_lb)} LBs ")
+    print(f"    Parsed {total_encounters:,} encounters across {len(encounters_by_lb)} LBs")
+    print(f"    + {len(links):,} links in {elapsed:.1f}s")
     
-    return instances_by_lb, links
+    return instances_by_lb, links, encounters_by_lb
 
 
 # ─── Step 4: Build context vectors ───────────────────────────────────────────
@@ -506,37 +582,37 @@ def main():
     wcid_to_idx, idx_to_wcid = build_wcid_vocabulary(ENRICHMENT)
     print()
     
-    # Step 2: Load weenie types
-    print("[Step 2] Loading weenie types...")
-    wcid_types = load_wcid_types()
-    print()
-    
-    # Step 3: Parse SQL
-    print("[Step 3] Parsing retail SQL...")
+    # Step 2: Parse SQL (before weenie types — we may need it as fallback)
+    print("[Step 2] Parsing retail SQL...")
     if not os.path.exists(RETAIL_SQL):
         print(f"  ERROR: SQL file not found: {RETAIL_SQL}")
         print(f"  Please update RETAIL_SQL path in this script.")
         return
-    instances_by_lb, links = parse_retail_sql(RETAIL_SQL)
+    instances_by_lb, links, encounters_by_lb = parse_retail_sql(RETAIL_SQL)
     print()
     
-    # Step 4: Load auxiliary data
-    print("[Step 4] Loading auxiliary data...")
+    # Step 2b: Load weenie types (with SQL fallback)
+    print("[Step 2b] Loading weenie types...")
+    wcid_types = load_wcid_types(RETAIL_SQL)
+    print()
+    
+    # Step 3: Load auxiliary data
+    print("[Step 3] Loading auxiliary data...")
     heights = load_height_grid(HEIGHTS_PATH)
     difficulty_grid = load_difficulty_grid(DIFFICULTY_GRADIENT)
     culture_grid = build_cultural_zones()
     print()
     
-    # Step 5: Build training examples
-    print("[Step 5] Building training examples...")
+    # Step 4: Build training examples
+    print("[Step 4] Building training examples...")
     contexts, sequences, seq_lengths, populated_lbs = build_training_examples(
         instances_by_lb, links, wcid_to_idx, wcid_types,
         heights, difficulty_grid, culture_grid
     )
     print()
     
-    # Step 6: Save
-    print("[Step 6] Saving output...")
+    # Step 5: Save
+    print("[Step 5] Saving output...")
     save_tensors(contexts, sequences, seq_lengths, populated_lbs,
                  wcid_to_idx, idx_to_wcid)
     print()
@@ -552,6 +628,8 @@ def main():
     print(f"  Avg objects per LB: {seq_lengths.mean():.1f}")
     print(f"  Max objects in any LB: {seq_lengths.max()}")
     print(f"  Total training tokens: {seq_lengths.sum():,}")
+    total_enc = sum(len(v) for v in encounters_by_lb.values())
+    print(f"  Encounter spawns: {total_enc:,} across {len(encounters_by_lb)} LBs")
     print()
     
     # Distribution

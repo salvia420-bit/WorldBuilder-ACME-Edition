@@ -1,0 +1,3983 @@
+{
+  "description": "Building Setup ID -> Cultural Architecture mapping",
+  "method": "Geocoded from retail landblock positions to nearest cultural town",
+  "total_buildings": 398,
+  "architecture_distribution": {
+    "Neutral": 246,
+    "Aluvian": 65,
+    "Gharu'ndim": 29,
+    "Viamontian": 22,
+    "Sho": 19,
+    "Empyrean": 17
+  },
+  "confidence_distribution": {
+    "default": 246,
+    "medium": 84,
+    "high": 68
+  },
+  "entries": {
+    "16786118": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 4,
+      "vote_breakdown": {}
+    },
+    "16783222": {
+      "architecture": "Sho",
+      "confidence": "high",
+      "nearest_town": "Sawato",
+      "distance_units": 364.4,
+      "distance_landblocks": 1.9,
+      "placement_count": 25,
+      "vote_breakdown": {
+        "Sho": 5,
+        "Aluvian": 3
+      }
+    },
+    "16781737": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Plateau Village",
+      "distance_units": 671.4,
+      "distance_landblocks": 3.5,
+      "placement_count": 92,
+      "vote_breakdown": {
+        "Gharu'ndim": 8,
+        "Aluvian": 16,
+        "Sho": 4,
+        "Empyrean": 1,
+        "Viamontian": 1
+      }
+    },
+    "16781574": {
+      "architecture": "Viamontian",
+      "confidence": "high",
+      "nearest_town": "Sanamar",
+      "distance_units": 645.1,
+      "distance_landblocks": 3.4,
+      "placement_count": 53,
+      "vote_breakdown": {
+        "Gharu'ndim": 2,
+        "Sho": 4,
+        "Viamontian": 6
+      }
+    },
+    "16787565": {
+      "architecture": "Empyrean",
+      "confidence": "medium",
+      "nearest_town": "Knorr",
+      "distance_units": 2698.5,
+      "distance_landblocks": 14.1,
+      "placement_count": 21,
+      "vote_breakdown": {
+        "Empyrean": 1
+      }
+    },
+    "16783230": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 15,
+      "vote_breakdown": {}
+    },
+    "16783231": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 15,
+      "vote_breakdown": {}
+    },
+    "16783289": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16783290": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16788027": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 4,
+      "vote_breakdown": {}
+    },
+    "16781811": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Holtburg",
+      "distance_units": 1251.7,
+      "distance_landblocks": 6.5,
+      "placement_count": 12,
+      "vote_breakdown": {
+        "Aluvian": 1,
+        "Gharu'ndim": 1
+      }
+    },
+    "16783228": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 8,
+      "vote_breakdown": {}
+    },
+    "16783232": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 8,
+      "vote_breakdown": {}
+    },
+    "16783227": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 8,
+      "vote_breakdown": {}
+    },
+    "16781129": {
+      "architecture": "Gharu'ndim",
+      "confidence": "medium",
+      "nearest_town": "Yaraq",
+      "distance_units": 1948.7,
+      "distance_landblocks": 10.1,
+      "placement_count": 15,
+      "vote_breakdown": {
+        "Gharu'ndim": 1,
+        "Sho": 1
+      }
+    },
+    "16781161": {
+      "architecture": "Sho",
+      "confidence": "medium",
+      "nearest_town": "Hebian-To",
+      "distance_units": 1533.1,
+      "distance_landblocks": 8.0,
+      "placement_count": 71,
+      "vote_breakdown": {
+        "Sho": 1,
+        "Aluvian": 1,
+        "Viamontian": 1
+      }
+    },
+    "16784328": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16781616": {
+      "architecture": "Sho",
+      "confidence": "high",
+      "nearest_town": "Hebian-To",
+      "distance_units": 372.2,
+      "distance_landblocks": 1.9,
+      "placement_count": 33,
+      "vote_breakdown": {
+        "Gharu'ndim": 4,
+        "Sho": 24,
+        "Empyrean": 2,
+        "Viamontian": 1
+      }
+    },
+    "16781665": {
+      "architecture": "Sho",
+      "confidence": "high",
+      "nearest_town": "Hebian-To",
+      "distance_units": 364.4,
+      "distance_landblocks": 1.9,
+      "placement_count": 79,
+      "vote_breakdown": {
+        "Gharu'ndim": 10,
+        "Sho": 49,
+        "Empyrean": 4
+      }
+    },
+    "16781604": {
+      "architecture": "Sho",
+      "confidence": "high",
+      "nearest_town": "Hebian-To",
+      "distance_units": 381.4,
+      "distance_landblocks": 2.0,
+      "placement_count": 115,
+      "vote_breakdown": {
+        "Gharu'ndim": 24,
+        "Sho": 105,
+        "Empyrean": 6,
+        "Viamontian": 1
+      }
+    },
+    "16781662": {
+      "architecture": "Sho",
+      "confidence": "high",
+      "nearest_town": "Hebian-To",
+      "distance_units": 252.3,
+      "distance_landblocks": 1.3,
+      "placement_count": 99,
+      "vote_breakdown": {
+        "Gharu'ndim": 13,
+        "Sho": 53,
+        "Empyrean": 5,
+        "Viamontian": 7
+      }
+    },
+    "16788763": {
+      "architecture": "Gharu'ndim",
+      "confidence": "high",
+      "nearest_town": "Tufa",
+      "distance_units": 515.9,
+      "distance_landblocks": 2.7,
+      "placement_count": 11,
+      "vote_breakdown": {
+        "Gharu'ndim": 3
+      }
+    },
+    "16790742": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 20,
+      "vote_breakdown": {}
+    },
+    "16790733": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 51,
+      "vote_breakdown": {}
+    },
+    "16790739": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 24,
+      "vote_breakdown": {}
+    },
+    "16790736": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 24,
+      "vote_breakdown": {}
+    },
+    "16790730": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 21,
+      "vote_breakdown": {}
+    },
+    "16790726": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 5,
+      "vote_breakdown": {}
+    },
+    "16790745": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 28,
+      "vote_breakdown": {}
+    },
+    "16781020": {
+      "architecture": "Gharu'ndim",
+      "confidence": "high",
+      "nearest_town": "Ayan Baqur",
+      "distance_units": 923.5,
+      "distance_landblocks": 4.8,
+      "placement_count": 49,
+      "vote_breakdown": {
+        "Gharu'ndim": 3
+      }
+    },
+    "16783223": {
+      "architecture": "Sho",
+      "confidence": "medium",
+      "nearest_town": "Lin",
+      "distance_units": 1311.5,
+      "distance_landblocks": 6.8,
+      "placement_count": 5,
+      "vote_breakdown": {
+        "Sho": 1
+      }
+    },
+    "16781062": {
+      "architecture": "Empyrean",
+      "confidence": "medium",
+      "nearest_town": "Candeth Keep",
+      "distance_units": 2049.8,
+      "distance_landblocks": 10.7,
+      "placement_count": 39,
+      "vote_breakdown": {
+        "Empyrean": 1
+      }
+    },
+    "16785975": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 3,
+      "vote_breakdown": {}
+    },
+    "16790381": {
+      "architecture": "Viamontian",
+      "confidence": "high",
+      "nearest_town": "Silyun",
+      "distance_units": 848.1,
+      "distance_landblocks": 4.4,
+      "placement_count": 16,
+      "vote_breakdown": {
+        "Viamontian": 3,
+        "Aluvian": 1,
+        "Empyrean": 1
+      }
+    },
+    "16790377": {
+      "architecture": "Viamontian",
+      "confidence": "high",
+      "nearest_town": "Silyun",
+      "distance_units": 839.7,
+      "distance_landblocks": 4.4,
+      "placement_count": 15,
+      "vote_breakdown": {
+        "Viamontian": 3,
+        "Aluvian": 1,
+        "Empyrean": 1
+      }
+    },
+    "16788463": {
+      "architecture": "Gharu'ndim",
+      "confidence": "high",
+      "nearest_town": "Al-Arqas",
+      "distance_units": 1618.5,
+      "distance_landblocks": 8.4,
+      "placement_count": 23,
+      "vote_breakdown": {
+        "Gharu'ndim": 6,
+        "Sho": 3
+      }
+    },
+    "16781760": {
+      "architecture": "Sho",
+      "confidence": "high",
+      "nearest_town": "Lin",
+      "distance_units": 396.4,
+      "distance_landblocks": 2.1,
+      "placement_count": 64,
+      "vote_breakdown": {
+        "Gharu'ndim": 1,
+        "Sho": 3
+      }
+    },
+    "16791274": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Arwic",
+      "distance_units": 408.3,
+      "distance_landblocks": 2.1,
+      "placement_count": 18,
+      "vote_breakdown": {
+        "Aluvian": 8,
+        "Viamontian": 7
+      }
+    },
+    "16785950": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16780864": {
+      "architecture": "Empyrean",
+      "confidence": "medium",
+      "nearest_town": "Candeth Keep",
+      "distance_units": 2042.9,
+      "distance_landblocks": 10.6,
+      "placement_count": 17,
+      "vote_breakdown": {
+        "Empyrean": 1
+      }
+    },
+    "16780817": {
+      "architecture": "Empyrean",
+      "confidence": "medium",
+      "nearest_town": "Candeth Keep",
+      "distance_units": 2076.1,
+      "distance_landblocks": 10.8,
+      "placement_count": 29,
+      "vote_breakdown": {
+        "Empyrean": 1
+      }
+    },
+    "16781052": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 17,
+      "vote_breakdown": {}
+    },
+    "16780859": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 20,
+      "vote_breakdown": {}
+    },
+    "16786915": {
+      "architecture": "Empyrean",
+      "confidence": "high",
+      "nearest_town": "Aerlinthe",
+      "distance_units": 819.9,
+      "distance_landblocks": 4.3,
+      "placement_count": 139,
+      "vote_breakdown": {
+        "Empyrean": 19
+      }
+    },
+    "16787995": {
+      "architecture": "Sho",
+      "confidence": "medium",
+      "nearest_town": "Shoushi",
+      "distance_units": 1645.9,
+      "distance_landblocks": 8.6,
+      "placement_count": 32,
+      "vote_breakdown": {
+        "Sho": 1
+      }
+    },
+    "16785155": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785187": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785156": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785157": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785158": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785159": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785160": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785164": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785190": {
+      "architecture": "Gharu'ndim",
+      "confidence": "medium",
+      "nearest_town": "Xarabydun",
+      "distance_units": 1208.1,
+      "distance_landblocks": 6.3,
+      "placement_count": 4,
+      "vote_breakdown": {
+        "Gharu'ndim": 2
+      }
+    },
+    "16785163": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785162": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785161": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785189": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785188": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785191": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785192": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785165": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785166": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785193": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785167": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785168": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785174": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785173": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785172": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785171": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785170": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785169": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785186": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785136": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785137": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785175": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785176": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785177": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785178": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785179": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785182": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785181": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785180": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785129": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785140": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785139": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785138": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785141": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785150": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785151": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785152": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785183": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785184": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16785185": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16781392": {
+      "architecture": "Sho",
+      "confidence": "medium",
+      "nearest_town": "Shoushi",
+      "distance_units": 1088.3,
+      "distance_landblocks": 5.7,
+      "placement_count": 51,
+      "vote_breakdown": {
+        "Sho": 2,
+        "Gharu'ndim": 1
+      }
+    },
+    "16781591": {
+      "architecture": "Sho",
+      "confidence": "high",
+      "nearest_town": "Nanto",
+      "distance_units": 612.5,
+      "distance_landblocks": 3.2,
+      "placement_count": 59,
+      "vote_breakdown": {
+        "Gharu'ndim": 3,
+        "Sho": 8,
+        "Empyrean": 1
+      }
+    },
+    "16781766": {
+      "architecture": "Gharu'ndim",
+      "confidence": "medium",
+      "nearest_town": "Khayyaban",
+      "distance_units": 1157.4,
+      "distance_landblocks": 6.0,
+      "placement_count": 20,
+      "vote_breakdown": {
+        "Gharu'ndim": 1
+      }
+    },
+    "16786082": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Holtburg",
+      "distance_units": 1288.4,
+      "distance_landblocks": 6.7,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Aluvian": 2
+      }
+    },
+    "16790548": {
+      "architecture": "Gharu'ndim",
+      "confidence": "medium",
+      "nearest_town": "Yaraq",
+      "distance_units": 1669.1,
+      "distance_landblocks": 8.7,
+      "placement_count": 2,
+      "vote_breakdown": {
+        "Gharu'ndim": 1
+      }
+    },
+    "16779312": {
+      "architecture": "Viamontian",
+      "confidence": "high",
+      "nearest_town": "Silyun",
+      "distance_units": 713.6,
+      "distance_landblocks": 3.7,
+      "placement_count": 31,
+      "vote_breakdown": {
+        "Gharu'ndim": 1,
+        "Sho": 1,
+        "Viamontian": 3
+      }
+    },
+    "16781825": {
+      "architecture": "Sho",
+      "confidence": "high",
+      "nearest_town": "Hebian-To",
+      "distance_units": 417.4,
+      "distance_landblocks": 2.2,
+      "placement_count": 44,
+      "vote_breakdown": {
+        "Sho": 50,
+        "Gharu'ndim": 7,
+        "Empyrean": 1
+      }
+    },
+    "16781578": {
+      "architecture": "Sho",
+      "confidence": "medium",
+      "nearest_town": "Lin",
+      "distance_units": 1808.5,
+      "distance_landblocks": 9.4,
+      "placement_count": 13,
+      "vote_breakdown": {
+        "Sho": 1,
+        "Empyrean": 1
+      }
+    },
+    "16786065": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16786068": {
+      "architecture": "Gharu'ndim",
+      "confidence": "medium",
+      "nearest_town": "Al-Arqas",
+      "distance_units": 1233.3,
+      "distance_landblocks": 6.4,
+      "placement_count": 14,
+      "vote_breakdown": {
+        "Gharu'ndim": 2,
+        "Aluvian": 2
+      }
+    },
+    "16786071": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Holtburg",
+      "distance_units": 1675.8,
+      "distance_landblocks": 8.7,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16791267": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Plateau Village",
+      "distance_units": 1104.1,
+      "distance_landblocks": 5.8,
+      "placement_count": 7,
+      "vote_breakdown": {
+        "Aluvian": 5
+      }
+    },
+    "16792238": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Plateau Village",
+      "distance_units": 997.2,
+      "distance_landblocks": 5.2,
+      "placement_count": 31,
+      "vote_breakdown": {
+        "Aluvian": 20
+      }
+    },
+    "16792226": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Plateau Village",
+      "distance_units": 1001.0,
+      "distance_landblocks": 5.2,
+      "placement_count": 50,
+      "vote_breakdown": {
+        "Aluvian": 36
+      }
+    },
+    "16792241": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 6,
+      "vote_breakdown": {}
+    },
+    "16792235": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 4,
+      "vote_breakdown": {}
+    },
+    "16792223": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Stonehold",
+      "distance_units": 1157.8,
+      "distance_landblocks": 6.0,
+      "placement_count": 5,
+      "vote_breakdown": {
+        "Aluvian": 3
+      }
+    },
+    "16792229": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Plateau Village",
+      "distance_units": 1044.7,
+      "distance_landblocks": 5.4,
+      "placement_count": 7,
+      "vote_breakdown": {
+        "Aluvian": 6
+      }
+    },
+    "16793649": {
+      "architecture": "Gharu'ndim",
+      "confidence": "medium",
+      "nearest_town": "Khayyaban",
+      "distance_units": 1594.0,
+      "distance_landblocks": 8.3,
+      "placement_count": 31,
+      "vote_breakdown": {
+        "Gharu'ndim": 1,
+        "Sho": 1,
+        "Aluvian": 1
+      }
+    },
+    "16792832": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Holtburg",
+      "distance_units": 1970.4,
+      "distance_landblocks": 10.3,
+      "placement_count": 14,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16787051": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 3,
+      "vote_breakdown": {}
+    },
+    "16786306": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 3,
+      "vote_breakdown": {}
+    },
+    "16786247": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 3,
+      "vote_breakdown": {}
+    },
+    "16786244": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 3,
+      "vote_breakdown": {}
+    },
+    "16786309": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 3,
+      "vote_breakdown": {}
+    },
+    "16786957": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Holtburg",
+      "distance_units": 1985.6,
+      "distance_landblocks": 10.3,
+      "placement_count": 5,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16787564": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 28,
+      "vote_breakdown": {}
+    },
+    "16781566": {
+      "architecture": "Empyrean",
+      "confidence": "medium",
+      "nearest_town": "Knorr",
+      "distance_units": 2072.1,
+      "distance_landblocks": 10.8,
+      "placement_count": 12,
+      "vote_breakdown": {
+        "Empyrean": 1
+      }
+    },
+    "16785878": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Holtburg",
+      "distance_units": 2713.9,
+      "distance_landblocks": 14.1,
+      "placement_count": 13,
+      "vote_breakdown": {
+        "Aluvian": 8
+      }
+    },
+    "16785879": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Holtburg",
+      "distance_units": 2727.0,
+      "distance_landblocks": 14.2,
+      "placement_count": 9,
+      "vote_breakdown": {
+        "Aluvian": 3,
+        "Gharu'ndim": 1
+      }
+    },
+    "16787083": {
+      "architecture": "Sho",
+      "confidence": "medium",
+      "nearest_town": "Shoushi",
+      "distance_units": 1504.9,
+      "distance_landblocks": 7.8,
+      "placement_count": 4,
+      "vote_breakdown": {
+        "Aluvian": 1,
+        "Sho": 2
+      }
+    },
+    "16785876": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Holtburg",
+      "distance_units": 2734.0,
+      "distance_landblocks": 14.2,
+      "placement_count": 5,
+      "vote_breakdown": {
+        "Aluvian": 4
+      }
+    },
+    "16785881": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Holtburg",
+      "distance_units": 2807.5,
+      "distance_landblocks": 14.6,
+      "placement_count": 2,
+      "vote_breakdown": {
+        "Aluvian": 1,
+        "Gharu'ndim": 1
+      }
+    },
+    "16787196": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Holtburg",
+      "distance_units": 2429.3,
+      "distance_landblocks": 12.7,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Aluvian": 2,
+        "Gharu'ndim": 1
+      }
+    },
+    "16787245": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Holtburg",
+      "distance_units": 2439.1,
+      "distance_landblocks": 12.7,
+      "placement_count": 2,
+      "vote_breakdown": {
+        "Aluvian": 2
+      }
+    },
+    "16791296": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Cragstone",
+      "distance_units": 1394.5,
+      "distance_landblocks": 7.3,
+      "placement_count": 1,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16794815": {
+      "architecture": "Gharu'ndim",
+      "confidence": "high",
+      "nearest_town": "Al-Arqas",
+      "distance_units": 1436.7,
+      "distance_landblocks": 7.5,
+      "placement_count": 43,
+      "vote_breakdown": {
+        "Gharu'ndim": 43
+      }
+    },
+    "16794816": {
+      "architecture": "Gharu'ndim",
+      "confidence": "high",
+      "nearest_town": "Al-Arqas",
+      "distance_units": 1431.8,
+      "distance_landblocks": 7.5,
+      "placement_count": 24,
+      "vote_breakdown": {
+        "Gharu'ndim": 24
+      }
+    },
+    "16786300": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16786245": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16786246": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16786685": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16786301": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16786302": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16786686": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 3,
+      "vote_breakdown": {}
+    },
+    "16786684": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16786303": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16786670": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16788051": {
+      "architecture": "Gharu'ndim",
+      "confidence": "medium",
+      "nearest_town": "Al-Arqas",
+      "distance_units": 1221.5,
+      "distance_landblocks": 6.4,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Gharu'ndim": 1
+      }
+    },
+    "16794817": {
+      "architecture": "Gharu'ndim",
+      "confidence": "high",
+      "nearest_town": "Al-Arqas",
+      "distance_units": 1499.6,
+      "distance_landblocks": 7.8,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Gharu'ndim": 3
+      }
+    },
+    "16787967": {
+      "architecture": "Gharu'ndim",
+      "confidence": "high",
+      "nearest_town": "Al-Arqas",
+      "distance_units": 1671.7,
+      "distance_landblocks": 8.7,
+      "placement_count": 113,
+      "vote_breakdown": {
+        "Gharu'ndim": 26,
+        "Aluvian": 15,
+        "Sho": 9
+      }
+    },
+    "16786075": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Holtburg",
+      "distance_units": 1627.1,
+      "distance_landblocks": 8.5,
+      "placement_count": 1,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16786078": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Holtburg",
+      "distance_units": 1341.9,
+      "distance_landblocks": 7.0,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Aluvian": 3
+      }
+    },
+    "16781159": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Holtburg",
+      "distance_units": 1723.6,
+      "distance_landblocks": 9.0,
+      "placement_count": 20,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16789160": {
+      "architecture": "Gharu'ndim",
+      "confidence": "high",
+      "nearest_town": "Xarabydun",
+      "distance_units": 1215.9,
+      "distance_landblocks": 6.3,
+      "placement_count": 5,
+      "vote_breakdown": {
+        "Sho": 2,
+        "Gharu'ndim": 3
+      }
+    },
+    "16785973": {
+      "architecture": "Sho",
+      "confidence": "medium",
+      "nearest_town": "Shoushi",
+      "distance_units": 1610.0,
+      "distance_landblocks": 8.4,
+      "placement_count": 1,
+      "vote_breakdown": {
+        "Sho": 1
+      }
+    },
+    "16791076": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Arwic",
+      "distance_units": 355.8,
+      "distance_landblocks": 1.9,
+      "placement_count": 4,
+      "vote_breakdown": {
+        "Aluvian": 6
+      }
+    },
+    "16791075": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Arwic",
+      "distance_units": 325.4,
+      "distance_landblocks": 1.7,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Aluvian": 5
+      }
+    },
+    "16781522": {
+      "architecture": "Empyrean",
+      "confidence": "high",
+      "nearest_town": "Aerlinthe",
+      "distance_units": 2393.8,
+      "distance_landblocks": 12.5,
+      "placement_count": 10,
+      "vote_breakdown": {
+        "Empyrean": 3
+      }
+    },
+    "16794207": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Rithwic",
+      "distance_units": 2673.8,
+      "distance_landblocks": 13.9,
+      "placement_count": 2,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16780311": {
+      "architecture": "Sho",
+      "confidence": "medium",
+      "nearest_town": "Shoushi",
+      "distance_units": 1699.1,
+      "distance_landblocks": 8.8,
+      "placement_count": 12,
+      "vote_breakdown": {
+        "Sho": 1
+      }
+    },
+    "16780318": {
+      "architecture": "Sho",
+      "confidence": "medium",
+      "nearest_town": "Shoushi",
+      "distance_units": 1667.7,
+      "distance_landblocks": 8.7,
+      "placement_count": 13,
+      "vote_breakdown": {
+        "Sho": 1
+      }
+    },
+    "16779303": {
+      "architecture": "Sho",
+      "confidence": "medium",
+      "nearest_town": "Shoushi",
+      "distance_units": 1653.8,
+      "distance_landblocks": 8.6,
+      "placement_count": 21,
+      "vote_breakdown": {
+        "Sho": 1
+      }
+    },
+    "16791110": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Stonehold",
+      "distance_units": 1394.4,
+      "distance_landblocks": 7.3,
+      "placement_count": 11,
+      "vote_breakdown": {
+        "Aluvian": 11
+      }
+    },
+    "16791812": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Plateau Village",
+      "distance_units": 1143.1,
+      "distance_landblocks": 6.0,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Aluvian": 3
+      }
+    },
+    "16791813": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Glenden Wood",
+      "distance_units": 2302.1,
+      "distance_landblocks": 12.0,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Aluvian": 3
+      }
+    },
+    "16791814": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Plateau Village",
+      "distance_units": 1027.6,
+      "distance_landblocks": 5.4,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Aluvian": 3
+      }
+    },
+    "16787960": {
+      "architecture": "Gharu'ndim",
+      "confidence": "high",
+      "nearest_town": "Xarabydun",
+      "distance_units": 2231.5,
+      "distance_landblocks": 11.6,
+      "placement_count": 67,
+      "vote_breakdown": {
+        "Aluvian": 7,
+        "Gharu'ndim": 17
+      }
+    },
+    "16787959": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Dryreach",
+      "distance_units": 2079.9,
+      "distance_landblocks": 10.8,
+      "placement_count": 48,
+      "vote_breakdown": {
+        "Aluvian": 7,
+        "Gharu'ndim": 7
+      }
+    },
+    "16789230": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16789229": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16789231": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16779292": {
+      "architecture": "Viamontian",
+      "confidence": "high",
+      "nearest_town": "Silyun",
+      "distance_units": 760.6,
+      "distance_landblocks": 4.0,
+      "placement_count": 32,
+      "vote_breakdown": {
+        "Viamontian": 3
+      }
+    },
+    "16780598": {
+      "architecture": "Viamontian",
+      "confidence": "medium",
+      "nearest_town": "Freehold",
+      "distance_units": 1091.4,
+      "distance_landblocks": 5.7,
+      "placement_count": 14,
+      "vote_breakdown": {
+        "Viamontian": 2
+      }
+    },
+    "16783358": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 9,
+      "vote_breakdown": {}
+    },
+    "16789228": {
+      "architecture": "Gharu'ndim",
+      "confidence": "medium",
+      "nearest_town": "Xarabydun",
+      "distance_units": 1281.5,
+      "distance_landblocks": 6.7,
+      "placement_count": 7,
+      "vote_breakdown": {
+        "Gharu'ndim": 2
+      }
+    },
+    "16789238": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 12,
+      "vote_breakdown": {}
+    },
+    "16789233": {
+      "architecture": "Gharu'ndim",
+      "confidence": "medium",
+      "nearest_town": "Xarabydun",
+      "distance_units": 1331.2,
+      "distance_landblocks": 6.9,
+      "placement_count": 4,
+      "vote_breakdown": {
+        "Gharu'ndim": 1
+      }
+    },
+    "16789232": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16789234": {
+      "architecture": "Gharu'ndim",
+      "confidence": "medium",
+      "nearest_town": "Xarabydun",
+      "distance_units": 1261.4,
+      "distance_landblocks": 6.6,
+      "placement_count": 4,
+      "vote_breakdown": {
+        "Gharu'ndim": 1
+      }
+    },
+    "16789285": {
+      "architecture": "Gharu'ndim",
+      "confidence": "medium",
+      "nearest_town": "Xarabydun",
+      "distance_units": 1177.5,
+      "distance_landblocks": 6.1,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Gharu'ndim": 2
+      }
+    },
+    "16788628": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 4,
+      "vote_breakdown": {}
+    },
+    "16786054": {
+      "architecture": "Viamontian",
+      "confidence": "high",
+      "nearest_town": "Sanamar",
+      "distance_units": 1175.4,
+      "distance_landblocks": 6.1,
+      "placement_count": 83,
+      "vote_breakdown": {
+        "Viamontian": 5,
+        "Aluvian": 1,
+        "Empyrean": 4
+      }
+    },
+    "16786130": {
+      "architecture": "Viamontian",
+      "confidence": "high",
+      "nearest_town": "Sanamar",
+      "distance_units": 1196.8,
+      "distance_landblocks": 6.2,
+      "placement_count": 83,
+      "vote_breakdown": {
+        "Viamontian": 5,
+        "Aluvian": 1,
+        "Empyrean": 4
+      }
+    },
+    "16786057": {
+      "architecture": "Viamontian",
+      "confidence": "high",
+      "nearest_town": "Sanamar",
+      "distance_units": 1207.8,
+      "distance_landblocks": 6.3,
+      "placement_count": 83,
+      "vote_breakdown": {
+        "Viamontian": 5,
+        "Aluvian": 1,
+        "Empyrean": 4
+      }
+    },
+    "16786055": {
+      "architecture": "Viamontian",
+      "confidence": "high",
+      "nearest_town": "Sanamar",
+      "distance_units": 1186.6,
+      "distance_landblocks": 6.2,
+      "placement_count": 83,
+      "vote_breakdown": {
+        "Viamontian": 5,
+        "Aluvian": 1,
+        "Empyrean": 4
+      }
+    },
+    "16791818": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Glenden Wood",
+      "distance_units": 2555.7,
+      "distance_landblocks": 13.3,
+      "placement_count": 7,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16789235": {
+      "architecture": "Gharu'ndim",
+      "confidence": "medium",
+      "nearest_town": "Xarabydun",
+      "distance_units": 1288.8,
+      "distance_landblocks": 6.7,
+      "placement_count": 2,
+      "vote_breakdown": {
+        "Gharu'ndim": 2
+      }
+    },
+    "16792842": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 10,
+      "vote_breakdown": {}
+    },
+    "16792811": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 4,
+      "vote_breakdown": {}
+    },
+    "16787979": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 24,
+      "vote_breakdown": {}
+    },
+    "16787993": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 8,
+      "vote_breakdown": {}
+    },
+    "16792840": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 18,
+      "vote_breakdown": {}
+    },
+    "16791825": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Plateau Village",
+      "distance_units": 1527.4,
+      "distance_landblocks": 8.0,
+      "placement_count": 1,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16791824": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Plateau Village",
+      "distance_units": 1538.1,
+      "distance_landblocks": 8.0,
+      "placement_count": 1,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16791823": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Plateau Village",
+      "distance_units": 1559.5,
+      "distance_landblocks": 8.1,
+      "placement_count": 1,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16791822": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Plateau Village",
+      "distance_units": 1548.9,
+      "distance_landblocks": 8.1,
+      "placement_count": 1,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16791828": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Plateau Village",
+      "distance_units": 1581.0,
+      "distance_landblocks": 8.2,
+      "placement_count": 1,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16791827": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Plateau Village",
+      "distance_units": 1570.6,
+      "distance_landblocks": 8.2,
+      "placement_count": 1,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16791826": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Plateau Village",
+      "distance_units": 1560.4,
+      "distance_landblocks": 8.1,
+      "placement_count": 1,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16791820": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Plateau Village",
+      "distance_units": 1602.6,
+      "distance_landblocks": 8.3,
+      "placement_count": 1,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16791819": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Plateau Village",
+      "distance_units": 1592.3,
+      "distance_landblocks": 8.3,
+      "placement_count": 1,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16791821": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Plateau Village",
+      "distance_units": 1538.6,
+      "distance_landblocks": 8.0,
+      "placement_count": 1,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16791304": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Plateau Village",
+      "distance_units": 1099.8,
+      "distance_landblocks": 5.7,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Aluvian": 3
+      }
+    },
+    "16791832": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Plateau Village",
+      "distance_units": 1174.5,
+      "distance_landblocks": 6.1,
+      "placement_count": 2,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16792323": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Plateau Village",
+      "distance_units": 1116.0,
+      "distance_landblocks": 5.8,
+      "placement_count": 2,
+      "vote_breakdown": {
+        "Aluvian": 2
+      }
+    },
+    "16793427": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Plateau Village",
+      "distance_units": 1975.2,
+      "distance_landblocks": 10.3,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16791305": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Stonehold",
+      "distance_units": 2810.2,
+      "distance_landblocks": 14.6,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16791306": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Stonehold",
+      "distance_units": 2792.2,
+      "distance_landblocks": 14.5,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16791307": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Stonehold",
+      "distance_units": 2774.2,
+      "distance_landblocks": 14.4,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16791308": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Stonehold",
+      "distance_units": 2794.5,
+      "distance_landblocks": 14.6,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16791309": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Stonehold",
+      "distance_units": 2776.3,
+      "distance_landblocks": 14.5,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16791310": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Stonehold",
+      "distance_units": 2758.3,
+      "distance_landblocks": 14.4,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16791319": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Stonehold",
+      "distance_units": 2742.5,
+      "distance_landblocks": 14.3,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16791312": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Stonehold",
+      "distance_units": 2760.7,
+      "distance_landblocks": 14.4,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16791311": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Stonehold",
+      "distance_units": 2778.9,
+      "distance_landblocks": 14.5,
+      "placement_count": 3,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16787974": {
+      "architecture": "Gharu'ndim",
+      "confidence": "medium",
+      "nearest_town": "Xarabydun",
+      "distance_units": 2523.4,
+      "distance_landblocks": 13.1,
+      "placement_count": 1,
+      "vote_breakdown": {
+        "Gharu'ndim": 1
+      }
+    },
+    "16790658": {
+      "architecture": "Sho",
+      "confidence": "high",
+      "nearest_town": "Nanto",
+      "distance_units": 595.9,
+      "distance_landblocks": 3.1,
+      "placement_count": 2,
+      "vote_breakdown": {
+        "Sho": 3,
+        "Empyrean": 1
+      }
+    },
+    "16792855": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 11,
+      "vote_breakdown": {}
+    },
+    "16780799": {
+      "architecture": "Gharu'ndim",
+      "confidence": "medium",
+      "nearest_town": "Ayan Baqur",
+      "distance_units": 1205.3,
+      "distance_landblocks": 6.3,
+      "placement_count": 9,
+      "vote_breakdown": {
+        "Gharu'ndim": 1
+      }
+    },
+    "16780805": {
+      "architecture": "Gharu'ndim",
+      "confidence": "medium",
+      "nearest_town": "Ayan Baqur",
+      "distance_units": 1190.9,
+      "distance_landblocks": 6.2,
+      "placement_count": 7,
+      "vote_breakdown": {
+        "Gharu'ndim": 2
+      }
+    },
+    "16780877": {
+      "architecture": "Gharu'ndim",
+      "confidence": "medium",
+      "nearest_town": "Ayan Baqur",
+      "distance_units": 1210.3,
+      "distance_landblocks": 6.3,
+      "placement_count": 12,
+      "vote_breakdown": {
+        "Gharu'ndim": 2
+      }
+    },
+    "16780804": {
+      "architecture": "Gharu'ndim",
+      "confidence": "medium",
+      "nearest_town": "Ayan Baqur",
+      "distance_units": 1171.7,
+      "distance_landblocks": 6.1,
+      "placement_count": 8,
+      "vote_breakdown": {
+        "Gharu'ndim": 1
+      }
+    },
+    "16780802": {
+      "architecture": "Gharu'ndim",
+      "confidence": "medium",
+      "nearest_town": "Ayan Baqur",
+      "distance_units": 1186.4,
+      "distance_landblocks": 6.2,
+      "placement_count": 9,
+      "vote_breakdown": {
+        "Gharu'ndim": 1
+      }
+    },
+    "16780811": {
+      "architecture": "Gharu'ndim",
+      "confidence": "medium",
+      "nearest_town": "Ayan Baqur",
+      "distance_units": 1224.5,
+      "distance_landblocks": 6.4,
+      "placement_count": 6,
+      "vote_breakdown": {
+        "Gharu'ndim": 1
+      }
+    },
+    "16780800": {
+      "architecture": "Gharu'ndim",
+      "confidence": "medium",
+      "nearest_town": "Ayan Baqur",
+      "distance_units": 1249.5,
+      "distance_landblocks": 6.5,
+      "placement_count": 8,
+      "vote_breakdown": {
+        "Gharu'ndim": 2
+      }
+    },
+    "16787938": {
+      "architecture": "Viamontian",
+      "confidence": "high",
+      "nearest_town": "Silyun",
+      "distance_units": 254.9,
+      "distance_landblocks": 1.3,
+      "placement_count": 6,
+      "vote_breakdown": {
+        "Gharu'ndim": 1,
+        "Aluvian": 1,
+        "Viamontian": 3
+      }
+    },
+    "16794086": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 4,
+      "vote_breakdown": {}
+    },
+    "16794101": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16789952": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Plateau Village",
+      "distance_units": 2557.9,
+      "distance_landblocks": 13.3,
+      "placement_count": 6,
+      "vote_breakdown": {
+        "Aluvian": 2
+      }
+    },
+    "16785958": {
+      "architecture": "Viamontian",
+      "confidence": "high",
+      "nearest_town": "Freehold",
+      "distance_units": 787.9,
+      "distance_landblocks": 4.1,
+      "placement_count": 375,
+      "vote_breakdown": {
+        "Aluvian": 2,
+        "Viamontian": 15,
+        "Empyrean": 13
+      }
+    },
+    "16786918": {
+      "architecture": "Empyrean",
+      "confidence": "high",
+      "nearest_town": "Aerlinthe",
+      "distance_units": 755.1,
+      "distance_landblocks": 3.9,
+      "placement_count": 161,
+      "vote_breakdown": {
+        "Empyrean": 11
+      }
+    },
+    "16785960": {
+      "architecture": "Empyrean",
+      "confidence": "high",
+      "nearest_town": "Aerlinthe",
+      "distance_units": 115.6,
+      "distance_landblocks": 0.6,
+      "placement_count": 445,
+      "vote_breakdown": {
+        "Aluvian": 1,
+        "Viamontian": 20,
+        "Empyrean": 32
+      }
+    },
+    "16786912": {
+      "architecture": "Empyrean",
+      "confidence": "high",
+      "nearest_town": "Aerlinthe",
+      "distance_units": 822.9,
+      "distance_landblocks": 4.3,
+      "placement_count": 160,
+      "vote_breakdown": {
+        "Sho": 1,
+        "Empyrean": 18
+      }
+    },
+    "16785967": {
+      "architecture": "Empyrean",
+      "confidence": "high",
+      "nearest_town": "Aerlinthe",
+      "distance_units": 69.9,
+      "distance_landblocks": 0.4,
+      "placement_count": 371,
+      "vote_breakdown": {
+        "Aluvian": 2,
+        "Viamontian": 21,
+        "Empyrean": 25
+      }
+    },
+    "16786159": {
+      "architecture": "Empyrean",
+      "confidence": "high",
+      "nearest_town": "Aerlinthe",
+      "distance_units": 105.9,
+      "distance_landblocks": 0.6,
+      "placement_count": 345,
+      "vote_breakdown": {
+        "Aluvian": 1,
+        "Viamontian": 10,
+        "Empyrean": 25
+      }
+    },
+    "16785970": {
+      "architecture": "Empyrean",
+      "confidence": "high",
+      "nearest_town": "Aerlinthe",
+      "distance_units": 149.6,
+      "distance_landblocks": 0.8,
+      "placement_count": 257,
+      "vote_breakdown": {
+        "Aluvian": 1,
+        "Viamontian": 12,
+        "Empyrean": 19
+      }
+    },
+    "16786059": {
+      "architecture": "Empyrean",
+      "confidence": "high",
+      "nearest_town": "Aerlinthe",
+      "distance_units": 90.3,
+      "distance_landblocks": 0.5,
+      "placement_count": 248,
+      "vote_breakdown": {
+        "Aluvian": 1,
+        "Viamontian": 12,
+        "Empyrean": 19
+      }
+    },
+    "16786307": {
+      "architecture": "Empyrean",
+      "confidence": "high",
+      "nearest_town": "Aerlinthe",
+      "distance_units": 530.4,
+      "distance_landblocks": 2.8,
+      "placement_count": 285,
+      "vote_breakdown": {
+        "Aluvian": 1,
+        "Empyrean": 30,
+        "Viamontian": 5
+      }
+    },
+    "16783355": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Rithwic",
+      "distance_units": 2418.4,
+      "distance_landblocks": 12.6,
+      "placement_count": 4,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16780762": {
+      "architecture": "Viamontian",
+      "confidence": "high",
+      "nearest_town": "Freehold",
+      "distance_units": 1062.9,
+      "distance_landblocks": 5.5,
+      "placement_count": 23,
+      "vote_breakdown": {
+        "Viamontian": 3
+      }
+    },
+    "16780801": {
+      "architecture": "Viamontian",
+      "confidence": "medium",
+      "nearest_town": "Freehold",
+      "distance_units": 1059.6,
+      "distance_landblocks": 5.5,
+      "placement_count": 11,
+      "vote_breakdown": {
+        "Viamontian": 1
+      }
+    },
+    "16789092": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16792326": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Stonehold",
+      "distance_units": 1134.5,
+      "distance_landblocks": 5.9,
+      "placement_count": 8,
+      "vote_breakdown": {
+        "Aluvian": 5
+      }
+    },
+    "16786126": {
+      "architecture": "Empyrean",
+      "confidence": "high",
+      "nearest_town": "Aerlinthe",
+      "distance_units": 489.8,
+      "distance_landblocks": 2.6,
+      "placement_count": 291,
+      "vote_breakdown": {
+        "Empyrean": 26,
+        "Viamontian": 5,
+        "Aluvian": 1
+      }
+    },
+    "16792806": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16792232": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16789188": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Stonehold",
+      "distance_units": 1003.5,
+      "distance_landblocks": 5.2,
+      "placement_count": 1,
+      "vote_breakdown": {
+        "Aluvian": 1
+      }
+    },
+    "16789185": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Stonehold",
+      "distance_units": 971.0,
+      "distance_landblocks": 5.1,
+      "placement_count": 2,
+      "vote_breakdown": {
+        "Aluvian": 2
+      }
+    },
+    "16789150": {
+      "architecture": "Aluvian",
+      "confidence": "medium",
+      "nearest_town": "Stonehold",
+      "distance_units": 966.0,
+      "distance_landblocks": 5.0,
+      "placement_count": 2,
+      "vote_breakdown": {
+        "Aluvian": 2
+      }
+    },
+    "16788232": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 28,
+      "vote_breakdown": {}
+    },
+    "16788238": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16788236": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 4,
+      "vote_breakdown": {}
+    },
+    "16788237": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 7,
+      "vote_breakdown": {}
+    },
+    "16788230": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 4,
+      "vote_breakdown": {}
+    },
+    "16788239": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 4,
+      "vote_breakdown": {}
+    },
+    "16792841": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 6,
+      "vote_breakdown": {}
+    },
+    "16788234": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 3,
+      "vote_breakdown": {}
+    },
+    "16791859": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Stonehold",
+      "distance_units": 657.1,
+      "distance_landblocks": 3.4,
+      "placement_count": 1,
+      "vote_breakdown": {
+        "Aluvian": 3
+      }
+    },
+    "16788229": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16788228": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 32,
+      "vote_breakdown": {}
+    },
+    "16784738": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Stonehold",
+      "distance_units": 491.9,
+      "distance_landblocks": 2.6,
+      "placement_count": 2,
+      "vote_breakdown": {
+        "Aluvian": 3
+      }
+    },
+    "16784742": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Stonehold",
+      "distance_units": 482.9,
+      "distance_landblocks": 2.5,
+      "placement_count": 2,
+      "vote_breakdown": {
+        "Aluvian": 3
+      }
+    },
+    "16784743": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Stonehold",
+      "distance_units": 472.1,
+      "distance_landblocks": 2.5,
+      "placement_count": 2,
+      "vote_breakdown": {
+        "Aluvian": 3
+      }
+    },
+    "16784739": {
+      "architecture": "Aluvian",
+      "confidence": "high",
+      "nearest_town": "Stonehold",
+      "distance_units": 558.4,
+      "distance_landblocks": 2.9,
+      "placement_count": 2,
+      "vote_breakdown": {
+        "Aluvian": 3
+      }
+    },
+    "16780227": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 42,
+      "vote_breakdown": {}
+    },
+    "16779310": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 18,
+      "vote_breakdown": {}
+    },
+    "16796808": {
+      "architecture": "Viamontian",
+      "confidence": "medium",
+      "nearest_town": "Freehold",
+      "distance_units": 1794.6,
+      "distance_landblocks": 9.3,
+      "placement_count": 1,
+      "vote_breakdown": {
+        "Viamontian": 1
+      }
+    },
+    "16786900": {
+      "architecture": "Empyrean",
+      "confidence": "high",
+      "nearest_town": "Aerlinthe",
+      "distance_units": 859.3,
+      "distance_landblocks": 4.5,
+      "placement_count": 132,
+      "vote_breakdown": {
+        "Empyrean": 12
+      }
+    },
+    "16780565": {
+      "architecture": "Viamontian",
+      "confidence": "medium",
+      "nearest_town": "Freehold",
+      "distance_units": 1076.7,
+      "distance_landblocks": 5.6,
+      "placement_count": 18,
+      "vote_breakdown": {
+        "Viamontian": 2
+      }
+    },
+    "16780651": {
+      "architecture": "Viamontian",
+      "confidence": "medium",
+      "nearest_town": "Freehold",
+      "distance_units": 1046.0,
+      "distance_landblocks": 5.4,
+      "placement_count": 19,
+      "vote_breakdown": {
+        "Viamontian": 2
+      }
+    },
+    "16780423": {
+      "architecture": "Viamontian",
+      "confidence": "medium",
+      "nearest_town": "Freehold",
+      "distance_units": 1127.7,
+      "distance_landblocks": 5.9,
+      "placement_count": 13,
+      "vote_breakdown": {
+        "Viamontian": 2
+      }
+    },
+    "16780286": {
+      "architecture": "Viamontian",
+      "confidence": "medium",
+      "nearest_town": "Freehold",
+      "distance_units": 1115.5,
+      "distance_landblocks": 5.8,
+      "placement_count": 29,
+      "vote_breakdown": {
+        "Viamontian": 2
+      }
+    },
+    "16779732": {
+      "architecture": "Viamontian",
+      "confidence": "high",
+      "nearest_town": "Freehold",
+      "distance_units": 1081.7,
+      "distance_landblocks": 5.6,
+      "placement_count": 20,
+      "vote_breakdown": {
+        "Viamontian": 3
+      }
+    },
+    "16780647": {
+      "architecture": "Viamontian",
+      "confidence": "medium",
+      "nearest_town": "Freehold",
+      "distance_units": 1061.1,
+      "distance_landblocks": 5.5,
+      "placement_count": 15,
+      "vote_breakdown": {
+        "Viamontian": 2
+      }
+    },
+    "16780564": {
+      "architecture": "Viamontian",
+      "confidence": "medium",
+      "nearest_town": "Freehold",
+      "distance_units": 1417.7,
+      "distance_landblocks": 7.4,
+      "placement_count": 10,
+      "vote_breakdown": {
+        "Viamontian": 1
+      }
+    },
+    "16781437": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 26,
+      "vote_breakdown": {}
+    },
+    "16779265": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 8,
+      "vote_breakdown": {}
+    },
+    "16782192": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 14,
+      "vote_breakdown": {}
+    },
+    "16784304": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 10,
+      "vote_breakdown": {}
+    },
+    "16784305": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 10,
+      "vote_breakdown": {}
+    },
+    "16784307": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 10,
+      "vote_breakdown": {}
+    },
+    "16789809": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16782196": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 7,
+      "vote_breakdown": {}
+    },
+    "16795198": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16779267": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 12,
+      "vote_breakdown": {}
+    },
+    "16779266": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 9,
+      "vote_breakdown": {}
+    },
+    "16795085": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16795202": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16788969": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 6,
+      "vote_breakdown": {}
+    },
+    "16788492": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 12,
+      "vote_breakdown": {}
+    },
+    "16781112": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 5,
+      "vote_breakdown": {}
+    },
+    "16782531": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 12,
+      "vote_breakdown": {}
+    },
+    "16785727": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 3,
+      "vote_breakdown": {}
+    },
+    "16787977": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 6,
+      "vote_breakdown": {}
+    },
+    "16783236": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 8,
+      "vote_breakdown": {}
+    },
+    "16783237": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 6,
+      "vote_breakdown": {}
+    },
+    "16783235": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 8,
+      "vote_breakdown": {}
+    },
+    "16783234": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 8,
+      "vote_breakdown": {}
+    },
+    "16783233": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 8,
+      "vote_breakdown": {}
+    },
+    "16787558": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 12,
+      "vote_breakdown": {}
+    },
+    "16779819": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 19,
+      "vote_breakdown": {}
+    },
+    "16780803": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 6,
+      "vote_breakdown": {}
+    },
+    "16781589": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16788791": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16788792": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16788793": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16783722": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 4,
+      "vote_breakdown": {}
+    },
+    "16783729": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 4,
+      "vote_breakdown": {}
+    },
+    "16783723": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 4,
+      "vote_breakdown": {}
+    },
+    "16783724": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16783719": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 4,
+      "vote_breakdown": {}
+    },
+    "16783720": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 4,
+      "vote_breakdown": {}
+    },
+    "16783721": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16783726": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 4,
+      "vote_breakdown": {}
+    },
+    "16783727": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 4,
+      "vote_breakdown": {}
+    },
+    "16783728": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16788052": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16788702": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 25,
+      "vote_breakdown": {}
+    },
+    "16784429": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 6,
+      "vote_breakdown": {}
+    },
+    "16790849": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16790852": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16790855": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16790858": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16783821": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16788064": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16793596": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 4,
+      "vote_breakdown": {}
+    },
+    "16793619": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 12,
+      "vote_breakdown": {}
+    },
+    "16793608": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 28,
+      "vote_breakdown": {}
+    },
+    "16793616": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 11,
+      "vote_breakdown": {}
+    },
+    "16793605": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 8,
+      "vote_breakdown": {}
+    },
+    "16793611": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 4,
+      "vote_breakdown": {}
+    },
+    "16790509": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16784361": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16784426": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16790572": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16790556": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16790580": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16790588": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16790584": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16790596": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16790592": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16790576": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16790568": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16790552": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16790560": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16790564": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16780813": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16788061": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16788047": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 5,
+      "vote_breakdown": {}
+    },
+    "16788059": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16788063": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 3,
+      "vote_breakdown": {}
+    },
+    "16788058": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16780901": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 11,
+      "vote_breakdown": {}
+    },
+    "16780900": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 9,
+      "vote_breakdown": {}
+    },
+    "16789949": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 8,
+      "vote_breakdown": {}
+    },
+    "16784815": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16788231": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 4,
+      "vote_breakdown": {}
+    },
+    "16788233": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16788235": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 3,
+      "vote_breakdown": {}
+    },
+    "16788269": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 3,
+      "vote_breakdown": {}
+    },
+    "16784740": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16784741": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16779268": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16792848": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 6,
+      "vote_breakdown": {}
+    },
+    "16788773": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16788772": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16788768": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16788770": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16788771": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16788769": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16780658": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16780655": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16780656": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16780657": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16792851": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 3,
+      "vote_breakdown": {}
+    },
+    "16780898": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 21,
+      "vote_breakdown": {}
+    },
+    "16780919": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 9,
+      "vote_breakdown": {}
+    },
+    "16789121": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16787980": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 8,
+      "vote_breakdown": {}
+    },
+    "16787981": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 4,
+      "vote_breakdown": {}
+    },
+    "16780897": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 8,
+      "vote_breakdown": {}
+    },
+    "16784399": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 3,
+      "vote_breakdown": {}
+    },
+    "16796566": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 2,
+      "vote_breakdown": {}
+    },
+    "16790779": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16790778": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16790777": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16790776": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16790780": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16790775": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 3,
+      "vote_breakdown": {}
+    },
+    "16790781": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16785328": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16785329": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16785326": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16785330": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16785331": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16785334": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16785332": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16785335": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16785363": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16794004": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16794007": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16794010": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    },
+    "16794013": {
+      "architecture": "Neutral",
+      "confidence": "default",
+      "nearest_town": null,
+      "distance_units": null,
+      "distance_landblocks": null,
+      "placement_count": 1,
+      "vote_breakdown": {}
+    }
+  }
+}

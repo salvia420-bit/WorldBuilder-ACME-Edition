@@ -13,7 +13,7 @@ Flow:
      b. Run autoregressive generation with temperature/nucleus sampling
      c. Apply quality validation (collision, cultural, density checks)
      d. Handle housing tokens → HousingLinker for slumlord GUID chains
-  3. Write landblock_instance + landblock_instance_link SQL
+  3. Write landblock_instance + landblock_instance_link + encounter + house_portal SQL
 
 Sampling controls (anti-overfitting, pro-variance):
   - Temperature: 0.8 (controlled randomness)
@@ -75,6 +75,43 @@ HOUSING_TOKEN_MAP = {
     HOUSING_COTTAGE_TOKEN: 'Cottage',
     HOUSING_VILLA_TOKEN: 'Villa',
     HOUSING_MANSION_TOKEN: 'Mansion',
+}
+
+# ─── Encounter Generation ────────────────────────────────────────────────────
+
+# Encounter generator wcids by difficulty tier
+# These are generator weenies that spawn waves of creatures
+# Mapped from retail AC encounter table patterns
+ENCOUNTER_GENERATORS_BY_TIER = {
+    0: [],  # Ocean/unused
+    1: [  # Starter (T1) — rats, drudge skulkers, mite scamps
+        1154,  # Drudge Camp Generator
+        4213,  # Low Banderling Generator
+        4215,  # Low Drudge Generator
+        7924,  # Low Mosswart Generator
+    ],
+    2: [  # Low (T2) — tuskers, armoredillos
+        4148,  # Armoredillo Generator
+        4149,  # Banderling Generator
+        4216,  # Low Undead Generator
+        7923,  # Low Lugian Generator
+    ],
+    3: [  # Medium (T3) — virindi, shadows
+        4153,  # Golem Generator
+        4221,  # Medium Shadow Generator
+        4218,  # Medium Tumerok Generator
+        4156,  # Virindi Generator
+    ],
+    4: [  # Hard (T4) — olthoi, tusker guards
+        4152,  # Olthoi Generator
+        4222,  # Hard Shadow Generator
+        4157,  # Hard Virindi Generator
+    ],
+    5: [  # Elite/Legendary (T5) — raid bosses, high-level spawns
+        4152,  # Olthoi Generator (high)
+        4157,  # Virindi Generator (high)
+        4222,  # Shadow Generator (high)
+    ],
 }
 
 # ─── Inference Engine ────────────────────────────────────────────────────────
@@ -342,9 +379,13 @@ def generate_world(args):
     
     all_instance_stmts = []
     all_link_stmts = []
+    all_encounter_stmts = []  # encounter table rows
+    all_house_portal_stmts = []  # house_portal table rows
     lb_count = 0
     total_objects = 0
     housing_count = 0
+    encounter_count = 0
+    enc_id_counter = 1  # Auto-incrementing encounter IDs
     now = time.strftime('%Y-%m-%d %H:%M:%S')
     
     t0 = time.time()
@@ -428,19 +469,45 @@ def generate_world(args):
                     ))
                 
                 total_objects += 1
+            
+            # ── Generate encounters for this LB (creature generators) ──
+            if difficulty_grid is not None and 0 <= lb_x < 255 and 0 <= lb_y < 255:
+                tier = max(0, min(5, int(difficulty_grid[lb_y, lb_x])))
+                generators = ENCOUNTER_GENERATORS_BY_TIER.get(tier, [])
+                
+                if generators and tier > 0:
+                    # Place 1-4 encounter generators per landblock
+                    num_encounters = random.randint(1, min(4, len(generators)))
+                    lb_id_enc = (lb_x << 8) | lb_y
+                    
+                    for _ in range(num_encounters):
+                        gen_wcid = random.choice(generators)
+                        cell_x = random.randint(0, 7)
+                        cell_y = random.randint(0, 7)
+                        
+                        all_encounter_stmts.append({
+                            'id': enc_id_counter,
+                            'landblock': lb_id_enc,
+                            'wcid': gen_wcid,
+                            'cell_x': cell_x,
+                            'cell_y': cell_y,
+                            'last_modified': now,
+                        })
+                        enc_id_counter += 1
+                        encounter_count += 1
         
         # Progress
         if (lb_x - args.margin + 1) % 25 == 0:
             elapsed = time.time() - t0
             pct = (lb_x - args.margin + 1) / (255 - 2 * args.margin) * 100
             print(f"    {pct:.0f}% ({lb_count} LBs, {total_objects:,} objects, "
-                  f"{housing_count} houses, {elapsed:.0f}s)")
+                  f"{housing_count} houses, {encounter_count} encounters, {elapsed:.0f}s)")
     
     elapsed = time.time() - t0
     
     # ── Write SQL ──
-    print(f"\n[5/6] Writing SQL ({len(all_instance_stmts):,} instances, "
-          f"{len(all_link_stmts):,} links)...")
+    print(f"\n[5/7] Writing SQL ({len(all_instance_stmts):,} instances, "
+          f"{len(all_link_stmts):,} links, {encounter_count} encounters)...")
     
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
@@ -451,7 +518,7 @@ def generate_world(args):
         f.write(f"-- Temperature: {args.temperature}, Top-k: {args.top_k}, "
                 f"Nucleus-p: {args.nucleus_p}\n")
         f.write(f"-- Landblocks: {lb_count}, Objects: {total_objects:,}, "
-                f"Houses: {housing_count}\n")
+                f"Houses: {housing_count}, Encounters: {encounter_count}\n")
         f.write(f"-- Generation time: {elapsed:.0f}s\n\n")
         
         # Write instances in batches
@@ -477,17 +544,64 @@ def generate_world(args):
             )
             f.write(",\n".join(s.to_link_sql() for s in batch))
             f.write(";\n\n")
+        
+        # Write encounters
+        if all_encounter_stmts:
+            f.write(f"\n-- ═══ ENCOUNTER TABLE ({len(all_encounter_stmts)} rows) ═══\n\n")
+            for i in range(0, len(all_encounter_stmts), batch_size):
+                batch = all_encounter_stmts[i:i+batch_size]
+                f.write(
+                    "INSERT INTO `encounter` "
+                    "(`id`, `landblock`, `weenie_Class_Id`, "
+                    "`cell_X`, `cell_Y`, `last_Modified`) VALUES\n"
+                )
+                rows = []
+                for e in batch:
+                    rows.append(
+                        f"({e['id']},{e['landblock']},{e['wcid']},"
+                        f"{e['cell_x']},{e['cell_y']},'{e['last_modified']}')"
+                    )
+                f.write(",\n".join(rows))
+                f.write(";\n\n")
+        
+        # Write house portals
+        if all_house_portal_stmts:
+            f.write(f"\n-- ═══ HOUSE PORTAL TABLE ({len(all_house_portal_stmts)} rows) ═══\n\n")
+            for i in range(0, len(all_house_portal_stmts), batch_size):
+                batch = all_house_portal_stmts[i:i+batch_size]
+                f.write(
+                    "INSERT INTO `house_portal` "
+                    "(`id`, `house_Id`, `obj_Cell_Id`, "
+                    "`origin_X`, `origin_Y`, `origin_Z`, "
+                    "`angles_W`, `angles_X`, `angles_Y`, `angles_Z`, "
+                    "`last_Modified`) VALUES\n"
+                )
+                rows = []
+                for hp in batch:
+                    rows.append(
+                        f"({hp['id']},{hp['house_id']},{hp['cell_id']},"
+                        f"{hp['x']},{hp['y']},{hp['z']},"
+                        f"{hp['w']},0,0,{hp['qz']},"
+                        f"'{hp['last_modified']}')"
+                    )
+                f.write(",\n".join(rows))
+                f.write(";\n\n")
     
     size_mb = os.path.getsize(OUTPUT_SQL) / 1024 / 1024
     
     # ── Validate housing ──
-    print(f"\n[6/6] Validating housing integrity...")
+    print(f"\n[6/7] Validating housing integrity...")
     housing_report = housing_linker.validate_placements()
     print(f"  Houses placed: {housing_report['total_houses']}")
     print(f"  By type: {housing_report['by_type']}")
     print(f"  Valid: {'✓' if housing_report['is_valid'] else '✗'}")
     for issue in housing_report['issues'][:10]:
         print(f"  ⚠️  {issue}")
+    
+    # ── Encounter validation ──
+    print(f"\n[7/7] Encounter summary...")
+    print(f"  Total encounters generated: {encounter_count}")
+    print(f"  Avg encounters per LB: {encounter_count / max(lb_count, 1):.1f}")
     
     # ── Summary ──
     print()
@@ -497,6 +611,7 @@ def generate_world(args):
     print(f"  Landblocks populated: {lb_count:,}")
     print(f"  Total objects placed: {total_objects:,}")
     print(f"  Housing units:        {housing_count}")
+    print(f"  Encounters:           {encounter_count}")
     print(f"  SQL file:             {OUTPUT_SQL} ({size_mb:.1f} MB)")
     print(f"  Generation time:      {elapsed:.0f}s")
     print()

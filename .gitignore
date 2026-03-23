@@ -544,6 +544,24 @@ pipeline_data/data/*
 !pipeline_data/data/retail_biomes.npy
 !pipeline_data/data/retail_biome_info.json
 
+# ── Un-ignore enrichment data (needed by ML population pipeline) ──
+!pipeline_data/enrichment/
+pipeline_data/enrichment/*
+!pipeline_data/enrichment/canonical_enrichment.json
+!pipeline_data/enrichment/building_culture_map.json
+!pipeline_data/enrichment/difficulty_gradient.json
+!pipeline_data/enrichment/biome_map.json
+
+# ── Un-ignore scene placer model + training artifacts (Git LFS) ──
+!pipeline_data/models/scene_placer_best.safetensors
+!pipeline_data/models/scene_placer_final.safetensors
+!pipeline_data/models/placement_evaluator.safetensors
+
+# ── Un-ignore placement vocab + training data (Git LFS for .npz) ──
+!pipeline_data/reference/placement_vocab.json
+!pipeline_data/reference/placement_tensors.npz
+!pipeline_data/reference/housing_templates.json
+
 # Large SQL scripts (generated pipeline output — NOT in pipeline_data/)
 building_remap*.sql
 holtburg_probe.sql

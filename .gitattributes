@@ -20,3 +20,9 @@ pipeline_data/heightmaps/retail_heightmaps.jsonl filter=lfs diff=lfs merge=lfs -
 
 # ── Retail dungeon topology reference ──
 pipeline_data/reference/retail_dungeon_topology.json filter=lfs diff=lfs merge=lfs -text
+
+# ── Scene Placement ML (population pipeline) ──
+pipeline_data/models/scene_placer_best.safetensors filter=lfs diff=lfs merge=lfs -text
+pipeline_data/models/scene_placer_final.safetensors filter=lfs diff=lfs merge=lfs -text
+pipeline_data/models/placement_evaluator.safetensors filter=lfs diff=lfs merge=lfs -text
+pipeline_data/reference/placement_tensors.npz filter=lfs diff=lfs merge=lfs -text
