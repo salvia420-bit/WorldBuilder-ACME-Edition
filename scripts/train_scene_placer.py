@@ -81,9 +81,9 @@ DEFAULT_CONFIG = {
     "n_layers": 8,
     "d_ff": 2048,
     "max_seq_len": 128,
-    "dropout_attn": 0.15,
-    "dropout_ff": 0.1,
-    "label_smoothing": 0.1,
+    "dropout_attn": 0.2,
+    "dropout_ff": 0.15,
+    "label_smoothing": 0.2,
     
     # Object token layout (10 floats per object)
     "obj_dim": 10,
@@ -92,32 +92,33 @@ DEFAULT_CONFIG = {
     # [8] = parent_wcid_idx, [9] = sequence_position
     
     # Training
-    "epochs": 500,
+    "epochs": 10000,
     "batch_size": 64,
-    "lr_max": 3e-4,
+    "lr_max": 1e-4,
     "lr_min": 1e-6,
-    "warmup_epochs": 50,
-    "weight_decay": 0.01,
+    "warmup_epochs": 200,
+    "weight_decay": 0.02,
     "ema_decay": 0.999,
     
     # Loss weights
     "lambda_pos": 10.0,
     "lambda_rot": 1.0,
     "lambda_link": 5.0,
+    "lambda_entropy": 0.1,  # Entropy regularization to prevent mode collapse
     
     # Data augmentation
-    "context_jitter_std": 0.03,
-    "coord_noise_std": 2.0 / 192.0,  # 2.0 world units, normalized
+    "context_jitter_std": 0.05,
+    "coord_noise_std": 3.0 / 192.0,  # 3.0 world units, normalized
     "rotation_augment": True,
     
     # Early stopping
-    "patience": 20,
-    "overfit_gap_threshold": 1.0,
-    "entropy_collapse_threshold": 3.0,
+    "patience": 500,
+    "overfit_gap_threshold": 10.0,
+    "entropy_collapse_threshold": 2.0,
     
     # Checkpointing
     "checkpoint_every": 50,
-    "resume_checkpoint_every": 50,
+    "resume_checkpoint_every": 25,
     
     # Validation
     "val_split": 0.15,
@@ -482,11 +483,22 @@ def compute_loss(model, batch, config, device):
     )
     L_link = (link_err * active).sum() / active.sum()
     
+    # Entropy regularization: penalize peaked distributions to prevent mode collapse
+    # Higher entropy = more diverse predictions = better generalization
+    wcid_probs = F.softmax(wcid_logits, dim=-1)  # (B, T, V)
+    token_entropy = -(wcid_probs * torch.log(wcid_probs + 1e-10)).sum(dim=-1)  # (B, T)
+    avg_entropy = (token_entropy * active).sum() / active.sum()
+    # We MAXIMIZE entropy (minimize negative entropy), scaled by lambda
+    L_entropy = -avg_entropy  # Negative because we want to maximize entropy
+    
+    lambda_ent = config.get('lambda_entropy', 0.1)
+    
     # Composite loss
     L_total = (L_wcid 
                + config['lambda_pos'] * L_pos 
                + config['lambda_rot'] * L_rot 
-               + config['lambda_link'] * L_link)
+               + config['lambda_link'] * L_link
+               + lambda_ent * L_entropy)
     
     return L_total, {
         'total': L_total.item(),
@@ -494,6 +506,7 @@ def compute_loss(model, batch, config, device):
         'pos': L_pos.item(),
         'rot': L_rot.item(),
         'link': L_link.item(),
+        'entropy': avg_entropy.item(),
     }
 
 
