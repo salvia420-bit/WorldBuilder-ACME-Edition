@@ -23,6 +23,13 @@ Important follow-up for the next session:
    - the first whole-world progress report was
      `10% (0 LBs, 0 objects, 0 houses, 0 encounters, 6674s)`
    - assume generation/inference needs debugging before spending many more hours on full-world runs
+7. March 24 follow-up:
+   - teacher forcing was patched to use a real shifted autoregressive target
+   - resumed training improved numerically into roughly `val=2.7`, `ent=3.4`
+   - small-region generation still produced `0` real placements
+   - old `scene_placer_best.pt` was PAD-only collapse at inference
+   - exported EMA from `resume.pt` emitted some `STOP` plus lots of `PAD`, but still zero real objects
+   - next session should focus on first-token/start-token inference debugging plus periodic small-region probe tests during resumed training
 
 Why this matters:
 

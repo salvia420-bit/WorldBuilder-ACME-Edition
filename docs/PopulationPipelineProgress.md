@@ -168,6 +168,32 @@ Interpretation:
 - early mode collapse appears to partially recover over time
 - this is promising for experimentation, but not proof of retail-dev-quality output
 
+### Important March 24 follow-up: teacher-forcing fix and resumed training
+
+A likely train/infer mismatch was identified in `train_scene_placer.py`:
+
+- the dataset was effectively feeding the current token as both input and target
+- that allowed validation loss to improve without requiring real next-token autoregressive behavior
+- inference, however, starts from an empty prompt / zero token, so this mismatch could make training look healthier than generation
+
+A patch was applied so teacher forcing now shifts the sequence right correctly.
+
+Observed result after resuming training from `resume.pt` with the fix:
+
+- resumed training ran from about epoch `600` into the `680s`
+- training metrics improved materially during that run
+- representative later validation points included:
+  - epoch `649`: `val=2.9462`, `ent=3.0`
+  - epoch `659`: `val=2.8176`, `ent=3.3`
+  - epoch `679`: `val=2.7083`, `ent=3.4`
+
+Important caveat:
+
+- the resumed run stopped unexpectedly before reaching a normal final-save path
+- `resume.pt` was saved at epoch `674`
+- `training_history.json` recorded progress through about epoch `682`
+- therefore the latest training history is newer than the latest saved resume checkpoint
+
 
 ## Checkpoint / Save Behavior
 
@@ -249,6 +275,49 @@ Most likely causes to investigate next:
 4. ocean-mask / difficulty / culture / terrain conditioning is causing systematic rejection
 5. current trained model is simply not inference-viable for this whole-world pass
 
+### Small-region generation probe after instrumentation
+
+A small-region probe was run on `lb_x=30..34`, `lb_y=120..124` after adding generation diagnostics.
+
+#### Probe 1: old `scene_placer_best.pt`
+
+Using the older best checkpoint already on disk:
+
+- raw placements generated: `0`
+- accepted after validation: `0`
+- `PAD` samples: `3000`
+- `STOP` samples: `0`
+
+Interpretation:
+
+- the old `scene_placer_best.pt` is a pure PAD-collapse inference checkpoint
+- validation is not the reason output disappears for that checkpoint
+- the model emits no real object tokens at all
+
+#### Probe 2: exported EMA from post-fix `resume.pt`
+
+The EMA weights from `resume.pt` were exported into a full inference-loadable checkpoint and tested on the same `5x5` region.
+
+Observed result:
+
+- raw placements generated: `0`
+- accepted after validation: `0`
+- `PAD` samples: `2846`
+- `STOP` samples: `154`
+
+Interpretation:
+
+- the post-fix checkpoint is not identical to the old PAD-only collapse
+- it now emits a mix of `PAD` and `STOP`
+- however, it still emits zero real object tokens
+- inference is therefore still non-viable in the current checkpoint state
+
+This is a more precise diagnosis than the earlier whole-world `10% / 0 objects` finding:
+
+- validation is not removing real placements
+- the current checkpoint fails earlier, at token generation
+- the model is still collapsing at first-token inference, even after the teacher-forcing fix
+
 
 ## Overnight Run / Tarball Plan
 
@@ -326,23 +395,24 @@ This aligns with the strategy in `docs/PopulationPipelineStrategy.md`:
    - actual files are `.pt`
 
 5. No generation-quality verdict yet
-   - training metrics improved
-   - generated world quality has not yet been evaluated in practice
+   - training metrics improved after the teacher-forcing fix
+   - small-region inference still emits zero real placements
+   - current failure mode is mostly `PAD`, with newer checkpoints showing some `STOP`
 
 
 ## Recommended Next Steps
 
 1. Recover the local tarball from the repo root after the VM run or stop the VM and preserve current artifacts.
-2. Treat the `10% / 0 objects / 0 LBs` generation result as a primary debugging signal.
-3. Patch `generate_populated_world.py` to log:
-   - raw placements produced per landblock
-   - accepted placements after validation
-   - skip counts by reason where possible
-4. Add a small-region generation mode before attempting another full-world run.
-5. Clean up checkpoint/logging consistency in `train_scene_placer.py`.
-6. If a meaningful SQL output is ever produced, then run:
+2. Treat the `10% / 0 objects / 0 LBs` full-world result and the `5x5` probe `PAD/STOP` collapse as the primary debugging signals.
+3. Do not spend more time on full-world generation until the small-region probe produces nonzero raw placements.
+4. Treat first-token / start-token inference behavior as the immediate debugging target.
+5. Resume training again from `resume.pt` on the next VM session.
+6. Every `25-50` epochs, export the current EMA weights to an inference checkpoint and rerun the same `5x5` probe region.
+7. If probe output remains `PAD/STOP` only, inspect and redesign start-token handling at inference and/or training.
+8. Clean up checkpoint/logging consistency in `train_scene_placer.py`.
+9. If a meaningful SQL output is ever produced, then run:
    - `scripts/PopulationPipeline/OutdoorML/score_placement_quality.py`
-7. Do not make strong quality claims about OutdoorML until inference produces nontrivial accepted output.
+10. Do not make strong quality claims about OutdoorML until inference produces nontrivial accepted output.
 
 
 ## Fast Handoff Summary
@@ -355,7 +425,10 @@ If a new agent picks this up, the key facts are:
 - early overfit stopping was patched and is no longer the immediate blocker
 - current best signal is that validation improved to about `2.5x` range while
   entropy recovered to about `2.8`
+- after the teacher-forcing fix, resumed training improved into roughly `val=2.7`, `ent=3.4`
 - full-world generation is slow enough that overnight execution is expensive
 - first whole-world generation signal was `10%` progress after hours with zero accepted output
+- old `scene_placer_best.pt` is PAD-only collapse at inference
+- exported EMA from the newer resumed run emits some `STOP` plus lots of `PAD`, but still zero real objects
 - no trustworthy claim about final world quality should be made until inference
   produces nontrivial accepted placements and scoring can run
