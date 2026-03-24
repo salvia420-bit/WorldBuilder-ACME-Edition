@@ -51,7 +51,7 @@ from train_scene_placer import ScenePlacerTransformer, DEFAULT_CONFIG
 from housing_linker import HousingLinker, GuidAllocator, write_housing_sql, SQLStatement
 from extract_placement_tensors import (
     build_context_vector, load_height_grid, load_difficulty_grid,
-    build_cultural_zones, STOP_TOKEN, PAD_TOKEN,
+    build_cultural_zones, load_wcid_types, STOP_TOKEN, PAD_TOKEN,
     HOUSING_COTTAGE_TOKEN, HOUSING_VILLA_TOKEN, HOUSING_MANSION_TOKEN,
 )
 
@@ -123,7 +123,8 @@ class PlacementGenerator:
     
     def __init__(self, model, vocab, device,
                  temperature=0.8, top_k=50, nucleus_p=0.92,
-                 frequency_penalty=0.3, min_objects=3, max_objects=120):
+                 frequency_penalty=0.3, min_objects=3, max_objects=120,
+                 wcid_types=None):
         self.model = model
         self.vocab = vocab
         self.device = device
@@ -133,12 +134,13 @@ class PlacementGenerator:
         self.frequency_penalty = frequency_penalty
         self.min_objects = min_objects
         self.max_objects = max_objects
+        self.wcid_types = wcid_types or {}
         
         self.idx_to_wcid = {int(k): v for k, v in vocab['idx_to_wcid'].items()}
         self.vocab_size = vocab['vocab_size']
     
     @torch.no_grad()
-    def generate(self, context: np.ndarray) -> list:
+    def generate(self, context: np.ndarray) -> tuple[list, dict]:
         """
         Generate object placements for a single landblock.
         
@@ -151,13 +153,26 @@ class PlacementGenerator:
         """
         ctx = torch.from_numpy(context).float().unsqueeze(0).to(self.device)
         
-        # Initialize sequence with a zero start token
+        # Initialize sequence with an explicit start token. Training now uses a
+        # shifted-right sequence, so a zero token is the correct first prompt.
         seq = torch.zeros(1, 1, 10, device=self.device)
         
         placements = []
         wcid_freq = Counter()
+        debug = {
+            'steps': 0,
+            'sampled_stop': 0,
+            'sampled_pad': 0,
+            'sampled_housing': 0,
+            'sampled_regular': 0,
+            'forced_continue_after_stop': 0,
+            'special_leaks': 0,
+            'terminated_by_stop': False,
+            'max_steps_reached': False,
+        }
         
         for step in range(self.max_objects):
+            debug['steps'] += 1
             # Forward pass
             wcid_logits, pos_pred, rot_pred, link_pred = self.model(ctx, seq)
             
@@ -194,14 +209,23 @@ class PlacementGenerator:
             
             # Check for STOP
             if wcid_idx == STOP_TOKEN:
+                debug['sampled_stop'] += 1
                 if len(placements) >= self.min_objects:
+                    debug['terminated_by_stop'] = True
                     break
                 else:
+                    debug['forced_continue_after_stop'] += 1
                     continue  # Force more objects
             
             # Skip PAD
             if wcid_idx == PAD_TOKEN:
+                debug['sampled_pad'] += 1
                 continue
+
+            if wcid_idx in HOUSING_TOKEN_MAP:
+                debug['sampled_housing'] += 1
+            else:
+                debug['sampled_regular'] += 1
             
             # Get position and rotation predictions
             pos = pos_pred[0, -1, :].cpu().numpy()   # (2,) normalized
@@ -230,27 +254,43 @@ class PlacementGenerator:
                 'is_housing': wcid_idx in HOUSING_TOKEN_MAP,
                 'housing_type': HOUSING_TOKEN_MAP.get(wcid_idx),
             }
+
+            if isinstance(placement['wcid'], int) and placement['wcid'] < 0:
+                debug['special_leaks'] += 1
+                continue
+
             placements.append(placement)
             wcid_freq[wcid_idx] += 1
             
             # Build next input token
             next_token = torch.zeros(1, 1, 10, device=self.device)
+            wcid = placement['wcid']
             next_token[0, 0, 0] = wcid_idx
             next_token[0, 0, 1] = pos[0]
             next_token[0, 0, 2] = pos[1]
             next_token[0, 0, 4] = rot[0]
             next_token[0, 0, 5] = rot[1]
             next_token[0, 0, 7] = float(link > 0.5)
+            if isinstance(wcid, int):
+                next_token[0, 0, 6] = self.wcid_types.get(wcid, 0) / 55.0
+            next_token[0, 0, 9] = min((len(placements) - 1) / MAX_OBJECTS_PER_LB, 1.0)
             
             seq = torch.cat([seq, next_token], dim=1)
+        else:
+            debug['max_steps_reached'] = True
         
-        return placements
+        return placements, debug
     
     def validate_placements(self, placements: list, lb_x: int, lb_y: int,
-                            culture: str = "Neutral") -> list:
+                            culture: str = "Neutral") -> tuple[list, dict]:
         """Apply inference-time quality checks."""
         validated = []
         positions = []
+        stats = {
+            'input_count': len(placements),
+            'accepted_count': 0,
+            'rerolled_collisions': 0,
+        }
         
         for p in placements:
             # Collision check
@@ -264,13 +304,33 @@ class PlacementGenerator:
             
             if too_close:
                 # Re-roll position
+                stats['rerolled_collisions'] += 1
                 p['local_x'] = random.uniform(4, 188)
                 p['local_y'] = random.uniform(4, 188)
             
             positions.append((p['local_x'], p['local_y']))
             validated.append(p)
         
-        return validated
+        stats['accepted_count'] = len(validated)
+        
+        return validated, stats
+
+
+def iter_landblocks(args):
+    """Yield landblocks for generation, honoring optional debug region bounds."""
+    x_start = args.lb_x_min if args.lb_x_min is not None else args.margin
+    x_end = args.lb_x_max if args.lb_x_max is not None else 254 - args.margin
+    y_start = args.lb_y_min if args.lb_y_min is not None else args.margin
+    y_end = args.lb_y_max if args.lb_y_max is not None else 254 - args.margin
+    
+    x_start = max(0, x_start)
+    y_start = max(0, y_start)
+    x_end = min(254, x_end)
+    y_end = min(254, y_end)
+    
+    for lb_x in range(x_start, x_end + 1):
+        for lb_y in range(y_start, y_end + 1):
+            yield lb_x, lb_y
 
 
 # ─── Height Snapping ─────────────────────────────────────────────────────────
@@ -361,6 +421,7 @@ def generate_world(args):
     
     # Instance counts (empty for generated world)
     instance_counts = {}
+    wcid_types = load_wcid_types()
     
     # ── Initialize generator ──
     generator = PlacementGenerator(
@@ -369,6 +430,7 @@ def generate_world(args):
         top_k=args.top_k,
         nucleus_p=args.nucleus_p,
         frequency_penalty=args.frequency_penalty,
+        wcid_types=wcid_types,
     )
     
     housing_linker = HousingLinker(GuidAllocator(start=0x70000000))
@@ -376,6 +438,11 @@ def generate_world(args):
     
     # ── Generate ──
     print(f"\n[4/6] Generating placements (margin={args.margin})...")
+    if any(v is not None for v in (args.lb_x_min, args.lb_x_max, args.lb_y_min, args.lb_y_max)):
+        print(f"  Region override: x={args.lb_x_min if args.lb_x_min is not None else args.margin}"
+              f"..{args.lb_x_max if args.lb_x_max is not None else 254 - args.margin}, "
+              f"y={args.lb_y_min if args.lb_y_min is not None else args.margin}"
+              f"..{args.lb_y_max if args.lb_y_max is not None else 254 - args.margin}")
     
     all_instance_stmts = []
     all_link_stmts = []
@@ -387,121 +454,138 @@ def generate_world(args):
     encounter_count = 0
     enc_id_counter = 1  # Auto-incrementing encounter IDs
     now = time.strftime('%Y-%m-%d %H:%M:%S')
+    debug_totals = Counter()
+    debug_examples = []
     
     t0 = time.time()
+    region_blocks = list(iter_landblocks(args))
+    total_region_blocks = len(region_blocks)
     
-    for lb_x in range(args.margin, 255 - args.margin):
-        for lb_y in range(args.margin, 255 - args.margin):
-            # Skip ocean
-            if ocean_mask is not None and ocean_mask[lb_y, lb_x]:
-                continue
+    for i, (lb_x, lb_y) in enumerate(region_blocks, start=1):
+        # Skip ocean
+        if ocean_mask is not None and ocean_mask[lb_y, lb_x]:
+            debug_totals['ocean_skips'] += 1
+            continue
+        
+        # Build context
+        ctx = build_context_vector(
+            lb_x, lb_y, heights, difficulty_grid,
+            culture_grid, instance_counts
+        )
+        
+        # Generate placements
+        placements, gen_stats = generator.generate(ctx)
+        debug_totals['landblocks_visited'] += 1
+        debug_totals['raw_generated'] += len(placements)
+        debug_totals.update(gen_stats)
+        
+        # Validate
+        culture_code = culture_grid[lb_x, lb_y] if 0 <= lb_x < 255 and 0 <= lb_y < 255 else 0
+        culture_name = {0:"Neutral", 1:"Aluvian", 2:"Sho", 3:"Gharu'ndim",
+                       4:"Viamontian", 5:"Empyrean"}.get(culture_code, "Neutral")
+        
+        placements, validation_stats = generator.validate_placements(placements, lb_x, lb_y, culture_name)
+        debug_totals.update(validation_stats)
+        
+        if not placements:
+            debug_totals['empty_landblocks_after_validation'] += 1
+            if args.debug_landblocks > 0 and len(debug_examples) < args.debug_landblocks:
+                debug_examples.append(
+                    f"LB ({lb_x},{lb_y}) empty: raw={gen_stats.get('sampled_regular', 0) + gen_stats.get('sampled_housing', 0)}, "
+                    f"stop={gen_stats.get('sampled_stop', 0)}, pad={gen_stats.get('sampled_pad', 0)}, "
+                    f"special_leaks={gen_stats.get('special_leaks', 0)}, steps={gen_stats.get('steps', 0)}"
+                )
+            continue
+        
+        lb_count += 1
+        cell_id = (lb_x << 24) | (lb_y << 16) | 0x0001
+        
+        for p in placements:
+            # Height snap
+            h = heights.get((lb_x, lb_y))
+            if h is not None:
+                p['local_z'] = snap_to_terrain(p['local_x'], p['local_y'], h)
             
-            # Build context
-            ctx = build_context_vector(
-                lb_x, lb_y, heights, difficulty_grid,
-                culture_grid, instance_counts
-            )
+            world_x = lb_x * LB_SIZE + p['local_x']
+            world_y = lb_y * LB_SIZE + p['local_y']
             
-            # Generate placements
-            placements = generator.generate(ctx)
-            
-            # Validate
-            culture_code = culture_grid[lb_x, lb_y] if 0 <= lb_x < 255 and 0 <= lb_y < 255 else 0
-            culture_name = {0:"Neutral", 1:"Aluvian", 2:"Sho", 3:"Gharu'ndim",
-                           4:"Viamontian", 5:"Empyrean"}.get(culture_code, "Neutral")
-            
-            placements = generator.validate_placements(placements, lb_x, lb_y, culture_name)
-            
-            if not placements:
-                continue
-            
-            lb_count += 1
-            cell_id = (lb_x << 24) | (lb_y << 16) | 0x0001
-            
-            for p in placements:
-                # Height snap
-                h = heights.get((lb_x, lb_y))
-                if h is not None:
-                    p['local_z'] = snap_to_terrain(p['local_x'], p['local_y'], h)
+            if p.get('is_housing') and p.get('housing_type'):
+                # Housing → use the linker
+                housing_stmts = housing_linker.place_housing(
+                    house_type=p['housing_type'],
+                    culture=culture_name,
+                    world_x=world_x,
+                    world_y=world_y,
+                    world_z=p['local_z'],
+                    lb_x=lb_x, lb_y=lb_y,
+                )
+                for stmt in housing_stmts:
+                    if stmt.table == 'landblock_instance':
+                        all_instance_stmts.append(stmt)
+                    else:
+                        all_link_stmts.append(stmt)
+                housing_count += 1
+            else:
+                # Regular instance
+                guid = guid_alloc.next()
+                wcid = p.get('wcid', 0)
+                if isinstance(wcid, int) and wcid < 0:
+                    debug_totals['special_leaks_post_validation'] += 1
+                    continue
                 
-                world_x = lb_x * LB_SIZE + p['local_x']
-                world_y = lb_y * LB_SIZE + p['local_y']
+                all_instance_stmts.append(SQLStatement(
+                    table='landblock_instance',
+                    values={
+                        'guid': guid,
+                        'wcid': wcid,
+                        'cell_id': cell_id,
+                        'x': round(world_x, 6),
+                        'y': round(world_y, 6),
+                        'z': round(p['local_z'], 6),
+                        'w': p.get('rot_w', 1.0),
+                        'qx': 0.0,
+                        'qy': 0.0,
+                        'qz': p.get('rot_z', 0.0),
+                        'is_link_child': p.get('is_link_child', False),
+                        'last_modified': now,
+                    }
+                ))
+            
+            total_objects += 1
+        
+        # ── Generate encounters for this LB (creature generators) ──
+        if difficulty_grid is not None and 0 <= lb_x < 255 and 0 <= lb_y < 255:
+            tier = max(0, min(5, int(difficulty_grid[lb_y, lb_x])))
+            generators = ENCOUNTER_GENERATORS_BY_TIER.get(tier, [])
+            
+            if generators and tier > 0:
+                # Place 1-4 encounter generators per landblock
+                num_encounters = random.randint(1, min(4, len(generators)))
+                lb_id_enc = (lb_x << 8) | lb_y
                 
-                if p.get('is_housing') and p.get('housing_type'):
-                    # Housing → use the linker
-                    housing_stmts = housing_linker.place_housing(
-                        house_type=p['housing_type'],
-                        culture=culture_name,
-                        world_x=world_x,
-                        world_y=world_y,
-                        world_z=p['local_z'],
-                        lb_x=lb_x, lb_y=lb_y,
-                    )
-                    for stmt in housing_stmts:
-                        if stmt.table == 'landblock_instance':
-                            all_instance_stmts.append(stmt)
-                        else:
-                            all_link_stmts.append(stmt)
-                    housing_count += 1
-                else:
-                    # Regular instance
-                    guid = guid_alloc.next()
-                    wcid = p.get('wcid', 0)
-                    if isinstance(wcid, int) and wcid < 0:
-                        continue  # Skip special tokens that leaked through
+                for _ in range(num_encounters):
+                    gen_wcid = random.choice(generators)
+                    cell_x = random.randint(0, 7)
+                    cell_y = random.randint(0, 7)
                     
-                    all_instance_stmts.append(SQLStatement(
-                        table='landblock_instance',
-                        values={
-                            'guid': guid,
-                            'wcid': wcid,
-                            'cell_id': cell_id,
-                            'x': round(world_x, 6),
-                            'y': round(world_y, 6),
-                            'z': round(p['local_z'], 6),
-                            'w': p.get('rot_w', 1.0),
-                            'qx': 0.0,
-                            'qy': 0.0,
-                            'qz': p.get('rot_z', 0.0),
-                            'is_link_child': p.get('is_link_child', False),
-                            'last_modified': now,
-                        }
-                    ))
-                
-                total_objects += 1
-            
-            # ── Generate encounters for this LB (creature generators) ──
-            if difficulty_grid is not None and 0 <= lb_x < 255 and 0 <= lb_y < 255:
-                tier = max(0, min(5, int(difficulty_grid[lb_y, lb_x])))
-                generators = ENCOUNTER_GENERATORS_BY_TIER.get(tier, [])
-                
-                if generators and tier > 0:
-                    # Place 1-4 encounter generators per landblock
-                    num_encounters = random.randint(1, min(4, len(generators)))
-                    lb_id_enc = (lb_x << 8) | lb_y
-                    
-                    for _ in range(num_encounters):
-                        gen_wcid = random.choice(generators)
-                        cell_x = random.randint(0, 7)
-                        cell_y = random.randint(0, 7)
-                        
-                        all_encounter_stmts.append({
-                            'id': enc_id_counter,
-                            'landblock': lb_id_enc,
-                            'wcid': gen_wcid,
-                            'cell_x': cell_x,
-                            'cell_y': cell_y,
-                            'last_modified': now,
-                        })
-                        enc_id_counter += 1
-                        encounter_count += 1
+                    all_encounter_stmts.append({
+                        'id': enc_id_counter,
+                        'landblock': lb_id_enc,
+                        'wcid': gen_wcid,
+                        'cell_x': cell_x,
+                        'cell_y': cell_y,
+                        'last_modified': now,
+                    })
+                    enc_id_counter += 1
+                    encounter_count += 1
         
         # Progress
-        if (lb_x - args.margin + 1) % 25 == 0:
+        if args.progress_every > 0 and i % args.progress_every == 0:
             elapsed = time.time() - t0
-            pct = (lb_x - args.margin + 1) / (255 - 2 * args.margin) * 100
+            pct = i / max(total_region_blocks, 1) * 100
             print(f"    {pct:.0f}% ({lb_count} LBs, {total_objects:,} objects, "
-                  f"{housing_count} houses, {encounter_count} encounters, {elapsed:.0f}s)")
+                  f"{housing_count} houses, {encounter_count} encounters, {elapsed:.0f}s, "
+                  f"raw={debug_totals['raw_generated']}, accepted={debug_totals['accepted_count']})")
     
     elapsed = time.time() - t0
     
@@ -602,6 +686,16 @@ def generate_world(args):
     print(f"\n[7/7] Encounter summary...")
     print(f"  Total encounters generated: {encounter_count}")
     print(f"  Avg encounters per LB: {encounter_count / max(lb_count, 1):.1f}")
+    print(f"  Raw placements generated: {debug_totals['raw_generated']}")
+    print(f"  Accepted after validation: {debug_totals['accepted_count']}")
+    print(f"  Empty landblocks after validation: {debug_totals['empty_landblocks_after_validation']}")
+    print(f"  STOP samples: {debug_totals['sampled_stop']}")
+    print(f"  PAD samples: {debug_totals['sampled_pad']}")
+    print(f"  Collision rerolls: {debug_totals['rerolled_collisions']}")
+    if debug_examples:
+        print("  Sample empty-landblock diagnostics:")
+        for line in debug_examples:
+            print(f"    - {line}")
     
     # ── Summary ──
     print()
@@ -635,6 +729,18 @@ def main():
     parser.add_argument("--frequency-penalty", type=float, default=0.3)
     parser.add_argument("--margin", type=int, default=8,
                        help="Landblock margin from edges to skip")
+    parser.add_argument("--lb-x-min", type=int, default=None,
+                       help="Optional inclusive X start for debug-region generation")
+    parser.add_argument("--lb-x-max", type=int, default=None,
+                       help="Optional inclusive X end for debug-region generation")
+    parser.add_argument("--lb-y-min", type=int, default=None,
+                       help="Optional inclusive Y start for debug-region generation")
+    parser.add_argument("--lb-y-max", type=int, default=None,
+                       help="Optional inclusive Y end for debug-region generation")
+    parser.add_argument("--progress-every", type=int, default=25,
+                       help="How many processed landblocks between progress logs")
+    parser.add_argument("--debug-landblocks", type=int, default=10,
+                       help="Number of empty-landblock diagnostic examples to print")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
     

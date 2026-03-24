@@ -181,13 +181,11 @@ class PlacementDataset(Dataset):
                 h = ctx[:81].reshape(9, 9)
                 ctx[:81] = h.T.reshape(-1)
         
-        # Teacher forcing: input is [START_CONTEXT, obj_1, ..., obj_N-1]
-        # Target is [obj_1, obj_2, ..., obj_N, STOP]
-        # We use the sequence as-is since it already ends with STOP
-        
-        # Input: context goes through a separate projection, sequence is the tokens
-        # Target: shifted by one position
-        input_seq = seq.clone()
+        # Teacher forcing: shift the sequence right so the model predicts the
+        # next token instead of learning an identity copy of the current token.
+        input_seq = torch.zeros_like(seq)
+        if seq_len > 1:
+            input_seq[1:seq_len] = seq[:seq_len - 1]
         target_wcid = seq[:, 0].long()  # Target wcid indices
         target_pos = seq[:, 1:3]        # Target positions (x, y)
         target_rot = seq[:, 4:6]        # Target rotations (w, z)

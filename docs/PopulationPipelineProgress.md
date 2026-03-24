@@ -219,6 +219,36 @@ Interpretation:
 - whole-world generation is likely a multi-hour run, not a short test pass
 - this is too slow for quick iteration without a smaller-region generation mode
 
+### Critical later finding
+
+During a longer whole-world generation run, the first visible progress report was:
+
+- `10% (0 LBs, 0 objects, 0 houses, 0 encounters, 6674s)`
+
+Interpretation of that line:
+
+- the generator spent roughly `6674s` (`~1.85` hours) reaching the first 10% progress mark
+- zero landblocks produced accepted placements
+- zero objects survived into output
+- zero housing placements and zero encounters were emitted
+
+This is currently the most important generation result in the project.
+
+Practical meaning:
+
+- full-world generation should **not** be trusted as productive in its current state
+- training may be numerically improving while inference still produces no usable world output
+- the next step is not "run longer and hope"
+- the next step is to instrument and debug the generation pipeline
+
+Most likely causes to investigate next:
+
+1. raw placements are being generated but all are removed by `validate_placements`
+2. the model is emitting mostly unusable or special-token outputs at inference
+3. context mismatch between training and inference is severe enough that outputs collapse
+4. ocean-mask / difficulty / culture / terrain conditioning is causing systematic rejection
+5. current trained model is simply not inference-viable for this whole-world pass
+
 
 ## Overnight Run / Tarball Plan
 
@@ -250,6 +280,9 @@ Important consequence for the next agent:
 - do **not** assume results were uploaded anywhere
 - the first recovery step should be to restart the VM if needed and check for the
   tarball in the repo root
+- because the generation run showed `10%` progress with zero accepted placements,
+  the next agent should strongly consider stopping the overnight whole-world run
+  and preserving logs/checkpoints rather than paying for many more hours blindly
 
 
 ## What OutdoorML Currently Means
@@ -299,14 +332,17 @@ This aligns with the strategy in `docs/PopulationPipelineStrategy.md`:
 
 ## Recommended Next Steps
 
-1. Recover the local tarball from the repo root after the overnight VM run.
-2. Verify whether `pipeline_data/population_output/vanquish_ml_populated.sql` was produced.
-3. If generation completed, run:
+1. Recover the local tarball from the repo root after the VM run or stop the VM and preserve current artifacts.
+2. Treat the `10% / 0 objects / 0 LBs` generation result as a primary debugging signal.
+3. Patch `generate_populated_world.py` to log:
+   - raw placements produced per landblock
+   - accepted placements after validation
+   - skip counts by reason where possible
+4. Add a small-region generation mode before attempting another full-world run.
+5. Clean up checkpoint/logging consistency in `train_scene_placer.py`.
+6. If a meaningful SQL output is ever produced, then run:
    - `scripts/PopulationPipeline/OutdoorML/score_placement_quality.py`
-4. Clean up checkpoint/logging consistency in `train_scene_placer.py`.
-5. Consider softening or delaying entropy-collapse LR intervention.
-6. Add a smaller-region generation mode for faster iteration.
-7. Inspect actual generated placements before drawing conclusions about usefulness.
+7. Do not make strong quality claims about OutdoorML until inference produces nontrivial accepted output.
 
 
 ## Fast Handoff Summary
@@ -319,6 +355,7 @@ If a new agent picks this up, the key facts are:
 - early overfit stopping was patched and is no longer the immediate blocker
 - current best signal is that validation improved to about `2.5x` range while
   entropy recovered to about `2.8`
-- full-world generation is slow enough that overnight execution is appropriate
-- no trustworthy claim about final world quality should be made until generation
-  finishes and scoring is run
+- full-world generation is slow enough that overnight execution is expensive
+- first whole-world generation signal was `10%` progress after hours with zero accepted output
+- no trustworthy claim about final world quality should be made until inference
+  produces nontrivial accepted placements and scoring can run
