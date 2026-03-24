@@ -115,6 +115,7 @@ DEFAULT_CONFIG = {
     # Early stopping
     "patience": 500,
     "overfit_gap_threshold": 10.0,
+    "min_overfit_epoch": 200,
     "entropy_collapse_threshold": 2.0,
     
     # Checkpointing
@@ -851,7 +852,7 @@ def train(config: dict, resume_path: Optional[str] = None):
                 val_metrics['overfit_gap'] = overfit_gap
                 
                 # ── EARLY STOPPING RAILS ──
-                if overfit_gap > config['overfit_gap_threshold']:
+                if epoch >= config['min_overfit_epoch'] and overfit_gap > config['overfit_gap_threshold']:
                     print(f"\n  ⚠️  OVERFIT DETECTED (gap={overfit_gap:.3f} > {config['overfit_gap_threshold']})")
                     save_weights_only(
                         model, ema,
