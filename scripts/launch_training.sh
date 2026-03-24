@@ -139,7 +139,7 @@ if [ "$TENSORS_EXIST" -eq 0 ]; then
         echo "  Continuing anyway (the script will show its own error)..."
     fi
     
-    python3 scripts/extract_placement_tensors.py
+    python3 scripts/PopulationPipeline/extract_placement_tensors.py
     echo ""
 else
     echo "[5/7] Skipping extraction (tensors already exist)"
@@ -170,7 +170,7 @@ if [ "$RESUME_FLAG" = "--resume" ]; then
 fi
 
 # Run training (nohup so it survives SSH disconnects)
-nohup python3 scripts/train_scene_placer.py $TRAIN_ARGS \
+nohup python3 scripts/PopulationPipeline/train_scene_placer.py $TRAIN_ARGS \
     > training_output.log 2>&1 &
 
 TRAIN_PID=$!
@@ -193,6 +193,6 @@ echo "    kill $TRAIN_PID                    # Stop training"
 echo "    nvidia-smi                          # Check GPU utilization"
 echo ""
 echo "  When done:"
-echo "    python3 scripts/generate_populated_world.py  # Generate world SQL"
-echo "    python3 scripts/score_placement_quality.py    # Score quality"
+echo "    python3 scripts/PopulationPipeline/generate_populated_world.py  # Generate world SQL"
+echo "    python3 scripts/PopulationPipeline/score_placement_quality.py    # Score quality"
 echo "═══════════════════════════════════════════════════════════════"

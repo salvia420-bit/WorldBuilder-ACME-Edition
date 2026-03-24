@@ -3,7 +3,7 @@
 ## Purpose
 
 This note captures the current state of the world population pipeline, why the
-existing `train_scene_placer.py` approach is not enough to reach retail-quality
+existing `scripts/PopulationPipeline/OutdoorML/train_scene_placer.py` approach is not enough to reach retail-quality
 world population on its own, and the staged direction we should take instead.
 
 The goal is not merely "plausible object spam." The goal is a new world that
@@ -22,17 +22,17 @@ The repo already has several separate population-related systems:
 
 1. Manual / deterministic town relocation
    - `tools/town_placer.html`
-   - `scripts/reseed_town_instances_from_retail.py`
-   - `scripts/remap_town_network_portals.py`
-   - `scripts/remap_outdoor_instances_from_lb_remap.py`
+   - `scripts/PopulationPipeline/MacroPlacement/reseed_town_instances_from_retail.py`
+   - `scripts/PopulationPipeline/MacroPlacement/remap_town_network_portals.py`
+   - `scripts/PopulationPipeline/MacroPlacement/remap_outdoor_instances_from_lb_remap.py`
 
 2. Heuristic broad population
-   - `scripts/build_population_plan.py`
+   - `scripts/PopulationPipeline/Planning/build_population_plan.py`
 
 3. ML outdoor placement
-   - `scripts/extract_placement_tensors.py`
-   - `scripts/train_scene_placer.py`
-   - `scripts/generate_populated_world.py`
+   - `scripts/PopulationPipeline/OutdoorML/extract_placement_tensors.py`
+   - `scripts/PopulationPipeline/OutdoorML/train_scene_placer.py`
+   - `scripts/PopulationPipeline/OutdoorML/generate_populated_world.py`
 
 4. Terrain generation / smoothing
    - `scripts/train_terrain_v3.py`
@@ -88,8 +88,8 @@ the real capability of the current architecture.
 
 ### 2. Indoor and outdoor data are mixed, but inference is outdoor-only
 
-`extract_placement_tensors.py` currently parses both outdoor and indoor
-instances, but `generate_populated_world.py` emits outdoor landblock instances
+`scripts/PopulationPipeline/OutdoorML/extract_placement_tensors.py` currently parses both outdoor and indoor
+instances, but `scripts/PopulationPipeline/OutdoorML/generate_populated_world.py` emits outdoor landblock instances
 and snaps them to terrain.
 
 That is a train/infer mismatch.
@@ -401,6 +401,9 @@ That is exactly the habit the population pipeline should adopt.
 ## Recommended Next Steps
 
 1. Split "population" into explicit pipeline stages in docs and code.
+   - keep population-owned scripts under `scripts/PopulationPipeline/`
+   - put implementations in stage folders such as `Planning/`, `MacroPlacement/`, and `OutdoorML/`
+   - leave thin wrappers at higher levels until the VM-side execution workflow is updated
 2. Keep town reseed/remap as a first-class deterministic stage.
 3. Add a dedicated foliage / scenery stage for trees, rocks, and ambient props.
 4. Define a separate interior-placement project instead of forcing it into the
