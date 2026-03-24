@@ -39,6 +39,7 @@ import argparse
 import json
 import math
 import os
+import tempfile
 import sys
 import time
 import random
@@ -616,14 +617,17 @@ def find_max_batch_size(model, config, device, start=None):
 
 def save_full_checkpoint(epoch, model, optimizer, scheduler, ema, best_val_loss, path):
     """Save full training state for spot instance recovery."""
-    torch.save({
+    checkpoint = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'scheduler_state_dict': scheduler.state_dict(),
         'ema_state_dict': ema.state_dict(),
         'best_val_loss': best_val_loss,
-    }, path)
+    }
+    temp_path = f"{path}.tmp"
+    torch.save(checkpoint, temp_path)
+    os.replace(temp_path, path)
     print(f"    Full checkpoint saved: {path}")
 
 
@@ -642,6 +646,24 @@ def save_weights_only(model, ema, path):
         torch.save(model.state_dict(), path.replace('.safetensors', '.pt'))
         ema.restore()
         print(f"    Weights saved (torch): {path}")
+
+
+def save_history(history, path):
+    """Persist training history atomically to survive interruptions."""
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    with tempfile.NamedTemporaryFile('w', delete=False, dir=directory, suffix='.tmp') as tmp:
+        json.dump(history, tmp, indent=2)
+        temp_path = tmp.name
+    os.replace(temp_path, path)
+
+
+def save_resume_checkpoint(epoch, model, optimizer, scheduler, ema, best_val_loss):
+    """Write the rolling checkpoint used by --resume."""
+    save_full_checkpoint(
+        epoch, model, optimizer, scheduler, ema, best_val_loss,
+        os.path.join(CHECKPOINT_DIR, "resume.pt")
+    )
 
 
 def train(config: dict, resume_path: Optional[str] = None):
@@ -747,150 +769,176 @@ def train(config: dict, resume_path: Optional[str] = None):
     
     history = []
     patience_counter = 0
+    history_path = os.path.join(LOG_DIR, "training_history.json")
+    last_completed_epoch = start_epoch - 1
     
-    for epoch in range(start_epoch, config['epochs']):
-        t_epoch = time.time()
-        model.train()
-        
-        epoch_losses = defaultdict(float)
-        n_batches = 0
-        
-        for batch in train_loader:
-            # Warmup: linear learning rate increase
-            if epoch < config['warmup_epochs']:
-                warmup_factor = (epoch * len(train_loader) + n_batches) / \
-                               (config['warmup_epochs'] * len(train_loader))
-                for pg in optimizer.param_groups:
-                    pg['lr'] = config['lr_max'] * warmup_factor
+    try:
+        for epoch in range(start_epoch, config['epochs']):
+            t_epoch = time.time()
+            model.train()
             
-            optimizer.zero_grad()
-            
-            if scaler:
-                with autocast(dtype=torch.float16):
+            epoch_losses = defaultdict(float)
+            n_batches = 0
+        
+            for batch in train_loader:
+                # Warmup: linear learning rate increase
+                if epoch < config['warmup_epochs']:
+                    warmup_factor = (epoch * len(train_loader) + n_batches) / \
+                                   (config['warmup_epochs'] * len(train_loader))
+                    for pg in optimizer.param_groups:
+                        pg['lr'] = config['lr_max'] * warmup_factor
+                
+                optimizer.zero_grad()
+                
+                if scaler:
+                    with autocast(dtype=torch.float16):
+                        loss, loss_dict = compute_loss(model, batch, config, device)
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
                     loss, loss_dict = compute_loss(model, batch, config, device)
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                loss, loss_dict = compute_loss(model, batch, config, device)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
-            
-            ema.update()
-            
-            for k, v in loss_dict.items():
-                epoch_losses[k] += v
-            n_batches += 1
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    optimizer.step()
+                
+                ema.update()
+                
+                for k, v in loss_dict.items():
+                    epoch_losses[k] += v
+                n_batches += 1
         
-        # Step scheduler (after warmup)
-        if epoch >= config['warmup_epochs']:
-            scheduler.step()
+            # Step scheduler (after warmup)
+            if epoch >= config['warmup_epochs']:
+                scheduler.step()
         
-        # Average training losses
-        train_metrics = {k: v / n_batches for k, v in epoch_losses.items()}
-        
-        # ── Validation ──
-        val_metrics = {}
-        if (epoch + 1) % 10 == 0 or epoch == config['epochs'] - 1:
-            model.eval()
-            ema.apply_shadow()  # Use EMA weights for validation
+            # Average training losses
+            train_metrics = {k: v / n_batches for k, v in epoch_losses.items()}
             
-            val_losses = defaultdict(float)
-            val_batches = 0
-            
-            with torch.no_grad():
-                for batch in val_loader:
-                    if scaler:
-                        with autocast(dtype=torch.float16):
+            # ── Validation ──
+            val_metrics = {}
+            if (epoch + 1) % 10 == 0 or epoch == config['epochs'] - 1:
+                model.eval()
+                ema.apply_shadow()  # Use EMA weights for validation
+                
+                val_losses = defaultdict(float)
+                val_batches = 0
+                
+                with torch.no_grad():
+                    for batch in val_loader:
+                        if scaler:
+                            with autocast(dtype=torch.float16):
+                                _, loss_dict = compute_loss(model, batch, config, device)
+                        else:
                             _, loss_dict = compute_loss(model, batch, config, device)
-                    else:
-                        _, loss_dict = compute_loss(model, batch, config, device)
-                    
-                    for k, v in loss_dict.items():
-                        val_losses[k] += v
-                    val_batches += 1
+                        
+                        for k, v in loss_dict.items():
+                            val_losses[k] += v
+                        val_batches += 1
+                
+                val_metrics = {f"val_{k}": v / val_batches for k, v in val_losses.items()}
+                
+                # Diversity metrics
+                diversity = compute_diversity_metrics(model, val_loader, config, device)
+                val_metrics.update(diversity)
+                
+                ema.restore()
+                
+                # Check overfitting
+                overfit_gap = val_metrics.get('val_total', 0) - train_metrics['total']
+                val_metrics['overfit_gap'] = overfit_gap
+                
+                # ── EARLY STOPPING RAILS ──
+                if overfit_gap > config['overfit_gap_threshold']:
+                    print(f"\n  ⚠️  OVERFIT DETECTED (gap={overfit_gap:.3f} > {config['overfit_gap_threshold']})")
+                    save_weights_only(
+                        model, ema,
+                        os.path.join(CHECKPOINT_DIR, "emergency_overfit_stop.safetensors")
+                    )
+                    save_resume_checkpoint(epoch, model, optimizer, scheduler, ema, best_val_loss)
+                    print("  Training stopped to prevent overfitting.")
+                    last_completed_epoch = epoch
+                    break
+                
+                wcid_ent = val_metrics.get('wcid_entropy', 999)
+                if wcid_ent < config['entropy_collapse_threshold']:
+                    print(f"\n  ⚠️  MODE COLLAPSE (entropy={wcid_ent:.2f} < {config['entropy_collapse_threshold']})")
+                    print("  Reducing learning rate by 50%...")
+                    for pg in optimizer.param_groups:
+                        pg['lr'] *= 0.5
+                
+                # Track best validation loss
+                val_total = val_metrics.get('val_total', float('inf'))
+                if val_total < best_val_loss:
+                    best_val_loss = val_total
+                    patience_counter = 0
+                    save_weights_only(
+                        model, ema,
+                        os.path.join(CHECKPOINT_DIR, "scene_placer_best.safetensors")
+                    )
+                    save_resume_checkpoint(epoch, model, optimizer, scheduler, ema, best_val_loss)
+                else:
+                    patience_counter += 1
+                
+                if patience_counter >= config['patience']:
+                    print(f"\n  Early stopping (patience={config['patience']} exhausted)")
+                    save_resume_checkpoint(epoch, model, optimizer, scheduler, ema, best_val_loss)
+                    last_completed_epoch = epoch
+                    break
             
-            val_metrics = {f"val_{k}": v / val_batches for k, v in val_losses.items()}
+            # ── Logging ──
+            elapsed = time.time() - t_epoch
+            lr = optimizer.param_groups[0]['lr']
             
-            # Diversity metrics
-            diversity = compute_diversity_metrics(model, val_loader, config, device)
-            val_metrics.update(diversity)
+            log_entry = {
+                'epoch': epoch,
+                'lr': lr,
+                'elapsed': elapsed,
+                **train_metrics,
+                **val_metrics,
+            }
+            history.append(log_entry)
+            save_history(history, history_path)
             
-            ema.restore()
+            # Print progress
+            val_str = ""
+            if val_metrics:
+                val_str = (f"  val={val_metrics.get('val_total', 0):.4f} "
+                          f"ent={val_metrics.get('wcid_entropy', 0):.1f} "
+                          f"gap={val_metrics.get('overfit_gap', 0):.3f}")
             
-            # Check overfitting
-            overfit_gap = train_metrics['total'] - val_metrics.get('val_total', 0)
-            val_metrics['overfit_gap'] = overfit_gap
+            print(f"  Epoch {epoch:4d}/{config['epochs']}  "
+                  f"loss={train_metrics['total']:.4f} "
+                  f"(wcid={train_metrics['wcid']:.3f} pos={train_metrics['pos']:.4f} "
+                  f"link={train_metrics['link']:.3f})"
+                  f"{val_str}  "
+                  f"lr={lr:.2e}  {elapsed:.1f}s")
             
-            # ── EARLY STOPPING RAILS ──
-            if overfit_gap > config['overfit_gap_threshold']:
-                print(f"\n  ⚠️  OVERFIT DETECTED (gap={overfit_gap:.3f} > {config['overfit_gap_threshold']})")
-                save_weights_only(
-                    model, ema,
-                    os.path.join(CHECKPOINT_DIR, "emergency_overfit_stop.safetensors")
+            # ── Checkpointing ──
+            if (epoch + 1) % config['resume_checkpoint_every'] == 0:
+                save_resume_checkpoint(epoch, model, optimizer, scheduler, ema, best_val_loss)
+            
+            if (epoch + 1) % config['checkpoint_every'] == 0:
+                save_full_checkpoint(
+                    epoch, model, optimizer, scheduler, ema, best_val_loss,
+                    os.path.join(CHECKPOINT_DIR, f"resume_epoch_{epoch + 1}.pt")
                 )
-                print("  Training stopped to prevent overfitting.")
-                break
             
-            wcid_ent = val_metrics.get('wcid_entropy', 999)
-            if wcid_ent < config['entropy_collapse_threshold']:
-                print(f"\n  ⚠️  MODE COLLAPSE (entropy={wcid_ent:.2f} < {config['entropy_collapse_threshold']})")
-                print("  Reducing learning rate by 50%...")
-                for pg in optimizer.param_groups:
-                    pg['lr'] *= 0.5
-            
-            # Track best validation loss
-            val_total = val_metrics.get('val_total', float('inf'))
-            if val_total < best_val_loss:
-                best_val_loss = val_total
-                patience_counter = 0
-                save_weights_only(
-                    model, ema,
-                    os.path.join(CHECKPOINT_DIR, "scene_placer_best.safetensors")
-                )
-            else:
-                patience_counter += 1
-            
-            if patience_counter >= config['patience']:
-                print(f"\n  Early stopping (patience={config['patience']} exhausted)")
-                break
-        
-        # ── Logging ──
-        elapsed = time.time() - t_epoch
-        lr = optimizer.param_groups[0]['lr']
-        
-        log_entry = {
-            'epoch': epoch,
-            'lr': lr,
-            'elapsed': elapsed,
-            **train_metrics,
-            **val_metrics,
-        }
-        history.append(log_entry)
-        
-        # Print progress
-        val_str = ""
-        if val_metrics:
-            val_str = (f"  val={val_metrics.get('val_total', 0):.4f} "
-                      f"ent={val_metrics.get('wcid_entropy', 0):.1f} "
-                      f"gap={val_metrics.get('overfit_gap', 0):.3f}")
-        
-        print(f"  Epoch {epoch:4d}/{config['epochs']}  "
-              f"loss={train_metrics['total']:.4f} "
-              f"(wcid={train_metrics['wcid']:.3f} pos={train_metrics['pos']:.4f} "
-              f"link={train_metrics['link']:.3f})"
-              f"{val_str}  "
-              f"lr={lr:.2e}  {elapsed:.1f}s")
-        
-        # ── Checkpointing ──
-        if (epoch + 1) % config['checkpoint_every'] == 0:
-            save_full_checkpoint(
-                epoch, model, optimizer, scheduler, ema, best_val_loss,
-                os.path.join(CHECKPOINT_DIR, "resume.pt")
-            )
+            last_completed_epoch = epoch
+    except KeyboardInterrupt:
+        print("\n  Interrupted. Saving resume checkpoint before exit...")
+        checkpoint_epoch = last_completed_epoch if last_completed_epoch >= start_epoch else start_epoch
+        save_resume_checkpoint(checkpoint_epoch, model, optimizer, scheduler, ema, best_val_loss)
+        save_history(history, history_path)
+        raise
+    except Exception:
+        print("\n  Training crashed. Saving resume checkpoint before re-raising...")
+        checkpoint_epoch = last_completed_epoch if last_completed_epoch >= start_epoch else start_epoch
+        save_resume_checkpoint(checkpoint_epoch, model, optimizer, scheduler, ema, best_val_loss)
+        save_history(history, history_path)
+        raise
     
     # ── Final save ──
     print(f"\n[4/5] Saving final model...")
@@ -900,9 +948,7 @@ def train(config: dict, resume_path: Optional[str] = None):
     )
     
     # Save training history
-    history_path = os.path.join(LOG_DIR, "training_history.json")
-    with open(history_path, 'w') as f:
-        json.dump(history, f, indent=2)
+    save_history(history, history_path)
     print(f"  Training history: {history_path}")
     
     # ── Summary ──
