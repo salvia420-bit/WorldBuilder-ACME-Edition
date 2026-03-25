@@ -661,11 +661,12 @@ public class TerminalRepl {
             if (!TryParseUint(tokens[1], "lbX", out uint lbX)) return;
             if (!TryParseUint(tokens[2], "lbY", out uint lbY)) return;
             var r = _engine.ClearObjects(lbX, lbY);
+            ushort lbKey = (ushort)((lbX << 8) | lbY);
             if (r.ObjectsRemoved == 0) {
-                Console.WriteLine($"  No objects in landblock 0x{r.AffectedLandblocks.FirstOrDefault():X4} â€” nothing to clear.");
+                Console.WriteLine($"  No objects in landblock 0x{lbKey:X4} â€” nothing to clear.");
             } else {
                 Console.ForegroundColor = ConsoleColor.Green;
-                Console.WriteLine($"  âœ“ Cleared {r.ObjectsRemoved} objects from landblock 0x{r.AffectedLandblocks[0]:X4}");
+                Console.WriteLine($"  âœ“ Cleared {r.ObjectsRemoved} objects from landblock 0x{lbKey:X4}");
                 Console.ResetColor();
             }
         }
