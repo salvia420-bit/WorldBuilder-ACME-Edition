@@ -115,6 +115,7 @@ public class JsonCommandProcessor {
                 "list-objects" => CmdListObjects(node),
                 "add-object" => CmdAddObject(node),
                 "remove-object" => CmdRemoveObject(node),
+                "clear-objects" => CmdClearObjects(node),
                 "move-object" => CmdMoveObject(node),
                 "rotate-object" => CmdRotateObject(node),
 
@@ -405,6 +406,33 @@ public class JsonCommandProcessor {
             index = r.Index, modelId = $"0x{r.ModelId:X8}",
             from = new { x = Math.Round(r.From.X, 2), y = Math.Round(r.From.Y, 2), z = Math.Round(r.From.Z, 2) },
             to = new { x, y, z } });
+    }
+
+    private string CmdClearObjects(System.Text.Json.Nodes.JsonNode node) {
+        bool clearAll = node["all"]?.GetValue<bool>() ?? false;
+
+        if (clearAll) {
+            var allResult = _engine.ClearAllObjects();
+            return Serialize(new {
+                success = allResult.Success,
+                command = "clear-objects",
+                all = true,
+                objectsRemoved = allResult.ObjectsRemoved,
+                landblocksProcessed = allResult.LandblocksProcessed,
+                affectedLandblocks = allResult.AffectedLandblocks.Select(lb => $"0x{lb:X4}").ToArray()
+            });
+        }
+
+        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var result = _engine.ClearObjects(lbX, lbY);
+        ushort lbKey = (ushort)((lbX << 8) | lbY);
+        return Serialize(new {
+            success = result.Success,
+            command = "clear-objects",
+            all = false,
+            landblock = $"0x{lbKey:X4}",
+            objectsRemoved = result.ObjectsRemoved
+        });
     }
 
     private string CmdRotateObject(System.Text.Json.Nodes.JsonNode node) {
@@ -767,6 +795,7 @@ public class JsonCommandProcessor {
             new { name = "list-objects",     args = "lbX, lbY",                              description = "List static objects" },
             new { name = "add-object",       args = "lbX, lbY, modelId, x, y, z, qw?, qx?, qy?, qz?, scale?", description = "Place object" },
             new { name = "remove-object",    args = "lbX, lbY, index",                       description = "Remove object by index" },
+            new { name = "clear-objects",    args = "lbX, lbY | all=true",                   description = "Clear all objects from one landblock or whole world" },
             new { name = "move-object",      args = "lbX, lbY, index, x, y, z",              description = "Move object" },
             new { name = "rotate-object",    args = "lbX, lbY, index, qw/qx/qy/qz | yaw",   description = "Set object orientation (absolute, not incremental)" },
             new { name = "query-radius",     args = "x, y, radius, z?, includeZ?",            description = "Find objects within radius" },
