@@ -1527,6 +1527,7 @@ public class TerminalRepl {
         Console.WriteLine("  ace-db reposition                                  Reposition instances after terrain edits");
         Console.WriteLine("  ace-db export-sql <path>                           Export reposition SQL (no apply)");
         Console.WriteLine("  ace-db stats                                       World instance count + dense landblocks");
+        Console.WriteLine("  ace-db clear-instances                             Delete ALL instances + links");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
@@ -3679,5 +3680,4 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 }
-
 
