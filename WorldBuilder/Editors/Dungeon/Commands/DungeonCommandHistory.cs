@@ -19,14 +19,7 @@ namespace WorldBuilder.Editors.Dungeon {
             command.Execute(document);
             _undoStack.Push(command);
             _redoStack.Clear();
-
-            if (HistoryLimit > 0 && _undoStack.Count > HistoryLimit) {
-                var temp = new Stack<IDungeonCommand>();
-                int keep = HistoryLimit;
-                while (keep-- > 0 && _undoStack.Count > 0) temp.Push(_undoStack.Pop());
-                _undoStack.Clear();
-                while (temp.Count > 0) _undoStack.Push(temp.Pop());
-            }
+            EnforceHistoryLimit();
 
             Changed?.Invoke(this, EventArgs.Empty);
         }
@@ -37,6 +30,7 @@ namespace WorldBuilder.Editors.Dungeon {
         public void Record(IDungeonCommand command) {
             _undoStack.Push(command);
             _redoStack.Clear();
+            EnforceHistoryLimit();
             Changed?.Invoke(this, EventArgs.Empty);
         }
 
@@ -53,6 +47,7 @@ namespace WorldBuilder.Editors.Dungeon {
             var command = _redoStack.Pop();
             command.Execute(document);
             _undoStack.Push(command);
+            EnforceHistoryLimit();
             Changed?.Invoke(this, EventArgs.Empty);
         }
 
@@ -60,6 +55,21 @@ namespace WorldBuilder.Editors.Dungeon {
             _undoStack.Clear();
             _redoStack.Clear();
             Changed?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void EnforceHistoryLimit() {
+            if (HistoryLimit <= 0 || _undoStack.Count <= HistoryLimit) return;
+
+            var temp = new Stack<IDungeonCommand>();
+            int keep = HistoryLimit;
+            while (keep-- > 0 && _undoStack.Count > 0) {
+                temp.Push(_undoStack.Pop());
+            }
+
+            _undoStack.Clear();
+            while (temp.Count > 0) {
+                _undoStack.Push(temp.Pop());
+            }
         }
     }
 }
