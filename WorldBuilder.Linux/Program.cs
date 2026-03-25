@@ -31,7 +31,7 @@ sealed class Program
                 var assemblyPath = Assembly.GetExecutingAssembly().Location;
                 App.ExecutablePath = assemblyPath;
                 App.Version = FileVersionInfo.GetVersionInfo(assemblyPath)?.ProductVersion ?? "0.0.0";
-                Console.WriteLine($"Executable: {App.Version}");
+                Console.WriteLine($"Executable: {App.ExecutablePath}");
                 Console.WriteLine($"Version: {App.Version}");
             }
             catch
