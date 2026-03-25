@@ -37,6 +37,24 @@ namespace WorldBuilder.Tests {
         }
 
         [Fact]
+        public void ConnectPortals_DoesNotDuplicateExistingLink() {
+            var doc = CreateDocument();
+            doc.SetLandblockKey(0xAAAA);
+            var cellA = doc.AddCell(0x0001, 0, Vector3.Zero, Quaternion.Identity, new List<ushort>());
+            var cellB = doc.AddCell(0x0001, 0, new Vector3(10, 0, 0), Quaternion.Identity, new List<ushort>());
+
+            doc.ConnectPortals(cellA, 1, cellB, 2);
+            doc.ConnectPortals(cellA, 1, cellB, 2);
+
+            var dcA = doc.GetCell(cellA);
+            var dcB = doc.GetCell(cellB);
+            Assert.NotNull(dcA);
+            Assert.NotNull(dcB);
+            Assert.Single(dcA!.CellPortals);
+            Assert.Single(dcB!.CellPortals);
+        }
+
+        [Fact]
         public void RemoveCell_RemovesFromList() {
             var doc = CreateDocument();
             doc.SetLandblockKey(0xAAAA);

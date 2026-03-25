@@ -274,20 +274,35 @@ namespace WorldBuilder.Shared.Documents {
             var cellB = Cells.FirstOrDefault(c => c.CellNumber == cellNumB);
             if (cellA == null || cellB == null) return;
 
-            cellA.CellPortals.Add(new DungeonCellPortalData {
-                OtherCellId = cellNumB,
-                PolygonId = polyIdA,
-                OtherPortalId = polyIdB,
-                Flags = 0
-            });
+            bool hasAtoB = cellA.CellPortals.Any(p =>
+                p.OtherCellId == cellNumB &&
+                p.PolygonId == polyIdA &&
+                p.OtherPortalId == polyIdB);
+            if (!hasAtoB) {
+                cellA.CellPortals.Add(new DungeonCellPortalData {
+                    OtherCellId = cellNumB,
+                    PolygonId = polyIdA,
+                    OtherPortalId = polyIdB,
+                    Flags = 0
+                });
+            }
 
-            cellB.CellPortals.Add(new DungeonCellPortalData {
-                OtherCellId = cellNumA,
-                PolygonId = polyIdB,
-                OtherPortalId = polyIdA,
-                Flags = 0
-            });
-            MarkDirty();
+            bool hasBtoA = cellB.CellPortals.Any(p =>
+                p.OtherCellId == cellNumA &&
+                p.PolygonId == polyIdB &&
+                p.OtherPortalId == polyIdA);
+            if (!hasBtoA) {
+                cellB.CellPortals.Add(new DungeonCellPortalData {
+                    OtherCellId = cellNumA,
+                    PolygonId = polyIdB,
+                    OtherPortalId = polyIdA,
+                    Flags = 0
+                });
+            }
+
+            if (!hasAtoB || !hasBtoA) {
+                MarkDirty();
+            }
         }
 
         public void RemoveCell(ushort cellNumber) {
