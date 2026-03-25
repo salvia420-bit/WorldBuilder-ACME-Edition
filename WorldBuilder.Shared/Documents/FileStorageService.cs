@@ -165,36 +165,7 @@ namespace WorldBuilder.Shared.Documents {
             if (string.IsNullOrEmpty(type)) throw new ArgumentNullException(nameof(type));
             if (update == null) throw new ArgumentNullException(nameof(update));
 
-            var updatesPath = GetUpdatesFilePath(documentId);
-            var dbUpdate = new DBDocumentUpdate {
-                DocumentId = documentId,
-                Type = type,
-                Data = update,
-                Timestamp = DateTime.UtcNow,
-                Id = Guid.NewGuid(),
-                ClientId = Guid.NewGuid()
-            };
-
-            try {
-                lock (_fileLock) {
-                    using var stream = new FileStream(updatesPath, FileMode.Append, FileAccess.Write, FileShare.None);
-                    using var writer = new BinaryWriter(stream);
-
-                    writer.Write(dbUpdate.Id.ToByteArray());
-                    writer.Write(dbUpdate.ClientId.ToByteArray());
-                    writer.Write(dbUpdate.Timestamp.Ticks);
-                    writer.Write(type.Length);
-                    writer.Write(type);
-                    writer.Write(update.Length);
-                    writer.Write(update);
-                }
-
-                return dbUpdate;
-            }
-            catch (Exception ex) {
-                _logger.LogError(ex, "Failed to create update for document {DocumentId}", documentId);
-                throw;
-            }
+            return await CreateUpdateInternalAsync(documentId, type, update, DateTime.UtcNow, Guid.NewGuid(), Guid.NewGuid());
         }
 
         public async Task<List<DBDocumentUpdate>> GetDocumentUpdatesAsync(string documentId) {
@@ -248,9 +219,7 @@ namespace WorldBuilder.Shared.Documents {
                     continue;
                 }
 
-                var dbUpdate = await CreateUpdateAsync(documentId, type, update);
-                dbUpdate.ClientId = clientId;
-                dbUpdate.Timestamp = timestamp;
+                var dbUpdate = await CreateUpdateInternalAsync(documentId, type, update, timestamp, clientId, Guid.NewGuid());
                 result.Add(dbUpdate);
             }
 
@@ -259,6 +228,45 @@ namespace WorldBuilder.Shared.Documents {
             }
 
             return result;
+        }
+
+        private Task<DBDocumentUpdate> CreateUpdateInternalAsync(
+            string documentId,
+            string type,
+            byte[] update,
+            DateTime timestamp,
+            Guid clientId,
+            Guid updateId) {
+            var updatesPath = GetUpdatesFilePath(documentId);
+            var dbUpdate = new DBDocumentUpdate {
+                DocumentId = documentId,
+                Type = type,
+                Data = update,
+                Timestamp = timestamp,
+                Id = updateId,
+                ClientId = clientId
+            };
+
+            try {
+                lock (_fileLock) {
+                    using var stream = new FileStream(updatesPath, FileMode.Append, FileAccess.Write, FileShare.None);
+                    using var writer = new BinaryWriter(stream);
+
+                    writer.Write(dbUpdate.Id.ToByteArray());
+                    writer.Write(dbUpdate.ClientId.ToByteArray());
+                    writer.Write(dbUpdate.Timestamp.Ticks);
+                    writer.Write(type.Length);
+                    writer.Write(type);
+                    writer.Write(update.Length);
+                    writer.Write(update);
+                }
+
+                return Task.FromResult(dbUpdate);
+            }
+            catch (Exception ex) {
+                _logger.LogError(ex, "Failed to create update for document {DocumentId}", documentId);
+                throw;
+            }
         }
 
         public async Task<int> CleanupOldUpdatesAsync(string documentId, int maxUpdates = 100, TimeSpan? maxAge = null) {
