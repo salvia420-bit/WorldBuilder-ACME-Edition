@@ -13,6 +13,7 @@ namespace WorldBuilder.Terminal;
 /// </summary>
 public class TerminalRepl {
     private readonly CommandEngine _engine;
+    private readonly Dictionary<string, Action<string[]>> _commandHandlers;
 
     public TerminalRepl(HeadlessProjectManager projectManager,
         ITerrainService terrainService,
@@ -21,6 +22,7 @@ public class TerminalRepl {
         IOntologyService ontologyService,
         IStampService stampService) {
         _engine = new CommandEngine(projectManager, terrainService, objectPlacementService, dungeonService, ontologyService, stampService);
+        _commandHandlers = BuildCommandHandlers();
     }
 
     /// <summary>
@@ -39,149 +41,19 @@ public class TerminalRepl {
             if (string.IsNullOrEmpty(trimmed)) continue;
 
             var tokens = TokenizeLine(trimmed);
-            var command = tokens[0].ToLowerInvariant();
+            var command = tokens[0];
 
             try {
-                switch (command) {
-                    // Project management
-                    case "load":        HandleLoad(tokens); break;
-                    case "export":      HandleExport(tokens); break;
-                    case "info":        HandleInfo(); break;
+                if (command.Equals("quit", StringComparison.OrdinalIgnoreCase) ||
+                    command.Equals("exit", StringComparison.OrdinalIgnoreCase)) {
+                    Console.WriteLine("Goodbye!");
+                    return;
+                }
 
-                    // Terrain editing
-                    case "smooth":      HandleSmooth(tokens); break;
-                    case "raise":       HandleRaise(tokens); break;
-                    case "lower":       HandleLower(tokens); break;
-                    case "set-height":  HandleSetHeight(tokens); break;
-                    case "paint":       HandlePaint(tokens); break;
-                    case "fill":        HandleFill(tokens); break;
-                    case "road":        HandleRoad(tokens); break;
-
-                    // Terrain queries
-                    case "get-height":      HandleGetHeight(tokens); break;
-                    case "terrain-info":    HandleTerrainInfo(tokens); break;
-                    case "get-heightmap":   HandleGetHeightmap(tokens); break;
-                    case "get-terrain-data": HandleGetTerrainData(tokens); break;
-                    case "terrain":        HandleTerrain(tokens); break;
-
-                    // Object management
-                    case "list-objects":   HandleListObjects(tokens); break;
-                    case "add-object":    HandleAddObject(tokens); break;
-                    case "remove-object": HandleRemoveObject(tokens); break;
-                    case "clear-objects": HandleClearObjects(tokens); break;
-                    case "move-object":   HandleMoveObject(tokens); break;
-                    case "rotate-object": HandleRotateObject(tokens); break;
-
-                    // Spatial queries
-                    case "query-radius": HandleQueryRadius(tokens); break;
-
-                    // Dungeon tools
-                    case "analyze-dungeons": HandleAnalyzeDungeons(tokens); break;
-                    case "analyze-dungeon-catalog": HandleAnalyzeDungeonCatalog(tokens); break;
-                    case "analyze-dungeon-topology": HandleAnalyzeDungeonTopology(tokens); break;
-                    case "get-dungeon-info": HandleGetDungeonInfo(tokens); break;
-
-                    // Validation
-                    case "validate-dungeon":          HandleValidateDungeon(tokens); break;
-                    case "validate-landblock":        HandleValidateLandblock(tokens); break;
-                    case "validate-terrain":          HandleValidateTerrain(tokens); break;
-                    case "validate-building-shells":  HandleValidateBuildingShells(tokens); break;
-                    case "validate-building-portals": HandleValidateBuildingPortals(tokens); break;
-                    case "validate-all":              HandleValidateAll(tokens); break;
-
-                    // World observation
-                    case "list-landblocks": HandleListLandblocks(tokens); break;
-                    case "get-world-info":  HandleGetWorldInfo(); break;
-                    case "get-region":      HandleGetRegion(); break;
-
-                    // Ontology
-                    case "scan-ontology":   HandleScanOntology(tokens); break;
-                    case "query-ontology":  HandleQueryOntology(tokens); break;
-                    case "ontology-stats":  HandleOntologyStats(); break;
-
-                    // Stamp & Portal
-                    case "paste-stamp":     HandlePasteStamp(tokens); break;
-                    case "snap-portal":     HandleSnapPortal(tokens); break;
-
-                    // Bulk & detail queries
-                    case "get-bulk-heightmap": HandleGetBulkHeightmap(tokens); break;
-                    case "get-object-detail":  HandleGetObjectDetail(tokens); break;
-                    case "diff-terrain":       HandleDiffTerrain(tokens); break;
-
-                    // Terrain layers
-                    case "get-terrain-layers": HandleGetTerrainLayers(tokens); break;
-
-                    // DAT extension commands
-                    case "export-textures":   HandleExportTextures(tokens); break;
-                    case "import-texture":    HandleImportTexture(tokens); break;
-                    case "clone-dat":         HandleCloneDat(tokens); break;
-                    case "defragment-dat":    HandleDefragmentDat(tokens); break;
-
-                    // Ontology export & enrichment
-                    case "export-ontology":   HandleExportOntology(tokens); break;
-                    case "mine-strings":      HandleMineStrings(tokens); break;
-                    case "enrich-ontology":   HandleEnrichOntology(); break;
-                    case "import-catalog":    HandleImportCatalog(tokens); break;
-                    case "classify-ontology": HandleClassifyOntology(); break;
-                    case "enrich-materials":  HandleEnrichMaterials(); break;
-
-                    // LSD Data Ingestion Pipeline
-                    case "ingest-weenies":     HandleIngestWeenies(tokens); break;
-                    case "enrich-weenies":     HandleEnrichWeenies(tokens); break;
-                    case "enrich-canonical":   HandleEnrichCanonical(tokens); break;
-                    case "scan-building-placements": HandleScanBuildingPlacements(tokens); break;
-                    case "difficulty-gradient":      HandleDifficultyGradient(tokens); break;
-                    case "apply-population":          HandleApplyPopulation(tokens); break;
-                    case "ingest-spawn-maps":  HandleIngestSpawnMaps(tokens); break;
-                    case "ingest-spells":      HandleIngestSpells(tokens); break;
-                    case "ingest-recipes":     HandleIngestRecipes(tokens); break;
-
-                    // Benchmark & bulk operations
-                    case "benchmark":               HandleBenchmark(); break;
-                    case "set-landblock-heightmap":  HandleSetLandblockHeightmap(tokens); break;
-                    case "set-landblock-terrain":    HandleSetLandblockTerrain(tokens); break;
-                    case "bulk-place-objects":       HandleBulkPlaceObjects(tokens); break;
-
-                    // Procedural generation
-                    case "generate-terrain":         HandleGenerateTerrain(tokens); break;
-                    case "generate-dungeon":         HandleGenerateDungeon(tokens); break;
-                    case "auto-paint":               HandleAutoPaint(); break;
-
-                    // Spatial analysis (Phase 10)
-                    case "analyze-landblock-patterns": HandleAnalyzeLandblockPatterns(tokens); break;
-                    case "export-training-data": HandleExportTrainingData(tokens); break;
-                    case "generate-settlement": HandleGenerateSettlement(tokens); break;
-
-                    // Data extraction (Phase 10.5a)
-                    case "extract-retail-heightmaps": HandleExtractRetailHeightmaps(tokens); break;
-                    case "compute-vanilla-baseline": HandleComputeVanillaBaseline(tokens); break;
-
-                    // Image-driven terrain (Phase 10.5+)
-                    case "analyze-map-image": HandleAnalyzeMapImage(tokens); break;
-                    case "calibrate-world-map": HandleCalibrateWorldMap(tokens); break;
-                    case "quick-world": HandleQuickWorld(tokens); break;
-
-                    // Building remap
-                    case "remap-buildings": HandleRemapBuildings(tokens); break;
-                    case "remap-buildings-v2": HandleRemapBuildingsV2(tokens); break;
-                    case "remap-buildings-sql": HandleRemapBuildingsSql(tokens); break;
-
-                    // ACE Database
-                    case "ace-db": HandleAceDb(tokens); break;
-
-                    // Dungeon Document Operations
-                    case "dungeon": HandleDungeon(tokens); break;
-
-                    // General
-                    case "help": PrintHelp(); break;
-                    case "quit":
-                    case "exit":
-                        Console.WriteLine("Goodbye!");
-                        return;
-
-                    default:
-                        Console.WriteLine($"Unknown command: '{command}'. Type 'help' for available commands.");
-                        break;
+                if (_commandHandlers.TryGetValue(command, out var handler)) {
+                    handler(tokens);
+                } else {
+                    Console.WriteLine($"Unknown command: '{command}'. Type 'help' for available commands.");
                 }
             } catch (Exception ex) {
                 Console.ForegroundColor = ConsoleColor.Red;
@@ -190,6 +62,94 @@ public class TerminalRepl {
             }
         }
     }
+
+    private Dictionary<string, Action<string[]>> BuildCommandHandlers() =>
+        new(StringComparer.OrdinalIgnoreCase) {
+            ["load"] = HandleLoad,
+            ["export"] = HandleExport,
+            ["info"] = _ => HandleInfo(),
+            ["smooth"] = HandleSmooth,
+            ["raise"] = HandleRaise,
+            ["lower"] = HandleLower,
+            ["set-height"] = HandleSetHeight,
+            ["paint"] = HandlePaint,
+            ["fill"] = HandleFill,
+            ["road"] = HandleRoad,
+            ["get-height"] = HandleGetHeight,
+            ["terrain-info"] = HandleTerrainInfo,
+            ["get-heightmap"] = HandleGetHeightmap,
+            ["get-terrain-data"] = HandleGetTerrainData,
+            ["terrain"] = HandleTerrain,
+            ["list-objects"] = HandleListObjects,
+            ["add-object"] = HandleAddObject,
+            ["remove-object"] = HandleRemoveObject,
+            ["clear-objects"] = HandleClearObjects,
+            ["move-object"] = HandleMoveObject,
+            ["rotate-object"] = HandleRotateObject,
+            ["query-radius"] = HandleQueryRadius,
+            ["analyze-dungeons"] = HandleAnalyzeDungeons,
+            ["analyze-dungeon-catalog"] = HandleAnalyzeDungeonCatalog,
+            ["analyze-dungeon-topology"] = HandleAnalyzeDungeonTopology,
+            ["get-dungeon-info"] = HandleGetDungeonInfo,
+            ["validate-dungeon"] = HandleValidateDungeon,
+            ["validate-landblock"] = HandleValidateLandblock,
+            ["validate-terrain"] = HandleValidateTerrain,
+            ["validate-building-shells"] = HandleValidateBuildingShells,
+            ["validate-building-portals"] = HandleValidateBuildingPortals,
+            ["validate-all"] = HandleValidateAll,
+            ["list-landblocks"] = HandleListLandblocks,
+            ["get-world-info"] = _ => HandleGetWorldInfo(),
+            ["get-region"] = _ => HandleGetRegion(),
+            ["scan-ontology"] = HandleScanOntology,
+            ["query-ontology"] = HandleQueryOntology,
+            ["ontology-stats"] = _ => HandleOntologyStats(),
+            ["paste-stamp"] = HandlePasteStamp,
+            ["snap-portal"] = HandleSnapPortal,
+            ["get-bulk-heightmap"] = HandleGetBulkHeightmap,
+            ["get-object-detail"] = HandleGetObjectDetail,
+            ["diff-terrain"] = HandleDiffTerrain,
+            ["get-terrain-layers"] = HandleGetTerrainLayers,
+            ["export-textures"] = HandleExportTextures,
+            ["import-texture"] = HandleImportTexture,
+            ["clone-dat"] = HandleCloneDat,
+            ["defragment-dat"] = HandleDefragmentDat,
+            ["export-ontology"] = HandleExportOntology,
+            ["mine-strings"] = HandleMineStrings,
+            ["enrich-ontology"] = _ => HandleEnrichOntology(),
+            ["import-catalog"] = HandleImportCatalog,
+            ["classify-ontology"] = _ => HandleClassifyOntology(),
+            ["enrich-materials"] = _ => HandleEnrichMaterials(),
+            ["ingest-weenies"] = HandleIngestWeenies,
+            ["enrich-weenies"] = HandleEnrichWeenies,
+            ["enrich-canonical"] = HandleEnrichCanonical,
+            ["scan-building-placements"] = HandleScanBuildingPlacements,
+            ["difficulty-gradient"] = HandleDifficultyGradient,
+            ["apply-population"] = HandleApplyPopulation,
+            ["ingest-spawn-maps"] = HandleIngestSpawnMaps,
+            ["ingest-spells"] = HandleIngestSpells,
+            ["ingest-recipes"] = HandleIngestRecipes,
+            ["benchmark"] = _ => HandleBenchmark(),
+            ["set-landblock-heightmap"] = HandleSetLandblockHeightmap,
+            ["set-landblock-terrain"] = HandleSetLandblockTerrain,
+            ["bulk-place-objects"] = HandleBulkPlaceObjects,
+            ["generate-terrain"] = HandleGenerateTerrain,
+            ["generate-dungeon"] = HandleGenerateDungeon,
+            ["auto-paint"] = _ => HandleAutoPaint(),
+            ["analyze-landblock-patterns"] = HandleAnalyzeLandblockPatterns,
+            ["export-training-data"] = HandleExportTrainingData,
+            ["generate-settlement"] = HandleGenerateSettlement,
+            ["extract-retail-heightmaps"] = HandleExtractRetailHeightmaps,
+            ["compute-vanilla-baseline"] = HandleComputeVanillaBaseline,
+            ["analyze-map-image"] = HandleAnalyzeMapImage,
+            ["calibrate-world-map"] = HandleCalibrateWorldMap,
+            ["quick-world"] = HandleQuickWorld,
+            ["remap-buildings"] = HandleRemapBuildings,
+            ["remap-buildings-v2"] = HandleRemapBuildingsV2,
+            ["remap-buildings-sql"] = HandleRemapBuildingsSql,
+            ["ace-db"] = HandleAceDb,
+            ["dungeon"] = HandleDungeon,
+            ["help"] = _ => PrintHelp(),
+        };
 
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     //  Project management
@@ -1573,6 +1533,10 @@ public class TerminalRepl {
     /// so that paths containing spaces are treated as a single argument.
     /// </summary>
     internal static string[] TokenizeLine(string line) {
+        if (!line.Contains('"')) {
+            return line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        }
+
         var tokens = new List<string>();
         var current = new System.Text.StringBuilder();
         bool inQuotes = false;
