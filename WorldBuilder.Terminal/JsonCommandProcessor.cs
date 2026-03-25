@@ -127,6 +127,7 @@ public class JsonCommandProcessor {
                 "validate-dungeon" => CmdValidateDungeon(node),
                 "validate-landblock" => CmdValidateLandblock(node),
                 "validate-terrain" => CmdValidateTerrain(node),
+                "validate-building-shells" => CmdValidateBuildingShells(node),
                 "validate-building-portals" => CmdValidateBuildingPortals(node),
                 "validate-all" => CmdValidateAll(node),
 
@@ -535,6 +536,11 @@ public class JsonCommandProcessor {
         return FormatValidation("validate-terrain", lbX, lbY, _engine.ValidateTerrain(lbX, lbY, threshold));
     }
 
+    private string CmdValidateBuildingShells(System.Text.Json.Nodes.JsonNode node) {
+        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        return FormatValidation("validate-building-shells", lbX, lbY, _engine.ValidateBuildingShells(lbX, lbY));
+    }
+
     private string CmdValidateBuildingPortals(System.Text.Json.Nodes.JsonNode node) {
         uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
         return FormatValidation("validate-building-portals", lbX, lbY, _engine.ValidateBuildingPortals(lbX, lbY));
@@ -767,6 +773,7 @@ public class JsonCommandProcessor {
             new { name = "validate-dungeon", args = "lbX, lbY",                              description = "Validate dungeon" },
             new { name = "validate-landblock", args = "lbX, lbY",                            description = "Validate landblock" },
             new { name = "validate-terrain", args = "lbX, lbY, cliffThreshold?",             description = "Validate terrain" },
+            new { name = "validate-building-shells", args = "lbX, lbY",                      description = "Validate building shells" },
             new { name = "validate-building-portals", args = "lbX, lbY",                     description = "Validate building portals" },
             new { name = "validate-all",     args = "lbX, lbY, cliffThreshold?",             description = "Run all validators" },
             new { name = "list-landblocks",  args = "minX?, minY?, maxX?, maxY?, limit?",    description = "List landblocks" },
