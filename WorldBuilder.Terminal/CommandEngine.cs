@@ -245,9 +245,14 @@ public class CommandEngine {
         var affected = _terrainService.GetAffectedVertices(new Vector3(x, y, 0), radius, hl);
 
         var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>();
+        var terrainCache = new Dictionary<ushort, TerrainEntry[]?>();
         int changeCount = 0;
         foreach (var (lbId, vIndex, _) in affected) {
-            var data = tl(lbId);
+            if (!terrainCache.TryGetValue(lbId, out var data)) {
+                data = tl(lbId);
+                terrainCache[lbId] = data;
+            }
+
             if (data == null || data[vIndex].Type == terrainType) continue;
             if (!batchChanges.TryGetValue(lbId, out var lbChanges)) {
                 lbChanges = new Dictionary<byte, uint>();
@@ -277,8 +282,13 @@ public class CommandEngine {
         if (fillResult.Count == 0) return new TerrainEditResult(0, new HashSet<ushort>());
 
         var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>();
+        var terrainCache = new Dictionary<ushort, TerrainEntry[]?>();
         foreach (var (lbId, vIndex, _) in fillResult) {
-            var data = tl(lbId);
+            if (!terrainCache.TryGetValue(lbId, out var data)) {
+                data = tl(lbId);
+                terrainCache[lbId] = data;
+            }
+
             if (data == null) continue;
             if (!batchChanges.TryGetValue(lbId, out var lbChanges)) {
                 lbChanges = new Dictionary<byte, uint>();
@@ -300,12 +310,17 @@ public class CommandEngine {
         if (path.Count == 0) return new RoadResult(0, 0, roadValue, new HashSet<ushort>());
 
         var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>();
+        var terrainCache = new Dictionary<ushort, TerrainEntry[]?>();
         int changeCount = 0;
         foreach (var wp in path) {
             var vi = _terrainService.WorldToVertex(wp.X, wp.Y);
             if (!vi.HasValue) continue;
             var (lbId, vIndex) = vi.Value;
-            var data = tl(lbId);
+            if (!terrainCache.TryGetValue(lbId, out var data)) {
+                data = tl(lbId);
+                terrainCache[lbId] = data;
+            }
+
             if (data == null || data[vIndex].Road == roadValue) continue;
             if (!batchChanges.TryGetValue(lbId, out var lbChanges)) {
                 lbChanges = new Dictionary<byte, uint>();
@@ -7588,8 +7603,13 @@ public class CommandEngine {
         if (changes.Count == 0) return new TerrainEditResult(0, new HashSet<ushort>());
 
         var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>();
+        var terrainCache = new Dictionary<ushort, TerrainEntry[]?>();
         foreach (var (lbId, vIndex, _, newHeight) in changes) {
-            var data = terrainDoc.GetLandblockInternal(lbId);
+            if (!terrainCache.TryGetValue(lbId, out var data)) {
+                data = terrainDoc.GetLandblockInternal(lbId);
+                terrainCache[lbId] = data;
+            }
+
             if (data == null) continue;
             if (!batchChanges.TryGetValue(lbId, out var lbChanges)) {
                 lbChanges = new Dictionary<byte, uint>();
@@ -7609,4 +7629,3 @@ public class CommandEngine {
                 $"Invalid index {index}. Landblock has {count} objects.");
     }
 }
-
