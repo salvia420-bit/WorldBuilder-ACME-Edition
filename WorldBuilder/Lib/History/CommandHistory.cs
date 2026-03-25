@@ -175,7 +175,14 @@ public class CommandHistory {
         if (!docId.StartsWith("landblock_", StringComparison.OrdinalIgnoreCase)) return false;
 
         // Extract landblock coordinates from ID (e.g., "landblock_0x1234" -> x=0x12, y=0x34)
-        var lbKey = ushort.Parse(docId.Replace("landblock_", ""), System.Globalization.NumberStyles.HexNumber);
+        var rawKey = docId["landblock_".Length..];
+        if (rawKey.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) {
+            rawKey = rawKey[2..];
+        }
+        if (!ushort.TryParse(rawKey, System.Globalization.NumberStyles.HexNumber, null, out var lbKey)) {
+            _logger.LogWarning("Unable to parse landblock document id '{DocumentId}' while checking view proximity", docId);
+            return false;
+        }
         var lbX = (lbKey >> 8) & 0xFF;
         var lbY = lbKey & 0xFF;
 
