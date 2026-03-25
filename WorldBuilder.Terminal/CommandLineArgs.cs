@@ -42,27 +42,33 @@ public class CommandLineArgs {
             switch (arg.ToLowerInvariant()) {
                 case "--project":
                 case "-p":
-                    if (i + 1 < args.Length) {
+                    if (i + 1 < args.Length && !LooksLikeFlag(args[i + 1])) {
                         result.ProjectPath = UnquotePath(args[++i]);
+                    } else {
+                        result.Warnings.Add("Warning: Missing value for --project/-p. Ignored.");
                     }
                     break;
 
                 case "--export":
                 case "-e":
-                    if (i + 1 < args.Length) {
+                    if (i + 1 < args.Length && !LooksLikeFlag(args[i + 1])) {
                         result.ExportDirectory = UnquotePath(args[++i]);
+                    } else {
+                        result.Warnings.Add("Warning: Missing value for --export/-e. Ignored.");
                     }
                     break;
 
                 case "--iteration":
                 case "-i":
-                    if (i + 1 < args.Length) {
+                    if (i + 1 < args.Length && !LooksLikeFlag(args[i + 1])) {
                         var iterStr = args[++i];
                         if (int.TryParse(iterStr, out var iter)) {
                             result.Iteration = iter;
                         } else {
                             result.Warnings.Add($"Warning: Invalid iteration value '{iterStr}' — expected an integer. Ignored.");
                         }
+                    } else {
+                        result.Warnings.Add("Warning: Missing value for --iteration/-i. Ignored.");
                     }
                     break;
 
@@ -99,6 +105,12 @@ public class CommandLineArgs {
             return value[1..^1];
         }
         return value;
+    }
+
+    private static bool LooksLikeFlag(string value) {
+        if (string.IsNullOrEmpty(value)) return false;
+        if (!value.StartsWith('-')) return false;
+        return value.Length == 1 || !char.IsDigit(value[1]);
     }
 
     public static void PrintUsage() {
