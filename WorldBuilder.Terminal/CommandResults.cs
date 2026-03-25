@@ -692,6 +692,79 @@ public record DungeonCopyCellsResult(
     int CellsCopied,
     string? Error = null);
 
+public record DungeonMoveCellResult(
+    bool Success,
+    ushort LbKey,
+    ushort CellNumber,
+    float DeltaX,
+    float DeltaY,
+    float DeltaZ,
+    string? Error = null);
+
+public record DungeonRotateCellResult(
+    bool Success,
+    ushort LbKey,
+    ushort CellNumber,
+    float Degrees,
+    float AxisX,
+    float AxisY,
+    float AxisZ,
+    string? Error = null);
+
+public record DungeonMoveObjectResult(
+    bool Success,
+    ushort LbKey,
+    ushort CellNumber,
+    int ObjectIndex,
+    float DeltaX,
+    float DeltaY,
+    float DeltaZ,
+    string? Error = null);
+
+public record DungeonRotateObjectResult(
+    bool Success,
+    ushort LbKey,
+    ushort CellNumber,
+    int ObjectIndex,
+    float Degrees,
+    string? Error = null);
+
+public record DungeonSetCellPositionResult(
+    bool Success,
+    ushort LbKey,
+    ushort CellNumber,
+    float X,
+    float Y,
+    float Z,
+    string? Error = null);
+
+public record DungeonSetCellRotationResult(
+    bool Success,
+    ushort LbKey,
+    ushort CellNumber,
+    float RotX,
+    float RotY,
+    float RotZ,
+    string? Error = null);
+
+public record DungeonSetObjectPositionResult(
+    bool Success,
+    ushort LbKey,
+    ushort CellNumber,
+    int ObjectIndex,
+    float X,
+    float Y,
+    float Z,
+    string? Error = null);
+
+public record DungeonSetObjectRotationResult(
+    bool Success,
+    ushort LbKey,
+    ushort CellNumber,
+    int ObjectIndex,
+    float Degrees,
+    string? Error = null);
+
 // ═══════════════════════════════════════════════════════
 //  Building Remap (cluster shuffle)
 // ═══════════════════════════════════════════════════════
@@ -743,4 +816,3 @@ public record RemapBuildingsSqlResult(
     bool Applied = false,
     List<string>? Warnings = null,
     string? Error = null);
-

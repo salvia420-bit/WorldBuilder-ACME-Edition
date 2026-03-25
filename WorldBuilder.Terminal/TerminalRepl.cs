@@ -1542,6 +1542,14 @@ public class TerminalRepl {
         Console.WriteLine("  dungeon recompute <lbX> <lbY>                             Recompute visible cells + portal flags");
         Console.WriteLine("  dungeon reload <lbX> <lbY>                                Reload from DAT (discard edits)");
         Console.WriteLine("  dungeon copy-cells <srcX> <srcY> <destX> <destY>          Copy dungeon cells to another landblock");
+        Console.WriteLine("  dungeon move-cell <lbX> <lbY> <cellNum> <dX> <dY> <dZ>    Translate a cell");
+        Console.WriteLine("  dungeon rotate-cell <lbX> <lbY> <cellNum> <deg> <ax> <ay> <az>  Rotate a cell around axis");
+        Console.WriteLine("  dungeon move-object <lbX> <lbY> <cellNum> <idx> <dX> <dY> <dZ>  Translate static object");
+        Console.WriteLine("  dungeon rotate-object <lbX> <lbY> <cellNum> <idx> <deg>   Rotate static object around Z");
+        Console.WriteLine("  dungeon set-cell-position <lbX> <lbY> <cellNum> <x> <y> <z>      Set absolute cell position");
+        Console.WriteLine("  dungeon set-cell-rotation <lbX> <lbY> <cellNum> <rx> <ry> <rz>   Set absolute cell Euler rotation");
+        Console.WriteLine("  dungeon set-object-position <lbX> <lbY> <cellNum> <idx> <x> <y> <z>   Set absolute object position");
+        Console.WriteLine("  dungeon set-object-rotation <lbX> <lbY> <cellNum> <idx> <deg>    Set absolute object Z rotation");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
@@ -3311,6 +3319,14 @@ public class TerminalRepl {
             Console.WriteLine("  recompute <lbX> <lbY>");
             Console.WriteLine("  reload <lbX> <lbY>");
             Console.WriteLine("  copy-cells <srcX> <srcY> <destX> <destY>");
+            Console.WriteLine("  move-cell <lbX> <lbY> <cellNum> <dX> <dY> <dZ>");
+            Console.WriteLine("  rotate-cell <lbX> <lbY> <cellNum> <degrees> <axisX> <axisY> <axisZ>");
+            Console.WriteLine("  move-object <lbX> <lbY> <cellNum> <objIndex> <dX> <dY> <dZ>");
+            Console.WriteLine("  rotate-object <lbX> <lbY> <cellNum> <objIndex> <degrees>");
+            Console.WriteLine("  set-cell-position <lbX> <lbY> <cellNum> <x> <y> <z>");
+            Console.WriteLine("  set-cell-rotation <lbX> <lbY> <cellNum> <rotX> <rotY> <rotZ>");
+            Console.WriteLine("  set-object-position <lbX> <lbY> <cellNum> <objIndex> <x> <y> <z>");
+            Console.WriteLine("  set-object-rotation <lbX> <lbY> <cellNum> <objIndex> <degrees>");
             return;
         }
 
@@ -3325,9 +3341,17 @@ public class TerminalRepl {
             case "recompute":   HandleDungeonRecompute(tokens); break;
             case "reload":      HandleDungeonReload(tokens); break;
             case "copy-cells":  HandleDungeonCopyCells(tokens); break;
+            case "move-cell":   HandleDungeonMoveCell(tokens); break;
+            case "rotate-cell": HandleDungeonRotateCell(tokens); break;
+            case "move-object": HandleDungeonMoveObject(tokens); break;
+            case "rotate-object": HandleDungeonRotateObject(tokens); break;
+            case "set-cell-position": HandleDungeonSetCellPosition(tokens); break;
+            case "set-cell-rotation": HandleDungeonSetCellRotation(tokens); break;
+            case "set-object-position": HandleDungeonSetObjectPosition(tokens); break;
+            case "set-object-rotation": HandleDungeonSetObjectRotation(tokens); break;
             default:
                 Console.WriteLine($"Unknown dungeon sub-command: '{sub}'");
-                Console.WriteLine("  Available: add-cell, remove-cell, connect, disconnect, validate, autofix, recompute, reload, copy-cells");
+                Console.WriteLine("  Available: add-cell, remove-cell, connect, disconnect, validate, autofix, recompute, reload, copy-cells, move-cell, rotate-cell, move-object, rotate-object, set-cell-position, set-cell-rotation, set-object-position, set-object-rotation");
                 break;
         }
     }
@@ -3612,6 +3636,215 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 
+    private void HandleDungeonMoveCell(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 8) {
+            Console.WriteLine("Usage: dungeon move-cell <lbX> <lbY> <cellNum> <dX> <dY> <dZ>");
+            return;
+        }
+        if (!TryParseUint(tokens[2], "lbX", out uint lbX)) return;
+        if (!TryParseUint(tokens[3], "lbY", out uint lbY)) return;
+        if (!TryParseHex(tokens[4], "cellNum", out uint cellNumU)) return;
+        if (!TryParseFloat(tokens[5], "dX", out float dx)) return;
+        if (!TryParseFloat(tokens[6], "dY", out float dy)) return;
+        if (!TryParseFloat(tokens[7], "dZ", out float dz)) return;
+
+        var r = _engine.DungeonMoveCell(lbX, lbY, (ushort)cellNumU, dx, dy, dz);
+        Console.WriteLine();
+        if (r.Success) {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"  ✓ Moved cell 0x{r.CellNumber:X4} by ({r.DeltaX:F2}, {r.DeltaY:F2}, {r.DeltaZ:F2})");
+        } else {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  ✗ Error: {r.Error}");
+        }
+        Console.ResetColor();
+        Console.WriteLine();
+    }
+
+    private void HandleDungeonRotateCell(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 9) {
+            Console.WriteLine("Usage: dungeon rotate-cell <lbX> <lbY> <cellNum> <degrees> <axisX> <axisY> <axisZ>");
+            return;
+        }
+        if (!TryParseUint(tokens[2], "lbX", out uint lbX)) return;
+        if (!TryParseUint(tokens[3], "lbY", out uint lbY)) return;
+        if (!TryParseHex(tokens[4], "cellNum", out uint cellNumU)) return;
+        if (!TryParseFloat(tokens[5], "degrees", out float degrees)) return;
+        if (!TryParseFloat(tokens[6], "axisX", out float axisX)) return;
+        if (!TryParseFloat(tokens[7], "axisY", out float axisY)) return;
+        if (!TryParseFloat(tokens[8], "axisZ", out float axisZ)) return;
+
+        var r = _engine.DungeonRotateCell(lbX, lbY, (ushort)cellNumU, degrees, axisX, axisY, axisZ);
+        Console.WriteLine();
+        if (r.Success) {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"  ✓ Rotated cell 0x{r.CellNumber:X4} by {r.Degrees:F1}° around ({r.AxisX:F2}, {r.AxisY:F2}, {r.AxisZ:F2})");
+        } else {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  ✗ Error: {r.Error}");
+        }
+        Console.ResetColor();
+        Console.WriteLine();
+    }
+
+    private void HandleDungeonMoveObject(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 9) {
+            Console.WriteLine("Usage: dungeon move-object <lbX> <lbY> <cellNum> <objIndex> <dX> <dY> <dZ>");
+            return;
+        }
+        if (!TryParseUint(tokens[2], "lbX", out uint lbX)) return;
+        if (!TryParseUint(tokens[3], "lbY", out uint lbY)) return;
+        if (!TryParseHex(tokens[4], "cellNum", out uint cellNumU)) return;
+        if (!TryParseInt(tokens[5], "objIndex", out int objectIndex)) return;
+        if (!TryParseFloat(tokens[6], "dX", out float dx)) return;
+        if (!TryParseFloat(tokens[7], "dY", out float dy)) return;
+        if (!TryParseFloat(tokens[8], "dZ", out float dz)) return;
+
+        var r = _engine.DungeonMoveObject(lbX, lbY, (ushort)cellNumU, objectIndex, dx, dy, dz);
+        Console.WriteLine();
+        if (r.Success) {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"  ✓ Moved object[{r.ObjectIndex}] in cell 0x{r.CellNumber:X4} by ({r.DeltaX:F2}, {r.DeltaY:F2}, {r.DeltaZ:F2})");
+        } else {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  ✗ Error: {r.Error}");
+        }
+        Console.ResetColor();
+        Console.WriteLine();
+    }
+
+    private void HandleDungeonRotateObject(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 7) {
+            Console.WriteLine("Usage: dungeon rotate-object <lbX> <lbY> <cellNum> <objIndex> <degrees>");
+            return;
+        }
+        if (!TryParseUint(tokens[2], "lbX", out uint lbX)) return;
+        if (!TryParseUint(tokens[3], "lbY", out uint lbY)) return;
+        if (!TryParseHex(tokens[4], "cellNum", out uint cellNumU)) return;
+        if (!TryParseInt(tokens[5], "objIndex", out int objectIndex)) return;
+        if (!TryParseFloat(tokens[6], "degrees", out float degrees)) return;
+
+        var r = _engine.DungeonRotateObject(lbX, lbY, (ushort)cellNumU, objectIndex, degrees);
+        Console.WriteLine();
+        if (r.Success) {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"  ✓ Rotated object[{r.ObjectIndex}] in cell 0x{r.CellNumber:X4} by {r.Degrees:F1}° (Z axis)");
+        } else {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  ✗ Error: {r.Error}");
+        }
+        Console.ResetColor();
+        Console.WriteLine();
+    }
+
+    private void HandleDungeonSetCellPosition(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 8) {
+            Console.WriteLine("Usage: dungeon set-cell-position <lbX> <lbY> <cellNum> <x> <y> <z>");
+            return;
+        }
+        if (!TryParseUint(tokens[2], "lbX", out uint lbX)) return;
+        if (!TryParseUint(tokens[3], "lbY", out uint lbY)) return;
+        if (!TryParseHex(tokens[4], "cellNum", out uint cellNumU)) return;
+        if (!TryParseFloat(tokens[5], "x", out float x)) return;
+        if (!TryParseFloat(tokens[6], "y", out float y)) return;
+        if (!TryParseFloat(tokens[7], "z", out float z)) return;
+
+        var r = _engine.DungeonSetCellPosition(lbX, lbY, (ushort)cellNumU, x, y, z);
+        Console.WriteLine();
+        if (r.Success) {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"  ✓ Set cell 0x{r.CellNumber:X4} position to ({r.X:F2}, {r.Y:F2}, {r.Z:F2})");
+        } else {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  ✗ Error: {r.Error}");
+        }
+        Console.ResetColor();
+        Console.WriteLine();
+    }
+
+    private void HandleDungeonSetCellRotation(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 8) {
+            Console.WriteLine("Usage: dungeon set-cell-rotation <lbX> <lbY> <cellNum> <rotX> <rotY> <rotZ>");
+            return;
+        }
+        if (!TryParseUint(tokens[2], "lbX", out uint lbX)) return;
+        if (!TryParseUint(tokens[3], "lbY", out uint lbY)) return;
+        if (!TryParseHex(tokens[4], "cellNum", out uint cellNumU)) return;
+        if (!TryParseFloat(tokens[5], "rotX", out float rotX)) return;
+        if (!TryParseFloat(tokens[6], "rotY", out float rotY)) return;
+        if (!TryParseFloat(tokens[7], "rotZ", out float rotZ)) return;
+
+        var r = _engine.DungeonSetCellRotation(lbX, lbY, (ushort)cellNumU, rotX, rotY, rotZ);
+        Console.WriteLine();
+        if (r.Success) {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"  ✓ Set cell 0x{r.CellNumber:X4} rotation to ({r.RotX:F1}, {r.RotY:F1}, {r.RotZ:F1})");
+        } else {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  ✗ Error: {r.Error}");
+        }
+        Console.ResetColor();
+        Console.WriteLine();
+    }
+
+    private void HandleDungeonSetObjectPosition(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 9) {
+            Console.WriteLine("Usage: dungeon set-object-position <lbX> <lbY> <cellNum> <objIndex> <x> <y> <z>");
+            return;
+        }
+        if (!TryParseUint(tokens[2], "lbX", out uint lbX)) return;
+        if (!TryParseUint(tokens[3], "lbY", out uint lbY)) return;
+        if (!TryParseHex(tokens[4], "cellNum", out uint cellNumU)) return;
+        if (!TryParseInt(tokens[5], "objIndex", out int objectIndex)) return;
+        if (!TryParseFloat(tokens[6], "x", out float x)) return;
+        if (!TryParseFloat(tokens[7], "y", out float y)) return;
+        if (!TryParseFloat(tokens[8], "z", out float z)) return;
+
+        var r = _engine.DungeonSetObjectPosition(lbX, lbY, (ushort)cellNumU, objectIndex, x, y, z);
+        Console.WriteLine();
+        if (r.Success) {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"  ✓ Set object[{r.ObjectIndex}] in cell 0x{r.CellNumber:X4} position to ({r.X:F2}, {r.Y:F2}, {r.Z:F2})");
+        } else {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  ✗ Error: {r.Error}");
+        }
+        Console.ResetColor();
+        Console.WriteLine();
+    }
+
+    private void HandleDungeonSetObjectRotation(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 7) {
+            Console.WriteLine("Usage: dungeon set-object-rotation <lbX> <lbY> <cellNum> <objIndex> <degrees>");
+            return;
+        }
+        if (!TryParseUint(tokens[2], "lbX", out uint lbX)) return;
+        if (!TryParseUint(tokens[3], "lbY", out uint lbY)) return;
+        if (!TryParseHex(tokens[4], "cellNum", out uint cellNumU)) return;
+        if (!TryParseInt(tokens[5], "objIndex", out int objectIndex)) return;
+        if (!TryParseFloat(tokens[6], "degrees", out float degrees)) return;
+
+        var r = _engine.DungeonSetObjectRotation(lbX, lbY, (ushort)cellNumU, objectIndex, degrees);
+        Console.WriteLine();
+        if (r.Success) {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"  ✓ Set object[{r.ObjectIndex}] in cell 0x{r.CellNumber:X4} rotation to {r.Degrees:F1}°");
+        } else {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  ✗ Error: {r.Error}");
+        }
+        Console.ResetColor();
+        Console.WriteLine();
+    }
+
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     //  Terrain Sub-commands
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -3680,4 +3913,3 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 }
-

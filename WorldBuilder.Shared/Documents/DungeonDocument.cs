@@ -302,6 +302,99 @@ namespace WorldBuilder.Shared.Documents {
             MarkDirty();
         }
 
+        public bool MoveCell(ushort cellNumber, Vector3 delta) {
+            var cell = Cells.FirstOrDefault(c => c.CellNumber == cellNumber);
+            if (cell == null) return false;
+            cell.Origin += delta;
+            MarkDirty();
+            return true;
+        }
+
+        public bool RotateCell(ushort cellNumber, float degrees, Vector3 axis) {
+            var cell = Cells.FirstOrDefault(c => c.CellNumber == cellNumber);
+            if (cell == null) return false;
+            if (axis == Vector3.Zero) return false;
+
+            var normalizedAxis = Vector3.Normalize(axis);
+            float radians = degrees * (MathF.PI / 180f);
+            var rotation = Quaternion.CreateFromAxisAngle(normalizedAxis, radians);
+            cell.Orientation = Quaternion.Normalize(rotation * cell.Orientation);
+            MarkDirty();
+            return true;
+        }
+
+        public bool MoveStaticObject(ushort cellNumber, int objectIndex, Vector3 delta) {
+            var cell = Cells.FirstOrDefault(c => c.CellNumber == cellNumber);
+            if (cell == null) return false;
+            if (objectIndex < 0 || objectIndex >= cell.StaticObjects.Count) return false;
+
+            cell.StaticObjects[objectIndex].Origin += delta;
+            MarkDirty();
+            return true;
+        }
+
+        public bool RotateStaticObject(ushort cellNumber, int objectIndex, float degrees) {
+            var cell = Cells.FirstOrDefault(c => c.CellNumber == cellNumber);
+            if (cell == null) return false;
+            if (objectIndex < 0 || objectIndex >= cell.StaticObjects.Count) return false;
+
+            float radians = degrees * (MathF.PI / 180f);
+            var rotation = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, radians);
+            var current = cell.StaticObjects[objectIndex].Orientation;
+            cell.StaticObjects[objectIndex].Orientation = Quaternion.Normalize(rotation * current);
+            MarkDirty();
+            return true;
+        }
+
+        public bool SetCellPosition(ushort cellNumber, Vector3 position) {
+            var cell = Cells.FirstOrDefault(c => c.CellNumber == cellNumber);
+            if (cell == null) return false;
+            cell.Origin = position;
+            MarkDirty();
+            return true;
+        }
+
+        public bool SetCellRotationEuler(ushort cellNumber, Vector3 eulerDegrees) {
+            var cell = Cells.FirstOrDefault(c => c.CellNumber == cellNumber);
+            if (cell == null) return false;
+            cell.Orientation = EulerToQuat(eulerDegrees);
+            MarkDirty();
+            return true;
+        }
+
+        public bool SetStaticObjectPosition(ushort cellNumber, int objectIndex, Vector3 position) {
+            var cell = Cells.FirstOrDefault(c => c.CellNumber == cellNumber);
+            if (cell == null) return false;
+            if (objectIndex < 0 || objectIndex >= cell.StaticObjects.Count) return false;
+            cell.StaticObjects[objectIndex].Origin = position;
+            MarkDirty();
+            return true;
+        }
+
+        public bool SetStaticObjectRotationDegrees(ushort cellNumber, int objectIndex, float targetDegrees) {
+            var cell = Cells.FirstOrDefault(c => c.CellNumber == cellNumber);
+            if (cell == null) return false;
+            if (objectIndex < 0 || objectIndex >= cell.StaticObjects.Count) return false;
+
+            var current = cell.StaticObjects[objectIndex].Orientation;
+            float currentDegrees = MathF.Atan2(
+                2f * (current.W * current.Z + current.X * current.Y),
+                1f - 2f * (current.Y * current.Y + current.Z * current.Z)) * 180f / MathF.PI;
+
+            float delta = targetDegrees - currentDegrees;
+            return RotateStaticObject(cellNumber, objectIndex, delta);
+        }
+
+        private static Quaternion EulerToQuat(Vector3 eulerDegrees) {
+            float rx = eulerDegrees.X * MathF.PI / 180f;
+            float ry = eulerDegrees.Y * MathF.PI / 180f;
+            float rz = eulerDegrees.Z * MathF.PI / 180f;
+            return Quaternion.Normalize(
+                Quaternion.CreateFromAxisAngle(Vector3.UnitZ, rz) *
+                Quaternion.CreateFromAxisAngle(Vector3.UnitY, ry) *
+                Quaternion.CreateFromAxisAngle(Vector3.UnitX, rx));
+        }
+
         /// <summary>
         /// AC dungeon depth formula: world_z = -blockY * DungeonZScale + origin_z.
         /// High blockY pushes dungeons far underground (e.g. 0x01D9 -> ~-3000).
