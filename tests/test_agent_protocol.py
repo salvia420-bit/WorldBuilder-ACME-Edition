@@ -25,6 +25,7 @@ protocol-level tests.
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -48,6 +49,26 @@ BINARY_PATH = os.environ.get("WORLDBUILDER_BINARY", None)
 # Timeout for process operations (seconds)
 STARTUP_TIMEOUT = 30
 COMMAND_TIMEOUT = 15
+
+
+def _runtime_is_available() -> tuple[bool, str]:
+    """
+    Validate that we can launch WorldBuilder.Terminal in this environment.
+    Returns (ok, reason_if_not_ok).
+    """
+    if BINARY_PATH:
+        binary = Path(BINARY_PATH)
+        if not binary.exists():
+            return False, f"--binary path does not exist: {binary}"
+        return True, ""
+
+    if shutil.which("dotnet") is None:
+        return False, "dotnet SDK/runtime is not available in PATH"
+
+    if not TERMINAL_PROJECT.exists():
+        return False, f"WorldBuilder.Terminal project not found at {TERMINAL_PROJECT}"
+
+    return True, ""
 
 
 # ─────────────────────────────────────────────────────────────
@@ -221,7 +242,18 @@ def assert_has_fields(response: dict, *fields: str):
 # Test Suite 1: Protocol-Level Tests (No project required)
 # ─────────────────────────────────────────────────────────────
 
-class TestProtocol(unittest.TestCase):
+class RuntimeRequiredTestCase(unittest.TestCase):
+    """Base class: skips when terminal runtime prerequisites are unavailable."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        ok, reason = _runtime_is_available()
+        if not ok:
+            raise unittest.SkipTest(f"Skipping terminal protocol tests: {reason}")
+
+
+class TestProtocol(RuntimeRequiredTestCase):
     """Tests for the JSON-line protocol mechanics — startup, error handling,
     malformed input, unknown commands, and session lifecycle."""
 
@@ -408,7 +440,7 @@ class TestProtocol(unittest.TestCase):
 
 @unittest.skipUnless(TEST_PROJECT.exists(),
                      f"TestProject not found at {TEST_PROJECT}")
-class TestProjectCommands(unittest.TestCase):
+class TestProjectCommands(RuntimeRequiredTestCase):
     """Tests that require a loaded project. Skipped if TestProject is missing."""
 
     @classmethod
@@ -827,7 +859,7 @@ class TestProjectCommands(unittest.TestCase):
 
 @unittest.skipUnless(TEST_PROJECT.exists(),
                      f"TestProject not found at {TEST_PROJECT}")
-class TestStartupWithProject(unittest.TestCase):
+class TestStartupWithProject(RuntimeRequiredTestCase):
     """Tests for spawning with --project to preload."""
 
     def test_01_preload_project_on_startup(self):
@@ -850,7 +882,7 @@ class TestStartupWithProject(unittest.TestCase):
 # Test Suite 4: Serialization Contract
 # ─────────────────────────────────────────────────────────────
 
-class TestSerializationContract(unittest.TestCase):
+class TestSerializationContract(RuntimeRequiredTestCase):
     """Tests that verify the JSON serialization rules documented in the API spec."""
 
     def setUp(self):
