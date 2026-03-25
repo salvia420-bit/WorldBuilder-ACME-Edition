@@ -4876,6 +4876,10 @@ public class CommandEngine {
             if (root.TryGetProperty("terrainBaseColors", out var colorsArray)) {
                 foreach (var c in colorsArray.EnumerateArray()) {
                     int ti = c.GetProperty("typeIndex").GetInt32();
+                    if (ti < byte.MinValue || ti > byte.MaxValue) {
+                        Console.WriteLine($"[QuickWorld] Warning: skipping terrain type {ti} (outside byte range 0-255)");
+                        continue;
+                    }
                     string tn = c.GetProperty("typeName").GetString() ?? $"Type{ti}";
                     int r = c.GetProperty("baseR").GetInt32();
                     int g = c.GetProperty("baseG").GetInt32();
@@ -4924,6 +4928,27 @@ public class CommandEngine {
         Console.WriteLine($"[QuickWorld] Codebook: {terrainBaseColors.Count} terrain types, " +
                           $"{heightPercentiles.Count} height distributions");
 
+        byte EstimateHeightFromCodebook(int terrainType, double brightness01) {
+            int noise = rng.Next(-2, 3);
+
+            if (heightPercentiles.TryGetValue(terrainType, out var pArr) && pArr.Length > 0) {
+                int pIdx = pArr.Length == 101
+                    ? Math.Clamp((int)Math.Round(brightness01 * 100.0), 0, 100)
+                    : Math.Clamp((int)Math.Round(brightness01 * (pArr.Length - 1)), 0, pArr.Length - 1);
+                int sampled = pArr[pIdx];
+                return (byte)Math.Clamp(sampled + noise, 0, 255);
+            }
+
+            if (heightMinMax.TryGetValue(terrainType, out var minMax)) {
+                int span = minMax.max - minMax.min;
+                int baseH = minMax.min + (int)Math.Round(brightness01 * span);
+                return (byte)Math.Clamp(baseH + noise, 0, 255);
+            }
+
+            int fallback = (int)Math.Round(brightness01 * 255.0);
+            return (byte)Math.Clamp(fallback + noise, 0, 255);
+        }
+
         // â”€â”€â”€ 2. Load world map image â”€â”€â”€
         Console.WriteLine($"[QuickWorld] Loading world map image: {worldMapImagePath}");
         if (!File.Exists(worldMapImagePath)) {
@@ -4970,6 +4995,13 @@ public class CommandEngine {
 
         // Pre-compute base color array for fast nearest-color search
         var baseColorArr = terrainBaseColors.ToArray();
+        var classificationColors = baseColorArr.Where(c => c.typeIndex != 32).ToArray();
+        if (classificationColors.Length == 0) {
+            sw.Stop();
+            return new QuickWorldResult(false, 0, 0, 0, 0,
+                new Dictionary<string, int>(), Math.Round(sw.Elapsed.TotalMilliseconds, 1),
+                "Codebook contains no usable terrain colors (all entries are excluded type 32)");
+        }
 
         // Collect ALL changes in memory before writing to avoid per-landblock I/O
         var allChanges = new Dictionary<ushort, Dictionary<byte, uint>>();
@@ -5015,20 +5047,18 @@ public class CommandEngine {
                             int pr = pixel.Red, pg = pixel.Green, pb = pixel.Blue;
 
                             // â”€â”€ Classify terrain type: nearest RGB distance â”€â”€
-                            int bestType = baseColorArr[0].typeIndex;
+                            int bestType = classificationColors[0].typeIndex;
                             double bestDist = double.MaxValue;
 
-                            for (int t = 0; t < baseColorArr.Length; t++) {
-                                if (baseColorArr[t].typeIndex == 32) continue;
-
-                                double dr = pr - baseColorArr[t].r;
-                                double dg = pg - baseColorArr[t].g;
-                                double db = pb - baseColorArr[t].b;
+                            for (int t = 0; t < classificationColors.Length; t++) {
+                                double dr = pr - classificationColors[t].r;
+                                double dg = pg - classificationColors[t].g;
+                                double db = pb - classificationColors[t].b;
                                 double dist = dr * dr + dg * dg + db * db;
 
                                 if (dist < bestDist) {
                                     bestDist = dist;
-                                    bestType = baseColorArr[t].typeIndex;
+                                    bestType = classificationColors[t].typeIndex;
                                 }
                             }
 
@@ -5039,13 +5069,10 @@ public class CommandEngine {
                             typeCounts[bestType] = tc + 1;
 
                             // â”€â”€ Estimate height from brightness â”€â”€
-                            // Direct linear mapping: brightness â†’ full 0-255 height range.
-                            // Dark pixels (ocean/beach) â†’ 0, bright pixels (peaks) â†’ 255.
-                            // Tiny Â±2 noise for natural micro-variation.
+                            // Prefer terrain-specific codebook distributions (percentiles/min-max),
+                            // fall back to linear mapping if distribution data is unavailable.
                             double brightness = (pr + pg + pb) / (3.0 * 255.0);
-                            int baseH = (int)Math.Round(brightness * 255.0);
-                            int noise = rng.Next(-2, 3);
-                            byte heightIdx = (byte)Math.Clamp(baseH + noise, 0, 255);
+                            byte heightIdx = EstimateHeightFromCodebook(bestType, brightness);
 
                             newEntries[vi] = currentData[vi] with {
                                 Height = heightIdx,
@@ -7582,6 +7609,4 @@ public class CommandEngine {
                 $"Invalid index {index}. Landblock has {count} objects.");
     }
 }
-
-
 
