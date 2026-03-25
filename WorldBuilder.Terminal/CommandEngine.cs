@@ -4996,7 +4996,7 @@ public class CommandEngine {
 
                     for (int vx = 0; vx < 9; vx++) {
                         for (int vy = 0; vy < 9; vy++) {
-                            int vi = vy * 9 + vx;
+                            int vi = vx * 9 + vy;
 
                             // Map vertex to pixel coordinate
                             int pixX, pixY;
@@ -5132,7 +5132,7 @@ public class CommandEngine {
 
                     int gx = Math.Clamp((int)((ox - worldMinX) / 24f), 0, 8);
                     int gy = Math.Clamp((int)((oy - worldMinY) / 24f), 0, 8);
-                    int vi = gy * 9 + gx;
+                    int vi = gx * 9 + gy;
                     float z = GetHeightTable()[entries[vi].Height];
 
                     var obj = new StaticObject {
