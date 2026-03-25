@@ -85,6 +85,8 @@ The full protocol reference — every command, parameter, response schema, coord
 
 ### Available Commands (40+)
 
+For the complete, fully grouped REPL command catalog (including sub-commands), see **[`docs/terminal_repl_commands.md`](docs/terminal_repl_commands.md)**.
+
 | Category | Commands |
 |----------|----------|
 | **Project** | `load`, `export`, `info` |
