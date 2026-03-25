@@ -42,4 +42,24 @@ public class FileStorageServiceTests {
             Directory.Delete(tempDir, recursive: true);
         }
     }
+
+    [Theory]
+    [InlineData("../outside")]
+    [InlineData("..\\outside")]
+    [InlineData("folder/doc")]
+    [InlineData("folder\\doc")]
+    public async Task CreateDocumentAsync_RejectsDocumentIdsWithPathSegments(string documentId) {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"wb-storage-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+
+        try {
+            using var storage = new FileStorageService(tempDir, NullLogger<DocumentStorageService>.Instance);
+
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                storage.CreateDocumentAsync(documentId, "delta", new byte[] { 1, 2, 3 }));
+        }
+        finally {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
 }

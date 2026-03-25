@@ -12,6 +12,8 @@ namespace WorldBuilder.Shared.Documents {
         private readonly string _storageDirectory;
         private readonly ILogger<DocumentStorageService> _logger;
         private readonly object _fileLock = new object();
+        private static readonly char[] InvalidDocumentIdChars =
+            Path.GetInvalidFileNameChars().Concat(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }).ToArray();
 
         public FileStorageService(string storageDirectory, ILogger<DocumentStorageService> logger) {
             _storageDirectory = storageDirectory ?? throw new ArgumentNullException(nameof(storageDirectory));
@@ -27,8 +29,18 @@ namespace WorldBuilder.Shared.Documents {
         private string GetUpdatesFilePath(string documentId) =>
             Path.Combine(_storageDirectory, $"{documentId}.updates");
 
+        private static string ValidateDocumentId(string documentId) {
+            if (string.IsNullOrWhiteSpace(documentId)) throw new ArgumentNullException(nameof(documentId));
+
+            if (documentId.IndexOfAny(InvalidDocumentIdChars) >= 0 || documentId.Contains("..", StringComparison.Ordinal)) {
+                throw new ArgumentException("Document id contains invalid path characters", nameof(documentId));
+            }
+
+            return documentId;
+        }
+
         public async Task<DBDocument?> GetDocumentAsync(string documentId) {
-            if (string.IsNullOrEmpty(documentId)) throw new ArgumentNullException(nameof(documentId));
+            documentId = ValidateDocumentId(documentId);
 
             var filePath = GetDocumentFilePath(documentId);
             if (!File.Exists(filePath)) return null;
@@ -57,7 +69,7 @@ namespace WorldBuilder.Shared.Documents {
         }
 
         public async Task<DBDocument> CreateDocumentAsync(string documentId, string type, byte[] initialData) {
-            if (string.IsNullOrEmpty(documentId)) throw new ArgumentNullException(nameof(documentId));
+            documentId = ValidateDocumentId(documentId);
             if (string.IsNullOrEmpty(type)) throw new ArgumentNullException(nameof(type));
             if (initialData == null) throw new ArgumentNullException(nameof(initialData));
 
@@ -96,7 +108,7 @@ namespace WorldBuilder.Shared.Documents {
         }
 
         public async Task<DBDocument> UpdateDocumentAsync(string documentId, byte[] update) {
-            if (string.IsNullOrEmpty(documentId)) throw new ArgumentNullException(nameof(documentId));
+            documentId = ValidateDocumentId(documentId);
             if (update == null) throw new ArgumentNullException(nameof(update));
 
             var filePath = GetDocumentFilePath(documentId);
@@ -137,7 +149,7 @@ namespace WorldBuilder.Shared.Documents {
         }
 
         public async Task<bool> DeleteDocumentAsync(string documentId) {
-            if (string.IsNullOrEmpty(documentId)) throw new ArgumentNullException(nameof(documentId));
+            documentId = ValidateDocumentId(documentId);
 
             var docPath = GetDocumentFilePath(documentId);
             var updatesPath = GetUpdatesFilePath(documentId);
@@ -161,7 +173,7 @@ namespace WorldBuilder.Shared.Documents {
         }
 
         public async Task<DBDocumentUpdate> CreateUpdateAsync(string documentId, string type, byte[] update) {
-            if (string.IsNullOrEmpty(documentId)) throw new ArgumentNullException(nameof(documentId));
+            documentId = ValidateDocumentId(documentId);
             if (string.IsNullOrEmpty(type)) throw new ArgumentNullException(nameof(type));
             if (update == null) throw new ArgumentNullException(nameof(update));
 
@@ -169,7 +181,7 @@ namespace WorldBuilder.Shared.Documents {
         }
 
         public async Task<List<DBDocumentUpdate>> GetDocumentUpdatesAsync(string documentId) {
-            if (string.IsNullOrEmpty(documentId)) throw new ArgumentNullException(nameof(documentId));
+            documentId = ValidateDocumentId(documentId);
 
             var updatesPath = GetUpdatesFilePath(documentId);
             var updates = new List<DBDocumentUpdate>();
@@ -219,7 +231,8 @@ namespace WorldBuilder.Shared.Documents {
                     continue;
                 }
 
-                var dbUpdate = await CreateUpdateInternalAsync(documentId, type, update, timestamp, clientId, Guid.NewGuid());
+                var validDocumentId = ValidateDocumentId(documentId);
+                var dbUpdate = await CreateUpdateInternalAsync(validDocumentId, type, update, timestamp, clientId, Guid.NewGuid());
                 result.Add(dbUpdate);
             }
 
@@ -270,7 +283,7 @@ namespace WorldBuilder.Shared.Documents {
         }
 
         public async Task<int> CleanupOldUpdatesAsync(string documentId, int maxUpdates = 100, TimeSpan? maxAge = null) {
-            if (string.IsNullOrEmpty(documentId)) throw new ArgumentNullException(nameof(documentId));
+            documentId = ValidateDocumentId(documentId);
 
             var updates = await GetDocumentUpdatesAsync(documentId);
             if (!updates.Any()) return 0;
@@ -339,6 +352,7 @@ namespace WorldBuilder.Shared.Documents {
         }
 
         public Task<List<DBSnapshot>> GetSnapshotsAsync(string documentId) {
+            documentId = ValidateDocumentId(documentId);
             throw new NotImplementedException();
         }
 
