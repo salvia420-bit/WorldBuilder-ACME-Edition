@@ -81,9 +81,13 @@ public class JsonCommandProcessor {
         if (node == null)
             return (Serialize(new { success = false, command = "parse_error", error = "Null JSON input" }), false);
 
-        var command = node["command"]?.GetValue<string>()?.ToLowerInvariant();
-        if (string.IsNullOrEmpty(command))
-            return (Serialize(new { success = false, command = "parse_error", error = "Missing 'command' field" }), false);
+        if (node["command"] is not System.Text.Json.Nodes.JsonValue commandValue ||
+            !commandValue.TryGetValue<string>(out var commandRaw) ||
+            string.IsNullOrWhiteSpace(commandRaw)) {
+            return (Serialize(new { success = false, command = "parse_error", error = "Missing or invalid 'command' field" }), false);
+        }
+
+        var command = commandRaw.ToLowerInvariant();
 
         try {
             var result = command switch {
