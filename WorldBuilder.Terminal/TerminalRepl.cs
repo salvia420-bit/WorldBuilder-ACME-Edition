@@ -181,11 +181,20 @@ public class TerminalRepl {
             return;
         }
 
-        bool reposition = tokens.Any(t => t.Equals("--reposition", StringComparison.OrdinalIgnoreCase));
-        var argTokens = tokens.Where(t => !t.StartsWith("--")).ToArray();
+        bool reposition = false;
+        var argTokens = new List<string>(tokens.Length);
+        foreach (var token in tokens) {
+            if (token.StartsWith("--", StringComparison.Ordinal)) {
+                if (token.Equals("--reposition", StringComparison.OrdinalIgnoreCase)) {
+                    reposition = true;
+                }
+                continue;
+            }
+            argTokens.Add(token);
+        }
 
         int? iteration = null;
-        if (argTokens.Length >= 3) {
+        if (argTokens.Count >= 3) {
             if (!TryParseInt(argTokens[2], "iteration", out var iter)) return;
             iteration = iter;
         }
@@ -2825,30 +2834,43 @@ public class TerminalRepl {
         }
 
         string remapPath = tokens[1];
-        bool flatten = !tokens.Any(t => t.Equals("--no-flatten", StringComparison.OrdinalIgnoreCase));
-        bool runValidators = !tokens.Any(t => t.Equals("--no-validate", StringComparison.OrdinalIgnoreCase));
-        bool preserveRetailZ = tokens.Any(t => t.Equals("--preserve-retail-z", StringComparison.OrdinalIgnoreCase));
+        bool flatten = true;
+        bool runValidators = true;
+        bool preserveRetailZ = false;
         float flattenRadius = 30f;
         float flattenStrength = 0.85f;
+
+        static bool TryParseFloatArg(string value, out float parsed) =>
+            float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out parsed) ||
+            float.TryParse(value, NumberStyles.Float, CultureInfo.CurrentCulture, out parsed);
+
         for (int i = 2; i < tokens.Length; i++) {
             var t = tokens[i];
-            if (t.StartsWith("--flatten-radius=", StringComparison.OrdinalIgnoreCase)) {
-                if (float.TryParse(t.Split('=')[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedRadius) ||
-                    float.TryParse(t.Split('=')[1], NumberStyles.Float, CultureInfo.CurrentCulture, out parsedRadius))
+            if (t.Equals("--no-flatten", StringComparison.OrdinalIgnoreCase)) {
+                flatten = false;
+            } else if (t.Equals("--no-validate", StringComparison.OrdinalIgnoreCase)) {
+                runValidators = false;
+            } else if (t.Equals("--preserve-retail-z", StringComparison.OrdinalIgnoreCase)) {
+                preserveRetailZ = true;
+            } else if (t.StartsWith("--flatten-radius=", StringComparison.OrdinalIgnoreCase)) {
+                int equalsIndex = t.IndexOf('=');
+                if (equalsIndex >= 0 &&
+                    TryParseFloatArg(t[(equalsIndex + 1)..], out var parsedRadius)) {
                     flattenRadius = parsedRadius;
+                }
             } else if (t.Equals("--flatten-radius", StringComparison.OrdinalIgnoreCase) && i + 1 < tokens.Length) {
                 var val = tokens[++i];
-                if (float.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedRadius) ||
-                    float.TryParse(val, NumberStyles.Float, CultureInfo.CurrentCulture, out parsedRadius))
+                if (TryParseFloatArg(val, out var parsedRadius))
                     flattenRadius = parsedRadius;
             } else if (t.StartsWith("--flatten-strength=", StringComparison.OrdinalIgnoreCase)) {
-                if (float.TryParse(t.Split('=')[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedStrength) ||
-                    float.TryParse(t.Split('=')[1], NumberStyles.Float, CultureInfo.CurrentCulture, out parsedStrength))
+                int equalsIndex = t.IndexOf('=');
+                if (equalsIndex >= 0 &&
+                    TryParseFloatArg(t[(equalsIndex + 1)..], out var parsedStrength)) {
                     flattenStrength = parsedStrength;
+                }
             } else if (t.Equals("--flatten-strength", StringComparison.OrdinalIgnoreCase) && i + 1 < tokens.Length) {
                 var val = tokens[++i];
-                if (float.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedStrength) ||
-                    float.TryParse(val, NumberStyles.Float, CultureInfo.CurrentCulture, out parsedStrength))
+                if (TryParseFloatArg(val, out var parsedStrength))
                     flattenStrength = parsedStrength;
             }
         }
