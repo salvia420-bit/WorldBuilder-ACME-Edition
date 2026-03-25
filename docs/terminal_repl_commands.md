@@ -143,6 +143,14 @@ This is the full interactive REPL command catalog (as shown by `help`), grouped 
 - `dungeon recompute <lbX> <lbY>`
 - `dungeon reload <lbX> <lbY>`
 - `dungeon copy-cells <srcX> <srcY> <destX> <destY>`
+- `dungeon move-cell <lbX> <lbY> <cellNum> <dX> <dY> <dZ>`
+- `dungeon rotate-cell <lbX> <lbY> <cellNum> <degrees> <axisX> <axisY> <axisZ>`
+- `dungeon move-object <lbX> <lbY> <cellNum> <objIndex> <dX> <dY> <dZ>`
+- `dungeon rotate-object <lbX> <lbY> <cellNum> <objIndex> <degrees>`
+- `dungeon set-cell-position <lbX> <lbY> <cellNum> <x> <y> <z>`
+- `dungeon set-cell-rotation <lbX> <lbY> <cellNum> <rotX> <rotY> <rotZ>`
+- `dungeon set-object-position <lbX> <lbY> <cellNum> <objIndex> <x> <y> <z>`
+- `dungeon set-object-rotation <lbX> <lbY> <cellNum> <objIndex> <degrees>`
 
 ## General
 - `help`

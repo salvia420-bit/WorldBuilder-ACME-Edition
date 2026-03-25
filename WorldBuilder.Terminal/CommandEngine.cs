@@ -7323,6 +7323,174 @@ public class CommandEngine {
         }
     }
 
+    public DungeonMoveCellResult DungeonMoveCell(uint lbX, uint lbY, ushort cellNumber,
+        float deltaX, float deltaY, float deltaZ) {
+        RequireProject();
+        ushort lbKey = LbKey(lbX, lbY);
+        try {
+            var doc = GetDungeonDoc(lbKey);
+            if (doc == null)
+                return new DungeonMoveCellResult(false, lbKey, cellNumber, deltaX, deltaY, deltaZ,
+                    $"Could not load dungeon document for 0x{lbKey:X4}");
+
+            bool moved = doc.MoveCell(cellNumber, new Vector3(deltaX, deltaY, deltaZ));
+            if (!moved)
+                return new DungeonMoveCellResult(false, lbKey, cellNumber, deltaX, deltaY, deltaZ,
+                    $"Cell 0x{cellNumber:X4} not found");
+
+            return new DungeonMoveCellResult(true, lbKey, cellNumber, deltaX, deltaY, deltaZ);
+        } catch (Exception ex) {
+            return new DungeonMoveCellResult(false, lbKey, cellNumber, deltaX, deltaY, deltaZ, ex.Message);
+        }
+    }
+
+    public DungeonRotateCellResult DungeonRotateCell(uint lbX, uint lbY, ushort cellNumber,
+        float degrees, float axisX, float axisY, float axisZ) {
+        RequireProject();
+        ushort lbKey = LbKey(lbX, lbY);
+        try {
+            var doc = GetDungeonDoc(lbKey);
+            if (doc == null)
+                return new DungeonRotateCellResult(false, lbKey, cellNumber, degrees, axisX, axisY, axisZ,
+                    $"Could not load dungeon document for 0x{lbKey:X4}");
+
+            bool rotated = doc.RotateCell(cellNumber, degrees, new Vector3(axisX, axisY, axisZ));
+            if (!rotated)
+                return new DungeonRotateCellResult(false, lbKey, cellNumber, degrees, axisX, axisY, axisZ,
+                    $"Cell 0x{cellNumber:X4} not found or axis was zero");
+
+            return new DungeonRotateCellResult(true, lbKey, cellNumber, degrees, axisX, axisY, axisZ);
+        } catch (Exception ex) {
+            return new DungeonRotateCellResult(false, lbKey, cellNumber, degrees, axisX, axisY, axisZ, ex.Message);
+        }
+    }
+
+    public DungeonMoveObjectResult DungeonMoveObject(uint lbX, uint lbY, ushort cellNumber, int objectIndex,
+        float deltaX, float deltaY, float deltaZ) {
+        RequireProject();
+        ushort lbKey = LbKey(lbX, lbY);
+        try {
+            var doc = GetDungeonDoc(lbKey);
+            if (doc == null)
+                return new DungeonMoveObjectResult(false, lbKey, cellNumber, objectIndex, deltaX, deltaY, deltaZ,
+                    $"Could not load dungeon document for 0x{lbKey:X4}");
+
+            bool moved = doc.MoveStaticObject(cellNumber, objectIndex, new Vector3(deltaX, deltaY, deltaZ));
+            if (!moved)
+                return new DungeonMoveObjectResult(false, lbKey, cellNumber, objectIndex, deltaX, deltaY, deltaZ,
+                    $"Cell 0x{cellNumber:X4} or object index {objectIndex} not found");
+
+            return new DungeonMoveObjectResult(true, lbKey, cellNumber, objectIndex, deltaX, deltaY, deltaZ);
+        } catch (Exception ex) {
+            return new DungeonMoveObjectResult(false, lbKey, cellNumber, objectIndex, deltaX, deltaY, deltaZ, ex.Message);
+        }
+    }
+
+    public DungeonRotateObjectResult DungeonRotateObject(uint lbX, uint lbY, ushort cellNumber, int objectIndex,
+        float degrees) {
+        RequireProject();
+        ushort lbKey = LbKey(lbX, lbY);
+        try {
+            var doc = GetDungeonDoc(lbKey);
+            if (doc == null)
+                return new DungeonRotateObjectResult(false, lbKey, cellNumber, objectIndex, degrees,
+                    $"Could not load dungeon document for 0x{lbKey:X4}");
+
+            bool rotated = doc.RotateStaticObject(cellNumber, objectIndex, degrees);
+            if (!rotated)
+                return new DungeonRotateObjectResult(false, lbKey, cellNumber, objectIndex, degrees,
+                    $"Cell 0x{cellNumber:X4} or object index {objectIndex} not found");
+
+            return new DungeonRotateObjectResult(true, lbKey, cellNumber, objectIndex, degrees);
+        } catch (Exception ex) {
+            return new DungeonRotateObjectResult(false, lbKey, cellNumber, objectIndex, degrees, ex.Message);
+        }
+    }
+
+    public DungeonSetCellPositionResult DungeonSetCellPosition(uint lbX, uint lbY, ushort cellNumber,
+        float x, float y, float z) {
+        RequireProject();
+        ushort lbKey = LbKey(lbX, lbY);
+        try {
+            var doc = GetDungeonDoc(lbKey);
+            if (doc == null)
+                return new DungeonSetCellPositionResult(false, lbKey, cellNumber, x, y, z,
+                    $"Could not load dungeon document for 0x{lbKey:X4}");
+
+            bool updated = doc.SetCellPosition(cellNumber, new Vector3(x, y, z));
+            if (!updated)
+                return new DungeonSetCellPositionResult(false, lbKey, cellNumber, x, y, z,
+                    $"Cell 0x{cellNumber:X4} not found");
+
+            return new DungeonSetCellPositionResult(true, lbKey, cellNumber, x, y, z);
+        } catch (Exception ex) {
+            return new DungeonSetCellPositionResult(false, lbKey, cellNumber, x, y, z, ex.Message);
+        }
+    }
+
+    public DungeonSetCellRotationResult DungeonSetCellRotation(uint lbX, uint lbY, ushort cellNumber,
+        float rotX, float rotY, float rotZ) {
+        RequireProject();
+        ushort lbKey = LbKey(lbX, lbY);
+        try {
+            var doc = GetDungeonDoc(lbKey);
+            if (doc == null)
+                return new DungeonSetCellRotationResult(false, lbKey, cellNumber, rotX, rotY, rotZ,
+                    $"Could not load dungeon document for 0x{lbKey:X4}");
+
+            bool updated = doc.SetCellRotationEuler(cellNumber, new Vector3(rotX, rotY, rotZ));
+            if (!updated)
+                return new DungeonSetCellRotationResult(false, lbKey, cellNumber, rotX, rotY, rotZ,
+                    $"Cell 0x{cellNumber:X4} not found");
+
+            return new DungeonSetCellRotationResult(true, lbKey, cellNumber, rotX, rotY, rotZ);
+        } catch (Exception ex) {
+            return new DungeonSetCellRotationResult(false, lbKey, cellNumber, rotX, rotY, rotZ, ex.Message);
+        }
+    }
+
+    public DungeonSetObjectPositionResult DungeonSetObjectPosition(uint lbX, uint lbY, ushort cellNumber, int objectIndex,
+        float x, float y, float z) {
+        RequireProject();
+        ushort lbKey = LbKey(lbX, lbY);
+        try {
+            var doc = GetDungeonDoc(lbKey);
+            if (doc == null)
+                return new DungeonSetObjectPositionResult(false, lbKey, cellNumber, objectIndex, x, y, z,
+                    $"Could not load dungeon document for 0x{lbKey:X4}");
+
+            bool updated = doc.SetStaticObjectPosition(cellNumber, objectIndex, new Vector3(x, y, z));
+            if (!updated)
+                return new DungeonSetObjectPositionResult(false, lbKey, cellNumber, objectIndex, x, y, z,
+                    $"Cell 0x{cellNumber:X4} or object index {objectIndex} not found");
+
+            return new DungeonSetObjectPositionResult(true, lbKey, cellNumber, objectIndex, x, y, z);
+        } catch (Exception ex) {
+            return new DungeonSetObjectPositionResult(false, lbKey, cellNumber, objectIndex, x, y, z, ex.Message);
+        }
+    }
+
+    public DungeonSetObjectRotationResult DungeonSetObjectRotation(uint lbX, uint lbY, ushort cellNumber, int objectIndex,
+        float degrees) {
+        RequireProject();
+        ushort lbKey = LbKey(lbX, lbY);
+        try {
+            var doc = GetDungeonDoc(lbKey);
+            if (doc == null)
+                return new DungeonSetObjectRotationResult(false, lbKey, cellNumber, objectIndex, degrees,
+                    $"Could not load dungeon document for 0x{lbKey:X4}");
+
+            bool updated = doc.SetStaticObjectRotationDegrees(cellNumber, objectIndex, degrees);
+            if (!updated)
+                return new DungeonSetObjectRotationResult(false, lbKey, cellNumber, objectIndex, degrees,
+                    $"Cell 0x{cellNumber:X4} or object index {objectIndex} not found");
+
+            return new DungeonSetObjectRotationResult(true, lbKey, cellNumber, objectIndex, degrees);
+        } catch (Exception ex) {
+            return new DungeonSetObjectRotationResult(false, lbKey, cellNumber, objectIndex, degrees, ex.Message);
+        }
+    }
+
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     //  Internal helpers
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -7414,8 +7582,6 @@ public class CommandEngine {
                 $"Invalid index {index}. Landblock has {count} objects.");
     }
 }
-
-
 
 
 
