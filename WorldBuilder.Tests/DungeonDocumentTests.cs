@@ -46,5 +46,24 @@ namespace WorldBuilder.Tests {
             doc.RemoveCell(cellNum);
             Assert.Empty(doc.Cells);
         }
+
+        [Fact]
+        public void RemoveCell_RemovesReferencesFromOtherCells() {
+            var doc = CreateDocument();
+            doc.SetLandblockKey(0xAAAA);
+            var cellA = doc.AddCell(0x0001, 0, Vector3.Zero, Quaternion.Identity, new List<ushort>());
+            var cellB = doc.AddCell(0x0001, 0, new Vector3(10, 0, 0), Quaternion.Identity, new List<ushort>());
+
+            doc.ConnectPortals(cellA, 1, cellB, 2);
+            doc.GetCell(cellA)!.VisibleCells.Add(cellB);
+            doc.GetCell(cellB)!.VisibleCells.Add(cellA);
+
+            doc.RemoveCell(cellB);
+
+            var remaining = doc.GetCell(cellA);
+            Assert.NotNull(remaining);
+            Assert.DoesNotContain(remaining!.CellPortals, p => p.OtherCellId == cellB);
+            Assert.DoesNotContain(cellB, remaining.VisibleCells);
+        }
     }
 }

@@ -296,6 +296,7 @@ namespace WorldBuilder.Shared.Documents {
 
             foreach (var other in Cells) {
                 other.CellPortals.RemoveAll(cp => cp.OtherCellId == cellNumber);
+                other.VisibleCells.RemoveAll(vc => vc == cellNumber);
             }
 
             Cells.Remove(cell);
