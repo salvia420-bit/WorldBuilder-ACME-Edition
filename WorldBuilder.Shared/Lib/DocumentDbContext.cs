@@ -151,7 +151,7 @@ namespace WorldBuilder.Shared.Documents {
 
         public async Task BulkInsertUpdatesAsync(IEnumerable<DBDocumentUpdate> updates, CancellationToken cancellationToken = default) {
             var updatesList = updates.ToList();
-            if (!updatesList.Any()) return;
+            if (updatesList.Count == 0) return;
 
             var originalAutoDetect = ChangeTracker.AutoDetectChangesEnabled;
             var originalQueryTracking = ChangeTracker.QueryTrackingBehavior;
@@ -164,7 +164,8 @@ namespace WorldBuilder.Shared.Documents {
 
                 const int batchSize = 500;
                 for (int i = 0; i < updatesList.Count; i += batchSize) {
-                    var batch = updatesList.Skip(i).Take(batchSize);
+                    var batchCount = Math.Min(batchSize, updatesList.Count - i);
+                    var batch = updatesList.GetRange(i, batchCount);
                     Updates.AddRange(batch);
                     await SaveChangesAsync(cancellationToken);
                     ChangeTracker.Clear();
