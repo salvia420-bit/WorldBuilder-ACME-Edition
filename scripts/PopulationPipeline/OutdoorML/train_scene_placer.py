@@ -98,6 +98,8 @@ DEFAULT_CONFIG = {
     "lr_max": 1e-4,
     "lr_min": 1e-6,
     "warmup_epochs": 200,
+    "warmup_fraction_cap": 0.2,
+    "warmup_min_epochs": 10,
     "weight_decay": 0.02,
     "ema_decay": 0.999,
     
@@ -714,9 +716,15 @@ def train(config: dict, resume_path: Optional[str] = None):
     sequences = data['sequences']
     seq_lengths = data['seq_lengths']
     config['context_dim'] = int(contexts.shape[1])
+    effective_warmup_epochs = min(
+        config['warmup_epochs'],
+        max(config.get('warmup_min_epochs', 10),
+            int(math.ceil(config['epochs'] * config.get('warmup_fraction_cap', 0.2))))
+    )
     
     print(f"  Loaded {len(contexts)} examples, context_dim={contexts.shape[1]}, "
           f"max_seq={sequences.shape[1]}")
+    print(f"  Effective warmup epochs: {effective_warmup_epochs}")
     
     # ── Train/val split ──
     n = len(contexts)
@@ -771,7 +779,7 @@ def train(config: dict, resume_path: Optional[str] = None):
     
     # Cosine annealing with warmup
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=config['epochs'] - config['warmup_epochs'],
+        optimizer, T_max=max(1, config['epochs'] - effective_warmup_epochs),
         eta_min=config['lr_min']
     )
     
@@ -818,8 +826,8 @@ def train(config: dict, resume_path: Optional[str] = None):
     history_path = os.path.join(LOG_DIR, "training_history.json")
     last_completed_epoch = start_epoch - 1
     entropy_check_epoch = max(
-        config.get('min_entropy_check_epoch', config['warmup_epochs']),
-        config['warmup_epochs'],
+        config.get('min_entropy_check_epoch', effective_warmup_epochs),
+        effective_warmup_epochs,
     )
     
     try:
@@ -832,9 +840,9 @@ def train(config: dict, resume_path: Optional[str] = None):
         
             for batch in train_loader:
                 # Warmup: linear learning rate increase
-                if epoch < config['warmup_epochs']:
+                if epoch < effective_warmup_epochs:
                     warmup_factor = (epoch * len(train_loader) + n_batches) / \
-                                   (config['warmup_epochs'] * len(train_loader))
+                                   (effective_warmup_epochs * len(train_loader))
                     for pg in optimizer.param_groups:
                         pg['lr'] = config['lr_max'] * warmup_factor
                 
@@ -861,7 +869,7 @@ def train(config: dict, resume_path: Optional[str] = None):
                 n_batches += 1
         
             # Step scheduler (after warmup)
-            if epoch >= config['warmup_epochs']:
+            if epoch >= effective_warmup_epochs:
                 scheduler.step()
         
             # Average training losses
