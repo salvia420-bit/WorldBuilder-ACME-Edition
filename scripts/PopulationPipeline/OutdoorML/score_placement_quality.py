@@ -69,27 +69,50 @@ def parse_instances_from_sql(sql_path: str) -> Dict[Tuple[int,int], list]:
         r"(\d+),'([^']*)'\)"
     )
     
+    collecting = False
+    statement_lines = []
+
+    def flush_statement():
+        nonlocal total
+        if not statement_lines:
+            return
+        statement = "".join(statement_lines)
+        for m in value_re.finditer(statement):
+            cell_id = int(m.group(3))
+            lb_x = (cell_id >> 24) & 0xFF
+            lb_y = (cell_id >> 16) & 0xFF
+            cell_idx = cell_id & 0xFFFF
+
+            if cell_idx >= 0x100:
+                continue
+
+            instances_by_lb[(lb_x, lb_y)].append({
+                'guid': int(m.group(1)),
+                'wcid': int(m.group(2)),
+                'x': float(m.group(4)),
+                'y': float(m.group(5)),
+                'z': float(m.group(6)),
+                'is_link_child': int(m.group(11)) == 1,
+            })
+            total += 1
+
     with open(sql_path, 'r', encoding='utf-8') as f:
         for line in f:
             if 'INSERT INTO `landblock_instance`' in line:
-                for m in value_re.finditer(line):
-                    cell_id = int(m.group(3))
-                    lb_x = (cell_id >> 24) & 0xFF
-                    lb_y = (cell_id >> 16) & 0xFF
-                    cell_idx = cell_id & 0xFFFF
-                    
-                    if cell_idx >= 0x100:
-                        continue
-                    
-                    instances_by_lb[(lb_x, lb_y)].append({
-                        'guid': int(m.group(1)),
-                        'wcid': int(m.group(2)),
-                        'x': float(m.group(4)),
-                        'y': float(m.group(5)),
-                        'z': float(m.group(6)),
-                        'is_link_child': int(m.group(11)) == 1,
-                    })
-                    total += 1
+                collecting = True
+                statement_lines = [line]
+                if ';' in line:
+                    flush_statement()
+                    collecting = False
+                    statement_lines = []
+                continue
+
+            if collecting:
+                statement_lines.append(line)
+                if ';' in line:
+                    flush_statement()
+                    collecting = False
+                    statement_lines = []
     
     print(f"    {total:,} instances across {len(instances_by_lb)} landblocks")
     return instances_by_lb
@@ -99,15 +122,37 @@ def parse_links_from_sql(sql_path: str) -> list:
     """Parse landblock_instance_link INSERTs from SQL."""
     links = []
     link_re = re.compile(r"\((\d+),(\d+),(\d+),'([^']*)'\)")
-    
+
+    collecting = False
+    statement_lines = []
+
+    def flush_statement():
+        if not statement_lines:
+            return
+        statement = "".join(statement_lines)
+        for m in link_re.finditer(statement):
+            links.append({
+                'parent_guid': int(m.group(2)),
+                'child_guid': int(m.group(3)),
+            })
+
     with open(sql_path, 'r', encoding='utf-8') as f:
         for line in f:
             if 'INSERT INTO `landblock_instance_link`' in line:
-                for m in link_re.finditer(line):
-                    links.append({
-                        'parent_guid': int(m.group(2)),
-                        'child_guid': int(m.group(3)),
-                    })
+                collecting = True
+                statement_lines = [line]
+                if ';' in line:
+                    flush_statement()
+                    collecting = False
+                    statement_lines = []
+                continue
+
+            if collecting:
+                statement_lines.append(line)
+                if ';' in line:
+                    flush_statement()
+                    collecting = False
+                    statement_lines = []
     
     return links
 
