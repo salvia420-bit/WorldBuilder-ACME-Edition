@@ -670,19 +670,26 @@ Effect on the same `20x20` region:
 
 2. Town vendor completion
 
-- currently opt-in via `--inject-town-vendors`
 - injects a retail vendor only for dense portal+lifestone town-like landblocks
   that still have no vendor
 - uses a small culture-aware WCID mapping where available and a neutral fallback otherwise
 
-Effect on the same `20x20` region when combined with lifestone completion:
+Effect on the first `20x20` region when combined with lifestone completion:
 
 - injected vendors: `4`
 - quality score improved from `80.8` to `83.1`
 - vendor coverage improved from `10/17` to `14/17`
 
+Second-region validation (`x=50..69`, `y=120..139`):
+
+- lifestone-only path scored `81.7/100`
+- vendor-completion path scored `83.6/100`
+- vendor coverage improved from `15/21` to `19/21`
+- injected vendors: `4`
+
 Current recommendation:
 
 - keep the lifestone completion pass in the validated default path
-- keep vendor completion as experimental / opt-in until more regions are checked
+- keep the vendor completion pass in the validated default path as well
+- use `--no-inject-town-vendors` only for explicit ablation / debugging
 - full-world generation should use CUDA and the current validated inference path, not CPU fallback

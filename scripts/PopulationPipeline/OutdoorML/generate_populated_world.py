@@ -1185,8 +1185,10 @@ def main():
                        help="Minimum objects before a landblock is considered town-like for service completion")
     parser.add_argument("--lifestone-wcid", type=int, default=DEFAULT_LIFESTONE_WCID,
                        help="Retail lifestone WCID to inject during service completion")
-    parser.add_argument("--inject-town-vendors", action="store_true",
+    parser.add_argument("--inject-town-vendors", action="store_true", default=True,
                        help="Add a vendor to dense portal+lifestone town-like landblocks that generated none")
+    parser.add_argument("--no-inject-town-vendors", action="store_false", dest="inject_town_vendors",
+                       help="Disable the town-vendor completion pass")
     parser.add_argument("--town-vendor-min-objects", type=int, default=20,
                        help="Minimum objects before a landblock is considered vendor-worthy for service completion")
     parser.add_argument("--vendor-wcid", type=int, default=DEFAULT_VENDOR_WCID,

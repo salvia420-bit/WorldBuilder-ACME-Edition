@@ -41,9 +41,12 @@ Current validated larger-scale results:
 
 - `10x10` CUDA region: `83.8/100`
 - `20x20` CUDA region after lifestone completion: `80.8/100`
-- `20x20` CUDA region with opt-in vendor completion: `83.1/100`
+- `20x20` CUDA region with service completion: `83.1/100`
+- second `20x20` CUDA region after lifestone completion: `81.7/100`
+- second `20x20` CUDA region with service completion: `83.6/100`
 
 Service-completion notes:
 
 - town-lifestone completion is part of the current validated inference path
-- town-vendor completion exists but is still experimental and opt-in via `--inject-town-vendors`
+- town-vendor completion now appears to generalize across at least two `20x20` regions and is part of the current validated path
+- use `--no-inject-town-vendors` only when you explicitly want to disable the vendor completion pass
