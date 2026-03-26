@@ -387,10 +387,10 @@ class PlacementGenerator:
             next_token = torch.zeros(1, 1, 10, device=self.device)
             wcid = placement['wcid']
             next_token[0, 0, 0] = wcid_idx
-            next_token[0, 0, 1] = pos[0]
-            next_token[0, 0, 2] = pos[1]
-            next_token[0, 0, 4] = rot[0]
-            next_token[0, 0, 5] = rot[1]
+            next_token[0, 0, 1] = float(pos[0])
+            next_token[0, 0, 2] = float(pos[1])
+            next_token[0, 0, 4] = float(rot[0])
+            next_token[0, 0, 5] = float(rot[1])
             next_token[0, 0, 7] = float(link > 0.5)
             if isinstance(wcid, int):
                 next_token[0, 0, 6] = self.wcid_types.get(wcid, 0) / 55.0
