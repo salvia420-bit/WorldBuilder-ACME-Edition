@@ -117,6 +117,8 @@ DEFAULT_CONFIG = {
     "overfit_gap_threshold": 10.0,
     "min_overfit_epoch": 200,
     "entropy_collapse_threshold": 2.0,
+    "min_entropy_check_epoch": 200,
+    "entropy_lr_halving_enabled": True,
     
     # Checkpointing
     "checkpoint_every": 50,
@@ -815,6 +817,10 @@ def train(config: dict, resume_path: Optional[str] = None):
     patience_counter = 0
     history_path = os.path.join(LOG_DIR, "training_history.json")
     last_completed_epoch = start_epoch - 1
+    entropy_check_epoch = max(
+        config.get('min_entropy_check_epoch', config['warmup_epochs']),
+        config['warmup_epochs'],
+    )
     
     try:
         for epoch in range(start_epoch, config['epochs']):
@@ -893,6 +899,7 @@ def train(config: dict, resume_path: Optional[str] = None):
                 # Check overfitting
                 overfit_gap = val_metrics.get('val_total', 0) - train_metrics['total']
                 val_metrics['overfit_gap'] = overfit_gap
+                val_metrics['entropy_check_epoch'] = entropy_check_epoch
                 
                 # ── EARLY STOPPING RAILS ──
                 if epoch >= config['min_overfit_epoch'] and overfit_gap > config['overfit_gap_threshold']:
@@ -907,11 +914,26 @@ def train(config: dict, resume_path: Optional[str] = None):
                     break
                 
                 wcid_ent = val_metrics.get('wcid_entropy', 999)
+                entropy_gate_open = (
+                    config.get('entropy_lr_halving_enabled', True) and
+                    epoch >= entropy_check_epoch
+                )
+                val_metrics['entropy_gate_open'] = float(entropy_gate_open)
                 if wcid_ent < config['entropy_collapse_threshold']:
-                    print(f"\n  ⚠️  MODE COLLAPSE (entropy={wcid_ent:.2f} < {config['entropy_collapse_threshold']})")
-                    print("  Reducing learning rate by 50%...")
-                    for pg in optimizer.param_groups:
-                        pg['lr'] *= 0.5
+                    if entropy_gate_open:
+                        print(
+                            f"\n  ⚠️  MODE COLLAPSE (entropy={wcid_ent:.2f} < "
+                            f"{config['entropy_collapse_threshold']}, epoch {epoch} >= {entropy_check_epoch})"
+                        )
+                        print("  Reducing learning rate by 50%...")
+                        for pg in optimizer.param_groups:
+                            pg['lr'] *= 0.5
+                    else:
+                        print(
+                            f"\n  Note: low validation entropy ({wcid_ent:.2f}) observed at epoch {epoch}, "
+                            f"but collapse rail is disabled until epoch {entropy_check_epoch} "
+                            f"(post-warmup safeguard)."
+                        )
                 
                 # Track best validation loss
                 val_total = val_metrics.get('val_total', float('inf'))
