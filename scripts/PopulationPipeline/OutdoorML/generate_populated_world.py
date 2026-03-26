@@ -52,7 +52,7 @@ from housing_linker import HousingLinker, GuidAllocator, write_housing_sql, SQLS
 from extract_placement_tensors import (
     build_context_vector, load_height_grid, load_difficulty_grid,
     build_cultural_zones, load_wcid_types, STOP_TOKEN, PAD_TOKEN,
-    HOUSING_COTTAGE_TOKEN, HOUSING_VILLA_TOKEN, HOUSING_MANSION_TOKEN,
+    FIRST_REAL_TOKEN, HOUSING_COTTAGE_TOKEN, HOUSING_VILLA_TOKEN, HOUSING_MANSION_TOKEN,
 )
 
 # ─── Configuration ───────────────────────────────────────────────────────────
@@ -76,6 +76,109 @@ HOUSING_TOKEN_MAP = {
     HOUSING_VILLA_TOKEN: 'Villa',
     HOUSING_MANSION_TOKEN: 'Mansion',
 }
+
+
+def load_inference_state_dict(model_path: str, device: torch.device,
+                              checkpoint_source: str = 'auto') -> tuple[dict, str]:
+    """
+    Load a state dict suitable for inference.
+
+    Supports:
+      - weights-only .pt / .safetensors checkpoints
+      - full training checkpoints such as resume.pt
+
+    checkpoint_source:
+      - auto: prefer EMA weights when present, otherwise model weights
+      - ema: require ema_state_dict
+      - model: require model_state_dict
+    """
+    if model_path.endswith('.safetensors'):
+        from safetensors.torch import load_file
+        return load_file(model_path), 'weights'
+
+    state = torch.load(model_path, map_location=device)
+    if not isinstance(state, dict):
+        raise ValueError(f"Unsupported checkpoint format in {model_path}")
+
+    if 'ema_state_dict' in state or 'model_state_dict' in state:
+        if checkpoint_source == 'ema':
+            if 'ema_state_dict' not in state:
+                raise ValueError(f"Checkpoint {model_path} does not contain ema_state_dict")
+            return state['ema_state_dict'], 'ema'
+        if checkpoint_source == 'model':
+            if 'model_state_dict' not in state:
+                raise ValueError(f"Checkpoint {model_path} does not contain model_state_dict")
+            return state['model_state_dict'], 'model'
+        if 'ema_state_dict' in state:
+            return state['ema_state_dict'], 'ema'
+        if 'model_state_dict' in state:
+            return state['model_state_dict'], 'model'
+
+    return state, 'weights'
+
+
+def apply_sampling_filters(logits: torch.Tensor, temperature: float = 1.0,
+                           top_k: int = 0, nucleus_p: float = 1.0) -> torch.Tensor:
+    """Apply the same sampling filters used during generation."""
+    filtered = logits.clone()
+
+    if temperature <= 0:
+        raise ValueError("temperature must be > 0")
+    filtered = filtered / temperature
+
+    if top_k > 0 and top_k < filtered.numel():
+        top_k_logits, top_k_indices = torch.topk(filtered, top_k)
+        filtered = torch.full_like(filtered, float('-inf'))
+        filtered.scatter_(0, top_k_indices, top_k_logits)
+
+    if nucleus_p < 1.0:
+        sorted_logits, sorted_indices = torch.sort(filtered, descending=True)
+        cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+        sorted_indices_to_remove = cumulative_probs > nucleus_p
+        sorted_indices_to_remove[1:] = sorted_indices_to_remove[:-1].clone()
+        sorted_indices_to_remove[0] = False
+        indices_to_remove = sorted_indices[sorted_indices_to_remove]
+        filtered[indices_to_remove] = float('-inf')
+
+    return filtered
+
+
+def summarize_token_probs(probs: torch.Tensor, idx_to_wcid: Dict[int, int],
+                          top_k: int = 10) -> dict:
+    """Summarize token probability mass and top identities."""
+    housing_mass = 0.0
+    real_mass = 0.0
+    for idx, prob in enumerate(probs.tolist()):
+        if idx in HOUSING_TOKEN_MAP:
+            housing_mass += prob
+        elif idx >= FIRST_REAL_TOKEN:
+            real_mass += prob
+
+    top_prob, top_idx = torch.topk(probs, min(top_k, probs.numel()))
+    top_tokens = []
+    for prob, idx in zip(top_prob.tolist(), top_idx.tolist()):
+        if idx == PAD_TOKEN:
+            token_kind = 'PAD'
+        elif idx == STOP_TOKEN:
+            token_kind = 'STOP'
+        elif idx in HOUSING_TOKEN_MAP:
+            token_kind = f"HOUSING_{HOUSING_TOKEN_MAP[idx].upper()}"
+        else:
+            token_kind = 'REAL'
+        top_tokens.append({
+            'idx': int(idx),
+            'prob': float(prob),
+            'kind': token_kind,
+            'wcid': int(idx_to_wcid.get(int(idx), int(idx))),
+        })
+
+    return {
+        'pad_mass': float(probs[PAD_TOKEN].item()) if PAD_TOKEN < probs.numel() else 0.0,
+        'stop_mass': float(probs[STOP_TOKEN].item()) if STOP_TOKEN < probs.numel() else 0.0,
+        'housing_mass': float(housing_mass),
+        'real_mass': float(real_mass),
+        'top_tokens': top_tokens,
+    }
 
 # ─── Encounter Generation ────────────────────────────────────────────────────
 
@@ -280,6 +383,29 @@ class PlacementGenerator:
             debug['max_steps_reached'] = True
         
         return placements, debug
+
+    @torch.no_grad()
+    def inspect_first_step(self, context: np.ndarray, summary_top_k: int = 10) -> dict:
+        """Inspect first-token probabilities before and after sampling filters."""
+        ctx = torch.from_numpy(context).float().unsqueeze(0).to(self.device)
+        seq = torch.zeros(1, 1, 10, device=self.device)
+
+        wcid_logits, _, _, _ = self.model(ctx, seq)
+        logits = wcid_logits[0, -1, :]
+        raw_probs = F.softmax(logits, dim=-1)
+
+        filtered_logits = apply_sampling_filters(
+            logits,
+            temperature=self.temperature,
+            top_k=self.top_k,
+            nucleus_p=self.nucleus_p,
+        )
+        filtered_probs = F.softmax(filtered_logits, dim=-1)
+
+        return {
+            'raw': summarize_token_probs(raw_probs, self.idx_to_wcid, top_k=summary_top_k),
+            'filtered': summarize_token_probs(filtered_probs, self.idx_to_wcid, top_k=summary_top_k),
+        }
     
     def validate_placements(self, placements: list, lb_x: int, lb_y: int,
                             culture: str = "Neutral") -> tuple[list, dict]:
@@ -396,14 +522,10 @@ def generate_world(args):
     model = ScenePlacerTransformer(config).to(device)
     
     # Load weights
-    if model_path.endswith('.safetensors'):
-        from safetensors.torch import load_file
-        state = load_file(model_path)
-    else:
-        state = torch.load(model_path, map_location=device)
+    state, state_source = load_inference_state_dict(model_path, device)
     model.load_state_dict(state)
     model.eval()
-    print(f"  Model loaded: {model.count_parameters()/1e6:.1f}M params")
+    print(f"  Model loaded: {model.count_parameters()/1e6:.1f}M params ({state_source} weights)")
     
     # ── Load vocab ──
     print("\n[2/6] Loading vocab...")

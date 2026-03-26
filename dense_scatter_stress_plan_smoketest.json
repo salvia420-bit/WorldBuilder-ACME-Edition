@@ -1,0 +1,1028 @@
+{
+  "description": "One-off dense scenery stress test plan",
+  "seed": 42,
+  "generator": "generate_dense_scatter_plan.py",
+  "profile": "extreme",
+  "densityMultiplier": 1.0,
+  "corridorWidth": 18.0,
+  "minSpacing": 7.0,
+  "total_landblocks": 2,
+  "total_objects": 124,
+  "category_stats": {
+    "Scenery": 0
+  },
+  "biome_stats": {
+    "forest": {
+      "objects": 124,
+      "avgAttemptsPerPopulatedLb": 98.0
+    }
+  },
+  "placements": [
+    {
+      "lbX": 2,
+      "lbY": 3,
+      "biome": "forest",
+      "objects": [
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 30.7,
+          "localY": 136.6,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 49.5,
+          "localY": 135.7,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 26.6,
+          "localY": 82.9,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 27.7,
+          "localY": 51.1,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 16.5,
+          "localY": 45.4,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 58.7,
+          "localY": 158.0,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 129.3,
+          "localY": 69.2,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557472,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 29.2,
+          "localY": 75.8,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 154.4,
+          "localY": 113.4,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 175.5,
+          "localY": 75.6,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557472,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 61.3,
+          "localY": 117.6,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 109.0,
+          "localY": 130.4,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 123.1,
+          "localY": 141.9,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 155.7,
+          "localY": 157.6,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 73.3,
+          "localY": 74.2,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 124.6,
+          "localY": 129.9,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 114.3,
+          "localY": 40.8,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 39.5,
+          "localY": 75.7,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 48.9,
+          "localY": 66.5,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557472,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 50.5,
+          "localY": 17.4,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 79.4,
+          "localY": 23.1,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 159.2,
+          "localY": 64.9,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 78.5,
+          "localY": 165.6,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 36.0,
+          "localY": 35.5,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557472,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 84.0,
+          "localY": 110.0,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 48.8,
+          "localY": 179.6,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 156.7,
+          "localY": 37.7,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 145.1,
+          "localY": 82.9,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 76.6,
+          "localY": 112.1,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 156.6,
+          "localY": 13.9,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 159.1,
+          "localY": 56.2,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 29.9,
+          "localY": 117.1,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 12.1,
+          "localY": 66.5,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 177.5,
+          "localY": 147.5,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 21.7,
+          "localY": 159.5,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 23.6,
+          "localY": 139.8,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 158.6,
+          "localY": 83.1,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 168.1,
+          "localY": 138.9,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557472,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 131.8,
+          "localY": 79.0,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 68.8,
+          "localY": 110.8,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 110.9,
+          "localY": 13.2,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557472,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 50.5,
+          "localY": 164.1,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 124.4,
+          "localY": 48.0,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 133.5,
+          "localY": 160.2,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 147.7,
+          "localY": 44.0,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 81.1,
+          "localY": 157.1,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 125.1,
+          "localY": 177.3,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 146.5,
+          "localY": 30.4,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 82.9,
+          "localY": 58.8,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 158.9,
+          "localY": 24.7,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 51.7,
+          "localY": 80.3,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 21.9,
+          "localY": 75.7,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 56.6,
+          "localY": 143.7,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 59.9,
+          "localY": 129.0,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 43.9,
+          "localY": 48.6,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 137.7,
+          "localY": 21.6,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 23.5,
+          "localY": 23.4,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 107.7,
+          "localY": 109.3,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 116.1,
+          "localY": 82.4,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557472,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 107.0,
+          "localY": 65.2,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557472,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 124.8,
+          "localY": 62.4,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 168.1,
+          "localY": 169.2,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 179.3,
+          "localY": 24.3,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 70.6,
+          "localY": 23.6,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 74.1,
+          "localY": 38.5,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 130.2,
+          "localY": 114.8,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557472,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 13.3,
+          "localY": 149.3,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 168.5,
+          "localY": 29.4,
+          "localZ": 0.0
+        }
+      ]
+    },
+    {
+      "lbX": 3,
+      "lbY": 2,
+      "biome": "forest",
+      "objects": [
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 31.4,
+          "localY": 30.0,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 38.1,
+          "localY": 59.3,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557472,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 132.6,
+          "localY": 46.2,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 164.6,
+          "localY": 20.5,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557472,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 151.3,
+          "localY": 19.4,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557472,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 141.5,
+          "localY": 119.0,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 39.1,
+          "localY": 86.2,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 106.2,
+          "localY": 30.8,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 109.9,
+          "localY": 36.9,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 19.0,
+          "localY": 73.3,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 163.0,
+          "localY": 47.3,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 124.0,
+          "localY": 71.4,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 160.5,
+          "localY": 80.3,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 137.9,
+          "localY": 167.5,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 157.3,
+          "localY": 176.0,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 135.7,
+          "localY": 67.8,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 146.8,
+          "localY": 157.2,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 56.8,
+          "localY": 144.3,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 76.3,
+          "localY": 18.5,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 49.4,
+          "localY": 149.2,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 70.7,
+          "localY": 149.9,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 49.5,
+          "localY": 122.9,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557472,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 67.1,
+          "localY": 157.2,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557472,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 126.2,
+          "localY": 153.7,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557472,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 169.8,
+          "localY": 31.4,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557472,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 42.0,
+          "localY": 173.7,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557472,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 18.4,
+          "localY": 112.2,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557472,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 76.7,
+          "localY": 108.9,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 19.5,
+          "localY": 85.3,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 132.9,
+          "localY": 136.6,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 64.0,
+          "localY": 80.6,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 129.1,
+          "localY": 105.1,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 82.6,
+          "localY": 170.0,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 115.4,
+          "localY": 62.6,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 152.1,
+          "localY": 63.1,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557472,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 84.2,
+          "localY": 109.4,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 163.4,
+          "localY": 145.7,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 122.7,
+          "localY": 59.7,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 49.7,
+          "localY": 45.5,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 19.8,
+          "localY": 177.3,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 81.6,
+          "localY": 117.8,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 132.7,
+          "localY": 76.5,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 12.9,
+          "localY": 138.2,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 142.8,
+          "localY": 48.8,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 65.3,
+          "localY": 138.9,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 114.9,
+          "localY": 132.8,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 86.9,
+          "localY": 38.7,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557472,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 52.2,
+          "localY": 85.9,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557339,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 51.4,
+          "localY": 68.4,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 25.5,
+          "localY": 37.3,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 128.6,
+          "localY": 130.7,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 81.7,
+          "localY": 67.6,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 81.9,
+          "localY": 46.7,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557331,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 77.4,
+          "localY": 141.3,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557470,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 155.9,
+          "localY": 140.6,
+          "localZ": 0.0
+        },
+        {
+          "setupId": 33557335,
+          "name": "DenseScatter forest",
+          "category": "Scenery",
+          "localX": 124.4,
+          "localY": 146.1,
+          "localZ": 0.0
+        }
+      ]
+    }
+  ]
+}

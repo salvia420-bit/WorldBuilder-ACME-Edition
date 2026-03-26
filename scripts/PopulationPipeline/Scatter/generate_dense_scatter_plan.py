@@ -39,6 +39,20 @@ SCENERY_BY_BIOME = {
     "road":      [0x02000B5B, 0x02000BD7],
 }
 
+# Stronger, more obviously tree-like retail setups pulled from canonical enrichment.
+# These are intended for a brutal client-side forest stress test.
+RIDICULOUS_FOREST_MODELS = [
+    0x02000F06,  # Tree
+    0x020014BF,  # Great Frost Tree
+    0x02001765,  # Pitiful Pine Tree
+    0x0200176A,  # Little Pine Tree
+    0x02001927,  # Shaped Tree
+    0x02000B53,  # quick-world foliage/tree-safe setup
+    0x02000B57,  # quick-world foliage/tree-safe setup
+    0x02000BE0,  # quick-world foliage/tree-safe setup
+    0x02000BDE,  # quick-world foliage/tree-safe setup
+]
+
 
 DENSITY_PROFILES = {
     "high": {
@@ -62,6 +76,17 @@ DENSITY_PROFILES = {
         "obsidian":  (12, 24),
         "mountain":  (12, 20),
         "road":      (6, 12),
+    },
+    "ridiculous_forest": {
+        "forest":    (90, 140),
+        "grassland": (28, 45),
+        "swamp":     (24, 40),
+        "snow":      (12, 22),
+        "desert":    (4, 10),
+        "barren":    (4, 10),
+        "obsidian":  (4, 10),
+        "mountain":  (4, 10),
+        "road":      (2, 6),
     },
 }
 
@@ -111,7 +136,10 @@ def far_enough(x: float, y: float, points, min_spacing: float) -> bool:
 
 def build_landblock_objects(biome: str, count: int, corridor_half_width: float,
                             edge_margin: float, min_spacing: float, max_attempts: int):
-    models = SCENERY_BY_BIOME.get(biome, SCENERY_BY_BIOME["barren"])
+    if biome == "forest":
+        models = RIDICULOUS_FOREST_MODELS
+    else:
+        models = SCENERY_BY_BIOME.get(biome, SCENERY_BY_BIOME["barren"])
     points = []
     objects = []
     attempts = 0
