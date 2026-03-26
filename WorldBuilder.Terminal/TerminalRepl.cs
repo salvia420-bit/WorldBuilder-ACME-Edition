@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Numerics;
+using System.Text;
 using WorldBuilder.Shared.Lib.Dungeon;
 using WorldBuilder.Shared.Lib.Validation;
 using WorldBuilder.Shared.Services;
@@ -1543,28 +1544,29 @@ public class TerminalRepl {
     /// </summary>
     internal static string[] TokenizeLine(string line) {
         var tokens = new List<string>(8);
+        var currentToken = new StringBuilder();
         bool inQuotes = false;
-        int tokenStart = -1;
 
-        for (int i = 0; i < line.Length; i++) {
-            char c = line[i];
+        foreach (char c in line) {
             if (c == '"') {
                 inQuotes = !inQuotes;
-                if (tokenStart < 0) tokenStart = i + 1;
                 continue;
             }
-            if (c == ' ' && !inQuotes) {
-                if (tokenStart >= 0) {
-                    tokens.Add(line[tokenStart..i]);
-                    tokenStart = -1;
+
+            if (char.IsWhiteSpace(c) && !inQuotes) {
+                if (currentToken.Length > 0) {
+                    tokens.Add(currentToken.ToString());
+                    currentToken.Clear();
                 }
                 continue;
             }
 
-            if (tokenStart < 0) tokenStart = i;
+            currentToken.Append(c);
         }
 
-        if (tokenStart >= 0) tokens.Add(line[tokenStart..]);
+        if (currentToken.Length > 0) {
+            tokens.Add(currentToken.ToString());
+        }
         return tokens.ToArray();
     }
 
