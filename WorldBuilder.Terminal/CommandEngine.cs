@@ -3240,13 +3240,13 @@ public class CommandEngine {
                 LandblockDocument lbDoc;
                 try { lbDoc = GetLandblockDoc(lbKey); } catch { continue; }
 
-                var objects = lbDoc.GetStaticObjects().ToList();
-                if (objects.Count == 0) continue;
-
-                landblocksAnalyzed++;
-                foreach (var obj in objects) {
+                bool hasObjects = false;
+                foreach (var obj in lbDoc.GetStaticObjects()) {
+                    hasObjects = true;
                     allObjects.Add((lbKey, obj.Origin, obj.Id, obj.Orientation));
                 }
+                if (!hasObjects) continue;
+                landblocksAnalyzed++;
             }
 
             if ((lbX - minX) % 50 == 0 && lbX > minX)
@@ -3287,39 +3287,37 @@ public class CommandEngine {
         }
 
         // Check each object against neighbors in adjacent buckets
+        const float MAX_DIST_SQ = 25f * 25f;
         foreach (var (bkey, indices) in buckets) {
             var (bx, by) = bkey;
-            // Collect neighborhood indices
-            var neighborIndices = new List<int>();
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dy = -1; dy <= 1; dy++) {
-                    if (buckets.TryGetValue((bx + dx, by + dy), out var nlist))
-                        neighborIndices.AddRange(nlist);
-                }
-            }
-
             foreach (int i in indices) {
                 var posA = allObjects[i].Pos;
                 var idA = allObjects[i].ObjectId;
+                for (int dx = -1; dx <= 1; dx++) {
+                    for (int dy = -1; dy <= 1; dy++) {
+                        if (!buckets.TryGetValue((bx + dx, by + dy), out var neighborIndices))
+                            continue;
 
-                foreach (int j in neighborIndices) {
-                    if (j <= i) continue; // avoid double-counting
-                    var posB = allObjects[j].Pos;
-                    var idB = allObjects[j].ObjectId;
+                        foreach (int j in neighborIndices) {
+                            if (j <= i) continue; // avoid double-counting
+                            var posB = allObjects[j].Pos;
+                            var idB = allObjects[j].ObjectId;
 
-                    float dist = MathF.Sqrt(
-                        (posA.X - posB.X) * (posA.X - posB.X) +
-                        (posA.Y - posB.Y) * (posA.Y - posB.Y));
+                            float deltaX = posA.X - posB.X;
+                            float deltaY = posA.Y - posB.Y;
+                            float distSq = deltaX * deltaX + deltaY * deltaY;
+                            if (distSq > MAX_DIST_SQ) continue;
 
-                    if (dist > 25f) continue;
+                            float dist = MathF.Sqrt(distSq);
+                            var pairKey = idA <= idB ? (idA, idB) : (idB, idA);
+                            adjacency.TryGetValue(pairKey, out var cur);
 
-                    var pairKey = idA <= idB ? (idA, idB) : (idB, idA);
-                    adjacency.TryGetValue(pairKey, out var cur);
-
-                    int c5 = cur.c5 + (dist <= 5f ? 1 : 0);
-                    int c10 = cur.c10 + (dist <= 10f ? 1 : 0);
-                    int c25 = cur.c25 + 1;
-                    adjacency[pairKey] = (c5, c10, c25, cur.totalDist + dist, cur.totalCount + 1);
+                            int c5 = cur.c5 + (dist <= 5f ? 1 : 0);
+                            int c10 = cur.c10 + (dist <= 10f ? 1 : 0);
+                            int c25 = cur.c25 + 1;
+                            adjacency[pairKey] = (c5, c10, c25, cur.totalDist + dist, cur.totalCount + 1);
+                        }
+                    }
                 }
             }
         }
@@ -3607,13 +3605,13 @@ public class CommandEngine {
                 LandblockDocument lbDoc;
                 try { lbDoc = GetLandblockDoc(lbKey); } catch { continue; }
 
-                var objects = lbDoc.GetStaticObjects().ToList();
-                if (objects.Count == 0) continue;
-
-                landblocksProcessed++;
-                foreach (var obj in objects) {
+                bool hasObjects = false;
+                foreach (var obj in lbDoc.GetStaticObjects()) {
+                    hasObjects = true;
                     allObjects.Add((lbKey, obj.Origin, obj.Id, obj.Orientation, obj.Scale));
                 }
+                if (!hasObjects) continue;
+                landblocksProcessed++;
             }
 
             if ((lbX - minX) % 50 == 0 && lbX > minX)
@@ -3651,6 +3649,8 @@ public class CommandEngine {
             DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
             WriteIndented = false
         };
+
+        var categoryCache = ontologyScanned ? new Dictionary<uint, string?>() : null;
 
         try {
             using var writer = new StreamWriter(outputPath, false, System.Text.Encoding.UTF8);
@@ -3735,6 +3735,7 @@ public class CommandEngine {
                     int byCenter = (int)MathF.Floor(pos.Y / BUCKET_SIZE);
 
                     var nearbyList = new List<(float dist, uint nearId, string? nearCat)>();
+                    const float maxNearbyDistSq = 25f * 25f;
                     for (int dx = -1; dx <= 1; dx++) {
                         for (int dy = -1; dy <= 1; dy++) {
                             if (!buckets.TryGetValue((bxCenter + dx, byCenter + dy), out var nlist))
@@ -3742,15 +3743,19 @@ public class CommandEngine {
                             foreach (int j in nlist) {
                                 if (j == idx) continue;
                                 var posB = allObjects[j].Pos;
-                                float dist = MathF.Sqrt(
-                                    (pos.X - posB.X) * (pos.X - posB.X) +
-                                    (pos.Y - posB.Y) * (pos.Y - posB.Y));
-                                if (dist > 25f) continue;
+                                float deltaX = pos.X - posB.X;
+                                float deltaY = pos.Y - posB.Y;
+                                float distSq = deltaX * deltaX + deltaY * deltaY;
+                                if (distSq > maxNearbyDistSq) continue;
+                                float dist = MathF.Sqrt(distSq);
 
                                 string? nearCat = null;
                                 if (ontologyScanned) {
-                                    var nearEntry = _ontologyService.GetEntry(allObjects[j].ObjectId);
-                                    nearCat = nearEntry?.Category;
+                                    uint nearId = allObjects[j].ObjectId;
+                                    if (!categoryCache!.TryGetValue(nearId, out nearCat)) {
+                                        nearCat = _ontologyService.GetEntry(nearId)?.Category;
+                                        categoryCache[nearId] = nearCat;
+                                    }
                                 }
                                 nearbyList.Add((dist, allObjects[j].ObjectId, nearCat));
                             }
