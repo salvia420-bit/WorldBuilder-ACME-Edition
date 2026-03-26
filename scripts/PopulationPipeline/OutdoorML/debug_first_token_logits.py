@@ -49,7 +49,6 @@ from extract_placement_tensors import (
     build_context_vector,
     build_cultural_zones,
     load_difficulty_grid,
-    load_housing_landblock_priors,
     load_height_grid,
     load_wcid_types,
 )
@@ -108,7 +107,6 @@ def main() -> int:
     heights = load_height_grid(HEIGHTS_PATH)
     difficulty_grid = load_difficulty_grid(DIFFICULTY_GRADIENT)
     culture_grid = build_cultural_zones()
-    housing_priors = load_housing_landblock_priors()
     ocean_mask = load_ocean_mask(difficulty_grid) if difficulty_grid is not None else None
     wcid_types = load_wcid_types()
 
@@ -141,7 +139,7 @@ def main() -> int:
                 continue
 
             context = build_context_vector(
-                lb_x, lb_y, heights, difficulty_grid, culture_grid, {}, housing_priors
+                lb_x, lb_y, heights, difficulty_grid, culture_grid, {}
             )
             first_step = generator.inspect_first_step(context, summary_top_k=args.top_tokens)
             raw_top = first_step["raw"]["top_tokens"][0] if first_step["raw"]["top_tokens"] else None

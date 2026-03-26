@@ -51,7 +51,7 @@ from train_scene_placer import ScenePlacerTransformer, DEFAULT_CONFIG
 from housing_linker import HousingLinker, GuidAllocator, write_housing_sql, SQLStatement
 from extract_placement_tensors import (
     build_context_vector, load_height_grid, load_difficulty_grid,
-    build_cultural_zones, load_wcid_types, load_housing_landblock_priors, STOP_TOKEN, PAD_TOKEN,
+    build_cultural_zones, load_wcid_types, STOP_TOKEN, PAD_TOKEN,
     FIRST_REAL_TOKEN, HOUSING_COTTAGE_TOKEN, HOUSING_VILLA_TOKEN, HOUSING_MANSION_TOKEN,
 )
 
@@ -278,19 +278,11 @@ class PlacementGenerator:
         culture_strength = float(context[212]) if len(context) > 212 else 0.0
         difficulty = float(context[213]) if len(context) > 213 else 0.0
         flatness = float(context[222]) if len(context) > 222 else 0.0
-        housing_here = float(context[224]) if len(context) > 224 else 0.0
-        housing_density = float(context[225]) if len(context) > 225 else 0.0
-        neighboring_housing = float(context[226]) if len(context) > 226 else 0.0
-
         if culture_strength >= 0.2:
             bonus += 1
         if flatness >= 0.55:
             bonus += 1
         if difficulty <= 0.6:
-            bonus += 1
-        if housing_here >= 0.5:
-            bonus += 2
-        elif housing_density >= 0.3 or neighboring_housing >= 0.25:
             bonus += 1
 
         min_objects += min(bonus, self.adaptive_min_objects_bonus)
@@ -302,15 +294,11 @@ class PlacementGenerator:
         difficulty = float(context[213]) if len(context) > 213 else 0.0
         flatness = float(context[222]) if len(context) > 222 else 0.0
         coast_distance = float(context[223]) if len(context) > 223 else 0.0
-        housing_here = float(context[224]) if len(context) > 224 else 0.0
-        housing_density = float(context[225]) if len(context) > 225 else 0.0
-        neighboring_housing = float(context[226]) if len(context) > 226 else 0.0
         return (
-            (culture_strength >= 0.2 or housing_here >= 0.5 or neighboring_housing >= 0.25) and
+            culture_strength >= 0.2 and
             flatness >= self.housing_flatness_threshold and
             difficulty <= self.housing_difficulty_ceiling and
-            coast_distance >= 0.08 and
-            (housing_here >= 0.5 or housing_density >= 0.2 or neighboring_housing >= 0.25)
+            coast_distance >= 0.08
         )
     
     @torch.no_grad()
@@ -636,7 +624,6 @@ def generate_world(args):
     heights = load_height_grid(HEIGHTS_PATH)
     difficulty_grid = load_difficulty_grid(DIFFICULTY_GRADIENT)
     culture_grid = build_cultural_zones()
-    housing_priors = load_housing_landblock_priors()
     
     ocean_mask = None
     if difficulty_grid is not None:
@@ -702,7 +689,7 @@ def generate_world(args):
         # Build context
         ctx = build_context_vector(
             lb_x, lb_y, heights, difficulty_grid,
-            culture_grid, instance_counts, housing_priors
+            culture_grid, instance_counts
         )
         
         # Generate placements

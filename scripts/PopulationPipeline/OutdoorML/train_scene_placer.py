@@ -76,7 +76,7 @@ STOP_TOKEN = 1
 
 DEFAULT_CONFIG = {
     # Architecture
-    "context_dim": 227,
+    "context_dim": 224,
     "d_model": 512,
     "n_heads": 8,
     "n_layers": 8,
