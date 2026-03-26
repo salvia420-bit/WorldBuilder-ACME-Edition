@@ -22,6 +22,7 @@ namespace WorldBuilder.Terminal;
 /// </summary>
 public class JsonCommandProcessor {
     private readonly CommandEngine _engine;
+    private readonly Dictionary<string, Func<System.Text.Json.Nodes.JsonNode, string>> _commandHandlers;
 
     private static readonly JsonSerializerOptions JsonOpts = new() {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -36,6 +37,7 @@ public class JsonCommandProcessor {
         IOntologyService ontologyService,
         IStampService stampService) {
         _engine = new CommandEngine(projectManager, terrainService, objectPlacementService, dungeonService, ontologyService, stampService);
+        _commandHandlers = BuildCommandHandlers();
     }
 
     /// <summary>
@@ -85,135 +87,102 @@ public class JsonCommandProcessor {
             return (Serialize(new { success = false, command = "parse_error", error = "Missing or invalid 'command' field" }), false);
         }
 
-        var command = commandRaw.ToLowerInvariant();
+        var command = commandRaw.Trim();
 
         try {
-            var result = command switch {
-                // Project management
-                "load" => CmdLoad(node),
-                "export" => CmdExport(node),
-                "info" => CmdInfo(),
+            if (command.Equals("quit", StringComparison.OrdinalIgnoreCase) ||
+                command.Equals("exit", StringComparison.OrdinalIgnoreCase)) {
+                return (Serialize(new { success = true, command }), true);
+            }
 
-                // Terrain editing
-                "smooth" => CmdSmooth(node),
-                "raise" => CmdRaise(node),
-                "lower" => CmdLower(node),
-                "set-height" => CmdSetHeight(node),
-                "paint" => CmdPaint(node),
-                "fill" => CmdFill(node),
-                "road" => CmdRoad(node),
+            if (_commandHandlers.TryGetValue(command, out var handler)) {
+                return (handler(node), false);
+            }
 
-                // Terrain queries
-                "get-height" => CmdGetHeight(node),
-                "terrain-info" => CmdTerrainInfo(node),
-                "get-heightmap" => CmdGetHeightmap(node),
-                "get-terrain-data" => CmdGetTerrainData(node),
-
-                // Object management
-                "list-objects" => CmdListObjects(node),
-                "add-object" => CmdAddObject(node),
-                "remove-object" => CmdRemoveObject(node),
-                "clear-objects" => CmdClearObjects(node),
-                "move-object" => CmdMoveObject(node),
-                "rotate-object" => CmdRotateObject(node),
-
-                // Spatial queries
-                "query-radius" => CmdQueryRadius(node),
-
-                // Dungeon tools
-                "analyze-dungeons" => CmdAnalyzeDungeons(node),
-                "analyze-dungeon-catalog" => CmdAnalyzeDungeonCatalog(node),
-                "analyze-dungeon-topology" => CmdAnalyzeDungeonTopology(node),
-                "get-dungeon-info" => CmdGetDungeonInfo(node),
-
-                // Validation
-                "validate-dungeon" => CmdValidateDungeon(node),
-                "validate-landblock" => CmdValidateLandblock(node),
-                "validate-terrain" => CmdValidateTerrain(node),
-                "validate-building-shells" => CmdValidateBuildingShells(node),
-                "validate-building-portals" => CmdValidateBuildingPortals(node),
-                "validate-all" => CmdValidateAll(node),
-
-                // World observation
-                "list-landblocks" => CmdListLandblocks(node),
-                "get-world-info" => CmdGetWorldInfo(),
-                "get-region" => CmdGetRegion(),
-
-                // Ontology
-                "scan-ontology" => CmdScanOntology(node),
-                "query-ontology" => CmdQueryOntology(node),
-                "ontology-stats" => CmdOntologyStats(),
-
-                // Stamp & Portal
-                "paste-stamp" => CmdPasteStamp(node),
-                "snap-portal" => CmdSnapPortal(node),
-
-                // Bulk & detail queries
-                "get-bulk-heightmap" => CmdGetBulkHeightmap(node),
-                "get-object-detail" => CmdGetObjectDetail(node),
-                "diff-terrain" => CmdDiffTerrain(node),
-
-                // Terrain layers
-                "get-terrain-layers" => CmdGetTerrainLayers(node),
-
-                // DAT extension commands
-                "export-textures" => CmdExportTextures(node),
-                "import-texture" => CmdImportTexture(node),
-                "clone-dat" => CmdCloneDat(node),
-                "defragment-dat" => CmdDefragmentDat(node),
-
-                // Ontology export & enrichment
-                "export-ontology" => CmdExportOntology(node),
-                "mine-strings" => CmdMineStrings(node),
-                "enrich-ontology" => CmdEnrichOntology(),
-                "import-catalog" => CmdImportCatalog(node),
-                "classify-ontology" => CmdClassifyOntology(),
-                "enrich-materials" => CmdEnrichMaterials(),
-
-                // LSD Data Ingestion Pipeline
-                "ingest-weenies" => CmdIngestWeenies(node),
-                "enrich-weenies" => CmdEnrichWeenies(node),
-                "enrich-canonical" => CmdEnrichCanonical(node),
-                "scan-building-placements" => CmdScanBuildingPlacements(node),
-                "difficulty-gradient" => CmdDifficultyGradient(node),
-                "apply-population" => CmdApplyPopulation(node),
-                "ingest-spawn-maps" => CmdIngestSpawnMaps(node),
-                "ingest-spells" => CmdIngestSpells(node),
-                "ingest-recipes" => CmdIngestRecipes(node),
-
-                // Benchmark & bulk operations
-                "benchmark" => CmdBenchmark(),
-                "set-landblock-heightmap" => CmdSetLandblockHeightmap(node),
-                "set-landblock-terrain" => CmdSetLandblockTerrain(node),
-                "bulk-place-objects" => CmdBulkPlaceObjects(node),
-
-                // Procedural generation
-                "generate-terrain" => CmdGenerateTerrain(node),
-                "generate-dungeon" => CmdGenerateDungeon(node),
-                "auto-paint" => CmdAutoPaint(),
-
-                // Spatial analysis (Phase 10)
-                "analyze-landblock-patterns" => CmdAnalyzeLandblockPatterns(node),
-                "export-training-data" => CmdExportTrainingData(node),
-                "generate-settlement" => CmdGenerateSettlement(node),
-
-                // Data extraction (Phase 10.5a)
-                "extract-retail-heightmaps" => CmdExtractRetailHeightmaps(node),
-                "compute-vanilla-baseline" => CmdComputeVanillaBaseline(node),
-
-                // Control
-                "help" => CmdHelp(),
-                "quit" or "exit" => Serialize(new { success = true, command }),
-
-                _ => Serialize(new { success = false, command, error = $"Unknown command: '{command}'" })
-            };
-
-            bool isQuit = command == "quit" || command == "exit";
-            return (result, isQuit);
+            return (Serialize(new { success = false, command, error = $"Unknown command: '{command}'" }), false);
         } catch (Exception ex) {
             return (Serialize(new { success = false, command, error = ex.Message }), false);
         }
     }
+
+    private Dictionary<string, Func<System.Text.Json.Nodes.JsonNode, string>> BuildCommandHandlers() =>
+        new(StringComparer.OrdinalIgnoreCase) {
+            ["load"] = CmdLoad,
+            ["export"] = CmdExport,
+            ["info"] = _ => CmdInfo(),
+            ["smooth"] = CmdSmooth,
+            ["raise"] = CmdRaise,
+            ["lower"] = CmdLower,
+            ["set-height"] = CmdSetHeight,
+            ["paint"] = CmdPaint,
+            ["fill"] = CmdFill,
+            ["road"] = CmdRoad,
+            ["get-height"] = CmdGetHeight,
+            ["terrain-info"] = CmdTerrainInfo,
+            ["get-heightmap"] = CmdGetHeightmap,
+            ["get-terrain-data"] = CmdGetTerrainData,
+            ["list-objects"] = CmdListObjects,
+            ["add-object"] = CmdAddObject,
+            ["remove-object"] = CmdRemoveObject,
+            ["clear-objects"] = CmdClearObjects,
+            ["move-object"] = CmdMoveObject,
+            ["rotate-object"] = CmdRotateObject,
+            ["query-radius"] = CmdQueryRadius,
+            ["analyze-dungeons"] = CmdAnalyzeDungeons,
+            ["analyze-dungeon-catalog"] = CmdAnalyzeDungeonCatalog,
+            ["analyze-dungeon-topology"] = CmdAnalyzeDungeonTopology,
+            ["get-dungeon-info"] = CmdGetDungeonInfo,
+            ["validate-dungeon"] = CmdValidateDungeon,
+            ["validate-landblock"] = CmdValidateLandblock,
+            ["validate-terrain"] = CmdValidateTerrain,
+            ["validate-building-shells"] = CmdValidateBuildingShells,
+            ["validate-building-portals"] = CmdValidateBuildingPortals,
+            ["validate-all"] = CmdValidateAll,
+            ["list-landblocks"] = CmdListLandblocks,
+            ["get-world-info"] = _ => CmdGetWorldInfo(),
+            ["get-region"] = _ => CmdGetRegion(),
+            ["scan-ontology"] = CmdScanOntology,
+            ["query-ontology"] = CmdQueryOntology,
+            ["ontology-stats"] = _ => CmdOntologyStats(),
+            ["paste-stamp"] = CmdPasteStamp,
+            ["snap-portal"] = CmdSnapPortal,
+            ["get-bulk-heightmap"] = CmdGetBulkHeightmap,
+            ["get-object-detail"] = CmdGetObjectDetail,
+            ["diff-terrain"] = CmdDiffTerrain,
+            ["get-terrain-layers"] = CmdGetTerrainLayers,
+            ["export-textures"] = CmdExportTextures,
+            ["import-texture"] = CmdImportTexture,
+            ["clone-dat"] = CmdCloneDat,
+            ["defragment-dat"] = CmdDefragmentDat,
+            ["export-ontology"] = CmdExportOntology,
+            ["mine-strings"] = CmdMineStrings,
+            ["enrich-ontology"] = _ => CmdEnrichOntology(),
+            ["import-catalog"] = CmdImportCatalog,
+            ["classify-ontology"] = _ => CmdClassifyOntology(),
+            ["enrich-materials"] = _ => CmdEnrichMaterials(),
+            ["ingest-weenies"] = CmdIngestWeenies,
+            ["enrich-weenies"] = CmdEnrichWeenies,
+            ["enrich-canonical"] = CmdEnrichCanonical,
+            ["scan-building-placements"] = CmdScanBuildingPlacements,
+            ["difficulty-gradient"] = CmdDifficultyGradient,
+            ["apply-population"] = CmdApplyPopulation,
+            ["ingest-spawn-maps"] = CmdIngestSpawnMaps,
+            ["ingest-spells"] = CmdIngestSpells,
+            ["ingest-recipes"] = CmdIngestRecipes,
+            ["benchmark"] = _ => CmdBenchmark(),
+            ["set-landblock-heightmap"] = CmdSetLandblockHeightmap,
+            ["set-landblock-terrain"] = CmdSetLandblockTerrain,
+            ["bulk-place-objects"] = CmdBulkPlaceObjects,
+            ["generate-terrain"] = CmdGenerateTerrain,
+            ["generate-dungeon"] = CmdGenerateDungeon,
+            ["auto-paint"] = _ => CmdAutoPaint(),
+            ["analyze-landblock-patterns"] = CmdAnalyzeLandblockPatterns,
+            ["export-training-data"] = CmdExportTrainingData,
+            ["generate-settlement"] = CmdGenerateSettlement,
+            ["extract-retail-heightmaps"] = CmdExtractRetailHeightmaps,
+            ["compute-vanilla-baseline"] = CmdComputeVanillaBaseline,
+            ["help"] = _ => CmdHelp(),
+        };
 
     // ════════════════════════════════════════════════════
     //  Project management
