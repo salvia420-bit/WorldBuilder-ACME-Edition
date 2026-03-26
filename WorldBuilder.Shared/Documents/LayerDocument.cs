@@ -352,7 +352,10 @@ namespace WorldBuilder.Shared.Documents {
         }
 
         protected override Task<bool> SaveToDatsInternal(IDatReaderWriter datwriter, int iteration = 0) {
-            throw new NotImplementedException();
+            // Layer documents are non-destructive overlays that are composed into a terrain
+            // export step elsewhere. Persisting a layer directly to DATs is therefore a no-op.
+            _logger.LogDebug("Skipping direct DAT save for layer {Id}; layers are saved via projection/composite workflows", Id);
+            return Task.FromResult(true);
         }
     }
 }
