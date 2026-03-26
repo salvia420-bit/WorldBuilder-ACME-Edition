@@ -281,56 +281,7 @@ namespace WorldBuilder.Shared.Documents {
                 var conn = GetOpenConnection();
                 using var transaction = conn.BeginTransaction();
 
-                // Use a CTE or subquery to identify IDs to delete (provider-specific; assumes SQL Server)
-                string sql = @"
-                    WITH ToDelete AS (
-                        SELECT Id
-                        FROM (
-                            SELECT Id, ROW_NUMBER() OVER (ORDER BY Timestamp DESC) AS RowNum
-                            FROM Updates
-                            WHERE DocumentId = @DocumentId
-                        ) Ranked
-                        WHERE RowNum > @MaxUpdates
-                    )
-                    DELETE FROM Updates
-                    WHERE Id IN (SELECT Id FROM ToDelete)";
-
-                if (maxAge.HasValue) {
-                    var cutoff = DateTime.UtcNow - maxAge.Value;
-                    sql = @"
-                        WITH ToDelete AS (
-                            SELECT Id
-                            FROM Updates
-                            WHERE DocumentId = @DocumentId AND Timestamp < @Cutoff
-                        )
-                        DELETE FROM Updates
-                        WHERE Id IN (SELECT Id FROM ToDelete)";
-                    
-                    if (maxUpdates > 0) {
-                        sql = @"
-                            WITH Ranked AS (
-                                SELECT Id, ROW_NUMBER() OVER (ORDER BY Timestamp DESC) AS RowNum
-                                FROM Updates
-                                WHERE DocumentId = @DocumentId
-                            ),
-                            ToDelete AS (
-                                SELECT Id
-                                FROM Ranked
-                                WHERE RowNum > @MaxUpdates OR Timestamp < @Cutoff
-                            )
-                            DELETE FROM Updates
-                            WHERE Id IN (SELECT Id FROM ToDelete)";
-                    }
-                }
-
-                using var cmd = conn.CreateCommand();
-                cmd.Transaction = transaction;
-                cmd.CommandText = sql;
-                AddParameter(cmd, "@DocumentId", documentId);
-                AddParameter(cmd, "@MaxUpdates", maxUpdates);
-                if (maxAge.HasValue) AddParameter(cmd, "@Cutoff", DateTime.UtcNow - maxAge.Value);
-
-                var deletedCount = await cmd.ExecuteNonQueryAsync();
+                var deletedCount = await CleanupOldUpdatesInternalAsync(conn, transaction, documentId, maxUpdates, maxAge);
                 if (deletedCount > 0) {
                     transaction.Commit();
                     _logger.LogInformation("Cleaned up {Count} old updates for document {DocumentId}", deletedCount, documentId);
@@ -346,12 +297,74 @@ namespace WorldBuilder.Shared.Documents {
 
                 var totalDeleted = 0;
                 foreach (var docId in documentIds) {
-                    totalDeleted += await CleanupOldUpdatesAsync(docId, maxUpdatesPerDocument, maxAge);
+                    using var transaction = conn.BeginTransaction();
+                    var deletedCount = await CleanupOldUpdatesInternalAsync(conn, transaction, docId, maxUpdatesPerDocument, maxAge);
+                    if (deletedCount > 0) {
+                        transaction.Commit();
+                    }
+                    totalDeleted += deletedCount;
                 }
 
                 _logger.LogInformation("Cleaned up {TotalDeleted} updates across {DocumentCount} documents", totalDeleted, documentIds.Count);
                 return totalDeleted;
             }, "Cleaned up all documents");
+        }
+
+        private async Task<int> CleanupOldUpdatesInternalAsync(
+            DbConnection conn,
+            DbTransaction transaction,
+            string documentId,
+            int maxUpdates,
+            TimeSpan? maxAge) {
+            // Use a CTE or subquery to identify IDs to delete (provider-specific; assumes SQL Server)
+            string sql = @"
+                WITH ToDelete AS (
+                    SELECT Id
+                    FROM (
+                        SELECT Id, ROW_NUMBER() OVER (ORDER BY Timestamp DESC) AS RowNum
+                        FROM Updates
+                        WHERE DocumentId = @DocumentId
+                    ) Ranked
+                    WHERE RowNum > @MaxUpdates
+                )
+                DELETE FROM Updates
+                WHERE Id IN (SELECT Id FROM ToDelete)";
+
+            if (maxAge.HasValue) {
+                sql = @"
+                    WITH ToDelete AS (
+                        SELECT Id
+                        FROM Updates
+                        WHERE DocumentId = @DocumentId AND Timestamp < @Cutoff
+                    )
+                    DELETE FROM Updates
+                    WHERE Id IN (SELECT Id FROM ToDelete)";
+
+                if (maxUpdates > 0) {
+                    sql = @"
+                        WITH Ranked AS (
+                            SELECT Id, Timestamp, ROW_NUMBER() OVER (ORDER BY Timestamp DESC) AS RowNum
+                            FROM Updates
+                            WHERE DocumentId = @DocumentId
+                        ),
+                        ToDelete AS (
+                            SELECT Id
+                            FROM Ranked
+                            WHERE RowNum > @MaxUpdates OR Timestamp < @Cutoff
+                        )
+                        DELETE FROM Updates
+                        WHERE Id IN (SELECT Id FROM ToDelete)";
+                }
+            }
+
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText = sql;
+            AddParameter(cmd, "@DocumentId", documentId);
+            AddParameter(cmd, "@MaxUpdates", maxUpdates);
+            if (maxAge.HasValue) AddParameter(cmd, "@Cutoff", DateTime.UtcNow - maxAge.Value);
+
+            return await cmd.ExecuteNonQueryAsync();
         }
 
         public async Task<List<DBDocumentUpdate>> CreateUpdatesAsync(IEnumerable<(string documentId, string type, byte[] update)> updates) {
