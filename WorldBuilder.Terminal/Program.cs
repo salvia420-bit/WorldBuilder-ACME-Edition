@@ -86,7 +86,6 @@ if (cliArgs.StdinMode) {
                 error = $"Could not pre-load project: {ex.Message}"
             });
             Console.WriteLine(errorJson);
-            Console.Out.Flush();
         }
     }
 

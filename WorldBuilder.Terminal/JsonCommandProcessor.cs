@@ -56,7 +56,6 @@ public class JsonCommandProcessor {
             try {
                 var (result, isQuit) = ProcessCommandInternal(line);
                 Console.WriteLine(result);
-                Console.Out.Flush();
                 if (isQuit) break;
             } catch (Exception ex) {
                 WriteResponse(new { success = false, command = "unknown", error = ex.Message });
