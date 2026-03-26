@@ -379,6 +379,8 @@ def load_ocean_mask(difficulty_grid: np.ndarray) -> np.ndarray:
 
 def generate_world(args):
     """Generate placements for the entire world."""
+    output_sql = os.path.abspath(args.output_sql) if args.output_sql else OUTPUT_SQL
+    output_dir = os.path.dirname(output_sql) or OUTPUT_DIR
     
     # ── Load model ──
     print("[1/6] Loading model...")
@@ -593,9 +595,9 @@ def generate_world(args):
     print(f"\n[5/7] Writing SQL ({len(all_instance_stmts):,} instances, "
           f"{len(all_link_stmts):,} links, {encounter_count} encounters)...")
     
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
     
-    with open(OUTPUT_SQL, 'w', encoding='utf-8') as f:
+    with open(output_sql, 'w', encoding='utf-8') as f:
         f.write(f"-- ML-Generated World Population for Vanquish\n")
         f.write(f"-- Generated: {now}\n")
         f.write(f"-- Model: {args.model}\n")
@@ -671,7 +673,7 @@ def generate_world(args):
                 f.write(",\n".join(rows))
                 f.write(";\n\n")
     
-    size_mb = os.path.getsize(OUTPUT_SQL) / 1024 / 1024
+    size_mb = os.path.getsize(output_sql) / 1024 / 1024
     
     # ── Validate housing ──
     print(f"\n[6/7] Validating housing integrity...")
@@ -706,15 +708,61 @@ def generate_world(args):
     print(f"  Total objects placed: {total_objects:,}")
     print(f"  Housing units:        {housing_count}")
     print(f"  Encounters:           {encounter_count}")
-    print(f"  SQL file:             {OUTPUT_SQL} ({size_mb:.1f} MB)")
+    print(f"  SQL file:             {output_sql} ({size_mb:.1f} MB)")
     print(f"  Generation time:      {elapsed:.0f}s")
     print()
     print(f"  To import into ACE:")
-    print(f'    mysql -u root -pbaltic ace_world < "{OUTPUT_SQL}"')
+    print(f'    mysql -u root -pbaltic ace_world < "{output_sql}"')
     print()
     print(f"  To score quality:")
-    print(f"    python scripts/PopulationPipeline/OutdoorML/score_placement_quality.py \"{OUTPUT_SQL}\"")
+    print(f"    python scripts/PopulationPipeline/OutdoorML/score_placement_quality.py \"{output_sql}\"")
     print("=" * 72)
+
+    summary = {
+        'model': args.model,
+        'output_sql': output_sql,
+        'generation_time_sec': round(elapsed, 3),
+        'region': {
+            'lb_x_min': args.lb_x_min,
+            'lb_x_max': args.lb_x_max,
+            'lb_y_min': args.lb_y_min,
+            'lb_y_max': args.lb_y_max,
+            'margin': args.margin,
+        },
+        'sampling': {
+            'temperature': args.temperature,
+            'top_k': args.top_k,
+            'nucleus_p': args.nucleus_p,
+            'frequency_penalty': args.frequency_penalty,
+            'seed': args.seed,
+        },
+        'results': {
+            'landblocks_populated': lb_count,
+            'objects': total_objects,
+            'houses': housing_count,
+            'encounters': encounter_count,
+            'raw_generated': int(debug_totals['raw_generated']),
+            'accepted_after_validation': int(debug_totals['accepted_count']),
+            'empty_landblocks_after_validation': int(debug_totals['empty_landblocks_after_validation']),
+            'ocean_skips': int(debug_totals['ocean_skips']),
+            'landblocks_visited': int(debug_totals['landblocks_visited']),
+            'stop_samples': int(debug_totals['sampled_stop']),
+            'pad_samples': int(debug_totals['sampled_pad']),
+            'regular_samples': int(debug_totals['sampled_regular']),
+            'housing_samples': int(debug_totals['sampled_housing']),
+            'special_leaks': int(debug_totals['special_leaks']),
+            'collision_rerolls': int(debug_totals['rerolled_collisions']),
+        },
+        'debug_examples': debug_examples,
+    }
+    if args.summary_json:
+        summary_path = os.path.abspath(args.summary_json)
+        summary_dir = os.path.dirname(summary_path)
+        if summary_dir:
+            os.makedirs(summary_dir, exist_ok=True)
+        with open(summary_path, 'w', encoding='utf-8') as f:
+            json.dump(summary, f, indent=2)
+        print(f"  Summary JSON:         {summary_path}")
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────
@@ -742,6 +790,10 @@ def main():
     parser.add_argument("--debug-landblocks", type=int, default=10,
                        help="Number of empty-landblock diagnostic examples to print")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--output-sql", type=str, default=None,
+                       help="Optional SQL output path (defaults to pipeline_data/population_output/vanquish_ml_populated.sql)")
+    parser.add_argument("--summary-json", type=str, default=None,
+                       help="Optional JSON summary output path for automated probe runs")
     args = parser.parse_args()
     
     random.seed(args.seed)

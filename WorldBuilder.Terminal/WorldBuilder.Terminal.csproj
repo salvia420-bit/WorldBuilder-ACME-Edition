@@ -25,14 +25,8 @@
 	</ItemGroup>
 
 	<ItemGroup Condition="'$(UseLocalReferenceBuild)'!='true'">
-		<Reference Include="WorldBuilder.Shared">
-			<HintPath>..\WorldBuilder.Shared\bin\Debug\net8.0\WorldBuilder.Shared.dll</HintPath>
-			<Private>true</Private>
-		</Reference>
-		<Reference Include="DatReaderWriter.Extensions">
-			<HintPath>..\DatReaderWriter.Extensions\bin\net8.0\DatReaderWriter.Extensions.dll</HintPath>
-			<Private>true</Private>
-		</Reference>
+		<ProjectReference Include="..\WorldBuilder.Shared\WorldBuilder.Shared.csproj" />
+		<ProjectReference Include="..\DatReaderWriter.Extensions\DatReaderWriter.Extensions\DatReaderWriter.Extensions.csproj" />
 	</ItemGroup>
 
 	<ItemGroup Condition="'$(UseLocalReferenceBuild)'=='true'">

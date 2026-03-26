@@ -40,15 +40,15 @@ if (cliArgs.IsBatchMode && !cliArgs.StdinMode) {
         c.SetMinimumLevel(LogLevel.Information);
     });
     using var batchProvider = batchServices.BuildServiceProvider();
-    var loggerFactory = batchProvider.GetRequiredService<ILoggerFactory>();
-    using var projectManager = new HeadlessProjectManager(loggerFactory);
+    var batchLoggerFactory = batchProvider.GetRequiredService<ILoggerFactory>();
+    using var batchProjectManager = new HeadlessProjectManager(batchLoggerFactory);
 
     try {
         Console.WriteLine($"[Batch] Loading project: {cliArgs.ProjectPath}");
-        projectManager.LoadProject(cliArgs.ProjectPath!);
+        batchProjectManager.LoadProject(cliArgs.ProjectPath!);
 
         Console.WriteLine($"[Batch] Exporting to: {cliArgs.ExportDirectory}");
-        var success = projectManager.ExportDats(cliArgs.ExportDirectory!, cliArgs.Iteration);
+        var success = batchProjectManager.ExportDats(cliArgs.ExportDirectory!, cliArgs.Iteration);
 
         return success ? 0 : 1;
     } catch (Exception ex) {
