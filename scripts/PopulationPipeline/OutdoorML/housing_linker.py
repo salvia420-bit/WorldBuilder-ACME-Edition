@@ -122,6 +122,17 @@ SLUMLORD_WEENIES = {
     }
 }
 
+
+def classify_slumlord_house_type(wcid: int) -> Optional[str]:
+    """Return the coarse house family for a retail slumlord WCID."""
+    for house_type, info in SLUMLORD_WEENIES.items():
+        if wcid in (info['cheap'], info['moderate'], info['expensive']):
+            return house_type
+        for range_wcid, _, _ in info.get('ranges', []):
+            if wcid == range_wcid:
+                return house_type
+    return None
+
 # ─── Housing Child Templates ─────────────────────────────────────────────────
 
 # These define what objects get linked as children of each slumlord type.
@@ -537,15 +548,7 @@ def extract_retail_housing_templates(sql_path: str) -> dict:
                         })
         
         # Determine house type from slumlord wcid
-        house_type = None
-        for ht, info in SLUMLORD_WEENIES.items():
-            if parent_wcid in (info['cheap'], info['moderate'], info['expensive']):
-                house_type = ht
-                break
-            for rwcid, _, _ in info.get('ranges', []):
-                if parent_wcid == rwcid:
-                    house_type = ht
-                    break
+        house_type = classify_slumlord_house_type(parent_wcid)
         
         if house_type and children:
             templates_by_type[house_type].append({

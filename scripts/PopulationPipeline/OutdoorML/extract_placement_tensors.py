@@ -28,6 +28,8 @@ import struct
 import numpy as np
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from housing_linker import classify_slumlord_house_type
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -69,6 +71,12 @@ WT_DOOR = 19
 WT_CHEST = 20
 WT_LIFESTONE = 25
 WT_SLUMLORD = 55
+
+SLUMLORD_TOKEN_BY_HOUSE_TYPE = {
+    "Cottage": HOUSING_COTTAGE_TOKEN,
+    "Villa": HOUSING_VILLA_TOKEN,
+    "Mansion": HOUSING_MANSION_TOKEN,
+}
 
 # Cultural zone codes
 CULTURE_CODES = {
@@ -425,6 +433,22 @@ def build_context_vector(lb_x: int, lb_y: int,
     return ctx
 
 
+def classify_housing_token(wcid: int, wtype: int) -> Tuple[Optional[int], Optional[str]]:
+    """
+    Map retail slumlord wcids into the coarse housing-token families used by
+    the model. Unknown slumlords fall back to cottage so older/custom rows
+    still preserve a housing signal instead of becoming generic objects.
+    """
+    if wtype != WT_SLUMLORD:
+        return None, None
+
+    house_type = classify_slumlord_house_type(wcid)
+    if house_type is None:
+        return HOUSING_COTTAGE_TOKEN, "UnknownFallback"
+
+    return SLUMLORD_TOKEN_BY_HOUSE_TYPE[house_type], house_type
+
+
 # ─── Step 5: Build training examples ─────────────────────────────────────────
 
 def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
@@ -462,6 +486,7 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
     contexts = np.zeros((len(populated_lbs), 224), dtype=np.float32)
     sequences = np.zeros((len(populated_lbs), MAX_OBJECTS_PER_LB, 10), dtype=np.float32)
     seq_lengths = np.zeros(len(populated_lbs), dtype=np.int32)
+    housing_token_counts = defaultdict(int)
     
     for idx, lb_key in enumerate(populated_lbs):
         lb_x, lb_y = lb_key
@@ -483,12 +508,10 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
             wcid = inst['wcid']
             wtype = wcid_types.get(wcid, 0)
             
-            # Check if this is a slumlord (convert to housing token)
-            if wtype == WT_SLUMLORD:
-                # Map slumlord to housing special token
-                # We'd need to look up HouseType from weenie properties
-                # For now, default to cottage
-                vocab_idx = HOUSING_COTTAGE_TOKEN
+            housing_token, housing_type = classify_housing_token(wcid, wtype)
+            if housing_token is not None:
+                vocab_idx = housing_token
+                housing_token_counts[housing_type] += 1
             else:
                 vocab_idx = wcid_to_idx.get(wcid, PAD_TOKEN)
             
@@ -528,7 +551,7 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
         if (idx + 1) % 1000 == 0:
             print(f"      {idx + 1}/{len(populated_lbs)} LBs processed")
     
-    return contexts, sequences, seq_lengths, populated_lbs
+    return contexts, sequences, seq_lengths, populated_lbs, dict(housing_token_counts)
 
 
 # ─── Step 6: Save output ─────────────────────────────────────────────────────
@@ -606,7 +629,7 @@ def main():
     
     # Step 4: Build training examples
     print("[Step 4] Building training examples...")
-    contexts, sequences, seq_lengths, populated_lbs = build_training_examples(
+    contexts, sequences, seq_lengths, populated_lbs, housing_token_counts = build_training_examples(
         instances_by_lb, links, wcid_to_idx, wcid_types,
         heights, difficulty_grid, culture_grid
     )
@@ -631,6 +654,16 @@ def main():
     print(f"  Total training tokens: {seq_lengths.sum():,}")
     total_enc = sum(len(v) for v in encounters_by_lb.values())
     print(f"  Encounter spawns: {total_enc:,} across {len(encounters_by_lb)} LBs")
+    housing_total = sum(housing_token_counts.values())
+    print(f"  Housing supervision tokens: {housing_total:,}")
+    if housing_total:
+        print(
+            "    Breakdown: "
+            f"cottage={housing_token_counts.get('Cottage', 0):,}, "
+            f"villa={housing_token_counts.get('Villa', 0):,}, "
+            f"mansion={housing_token_counts.get('Mansion', 0):,}, "
+            f"fallback={housing_token_counts.get('UnknownFallback', 0):,}"
+        )
     print()
     
     # Distribution
