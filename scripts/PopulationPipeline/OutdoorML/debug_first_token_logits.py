@@ -39,7 +39,12 @@ DIFFICULTY_GRADIENT = os.path.join(BASE_DIR, "pipeline_data", "enrichment", "dif
 sys.path.insert(0, SCRIPT_DIR)
 
 from train_scene_placer import ScenePlacerTransformer, DEFAULT_CONFIG
-from generate_populated_world import PlacementGenerator, load_inference_state_dict, load_ocean_mask
+from generate_populated_world import (
+    PlacementGenerator,
+    load_inference_state_dict,
+    load_model_for_inference,
+    load_ocean_mask,
+)
 from extract_placement_tensors import (
     build_context_vector,
     build_cultural_zones,
@@ -87,7 +92,7 @@ def main() -> int:
     state_dict, state_source = load_inference_state_dict(
         model_path, device, checkpoint_source=args.checkpoint_source
     )
-    model.load_state_dict(state_dict)
+    load_model_for_inference(model, state_dict, model_path)
     model.eval()
 
     heights = load_height_grid(HEIGHTS_PATH)

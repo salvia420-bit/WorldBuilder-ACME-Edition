@@ -117,6 +117,24 @@ def load_inference_state_dict(model_path: str, device: torch.device,
     return state, 'weights'
 
 
+def load_model_for_inference(model: torch.nn.Module, state_dict: dict,
+                             model_path: str) -> None:
+    """
+    Load inference weights while tolerating older checkpoints that omitted
+    non-trainable buffers such as positional encodings or cached masks.
+    """
+    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+    ignored_missing = {'causal_mask', 'pos_encoding.pe'}
+    real_missing = [key for key in missing if key not in ignored_missing]
+    if real_missing or unexpected:
+        raise RuntimeError(
+            f"Checkpoint load mismatch for {model_path}: "
+            f"missing={real_missing}, unexpected={list(unexpected)}"
+        )
+    if missing:
+        print(f"  Note: older checkpoint omitted buffers {sorted(missing)}; using model defaults")
+
+
 def apply_sampling_filters(logits: torch.Tensor, temperature: float = 1.0,
                            top_k: int = 0, nucleus_p: float = 1.0) -> torch.Tensor:
     """Apply the same sampling filters used during generation."""
@@ -523,7 +541,7 @@ def generate_world(args):
     
     # Load weights
     state, state_source = load_inference_state_dict(model_path, device)
-    model.load_state_dict(state)
+    load_model_for_inference(model, state, model_path)
     model.eval()
     print(f"  Model loaded: {model.count_parameters()/1e6:.1f}M params ({state_source} weights)")
     
