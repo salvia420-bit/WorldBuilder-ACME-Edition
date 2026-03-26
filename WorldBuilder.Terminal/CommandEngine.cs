@@ -244,8 +244,9 @@ public class CommandEngine {
         var (doc, tl, hl) = GetTerrainHelpers();
         var affected = _terrainService.GetAffectedVertices(new Vector3(x, y, 0), radius, hl);
 
-        var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>();
-        var terrainCache = new Dictionary<ushort, TerrainEntry[]?>();
+        int estimatedLandblocks = Math.Min(affected.Count, 256);
+        var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>(estimatedLandblocks);
+        var terrainCache = new Dictionary<ushort, TerrainEntry[]?>(estimatedLandblocks);
         int changeCount = 0;
         foreach (var (lbId, vIndex, _) in affected) {
             if (!terrainCache.TryGetValue(lbId, out var data)) {
@@ -255,10 +256,11 @@ public class CommandEngine {
 
             if (data == null || data[vIndex].Type == terrainType) continue;
             if (!batchChanges.TryGetValue(lbId, out var lbChanges)) {
-                lbChanges = new Dictionary<byte, uint>();
+                lbChanges = new Dictionary<byte, uint>(16);
                 batchChanges[lbId] = lbChanges;
             }
-            lbChanges[(byte)vIndex] = (data[vIndex] with { Type = terrainType }).ToUInt();
+            var current = data[vIndex];
+            lbChanges[(byte)vIndex] = (current with { Type = terrainType }).ToUInt();
             changeCount++;
         }
 
@@ -281,8 +283,9 @@ public class CommandEngine {
         var fillResult = _terrainService.FloodFill(lbX, lbY, cellX, cellY, newType, tl);
         if (fillResult.Count == 0) return new TerrainEditResult(0, new HashSet<ushort>());
 
-        var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>();
-        var terrainCache = new Dictionary<ushort, TerrainEntry[]?>();
+        int estimatedLandblocks = Math.Min(fillResult.Count, 256);
+        var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>(estimatedLandblocks);
+        var terrainCache = new Dictionary<ushort, TerrainEntry[]?>(estimatedLandblocks);
         foreach (var (lbId, vIndex, _) in fillResult) {
             if (!terrainCache.TryGetValue(lbId, out var data)) {
                 data = tl(lbId);
@@ -291,10 +294,11 @@ public class CommandEngine {
 
             if (data == null) continue;
             if (!batchChanges.TryGetValue(lbId, out var lbChanges)) {
-                lbChanges = new Dictionary<byte, uint>();
+                lbChanges = new Dictionary<byte, uint>(16);
                 batchChanges[lbId] = lbChanges;
             }
-            lbChanges[(byte)vIndex] = (data[vIndex] with { Type = newType }).ToUInt();
+            var current = data[vIndex];
+            lbChanges[(byte)vIndex] = (current with { Type = newType }).ToUInt();
         }
 
         doc.UpdateLandblocksBatchInternal(batchChanges, out var modifiedLbs);
@@ -309,8 +313,9 @@ public class CommandEngine {
 
         if (path.Count == 0) return new RoadResult(0, 0, roadValue, new HashSet<ushort>());
 
-        var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>();
-        var terrainCache = new Dictionary<ushort, TerrainEntry[]?>();
+        int estimatedLandblocks = Math.Min(path.Count, 256);
+        var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>(estimatedLandblocks);
+        var terrainCache = new Dictionary<ushort, TerrainEntry[]?>(estimatedLandblocks);
         int changeCount = 0;
         foreach (var wp in path) {
             var vi = _terrainService.WorldToVertex(wp.X, wp.Y);
@@ -323,10 +328,11 @@ public class CommandEngine {
 
             if (data == null || data[vIndex].Road == roadValue) continue;
             if (!batchChanges.TryGetValue(lbId, out var lbChanges)) {
-                lbChanges = new Dictionary<byte, uint>();
+                lbChanges = new Dictionary<byte, uint>(16);
                 batchChanges[lbId] = lbChanges;
             }
-            lbChanges[(byte)vIndex] = (data[vIndex] with { Road = roadValue }).ToUInt();
+            var current = data[vIndex];
+            lbChanges[(byte)vIndex] = (current with { Road = roadValue }).ToUInt();
             changeCount++;
         }
 
