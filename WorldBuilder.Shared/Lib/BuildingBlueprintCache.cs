@@ -366,6 +366,10 @@ namespace WorldBuilder.Shared.Lib {
                     Orientation = localOrientation,
                     RestrictionObj = envCell.RestrictionObj
                 };
+                snapshot.Surfaces.Capacity = envCell.Surfaces.Count;
+                snapshot.CellPortals.Capacity = envCell.CellPortals.Count;
+                snapshot.VisibleCells.Capacity = envCell.VisibleCells.Count;
+                snapshot.StaticObjects.Capacity = envCell.StaticObjects.Count;
 
                 // Copy surfaces
                 snapshot.Surfaces.AddRange(envCell.Surfaces);
@@ -437,12 +441,18 @@ namespace WorldBuilder.Shared.Lib {
             ILogger? logger) {
 
             // Build cell ID remap table: originalCellId -> newCellId
-            var remap = new Dictionary<ushort, ushort>();
+            var remap = new Dictionary<ushort, ushort>(blueprint.Cells.Count);
             ushort nextCellId = (ushort)(currentNumCells + 0x0100);
             foreach (var cell in blueprint.Cells) {
                 remap[cell.OriginalCellId] = nextCellId;
                 nextCellId++;
             }
+
+            // Precompute donor->destination outdoor cell delta once per building instantiation.
+            var (donorCellX, donorCellY) = PositionToOutdoorCell(blueprint.DonorOrigin);
+            var (newCellX, newCellY) = PositionToOutdoorCell(newOrigin);
+            int cellDeltaX = newCellX - donorCellX;
+            int cellDeltaY = newCellY - donorCellY;
 
             // Create and save each new EnvCell
             // Apply the new building's orientation to transform local-space offsets to world-space
@@ -465,6 +475,10 @@ namespace WorldBuilder.Shared.Lib {
                         Orientation = worldOrientation
                     }
                 };
+                envCell.Surfaces.Capacity = cell.Surfaces.Count;
+                envCell.CellPortals.Capacity = cell.CellPortals.Count;
+                envCell.VisibleCells.Capacity = cell.VisibleCells.Count;
+                envCell.StaticObjects.Capacity = cell.StaticObjects.Count;
 
                 // Copy surfaces
                 envCell.Surfaces.AddRange(cell.Surfaces);
@@ -497,11 +511,6 @@ namespace WorldBuilder.Shared.Lib {
                 // outdoor cell boundaries, resulting in one-sided walk-through walls.
                 // We apply a 2D cell-coordinate delta (donor → new) to each LandCell reference
                 // to preserve the spatial relationship (e.g. "the cell one step north").
-                var (donorCellX, donorCellY) = PositionToOutdoorCell(blueprint.DonorOrigin);
-                var (newCellX, newCellY) = PositionToOutdoorCell(newOrigin);
-                int cellDeltaX = newCellX - donorCellX;
-                int cellDeltaY = newCellY - donorCellY;
-
                 for (int v = 0; v < envCell.VisibleCells.Count; v++) {
                     var vc = envCell.VisibleCells[v];
                     if (vc >= 0x0001 && vc <= 0x0040) {
