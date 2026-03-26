@@ -96,8 +96,8 @@ public class CommandEngine {
             }
 
             // Capture old terrain from base DATs, new from current document state
-            var oldTerrain = new Dictionary<ushort, TerrainEntry[]>();
-            var newTerrain = new Dictionary<ushort, TerrainEntry[]>();
+            var oldTerrain = new Dictionary<ushort, TerrainEntry[]>(modifiedLbs.Count);
+            var newTerrain = new Dictionary<ushort, TerrainEntry[]>(modifiedLbs.Count);
             var dats = project.DocumentManager.Dats;
 
             foreach (var lbKey in modifiedLbs) {
@@ -105,10 +105,11 @@ public class CommandEngine {
                 if (dats.TryGet<LandBlock>(baseLbId, out var baseLb)) {
                     var entries = new TerrainEntry[81];
                     for (int i = 0; i < 81; i++) {
+                        var terrainVertex = baseLb.Terrain[i];
                         entries[i] = new TerrainEntry(
-                            baseLb.Terrain[i].Road,
-                            baseLb.Terrain[i].Scenery,
-                            (byte)baseLb.Terrain[i].Type,
+                            terrainVertex.Road,
+                            terrainVertex.Scenery,
+                            (byte)terrainVertex.Type,
                             baseLb.Height[i]);
                     }
                     oldTerrain[lbKey] = entries;
@@ -117,7 +118,7 @@ public class CommandEngine {
                 var currentEntries = terrainDoc.GetLandblockInternal(lbKey);
                 if (currentEntries != null) {
                     var snapshot = new TerrainEntry[81];
-                    Array.Copy(currentEntries, snapshot, 81);
+                    currentEntries.AsSpan(0, 81).CopyTo(snapshot);
                     newTerrain[lbKey] = snapshot;
                 }
             }

@@ -49,12 +49,10 @@ public class JsonCommandProcessor {
         while (true) {
             var line = Console.ReadLine();
             if (line == null) break; // EOF
-
-            var trimmed = line.Trim();
-            if (string.IsNullOrEmpty(trimmed)) continue;
+            if (string.IsNullOrWhiteSpace(line)) continue;
 
             try {
-                var (result, isQuit) = ProcessCommandInternal(trimmed);
+                var (result, isQuit) = ProcessCommandInternal(line);
                 Console.WriteLine(result);
                 Console.Out.Flush();
                 if (isQuit) break;
