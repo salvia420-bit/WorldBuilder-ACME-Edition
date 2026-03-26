@@ -16,7 +16,7 @@ from datetime import datetime
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR))))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))
 GENERATOR = os.path.join(SCRIPT_DIR, "generate_populated_world.py")
 DEFAULT_OUT_DIR = os.path.join(BASE_DIR, "pipeline_data", "population_output", "probes")
 
