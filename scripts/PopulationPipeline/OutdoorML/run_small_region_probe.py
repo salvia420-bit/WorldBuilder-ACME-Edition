@@ -37,6 +37,15 @@ def main() -> int:
     parser.add_argument("--top-k", type=int, default=50)
     parser.add_argument("--nucleus-p", type=float, default=0.92)
     parser.add_argument("--frequency-penalty", type=float, default=0.3)
+    parser.add_argument("--min-objects", type=int, default=3)
+    parser.add_argument("--adaptive-min-objects-bonus", type=int, default=0)
+    parser.add_argument("--pad-logit-bias", type=float, default=0.0)
+    parser.add_argument("--stop-logit-bias", type=float, default=0.0)
+    parser.add_argument("--housing-logit-bias", type=float, default=0.0)
+    parser.add_argument("--housing-flatness-threshold", type=float, default=0.6)
+    parser.add_argument("--housing-difficulty-ceiling", type=float, default=0.6)
+    parser.add_argument("--housing-min-placements", type=int, default=2)
+    parser.add_argument("--max-housing-per-lb", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -60,6 +69,15 @@ def main() -> int:
         "--top-k", str(args.top_k),
         "--nucleus-p", str(args.nucleus_p),
         "--frequency-penalty", str(args.frequency_penalty),
+        "--min-objects", str(args.min_objects),
+        "--adaptive-min-objects-bonus", str(args.adaptive_min_objects_bonus),
+        "--pad-logit-bias", str(args.pad_logit_bias),
+        "--stop-logit-bias", str(args.stop_logit_bias),
+        "--housing-logit-bias", str(args.housing_logit_bias),
+        "--housing-flatness-threshold", str(args.housing_flatness_threshold),
+        "--housing-difficulty-ceiling", str(args.housing_difficulty_ceiling),
+        "--housing-min-placements", str(args.housing_min_placements),
+        "--max-housing-per-lb", str(args.max_housing_per_lb),
         "--seed", str(args.seed),
         "--output-sql", sql_path,
         "--summary-json", summary_path,

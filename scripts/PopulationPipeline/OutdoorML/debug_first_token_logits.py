@@ -72,6 +72,15 @@ def main() -> int:
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-k", type=int, default=50)
     parser.add_argument("--nucleus-p", type=float, default=0.92)
+    parser.add_argument("--min-objects", type=int, default=3)
+    parser.add_argument("--adaptive-min-objects-bonus", type=int, default=0)
+    parser.add_argument("--pad-logit-bias", type=float, default=0.0)
+    parser.add_argument("--stop-logit-bias", type=float, default=0.0)
+    parser.add_argument("--housing-logit-bias", type=float, default=0.0)
+    parser.add_argument("--housing-flatness-threshold", type=float, default=0.6)
+    parser.add_argument("--housing-difficulty-ceiling", type=float, default=0.6)
+    parser.add_argument("--housing-min-placements", type=int, default=2)
+    parser.add_argument("--max-housing-per-lb", type=int, default=1)
     parser.add_argument("--top-tokens", type=int, default=8,
                         help="How many top tokens to print per landblock summary")
     parser.add_argument("--json-out", type=str, default=None,
@@ -108,7 +117,16 @@ def main() -> int:
         temperature=args.temperature,
         top_k=args.top_k,
         nucleus_p=args.nucleus_p,
+        min_objects=args.min_objects,
         wcid_types=wcid_types,
+        pad_logit_bias=args.pad_logit_bias,
+        stop_logit_bias=args.stop_logit_bias,
+        adaptive_min_objects_bonus=args.adaptive_min_objects_bonus,
+        housing_logit_bias=args.housing_logit_bias,
+        housing_flatness_threshold=args.housing_flatness_threshold,
+        housing_difficulty_ceiling=args.housing_difficulty_ceiling,
+        housing_min_placements=args.housing_min_placements,
+        max_housing_per_lb=args.max_housing_per_lb,
     )
 
     region_results = []
@@ -161,6 +179,20 @@ def main() -> int:
             "lb_y_max": args.lb_y_max,
         },
         "landblocks_analyzed": len(region_results),
+        "sampling": {
+            "temperature": args.temperature,
+            "top_k": args.top_k,
+            "nucleus_p": args.nucleus_p,
+            "min_objects": args.min_objects,
+            "adaptive_min_objects_bonus": args.adaptive_min_objects_bonus,
+            "pad_logit_bias": args.pad_logit_bias,
+            "stop_logit_bias": args.stop_logit_bias,
+            "housing_logit_bias": args.housing_logit_bias,
+            "housing_flatness_threshold": args.housing_flatness_threshold,
+            "housing_difficulty_ceiling": args.housing_difficulty_ceiling,
+            "housing_min_placements": args.housing_min_placements,
+            "max_housing_per_lb": args.max_housing_per_lb,
+        },
         "raw_avg": {
             "pad_mass": average(raw_pad),
             "stop_mass": average(raw_stop),

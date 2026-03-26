@@ -245,7 +245,10 @@ class PlacementGenerator:
     def __init__(self, model, vocab, device,
                  temperature=0.8, top_k=50, nucleus_p=0.92,
                  frequency_penalty=0.3, min_objects=3, max_objects=120,
-                 wcid_types=None):
+                 wcid_types=None, pad_logit_bias=0.0, stop_logit_bias=0.0,
+                 adaptive_min_objects_bonus=0, housing_logit_bias=0.0,
+                 housing_flatness_threshold=0.6, housing_difficulty_ceiling=0.6,
+                 housing_min_placements=2, max_housing_per_lb=1):
         self.model = model
         self.vocab = vocab
         self.device = device
@@ -256,9 +259,48 @@ class PlacementGenerator:
         self.min_objects = min_objects
         self.max_objects = max_objects
         self.wcid_types = wcid_types or {}
+        self.pad_logit_bias = pad_logit_bias
+        self.stop_logit_bias = stop_logit_bias
+        self.adaptive_min_objects_bonus = adaptive_min_objects_bonus
+        self.housing_logit_bias = housing_logit_bias
+        self.housing_flatness_threshold = housing_flatness_threshold
+        self.housing_difficulty_ceiling = housing_difficulty_ceiling
+        self.housing_min_placements = housing_min_placements
+        self.max_housing_per_lb = max_housing_per_lb
         
         self.idx_to_wcid = {int(k): v for k, v in vocab['idx_to_wcid'].items()}
         self.vocab_size = vocab['vocab_size']
+
+    def _estimate_min_objects(self, context: np.ndarray) -> int:
+        """Raise the minimum object count in contexts that look more buildable."""
+        min_objects = self.min_objects
+        bonus = 0
+        culture_strength = float(context[212]) if len(context) > 212 else 0.0
+        difficulty = float(context[213]) if len(context) > 213 else 0.0
+        flatness = float(context[222]) if len(context) > 222 else 0.0
+
+        if culture_strength >= 0.2:
+            bonus += 1
+        if flatness >= 0.55:
+            bonus += 1
+        if difficulty <= 0.6:
+            bonus += 1
+
+        min_objects += min(bonus, self.adaptive_min_objects_bonus)
+        return max(0, min(min_objects, self.max_objects))
+
+    def _is_housing_friendly_context(self, context: np.ndarray) -> bool:
+        """Heuristic gate for housing-token encouragement."""
+        culture_strength = float(context[212]) if len(context) > 212 else 0.0
+        difficulty = float(context[213]) if len(context) > 213 else 0.0
+        flatness = float(context[222]) if len(context) > 222 else 0.0
+        coast_distance = float(context[223]) if len(context) > 223 else 0.0
+        return (
+            culture_strength >= 0.2 and
+            flatness >= self.housing_flatness_threshold and
+            difficulty <= self.housing_difficulty_ceiling and
+            coast_distance >= 0.08
+        )
     
     @torch.no_grad()
     def generate(self, context: np.ndarray) -> tuple[list, dict]:
@@ -280,6 +322,8 @@ class PlacementGenerator:
         
         placements = []
         wcid_freq = Counter()
+        min_objects_for_lb = self._estimate_min_objects(context)
+        housing_friendly = self._is_housing_friendly_context(context)
         debug = {
             'steps': 0,
             'sampled_stop': 0,
@@ -290,6 +334,10 @@ class PlacementGenerator:
             'special_leaks': 0,
             'terminated_by_stop': False,
             'max_steps_reached': False,
+            'min_objects_target': min_objects_for_lb,
+            'stop_suppressed_steps': 0,
+            'housing_boost_steps': 0,
+            'housing_friendly_context': housing_friendly,
         }
         
         for step in range(self.max_objects):
@@ -304,6 +352,25 @@ class PlacementGenerator:
             for wcid_idx, count in wcid_freq.items():
                 if wcid_idx < len(logits):
                     logits[wcid_idx] -= self.frequency_penalty * math.log(count + 1)
+
+            if self.pad_logit_bias:
+                logits[PAD_TOKEN] -= self.pad_logit_bias
+
+            if len(placements) < min_objects_for_lb:
+                logits[STOP_TOKEN] = float('-inf')
+                debug['stop_suppressed_steps'] += 1
+            elif self.stop_logit_bias:
+                logits[STOP_TOKEN] -= self.stop_logit_bias
+
+            if housing_friendly:
+                housing_count = sum(1 for p in placements if p.get('is_housing'))
+                if housing_count >= self.max_housing_per_lb:
+                    for housing_idx in HOUSING_TOKEN_MAP:
+                        logits[housing_idx] = float('-inf')
+                elif len(placements) >= self.housing_min_placements and self.housing_logit_bias:
+                    for housing_idx in HOUSING_TOKEN_MAP:
+                        logits[housing_idx] += self.housing_logit_bias
+                    debug['housing_boost_steps'] += 1
             
             # Temperature scaling
             logits = logits / self.temperature
@@ -331,7 +398,7 @@ class PlacementGenerator:
             # Check for STOP
             if wcid_idx == STOP_TOKEN:
                 debug['sampled_stop'] += 1
-                if len(placements) >= self.min_objects:
+                if len(placements) >= min_objects_for_lb:
                     debug['terminated_by_stop'] = True
                     break
                 else:
@@ -572,7 +639,16 @@ def generate_world(args):
         top_k=args.top_k,
         nucleus_p=args.nucleus_p,
         frequency_penalty=args.frequency_penalty,
+        min_objects=args.min_objects,
         wcid_types=wcid_types,
+        pad_logit_bias=args.pad_logit_bias,
+        stop_logit_bias=args.stop_logit_bias,
+        adaptive_min_objects_bonus=args.adaptive_min_objects_bonus,
+        housing_logit_bias=args.housing_logit_bias,
+        housing_flatness_threshold=args.housing_flatness_threshold,
+        housing_difficulty_ceiling=args.housing_difficulty_ceiling,
+        housing_min_placements=args.housing_min_placements,
+        max_housing_per_lb=args.max_housing_per_lb,
     )
     
     housing_linker = HousingLinker(GuidAllocator(start=0x70000000))
@@ -874,6 +950,15 @@ def generate_world(args):
             'top_k': args.top_k,
             'nucleus_p': args.nucleus_p,
             'frequency_penalty': args.frequency_penalty,
+            'min_objects': args.min_objects,
+            'pad_logit_bias': args.pad_logit_bias,
+            'stop_logit_bias': args.stop_logit_bias,
+            'adaptive_min_objects_bonus': args.adaptive_min_objects_bonus,
+            'housing_logit_bias': args.housing_logit_bias,
+            'housing_flatness_threshold': args.housing_flatness_threshold,
+            'housing_difficulty_ceiling': args.housing_difficulty_ceiling,
+            'housing_min_placements': args.housing_min_placements,
+            'max_housing_per_lb': args.max_housing_per_lb,
             'seed': args.seed,
         },
         'results': {
@@ -915,6 +1000,24 @@ def main():
     parser.add_argument("--top-k", type=int, default=50)
     parser.add_argument("--nucleus-p", type=float, default=0.92)
     parser.add_argument("--frequency-penalty", type=float, default=0.3)
+    parser.add_argument("--min-objects", type=int, default=3,
+                       help="Base minimum generated objects before STOP can terminate")
+    parser.add_argument("--adaptive-min-objects-bonus", type=int, default=0,
+                       help="Extra minimum objects in buildable contexts (0-3 recommended)")
+    parser.add_argument("--pad-logit-bias", type=float, default=0.0,
+                       help="Subtract from PAD logit before sampling")
+    parser.add_argument("--stop-logit-bias", type=float, default=0.0,
+                       help="Subtract from STOP logit after minimum objects are met")
+    parser.add_argument("--housing-logit-bias", type=float, default=0.0,
+                       help="Add to housing-token logits in housing-friendly contexts")
+    parser.add_argument("--housing-flatness-threshold", type=float, default=0.6,
+                       help="Minimum flatness score to encourage housing tokens")
+    parser.add_argument("--housing-difficulty-ceiling", type=float, default=0.6,
+                       help="Maximum normalized difficulty to encourage housing tokens")
+    parser.add_argument("--housing-min-placements", type=int, default=2,
+                       help="Minimum placements before housing boost can apply")
+    parser.add_argument("--max-housing-per-lb", type=int, default=1,
+                       help="Cap housing tokens per landblock during generation")
     parser.add_argument("--margin", type=int, default=8,
                        help="Landblock margin from edges to skip")
     parser.add_argument("--lb-x-min", type=int, default=None,
