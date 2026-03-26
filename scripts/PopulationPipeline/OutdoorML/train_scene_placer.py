@@ -7,7 +7,7 @@ GPT-style autoregressive transformer that learns to place objects on
 Dereth's landscape from retail AC data.
 
 Architecture:
-  - Input: 224-dim landblock context + sequence of previous objects
+  - Input: landblock context + sequence of previous objects
   - Output: Next object (wcid, position, rotation, link flag)
   - 8-layer Transformer decoder, 512 d_model, 8 heads, ~45M params
 
@@ -76,7 +76,7 @@ STOP_TOKEN = 1
 
 DEFAULT_CONFIG = {
     # Architecture
-    "context_dim": 224,
+    "context_dim": 227,
     "d_model": 512,
     "n_heads": 8,
     "n_layers": 8,
@@ -133,7 +133,7 @@ class PlacementDataset(Dataset):
     """
     Dataset of landblock placements.
     
-    Each sample: (context_224, input_sequence, target_sequence, seq_len)
+    Each sample: (context_N, input_sequence, target_sequence, seq_len)
     
     The input sequence is the object tokens shifted right by one (teacher forcing).
     The target sequence is the next-token targets.
@@ -201,7 +201,7 @@ class PlacementDataset(Dataset):
 # ─── Model ───────────────────────────────────────────────────────────────────
 
 class ContextProjection(nn.Module):
-    """Projects the 224-dim context into d_model space."""
+    """Projects the context vector into d_model space."""
     
     def __init__(self, context_dim: int, d_model: int):
         super().__init__()
@@ -334,7 +334,7 @@ class ScenePlacerTransformer(nn.Module):
         Forward pass.
         
         Args:
-            context: (B, 224) landblock context
+            context: (B, context_dim) landblock context
             obj_sequence: (B, T, 10) object tokens
             mask: (B, T) boolean mask (True = valid token)
         
@@ -665,6 +665,38 @@ def save_resume_checkpoint(epoch, model, optimizer, scheduler, ema, best_val_los
     )
 
 
+def filter_compatible_state_dict(module: nn.Module, state_dict: dict) -> tuple[dict, list[str]]:
+    """Return only checkpoint tensors whose keys and shapes match the module."""
+    current = module.state_dict()
+    compatible = {}
+    skipped = []
+
+    for key, value in state_dict.items():
+        if key not in current or current[key].shape != value.shape:
+            skipped.append(key)
+            continue
+        compatible[key] = value
+
+    return compatible, skipped
+
+
+def load_compatible_state_dict(module: nn.Module, state_dict: dict, label: str) -> tuple[list[str], list[str]]:
+    """
+    Load only checkpoint tensors whose shapes still match the current module.
+    This allows bounded architecture changes such as context-dimension growth
+    while preserving most learned weights.
+    """
+    compatible, skipped = filter_compatible_state_dict(module, state_dict)
+    missing, unexpected = module.load_state_dict(compatible, strict=False)
+    if skipped:
+        print(f"  {label}: skipped {len(skipped)} incompatible tensors")
+    if missing:
+        print(f"  {label}: missing {len(missing)} tensors after compatible load")
+    if unexpected:
+        print(f"  {label}: unexpected tensors {len(unexpected)}")
+    return skipped, list(missing)
+
+
 def train(config: dict, resume_path: Optional[str] = None):
     """Main training loop."""
     
@@ -679,6 +711,7 @@ def train(config: dict, resume_path: Optional[str] = None):
     contexts = data['contexts']
     sequences = data['sequences']
     seq_lengths = data['seq_lengths']
+    config['context_dim'] = int(contexts.shape[1])
     
     print(f"  Loaded {len(contexts)} examples, context_dim={contexts.shape[1]}, "
           f"max_seq={sequences.shape[1]}")
@@ -753,10 +786,22 @@ def train(config: dict, resume_path: Optional[str] = None):
     if resume_path and os.path.exists(resume_path):
         print(f"\n  Resuming from {resume_path}...")
         checkpoint = torch.load(resume_path, map_location=device)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-        ema.load_state_dict(checkpoint['ema_state_dict'])
+        model_skipped, _ = load_compatible_state_dict(
+            model, checkpoint['model_state_dict'], "Model checkpoint"
+        )
+        ema_skipped = []
+        if 'ema_state_dict' in checkpoint:
+            ema = EMA(model, decay=config['ema_decay'])
+            _, ema_skipped = filter_compatible_state_dict(model, checkpoint['ema_state_dict'])
+            if not ema_skipped:
+                ema.load_state_dict(checkpoint['ema_state_dict'])
+            else:
+                print(f"  EMA checkpoint: skipped {len(ema_skipped)} incompatible tensors; rebuilding EMA from current model state.")
+        if not model_skipped and not ema_skipped:
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        else:
+            print("  Resume note: context shape changed, keeping model weights where compatible and resetting optimizer/scheduler state.")
         start_epoch = checkpoint['epoch'] + 1
         best_val_loss = checkpoint['best_val_loss']
         print(f"  Resumed at epoch {start_epoch}, best_val_loss={best_val_loss:.4f}")

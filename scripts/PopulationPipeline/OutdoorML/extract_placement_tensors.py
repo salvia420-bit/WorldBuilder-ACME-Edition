@@ -7,7 +7,7 @@ Parses the ACE World SQL dump + enrichment data to produce structured
 training tensors for the Scene Placement Transformer.
 
 Each training example is one landblock with:
-  - context:   224-dim float vector (terrain, biome, culture, difficulty, etc.)
+  - context:   227-dim float vector (terrain, biome, culture, difficulty, etc.)
   - objects:    Nx10 array of (wcid_idx, local_x, local_y, local_z,
                 rot_w, rot_z, weenie_type, is_link_child, parent_wcid_idx, obj_idx)
   - link_pairs: Mx2 array of (parent_idx_in_sequence, child_idx_in_sequence)
@@ -45,9 +45,12 @@ CULTURE_MAP_PATH = os.path.join(BASE_DIR, "pipeline_data", "enrichment", "buildi
 OUTPUT_DIR = os.path.join(BASE_DIR, "pipeline_data", "reference")
 OUTPUT_NPZ = os.path.join(OUTPUT_DIR, "placement_tensors.npz")
 OUTPUT_VOCAB = os.path.join(OUTPUT_DIR, "placement_vocab.json")
+OUTPUT_HOUSING_PRIORS = os.path.join(OUTPUT_DIR, "housing_landblock_priors.json")
 
 LB_SIZE = 192.0
 MAX_OBJECTS_PER_LB = 128
+BASE_CONTEXT_DIM = 224
+CONTEXT_DIM = 227
 
 # MariaDB client for weenie type lookups
 MYSQL = r"C:\Program Files\MariaDB 12.2\bin\mysql.exe"
@@ -356,13 +359,14 @@ def build_cultural_zones() -> np.ndarray:
     return grid
 
 
-def build_context_vector(lb_x: int, lb_y: int, 
-                         heights: dict, 
+def build_context_vector(lb_x: int, lb_y: int,
+                         heights: dict,
                          difficulty_grid: Optional[np.ndarray],
                          culture_grid: np.ndarray,
-                         instance_counts: Dict[Tuple[int,int], int]) -> np.ndarray:
+                         instance_counts: Dict[Tuple[int,int], int],
+                         housing_priors: Optional[Dict[Tuple[int, int], dict]] = None) -> np.ndarray:
     """
-    Build a 224-dim context vector for a landblock.
+    Build a 227-dim context vector for a landblock.
     
     Layout:
       [0:81]    = terrain heights (9×9, normalized)
@@ -375,8 +379,11 @@ def build_context_vector(lb_x: int, lb_y: int,
       [214:222] = neighbor density (8 directions, normalized)
       [222]     = flatness score
       [223]     = distance to nearest coast (normalized)
+      [224]     = is retail housing landblock (0/1)
+      [225]     = retail slumlord density in this landblock
+      [226]     = neighboring housing-landblock ratio
     """
-    ctx = np.zeros(224, dtype=np.float32)
+    ctx = np.zeros(CONTEXT_DIM, dtype=np.float32)
     
     # Terrain heights (9×9 = 81 values)
     h = heights.get((lb_x, lb_y))
@@ -430,10 +437,116 @@ def build_context_vector(lb_x: int, lb_y: int,
     # Distance to coast (simplified: distance from edge of populated area)
     ctx[223] = min(lb_x, lb_y, 254 - lb_x, 254 - lb_y) / 128.0
     
+    priors = housing_priors.get((lb_x, lb_y), {}) if housing_priors else {}
+    ctx[224] = 1.0 if priors.get('slumlord_count', 0) > 0 else 0.0
+    ctx[225] = min(priors.get('slumlord_count', 0) / 6.0, 1.0)
+    ctx[226] = min(priors.get('neighbor_housing_count', 0) / 8.0, 1.0)
+
     return ctx
 
 
-def classify_housing_token(wcid: int, wtype: int) -> Tuple[Optional[int], Optional[str]]:
+def load_wcid_names(sql_path: str) -> Dict[int, str]:
+    """Parse the weenie table from the SQL dump to build wcid -> class name."""
+    if not sql_path or not os.path.exists(sql_path):
+        return {}
+
+    print("  Loading weenie names from SQL dump...")
+    wcid_names: Dict[int, str] = {}
+    row_re = re.compile(r"\((\d+),'((?:''|[^'])*)',(\d+),'[^']*'\)")
+
+    with open(sql_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            if 'INSERT INTO `weenie`' not in line:
+                continue
+            for match in row_re.finditer(line):
+                name = match.group(2).replace("''", "'")
+                wcid_names[int(match.group(1))] = name
+
+    print(f"    Loaded {len(wcid_names)} wcid->name rows")
+    return wcid_names
+
+
+def classify_slumlord_house_type_from_name(name: Optional[str]) -> Optional[str]:
+    """Fallback classifier for slumlord WCIDs not covered by explicit retail WCID families."""
+    if not name:
+        return None
+
+    lowered = name.lower()
+    if 'mansion' in lowered or 'manor' in lowered or 'estate' in lowered:
+        return 'Mansion'
+    if 'villa' in lowered:
+        return 'Villa'
+    if 'cottage' in lowered or 'bungalow' in lowered:
+        return 'Cottage'
+    return None
+
+
+def build_housing_landblock_priors(instances_by_lb,
+                                   wcid_types: Dict[int, int],
+                                   wcid_names: Optional[Dict[int, str]] = None) -> Dict[Tuple[int, int], dict]:
+    """
+    Summarize retail housing presence per landblock so the context vector can
+    explicitly distinguish dense housing settlements from generic outdoor LBs.
+    """
+    priors: Dict[Tuple[int, int], dict] = {}
+
+    for lb_key, insts in instances_by_lb.items():
+        house_type_counts = Counter()
+        slumlord_count = 0
+
+        for inst in insts:
+            wcid = inst['wcid']
+            if wcid_types.get(wcid) != WT_SLUMLORD:
+                continue
+
+            slumlord_count += 1
+            house_type = classify_slumlord_house_type(wcid)
+            if house_type is None:
+                house_type = classify_slumlord_house_type_from_name((wcid_names or {}).get(wcid))
+            if house_type is None:
+                house_type = "Unknown"
+            house_type_counts[house_type] += 1
+
+        if slumlord_count <= 0:
+            continue
+
+        priors[lb_key] = {
+            'slumlord_count': slumlord_count,
+            'house_type_counts': dict(house_type_counts),
+            'dominant_house_type': house_type_counts.most_common(1)[0][0] if house_type_counts else 'Unknown',
+            'neighbor_housing_count': 0,
+        }
+
+    for lb_x, lb_y in list(priors.keys()):
+        neighbor_housing_count = 0
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+                if (lb_x + dx, lb_y + dy) in priors:
+                    neighbor_housing_count += 1
+        priors[(lb_x, lb_y)]['neighbor_housing_count'] = neighbor_housing_count
+
+    return priors
+
+
+def load_housing_landblock_priors(path: str = OUTPUT_HOUSING_PRIORS) -> Dict[Tuple[int, int], dict]:
+    """Load saved retail housing-landblock priors for inference-time context features."""
+    if not os.path.exists(path):
+        return {}
+
+    with open(path, 'r', encoding='utf-8') as f:
+        raw = json.load(f)
+
+    priors = {}
+    for key, payload in raw.items():
+        lb_x_str, lb_y_str = key.split(',')
+        priors[(int(lb_x_str), int(lb_y_str))] = payload
+    return priors
+
+
+def classify_housing_token(wcid: int, wtype: int,
+                           wcid_names: Optional[Dict[int, str]] = None) -> Tuple[Optional[int], Optional[str]]:
     """
     Map retail slumlord wcids into the coarse housing-token families used by
     the model. Unknown slumlords fall back to cottage so older/custom rows
@@ -444,6 +557,8 @@ def classify_housing_token(wcid: int, wtype: int) -> Tuple[Optional[int], Option
 
     house_type = classify_slumlord_house_type(wcid)
     if house_type is None:
+        house_type = classify_slumlord_house_type_from_name((wcid_names or {}).get(wcid))
+    if house_type is None:
         return HOUSING_COTTAGE_TOKEN, "UnknownFallback"
 
     return SLUMLORD_TOKEN_BY_HOUSE_TYPE[house_type], house_type
@@ -452,12 +567,13 @@ def classify_housing_token(wcid: int, wtype: int) -> Tuple[Optional[int], Option
 # ─── Step 5: Build training examples ─────────────────────────────────────────
 
 def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
-                            heights, difficulty_grid, culture_grid):
+                            heights, difficulty_grid, culture_grid,
+                            housing_priors, wcid_names):
     """
     Convert raw SQL data into structured training arrays.
     
     Returns:
-        contexts: (N, 224) float32 — per-landblock context vectors
+        contexts: (N, 227) float32 — per-landblock context vectors
         sequences: (N, MAX_OBJECTS, 10) float32 — object sequences
         seq_lengths: (N,) int32 — actual sequence length per LB
     """
@@ -483,7 +599,7 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
     
     print(f"    Populated landblocks to process: {len(populated_lbs)}")
     
-    contexts = np.zeros((len(populated_lbs), 224), dtype=np.float32)
+    contexts = np.zeros((len(populated_lbs), CONTEXT_DIM), dtype=np.float32)
     sequences = np.zeros((len(populated_lbs), MAX_OBJECTS_PER_LB, 10), dtype=np.float32)
     seq_lengths = np.zeros(len(populated_lbs), dtype=np.int32)
     housing_token_counts = defaultdict(int)
@@ -494,7 +610,7 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
         
         # Build context vector
         contexts[idx] = build_context_vector(
-            lb_x, lb_y, heights, difficulty_grid, culture_grid, instance_counts
+            lb_x, lb_y, heights, difficulty_grid, culture_grid, instance_counts, housing_priors
         )
         
         # Sort instances: non-link-children first (parents), then children
@@ -508,7 +624,7 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
             wcid = inst['wcid']
             wtype = wcid_types.get(wcid, 0)
             
-            housing_token, housing_type = classify_housing_token(wcid, wtype)
+            housing_token, housing_type = classify_housing_token(wcid, wtype, wcid_names)
             if housing_token is not None:
                 vocab_idx = housing_token
                 housing_token_counts[housing_type] += 1
@@ -557,7 +673,7 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
 # ─── Step 6: Save output ─────────────────────────────────────────────────────
 
 def save_tensors(contexts, sequences, seq_lengths, populated_lbs,
-                 wcid_to_idx, idx_to_wcid):
+                 wcid_to_idx, idx_to_wcid, housing_priors):
     """Save training data and vocabulary."""
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
@@ -591,6 +707,14 @@ def save_tensors(contexts, sequences, seq_lengths, populated_lbs,
         json.dump(vocab, f, indent=2)
     print(f"    -> Vocab size: {vocab['vocab_size']}")
 
+    print(f"  Saving housing priors to {OUTPUT_HOUSING_PRIORS}...")
+    housing_json = {
+        f"{lb_x},{lb_y}": payload for (lb_x, lb_y), payload in housing_priors.items()
+    }
+    with open(OUTPUT_HOUSING_PRIORS, 'w') as f:
+        json.dump(housing_json, f, indent=2)
+    print(f"    -> Housing landblocks: {len(housing_json)}")
+
 
 # ─── Main ────────────────────────────────────────────────────────────────────
 
@@ -619,26 +743,31 @@ def main():
     print("[Step 2b] Loading weenie types...")
     wcid_types = load_wcid_types(RETAIL_SQL)
     print()
+
+    print("[Step 2c] Loading weenie names...")
+    wcid_names = load_wcid_names(RETAIL_SQL)
+    print()
     
     # Step 3: Load auxiliary data
     print("[Step 3] Loading auxiliary data...")
     heights = load_height_grid(HEIGHTS_PATH)
     difficulty_grid = load_difficulty_grid(DIFFICULTY_GRADIENT)
     culture_grid = build_cultural_zones()
+    housing_priors = build_housing_landblock_priors(instances_by_lb, wcid_types, wcid_names)
     print()
     
     # Step 4: Build training examples
     print("[Step 4] Building training examples...")
     contexts, sequences, seq_lengths, populated_lbs, housing_token_counts = build_training_examples(
         instances_by_lb, links, wcid_to_idx, wcid_types,
-        heights, difficulty_grid, culture_grid
+        heights, difficulty_grid, culture_grid, housing_priors, wcid_names
     )
     print()
     
     # Step 5: Save
     print("[Step 5] Saving output...")
     save_tensors(contexts, sequences, seq_lengths, populated_lbs,
-                 wcid_to_idx, idx_to_wcid)
+                 wcid_to_idx, idx_to_wcid, housing_priors)
     print()
     
     # Summary
@@ -656,6 +785,7 @@ def main():
     print(f"  Encounter spawns: {total_enc:,} across {len(encounters_by_lb)} LBs")
     housing_total = sum(housing_token_counts.values())
     print(f"  Housing supervision tokens: {housing_total:,}")
+    print(f"  Housing landblock priors: {len(housing_priors):,}")
     if housing_total:
         print(
             "    Breakdown: "
