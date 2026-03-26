@@ -432,3 +432,123 @@ If a new agent picks this up, the key facts are:
 - exported EMA from the newer resumed run emits some `STOP` plus lots of `PAD`, but still zero real objects
 - no trustworthy claim about final world quality should be made until inference
   produces nontrivial accepted placements and scoring can run
+
+
+## March 26, 2026: Housing-Label Refresh + Bounded Retraining
+
+The next focused training-quality step was completed on March 26, 2026 with a
+small extraction change rather than another blind epoch sweep.
+
+### What changed
+
+`scripts/PopulationPipeline/OutdoorML/extract_placement_tensors.py` was updated
+to classify retail slumlord WCIDs into coarse housing families using the shared
+slumlord taxonomy in `scripts/PopulationPipeline/OutdoorML/housing_linker.py`.
+
+Before this change:
+
+- all `WT_SLUMLORD` instances collapsed to `HOUSING_COTTAGE_TOKEN`
+
+After this change:
+
+- cottage / villa / mansion are extracted separately
+- unknown slumlord WCIDs fall back to cottage instead of losing housing signal
+- the extractor prints the housing-token breakdown in its summary
+
+Observed extractor summary on the VM:
+
+- `Housing supervision tokens: 280`
+- `cottage=137`
+- `villa=63`
+- `mansion=70`
+- `fallback=10`
+
+### Bounded training slice
+
+Training resumed from `pipeline_data/models/resume.pt` and ran from epoch
+`725` through `750` on `worldbuilder-l4` (NVIDIA L4).
+
+Observed end-of-slice state:
+
+- resumed at epoch `725`
+- completed through epoch `749`
+- wrote updated `resume.pt` and `resume_epoch_750.pt`
+- best validation loss remained `2.4673`
+- final validation at epoch `749`: `val=2.6074`
+- final diversity:
+  - `wcid_entropy: 3.3908`
+  - `unique_wcids: 819`
+  - `pos_std: 0.2734`
+
+Interpretation:
+
+- the slice was intentionally short and safe
+- this was a data-quality verification run, not an attempt to chase val-loss gains
+- the important question was whether inference quality held after the label fix
+
+### Fixed-probe result after retraining
+
+The standard fixed `5x5` probe was rerun with the known-good baseline settings:
+
+- `--temperature 1.0`
+- `--top-k 0`
+- `--nucleus-p 1.0`
+- `--min-objects 5`
+- `--adaptive-min-objects-bonus 2`
+- `--pad-logit-bias 1.0`
+- `--stop-logit-bias 0.5`
+
+Observed result:
+
+- `Raw generated: 422`
+- `Accepted: 422`
+- `PAD samples: 11`
+- `STOP samples: 24`
+- `Housing toks: 0`
+
+Interpretation:
+
+- the post-label-fix checkpoint preserved the known-good density baseline exactly
+- no regression was observed on the reference probe
+- the housing-label change did not damage inference viability
+
+### Aggressive housing stress probe after retraining
+
+The explicit housing-path validation probe was rerun with aggressive housing
+forcing:
+
+- `--housing-logit-bias 4.0`
+- `--housing-min-placements 0`
+- `--housing-flatness-threshold 0.0`
+- `--housing-difficulty-ceiling 1.0`
+- `--max-housing-per-lb 2`
+
+Observed result:
+
+- `Raw generated: 422`
+- `Accepted: 422`
+- `Housing toks: 2`
+- `Houses placed: 2`
+- housing integrity valid
+- both sampled houses were `Villa`
+
+Interpretation:
+
+- the housing path remained fully functional after retraining
+- the new multi-family supervision is active enough to surface non-cottage
+  housing under stress settings
+- mild baseline housing remains a training/data-quality challenge, but the
+  change was still worth keeping because it improved labels without harming the
+  stable probe baseline
+
+### Current conclusion
+
+This was a successful bounded iteration.
+
+- The training-data improvement was plausible and high-value.
+- The VM returned to bounded training quickly.
+- The reference probe baseline was maintained exactly.
+- Housing stress behavior remained valid.
+
+The next best step is likely another small semantic training-data improvement or
+a targeted quality evaluation, not an open-ended epoch run.
