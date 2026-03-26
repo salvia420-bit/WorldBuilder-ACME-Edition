@@ -443,7 +443,9 @@ class PlacementGenerator:
                 'housing_type': HOUSING_TOKEN_MAP.get(wcid_idx),
             }
 
-            if isinstance(placement['wcid'], int) and placement['wcid'] < 0:
+            if (isinstance(placement['wcid'], int) and
+                    placement['wcid'] < 0 and
+                    not placement['is_housing']):
                 debug['special_leaks'] += 1
                 continue
 
