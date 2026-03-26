@@ -1124,13 +1124,7 @@ public class JsonCommandProcessor {
     private string CmdSetLandblockHeightmap(System.Text.Json.Nodes.JsonNode node) {
         uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
         var heightsNode = node["heights"] ?? throw new ArgumentException("Missing 'heights' field");
-        byte[] heights;
-        if (heightsNode is System.Text.Json.Nodes.JsonArray arr) {
-            heights = arr.Select(h => (byte)(h?.GetValue<int>() ?? 0)).ToArray();
-        } else {
-            var str = heightsNode.GetValue<string>();
-            heights = str.Split(',').Select(s => byte.Parse(s.Trim())).ToArray();
-        }
+        byte[] heights = ParseByteArrayField(heightsNode, "heights");
         var r = _engine.SetLandblockHeightmap(lbX, lbY, heights);
         return Serialize(new { success = true, command = "set-landblock-heightmap",
             landblock = $"0x{r.LbKey:X4}", verticesModified = r.VerticesModified,
@@ -1140,13 +1134,7 @@ public class JsonCommandProcessor {
     private string CmdSetLandblockTerrain(System.Text.Json.Nodes.JsonNode node) {
         uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
         var typesNode = node["types"] ?? throw new ArgumentException("Missing 'types' field");
-        byte[] types;
-        if (typesNode is System.Text.Json.Nodes.JsonArray arr) {
-            types = arr.Select(t => (byte)(t?.GetValue<int>() ?? 0)).ToArray();
-        } else {
-            var str = typesNode.GetValue<string>();
-            types = str.Split(',').Select(s => byte.Parse(s.Trim())).ToArray();
-        }
+        byte[] types = ParseByteArrayField(typesNode, "types");
         var r = _engine.SetLandblockTerrain(lbX, lbY, types);
         return Serialize(new { success = true, command = "set-landblock-terrain",
             landblock = $"0x{r.LbKey:X4}", verticesModified = r.VerticesModified,
@@ -1157,7 +1145,7 @@ public class JsonCommandProcessor {
         uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
         var objectsArr = node["objects"] as System.Text.Json.Nodes.JsonArray
             ?? throw new ArgumentException("Missing 'objects' array");
-        var objects = new List<(uint modelId, float x, float y, float z)>();
+        var objects = new List<(uint modelId, float x, float y, float z)>(objectsArr.Count);
         foreach (var obj in objectsArr) {
             if (obj == null) continue;
             var midStr = obj["modelId"]?.GetValue<string>() ?? "0";
@@ -1360,7 +1348,48 @@ public class JsonCommandProcessor {
         node[field]?.GetValue<uint>() ?? throw new ArgumentException($"Missing '{field}'");
 
     private static string[] FormatLbs(HashSet<ushort> lbs) =>
-        lbs.Select(lb => $"0x{lb:X4}").ToArray();
+        lbs.Count == 0 ? Array.Empty<string>() : lbs.Select(lb => $"0x{lb:X4}").ToArray();
+
+    private static byte[] ParseByteArrayField(System.Text.Json.Nodes.JsonNode fieldNode, string fieldName) {
+        if (fieldNode is System.Text.Json.Nodes.JsonArray arr) {
+            if (arr.Count == 0) return Array.Empty<byte>();
+            var result = new byte[arr.Count];
+            for (int i = 0; i < arr.Count; i++) {
+                result[i] = (byte)(arr[i]?.GetValue<int>() ?? 0);
+            }
+            return result;
+        }
+
+        var csv = fieldNode.GetValue<string>();
+        return ParseCsvByteArray(csv.AsSpan(), fieldName);
+    }
+
+    private static byte[] ParseCsvByteArray(ReadOnlySpan<char> csv, string fieldName) {
+        if (csv.IsEmpty) return Array.Empty<byte>();
+
+        int count = 1;
+        for (int i = 0; i < csv.Length; i++) {
+            if (csv[i] == ',') count++;
+        }
+
+        var result = new byte[count];
+        int index = 0;
+        int start = 0;
+
+        for (int i = 0; i <= csv.Length; i++) {
+            if (i != csv.Length && csv[i] != ',') continue;
+
+            var segment = csv[start..i].Trim();
+            if (!byte.TryParse(segment, out result[index])) {
+                throw new ArgumentException($"Invalid byte value in '{fieldName}' at position {index}");
+            }
+
+            index++;
+            start = i + 1;
+        }
+
+        return result;
+    }
 
     private static object FmtQ(Quaternion q) => new {
         w = Math.Round(q.W, 6), x = Math.Round(q.X, 6),
