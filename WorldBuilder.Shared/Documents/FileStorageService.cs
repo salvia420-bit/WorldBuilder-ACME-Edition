@@ -29,6 +29,9 @@ namespace WorldBuilder.Shared.Documents {
         private string GetUpdatesFilePath(string documentId) =>
             Path.Combine(_storageDirectory, $"{documentId}.updates");
 
+        private string GetSnapshotFilePath(Guid snapshotId) =>
+            Path.Combine(_storageDirectory, $"{snapshotId:N}.snapshot");
+
         private static string ValidateDocumentId(string documentId) {
             if (string.IsNullOrWhiteSpace(documentId)) throw new ArgumentNullException(nameof(documentId));
 
@@ -162,6 +165,13 @@ namespace WorldBuilder.Shared.Documents {
                 }
                 if (File.Exists(updatesPath)) {
                     File.Delete(updatesPath);
+                }
+
+                foreach (var snapshotPath in Directory.GetFiles(_storageDirectory, "*.snapshot")) {
+                    var snapshot = ReadSnapshotFromFile(snapshotPath);
+                    if (snapshot != null && string.Equals(snapshot.DocumentId, documentId, StringComparison.Ordinal)) {
+                        File.Delete(snapshotPath);
+                    }
                 }
             }
 
@@ -344,24 +354,143 @@ namespace WorldBuilder.Shared.Documents {
         }
 
         public Task<DBSnapshot> CreateSnapshotAsync(DBSnapshot snapshot) {
-            throw new NotImplementedException();
+            if (snapshot == null) throw new ArgumentNullException(nameof(snapshot));
+            snapshot.DocumentId = ValidateDocumentId(snapshot.DocumentId);
+            if (snapshot.Data == null) throw new ArgumentNullException(nameof(snapshot.Data));
+
+            if (snapshot.Id == Guid.Empty) snapshot.Id = Guid.NewGuid();
+            snapshot.Timestamp = DateTime.UtcNow;
+
+            var snapshotPath = GetSnapshotFilePath(snapshot.Id);
+            try {
+                lock (_fileLock) {
+                    if (File.Exists(snapshotPath))
+                        throw new InvalidOperationException($"Snapshot {snapshot.Id} already exists");
+
+                    WriteSnapshotToFile(snapshotPath, snapshot);
+                }
+
+                return Task.FromResult(snapshot);
+            }
+            catch (Exception ex) {
+                _logger.LogError(ex, "Failed to create snapshot {SnapshotId} for document {DocumentId}", snapshot.Id, snapshot.DocumentId);
+                throw;
+            }
         }
 
         public Task<DBSnapshot?> GetSnapshotAsync(Guid snapshotId) {
-            throw new NotImplementedException();
+            var snapshotPath = GetSnapshotFilePath(snapshotId);
+            if (!File.Exists(snapshotPath)) return Task.FromResult<DBSnapshot?>(null);
+
+            try {
+                lock (_fileLock) {
+                    return Task.FromResult<DBSnapshot?>(ReadSnapshotFromFile(snapshotPath));
+                }
+            }
+            catch (Exception ex) {
+                _logger.LogError(ex, "Failed to read snapshot {SnapshotId}", snapshotId);
+                return Task.FromResult<DBSnapshot?>(null);
+            }
         }
 
         public Task<List<DBSnapshot>> GetSnapshotsAsync(string documentId) {
             documentId = ValidateDocumentId(documentId);
-            throw new NotImplementedException();
+            var result = new List<DBSnapshot>();
+
+            try {
+                lock (_fileLock) {
+                    foreach (var snapshotPath in Directory.GetFiles(_storageDirectory, "*.snapshot")) {
+                        var snapshot = ReadSnapshotFromFile(snapshotPath);
+                        if (snapshot != null && string.Equals(snapshot.DocumentId, documentId, StringComparison.Ordinal)) {
+                            result.Add(snapshot);
+                        }
+                    }
+                }
+
+                return Task.FromResult(result.OrderBy(s => s.Timestamp).ToList());
+            }
+            catch (Exception ex) {
+                _logger.LogError(ex, "Failed to read snapshots for document {DocumentId}", documentId);
+                return Task.FromResult(result);
+            }
         }
 
         public Task<bool> DeleteSnapshotAsync(Guid snapshotId) {
-            throw new NotImplementedException();
+            var snapshotPath = GetSnapshotFilePath(snapshotId);
+            bool deleted = false;
+
+            lock (_fileLock) {
+                if (File.Exists(snapshotPath)) {
+                    File.Delete(snapshotPath);
+                    deleted = true;
+                }
+            }
+
+            if (deleted) {
+                _logger.LogInformation("Deleted snapshot {SnapshotId}", snapshotId);
+            }
+
+            return Task.FromResult(deleted);
         }
 
         public Task UpdateSnapshotNameAsync(Guid snapshotId, string newName) {
-            throw new NotImplementedException();
+            if (string.IsNullOrWhiteSpace(newName)) throw new ArgumentNullException(nameof(newName));
+
+            var snapshotPath = GetSnapshotFilePath(snapshotId);
+            lock (_fileLock) {
+                if (!File.Exists(snapshotPath)) {
+                    throw new InvalidOperationException($"Snapshot {snapshotId} not found");
+                }
+
+                var snapshot = ReadSnapshotFromFile(snapshotPath)
+                    ?? throw new InvalidOperationException($"Snapshot {snapshotId} is invalid");
+
+                snapshot.Name = newName;
+                snapshot.Timestamp = DateTime.UtcNow;
+
+                WriteSnapshotToFile(snapshotPath, snapshot);
+            }
+
+            _logger.LogInformation("Updated snapshot {SnapshotId} name to {NewName}", snapshotId, newName);
+            return Task.CompletedTask;
+        }
+
+        private static void WriteSnapshotToFile(string snapshotPath, DBSnapshot snapshot) {
+            using var stream = new FileStream(snapshotPath, FileMode.Create, FileAccess.Write, FileShare.None);
+            using var writer = new BinaryWriter(stream);
+
+            writer.Write(snapshot.Id.ToByteArray());
+            writer.Write(snapshot.DocumentId);
+            writer.Write(snapshot.Name ?? string.Empty);
+            writer.Write(snapshot.Timestamp.Ticks);
+            writer.Write(snapshot.Data.Length);
+            writer.Write(snapshot.Data);
+        }
+
+        private static DBSnapshot? ReadSnapshotFromFile(string snapshotPath) {
+            if (!File.Exists(snapshotPath)) return null;
+
+            using var stream = new FileStream(snapshotPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var reader = new BinaryReader(stream);
+
+            var idBytes = reader.ReadBytes(16);
+            if (idBytes.Length != 16) return null;
+
+            var documentId = reader.ReadString();
+            var name = reader.ReadString();
+            var timestampTicks = reader.ReadInt64();
+            var dataLength = reader.ReadInt32();
+            var data = reader.ReadBytes(dataLength);
+
+            if (data.Length != dataLength) return null;
+
+            return new DBSnapshot {
+                Id = new Guid(idBytes),
+                DocumentId = documentId,
+                Name = string.IsNullOrWhiteSpace(name) ? null : name,
+                Timestamp = new DateTime(timestampTicks, DateTimeKind.Utc),
+                Data = data
+            };
         }
     }
 }
