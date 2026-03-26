@@ -1543,20 +1543,28 @@ public class TerminalRepl {
     /// </summary>
     internal static string[] TokenizeLine(string line) {
         var tokens = new List<string>(8);
-        var current = new System.Text.StringBuilder(line.Length);
         bool inQuotes = false;
+        int tokenStart = -1;
 
         for (int i = 0; i < line.Length; i++) {
             char c = line[i];
-            if (c == '"') { inQuotes = !inQuotes; continue; }
-            if (c == ' ' && !inQuotes) {
-                if (current.Length > 0) { tokens.Add(current.ToString()); current.Clear(); }
+            if (c == '"') {
+                inQuotes = !inQuotes;
+                if (tokenStart < 0) tokenStart = i + 1;
                 continue;
             }
-            current.Append(c);
+            if (c == ' ' && !inQuotes) {
+                if (tokenStart >= 0) {
+                    tokens.Add(line[tokenStart..i]);
+                    tokenStart = -1;
+                }
+                continue;
+            }
+
+            if (tokenStart < 0) tokenStart = i;
         }
 
-        if (current.Length > 0) tokens.Add(current.ToString());
+        if (tokenStart >= 0) tokens.Add(line[tokenStart..]);
         return tokens.ToArray();
     }
 

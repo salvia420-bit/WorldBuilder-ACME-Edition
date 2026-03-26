@@ -7613,8 +7613,9 @@ public class CommandEngine {
         List<(ushort LbId, int VertexIndex, byte Original, byte NewHeight)> changes) {
         if (changes.Count == 0) return new TerrainEditResult(0, new HashSet<ushort>());
 
-        var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>();
-        var terrainCache = new Dictionary<ushort, TerrainEntry[]?>();
+        int estimatedLandblocks = Math.Min(changes.Count, 256);
+        var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>(estimatedLandblocks);
+        var terrainCache = new Dictionary<ushort, TerrainEntry[]?>(estimatedLandblocks);
         foreach (var (lbId, vIndex, _, newHeight) in changes) {
             if (!terrainCache.TryGetValue(lbId, out var data)) {
                 data = terrainDoc.GetLandblockInternal(lbId);
@@ -7623,7 +7624,7 @@ public class CommandEngine {
 
             if (data == null) continue;
             if (!batchChanges.TryGetValue(lbId, out var lbChanges)) {
-                lbChanges = new Dictionary<byte, uint>();
+                lbChanges = new Dictionary<byte, uint>(16);
                 batchChanges[lbId] = lbChanges;
             }
             lbChanges[(byte)vIndex] = (data[vIndex] with { Height = newHeight }).ToUInt();
@@ -7634,7 +7635,12 @@ public class CommandEngine {
     }
 
     private static void ValidateObjectIndex(LandblockDocument lbDoc, int index, string command) {
-        int count = lbDoc.GetStaticObjects().Count();
+        var objects = lbDoc.GetStaticObjects();
+        int count = objects switch {
+            ICollection<StaticObject> c => c.Count,
+            IReadOnlyCollection<StaticObject> c => c.Count,
+            _ => objects.Count()
+        };
         if (index < 0 || index >= count)
             throw new ArgumentException(
                 $"Invalid index {index}. Landblock has {count} objects.");

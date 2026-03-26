@@ -1348,13 +1348,23 @@ public class JsonCommandProcessor {
         node[field]?.GetValue<uint>() ?? throw new ArgumentException($"Missing '{field}'");
 
     private static string[] FormatLbs(HashSet<ushort> lbs) =>
-        lbs.Count == 0 ? Array.Empty<string>() : lbs.Select(lb => $"0x{lb:X4}").ToArray();
+        lbs.Count == 0 ? Array.Empty<string>() : FormatLbsArray(lbs);
+
+    private static string[] FormatLbsArray(HashSet<ushort> lbs) {
+        var result = new string[lbs.Count];
+        int i = 0;
+        foreach (var lb in lbs) {
+            result[i++] = $"0x{lb:X4}";
+        }
+        return result;
+    }
 
     private static byte[] ParseByteArrayField(System.Text.Json.Nodes.JsonNode fieldNode, string fieldName) {
         if (fieldNode is System.Text.Json.Nodes.JsonArray arr) {
-            if (arr.Count == 0) return Array.Empty<byte>();
-            var result = new byte[arr.Count];
-            for (int i = 0; i < arr.Count; i++) {
+            int count = arr.Count;
+            if (count == 0) return Array.Empty<byte>();
+            var result = new byte[count];
+            for (int i = 0; i < count; i++) {
                 result[i] = (byte)(arr[i]?.GetValue<int>() ?? 0);
             }
             return result;
