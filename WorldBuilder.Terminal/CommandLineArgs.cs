@@ -39,58 +39,55 @@ public class CommandLineArgs {
         for (int i = 0; i < args.Length; i++) {
             var arg = args[i];
 
-            switch (arg.ToLowerInvariant()) {
-                case "--project":
-                case "-p":
-                    if (i + 1 < args.Length && !LooksLikeFlag(args[i + 1])) {
-                        result.ProjectPath = UnquotePath(args[++i]);
+            if (MatchesOption(arg, "--project", "-p")) {
+                if (i + 1 < args.Length && !LooksLikeFlag(args[i + 1])) {
+                    result.ProjectPath = UnquotePath(args[++i]);
+                } else {
+                    result.Warnings.Add("Warning: Missing value for --project/-p. Ignored.");
+                }
+                continue;
+            }
+
+            if (MatchesOption(arg, "--export", "-e")) {
+                if (i + 1 < args.Length && !LooksLikeFlag(args[i + 1])) {
+                    result.ExportDirectory = UnquotePath(args[++i]);
+                } else {
+                    result.Warnings.Add("Warning: Missing value for --export/-e. Ignored.");
+                }
+                continue;
+            }
+
+            if (MatchesOption(arg, "--iteration", "-i")) {
+                if (i + 1 < args.Length && !LooksLikeFlag(args[i + 1])) {
+                    var iterStr = args[++i];
+                    if (int.TryParse(iterStr, out var iter)) {
+                        result.Iteration = iter;
                     } else {
-                        result.Warnings.Add("Warning: Missing value for --project/-p. Ignored.");
+                        result.Warnings.Add($"Warning: Invalid iteration value '{iterStr}' — expected an integer. Ignored.");
                     }
-                    break;
+                } else {
+                    result.Warnings.Add("Warning: Missing value for --iteration/-i. Ignored.");
+                }
+                continue;
+            }
 
-                case "--export":
-                case "-e":
-                    if (i + 1 < args.Length && !LooksLikeFlag(args[i + 1])) {
-                        result.ExportDirectory = UnquotePath(args[++i]);
-                    } else {
-                        result.Warnings.Add("Warning: Missing value for --export/-e. Ignored.");
-                    }
-                    break;
+            if (arg.Equals("--stdin", StringComparison.OrdinalIgnoreCase)) {
+                result.StdinMode = true;
+                continue;
+            }
 
-                case "--iteration":
-                case "-i":
-                    if (i + 1 < args.Length && !LooksLikeFlag(args[i + 1])) {
-                        var iterStr = args[++i];
-                        if (int.TryParse(iterStr, out var iter)) {
-                            result.Iteration = iter;
-                        } else {
-                            result.Warnings.Add($"Warning: Invalid iteration value '{iterStr}' — expected an integer. Ignored.");
-                        }
-                    } else {
-                        result.Warnings.Add("Warning: Missing value for --iteration/-i. Ignored.");
-                    }
-                    break;
+            if (MatchesOption(arg, "--help", "-h")) {
+                result.ShowHelp = true;
+                continue;
+            }
 
-                case "--stdin":
-                    result.StdinMode = true;
-                    break;
+            if (MatchesOption(arg, "--version", "-v")) {
+                result.ShowVersion = true;
+                continue;
+            }
 
-                case "--help":
-                case "-h":
-                    result.ShowHelp = true;
-                    break;
-
-                case "--version":
-                case "-v":
-                    result.ShowVersion = true;
-                    break;
-
-                default:
-                    if (arg.StartsWith('-')) {
-                        result.Warnings.Add($"Warning: Unknown flag '{arg}' — ignored. Use --help for usage.");
-                    }
-                    break;
+            if (arg.StartsWith('-')) {
+                result.Warnings.Add($"Warning: Unknown flag '{arg}' — ignored. Use --help for usage.");
             }
         }
 
@@ -112,6 +109,10 @@ public class CommandLineArgs {
         if (!value.StartsWith('-')) return false;
         return value.Length == 1 || !char.IsDigit(value[1]);
     }
+
+    private static bool MatchesOption(string arg, string longName, string shortName) =>
+        arg.Equals(longName, StringComparison.OrdinalIgnoreCase) ||
+        arg.Equals(shortName, StringComparison.OrdinalIgnoreCase);
 
     public static void PrintUsage() {
         Console.WriteLine();
