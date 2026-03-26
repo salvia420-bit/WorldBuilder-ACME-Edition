@@ -1542,12 +1542,8 @@ public class TerminalRepl {
     /// so that paths containing spaces are treated as a single argument.
     /// </summary>
     internal static string[] TokenizeLine(string line) {
-        if (!line.Contains('"')) {
-            return line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        }
-
-        var tokens = new List<string>();
-        var current = new System.Text.StringBuilder();
+        var tokens = new List<string>(8);
+        var current = new System.Text.StringBuilder(line.Length);
         bool inQuotes = false;
 
         for (int i = 0; i < line.Length; i++) {
