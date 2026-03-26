@@ -30,28 +30,19 @@ if (cliArgs.ShowVersion) {
     return 0;
 }
 
-// Set up a lightweight DI container for logging
-// In stdin mode, suppress console logging to keep stdout clean for JSON
-var services = new ServiceCollection();
-services.AddLogging(c => {
-    if (!cliArgs.StdinMode) {
-        c.AddConsole();
-    }
-    c.SetMinimumLevel(cliArgs.StdinMode ? LogLevel.Warning : LogLevel.Information);
-});
-services.AddWorldBuilder();  // Register ITerrainService, IObjectPlacementService, etc.
-var provider = services.BuildServiceProvider();
-
-var loggerFactory = provider.GetRequiredService<ILoggerFactory>();
-var terrainService = provider.GetRequiredService<ITerrainService>();
-var objectPlacementService = provider.GetRequiredService<IObjectPlacementService>();
-var dungeonService = provider.GetRequiredService<IDungeonService>();
-var ontologyService = provider.GetRequiredService<IOntologyService>();
-var stampService = provider.GetRequiredService<IStampService>();
-using var projectManager = new HeadlessProjectManager(loggerFactory);
-
 // ── Batch mode ──────────────────────────────────────
 if (cliArgs.IsBatchMode && !cliArgs.StdinMode) {
+    // Batch export only needs logging + project manager, so avoid constructing
+    // the full WorldBuilder service graph for faster startup.
+    var batchServices = new ServiceCollection();
+    batchServices.AddLogging(c => {
+        c.AddConsole();
+        c.SetMinimumLevel(LogLevel.Information);
+    });
+    using var batchProvider = batchServices.BuildServiceProvider();
+    var loggerFactory = batchProvider.GetRequiredService<ILoggerFactory>();
+    using var projectManager = new HeadlessProjectManager(loggerFactory);
+
     try {
         Console.WriteLine($"[Batch] Loading project: {cliArgs.ProjectPath}");
         projectManager.LoadProject(cliArgs.ProjectPath!);
@@ -65,6 +56,26 @@ if (cliArgs.IsBatchMode && !cliArgs.StdinMode) {
         return 1;
     }
 }
+
+// Set up the full WorldBuilder services for interactive/stdin modes.
+// In stdin mode, suppress console logging to keep stdout clean for JSON.
+var services = new ServiceCollection();
+services.AddLogging(c => {
+    if (!cliArgs.StdinMode) {
+        c.AddConsole();
+    }
+    c.SetMinimumLevel(cliArgs.StdinMode ? LogLevel.Warning : LogLevel.Information);
+});
+services.AddWorldBuilder();  // Register ITerrainService, IObjectPlacementService, etc.
+using var provider = services.BuildServiceProvider();
+
+var loggerFactory = provider.GetRequiredService<ILoggerFactory>();
+var terrainService = provider.GetRequiredService<ITerrainService>();
+var objectPlacementService = provider.GetRequiredService<IObjectPlacementService>();
+var dungeonService = provider.GetRequiredService<IDungeonService>();
+var ontologyService = provider.GetRequiredService<IOntologyService>();
+var stampService = provider.GetRequiredService<IStampService>();
+using var projectManager = new HeadlessProjectManager(loggerFactory);
 
 // ── Stdin/JSON mode (agent protocol) ────────────────
 if (cliArgs.StdinMode) {
