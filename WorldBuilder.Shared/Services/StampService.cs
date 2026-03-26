@@ -11,6 +11,14 @@ namespace WorldBuilder.Shared.Services;
 /// Provides terrain region capture, paste computation, and serialization.
 /// </summary>
 public class StampService : IStampService {
+    private static readonly JsonSerializerOptions StampSerializationOptions = new() {
+        WriteIndented = false,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
+    private static readonly JsonSerializerOptions StampDeserializationOptions = new() {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
 
     /// <summary>
     /// Captures a rectangular region of terrain into a TerrainStamp.
@@ -132,18 +140,13 @@ public class StampService : IStampService {
     /// Serializes a TerrainStamp to JSON bytes for storage or agent transmission.
     /// </summary>
     public byte[] SerializeStamp(TerrainStamp stamp) {
-        return JsonSerializer.SerializeToUtf8Bytes(stamp, new JsonSerializerOptions {
-            WriteIndented = false,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-        });
+        return JsonSerializer.SerializeToUtf8Bytes(stamp, StampSerializationOptions);
     }
 
     /// <summary>
     /// Deserializes a TerrainStamp from JSON bytes.
     /// </summary>
     public TerrainStamp? DeserializeStamp(byte[] data) {
-        return JsonSerializer.Deserialize<TerrainStamp>(data, new JsonSerializerOptions {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-        });
+        return JsonSerializer.Deserialize<TerrainStamp>(data, StampDeserializationOptions);
     }
 }

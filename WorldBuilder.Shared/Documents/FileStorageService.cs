@@ -39,11 +39,11 @@ namespace WorldBuilder.Shared.Documents {
             return documentId;
         }
 
-        public async Task<DBDocument?> GetDocumentAsync(string documentId) {
+        public Task<DBDocument?> GetDocumentAsync(string documentId) {
             documentId = ValidateDocumentId(documentId);
 
             var filePath = GetDocumentFilePath(documentId);
-            if (!File.Exists(filePath)) return null;
+            if (!File.Exists(filePath)) return Task.FromResult<DBDocument?>(null);
 
             try {
                 using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -55,20 +55,20 @@ namespace WorldBuilder.Shared.Documents {
                 var dataLength = reader.ReadInt32();
                 var data = reader.ReadBytes(dataLength);
 
-                return new DBDocument {
+                return Task.FromResult<DBDocument?>(new DBDocument {
                     Id = documentId,
                     Type = type,
                     LastModified = new DateTime(lastModifiedTicks, DateTimeKind.Utc),
                     Data = data
-                };
+                });
             }
             catch (Exception ex) {
                 _logger.LogError(ex, "Failed to read document {DocumentId}", documentId);
-                return null;
+                return Task.FromResult<DBDocument?>(null);
             }
         }
 
-        public async Task<DBDocument> CreateDocumentAsync(string documentId, string type, byte[] initialData) {
+        public Task<DBDocument> CreateDocumentAsync(string documentId, string type, byte[] initialData) {
             documentId = ValidateDocumentId(documentId);
             if (string.IsNullOrEmpty(type)) throw new ArgumentNullException(nameof(type));
             if (initialData == null) throw new ArgumentNullException(nameof(initialData));
@@ -99,7 +99,7 @@ namespace WorldBuilder.Shared.Documents {
                 _logger.LogInformation("Created document {DocumentId} of type {Type} ({Size} bytes)",
                     documentId, type, initialData.Length);
 
-                return document;
+                return Task.FromResult(document);
             }
             catch (Exception ex) {
                 _logger.LogError(ex, "Failed to create document {DocumentId}", documentId);
@@ -148,7 +148,7 @@ namespace WorldBuilder.Shared.Documents {
             }
         }
 
-        public async Task<bool> DeleteDocumentAsync(string documentId) {
+        public Task<bool> DeleteDocumentAsync(string documentId) {
             documentId = ValidateDocumentId(documentId);
 
             var docPath = GetDocumentFilePath(documentId);
@@ -169,7 +169,7 @@ namespace WorldBuilder.Shared.Documents {
                 _logger.LogInformation("Deleted document {DocumentId}", documentId);
             }
 
-            return deleted;
+            return Task.FromResult(deleted);
         }
 
         public async Task<DBDocumentUpdate> CreateUpdateAsync(string documentId, string type, byte[] update) {
