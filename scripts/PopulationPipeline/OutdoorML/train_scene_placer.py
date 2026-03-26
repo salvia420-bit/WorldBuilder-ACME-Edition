@@ -645,10 +645,11 @@ def save_weights_only(model, ema, path):
         ema.restore()
         print(f"    Weights saved (safetensors): {path}")
     except ImportError:
+        actual_path = path.replace('.safetensors', '.pt')
         ema.apply_shadow()
-        torch.save(model.state_dict(), path.replace('.safetensors', '.pt'))
+        torch.save(model.state_dict(), actual_path)
         ema.restore()
-        print(f"    Weights saved (torch): {path}")
+        print(f"    Weights saved (torch): {actual_path}")
 
 
 def save_history(history, path):

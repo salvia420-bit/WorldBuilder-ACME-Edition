@@ -552,3 +552,137 @@ This was a successful bounded iteration.
 
 The next best step is likely another small semantic training-data improvement or
 a targeted quality evaluation, not an open-ended epoch run.
+
+## March 26, 2026: GPU Validation, CPU/CUDA Divergence, and Service Completion
+
+Follow-up validation on the same VM showed an important environment-specific
+behavior that affected inference conclusions.
+
+### CPU vs CUDA divergence
+
+The same validated checkpoint and fixed `5x5` probe settings produced materially
+different outputs depending on whether inference ran on CPU or the NVIDIA L4:
+
+- CUDA run: `422` accepted, `PAD=11`, `STOP=24`
+- CPU fallback run: `320` accepted, `PAD=10`, `STOP=24`
+
+Interpretation:
+
+- the checkpoint was not regressing
+- the apparent density drop came from CPU fallback
+- OutdoorML validation on this VM should be treated as CUDA-required
+
+Code changes were made so:
+
+- `run_small_region_probe.py` now requires CUDA by default
+- `generate_populated_world.py` supports `--require-cuda`
+- `debug_first_token_logits.py` supports `--require-cuda`
+- CPU fallback now warns explicitly instead of silently looking authoritative
+
+### Revalidated fixed-probe baseline on GPU
+
+Rerunning the standard fixed `5x5` probe on the L4 reproduced the known-good
+reference exactly:
+
+- `Raw generated: 422`
+- `Accepted: 422`
+- `PAD samples: 11`
+- `STOP samples: 24`
+- quality score: `79.5/100`
+
+This re-established the working inference baseline.
+
+### Revalidated housing stress path on GPU
+
+The explicit housing stress settings were rerun on the L4 and again matched the
+earlier reference:
+
+- `Raw generated: 422`
+- `Accepted: 422`
+- `Housing toks: 2`
+- `Houses placed: 2`
+- both houses were `Villa`
+- quality score: `74.1/100`
+
+Interpretation:
+
+- housing generation remains functional
+- the aggressive housing settings are still proof-of-path settings, not quality-balanced defaults
+
+### Medium and intermediate region validation
+
+Two larger bounded CUDA-backed runs were completed.
+
+`10x10` region:
+
+- `989` accepted placements across `100` landblocks
+- `0` empty landblocks
+- quality score: `83.8/100`
+
+`20x20` region, raw baseline:
+
+- `4,498` accepted placements across `400` landblocks
+- `0` empty landblocks
+- `4` houses
+- `294` encounters
+- corrected quality score after fixing a scorer bug: `76.7/100`
+
+Important scorer fix:
+
+- `score_placement_quality.py` was incorrectly treating some housing child WCIDs
+  as slumlords via `weenie type 55`
+- this understated `building_integrity`
+- the scorer now classifies real slumlords using `housing_linker.classify_slumlord_house_type`
+
+### Structural diagnosis at scale
+
+The large-region structural weakness was not collapse, density, or collision.
+It was missing settlement services:
+
+- vendor coverage in dense town-like landblocks: `10/16`
+- portal coverage in town-like landblocks: `40/42`
+- lifestone coverage in town-like landblocks: `0/42`
+- slumlord link coverage after scorer fix: `4/4`
+
+Interpretation:
+
+- housing integrity is acceptable
+- the main missing semantic at scale was lifestone presence
+- vendor presence was secondary but still incomplete
+
+### Inference-side service completion passes
+
+Two narrow inference-side completion passes were added in
+`generate_populated_world.py`.
+
+1. Town lifestone completion
+
+- enabled by default
+- injects retail `lifestone` `wcid 509`
+- only for dense, portal-bearing, town-like landblocks that generated no lifestone
+
+Effect on the same `20x20` region:
+
+- injected lifestones: `38`
+- quality score improved from `76.7` to `80.8`
+- `essential_services` improved from `4.8` to `9.3`
+- lifestone coverage improved from `0/42` to `38/42`
+
+2. Town vendor completion
+
+- currently opt-in via `--inject-town-vendors`
+- injects a retail vendor only for dense portal+lifestone town-like landblocks
+  that still have no vendor
+- uses a small culture-aware WCID mapping where available and a neutral fallback otherwise
+
+Effect on the same `20x20` region when combined with lifestone completion:
+
+- injected vendors: `4`
+- quality score improved from `80.8` to `83.1`
+- vendor coverage improved from `10/17` to `14/17`
+
+Current recommendation:
+
+- keep the lifestone completion pass in the validated default path
+- keep vendor completion as experimental / opt-in until more regions are checked
+- full-world generation should use CUDA and the current validated inference path, not CPU fallback

@@ -36,6 +36,8 @@ import numpy as np
 from collections import Counter, defaultdict
 from typing import Dict, List, Tuple, Optional
 
+from housing_linker import classify_slumlord_house_type
+
 # ─── Configuration ───────────────────────────────────────────────────────────
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -296,6 +298,65 @@ class PlacementQualityScorer:
             'breakdown': {k: round(v, 1) for k, v in scores.items()},
             'grade': self._grade(total),
         }
+
+    def structural_diagnostics(self, instances: Dict[Tuple[int, int], list], links: list) -> dict:
+        """Summarize which structural heuristics are failing and where."""
+        town15 = []
+        town20 = []
+        parent_set = {l['parent_guid'] for l in links}
+
+        for lb, insts in instances.items():
+            types = {self.wcid_types.get(i['wcid'], 0) for i in insts}
+            slumlord_guids = [
+                i['guid'] for i in insts
+                if classify_slumlord_house_type(i['wcid']) is not None
+            ]
+            entry = {
+                'lb_x': lb[0],
+                'lb_y': lb[1],
+                'count': len(insts),
+                'has_vendor': WT_VENDOR in types,
+                'has_portal': WT_PORTAL in types,
+                'has_lifestone': WT_LIFESTONE in types,
+                'slumlord_count': len(slumlord_guids),
+                'linked_slumlords': sum(1 for guid in slumlord_guids if guid in parent_set),
+            }
+            if len(insts) >= 15:
+                town15.append(entry)
+            if len(insts) >= 20:
+                town20.append(entry)
+
+        dense_without_vendor = sorted(
+            [lb for lb in town20 if not lb['has_vendor']],
+            key=lambda lb: lb['count'],
+            reverse=True,
+        )
+        dense_without_essentials = sorted(
+            [lb for lb in town15 if not lb['has_portal'] and not lb['has_lifestone']],
+            key=lambda lb: lb['count'],
+            reverse=True,
+        )
+        slumlord_problem_lbs = sorted(
+            [lb for lb in town15 if lb['slumlord_count'] and lb['linked_slumlords'] < lb['slumlord_count']],
+            key=lambda lb: (lb['slumlord_count'] - lb['linked_slumlords'], lb['count']),
+            reverse=True,
+        )
+
+        total_slumlords = sum(lb['slumlord_count'] for lb in town15)
+        total_linked_slumlords = sum(lb['linked_slumlords'] for lb in town15)
+
+        return {
+            'town_like_landblocks_ge_15': len(town15),
+            'town_like_landblocks_ge_20': len(town20),
+            'vendor_landblocks_ge_20': sum(1 for lb in town20 if lb['has_vendor']),
+            'portal_landblocks_ge_15': sum(1 for lb in town15 if lb['has_portal']),
+            'lifestone_landblocks_ge_15': sum(1 for lb in town15 if lb['has_lifestone']),
+            'total_slumlords_in_ge_15': total_slumlords,
+            'linked_slumlords_in_ge_15': total_linked_slumlords,
+            'top_dense_without_vendor': dense_without_vendor[:10],
+            'top_dense_without_essentials': dense_without_essentials[:10],
+            'top_partial_slumlord_links': slumlord_problem_lbs[:10],
+        }
     
     def _grade(self, total: float) -> str:
         if total >= 95: return "S  (AC Dev quality)"
@@ -368,7 +429,7 @@ class PlacementQualityScorer:
         for insts in instances.values():
             for inst in insts:
                 all_guids.add(inst['guid'])
-                if self.wcid_types.get(inst['wcid'], 0) == WT_SLUMLORD:
+                if classify_slumlord_house_type(inst['wcid']) is not None:
                     slumlord_guids.add(inst['guid'])
         
         if not slumlord_guids:
@@ -610,6 +671,7 @@ def main():
     )
     
     result = scorer.score(gen_instances, gen_links)
+    diagnostics = scorer.structural_diagnostics(gen_instances, gen_links)
     
     # Report
     print()
@@ -639,6 +701,18 @@ def main():
     print(f"    Avg per LB:       {total_instances/max(total_lbs,1):.1f}")
     print(f"    Links:            {len(gen_links):,}")
     print()
+    print(f"  Structural diagnostics:")
+    print(f"    Town-like LBs (>=15 objs): {diagnostics['town_like_landblocks_ge_15']}")
+    print(f"    Town-like LBs (>=20 objs): {diagnostics['town_like_landblocks_ge_20']}")
+    print(f"    Vendor coverage (>=20 objs): {diagnostics['vendor_landblocks_ge_20']}/{diagnostics['town_like_landblocks_ge_20']}")
+    print(f"    Portal coverage (>=15 objs): {diagnostics['portal_landblocks_ge_15']}/{diagnostics['town_like_landblocks_ge_15']}")
+    print(f"    Lifestone coverage (>=15 objs): {diagnostics['lifestone_landblocks_ge_15']}/{diagnostics['town_like_landblocks_ge_15']}")
+    if diagnostics['total_slumlords_in_ge_15']:
+        print(
+            f"    Slumlord link coverage: {diagnostics['linked_slumlords_in_ge_15']}/"
+            f"{diagnostics['total_slumlords_in_ge_15']}"
+        )
+    print()
     
     # Save report
     output_path = args.output or os.path.join(
@@ -654,6 +728,7 @@ def main():
             'avg_per_lb': total_instances / max(total_lbs, 1),
             'total_links': len(gen_links),
         },
+        'diagnostics': diagnostics,
         'sql_file': args.sql_file,
     }
     

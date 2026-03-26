@@ -16,15 +16,16 @@ Flow:
   3. Write landblock_instance + landblock_instance_link + encounter + house_portal SQL
 
 Sampling controls (anti-overfitting, pro-variance):
-  - Temperature: 0.8 (controlled randomness)
-  - Nucleus (top-p): 0.92 (diverse but reasonable)
-  - Top-k: 50 (prevent degenerate rare picks)
-  - Frequency penalty: -0.3 * log(freq) (prevent mode collapse)
+  - Temperature: 1.0 (validated March 26, 2026 baseline)
+  - Nucleus (top-p): 1.0 (disable filtering for current stable path)
+  - Top-k: 0 (disable filtering for current stable path)
+  - Minimum objects: 5 base + 2 adaptive in buildable contexts
+  - PAD bias: 1.0, STOP bias: 0.5 (reduce collapse into control tokens)
 
 Usage:
     python scripts/PopulationPipeline/OutdoorML/generate_populated_world.py
-    python scripts/PopulationPipeline/OutdoorML/generate_populated_world.py --model scene_placer_best.safetensors
-    python scripts/PopulationPipeline/OutdoorML/generate_populated_world.py --temperature 0.9 --top-k 100
+    python scripts/PopulationPipeline/OutdoorML/generate_populated_world.py --model scene_placer_resume_ema.pt
+    python scripts/PopulationPipeline/OutdoorML/generate_populated_world.py --temperature 1.0 --top-k 0 --nucleus-p 1.0
 """
 
 import argparse
@@ -75,6 +76,17 @@ HOUSING_TOKEN_MAP = {
     HOUSING_COTTAGE_TOKEN: 'Cottage',
     HOUSING_VILLA_TOKEN: 'Villa',
     HOUSING_MANSION_TOKEN: 'Mansion',
+}
+
+WT_PORTAL = 7
+WT_VENDOR = 12
+WT_LIFESTONE = 25
+DEFAULT_LIFESTONE_WCID = 509
+DEFAULT_VENDOR_WCID = 12718
+VENDOR_WCID_BY_CULTURE = {
+    'Aluvian': 1390,
+    'Sho': 1392,
+    'Neutral': 12718,
 }
 
 
@@ -133,6 +145,111 @@ def load_model_for_inference(model: torch.nn.Module, state_dict: dict,
         )
     if missing:
         print(f"  Note: older checkpoint omitted buffers {sorted(missing)}; using model defaults")
+
+
+def pick_service_position(existing_positions: list[tuple[float, float]], anchor_x: float,
+                          anchor_y: float, min_dist: float = 6.0) -> tuple[float, float]:
+    """Choose a service-object position near an anchor while avoiding overlaps."""
+    candidate_offsets = [
+        (0.0, 0.0),
+        (8.0, 0.0), (-8.0, 0.0), (0.0, 8.0), (0.0, -8.0),
+        (12.0, 0.0), (-12.0, 0.0), (0.0, 12.0), (0.0, -12.0),
+        (8.0, 8.0), (-8.0, 8.0), (8.0, -8.0), (-8.0, -8.0),
+    ]
+    min_dist_sq = min_dist * min_dist
+    for dx, dy in candidate_offsets:
+        x = max(6.0, min(186.0, anchor_x + dx))
+        y = max(6.0, min(186.0, anchor_y + dy))
+        if all((x - px) ** 2 + (y - py) ** 2 >= min_dist_sq for px, py in existing_positions):
+            return round(x, 2), round(y, 2)
+    return round(max(6.0, min(186.0, anchor_x)), 2), round(max(6.0, min(186.0, anchor_y)), 2)
+
+
+def maybe_add_town_lifestone(placements: list, wcid_types: dict[int, int], min_objects: int,
+                             lifestone_wcid: int) -> tuple[list, int]:
+    """
+    Ensure dense, portal-bearing town-like landblocks are not missing a lifestone.
+    This is a narrow post-pass for the exact structural gap seen in large-region QA.
+    """
+    if len(placements) < min_objects:
+        return placements, 0
+
+    has_portal = any(wcid_types.get(p.get('wcid'), 0) == WT_PORTAL for p in placements)
+    has_lifestone = any(wcid_types.get(p.get('wcid'), 0) == WT_LIFESTONE for p in placements)
+    if not has_portal or has_lifestone:
+        return placements, 0
+
+    service_candidates = [
+        p for p in placements
+        if wcid_types.get(p.get('wcid'), 0) in (WT_PORTAL, WT_VENDOR)
+    ]
+    if service_candidates:
+        anchor = service_candidates[0]
+        anchor_x = float(anchor['local_x'])
+        anchor_y = float(anchor['local_y'])
+    else:
+        anchor_x = sum(float(p['local_x']) for p in placements) / max(len(placements), 1)
+        anchor_y = sum(float(p['local_y']) for p in placements) / max(len(placements), 1)
+
+    existing_positions = [(float(p['local_x']), float(p['local_y'])) for p in placements]
+    local_x, local_y = pick_service_position(existing_positions, anchor_x, anchor_y)
+    placements.append({
+        'wcid': lifestone_wcid,
+        'local_x': local_x,
+        'local_y': local_y,
+        'local_z': 0.0,
+        'rot_w': 1.0,
+        'rot_z': 0.0,
+        'is_link_child': False,
+        'is_housing': False,
+        'housing_type': None,
+        'is_injected_service': True,
+    })
+    return placements, 1
+
+
+def maybe_add_town_vendor(placements: list, wcid_types: dict[int, int], min_objects: int,
+                          vendor_wcid: int) -> tuple[list, int]:
+    """
+    Add a vendor to dense, service-complete town-like landblocks that still lack one.
+    Kept opt-in because vendor semantics are narrower than the lifestone fix.
+    """
+    if len(placements) < min_objects:
+        return placements, 0
+
+    has_vendor = any(wcid_types.get(p.get('wcid'), 0) == WT_VENDOR for p in placements)
+    has_portal = any(wcid_types.get(p.get('wcid'), 0) == WT_PORTAL for p in placements)
+    has_lifestone = any(wcid_types.get(p.get('wcid'), 0) == WT_LIFESTONE for p in placements)
+    if has_vendor or not has_portal or not has_lifestone:
+        return placements, 0
+
+    service_candidates = [
+        p for p in placements
+        if wcid_types.get(p.get('wcid'), 0) in (WT_PORTAL, WT_LIFESTONE)
+    ]
+    if service_candidates:
+        anchor = service_candidates[0]
+        anchor_x = float(anchor['local_x'])
+        anchor_y = float(anchor['local_y'])
+    else:
+        anchor_x = sum(float(p['local_x']) for p in placements) / max(len(placements), 1)
+        anchor_y = sum(float(p['local_y']) for p in placements) / max(len(placements), 1)
+
+    existing_positions = [(float(p['local_x']), float(p['local_y'])) for p in placements]
+    local_x, local_y = pick_service_position(existing_positions, anchor_x, anchor_y, min_dist=8.0)
+    placements.append({
+        'wcid': vendor_wcid,
+        'local_x': local_x,
+        'local_y': local_y,
+        'local_z': 0.0,
+        'rot_w': 1.0,
+        'rot_z': 0.0,
+        'is_link_child': False,
+        'is_housing': False,
+        'housing_type': None,
+        'is_injected_service': True,
+    })
+    return placements, 1
 
 
 def apply_sampling_filters(logits: torch.Tensor, temperature: float = 1.0,
@@ -599,11 +716,21 @@ def generate_world(args):
     model_path = os.path.join(MODEL_DIR, args.model)
     if not os.path.exists(model_path):
         print(f"  ERROR: Model not found: {model_path}")
-        return
+        return 1
     
     config = DEFAULT_CONFIG.copy()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    cuda_available = torch.cuda.is_available()
+    if args.require_cuda and not cuda_available:
+        print("  ERROR: CUDA was requested with --require-cuda, but torch.cuda.is_available() is false.")
+        print("  Refusing to run on CPU because OutdoorML probe density can diverge materially from CUDA results.")
+        return 1
+
+    device = torch.device('cuda' if cuda_available else 'cpu')
     print(f"  Device: {device}")
+    if device.type != 'cuda':
+        print("  WARNING: running on CPU fallback.")
+        print("  OutdoorML probe outputs are not equivalent across CPU and CUDA in this environment.")
+        print("  Use --require-cuda to fail fast instead of accepting a CPU fallback.")
     
     model = ScenePlacerTransformer(config).to(device)
     
@@ -705,6 +832,24 @@ def generate_world(args):
         
         placements, validation_stats = generator.validate_placements(placements, lb_x, lb_y, culture_name)
         debug_totals.update(validation_stats)
+
+        if args.inject_town_lifestones:
+            placements, injected_lifestones = maybe_add_town_lifestone(
+                placements,
+                wcid_types,
+                min_objects=args.town_service_min_objects,
+                lifestone_wcid=args.lifestone_wcid,
+            )
+            debug_totals['injected_lifestones'] += injected_lifestones
+        if args.inject_town_vendors:
+            vendor_wcid = VENDOR_WCID_BY_CULTURE.get(culture_name, args.vendor_wcid)
+            placements, injected_vendors = maybe_add_town_vendor(
+                placements,
+                wcid_types,
+                min_objects=args.town_vendor_min_objects,
+                vendor_wcid=vendor_wcid,
+            )
+            debug_totals['injected_vendors'] += injected_vendors
         
         if not placements:
             debug_totals['empty_landblocks_after_validation'] += 1
@@ -911,6 +1056,10 @@ def generate_world(args):
     print(f"  STOP samples: {debug_totals['sampled_stop']}")
     print(f"  PAD samples: {debug_totals['sampled_pad']}")
     print(f"  Collision rerolls: {debug_totals['rerolled_collisions']}")
+    if debug_totals['injected_lifestones']:
+        print(f"  Injected lifestones: {debug_totals['injected_lifestones']}")
+    if debug_totals['injected_vendors']:
+        print(f"  Injected vendors: {debug_totals['injected_vendors']}")
     if debug_examples:
         print("  Sample empty-landblock diagnostics:")
         for line in debug_examples:
@@ -960,6 +1109,12 @@ def generate_world(args):
             'housing_difficulty_ceiling': args.housing_difficulty_ceiling,
             'housing_min_placements': args.housing_min_placements,
             'max_housing_per_lb': args.max_housing_per_lb,
+            'inject_town_lifestones': args.inject_town_lifestones,
+            'town_service_min_objects': args.town_service_min_objects,
+            'lifestone_wcid': args.lifestone_wcid,
+            'inject_town_vendors': args.inject_town_vendors,
+            'town_vendor_min_objects': args.town_vendor_min_objects,
+            'vendor_wcid': args.vendor_wcid,
             'seed': args.seed,
         },
         'results': {
@@ -978,6 +1133,8 @@ def generate_world(args):
             'housing_samples': int(debug_totals['sampled_housing']),
             'special_leaks': int(debug_totals['special_leaks']),
             'collision_rerolls': int(debug_totals['rerolled_collisions']),
+            'injected_lifestones': int(debug_totals['injected_lifestones']),
+            'injected_vendors': int(debug_totals['injected_vendors']),
         },
         'debug_examples': debug_examples,
     }
@@ -989,25 +1146,26 @@ def generate_world(args):
         with open(summary_path, 'w', encoding='utf-8') as f:
             json.dump(summary, f, indent=2)
         print(f"  Summary JSON:         {summary_path}")
+    return 0
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="Generate ML-populated world")
-    parser.add_argument("--model", type=str, default="scene_placer_best.safetensors",
-                       help="Model weights file (in pipeline_data/models/)")
-    parser.add_argument("--temperature", type=float, default=0.8)
-    parser.add_argument("--top-k", type=int, default=50)
-    parser.add_argument("--nucleus-p", type=float, default=0.92)
+    parser.add_argument("--model", type=str, default="scene_placer_resume_ema.pt",
+                       help="Model checkpoint in pipeline_data/models/; defaults to the March 26, 2026 validated baseline")
+    parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--top-k", type=int, default=0)
+    parser.add_argument("--nucleus-p", type=float, default=1.0)
     parser.add_argument("--frequency-penalty", type=float, default=0.3)
-    parser.add_argument("--min-objects", type=int, default=3,
+    parser.add_argument("--min-objects", type=int, default=5,
                        help="Base minimum generated objects before STOP can terminate")
-    parser.add_argument("--adaptive-min-objects-bonus", type=int, default=0,
+    parser.add_argument("--adaptive-min-objects-bonus", type=int, default=2,
                        help="Extra minimum objects in buildable contexts (0-3 recommended)")
-    parser.add_argument("--pad-logit-bias", type=float, default=0.0,
+    parser.add_argument("--pad-logit-bias", type=float, default=1.0,
                        help="Subtract from PAD logit before sampling")
-    parser.add_argument("--stop-logit-bias", type=float, default=0.0,
+    parser.add_argument("--stop-logit-bias", type=float, default=0.5,
                        help="Subtract from STOP logit after minimum objects are met")
     parser.add_argument("--housing-logit-bias", type=float, default=0.0,
                        help="Add to housing-token logits in housing-friendly contexts")
@@ -1019,6 +1177,20 @@ def main():
                        help="Minimum placements before housing boost can apply")
     parser.add_argument("--max-housing-per-lb", type=int, default=1,
                        help="Cap housing tokens per landblock during generation")
+    parser.add_argument("--inject-town-lifestones", action="store_true", default=True,
+                       help="Add a lifestone to dense portal-bearing town-like landblocks that generated none")
+    parser.add_argument("--no-inject-town-lifestones", action="store_false", dest="inject_town_lifestones",
+                       help="Disable the town-lifestone completion pass")
+    parser.add_argument("--town-service-min-objects", type=int, default=15,
+                       help="Minimum objects before a landblock is considered town-like for service completion")
+    parser.add_argument("--lifestone-wcid", type=int, default=DEFAULT_LIFESTONE_WCID,
+                       help="Retail lifestone WCID to inject during service completion")
+    parser.add_argument("--inject-town-vendors", action="store_true",
+                       help="Add a vendor to dense portal+lifestone town-like landblocks that generated none")
+    parser.add_argument("--town-vendor-min-objects", type=int, default=20,
+                       help="Minimum objects before a landblock is considered vendor-worthy for service completion")
+    parser.add_argument("--vendor-wcid", type=int, default=DEFAULT_VENDOR_WCID,
+                       help="Fallback retail vendor WCID for vendor completion when no culture-specific mapping exists")
     parser.add_argument("--margin", type=int, default=8,
                        help="Landblock margin from edges to skip")
     parser.add_argument("--lb-x-min", type=int, default=None,
@@ -1038,6 +1210,8 @@ def main():
                        help="Optional SQL output path (defaults to pipeline_data/population_output/vanquish_ml_populated.sql)")
     parser.add_argument("--summary-json", type=str, default=None,
                        help="Optional JSON summary output path for automated probe runs")
+    parser.add_argument("--require-cuda", action="store_true",
+                       help="Fail fast if CUDA is unavailable instead of silently running on CPU")
     args = parser.parse_args()
     
     random.seed(args.seed)
@@ -1050,7 +1224,7 @@ def main():
     print("=" * 72)
     print()
     
-    generate_world(args)
+    raise SystemExit(generate_world(args))
 
 
 if __name__ == '__main__':

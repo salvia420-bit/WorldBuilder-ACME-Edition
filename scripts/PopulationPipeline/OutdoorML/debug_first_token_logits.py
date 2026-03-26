@@ -12,6 +12,9 @@ probability mass on the very first generated token for:
 It can load either:
   - inference weights such as scene_placer_best.pt
   - full training checkpoints such as resume.pt, using EMA or raw model weights
+
+Defaults match the March 26, 2026 validated small-probe baseline so first-token
+inspection stays aligned with the current non-collapsed inference path.
 """
 
 import argparse
@@ -69,13 +72,13 @@ def main() -> int:
     parser.add_argument("--lb-x-max", type=int, default=34)
     parser.add_argument("--lb-y-min", type=int, default=120)
     parser.add_argument("--lb-y-max", type=int, default=124)
-    parser.add_argument("--temperature", type=float, default=0.8)
-    parser.add_argument("--top-k", type=int, default=50)
-    parser.add_argument("--nucleus-p", type=float, default=0.92)
-    parser.add_argument("--min-objects", type=int, default=3)
-    parser.add_argument("--adaptive-min-objects-bonus", type=int, default=0)
-    parser.add_argument("--pad-logit-bias", type=float, default=0.0)
-    parser.add_argument("--stop-logit-bias", type=float, default=0.0)
+    parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--top-k", type=int, default=0)
+    parser.add_argument("--nucleus-p", type=float, default=1.0)
+    parser.add_argument("--min-objects", type=int, default=5)
+    parser.add_argument("--adaptive-min-objects-bonus", type=int, default=2)
+    parser.add_argument("--pad-logit-bias", type=float, default=1.0)
+    parser.add_argument("--stop-logit-bias", type=float, default=0.5)
     parser.add_argument("--housing-logit-bias", type=float, default=0.0)
     parser.add_argument("--housing-flatness-threshold", type=float, default=0.6)
     parser.add_argument("--housing-difficulty-ceiling", type=float, default=0.6)
@@ -85,6 +88,8 @@ def main() -> int:
                         help="How many top tokens to print per landblock summary")
     parser.add_argument("--json-out", type=str, default=None,
                         help="Optional JSON output path")
+    parser.add_argument("--require-cuda", action="store_true",
+                        help="Fail fast if CUDA is unavailable instead of silently running on CPU")
     args = parser.parse_args()
 
     model_path = os.path.join(MODEL_DIR, args.model)
@@ -96,7 +101,16 @@ def main() -> int:
         vocab = json.load(f)
 
     config = DEFAULT_CONFIG.copy()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    cuda_available = torch.cuda.is_available()
+    if args.require_cuda and not cuda_available:
+        print("ERROR: CUDA was requested with --require-cuda, but torch.cuda.is_available() is false.")
+        print("Refusing CPU fallback because first-token diagnostics can diverge from CUDA behavior.")
+        return 1
+
+    device = torch.device("cuda" if cuda_available else "cpu")
+    if device.type != "cuda":
+        print("WARNING: running first-token diagnostics on CPU fallback.")
+        print("OutdoorML inference diagnostics are not guaranteed to match CUDA results.")
     model = ScenePlacerTransformer(config).to(device)
     state_dict, state_source = load_inference_state_dict(
         model_path, device, checkpoint_source=args.checkpoint_source

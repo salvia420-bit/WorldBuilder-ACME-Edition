@@ -4,7 +4,8 @@ Run the known small-region OutdoorML inference probe and emit easy-to-read outpu
 
 This wraps generate_populated_world.py with the fixed 5x5 region described in
 the handoff docs so we can quickly test whether a checkpoint has moved beyond
-PAD/STOP collapse.
+PAD/STOP collapse. By default it requires CUDA because CPU fallback has produced
+materially different density results on the same checkpoint.
 """
 
 import argparse
@@ -33,20 +34,22 @@ def main() -> int:
                         help="Model weights file name in pipeline_data/models/")
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR,
                         help="Directory for probe SQL, JSON, and console log")
-    parser.add_argument("--temperature", type=float, default=0.8)
-    parser.add_argument("--top-k", type=int, default=50)
-    parser.add_argument("--nucleus-p", type=float, default=0.92)
+    parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--top-k", type=int, default=0)
+    parser.add_argument("--nucleus-p", type=float, default=1.0)
     parser.add_argument("--frequency-penalty", type=float, default=0.3)
-    parser.add_argument("--min-objects", type=int, default=3)
-    parser.add_argument("--adaptive-min-objects-bonus", type=int, default=0)
-    parser.add_argument("--pad-logit-bias", type=float, default=0.0)
-    parser.add_argument("--stop-logit-bias", type=float, default=0.0)
+    parser.add_argument("--min-objects", type=int, default=5)
+    parser.add_argument("--adaptive-min-objects-bonus", type=int, default=2)
+    parser.add_argument("--pad-logit-bias", type=float, default=1.0)
+    parser.add_argument("--stop-logit-bias", type=float, default=0.5)
     parser.add_argument("--housing-logit-bias", type=float, default=0.0)
     parser.add_argument("--housing-flatness-threshold", type=float, default=0.6)
     parser.add_argument("--housing-difficulty-ceiling", type=float, default=0.6)
     parser.add_argument("--housing-min-placements", type=int, default=2)
     parser.add_argument("--max-housing-per-lb", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--allow-cpu", action="store_true",
+                        help="Permit CPU fallback; by default the probe requires CUDA")
     args = parser.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -82,6 +85,8 @@ def main() -> int:
         "--output-sql", sql_path,
         "--summary-json", summary_path,
     ]
+    if not args.allow_cpu:
+        cmd.append("--require-cuda")
 
     print("=" * 72)
     print("  OutdoorML Small-Region Probe")
