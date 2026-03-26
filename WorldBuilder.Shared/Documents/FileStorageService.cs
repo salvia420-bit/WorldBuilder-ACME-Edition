@@ -172,12 +172,12 @@ namespace WorldBuilder.Shared.Documents {
             return Task.FromResult(deleted);
         }
 
-        public async Task<DBDocumentUpdate> CreateUpdateAsync(string documentId, string type, byte[] update) {
+        public Task<DBDocumentUpdate> CreateUpdateAsync(string documentId, string type, byte[] update) {
             documentId = ValidateDocumentId(documentId);
             if (string.IsNullOrEmpty(type)) throw new ArgumentNullException(nameof(type));
             if (update == null) throw new ArgumentNullException(nameof(update));
 
-            return await CreateUpdateInternalAsync(documentId, type, update, DateTime.UtcNow, Guid.NewGuid(), Guid.NewGuid());
+            return Task.FromResult(CreateUpdateInternal(documentId, type, update, DateTime.UtcNow, Guid.NewGuid(), Guid.NewGuid()));
         }
 
         public async Task<List<DBDocumentUpdate>> GetDocumentUpdatesAsync(string documentId) {
@@ -219,7 +219,7 @@ namespace WorldBuilder.Shared.Documents {
             }
         }
 
-        public async Task<List<DBDocumentUpdate>> CreateUpdatesAsync(IEnumerable<(string documentId, string type, byte[] update)> updates) {
+        public Task<List<DBDocumentUpdate>> CreateUpdatesAsync(IEnumerable<(string documentId, string type, byte[] update)> updates) {
             var result = new List<DBDocumentUpdate>();
             var timestamp = DateTime.UtcNow;
             var clientId = Guid.NewGuid();
@@ -232,18 +232,18 @@ namespace WorldBuilder.Shared.Documents {
                 }
 
                 var validDocumentId = ValidateDocumentId(documentId);
-                var dbUpdate = await CreateUpdateInternalAsync(validDocumentId, type, update, timestamp, clientId, Guid.NewGuid());
+                var dbUpdate = CreateUpdateInternal(validDocumentId, type, update, timestamp, clientId, Guid.NewGuid());
                 result.Add(dbUpdate);
             }
 
-            if (result.Any()) {
+            if (result.Count > 0) {
                 _logger.LogInformation("Created batch of {Count} updates", result.Count);
             }
 
-            return result;
+            return Task.FromResult(result);
         }
 
-        private Task<DBDocumentUpdate> CreateUpdateInternalAsync(
+        private DBDocumentUpdate CreateUpdateInternal(
             string documentId,
             string type,
             byte[] update,
@@ -274,7 +274,7 @@ namespace WorldBuilder.Shared.Documents {
                     writer.Write(update);
                 }
 
-                return Task.FromResult(dbUpdate);
+                return dbUpdate;
             }
             catch (Exception ex) {
                 _logger.LogError(ex, "Failed to create update for document {DocumentId}", documentId);
@@ -286,7 +286,7 @@ namespace WorldBuilder.Shared.Documents {
             documentId = ValidateDocumentId(documentId);
 
             var updates = await GetDocumentUpdatesAsync(documentId);
-            if (!updates.Any()) return 0;
+            if (updates.Count == 0) return 0;
 
             var toKeep = updates.OrderByDescending(x => x.Timestamp)
                 .Take(maxUpdates);
