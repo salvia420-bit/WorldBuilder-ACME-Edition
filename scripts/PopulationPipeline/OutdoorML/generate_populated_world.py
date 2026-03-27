@@ -409,6 +409,7 @@ class PlacementGenerator:
         self.role_labels = tuple(SETTLEMENT_ROLE_LABELS)
         self.role_index = {label: self.role_offset + i for i, label in enumerate(self.role_labels)}
         self.type_token_tensors = self._build_type_token_tensors()
+        self.compact_roles = {"service_node", "service_housing_town", "housing_cluster"}
 
     def _build_type_token_tensors(self) -> dict[int, torch.Tensor]:
         indices_by_type = defaultdict(list)
@@ -469,6 +470,64 @@ class PlacementGenerator:
         token_indices = self.type_token_tensors.get(wtype)
         if token_indices is not None and len(token_indices) > 0:
             logits[token_indices] += bias
+
+    def _family_key_for_wcid(self, wcid: int, wtype: int) -> str:
+        if wtype == WT_VENDOR:
+            return "vendor"
+        if wtype == WT_PORTAL:
+            return "portal"
+        if wtype == WT_LIFESTONE:
+            return "lifestone"
+        if wtype == WT_DOOR:
+            return "door"
+        if wtype == WT_CREATURE:
+            return "creature"
+        if wtype == WT_SLUMLORD:
+            house_type = classify_slumlord_house_type(wcid)
+            return f"housing_{house_type.lower()}" if house_type else "housing_unknown"
+        return f"wt_{wtype}"
+
+    def _apply_compactness_bias(
+        self,
+        logits: torch.Tensor,
+        role: str,
+        placements: list[dict],
+        wcid_freq: Counter,
+    ) -> None:
+        """
+        Dense town-like blocks should not explode into too many unique WCIDs.
+        Once a compact role already has a few placements, gently favor already
+        seen WCIDs/families and penalize novelty.
+        """
+        if role not in self.compact_roles or len(placements) < 6:
+            return
+
+        seen_families: set[str] = set()
+        for p in placements:
+            wcid = p.get('wcid')
+            if not isinstance(wcid, int) or wcid < 0:
+                continue
+            wtype = self.wcid_types.get(wcid, 0)
+            seen_families.add(self._family_key_for_wcid(wcid, wtype))
+
+        unique_wcids = len(wcid_freq)
+        compactness = min(max((unique_wcids - 6) / 10.0, 0.0), 1.0)
+        if compactness <= 0.0:
+            return
+
+        for idx, mapped in self.idx_to_wcid.items():
+            if idx < FIRST_REAL_TOKEN or idx >= len(logits):
+                continue
+            if not isinstance(mapped, int) or mapped < 0:
+                continue
+            wtype = self.wcid_types.get(mapped, 0)
+            family_key = self._family_key_for_wcid(mapped, wtype)
+            if idx in wcid_freq:
+                logits[idx] += 0.22 * math.log(wcid_freq[idx] + 1) * (1.0 + compactness)
+            elif family_key in seen_families:
+                logits[idx] += 0.10 * compactness
+            else:
+                logits[idx] -= 0.14 * compactness
 
     def _apply_role_biases(self, logits: torch.Tensor, context: np.ndarray, placements: list[dict]) -> str:
         role = self._settlement_role(context)
@@ -559,6 +618,9 @@ class PlacementGenerator:
             for wcid_idx, count in wcid_freq.items():
                 if wcid_idx < len(logits):
                     logits[wcid_idx] -= self.frequency_penalty * math.log(count + 1)
+
+            role = self._settlement_role(context)
+            self._apply_compactness_bias(logits, role, placements, wcid_freq)
 
             if self.pad_logit_bias:
                 logits[PAD_TOKEN] -= self.pad_logit_bias
