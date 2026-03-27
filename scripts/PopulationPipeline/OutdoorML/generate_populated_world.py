@@ -722,6 +722,61 @@ class PlacementGenerator:
                 if wtype is not None:
                     self._apply_type_bias(logits, wtype, bias)
 
+    def _apply_archetype_realization_biases(
+        self,
+        logits: torch.Tensor,
+        placements: list[dict],
+        planner_plan: Optional[dict],
+    ) -> None:
+        if not planner_plan:
+            return
+
+        archetype = planner_plan.get('archetype')
+        if archetype not in {'service_node', 'housing_cluster', 'service_housing_town'}:
+            return
+
+        counts = self._family_counts(placements)
+        creature_count = counts.get('creature', 0)
+        portal_count = counts.get('portal', 0)
+        vendor_count = counts.get('vendor', 0)
+        lifestone_count = counts.get('lifestone', 0)
+        door_count = counts.get('door', 0)
+        housing_count = counts.get('housing', 0)
+        service_count = portal_count + vendor_count + lifestone_count
+
+        if archetype == 'service_node':
+            if service_count == 0 and len(placements) >= 1:
+                self._apply_type_bias(logits, WT_PORTAL, 0.45)
+                self._apply_type_bias(logits, WT_VENDOR, 0.35)
+                self._apply_type_bias(logits, WT_LIFESTONE, 0.20)
+            if service_count >= 1:
+                self._apply_type_bias(logits, WT_CREATURE, -0.28 - 0.08 * min(creature_count, 3))
+                self._apply_type_bias(logits, WT_DOOR, 0.16 if door_count == 0 else 0.06)
+                if housing_count == 0:
+                    for housing_idx in HOUSING_TOKEN_MAP:
+                        logits[housing_idx] += 0.10
+
+        elif archetype == 'housing_cluster':
+            self._apply_type_bias(logits, WT_CREATURE, -0.18 - 0.06 * min(creature_count, 3))
+            self._apply_type_bias(logits, WT_DOOR, 0.14 if door_count == 0 else 0.05)
+            if housing_count < self.max_housing_per_lb:
+                for housing_idx in HOUSING_TOKEN_MAP:
+                    logits[housing_idx] += 0.18
+            if service_count == 0 and len(placements) >= 3:
+                self._apply_type_bias(logits, WT_PORTAL, 0.10)
+                self._apply_type_bias(logits, WT_LIFESTONE, 0.08)
+
+        elif archetype == 'service_housing_town':
+            self._apply_type_bias(logits, WT_CREATURE, -0.22 - 0.05 * min(creature_count, 4))
+            self._apply_type_bias(logits, WT_DOOR, 0.12 if door_count == 0 else 0.04)
+            if housing_count < self.max_housing_per_lb:
+                for housing_idx in HOUSING_TOKEN_MAP:
+                    logits[housing_idx] += 0.20
+            if service_count < 2 and len(placements) >= 2:
+                self._apply_type_bias(logits, WT_PORTAL, 0.18)
+                self._apply_type_bias(logits, WT_VENDOR, 0.12)
+                self._apply_type_bias(logits, WT_LIFESTONE, 0.10)
+
     def _apply_role_biases(self, logits: torch.Tensor, context: np.ndarray, placements: list[dict]) -> tuple[str, str]:
         role = self._settlement_role(context)
         archetype = self._settlement_archetype(context)
@@ -853,6 +908,7 @@ class PlacementGenerator:
             role = self._settlement_role(context)
             self._apply_compactness_bias(logits, role, placements, wcid_freq)
             self._apply_family_plan_biases(logits, placements, planner_plan)
+            self._apply_archetype_realization_biases(logits, placements, planner_plan)
 
             if self.pad_logit_bias:
                 logits[PAD_TOKEN] -= self.pad_logit_bias
