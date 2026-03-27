@@ -49,7 +49,13 @@ except ImportError:
 # Import project modules
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from train_scene_placer import ScenePlacerTransformer, DEFAULT_CONFIG
-from housing_linker import HousingLinker, GuidAllocator, write_housing_sql, SQLStatement
+from housing_linker import (
+    HousingLinker,
+    GuidAllocator,
+    write_housing_sql,
+    SQLStatement,
+    classify_slumlord_house_type,
+)
 from extract_placement_tensors import (
     build_context_vector, load_height_grid, load_difficulty_grid,
     build_cultural_zones, load_wcid_types, STOP_TOKEN, PAD_TOKEN,
@@ -77,6 +83,7 @@ HOUSING_TOKEN_MAP = {
     HOUSING_VILLA_TOKEN: 'Villa',
     HOUSING_MANSION_TOKEN: 'Mansion',
 }
+HOUSE_TYPE_TOKEN_MAP = {house_type: token for token, house_type in HOUSING_TOKEN_MAP.items()}
 
 WT_PORTAL = 7
 WT_VENDOR = 12
@@ -446,6 +453,7 @@ class PlacementGenerator:
             'sampled_pad': 0,
             'sampled_housing': 0,
             'sampled_regular': 0,
+            'sampled_raw_slumlord_as_housing': 0,
             'forced_continue_after_stop': 0,
             'special_leaks': 0,
             'terminated_by_stop': False,
@@ -526,7 +534,16 @@ class PlacementGenerator:
                 debug['sampled_pad'] += 1
                 continue
 
-            if wcid_idx in HOUSING_TOKEN_MAP:
+            sampled_wcid = self.idx_to_wcid.get(wcid_idx, wcid_idx)
+            housing_type = HOUSING_TOKEN_MAP.get(wcid_idx)
+            if housing_type is None and isinstance(sampled_wcid, int) and sampled_wcid >= 0:
+                housing_type = classify_slumlord_house_type(sampled_wcid)
+                if housing_type is not None:
+                    wcid_idx = HOUSE_TYPE_TOKEN_MAP[housing_type]
+                    sampled_wcid = self.idx_to_wcid.get(wcid_idx, wcid_idx)
+                    debug['sampled_raw_slumlord_as_housing'] += 1
+
+            if housing_type is not None:
                 debug['sampled_housing'] += 1
             else:
                 debug['sampled_regular'] += 1
@@ -548,15 +565,15 @@ class PlacementGenerator:
             
             placement = {
                 'wcid_idx': wcid_idx,
-                'wcid': self.idx_to_wcid.get(wcid_idx, wcid_idx),
+                'wcid': sampled_wcid,
                 'local_x': round(local_x, 2),
                 'local_y': round(local_y, 2),
                 'local_z': 0.0,  # Will be height-snapped
                 'rot_w': round(float(rot[0]), 4),
                 'rot_z': round(float(rot[1]), 4),
                 'is_link_child': link > 0.5,
-                'is_housing': wcid_idx in HOUSING_TOKEN_MAP,
-                'housing_type': HOUSING_TOKEN_MAP.get(wcid_idx),
+                'is_housing': housing_type is not None,
+                'housing_type': housing_type,
             }
 
             if (isinstance(placement['wcid'], int) and
@@ -577,7 +594,9 @@ class PlacementGenerator:
             next_token[0, 0, 4] = float(rot[0])
             next_token[0, 0, 5] = float(rot[1])
             next_token[0, 0, 7] = float(link > 0.5)
-            if isinstance(wcid, int):
+            if placement['is_housing']:
+                next_token[0, 0, 6] = WT_SLUMLORD / 55.0
+            elif isinstance(wcid, int):
                 next_token[0, 0, 6] = self.wcid_types.get(wcid, 0) / 55.0
             next_token[0, 0, 9] = min((len(placements) - 1) / MAX_OBJECTS_PER_LB, 1.0)
             
@@ -751,7 +770,7 @@ def generate_world(args):
     heights = load_height_grid(HEIGHTS_PATH)
     difficulty_grid = load_difficulty_grid(DIFFICULTY_GRADIENT)
     culture_grid = build_cultural_zones()
-    
+
     ocean_mask = None
     if difficulty_grid is not None:
         ocean_mask = load_ocean_mask(difficulty_grid)

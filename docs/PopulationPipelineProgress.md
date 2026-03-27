@@ -434,6 +434,175 @@ If a new agent picks this up, the key facts are:
   produces nontrivial accepted placements and scoring can run
 
 
+## March 27, 2026: Full-World Generation Milestone
+
+The most important update after the earlier PAD/STOP debugging is that a full
+OutdoorML world generation run completed successfully on March 27, 2026.
+
+Reference artifacts:
+
+- `pipeline_data/population_output/fullworld_scene_placer_resume_ema_20260327T001000Z.sql`
+- `pipeline_data/population_output/fullworld_scene_placer_resume_ema_20260327T001000Z_summary.json`
+- `pipeline_data/population_output/quality_report.json`
+
+Observed full-world summary:
+
+- model: `scene_placer_resume_ema.pt`
+- generation time: `6657s`
+- populated landblocks: `57,121`
+- objects: `605,636`
+- houses: `104`
+- encounters: `120,727`
+- raw generated: `602,215`
+- accepted after validation: `602,215`
+- `STOP` samples: `56,140`
+- `PAD` samples: `18,653`
+- collision rerolls: `145,979`
+- injected lifestones: `3,095`
+- injected vendors: `326`
+
+Observed housing integrity:
+
+- valid housing links written
+- house mix:
+  - `Cottage: 2`
+  - `Villa: 47`
+  - `Mansion: 55`
+
+Observed score summary:
+
+- total score: `77.8/100`
+- grade: `B (Good)`
+- strengths:
+  - `no_collisions: 10.0`
+  - `ground_snap: 10.0`
+  - `density_appropriate: 9.4`
+  - `vendor_presence: 9.7`
+  - `essential_services: 9.3`
+- weaknesses:
+  - `building_integrity: 3.4`
+  - `variety: 5.5`
+  - `clustering: 5.9`
+  - `cultural_coherence: 7.0`
+
+Interpretation:
+
+- inference viability is no longer the primary blocker
+- OutdoorML now produces a usable full-world artifact
+- the next phase is quality improvement, not first-token rescue
+- quality claims should still stay disciplined because the system still leans on
+  post-generation completion passes and some structure semantics remain weak
+
+
+## Current OutdoorML Baseline
+
+The current safe baseline is:
+
+- model family: `scene_placer_resume_ema.pt`
+- fixed `5x5` probe baseline:
+  - `accepted_after_validation: 422`
+  - `PAD: 11`
+  - `STOP: 24`
+- current safe feature width:
+  - context dim `224`
+- active keepers from March 26:
+  - improved slumlord-to-housing family labels
+  - name-based fallback housing mapping
+  - warmup / entropy-rail training fixes
+  - vendor and lifestone completion passes in generation
+
+The following branch remains parked:
+
+- `227`-dim housing-prior context expansion
+
+Reason:
+
+- it regressed the stable probe baseline and is not currently better than the
+  safe `224`-dim line
+
+
+## What The Bottleneck Is Now
+
+The bottleneck is no longer:
+
+- zero-output inference collapse
+
+The bottleneck is now:
+
+- getting better structure semantics and higher world-quality scores without
+  losing the current density and stability baseline
+
+Concretely, the next ML work should target:
+
+1. better building integrity
+2. better variety and clustering
+3. more retail-like service semantics in dense towns
+4. better slumlord / housing-link fidelity
+5. less dependence on lifestone / vendor completion passes over time
+
+
+## Recommended Next Work
+
+The current highest-leverage plan is:
+
+1. Freeze the March 27 full-world run as the reference baseline.
+2. Keep using the fixed `5x5` probe as a regression guardrail, not as the sole success criterion.
+3. Make label-quality and retail-supervision improvements that do not widen model input beyond `224`.
+4. After each extractor change, run a bounded training slice rather than a long unattended training run.
+5. After each bounded slice:
+   - rerun the fixed `5x5` probe
+   - rerun one representative scored region such as a validated `20x20`
+6. Only schedule another full-world run after the bounded checks show a real quality improvement without probe regression.
+
+
+## Specific Next ML Targets
+
+Priority 1: Structure and service semantics
+
+- analyze dense generated landblocks that still lack vendors, portals, or
+  lifestones
+- derive better retail supervision for when dense settlements should contain
+  services
+- try to teach more of that behavior in extraction labels before adding more
+  heuristics
+
+Priority 2: Housing-link quality
+
+- analyze partial slumlord-link cases in the current full-world output
+- compare them against retail slumlord / child-link patterns
+- improve supervision so generated housing landblocks more often produce the
+  right linked-object structure directly
+
+Priority 3: Structure-family diversity
+
+- analyze retail structure-family frequency and co-occurrence by settlement type
+- improve label semantics so the model has a cleaner target for town-like
+  diversity and clustering
+
+
+## Current Decision Rules
+
+- If the fixed probe regresses materially from `422 / PAD 11 / STOP 24`, stop.
+- If the probe holds but regional scoring gets worse, stop.
+- If a candidate only looks better because heuristic completion passes are doing
+  more work, treat it as suspect.
+- If a label change improves regional scores while preserving probe behavior,
+  keep it and continue bounded training.
+- Do not widen context or restart architecture exploration until the current
+  label-quality path is clearly exhausted.
+
+
+## Recommended Immediate Repo Tasks
+
+1. Update stale docs that still describe full-world generation as blocked.
+2. Add a retail-analysis workflow focused on:
+   - dense towns missing services
+   - slumlord link coverage
+   - structure-family co-occurrence
+3. Keep the March 27 summary and quality report paths visible in future handoff notes.
+4. Prefer bounded, scored experiments over blind overnight full-world runs.
+
+
 ## March 26, 2026: Housing-Label Refresh + Bounded Retraining
 
 The next focused training-quality step was completed on March 26, 2026 with a

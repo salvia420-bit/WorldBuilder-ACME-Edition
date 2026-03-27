@@ -19,6 +19,8 @@ Current contents:
 - `debug_first_token_logits.py`
 - `housing_linker.py`
 - `score_placement_quality.py`
+- `analyze_retail_housing.py`
+- `analyze_population_gaps.py`
 
 Current validated inference baseline from March 26, 2026:
 
@@ -30,6 +32,17 @@ Current validated inference baseline from March 26, 2026:
 - `adaptive_min_objects_bonus=2`
 - `pad_logit_bias=1.0`
 - `stop_logit_bias=0.5`
+
+Current code-level safeguards:
+
+- `extract_placement_tensors.py` now accepts `--retail-sql` and `ACE_RETAIL_SQL`
+  so the retail SQL path is no longer hardcoded to one machine
+- the extractor filters indoor rows before building OutdoorML training examples
+- `generate_populated_world.py` canonicalizes raw sampled slumlord WCIDs back
+  into the housing-token path so housing is emitted through `HousingLinker`
+  instead of leaking unlinked slumlord instances
+- housing autoregressive state now preserves `weenie_type=55` for generated
+  housing tokens so inference matches training more closely
 
 Operational note:
 
@@ -50,3 +63,15 @@ Service-completion notes:
 - town-lifestone completion is part of the current validated inference path
 - town-vendor completion now appears to generalize across at least two `20x20` regions and is part of the current validated path
 - use `--no-inject-town-vendors` only when you explicitly want to disable the vendor completion pass
+
+Current analysis helpers:
+
+- `analyze_retail_housing.py` summarizes retail housing density and house-family token coverage
+- `analyze_population_gaps.py` compares retail vs generated SQL for dense-town service gaps, slumlord-link coverage, and coarse family co-occurrence
+
+Detached execution:
+
+- use `run_outdoorml_detached.sh` from the repo root to launch a bounded cycle
+  under a detached `tmux` session so it survives SSH disconnects
+- the script writes a run directory under `pipeline_data/population_output/detached_runs/`
+  with `stdout.log`, `pid.txt`, `session.txt`, and a copy of the exact command used

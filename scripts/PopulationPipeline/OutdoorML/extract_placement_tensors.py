@@ -16,8 +16,10 @@ Output: pipeline_data/reference/placement_tensors.npz
 
 Usage:
     python scripts/PopulationPipeline/OutdoorML/extract_placement_tensors.py
+    python scripts/PopulationPipeline/OutdoorML/extract_placement_tensors.py --retail-sql /path/to/ACE-World-Database.sql
 """
 
+import argparse
 import json
 import math
 import os
@@ -35,7 +37,10 @@ from housing_linker import classify_slumlord_house_type
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-RETAIL_SQL = r"D:\ACE\world-db\ACE-World-Database-v0.9.292.sql"
+DEFAULT_RETAIL_SQL = os.environ.get(
+    "ACE_RETAIL_SQL",
+    os.path.join(BASE_DIR, "ace_world_release", "ACE-World-Database-v0.9.292.sql"),
+)
 HEIGHTS_PATH = os.path.join(BASE_DIR, "pipeline_data", "population_output", "vanquish_heights.json")
 BIOME_MAP = os.path.join(BASE_DIR, "pipeline_data", "enrichment", "biome_map.json")
 DIFFICULTY_GRADIENT = os.path.join(BASE_DIR, "pipeline_data", "enrichment", "difficulty_gradient.json")
@@ -384,7 +389,7 @@ def build_context_vector(lb_x: int, lb_y: int,
         # Normalize: mean ~129, std ~35
         h_norm = (h[:81] - 129.0) / 35.0 if len(h) >= 81 else np.zeros(81)
         ctx[0:81] = h_norm
-    
+
     # Terrain type and road flags are placeholders until DAT extraction is available
     # ctx[81:145] = terrain types (future)
     # ctx[145:209] = road flags (future)
@@ -497,28 +502,40 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
     Convert raw SQL data into structured training arrays.
     
     Returns:
-        contexts: (N, 227) float32 — per-landblock context vectors
+        contexts: (N, 224) float32 — per-landblock context vectors
         sequences: (N, MAX_OBJECTS, 10) float32 — object sequences
         seq_lengths: (N,) int32 — actual sequence length per LB
     """
     print("  Building training examples...")
     
+    # OutdoorML should only learn from outdoor placements. The SQL parser keeps
+    # indoor rows attached to the same landblock coordinates, so filter them out
+    # here before computing density, contexts, and token supervision.
+    outdoor_instances_by_lb = {
+        lb_key: [inst for inst in insts if not inst.get('is_indoor')]
+        for lb_key, insts in instances_by_lb.items()
+    }
+    outdoor_instances_by_lb = {
+        lb_key: insts for lb_key, insts in outdoor_instances_by_lb.items() if insts
+    }
+
     # Build GUID -> instance lookup for link resolution
     guid_to_inst = {}
-    for lb_key, insts in instances_by_lb.items():
+    for lb_key, insts in outdoor_instances_by_lb.items():
         for inst in insts:
             guid_to_inst[inst['guid']] = (lb_key, inst)
     
     # Build parent_guid -> child_guids index
     parent_children = defaultdict(list)
     for link in links:
-        parent_children[link['parent_guid']].append(link['child_guid'])
+        if link['parent_guid'] in guid_to_inst and link['child_guid'] in guid_to_inst:
+            parent_children[link['parent_guid']].append(link['child_guid'])
     
     # Instance counts for neighbor density
-    instance_counts = {k: len(v) for k, v in instances_by_lb.items()}
+    instance_counts = {k: len(v) for k, v in outdoor_instances_by_lb.items()}
     
     # Filter to populated outdoor landblocks
-    populated_lbs = sorted(k for k, v in instances_by_lb.items() 
+    populated_lbs = sorted(k for k, v in outdoor_instances_by_lb.items()
                           if len(v) >= 2 and k[0] >= 1 and k[1] >= 1)
     
     print(f"    Populated landblocks to process: {len(populated_lbs)}")
@@ -530,7 +547,7 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
     
     for idx, lb_key in enumerate(populated_lbs):
         lb_x, lb_y = lb_key
-        insts = instances_by_lb[lb_key]
+        insts = outdoor_instances_by_lb[lb_key]
         
         # Build context vector
         contexts[idx] = build_context_vector(
@@ -634,7 +651,20 @@ def save_tensors(contexts, sequences, seq_lengths, populated_lbs,
 
 # ─── Main ────────────────────────────────────────────────────────────────────
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Extract OutdoorML placement tensors from a retail SQL dump.")
+    parser.add_argument(
+        "--retail-sql",
+        default=DEFAULT_RETAIL_SQL,
+        help="Path to the ACE world SQL dump. Defaults to $ACE_RETAIL_SQL or the repo-local ace_world_release copy.",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
+    retail_sql = os.path.abspath(args.retail_sql)
+
     print("=" * 72)
     print("  Placement Tensor Extractor")
     print("  SQL + DAT → ML Training Data")
@@ -648,20 +678,21 @@ def main():
     
     # Step 2: Parse SQL (before weenie types — we may need it as fallback)
     print("[Step 2] Parsing retail SQL...")
-    if not os.path.exists(RETAIL_SQL):
-        print(f"  ERROR: SQL file not found: {RETAIL_SQL}")
-        print(f"  Please update RETAIL_SQL path in this script.")
+    print(f"  Retail SQL: {retail_sql}")
+    if not os.path.exists(retail_sql):
+        print(f"  ERROR: SQL file not found: {retail_sql}")
+        print("  Pass --retail-sql or set ACE_RETAIL_SQL to point at the SQL dump.")
         return
-    instances_by_lb, links, encounters_by_lb = parse_retail_sql(RETAIL_SQL)
+    instances_by_lb, links, encounters_by_lb = parse_retail_sql(retail_sql)
     print()
     
     # Step 2b: Load weenie types (with SQL fallback)
     print("[Step 2b] Loading weenie types...")
-    wcid_types = load_wcid_types(RETAIL_SQL)
+    wcid_types = load_wcid_types(retail_sql)
     print()
 
     print("[Step 2c] Loading weenie names...")
-    wcid_names = load_wcid_names(RETAIL_SQL)
+    wcid_names = load_wcid_names(retail_sql)
     print()
     
     # Step 3: Load auxiliary data
