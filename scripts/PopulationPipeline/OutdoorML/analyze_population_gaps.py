@@ -24,20 +24,22 @@ from itertools import combinations
 from typing import Any
 
 from housing_linker import classify_slumlord_house_type
+from settlement_signatures import (
+    WT_CREATURE,
+    WT_DOOR,
+    WT_LIFESTONE,
+    WT_PORTAL,
+    WT_SLUMLORD,
+    WT_VENDOR,
+    classify_settlement_signature,
+    family_labels_for_landblock,
+)
 
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 DEFAULT_RETAIL_SQL = os.path.join(BASE_DIR, "ace_world_release", "ACE-World-Database-v0.9.292.sql")
 DEFAULT_OUTPUT_DIR = os.path.join(BASE_DIR, "pipeline_data", "population_output")
 DEFAULT_JSON_OUT = os.path.join(DEFAULT_OUTPUT_DIR, "population_gap_report.json")
-
-WT_VENDOR = 12
-WT_PORTAL = 7
-WT_LIFESTONE = 25
-WT_SLUMLORD = 55
-WT_DOOR = 19
-WT_CREATURE = 10
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compare generated OutdoorML SQL against retail patterns")
@@ -191,35 +193,6 @@ def parse_instances_and_links(sql_path: str) -> tuple[dict[tuple[int, int], list
     return instances_by_lb, links
 
 
-def family_labels_for_landblock(insts: list[dict[str, Any]], wcid_types: dict[int, int]) -> list[str]:
-    labels: set[str] = set()
-
-    for inst in insts:
-        wcid = inst["wcid"]
-        wtype = wcid_types.get(wcid, 0)
-
-        if wtype == WT_VENDOR:
-            labels.add("vendor")
-        elif wtype == WT_PORTAL:
-            labels.add("portal")
-        elif wtype == WT_LIFESTONE:
-            labels.add("lifestone")
-        elif wtype == WT_DOOR:
-            labels.add("door")
-        elif wtype == WT_CREATURE:
-            labels.add("creature")
-        elif wtype == WT_SLUMLORD:
-            house_type = classify_slumlord_house_type(wcid)
-            if house_type:
-                labels.add(f"housing_{house_type.lower()}")
-            else:
-                labels.add("housing_unknown")
-        else:
-            labels.add(f"wt_{wtype}")
-
-    return sorted(labels)
-
-
 def summarize_dataset(
     name: str,
     instances_by_lb: dict[tuple[int, int], list[dict[str, Any]]],
@@ -233,6 +206,7 @@ def summarize_dataset(
     town_entries = []
     dense_entries = []
     family_signature_counter: Counter[tuple[str, ...]] = Counter()
+    settlement_signature_counter: Counter[str] = Counter()
     family_presence_counter: Counter[str] = Counter()
     pair_counter: Counter[tuple[str, str]] = Counter()
     dense_unique_wcids: list[int] = []
@@ -245,6 +219,8 @@ def summarize_dataset(
         types = {wcid_types.get(inst["wcid"], 0) for inst in insts}
         family_labels = family_labels_for_landblock(insts, wcid_types)
         signature = tuple(label for label in family_labels if not label.startswith("wt_"))
+        settlement_signature = classify_settlement_signature(family_labels, len(insts))
+        settlement_signature_counter[settlement_signature] += 1
         if signature:
             family_signature_counter[signature] += 1
             for label in signature:
@@ -273,6 +249,7 @@ def summarize_dataset(
             "slumlord_count": len(slumlords),
             "linked_slumlords": sum(1 for guid, _house_type in slumlords if guid in parent_set),
             "family_signature": list(signature),
+            "settlement_signature": settlement_signature,
         }
 
         if len(insts) >= town_threshold:
@@ -327,6 +304,10 @@ def summarize_dataset(
         "family_signature_top": [
             {"signature": list(signature), "count": count}
             for signature, count in family_signature_counter.most_common(top_k)
+        ],
+        "settlement_signature_top": [
+            {"signature": signature, "count": count}
+            for signature, count in settlement_signature_counter.most_common(top_k)
         ],
         "family_pair_top": [
             {"pair": list(pair), "count": count}
@@ -406,6 +387,9 @@ def print_dataset_summary(summary: dict[str, Any], top_k: int) -> None:
     for row in summary["family_signature_top"][:top_k]:
         label = ", ".join(row["signature"]) if row["signature"] else "(none)"
         print(f"      {row['count']:5d}  {label}")
+    print(f"    Top settlement signatures:")
+    for row in summary["settlement_signature_top"][:top_k]:
+        print(f"      {row['count']:5d}  {row['signature']}")
     print(f"    Top family co-occurrence pairs:")
     for row in summary["family_pair_top"][:top_k]:
         print(f"      {row['count']:5d}  {' + '.join(row['pair'])}")

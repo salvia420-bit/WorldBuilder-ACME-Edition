@@ -32,6 +32,7 @@ from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from housing_linker import classify_slumlord_house_type
+from settlement_signatures import classify_settlement_signature, family_labels_for_landblock
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -546,6 +547,7 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
     sequences = np.zeros((len(populated_lbs), MAX_OBJECTS_PER_LB, 10), dtype=np.float32)
     seq_lengths = np.zeros(len(populated_lbs), dtype=np.int32)
     housing_token_counts = defaultdict(int)
+    settlement_signature_counts = defaultdict(int)
     
     for idx, lb_key in enumerate(populated_lbs):
         lb_x, lb_y = lb_key
@@ -555,6 +557,10 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
         contexts[idx] = build_context_vector(
             lb_x, lb_y, heights, difficulty_grid, culture_grid, instance_counts
         )
+
+        family_labels = family_labels_for_landblock(insts, wcid_types)
+        settlement_signature = classify_settlement_signature(family_labels, len(insts))
+        settlement_signature_counts[settlement_signature] += 1
         
         # Sort instances: non-link-children first (parents), then children
         insts.sort(key=lambda i: (i['is_link_child'], i['guid']))
@@ -608,7 +614,14 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
         if (idx + 1) % 1000 == 0:
             print(f"      {idx + 1}/{len(populated_lbs)} LBs processed")
     
-    return contexts, sequences, seq_lengths, populated_lbs, dict(housing_token_counts)
+    return (
+        contexts,
+        sequences,
+        seq_lengths,
+        populated_lbs,
+        dict(housing_token_counts),
+        dict(settlement_signature_counts),
+    )
 
 
 # ─── Step 6: Save output ─────────────────────────────────────────────────────
@@ -704,7 +717,14 @@ def main():
     
     # Step 4: Build training examples
     print("[Step 4] Building training examples...")
-    contexts, sequences, seq_lengths, populated_lbs, housing_token_counts = build_training_examples(
+    (
+        contexts,
+        sequences,
+        seq_lengths,
+        populated_lbs,
+        housing_token_counts,
+        settlement_signature_counts,
+    ) = build_training_examples(
         instances_by_lb, links, wcid_to_idx, wcid_types,
         heights, difficulty_grid, culture_grid, wcid_names
     )
@@ -739,6 +759,13 @@ def main():
             f"mansion={housing_token_counts.get('Mansion', 0):,}, "
             f"fallback={housing_token_counts.get('UnknownFallback', 0):,}"
         )
+    if settlement_signature_counts:
+        print("  Top settlement signatures:")
+        for signature, count in sorted(
+            settlement_signature_counts.items(),
+            key=lambda item: (-item[1], item[0])
+        )[:8]:
+            print(f"    {count:5d}  {signature}")
     print()
     
     # Distribution
