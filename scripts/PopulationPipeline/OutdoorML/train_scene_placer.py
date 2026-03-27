@@ -617,8 +617,9 @@ def compute_loss(model, batch, config, device):
                 (token_positions >= 4)
             )
             if dense_active.any():
-                repeat_loss = F.binary_cross_entropy(
-                    repeat_probs[dense_active],
+                repeat_logits = torch.logit(repeat_probs[dense_active], eps=1e-6)
+                repeat_loss = F.binary_cross_entropy_with_logits(
+                    repeat_logits,
                     target_repeat[dense_active],
                     reduction='mean'
                 )
