@@ -25,8 +25,7 @@ WT_CREATURE = 10
 SETTLEMENT_SIGNATURE_TRAIN_WEIGHTS = {
     "service_housing_town": 1.8,
     "housing_cluster": 1.6,
-    "service_node": 1.5,
-    "portal_lifestone_hub": 1.35,
+    "service_node": 1.2,
     "portal_creature_outpost": 0.7,
     "vendor_portal_hub": 0.85,
 }
@@ -159,21 +158,17 @@ def service_targets_for_signature(signature: str, family_labels: list[str]) -> l
         lifestone_target = max(lifestone_target, 0.55)
         vendor_target = max(vendor_target, 0.35)
     elif signature == "service_node":
-        portal_target = max(portal_target, 0.80)
-        lifestone_target = max(lifestone_target, 0.40)
-        vendor_target = max(vendor_target, 0.25)
-    elif signature == "portal_lifestone_hub":
-        portal_target = max(portal_target, 0.80)
-        lifestone_target = max(lifestone_target, 0.45)
-        vendor_target = max(vendor_target, 0.15)
+        portal_target = max(portal_target, 0.75)
+        lifestone_target = max(lifestone_target, 0.30)
+        vendor_target = max(vendor_target, 0.20)
     elif signature in {"housing_cluster", "housing_sparse", "door_only_cluster"}:
         portal_target = max(portal_target, 0.15)
         lifestone_target = max(lifestone_target, 0.05)
         vendor_target = max(vendor_target, 0.05)
     elif signature in {"portal_creature_outpost", "vendor_portal_hub", "service_creature_town"}:
-        portal_target = max(portal_target, 0.45)
-        lifestone_target = max(lifestone_target, 0.10)
-        vendor_target = max(vendor_target, 0.10)
+        portal_target = max(portal_target, 0.60)
+        lifestone_target = max(lifestone_target, 0.15)
+        vendor_target = max(vendor_target, 0.15)
 
     return [portal_target, lifestone_target, vendor_target]
 
@@ -209,9 +204,9 @@ def infer_service_targets_from_role(role: str) -> list[float]:
     if role == "service_housing_town":
         return [0.85, 0.55, 0.35]
     if role == "service_node":
-        return [0.80, 0.40, 0.25]
+        return [0.75, 0.30, 0.20]
     if role == "housing_cluster":
         return [0.15, 0.05, 0.05]
     if role == "outpost":
-        return [0.45, 0.10, 0.10]
+        return [0.60, 0.15, 0.15]
     return [0.10, 0.0, 0.0]
