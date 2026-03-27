@@ -14,7 +14,7 @@ Completed
 
 Next steps toward `90`
 - [x] Extract a dedicated retail dense-service benchmark dataset from retail SQL.
-- [ ] Cluster retail dense-service blocks into data-driven composition groups.
+- [x] Cluster retail dense-service blocks into data-driven composition groups.
 - [ ] Add a new planner supervision target based on those retail-derived clusters.
 - [ ] Condition generation on the new cluster signal with mild realization biases only.
 - [ ] Run the full 7-stage detached OutdoorML cycle on the new branch.
