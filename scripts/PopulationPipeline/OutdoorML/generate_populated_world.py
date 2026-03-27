@@ -777,56 +777,6 @@ class PlacementGenerator:
                 self._apply_type_bias(logits, WT_VENDOR, 0.12)
                 self._apply_type_bias(logits, WT_LIFESTONE, 0.10)
 
-    def _apply_town_completion_biases(
-        self,
-        logits: torch.Tensor,
-        placements: list[dict],
-        planner_plan: Optional[dict],
-    ) -> None:
-        if not planner_plan or len(placements) < 2:
-            return
-
-        archetype = planner_plan.get('archetype')
-        if archetype not in {'service_node', 'housing_cluster', 'service_housing_town'}:
-            return
-
-        counts = self._family_counts(placements)
-        creature_count = counts.get('creature', 0)
-        portal_count = counts.get('portal', 0)
-        vendor_count = counts.get('vendor', 0)
-        lifestone_count = counts.get('lifestone', 0)
-        door_count = counts.get('door', 0)
-        housing_count = counts.get('housing', 0)
-        service_count = portal_count + vendor_count + lifestone_count
-        started_as_outpost = creature_count >= 1 and portal_count >= 1 and door_count == 0 and housing_count == 0
-
-        if archetype == 'service_node':
-            if started_as_outpost:
-                self._apply_type_bias(logits, WT_CREATURE, -0.34 - 0.06 * min(creature_count, 3))
-                self._apply_type_bias(logits, WT_DOOR, 0.22)
-                self._apply_type_bias(logits, WT_LIFESTONE, 0.16 if lifestone_count == 0 else 0.04)
-                if housing_count == 0:
-                    for housing_idx in HOUSING_TOKEN_MAP:
-                        logits[housing_idx] += 0.08
-            elif service_count >= 1 and door_count == 0:
-                self._apply_type_bias(logits, WT_DOOR, 0.12)
-
-        elif archetype == 'housing_cluster':
-            if service_count >= 1 and door_count == 0:
-                self._apply_type_bias(logits, WT_DOOR, 0.16)
-            if creature_count >= 1 and housing_count >= 1:
-                self._apply_type_bias(logits, WT_CREATURE, -0.20)
-
-        elif archetype == 'service_housing_town':
-            if started_as_outpost or (service_count >= 1 and housing_count == 0):
-                self._apply_type_bias(logits, WT_CREATURE, -0.28 - 0.05 * min(creature_count, 4))
-                self._apply_type_bias(logits, WT_DOOR, 0.18 if door_count == 0 else 0.06)
-                if housing_count < self.max_housing_per_lb:
-                    for housing_idx in HOUSING_TOKEN_MAP:
-                        logits[housing_idx] += 0.12
-                if lifestone_count == 0:
-                    self._apply_type_bias(logits, WT_LIFESTONE, 0.14)
-
     def _apply_role_biases(self, logits: torch.Tensor, context: np.ndarray, placements: list[dict]) -> tuple[str, str]:
         role = self._settlement_role(context)
         archetype = self._settlement_archetype(context)
@@ -959,7 +909,6 @@ class PlacementGenerator:
             self._apply_compactness_bias(logits, role, placements, wcid_freq)
             self._apply_family_plan_biases(logits, placements, planner_plan)
             self._apply_archetype_realization_biases(logits, placements, planner_plan)
-            self._apply_town_completion_biases(logits, placements, planner_plan)
 
             if self.pad_logit_bias:
                 logits[PAD_TOKEN] -= self.pad_logit_bias
