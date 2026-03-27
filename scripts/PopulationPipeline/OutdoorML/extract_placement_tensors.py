@@ -33,8 +33,10 @@ from typing import Dict, List, Tuple, Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from housing_linker import classify_slumlord_house_type
 from settlement_signatures import classify_settlement_signature, family_labels_for_landblock
-from settlement_signatures import infer_settlement_role_from_context, settlement_role_from_signature
-from settlement_signatures import settlement_role_one_hot, SETTLEMENT_ROLE_LABELS, settlement_signature_weight
+from settlement_signatures import infer_settlement_archetype_from_context, infer_settlement_role_from_context
+from settlement_signatures import settlement_archetype_from_signature, settlement_archetype_one_hot
+from settlement_signatures import settlement_role_from_signature, settlement_role_one_hot
+from settlement_signatures import SETTLEMENT_ARCHETYPE_LABELS, SETTLEMENT_ROLE_LABELS, settlement_signature_weight
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -56,7 +58,9 @@ OUTPUT_VOCAB = os.path.join(OUTPUT_DIR, "placement_vocab.json")
 LB_SIZE = 192.0
 MAX_OBJECTS_PER_LB = 128
 BASE_CONTEXT_DIM = 224
-CONTEXT_DIM = BASE_CONTEXT_DIM + len(SETTLEMENT_ROLE_LABELS)
+ROLE_OFFSET = BASE_CONTEXT_DIM
+ARCHETYPE_OFFSET = ROLE_OFFSET + len(SETTLEMENT_ROLE_LABELS)
+CONTEXT_DIM = BASE_CONTEXT_DIM + len(SETTLEMENT_ROLE_LABELS) + len(SETTLEMENT_ARCHETYPE_LABELS)
 
 # MariaDB client for weenie type lookups
 MYSQL = r"C:\Program Files\MariaDB 12.2\bin\mysql.exe"
@@ -370,7 +374,8 @@ def build_context_vector(lb_x: int, lb_y: int,
                          difficulty_grid: Optional[np.ndarray],
                          culture_grid: np.ndarray,
                          instance_counts: Dict[Tuple[int,int], int],
-                         settlement_role: Optional[str] = None) -> np.ndarray:
+                         settlement_role: Optional[str] = None,
+                         settlement_archetype: Optional[str] = None) -> np.ndarray:
     """
     Build a context vector for a landblock.
     
@@ -386,6 +391,7 @@ def build_context_vector(lb_x: int, lb_y: int,
       [222]     = flatness score
       [223]     = distance to nearest coast (normalized)
       [224:229] = coarse settlement-role one-hot prior
+      [229:235] = settlement archetype one-hot prior
     """
     ctx = np.zeros(CONTEXT_DIM, dtype=np.float32)
     
@@ -447,7 +453,15 @@ def build_context_vector(lb_x: int, lb_y: int,
         flatness=float(ctx[222]),
         coast_distance=float(ctx[223]),
     )
-    ctx[BASE_CONTEXT_DIM:CONTEXT_DIM] = np.array(settlement_role_one_hot(role), dtype=np.float32)
+    archetype = settlement_archetype or infer_settlement_archetype_from_context(
+        culture_strength=float(ctx[212]),
+        difficulty=float(ctx[213]),
+        flatness=float(ctx[222]),
+        coast_distance=float(ctx[223]),
+        settlement_role=role,
+    )
+    ctx[ROLE_OFFSET:ARCHETYPE_OFFSET] = np.array(settlement_role_one_hot(role), dtype=np.float32)
+    ctx[ARCHETYPE_OFFSET:CONTEXT_DIM] = np.array(settlement_archetype_one_hot(archetype), dtype=np.float32)
     
     return ctx
 
@@ -570,13 +584,15 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
         family_labels = family_labels_for_landblock(insts, wcid_types)
         settlement_signature = classify_settlement_signature(family_labels, len(insts))
         settlement_role = settlement_role_from_signature(settlement_signature)
+        settlement_archetype = settlement_archetype_from_signature(settlement_signature)
         settlement_signature_counts[settlement_signature] += 1
         sample_weights[idx] = settlement_signature_weight(settlement_signature)
 
         # Build context vector after computing the supervised settlement role.
         contexts[idx] = build_context_vector(
             lb_x, lb_y, heights, difficulty_grid, culture_grid, instance_counts,
-            settlement_role=settlement_role
+            settlement_role=settlement_role,
+            settlement_archetype=settlement_archetype,
         )
         
         # Sort instances: non-link-children first (parents), then children

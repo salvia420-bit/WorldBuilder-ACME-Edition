@@ -61,7 +61,7 @@ from extract_placement_tensors import (
     build_cultural_zones, load_wcid_types, STOP_TOKEN, PAD_TOKEN,
     FIRST_REAL_TOKEN, HOUSING_COTTAGE_TOKEN, HOUSING_VILLA_TOKEN, HOUSING_MANSION_TOKEN,
 )
-from settlement_signatures import SETTLEMENT_ROLE_LABELS
+from settlement_signatures import SETTLEMENT_ARCHETYPE_LABELS, SETTLEMENT_ROLE_LABELS
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -87,6 +87,7 @@ HOUSING_TOKEN_MAP = {
 HOUSE_TYPE_TOKEN_MAP = {house_type: token for token, house_type in HOUSING_TOKEN_MAP.items()}
 
 WT_PORTAL = 7
+WT_CREATURE = 10
 WT_VENDOR = 12
 WT_DOOR = 19
 WT_LIFESTONE = 25
@@ -408,6 +409,11 @@ class PlacementGenerator:
         self.role_offset = BASE_CONTEXT_DIM
         self.role_labels = tuple(SETTLEMENT_ROLE_LABELS)
         self.role_index = {label: self.role_offset + i for i, label in enumerate(self.role_labels)}
+        self.archetype_offset = self.role_offset + len(self.role_labels)
+        self.archetype_labels = tuple(SETTLEMENT_ARCHETYPE_LABELS)
+        self.archetype_index = {
+            label: self.archetype_offset + i for i, label in enumerate(self.archetype_labels)
+        }
         self.type_token_tensors = self._build_type_token_tensors()
         self.compact_roles = {"service_node", "service_housing_town", "housing_cluster"}
 
@@ -458,6 +464,28 @@ class PlacementGenerator:
         best_label = self.role_labels[0]
         best_value = float('-inf')
         for label, idx in self.role_index.items():
+            value = float(context[idx]) if len(context) > idx else 0.0
+            if value > best_value:
+                best_label = label
+                best_value = value
+        return best_label
+
+    def _settlement_archetype(self, context: np.ndarray) -> str:
+        if len(context) < self.archetype_offset + len(self.archetype_labels):
+            role = self._settlement_role(context)
+            if role == 'service_housing_town':
+                return 'service_housing_town'
+            if role == 'housing_cluster':
+                return 'housing_cluster'
+            if role == 'service_node':
+                return 'service_node'
+            if role == 'outpost':
+                return 'portal_creature_outpost'
+            return 'sparse_misc'
+
+        best_label = self.archetype_labels[0]
+        best_value = float('-inf')
+        for label, idx in self.archetype_index.items():
             value = float(context[idx]) if len(context) > idx else 0.0
             if value > best_value:
                 best_label = label
@@ -529,10 +557,11 @@ class PlacementGenerator:
             else:
                 logits[idx] -= 0.14 * compactness
 
-    def _apply_role_biases(self, logits: torch.Tensor, context: np.ndarray, placements: list[dict]) -> str:
+    def _apply_role_biases(self, logits: torch.Tensor, context: np.ndarray, placements: list[dict]) -> tuple[str, str]:
         role = self._settlement_role(context)
+        archetype = self._settlement_archetype(context)
         if not placements:
-            return role
+            return role, archetype
 
         housing_count = sum(1 for p in placements if p.get('is_housing'))
         has_portal = any(self.wcid_types.get(p.get('wcid'), 0) == WT_PORTAL for p in placements)
@@ -565,7 +594,42 @@ class PlacementGenerator:
                 self._apply_type_bias(logits, WT_VENDOR, -0.10)
                 self._apply_type_bias(logits, WT_LIFESTONE, -0.10)
 
-        return role
+        if archetype == 'service_housing_town':
+            if len(placements) >= 2 and housing_count < self.max_housing_per_lb:
+                for housing_idx in HOUSING_TOKEN_MAP:
+                    logits[housing_idx] += 1.15
+            if service_count == 0 and len(placements) >= 3:
+                self._apply_type_bias(logits, WT_PORTAL, 0.35)
+                self._apply_type_bias(logits, WT_VENDOR, 0.20)
+        elif archetype == 'housing_cluster':
+            if len(placements) >= 2 and housing_count < self.max_housing_per_lb:
+                for housing_idx in HOUSING_TOKEN_MAP:
+                    logits[housing_idx] += 0.95
+            self._apply_type_bias(logits, WT_CREATURE, -0.12)
+        elif archetype == 'service_node':
+            if service_count == 0 and len(placements) >= 2:
+                self._apply_type_bias(logits, WT_PORTAL, 0.55)
+                self._apply_type_bias(logits, WT_VENDOR, 0.42)
+                self._apply_type_bias(logits, WT_LIFESTONE, 0.30)
+            elif service_count == 1:
+                self._apply_type_bias(logits, WT_VENDOR, 0.18)
+                self._apply_type_bias(logits, WT_LIFESTONE, 0.12)
+            self._apply_type_bias(logits, WT_CREATURE, -0.16)
+        elif archetype == 'portal_creature_outpost':
+            self._apply_type_bias(logits, WT_CREATURE, 0.18)
+            self._apply_type_bias(logits, WT_PORTAL, 0.10)
+            if service_count >= 1:
+                self._apply_type_bias(logits, WT_VENDOR, -0.20)
+                self._apply_type_bias(logits, WT_LIFESTONE, -0.16)
+        elif archetype == 'vendor_portal_hub':
+            if service_count == 0:
+                self._apply_type_bias(logits, WT_PORTAL, 0.42)
+                self._apply_type_bias(logits, WT_VENDOR, 0.38)
+            elif service_count >= 2:
+                self._apply_type_bias(logits, WT_CREATURE, -0.10)
+                self._apply_type_bias(logits, WT_LIFESTONE, -0.10)
+
+        return role, archetype
     
     @torch.no_grad()
     def generate(self, context: np.ndarray) -> tuple[list, dict]:

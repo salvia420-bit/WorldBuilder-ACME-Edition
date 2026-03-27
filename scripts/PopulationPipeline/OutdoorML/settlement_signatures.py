@@ -38,6 +38,15 @@ SETTLEMENT_ROLE_LABELS = (
     "outpost",
 )
 
+SETTLEMENT_ARCHETYPE_LABELS = (
+    "service_node",
+    "housing_cluster",
+    "service_housing_town",
+    "portal_creature_outpost",
+    "vendor_portal_hub",
+    "sparse_misc",
+)
+
 
 def family_labels_for_landblock(insts: list[dict[str, Any]], wcid_types: dict[int, int]) -> list[str]:
     labels: set[str] = set()
@@ -133,6 +142,28 @@ def settlement_role_one_hot(role: str) -> list[float]:
     return [1.0 if label == role else 0.0 for label in SETTLEMENT_ROLE_LABELS]
 
 
+def settlement_archetype_from_signature(signature: str) -> str:
+    if signature in {
+        "service_node",
+        "portal_lifestone_hub",
+        "service_creature_town",
+    }:
+        return "service_node"
+    if signature in {"housing_cluster", "housing_sparse", "door_only_cluster", "door_creature_cluster"}:
+        return "housing_cluster"
+    if signature == "service_housing_town":
+        return "service_housing_town"
+    if signature == "portal_creature_outpost":
+        return "portal_creature_outpost"
+    if signature in {"vendor_portal_hub", "vendor_creature_mix"}:
+        return "vendor_portal_hub"
+    return "sparse_misc"
+
+
+def settlement_archetype_one_hot(archetype: str) -> list[float]:
+    return [1.0 if label == archetype else 0.0 for label in SETTLEMENT_ARCHETYPE_LABELS]
+
+
 def infer_settlement_role_from_context(
     culture_strength: float,
     difficulty: float,
@@ -157,3 +188,35 @@ def infer_settlement_role_from_context(
     if flatness >= 0.30 and difficulty <= 0.70 and coast_distance >= 0.04:
         return "outpost"
     return "sparse_creature"
+
+
+def infer_settlement_archetype_from_context(
+    culture_strength: float,
+    difficulty: float,
+    flatness: float,
+    coast_distance: float,
+    settlement_role: str | None = None,
+) -> str:
+    role = settlement_role or infer_settlement_role_from_context(
+        culture_strength=culture_strength,
+        difficulty=difficulty,
+        flatness=flatness,
+        coast_distance=coast_distance,
+    )
+    if role == "service_housing_town":
+        return "service_housing_town"
+    if role == "housing_cluster":
+        if culture_strength >= 0.24 and flatness >= 0.68:
+            return "service_housing_town"
+        return "housing_cluster"
+    if role == "service_node":
+        if culture_strength >= 0.16 and flatness >= 0.50 and difficulty <= 0.55:
+            return "service_node"
+        return "vendor_portal_hub"
+    if role == "outpost":
+        if difficulty >= 0.55 or culture_strength < 0.10:
+            return "portal_creature_outpost"
+        return "vendor_portal_hub"
+    if flatness >= 0.45 and coast_distance >= 0.08 and culture_strength >= 0.12:
+        return "housing_cluster"
+    return "sparse_misc"
