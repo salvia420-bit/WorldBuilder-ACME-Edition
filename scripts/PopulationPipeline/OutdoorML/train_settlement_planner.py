@@ -46,17 +46,24 @@ class Config:
     val_split: float = 0.15
 
 
-def compute_archetype_weights(archetypes: np.ndarray, num_classes: int) -> np.ndarray:
-    counts = np.bincount(archetypes, minlength=num_classes).astype(np.float32)
-    nonzero = counts[counts > 0]
-    median_count = float(np.median(nonzero)) if len(nonzero) else 1.0
-    weights = np.zeros(num_classes, dtype=np.float32)
+def compute_archetype_weights(archetypes: np.ndarray, archetype_labels: list[str]) -> np.ndarray:
+    counts = np.bincount(archetypes, minlength=len(archetype_labels)).astype(np.float32)
+    weights = np.ones(len(archetype_labels), dtype=np.float32)
+    label_to_idx = {label: idx for idx, label in enumerate(archetype_labels)}
+
     for idx, count in enumerate(counts):
         if count <= 0:
             weights[idx] = 0.0
-        else:
-            ratio = median_count / count
-            weights[idx] = float(np.clip(math.sqrt(ratio), 0.75, 3.0))
+
+    # Target the specific planner miss we keep seeing in generated outputs:
+    # too many outposts, too few vendor-bearing town plans, not enough service nodes.
+    if 'service_node' in label_to_idx:
+        weights[label_to_idx['service_node']] = 1.20
+    if 'vendor_portal_hub' in label_to_idx:
+        weights[label_to_idx['vendor_portal_hub']] = 1.75
+    if 'portal_creature_outpost' in label_to_idx:
+        weights[label_to_idx['portal_creature_outpost']] = 0.90
+
     return weights
 
 
@@ -137,7 +144,7 @@ def main() -> None:
     val_ds = PlannerDataset(contexts[val_idx], archetypes[val_idx], family_bins[val_idx])
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    archetype_weights_np = compute_archetype_weights(archetypes[train_idx], len(meta["archetype_labels"]))
+    archetype_weights_np = compute_archetype_weights(archetypes[train_idx], meta["archetype_labels"])
     archetype_weights = torch.from_numpy(archetype_weights_np).float().to(device)
     model = SettlementPlanner(
         context_dim=contexts.shape[1],
