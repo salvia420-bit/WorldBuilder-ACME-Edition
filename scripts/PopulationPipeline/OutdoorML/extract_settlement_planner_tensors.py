@@ -34,10 +34,8 @@ from extract_placement_tensors import (  # noqa: E402
     load_wcid_types,
 )
 from settlement_signatures import (  # noqa: E402
-    DENSE_SERVICE_COMPOSITION_LABELS,
     SERVICE_STYLE_LABELS,
     SETTLEMENT_ARCHETYPE_LABELS,
-    classify_dense_service_composition,
     classify_settlement_signature,
     classify_service_style,
     family_labels_for_landblock,
@@ -112,23 +110,19 @@ def main() -> None:
     contexts = np.zeros((len(populated_lbs), 235), dtype=np.float32)
     archetypes = np.zeros(len(populated_lbs), dtype=np.int64)
     service_styles = np.zeros(len(populated_lbs), dtype=np.int64)
-    dense_service_compositions = np.zeros(len(populated_lbs), dtype=np.int64)
     family_bins = np.zeros((len(populated_lbs), len(PLANNER_FAMILY_LABELS)), dtype=np.int64)
 
     print("\n[3/4] Building planner examples...")
     archetype_counts = Counter()
     service_style_counts = Counter()
-    dense_service_composition_counts = Counter()
     for idx, (lb_x, lb_y) in enumerate(populated_lbs):
         insts = [inst for inst in instances_by_lb[(lb_x, lb_y)] if not inst.get("is_indoor", False)]
         family_labels = family_labels_for_landblock(insts, wcid_types)
         signature = classify_settlement_signature(family_labels, len(insts))
         archetype = settlement_archetype_from_signature(signature)
         service_style = classify_service_style(family_labels)
-        dense_service_composition = classify_dense_service_composition(family_labels, len(insts))
         archetype_counts[archetype] += 1
         service_style_counts[service_style] += 1
-        dense_service_composition_counts[dense_service_composition] += 1
 
         contexts[idx] = build_context_vector(
             lb_x,
@@ -140,7 +134,6 @@ def main() -> None:
         )
         archetypes[idx] = SETTLEMENT_ARCHETYPE_LABELS.index(archetype)
         service_styles[idx] = SERVICE_STYLE_LABELS.index(service_style)
-        dense_service_compositions[idx] = DENSE_SERVICE_COMPOSITION_LABELS.index(dense_service_composition)
         family_bins[idx] = family_count_bins(insts, wcid_types)
 
         if (idx + 1) % 1000 == 0:
@@ -153,7 +146,6 @@ def main() -> None:
         contexts=contexts,
         archetypes=archetypes,
         service_styles=service_styles,
-        dense_service_compositions=dense_service_compositions,
         family_bins=family_bins,
         lb_coords=np.array(populated_lbs, dtype=np.int32),
     )
@@ -162,7 +154,6 @@ def main() -> None:
             {
                 "archetype_labels": list(SETTLEMENT_ARCHETYPE_LABELS),
                 "service_style_labels": list(SERVICE_STYLE_LABELS),
-                "dense_service_composition_labels": list(DENSE_SERVICE_COMPOSITION_LABELS),
                 "family_labels": list(PLANNER_FAMILY_LABELS),
                 "count_bins": ["0", "1", "2-3", "4+"],
             },
@@ -177,9 +168,6 @@ def main() -> None:
         print(f"  {label:24s} {count:5d}")
     print("  Service styles:")
     for label, count in sorted(service_style_counts.items(), key=lambda item: (-item[1], item[0])):
-        print(f"    {label:22s} {count:5d}")
-    print("  Dense service compositions:")
-    for label, count in sorted(dense_service_composition_counts.items(), key=lambda item: (-item[1], item[0])):
         print(f"    {label:22s} {count:5d}")
     print(f"  Tensors: {OUTPUT_NPZ}")
     print(f"  Meta:    {OUTPUT_META}")
