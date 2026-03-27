@@ -246,6 +246,12 @@ def apply_planner_plan_to_context(context: np.ndarray, planner_plan: Optional[di
     arch_end = arch_offset + len(SETTLEMENT_ARCHETYPE_LABELS)
 
     planner_archetype = planner_plan['archetype']
+    if planner_archetype == 'sparse_misc':
+        if len(ctx) > scene_context_dim:
+            return ctx[:scene_context_dim]
+        if len(ctx) < scene_context_dim:
+            return np.pad(ctx, (0, scene_context_dim - len(ctx)))
+        return ctx
     planner_role = ROLE_LABELS_BY_ARCHETYPE.get(planner_archetype, 'sparse_creature')
 
     if len(ctx) >= role_end:
@@ -682,10 +688,20 @@ class PlacementGenerator:
             return
 
         family_bins = planner_plan.get('family_bins') or {}
+        archetype = planner_plan.get('archetype')
         if not family_bins:
             return
 
         counts = self._family_counts(placements)
+        scale = 1.0
+        if archetype == 'sparse_misc':
+            scale = 0.0
+        elif archetype == 'portal_creature_outpost':
+            scale = 0.55
+        elif archetype == 'vendor_portal_hub':
+            scale = 0.75
+        if scale <= 0.0:
+            return
         for family_label, target_bin in family_bins.items():
             current = counts.get(family_label, 0)
             if target_bin <= 0:
@@ -696,6 +712,7 @@ class PlacementGenerator:
                 bias = 0.24 if current < 2 else (-0.10 if current >= 4 else 0.0)
             else:
                 bias = 0.18 if current < 4 else 0.0
+            bias *= scale
 
             if family_label == 'housing':
                 for housing_idx in HOUSING_TOKEN_MAP:
