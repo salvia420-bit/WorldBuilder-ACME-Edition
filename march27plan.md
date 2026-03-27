@@ -16,7 +16,7 @@ Next steps toward `90`
 - [x] Extract a dedicated retail dense-service benchmark dataset from retail SQL.
 - [x] Cluster retail dense-service blocks into data-driven composition groups.
 - [x] Add a new planner supervision target based on those retail-derived clusters.
-- [x] Condition generation on the new cluster signal with mild realization biases only.
+- [ ] Condition generation on the new cluster signal with mild realization biases only.
 - [ ] Run the full 7-stage detached OutdoorML cycle on the new branch.
 - [ ] Compare against the current leader and reject anything that does not beat `85.4/100`.
 - [ ] If a branch wins, validate it across multiple representative `20x20` regions.
