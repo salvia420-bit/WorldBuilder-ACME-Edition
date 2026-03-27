@@ -855,9 +855,10 @@ class PlacementGenerator:
         Planner-v2 still over-explodes dense service blocks into novel creature-heavy
         mixes after the core service motif is already present. Keep this narrow:
         only compact portal_vendor / full_service realizations after the service
-        structure is established.
+        structure is established, and only once the block is already dense enough
+        that additional novelty is usually harmful.
         """
-        if not planner_plan or len(placements) < 10:
+        if not planner_plan or len(placements) < 9:
             return
 
         service_style = planner_plan.get('service_style')
@@ -885,9 +886,13 @@ class PlacementGenerator:
             seen_families.add(self._family_key_for_wcid(wcid, wtype))
 
         unique_wcids = len(wcid_freq)
-        compactness = min(max((unique_wcids - 10) / 10.0, 0.0), 1.0)
+        compactness = min(max((unique_wcids - 9) / 8.0, 0.0), 1.0)
         if compactness <= 0.0:
             return
+
+        overgrown = unique_wcids >= 16 or (service_style == 'full_service' and unique_wcids >= 14)
+        if overgrown and len(placements) >= 14:
+            logits[STOP_TOKEN] += 0.12 + 0.10 * compactness
 
         for idx, mapped in self.idx_to_wcid.items():
             if idx < FIRST_REAL_TOKEN or idx >= len(logits):
@@ -898,26 +903,31 @@ class PlacementGenerator:
             family_key = self._family_key_for_wcid(mapped, wtype)
 
             if idx in wcid_freq:
-                logits[idx] += 0.16 * math.log(wcid_freq[idx] + 1) * (1.0 + compactness)
+                logits[idx] += 0.20 * math.log(wcid_freq[idx] + 1) * (1.0 + compactness)
                 continue
 
             if family_key in {'portal', 'vendor', 'lifestone', 'door'}:
-                logits[idx] += 0.06 * compactness
+                logits[idx] += 0.10 * compactness
                 continue
 
             if family_key.startswith('housing_') or family_key == 'housing_unknown':
-                logits[idx] += 0.04 * compactness
+                logits[idx] += 0.06 * compactness
                 continue
 
             if family_key == 'creature':
-                creature_penalty = 0.24 + 0.05 * min(creature_count, 4)
+                creature_penalty = 0.34 + 0.07 * min(creature_count, 4)
                 if service_count >= 3:
-                    creature_penalty += 0.06
+                    creature_penalty += 0.10
+                if overgrown:
+                    creature_penalty += 0.10
                 logits[idx] -= creature_penalty * compactness
             elif family_key in seen_families:
-                logits[idx] += 0.05 * compactness
+                logits[idx] += 0.07 * compactness
             else:
-                logits[idx] -= 0.18 * compactness
+                novelty_penalty = 0.26
+                if overgrown:
+                    novelty_penalty += 0.10
+                logits[idx] -= novelty_penalty * compactness
 
     def _apply_role_biases(self, logits: torch.Tensor, context: np.ndarray, placements: list[dict]) -> tuple[str, str]:
         role = self._settlement_role(context)
