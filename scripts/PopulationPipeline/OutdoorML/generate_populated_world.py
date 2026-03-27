@@ -49,6 +49,7 @@ except ImportError:
 # Import project modules
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from train_scene_placer import ScenePlacerTransformer, DEFAULT_CONFIG
+from train_settlement_planner import SettlementPlanner
 from housing_linker import (
     HousingLinker,
     GuidAllocator,
@@ -68,6 +69,7 @@ from settlement_signatures import SETTLEMENT_ARCHETYPE_LABELS, SETTLEMENT_ROLE_L
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 MODEL_DIR = os.path.join(BASE_DIR, "pipeline_data", "models")
+PLANNER_MODEL_PATH = os.path.join(MODEL_DIR, "settlement_planner.pt")
 VOCAB_PATH = os.path.join(BASE_DIR, "pipeline_data", "reference", "placement_vocab.json")
 HEIGHTS_PATH = os.path.join(BASE_DIR, "pipeline_data", "population_output", "vanquish_heights.json")
 DIFFICULTY_GRADIENT = os.path.join(BASE_DIR, "pipeline_data", "enrichment", "difficulty_gradient.json")
@@ -98,6 +100,23 @@ VENDOR_WCID_BY_CULTURE = {
     'Aluvian': 1390,
     'Sho': 1392,
     'Neutral': 12718,
+}
+
+ROLE_LABELS_BY_ARCHETYPE = {
+    'service_node': 'service_node',
+    'housing_cluster': 'housing_cluster',
+    'service_housing_town': 'service_housing_town',
+    'portal_creature_outpost': 'outpost',
+    'vendor_portal_hub': 'outpost',
+    'sparse_misc': 'sparse_creature',
+}
+
+PLANNER_FAMILY_TYPE_MAP = {
+    'creature': WT_CREATURE,
+    'portal': WT_PORTAL,
+    'vendor': WT_VENDOR,
+    'lifestone': WT_LIFESTONE,
+    'door': WT_DOOR,
 }
 
 
@@ -164,6 +183,85 @@ def infer_context_dim_from_state_dict(state_dict: dict, default: int) -> int:
     if weight is None or len(weight.shape) != 2:
         return default
     return int(weight.shape[1])
+
+
+def load_settlement_planner(planner_path: str, device: torch.device) -> Optional[dict]:
+    if not planner_path or not os.path.exists(planner_path):
+        return None
+
+    state = torch.load(planner_path, map_location=device)
+    planner = SettlementPlanner(
+        context_dim=int(state['context_dim']),
+        archetype_classes=len(state['archetype_labels']),
+        family_heads=len(state['family_labels']),
+    ).to(device)
+    planner.load_state_dict(state['model_state_dict'])
+    planner.eval()
+    return {
+        'model': planner,
+        'context_dim': int(state['context_dim']),
+        'archetype_labels': tuple(state['archetype_labels']),
+        'family_labels': tuple(state['family_labels']),
+        'path': planner_path,
+    }
+
+
+@torch.no_grad()
+def predict_settlement_plan(planner_bundle: Optional[dict], context: np.ndarray, device: torch.device) -> Optional[dict]:
+    if planner_bundle is None:
+        return None
+
+    planner_ctx = context
+    planner_dim = planner_bundle['context_dim']
+    if len(planner_ctx) > planner_dim:
+        planner_ctx = planner_ctx[:planner_dim]
+    elif len(planner_ctx) < planner_dim:
+        planner_ctx = np.pad(planner_ctx, (0, planner_dim - len(planner_ctx)))
+
+    ctx_tensor = torch.from_numpy(planner_ctx).float().unsqueeze(0).to(device)
+    archetype_logits, family_logits = planner_bundle['model'](ctx_tensor)
+    archetype_idx = int(archetype_logits.argmax(dim=-1).item())
+    family_bins = family_logits.argmax(dim=-1).squeeze(0).cpu().tolist()
+    return {
+        'archetype': planner_bundle['archetype_labels'][archetype_idx],
+        'family_bins': {
+            label: int(bin_idx)
+            for label, bin_idx in zip(planner_bundle['family_labels'], family_bins)
+        },
+    }
+
+
+def apply_planner_plan_to_context(context: np.ndarray, planner_plan: Optional[dict], scene_context_dim: int) -> np.ndarray:
+    ctx = context.copy()
+    if not planner_plan:
+        if len(ctx) > scene_context_dim:
+            return ctx[:scene_context_dim]
+        if len(ctx) < scene_context_dim:
+            return np.pad(ctx, (0, scene_context_dim - len(ctx)))
+        return ctx
+
+    role_offset = BASE_CONTEXT_DIM
+    role_end = role_offset + len(SETTLEMENT_ROLE_LABELS)
+    arch_offset = role_end
+    arch_end = arch_offset + len(SETTLEMENT_ARCHETYPE_LABELS)
+
+    planner_archetype = planner_plan['archetype']
+    planner_role = ROLE_LABELS_BY_ARCHETYPE.get(planner_archetype, 'sparse_creature')
+
+    if len(ctx) >= role_end:
+        ctx[role_offset:role_end] = 0.0
+        if planner_role in SETTLEMENT_ROLE_LABELS:
+            ctx[role_offset + SETTLEMENT_ROLE_LABELS.index(planner_role)] = 1.0
+    if len(ctx) >= arch_end:
+        ctx[arch_offset:arch_end] = 0.0
+        if planner_archetype in SETTLEMENT_ARCHETYPE_LABELS:
+            ctx[arch_offset + SETTLEMENT_ARCHETYPE_LABELS.index(planner_archetype)] = 1.0
+
+    if len(ctx) > scene_context_dim:
+        return ctx[:scene_context_dim]
+    if len(ctx) < scene_context_dim:
+        return np.pad(ctx, (0, scene_context_dim - len(ctx)))
+    return ctx
 
 
 def pick_service_position(existing_positions: list[tuple[float, float]], anchor_x: float,
@@ -557,6 +655,56 @@ class PlacementGenerator:
             else:
                 logits[idx] -= 0.14 * compactness
 
+    def _family_counts(self, placements: list[dict]) -> Counter:
+        counts = Counter()
+        for p in placements:
+            if p.get('is_housing'):
+                counts['housing'] += 1
+                continue
+            wcid = p.get('wcid')
+            if not isinstance(wcid, int) or wcid < 0:
+                continue
+            wtype = self.wcid_types.get(wcid, 0)
+            family_key = self._family_key_for_wcid(wcid, wtype)
+            if family_key.startswith('housing_'):
+                counts['housing'] += 1
+            elif family_key in ('creature', 'portal', 'vendor', 'lifestone', 'door'):
+                counts[family_key] += 1
+        return counts
+
+    def _apply_family_plan_biases(
+        self,
+        logits: torch.Tensor,
+        placements: list[dict],
+        planner_plan: Optional[dict],
+    ) -> None:
+        if not planner_plan:
+            return
+
+        family_bins = planner_plan.get('family_bins') or {}
+        if not family_bins:
+            return
+
+        counts = self._family_counts(placements)
+        for family_label, target_bin in family_bins.items():
+            current = counts.get(family_label, 0)
+            if target_bin <= 0:
+                bias = -0.35 if current == 0 else -0.55
+            elif target_bin == 1:
+                bias = 0.28 if current < 1 else -0.08
+            elif target_bin == 2:
+                bias = 0.24 if current < 2 else (-0.10 if current >= 4 else 0.0)
+            else:
+                bias = 0.18 if current < 4 else 0.0
+
+            if family_label == 'housing':
+                for housing_idx in HOUSING_TOKEN_MAP:
+                    logits[housing_idx] += bias
+            else:
+                wtype = PLANNER_FAMILY_TYPE_MAP.get(family_label)
+                if wtype is not None:
+                    self._apply_type_bias(logits, wtype, bias)
+
     def _apply_role_biases(self, logits: torch.Tensor, context: np.ndarray, placements: list[dict]) -> tuple[str, str]:
         role = self._settlement_role(context)
         archetype = self._settlement_archetype(context)
@@ -632,7 +780,7 @@ class PlacementGenerator:
         return role, archetype
     
     @torch.no_grad()
-    def generate(self, context: np.ndarray) -> tuple[list, dict]:
+    def generate(self, context: np.ndarray, planner_plan: Optional[dict] = None) -> tuple[list, dict]:
         """
         Generate object placements for a single landblock.
         
@@ -669,6 +817,8 @@ class PlacementGenerator:
             'housing_boost_steps': 0,
             'housing_friendly_context': housing_friendly,
         }
+        if planner_plan:
+            debug['planner_conditioned'] = 1
         
         for step in range(self.max_objects):
             debug['steps'] += 1
@@ -685,6 +835,7 @@ class PlacementGenerator:
 
             role = self._settlement_role(context)
             self._apply_compactness_bias(logits, role, placements, wcid_freq)
+            self._apply_family_plan_biases(logits, placements, planner_plan)
 
             if self.pad_logit_bias:
                 logits[PAD_TOKEN] -= self.pad_logit_bias
@@ -989,6 +1140,17 @@ def generate_world(args):
     # Instance counts (empty for generated world)
     instance_counts = {}
     wcid_types = load_wcid_types()
+    planner_path = None
+    planner_bundle = None
+    if not args.disable_planner:
+        planner_path = args.planner_model
+        if not os.path.isabs(planner_path):
+            planner_path = os.path.join(MODEL_DIR, planner_path)
+        planner_bundle = load_settlement_planner(planner_path, device)
+        if planner_bundle is not None:
+            print(f"  Planner loaded: {planner_bundle['path']}")
+        else:
+            print("  Planner not loaded; using heuristic role/archetype context.")
     
     # ── Initialize generator ──
     generator = PlacementGenerator(
@@ -1032,6 +1194,7 @@ def generate_world(args):
     now = time.strftime('%Y-%m-%d %H:%M:%S')
     debug_totals = Counter()
     debug_examples = []
+    planner_archetypes = Counter()
     
     t0 = time.time()
     region_blocks = list(iter_landblocks(args))
@@ -1048,13 +1211,13 @@ def generate_world(args):
             lb_x, lb_y, heights, difficulty_grid,
             culture_grid, instance_counts
         )
-        if len(ctx) > config['context_dim']:
-            ctx = ctx[:config['context_dim']]
-        elif len(ctx) < config['context_dim']:
-            ctx = np.pad(ctx, (0, config['context_dim'] - len(ctx)))
+        planner_plan = predict_settlement_plan(planner_bundle, ctx, device)
+        if planner_plan:
+            planner_archetypes[planner_plan['archetype']] += 1
+        ctx = apply_planner_plan_to_context(ctx, planner_plan, config['context_dim'])
         
         # Generate placements
-        placements, gen_stats = generator.generate(ctx)
+        placements, gen_stats = generator.generate(ctx, planner_plan=planner_plan)
         debug_totals['landblocks_visited'] += 1
         debug_totals['raw_generated'] += len(placements)
         debug_totals.update(gen_stats)
@@ -1351,6 +1514,11 @@ def generate_world(args):
             'vendor_wcid': args.vendor_wcid,
             'seed': args.seed,
         },
+        'planner': {
+            'enabled': planner_bundle is not None,
+            'model': planner_path,
+            'predicted_archetypes': dict(planner_archetypes),
+        },
         'results': {
             'landblocks_populated': lb_count,
             'objects': total_objects,
@@ -1427,6 +1595,10 @@ def main():
                        help="Minimum objects before a landblock is considered vendor-worthy for service completion")
     parser.add_argument("--vendor-wcid", type=int, default=DEFAULT_VENDOR_WCID,
                        help="Fallback retail vendor WCID for vendor completion when no culture-specific mapping exists")
+    parser.add_argument("--planner-model", type=str, default="settlement_planner.pt",
+                       help="Optional planner checkpoint in pipeline_data/models/ to predict landblock archetypes and family bins")
+    parser.add_argument("--disable-planner", action="store_true",
+                       help="Disable the settlement planner and use heuristic role/archetype context only")
     parser.add_argument("--margin", type=int, default=8,
                        help="Landblock margin from edges to skip")
     parser.add_argument("--lb-x-min", type=int, default=None,
