@@ -633,7 +633,6 @@ class PlacementGenerator:
         role: str,
         placements: list[dict],
         wcid_freq: Counter,
-        planner_plan: Optional[dict] = None,
     ) -> None:
         """
         Dense town-like blocks should not explode into too many unique WCIDs.
@@ -656,17 +655,6 @@ class PlacementGenerator:
         if compactness <= 0.0:
             return
 
-        service_style = (planner_plan or {}).get('service_style')
-        archetype = (planner_plan or {}).get('archetype')
-        if service_style in {'portal_vendor', 'full_service'}:
-            compactness = min(1.35, compactness * 1.25)
-        elif service_style in {'portal_lifestone', 'vendor_only'}:
-            compactness = min(1.20, compactness * 1.12)
-
-        seen_service_family = any(
-            family in seen_families for family in ('portal', 'vendor', 'lifestone', 'door')
-        )
-
         for idx, mapped in self.idx_to_wcid.items():
             if idx < FIRST_REAL_TOKEN or idx >= len(logits):
                 continue
@@ -677,20 +665,9 @@ class PlacementGenerator:
             if idx in wcid_freq:
                 logits[idx] += 0.22 * math.log(wcid_freq[idx] + 1) * (1.0 + compactness)
             elif family_key in seen_families:
-                family_bonus = 0.10
-                if service_style in {'portal_vendor', 'full_service'} and family_key in {'portal', 'vendor', 'lifestone', 'door'}:
-                    family_bonus = 0.16
-                logits[idx] += family_bonus * compactness
+                logits[idx] += 0.10 * compactness
             else:
-                novelty_penalty = 0.14
-                if service_style in {'portal_vendor', 'full_service'} and seen_service_family:
-                    if family_key in {'creature', 'wt_0'}:
-                        novelty_penalty = 0.22
-                    else:
-                        novelty_penalty = 0.18
-                elif archetype in {'service_node', 'vendor_portal_hub'} and family_key == 'creature':
-                    novelty_penalty = 0.18
-                logits[idx] -= novelty_penalty * compactness
+                logits[idx] -= 0.14 * compactness
 
     def _family_counts(self, placements: list[dict]) -> Counter:
         counts = Counter()
@@ -996,7 +973,7 @@ class PlacementGenerator:
                     logits[wcid_idx] -= self.frequency_penalty * math.log(count + 1)
 
             role = self._settlement_role(context)
-            self._apply_compactness_bias(logits, role, placements, wcid_freq, planner_plan=planner_plan)
+            self._apply_compactness_bias(logits, role, placements, wcid_freq)
             self._apply_family_plan_biases(logits, placements, planner_plan)
             self._apply_archetype_realization_biases(logits, placements, planner_plan)
             self._apply_service_style_biases(logits, placements, planner_plan)
