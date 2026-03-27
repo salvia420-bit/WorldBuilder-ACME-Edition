@@ -416,7 +416,6 @@ class PlacementGenerator:
         self.service_target_offset = self.role_offset + len(self.role_labels)
         self.service_target_labels = tuple(SERVICE_TARGET_LABELS)
         self.type_token_tensors = self._build_type_token_tensors()
-        self.repeat_bonus_roles = {"service_node", "service_housing_town"}
 
     def _build_type_token_tensors(self) -> dict[int, torch.Tensor]:
         indices_by_type = defaultdict(list)
@@ -488,18 +487,6 @@ class PlacementGenerator:
         token_indices = self.type_token_tensors.get(wtype)
         if token_indices is not None and len(token_indices) > 0:
             logits[token_indices] += bias
-
-    def _apply_repeat_bonus(self, logits: torch.Tensor, role: str, wcid_freq: Counter) -> None:
-        """
-        Dense town-like blocks currently overproduce unique WCIDs. Give a small
-        bonus to already-sampled WCIDs in town-core roles so composition stays
-        tighter without affecting sparse blocks much.
-        """
-        if role not in self.repeat_bonus_roles or not wcid_freq:
-            return
-        for wcid_idx, count in wcid_freq.items():
-            if wcid_idx < len(logits):
-                logits[wcid_idx] += 0.18 * math.log(count + 1)
 
     def _apply_role_biases(self, logits: torch.Tensor, context: np.ndarray, placements: list[dict]) -> str:
         role = self._settlement_role(context)
@@ -614,9 +601,6 @@ class PlacementGenerator:
             for wcid_idx, count in wcid_freq.items():
                 if wcid_idx < len(logits):
                     logits[wcid_idx] -= self.frequency_penalty * math.log(count + 1)
-
-            role = self._settlement_role(context)
-            self._apply_repeat_bonus(logits, role, wcid_freq)
 
             if self.pad_logit_bias:
                 logits[PAD_TOKEN] -= self.pad_logit_bias
