@@ -48,6 +48,17 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from settlement_signatures import (
+    SETTLEMENT_ROLE_LABELS,
+    WT_CREATURE,
+    WT_DOOR,
+    WT_LIFESTONE,
+    WT_PORTAL,
+    WT_SLUMLORD,
+    WT_VENDOR,
+)
+
 try:
     import torch
     import torch.nn as nn
@@ -71,6 +82,16 @@ LOG_DIR = os.path.join(BASE_DIR, "pipeline_data", "models", "logs")
 # Special tokens (must match extract_placement_tensors.py)
 PAD_TOKEN = 0
 STOP_TOKEN = 1
+
+FAMILY_OTHER = 0
+FAMILY_CREATURE = 1
+FAMILY_PORTAL = 2
+FAMILY_VENDOR = 3
+FAMILY_LIFESTONE = 4
+FAMILY_DOOR = 5
+FAMILY_HOUSING = 6
+FAMILY_COUNT = 7
+BASE_CONTEXT_DIM = 224
 
 # ─── Model Hyperparameters ───────────────────────────────────────────────────
 
@@ -108,6 +129,7 @@ DEFAULT_CONFIG = {
     "lambda_rot": 1.0,
     "lambda_link": 5.0,
     "lambda_entropy": 0.1,  # Entropy regularization to prevent mode collapse
+    "lambda_dense_repeat": 0.35,
     
     # Data augmentation
     "context_jitter_std": 0.05,
@@ -129,6 +151,76 @@ DEFAULT_CONFIG = {
     # Validation
     "val_split": 0.15,
 }
+
+ROLE_INDEX_BY_LABEL = {label: idx for idx, label in enumerate(SETTLEMENT_ROLE_LABELS)}
+DENSE_ROLE_INDICES = tuple(
+    ROLE_INDEX_BY_LABEL[label]
+    for label in ("service_node", "housing_cluster", "service_housing_town")
+    if label in ROLE_INDEX_BY_LABEL
+)
+
+
+def load_wcid_types() -> Dict[int, int]:
+    cache_path = os.path.join(BASE_DIR, "pipeline_data", "reference", "wcid_types_cache.json")
+    if not os.path.exists(cache_path):
+        return {}
+    with open(cache_path) as f:
+        data = json.load(f)
+    return {int(k): int(v) for k, v in data.items()}
+
+
+def token_family_for_wcid(wcid: int) -> int:
+    if wcid == STOP_TOKEN:
+        return FAMILY_OTHER
+    if wcid == PAD_TOKEN:
+        return FAMILY_OTHER
+    if wcid in (2, 3, 4):
+        return FAMILY_HOUSING
+    return FAMILY_OTHER
+
+
+def build_token_family_index(vocab_size: int) -> torch.Tensor:
+    token_family = np.zeros(vocab_size, dtype=np.int64)
+    wcid_types = load_wcid_types()
+
+    if os.path.exists(VOCAB_PATH):
+        with open(VOCAB_PATH) as f:
+            vocab = json.load(f)
+        idx_to_wcid = {int(k): int(v) for k, v in vocab.get("idx_to_wcid", {}).items()}
+    else:
+        idx_to_wcid = {}
+
+    for token_idx in range(vocab_size):
+        if token_idx in (PAD_TOKEN, STOP_TOKEN):
+            family = FAMILY_OTHER
+        elif token_idx in (2, 3, 4):
+            family = FAMILY_HOUSING
+        else:
+            wcid = idx_to_wcid.get(token_idx)
+            wtype = wcid_types.get(wcid, 0) if wcid is not None else 0
+            if wtype == WT_CREATURE:
+                family = FAMILY_CREATURE
+            elif wtype == WT_PORTAL:
+                family = FAMILY_PORTAL
+            elif wtype == WT_VENDOR:
+                family = FAMILY_VENDOR
+            elif wtype == WT_LIFESTONE:
+                family = FAMILY_LIFESTONE
+            elif wtype == WT_DOOR:
+                family = FAMILY_DOOR
+            elif wtype == WT_SLUMLORD:
+                family = FAMILY_HOUSING
+            else:
+                family = FAMILY_OTHER
+        token_family[token_idx] = family
+
+    return torch.from_numpy(token_family)
+
+
+def build_family_projection(token_family_index: torch.Tensor, vocab_size: int) -> torch.Tensor:
+    family_projection = torch.zeros(vocab_size, FAMILY_COUNT, dtype=torch.float32)
+    family_projection[torch.arange(vocab_size), token_family_index] = 1.0
+    return family_projection
 
 
 # ─── Dataset ─────────────────────────────────────────────────────────────────
@@ -456,6 +548,8 @@ def compute_loss(model, batch, config, device):
     target_rot = target_rot.to(device)
     target_link = target_link.to(device)
     mask = mask.to(device)
+    token_family_index = config.get('token_family_index')
+    family_projection = config.get('family_projection')
     
     # Forward
     wcid_logits, pos_pred, rot_pred, link_pred = model(ctx, input_seq, mask)
@@ -494,15 +588,52 @@ def compute_loss(model, batch, config, device):
     avg_entropy = (token_entropy * active).sum() / active.sum()
     # We MAXIMIZE entropy (minimize negative entropy), scaled by lambda
     L_entropy = -avg_entropy  # Negative because we want to maximize entropy
-    
+
+    L_dense_repeat = torch.zeros((), device=device)
+    if (
+        token_family_index is not None and
+        family_projection is not None and
+        ctx.shape[1] >= BASE_CONTEXT_DIM + len(SETTLEMENT_ROLE_LABELS) and
+        DENSE_ROLE_INDICES
+    ):
+        role_slice = ctx[:, BASE_CONTEXT_DIM:BASE_CONTEXT_DIM + len(SETTLEMENT_ROLE_LABELS)]
+        dense_role_strength = role_slice[:, list(DENSE_ROLE_INDICES)].sum(dim=-1)
+        dense_role_mask = dense_role_strength > 0.5
+        if dense_role_mask.any():
+            input_token_ids = input_seq[:, :, 0].long().clamp(0, V - 1)
+            input_family = token_family_index[input_token_ids]
+            target_family = token_family_index[target_wcid.clamp(0, V - 1)]
+
+            family_seen = F.one_hot(input_family, num_classes=FAMILY_COUNT).cumsum(dim=1) > 0
+            family_probs = torch.matmul(F.softmax(wcid_logits, dim=-1), family_projection)
+            repeat_probs = (family_probs * family_seen.float()).sum(dim=-1).clamp(1e-6, 1.0 - 1e-6)
+
+            target_repeat = family_seen.gather(-1, target_family.unsqueeze(-1)).squeeze(-1).float()
+            token_positions = torch.arange(T, device=device).unsqueeze(0)
+            dense_active = (
+                active.bool() &
+                dense_role_mask.unsqueeze(1) &
+                (target_family != FAMILY_OTHER) &
+                (token_positions >= 4)
+            )
+            if dense_active.any():
+                repeat_loss = F.binary_cross_entropy(
+                    repeat_probs[dense_active],
+                    target_repeat[dense_active],
+                    reduction='mean'
+                )
+                L_dense_repeat = repeat_loss
+
     lambda_ent = config.get('lambda_entropy', 0.1)
+    lambda_dense_repeat = config.get('lambda_dense_repeat', 0.0)
     
     # Composite loss
     L_total = (L_wcid 
                + config['lambda_pos'] * L_pos 
                + config['lambda_rot'] * L_rot 
                + config['lambda_link'] * L_link
-               + lambda_ent * L_entropy)
+               + lambda_ent * L_entropy
+               + lambda_dense_repeat * L_dense_repeat)
     
     return L_total, {
         'total': L_total.item(),
@@ -511,6 +642,7 @@ def compute_loss(model, batch, config, device):
         'rot': L_rot.item(),
         'link': L_link.item(),
         'entropy': avg_entropy.item(),
+        'dense_repeat': L_dense_repeat.item(),
     }
 
 
@@ -763,6 +895,9 @@ def train(config: dict, resume_path: Optional[str] = None):
     model = ScenePlacerTransformer(config).to(device)
     param_count = model.count_parameters()
     print(f"  Parameters: {param_count:,} ({param_count/1e6:.1f}M)")
+    token_family_index = build_token_family_index(model.vocab_size)
+    config['token_family_index'] = token_family_index.to(device)
+    config['family_projection'] = build_family_projection(token_family_index, model.vocab_size).to(device)
     
     # ── Batch size auto-detection ──
     if device.type == 'cuda':
