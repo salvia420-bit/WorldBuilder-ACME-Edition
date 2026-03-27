@@ -57,10 +57,11 @@ from housing_linker import (
     classify_slumlord_house_type,
 )
 from extract_placement_tensors import (
-    build_context_vector, load_height_grid, load_difficulty_grid,
+    BASE_CONTEXT_DIM, build_context_vector, load_height_grid, load_difficulty_grid,
     build_cultural_zones, load_wcid_types, STOP_TOKEN, PAD_TOKEN,
     FIRST_REAL_TOKEN, HOUSING_COTTAGE_TOKEN, HOUSING_VILLA_TOKEN, HOUSING_MANSION_TOKEN,
 )
+from settlement_signatures import SETTLEMENT_ROLE_LABELS
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -153,6 +154,14 @@ def load_model_for_inference(model: torch.nn.Module, state_dict: dict,
         )
     if missing:
         print(f"  Note: older checkpoint omitted buffers {sorted(missing)}; using model defaults")
+
+
+def infer_context_dim_from_state_dict(state_dict: dict, default: int) -> int:
+    """Infer context width from the first context-projection layer when available."""
+    weight = state_dict.get('ctx_proj.proj.0.weight')
+    if weight is None or len(weight.shape) != 2:
+        return default
+    return int(weight.shape[1])
 
 
 def pick_service_position(existing_positions: list[tuple[float, float]], anchor_x: float,
@@ -395,6 +404,23 @@ class PlacementGenerator:
         
         self.idx_to_wcid = {int(k): v for k, v in vocab['idx_to_wcid'].items()}
         self.vocab_size = vocab['vocab_size']
+        self.role_offset = BASE_CONTEXT_DIM
+        self.role_labels = tuple(SETTLEMENT_ROLE_LABELS)
+        self.role_index = {label: self.role_offset + i for i, label in enumerate(self.role_labels)}
+        self.type_token_tensors = self._build_type_token_tensors()
+
+    def _build_type_token_tensors(self) -> dict[int, torch.Tensor]:
+        indices_by_type = defaultdict(list)
+        for idx, wcid in self.idx_to_wcid.items():
+            if idx < FIRST_REAL_TOKEN or not isinstance(wcid, int) or wcid < 0:
+                continue
+            wtype = self.wcid_types.get(wcid, 0)
+            indices_by_type[wtype].append(idx)
+
+        tensors = {}
+        for wtype, indices in indices_by_type.items():
+            tensors[wtype] = torch.tensor(indices, dtype=torch.long, device=self.device)
+        return tensors
 
     def _estimate_min_objects(self, context: np.ndarray) -> int:
         """Raise the minimum object count in contexts that look more buildable."""
@@ -425,6 +451,61 @@ class PlacementGenerator:
             difficulty <= self.housing_difficulty_ceiling and
             coast_distance >= 0.08
         )
+
+    def _settlement_role(self, context: np.ndarray) -> str:
+        best_label = self.role_labels[0]
+        best_value = float('-inf')
+        for label, idx in self.role_index.items():
+            value = float(context[idx]) if len(context) > idx else 0.0
+            if value > best_value:
+                best_label = label
+                best_value = value
+        return best_label
+
+    def _apply_type_bias(self, logits: torch.Tensor, wtype: int, bias: float) -> None:
+        if not bias:
+            return
+        token_indices = self.type_token_tensors.get(wtype)
+        if token_indices is not None and len(token_indices) > 0:
+            logits[token_indices] += bias
+
+    def _apply_role_biases(self, logits: torch.Tensor, context: np.ndarray, placements: list[dict]) -> str:
+        role = self._settlement_role(context)
+        if not placements:
+            return role
+
+        housing_count = sum(1 for p in placements if p.get('is_housing'))
+        has_portal = any(self.wcid_types.get(p.get('wcid'), 0) == WT_PORTAL for p in placements)
+        has_vendor = any(self.wcid_types.get(p.get('wcid'), 0) == WT_VENDOR for p in placements)
+        has_lifestone = any(self.wcid_types.get(p.get('wcid'), 0) == WT_LIFESTONE for p in placements)
+        service_count = int(has_portal) + int(has_vendor) + int(has_lifestone)
+
+        if role == 'service_housing_town':
+            if len(placements) >= 2 and housing_count < self.max_housing_per_lb:
+                for housing_idx in HOUSING_TOKEN_MAP:
+                    logits[housing_idx] += 1.0
+            if service_count >= 1:
+                self._apply_type_bias(logits, WT_PORTAL, -0.35)
+                self._apply_type_bias(logits, WT_VENDOR, -0.20)
+                self._apply_type_bias(logits, WT_LIFESTONE, -0.20)
+        elif role == 'housing_cluster':
+            if len(placements) >= 2 and housing_count < self.max_housing_per_lb:
+                for housing_idx in HOUSING_TOKEN_MAP:
+                    logits[housing_idx] += 0.85
+            self._apply_type_bias(logits, WT_PORTAL, -0.35)
+            self._apply_type_bias(logits, WT_VENDOR, -0.25)
+            self._apply_type_bias(logits, WT_LIFESTONE, -0.15)
+        elif role == 'service_node':
+            if service_count == 0 and len(placements) >= 2:
+                self._apply_type_bias(logits, WT_PORTAL, 0.45)
+                self._apply_type_bias(logits, WT_VENDOR, 0.30)
+                self._apply_type_bias(logits, WT_LIFESTONE, 0.25)
+            elif service_count >= 1:
+                self._apply_type_bias(logits, WT_PORTAL, -0.20)
+                self._apply_type_bias(logits, WT_VENDOR, -0.10)
+                self._apply_type_bias(logits, WT_LIFESTONE, -0.10)
+
+        return role
     
     @torch.no_grad()
     def generate(self, context: np.ndarray) -> tuple[list, dict]:
@@ -463,6 +544,7 @@ class PlacementGenerator:
             'stop_suppressed_steps': 0,
             'housing_boost_steps': 0,
             'housing_friendly_context': housing_friendly,
+            'settlement_role': self._settlement_role(context),
         }
         
         for step in range(self.max_objects):
@@ -486,6 +568,9 @@ class PlacementGenerator:
                 debug['stop_suppressed_steps'] += 1
             elif self.stop_logit_bias:
                 logits[STOP_TOKEN] -= self.stop_logit_bias
+
+            role = self._apply_role_biases(logits, context, placements)
+            debug['settlement_role'] = role
 
             if housing_friendly:
                 housing_count = sum(1 for p in placements if p.get('is_housing'))
@@ -752,10 +837,10 @@ def generate_world(args):
         print("  OutdoorML probe outputs are not equivalent across CPU and CUDA in this environment.")
         print("  Use --require-cuda to fail fast instead of accepting a CPU fallback.")
     
-    model = ScenePlacerTransformer(config).to(device)
-    
     # Load weights
     state, state_source = load_inference_state_dict(model_path, device)
+    config['context_dim'] = infer_context_dim_from_state_dict(state, config['context_dim'])
+    model = ScenePlacerTransformer(config).to(device)
     load_model_for_inference(model, state, model_path)
     model.eval()
     print(f"  Model loaded: {model.count_parameters()/1e6:.1f}M params ({state_source} weights)")
@@ -838,6 +923,10 @@ def generate_world(args):
             lb_x, lb_y, heights, difficulty_grid,
             culture_grid, instance_counts
         )
+        if len(ctx) > config['context_dim']:
+            ctx = ctx[:config['context_dim']]
+        elif len(ctx) < config['context_dim']:
+            ctx = np.pad(ctx, (0, config['context_dim'] - len(ctx)))
         
         # Generate placements
         placements, gen_stats = generator.generate(ctx)

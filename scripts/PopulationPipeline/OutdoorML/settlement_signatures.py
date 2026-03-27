@@ -30,6 +30,14 @@ SETTLEMENT_SIGNATURE_TRAIN_WEIGHTS = {
     "vendor_portal_hub": 0.85,
 }
 
+SETTLEMENT_ROLE_LABELS = (
+    "sparse_creature",
+    "service_node",
+    "housing_cluster",
+    "service_housing_town",
+    "outpost",
+)
+
 
 def family_labels_for_landblock(insts: list[dict[str, Any]], wcid_types: dict[int, int]) -> list[str]:
     labels: set[str] = set()
@@ -100,3 +108,52 @@ def classify_settlement_signature(family_labels: list[str], object_count: int) -
 def settlement_signature_weight(signature: str) -> float:
     """Sampling weight used to rebalance training toward retail-like settlements."""
     return SETTLEMENT_SIGNATURE_TRAIN_WEIGHTS.get(signature, 1.0)
+
+
+def settlement_role_from_signature(signature: str) -> str:
+    """Collapse detailed settlement signatures into a compact training role."""
+    if signature == "service_housing_town":
+        return "service_housing_town"
+    if signature in {"housing_cluster", "housing_sparse", "door_only_cluster"}:
+        return "housing_cluster"
+    if signature in {"service_node", "portal_lifestone_hub"}:
+        return "service_node"
+    if signature in {
+        "portal_creature_outpost",
+        "vendor_portal_hub",
+        "service_creature_town",
+        "vendor_creature_mix",
+        "door_creature_cluster",
+    }:
+        return "outpost"
+    return "sparse_creature"
+
+
+def settlement_role_one_hot(role: str) -> list[float]:
+    return [1.0 if label == role else 0.0 for label in SETTLEMENT_ROLE_LABELS]
+
+
+def infer_settlement_role_from_context(
+    culture_strength: float,
+    difficulty: float,
+    flatness: float,
+    coast_distance: float,
+) -> str:
+    """
+    Heuristic role prior for inference-time contexts where we do not know the
+    actual generated family mix yet.
+    """
+    if (
+        culture_strength >= 0.20 and
+        flatness >= 0.68 and
+        difficulty <= 0.45 and
+        coast_distance >= 0.08
+    ):
+        return "service_housing_town"
+    if culture_strength >= 0.18 and flatness >= 0.58 and difficulty <= 0.55:
+        return "housing_cluster"
+    if culture_strength >= 0.12 and flatness >= 0.45 and difficulty <= 0.65:
+        return "service_node"
+    if flatness >= 0.30 and difficulty <= 0.70 and coast_distance >= 0.04:
+        return "outpost"
+    return "sparse_creature"
