@@ -5,6 +5,16 @@ Current validated baseline:
 - Best validated score: `85.4/100`
 - Leader probe: `247 / PAD 8 / STOP 25`
 
+Winning artifacts
+- Region A: `pipeline_data/population_output/serviceprior_region_20260327T155119Z_score.txt` -> `85.4/100`
+- Region B: `pipeline_data/population_output/serviceprior_region_v2_b_20260327T1600.sql` -> `85.4/100`
+- Probe: `pipeline_data/population_output/probes/probe_scene_placer_final_20260327T155447Z.json` -> `247 / PAD 8 / STOP 25`
+
+Current repo state
+- `master` is intentionally restored to the validated planner-v2 winner line.
+- Latest repo commit: `143a83b`
+- Do not resume from the rejected dense-service-head or retail-cluster-conditioned branches.
+
 Completed
 - [x] Freeze the winning planner-v2 branch as the production-quality baseline.
 - [x] Add dense-entropy diagnostics to `analyze_population_gaps.py`.
@@ -38,3 +48,15 @@ Decision
 - Keep planner-v2 as the winning branch.
 - Do not continue local generator tuning on this line.
 - The next research step should be better retail-derived supervision, not more logit surgery.
+
+Shutdown handoff
+- Safe production-quality baseline: planner-v2 winner on `master`
+- Retail dense-service research artifacts now exist:
+  - `pipeline_data/reference/dense_service_retail_dataset.json`
+  - `pipeline_data/reference/dense_service_retail_dataset.npz`
+  - `pipeline_data/reference/dense_service_retail_clusters.json`
+  - `pipeline_data/reference/dense_service_retail_clusters.npz`
+- The retail-cluster-conditioned branch was tested and rejected:
+  - strong probe recovery, but only `84.9/100`
+  - dense entropy remained worse than the winner
+- If work resumes, branch from current `master` and use the retail dense-service artifacts as inputs for the next supervision design.
