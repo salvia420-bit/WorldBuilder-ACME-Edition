@@ -544,7 +544,6 @@ class PlacementGenerator:
             'stop_suppressed_steps': 0,
             'housing_boost_steps': 0,
             'housing_friendly_context': housing_friendly,
-            'settlement_role': self._settlement_role(context),
         }
         
         for step in range(self.max_objects):
@@ -569,8 +568,7 @@ class PlacementGenerator:
             elif self.stop_logit_bias:
                 logits[STOP_TOKEN] -= self.stop_logit_bias
 
-            role = self._apply_role_biases(logits, context, placements)
-            debug['settlement_role'] = role
+            self._apply_role_biases(logits, context, placements)
 
             if housing_friendly:
                 housing_count = sum(1 for p in placements if p.get('is_housing'))
