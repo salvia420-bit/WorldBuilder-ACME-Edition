@@ -21,6 +21,7 @@ REGION_SCORE="$OUT_DIR/${REGION_STEM}_score.txt"
 BASE_RESUME="${1:-pipeline_data/models/resume_baseline_2026-03-26_epoch750.pt}"
 TARGET_EPOCHS="${2:-775}"
 PROBE_MODEL="${3:-scene_placer_final.pt}"
+PLANNER_EPOCHS="${4:-40}"
 
 echo "========================================================================"
 echo "  OutdoorML Service-Prior Bounded Cycle"
@@ -28,21 +29,31 @@ echo "========================================================================"
 echo "  Base resume:   $BASE_RESUME"
 echo "  Target epochs: $TARGET_EPOCHS"
 echo "  Probe model:   $PROBE_MODEL"
+echo "  Planner epochs:$PLANNER_EPOCHS"
 echo "  Region SQL:    $REGION_SQL"
 echo "========================================================================"
 
 echo
-echo "[1/5] Rebuild placement tensors with service priors..."
+echo "[1/7] Rebuild placement tensors with service priors..."
 python3 -u scripts/PopulationPipeline/OutdoorML/extract_placement_tensors.py
 
 echo
-echo "[2/5] Run bounded retrain..."
+echo "[2/7] Rebuild planner tensors..."
+python3 -u scripts/PopulationPipeline/OutdoorML/extract_settlement_planner_tensors.py
+
+echo
+echo "[3/7] Retrain settlement planner..."
+python3 -u scripts/PopulationPipeline/OutdoorML/train_settlement_planner.py \
+  --epochs "$PLANNER_EPOCHS"
+
+echo
+echo "[4/7] Run bounded retrain..."
 python3 -u scripts/PopulationPipeline/OutdoorML/train_scene_placer.py \
   --resume "$BASE_RESUME" \
   --epochs "$TARGET_EPOCHS"
 
 echo
-echo "[3/5] Run fixed 5x5 probe..."
+echo "[5/7] Run fixed 5x5 probe..."
 python3 -u scripts/PopulationPipeline/OutdoorML/run_small_region_probe.py \
   --model "$PROBE_MODEL" \
   --temperature 1.0 \
@@ -54,7 +65,7 @@ python3 -u scripts/PopulationPipeline/OutdoorML/run_small_region_probe.py \
   --stop-logit-bias 0.5
 
 echo
-echo "[4/5] Run representative scored region..."
+echo "[6/7] Run representative scored region..."
 python3 -u scripts/PopulationPipeline/OutdoorML/generate_populated_world.py \
   --model "$PROBE_MODEL" \
   --lb-x-min 30 \
@@ -75,7 +86,7 @@ python3 -u scripts/PopulationPipeline/OutdoorML/generate_populated_world.py \
   --require-cuda
 
 echo
-echo "[5/5] Score representative region..."
+echo "[7/7] Score representative region..."
 python3 -u scripts/PopulationPipeline/OutdoorML/score_placement_quality.py "$REGION_SQL" > "$REGION_SCORE"
 
 echo

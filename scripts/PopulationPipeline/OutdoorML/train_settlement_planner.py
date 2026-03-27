@@ -24,7 +24,7 @@ try:
     import torch
     import torch.nn as nn
     import torch.nn.functional as F
-    from torch.utils.data import DataLoader, Dataset
+    from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 except ImportError:
     print("ERROR: PyTorch not found.")
     sys.exit(1)
@@ -44,6 +44,20 @@ class Config:
     hidden_dim: int = 256
     dropout: float = 0.15
     val_split: float = 0.15
+
+
+def compute_archetype_weights(archetypes: np.ndarray, num_classes: int) -> np.ndarray:
+    counts = np.bincount(archetypes, minlength=num_classes).astype(np.float32)
+    nonzero = counts[counts > 0]
+    median_count = float(np.median(nonzero)) if len(nonzero) else 1.0
+    weights = np.zeros(num_classes, dtype=np.float32)
+    for idx, count in enumerate(counts):
+        if count <= 0:
+            weights[idx] = 0.0
+        else:
+            ratio = median_count / count
+            weights[idx] = float(np.clip(math.sqrt(ratio), 0.75, 3.0))
+    return weights
 
 
 class PlannerDataset(Dataset):
@@ -123,13 +137,21 @@ def main() -> None:
     val_ds = PlannerDataset(contexts[val_idx], archetypes[val_idx], family_bins[val_idx])
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    archetype_weights_np = compute_archetype_weights(archetypes[train_idx], len(meta["archetype_labels"]))
+    archetype_weights = torch.from_numpy(archetype_weights_np).float().to(device)
     model = SettlementPlanner(
         context_dim=contexts.shape[1],
         archetype_classes=len(meta["archetype_labels"]),
         family_heads=len(meta["family_labels"]),
     ).to(device)
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch, shuffle=True, drop_last=False)
+    sample_weights = archetype_weights_np[archetypes[train_idx]]
+    train_sampler = WeightedRandomSampler(
+        weights=torch.from_numpy(sample_weights).double(),
+        num_samples=len(train_idx),
+        replacement=True,
+    )
+    train_loader = DataLoader(train_ds, batch_size=args.batch, sampler=train_sampler, drop_last=False)
     val_loader = DataLoader(val_ds, batch_size=args.batch, shuffle=False)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=Config.weight_decay)
 
@@ -138,6 +160,9 @@ def main() -> None:
     print("=" * 72)
     print(f"  Train: {len(train_ds)}  Val: {len(val_ds)}  Context: {contexts.shape[1]}")
     print(f"  Device: {device}")
+    print("  Archetype weights:")
+    for label, weight in zip(meta["archetype_labels"], archetype_weights_np.tolist()):
+        print(f"    {label:24s} {weight:.2f}")
 
     best_val = float("inf")
     best_state = None
@@ -151,7 +176,7 @@ def main() -> None:
             fam = fam.to(device)
 
             arch_logits, fam_logits = model(ctx)
-            loss_arch = F.cross_entropy(arch_logits, arch)
+            loss_arch = F.cross_entropy(arch_logits, arch, weight=archetype_weights)
             loss_fam = F.cross_entropy(fam_logits.reshape(-1, 4), fam.reshape(-1))
             loss = loss_arch + 0.6 * loss_fam
 
@@ -170,7 +195,7 @@ def main() -> None:
                 arch = arch.to(device)
                 fam = fam.to(device)
                 arch_logits, fam_logits = model(ctx)
-                loss_arch = F.cross_entropy(arch_logits, arch)
+                loss_arch = F.cross_entropy(arch_logits, arch, weight=archetype_weights)
                 loss_fam = F.cross_entropy(fam_logits.reshape(-1, 4), fam.reshape(-1))
                 loss = loss_arch + 0.6 * loss_fam
                 val_loss += loss.item()
