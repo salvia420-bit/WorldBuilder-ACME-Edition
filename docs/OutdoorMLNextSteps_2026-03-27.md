@@ -174,3 +174,42 @@ Rule:
 
 - keep the existing `83.6` line available as a safe baseline while the planner
   path is developed in parallel
+
+
+## Current Experimental Leader
+
+Planner-conditioned inference is now the leading experimental branch.
+
+Key commits:
+
+- `89243d3` start settlement planner path
+- `4eac39f` condition inference on planner outputs
+- `96d152d` soften planner family constraints
+
+Measured results:
+
+- fixed `5x5` probe with softened planner path:
+  - `accepted_after_validation: 244`
+  - `PAD: 11`
+  - `STOP: 25`
+- representative `20x20` planner-soft region A:
+  - `85.2/100`
+  - stronger `essential_services` and `vendor_presence`
+- representative `20x20` planner-soft region B:
+  - `84.8/100`
+  - `clustering: 3.0`
+
+Interpretation:
+
+- this is the first branch that has clearly broken the old `83.6` regional
+  plateau across more than one region
+- the planner path still underperforms the historic probe ceiling, so it should
+  be treated as an experimental leader rather than an unquestioned replacement
+  for the safe baseline
+
+Next move on this branch:
+
+- keep planner-conditioned inference enabled
+- run bounded detached cycles to capture probe + representative region together
+- improve clustering inside the planner path without giving back the new
+  `84.8-85.2` range

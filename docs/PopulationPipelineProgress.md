@@ -12,6 +12,49 @@ It exists so a future agent or collaborator can quickly answer:
 - what should happen next
 
 
+## March 27, 2026 Planner Escalation
+
+The original single-stage OutdoorML path hit a stable scored-region plateau at
+`83.6/100`. Multiple extraction, context, loss, and inference changes kept
+collapsing back to that same regional result, which justified a parallel
+two-stage escalation.
+
+What was added:
+
+- `extract_settlement_planner_tensors.py`
+- `train_settlement_planner.py`
+- planner-conditioned inference in `generate_populated_world.py`
+
+Important commits:
+
+- `89243d3` start settlement planner path
+- `4eac39f` condition OutdoorML inference on settlement planner
+- `96d152d` soften planner family constraints
+
+Verified planner-stage outcomes:
+
+- planner tensor extraction produced `2681` landblocks with `context_dim=235`
+- planner training produced a working checkpoint at
+  `pipeline_data/models/settlement_planner.pt`
+- planner-conditioned probe initially regressed to `235 accepted`
+- after softening planner family constraints, the probe improved to:
+  - `accepted=244`
+  - `PAD=11`
+  - `STOP=25`
+
+Most important scored-region results:
+
+- planner-soft region A: `85.2/100`
+- planner-soft region B: `84.8/100`
+
+Interpretation:
+
+- this is the first branch that clearly beat the old `83.6/100` regional basin
+- the gain came mainly from stronger structural/service metrics
+- clustering is still a weak point, so future improvement work should stay on
+  the planner path and target composition/clustering there
+
+
 ## Current Repo Structure
 
 Population work has been reorganized under:

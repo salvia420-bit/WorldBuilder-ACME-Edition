@@ -58,6 +58,29 @@ Current validated larger-scale results:
 - second `20x20` CUDA region after lifestone completion: `81.7/100`
 - second `20x20` CUDA region with service completion: `83.6/100`
 
+Current experimental leader:
+
+- planner-conditioned inference branch
+- softened planner family constraints currently score:
+  - `85.2/100` on one `20x20` region
+  - `84.8/100` on a second `20x20` region
+- current planner-soft probe:
+  - `accepted=244`
+  - `PAD=11`
+  - `STOP=25`
+
+Planner-stage artifacts:
+
+- `extract_settlement_planner_tensors.py`
+- `train_settlement_planner.py`
+- `pipeline_data/models/settlement_planner.pt`
+
+Interpretation:
+
+- the old single-stage line remains the safer historical baseline
+- the planner-soft branch is the first line to beat the repeated `83.6` regional plateau
+- future score work should focus on clustering within the planner path rather than more scalar tuning of the old single-stage path
+
 Service-completion notes:
 
 - town-lifestone completion is part of the current validated inference path
