@@ -60,11 +60,12 @@ Current validated larger-scale results:
 
 Current experimental leader:
 
-- planner-conditioned inference branch
-- softened planner family constraints currently score:
+- planner-conditioned inference with archetype-realization biases
+- current measured scores:
   - `85.2/100` on one `20x20` region
-  - `84.8/100` on a second `20x20` region
-- current planner-soft probe:
+  - `85.1/100` on a second `20x20` region
+  - both regions reached `clustering: 3.0`
+- current probe on this branch:
   - `accepted=244`
   - `PAD=11`
   - `STOP=25`
@@ -78,8 +79,8 @@ Planner-stage artifacts:
 Interpretation:
 
 - the old single-stage line remains the safer historical baseline
-- the planner-soft branch is the first line to beat the repeated `83.6` regional plateau
-- future score work should focus on clustering within the planner path rather than more scalar tuning of the old single-stage path
+- the planner/archetype branch is the first line to beat the repeated `83.6` regional plateau across multiple regions
+- future score work should stay on the planner path rather than return to scalar tuning of the old single-stage path
 
 Service-completion notes:
 

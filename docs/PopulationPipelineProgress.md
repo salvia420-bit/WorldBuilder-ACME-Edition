@@ -46,13 +46,16 @@ Most important scored-region results:
 
 - planner-soft region A: `85.2/100`
 - planner-soft region B: `84.8/100`
+- planner archetype-realization region A: `85.2/100`, `clustering: 3.0`
+- planner archetype-realization region B: `85.1/100`, `clustering: 3.0`
 
 Interpretation:
 
 - this is the first branch that clearly beat the old `83.6/100` regional basin
-- the gain came mainly from stronger structural/service metrics
-- clustering is still a weak point, so future improvement work should stay on
-  the planner path and target composition/clustering there
+- the later archetype-realization variant kept the planner gains and improved
+  clustering more consistently than the initial planner-soft branch
+- future improvement work should stay on the planner path and target service
+  coverage/composition there
 
 
 ## Current Repo Structure

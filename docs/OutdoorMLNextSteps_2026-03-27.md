@@ -178,38 +178,43 @@ Rule:
 
 ## Current Experimental Leader
 
-Planner-conditioned inference is now the leading experimental branch.
+Planner-conditioned inference with archetype-realization biases is now the
+leading experimental branch.
 
 Key commits:
 
 - `89243d3` start settlement planner path
 - `4eac39f` condition inference on planner outputs
 - `96d152d` soften planner family constraints
+- `f7c5535` bias planner archetype realization during inference
 
 Measured results:
 
-- fixed `5x5` probe with softened planner path:
+- fixed `5x5` probe with archetype-realization branch:
   - `accepted_after_validation: 244`
   - `PAD: 11`
   - `STOP: 25`
-- representative `20x20` planner-soft region A:
+- representative `20x20` archetype-realization region A:
   - `85.2/100`
-  - stronger `essential_services` and `vendor_presence`
-- representative `20x20` planner-soft region B:
-  - `84.8/100`
+  - `clustering: 3.0`
+- representative `20x20` archetype-realization region B:
+  - `85.1/100`
   - `clustering: 3.0`
 
 Interpretation:
 
-- this is the first branch that has clearly broken the old `83.6` regional
-  plateau across more than one region
-- the planner path still underperforms the historic probe ceiling, so it should
-  be treated as an experimental leader rather than an unquestioned replacement
-  for the safe baseline
+- this branch matches or exceeds the planner-soft score line while improving
+  clustering more consistently
+- it has clearly broken the old `83.6` regional plateau across more than one
+  region
+- it still underperforms the historic probe ceiling, so it remains an
+  experimental leader rather than an unquestioned replacement for the safe
+  baseline
 
 Next move on this branch:
 
 - keep planner-conditioned inference enabled
+- keep archetype-realization biases enabled
 - run bounded detached cycles to capture probe + representative region together
-- improve clustering inside the planner path without giving back the new
-  `84.8-85.2` range
+- improve service coverage inside the planner path without giving back the new
+  `85.1-85.2` range or the `clustering: 3.0` gain
