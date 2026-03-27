@@ -62,7 +62,6 @@ from extract_placement_tensors import (
     FIRST_REAL_TOKEN, HOUSING_COTTAGE_TOKEN, HOUSING_VILLA_TOKEN, HOUSING_MANSION_TOKEN,
 )
 from settlement_signatures import SETTLEMENT_ROLE_LABELS
-from settlement_signatures import infer_service_targets_from_role, SERVICE_TARGET_LABELS
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -413,8 +412,6 @@ class PlacementGenerator:
         self.role_offset = BASE_CONTEXT_DIM
         self.role_labels = tuple(SETTLEMENT_ROLE_LABELS)
         self.role_index = {label: self.role_offset + i for i, label in enumerate(self.role_labels)}
-        self.service_target_offset = self.role_offset + len(self.role_labels)
-        self.service_target_labels = tuple(SERVICE_TARGET_LABELS)
         self.type_token_tensors = self._build_type_token_tensors()
 
     def _build_type_token_tensors(self) -> dict[int, torch.Tensor]:
@@ -470,17 +467,6 @@ class PlacementGenerator:
                 best_value = value
         return best_label
 
-    def _service_targets(self, context: np.ndarray, role: str) -> dict[str, float]:
-        inferred = infer_service_targets_from_role(role)
-        targets: dict[str, float] = {}
-        for i, label in enumerate(self.service_target_labels):
-            idx = self.service_target_offset + i
-            if len(context) > idx:
-                targets[label] = float(context[idx])
-            else:
-                targets[label] = float(inferred[i])
-        return targets
-
     def _apply_type_bias(self, logits: torch.Tensor, wtype: int, bias: float) -> None:
         if not bias:
             return
@@ -499,28 +485,20 @@ class PlacementGenerator:
         has_lifestone = any(self.wcid_types.get(p.get('wcid'), 0) == WT_LIFESTONE for p in placements)
         has_door = any(self.wcid_types.get(p.get('wcid'), 0) == WT_DOOR for p in placements)
         service_count = int(has_portal) + int(has_vendor) + int(has_lifestone)
-        service_targets = self._service_targets(context, role)
 
-        # Bias toward unmet service targets and away from already-satisfied ones.
-        if not has_portal and service_targets["portal_target"] >= 0.5:
-            self._apply_type_bias(logits, WT_PORTAL, 0.35)
-        elif has_portal:
-            self._apply_type_bias(logits, WT_PORTAL, -0.45)
-
-        if not has_lifestone and service_targets["lifestone_target"] >= 0.35 and (has_door or housing_count > 0):
-            self._apply_type_bias(logits, WT_LIFESTONE, 0.20)
-        elif has_lifestone:
-            self._apply_type_bias(logits, WT_LIFESTONE, -0.35)
-
-        if not has_vendor and service_targets["vendor_target"] >= 0.25 and (has_door or housing_count > 0):
-            self._apply_type_bias(logits, WT_VENDOR, 0.15)
-        elif has_vendor:
-            self._apply_type_bias(logits, WT_VENDOR, -0.30)
-
+        # The current failure mode is portal/vendor/lifestone overproduction.
+        # Penalize repeated service tokens, but keep the first service object
+        # available often enough for real town blocks to retain basic services.
+        if has_portal:
+            self._apply_type_bias(logits, WT_PORTAL, -0.55)
+        if has_vendor:
+            self._apply_type_bias(logits, WT_VENDOR, -0.45)
+        if has_lifestone:
+            self._apply_type_bias(logits, WT_LIFESTONE, -0.45)
         if service_count >= 2:
-            self._apply_type_bias(logits, WT_PORTAL, -0.30)
-            self._apply_type_bias(logits, WT_VENDOR, -0.30)
-            self._apply_type_bias(logits, WT_LIFESTONE, -0.30)
+            self._apply_type_bias(logits, WT_PORTAL, -0.45)
+            self._apply_type_bias(logits, WT_VENDOR, -0.45)
+            self._apply_type_bias(logits, WT_LIFESTONE, -0.45)
 
         if role == 'service_housing_town':
             if len(placements) >= 2 and housing_count < self.max_housing_per_lb:

@@ -34,8 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from housing_linker import classify_slumlord_house_type
 from settlement_signatures import classify_settlement_signature, family_labels_for_landblock
 from settlement_signatures import infer_settlement_role_from_context, settlement_role_from_signature
-from settlement_signatures import service_targets_for_signature
-from settlement_signatures import settlement_role_one_hot, SERVICE_TARGET_LABELS, SETTLEMENT_ROLE_LABELS, settlement_signature_weight
+from settlement_signatures import settlement_role_one_hot, SETTLEMENT_ROLE_LABELS, settlement_signature_weight
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -57,7 +56,7 @@ OUTPUT_VOCAB = os.path.join(OUTPUT_DIR, "placement_vocab.json")
 LB_SIZE = 192.0
 MAX_OBJECTS_PER_LB = 128
 BASE_CONTEXT_DIM = 224
-CONTEXT_DIM = BASE_CONTEXT_DIM + len(SETTLEMENT_ROLE_LABELS) + len(SERVICE_TARGET_LABELS)
+CONTEXT_DIM = BASE_CONTEXT_DIM + len(SETTLEMENT_ROLE_LABELS)
 
 # MariaDB client for weenie type lookups
 MYSQL = r"C:\Program Files\MariaDB 12.2\bin\mysql.exe"
@@ -371,8 +370,7 @@ def build_context_vector(lb_x: int, lb_y: int,
                          difficulty_grid: Optional[np.ndarray],
                          culture_grid: np.ndarray,
                          instance_counts: Dict[Tuple[int,int], int],
-                         settlement_role: Optional[str] = None,
-                         service_targets: Optional[list[float]] = None) -> np.ndarray:
+                         settlement_role: Optional[str] = None) -> np.ndarray:
     """
     Build a context vector for a landblock.
     
@@ -388,7 +386,6 @@ def build_context_vector(lb_x: int, lb_y: int,
       [222]     = flatness score
       [223]     = distance to nearest coast (normalized)
       [224:229] = coarse settlement-role one-hot prior
-      [229:232] = soft service targets (portal, lifestone, vendor)
     """
     ctx = np.zeros(CONTEXT_DIM, dtype=np.float32)
     
@@ -450,11 +447,7 @@ def build_context_vector(lb_x: int, lb_y: int,
         flatness=float(ctx[222]),
         coast_distance=float(ctx[223]),
     )
-    role_end = BASE_CONTEXT_DIM + len(SETTLEMENT_ROLE_LABELS)
-    ctx[BASE_CONTEXT_DIM:role_end] = np.array(settlement_role_one_hot(role), dtype=np.float32)
-    if service_targets is None:
-        service_targets = [0.0] * len(SERVICE_TARGET_LABELS)
-    ctx[role_end:CONTEXT_DIM] = np.array(service_targets, dtype=np.float32)
+    ctx[BASE_CONTEXT_DIM:CONTEXT_DIM] = np.array(settlement_role_one_hot(role), dtype=np.float32)
     
     return ctx
 
@@ -577,15 +570,13 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
         family_labels = family_labels_for_landblock(insts, wcid_types)
         settlement_signature = classify_settlement_signature(family_labels, len(insts))
         settlement_role = settlement_role_from_signature(settlement_signature)
-        service_targets = service_targets_for_signature(settlement_signature, family_labels)
         settlement_signature_counts[settlement_signature] += 1
         sample_weights[idx] = settlement_signature_weight(settlement_signature)
 
         # Build context vector after computing the supervised settlement role.
         contexts[idx] = build_context_vector(
             lb_x, lb_y, heights, difficulty_grid, culture_grid, instance_counts,
-            settlement_role=settlement_role,
-            service_targets=service_targets,
+            settlement_role=settlement_role
         )
         
         # Sort instances: non-link-children first (parents), then children
