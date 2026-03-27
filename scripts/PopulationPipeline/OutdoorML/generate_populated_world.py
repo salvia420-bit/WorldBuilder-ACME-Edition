@@ -62,12 +62,7 @@ from extract_placement_tensors import (
     build_cultural_zones, load_wcid_types, STOP_TOKEN, PAD_TOKEN,
     FIRST_REAL_TOKEN, HOUSING_COTTAGE_TOKEN, HOUSING_VILLA_TOKEN, HOUSING_MANSION_TOKEN,
 )
-from settlement_signatures import (
-    SETTLEMENT_ARCHETYPE_LABELS,
-    SETTLEMENT_ROLE_LABELS,
-    infer_settlement_archetype_from_context,
-    infer_settlement_role_from_context,
-)
+from settlement_signatures import SETTLEMENT_ARCHETYPE_LABELS, SETTLEMENT_ROLE_LABELS
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -225,86 +220,14 @@ def predict_settlement_plan(planner_bundle: Optional[dict], context: np.ndarray,
 
     ctx_tensor = torch.from_numpy(planner_ctx).float().unsqueeze(0).to(device)
     archetype_logits, family_logits = planner_bundle['model'](ctx_tensor)
-    archetype_probs = F.softmax(archetype_logits, dim=-1).squeeze(0).cpu().tolist()
-    archetype_prob_map = {
-        label: float(prob)
-        for label, prob in zip(planner_bundle['archetype_labels'], archetype_probs)
-    }
     archetype_idx = int(archetype_logits.argmax(dim=-1).item())
-    planner_archetype = planner_bundle['archetype_labels'][archetype_idx]
-
-    culture_strength = float(context[212]) if len(context) > 212 else 0.0
-    difficulty = float(context[213]) if len(context) > 213 else 0.0
-    flatness = float(context[222]) if len(context) > 222 else 0.0
-    coast_distance = float(context[223]) if len(context) > 223 else 0.0
-    heuristic_role = infer_settlement_role_from_context(
-        culture_strength=culture_strength,
-        difficulty=difficulty,
-        flatness=flatness,
-        coast_distance=coast_distance,
-    )
-    heuristic_archetype = infer_settlement_archetype_from_context(
-        culture_strength=culture_strength,
-        difficulty=difficulty,
-        flatness=flatness,
-        coast_distance=coast_distance,
-        settlement_role=heuristic_role,
-    )
-
-    planner_prob = archetype_prob_map.get(planner_archetype, 0.0)
-    heuristic_prob = archetype_prob_map.get(heuristic_archetype, 0.0)
-    planner_archetype_outposty = planner_archetype in {'portal_creature_outpost', 'vendor_portal_hub', 'sparse_misc'}
-    heuristic_archetype_towny = heuristic_archetype in {'service_node', 'housing_cluster', 'service_housing_town'}
-
-    if planner_archetype_outposty and heuristic_archetype_towny:
-        margin = planner_prob - heuristic_prob
-        promote = False
-        if heuristic_archetype == 'service_housing_town':
-            promote = (
-                culture_strength >= 0.20 and
-                flatness >= 0.62 and
-                difficulty <= 0.55 and
-                coast_distance >= 0.08 and
-                margin <= 0.18
-            )
-        elif heuristic_archetype == 'housing_cluster':
-            promote = (
-                culture_strength >= 0.18 and
-                flatness >= 0.56 and
-                difficulty <= 0.58 and
-                margin <= 0.14
-            )
-        elif heuristic_archetype == 'service_node':
-            promote = (
-                culture_strength >= 0.13 and
-                flatness >= 0.46 and
-                difficulty <= 0.66 and
-                margin <= 0.10
-            )
-        if promote:
-            planner_archetype = heuristic_archetype
-
     family_bins = family_logits.argmax(dim=-1).squeeze(0).cpu().tolist()
-    family_bin_map = {
-        label: int(bin_idx)
-        for label, bin_idx in zip(planner_bundle['family_labels'], family_bins)
-    }
-
-    if planner_archetype == 'service_node':
-        family_bin_map['portal'] = max(family_bin_map.get('portal', 0), 1)
-        family_bin_map['lifestone'] = max(family_bin_map.get('lifestone', 0), 1)
-    elif planner_archetype == 'housing_cluster':
-        family_bin_map['door'] = max(family_bin_map.get('door', 0), 1)
-        family_bin_map['housing'] = max(family_bin_map.get('housing', 0), 1)
-    elif planner_archetype == 'service_housing_town':
-        family_bin_map['door'] = max(family_bin_map.get('door', 0), 1)
-        family_bin_map['housing'] = max(family_bin_map.get('housing', 0), 1)
-        family_bin_map['portal'] = max(family_bin_map.get('portal', 0), 1)
-        family_bin_map['lifestone'] = max(family_bin_map.get('lifestone', 0), 1)
-
     return {
-        'archetype': planner_archetype,
-        'family_bins': family_bin_map,
+        'archetype': planner_bundle['archetype_labels'][archetype_idx],
+        'family_bins': {
+            label: int(bin_idx)
+            for label, bin_idx in zip(planner_bundle['family_labels'], family_bins)
+        },
     }
 
 
