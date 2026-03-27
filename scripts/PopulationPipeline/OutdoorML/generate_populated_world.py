@@ -844,6 +844,81 @@ class PlacementGenerator:
             else:
                 self._apply_type_bias(logits, WT_VENDOR, -0.08)
 
+    def _apply_dense_service_compactness_bias(
+        self,
+        logits: torch.Tensor,
+        placements: list[dict],
+        planner_plan: Optional[dict],
+        wcid_freq: Counter,
+    ) -> None:
+        """
+        Planner-v2 still over-explodes dense service blocks into novel creature-heavy
+        mixes after the core service motif is already present. Keep this narrow:
+        only compact portal_vendor / full_service realizations after the service
+        structure is established.
+        """
+        if not planner_plan or len(placements) < 10:
+            return
+
+        service_style = planner_plan.get('service_style')
+        if service_style not in {'portal_vendor', 'full_service'}:
+            return
+
+        counts = self._family_counts(placements)
+        portal_count = counts.get('portal', 0)
+        vendor_count = counts.get('vendor', 0)
+        lifestone_count = counts.get('lifestone', 0)
+        creature_count = counts.get('creature', 0)
+        service_count = portal_count + vendor_count + lifestone_count
+
+        if portal_count == 0 or vendor_count == 0:
+            return
+        if service_style == 'full_service' and lifestone_count == 0:
+            return
+
+        seen_families: set[str] = set()
+        for p in placements:
+            wcid = p.get('wcid')
+            if not isinstance(wcid, int) or wcid < 0:
+                continue
+            wtype = self.wcid_types.get(wcid, 0)
+            seen_families.add(self._family_key_for_wcid(wcid, wtype))
+
+        unique_wcids = len(wcid_freq)
+        compactness = min(max((unique_wcids - 10) / 10.0, 0.0), 1.0)
+        if compactness <= 0.0:
+            return
+
+        for idx, mapped in self.idx_to_wcid.items():
+            if idx < FIRST_REAL_TOKEN or idx >= len(logits):
+                continue
+            if not isinstance(mapped, int) or mapped < 0:
+                continue
+            wtype = self.wcid_types.get(mapped, 0)
+            family_key = self._family_key_for_wcid(mapped, wtype)
+
+            if idx in wcid_freq:
+                logits[idx] += 0.16 * math.log(wcid_freq[idx] + 1) * (1.0 + compactness)
+                continue
+
+            if family_key in {'portal', 'vendor', 'lifestone', 'door'}:
+                logits[idx] += 0.06 * compactness
+                continue
+
+            if family_key.startswith('housing_') or family_key == 'housing_unknown':
+                logits[idx] += 0.04 * compactness
+                continue
+
+            if family_key == 'creature':
+                creature_penalty = 0.24 + 0.05 * min(creature_count, 4)
+                if service_count >= 3:
+                    creature_penalty += 0.06
+                logits[idx] -= creature_penalty * compactness
+            elif family_key in seen_families:
+                logits[idx] += 0.05 * compactness
+            else:
+                logits[idx] -= 0.18 * compactness
+
     def _apply_role_biases(self, logits: torch.Tensor, context: np.ndarray, placements: list[dict]) -> tuple[str, str]:
         role = self._settlement_role(context)
         archetype = self._settlement_archetype(context)
@@ -977,6 +1052,7 @@ class PlacementGenerator:
             self._apply_family_plan_biases(logits, placements, planner_plan)
             self._apply_archetype_realization_biases(logits, placements, planner_plan)
             self._apply_service_style_biases(logits, placements, planner_plan)
+            self._apply_dense_service_compactness_bias(logits, placements, planner_plan, wcid_freq)
 
             if self.pad_logit_bias:
                 logits[PAD_TOKEN] -= self.pad_logit_bias

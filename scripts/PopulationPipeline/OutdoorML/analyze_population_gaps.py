@@ -41,6 +41,23 @@ DEFAULT_RETAIL_SQL = os.path.join(BASE_DIR, "ace_world_release", "ACE-World-Data
 DEFAULT_OUTPUT_DIR = os.path.join(BASE_DIR, "pipeline_data", "population_output")
 DEFAULT_JSON_OUT = os.path.join(DEFAULT_OUTPUT_DIR, "population_gap_report.json")
 
+
+def classify_service_pattern(types: set[int], family_signature: tuple[str, ...]) -> str:
+    labels: list[str] = []
+    if WT_PORTAL in types:
+        labels.append("portal")
+    if WT_LIFESTONE in types:
+        labels.append("lifestone")
+    if WT_VENDOR in types:
+        labels.append("vendor")
+    if WT_DOOR in types or "door" in family_signature:
+        labels.append("door")
+    if WT_SLUMLORD in types or "housing" in family_signature:
+        labels.append("housing")
+    if WT_CREATURE in types or "creature" in family_signature:
+        labels.append("creature")
+    return "+".join(labels) if labels else "none"
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compare generated OutdoorML SQL against retail patterns")
     parser.add_argument(
@@ -210,6 +227,10 @@ def summarize_dataset(
     family_presence_counter: Counter[str] = Counter()
     pair_counter: Counter[tuple[str, str]] = Counter()
     dense_unique_wcids: list[int] = []
+    dense_signature_stats: dict[str, dict[str, float]] = defaultdict(lambda: {"landblocks": 0, "objects": 0, "unique_wcids": 0})
+    dense_service_pattern_stats: dict[str, dict[str, float]] = defaultdict(
+        lambda: {"landblocks": 0, "objects": 0, "unique_wcids": 0}
+    )
 
     house_type_total = Counter()
     house_type_linked = Counter()
@@ -250,6 +271,7 @@ def summarize_dataset(
             "linked_slumlords": sum(1 for guid, _house_type in slumlords if guid in parent_set),
             "family_signature": list(signature),
             "settlement_signature": settlement_signature,
+            "service_pattern": classify_service_pattern(types, signature),
         }
 
         if len(insts) >= town_threshold:
@@ -257,6 +279,31 @@ def summarize_dataset(
         if len(insts) >= dense_threshold:
             dense_entries.append(entry)
             dense_unique_wcids.append(entry["unique_wcids"])
+            sig_stats = dense_signature_stats[settlement_signature]
+            sig_stats["landblocks"] += 1
+            sig_stats["objects"] += entry["count"]
+            sig_stats["unique_wcids"] += entry["unique_wcids"]
+            pattern_stats = dense_service_pattern_stats[entry["service_pattern"]]
+            pattern_stats["landblocks"] += 1
+            pattern_stats["objects"] += entry["count"]
+            pattern_stats["unique_wcids"] += entry["unique_wcids"]
+
+    def finalize_dense_bucket_stats(raw_stats: dict[str, dict[str, float]]) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for label, stats in raw_stats.items():
+            landblocks = int(stats["landblocks"])
+            if not landblocks:
+                continue
+            rows.append(
+                {
+                    "label": label,
+                    "landblocks": landblocks,
+                    "avg_objects": stats["objects"] / landblocks,
+                    "avg_unique_wcids": stats["unique_wcids"] / landblocks,
+                }
+            )
+        rows.sort(key=lambda row: (row["avg_unique_wcids"], row["landblocks"]), reverse=True)
+        return rows
 
     dense_without_vendor = sorted(
         [entry for entry in dense_entries if not entry["has_vendor"]],
@@ -309,6 +356,8 @@ def summarize_dataset(
             {"signature": signature, "count": count}
             for signature, count in settlement_signature_counter.most_common(top_k)
         ],
+        "dense_entropy_by_settlement_signature": finalize_dense_bucket_stats(dense_signature_stats)[:top_k],
+        "dense_entropy_by_service_pattern": finalize_dense_bucket_stats(dense_service_pattern_stats)[:top_k],
         "family_pair_top": [
             {"pair": list(pair), "count": count}
             for pair, count in pair_counter.most_common(top_k)
@@ -390,6 +439,18 @@ def print_dataset_summary(summary: dict[str, Any], top_k: int) -> None:
     print(f"    Top settlement signatures:")
     for row in summary["settlement_signature_top"][:top_k]:
         print(f"      {row['count']:5d}  {row['signature']}")
+    print(f"    Highest-entropy dense settlement signatures:")
+    for row in summary["dense_entropy_by_settlement_signature"][:top_k]:
+        print(
+            f"      {row['landblocks']:5d}  {row['label']:<28} "
+            f"uniq={row['avg_unique_wcids']:.1f} obj={row['avg_objects']:.1f}"
+        )
+    print(f"    Highest-entropy dense service patterns:")
+    for row in summary["dense_entropy_by_service_pattern"][:top_k]:
+        print(
+            f"      {row['landblocks']:5d}  {row['label']:<28} "
+            f"uniq={row['avg_unique_wcids']:.1f} obj={row['avg_objects']:.1f}"
+        )
     print(f"    Top family co-occurrence pairs:")
     for row in summary["family_pair_top"][:top_k]:
         print(f"      {row['count']:5d}  {' + '.join(row['pair'])}")
@@ -439,6 +500,20 @@ def print_comparison(comparison: dict[str, Any], generated: dict[str, Any], top_
         print(
             f"    ({row['lb_x']:3d},{row['lb_y']:3d}) count={row['count']:3d} "
             f"slumlords={row['slumlord_count']} linked={row['linked_slumlords']}"
+        )
+    print()
+    print("  Highest-entropy generated dense settlement signatures:")
+    for row in generated["dense_entropy_by_settlement_signature"][:top_k]:
+        print(
+            f"    {row['label']:<28} lbs={row['landblocks']:3d} "
+            f"uniq={row['avg_unique_wcids']:.1f} obj={row['avg_objects']:.1f}"
+        )
+    print()
+    print("  Highest-entropy generated dense service patterns:")
+    for row in generated["dense_entropy_by_service_pattern"][:top_k]:
+        print(
+            f"    {row['label']:<28} lbs={row['landblocks']:3d} "
+            f"uniq={row['avg_unique_wcids']:.1f} obj={row['avg_objects']:.1f}"
         )
     print()
     print("  House-type link-rate comparison:")
