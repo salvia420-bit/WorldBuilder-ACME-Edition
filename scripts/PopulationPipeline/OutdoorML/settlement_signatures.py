@@ -57,6 +57,14 @@ SERVICE_STYLE_LABELS = (
     "lifestone_only",
 )
 
+DENSE_SERVICE_COMPOSITION_LABELS = (
+    "none",
+    "compact_portal_vendor",
+    "creature_heavy_portal_vendor",
+    "compact_full_service",
+    "creature_heavy_full_service",
+)
+
 
 def family_labels_for_landblock(insts: list[dict[str, Any]], wcid_types: dict[int, int]) -> list[str]:
     labels: set[str] = set()
@@ -193,6 +201,26 @@ def classify_service_style(family_labels: list[str]) -> str:
     if has_lifestone:
         return "lifestone_only"
     return "non_service"
+
+
+def classify_dense_service_composition(family_labels: list[str], object_count: int) -> str:
+    labels = set(family_labels)
+    has_portal = "portal" in labels
+    has_vendor = "vendor" in labels
+    has_lifestone = "lifestone" in labels
+    has_creature = "creature" in labels
+
+    if not has_portal or not has_vendor:
+        return "none"
+
+    if has_lifestone:
+        if has_creature and object_count >= 20:
+            return "creature_heavy_full_service"
+        return "compact_full_service"
+
+    if has_creature and object_count >= 18:
+        return "creature_heavy_portal_vendor"
+    return "compact_portal_vendor"
 
 
 def infer_settlement_role_from_context(

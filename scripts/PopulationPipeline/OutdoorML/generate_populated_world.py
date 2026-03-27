@@ -195,6 +195,7 @@ def load_settlement_planner(planner_path: str, device: torch.device) -> Optional
         archetype_classes=len(state['archetype_labels']),
         family_heads=len(state['family_labels']),
         service_style_classes=len(state.get('service_style_labels', [])),
+        dense_service_composition_classes=len(state.get('dense_service_composition_labels', [])),
     ).to(device)
     planner.load_state_dict(state['model_state_dict'], strict=False)
     planner.eval()
@@ -203,6 +204,7 @@ def load_settlement_planner(planner_path: str, device: torch.device) -> Optional
         'context_dim': int(state['context_dim']),
         'archetype_labels': tuple(state['archetype_labels']),
         'service_style_labels': tuple(state.get('service_style_labels', [])),
+        'dense_service_composition_labels': tuple(state.get('dense_service_composition_labels', [])),
         'family_labels': tuple(state['family_labels']),
         'path': planner_path,
     }
@@ -221,17 +223,23 @@ def predict_settlement_plan(planner_bundle: Optional[dict], context: np.ndarray,
         planner_ctx = np.pad(planner_ctx, (0, planner_dim - len(planner_ctx)))
 
     ctx_tensor = torch.from_numpy(planner_ctx).float().unsqueeze(0).to(device)
-    archetype_logits, service_style_logits, family_logits = planner_bundle['model'](ctx_tensor)
+    archetype_logits, service_style_logits, dense_service_composition_logits, family_logits = planner_bundle['model'](ctx_tensor)
     archetype_idx = int(archetype_logits.argmax(dim=-1).item())
     family_bins = family_logits.argmax(dim=-1).squeeze(0).cpu().tolist()
     service_style = None
+    dense_service_composition = None
     service_style_labels = planner_bundle.get('service_style_labels') or ()
+    dense_service_composition_labels = planner_bundle.get('dense_service_composition_labels') or ()
     if service_style_logits is not None and service_style_labels:
         service_style_idx = int(service_style_logits.argmax(dim=-1).item())
         service_style = service_style_labels[service_style_idx]
+    if dense_service_composition_logits is not None and dense_service_composition_labels:
+        dense_service_composition_idx = int(dense_service_composition_logits.argmax(dim=-1).item())
+        dense_service_composition = dense_service_composition_labels[dense_service_composition_idx]
     return {
         'archetype': planner_bundle['archetype_labels'][archetype_idx],
         'service_style': service_style,
+        'dense_service_composition': dense_service_composition,
         'family_bins': {
             label: int(bin_idx)
             for label, bin_idx in zip(planner_bundle['family_labels'], family_bins)
@@ -865,6 +873,8 @@ class PlacementGenerator:
         if service_style not in {'portal_vendor', 'full_service'}:
             return
 
+        dense_service_composition = planner_plan.get('dense_service_composition')
+
         counts = self._family_counts(placements)
         portal_count = counts.get('portal', 0)
         vendor_count = counts.get('vendor', 0)
@@ -891,6 +901,11 @@ class PlacementGenerator:
             return
 
         overgrown = unique_wcids >= 16 or (service_style == 'full_service' and unique_wcids >= 14)
+        if dense_service_composition in {'compact_portal_vendor', 'compact_full_service'}:
+            compactness = min(compactness * 1.35, 1.0)
+            overgrown = overgrown or unique_wcids >= 13
+        elif dense_service_composition in {'creature_heavy_portal_vendor', 'creature_heavy_full_service'}:
+            compactness *= 0.75
         if overgrown and len(placements) >= 14:
             logits[STOP_TOKEN] += 0.12 + 0.10 * compactness
 
