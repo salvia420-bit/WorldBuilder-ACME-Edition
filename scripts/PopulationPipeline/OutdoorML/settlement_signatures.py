@@ -38,6 +38,12 @@ SETTLEMENT_ROLE_LABELS = (
     "outpost",
 )
 
+SERVICE_TARGET_LABELS = (
+    "portal_target",
+    "lifestone_target",
+    "vendor_target",
+)
+
 
 def family_labels_for_landblock(insts: list[dict[str, Any]], wcid_types: dict[int, int]) -> list[str]:
     labels: set[str] = set()
@@ -133,6 +139,40 @@ def settlement_role_one_hot(role: str) -> list[float]:
     return [1.0 if label == role else 0.0 for label in SETTLEMENT_ROLE_LABELS]
 
 
+def service_targets_for_signature(signature: str, family_labels: list[str]) -> list[float]:
+    """
+    Encode a soft target for core services. These are training-time priors derived
+    from retail structure signatures, not hard requirements.
+    """
+    labels = set(family_labels)
+    has_portal = "portal" in labels
+    has_lifestone = "lifestone" in labels
+    has_vendor = "vendor" in labels
+
+    portal_target = 1.0 if has_portal else 0.0
+    lifestone_target = 1.0 if has_lifestone else 0.0
+    vendor_target = 1.0 if has_vendor else 0.0
+
+    if signature == "service_housing_town":
+        portal_target = max(portal_target, 0.85)
+        lifestone_target = max(lifestone_target, 0.55)
+        vendor_target = max(vendor_target, 0.35)
+    elif signature == "service_node":
+        portal_target = max(portal_target, 0.75)
+        lifestone_target = max(lifestone_target, 0.30)
+        vendor_target = max(vendor_target, 0.20)
+    elif signature in {"housing_cluster", "housing_sparse", "door_only_cluster"}:
+        portal_target = max(portal_target, 0.15)
+        lifestone_target = max(lifestone_target, 0.05)
+        vendor_target = max(vendor_target, 0.05)
+    elif signature in {"portal_creature_outpost", "vendor_portal_hub", "service_creature_town"}:
+        portal_target = max(portal_target, 0.60)
+        lifestone_target = max(lifestone_target, 0.15)
+        vendor_target = max(vendor_target, 0.15)
+
+    return [portal_target, lifestone_target, vendor_target]
+
+
 def infer_settlement_role_from_context(
     culture_strength: float,
     difficulty: float,
@@ -157,3 +197,16 @@ def infer_settlement_role_from_context(
     if flatness >= 0.30 and difficulty <= 0.70 and coast_distance >= 0.04:
         return "outpost"
     return "sparse_creature"
+
+
+def infer_service_targets_from_role(role: str) -> list[float]:
+    """Inference-time default service targets for a coarse settlement role."""
+    if role == "service_housing_town":
+        return [0.85, 0.55, 0.35]
+    if role == "service_node":
+        return [0.75, 0.30, 0.20]
+    if role == "housing_cluster":
+        return [0.15, 0.05, 0.05]
+    if role == "outpost":
+        return [0.60, 0.15, 0.15]
+    return [0.10, 0.0, 0.0]
