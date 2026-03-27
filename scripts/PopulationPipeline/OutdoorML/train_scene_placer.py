@@ -52,7 +52,7 @@ try:
     import torch
     import torch.nn as nn
     import torch.nn.functional as F
-    from torch.utils.data import Dataset, DataLoader
+    from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
     from torch.cuda.amp import GradScaler, autocast
 except ImportError:
     print("ERROR: PyTorch not found. Install with: pip install torch")
@@ -716,6 +716,7 @@ def train(config: dict, resume_path: Optional[str] = None):
     contexts = data['contexts']
     sequences = data['sequences']
     seq_lengths = data['seq_lengths']
+    sample_weights = data['sample_weights'] if 'sample_weights' in data.files else np.ones(len(contexts), dtype=np.float32)
     config['context_dim'] = int(contexts.shape[1])
     effective_warmup_epochs = min(
         config['warmup_epochs'],
@@ -744,6 +745,11 @@ def train(config: dict, resume_path: Optional[str] = None):
     )
     
     print(f"  Train: {len(train_ds)}, Val: {len(val_ds)}")
+    train_weights = torch.as_tensor(sample_weights[train_idx], dtype=torch.double)
+    print(
+        f"  Train sample weights: min={train_weights.min().item():.2f}, "
+        f"mean={train_weights.mean().item():.2f}, max={train_weights.max().item():.2f}"
+    )
     
     # ── Device ──
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -767,7 +773,12 @@ def train(config: dict, resume_path: Optional[str] = None):
     
     print(f"  Effective batch size: {batch_size}")
     
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+    train_sampler = WeightedRandomSampler(
+        weights=train_weights,
+        num_samples=len(train_weights),
+        replacement=True,
+    )
+    train_loader = DataLoader(train_ds, batch_size=batch_size, sampler=train_sampler,
                               num_workers=0, pin_memory=True, drop_last=True)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
                             num_workers=0, pin_memory=True)

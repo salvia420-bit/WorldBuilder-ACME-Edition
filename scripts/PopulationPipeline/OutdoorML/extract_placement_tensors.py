@@ -33,6 +33,7 @@ from typing import Dict, List, Tuple, Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from housing_linker import classify_slumlord_house_type
 from settlement_signatures import classify_settlement_signature, family_labels_for_landblock
+from settlement_signatures import settlement_signature_weight
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -546,6 +547,7 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
     contexts = np.zeros((len(populated_lbs), CONTEXT_DIM), dtype=np.float32)
     sequences = np.zeros((len(populated_lbs), MAX_OBJECTS_PER_LB, 10), dtype=np.float32)
     seq_lengths = np.zeros(len(populated_lbs), dtype=np.int32)
+    sample_weights = np.ones(len(populated_lbs), dtype=np.float32)
     housing_token_counts = defaultdict(int)
     settlement_signature_counts = defaultdict(int)
     
@@ -561,6 +563,7 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
         family_labels = family_labels_for_landblock(insts, wcid_types)
         settlement_signature = classify_settlement_signature(family_labels, len(insts))
         settlement_signature_counts[settlement_signature] += 1
+        sample_weights[idx] = settlement_signature_weight(settlement_signature)
         
         # Sort instances: non-link-children first (parents), then children
         insts.sort(key=lambda i: (i['is_link_child'], i['guid']))
@@ -618,6 +621,7 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
         contexts,
         sequences,
         seq_lengths,
+        sample_weights,
         populated_lbs,
         dict(housing_token_counts),
         dict(settlement_signature_counts),
@@ -626,7 +630,7 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
 
 # ─── Step 6: Save output ─────────────────────────────────────────────────────
 
-def save_tensors(contexts, sequences, seq_lengths, populated_lbs,
+def save_tensors(contexts, sequences, seq_lengths, sample_weights, populated_lbs,
                  wcid_to_idx, idx_to_wcid):
     """Save training data and vocabulary."""
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -638,6 +642,7 @@ def save_tensors(contexts, sequences, seq_lengths, populated_lbs,
         contexts=contexts,
         sequences=sequences,
         seq_lengths=seq_lengths,
+        sample_weights=sample_weights,
         lb_coords=np.array(populated_lbs, dtype=np.int32),
     )
     size_mb = os.path.getsize(OUTPUT_NPZ) / 1024 / 1024
@@ -721,6 +726,7 @@ def main():
         contexts,
         sequences,
         seq_lengths,
+        sample_weights,
         populated_lbs,
         housing_token_counts,
         settlement_signature_counts,
@@ -732,7 +738,7 @@ def main():
     
     # Step 5: Save
     print("[Step 5] Saving output...")
-    save_tensors(contexts, sequences, seq_lengths, populated_lbs,
+    save_tensors(contexts, sequences, seq_lengths, sample_weights, populated_lbs,
                  wcid_to_idx, idx_to_wcid)
     print()
     
@@ -765,7 +771,7 @@ def main():
             settlement_signature_counts.items(),
             key=lambda item: (-item[1], item[0])
         )[:8]:
-            print(f"    {count:5d}  {signature}")
+            print(f"    {count:5d}  {signature} (weight={settlement_signature_weight(signature):.2f})")
     print()
     
     # Distribution

@@ -22,6 +22,14 @@ WT_SLUMLORD = 55
 WT_DOOR = 19
 WT_CREATURE = 10
 
+SETTLEMENT_SIGNATURE_TRAIN_WEIGHTS = {
+    "service_housing_town": 1.8,
+    "housing_cluster": 1.6,
+    "service_node": 1.2,
+    "portal_creature_outpost": 0.7,
+    "vendor_portal_hub": 0.85,
+}
+
 
 def family_labels_for_landblock(insts: list[dict[str, Any]], wcid_types: dict[int, int]) -> list[str]:
     labels: set[str] = set()
@@ -87,3 +95,8 @@ def classify_settlement_signature(family_labels: list[str], object_count: int) -
     if has_door:
         return "door_only_cluster"
     return "misc_sparse"
+
+
+def settlement_signature_weight(signature: str) -> float:
+    """Sampling weight used to rebalance training toward retail-like settlements."""
+    return SETTLEMENT_SIGNATURE_TRAIN_WEIGHTS.get(signature, 1.0)
