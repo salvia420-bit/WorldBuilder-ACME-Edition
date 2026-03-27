@@ -28,6 +28,11 @@ Rejected lines
 - Softer dense-service composition head:
   - still regressed total score to `84.3/100`
   - worsened dense entropy in the worst service bucket
+- Retail-cluster supervision + cluster-conditioned generation:
+  - recovered the strong probe line `247 / PAD 8 / STOP 25`
+  - but only scored `84.9/100`
+  - dense entropy still worsened to `29.1` unique WCIDs per dense LB
+  - rejected against the `85.4/100` planner-v2 leader
 
 Decision
 - Keep planner-v2 as the winning branch.
