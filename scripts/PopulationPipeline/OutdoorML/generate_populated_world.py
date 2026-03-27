@@ -193,7 +193,9 @@ def maybe_add_town_lifestone(placements: list, wcid_types: dict[int, int], min_o
 
     has_portal = any(wcid_types.get(p.get('wcid'), 0) == WT_PORTAL for p in placements)
     has_lifestone = any(wcid_types.get(p.get('wcid'), 0) == WT_LIFESTONE for p in placements)
-    if not has_portal or has_lifestone:
+    has_door = any(wcid_types.get(p.get('wcid'), 0) == WT_DOOR for p in placements)
+    has_housing = any(p.get('is_housing') for p in placements)
+    if not has_portal or has_lifestone or not (has_door or has_housing):
         return placements, 0
 
     service_candidates = [
@@ -237,7 +239,9 @@ def maybe_add_town_vendor(placements: list, wcid_types: dict[int, int], min_obje
     has_vendor = any(wcid_types.get(p.get('wcid'), 0) == WT_VENDOR for p in placements)
     has_portal = any(wcid_types.get(p.get('wcid'), 0) == WT_PORTAL for p in placements)
     has_lifestone = any(wcid_types.get(p.get('wcid'), 0) == WT_LIFESTONE for p in placements)
-    if has_vendor or not has_portal or not has_lifestone:
+    has_door = any(wcid_types.get(p.get('wcid'), 0) == WT_DOOR for p in placements)
+    has_housing = any(p.get('is_housing') for p in placements)
+    if has_vendor or not has_portal or not has_lifestone or not (has_door or has_housing):
         return placements, 0
 
     service_candidates = [
@@ -478,32 +482,48 @@ class PlacementGenerator:
         has_portal = any(self.wcid_types.get(p.get('wcid'), 0) == WT_PORTAL for p in placements)
         has_vendor = any(self.wcid_types.get(p.get('wcid'), 0) == WT_VENDOR for p in placements)
         has_lifestone = any(self.wcid_types.get(p.get('wcid'), 0) == WT_LIFESTONE for p in placements)
+        has_door = any(self.wcid_types.get(p.get('wcid'), 0) == WT_DOOR for p in placements)
         service_count = int(has_portal) + int(has_vendor) + int(has_lifestone)
+
+        # The current failure mode is portal/vendor/lifestone overproduction.
+        # Penalize repeated service tokens sharply once a block already has them,
+        # and make non-town roles especially resistant to service sprawl.
+        if has_portal:
+            self._apply_type_bias(logits, WT_PORTAL, -1.25)
+        if has_vendor:
+            self._apply_type_bias(logits, WT_VENDOR, -1.00)
+        if has_lifestone:
+            self._apply_type_bias(logits, WT_LIFESTONE, -1.00)
+        if service_count >= 2:
+            self._apply_type_bias(logits, WT_PORTAL, -0.75)
+            self._apply_type_bias(logits, WT_VENDOR, -0.75)
+            self._apply_type_bias(logits, WT_LIFESTONE, -0.75)
 
         if role == 'service_housing_town':
             if len(placements) >= 2 and housing_count < self.max_housing_per_lb:
                 for housing_idx in HOUSING_TOKEN_MAP:
                     logits[housing_idx] += 1.0
-            if service_count >= 1:
-                self._apply_type_bias(logits, WT_PORTAL, -0.35)
-                self._apply_type_bias(logits, WT_VENDOR, -0.20)
-                self._apply_type_bias(logits, WT_LIFESTONE, -0.20)
+            if service_count == 0 and len(placements) >= 3 and has_door:
+                self._apply_type_bias(logits, WT_PORTAL, 0.25)
+                self._apply_type_bias(logits, WT_LIFESTONE, 0.15)
         elif role == 'housing_cluster':
             if len(placements) >= 2 and housing_count < self.max_housing_per_lb:
                 for housing_idx in HOUSING_TOKEN_MAP:
                     logits[housing_idx] += 0.85
-            self._apply_type_bias(logits, WT_PORTAL, -0.35)
-            self._apply_type_bias(logits, WT_VENDOR, -0.25)
-            self._apply_type_bias(logits, WT_LIFESTONE, -0.15)
+            self._apply_type_bias(logits, WT_PORTAL, -0.50)
+            self._apply_type_bias(logits, WT_VENDOR, -0.40)
+            self._apply_type_bias(logits, WT_LIFESTONE, -0.30)
         elif role == 'service_node':
             if service_count == 0 and len(placements) >= 2:
-                self._apply_type_bias(logits, WT_PORTAL, 0.45)
-                self._apply_type_bias(logits, WT_VENDOR, 0.30)
-                self._apply_type_bias(logits, WT_LIFESTONE, 0.25)
-            elif service_count >= 1:
-                self._apply_type_bias(logits, WT_PORTAL, -0.20)
-                self._apply_type_bias(logits, WT_VENDOR, -0.10)
-                self._apply_type_bias(logits, WT_LIFESTONE, -0.10)
+                self._apply_type_bias(logits, WT_PORTAL, 0.30)
+                self._apply_type_bias(logits, WT_VENDOR, 0.20)
+                self._apply_type_bias(logits, WT_LIFESTONE, 0.10)
+        else:
+            # Outposts and sparse blocks should resist becoming full service hubs.
+            self._apply_type_bias(logits, WT_VENDOR, -0.60)
+            self._apply_type_bias(logits, WT_LIFESTONE, -0.60)
+            if role == 'sparse_creature':
+                self._apply_type_bias(logits, WT_PORTAL, -0.50)
 
         return role
     
