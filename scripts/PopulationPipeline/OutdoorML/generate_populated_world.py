@@ -225,19 +225,26 @@ def predict_settlement_plan(planner_bundle: Optional[dict], context: np.ndarray,
     ctx_tensor = torch.from_numpy(planner_ctx).float().unsqueeze(0).to(device)
     planner_outputs = planner_bundle['model'](ctx_tensor)
     if len(planner_outputs) == 4:
-        archetype_logits, service_style_logits, _dense_service_cluster_logits, family_logits = planner_outputs
+        archetype_logits, service_style_logits, dense_service_cluster_logits, family_logits = planner_outputs
     else:
         archetype_logits, service_style_logits, family_logits = planner_outputs
+        dense_service_cluster_logits = None
     archetype_idx = int(archetype_logits.argmax(dim=-1).item())
     family_bins = family_logits.argmax(dim=-1).squeeze(0).cpu().tolist()
     service_style = None
+    dense_service_cluster = None
     service_style_labels = planner_bundle.get('service_style_labels') or ()
+    dense_service_cluster_labels = planner_bundle.get('dense_service_cluster_labels') or ()
     if service_style_logits is not None and service_style_labels:
         service_style_idx = int(service_style_logits.argmax(dim=-1).item())
         service_style = service_style_labels[service_style_idx]
+    if dense_service_cluster_logits is not None and dense_service_cluster_labels:
+        dense_service_cluster_idx = int(dense_service_cluster_logits.argmax(dim=-1).item())
+        dense_service_cluster = dense_service_cluster_labels[dense_service_cluster_idx]
     return {
         'archetype': planner_bundle['archetype_labels'][archetype_idx],
         'service_style': service_style,
+        'dense_service_cluster': dense_service_cluster,
         'family_bins': {
             label: int(bin_idx)
             for label, bin_idx in zip(planner_bundle['family_labels'], family_bins)
@@ -850,6 +857,71 @@ class PlacementGenerator:
             else:
                 self._apply_type_bias(logits, WT_VENDOR, -0.08)
 
+    def _apply_dense_service_cluster_biases(
+        self,
+        logits: torch.Tensor,
+        placements: list[dict],
+        planner_plan: Optional[dict],
+    ) -> None:
+        if not planner_plan:
+            return
+
+        dense_service_cluster = planner_plan.get('dense_service_cluster')
+        if not dense_service_cluster or dense_service_cluster == 'none':
+            return
+
+        counts = self._family_counts(placements)
+        portal_count = counts.get('portal', 0)
+        vendor_count = counts.get('vendor', 0)
+        lifestone_count = counts.get('lifestone', 0)
+        creature_count = counts.get('creature', 0)
+        door_count = counts.get('door', 0)
+        service_count = portal_count + vendor_count + lifestone_count
+
+        if dense_service_cluster == 'cluster_0':
+            if portal_count == 0:
+                self._apply_type_bias(logits, WT_PORTAL, 0.18)
+            elif vendor_count == 0:
+                self._apply_type_bias(logits, WT_VENDOR, 0.10)
+                self._apply_type_bias(logits, WT_LIFESTONE, 0.08)
+            if creature_count >= 2:
+                self._apply_type_bias(logits, WT_CREATURE, -0.08)
+            if door_count == 0 and len(placements) >= 2:
+                self._apply_type_bias(logits, WT_DOOR, 0.05)
+
+        elif dense_service_cluster == 'cluster_1':
+            if portal_count == 0:
+                self._apply_type_bias(logits, WT_PORTAL, 0.16)
+            if service_count >= 1:
+                self._apply_type_bias(logits, WT_CREATURE, 0.04)
+            if service_count >= 2:
+                self._apply_type_bias(logits, WT_VENDOR, -0.08)
+                self._apply_type_bias(logits, WT_LIFESTONE, -0.06)
+
+        elif dense_service_cluster == 'cluster_3':
+            if portal_count == 0:
+                self._apply_type_bias(logits, WT_PORTAL, 0.14)
+            elif vendor_count == 0:
+                self._apply_type_bias(logits, WT_VENDOR, 0.10)
+            elif lifestone_count == 0:
+                self._apply_type_bias(logits, WT_LIFESTONE, 0.10)
+            else:
+                self._apply_type_bias(logits, WT_CREATURE, -0.06)
+            if door_count == 0 and len(placements) >= 3:
+                self._apply_type_bias(logits, WT_DOOR, 0.04)
+
+        elif dense_service_cluster == 'cluster_2':
+            if portal_count == 0:
+                self._apply_type_bias(logits, WT_PORTAL, 0.12)
+            elif vendor_count == 0:
+                self._apply_type_bias(logits, WT_VENDOR, 0.08)
+            elif lifestone_count == 0:
+                self._apply_type_bias(logits, WT_LIFESTONE, 0.08)
+            else:
+                self._apply_type_bias(logits, WT_CREATURE, -0.03)
+            if door_count == 0 and len(placements) >= 3:
+                self._apply_type_bias(logits, WT_DOOR, 0.03)
+
     def _apply_dense_service_compactness_bias(
         self,
         logits: torch.Tensor,
@@ -1068,6 +1140,7 @@ class PlacementGenerator:
             self._apply_family_plan_biases(logits, placements, planner_plan)
             self._apply_archetype_realization_biases(logits, placements, planner_plan)
             self._apply_service_style_biases(logits, placements, planner_plan)
+            self._apply_dense_service_cluster_biases(logits, placements, planner_plan)
             self._apply_dense_service_compactness_bias(logits, placements, planner_plan, wcid_freq)
 
             if self.pad_logit_bias:
