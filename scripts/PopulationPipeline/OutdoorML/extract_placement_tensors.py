@@ -527,9 +527,11 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
     
     # Build parent_guid -> child_guids index
     parent_children = defaultdict(list)
+    child_to_parent = {}
     for link in links:
         if link['parent_guid'] in guid_to_inst and link['child_guid'] in guid_to_inst:
             parent_children[link['parent_guid']].append(link['child_guid'])
+            child_to_parent[link['child_guid']] = link['parent_guid']
     
     # Instance counts for neighbor density
     instance_counts = {k: len(v) for k, v in outdoor_instances_by_lb.items()}
@@ -579,14 +581,12 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
             # Find parent wcid index if this is a link child
             parent_vocab_idx = 0
             if inst['is_link_child']:
-                # Search links for this instance's parent
-                for link in links:
-                    if link['child_guid'] == inst['guid']:
-                        parent_info = guid_to_inst.get(link['parent_guid'])
-                        if parent_info:
-                            parent_wcid = parent_info[1]['wcid']
-                            parent_vocab_idx = wcid_to_idx.get(parent_wcid, 0)
-                        break
+                parent_guid = child_to_parent.get(inst['guid'])
+                if parent_guid is not None:
+                    parent_info = guid_to_inst.get(parent_guid)
+                    if parent_info:
+                        parent_wcid = parent_info[1]['wcid']
+                        parent_vocab_idx = wcid_to_idx.get(parent_wcid, 0)
             
             sequences[idx, obj_idx] = [
                 vocab_idx,                    # [0] wcid vocab index

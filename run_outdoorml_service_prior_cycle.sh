@@ -33,17 +33,17 @@ echo "========================================================================"
 
 echo
 echo "[1/5] Rebuild placement tensors with service priors..."
-python3 scripts/PopulationPipeline/OutdoorML/extract_placement_tensors.py
+python3 -u scripts/PopulationPipeline/OutdoorML/extract_placement_tensors.py
 
 echo
 echo "[2/5] Run bounded retrain..."
-python3 scripts/PopulationPipeline/OutdoorML/train_scene_placer.py \
+python3 -u scripts/PopulationPipeline/OutdoorML/train_scene_placer.py \
   --resume "$BASE_RESUME" \
   --epochs "$TARGET_EPOCHS"
 
 echo
 echo "[3/5] Run fixed 5x5 probe..."
-python3 scripts/PopulationPipeline/OutdoorML/run_small_region_probe.py \
+python3 -u scripts/PopulationPipeline/OutdoorML/run_small_region_probe.py \
   --model "$PROBE_MODEL" \
   --temperature 1.0 \
   --top-k 0 \
@@ -55,7 +55,7 @@ python3 scripts/PopulationPipeline/OutdoorML/run_small_region_probe.py \
 
 echo
 echo "[4/5] Run representative scored region..."
-python3 scripts/PopulationPipeline/OutdoorML/generate_populated_world.py \
+python3 -u scripts/PopulationPipeline/OutdoorML/generate_populated_world.py \
   --model "$PROBE_MODEL" \
   --lb-x-min 30 \
   --lb-x-max 49 \
@@ -76,7 +76,7 @@ python3 scripts/PopulationPipeline/OutdoorML/generate_populated_world.py \
 
 echo
 echo "[5/5] Score representative region..."
-python3 scripts/PopulationPipeline/OutdoorML/score_placement_quality.py "$REGION_SQL" > "$REGION_SCORE"
+python3 -u scripts/PopulationPipeline/OutdoorML/score_placement_quality.py "$REGION_SQL" > "$REGION_SCORE"
 
 echo
 echo "Cycle complete."
