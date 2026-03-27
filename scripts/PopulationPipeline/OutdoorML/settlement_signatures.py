@@ -57,6 +57,15 @@ SERVICE_STYLE_LABELS = (
     "lifestone_only",
 )
 
+SERVICE_MOTIF_LABELS = (
+    "none",
+    "creature_portal_mix",
+    "vendor_portal_core",
+    "door_service_mix",
+    "full_service_cluster",
+    "housing_service_mix",
+)
+
 
 def family_labels_for_landblock(insts: list[dict[str, Any]], wcid_types: dict[int, int]) -> list[str]:
     labels: set[str] = set()
@@ -193,6 +202,32 @@ def classify_service_style(family_labels: list[str]) -> str:
     if has_lifestone:
         return "lifestone_only"
     return "non_service"
+
+
+def classify_service_motif(family_labels: list[str], object_count: int) -> str:
+    labels = set(family_labels)
+    has_portal = "portal" in labels
+    has_vendor = "vendor" in labels
+    has_lifestone = "lifestone" in labels
+    has_door = "door" in labels
+    has_creature = "creature" in labels
+    has_housing = any(label.startswith("housing_") for label in labels)
+
+    if not (has_portal or has_vendor or has_lifestone):
+        return "none"
+    if has_housing and (has_portal or has_vendor or has_lifestone):
+        return "housing_service_mix"
+    if has_door and (has_portal or has_vendor or has_lifestone):
+        return "door_service_mix"
+    if has_portal and has_vendor and has_lifestone and object_count >= 20:
+        return "full_service_cluster"
+    if has_portal and has_vendor:
+        return "vendor_portal_core"
+    if has_portal and has_creature:
+        return "creature_portal_mix"
+    if has_portal and has_lifestone:
+        return "vendor_portal_core" if object_count >= 18 else "creature_portal_mix"
+    return "none"
 
 
 def infer_settlement_role_from_context(

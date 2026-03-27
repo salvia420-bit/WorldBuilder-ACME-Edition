@@ -195,6 +195,7 @@ def load_settlement_planner(planner_path: str, device: torch.device) -> Optional
         archetype_classes=len(state['archetype_labels']),
         family_heads=len(state['family_labels']),
         service_style_classes=len(state.get('service_style_labels', [])),
+        service_motif_classes=len(state.get('service_motif_labels', [])),
     ).to(device)
     planner.load_state_dict(state['model_state_dict'], strict=False)
     planner.eval()
@@ -203,6 +204,7 @@ def load_settlement_planner(planner_path: str, device: torch.device) -> Optional
         'context_dim': int(state['context_dim']),
         'archetype_labels': tuple(state['archetype_labels']),
         'service_style_labels': tuple(state.get('service_style_labels', [])),
+        'service_motif_labels': tuple(state.get('service_motif_labels', [])),
         'family_labels': tuple(state['family_labels']),
         'path': planner_path,
     }
@@ -221,17 +223,23 @@ def predict_settlement_plan(planner_bundle: Optional[dict], context: np.ndarray,
         planner_ctx = np.pad(planner_ctx, (0, planner_dim - len(planner_ctx)))
 
     ctx_tensor = torch.from_numpy(planner_ctx).float().unsqueeze(0).to(device)
-    archetype_logits, service_style_logits, family_logits = planner_bundle['model'](ctx_tensor)
+    archetype_logits, service_style_logits, service_motif_logits, family_logits = planner_bundle['model'](ctx_tensor)
     archetype_idx = int(archetype_logits.argmax(dim=-1).item())
     family_bins = family_logits.argmax(dim=-1).squeeze(0).cpu().tolist()
     service_style = None
+    service_motif = None
     service_style_labels = planner_bundle.get('service_style_labels') or ()
+    service_motif_labels = planner_bundle.get('service_motif_labels') or ()
     if service_style_logits is not None and service_style_labels:
         service_style_idx = int(service_style_logits.argmax(dim=-1).item())
         service_style = service_style_labels[service_style_idx]
+    if service_motif_logits is not None and service_motif_labels:
+        service_motif_idx = int(service_motif_logits.argmax(dim=-1).item())
+        service_motif = service_motif_labels[service_motif_idx]
     return {
         'archetype': planner_bundle['archetype_labels'][archetype_idx],
         'service_style': service_style,
+        'service_motif': service_motif,
         'family_bins': {
             label: int(bin_idx)
             for label, bin_idx in zip(planner_bundle['family_labels'], family_bins)
@@ -867,6 +875,59 @@ class PlacementGenerator:
             else:
                 self._apply_type_bias(logits, WT_VENDOR, -0.08)
 
+    def _apply_service_motif_biases(
+        self,
+        logits: torch.Tensor,
+        placements: list[dict],
+        planner_plan: Optional[dict],
+    ) -> None:
+        if not planner_plan:
+            return
+
+        motif = planner_plan.get('service_motif')
+        if not motif or motif == 'none':
+            return
+
+        counts = self._family_counts(placements)
+        creature_count = counts.get('creature', 0)
+        portal_count = counts.get('portal', 0)
+        vendor_count = counts.get('vendor', 0)
+        lifestone_count = counts.get('lifestone', 0)
+        door_count = counts.get('door', 0)
+        housing_count = counts.get('housing', 0)
+
+        if motif == 'vendor_portal_core':
+            if portal_count == 0:
+                self._apply_type_bias(logits, WT_PORTAL, 0.18)
+            elif vendor_count == 0:
+                self._apply_type_bias(logits, WT_VENDOR, 0.26)
+            self._apply_type_bias(logits, WT_CREATURE, -0.10 - 0.03 * min(creature_count, 3))
+        elif motif == 'door_service_mix':
+            if door_count == 0:
+                self._apply_type_bias(logits, WT_DOOR, 0.18)
+            if vendor_count == 0 and portal_count >= 1:
+                self._apply_type_bias(logits, WT_VENDOR, 0.12)
+        elif motif == 'full_service_cluster':
+            if portal_count == 0:
+                self._apply_type_bias(logits, WT_PORTAL, 0.16)
+            elif vendor_count == 0:
+                self._apply_type_bias(logits, WT_VENDOR, 0.18)
+            elif lifestone_count == 0:
+                self._apply_type_bias(logits, WT_LIFESTONE, 0.16)
+            else:
+                self._apply_type_bias(logits, WT_CREATURE, -0.10 - 0.04 * min(creature_count, 3))
+        elif motif == 'housing_service_mix':
+            if housing_count < self.max_housing_per_lb:
+                for housing_idx in HOUSING_TOKEN_MAP:
+                    logits[housing_idx] += 0.12
+            if door_count == 0:
+                self._apply_type_bias(logits, WT_DOOR, 0.14)
+        elif motif == 'creature_portal_mix':
+            if portal_count == 0:
+                self._apply_type_bias(logits, WT_PORTAL, 0.12)
+            if creature_count == 0:
+                self._apply_type_bias(logits, WT_CREATURE, 0.12)
+
     def _apply_role_biases(self, logits: torch.Tensor, context: np.ndarray, placements: list[dict]) -> tuple[str, str]:
         role = self._settlement_role(context)
         archetype = self._settlement_archetype(context)
@@ -1000,6 +1061,7 @@ class PlacementGenerator:
             self._apply_family_plan_biases(logits, placements, planner_plan)
             self._apply_archetype_realization_biases(logits, placements, planner_plan)
             self._apply_service_style_biases(logits, placements, planner_plan)
+            self._apply_service_motif_biases(logits, placements, planner_plan)
 
             if self.pad_logit_bias:
                 logits[PAD_TOKEN] -= self.pad_logit_bias
