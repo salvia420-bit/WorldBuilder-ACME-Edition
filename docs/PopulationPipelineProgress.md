@@ -48,12 +48,16 @@ Most important scored-region results:
 - planner-soft region B: `84.8/100`
 - planner archetype-realization region A: `85.2/100`, `clustering: 3.0`
 - planner archetype-realization region B: `85.1/100`, `clustering: 3.0`
+- planner-v2 service-style region A: `85.4/100`, probe `247 / PAD 8 / STOP 25`
+- planner-v2 service-style region B: `85.4/100`, `clustering: 3.0`
 
 Interpretation:
 
 - this is the first branch that clearly beat the old `83.6/100` regional basin
 - the later archetype-realization variant kept the planner gains and improved
   clustering more consistently than the initial planner-soft branch
+- the planner-v2 service-style branch is now the score leader, but it wins by
+  stronger vendor/service realization while giving back some clustering
 - future improvement work should stay on the planner path and target service
   coverage/composition there
 

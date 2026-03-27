@@ -178,8 +178,8 @@ Rule:
 
 ## Current Experimental Leader
 
-Planner-conditioned inference with archetype-realization biases is now the
-leading experimental branch.
+Planner-conditioned inference with planner-v2 service-style conditioning is now
+the leading experimental branch.
 
 Key commits:
 
@@ -187,34 +187,33 @@ Key commits:
 - `4eac39f` condition inference on planner outputs
 - `96d152d` soften planner family constraints
 - `f7c5535` bias planner archetype realization during inference
+- `ecb3586` add planner-v2 service-style head
 
 Measured results:
 
-- fixed `5x5` probe with archetype-realization branch:
-  - `accepted_after_validation: 244`
-  - `PAD: 11`
+- fixed `5x5` probe with planner-v2 service-style branch:
+  - `accepted_after_validation: 247`
+  - `PAD: 8`
   - `STOP: 25`
-- representative `20x20` archetype-realization region A:
-  - `85.2/100`
-  - `clustering: 3.0`
-- representative `20x20` archetype-realization region B:
-  - `85.1/100`
+- representative `20x20` planner-v2 region A:
+  - `85.4/100`
+  - `vendor_presence: 7.9`
+  - `density_appropriate: 9.9`
+- representative `20x20` planner-v2 region B:
+  - `85.4/100`
   - `clustering: 3.0`
 
 Interpretation:
 
-- this branch matches or exceeds the planner-soft score line while improving
-  clustering more consistently
-- it has clearly broken the old `83.6` regional plateau across more than one
-  region
-- it still underperforms the historic probe ceiling, so it remains an
-  experimental leader rather than an unquestioned replacement for the safe
-  baseline
+- this branch is the highest score reached so far
+- the gain comes from stronger service/vendor realization rather than better
+  clustering
+- clustering regressed from the earlier `3.0` planner-realization line to
+  `2.4`, so this is a new score leader but not yet a clean across-the-board win
 
 Next move on this branch:
 
 - keep planner-conditioned inference enabled
-- keep archetype-realization biases enabled
-- run bounded detached cycles to capture probe + representative region together
-- improve service coverage inside the planner path without giving back the new
-  `85.1-85.2` range or the `clustering: 3.0` gain
+- keep planner-v2 service-style conditioning enabled
+- improve clustering inside planner-v2 without giving back the new
+  `85.4/100` score

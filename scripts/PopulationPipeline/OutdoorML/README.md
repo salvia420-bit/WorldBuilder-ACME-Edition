@@ -60,14 +60,13 @@ Current validated larger-scale results:
 
 Current experimental leader:
 
-- planner-conditioned inference with archetype-realization biases
+- planner-conditioned inference with planner-v2 service-style conditioning
 - current measured scores:
-  - `85.2/100` on one `20x20` region
-  - `85.1/100` on a second `20x20` region
-  - both regions reached `clustering: 3.0`
+  - `85.4/100` on two different `20x20` regions
+  - earlier planner-realization validation still holds at `85.1-85.2/100`
 - current probe on this branch:
-  - `accepted=244`
-  - `PAD=11`
+  - `accepted=247`
+  - `PAD=8`
   - `STOP=25`
 
 Planner-stage artifacts:
@@ -79,7 +78,8 @@ Planner-stage artifacts:
 Interpretation:
 
 - the old single-stage line remains the safer historical baseline
-- the planner/archetype branch is the first line to beat the repeated `83.6` regional plateau across multiple regions
+- the planner path is the first line to beat the repeated `83.6` regional plateau across multiple regions
+- the new planner-v2 service-style branch is the highest score reached so far, though it currently trades away some clustering to do it
 - future score work should stay on the planner path rather than return to scalar tuning of the old single-stage path
 
 Service-completion notes:
