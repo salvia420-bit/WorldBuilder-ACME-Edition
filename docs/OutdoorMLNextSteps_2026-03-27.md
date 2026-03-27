@@ -147,3 +147,30 @@ Success signal:
    - detached helper: `run_outdoorml_detached.sh`
 5. Prefer detached `tmux` launches for bounded runs on SSH sessions that may
    drop before the cycle completes.
+
+
+## Disciplined Escalation
+
+The current single-stage scene placer has now shown a stable `83.6/100` basin
+across multiple materially different training and inference changes. The next
+escalation path is therefore a parallel two-stage line, not more scalar tuning
+inside the same formulation.
+
+Stage 1 planner:
+
+- predict landblock archetype
+- predict coarse family-count bins
+- artifacts:
+  - `scripts/PopulationPipeline/OutdoorML/extract_settlement_planner_tensors.py`
+  - `scripts/PopulationPipeline/OutdoorML/train_settlement_planner.py`
+
+Stage 2 generator:
+
+- keep the current scene placer as the realization model
+- later condition it on planner outputs instead of asking it to infer town
+  intent and exact object sequence in one step
+
+Rule:
+
+- keep the existing `83.6` line available as a safe baseline while the planner
+  path is developed in parallel
