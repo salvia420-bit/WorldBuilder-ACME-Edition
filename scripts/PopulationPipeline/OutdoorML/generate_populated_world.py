@@ -195,6 +195,7 @@ def load_settlement_planner(planner_path: str, device: torch.device) -> Optional
         archetype_classes=len(state['archetype_labels']),
         family_heads=len(state['family_labels']),
         service_style_classes=len(state.get('service_style_labels', [])),
+        dense_service_cluster_classes=len(state.get('dense_service_cluster_labels', [])),
     ).to(device)
     planner.load_state_dict(state['model_state_dict'], strict=False)
     planner.eval()
@@ -203,6 +204,7 @@ def load_settlement_planner(planner_path: str, device: torch.device) -> Optional
         'context_dim': int(state['context_dim']),
         'archetype_labels': tuple(state['archetype_labels']),
         'service_style_labels': tuple(state.get('service_style_labels', [])),
+        'dense_service_cluster_labels': tuple(state.get('dense_service_cluster_labels', [])),
         'family_labels': tuple(state['family_labels']),
         'path': planner_path,
     }
@@ -221,7 +223,11 @@ def predict_settlement_plan(planner_bundle: Optional[dict], context: np.ndarray,
         planner_ctx = np.pad(planner_ctx, (0, planner_dim - len(planner_ctx)))
 
     ctx_tensor = torch.from_numpy(planner_ctx).float().unsqueeze(0).to(device)
-    archetype_logits, service_style_logits, family_logits = planner_bundle['model'](ctx_tensor)
+    planner_outputs = planner_bundle['model'](ctx_tensor)
+    if len(planner_outputs) == 4:
+        archetype_logits, service_style_logits, _dense_service_cluster_logits, family_logits = planner_outputs
+    else:
+        archetype_logits, service_style_logits, family_logits = planner_outputs
     archetype_idx = int(archetype_logits.argmax(dim=-1).item())
     family_bins = family_logits.argmax(dim=-1).squeeze(0).cpu().tolist()
     service_style = None

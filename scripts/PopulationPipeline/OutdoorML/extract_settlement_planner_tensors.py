@@ -45,6 +45,8 @@ from settlement_signatures import (  # noqa: E402
 OUTPUT_DIR = os.path.join(BASE_DIR, "pipeline_data", "reference")
 OUTPUT_NPZ = os.path.join(OUTPUT_DIR, "settlement_planner_tensors.npz")
 OUTPUT_META = os.path.join(OUTPUT_DIR, "settlement_planner_vocab.json")
+DENSE_SERVICE_DATASET_JSON = os.path.join(OUTPUT_DIR, "dense_service_retail_dataset.json")
+DENSE_SERVICE_CLUSTERS_JSON = os.path.join(OUTPUT_DIR, "dense_service_retail_clusters.json")
 
 PLANNER_FAMILY_LABELS = (
     "creature",
@@ -54,6 +56,31 @@ PLANNER_FAMILY_LABELS = (
     "door",
     "housing",
 )
+
+
+def load_dense_service_cluster_targets() -> tuple[dict[tuple[int, int], str], list[str]]:
+    if not os.path.exists(DENSE_SERVICE_DATASET_JSON) or not os.path.exists(DENSE_SERVICE_CLUSTERS_JSON):
+        return {}, ["none"]
+
+    with open(DENSE_SERVICE_DATASET_JSON, "r", encoding="utf-8") as handle:
+        dataset = json.load(handle)
+    with open(DENSE_SERVICE_CLUSTERS_JSON, "r", encoding="utf-8") as handle:
+        clusters = json.load(handle)
+
+    rows = dataset.get("rows", [])
+    labels = clusters.get("labels", [])
+    if len(rows) != len(labels):
+        return {}, ["none"]
+
+    coord_to_cluster: dict[tuple[int, int], str] = {}
+    cluster_names = ["none"]
+    for cluster_id in sorted(set(int(label) for label in labels)):
+        cluster_names.append(f"cluster_{cluster_id}")
+
+    for row, label in zip(rows, labels):
+        coord_to_cluster[(int(row["lb_x"]), int(row["lb_y"]))] = f"cluster_{int(label)}"
+
+    return coord_to_cluster, cluster_names
 
 
 def count_bin(count: int) -> int:
@@ -110,19 +137,24 @@ def main() -> None:
     contexts = np.zeros((len(populated_lbs), 235), dtype=np.float32)
     archetypes = np.zeros(len(populated_lbs), dtype=np.int64)
     service_styles = np.zeros(len(populated_lbs), dtype=np.int64)
+    dense_service_clusters = np.zeros(len(populated_lbs), dtype=np.int64)
     family_bins = np.zeros((len(populated_lbs), len(PLANNER_FAMILY_LABELS)), dtype=np.int64)
+    dense_service_cluster_map, dense_service_cluster_labels = load_dense_service_cluster_targets()
 
     print("\n[3/4] Building planner examples...")
     archetype_counts = Counter()
     service_style_counts = Counter()
+    dense_service_cluster_counts = Counter()
     for idx, (lb_x, lb_y) in enumerate(populated_lbs):
         insts = [inst for inst in instances_by_lb[(lb_x, lb_y)] if not inst.get("is_indoor", False)]
         family_labels = family_labels_for_landblock(insts, wcid_types)
         signature = classify_settlement_signature(family_labels, len(insts))
         archetype = settlement_archetype_from_signature(signature)
         service_style = classify_service_style(family_labels)
+        dense_service_cluster = dense_service_cluster_map.get((lb_x, lb_y), "none")
         archetype_counts[archetype] += 1
         service_style_counts[service_style] += 1
+        dense_service_cluster_counts[dense_service_cluster] += 1
 
         contexts[idx] = build_context_vector(
             lb_x,
@@ -134,6 +166,7 @@ def main() -> None:
         )
         archetypes[idx] = SETTLEMENT_ARCHETYPE_LABELS.index(archetype)
         service_styles[idx] = SERVICE_STYLE_LABELS.index(service_style)
+        dense_service_clusters[idx] = dense_service_cluster_labels.index(dense_service_cluster)
         family_bins[idx] = family_count_bins(insts, wcid_types)
 
         if (idx + 1) % 1000 == 0:
@@ -146,6 +179,7 @@ def main() -> None:
         contexts=contexts,
         archetypes=archetypes,
         service_styles=service_styles,
+        dense_service_clusters=dense_service_clusters,
         family_bins=family_bins,
         lb_coords=np.array(populated_lbs, dtype=np.int32),
     )
@@ -154,6 +188,7 @@ def main() -> None:
             {
                 "archetype_labels": list(SETTLEMENT_ARCHETYPE_LABELS),
                 "service_style_labels": list(SERVICE_STYLE_LABELS),
+                "dense_service_cluster_labels": list(dense_service_cluster_labels),
                 "family_labels": list(PLANNER_FAMILY_LABELS),
                 "count_bins": ["0", "1", "2-3", "4+"],
             },
@@ -168,6 +203,9 @@ def main() -> None:
         print(f"  {label:24s} {count:5d}")
     print("  Service styles:")
     for label, count in sorted(service_style_counts.items(), key=lambda item: (-item[1], item[0])):
+        print(f"    {label:22s} {count:5d}")
+    print("  Dense service clusters:")
+    for label, count in sorted(dense_service_cluster_counts.items(), key=lambda item: (-item[1], item[0])):
         print(f"    {label:22s} {count:5d}")
     print(f"  Tensors: {OUTPUT_NPZ}")
     print(f"  Meta:    {OUTPUT_META}")
