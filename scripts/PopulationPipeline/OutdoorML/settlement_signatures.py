@@ -47,6 +47,16 @@ SETTLEMENT_ARCHETYPE_LABELS = (
     "sparse_misc",
 )
 
+SERVICE_STYLE_LABELS = (
+    "non_service",
+    "portal_only",
+    "portal_lifestone",
+    "portal_vendor",
+    "full_service",
+    "vendor_only",
+    "lifestone_only",
+)
+
 
 def family_labels_for_landblock(insts: list[dict[str, Any]], wcid_types: dict[int, int]) -> list[str]:
     labels: set[str] = set()
@@ -162,6 +172,27 @@ def settlement_archetype_from_signature(signature: str) -> str:
 
 def settlement_archetype_one_hot(archetype: str) -> list[float]:
     return [1.0 if label == archetype else 0.0 for label in SETTLEMENT_ARCHETYPE_LABELS]
+
+
+def classify_service_style(family_labels: list[str]) -> str:
+    labels = set(family_labels)
+    has_portal = "portal" in labels
+    has_vendor = "vendor" in labels
+    has_lifestone = "lifestone" in labels
+
+    if has_portal and has_vendor and has_lifestone:
+        return "full_service"
+    if has_portal and has_vendor:
+        return "portal_vendor"
+    if has_portal and has_lifestone:
+        return "portal_lifestone"
+    if has_portal:
+        return "portal_only"
+    if has_vendor:
+        return "vendor_only"
+    if has_lifestone:
+        return "lifestone_only"
+    return "non_service"
 
 
 def infer_settlement_role_from_context(

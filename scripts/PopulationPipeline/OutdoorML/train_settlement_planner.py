@@ -68,20 +68,21 @@ def compute_archetype_weights(archetypes: np.ndarray, archetype_labels: list[str
 
 
 class PlannerDataset(Dataset):
-    def __init__(self, contexts: np.ndarray, archetypes: np.ndarray, family_bins: np.ndarray):
+    def __init__(self, contexts: np.ndarray, archetypes: np.ndarray, service_styles: np.ndarray, family_bins: np.ndarray):
         self.contexts = torch.from_numpy(contexts).float()
         self.archetypes = torch.from_numpy(archetypes).long()
+        self.service_styles = torch.from_numpy(service_styles).long()
         self.family_bins = torch.from_numpy(family_bins).long()
 
     def __len__(self) -> int:
         return len(self.contexts)
 
     def __getitem__(self, idx: int):
-        return self.contexts[idx], self.archetypes[idx], self.family_bins[idx]
+        return self.contexts[idx], self.archetypes[idx], self.service_styles[idx], self.family_bins[idx]
 
 
 class SettlementPlanner(nn.Module):
-    def __init__(self, context_dim: int, archetype_classes: int, family_heads: int):
+    def __init__(self, context_dim: int, archetype_classes: int, family_heads: int, service_style_classes: int = 0):
         super().__init__()
         self.backbone = nn.Sequential(
             nn.Linear(context_dim, 256),
@@ -93,25 +94,32 @@ class SettlementPlanner(nn.Module):
             nn.GELU(),
         )
         self.archetype_head = nn.Linear(256, archetype_classes)
+        self.service_style_head = nn.Linear(256, service_style_classes) if service_style_classes > 0 else None
         self.family_head = nn.Linear(256, family_heads * 4)
         self.family_heads = family_heads
 
-    def forward(self, ctx: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, ctx: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
         hidden = self.backbone(ctx)
         archetype_logits = self.archetype_head(hidden)
+        service_style_logits = self.service_style_head(hidden) if self.service_style_head is not None else None
         family_logits = self.family_head(hidden).view(ctx.shape[0], self.family_heads, 4)
-        return archetype_logits, family_logits
+        return archetype_logits, service_style_logits, family_logits
 
 
 def compute_metrics(
     archetype_logits: torch.Tensor,
     archetypes: torch.Tensor,
+    service_style_logits: torch.Tensor | None,
+    service_styles: torch.Tensor,
     family_logits: torch.Tensor,
     family_bins: torch.Tensor,
 ) -> dict[str, float]:
     archetype_acc = (archetype_logits.argmax(dim=-1) == archetypes).float().mean().item()
+    service_style_acc = 0.0
+    if service_style_logits is not None:
+        service_style_acc = (service_style_logits.argmax(dim=-1) == service_styles).float().mean().item()
     family_acc = (family_logits.argmax(dim=-1) == family_bins).float().mean().item()
-    return {"archetype_acc": archetype_acc, "family_acc": family_acc}
+    return {"archetype_acc": archetype_acc, "service_style_acc": service_style_acc, "family_acc": family_acc}
 
 
 def main() -> None:
@@ -132,6 +140,7 @@ def main() -> None:
 
     contexts = data["contexts"]
     archetypes = data["archetypes"]
+    service_styles = data["service_styles"]
     family_bins = data["family_bins"]
 
     rng = np.random.RandomState(42)
@@ -140,8 +149,8 @@ def main() -> None:
     val_idx = indices[:val_n]
     train_idx = indices[val_n:]
 
-    train_ds = PlannerDataset(contexts[train_idx], archetypes[train_idx], family_bins[train_idx])
-    val_ds = PlannerDataset(contexts[val_idx], archetypes[val_idx], family_bins[val_idx])
+    train_ds = PlannerDataset(contexts[train_idx], archetypes[train_idx], service_styles[train_idx], family_bins[train_idx])
+    val_ds = PlannerDataset(contexts[val_idx], archetypes[val_idx], service_styles[val_idx], family_bins[val_idx])
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     archetype_weights_np = compute_archetype_weights(archetypes[train_idx], meta["archetype_labels"])
@@ -150,6 +159,7 @@ def main() -> None:
         context_dim=contexts.shape[1],
         archetype_classes=len(meta["archetype_labels"]),
         family_heads=len(meta["family_labels"]),
+        service_style_classes=len(meta.get("service_style_labels", [])),
     ).to(device)
 
     sample_weights = archetype_weights_np[archetypes[train_idx]]
@@ -177,15 +187,20 @@ def main() -> None:
     for epoch in range(args.epochs):
         model.train()
         train_loss = 0.0
-        for ctx, arch, fam in train_loader:
+        for ctx, arch, style, fam in train_loader:
             ctx = ctx.to(device)
             arch = arch.to(device)
+            style = style.to(device)
             fam = fam.to(device)
 
-            arch_logits, fam_logits = model(ctx)
+            arch_logits, style_logits, fam_logits = model(ctx)
             loss_arch = F.cross_entropy(arch_logits, arch, weight=archetype_weights)
+            loss_style = (
+                F.cross_entropy(style_logits, style)
+                if style_logits is not None else torch.tensor(0.0, device=device)
+            )
             loss_fam = F.cross_entropy(fam_logits.reshape(-1, 4), fam.reshape(-1))
-            loss = loss_arch + 0.6 * loss_fam
+            loss = loss_arch + 0.35 * loss_style + 0.6 * loss_fam
 
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -194,19 +209,24 @@ def main() -> None:
 
         model.eval()
         val_loss = 0.0
-        val_metrics = {"archetype_acc": 0.0, "family_acc": 0.0}
+        val_metrics = {"archetype_acc": 0.0, "service_style_acc": 0.0, "family_acc": 0.0}
         val_batches = 0
         with torch.no_grad():
-            for ctx, arch, fam in val_loader:
+            for ctx, arch, style, fam in val_loader:
                 ctx = ctx.to(device)
                 arch = arch.to(device)
+                style = style.to(device)
                 fam = fam.to(device)
-                arch_logits, fam_logits = model(ctx)
+                arch_logits, style_logits, fam_logits = model(ctx)
                 loss_arch = F.cross_entropy(arch_logits, arch, weight=archetype_weights)
+                loss_style = (
+                    F.cross_entropy(style_logits, style)
+                    if style_logits is not None else torch.tensor(0.0, device=device)
+                )
                 loss_fam = F.cross_entropy(fam_logits.reshape(-1, 4), fam.reshape(-1))
-                loss = loss_arch + 0.6 * loss_fam
+                loss = loss_arch + 0.35 * loss_style + 0.6 * loss_fam
                 val_loss += loss.item()
-                batch_metrics = compute_metrics(arch_logits, arch, fam_logits, fam)
+                batch_metrics = compute_metrics(arch_logits, arch, style_logits, style, fam_logits, fam)
                 for key, value in batch_metrics.items():
                     val_metrics[key] += value
                 val_batches += 1
@@ -222,6 +242,7 @@ def main() -> None:
                 "model_state_dict": model.state_dict(),
                 "context_dim": contexts.shape[1],
                 "archetype_labels": meta["archetype_labels"],
+                "service_style_labels": meta.get("service_style_labels", []),
                 "family_labels": meta["family_labels"],
                 "best_val_loss": best_val,
             }
@@ -230,6 +251,7 @@ def main() -> None:
             f"  Epoch {epoch + 1:3d}/{args.epochs} "
             f"train={avg_train:.4f} val={avg_val:.4f} "
             f"arch_acc={val_metrics['archetype_acc']:.3f} "
+            f"style_acc={val_metrics['service_style_acc']:.3f} "
             f"family_acc={val_metrics['family_acc']:.3f}"
         )
 
@@ -239,6 +261,7 @@ def main() -> None:
             "model_state_dict": model.state_dict(),
             "context_dim": contexts.shape[1],
             "archetype_labels": meta["archetype_labels"],
+            "service_style_labels": meta.get("service_style_labels", []),
             "family_labels": meta["family_labels"],
             "best_val_loss": best_val,
         }

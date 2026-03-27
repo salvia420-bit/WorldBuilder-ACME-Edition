@@ -194,13 +194,15 @@ def load_settlement_planner(planner_path: str, device: torch.device) -> Optional
         context_dim=int(state['context_dim']),
         archetype_classes=len(state['archetype_labels']),
         family_heads=len(state['family_labels']),
+        service_style_classes=len(state.get('service_style_labels', [])),
     ).to(device)
-    planner.load_state_dict(state['model_state_dict'])
+    planner.load_state_dict(state['model_state_dict'], strict=False)
     planner.eval()
     return {
         'model': planner,
         'context_dim': int(state['context_dim']),
         'archetype_labels': tuple(state['archetype_labels']),
+        'service_style_labels': tuple(state.get('service_style_labels', [])),
         'family_labels': tuple(state['family_labels']),
         'path': planner_path,
     }
@@ -219,11 +221,17 @@ def predict_settlement_plan(planner_bundle: Optional[dict], context: np.ndarray,
         planner_ctx = np.pad(planner_ctx, (0, planner_dim - len(planner_ctx)))
 
     ctx_tensor = torch.from_numpy(planner_ctx).float().unsqueeze(0).to(device)
-    archetype_logits, family_logits = planner_bundle['model'](ctx_tensor)
+    archetype_logits, service_style_logits, family_logits = planner_bundle['model'](ctx_tensor)
     archetype_idx = int(archetype_logits.argmax(dim=-1).item())
     family_bins = family_logits.argmax(dim=-1).squeeze(0).cpu().tolist()
+    service_style = None
+    service_style_labels = planner_bundle.get('service_style_labels') or ()
+    if service_style_logits is not None and service_style_labels:
+        service_style_idx = int(service_style_logits.argmax(dim=-1).item())
+        service_style = service_style_labels[service_style_idx]
     return {
         'archetype': planner_bundle['archetype_labels'][archetype_idx],
+        'service_style': service_style,
         'family_bins': {
             label: int(bin_idx)
             for label, bin_idx in zip(planner_bundle['family_labels'], family_bins)
@@ -777,6 +785,65 @@ class PlacementGenerator:
                 self._apply_type_bias(logits, WT_VENDOR, 0.12)
                 self._apply_type_bias(logits, WT_LIFESTONE, 0.10)
 
+    def _apply_service_style_biases(
+        self,
+        logits: torch.Tensor,
+        placements: list[dict],
+        planner_plan: Optional[dict],
+    ) -> None:
+        if not planner_plan:
+            return
+
+        service_style = planner_plan.get('service_style')
+        if not service_style or service_style == 'non_service':
+            return
+
+        counts = self._family_counts(placements)
+        portal_count = counts.get('portal', 0)
+        vendor_count = counts.get('vendor', 0)
+        lifestone_count = counts.get('lifestone', 0)
+        creature_count = counts.get('creature', 0)
+        service_count = portal_count + vendor_count + lifestone_count
+
+        if service_style == 'portal_only':
+            if portal_count == 0:
+                self._apply_type_bias(logits, WT_PORTAL, 0.22)
+            elif service_count >= 1:
+                self._apply_type_bias(logits, WT_VENDOR, -0.16)
+                self._apply_type_bias(logits, WT_LIFESTONE, -0.12)
+        elif service_style == 'portal_lifestone':
+            if portal_count == 0:
+                self._apply_type_bias(logits, WT_PORTAL, 0.20)
+            elif lifestone_count == 0:
+                self._apply_type_bias(logits, WT_LIFESTONE, 0.24)
+                self._apply_type_bias(logits, WT_VENDOR, -0.10)
+        elif service_style == 'portal_vendor':
+            if portal_count == 0:
+                self._apply_type_bias(logits, WT_PORTAL, 0.18)
+            elif vendor_count == 0:
+                self._apply_type_bias(logits, WT_VENDOR, 0.28)
+                self._apply_type_bias(logits, WT_LIFESTONE, -0.08)
+        elif service_style == 'full_service':
+            if portal_count == 0:
+                self._apply_type_bias(logits, WT_PORTAL, 0.18)
+            elif vendor_count == 0:
+                self._apply_type_bias(logits, WT_VENDOR, 0.24)
+            elif lifestone_count == 0:
+                self._apply_type_bias(logits, WT_LIFESTONE, 0.20)
+            else:
+                self._apply_type_bias(logits, WT_CREATURE, -0.10 - 0.04 * min(creature_count, 3))
+        elif service_style == 'vendor_only':
+            if vendor_count == 0:
+                self._apply_type_bias(logits, WT_VENDOR, 0.22)
+            else:
+                self._apply_type_bias(logits, WT_PORTAL, -0.10)
+                self._apply_type_bias(logits, WT_LIFESTONE, -0.08)
+        elif service_style == 'lifestone_only':
+            if lifestone_count == 0:
+                self._apply_type_bias(logits, WT_LIFESTONE, 0.22)
+            else:
+                self._apply_type_bias(logits, WT_VENDOR, -0.08)
+
     def _apply_role_biases(self, logits: torch.Tensor, context: np.ndarray, placements: list[dict]) -> tuple[str, str]:
         role = self._settlement_role(context)
         archetype = self._settlement_archetype(context)
@@ -909,6 +976,7 @@ class PlacementGenerator:
             self._apply_compactness_bias(logits, role, placements, wcid_freq)
             self._apply_family_plan_biases(logits, placements, planner_plan)
             self._apply_archetype_realization_biases(logits, placements, planner_plan)
+            self._apply_service_style_biases(logits, placements, planner_plan)
 
             if self.pad_logit_bias:
                 logits[PAD_TOKEN] -= self.pad_logit_bias
