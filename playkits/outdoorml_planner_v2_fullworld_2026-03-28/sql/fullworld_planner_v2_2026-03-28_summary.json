@@ -1,0 +1,65 @@
+{
+  "model": "scene_placer_final.pt",
+  "output_sql": "/home/salvia420/WorldBuilder-ACME-Edition/playkits/outdoorml_planner_v2_fullworld_2026-03-28/sql/fullworld_planner_v2_2026-03-28.sql",
+  "generation_time_sec": 1182.29,
+  "region": {
+    "lb_x_min": null,
+    "lb_x_max": null,
+    "lb_y_min": null,
+    "lb_y_max": null,
+    "margin": 8
+  },
+  "sampling": {
+    "temperature": 1.0,
+    "top_k": 0,
+    "nucleus_p": 1.0,
+    "frequency_penalty": 0.3,
+    "min_objects": 5,
+    "pad_logit_bias": 1.0,
+    "stop_logit_bias": 0.5,
+    "adaptive_min_objects_bonus": 2,
+    "housing_logit_bias": 0.0,
+    "housing_flatness_threshold": 0.6,
+    "housing_difficulty_ceiling": 0.6,
+    "housing_min_placements": 2,
+    "max_housing_per_lb": 1,
+    "inject_town_lifestones": true,
+    "town_service_min_objects": 15,
+    "lifestone_wcid": 509,
+    "inject_town_vendors": true,
+    "town_vendor_min_objects": 20,
+    "vendor_wcid": 12718,
+    "seed": 42
+  },
+  "planner": {
+    "enabled": true,
+    "model": "/home/salvia420/WorldBuilder-ACME-Edition/pipeline_data/models/settlement_planner.pt",
+    "predicted_archetypes": {
+      "sparse_misc": 23691,
+      "service_node": 20184,
+      "housing_cluster": 12583,
+      "portal_creature_outpost": 389,
+      "vendor_portal_hub": 274
+    }
+  },
+  "results": {
+    "landblocks_populated": 57121,
+    "objects": 507627,
+    "houses": 288,
+    "encounters": 120585,
+    "raw_generated": 504744,
+    "accepted_after_validation": 504744,
+    "empty_landblocks_after_validation": 0,
+    "ocean_skips": 0,
+    "landblocks_visited": 57121,
+    "stop_samples": 57121,
+    "pad_samples": 17353,
+    "regular_samples": 504456,
+    "housing_samples": 288,
+    "special_leaks": 0,
+    "collision_rerolls": 306403,
+    "injected_lifestones": 2550,
+    "injected_vendors": 333
+  },
+  "debug_examples": []
+}

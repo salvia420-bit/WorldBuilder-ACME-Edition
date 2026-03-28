@@ -101,6 +101,14 @@ VENDOR_WCID_BY_CULTURE = {
     'Sho': 1392,
     'Neutral': 12718,
 }
+CULTURE_NAME_BY_CODE = {
+    0: "Neutral",
+    1: "Aluvian",
+    2: "Sho",
+    3: "Gharu'ndim",
+    4: "Viamontian",
+    5: "Empyrean",
+}
 
 ROLE_LABELS_BY_ARCHETYPE = {
     'service_node': 'service_node',
@@ -110,6 +118,9 @@ ROLE_LABELS_BY_ARCHETYPE = {
     'vendor_portal_hub': 'outpost',
     'sparse_misc': 'sparse_creature',
 }
+SETTLEMENT_ROLE_INDEX = {label: idx for idx, label in enumerate(SETTLEMENT_ROLE_LABELS)}
+SETTLEMENT_ARCHETYPE_INDEX = {label: idx for idx, label in enumerate(SETTLEMENT_ARCHETYPE_LABELS)}
+DEFAULT_PLANNER_BATCH_SIZE = 512
 
 PLANNER_FAMILY_TYPE_MAP = {
     'creature': WT_CREATURE,
@@ -208,17 +219,22 @@ def load_settlement_planner(planner_path: str, device: torch.device) -> Optional
     }
 
 
-@torch.no_grad()
+def _pad_or_trim_context(context: np.ndarray, target_dim: int) -> np.ndarray:
+    if len(context) > target_dim:
+        return context[:target_dim]
+    if len(context) < target_dim:
+        padded = np.zeros(target_dim, dtype=np.float32)
+        padded[:len(context)] = context
+        return padded
+    return context
+
+
+@torch.inference_mode()
 def predict_settlement_plan(planner_bundle: Optional[dict], context: np.ndarray, device: torch.device) -> Optional[dict]:
     if planner_bundle is None:
         return None
 
-    planner_ctx = context
-    planner_dim = planner_bundle['context_dim']
-    if len(planner_ctx) > planner_dim:
-        planner_ctx = planner_ctx[:planner_dim]
-    elif len(planner_ctx) < planner_dim:
-        planner_ctx = np.pad(planner_ctx, (0, planner_dim - len(planner_ctx)))
+    planner_ctx = _pad_or_trim_context(context, planner_bundle['context_dim'])
 
     ctx_tensor = torch.from_numpy(planner_ctx).float().unsqueeze(0).to(device)
     archetype_logits, service_style_logits, family_logits = planner_bundle['model'](ctx_tensor)
@@ -237,6 +253,52 @@ def predict_settlement_plan(planner_bundle: Optional[dict], context: np.ndarray,
             for label, bin_idx in zip(planner_bundle['family_labels'], family_bins)
         },
     }
+
+
+@torch.inference_mode()
+def predict_settlement_plans(planner_bundle: Optional[dict], contexts: List[np.ndarray],
+                             device: torch.device,
+                             batch_size: int = DEFAULT_PLANNER_BATCH_SIZE) -> List[Optional[dict]]:
+    if planner_bundle is None:
+        return [None] * len(contexts)
+    if not contexts:
+        return []
+
+    planner_dim = planner_bundle['context_dim']
+    planner_ctx = np.stack([
+        _pad_or_trim_context(context, planner_dim)
+        for context in contexts
+    ]).astype(np.float32, copy=False)
+
+    planner_model = planner_bundle['model']
+    archetype_labels = planner_bundle['archetype_labels']
+    family_labels = planner_bundle['family_labels']
+    service_style_labels = planner_bundle.get('service_style_labels') or ()
+    plans: List[Optional[dict]] = []
+
+    for start in range(0, len(planner_ctx), batch_size):
+        batch_np = planner_ctx[start:start + batch_size]
+        ctx_tensor = torch.from_numpy(batch_np).to(device)
+        archetype_logits, service_style_logits, family_logits = planner_model(ctx_tensor)
+        archetype_idx = archetype_logits.argmax(dim=-1).tolist()
+        family_bins = family_logits.argmax(dim=-1).tolist()
+        service_style_idx = None
+        if service_style_logits is not None and service_style_labels:
+            service_style_idx = service_style_logits.argmax(dim=-1).tolist()
+
+        for row_idx, arch_idx in enumerate(archetype_idx):
+            service_style = None
+            if service_style_idx is not None:
+                service_style = service_style_labels[service_style_idx[row_idx]]
+            plans.append({
+                'archetype': archetype_labels[arch_idx],
+                'service_style': service_style,
+                'family_bins': {
+                    label: int(bin_idx)
+                    for label, bin_idx in zip(family_labels, family_bins[row_idx])
+                },
+            })
+    return plans
 
 
 def apply_planner_plan_to_context(context: np.ndarray, planner_plan: Optional[dict], scene_context_dim: int) -> np.ndarray:
@@ -265,11 +327,11 @@ def apply_planner_plan_to_context(context: np.ndarray, planner_plan: Optional[di
     if len(ctx) >= role_end:
         ctx[role_offset:role_end] = 0.0
         if planner_role in SETTLEMENT_ROLE_LABELS:
-            ctx[role_offset + SETTLEMENT_ROLE_LABELS.index(planner_role)] = 1.0
+            ctx[role_offset + SETTLEMENT_ROLE_INDEX[planner_role]] = 1.0
     if len(ctx) >= arch_end:
         ctx[arch_offset:arch_end] = 0.0
-        if planner_archetype in SETTLEMENT_ARCHETYPE_LABELS:
-            ctx[arch_offset + SETTLEMENT_ARCHETYPE_LABELS.index(planner_archetype)] = 1.0
+        if planner_archetype in SETTLEMENT_ARCHETYPE_INDEX:
+            ctx[arch_offset + SETTLEMENT_ARCHETYPE_INDEX[planner_archetype]] = 1.0
 
     if len(ctx) > scene_context_dim:
         return ctx[:scene_context_dim]
@@ -1003,7 +1065,7 @@ class PlacementGenerator:
 
         return role, archetype
     
-    @torch.no_grad()
+    @torch.inference_mode()
     def generate(self, context: np.ndarray, planner_plan: Optional[dict] = None) -> tuple[list, dict]:
         """
         Generate object placements for a single landblock.
@@ -1019,7 +1081,8 @@ class PlacementGenerator:
         
         # Initialize sequence with an explicit start token. Training now uses a
         # shifted-right sequence, so a zero token is the correct first prompt.
-        seq = torch.zeros(1, 1, 10, device=self.device)
+        seq = torch.zeros(1, self.max_objects + 1, 10, device=self.device)
+        seq_len = 1
         
         placements = []
         wcid_freq = Counter()
@@ -1047,7 +1110,7 @@ class PlacementGenerator:
         for step in range(self.max_objects):
             debug['steps'] += 1
             # Forward pass
-            wcid_logits, pos_pred, rot_pred, link_pred = self.model(ctx, seq)
+            wcid_logits, pos_pred, rot_pred, link_pred = self.model(ctx, seq[:, :seq_len, :])
             
             # Get logits for the last position
             logits = wcid_logits[0, -1, :]  # (vocab_size,)
@@ -1175,25 +1238,239 @@ class PlacementGenerator:
             wcid_freq[wcid_idx] += 1
             
             # Build next input token
-            next_token = torch.zeros(1, 1, 10, device=self.device)
             wcid = placement['wcid']
-            next_token[0, 0, 0] = wcid_idx
-            next_token[0, 0, 1] = float(pos[0])
-            next_token[0, 0, 2] = float(pos[1])
-            next_token[0, 0, 4] = float(rot[0])
-            next_token[0, 0, 5] = float(rot[1])
-            next_token[0, 0, 7] = float(link > 0.5)
+            seq[0, seq_len, :] = 0.0
+            seq[0, seq_len, 0] = wcid_idx
+            seq[0, seq_len, 1] = float(pos[0])
+            seq[0, seq_len, 2] = float(pos[1])
+            seq[0, seq_len, 4] = float(rot[0])
+            seq[0, seq_len, 5] = float(rot[1])
+            seq[0, seq_len, 7] = float(link > 0.5)
             if placement['is_housing']:
-                next_token[0, 0, 6] = WT_SLUMLORD / 55.0
+                seq[0, seq_len, 6] = WT_SLUMLORD / 55.0
             elif isinstance(wcid, int):
-                next_token[0, 0, 6] = self.wcid_types.get(wcid, 0) / 55.0
-            next_token[0, 0, 9] = min((len(placements) - 1) / MAX_OBJECTS_PER_LB, 1.0)
-            
-            seq = torch.cat([seq, next_token], dim=1)
+                seq[0, seq_len, 6] = self.wcid_types.get(wcid, 0) / 55.0
+            seq[0, seq_len, 9] = min((len(placements) - 1) / MAX_OBJECTS_PER_LB, 1.0)
+            seq_len += 1
         else:
             debug['max_steps_reached'] = True
         
         return placements, debug
+
+    @torch.inference_mode()
+    def generate_batch(self, contexts: List[np.ndarray],
+                       planner_plans: Optional[List[Optional[dict]]] = None) -> tuple[List[list], List[dict]]:
+        if not contexts:
+            return [], []
+        if len(contexts) == 1:
+            placements, debug = self.generate(contexts[0], None if not planner_plans else planner_plans[0])
+            return [placements], [debug]
+
+        batch_size = len(contexts)
+        planner_plans = planner_plans or [None] * batch_size
+        ctx_batch = torch.from_numpy(np.stack(contexts).astype(np.float32, copy=False)).to(self.device)
+        seq = torch.zeros(batch_size, self.max_objects + 1, 10, device=self.device)
+        seq_mask = torch.zeros(batch_size, self.max_objects + 1, dtype=torch.bool, device=self.device)
+        seq_mask[:, 0] = True
+        seq_lens = torch.ones(batch_size, dtype=torch.long, device=self.device)
+
+        placements_by_lb: List[list] = [[] for _ in range(batch_size)]
+        wcid_freqs = [Counter() for _ in range(batch_size)]
+        min_objects_targets = [self._estimate_min_objects(context) for context in contexts]
+        housing_friendly_flags = [self._is_housing_friendly_context(context) for context in contexts]
+        debug_by_lb: List[dict] = []
+        active = list(range(batch_size))
+
+        for planner_plan, min_objects_for_lb, housing_friendly in zip(
+            planner_plans, min_objects_targets, housing_friendly_flags
+        ):
+            debug = {
+                'steps': 0,
+                'sampled_stop': 0,
+                'sampled_pad': 0,
+                'sampled_housing': 0,
+                'sampled_regular': 0,
+                'sampled_raw_slumlord_as_housing': 0,
+                'forced_continue_after_stop': 0,
+                'special_leaks': 0,
+                'terminated_by_stop': False,
+                'max_steps_reached': False,
+                'min_objects_target': min_objects_for_lb,
+                'stop_suppressed_steps': 0,
+                'housing_boost_steps': 0,
+                'housing_friendly_context': housing_friendly,
+            }
+            if planner_plan:
+                debug['planner_conditioned'] = 1
+            debug_by_lb.append(debug)
+
+        for _step in range(self.max_objects):
+            if not active:
+                break
+
+            active_tensor = torch.tensor(active, device=self.device, dtype=torch.long)
+            active_lens = seq_lens[active_tensor]
+            current_len = int(active_lens.max().item())
+            wcid_logits, pos_pred, rot_pred, link_pred = self.model(
+                ctx_batch[active_tensor],
+                seq[active_tensor, :current_len, :],
+                mask=seq_mask[active_tensor, :current_len],
+            )
+            gather_index = (active_lens - 1).view(-1, 1, 1)
+            logits_batch = wcid_logits.gather(
+                1, gather_index.expand(-1, 1, wcid_logits.size(-1))
+            ).squeeze(1)
+            pos_batch = pos_pred.gather(1, gather_index.expand(-1, 1, pos_pred.size(-1))).squeeze(1)
+            rot_batch = rot_pred.gather(1, gather_index.expand(-1, 1, rot_pred.size(-1))).squeeze(1)
+            link_batch = link_pred.gather(1, gather_index.expand(-1, 1, link_pred.size(-1))).squeeze(1)
+
+            next_active = []
+            for batch_row, lb_idx in enumerate(active):
+                debug = debug_by_lb[lb_idx]
+                debug['steps'] += 1
+                logits = logits_batch[batch_row].clone()
+                placements = placements_by_lb[lb_idx]
+                wcid_freq = wcid_freqs[lb_idx]
+                min_objects_for_lb = min_objects_targets[lb_idx]
+                housing_friendly = housing_friendly_flags[lb_idx]
+                context = contexts[lb_idx]
+                planner_plan = planner_plans[lb_idx]
+
+                for wcid_idx, count in wcid_freq.items():
+                    if wcid_idx < len(logits):
+                        logits[wcid_idx] -= self.frequency_penalty * math.log(count + 1)
+
+                role = self._settlement_role(context)
+                self._apply_compactness_bias(logits, role, placements, wcid_freq)
+                self._apply_family_plan_biases(logits, placements, planner_plan)
+                self._apply_archetype_realization_biases(logits, placements, planner_plan)
+                self._apply_service_style_biases(logits, placements, planner_plan)
+                self._apply_dense_service_compactness_bias(logits, placements, planner_plan, wcid_freq)
+
+                if self.pad_logit_bias:
+                    logits[PAD_TOKEN] -= self.pad_logit_bias
+
+                if len(placements) < min_objects_for_lb:
+                    logits[STOP_TOKEN] = float('-inf')
+                    debug['stop_suppressed_steps'] += 1
+                elif self.stop_logit_bias:
+                    logits[STOP_TOKEN] -= self.stop_logit_bias
+
+                self._apply_role_biases(logits, context, placements)
+
+                if housing_friendly:
+                    housing_count = sum(1 for p in placements if p.get('is_housing'))
+                    if housing_count >= self.max_housing_per_lb:
+                        for housing_idx in HOUSING_TOKEN_MAP:
+                            logits[housing_idx] = float('-inf')
+                    elif len(placements) >= self.housing_min_placements and self.housing_logit_bias:
+                        for housing_idx in HOUSING_TOKEN_MAP:
+                            logits[housing_idx] += self.housing_logit_bias
+                        debug['housing_boost_steps'] += 1
+
+                logits = logits / self.temperature
+
+                if self.top_k > 0:
+                    top_k_logits, top_k_indices = torch.topk(logits, self.top_k)
+                    logits = torch.full_like(logits, float('-inf'))
+                    logits.scatter_(0, top_k_indices, top_k_logits)
+
+                if self.nucleus_p < 1.0:
+                    sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+                    cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+                    sorted_indices_to_remove = cumulative_probs > self.nucleus_p
+                    sorted_indices_to_remove[1:] = sorted_indices_to_remove[:-1].clone()
+                    sorted_indices_to_remove[0] = False
+                    indices_to_remove = sorted_indices[sorted_indices_to_remove]
+                    logits[indices_to_remove] = float('-inf')
+
+                probs = F.softmax(logits, dim=-1)
+                wcid_idx = torch.multinomial(probs, 1).item()
+
+                if wcid_idx == STOP_TOKEN:
+                    debug['sampled_stop'] += 1
+                    if len(placements) >= min_objects_for_lb:
+                        debug['terminated_by_stop'] = True
+                        continue
+                    debug['forced_continue_after_stop'] += 1
+                    next_active.append(lb_idx)
+                    continue
+
+                if wcid_idx == PAD_TOKEN:
+                    debug['sampled_pad'] += 1
+                    next_active.append(lb_idx)
+                    continue
+
+                sampled_wcid = self.idx_to_wcid.get(wcid_idx, wcid_idx)
+                housing_type = HOUSING_TOKEN_MAP.get(wcid_idx)
+                if housing_type is None and isinstance(sampled_wcid, int) and sampled_wcid >= 0:
+                    housing_type = classify_slumlord_house_type(sampled_wcid)
+                    if housing_type is not None:
+                        wcid_idx = HOUSE_TYPE_TOKEN_MAP[housing_type]
+                        sampled_wcid = self.idx_to_wcid.get(wcid_idx, wcid_idx)
+                        debug['sampled_raw_slumlord_as_housing'] += 1
+
+                if housing_type is not None:
+                    debug['sampled_housing'] += 1
+                else:
+                    debug['sampled_regular'] += 1
+
+                pos = pos_batch[batch_row].tolist()
+                rot = rot_batch[batch_row].tolist()
+                link = torch.sigmoid(link_batch[batch_row, 0]).item()
+
+                local_x = max(4.0, min(188.0, pos[0] * LB_SIZE))
+                local_y = max(4.0, min(188.0, pos[1] * LB_SIZE))
+                local_x += random.gauss(0, 1.5)
+                local_y += random.gauss(0, 1.5)
+                local_x = max(2.0, min(190.0, local_x))
+                local_y = max(2.0, min(190.0, local_y))
+
+                placement = {
+                    'wcid_idx': wcid_idx,
+                    'wcid': sampled_wcid,
+                    'local_x': round(local_x, 2),
+                    'local_y': round(local_y, 2),
+                    'local_z': 0.0,
+                    'rot_w': round(float(rot[0]), 4),
+                    'rot_z': round(float(rot[1]), 4),
+                    'is_link_child': link > 0.5,
+                    'is_housing': housing_type is not None,
+                    'housing_type': housing_type,
+                }
+
+                if (isinstance(placement['wcid'], int) and placement['wcid'] < 0 and
+                        not placement['is_housing']):
+                    debug['special_leaks'] += 1
+                    next_active.append(lb_idx)
+                    continue
+
+                placements.append(placement)
+                wcid_freq[wcid_idx] += 1
+
+                seq_pos = int(seq_lens[lb_idx].item())
+                seq[lb_idx, seq_pos, :] = 0.0
+                seq[lb_idx, seq_pos, 0] = wcid_idx
+                seq[lb_idx, seq_pos, 1] = float(pos[0])
+                seq[lb_idx, seq_pos, 2] = float(pos[1])
+                seq[lb_idx, seq_pos, 4] = float(rot[0])
+                seq[lb_idx, seq_pos, 5] = float(rot[1])
+                seq[lb_idx, seq_pos, 7] = float(link > 0.5)
+                if placement['is_housing']:
+                    seq[lb_idx, seq_pos, 6] = WT_SLUMLORD / 55.0
+                elif isinstance(sampled_wcid, int):
+                    seq[lb_idx, seq_pos, 6] = self.wcid_types.get(sampled_wcid, 0) / 55.0
+                seq[lb_idx, seq_pos, 9] = min((len(placements) - 1) / MAX_OBJECTS_PER_LB, 1.0)
+                seq_mask[lb_idx, seq_pos] = True
+                seq_lens[lb_idx] += 1
+                next_active.append(lb_idx)
+
+            active = next_active
+        else:
+            for lb_idx in active:
+                debug_by_lb[lb_idx]['max_steps_reached'] = True
+
+        return placements_by_lb, debug_by_lb
 
     @torch.no_grad()
     def inspect_first_step(self, context: np.ndarray, summary_top_k: int = 10) -> dict:
@@ -1270,6 +1547,34 @@ def iter_landblocks(args):
             yield lb_x, lb_y
 
 
+def count_landblocks(args) -> int:
+    """Count the total landblocks covered by the requested region bounds."""
+    x_start = args.lb_x_min if args.lb_x_min is not None else args.margin
+    x_end = args.lb_x_max if args.lb_x_max is not None else 254 - args.margin
+    y_start = args.lb_y_min if args.lb_y_min is not None else args.margin
+    y_end = args.lb_y_max if args.lb_y_max is not None else 254 - args.margin
+
+    x_start = max(0, x_start)
+    y_start = max(0, y_start)
+    x_end = min(254, x_end)
+    y_end = min(254, y_end)
+
+    if x_end < x_start or y_end < y_start:
+        return 0
+    return (x_end - x_start + 1) * (y_end - y_start + 1)
+
+
+def iter_landblock_batches(args, batch_size: int):
+    batch = []
+    for lb_x, lb_y in iter_landblocks(args):
+        batch.append((lb_x, lb_y))
+        if len(batch) >= batch_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
 # ─── Height Snapping ─────────────────────────────────────────────────────────
 
 def snap_to_terrain(local_x: float, local_y: float, 
@@ -1314,6 +1619,7 @@ def load_ocean_mask(difficulty_grid: np.ndarray) -> np.ndarray:
 
 # ─── Main Generation ─────────────────────────────────────────────────────────
 
+@torch.inference_mode()
 def generate_world(args):
     """Generate placements for the entire world."""
     output_sql = os.path.abspath(args.output_sql) if args.output_sql else OUTPUT_SQL
@@ -1424,156 +1730,184 @@ def generate_world(args):
     planner_archetypes = Counter()
     
     t0 = time.time()
-    region_blocks = list(iter_landblocks(args))
-    total_region_blocks = len(region_blocks)
-    
-    for i, (lb_x, lb_y) in enumerate(region_blocks, start=1):
-        # Skip ocean
-        if ocean_mask is not None and ocean_mask[lb_y, lb_x]:
-            debug_totals['ocean_skips'] += 1
-            continue
-        
-        # Build context
-        ctx = build_context_vector(
-            lb_x, lb_y, heights, difficulty_grid,
-            culture_grid, instance_counts
-        )
-        planner_plan = predict_settlement_plan(planner_bundle, ctx, device)
-        if planner_plan:
-            planner_archetypes[planner_plan['archetype']] += 1
-        ctx = apply_planner_plan_to_context(ctx, planner_plan, config['context_dim'])
-        
-        # Generate placements
-        placements, gen_stats = generator.generate(ctx, planner_plan=planner_plan)
-        debug_totals['landblocks_visited'] += 1
-        debug_totals['raw_generated'] += len(placements)
-        debug_totals.update(gen_stats)
-        
-        # Validate
-        culture_code = culture_grid[lb_x, lb_y] if 0 <= lb_x < 255 and 0 <= lb_y < 255 else 0
-        culture_name = {0:"Neutral", 1:"Aluvian", 2:"Sho", 3:"Gharu'ndim",
-                       4:"Viamontian", 5:"Empyrean"}.get(culture_code, "Neutral")
-        
-        placements, validation_stats = generator.validate_placements(placements, lb_x, lb_y, culture_name)
-        debug_totals.update(validation_stats)
+    total_region_blocks = count_landblocks(args)
+    processed_region_blocks = 0
 
-        if args.inject_town_lifestones:
-            placements, injected_lifestones = maybe_add_town_lifestone(
-                placements,
-                wcid_types,
-                min_objects=args.town_service_min_objects,
-                lifestone_wcid=args.lifestone_wcid,
+    for block_batch in iter_landblock_batches(args, DEFAULT_PLANNER_BATCH_SIZE):
+        prepared = []
+        planner_contexts = []
+
+        for lb_x, lb_y in block_batch:
+            processed_region_blocks += 1
+            progress_index = processed_region_blocks
+            if ocean_mask is not None and ocean_mask[lb_y, lb_x]:
+                debug_totals['ocean_skips'] += 1
+                continue
+
+            ctx = build_context_vector(
+                lb_x, lb_y, heights, difficulty_grid,
+                culture_grid, instance_counts
             )
-            debug_totals['injected_lifestones'] += injected_lifestones
-        if args.inject_town_vendors:
-            vendor_wcid = VENDOR_WCID_BY_CULTURE.get(culture_name, args.vendor_wcid)
-            placements, injected_vendors = maybe_add_town_vendor(
-                placements,
-                wcid_types,
-                min_objects=args.town_vendor_min_objects,
-                vendor_wcid=vendor_wcid,
-            )
-            debug_totals['injected_vendors'] += injected_vendors
-        
-        if not placements:
-            debug_totals['empty_landblocks_after_validation'] += 1
-            if args.debug_landblocks > 0 and len(debug_examples) < args.debug_landblocks:
-                debug_examples.append(
-                    f"LB ({lb_x},{lb_y}) empty: raw={gen_stats.get('sampled_regular', 0) + gen_stats.get('sampled_housing', 0)}, "
-                    f"stop={gen_stats.get('sampled_stop', 0)}, pad={gen_stats.get('sampled_pad', 0)}, "
-                    f"special_leaks={gen_stats.get('special_leaks', 0)}, steps={gen_stats.get('steps', 0)}"
+            culture_code = culture_grid[lb_x, lb_y] if 0 <= lb_x < 255 and 0 <= lb_y < 255 else 0
+            culture_name = CULTURE_NAME_BY_CODE.get(int(culture_code), "Neutral")
+            prepared.append({
+                'lb_x': lb_x,
+                'lb_y': lb_y,
+                'ctx': ctx,
+                'culture_name': culture_name,
+                'height_grid': heights.get((lb_x, lb_y)),
+                'progress_index': progress_index,
+            })
+            planner_contexts.append(ctx)
+
+        planner_plans = predict_settlement_plans(planner_bundle, planner_contexts, device)
+
+        for chunk_start in range(0, len(prepared), max(1, args.landblock_batch_size)):
+            landblock_chunk = prepared[chunk_start:chunk_start + max(1, args.landblock_batch_size)]
+            planner_chunk = planner_plans[chunk_start:chunk_start + max(1, args.landblock_batch_size)]
+            conditioned_contexts = []
+            for landblock, planner_plan in zip(landblock_chunk, planner_chunk):
+                if planner_plan:
+                    planner_archetypes[planner_plan['archetype']] += 1
+                conditioned_contexts.append(
+                    apply_planner_plan_to_context(landblock['ctx'], planner_plan, config['context_dim'])
                 )
-            continue
-        
-        lb_count += 1
-        cell_id = (lb_x << 24) | (lb_y << 16) | 0x0001
-        
-        for p in placements:
-            # Height snap
-            h = heights.get((lb_x, lb_y))
-            if h is not None:
-                p['local_z'] = snap_to_terrain(p['local_x'], p['local_y'], h)
-            
-            world_x = lb_x * LB_SIZE + p['local_x']
-            world_y = lb_y * LB_SIZE + p['local_y']
-            
-            if p.get('is_housing') and p.get('housing_type'):
-                # Housing → use the linker
-                housing_stmts = housing_linker.place_housing(
-                    house_type=p['housing_type'],
-                    culture=culture_name,
-                    world_x=world_x,
-                    world_y=world_y,
-                    world_z=p['local_z'],
-                    lb_x=lb_x, lb_y=lb_y,
-                )
-                for stmt in housing_stmts:
-                    if stmt.table == 'landblock_instance':
-                        all_instance_stmts.append(stmt)
-                    else:
-                        all_link_stmts.append(stmt)
-                housing_count += 1
+
+            if args.landblock_batch_size > 1:
+                placements_batch, debug_batch = generator.generate_batch(conditioned_contexts, planner_chunk)
             else:
-                # Regular instance
-                guid = guid_alloc.next()
-                wcid = p.get('wcid', 0)
-                if isinstance(wcid, int) and wcid < 0:
-                    debug_totals['special_leaks_post_validation'] += 1
+                placements_batch = []
+                debug_batch = []
+                for ctx, planner_plan in zip(conditioned_contexts, planner_chunk):
+                    placements, gen_stats = generator.generate(ctx, planner_plan=planner_plan)
+                    placements_batch.append(placements)
+                    debug_batch.append(gen_stats)
+
+            for landblock, planner_plan, placements, gen_stats in zip(
+                landblock_chunk, planner_chunk, placements_batch, debug_batch
+            ):
+                lb_x = landblock['lb_x']
+                lb_y = landblock['lb_y']
+                culture_name = landblock['culture_name']
+                progress_index = landblock['progress_index']
+                debug_totals['landblocks_visited'] += 1
+                debug_totals['raw_generated'] += len(placements)
+                debug_totals.update(gen_stats)
+
+                placements, validation_stats = generator.validate_placements(placements, lb_x, lb_y, culture_name)
+                debug_totals.update(validation_stats)
+
+                if args.inject_town_lifestones:
+                    placements, injected_lifestones = maybe_add_town_lifestone(
+                        placements,
+                        wcid_types,
+                        min_objects=args.town_service_min_objects,
+                        lifestone_wcid=args.lifestone_wcid,
+                    )
+                    debug_totals['injected_lifestones'] += injected_lifestones
+                if args.inject_town_vendors:
+                    vendor_wcid = VENDOR_WCID_BY_CULTURE.get(culture_name, args.vendor_wcid)
+                    placements, injected_vendors = maybe_add_town_vendor(
+                        placements,
+                        wcid_types,
+                        min_objects=args.town_vendor_min_objects,
+                        vendor_wcid=vendor_wcid,
+                    )
+                    debug_totals['injected_vendors'] += injected_vendors
+
+                if not placements:
+                    debug_totals['empty_landblocks_after_validation'] += 1
+                    if args.debug_landblocks > 0 and len(debug_examples) < args.debug_landblocks:
+                        debug_examples.append(
+                            f"LB ({lb_x},{lb_y}) empty: raw={gen_stats.get('sampled_regular', 0) + gen_stats.get('sampled_housing', 0)}, "
+                            f"stop={gen_stats.get('sampled_stop', 0)}, pad={gen_stats.get('sampled_pad', 0)}, "
+                            f"special_leaks={gen_stats.get('special_leaks', 0)}, steps={gen_stats.get('steps', 0)}"
+                        )
                     continue
-                
-                all_instance_stmts.append(SQLStatement(
-                    table='landblock_instance',
-                    values={
-                        'guid': guid,
-                        'wcid': wcid,
-                        'cell_id': cell_id,
-                        'x': round(world_x, 6),
-                        'y': round(world_y, 6),
-                        'z': round(p['local_z'], 6),
-                        'w': p.get('rot_w', 1.0),
-                        'qx': 0.0,
-                        'qy': 0.0,
-                        'qz': p.get('rot_z', 0.0),
-                        'is_link_child': p.get('is_link_child', False),
-                        'last_modified': now,
-                    }
-                ))
-            
-            total_objects += 1
-        
-        # ── Generate encounters for this LB (creature generators) ──
-        if difficulty_grid is not None and 0 <= lb_x < 255 and 0 <= lb_y < 255:
-            tier = max(0, min(5, int(difficulty_grid[lb_y, lb_x])))
-            generators = ENCOUNTER_GENERATORS_BY_TIER.get(tier, [])
-            
-            if generators and tier > 0:
-                # Place 1-4 encounter generators per landblock
-                num_encounters = random.randint(1, min(4, len(generators)))
-                lb_id_enc = (lb_x << 8) | lb_y
-                
-                for _ in range(num_encounters):
-                    gen_wcid = random.choice(generators)
-                    cell_x = random.randint(0, 7)
-                    cell_y = random.randint(0, 7)
-                    
-                    all_encounter_stmts.append({
-                        'id': enc_id_counter,
-                        'landblock': lb_id_enc,
-                        'wcid': gen_wcid,
-                        'cell_x': cell_x,
-                        'cell_y': cell_y,
-                        'last_modified': now,
-                    })
-                    enc_id_counter += 1
-                    encounter_count += 1
-        
-        # Progress
-        if args.progress_every > 0 and i % args.progress_every == 0:
-            elapsed = time.time() - t0
-            pct = i / max(total_region_blocks, 1) * 100
-            print(f"    {pct:.0f}% ({lb_count} LBs, {total_objects:,} objects, "
-                  f"{housing_count} houses, {encounter_count} encounters, {elapsed:.0f}s, "
-                  f"raw={debug_totals['raw_generated']}, accepted={debug_totals['accepted_count']})")
+
+                lb_count += 1
+                cell_id = (lb_x << 24) | (lb_y << 16) | 0x0001
+                height_grid = landblock['height_grid']
+
+                for p in placements:
+                    if height_grid is not None:
+                        p['local_z'] = snap_to_terrain(p['local_x'], p['local_y'], height_grid)
+
+                    world_x = lb_x * LB_SIZE + p['local_x']
+                    world_y = lb_y * LB_SIZE + p['local_y']
+
+                    if p.get('is_housing') and p.get('housing_type'):
+                        housing_stmts = housing_linker.place_housing(
+                            house_type=p['housing_type'],
+                            culture=culture_name,
+                            world_x=world_x,
+                            world_y=world_y,
+                            world_z=p['local_z'],
+                            lb_x=lb_x, lb_y=lb_y,
+                        )
+                        for stmt in housing_stmts:
+                            if stmt.table == 'landblock_instance':
+                                all_instance_stmts.append(stmt)
+                            else:
+                                all_link_stmts.append(stmt)
+                        housing_count += 1
+                    else:
+                        guid = guid_alloc.next()
+                        wcid = p.get('wcid', 0)
+                        if isinstance(wcid, int) and wcid < 0:
+                            debug_totals['special_leaks_post_validation'] += 1
+                            continue
+
+                        all_instance_stmts.append(SQLStatement(
+                            table='landblock_instance',
+                            values={
+                                'guid': guid,
+                                'wcid': wcid,
+                                'cell_id': cell_id,
+                                'x': round(world_x, 6),
+                                'y': round(world_y, 6),
+                                'z': round(p['local_z'], 6),
+                                'w': p.get('rot_w', 1.0),
+                                'qx': 0.0,
+                                'qy': 0.0,
+                                'qz': p.get('rot_z', 0.0),
+                                'is_link_child': p.get('is_link_child', False),
+                                'last_modified': now,
+                            }
+                        ))
+
+                    total_objects += 1
+
+                if difficulty_grid is not None and 0 <= lb_x < 255 and 0 <= lb_y < 255:
+                    tier = max(0, min(5, int(difficulty_grid[lb_y, lb_x])))
+                    generators = ENCOUNTER_GENERATORS_BY_TIER.get(tier, [])
+
+                    if generators and tier > 0:
+                        num_encounters = random.randint(1, min(4, len(generators)))
+                        lb_id_enc = (lb_x << 8) | lb_y
+
+                        for _ in range(num_encounters):
+                            gen_wcid = random.choice(generators)
+                            cell_x = random.randint(0, 7)
+                            cell_y = random.randint(0, 7)
+
+                            all_encounter_stmts.append({
+                                'id': enc_id_counter,
+                                'landblock': lb_id_enc,
+                                'wcid': gen_wcid,
+                                'cell_x': cell_x,
+                                'cell_y': cell_y,
+                                'last_modified': now,
+                            })
+                            enc_id_counter += 1
+                            encounter_count += 1
+
+                if args.progress_every > 0 and progress_index % args.progress_every == 0:
+                    elapsed = time.time() - t0
+                    pct = progress_index / max(total_region_blocks, 1) * 100
+                    print(f"    {pct:.0f}% ({lb_count} LBs, {total_objects:,} objects, "
+                          f"{housing_count} houses, {encounter_count} encounters, {elapsed:.0f}s, "
+                          f"raw={debug_totals['raw_generated']}, accepted={debug_totals['accepted_count']})")
     
     elapsed = time.time() - t0
     
@@ -1838,6 +2172,8 @@ def main():
                        help="Optional inclusive Y end for debug-region generation")
     parser.add_argument("--progress-every", type=int, default=25,
                        help="How many processed landblocks between progress logs")
+    parser.add_argument("--landblock-batch-size", type=int, default=1,
+                       help="Number of landblocks to generate in parallel during inference; 1 preserves legacy behavior")
     parser.add_argument("--debug-landblocks", type=int, default=10,
                        help="Number of empty-landblock diagnostic examples to print")
     parser.add_argument("--seed", type=int, default=42)
