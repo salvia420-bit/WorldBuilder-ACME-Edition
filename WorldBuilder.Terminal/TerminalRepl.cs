@@ -797,7 +797,7 @@ public class TerminalRepl {
         if (tokens.Length < 3) { Console.WriteLine("Usage: validate-terrain <lbX> <lbY> [cliff-threshold]"); return; }
         if (!TryParseUint(tokens[1], "lbX", out uint lbX)) return;
         if (!TryParseUint(tokens[2], "lbY", out uint lbY)) return;
-        float threshold = 100f;
+        float threshold = ValidationEngine.DefaultCliffThreshold;
         if (tokens.Length >= 4 && !TryParseFloat(tokens[3], "cliff-threshold", out threshold)) return;
         PrintValidationReport(_engine.ValidateTerrain(lbX, lbY, threshold));
     }
@@ -823,7 +823,7 @@ public class TerminalRepl {
         if (tokens.Length < 3) { Console.WriteLine("Usage: validate-all <lbX> <lbY> [cliff-threshold]"); return; }
         if (!TryParseUint(tokens[1], "lbX", out uint lbX)) return;
         if (!TryParseUint(tokens[2], "lbY", out uint lbY)) return;
-        float threshold = 100f;
+        float threshold = ValidationEngine.DefaultCliffThreshold;
         if (tokens.Length >= 4 && !TryParseFloat(tokens[3], "cliff-threshold", out threshold)) return;
         PrintValidationReport(_engine.ValidateAll(lbX, lbY, threshold));
     }

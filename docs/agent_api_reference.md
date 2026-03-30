@@ -1117,7 +1117,7 @@ Validates terrain data — extreme height cliffs between adjacent vertices, edge
 |-----------|------|----------|---------|-------------|
 | `lbX` | uint | ✅ | — | Landblock grid X |
 | `lbY` | uint | ✅ | — | Landblock grid Y |
-| `cliffThreshold` | float | ❌ | 100.0 | Height delta threshold for cliff warnings (world units) |
+| `cliffThreshold` | float | ❌ | 12.0 | Height delta threshold for cliff warnings (world units) |
 
 ---
 
@@ -1145,7 +1145,7 @@ Runs **all four validators** in a single call and returns a combined report. Thi
 |-----------|------|----------|---------|-------------|
 | `lbX` | uint | ✅ | — | Landblock grid X |
 | `lbY` | uint | ✅ | — | Landblock grid Y |
-| `cliffThreshold` | float | ❌ | 100.0 | Cliff warning threshold |
+| `cliffThreshold` | float | ❌ | 12.0 | Cliff warning threshold |
 
 ---
 

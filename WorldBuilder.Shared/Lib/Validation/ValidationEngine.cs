@@ -46,6 +46,7 @@ public record ValidationReport(
 /// so that an AI agent gets immediate structured feedback after mutations.
 /// </summary>
 public static class ValidationEngine {
+    public const float DefaultCliffThreshold = 12f;
 
     // ════════════════════════════════════════════════════════════
     //  Dungeon validation
@@ -327,7 +328,7 @@ public static class ValidationEngine {
         TerrainDocument terrainDoc,
         ushort lbKey,
         float[] heightTable,
-        float cliffThreshold = 100f) {
+        float cliffThreshold = DefaultCliffThreshold) {
 
         var diagnostics = new List<ValidationDiagnostic>();
         var target = $"terrain_{lbKey:X4}";
@@ -615,7 +616,7 @@ public static class ValidationEngine {
         float[]? heightTable,
         Func<float, float, float>? heightLookup,
         IDatReaderWriter? dats,
-        float cliffThreshold = 100f) {
+        float cliffThreshold = DefaultCliffThreshold) {
 
         var allDiagnostics = new List<ValidationDiagnostic>();
         var target = $"all_{lbKey:X4}";

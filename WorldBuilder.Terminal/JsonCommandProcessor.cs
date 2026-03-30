@@ -1,6 +1,7 @@
 using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using WorldBuilder.Shared.Lib.Validation;
 using WorldBuilder.Shared.Services;
 
 namespace WorldBuilder.Terminal;
@@ -532,7 +533,7 @@ public class JsonCommandProcessor {
 
     private string CmdValidateTerrain(System.Text.Json.Nodes.JsonNode node) {
         uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
-        float threshold = node["cliffThreshold"]?.GetValue<float>() ?? 100f;
+        float threshold = node["cliffThreshold"]?.GetValue<float>() ?? ValidationEngine.DefaultCliffThreshold;
         return FormatValidation("validate-terrain", lbX, lbY, _engine.ValidateTerrain(lbX, lbY, threshold));
     }
 
@@ -548,7 +549,7 @@ public class JsonCommandProcessor {
 
     private string CmdValidateAll(System.Text.Json.Nodes.JsonNode node) {
         uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
-        float threshold = node["cliffThreshold"]?.GetValue<float>() ?? 100f;
+        float threshold = node["cliffThreshold"]?.GetValue<float>() ?? ValidationEngine.DefaultCliffThreshold;
         return FormatValidation("validate-all", lbX, lbY, _engine.ValidateAll(lbX, lbY, threshold));
     }
 

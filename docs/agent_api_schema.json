@@ -547,7 +547,7 @@
                 "qw": {
                     "type": "float",
                     "required": false,
-                    "default": 1.0,
+                    "default": 12.0,
                     "description": "Quaternion W"
                 },
                 "qx": {
@@ -974,7 +974,7 @@
                 "cliffThreshold": {
                     "type": "float",
                     "required": false,
-                    "default": 100.0,
+                    "default": 1.0,
                     "description": "Height delta for cliff warnings (world units)"
                 }
             },
@@ -1010,7 +1010,7 @@
                 "cliffThreshold": {
                     "type": "float",
                     "required": false,
-                    "default": 100.0
+                    "default": 12.0
                 }
             },
             "response": "$ref:validationReport"

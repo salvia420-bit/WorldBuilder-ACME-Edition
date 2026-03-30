@@ -1013,7 +1013,7 @@ public class CommandEngine {
         return ValidationEngine.ValidateLandblock(lbDoc, lbKey, heightLookup, dats);
     }
 
-    public ValidationReport ValidateTerrain(uint lbX, uint lbY, float cliffThreshold = 100f) {
+    public ValidationReport ValidateTerrain(uint lbX, uint lbY, float cliffThreshold = ValidationEngine.DefaultCliffThreshold) {
         RequireProject();
         ushort lbKey = LbKey(lbX, lbY);
         return ValidationEngine.ValidateTerrain(
@@ -1034,7 +1034,7 @@ public class CommandEngine {
             _projectManager.CurrentProject!.DocumentManager.Dats);
     }
 
-    public ValidationReport ValidateAll(uint lbX, uint lbY, float cliffThreshold = 100f) {
+    public ValidationReport ValidateAll(uint lbX, uint lbY, float cliffThreshold = ValidationEngine.DefaultCliffThreshold) {
         RequireProject();
         ushort lbKey = LbKey(lbX, lbY);
         var project = _projectManager.CurrentProject!;
@@ -7049,6 +7049,11 @@ public class CommandEngine {
             flattenStrength = Math.Clamp(flattenStrength, 0f, 1f);
             BuildingBlueprintCache.ClearPlacementDonorHints();
 
+            const float maxBuildingBurialMeters = 0.1f;
+            const float maxBuildingFloatMeters = 1.0f;
+            const float foundationAutoFixThresholdMeters = 0.75f;
+            const float foundationResidualWarnThresholdMeters = 1.0f;
+
             // 1. Load lb_remap.json
             if (!File.Exists(remapJsonPath))
                 return new RemapBuildingsV2Result(false, 0, 0, 0, 0, 0, 0,
@@ -7416,10 +7421,17 @@ public class CommandEngine {
                     float sourceOriginToGroundOffset = building.Frame.Origin.Z - sourceGroundZ;
                     float retainedOriginToGroundOffset = preserveRetailZProfile
                         ? sourceOriginToGroundOffset
-                        : Math.Clamp(sourceOriginToGroundOffset, -2f, 6f);
+                        : Math.Clamp(sourceOriginToGroundOffset, -maxBuildingBurialMeters, maxBuildingFloatMeters);
                     float targetGroundZ = placement.destinationGroundZ ?? (sourceGroundZ + fallbackDeltaZ);
                     float newZ = targetGroundZ + retainedOriginToGroundOffset;
                     float placedZ = flattenTerrain ? heightTable[FindClosestHeightIdx(newZ)] : newZ;
+
+                    if (!preserveRetailZProfile &&
+                        Math.Abs(retainedOriginToGroundOffset - sourceOriginToGroundOffset) > 0.01f) {
+                        warnings.Add(
+                            $"Building 0x{building.ModelId:X8} in LB 0x{newLbKey:X4}: clamped retail ground offset " +
+                            $"from {sourceOriginToGroundOffset:F2}m to {retainedOriginToGroundOffset:F2}m");
+                    }
 
                     destDoc.AddStaticObject(new StaticObject {
                         Id = building.ModelId,
@@ -7449,14 +7461,14 @@ public class CommandEngine {
 
                         float sampleRadius = MathF.Max(8f, effectiveFlattenRadius * 0.75f);
                         float mismatch = SampleFoundationMismatch(worldX, worldY, sampleRadius, targetGroundZ);
-                        if (mismatch > 3f) {
+                        if (mismatch > foundationAutoFixThresholdMeters) {
                             float correctiveRadius = MathF.Min(96f, effectiveFlattenRadius + 10f);
                             FlattenTerrainAt(worldX, worldY, targetGroundZ, correctiveRadius);
                             terrainAutoFixPasses++;
 
                             float mismatchAfterFix = SampleFoundationMismatch(
                                 worldX, worldY, MathF.Max(8f, correctiveRadius * 0.75f), targetGroundZ);
-                            if (mismatchAfterFix > 3.5f) {
+                            if (mismatchAfterFix > foundationResidualWarnThresholdMeters) {
                                 warnings.Add(
                                     $"Foundation mismatch remains for model 0x{building.ModelId:X8} in LB 0x{newLbKey:X4} (max delta {mismatchAfterFix:F1}m)");
                             }
