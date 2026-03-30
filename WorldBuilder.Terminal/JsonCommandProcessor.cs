@@ -177,6 +177,8 @@ public class JsonCommandProcessor {
             ["auto-paint"] = _ => CmdAutoPaint(),
             ["analyze-landblock-patterns"] = CmdAnalyzeLandblockPatterns,
             ["export-training-data"] = CmdExportTrainingData,
+            ["export-raw-world-facts"] = CmdExportRawWorldFacts,
+            ["export-envcell-components"] = CmdExportEnvCellComponents,
             ["generate-settlement"] = CmdGenerateSettlement,
             ["extract-retail-heightmaps"] = CmdExtractRetailHeightmaps,
             ["compute-vanilla-baseline"] = CmdComputeVanillaBaseline,
@@ -815,6 +817,8 @@ public class JsonCommandProcessor {
             new { name = "auto-paint",       args = "",                                            description = "Re-paint all terrain types from heightmap" },
             new { name = "analyze-landblock-patterns", args = "minX?, minY?, maxX?, maxY?, outputPath?", description = "Extract spatial design patterns from populated landblocks" },
             new { name = "export-training-data", args = "minX?, minY?, maxX?, maxY?, outputPath?, nearbyLimit?", description = "Export placement examples as JSONL (one per object with terrain + neighbors + ontology)" },
+            new { name = "export-raw-world-facts", args = "minX?, minY?, maxX?, maxY?, outputPath?, includeAceDb?, includeLinks?", description = "Export raw DAT/SQL/spawn facts as JSONL" },
+            new { name = "export-envcell-components", args = "minX?, minY?, maxX?, maxY?, outputPath?", description = "Export linked surface-anchor and EnvCell components as JSONL" },
             new { name = "generate-settlement", args = "template, centerX, centerY, seed?", description = "Generate constraint-based settlement from template" },
             new { name = "extract-retail-heightmaps", args = "outputPath?", description = "Dump all 255×255 landblock heightmaps as JSONL" },
             new { name = "compute-vanilla-baseline", args = "outputPath?", description = "Compute retail quality baseline metrics (density, terrain dist, etc.)" },
@@ -1252,6 +1256,54 @@ public class JsonCommandProcessor {
             elapsedMs = r.ElapsedMs,
             outputPath = r.OutputPath,
             error = r.Error });
+    }
+
+    private string CmdExportRawWorldFacts(System.Text.Json.Nodes.JsonNode node) {
+        uint minX = node["minX"]?.GetValue<uint>() ?? 0;
+        uint minY = node["minY"]?.GetValue<uint>() ?? 0;
+        uint maxX = node["maxX"]?.GetValue<uint>() ?? 254;
+        uint maxY = node["maxY"]?.GetValue<uint>() ?? 254;
+        string? outputPath = node["outputPath"]?.GetValue<string>();
+        bool includeAceDb = node["includeAceDb"]?.GetValue<bool>() ?? false;
+        bool includeLinks = node["includeLinks"]?.GetValue<bool>() ?? false;
+
+        var r = _engine.ExportRawWorldFacts(minX, minY, maxX, maxY, outputPath, includeAceDb, includeLinks);
+        return Serialize(new {
+            success = r.Success,
+            command = "export-raw-world-facts",
+            totalExported = r.TotalExported,
+            datStaticCount = r.DatStaticCount,
+            aceInstanceCount = r.AceInstanceCount,
+            aceEncounterCount = r.AceEncounterCount,
+            aceHousePortalCount = r.AceHousePortalCount,
+            landblocksProcessed = r.LandblocksProcessed,
+            includedAceDb = r.IncludedAceDb,
+            includedLinks = r.IncludedLinks,
+            elapsedMs = r.ElapsedMs,
+            outputPath = r.OutputPath,
+            error = r.Error
+        });
+    }
+
+    private string CmdExportEnvCellComponents(System.Text.Json.Nodes.JsonNode node) {
+        uint minX = node["minX"]?.GetValue<uint>() ?? 0;
+        uint minY = node["minY"]?.GetValue<uint>() ?? 0;
+        uint maxX = node["maxX"]?.GetValue<uint>() ?? 254;
+        uint maxY = node["maxY"]?.GetValue<uint>() ?? 254;
+        string? outputPath = node["outputPath"]?.GetValue<string>();
+
+        var r = _engine.ExportEnvCellComponents(minX, minY, maxX, maxY, outputPath);
+        return Serialize(new {
+            success = r.Success,
+            command = "export-envcell-components",
+            totalExported = r.TotalExported,
+            anchoredCount = r.AnchoredCount,
+            unanchoredCount = r.UnanchoredCount,
+            landblocksProcessed = r.LandblocksProcessed,
+            elapsedMs = r.ElapsedMs,
+            outputPath = r.OutputPath,
+            error = r.Error
+        });
     }
 
     private string CmdGenerateSettlement(System.Text.Json.Nodes.JsonNode node) {

@@ -138,6 +138,8 @@ public class TerminalRepl {
             ["auto-paint"] = _ => HandleAutoPaint(),
             ["analyze-landblock-patterns"] = HandleAnalyzeLandblockPatterns,
             ["export-training-data"] = HandleExportTrainingData,
+            ["export-raw-world-facts"] = HandleExportRawWorldFacts,
+            ["export-envcell-components"] = HandleExportEnvCellComponents,
             ["generate-settlement"] = HandleGenerateSettlement,
             ["extract-retail-heightmaps"] = HandleExtractRetailHeightmaps,
             ["compute-vanilla-baseline"] = HandleComputeVanillaBaseline,
@@ -1468,6 +1470,8 @@ public class TerminalRepl {
         Console.WriteLine("  auto-paint                                       Re-paint terrain types from heightmap");
         Console.WriteLine("  analyze-landblock-patterns [minX minY maxX maxY] [output]  Extract spatial design patterns");
         Console.WriteLine("  export-training-data [minX minY maxX maxY] [output] [nearbyN]  Export placement examples as JSONL");
+        Console.WriteLine("  export-raw-world-facts [minX minY maxX maxY] [output] [--ace-db] [--links]  Export raw DAT/SQL/spawn facts");
+        Console.WriteLine("  export-envcell-components [minX minY maxX maxY] [output]  Export linked surface-anchor and EnvCell components");
         Console.WriteLine("  generate-settlement <template> <cx> <cy> [seed]  Place settlement from constraint templates");
         Console.WriteLine("  extract-retail-heightmaps [output.jsonl]           Dump all 255Ã—255 landblock heightmaps");
         Console.WriteLine("  compute-vanilla-baseline [output.json]             Compute retail quality baseline metrics");
@@ -2442,6 +2446,111 @@ public class TerminalRepl {
         Console.WriteLine($"  Total exported       : {r.TotalExported}");
         Console.WriteLine($"  Landblocks processed : {r.LandblocksProcessed}");
         Console.WriteLine($"  With ontology data   : {r.WithOntology}");
+        Console.WriteLine($"  Elapsed              : {r.ElapsedMs:F0} ms");
+        if (!string.IsNullOrEmpty(r.OutputPath))
+            Console.WriteLine($"  Output file          : {r.OutputPath}");
+        Console.WriteLine();
+    }
+
+    private void HandleExportRawWorldFacts(string[] tokens) {
+        if (!CheckProject()) return;
+        uint minX = 0, minY = 0, maxX = 254, maxY = 254;
+        string? outputPath = null;
+        bool includeAceDb = false;
+        bool includeLinks = false;
+
+        var positional = new List<string>();
+        for (int i = 1; i < tokens.Length; i++) {
+            var token = tokens[i];
+            if (token.Equals("--ace-db", StringComparison.OrdinalIgnoreCase)) {
+                includeAceDb = true;
+                continue;
+            }
+            if (token.Equals("--links", StringComparison.OrdinalIgnoreCase)) {
+                includeLinks = true;
+                includeAceDb = true;
+                continue;
+            }
+            positional.Add(token);
+        }
+
+        if (positional.Count >= 4) {
+            if (!TryParseUint(positional[0], "minX", out minX)) return;
+            if (!TryParseUint(positional[1], "minY", out minY)) return;
+            if (!TryParseUint(positional[2], "maxX", out maxX)) return;
+            if (!TryParseUint(positional[3], "maxY", out maxY)) return;
+            if (positional.Count >= 5) outputPath = positional[4];
+        } else if (positional.Count >= 1) {
+            outputPath = positional[0];
+        }
+
+        Console.WriteLine();
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine("  ═══ Export Raw World Facts ═══");
+        Console.ResetColor();
+        Console.WriteLine($"  Range: ({minX},{minY}) to ({maxX},{maxY})");
+        Console.WriteLine($"  Include ACE DB: {includeAceDb}");
+        Console.WriteLine($"  Include links : {includeLinks}");
+        Console.WriteLine($"  Output: {outputPath ?? "raw_world_facts.jsonl"}");
+        Console.WriteLine("  Exporting raw DAT/SQL/spawn facts...");
+        Console.WriteLine();
+
+        var r = _engine.ExportRawWorldFacts(minX, minY, maxX, maxY, outputPath, includeAceDb, includeLinks);
+
+        Console.ForegroundColor = r.Success ? ConsoleColor.Green : ConsoleColor.Red;
+        Console.WriteLine(r.Success ? "  ✓ Export complete!" : $"  ✗ Export failed: {r.Error}");
+        Console.ResetColor();
+        Console.WriteLine();
+
+        Console.WriteLine($"  Total exported       : {r.TotalExported}");
+        Console.WriteLine($"  DAT static objects   : {r.DatStaticCount}");
+        Console.WriteLine($"  ACE instances        : {r.AceInstanceCount}");
+        Console.WriteLine($"  ACE encounters       : {r.AceEncounterCount}");
+        Console.WriteLine($"  ACE house portals    : {r.AceHousePortalCount}");
+        Console.WriteLine($"  Landblocks processed : {r.LandblocksProcessed}");
+        Console.WriteLine($"  Included ACE DB      : {r.IncludedAceDb}");
+        Console.WriteLine($"  Included links       : {r.IncludedLinks}");
+        Console.WriteLine($"  Elapsed              : {r.ElapsedMs:F0} ms");
+        if (!string.IsNullOrEmpty(r.OutputPath))
+            Console.WriteLine($"  Output file          : {r.OutputPath}");
+        Console.WriteLine();
+    }
+
+    private void HandleExportEnvCellComponents(string[] tokens) {
+        if (!CheckProject()) return;
+        uint minX = 0, minY = 0, maxX = 254, maxY = 254;
+        string? outputPath = null;
+
+        if (tokens.Length >= 5) {
+            if (!TryParseUint(tokens[1], "minX", out minX)) return;
+            if (!TryParseUint(tokens[2], "minY", out minY)) return;
+            if (!TryParseUint(tokens[3], "maxX", out maxX)) return;
+            if (!TryParseUint(tokens[4], "maxY", out maxY)) return;
+            if (tokens.Length >= 6) outputPath = tokens[5];
+        } else if (tokens.Length >= 2) {
+            outputPath = tokens[1];
+        }
+
+        Console.WriteLine();
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine("  ═══ Export EnvCell Components ═══");
+        Console.ResetColor();
+        Console.WriteLine($"  Range: ({minX},{minY}) to ({maxX},{maxY})");
+        Console.WriteLine($"  Output: {outputPath ?? "envcell_components.jsonl"}");
+        Console.WriteLine("  Exporting linked surface-anchor and EnvCell components...");
+        Console.WriteLine();
+
+        var r = _engine.ExportEnvCellComponents(minX, minY, maxX, maxY, outputPath);
+
+        Console.ForegroundColor = r.Success ? ConsoleColor.Green : ConsoleColor.Red;
+        Console.WriteLine(r.Success ? "  ✓ Export complete!" : $"  ✗ Export failed: {r.Error}");
+        Console.ResetColor();
+        Console.WriteLine();
+
+        Console.WriteLine($"  Total exported       : {r.TotalExported}");
+        Console.WriteLine($"  Anchored components  : {r.AnchoredCount}");
+        Console.WriteLine($"  Unanchored components: {r.UnanchoredCount}");
+        Console.WriteLine($"  Landblocks processed : {r.LandblocksProcessed}");
         Console.WriteLine($"  Elapsed              : {r.ElapsedMs:F0} ms");
         if (!string.IsNullOrEmpty(r.OutputPath))
             Console.WriteLine($"  Output file          : {r.OutputPath}");

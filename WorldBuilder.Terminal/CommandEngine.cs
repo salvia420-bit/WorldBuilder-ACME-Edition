@@ -3825,6 +3825,1039 @@ public class CommandEngine {
             elapsedMs, outputPath);
     }
 
+    private sealed class EnvCellComponentAnchorInfo {
+        public required string SourceTable { get; init; }
+        public required int SourceIndex { get; init; }
+        public required uint ClassId { get; init; }
+        public required Vector3 LocalPosition { get; init; }
+        public required Quaternion Orientation { get; init; }
+        public required ushort[] EntryCellIds { get; init; }
+    }
+
+    private static ushort[] CollectAnchorEntryCellIds(BuildingInfo building) {
+        var entryCellIds = new HashSet<ushort>();
+        foreach (var portal in building.Portals) {
+            if (portal.OtherCellId >= 0x0100 && portal.OtherCellId <= 0xFFFD)
+                entryCellIds.Add(portal.OtherCellId);
+
+            foreach (var stab in portal.StabList) {
+                if (stab >= 0x0100 && stab <= 0xFFFD)
+                    entryCellIds.Add(stab);
+            }
+        }
+
+        return entryCellIds.OrderBy(v => v).ToArray();
+    }
+
+    private static HashSet<ushort> CollectConnectedEnvCellComponent(
+        ushort startCellId,
+        IReadOnlyDictionary<ushort, EnvCell> envCells,
+        HashSet<ushort>? allowedCellIds = null) {
+        var component = new HashSet<ushort>();
+        var toVisit = new Queue<ushort>();
+
+        component.Add(startCellId);
+        toVisit.Enqueue(startCellId);
+
+        while (toVisit.Count > 0) {
+            var cellId = toVisit.Dequeue();
+            if (!envCells.TryGetValue(cellId, out var envCell))
+                continue;
+
+            foreach (var portal in envCell.CellPortals) {
+                ushort other = portal.OtherCellId;
+                if (other < 0x0100 || other > 0xFFFD)
+                    continue;
+                if (!envCells.ContainsKey(other))
+                    continue;
+                if (allowedCellIds != null && !allowedCellIds.Contains(other))
+                    continue;
+                if (component.Add(other))
+                    toVisit.Enqueue(other);
+            }
+        }
+
+        return component;
+    }
+
+    private static object BuildEnvCellComponentJson(
+        ushort lbKey,
+        string componentKind,
+        ulong componentId,
+        IReadOnlyDictionary<ushort, EnvCell> envCells,
+        IReadOnlyCollection<ushort> componentCellIds,
+        EnvCellComponentAnchorInfo? anchor = null) {
+        float lbWorldX = (lbKey >> 8) * 192f;
+        float lbWorldY = (lbKey & 0xFF) * 192f;
+        Vector3? anchorLocal = anchor?.LocalPosition;
+
+        var sortedCellIds = componentCellIds.OrderBy(v => v).ToArray();
+        var componentStaticObjects = new List<object>();
+        float minX = float.PositiveInfinity, minY = float.PositiveInfinity, minZ = float.PositiveInfinity;
+        float maxX = float.NegativeInfinity, maxY = float.NegativeInfinity, maxZ = float.NegativeInfinity;
+
+        var cells = new List<object>(sortedCellIds.Length);
+        foreach (var cellId in sortedCellIds) {
+            if (!envCells.TryGetValue(cellId, out var envCell))
+                continue;
+
+            var cellOrigin = envCell.Position.Origin;
+            minX = MathF.Min(minX, cellOrigin.X);
+            minY = MathF.Min(minY, cellOrigin.Y);
+            minZ = MathF.Min(minZ, cellOrigin.Z);
+            maxX = MathF.Max(maxX, cellOrigin.X);
+            maxY = MathF.Max(maxY, cellOrigin.Y);
+            maxZ = MathF.Max(maxZ, cellOrigin.Z);
+
+            var staticObjects = envCell.StaticObjects.Select(stab => {
+                var local = stab.Frame.Origin;
+                minX = MathF.Min(minX, local.X);
+                minY = MathF.Min(minY, local.Y);
+                minZ = MathF.Min(minZ, local.Z);
+                maxX = MathF.Max(maxX, local.X);
+                maxY = MathF.Max(maxY, local.Y);
+                maxZ = MathF.Max(maxZ, local.Z);
+
+                var obj = new {
+                    classId = stab.Id,
+                    classIdSpace = "model_id",
+                    x = Math.Round(local.X, 3),
+                    y = Math.Round(local.Y, 3),
+                    z = Math.Round(local.Z, 3),
+                    worldX = Math.Round(lbWorldX + local.X, 3),
+                    worldY = Math.Round(lbWorldY + local.Y, 3),
+                    worldZ = Math.Round(local.Z, 3),
+                    relX = anchorLocal.HasValue ? (double?)Math.Round(local.X - anchorLocal.Value.X, 3) : null,
+                    relY = anchorLocal.HasValue ? (double?)Math.Round(local.Y - anchorLocal.Value.Y, 3) : null,
+                    relZ = anchorLocal.HasValue ? (double?)Math.Round(local.Z - anchorLocal.Value.Z, 3) : null
+                };
+                componentStaticObjects.Add(obj);
+                return obj;
+            }).ToArray();
+
+            cells.Add(new {
+                cellId = $"0x{lbKey:X4}{cellId:X4}",
+                cellNumber = $"0x{cellId:X4}",
+                environmentId = $"0x{envCell.EnvironmentId:X4}",
+                cellStructure = envCell.CellStructure,
+                x = Math.Round(cellOrigin.X, 3),
+                y = Math.Round(cellOrigin.Y, 3),
+                z = Math.Round(cellOrigin.Z, 3),
+                worldX = Math.Round(lbWorldX + cellOrigin.X, 3),
+                worldY = Math.Round(lbWorldY + cellOrigin.Y, 3),
+                worldZ = Math.Round(cellOrigin.Z, 3),
+                relX = anchorLocal.HasValue ? (double?)Math.Round(cellOrigin.X - anchorLocal.Value.X, 3) : null,
+                relY = anchorLocal.HasValue ? (double?)Math.Round(cellOrigin.Y - anchorLocal.Value.Y, 3) : null,
+                relZ = anchorLocal.HasValue ? (double?)Math.Round(cellOrigin.Z - anchorLocal.Value.Z, 3) : null,
+                qw = Math.Round(envCell.Position.Orientation.W, 6),
+                qx = Math.Round(envCell.Position.Orientation.X, 6),
+                qy = Math.Round(envCell.Position.Orientation.Y, 6),
+                qz = Math.Round(envCell.Position.Orientation.Z, 6),
+                portalRefs = envCell.CellPortals.Select(p => new {
+                    otherCellId = $"0x{p.OtherCellId:X4}",
+                    polygonId = p.PolygonId,
+                    otherPortalId = p.OtherPortalId,
+                    flags = (ushort)p.Flags
+                }).ToArray(),
+                visibleCellRefs = envCell.VisibleCells.Select(v => $"0x{v:X4}").ToArray(),
+                staticObjectCount = staticObjects.Length,
+                staticObjects
+            });
+        }
+
+        object? anchorJson = null;
+        if (anchor != null) {
+            anchorJson = new {
+                sourceTable = anchor.SourceTable,
+                sourceIndex = anchor.SourceIndex,
+                classId = anchor.ClassId,
+                classIdSpace = "model_id",
+                x = Math.Round(anchor.LocalPosition.X, 3),
+                y = Math.Round(anchor.LocalPosition.Y, 3),
+                z = Math.Round(anchor.LocalPosition.Z, 3),
+                worldX = Math.Round(lbWorldX + anchor.LocalPosition.X, 3),
+                worldY = Math.Round(lbWorldY + anchor.LocalPosition.Y, 3),
+                worldZ = Math.Round(anchor.LocalPosition.Z, 3),
+                qw = Math.Round(anchor.Orientation.W, 6),
+                qx = Math.Round(anchor.Orientation.X, 6),
+                qy = Math.Round(anchor.Orientation.Y, 6),
+                qz = Math.Round(anchor.Orientation.Z, 6),
+                entryCellIds = anchor.EntryCellIds.Select(v => $"0x{v:X4}").ToArray()
+            };
+        }
+
+        if (!float.IsFinite(minX)) {
+            minX = minY = minZ = maxX = maxY = maxZ = 0f;
+        }
+
+        return new {
+            componentKind,
+            componentId,
+            landblockId = $"0x{lbKey:X4}",
+            landblockX = lbKey >> 8,
+            landblockY = lbKey & 0xFF,
+            anchor = anchorJson,
+            cellCount = sortedCellIds.Length,
+            cellIds = sortedCellIds.Select(v => $"0x{v:X4}").ToArray(),
+            staticObjectCount = componentStaticObjects.Count,
+            boundsLocal = new {
+                minX = Math.Round(minX, 3),
+                minY = Math.Round(minY, 3),
+                minZ = Math.Round(minZ, 3),
+                maxX = Math.Round(maxX, 3),
+                maxY = Math.Round(maxY, 3),
+                maxZ = Math.Round(maxZ, 3)
+            },
+            cells
+        };
+    }
+
+    public ExportEnvCellComponentsResult ExportEnvCellComponents(
+        uint minX = 0, uint minY = 0, uint maxX = 254, uint maxY = 254,
+        string? outputPath = null) {
+
+        RequireProject();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        if (string.IsNullOrWhiteSpace(outputPath))
+            outputPath = "envcell_components.jsonl";
+
+        var dats = _projectManager.CurrentProject!.DocumentManager.Dats;
+        int anchoredCount = 0;
+        int unanchoredCount = 0;
+        int totalExported = 0;
+        int landblocksProcessed = 0;
+
+        var jsonOpts = new System.Text.Json.JsonSerializerOptions {
+            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+            WriteIndented = false
+        };
+
+        try {
+            using var writer = new StreamWriter(outputPath, false, System.Text.Encoding.UTF8);
+            for (uint lbX = minX; lbX <= maxX; lbX++) {
+                for (uint lbY = minY; lbY <= maxY; lbY++) {
+                    ushort lbKey = LbKey(lbX, lbY);
+                    landblocksProcessed++;
+                    uint lbiId = ((uint)lbKey << 16) | 0xFFFE;
+
+                    if (!dats.TryGet<LandBlockInfo>(lbiId, out var lbi) || lbi.NumCells == 0)
+                        continue;
+
+                    var envCells = new Dictionary<ushort, EnvCell>();
+                    for (uint i = 0; i < lbi.NumCells; i++) {
+                        ushort cellNum = (ushort)(0x0100 + i);
+                        uint fullCellId = ((uint)lbKey << 16) | cellNum;
+                        if (dats.TryGet<EnvCell>(fullCellId, out var envCell))
+                            envCells[cellNum] = envCell;
+                    }
+
+                    if (envCells.Count == 0)
+                        continue;
+
+                    var claimedCellIds = new HashSet<ushort>();
+                    for (int buildingIndex = 0; buildingIndex < lbi.Buildings.Count; buildingIndex++) {
+                        var building = lbi.Buildings[buildingIndex];
+                        var componentCellIds = CollectBuildingCellIdsExternal(building, dats, lbKey)
+                            .Where(envCells.ContainsKey)
+                            .OrderBy(v => v)
+                            .ToArray();
+
+                        if (componentCellIds.Length == 0)
+                            continue;
+
+                        foreach (var cellId in componentCellIds)
+                            claimedCellIds.Add(cellId);
+
+                        var anchor = new EnvCellComponentAnchorInfo {
+                            SourceTable = "landblock_info_building",
+                            SourceIndex = buildingIndex,
+                            ClassId = building.ModelId,
+                            LocalPosition = building.Frame.Origin,
+                            Orientation = building.Frame.Orientation,
+                            EntryCellIds = CollectAnchorEntryCellIds(building)
+                        };
+
+                        ulong componentId = ((ulong)lbKey << 32) | (uint)buildingIndex;
+                        writer.WriteLine(System.Text.Json.JsonSerializer.Serialize(
+                            BuildEnvCellComponentJson(lbKey, "surface_anchor_component", componentId, envCells, componentCellIds, anchor),
+                            jsonOpts));
+                        anchoredCount++;
+                        totalExported++;
+                    }
+
+                    var unclaimed = new HashSet<ushort>(envCells.Keys.Where(cellId => !claimedCellIds.Contains(cellId)));
+                    while (unclaimed.Count > 0) {
+                        ushort startCellId = unclaimed.Min();
+                        var componentCellIds = CollectConnectedEnvCellComponent(startCellId, envCells, unclaimed);
+                        foreach (var cellId in componentCellIds)
+                            unclaimed.Remove(cellId);
+
+                        ulong componentId = ((ulong)lbKey << 32) | (uint)startCellId;
+                        writer.WriteLine(System.Text.Json.JsonSerializer.Serialize(
+                            BuildEnvCellComponentJson(lbKey, "unanchored_envcell_component", componentId, envCells, componentCellIds),
+                            jsonOpts));
+                        unanchoredCount++;
+                        totalExported++;
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            sw.Stop();
+            return new ExportEnvCellComponentsResult(
+                false, 0, anchoredCount, unanchoredCount, landblocksProcessed,
+                Math.Round(sw.Elapsed.TotalMilliseconds, 1), outputPath, ex.Message);
+        }
+
+        sw.Stop();
+        return new ExportEnvCellComponentsResult(
+            true, totalExported, anchoredCount, unanchoredCount, landblocksProcessed,
+            Math.Round(sw.Elapsed.TotalMilliseconds, 1), outputPath);
+    }
+
+    private sealed class RawFactObjectInfo {
+        public required string SourceDb { get; init; }
+        public required string SourceTable { get; init; }
+        public ulong? SourceRecordId { get; init; }
+        public required ushort LandblockId { get; init; }
+        public ushort? CellId { get; init; }
+        public uint? Guid { get; init; }
+        public uint? Wcid { get; init; }
+        public int? WeenieType { get; set; }
+        public uint? ModelId { get; init; }
+        public required Vector3 Position { get; init; }
+        public required Quaternion Orientation { get; init; }
+        public required Vector3 Scale { get; init; }
+        public ulong? EnvCellComponentId { get; set; }
+        public string? EnvCellComponentKind { get; set; }
+        public List<RawFactGeneratorProfile>? GeneratorProfiles { get; set; }
+        public List<RawFactCreateListEntry>? CreateListEntries { get; set; }
+        public List<uint>? ParentGuids { get; set; }
+        public List<uint>? ChildGuids { get; set; }
+    }
+
+    private sealed class RawFactGeneratorProfile {
+        public required uint ObjectId { get; init; }
+        public required float Probability { get; init; }
+        public required uint WeenieClassId { get; init; }
+        public float? Delay { get; init; }
+        public required int InitCreate { get; init; }
+        public required int MaxCreate { get; init; }
+        public required uint WhenCreate { get; init; }
+        public required uint WhereCreate { get; init; }
+        public int? StackSize { get; init; }
+        public uint? PaletteId { get; init; }
+        public float? Shade { get; init; }
+        public uint? ObjCellId { get; init; }
+        public float? OriginX { get; init; }
+        public float? OriginY { get; init; }
+        public float? OriginZ { get; init; }
+        public float? AnglesW { get; init; }
+        public float? AnglesX { get; init; }
+        public float? AnglesY { get; init; }
+        public float? AnglesZ { get; init; }
+    }
+
+    private sealed class RawFactCreateListEntry {
+        public required uint ObjectId { get; init; }
+        public required sbyte DestinationType { get; init; }
+        public required uint WeenieClassId { get; init; }
+        public required int StackSize { get; init; }
+        public required sbyte Palette { get; init; }
+        public required float Shade { get; init; }
+        public required bool TryToBond { get; init; }
+    }
+
+    public ExportRawWorldFactsResult ExportRawWorldFacts(
+        uint minX = 0, uint minY = 0, uint maxX = 254, uint maxY = 254,
+        string? outputPath = null, bool includeAceDb = false, bool includeLinks = false) {
+
+        RequireProject();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        if (string.IsNullOrWhiteSpace(outputPath))
+            outputPath = "raw_world_facts.jsonl";
+
+        var terrainDoc = GetTerrainDoc();
+        var heightTable = GetHeightTable();
+        var dats = _projectManager.CurrentProject!.DocumentManager.Dats;
+        const float bucketSize = 48f;
+        int[] radii = new[] { 6, 12, 24, 48 };
+
+        var landblockIds = new List<ushort>();
+        var objects = new List<RawFactObjectInfo>();
+        var objectsByGuid = new Dictionary<uint, RawFactObjectInfo>();
+        int datStaticCount = 0;
+        int aceInstanceCount = 0;
+        int aceEncounterCount = 0;
+        int aceHousePortalCount = 0;
+
+        for (uint lbX = minX; lbX <= maxX; lbX++) {
+            for (uint lbY = minY; lbY <= maxY; lbY++) {
+                ushort lbKey = LbKey(lbX, lbY);
+                landblockIds.Add(lbKey);
+
+                try {
+                    uint infoId = ((uint)lbKey << 16) | 0xFFFE;
+                    if (!dats.TryGet<LandBlockInfo>(infoId, out var lbi))
+                        continue;
+
+                    float lbWorldX = (lbKey >> 8) * 192f;
+                    float lbWorldY = (lbKey & 0xFF) * 192f;
+
+                    for (int objectIndex = 0; objectIndex < lbi.Objects.Count; objectIndex++) {
+                        var obj = lbi.Objects[objectIndex];
+                        objects.Add(new RawFactObjectInfo {
+                            SourceDb = "dat",
+                            SourceTable = "landblock_info_object",
+                            SourceRecordId = (ulong)objectIndex,
+                            LandblockId = lbKey,
+                            Position = new Vector3(lbWorldX + obj.Frame.Origin.X, lbWorldY + obj.Frame.Origin.Y, obj.Frame.Origin.Z),
+                            Orientation = obj.Frame.Orientation,
+                            Scale = Vector3.One,
+                            ModelId = obj.Id
+                        });
+                        datStaticCount++;
+                    }
+
+                    for (int buildingIndex = 0; buildingIndex < lbi.Buildings.Count; buildingIndex++) {
+                        var building = lbi.Buildings[buildingIndex];
+                        var componentCellIds = CollectBuildingCellIdsExternal(building, dats, lbKey)
+                            .Where(cellId => cellId >= 0x0100 && cellId <= 0xFFFD)
+                            .OrderBy(v => v)
+                            .ToArray();
+                        objects.Add(new RawFactObjectInfo {
+                            SourceDb = "dat",
+                            SourceTable = "landblock_info_building",
+                            SourceRecordId = (ulong)buildingIndex,
+                            LandblockId = lbKey,
+                            Position = new Vector3(lbWorldX + building.Frame.Origin.X, lbWorldY + building.Frame.Origin.Y, building.Frame.Origin.Z),
+                            Orientation = building.Frame.Orientation,
+                            Scale = Vector3.One,
+                            ModelId = building.ModelId,
+                            EnvCellComponentId = componentCellIds.Length > 0 ? ((ulong)lbKey << 32) | (uint)buildingIndex : null,
+                            EnvCellComponentKind = componentCellIds.Length > 0 ? "surface_anchor_component" : null
+                        });
+                        datStaticCount++;
+                    }
+                } catch {
+                    // Missing or unreadable landblock data is non-fatal here.
+                }
+            }
+        }
+
+        string? aceError = null;
+        if (includeAceDb) {
+            var settings = _projectManager.CurrentProject?.AceDb;
+            if (settings == null) {
+                aceError = "ACE DB export requested but no ACE database settings are configured.";
+            } else {
+                try {
+                    using var conn = new MySqlConnector.MySqlConnection(settings.ConnectionString);
+                    conn.Open();
+
+                    var weenieTypesByWcid = new Dictionary<uint, int>();
+                    var generatorProfilesByObjectId = new Dictionary<uint, List<RawFactGeneratorProfile>>();
+                    var createListEntriesByObjectId = new Dictionary<uint, List<RawFactCreateListEntry>>();
+                    var envCellComponentsByLandblock = new Dictionary<ushort, Dictionary<ushort, (ulong ComponentId, string ComponentKind)>>();
+
+                    foreach (var lbKey in landblockIds) {
+                        var envCellComponentByCellId = new Dictionary<ushort, (ulong ComponentId, string ComponentKind)>();
+                        uint infoId = ((uint)lbKey << 16) | 0xFFFE;
+                        if (dats.TryGet<LandBlockInfo>(infoId, out var lbiForComponents) && lbiForComponents.NumCells > 0) {
+                            var envCellIdsPresent = new HashSet<ushort>();
+                            for (uint i = 0; i < lbiForComponents.NumCells; i++) {
+                                ushort cellNum = (ushort)(0x0100 + i);
+                                uint fullCellId = ((uint)lbKey << 16) | cellNum;
+                                if (dats.TryGet<EnvCell>(fullCellId, out _))
+                                    envCellIdsPresent.Add(cellNum);
+                            }
+
+                            var claimedCellIds = new HashSet<ushort>();
+                            for (int buildingIndex = 0; buildingIndex < lbiForComponents.Buildings.Count; buildingIndex++) {
+                                var building = lbiForComponents.Buildings[buildingIndex];
+                                var componentCellIds = CollectBuildingCellIdsExternal(building, dats, lbKey)
+                                    .Where(envCellIdsPresent.Contains)
+                                    .ToArray();
+                                if (componentCellIds.Length == 0)
+                                    continue;
+
+                                ulong componentId = ((ulong)lbKey << 32) | (uint)buildingIndex;
+                                foreach (var cellId in componentCellIds) {
+                                    envCellComponentByCellId[cellId] = (componentId, "surface_anchor_component");
+                                    claimedCellIds.Add(cellId);
+                                }
+                            }
+
+                            var unclaimed = new HashSet<ushort>(envCellIdsPresent.Where(cellId => !claimedCellIds.Contains(cellId)));
+                            while (unclaimed.Count > 0) {
+                                ushort startCellId = unclaimed.Min();
+                                var envCells = new Dictionary<ushort, EnvCell>();
+                                foreach (var cellId in unclaimed.ToArray()) {
+                                    uint fullCellId = ((uint)lbKey << 16) | cellId;
+                                    if (dats.TryGet<EnvCell>(fullCellId, out var envCell))
+                                        envCells[cellId] = envCell;
+                                }
+                                var componentCellIds = CollectConnectedEnvCellComponent(startCellId, envCells, unclaimed);
+                                ulong componentId = ((ulong)lbKey << 32) | (uint)startCellId;
+                                foreach (var cellId in componentCellIds) {
+                                    envCellComponentByCellId[cellId] = (componentId, "unanchored_envcell_component");
+                                    unclaimed.Remove(cellId);
+                                }
+                            }
+                        }
+
+                        envCellComponentsByLandblock[lbKey] = envCellComponentByCellId;
+                    }
+
+                    const string rangePredicate = @"
+                        (((`obj_Cell_Id` >> 24) >= @minX) AND ((`obj_Cell_Id` >> 24) <= @maxX))
+                        AND ((((`obj_Cell_Id` >> 16) & 255)) >= @minY)
+                        AND ((((`obj_Cell_Id` >> 16) & 255)) <= @maxY)";
+
+                    const string instanceSql = @"
+                        SELECT li.`guid`, li.`weenie_Class_Id`, li.`obj_Cell_Id`,
+                               li.`origin_X`, li.`origin_Y`, li.`origin_Z`,
+                               li.`angles_W`, li.`angles_X`, li.`angles_Y`, li.`angles_Z`,
+                               w.`type`
+                        FROM `landblock_instance` li
+                        LEFT JOIN `weenie` w ON w.`class_Id` = li.`weenie_Class_Id`
+                        WHERE " + rangePredicate;
+
+                    using (var cmd = new MySqlConnector.MySqlCommand(instanceSql, conn)) {
+                        cmd.Parameters.AddWithValue("@minX", minX);
+                        cmd.Parameters.AddWithValue("@maxX", maxX);
+                        cmd.Parameters.AddWithValue("@minY", minY);
+                        cmd.Parameters.AddWithValue("@maxY", maxY);
+                        using var reader = cmd.ExecuteReader();
+                        while (reader.Read()) {
+                            uint objCellId = reader.GetUInt32("obj_Cell_Id");
+                            ushort objectLandblockId = (ushort)(objCellId >> 16);
+                            ushort objectCellId = (ushort)(objCellId & 0xFFFF);
+                            float localX = reader.GetFloat("origin_X");
+                            float localY = reader.GetFloat("origin_Y");
+                            (ulong ComponentId, string ComponentKind)? instanceComponent = null;
+                            if (envCellComponentsByLandblock.TryGetValue(objectLandblockId, out var instanceComponentsByCell)
+                                && instanceComponentsByCell.TryGetValue(objectCellId, out var resolvedInstanceComponent))
+                                instanceComponent = resolvedInstanceComponent;
+                            var fact = new RawFactObjectInfo {
+                                SourceDb = "ace",
+                                SourceTable = "landblock_instance",
+                                SourceRecordId = reader.GetUInt32("guid"),
+                                LandblockId = objectLandblockId,
+                                CellId = objectCellId,
+                                Guid = reader.GetUInt32("guid"),
+                                Wcid = reader.GetUInt32("weenie_Class_Id"),
+                                WeenieType = reader.IsDBNull(reader.GetOrdinal("type"))
+                                    ? null
+                                    : reader.GetInt32("type"),
+                                Position = new Vector3(
+                                    ((objectLandblockId >> 8) * 192f) + localX,
+                                    ((objectLandblockId & 0xFF) * 192f) + localY,
+                                    reader.GetFloat("origin_Z")),
+                                Orientation = new Quaternion(
+                                    reader.GetFloat("angles_X"),
+                                    reader.GetFloat("angles_Y"),
+                                    reader.GetFloat("angles_Z"),
+                                    reader.GetFloat("angles_W")),
+                                Scale = Vector3.One,
+                                EnvCellComponentId = instanceComponent?.ComponentId,
+                                EnvCellComponentKind = instanceComponent?.ComponentKind
+                            };
+                            objects.Add(fact);
+                            if (fact.Guid.HasValue)
+                                objectsByGuid[fact.Guid.Value] = fact;
+                            if (fact.Wcid.HasValue && fact.WeenieType.HasValue)
+                                weenieTypesByWcid[fact.Wcid.Value] = fact.WeenieType.Value;
+                            aceInstanceCount++;
+                        }
+                    }
+
+                    const string encounterSql = @"
+                        SELECT e.`landblock`, e.`weenie_Class_Id`, e.`cell_X`, e.`cell_Y`, w.`type`
+                        FROM `encounter` e
+                        LEFT JOIN `weenie` w ON w.`class_Id` = e.`weenie_Class_Id`
+                        WHERE ((e.`landblock` >> 8) >= @minX) AND ((e.`landblock` >> 8) <= @maxX)
+                          AND ((e.`landblock` & 255) >= @minY) AND ((e.`landblock` & 255) <= @maxY)";
+
+                    using (var encounterCmd = new MySqlConnector.MySqlCommand(encounterSql, conn)) {
+                        encounterCmd.Parameters.AddWithValue("@minX", minX);
+                        encounterCmd.Parameters.AddWithValue("@maxX", maxX);
+                        encounterCmd.Parameters.AddWithValue("@minY", minY);
+                        encounterCmd.Parameters.AddWithValue("@maxY", maxY);
+                        using var encounterReader = encounterCmd.ExecuteReader();
+                        while (encounterReader.Read()) {
+                            ushort lbKey = encounterReader.GetUInt16("landblock");
+                            int cellX = encounterReader.GetInt32("cell_X");
+                            int cellY = encounterReader.GetInt32("cell_Y");
+                            float localX = Math.Clamp(cellX * 24.0f, 0.5f, 191.5f);
+                            float localY = Math.Clamp(cellY * 24.0f, 0.5f, 191.5f);
+                            float worldX = ((lbKey >> 8) * 192f) + localX;
+                            float worldY = ((lbKey & 0xFF) * 192f) + localY;
+                            float terrainZ = _terrainService.GetHeightAtWorldPosition(
+                                worldX, worldY, terrainDoc.GetLandblockInternal, heightTable);
+
+                            var encounter = new RawFactObjectInfo {
+                                SourceDb = "ace",
+                                SourceTable = "encounter",
+                                SourceRecordId = ((ulong)lbKey << 32)
+                                    | ((ulong)(ushort)cellX << 16)
+                                    | (ushort)cellY,
+                                LandblockId = lbKey,
+                                CellId = 0x0001,
+                                Wcid = encounterReader.GetUInt32("weenie_Class_Id"),
+                                WeenieType = encounterReader.IsDBNull(encounterReader.GetOrdinal("type"))
+                                    ? null
+                                    : encounterReader.GetInt32("type"),
+                                Position = new Vector3(worldX, worldY, terrainZ),
+                                Orientation = Quaternion.Identity,
+                                Scale = Vector3.One
+                            };
+                            objects.Add(encounter);
+                            if (encounter.Wcid.HasValue && encounter.WeenieType.HasValue)
+                                weenieTypesByWcid[encounter.Wcid.Value] = encounter.WeenieType.Value;
+                            aceEncounterCount++;
+                        }
+                    }
+
+                    const string housePortalSql = @"
+                        SELECT hp.`id`, hp.`obj_Cell_Id`,
+                               hp.`origin_X`, hp.`origin_Y`, hp.`origin_Z`,
+                               hp.`angles_W`, hp.`angles_X`, hp.`angles_Y`, hp.`angles_Z`
+                        FROM `house_portal` hp
+                        WHERE " + rangePredicate;
+
+                    using (var housePortalCmd = new MySqlConnector.MySqlCommand(housePortalSql, conn)) {
+                        housePortalCmd.Parameters.AddWithValue("@minX", minX);
+                        housePortalCmd.Parameters.AddWithValue("@maxX", maxX);
+                        housePortalCmd.Parameters.AddWithValue("@minY", minY);
+                        housePortalCmd.Parameters.AddWithValue("@maxY", maxY);
+                        using var housePortalReader = housePortalCmd.ExecuteReader();
+                        while (housePortalReader.Read()) {
+                            uint objCellId = housePortalReader.GetUInt32("obj_Cell_Id");
+                            ushort objectLandblockId = (ushort)(objCellId >> 16);
+                            ushort objectCellId = (ushort)(objCellId & 0xFFFF);
+                            float localX = housePortalReader.GetFloat("origin_X");
+                            float localY = housePortalReader.GetFloat("origin_Y");
+                            (ulong ComponentId, string ComponentKind)? houseComponent = null;
+                            if (envCellComponentsByLandblock.TryGetValue(objectLandblockId, out var houseComponentsByCell)
+                                && houseComponentsByCell.TryGetValue(objectCellId, out var resolvedHouseComponent))
+                                houseComponent = resolvedHouseComponent;
+                            objects.Add(new RawFactObjectInfo {
+                                SourceDb = "ace",
+                                SourceTable = "house_portal",
+                                SourceRecordId = housePortalReader.GetUInt32("id"),
+                                LandblockId = objectLandblockId,
+                                CellId = objectCellId,
+                                Position = new Vector3(
+                                    ((objectLandblockId >> 8) * 192f) + localX,
+                                    ((objectLandblockId & 0xFF) * 192f) + localY,
+                                    housePortalReader.GetFloat("origin_Z")),
+                                Orientation = new Quaternion(
+                                    housePortalReader.GetFloat("angles_X"),
+                                    housePortalReader.GetFloat("angles_Y"),
+                                    housePortalReader.GetFloat("angles_Z"),
+                                    housePortalReader.GetFloat("angles_W")),
+                                Scale = Vector3.One,
+                                EnvCellComponentId = houseComponent?.ComponentId,
+                                EnvCellComponentKind = houseComponent?.ComponentKind
+                            });
+                            aceHousePortalCount++;
+                        }
+                    }
+
+                    if (includeLinks) {
+                        string linkSql = @"
+                            SELECT lil.`parent_GUID`, lil.`child_GUID`
+                            FROM `landblock_instance_link` lil
+                            INNER JOIN `landblock_instance` p ON p.`guid` = lil.`parent_GUID`
+                            WHERE " + rangePredicate.Replace("`obj_Cell_Id`", "p.`obj_Cell_Id`");
+
+                        using var linkCmd = new MySqlConnector.MySqlCommand(linkSql, conn);
+                        linkCmd.Parameters.AddWithValue("@minX", minX);
+                        linkCmd.Parameters.AddWithValue("@maxX", maxX);
+                        linkCmd.Parameters.AddWithValue("@minY", minY);
+                        linkCmd.Parameters.AddWithValue("@maxY", maxY);
+                        using var linkReader = linkCmd.ExecuteReader();
+                        while (linkReader.Read()) {
+                            uint parentGuid = linkReader.GetUInt32("parent_GUID");
+                            uint childGuid = linkReader.GetUInt32("child_GUID");
+
+                            if (objectsByGuid.TryGetValue(parentGuid, out var parent)) {
+                                parent.ChildGuids ??= new List<uint>();
+                                parent.ChildGuids.Add(childGuid);
+                            }
+
+                            if (objectsByGuid.TryGetValue(childGuid, out var child)) {
+                                child.ParentGuids ??= new List<uint>();
+                                child.ParentGuids.Add(parentGuid);
+                            }
+                        }
+                    }
+
+                    const string allGeneratorSql = @"
+                        SELECT `object_Id`, `probability`, `weenie_Class_Id`, `delay`,
+                               `init_Create`, `max_Create`, `when_Create`, `where_Create`,
+                               `stack_Size`, `palette_Id`, `shade`, `obj_Cell_Id`,
+                               `origin_X`, `origin_Y`, `origin_Z`,
+                               `angles_W`, `angles_X`, `angles_Y`, `angles_Z`
+                        FROM `weenie_properties_generator`";
+                    using (var generatorCmd = new MySqlConnector.MySqlCommand(allGeneratorSql, conn))
+                    using (var generatorReader = generatorCmd.ExecuteReader()) {
+                        while (generatorReader.Read()) {
+                            uint objectId = generatorReader.GetUInt32("object_Id");
+                            if (!generatorProfilesByObjectId.TryGetValue(objectId, out var list)) {
+                                list = new List<RawFactGeneratorProfile>();
+                                generatorProfilesByObjectId[objectId] = list;
+                            }
+
+                            list.Add(new RawFactGeneratorProfile {
+                                ObjectId = objectId,
+                                Probability = generatorReader.GetFloat("probability"),
+                                WeenieClassId = generatorReader.GetUInt32("weenie_Class_Id"),
+                                Delay = generatorReader.IsDBNull(generatorReader.GetOrdinal("delay")) ? null : generatorReader.GetFloat("delay"),
+                                InitCreate = generatorReader.GetInt32("init_Create"),
+                                MaxCreate = generatorReader.GetInt32("max_Create"),
+                                WhenCreate = generatorReader.GetUInt32("when_Create"),
+                                WhereCreate = generatorReader.GetUInt32("where_Create"),
+                                StackSize = generatorReader.IsDBNull(generatorReader.GetOrdinal("stack_Size")) ? null : generatorReader.GetInt32("stack_Size"),
+                                PaletteId = generatorReader.IsDBNull(generatorReader.GetOrdinal("palette_Id")) ? null : generatorReader.GetUInt32("palette_Id"),
+                                Shade = generatorReader.IsDBNull(generatorReader.GetOrdinal("shade")) ? null : generatorReader.GetFloat("shade"),
+                                ObjCellId = generatorReader.IsDBNull(generatorReader.GetOrdinal("obj_Cell_Id")) ? null : generatorReader.GetUInt32("obj_Cell_Id"),
+                                OriginX = generatorReader.IsDBNull(generatorReader.GetOrdinal("origin_X")) ? null : generatorReader.GetFloat("origin_X"),
+                                OriginY = generatorReader.IsDBNull(generatorReader.GetOrdinal("origin_Y")) ? null : generatorReader.GetFloat("origin_Y"),
+                                OriginZ = generatorReader.IsDBNull(generatorReader.GetOrdinal("origin_Z")) ? null : generatorReader.GetFloat("origin_Z"),
+                                AnglesW = generatorReader.IsDBNull(generatorReader.GetOrdinal("angles_W")) ? null : generatorReader.GetFloat("angles_W"),
+                                AnglesX = generatorReader.IsDBNull(generatorReader.GetOrdinal("angles_X")) ? null : generatorReader.GetFloat("angles_X"),
+                                AnglesY = generatorReader.IsDBNull(generatorReader.GetOrdinal("angles_Y")) ? null : generatorReader.GetFloat("angles_Y"),
+                                AnglesZ = generatorReader.IsDBNull(generatorReader.GetOrdinal("angles_Z")) ? null : generatorReader.GetFloat("angles_Z")
+                            });
+                        }
+                    }
+
+                    const string allCreateListSql = @"
+                        SELECT `object_Id`, `destination_Type`, `weenie_Class_Id`,
+                               `stack_Size`, `palette`, `shade`, `try_To_Bond`
+                        FROM `weenie_properties_create_list`";
+                    using (var createListCmd = new MySqlConnector.MySqlCommand(allCreateListSql, conn))
+                    using (var createListReader = createListCmd.ExecuteReader()) {
+                        while (createListReader.Read()) {
+                            uint objectId = createListReader.GetUInt32("object_Id");
+                            if (!createListEntriesByObjectId.TryGetValue(objectId, out var list)) {
+                                list = new List<RawFactCreateListEntry>();
+                                createListEntriesByObjectId[objectId] = list;
+                            }
+
+                            list.Add(new RawFactCreateListEntry {
+                                ObjectId = objectId,
+                                DestinationType = createListReader.GetSByte("destination_Type"),
+                                WeenieClassId = createListReader.GetUInt32("weenie_Class_Id"),
+                                StackSize = createListReader.GetInt32("stack_Size"),
+                                Palette = createListReader.GetSByte("palette"),
+                                Shade = createListReader.GetFloat("shade"),
+                                TryToBond = createListReader.GetBoolean("try_To_Bond")
+                            });
+                        }
+                    }
+
+                    foreach (var obj in objects) {
+                        if (!obj.Wcid.HasValue)
+                            continue;
+
+                        if (!obj.WeenieType.HasValue && weenieTypesByWcid.TryGetValue(obj.Wcid.Value, out var resolvedWeenieType))
+                            obj.WeenieType = resolvedWeenieType;
+
+                        if (generatorProfilesByObjectId.TryGetValue(obj.Wcid.Value, out var generatorProfiles))
+                            obj.GeneratorProfiles = generatorProfiles;
+
+                        if (createListEntriesByObjectId.TryGetValue(obj.Wcid.Value, out var createListEntries))
+                            obj.CreateListEntries = createListEntries;
+                    }
+                } catch (Exception ex) {
+                    aceError = ex.Message;
+                }
+            }
+        }
+
+        if (objects.Count == 0) {
+            sw.Stop();
+            return new ExportRawWorldFactsResult(
+                Success: string.IsNullOrEmpty(aceError),
+                TotalExported: 0,
+                DatStaticCount: datStaticCount,
+                AceInstanceCount: aceInstanceCount,
+                AceEncounterCount: aceEncounterCount,
+                AceHousePortalCount: aceHousePortalCount,
+                LandblocksProcessed: landblockIds.Count,
+                IncludedAceDb: includeAceDb && string.IsNullOrEmpty(aceError),
+                IncludedLinks: includeAceDb && includeLinks && string.IsNullOrEmpty(aceError),
+                ElapsedMs: Math.Round(sw.Elapsed.TotalMilliseconds, 1),
+                OutputPath: outputPath,
+                Error: aceError);
+        }
+
+        var buckets = new Dictionary<(int, int), List<int>>();
+        for (int i = 0; i < objects.Count; i++) {
+            int bx = (int)MathF.Floor(objects[i].Position.X / bucketSize);
+            int by = (int)MathF.Floor(objects[i].Position.Y / bucketSize);
+            var key = (bx, by);
+            if (!buckets.TryGetValue(key, out var list)) {
+                list = new List<int>();
+                buckets[key] = list;
+            }
+            list.Add(i);
+        }
+
+        var jsonOpts = new System.Text.Json.JsonSerializerOptions {
+            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+            WriteIndented = false
+        };
+
+        try {
+            using var writer = new StreamWriter(outputPath, false, System.Text.Encoding.UTF8);
+            for (int idx = 0; idx < objects.Count; idx++) {
+                var obj = objects[idx];
+                var pos = obj.Position;
+
+                var terrainSampleZ = _terrainService.GetHeightAtWorldPosition(
+                    pos.X, pos.Y, terrainDoc.GetLandblockInternal, heightTable);
+
+                int? terrainType = null;
+                int? heightIndex = null;
+                double slopeDeg = 0;
+                var vertexInfo = _terrainService.WorldToVertex(pos.X, pos.Y);
+                if (vertexInfo.HasValue) {
+                    var data = terrainDoc.GetLandblockInternal(vertexInfo.Value.LandblockKey);
+                    if (data != null) {
+                        int vIdx = vertexInfo.Value.VertexIndex;
+                        int vx = vIdx / 9;
+                        int vy = vIdx % 9;
+                        terrainType = data[vIdx].Type;
+                        heightIndex = data[vIdx].Height;
+
+                        byte hCenter = data[vIdx].Height;
+                        float maxDelta = 0f;
+                        if (vx > 0) maxDelta = MathF.Max(maxDelta, MathF.Abs(hCenter - data[(vx - 1) * 9 + vy].Height));
+                        if (vx < 8) maxDelta = MathF.Max(maxDelta, MathF.Abs(hCenter - data[(vx + 1) * 9 + vy].Height));
+                        if (vy > 0) maxDelta = MathF.Max(maxDelta, MathF.Abs(hCenter - data[vx * 9 + (vy - 1)].Height));
+                        if (vy < 8) maxDelta = MathF.Max(maxDelta, MathF.Abs(hCenter - data[vx * 9 + (vy + 1)].Height));
+                        float heightDeltaWorld = maxDelta * 2f;
+                        slopeDeg = Math.Round(MathF.Atan2(heightDeltaWorld, 24f) * (180f / MathF.PI), 1);
+                    }
+                }
+
+                float yaw = MathF.Atan2(
+                    2f * (obj.Orientation.W * obj.Orientation.Z + obj.Orientation.X * obj.Orientation.Y),
+                    1f - 2f * (obj.Orientation.Y * obj.Orientation.Y + obj.Orientation.Z * obj.Orientation.Z));
+                float yawDeg = yaw * (180f / MathF.PI);
+                if (yawDeg < 0) yawDeg += 360f;
+
+                int bxCenter = (int)MathF.Floor(pos.X / bucketSize);
+                int byCenter = (int)MathF.Floor(pos.Y / bucketSize);
+                float maxRadiusSq = radii[^1] * radii[^1];
+                var neighborIndexes = new List<(int Index, float Dist)>();
+
+                for (int dx = -1; dx <= 1; dx++) {
+                    for (int dy = -1; dy <= 1; dy++) {
+                        if (!buckets.TryGetValue((bxCenter + dx, byCenter + dy), out var bucket))
+                            continue;
+                        foreach (var otherIdx in bucket) {
+                            if (otherIdx == idx) continue;
+                            var otherPos = objects[otherIdx].Position;
+                            float deltaX = pos.X - otherPos.X;
+                            float deltaY = pos.Y - otherPos.Y;
+                            float distSq = deltaX * deltaX + deltaY * deltaY;
+                            if (distSq > maxRadiusSq) continue;
+                            neighborIndexes.Add((otherIdx, MathF.Sqrt(distSq)));
+                        }
+                    }
+                }
+
+                var neighborhoods = new List<object>(radii.Length);
+                foreach (var radius in radii) {
+                    int totalCount = 0;
+                    int sameModelIdCount = 0;
+                    int sameWcidCount = 0;
+                    int sameWeenieTypeCount = 0;
+                    float? nearestSameModelId = null;
+                    float? nearestSameWcid = null;
+                    float? nearestSameWeenieType = null;
+                    var sourceDbCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+                    var modelCounts = new Dictionary<uint, int>();
+                    var wcidCounts = new Dictionary<uint, int>();
+                    var weenieTypeCounts = new Dictionary<int, int>();
+
+                    foreach (var (otherIdx, dist) in neighborIndexes) {
+                        if (dist > radius)
+                            continue;
+
+                        totalCount++;
+                        var other = objects[otherIdx];
+                        sourceDbCounts[other.SourceDb] = sourceDbCounts.GetValueOrDefault(other.SourceDb) + 1;
+
+                        if (other.ModelId.HasValue) {
+                            modelCounts[other.ModelId.Value] = modelCounts.GetValueOrDefault(other.ModelId.Value) + 1;
+                            if (obj.ModelId.HasValue && other.ModelId.Value == obj.ModelId.Value) {
+                                sameModelIdCount++;
+                                nearestSameModelId = !nearestSameModelId.HasValue || dist < nearestSameModelId.Value ? dist : nearestSameModelId;
+                            }
+                        }
+
+                        if (other.Wcid.HasValue) {
+                            wcidCounts[other.Wcid.Value] = wcidCounts.GetValueOrDefault(other.Wcid.Value) + 1;
+                            if (obj.Wcid.HasValue && other.Wcid.Value == obj.Wcid.Value) {
+                                sameWcidCount++;
+                                nearestSameWcid = !nearestSameWcid.HasValue || dist < nearestSameWcid.Value ? dist : nearestSameWcid;
+                            }
+                        }
+
+                        if (other.WeenieType.HasValue) {
+                            weenieTypeCounts[other.WeenieType.Value] = weenieTypeCounts.GetValueOrDefault(other.WeenieType.Value) + 1;
+                            if (obj.WeenieType.HasValue && other.WeenieType.Value == obj.WeenieType.Value) {
+                                sameWeenieTypeCount++;
+                                nearestSameWeenieType = !nearestSameWeenieType.HasValue || dist < nearestSameWeenieType.Value ? dist : nearestSameWeenieType;
+                            }
+                        }
+                    }
+
+                    neighborhoods.Add(new {
+                        radius,
+                        totalCount,
+                        sourceDbCounts = sourceDbCounts.Count == 0 ? null : sourceDbCounts
+                            .OrderBy(kv => kv.Key)
+                            .Select(kv => new { sourceDb = kv.Key, count = kv.Value })
+                            .ToArray(),
+                        sameModelIdCount = obj.ModelId.HasValue ? sameModelIdCount : (int?)null,
+                        nearestSameModelId = nearestSameModelId.HasValue ? (double?)Math.Round(nearestSameModelId.Value, 2) : null,
+                        sameWcidCount = obj.Wcid.HasValue ? sameWcidCount : (int?)null,
+                        nearestSameWcid = nearestSameWcid.HasValue ? (double?)Math.Round(nearestSameWcid.Value, 2) : null,
+                        sameWeenieTypeCount = obj.WeenieType.HasValue ? sameWeenieTypeCount : (int?)null,
+                        nearestSameWeenieType = nearestSameWeenieType.HasValue ? (double?)Math.Round(nearestSameWeenieType.Value, 2) : null,
+                        topModelIds = modelCounts.Count == 0 ? null : modelCounts
+                            .OrderByDescending(kv => kv.Value)
+                            .ThenBy(kv => kv.Key)
+                            .Take(8)
+                            .Select(kv => new { modelId = $"0x{kv.Key:X8}", count = kv.Value })
+                            .ToArray(),
+                        topWcids = wcidCounts.Count == 0 ? null : wcidCounts
+                            .OrderByDescending(kv => kv.Value)
+                            .ThenBy(kv => kv.Key)
+                            .Take(8)
+                            .Select(kv => new { wcid = kv.Key, count = kv.Value })
+                            .ToArray(),
+                        topWeenieTypes = weenieTypeCounts.Count == 0 ? null : weenieTypeCounts
+                            .OrderByDescending(kv => kv.Value)
+                            .ThenBy(kv => kv.Key)
+                            .Take(8)
+                            .Select(kv => new { weenieType = kv.Key, count = kv.Value })
+                            .ToArray()
+                    });
+                }
+
+                writer.WriteLine(System.Text.Json.JsonSerializer.Serialize(new {
+                    sourceDb = obj.SourceDb,
+                    sourceTable = obj.SourceTable,
+                    sourceRecordId = obj.SourceRecordId,
+                    landblockId = $"0x{obj.LandblockId:X4}",
+                    landblockX = obj.LandblockId >> 8,
+                    landblockY = obj.LandblockId & 0xFF,
+                    cellId = obj.CellId.HasValue ? $"0x{obj.CellId.Value:X4}" : null,
+                    guid = obj.Guid,
+                    classId = obj.Wcid ?? obj.ModelId,
+                    classIdSpace = obj.Wcid.HasValue ? "wcid" : (obj.ModelId.HasValue ? "model_id" : null),
+                    typeId = obj.WeenieType,
+                    envCellComponentId = obj.EnvCellComponentId,
+                    envCellComponentKind = obj.EnvCellComponentKind,
+                    wcid = obj.Wcid,
+                    modelId = obj.ModelId.HasValue ? $"0x{obj.ModelId.Value:X8}" : null,
+                    weenieType = obj.WeenieType,
+                    x = Math.Round(pos.X, 3),
+                    y = Math.Round(pos.Y, 3),
+                    z = Math.Round(pos.Z, 3),
+                    localX = Math.Round(pos.X - ((obj.LandblockId >> 8) * 192f), 3),
+                    localY = Math.Round(pos.Y - ((obj.LandblockId & 0xFF) * 192f), 3),
+                    terrainSampleZ = Math.Round(terrainSampleZ, 3),
+                    terrainDeltaZ = Math.Round(pos.Z - terrainSampleZ, 3),
+                    terrainType,
+                    heightIndex,
+                    slopeDeg,
+                    yawDeg = Math.Round(yawDeg, 2),
+                    qw = Math.Round(obj.Orientation.W, 6),
+                    qx = Math.Round(obj.Orientation.X, 6),
+                    qy = Math.Round(obj.Orientation.Y, 6),
+                    qz = Math.Round(obj.Orientation.Z, 6),
+                    scaleX = Math.Round(obj.Scale.X, 4),
+                    scaleY = Math.Round(obj.Scale.Y, 4),
+                    scaleZ = Math.Round(obj.Scale.Z, 4),
+                    generatorProfiles = obj.GeneratorProfiles?.Select(profile => new {
+                        objectId = profile.ObjectId,
+                        probability = Math.Round(profile.Probability, 6),
+                        weenieClassId = profile.WeenieClassId,
+                        delay = profile.Delay.HasValue ? (double?)Math.Round(profile.Delay.Value, 6) : null,
+                        initCreate = profile.InitCreate,
+                        maxCreate = profile.MaxCreate,
+                        whenCreate = profile.WhenCreate,
+                        whereCreate = profile.WhereCreate,
+                        stackSize = profile.StackSize,
+                        paletteId = profile.PaletteId,
+                        shade = profile.Shade.HasValue ? (double?)Math.Round(profile.Shade.Value, 6) : null,
+                        objCellId = profile.ObjCellId.HasValue ? $"0x{profile.ObjCellId.Value:X8}" : null,
+                        originX = profile.OriginX.HasValue ? (double?)Math.Round(profile.OriginX.Value, 3) : null,
+                        originY = profile.OriginY.HasValue ? (double?)Math.Round(profile.OriginY.Value, 3) : null,
+                        originZ = profile.OriginZ.HasValue ? (double?)Math.Round(profile.OriginZ.Value, 3) : null,
+                        anglesW = profile.AnglesW.HasValue ? (double?)Math.Round(profile.AnglesW.Value, 6) : null,
+                        anglesX = profile.AnglesX.HasValue ? (double?)Math.Round(profile.AnglesX.Value, 6) : null,
+                        anglesY = profile.AnglesY.HasValue ? (double?)Math.Round(profile.AnglesY.Value, 6) : null,
+                        anglesZ = profile.AnglesZ.HasValue ? (double?)Math.Round(profile.AnglesZ.Value, 6) : null
+                    }).ToArray(),
+                    createListEntries = obj.CreateListEntries?.Select(entry => new {
+                        objectId = entry.ObjectId,
+                        destinationType = entry.DestinationType,
+                        weenieClassId = entry.WeenieClassId,
+                        stackSize = entry.StackSize,
+                        palette = entry.Palette,
+                        shade = Math.Round(entry.Shade, 6),
+                        tryToBond = entry.TryToBond
+                    }).ToArray(),
+                    parentGuids = obj.ParentGuids?.Distinct().OrderBy(v => v).ToArray(),
+                    childGuids = obj.ChildGuids?.Distinct().OrderBy(v => v).ToArray(),
+                    neighborhoods
+                }, jsonOpts));
+            }
+        } catch (Exception ex) {
+            sw.Stop();
+            return new ExportRawWorldFactsResult(
+                Success: false,
+                TotalExported: 0,
+                DatStaticCount: datStaticCount,
+                AceInstanceCount: aceInstanceCount,
+                AceEncounterCount: aceEncounterCount,
+                AceHousePortalCount: aceHousePortalCount,
+                LandblocksProcessed: landblockIds.Count,
+                IncludedAceDb: includeAceDb && string.IsNullOrEmpty(aceError),
+                IncludedLinks: includeAceDb && includeLinks && string.IsNullOrEmpty(aceError),
+                ElapsedMs: Math.Round(sw.Elapsed.TotalMilliseconds, 1),
+                OutputPath: outputPath,
+                Error: ex.Message);
+        }
+
+        sw.Stop();
+        return new ExportRawWorldFactsResult(
+            Success: string.IsNullOrEmpty(aceError),
+            TotalExported: objects.Count,
+            DatStaticCount: datStaticCount,
+            AceInstanceCount: aceInstanceCount,
+            AceEncounterCount: aceEncounterCount,
+            AceHousePortalCount: aceHousePortalCount,
+            LandblocksProcessed: landblockIds.Count,
+            IncludedAceDb: includeAceDb && string.IsNullOrEmpty(aceError),
+            IncludedLinks: includeAceDb && includeLinks && string.IsNullOrEmpty(aceError),
+            ElapsedMs: Math.Round(sw.Elapsed.TotalMilliseconds, 1),
+            OutputPath: outputPath,
+            Error: aceError);
+    }
+
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     //  Phase 10 â€” Constraint-Based Settlement Generator
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•

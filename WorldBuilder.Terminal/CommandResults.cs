@@ -466,6 +466,30 @@ public record ExportTrainingDataResult(
     string? OutputPath = null,
     string? Error = null);
 
+public record ExportRawWorldFactsResult(
+    bool Success,
+    int TotalExported,
+    int DatStaticCount,
+    int AceInstanceCount,
+    int AceEncounterCount,
+    int AceHousePortalCount,
+    int LandblocksProcessed,
+    bool IncludedAceDb,
+    bool IncludedLinks,
+    double ElapsedMs,
+    string? OutputPath = null,
+    string? Error = null);
+
+public record ExportEnvCellComponentsResult(
+    bool Success,
+    int TotalExported,
+    int AnchoredCount,
+    int UnanchoredCount,
+    int LandblocksProcessed,
+    double ElapsedMs,
+    string? OutputPath = null,
+    string? Error = null);
+
 // ═══════════════════════════════════════════════════════
 //  Phase 10 — Generate Settlement
 // ═══════════════════════════════════════════════════════

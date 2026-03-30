@@ -74,12 +74,12 @@ except ImportError:
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-TENSOR_PATH = os.path.join(BASE_DIR, "pipeline_data", "reference", "placement_tensors.npz")
-VOCAB_PATH = os.path.join(BASE_DIR, "pipeline_data", "reference", "placement_vocab.json")
+TENSOR_PATH = os.path.join(BASE_DIR, "pipeline_data", "reference", "component_linked_tensors.npz")
+VOCAB_PATH = os.path.join(BASE_DIR, "pipeline_data", "reference", "component_linked_vocab.json")
 CHECKPOINT_DIR = os.path.join(BASE_DIR, "pipeline_data", "models")
 LOG_DIR = os.path.join(BASE_DIR, "pipeline_data", "models", "logs")
 
-# Special tokens (must match extract_placement_tensors.py)
+# Special tokens
 PAD_TOKEN = 0
 STOP_TOKEN = 1
 
@@ -107,11 +107,8 @@ DEFAULT_CONFIG = {
     "dropout_ff": 0.15,
     "label_smoothing": 0.2,
     
-    # Object token layout (10 floats per object)
+    # Object token width is inferred from the dataset at runtime.
     "obj_dim": 10,
-    # [0] = wcid_idx, [1] = local_x, [2] = local_y, [3] = local_z,
-    # [4] = rot_w, [5] = rot_z, [6] = weenie_type, [7] = is_link_child,
-    # [8] = parent_wcid_idx, [9] = sequence_position
     
     # Training
     "epochs": 10000,
@@ -150,6 +147,11 @@ DEFAULT_CONFIG = {
     
     # Validation
     "val_split": 0.15,
+    "tensor_path": TENSOR_PATH,
+    "vocab_path": VOCAB_PATH,
+    "max_train_batches": None,
+    "max_val_batches": None,
+    "run_name": "scene_placer",
 }
 
 ROLE_INDEX_BY_LABEL = {label: idx for idx, label in enumerate(SETTLEMENT_ROLE_LABELS)}
@@ -169,6 +171,13 @@ def load_wcid_types() -> Dict[int, int]:
     return {int(k): int(v) for k, v in data.items()}
 
 
+def load_vocab_metadata(vocab_path: str) -> dict:
+    if not os.path.exists(vocab_path):
+        return {}
+    with open(vocab_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def token_family_for_wcid(wcid: int) -> int:
     if wcid == STOP_TOKEN:
         return FAMILY_OTHER
@@ -179,16 +188,12 @@ def token_family_for_wcid(wcid: int) -> int:
     return FAMILY_OTHER
 
 
-def build_token_family_index(vocab_size: int) -> torch.Tensor:
+def build_token_family_index(vocab_size: int, vocab_path: str) -> torch.Tensor:
     token_family = np.zeros(vocab_size, dtype=np.int64)
     wcid_types = load_wcid_types()
-
-    if os.path.exists(VOCAB_PATH):
-        with open(VOCAB_PATH) as f:
-            vocab = json.load(f)
-        idx_to_wcid = {int(k): int(v) for k, v in vocab.get("idx_to_wcid", {}).items()}
-    else:
-        idx_to_wcid = {}
+    vocab = load_vocab_metadata(vocab_path)
+    idx_to_wcid = {int(k): int(v) for k, v in vocab.get("idx_to_wcid", {}).items()}
+    idx_to_class_key = {int(k): v for k, v in vocab.get("idx_to_class_key", {}).items()}
 
     for token_idx in range(vocab_size):
         if token_idx in (PAD_TOKEN, STOP_TOKEN):
@@ -197,6 +202,10 @@ def build_token_family_index(vocab_size: int) -> torch.Tensor:
             family = FAMILY_HOUSING
         else:
             wcid = idx_to_wcid.get(token_idx)
+            if wcid is None:
+                class_key = idx_to_class_key.get(token_idx)
+                if class_key and len(class_key) == 2 and class_key[0] == 'wcid':
+                    wcid = int(class_key[1])
             wtype = wcid_types.get(wcid, 0) if wcid is not None else 0
             if wtype == WT_CREATURE:
                 family = FAMILY_CREATURE
@@ -243,8 +252,12 @@ class PlacementDataset(Dataset):
         self.seq_lengths = torch.from_numpy(seq_lengths).long()
         self.config = config
         self.augment = augment
-        self.max_len = config['max_seq_len']
-    
+        self.max_len = sequences.shape[1]
+        self.schema = config.get('dataset_schema', 'legacy')
+        self.coord_slice = tuple(config.get('coord_slice', (1, 3)))
+        self.rot_slice = tuple(config.get('rot_slice', (4, 6)))
+        self.link_idx = int(config.get('link_idx', 7))
+
     def __len__(self):
         return len(self.contexts)
     
@@ -254,28 +267,32 @@ class PlacementDataset(Dataset):
         seq_len = self.seq_lengths[idx].item()
         
         if self.augment:
-            # Context jitter: add Gaussian noise to terrain features
             jitter_std = self.config['context_jitter_std']
-            ctx[:81] += torch.randn(81) * jitter_std  # Heights
-            
-            # Coordinate noise
+            if self.schema == 'legacy' and ctx.numel() >= 81:
+                ctx[:81] += torch.randn(81) * jitter_std
+            else:
+                ctx += torch.randn_like(ctx) * jitter_std
+
             coord_std = self.config['coord_noise_std']
-            seq[:seq_len, 1] += torch.randn(seq_len) * coord_std  # local_x
-            seq[:seq_len, 2] += torch.randn(seq_len) * coord_std  # local_y
-            
-            # Clamp to valid range
-            seq[:seq_len, 1].clamp_(0, 1)
-            seq[:seq_len, 2].clamp_(0, 1)
-            
-            # Rotation augmentation: randomly flip X/Y (90° rotation)
+            coord_x, coord_y = self.coord_slice[0], self.coord_slice[0] + 1
+            seq[:seq_len, coord_x] += torch.randn(seq_len) * coord_std
+            seq[:seq_len, coord_y] += torch.randn(seq_len) * coord_std
+            seq[:seq_len, coord_x].clamp_(0, 1)
+            seq[:seq_len, coord_y].clamp_(0, 1)
+
             if self.config['rotation_augment'] and random.random() < 0.5:
-                # Swap X and Y coordinates
-                seq[:seq_len, 1], seq[:seq_len, 2] = (
-                    seq[:seq_len, 2].clone(), seq[:seq_len, 1].clone()
+                seq[:seq_len, coord_x], seq[:seq_len, coord_y] = (
+                    seq[:seq_len, coord_y].clone(), seq[:seq_len, coord_x].clone()
                 )
-                # Rotate the context heights (9×9 grid)
-                h = ctx[:81].reshape(9, 9)
-                ctx[:81] = h.T.reshape(-1)
+                if self.schema == 'legacy' and ctx.numel() >= 81:
+                    h = ctx[:81].reshape(9, 9)
+                    ctx[:81] = h.T.reshape(-1)
+                else:
+                    sin_idx, cos_idx = self.rot_slice
+                    sin_vals = seq[:seq_len, sin_idx].clone()
+                    cos_vals = seq[:seq_len, cos_idx].clone()
+                    seq[:seq_len, sin_idx] = cos_vals
+                    seq[:seq_len, cos_idx] = -sin_vals
         
         # Teacher forcing: shift the sequence right so the model predicts the
         # next token instead of learning an identity copy of the current token.
@@ -283,9 +300,9 @@ class PlacementDataset(Dataset):
         if seq_len > 1:
             input_seq[1:seq_len] = seq[:seq_len - 1]
         target_wcid = seq[:, 0].long()  # Target wcid indices
-        target_pos = seq[:, 1:3]        # Target positions (x, y)
-        target_rot = seq[:, 4:6]        # Target rotations (w, z)
-        target_link = seq[:, 7]         # Target link flag
+        target_pos = seq[:, self.coord_slice[0]:self.coord_slice[1]]
+        target_rot = seq[:, self.rot_slice[0]:self.rot_slice[1]]
+        target_link = seq[:, self.link_idx]
         
         # Sequence mask (1 for real tokens, 0 for padding)
         mask = torch.zeros(self.max_len, dtype=torch.bool)
@@ -378,7 +395,7 @@ class ScenePlacerTransformer(nn.Module):
         max_seq = config['max_seq_len'] + 1  # +1 for context token
         
         # Load vocab size
-        vocab_path = VOCAB_PATH
+        vocab_path = config.get('vocab_path', VOCAB_PATH)
         if os.path.exists(vocab_path):
             with open(vocab_path) as f:
                 vocab = json.load(f)
@@ -647,6 +664,32 @@ def compute_loss(model, batch, config, device):
     }
 
 
+def build_component_feature_matrix(data: np.lib.npyio.NpzFile, vocab_size: int) -> np.ndarray:
+    component_index_by_object = data['component_index_by_object'].astype(np.int32, copy=False)
+    component_count = data['component_ids'].shape[0]
+    feature_dim = 12
+    component_features = np.zeros((component_count + 1, feature_dim), dtype=np.float32)
+
+    component_features[1:, 0] = 1.0
+    component_features[1:, 1] = data['component_kind'].astype(np.float32) / max(max(int(data['component_kind'].max()), 1), 1)
+    component_features[1:, 2] = data['component_lb_coords'][:, 0].astype(np.float32) / 254.0
+    component_features[1:, 3] = data['component_lb_coords'][:, 1].astype(np.float32) / 254.0
+    component_features[1:, 4] = np.clip(data['component_cell_count'].astype(np.float32) / 64.0, 0.0, 1.0)
+    component_features[1:, 5] = np.clip(data['component_static_count'].astype(np.float32) / 512.0, 0.0, 4.0)
+    component_features[1:, 6] = np.clip(data['component_entry_count'].astype(np.float32) / 16.0, 0.0, 1.0)
+    anchor_idx = data['component_anchor_class_idx'].astype(np.float32)
+    anchor_idx = np.where(anchor_idx >= 0, anchor_idx / max(vocab_size - 1, 1), 0.0)
+    component_features[1:, 7] = anchor_idx
+    component_features[1:, 8:11] = data['component_anchor_pos'].astype(np.float32)
+    component_features[1:, 8] /= 192.0
+    component_features[1:, 9] /= 192.0
+    component_features[1:, 10] /= 512.0
+    component_features[1:, 11] = np.clip(data['component_portal_ref_count'].astype(np.float32) / 32.0, 0.0, 4.0)
+
+    gather_index = np.where(component_index_by_object >= 0, component_index_by_object + 1, 0)
+    return component_features[gather_index]
+
+
 def compute_diversity_metrics(model, val_loader, config, device):
     """Compute diversity metrics on validation set."""
     model.eval()
@@ -655,7 +698,10 @@ def compute_diversity_metrics(model, val_loader, config, device):
     all_pos_preds = []
     
     with torch.no_grad():
-        for batch in val_loader:
+        for batch_idx, batch in enumerate(val_loader):
+            max_val_batches = config.get('max_val_batches')
+            if max_val_batches is not None and batch_idx >= max_val_batches:
+                break
             ctx, input_seq, target_wcid, target_pos, target_rot, target_link, mask, seq_len = batch
             ctx = ctx.to(device)
             input_seq = input_seq.to(device)
@@ -795,6 +841,17 @@ def save_history(history, path):
     os.replace(temp_path, path)
 
 
+def build_run_paths(run_name: str) -> dict:
+    history_dir = os.path.join(LOG_DIR, run_name)
+    return {
+        'best_weights': os.path.join(CHECKPOINT_DIR, f"{run_name}_best.safetensors"),
+        'final_weights': os.path.join(CHECKPOINT_DIR, f"{run_name}_final.safetensors"),
+        'resume_checkpoint': os.path.join(CHECKPOINT_DIR, f"{run_name}_resume.pt"),
+        'epoch_checkpoint': lambda epoch: os.path.join(CHECKPOINT_DIR, f"{run_name}_resume_epoch_{epoch}.pt"),
+        'history': os.path.join(history_dir, "training_history.json"),
+    }
+
+
 def save_resume_checkpoint(epoch, model, optimizer, scheduler, ema, best_val_loss):
     """Write the rolling checkpoint used by --resume."""
     save_full_checkpoint(
@@ -840,17 +897,40 @@ def train(config: dict, resume_path: Optional[str] = None):
     
     # ── Load data ──
     print("[1/5] Loading training data...")
-    if not os.path.exists(TENSOR_PATH):
-        print(f"  ERROR: Training data not found: {TENSOR_PATH}")
-        print(f"  Run extract_placement_tensors.py first.")
+    tensor_path = config.get('tensor_path', TENSOR_PATH)
+    vocab_path = config.get('vocab_path', VOCAB_PATH)
+    run_name = config.get('run_name', 'scene_placer')
+    run_paths = build_run_paths(run_name)
+    if not os.path.exists(tensor_path):
+        print(f"  ERROR: Training data not found: {tensor_path}")
         return
     
-    data = np.load(TENSOR_PATH)
+    data = np.load(tensor_path)
     contexts = data['contexts']
     sequences = data['sequences']
     seq_lengths = data['seq_lengths']
     sample_weights = data['sample_weights'] if 'sample_weights' in data.files else np.ones(len(contexts), dtype=np.float32)
+    vocab = load_vocab_metadata(vocab_path)
+    vocab_size = int(vocab.get('vocab_size', int(np.max(sequences[:, :, 0])) + 1))
+
+    if 'component_index_by_object' in data.files:
+        component_features = build_component_feature_matrix(data, vocab_size)
+        link_idx = sequences.shape[2]
+        sequences = np.concatenate([sequences, component_features], axis=-1)
+        config['dataset_schema'] = 'component_linked'
+        config['coord_slice'] = (2, 4)
+        config['rot_slice'] = (5, 7)
+        config['link_idx'] = link_idx
+    else:
+        config['dataset_schema'] = 'legacy'
+        config['coord_slice'] = (1, 3)
+        config['rot_slice'] = (4, 6)
+        config['link_idx'] = 7
+
     config['context_dim'] = int(contexts.shape[1])
+    config['obj_dim'] = int(sequences.shape[2])
+    config['max_seq_len'] = int(sequences.shape[1])
+    config['vocab_path'] = vocab_path
     effective_warmup_epochs = min(
         config['warmup_epochs'],
         max(config.get('warmup_min_epochs', 10),
@@ -858,8 +938,10 @@ def train(config: dict, resume_path: Optional[str] = None):
     )
     
     print(f"  Loaded {len(contexts)} examples, context_dim={contexts.shape[1]}, "
-          f"max_seq={sequences.shape[1]}")
+          f"max_seq={sequences.shape[1]}, obj_dim={sequences.shape[2]}")
+    print(f"  Dataset schema: {config['dataset_schema']}")
     print(f"  Effective warmup epochs: {effective_warmup_epochs}")
+    print(f"  Run name: {run_name}")
     
     # ── Train/val split ──
     n = len(contexts)
@@ -896,7 +978,7 @@ def train(config: dict, resume_path: Optional[str] = None):
     model = ScenePlacerTransformer(config).to(device)
     param_count = model.count_parameters()
     print(f"  Parameters: {param_count:,} ({param_count/1e6:.1f}M)")
-    token_family_index = build_token_family_index(model.vocab_size)
+    token_family_index = build_token_family_index(model.vocab_size, vocab_path)
     config['token_family_index'] = token_family_index.to(device)
     config['family_projection'] = build_family_projection(token_family_index, model.vocab_size).to(device)
     
@@ -971,7 +1053,7 @@ def train(config: dict, resume_path: Optional[str] = None):
     
     history = []
     patience_counter = 0
-    history_path = os.path.join(LOG_DIR, "training_history.json")
+    history_path = run_paths['history']
     last_completed_epoch = start_epoch - 1
     entropy_check_epoch = max(
         config.get('min_entropy_check_epoch', effective_warmup_epochs),
@@ -986,7 +1068,10 @@ def train(config: dict, resume_path: Optional[str] = None):
             epoch_losses = defaultdict(float)
             n_batches = 0
         
-            for batch in train_loader:
+            for batch_idx, batch in enumerate(train_loader):
+                max_train_batches = config.get('max_train_batches')
+                if max_train_batches is not None and batch_idx >= max_train_batches:
+                    break
                 # Warmup: linear learning rate increase
                 if epoch < effective_warmup_epochs:
                     warmup_factor = (epoch * len(train_loader) + n_batches) / \
@@ -1033,7 +1118,10 @@ def train(config: dict, resume_path: Optional[str] = None):
                 val_batches = 0
                 
                 with torch.no_grad():
-                    for batch in val_loader:
+                    for batch_idx, batch in enumerate(val_loader):
+                        max_val_batches = config.get('max_val_batches')
+                        if max_val_batches is not None and batch_idx >= max_val_batches:
+                            break
                         if scaler:
                             with autocast(dtype=torch.float16):
                                 _, loss_dict = compute_loss(model, batch, config, device)
@@ -1098,9 +1186,12 @@ def train(config: dict, resume_path: Optional[str] = None):
                     patience_counter = 0
                     save_weights_only(
                         model, ema,
-                        os.path.join(CHECKPOINT_DIR, "scene_placer_best.safetensors")
+                        run_paths['best_weights']
                     )
-                    save_resume_checkpoint(epoch, model, optimizer, scheduler, ema, best_val_loss)
+                    save_full_checkpoint(
+                        epoch, model, optimizer, scheduler, ema, best_val_loss,
+                        run_paths['resume_checkpoint']
+                    )
                 else:
                     patience_counter += 1
                 
@@ -1140,25 +1231,34 @@ def train(config: dict, resume_path: Optional[str] = None):
             
             # ── Checkpointing ──
             if (epoch + 1) % config['resume_checkpoint_every'] == 0:
-                save_resume_checkpoint(epoch, model, optimizer, scheduler, ema, best_val_loss)
+                save_full_checkpoint(
+                    epoch, model, optimizer, scheduler, ema, best_val_loss,
+                    run_paths['resume_checkpoint']
+                )
             
             if (epoch + 1) % config['checkpoint_every'] == 0:
                 save_full_checkpoint(
                     epoch, model, optimizer, scheduler, ema, best_val_loss,
-                    os.path.join(CHECKPOINT_DIR, f"resume_epoch_{epoch + 1}.pt")
+                    run_paths['epoch_checkpoint'](epoch + 1)
                 )
             
             last_completed_epoch = epoch
     except KeyboardInterrupt:
         print("\n  Interrupted. Saving resume checkpoint before exit...")
         checkpoint_epoch = last_completed_epoch if last_completed_epoch >= start_epoch else start_epoch
-        save_resume_checkpoint(checkpoint_epoch, model, optimizer, scheduler, ema, best_val_loss)
+        save_full_checkpoint(
+            checkpoint_epoch, model, optimizer, scheduler, ema, best_val_loss,
+            run_paths['resume_checkpoint']
+        )
         save_history(history, history_path)
         raise
     except Exception:
         print("\n  Training crashed. Saving resume checkpoint before re-raising...")
         checkpoint_epoch = last_completed_epoch if last_completed_epoch >= start_epoch else start_epoch
-        save_resume_checkpoint(checkpoint_epoch, model, optimizer, scheduler, ema, best_val_loss)
+        save_full_checkpoint(
+            checkpoint_epoch, model, optimizer, scheduler, ema, best_val_loss,
+            run_paths['resume_checkpoint']
+        )
         save_history(history, history_path)
         raise
     
@@ -1166,7 +1266,7 @@ def train(config: dict, resume_path: Optional[str] = None):
     print(f"\n[4/5] Saving final model...")
     save_weights_only(
         model, ema,
-        os.path.join(CHECKPOINT_DIR, "scene_placer_final.safetensors")
+        run_paths['final_weights']
     )
     
     # Save training history
@@ -1192,6 +1292,13 @@ def main():
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
+    parser.add_argument("--tensor-path", type=str, default=TENSOR_PATH)
+    parser.add_argument("--vocab-path", type=str, default=VOCAB_PATH)
+    parser.add_argument("--max-train-batches", type=int, default=None)
+    parser.add_argument("--max-val-batches", type=int, default=None)
+    parser.add_argument("--run-name", type=str, default="scene_placer")
+    parser.add_argument("--checkpoint-every", type=int, default=None)
+    parser.add_argument("--resume-checkpoint-every", type=int, default=None)
     args = parser.parse_args()
     
     config = DEFAULT_CONFIG.copy()
@@ -1201,6 +1308,15 @@ def main():
         config['batch_size'] = args.batch
     if args.lr:
         config['lr_max'] = args.lr
+    if args.checkpoint_every:
+        config['checkpoint_every'] = args.checkpoint_every
+    if args.resume_checkpoint_every:
+        config['resume_checkpoint_every'] = args.resume_checkpoint_every
+    config['tensor_path'] = args.tensor_path
+    config['vocab_path'] = args.vocab_path
+    config['max_train_batches'] = args.max_train_batches
+    config['max_val_batches'] = args.max_val_batches
+    config['run_name'] = args.run_name
     
     print("=" * 72)
     print("  Scene Placement Transformer — Training")

@@ -10,7 +10,9 @@
 		<AssemblyTitle>WorldBuilder.Terminal</AssemblyTitle>
 		<Description>Headless DAT export and world-editing terminal for ACME WorldBuilder</Description>
 		<ServerGarbageCollection>true</ServerGarbageCollection>
+		<BuildInParallel>false</BuildInParallel>
 		<UseLocalReferenceBuild Condition="'$(UseLocalReferenceBuild)'==''">false</UseLocalReferenceBuild>
+		<RestoreBuildInParallel>false</RestoreBuildInParallel>
 	</PropertyGroup>
 
 	<ItemGroup Condition="'$(UseLocalReferenceBuild)'!='true'">
