@@ -1633,6 +1633,9 @@ def generate_world(args):
         return 1
     
     config = DEFAULT_CONFIG.copy()
+    # Legacy scene-placer checkpoints are tied to the classic placement vocab,
+    # not the newer component-linked training artifacts imported via DEFAULT_CONFIG.
+    config['vocab_path'] = VOCAB_PATH
     cuda_available = torch.cuda.is_available()
     if args.require_cuda and not cuda_available:
         print("  ERROR: CUDA was requested with --require-cuda, but torch.cuda.is_available() is false.")

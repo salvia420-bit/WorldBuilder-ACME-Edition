@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd ~/WorldBuilder-ACME-Edition
+ROOT="/home/salvia420/WorldBuilder-ACME-Edition"
+cd "$ROOT"
 
 RUN_TS="$(date -u +%Y%m%dT%H%M%SZ)"
-OUTDIR="$PWD/pipeline_data/search_runs/overnight_benchmark_search_${RUN_TS}"
+OUTDIR="$ROOT/pipeline_data/search_runs/overnight_benchmark_search_${RUN_TS}"
 mkdir -p "$OUTDIR"
+chown -R salvia420:salvia420 "$OUTDIR"
 
 PID_FILE="$OUTDIR/runner.pid"
 LOG_FILE="$OUTDIR/runner.log"
@@ -20,6 +22,8 @@ mkdir -p /dev
 [ -e /dev/nvidia-modeset ] || mknod -m 666 /dev/nvidia-modeset c 195 254
 [ -e /dev/nvidia-uvm ] || mknod -m 666 /dev/nvidia-uvm c 235 0
 [ -e /dev/nvidia-uvm-tools ] || mknod -m 666 /dev/nvidia-uvm-tools c 235 1
+chown -R salvia420:salvia420 $OUTDIR
+sudo -u salvia420 /bin/bash -lc "
 cd /home/salvia420/WorldBuilder-ACME-Edition
 nohup /home/salvia420/WorldBuilder-ACME-Edition/.venv/bin/python \
   /home/salvia420/WorldBuilder-ACME-Edition/scripts/PopulationPipeline/FrequencyModel/run_overnight_benchmark_search.py \
@@ -27,7 +31,10 @@ nohup /home/salvia420/WorldBuilder-ACME-Edition/.venv/bin/python \
   --model /home/salvia420/WorldBuilder-ACME-Edition/pipeline_data/models/scene_placer_final.pt \
   --outdir $OUTDIR \
   > $LOG_FILE 2>&1 < /dev/null &
-echo \$! > $PID_FILE
+echo \\\$! > $PID_FILE
+sleep 3
+kill -0 \\\$(cat $PID_FILE)
+"
 '
 EOF
 
