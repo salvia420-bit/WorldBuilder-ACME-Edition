@@ -26,6 +26,8 @@ This path is separate from the OutdoorML trainer. It is intended to answer:
   - batch ranking wrapper for multiple SQL outputs
 - `run_overnight_benchmark_search.py`
   - autonomous benchmark search over generation-time knobs
+- `run_model_benchmark.py`
+  - benchmark a specific model checkpoint with a fixed saved parameter preset
 
 ## Current scoring shape
 
@@ -77,6 +79,21 @@ It writes:
 - `leaderboard.json`
 - `search_summary.json`
 - per-candidate params, logs, SQL, summaries, and scored results
+
+## Benchmark one model
+
+Use the saved best parameter preset against a specific checkpoint:
+
+```bash
+python3 scripts/PopulationPipeline/FrequencyModel/run_model_benchmark.py \
+  --model pipeline_data/models/scene_placer_final.pt
+```
+
+This is the intended bridge back into model work:
+
+- keep inference parameters fixed from the current best search result
+- benchmark a new checkpoint on the same fixed regions
+- compare model checkpoints without re-running parameter search first
 
 ## Detached launch
 
