@@ -1,0 +1,34 @@
+{
+  "source_run": "pipeline_data/search_runs/focused_benchmark_search_cuda_20260331T134118Z",
+  "candidate_id": "candidate_0008",
+  "completed_at_utc": "2026-03-31T15:42:50Z",
+  "notes": "Best viable candidate from the patched full-region FrequencyModel search.",
+  "params": {
+    "temperature": 1.068,
+    "top_k": 24,
+    "nucleus_p": 0.969,
+    "frequency_penalty": 0.203,
+    "min_objects": 7,
+    "adaptive_min_objects_bonus": 2,
+    "pad_logit_bias": 1.341,
+    "stop_logit_bias": 0.636,
+    "housing_logit_bias": 0.064,
+    "housing_flatness_threshold": 0.667,
+    "housing_difficulty_ceiling": 0.667,
+    "housing_min_placements": 2,
+    "max_housing_per_lb": 2,
+    "inject_town_lifestones": true,
+    "town_service_min_objects": 18,
+    "inject_town_vendors": true,
+    "town_vendor_min_objects": 24
+  },
+  "metrics": {
+    "avg_score_per_row": -1.1018247474892349,
+    "avg_score_per_landblock": -11.028242393648506,
+    "avg_over_penalty_per_row": 1.0195986489610112,
+    "avg_mix_reward_per_landblock": 0.0011988636363636364,
+    "total_generated_rows": 8370,
+    "total_generated_landblocks": 837,
+    "active_benchmarks": 3
+  }
+}
