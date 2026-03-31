@@ -22,6 +22,7 @@ DEFAULT_WEIGHTS_JSON = REFERENCE_DIR / "dereth_frequency_weights.json"
 DEFAULT_LANDBLOCK_REFERENCE_JSON = REFERENCE_DIR / "dereth_landblock_reference_counts.json"
 DEFAULT_SIMILARITY_JSON = REFERENCE_DIR / "dereth_wcid_similarity.json"
 SCORER_PATH = Path(__file__).with_name("score_neighborhood_frequency.py")
+MIN_ROWS_PER_SQL = 1
 
 
 def load_scorer_module():
@@ -48,12 +49,21 @@ def parse_args() -> argparse.Namespace:
         default="score_per_row",
         choices=("score_per_row", "score_per_landblock", "total_score", "over_penalty_per_row"),
     )
+    parser.add_argument(
+        "--exclude-empty",
+        action="store_true",
+        help="Exclude zero-row outputs from ranking so collapse cannot outrank real candidates.",
+    )
     parser.add_argument("--out-json", type=Path, default=None)
     return parser.parse_args()
 
 
+def row_sort_key(row: dict, sort_by: str) -> tuple[float, float]:
+    return (1.0 if row["is_rankable"] else 0.0, row[sort_by])
+
+
 def format_table(rows: list[dict], sort_by: str) -> str:
-    ordered = sorted(rows, key=lambda row: row[sort_by], reverse=True)
+    ordered = sorted(rows, key=lambda row: row_sort_key(row, sort_by), reverse=True)
     headers = [
         ("label", 34),
         ("rows", 9),
@@ -116,6 +126,7 @@ def main() -> None:
             "mix_matched_reward": summary["mix_matched_reward"],
             "overgeneration_penalty": summary["overgeneration_penalty"],
             "missing_penalty": summary["missing_penalty"],
+            "is_rankable": generated_rows >= MIN_ROWS_PER_SQL,
             "score_per_row": summary["total_score"] / generated_rows if generated_rows else 0.0,
             "score_per_landblock": summary["total_score"] / generated_landblocks if generated_landblocks else 0.0,
             "over_penalty_per_row": summary["overgeneration_penalty"] / generated_rows if generated_rows else 0.0,
@@ -123,16 +134,18 @@ def main() -> None:
         }
         rows.append(row)
 
-    print(format_table(rows, args.sort_by))
+    printable_rows = [row for row in rows if row["is_rankable"]] if args.exclude_empty else rows
+    print(format_table(printable_rows, args.sort_by))
 
     if args.out_json:
         payload = {
             "sort_by": args.sort_by,
+            "exclude_empty": args.exclude_empty,
             "radius": args.radius,
             "neighborhood_cap": args.neighborhood_cap,
             "similarity_credit_ratio": args.similarity_credit_ratio,
             "similarity_penalty_ratio": args.similarity_penalty_ratio,
-            "results": sorted(rows, key=lambda row: row[args.sort_by], reverse=True),
+            "results": sorted(printable_rows, key=lambda row: row_sort_key(row, args.sort_by), reverse=True),
         }
         args.out_json.parent.mkdir(parents=True, exist_ok=True)
         with args.out_json.open("w", encoding="utf-8") as f:

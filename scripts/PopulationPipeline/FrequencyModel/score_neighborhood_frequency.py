@@ -145,6 +145,14 @@ def build_similarity_lookup(similarity_doc: dict) -> dict[int, list[dict]]:
     return lookup
 
 
+def region_landblock_ids(lb_x_min: int, lb_x_max: int, lb_y_min: int, lb_y_max: int) -> list[str]:
+    ids = []
+    for x in range(lb_x_min, lb_x_max + 1):
+        for y in range(lb_y_min, lb_y_max + 1):
+            ids.append(make_landblock_id(x, y))
+    return ids
+
+
 def evaluate_neighborhoods(
     generated: dict[str, Counter[int]],
     reference_landblocks: dict[str, Counter[int]],
@@ -154,6 +162,7 @@ def evaluate_neighborhoods(
     neighborhood_cap: int,
     similarity_credit_ratio: float,
     similarity_penalty_ratio: float,
+    expected_landblocks: list[str] | None = None,
 ) -> dict:
     similarity_lookup = build_similarity_lookup(similarity_doc)
 
@@ -188,9 +197,12 @@ def evaluate_neighborhoods(
                 rows.append((neighbor_lbid, tuple(sorted(ref_counter.items()))))
         return tuple(rows)
 
-    all_generated_lbs = set(generated)
-    for lbid in sorted(all_generated_lbs):
-        gen_counts = generated[lbid]
+    evaluated_lbs = set(generated)
+    if expected_landblocks is not None:
+        evaluated_lbs.update(normalize_landblock_id(lbid) for lbid in expected_landblocks)
+
+    for lbid in sorted(evaluated_lbs):
+        gen_counts = generated.get(lbid, Counter())
         ref_counts = neighborhood_reference(lbid)
         lb_score = 0.0
         lb_reward = 0.0
@@ -327,6 +339,7 @@ def evaluate_neighborhoods(
 
     return {
         "generated_landblocks": len(generated),
+        "evaluated_landblocks": len(evaluated_lbs),
         "reference_landblocks": len(reference_landblocks),
         "radius": radius,
         "neighborhood_cap": neighborhood_cap,

@@ -36,6 +36,9 @@ DEFAULT_BENCHMARKS = [
     {"name": "region_c_100", "lb_x_min": 30, "lb_x_max": 39, "lb_y_min": 120, "lb_y_max": 129},
 ]
 
+MIN_ROWS_PER_BENCHMARK = 1
+MIN_ACTIVE_BENCHMARKS = len(DEFAULT_BENCHMARKS)
+
 
 def utc_now_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -82,26 +85,49 @@ def write_json(path: Path, payload: dict | list) -> None:
 
 
 def sample_candidate(rng: random.Random) -> dict:
-    top_k = rng.choice([0, 16, 24, 32, 48])
-    candidate = {
-        "temperature": round(rng.uniform(0.88, 1.08), 3),
-        "top_k": top_k,
-        "nucleus_p": round(rng.uniform(0.92, 1.0), 3) if top_k == 0 else round(rng.uniform(0.94, 1.0), 3),
-        "frequency_penalty": round(rng.uniform(0.18, 0.42), 3),
-        "min_objects": rng.choice([4, 5, 6, 7]),
-        "adaptive_min_objects_bonus": rng.choice([1, 2, 3]),
-        "pad_logit_bias": round(rng.uniform(0.7, 1.4), 3),
-        "stop_logit_bias": round(rng.uniform(0.25, 0.9), 3),
-        "housing_logit_bias": round(rng.uniform(-0.1, 0.25), 3),
-        "housing_flatness_threshold": round(rng.uniform(0.45, 0.72), 3),
-        "housing_difficulty_ceiling": round(rng.uniform(0.45, 0.72), 3),
-        "housing_min_placements": rng.choice([1, 2, 3]),
-        "max_housing_per_lb": rng.choice([0, 1, 2]),
-        "inject_town_lifestones": rng.choice([True, True, False]),
-        "town_service_min_objects": rng.choice([12, 14, 15, 16, 18]),
-        "inject_town_vendors": rng.choice([True, True, False]),
-        "town_vendor_min_objects": rng.choice([16, 18, 20, 22, 24]),
-    }
+    focused = rng.random() < 0.75
+    if focused:
+        top_k = rng.choice([24, 32, 32, 48])
+        candidate = {
+            "temperature": round(rng.uniform(1.0, 1.07), 3),
+            "top_k": top_k,
+            "nucleus_p": round(rng.uniform(0.945, 0.99), 3),
+            "frequency_penalty": round(rng.uniform(0.18, 0.36), 3),
+            "min_objects": rng.choice([6, 7, 7]),
+            "adaptive_min_objects_bonus": rng.choice([1, 2, 2]),
+            "pad_logit_bias": round(rng.uniform(1.0, 1.36), 3),
+            "stop_logit_bias": round(rng.uniform(0.6, 0.82), 3),
+            "housing_logit_bias": round(rng.uniform(-0.02, 0.14), 3),
+            "housing_flatness_threshold": round(rng.uniform(0.6, 0.71), 3),
+            "housing_difficulty_ceiling": round(rng.uniform(0.58, 0.67), 3),
+            "housing_min_placements": rng.choice([2, 3]),
+            "max_housing_per_lb": rng.choice([0, 1, 2]),
+            "inject_town_lifestones": rng.choice([True, True, False]),
+            "town_service_min_objects": rng.choice([14, 16, 16, 18]),
+            "inject_town_vendors": rng.choice([True, True, True, False]),
+            "town_vendor_min_objects": rng.choice([18, 20, 22, 24]),
+        }
+    else:
+        top_k = rng.choice([0, 16, 24, 32, 48])
+        candidate = {
+            "temperature": round(rng.uniform(0.88, 1.08), 3),
+            "top_k": top_k,
+            "nucleus_p": round(rng.uniform(0.92, 1.0), 3) if top_k == 0 else round(rng.uniform(0.94, 1.0), 3),
+            "frequency_penalty": round(rng.uniform(0.18, 0.42), 3),
+            "min_objects": rng.choice([4, 5, 6, 7]),
+            "adaptive_min_objects_bonus": rng.choice([1, 2, 3]),
+            "pad_logit_bias": round(rng.uniform(0.7, 1.4), 3),
+            "stop_logit_bias": round(rng.uniform(0.25, 0.9), 3),
+            "housing_logit_bias": round(rng.uniform(-0.1, 0.25), 3),
+            "housing_flatness_threshold": round(rng.uniform(0.45, 0.72), 3),
+            "housing_difficulty_ceiling": round(rng.uniform(0.45, 0.72), 3),
+            "housing_min_placements": rng.choice([1, 2, 3]),
+            "max_housing_per_lb": rng.choice([0, 1, 2]),
+            "inject_town_lifestones": rng.choice([True, True, False]),
+            "town_service_min_objects": rng.choice([12, 14, 15, 16, 18]),
+            "inject_town_vendors": rng.choice([True, True, False]),
+            "town_vendor_min_objects": rng.choice([16, 18, 20, 22, 24]),
+        }
     if candidate["town_vendor_min_objects"] < candidate["town_service_min_objects"]:
         candidate["town_vendor_min_objects"] = candidate["town_service_min_objects"] + 2
     return candidate
@@ -132,6 +158,7 @@ def candidate_to_args(candidate: dict) -> list[str]:
 
 def score_sort_key(row: dict) -> tuple[float, float, float]:
     return (
+        1.0 if row.get("is_viable_leader", False) else 0.0,
         row["avg_score_per_row"],
         -row["avg_over_penalty_per_row"],
         row["avg_mix_reward_per_landblock"],
@@ -164,6 +191,35 @@ def render_leaderboard(rows: list[dict], limit: int = 10) -> str:
             )
         )
     return "\n".join(lines)
+
+
+def summarize_viability(benchmark_rows: list[dict]) -> dict:
+    total_generated_rows = sum(row["generated_rows"] for row in benchmark_rows)
+    total_generated_landblocks = sum(row["generated_landblocks"] for row in benchmark_rows)
+    active_benchmarks = sum(1 for row in benchmark_rows if row["generated_rows"] >= MIN_ROWS_PER_BENCHMARK)
+    collapsed_benchmarks = [
+        row["name"] for row in benchmark_rows if row["generated_rows"] < MIN_ROWS_PER_BENCHMARK
+    ]
+    return {
+        "total_generated_rows": total_generated_rows,
+        "total_generated_landblocks": total_generated_landblocks,
+        "active_benchmarks": active_benchmarks,
+        "collapsed_benchmarks": collapsed_benchmarks,
+        "is_viable_leader": active_benchmarks >= MIN_ACTIVE_BENCHMARKS,
+    }
+
+
+def build_search_summary(rows: list[dict], limit: int) -> dict:
+    ordered = sorted(rows, key=score_sort_key, reverse=True)
+    viable = [row for row in ordered if row.get("is_viable_leader", False)]
+    diagnostics = [row for row in ordered if not row.get("is_viable_leader", False)]
+    return {
+        "best": viable[:limit],
+        "best_viable": viable[:limit],
+        "top_diagnostics": diagnostics[:limit],
+        "viable_candidates": len(viable),
+        "diagnostic_only_candidates": len(diagnostics),
+    }
 
 
 def run_generation(cmd: list[str], log_path: Path) -> None:
@@ -235,6 +291,12 @@ def evaluate_candidate(
             neighborhood_cap=8,
             similarity_credit_ratio=0.3,
             similarity_penalty_ratio=0.55,
+            expected_landblocks=scorer.region_landblock_ids(
+                benchmark["lb_x_min"],
+                benchmark["lb_x_max"],
+                benchmark["lb_y_min"],
+                benchmark["lb_y_max"],
+            ),
         )
         generated_rows = sum(sum(counter.values()) for counter in generated.values())
         generated_landblocks = len(generated)
@@ -258,6 +320,7 @@ def evaluate_candidate(
     avg_score_per_landblock = sum(row["score_per_landblock"] for row in benchmark_rows) / len(benchmark_rows)
     avg_over_penalty_per_row = sum(row["over_penalty_per_row"] for row in benchmark_rows) / len(benchmark_rows)
     avg_mix_reward_per_landblock = sum(row["mix_reward_per_landblock"] for row in benchmark_rows) / len(benchmark_rows)
+    viability = summarize_viability(benchmark_rows)
 
     result = {
         "candidate_id": candidate_id,
@@ -268,6 +331,7 @@ def evaluate_candidate(
         "avg_over_penalty_per_row": avg_over_penalty_per_row,
         "avg_mix_reward_per_landblock": avg_mix_reward_per_landblock,
         "benchmarks": benchmark_rows,
+        **viability,
     }
     write_json(candidate_dir / "result.json", result)
     return result
@@ -325,14 +389,16 @@ def main() -> None:
             )
             result["wallclock_sec"] = time.time() - started
             leaderboard.append(result)
-            write_json(outdir / args.leaderboard_json_name, sorted(leaderboard, key=score_sort_key, reverse=True))
+            ordered = sorted(leaderboard, key=score_sort_key, reverse=True)
+            summary = build_search_summary(leaderboard, limit=5)
+            write_json(outdir / args.leaderboard_json_name, ordered)
             write_json(
                 outdir / args.summary_json_name,
                 {
                     "updated_at": utc_now_stamp(),
                     "completed_candidates": len(leaderboard),
                     "remaining_hours_estimate": max(0.0, (deadline - time.time()) / 3600.0),
-                    "best": sorted(leaderboard, key=score_sort_key, reverse=True)[:5],
+                    **summary,
                 },
             )
             prune_candidates(leaderboard, outdir, args.keep_top_k)
@@ -352,7 +418,7 @@ def main() -> None:
         {
             "finished_at": utc_now_stamp(),
             "completed_candidates": len(leaderboard),
-            "best": sorted(leaderboard, key=score_sort_key, reverse=True)[:10],
+            **build_search_summary(leaderboard, limit=10),
         },
     )
 
