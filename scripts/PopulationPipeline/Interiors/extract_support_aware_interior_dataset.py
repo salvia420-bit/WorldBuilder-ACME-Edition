@@ -34,6 +34,7 @@ DEFAULT_OUT_SILVER_JSONL = REFERENCE_DIR / "interior_supported_props_silver.json
 DEFAULT_OUT_SUMMARY_JSON = REFERENCE_DIR / "interior_support_dataset_highconf_summary.json"
 DEFAULT_OUT_REVIEW_JSONL = REFERENCE_DIR / "interior_supported_prop_candidates_review.jsonl"
 DEFAULT_OUT_CANDIDATES_JSONL = REFERENCE_DIR / "interior_supported_prop_candidates_ranked.jsonl"
+DEFAULT_OUT_MOTIFS_JSONL = REFERENCE_DIR / "interior_supported_prop_motifs.jsonl"
 
 
 SUPPORT_NAME_HINTS = {
@@ -106,6 +107,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-summary-json", type=Path, default=DEFAULT_OUT_SUMMARY_JSON)
     parser.add_argument("--out-review-jsonl", type=Path, default=DEFAULT_OUT_REVIEW_JSONL)
     parser.add_argument("--out-candidates-jsonl", type=Path, default=DEFAULT_OUT_CANDIDATES_JSONL)
+    parser.add_argument("--out-motifs-jsonl", type=Path, default=DEFAULT_OUT_MOTIFS_JSONL)
     return parser.parse_args()
 
 
@@ -726,6 +728,55 @@ def rank_support_candidates(
     return ranked[:top_k]
 
 
+def quantize_value(value: float, step: float) -> float:
+    return round(round(value / step) * step, 3)
+
+
+def build_candidate_motif_rows(candidate_rows: list[dict]) -> list[dict]:
+    buckets: dict[tuple, list[dict]] = {}
+    for row in candidate_rows:
+        rel = row["supportRelation"]["relativePosition"]
+        key = (
+            row["supportParent"]["classIdSpace"],
+            row["supportParent"]["classId"],
+            row["supportParent"]["supportClass"],
+            row["prop"]["propClass"],
+            quantize_value(float(rel["x"]), 0.5),
+            quantize_value(float(rel["y"]), 0.5),
+            quantize_value(float(rel["z"]), 0.15),
+            quantize_value(float(row["supportRelation"]["relativeYawDeg"]), 30.0),
+        )
+        buckets.setdefault(key, []).append(row)
+
+    motif_rows: list[dict] = []
+    for key, rows in buckets.items():
+        if len(rows) < 2:
+            continue
+        support_space, support_class_id, support_class, prop_class, qx, qy, qz, qyaw = key
+        top_tiers = Counter(row["supportRelation"].get("candidateTier", "unknown") for row in rows)
+        motif_rows.append(
+            {
+                "motifKey": {
+                    "supportClassIdSpace": support_space,
+                    "supportClassId": support_class_id,
+                    "supportClass": support_class,
+                    "propClass": prop_class,
+                    "relativePositionBucket": {"x": qx, "y": qy, "z": qz},
+                    "relativeYawBucket": qyaw,
+                },
+                "count": len(rows),
+                "candidateTierCounts": dict(top_tiers.most_common()),
+                "exampleSceneIds": [row["sceneId"] for row in rows[:5]],
+                "supportName": rows[0]["supportParent"].get("name"),
+                "examplePropName": rows[0]["prop"].get("name"),
+                "promotionEligibleCount": sum(1 for row in rows if row["validation"].get("promotionEligible")),
+            }
+        )
+
+    motif_rows.sort(key=lambda row: (-row["count"], -row["promotionEligibleCount"], row["motifKey"]["supportClass"]))
+    return motif_rows
+
+
 def write_jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
@@ -748,6 +799,7 @@ def main() -> None:
     silver_rows: list[dict] = []
     review_rows: list[dict] = []
     candidate_rows: list[dict] = []
+    motif_rows: list[dict] = []
 
     stats = {
         "scanned_rows": 0,
@@ -769,6 +821,7 @@ def main() -> None:
         "review_candidate_support_class_counts": Counter(),
         "review_candidate_prop_class_counts": Counter(),
         "candidate_tier_counts": Counter(),
+        "motif_rows_emitted": 0,
         "static_support_objects_emitted": 0,
     }
 
@@ -1005,6 +1058,9 @@ def main() -> None:
     write_jsonl(args.out_silver_jsonl, silver_rows)
     write_jsonl(args.out_review_jsonl, review_rows)
     write_jsonl(args.out_candidates_jsonl, candidate_rows)
+    motif_rows = build_candidate_motif_rows(candidate_rows)
+    write_jsonl(args.out_motifs_jsonl, motif_rows)
+    stats["motif_rows_emitted"] = len(motif_rows)
 
     summary = {
         "raw_jsonl": str(args.raw_jsonl),
@@ -1015,6 +1071,7 @@ def main() -> None:
         "silver_output_jsonl": str(args.out_silver_jsonl),
         "review_output_jsonl": str(args.out_review_jsonl),
         "candidates_output_jsonl": str(args.out_candidates_jsonl),
+        "motifs_output_jsonl": str(args.out_motifs_jsonl),
         "counts": {
             "scanned_rows": stats["scanned_rows"],
             "interior_rows": stats["interior_rows"],
@@ -1024,6 +1081,7 @@ def main() -> None:
             "silver_props_emitted": stats["silver_props_emitted"],
             "review_candidate_emitted": stats["review_candidate_emitted"],
             "candidate_rows_emitted": stats["candidate_rows_emitted"],
+            "motif_rows_emitted": stats["motif_rows_emitted"],
             "skipped_non_interior": stats["skipped_non_interior"],
             "skipped_non_wcid": stats["skipped_non_wcid"],
             "skipped_non_instance": stats["skipped_non_instance"],
@@ -1057,11 +1115,13 @@ def main() -> None:
     print(f"  Silver rows:  {len(silver_rows):,}")
     print(f"  Review rows:  {len(review_rows):,}")
     print(f"  Candidate rows: {len(candidate_rows):,}")
+    print(f"  Motif rows:   {len(motif_rows):,}")
     print(f"  Support JSONL: {args.out_support_jsonl}")
     print(f"  Gold JSONL:    {args.out_prop_jsonl}")
     print(f"  Silver JSONL:  {args.out_silver_jsonl}")
     print(f"  Review JSONL:  {args.out_review_jsonl}")
     print(f"  Candidates JSONL: {args.out_candidates_jsonl}")
+    print(f"  Motifs JSONL:  {args.out_motifs_jsonl}")
     print(f"  Summary JSON:  {args.out_summary_json}")
 
 
