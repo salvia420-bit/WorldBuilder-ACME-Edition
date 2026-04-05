@@ -32,6 +32,7 @@ DEFAULT_OUT_SUPPORT_JSONL = REFERENCE_DIR / "interior_support_objects_highconf.j
 DEFAULT_OUT_PROP_JSONL = REFERENCE_DIR / "interior_supported_props_highconf.jsonl"
 DEFAULT_OUT_SUMMARY_JSON = REFERENCE_DIR / "interior_support_dataset_highconf_summary.json"
 DEFAULT_OUT_REVIEW_JSONL = REFERENCE_DIR / "interior_supported_prop_candidates_review.jsonl"
+DEFAULT_OUT_CANDIDATES_JSONL = REFERENCE_DIR / "interior_supported_prop_candidates_ranked.jsonl"
 
 
 SUPPORT_NAME_HINTS = {
@@ -102,6 +103,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-prop-jsonl", type=Path, default=DEFAULT_OUT_PROP_JSONL)
     parser.add_argument("--out-summary-json", type=Path, default=DEFAULT_OUT_SUMMARY_JSON)
     parser.add_argument("--out-review-jsonl", type=Path, default=DEFAULT_OUT_REVIEW_JSONL)
+    parser.add_argument("--out-candidates-jsonl", type=Path, default=DEFAULT_OUT_CANDIDATES_JSONL)
     return parser.parse_args()
 
 
@@ -548,6 +550,63 @@ def build_review_prop_candidate_row(
     return base
 
 
+def classify_candidate_tier(
+    support_class: str,
+    support_mode: str,
+    horizontal_distance: float,
+    dz: float,
+    competing_parent_count: int,
+    candidate_score: float,
+) -> tuple[str, bool]:
+    furniture_like = support_class in {"table_like", "desk_like", "altar_like", "shelf_like"}
+    if furniture_like and support_mode == "static_setup_name":
+        if horizontal_distance <= 0.9 and 0.0 <= dz <= 0.35 and competing_parent_count == 0 and candidate_score >= 0.72:
+            return "silver_static", True
+        if horizontal_distance <= 1.35 and 0.0 <= dz <= 0.5 and competing_parent_count <= 1 and candidate_score >= 0.58:
+            return "bronze_static", False
+    if support_class == "container_top":
+        if horizontal_distance <= 0.9 and 0.0 <= dz <= 0.2 and competing_parent_count == 0 and candidate_score >= 0.62:
+            return "bronze_container", False
+    return "review_only", False
+
+
+def build_ranked_candidate_row(
+    row: dict,
+    prop_class: str,
+    prop_confidence: float,
+    prop_mode: str,
+    prop_grounding: dict | None,
+    parent_row: dict,
+    parent_support_class: str,
+    parent_support_confidence: float,
+    parent_support_mode: str,
+    parent_grounding: dict | None,
+    component_info: dict | None,
+    cell_info: dict | None,
+    relation_confidence: float,
+    relation_mode: str,
+    competing_parent_count: int,
+) -> dict:
+    row_out = build_review_prop_candidate_row(
+        row,
+        prop_class,
+        prop_confidence,
+        prop_mode,
+        prop_grounding,
+        parent_row,
+        parent_support_class,
+        parent_support_confidence,
+        parent_support_mode,
+        parent_grounding,
+        component_info,
+        cell_info,
+        relation_confidence,
+        relation_mode,
+        competing_parent_count,
+    )
+    return row_out
+
+
 def supported_prop_relation_valid(row: dict, parent_row: dict) -> tuple[bool, str]:
     if row.get("cellId") != parent_row.get("cellId"):
         return False, "different_cell"
@@ -607,6 +666,64 @@ def find_geometry_support_candidate(
     return (support_guid, support_row, support_class, support_conf, support_mode, support_grounding), max(len(ranked) - 1, 0)
 
 
+def rank_support_candidates(
+    row: dict,
+    support_candidates: list[tuple[int, dict, str | None, float, str, dict | None, dict | None]],
+    top_k: int = 3,
+) -> list[dict]:
+    x = float(row.get("localX", 0.0))
+    y = float(row.get("localY", 0.0))
+    z = float(row.get("z", 0.0))
+    ranked: list[dict] = []
+
+    for support_guid, support_row, support_class, support_conf, support_mode, support_grounding, _canonical_entry in support_candidates:
+        if support_class is None or support_guid == int(row.get("guid") or -1):
+            continue
+        support_name = normalized_name(support_row, support_grounding, None)
+        if support_class == "container_top" and is_loot_container_name(support_name):
+            continue
+        sx = float(support_row.get("localX", 0.0))
+        sy = float(support_row.get("localY", 0.0))
+        sz = float(support_row.get("z", 0.0))
+        dz = z - sz
+        if dz < -0.25 or dz > 1.75:
+            continue
+        horiz = math.hypot(x - sx, y - sy)
+        if horiz > 2.5:
+            continue
+
+        score = support_conf
+        score += max(0.0, 1.25 - horiz) * 0.22
+        score += max(0.0, 0.5 - abs(dz - 0.12)) * 0.18
+        if support_mode == "static_setup_name":
+            score += 0.08
+        if support_class in {"table_like", "desk_like", "altar_like"}:
+            score += 0.06
+        elif support_class == "shelf_like":
+            score += 0.05
+        elif support_class == "container_top":
+            score -= 0.12
+        if support_class == "bed_like":
+            score -= 0.08
+
+        ranked.append(
+            {
+                "score": score,
+                "horizontalDistance": horiz,
+                "dz": dz,
+                "support_guid": support_guid,
+                "support_row": support_row,
+                "support_class": support_class,
+                "support_conf": support_conf,
+                "support_mode": support_mode,
+                "support_grounding": support_grounding,
+            }
+        )
+
+    ranked.sort(key=lambda item: (-item["score"], item["horizontalDistance"], abs(item["dz"])))
+    return ranked[:top_k]
+
+
 def write_jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
@@ -627,6 +744,7 @@ def main() -> None:
     support_rows: list[dict] = []
     prop_rows: list[dict] = []
     review_rows: list[dict] = []
+    candidate_rows: list[dict] = []
 
     stats = {
         "scanned_rows": 0,
@@ -643,8 +761,10 @@ def main() -> None:
         "prop_inference_mode_counts": Counter(),
         "prop_rejection_reason_counts": Counter(),
         "review_candidate_emitted": 0,
+        "candidate_rows_emitted": 0,
         "review_candidate_support_class_counts": Counter(),
         "review_candidate_prop_class_counts": Counter(),
+        "candidate_tier_counts": Counter(),
         "static_support_objects_emitted": 0,
     }
 
@@ -772,44 +892,50 @@ def main() -> None:
         if prop_class is None:
             continue
 
-        parent_guids = row.get("parentGuids") or []
-        if len(parent_guids) != 1:
-            continue
-        parent_guid = int(parent_guids[0])
-        parent_row = raw_rows_by_guid.get(parent_guid)
-        if parent_row is None:
-            continue
-
-        parent_support_class, parent_support_conf, parent_support_mode, parent_grounding, _ = support_cache.get(
-            parent_guid, (None, 0.0, "missing", None, None)
-        )
-        if parent_support_class is None:
-            parent_support_class = None
-
         cell_num = parse_hexish(row.get("cellId"))
         cell_info = cells_by_lb_cell.get((int(row["landblockX"]), int(row["landblockY"]), cell_num or -1))
         component_info = component_by_id.get(int(row["envCellComponentId"])) if row.get("envCellComponentId") is not None else None
 
-        if parent_support_class is not None:
+        parent_row = None
+        parent_support_class = None
+        parent_support_conf = 0.0
+        parent_support_mode = "missing"
+        parent_grounding = None
+        parent_guids = row.get("parentGuids") or []
+        if len(parent_guids) == 1:
+            parent_guid = int(parent_guids[0])
+            parent_row = raw_rows_by_guid.get(parent_guid)
+            if parent_row is not None:
+                parent_support_class, parent_support_conf, parent_support_mode, parent_grounding, _ = support_cache.get(
+                    parent_guid, (None, 0.0, "missing", None, None)
+                )
+
+        if parent_row is not None and parent_support_class is not None:
             relation_valid, rejection_reason = supported_prop_relation_valid(row, parent_row)
             if relation_valid:
-                prop_rows.append(
-                    build_supported_prop_row(
-                        row,
-                        prop_class,
-                        prop_conf,
-                        prop_mode,
-                        prop_grounding,
-                        parent_row,
-                        parent_support_class,
-                        parent_support_conf,
-                        parent_support_mode,
-                        parent_grounding,
-                        component_info,
-                        cell_info,
-                    )
+                promoted_row = build_supported_prop_row(
+                    row,
+                    prop_class,
+                    prop_conf,
+                    prop_mode,
+                    prop_grounding,
+                    parent_row,
+                    parent_support_class,
+                    parent_support_conf,
+                    parent_support_mode,
+                    parent_grounding,
+                    component_info,
+                    cell_info,
                 )
+                promoted_row["supportRelation"]["candidateTier"] = "gold_graph"
+                promoted_row["supportRelation"]["candidateRank"] = 1
+                promoted_row["supportRelation"]["candidateScore"] = round(min(prop_conf, parent_support_conf), 4)
+                promoted_row["validation"]["promotionEligible"] = True
+                prop_rows.append(promoted_row)
+                candidate_rows.append(promoted_row)
                 stats["supported_props_emitted"] += 1
+                stats["candidate_rows_emitted"] += 1
+                stats["candidate_tier_counts"]["gold_graph"] += 1
                 stats["prop_class_counts"][prop_class] += 1
                 stats["prop_inference_mode_counts"]["graph_link"] += 1
                 if idx % 100000 == 0:
@@ -818,38 +944,59 @@ def main() -> None:
             stats["prop_rejection_reason_counts"][rejection_reason] += 1
 
         scene_key = build_scene_key(row)
-        review_candidate, competing_parent_count = find_geometry_support_candidate(row, supports_by_scene.get(scene_key, []))
-        if review_candidate is not None:
-            candidate_guid, candidate_row, candidate_support_class, candidate_support_conf, candidate_support_mode, candidate_grounding = review_candidate
-            relation_confidence = min(prop_conf, candidate_support_conf) * 0.7
-            review_rows.append(
-                build_review_prop_candidate_row(
+        ranked_candidates = rank_support_candidates(row, supports_by_scene.get(scene_key, []), top_k=3)
+        if ranked_candidates:
+            top_score = ranked_candidates[0]["score"]
+            second_score = ranked_candidates[1]["score"] if len(ranked_candidates) > 1 else None
+            for candidate_rank, candidate in enumerate(ranked_candidates, start=1):
+                competing_parent_count = max(len(ranked_candidates) - 1, 0)
+                if second_score is not None and candidate_rank == 1 and second_score >= top_score - 0.03:
+                    competing_parent_count = max(competing_parent_count, 1)
+                candidate_tier, promotion_eligible = classify_candidate_tier(
+                    candidate["support_class"],
+                    candidate["support_mode"],
+                    candidate["horizontalDistance"],
+                    candidate["dz"],
+                    competing_parent_count,
+                    candidate["score"],
+                )
+                relation_confidence = min(prop_conf, candidate["support_conf"]) * 0.7
+                candidate_row = build_ranked_candidate_row(
                     row,
                     prop_class,
                     prop_conf,
                     prop_mode,
                     prop_grounding,
-                    candidate_row,
-                    candidate_support_class,
-                    candidate_support_conf,
-                    candidate_support_mode,
-                    candidate_grounding,
+                    candidate["support_row"],
+                    candidate["support_class"],
+                    candidate["support_conf"],
+                    candidate["support_mode"],
+                    candidate["support_grounding"],
                     component_info,
                     cell_info,
                     relation_confidence,
                     "geometry_nearest",
                     competing_parent_count,
                 )
-            )
-            stats["review_candidate_emitted"] += 1
-            stats["review_candidate_prop_class_counts"][prop_class] += 1
-            stats["review_candidate_support_class_counts"][candidate_support_class] += 1
+                candidate_row["supportRelation"]["candidateRank"] = candidate_rank
+                candidate_row["supportRelation"]["candidateScore"] = round(candidate["score"], 4)
+                candidate_row["supportRelation"]["candidateTier"] = candidate_tier
+                candidate_row["validation"]["promotionEligible"] = promotion_eligible
+                candidate_rows.append(candidate_row)
+                stats["candidate_rows_emitted"] += 1
+                stats["candidate_tier_counts"][candidate_tier] += 1
+                if candidate_rank == 1:
+                    review_rows.append(candidate_row)
+                    stats["review_candidate_emitted"] += 1
+                    stats["review_candidate_prop_class_counts"][prop_class] += 1
+                    stats["review_candidate_support_class_counts"][candidate["support_class"]] += 1
         if idx % 100000 == 0:
             print(f"  Prop relation rows processed: {idx:,}  emitted: {len(prop_rows):,}")
 
     write_jsonl(args.out_support_jsonl, support_rows)
     write_jsonl(args.out_prop_jsonl, prop_rows)
     write_jsonl(args.out_review_jsonl, review_rows)
+    write_jsonl(args.out_candidates_jsonl, candidate_rows)
 
     summary = {
         "raw_jsonl": str(args.raw_jsonl),
@@ -858,6 +1005,7 @@ def main() -> None:
         "support_output_jsonl": str(args.out_support_jsonl),
         "prop_output_jsonl": str(args.out_prop_jsonl),
         "review_output_jsonl": str(args.out_review_jsonl),
+        "candidates_output_jsonl": str(args.out_candidates_jsonl),
         "counts": {
             "scanned_rows": stats["scanned_rows"],
             "interior_rows": stats["interior_rows"],
@@ -865,6 +1013,7 @@ def main() -> None:
             "static_support_objects_emitted": stats["static_support_objects_emitted"],
             "supported_props_emitted": stats["supported_props_emitted"],
             "review_candidate_emitted": stats["review_candidate_emitted"],
+            "candidate_rows_emitted": stats["candidate_rows_emitted"],
             "skipped_non_interior": stats["skipped_non_interior"],
             "skipped_non_wcid": stats["skipped_non_wcid"],
             "skipped_non_instance": stats["skipped_non_instance"],
@@ -875,11 +1024,13 @@ def main() -> None:
         "support_inference_mode_counts": dict(stats["support_inference_mode_counts"].most_common()),
         "prop_inference_mode_counts": dict(stats["prop_inference_mode_counts"].most_common()),
         "prop_rejection_reason_counts": dict(stats["prop_rejection_reason_counts"].most_common()),
+        "candidate_tier_counts": dict(stats["candidate_tier_counts"].most_common()),
         "review_candidate_prop_class_counts": dict(stats["review_candidate_prop_class_counts"].most_common()),
         "review_candidate_support_class_counts": dict(stats["review_candidate_support_class_counts"].most_common()),
         "notes": [
             "This is a first-pass high-confidence extractor.",
-            "Supported-prop rows currently require exactly one direct parentGuid whose parent is support-classified.",
+            "Supported-prop rows currently require a direct parentGuid with valid same-cell/component geometry.",
+            "Ranked candidate rows provide weak-supervision tiers instead of collapsing ambiguous props into one guessed parent.",
             "Supported-prop rows are rejected when the parent is in a different cell/component or when the prop sits below the parent plane.",
             "Review candidates are same-cell, same-component geometric nearest-support guesses and are not yet training-grade labels.",
             "Name hints are used, but hook classes are grounded directly by weenie type 56 and ACE enum-backed names.",
@@ -894,9 +1045,11 @@ def main() -> None:
     print(f"  Support rows: {len(support_rows):,}")
     print(f"  Prop rows:    {len(prop_rows):,}")
     print(f"  Review rows:  {len(review_rows):,}")
+    print(f"  Candidate rows: {len(candidate_rows):,}")
     print(f"  Support JSONL: {args.out_support_jsonl}")
     print(f"  Prop JSONL:    {args.out_prop_jsonl}")
     print(f"  Review JSONL:  {args.out_review_jsonl}")
+    print(f"  Candidates JSONL: {args.out_candidates_jsonl}")
     print(f"  Summary JSON:  {args.out_summary_json}")
 
 
