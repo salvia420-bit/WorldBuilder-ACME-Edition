@@ -21,3 +21,5 @@ Current research entrypoints:
   - writes town-only support / silver / review outputs under `pipeline_data/reference/`
 - `SupportAwareInteriorDatasetDesign_2026-04-05.md`
   - dataset/schema design note for support-aware interior modeling
+- `InteriorSupportExporterPlan_2026-04-05.md`
+  - concrete `WorldBuilder.Terminal` export upgrade plan for support-surface metadata and interior support candidates
