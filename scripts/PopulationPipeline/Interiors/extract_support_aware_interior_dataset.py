@@ -30,6 +30,7 @@ DEFAULT_CANONICAL_ENRICHMENT_JSON = ENRICHMENT_DIR / "canonical_enrichment.json"
 
 DEFAULT_OUT_SUPPORT_JSONL = REFERENCE_DIR / "interior_support_objects_highconf.jsonl"
 DEFAULT_OUT_PROP_JSONL = REFERENCE_DIR / "interior_supported_props_highconf.jsonl"
+DEFAULT_OUT_SILVER_JSONL = REFERENCE_DIR / "interior_supported_props_silver.jsonl"
 DEFAULT_OUT_SUMMARY_JSON = REFERENCE_DIR / "interior_support_dataset_highconf_summary.json"
 DEFAULT_OUT_REVIEW_JSONL = REFERENCE_DIR / "interior_supported_prop_candidates_review.jsonl"
 DEFAULT_OUT_CANDIDATES_JSONL = REFERENCE_DIR / "interior_supported_prop_candidates_ranked.jsonl"
@@ -101,6 +102,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--canonical-enrichment-json", type=Path, default=DEFAULT_CANONICAL_ENRICHMENT_JSON)
     parser.add_argument("--out-support-jsonl", type=Path, default=DEFAULT_OUT_SUPPORT_JSONL)
     parser.add_argument("--out-prop-jsonl", type=Path, default=DEFAULT_OUT_PROP_JSONL)
+    parser.add_argument("--out-silver-jsonl", type=Path, default=DEFAULT_OUT_SILVER_JSONL)
     parser.add_argument("--out-summary-json", type=Path, default=DEFAULT_OUT_SUMMARY_JSON)
     parser.add_argument("--out-review-jsonl", type=Path, default=DEFAULT_OUT_REVIEW_JSONL)
     parser.add_argument("--out-candidates-jsonl", type=Path, default=DEFAULT_OUT_CANDIDATES_JSONL)
@@ -743,6 +745,7 @@ def main() -> None:
     raw_rows_by_guid: dict[int, dict] = {}
     support_rows: list[dict] = []
     prop_rows: list[dict] = []
+    silver_rows: list[dict] = []
     review_rows: list[dict] = []
     candidate_rows: list[dict] = []
 
@@ -751,6 +754,7 @@ def main() -> None:
         "interior_rows": 0,
         "support_objects_emitted": 0,
         "supported_props_emitted": 0,
+        "silver_props_emitted": 0,
         "skipped_non_interior": 0,
         "skipped_non_wcid": 0,
         "skipped_non_instance": 0,
@@ -985,6 +989,9 @@ def main() -> None:
                 candidate_rows.append(candidate_row)
                 stats["candidate_rows_emitted"] += 1
                 stats["candidate_tier_counts"][candidate_tier] += 1
+                if promotion_eligible:
+                    silver_rows.append(candidate_row)
+                    stats["silver_props_emitted"] += 1
                 if candidate_rank == 1:
                     review_rows.append(candidate_row)
                     stats["review_candidate_emitted"] += 1
@@ -995,6 +1002,7 @@ def main() -> None:
 
     write_jsonl(args.out_support_jsonl, support_rows)
     write_jsonl(args.out_prop_jsonl, prop_rows)
+    write_jsonl(args.out_silver_jsonl, silver_rows)
     write_jsonl(args.out_review_jsonl, review_rows)
     write_jsonl(args.out_candidates_jsonl, candidate_rows)
 
@@ -1003,7 +1011,8 @@ def main() -> None:
         "component_jsonl": str(args.component_jsonl),
         "grounding_jsonl": str(args.grounding_jsonl),
         "support_output_jsonl": str(args.out_support_jsonl),
-        "prop_output_jsonl": str(args.out_prop_jsonl),
+        "gold_output_jsonl": str(args.out_prop_jsonl),
+        "silver_output_jsonl": str(args.out_silver_jsonl),
         "review_output_jsonl": str(args.out_review_jsonl),
         "candidates_output_jsonl": str(args.out_candidates_jsonl),
         "counts": {
@@ -1011,7 +1020,8 @@ def main() -> None:
             "interior_rows": stats["interior_rows"],
             "support_objects_emitted": stats["support_objects_emitted"],
             "static_support_objects_emitted": stats["static_support_objects_emitted"],
-            "supported_props_emitted": stats["supported_props_emitted"],
+            "gold_props_emitted": stats["supported_props_emitted"],
+            "silver_props_emitted": stats["silver_props_emitted"],
             "review_candidate_emitted": stats["review_candidate_emitted"],
             "candidate_rows_emitted": stats["candidate_rows_emitted"],
             "skipped_non_interior": stats["skipped_non_interior"],
@@ -1043,11 +1053,13 @@ def main() -> None:
 
     print("Support-aware interior extraction complete")
     print(f"  Support rows: {len(support_rows):,}")
-    print(f"  Prop rows:    {len(prop_rows):,}")
+    print(f"  Gold rows:    {len(prop_rows):,}")
+    print(f"  Silver rows:  {len(silver_rows):,}")
     print(f"  Review rows:  {len(review_rows):,}")
     print(f"  Candidate rows: {len(candidate_rows):,}")
     print(f"  Support JSONL: {args.out_support_jsonl}")
-    print(f"  Prop JSONL:    {args.out_prop_jsonl}")
+    print(f"  Gold JSONL:    {args.out_prop_jsonl}")
+    print(f"  Silver JSONL:  {args.out_silver_jsonl}")
     print(f"  Review JSONL:  {args.out_review_jsonl}")
     print(f"  Candidates JSONL: {args.out_candidates_jsonl}")
     print(f"  Summary JSON:  {args.out_summary_json}")
