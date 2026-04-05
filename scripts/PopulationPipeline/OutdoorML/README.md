@@ -2,6 +2,12 @@
 
 This stage owns outdoor-only ML extraction, training, inference, and QA.
 
+Scope note:
+
+- `OutdoorML` is not the home for the newer retail-Dereth world-reproduction line
+- that work now lives under `scripts/PopulationPipeline/WorldGrammar/`
+- keep `OutdoorML` focused on its existing outdoor/planner-oriented lane rather than mixing responsibilities back together
+
 What belongs here:
 
 - tensor extraction for outdoor placement
