@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -58,6 +59,17 @@ PROP_NAME_HINTS = {
 
 SUPPORT_WEENIE_TYPES = {20, 21, 24, 26, 56, 57}
 PROP_WEENIE_TYPES = {8, 18, 34, 38, 44}
+LOOT_CONTAINER_NAME_HINTS = (
+    "chest",
+    "storage",
+    "sack",
+    "cache",
+    "coffer",
+    "crate",
+    "barrel",
+    "treasure",
+    "locker",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -193,6 +205,24 @@ def normalized_name(raw_row: dict, grounding_row: dict | None, canonical_entry: 
     return ""
 
 
+def tokenize_name(name: str) -> tuple[str, ...]:
+    return tuple(token for token in re.split(r"[^a-z0-9]+", name.lower()) if token)
+
+
+def name_has_hint(name: str, hint: str) -> bool:
+    if not name or not hint:
+        return False
+    if " " in hint:
+        pattern = r"\b" + re.escape(hint) + r"\b"
+        return re.search(pattern, name) is not None
+    tokens = tokenize_name(name)
+    return hint in tokens
+
+
+def is_loot_container_name(name: str) -> bool:
+    return any(name_has_hint(name, hint) for hint in LOOT_CONTAINER_NAME_HINTS)
+
+
 def classify_support(row: dict, grounding_row: dict | None, canonical_entry: dict | None) -> tuple[str | None, float, str]:
     weenie_type = int(row.get("weenieType") or row.get("typeId") or 0)
     name = normalized_name(row, grounding_row, canonical_entry)
@@ -205,7 +235,7 @@ def classify_support(row: dict, grounding_row: dict | None, canonical_entry: dic
         return "hook_wall", 0.95, "weenie_type_56"
 
     for support_class, hints in SUPPORT_NAME_HINTS.items():
-        if any(hint in name for hint in hints):
+        if any(name_has_hint(name, hint) for hint in hints):
             base_conf = 0.80
             if support_class in {"shelf_like", "desk_like", "table_like"}:
                 base_conf = 0.86
@@ -230,7 +260,7 @@ def classify_prop(row: dict, grounding_row: dict | None, canonical_entry: dict |
     name = normalized_name(row, grounding_row, canonical_entry)
 
     for prop_class, hints in PROP_NAME_HINTS.items():
-        if any(hint in name for hint in hints):
+        if any(name_has_hint(name, hint) for hint in hints):
             return prop_class, 0.82, "name_hint"
 
     if weenie_type in PROP_WEENIE_TYPES:
@@ -476,6 +506,9 @@ def find_geometry_support_candidate(
     for support_guid, support_row, support_class, support_conf, support_mode, support_grounding, _canonical_entry in support_candidates:
         if support_class is None or support_guid == int(row.get("guid") or -1):
             continue
+        support_name = normalized_name(support_row, support_grounding, None)
+        if support_class == "container_top" and is_loot_container_name(support_name):
+            continue
         sx = float(support_row.get("localX", 0.0))
         sy = float(support_row.get("localY", 0.0))
         sz = float(support_row.get("z", 0.0))
@@ -487,6 +520,10 @@ def find_geometry_support_candidate(
             continue
 
         score = horiz + dz * 0.25
+        if support_class == "container_top":
+            score += 1.0
+        elif support_class in {"table_like", "desk_like", "altar_like", "shelf_like"}:
+            score -= 0.25
         ranked.append((score, horiz, dz, support_guid, support_row, support_class, support_conf, support_mode, support_grounding))
 
     if not ranked:
