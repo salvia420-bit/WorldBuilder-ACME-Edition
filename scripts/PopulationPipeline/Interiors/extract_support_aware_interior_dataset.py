@@ -406,6 +406,128 @@ def angle_delta_deg(a: float, b: float) -> float:
     return delta
 
 
+def quaternion_conjugate(qw: float, qx: float, qy: float, qz: float) -> tuple[float, float, float, float]:
+    return qw, -qx, -qy, -qz
+
+
+def rotate_vector_by_quaternion(
+    vx: float, vy: float, vz: float, qw: float, qx: float, qy: float, qz: float
+) -> tuple[float, float, float]:
+    ix = qw * vx + qy * vz - qz * vy
+    iy = qw * vy + qz * vx - qx * vz
+    iz = qw * vz + qx * vy - qy * vx
+    iw = -qx * vx - qy * vy - qz * vz
+    rx = ix * qw + iw * -qx + iy * -qz - iz * -qy
+    ry = iy * qw + iw * -qy + iz * -qx - ix * -qz
+    rz = iz * qw + iw * -qz + ix * -qy - iy * -qx
+    return rx, ry, rz
+
+
+def object_local_to_cell_local(row: dict, point_local: dict | None) -> dict | None:
+    if not isinstance(point_local, dict):
+        return None
+    px = float(point_local.get("x", 0.0))
+    py = float(point_local.get("y", 0.0))
+    pz = float(point_local.get("z", 0.0))
+    qw = float(row.get("qw", 1.0))
+    qx = float(row.get("qx", 0.0))
+    qy = float(row.get("qy", 0.0))
+    qz = float(row.get("qz", 0.0))
+    rx, ry, rz = rotate_vector_by_quaternion(px, py, pz, qw, qx, qy, qz)
+    return {
+        "x": float(row.get("localX", 0.0)) + rx,
+        "y": float(row.get("localY", 0.0)) + ry,
+        "z": float(row.get("z", 0.0)) + rz,
+    }
+
+
+def cell_local_to_object_local(row: dict, point_cell: dict | None) -> dict | None:
+    if not isinstance(point_cell, dict):
+        return None
+    dx = float(point_cell.get("x", 0.0)) - float(row.get("localX", 0.0))
+    dy = float(point_cell.get("y", 0.0)) - float(row.get("localY", 0.0))
+    dz = float(point_cell.get("z", 0.0)) - float(row.get("z", 0.0))
+    qw = float(row.get("qw", 1.0))
+    qx = float(row.get("qx", 0.0))
+    qy = float(row.get("qy", 0.0))
+    qz = float(row.get("qz", 0.0))
+    cq_w, cq_x, cq_y, cq_z = quaternion_conjugate(qw, qx, qy, qz)
+    rx, ry, rz = rotate_vector_by_quaternion(dx, dy, dz, cq_w, cq_x, cq_y, cq_z)
+    return {"x": rx, "y": ry, "z": rz}
+
+
+def best_support_surface_hint(row: dict) -> dict | None:
+    hints = row.get("supportSurfaceHints")
+    if hints is None:
+        hints = (row.get("geometry") or {}).get("supportSurfaceHints")
+    if isinstance(hints, dict):
+        hint_list = [hints]
+    elif isinstance(hints, list):
+        hint_list = [hint for hint in hints if isinstance(hint, dict)]
+    else:
+        hint_list = []
+    if not hint_list:
+        return None
+    top_planes = [hint for hint in hint_list if hint.get("surfaceClass") == "top_plane"]
+    if top_planes:
+        return top_planes[0]
+    return hint_list[0]
+
+
+def support_anchor_metrics(prop_row: dict, support_row: dict) -> dict:
+    prop_point = {
+        "x": float(prop_row.get("localX", 0.0)),
+        "y": float(prop_row.get("localY", 0.0)),
+        "z": float(prop_row.get("z", 0.0)),
+    }
+    anchor = {
+        "x": float(support_row.get("localX", 0.0)),
+        "y": float(support_row.get("localY", 0.0)),
+        "z": float(support_row.get("z", 0.0)),
+    }
+    support_surface_hint = best_support_surface_hint(support_row)
+    if support_surface_hint is not None:
+        surface_origin = object_local_to_cell_local(support_row, support_surface_hint.get("originLocal"))
+        if surface_origin is not None:
+            anchor = surface_origin
+
+    dx = prop_point["x"] - anchor["x"]
+    dy = prop_point["y"] - anchor["y"]
+    dz = prop_point["z"] - anchor["z"]
+    horiz = math.hypot(dx, dy)
+    metrics = {
+        "anchorX": anchor["x"],
+        "anchorY": anchor["y"],
+        "anchorZ": anchor["z"],
+        "horizontalDistance": horiz,
+        "heightAboveSupportPlane": dz,
+        "hasSurfaceHint": support_surface_hint is not None,
+        "withinSurfaceFootprint": False,
+        "surfaceFootprintOverflow": None,
+    }
+
+    if support_surface_hint is None:
+        return metrics
+
+    prop_local = cell_local_to_object_local(support_row, prop_point)
+    origin_local = support_surface_hint.get("originLocal") or {}
+    extent_local = support_surface_hint.get("extentLocal") or {}
+    if prop_local is None:
+        return metrics
+
+    # Terminal-side supportSurfaceHints already emit half-extents for the top plane.
+    half_x = max(float(extent_local.get("x", 0.0)), 0.0)
+    half_y = max(float(extent_local.get("y", 0.0)), 0.0)
+    rel_x = float(prop_local["x"]) - float(origin_local.get("x", 0.0))
+    rel_y = float(prop_local["y"]) - float(origin_local.get("y", 0.0))
+    overflow_x = max(abs(rel_x) - half_x, 0.0)
+    overflow_y = max(abs(rel_y) - half_y, 0.0)
+    overflow = math.hypot(overflow_x, overflow_y)
+    metrics["withinSurfaceFootprint"] = overflow <= 0.15
+    metrics["surfaceFootprintOverflow"] = overflow
+    return metrics
+
+
 def interior_only(row: dict) -> bool:
     cell_id = parse_hexish(row.get("cellId"))
     return cell_id is not None and cell_id >= 0x0100
@@ -480,6 +602,8 @@ def build_support_object_row(
         "supportInferenceMode": support_mode,
         "geometry": {
             "componentBoundsLocal": component_info.get("boundsLocal") if component_info else None,
+            "aabbLocal": row.get("aabbLocal"),
+            "supportSurfaceHints": row.get("supportSurfaceHints"),
         },
         "context": build_room_context(row, component_info, cell_info),
     }
@@ -507,6 +631,7 @@ def build_supported_prop_row(
     same_cell = row.get("cellId") == parent_row.get("cellId")
     relation_kind = "hook_attached" if parent_support_class.startswith("hook_") else "linked_child_of_support"
     relation_confidence = min(prop_confidence, parent_support_confidence)
+    support_metrics = support_anchor_metrics(row, parent_row)
 
     return {
         "sceneId": build_scene_id(row),
@@ -554,7 +679,7 @@ def build_supported_prop_row(
             "confidence": round(relation_confidence, 4),
             "relativePosition": {"x": round(dx, 4), "y": round(dy, 4), "z": round(dz, 4)},
             "relativeYawDeg": round(angle_delta_deg(prop_yaw, parent_yaw), 4),
-            "heightAboveSupportPlane": round(dz, 4),
+            "heightAboveSupportPlane": round(float(support_metrics["heightAboveSupportPlane"]), 4),
             "sameCell": same_cell,
             "supportInferenceMode": "graph_link",
         },
@@ -602,13 +727,16 @@ def build_review_prop_candidate_row(
     base["supportRelation"]["confidence"] = round(relation_confidence, 4)
     base["supportRelation"]["supportInferenceMode"] = relation_mode
     dz = float(row.get("z", 0.0)) - float(parent_row.get("z", 0.0))
-    horiz = math.hypot(
-        float(row.get("localX", 0.0)) - float(parent_row.get("localX", 0.0)),
-        float(row.get("localY", 0.0)) - float(parent_row.get("localY", 0.0)),
-    )
+    support_metrics = support_anchor_metrics(row, parent_row)
+    horiz = float(support_metrics["horizontalDistance"])
     base["validation"]["competingParentCount"] = competing_parent_count
-    base["validation"]["verticalOffsetOk"] = dz >= -0.25
+    base["validation"]["verticalOffsetOk"] = float(support_metrics["heightAboveSupportPlane"]) >= -0.25
     base["validation"]["horizontalDistance"] = round(horiz, 4)
+    base["validation"]["heightAboveSupportPlane"] = round(float(support_metrics["heightAboveSupportPlane"]), 4)
+    base["validation"]["hasSurfaceHint"] = bool(support_metrics["hasSurfaceHint"])
+    base["validation"]["withinSurfaceFootprint"] = bool(support_metrics["withinSurfaceFootprint"])
+    if support_metrics["surfaceFootprintOverflow"] is not None:
+        base["validation"]["surfaceFootprintOverflow"] = round(float(support_metrics["surfaceFootprintOverflow"]), 4)
     base["validation"]["reviewOnly"] = True
     return base
 
@@ -708,14 +836,12 @@ def find_geometry_support_candidate(
         support_name = normalized_name(support_row, support_grounding, None)
         if support_class == "container_top" and is_loot_container_name(support_name):
             continue
-        sx = float(support_row.get("localX", 0.0))
-        sy = float(support_row.get("localY", 0.0))
-        sz = float(support_row.get("z", 0.0))
-        dz = z - sz
+        metrics = support_anchor_metrics(row, support_row)
+        dz = float(metrics["heightAboveSupportPlane"])
         if dz < -0.25 or dz > 1.5:
             continue
-        horiz = math.hypot(x - sx, y - sy)
-        if horiz > 1.5:
+        horiz = float(metrics["horizontalDistance"])
+        if horiz > 1.5 and not metrics["withinSurfaceFootprint"]:
             continue
 
         score = horiz + dz * 0.25
@@ -723,6 +849,10 @@ def find_geometry_support_candidate(
             score += 1.0
         elif support_class in {"table_like", "desk_like", "altar_like", "shelf_like"}:
             score -= 0.25
+        if metrics["hasSurfaceHint"]:
+            score -= 0.18
+        if metrics["withinSurfaceFootprint"]:
+            score -= 0.22
         ranked.append((score, horiz, dz, support_guid, support_row, support_class, support_conf, support_mode, support_grounding))
 
     if not ranked:
@@ -746,9 +876,6 @@ def rank_support_candidates(
     support_candidates: list[tuple[int, dict, str | None, float, str, dict | None, dict | None]],
     top_k: int = 3,
 ) -> list[dict]:
-    x = float(row.get("localX", 0.0))
-    y = float(row.get("localY", 0.0))
-    z = float(row.get("z", 0.0))
     ranked: list[dict] = []
 
     for support_guid, support_row, support_class, support_conf, support_mode, support_grounding, _canonical_entry in support_candidates:
@@ -757,14 +884,12 @@ def rank_support_candidates(
         support_name = normalized_name(support_row, support_grounding, None)
         if support_class == "container_top" and is_loot_container_name(support_name):
             continue
-        sx = float(support_row.get("localX", 0.0))
-        sy = float(support_row.get("localY", 0.0))
-        sz = float(support_row.get("z", 0.0))
-        dz = z - sz
+        metrics = support_anchor_metrics(row, support_row)
+        dz = float(metrics["heightAboveSupportPlane"])
         if dz < -0.25 or dz > 1.75:
             continue
-        horiz = math.hypot(x - sx, y - sy)
-        if horiz > 2.5:
+        horiz = float(metrics["horizontalDistance"])
+        if horiz > 2.5 and not metrics["withinSurfaceFootprint"]:
             continue
 
         score = support_conf
@@ -780,12 +905,22 @@ def rank_support_candidates(
             score -= 0.12
         if support_class == "bed_like":
             score -= 0.08
+        if metrics["hasSurfaceHint"]:
+            score += 0.08
+        if metrics["withinSurfaceFootprint"]:
+            score += 0.14
+        overflow = metrics["surfaceFootprintOverflow"]
+        if overflow is not None:
+            score -= min(float(overflow), 1.5) * 0.1
 
         ranked.append(
             {
                 "score": score,
                 "horizontalDistance": horiz,
                 "dz": dz,
+                "hasSurfaceHint": bool(metrics["hasSurfaceHint"]),
+                "withinSurfaceFootprint": bool(metrics["withinSurfaceFootprint"]),
+                "surfaceFootprintOverflow": metrics["surfaceFootprintOverflow"],
                 "support_guid": support_guid,
                 "support_row": support_row,
                 "support_class": support_class,
@@ -1090,10 +1225,13 @@ def main() -> None:
                 "localX": float(static_obj.get("x", 0.0)),
                 "localY": float(static_obj.get("y", 0.0)),
                 "z": float(static_obj.get("z", 0.0)),
-                "qw": 1.0,
-                "qx": 0.0,
-                "qy": 0.0,
-                "qz": 0.0,
+                "qw": float(static_obj.get("qw", 1.0)),
+                "qx": float(static_obj.get("qx", 0.0)),
+                "qy": float(static_obj.get("qy", 0.0)),
+                "qz": float(static_obj.get("qz", 0.0)),
+                "yawDeg": static_obj.get("yawDeg"),
+                "aabbLocal": static_obj.get("aabbLocal"),
+                "supportSurfaceHints": static_obj.get("supportSurfaceHints"),
             }
             scene_key = build_scene_key(row)
             supports_by_scene.setdefault(scene_key, []).append(
@@ -1217,6 +1355,12 @@ def main() -> None:
                 candidate_row["supportRelation"]["candidateRank"] = candidate_rank
                 candidate_row["supportRelation"]["candidateScore"] = round(candidate["score"], 4)
                 candidate_row["supportRelation"]["candidateTier"] = candidate_tier
+                candidate_row["validation"]["hasSurfaceHint"] = candidate["hasSurfaceHint"]
+                candidate_row["validation"]["withinSurfaceFootprint"] = candidate["withinSurfaceFootprint"]
+                if candidate["surfaceFootprintOverflow"] is not None:
+                    candidate_row["validation"]["surfaceFootprintOverflow"] = round(
+                        float(candidate["surfaceFootprintOverflow"]), 4
+                    )
                 candidate_row["validation"]["promotionEligible"] = promotion_eligible
                 candidate_rows.append(candidate_row)
                 stats["candidate_rows_emitted"] += 1
