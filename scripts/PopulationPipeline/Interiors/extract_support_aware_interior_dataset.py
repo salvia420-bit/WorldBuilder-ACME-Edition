@@ -70,6 +70,25 @@ LOOT_CONTAINER_NAME_HINTS = (
     "treasure",
     "locker",
 )
+STATIC_SETUP_NAME_RULES = (
+    ("bookcase", "shelf_like"),
+    ("bookshelf", "shelf_like"),
+    ("book shelf", "shelf_like"),
+    ("desk", "desk_like"),
+    ("alchemy table", "table_like"),
+    ("table", "table_like"),
+    ("altar", "altar_like"),
+    ("bed", "bed_like"),
+    ("torch", "wall_fixture"),
+    ("sconce", "wall_fixture"),
+)
+STATIC_SETUP_EXCLUDE_HINTS = (
+    "portable igloo",
+    "unstable portal",
+    "stone tablet",
+    "eastern temple tablet",
+    "unstable mana stone",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -150,6 +169,7 @@ def load_component_cells(path: Path) -> tuple[dict[int, dict], dict[tuple[int, i
             cells[(component_info["landblockX"], component_info["landblockY"], cell_num)] = {
                 "cellNumber": cell.get("cellNumber"),
                 "cellId": cell.get("cellId"),
+                "componentInfo": component_info,
                 "origin": {
                     "x": float(cell.get("x", 0.0)),
                     "y": float(cell.get("y", 0.0)),
@@ -162,6 +182,7 @@ def load_component_cells(path: Path) -> tuple[dict[int, dict], dict[tuple[int, i
                     "qz": float(cell.get("qz", 0.0)),
                 },
                 "staticObjectCount": int(cell.get("staticObjectCount", 0)),
+                "staticObjects": cell.get("staticObjects") or [],
                 "portalCount": len(cell.get("portalRefs", [])),
                 "visibleCellCount": len(cell.get("visibleCellRefs", [])),
             }
@@ -187,6 +208,29 @@ def build_canonical_index(canonical_enrichment: dict) -> dict[int, dict]:
             except (TypeError, ValueError):
                 continue
     return index
+
+
+def build_setup_name_index(canonical_enrichment: dict) -> dict[int, str]:
+    entries = canonical_enrichment.get("entries")
+    if not isinstance(entries, list):
+        return {}
+
+    setup_name_counts: dict[int, Counter] = {}
+    for entry in entries:
+        raw_setup = entry.get("setupDid")
+        if raw_setup is None:
+            continue
+        name = entry.get("name") or entry.get("canonical_name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        setup_did = int(raw_setup)
+        bucket = setup_name_counts.setdefault(setup_did, Counter())
+        bucket[name.strip()] += 1
+
+    result: dict[int, str] = {}
+    for setup_did, counts in setup_name_counts.items():
+        result[setup_did] = counts.most_common(1)[0][0]
+    return result
 
 
 def normalized_name(raw_row: dict, grounding_row: dict | None, canonical_entry: dict | None) -> str:
@@ -268,6 +312,18 @@ def classify_prop(row: dict, grounding_row: dict | None, canonical_entry: dict |
     return None, 0.0, "unclassified"
 
 
+def classify_static_support_name(name: str) -> tuple[str | None, float, str]:
+    lower_name = name.strip().lower()
+    if not lower_name:
+        return None, 0.0, "unclassified"
+    if any(name_has_hint(lower_name, hint) for hint in STATIC_SETUP_EXCLUDE_HINTS):
+        return None, 0.0, "excluded_name"
+    for hint, support_class in STATIC_SETUP_NAME_RULES:
+        if name_has_hint(lower_name, hint):
+            return support_class, 0.72, "static_setup_name"
+    return None, 0.0, "unclassified"
+
+
 def yaw_deg(row: dict) -> float:
     if row.get("yawDeg") is not None:
         return float(row["yawDeg"])
@@ -305,6 +361,15 @@ def build_room_context(row: dict, component_info: dict | None, cell_info: dict |
     }
 
 
+def build_scene_key(row: dict) -> tuple[int, int, str, int | None]:
+    return (
+        int(row["landblockX"]),
+        int(row["landblockY"]),
+        row["cellId"],
+        int(row["envCellComponentId"]) if row.get("envCellComponentId") is not None else None,
+    )
+
+
 def build_support_object_row(
     row: dict,
     support_class: str,
@@ -332,7 +397,7 @@ def build_support_object_row(
             "classId": row.get("classId"),
             "wcid": row.get("wcid"),
             "weenieType": row.get("weenieType") or row.get("typeId"),
-            "name": grounding_row.get("preferred_name") if grounding_row else None,
+            "name": grounding_row.get("preferred_name") if grounding_row else (row.get("name") or row.get("className")),
             "positionLocal": {
                 "x": float(row.get("localX", 0.0)),
                 "y": float(row.get("localY", 0.0)),
@@ -414,7 +479,7 @@ def build_supported_prop_row(
             "classId": parent_row.get("classId"),
             "wcid": parent_row.get("wcid"),
             "weenieType": parent_row.get("weenieType") or parent_row.get("typeId"),
-            "name": parent_grounding.get("preferred_name") if parent_grounding else None,
+            "name": parent_grounding.get("preferred_name") if parent_grounding else (parent_row.get("name") or parent_row.get("className")),
             "supportClass": parent_support_class,
             "supportConfidence": round(parent_support_confidence, 4),
             "supportInferenceMode": parent_support_mode,
@@ -430,7 +495,7 @@ def build_supported_prop_row(
         },
         "roomContext": build_room_context(row, component_info, cell_info),
         "validation": {
-            "hasDirectParentGuid": True,
+            "hasDirectParentGuid": parent_row.get("guid") is not None,
             "sameCell": same_cell,
             "componentMatchesParent": row.get("envCellComponentId") == parent_row.get("envCellComponentId"),
         },
@@ -554,6 +619,7 @@ def main() -> None:
     grounding_by_wcid = load_grounding(args.grounding_jsonl)
     canonical_enrichment = load_json_dict(args.canonical_enrichment_json)
     canonical_by_wcid = build_canonical_index(canonical_enrichment)
+    setup_name_by_model_id = build_setup_name_index(canonical_enrichment)
     _wcid_types = load_json_dict(args.wcid_types_json)
     component_by_id, cells_by_lb_cell = load_component_cells(args.component_jsonl)
 
@@ -579,6 +645,7 @@ def main() -> None:
         "review_candidate_emitted": 0,
         "review_candidate_support_class_counts": Counter(),
         "review_candidate_prop_class_counts": Counter(),
+        "static_support_objects_emitted": 0,
     }
 
     for idx, row in enumerate(iter_jsonl(args.raw_jsonl), start=1):
@@ -614,12 +681,7 @@ def main() -> None:
         prop_class, prop_conf, prop_mode = classify_prop(row, grounding_row, canonical_entry)
         support_cache[guid] = (support_class, support_conf, support_mode, grounding_row, canonical_entry)
         prop_cache[guid] = (prop_class, prop_conf, prop_mode, grounding_row, canonical_entry)
-        scene_key = (
-            int(row["landblockX"]),
-            int(row["landblockY"]),
-            row["cellId"],
-            int(row["envCellComponentId"]) if row.get("envCellComponentId") is not None else None,
-        )
+        scene_key = build_scene_key(row)
         supports_by_scene.setdefault(scene_key, []).append(
             (guid, row, support_class, support_conf, support_mode, grounding_row, canonical_entry)
         )
@@ -645,6 +707,65 @@ def main() -> None:
             stats["support_inference_mode_counts"][support_mode] += 1
         if idx % 100000 == 0:
             print(f"  Support classification rows processed: {idx:,}")
+
+    print("  Building static support candidates from envcell components")
+    for component_info in component_by_id.values():
+        pass
+    for (landblock_x, landblock_y, cell_num), cell_info in cells_by_lb_cell.items():
+        static_objects = cell_info.get("staticObjects") or []
+        if not static_objects:
+            continue
+        component_info = cell_info.get("componentInfo")
+        for static_idx, static_obj in enumerate(static_objects, start=1):
+            if static_obj.get("classIdSpace") != "model_id":
+                continue
+            class_id = int(static_obj.get("classId") or 0)
+            setup_name = setup_name_by_model_id.get(class_id)
+            if not setup_name:
+                continue
+            support_class, support_conf, support_mode = classify_static_support_name(setup_name)
+            if support_class is None:
+                continue
+            row = {
+                "guid": None,
+                "classIdSpace": "model_id",
+                "classId": class_id,
+                "wcid": None,
+                "weenieType": None,
+                "name": setup_name,
+                "landblockId": component_info.get("landblockId") if component_info else None,
+                "landblockX": landblock_x,
+                "landblockY": landblock_y,
+                "cellId": cell_info.get("cellNumber"),
+                "envCellComponentId": component_info.get("componentId") if component_info else None,
+                "envCellComponentKind": component_info.get("componentKind") if component_info else None,
+                "localX": float(static_obj.get("x", 0.0)),
+                "localY": float(static_obj.get("y", 0.0)),
+                "z": float(static_obj.get("z", 0.0)),
+                "qw": 1.0,
+                "qx": 0.0,
+                "qy": 0.0,
+                "qz": 0.0,
+            }
+            scene_key = build_scene_key(row)
+            supports_by_scene.setdefault(scene_key, []).append(
+                (-static_idx, row, support_class, support_conf, support_mode, None, None)
+            )
+            support_rows.append(
+                build_support_object_row(
+                    row,
+                    support_class,
+                    support_conf,
+                    support_mode,
+                    None,
+                    component_info,
+                    cell_info,
+                )
+            )
+            stats["support_objects_emitted"] += 1
+            stats["static_support_objects_emitted"] += 1
+            stats["support_class_counts"][support_class] += 1
+            stats["support_inference_mode_counts"][support_mode] += 1
 
     for idx, (guid, row) in enumerate(raw_rows_by_guid.items(), start=1):
         prop_class, prop_conf, prop_mode, prop_grounding, _canonical_entry = prop_cache[guid]
@@ -696,12 +817,7 @@ def main() -> None:
                 continue
             stats["prop_rejection_reason_counts"][rejection_reason] += 1
 
-        scene_key = (
-            int(row["landblockX"]),
-            int(row["landblockY"]),
-            row["cellId"],
-            int(row["envCellComponentId"]) if row.get("envCellComponentId") is not None else None,
-        )
+        scene_key = build_scene_key(row)
         review_candidate, competing_parent_count = find_geometry_support_candidate(row, supports_by_scene.get(scene_key, []))
         if review_candidate is not None:
             candidate_guid, candidate_row, candidate_support_class, candidate_support_conf, candidate_support_mode, candidate_grounding = review_candidate
@@ -746,6 +862,7 @@ def main() -> None:
             "scanned_rows": stats["scanned_rows"],
             "interior_rows": stats["interior_rows"],
             "support_objects_emitted": stats["support_objects_emitted"],
+            "static_support_objects_emitted": stats["static_support_objects_emitted"],
             "supported_props_emitted": stats["supported_props_emitted"],
             "review_candidate_emitted": stats["review_candidate_emitted"],
             "skipped_non_interior": stats["skipped_non_interior"],
