@@ -3891,6 +3891,46 @@ public class CommandEngine {
         return true;
     }
 
+    private static object[]? BuildSupportSurfaceHints(Vector3 boundsMin, Vector3 boundsMax) {
+        float width = MathF.Max(0f, boundsMax.X - boundsMin.X);
+        float depth = MathF.Max(0f, boundsMax.Y - boundsMin.Y);
+        float height = MathF.Max(0f, boundsMax.Z - boundsMin.Z);
+        if (width < 0.25f || depth < 0.2f || height < 0.2f)
+            return null;
+
+        string supportClass = "unknown_support";
+        double confidence = 0.42;
+        if (height >= 1.05f && MathF.Max(width, depth) >= 0.45f) {
+            supportClass = "shelf_like";
+            confidence = 0.58;
+        } else if (height >= 0.45f && height <= 1.25f && width >= 0.35f && depth >= 0.2f) {
+            supportClass = "table_like";
+            confidence = 0.62;
+        } else if (height >= 0.2f && height <= 0.85f && width >= 1.1f && depth >= 0.45f) {
+            supportClass = "bed_like";
+            confidence = 0.54;
+        }
+
+        return new object[] {
+            new {
+                surfaceClass = "top_plane",
+                supportClass,
+                originLocal = new {
+                    x = Math.Round((boundsMin.X + boundsMax.X) * 0.5f, 3),
+                    y = Math.Round((boundsMin.Y + boundsMax.Y) * 0.5f, 3),
+                    z = Math.Round(boundsMax.Z, 3)
+                },
+                normalLocal = new { x = 0.0, y = 0.0, z = 1.0 },
+                extentLocal = new {
+                    x = Math.Round(width * 0.5f, 3),
+                    y = Math.Round(depth * 0.5f, 3)
+                },
+                confidence,
+                inferenceMode = "model_bounds_top_plane"
+            }
+        };
+    }
+
     private static ushort[] CollectAnchorEntryCellIds(BuildingInfo building) {
         var entryCellIds = new HashSet<ushort>();
         foreach (var portal in building.Portals) {
@@ -3971,6 +4011,7 @@ public class CommandEngine {
                 var local = stab.Frame.Origin;
                 var localOrientation = Quaternion.Normalize(stab.Frame.Orientation);
                 var hasBounds = TryBuildModelLocalBounds(dats, stab.Id, out var boundsMin, out var boundsMax);
+                var supportSurfaceHints = hasBounds ? BuildSupportSurfaceHints(boundsMin, boundsMax) : null;
                 minX = MathF.Min(minX, local.X);
                 minY = MathF.Min(minY, local.Y);
                 minZ = MathF.Min(minZ, local.Z);
@@ -4002,7 +4043,8 @@ public class CommandEngine {
                         maxX = Math.Round(boundsMax.X, 3),
                         maxY = Math.Round(boundsMax.Y, 3),
                         maxZ = Math.Round(boundsMax.Z, 3)
-                    } : null
+                    } : null,
+                    supportSurfaceHints
                 };
                 componentStaticObjects.Add(obj);
                 return obj;
