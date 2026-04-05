@@ -3834,6 +3834,63 @@ public class CommandEngine {
         public required ushort[] EntryCellIds { get; init; }
     }
 
+    private static double ComputeYawDeg(Quaternion orientation) {
+        var q = Quaternion.Normalize(orientation);
+        var sinyCosp = 2.0 * (q.W * q.Z + q.X * q.Y);
+        var cosyCosp = 1.0 - 2.0 * (q.Y * q.Y + q.Z * q.Z);
+        return Math.Round(Math.Atan2(sinyCosp, cosyCosp) * (180.0 / Math.PI), 3);
+    }
+
+    private static bool TryBuildModelLocalBounds(
+        IDatReaderWriter dats,
+        uint modelId,
+        out Vector3 min,
+        out Vector3 max) {
+        min = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
+        max = new Vector3(float.MinValue, float.MinValue, float.MinValue);
+        bool anyVertex = false;
+
+        if ((modelId & 0xFF000000) == 0x02000000 && dats.TryGet<Setup>(modelId, out var setup)) {
+            int partCount = setup.Parts?.Count ?? 0;
+            for (int i = 0; i < partCount; i++) {
+                uint partId = setup.Parts![i];
+                if (!dats.TryGet<GfxObj>(partId, out var gfx) || gfx.VertexArray?.Vertices == null)
+                    continue;
+
+                Vector3 partOffset = Vector3.Zero;
+                if (setup.PlacementFrames != null && setup.PlacementFrames.Count > 0) {
+                    var placement = setup.PlacementFrames.Values.FirstOrDefault();
+                    if (placement?.Frames != null && i < placement.Frames.Count)
+                        partOffset = placement.Frames[i].Origin;
+                }
+
+                foreach (var vertex in gfx.VertexArray.Vertices.Values) {
+                    var p = vertex.Origin + partOffset;
+                    min = Vector3.Min(min, p);
+                    max = Vector3.Max(max, p);
+                    anyVertex = true;
+                }
+            }
+        } else if ((modelId & 0xFF000000) == 0x01000000 &&
+                   dats.TryGet<GfxObj>(modelId, out var singleGfx) &&
+                   singleGfx.VertexArray?.Vertices != null) {
+            foreach (var vertex in singleGfx.VertexArray.Vertices.Values) {
+                var p = vertex.Origin;
+                min = Vector3.Min(min, p);
+                max = Vector3.Max(max, p);
+                anyVertex = true;
+            }
+        }
+
+        if (!anyVertex) {
+            min = Vector3.Zero;
+            max = Vector3.Zero;
+            return false;
+        }
+
+        return true;
+    }
+
     private static ushort[] CollectAnchorEntryCellIds(BuildingInfo building) {
         var entryCellIds = new HashSet<ushort>();
         foreach (var portal in building.Portals) {
@@ -3881,6 +3938,7 @@ public class CommandEngine {
     }
 
     private static object BuildEnvCellComponentJson(
+        IDatReaderWriter dats,
         ushort lbKey,
         string componentKind,
         ulong componentId,
@@ -3911,6 +3969,8 @@ public class CommandEngine {
 
             var staticObjects = envCell.StaticObjects.Select(stab => {
                 var local = stab.Frame.Origin;
+                var localOrientation = Quaternion.Normalize(stab.Frame.Orientation);
+                var hasBounds = TryBuildModelLocalBounds(dats, stab.Id, out var boundsMin, out var boundsMax);
                 minX = MathF.Min(minX, local.X);
                 minY = MathF.Min(minY, local.Y);
                 minZ = MathF.Min(minZ, local.Z);
@@ -3927,9 +3987,22 @@ public class CommandEngine {
                     worldX = Math.Round(lbWorldX + local.X, 3),
                     worldY = Math.Round(lbWorldY + local.Y, 3),
                     worldZ = Math.Round(local.Z, 3),
+                    qw = Math.Round(localOrientation.W, 6),
+                    qx = Math.Round(localOrientation.X, 6),
+                    qy = Math.Round(localOrientation.Y, 6),
+                    qz = Math.Round(localOrientation.Z, 6),
+                    yawDeg = ComputeYawDeg(localOrientation),
                     relX = anchorLocal.HasValue ? (double?)Math.Round(local.X - anchorLocal.Value.X, 3) : null,
                     relY = anchorLocal.HasValue ? (double?)Math.Round(local.Y - anchorLocal.Value.Y, 3) : null,
-                    relZ = anchorLocal.HasValue ? (double?)Math.Round(local.Z - anchorLocal.Value.Z, 3) : null
+                    relZ = anchorLocal.HasValue ? (double?)Math.Round(local.Z - anchorLocal.Value.Z, 3) : null,
+                    aabbLocal = hasBounds ? new {
+                        minX = Math.Round(boundsMin.X, 3),
+                        minY = Math.Round(boundsMin.Y, 3),
+                        minZ = Math.Round(boundsMin.Z, 3),
+                        maxX = Math.Round(boundsMax.X, 3),
+                        maxY = Math.Round(boundsMax.Y, 3),
+                        maxZ = Math.Round(boundsMax.Z, 3)
+                    } : null
                 };
                 componentStaticObjects.Add(obj);
                 return obj;
@@ -4080,7 +4153,7 @@ public class CommandEngine {
 
                         ulong componentId = ((ulong)lbKey << 32) | (uint)buildingIndex;
                         writer.WriteLine(System.Text.Json.JsonSerializer.Serialize(
-                            BuildEnvCellComponentJson(lbKey, "surface_anchor_component", componentId, envCells, componentCellIds, anchor),
+                            BuildEnvCellComponentJson(dats, lbKey, "surface_anchor_component", componentId, envCells, componentCellIds, anchor),
                             jsonOpts));
                         anchoredCount++;
                         totalExported++;
@@ -4095,7 +4168,7 @@ public class CommandEngine {
 
                         ulong componentId = ((ulong)lbKey << 32) | (uint)startCellId;
                         writer.WriteLine(System.Text.Json.JsonSerializer.Serialize(
-                            BuildEnvCellComponentJson(lbKey, "unanchored_envcell_component", componentId, envCells, componentCellIds),
+                            BuildEnvCellComponentJson(dats, lbKey, "unanchored_envcell_component", componentId, envCells, componentCellIds),
                             jsonOpts));
                         unanchoredCount++;
                         totalExported++;
