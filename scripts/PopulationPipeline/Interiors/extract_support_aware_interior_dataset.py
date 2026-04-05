@@ -35,6 +35,8 @@ DEFAULT_OUT_SUMMARY_JSON = REFERENCE_DIR / "interior_support_dataset_highconf_su
 DEFAULT_OUT_REVIEW_JSONL = REFERENCE_DIR / "interior_supported_prop_candidates_review.jsonl"
 DEFAULT_OUT_CANDIDATES_JSONL = REFERENCE_DIR / "interior_supported_prop_candidates_ranked.jsonl"
 DEFAULT_OUT_MOTIFS_JSONL = REFERENCE_DIR / "interior_supported_prop_motifs.jsonl"
+DEFAULT_OUT_REVIEW_PACKETS_JSONL = REFERENCE_DIR / "interior_supported_prop_review_packets.jsonl"
+DEFAULT_OUT_BOOTSTRAP_JSONL = REFERENCE_DIR / "interior_supported_props_bootstrap.jsonl"
 
 
 SUPPORT_NAME_HINTS = {
@@ -108,6 +110,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-review-jsonl", type=Path, default=DEFAULT_OUT_REVIEW_JSONL)
     parser.add_argument("--out-candidates-jsonl", type=Path, default=DEFAULT_OUT_CANDIDATES_JSONL)
     parser.add_argument("--out-motifs-jsonl", type=Path, default=DEFAULT_OUT_MOTIFS_JSONL)
+    parser.add_argument("--out-review-packets-jsonl", type=Path, default=DEFAULT_OUT_REVIEW_PACKETS_JSONL)
+    parser.add_argument("--out-bootstrap-jsonl", type=Path, default=DEFAULT_OUT_BOOTSTRAP_JSONL)
+    parser.add_argument("--review-decisions-jsonl", type=Path, default=None)
     return parser.parse_args()
 
 
@@ -1088,6 +1093,167 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
             handle.write(json.dumps(row, ensure_ascii=True) + "\n")
 
 
+def build_candidate_review_key(row: dict) -> str:
+    support_parent = row.get("supportParent") or {}
+    prop = row.get("prop") or {}
+    support_guid = support_parent.get("guid")
+    support_key = (
+        f"guid:{support_guid}"
+        if support_guid is not None
+        else f"{support_parent.get('classIdSpace')}:{support_parent.get('classId')}"
+    )
+    return "|".join(
+        [
+            str(row.get("sceneId")),
+            str(prop.get("guid")),
+            str(row.get("supportRelation", {}).get("candidateRank")),
+            support_key,
+        ]
+    )
+
+
+def build_prop_review_group_key(row: dict) -> str:
+    return "|".join([str(row.get("sceneId")), str((row.get("prop") or {}).get("guid"))])
+
+
+def build_review_packets(candidate_rows: list[dict], motif_index: dict[tuple, dict]) -> list[dict]:
+    grouped: dict[str, list[dict]] = {}
+    for row in candidate_rows:
+        grouped.setdefault(build_prop_review_group_key(row), []).append(row)
+
+    packets: list[dict] = []
+    for rows in grouped.values():
+        rows = sorted(rows, key=lambda row: row["supportRelation"].get("candidateRank", 999))
+        best = rows[0]
+        prop = best.get("prop") or {}
+        room_context = best.get("roomContext") or {}
+        candidates_out: list[dict] = []
+        for row in rows:
+            rel = row.get("supportRelation") or {}
+            val = row.get("validation") or {}
+            support_parent = row.get("supportParent") or {}
+            motif_key = (
+                support_parent.get("classIdSpace"),
+                support_parent.get("classId"),
+                support_parent.get("supportClass"),
+                prop.get("propClass"),
+                quantize_value(float(rel.get("relativePosition", {}).get("x", 0.0)), 0.5),
+                quantize_value(float(rel.get("relativePosition", {}).get("y", 0.0)), 0.5),
+                quantize_value(float(rel.get("relativePosition", {}).get("z", 0.0)), 0.15),
+                quantize_value(float(rel.get("relativeYawDeg", 0.0)), 30.0),
+            )
+            motif_row = motif_index.get(motif_key)
+            candidates_out.append(
+                {
+                    "reviewKey": row.get("reviewKey"),
+                    "candidateRank": rel.get("candidateRank"),
+                    "candidateTier": rel.get("candidateTier"),
+                    "candidateScore": rel.get("candidateScore"),
+                    "supportName": support_parent.get("name"),
+                    "supportClass": support_parent.get("supportClass"),
+                    "supportClassIdSpace": support_parent.get("classIdSpace"),
+                    "supportClassId": support_parent.get("classId"),
+                    "supportInferenceMode": support_parent.get("supportInferenceMode"),
+                    "heightAboveSupportPlane": rel.get("heightAboveSupportPlane"),
+                    "horizontalDistance": val.get("horizontalDistance"),
+                    "hasSurfaceHint": val.get("hasSurfaceHint"),
+                    "withinSurfaceFootprint": val.get("withinSurfaceFootprint"),
+                    "surfaceFootprintOverflow": val.get("surfaceFootprintOverflow"),
+                    "competingParentCount": val.get("competingParentCount"),
+                    "motifCount": motif_row.get("count") if motif_row else 0,
+                    "motifPromotionEligibleCount": motif_row.get("promotionEligibleCount") if motif_row else 0,
+                }
+            )
+        packets.append(
+            {
+                "reviewGroupKey": build_prop_review_group_key(best),
+                "sceneId": best.get("sceneId"),
+                "landblockId": best.get("landblockId"),
+                "cellId": best.get("cellId"),
+                "componentId": best.get("componentId"),
+                "prop": {
+                    "guid": prop.get("guid"),
+                    "name": prop.get("name"),
+                    "classId": prop.get("classId"),
+                    "wcid": prop.get("wcid"),
+                    "propClass": prop.get("propClass"),
+                    "positionLocal": prop.get("positionLocal"),
+                },
+                "roomContext": {
+                    "portalCountInCell": room_context.get("portalCountInCell"),
+                    "staticObjectCountInCell": room_context.get("staticObjectCountInCell"),
+                    "visibleCellCount": room_context.get("visibleCellCount"),
+                },
+                "topCandidateReviewKey": best.get("reviewKey"),
+                "topCandidateTier": best.get("supportRelation", {}).get("candidateTier"),
+                "topCandidateScore": best.get("supportRelation", {}).get("candidateScore"),
+                "recommendedAction": "review_top_candidate",
+                "candidates": candidates_out,
+            }
+        )
+    packets.sort(
+        key=lambda row: (
+            row.get("topCandidateTier") != "silver_static",
+            -(row.get("topCandidateScore") or 0.0),
+            row.get("sceneId") or "",
+        )
+    )
+    return packets
+
+
+def load_review_decisions(path: Path | None) -> tuple[dict[str, dict], dict[str, dict]]:
+    by_review_key: dict[str, dict] = {}
+    by_review_group_key: dict[str, dict] = {}
+    if path is None or not path.exists():
+        return by_review_key, by_review_group_key
+    for row in iter_jsonl(path):
+        review_key = row.get("reviewKey")
+        review_group_key = row.get("reviewGroupKey")
+        if isinstance(review_key, str) and review_key.strip():
+            by_review_key[review_key] = row
+        if isinstance(review_group_key, str) and review_group_key.strip():
+            by_review_group_key[review_group_key] = row
+    return by_review_key, by_review_group_key
+
+
+def build_bootstrap_rows(
+    candidate_rows: list[dict],
+    review_packets: list[dict],
+    review_decisions_by_key: dict[str, dict],
+    review_decisions_by_group: dict[str, dict],
+) -> list[dict]:
+    packet_by_group = {row["reviewGroupKey"]: row for row in review_packets}
+    bootstrap_rows: list[dict] = []
+    seen_keys: set[str] = set()
+    for row in candidate_rows:
+        review_key = row.get("reviewKey")
+        group_key = build_prop_review_group_key(row)
+        decision = review_decisions_by_key.get(review_key) or review_decisions_by_group.get(group_key)
+        if decision is None:
+            continue
+        decision_value = str(decision.get("decision") or "").strip().lower()
+        accepted = decision_value in {"accept", "accepted", "yes", "promote", "silver"}
+        if not accepted:
+            continue
+        if review_key in seen_keys:
+            continue
+        seen_keys.add(review_key)
+        promoted_row = json.loads(json.dumps(row))
+        promoted_row["supportRelation"]["candidateTier"] = "bootstrap_reviewed"
+        promoted_row["validation"]["promotionEligible"] = True
+        promoted_row["bootstrapReview"] = {
+            "reviewKey": review_key,
+            "reviewGroupKey": group_key,
+            "decision": decision_value,
+            "reviewer": decision.get("reviewer"),
+            "notes": decision.get("notes"),
+            "topCandidateReviewKey": packet_by_group.get(group_key, {}).get("topCandidateReviewKey"),
+        }
+        bootstrap_rows.append(promoted_row)
+    bootstrap_rows.sort(key=lambda row: (row.get("sceneId") or "", str((row.get("prop") or {}).get("guid"))))
+    return bootstrap_rows
+
+
 def main() -> None:
     args = parse_args()
     grounding_by_wcid = load_grounding(args.grounding_jsonl)
@@ -1104,6 +1270,8 @@ def main() -> None:
     review_rows: list[dict] = []
     candidate_rows: list[dict] = []
     motif_rows: list[dict] = []
+    review_packets: list[dict] = []
+    bootstrap_rows: list[dict] = []
 
     stats = {
         "scanned_rows": 0,
@@ -1126,6 +1294,8 @@ def main() -> None:
         "review_candidate_prop_class_counts": Counter(),
         "candidate_tier_counts": Counter(),
         "motif_rows_emitted": 0,
+        "review_packets_emitted": 0,
+        "bootstrap_rows_emitted": 0,
         "static_support_objects_emitted": 0,
         "semantic_support_prior_counts": {},
         "semantic_support_prior_promotions": 0,
@@ -1355,6 +1525,7 @@ def main() -> None:
                 candidate_row["supportRelation"]["candidateRank"] = candidate_rank
                 candidate_row["supportRelation"]["candidateScore"] = round(candidate["score"], 4)
                 candidate_row["supportRelation"]["candidateTier"] = candidate_tier
+                candidate_row["reviewKey"] = build_candidate_review_key(candidate_row)
                 candidate_row["validation"]["hasSurfaceHint"] = candidate["hasSurfaceHint"]
                 candidate_row["validation"]["withinSurfaceFootprint"] = candidate["withinSurfaceFootprint"]
                 if candidate["surfaceFootprintOverflow"] is not None:
@@ -1404,6 +1575,26 @@ def main() -> None:
     motif_rows = build_candidate_motif_rows(candidate_rows)
     write_jsonl(args.out_motifs_jsonl, motif_rows)
     stats["motif_rows_emitted"] = len(motif_rows)
+    motif_index = {
+        (
+            row["motifKey"]["supportClassIdSpace"],
+            row["motifKey"]["supportClassId"],
+            row["motifKey"]["supportClass"],
+            row["motifKey"]["propClass"],
+            row["motifKey"]["relativePositionBucket"]["x"],
+            row["motifKey"]["relativePositionBucket"]["y"],
+            row["motifKey"]["relativePositionBucket"]["z"],
+            row["motifKey"]["relativeYawBucket"],
+        ): row
+        for row in motif_rows
+    }
+    review_packets = build_review_packets(candidate_rows, motif_index)
+    write_jsonl(args.out_review_packets_jsonl, review_packets)
+    stats["review_packets_emitted"] = len(review_packets)
+    review_decisions_by_key, review_decisions_by_group = load_review_decisions(args.review_decisions_jsonl)
+    bootstrap_rows = build_bootstrap_rows(candidate_rows, review_packets, review_decisions_by_key, review_decisions_by_group)
+    write_jsonl(args.out_bootstrap_jsonl, bootstrap_rows)
+    stats["bootstrap_rows_emitted"] = len(bootstrap_rows)
 
     summary = {
         "raw_jsonl": str(args.raw_jsonl),
@@ -1415,6 +1606,9 @@ def main() -> None:
         "review_output_jsonl": str(args.out_review_jsonl),
         "candidates_output_jsonl": str(args.out_candidates_jsonl),
         "motifs_output_jsonl": str(args.out_motifs_jsonl),
+        "review_packets_output_jsonl": str(args.out_review_packets_jsonl),
+        "bootstrap_output_jsonl": str(args.out_bootstrap_jsonl),
+        "review_decisions_jsonl": str(args.review_decisions_jsonl) if args.review_decisions_jsonl else None,
         "counts": {
             "scanned_rows": stats["scanned_rows"],
             "interior_rows": stats["interior_rows"],
@@ -1425,6 +1619,8 @@ def main() -> None:
             "review_candidate_emitted": stats["review_candidate_emitted"],
             "candidate_rows_emitted": stats["candidate_rows_emitted"],
             "motif_rows_emitted": stats["motif_rows_emitted"],
+            "review_packets_emitted": stats["review_packets_emitted"],
+            "bootstrap_rows_emitted": stats["bootstrap_rows_emitted"],
             "skipped_non_interior": stats["skipped_non_interior"],
             "skipped_non_wcid": stats["skipped_non_wcid"],
             "skipped_non_instance": stats["skipped_non_instance"],
@@ -1448,6 +1644,8 @@ def main() -> None:
             "Review candidates are same-cell, same-component geometric nearest-support guesses and are not yet training-grade labels.",
             "Name hints are used, but hook classes are grounded directly by weenie type 56 and ACE enum-backed names.",
             "Static DAT-only support furniture participates in weak parent inference, but only repeated semantic priors can promote geometric candidates into silver labels.",
+            "Review packets group top-k candidate parents per prop and provide stable review keys for semi-automatic promotion.",
+            "Bootstrap rows are emitted only when a review-decisions JSONL explicitly accepts a candidate or a prop-level review group.",
         ],
     }
     args.out_summary_json.parent.mkdir(parents=True, exist_ok=True)
@@ -1461,12 +1659,16 @@ def main() -> None:
     print(f"  Review rows:  {len(review_rows):,}")
     print(f"  Candidate rows: {len(candidate_rows):,}")
     print(f"  Motif rows:   {len(motif_rows):,}")
+    print(f"  Review packets: {len(review_packets):,}")
+    print(f"  Bootstrap rows: {len(bootstrap_rows):,}")
     print(f"  Support JSONL: {args.out_support_jsonl}")
     print(f"  Gold JSONL:    {args.out_prop_jsonl}")
     print(f"  Silver JSONL:  {args.out_silver_jsonl}")
     print(f"  Review JSONL:  {args.out_review_jsonl}")
     print(f"  Candidates JSONL: {args.out_candidates_jsonl}")
     print(f"  Motifs JSONL:  {args.out_motifs_jsonl}")
+    print(f"  Review packets JSONL: {args.out_review_packets_jsonl}")
+    print(f"  Bootstrap JSONL: {args.out_bootstrap_jsonl}")
     print(f"  Summary JSON:  {args.out_summary_json}")
 
 
