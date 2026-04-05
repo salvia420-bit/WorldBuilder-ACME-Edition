@@ -273,6 +273,65 @@ def is_loot_container_name(name: str) -> bool:
     return any(name_has_hint(name, hint) for hint in LOOT_CONTAINER_NAME_HINTS)
 
 
+def is_document_like_prop(row: dict) -> bool:
+    name = (row.get("name") or row.get("className") or "").strip().lower()
+    if not name:
+        return False
+    document_hints = (
+        "book",
+        "note",
+        "paper",
+        "parchment",
+        "tome",
+        "scroll",
+        "journal",
+        "log",
+        "manual",
+        "guide",
+    )
+    return any(name_has_hint(name, hint) or name.startswith(hint) for hint in document_hints)
+
+
+def is_potion_like_prop(row: dict) -> bool:
+    name = (row.get("name") or row.get("className") or "").strip().lower()
+    if not name:
+        return False
+    potion_hints = (
+        "philter",
+        "potion",
+        "elixir",
+        "draught",
+        "tonic",
+        "vial",
+    )
+    return any(name_has_hint(name, hint) or name.startswith(hint) for hint in potion_hints)
+
+
+def semantic_prop_bucket(row: dict) -> str | None:
+    if is_document_like_prop(row):
+        return "document_like"
+    if is_potion_like_prop(row):
+        return "potion_like"
+    prop_class = row.get("propClass")
+    if isinstance(prop_class, str) and prop_class.strip():
+        return prop_class.strip()
+    return None
+
+
+def preferred_display_name(row: dict, grounding_row: dict | None) -> str | None:
+    for value in (
+        grounding_row.get("preferred_name") if grounding_row else None,
+        grounding_row.get("ace_friendly_name") if grounding_row else None,
+        grounding_row.get("ace_class_name") if grounding_row else None,
+        row.get("name"),
+        row.get("className"),
+        row.get("aceFriendlyName"),
+    ):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def classify_support(row: dict, grounding_row: dict | None, canonical_entry: dict | None) -> tuple[str | None, float, str]:
     weenie_type = int(row.get("weenieType") or row.get("typeId") or 0)
     name = normalized_name(row, grounding_row, canonical_entry)
@@ -463,7 +522,7 @@ def build_supported_prop_row(
             "classId": row.get("classId"),
             "wcid": row.get("wcid"),
             "weenieType": row.get("weenieType") or row.get("typeId"),
-            "name": prop_grounding.get("preferred_name") if prop_grounding else None,
+            "name": preferred_display_name(row, prop_grounding),
             "propClass": prop_class,
             "propConfidence": round(prop_confidence, 4),
             "propInferenceMode": prop_mode,
@@ -555,7 +614,9 @@ def build_review_prop_candidate_row(
 
 
 def classify_candidate_tier(
+    prop_row: dict,
     support_class: str,
+    support_name: str,
     support_mode: str,
     horizontal_distance: float,
     dz: float,
@@ -565,6 +626,16 @@ def classify_candidate_tier(
     furniture_like = support_class in {"table_like", "desk_like", "altar_like", "shelf_like"}
     if furniture_like and support_mode == "static_setup_name":
         if horizontal_distance <= 0.9 and 0.0 <= dz <= 0.35 and competing_parent_count == 0 and candidate_score >= 0.72:
+            return "silver_static", True
+        if (
+            support_class == "shelf_like"
+            and support_name.strip().lower() == "bookcase"
+            and is_document_like_prop(prop_row)
+            and horizontal_distance <= 1.3
+            and 0.0 <= dz <= 0.18
+            and competing_parent_count <= 1
+            and candidate_score >= 0.9
+        ):
             return "silver_static", True
         if horizontal_distance <= 1.35 and 0.0 <= dz <= 0.5 and competing_parent_count <= 1 and candidate_score >= 0.58:
             return "bronze_static", False
@@ -732,6 +803,104 @@ def quantize_value(value: float, step: float) -> float:
     return round(round(value / step) * step, 3)
 
 
+def median_value(values: list[float]) -> float:
+    ordered = sorted(values)
+    if not ordered:
+        return 0.0
+    mid = len(ordered) // 2
+    if len(ordered) % 2 == 1:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+def build_semantic_support_priors(candidate_rows: list[dict]) -> dict[tuple, dict]:
+    buckets: dict[tuple, list[dict]] = {}
+    for row in candidate_rows:
+        support_parent = row.get("supportParent") or {}
+        support_relation = row.get("supportRelation") or {}
+        validation = row.get("validation") or {}
+        if support_relation.get("candidateRank") != 1:
+            continue
+        if support_parent.get("classIdSpace") != "model_id":
+            continue
+        if support_parent.get("supportInferenceMode") != "static_setup_name":
+            continue
+        if not validation.get("sameCell", True):
+            continue
+        semantic_bucket = semantic_prop_bucket(row.get("prop") or {})
+        if semantic_bucket is None:
+            continue
+        key = (
+            support_parent.get("classIdSpace"),
+            support_parent.get("classId"),
+            support_parent.get("supportClass"),
+            semantic_bucket,
+        )
+        buckets.setdefault(key, []).append(row)
+
+    priors: dict[tuple, dict] = {}
+    for key, rows in buckets.items():
+        if len(rows) < 3:
+            continue
+        horizontal_distances = [float(row["validation"]["horizontalDistance"]) for row in rows]
+        heights = [float(row["supportRelation"]["heightAboveSupportPlane"]) for row in rows]
+        priors[key] = {
+            "count": len(rows),
+            "medianHorizontalDistance": round(median_value(horizontal_distances), 4),
+            "medianHeightAboveSupportPlane": round(median_value(heights), 4),
+            "minHeightAboveSupportPlane": round(min(heights), 4),
+            "maxHeightAboveSupportPlane": round(max(heights), 4),
+            "supportName": rows[0]["supportParent"].get("name"),
+            "examplePropNames": [row["prop"].get("name") for row in rows[:5]],
+        }
+    return priors
+
+
+def apply_semantic_support_priors(candidate_rows: list[dict], semantic_support_priors: dict[tuple, dict]) -> int:
+    promoted_count = 0
+    for row in candidate_rows:
+        support_parent = row.get("supportParent") or {}
+        support_relation = row.get("supportRelation") or {}
+        validation = row.get("validation") or {}
+        if validation.get("promotionEligible"):
+            continue
+        if support_relation.get("candidateRank") != 1:
+            continue
+        semantic_bucket = semantic_prop_bucket(row.get("prop") or {})
+        key = (
+            support_parent.get("classIdSpace"),
+            support_parent.get("classId"),
+            support_parent.get("supportClass"),
+            semantic_bucket,
+        )
+        prior = semantic_support_priors.get(key)
+        if prior is None:
+            continue
+
+        support_class = support_parent.get("supportClass")
+        horizontal_distance = float(validation.get("horizontalDistance", 0.0))
+        height_above_support = float(support_relation.get("heightAboveSupportPlane", 0.0))
+        competing_parent_count = int(validation.get("competingParentCount", 0) or 0)
+        if (
+            support_class == "shelf_like"
+            and semantic_bucket == "document_like"
+            and prior["count"] >= 5
+            and competing_parent_count == 0
+            and 0.0 <= height_above_support <= 0.12
+            and horizontal_distance <= 1.6
+        ):
+            support_relation["candidateTier"] = "silver_static"
+            support_relation["semanticPriorKey"] = {
+                "supportClassIdSpace": key[0],
+                "supportClassId": key[1],
+                "supportClass": key[2],
+                "propSemanticBucket": key[3],
+            }
+            validation["promotionEligible"] = True
+            promoted_count += 1
+    return promoted_count
+
+
 def build_candidate_motif_rows(candidate_rows: list[dict]) -> list[dict]:
     buckets: dict[tuple, list[dict]] = {}
     for row in candidate_rows:
@@ -823,6 +992,8 @@ def main() -> None:
         "candidate_tier_counts": Counter(),
         "motif_rows_emitted": 0,
         "static_support_objects_emitted": 0,
+        "semantic_support_prior_counts": {},
+        "semantic_support_prior_promotions": 0,
     }
 
     for idx, row in enumerate(iter_jsonl(args.raw_jsonl), start=1):
@@ -1009,8 +1180,16 @@ def main() -> None:
                 competing_parent_count = max(len(ranked_candidates) - 1, 0)
                 if second_score is not None and candidate_rank == 1 and second_score >= top_score - 0.03:
                     competing_parent_count = max(competing_parent_count, 1)
+                prop_name_for_tier = (
+                    (prop_grounding.get("preferred_name") if prop_grounding else None)
+                    or row.get("name")
+                    or row.get("className")
+                    or row.get("aceFriendlyName")
+                )
                 candidate_tier, promotion_eligible = classify_candidate_tier(
+                    {"name": prop_name_for_tier, "className": row.get("className")},
                     candidate["support_class"],
+                    candidate["support_row"].get("name") or candidate["support_row"].get("className") or "",
                     candidate["support_mode"],
                     candidate["horizontalDistance"],
                     candidate["dz"],
@@ -1042,16 +1221,36 @@ def main() -> None:
                 candidate_rows.append(candidate_row)
                 stats["candidate_rows_emitted"] += 1
                 stats["candidate_tier_counts"][candidate_tier] += 1
-                if promotion_eligible:
-                    silver_rows.append(candidate_row)
-                    stats["silver_props_emitted"] += 1
-                if candidate_rank == 1:
-                    review_rows.append(candidate_row)
-                    stats["review_candidate_emitted"] += 1
-                    stats["review_candidate_prop_class_counts"][prop_class] += 1
-                    stats["review_candidate_support_class_counts"][candidate["support_class"]] += 1
         if idx % 100000 == 0:
             print(f"  Prop relation rows processed: {idx:,}  emitted: {len(prop_rows):,}")
+
+    semantic_support_priors = build_semantic_support_priors(candidate_rows)
+    stats["semantic_support_prior_counts"] = {
+        f"{key[0]}:{key[1]}:{key[2]}:{key[3]}": prior["count"] for key, prior in semantic_support_priors.items()
+    }
+    stats["semantic_support_prior_promotions"] = apply_semantic_support_priors(candidate_rows, semantic_support_priors)
+    silver_rows = [
+        row
+        for row in candidate_rows
+        if row.get("supportRelation", {}).get("kind") == "geometry_candidate"
+        and row.get("supportRelation", {}).get("candidateTier") == "silver_static"
+        and row.get("validation", {}).get("promotionEligible")
+    ]
+    review_rows = [row for row in candidate_rows if row.get("supportRelation", {}).get("candidateRank") == 1]
+    stats["silver_props_emitted"] = len(silver_rows)
+    stats["review_candidate_emitted"] = len(review_rows)
+    stats["candidate_rows_emitted"] = len(candidate_rows)
+    stats["candidate_tier_counts"] = Counter(
+        row.get("supportRelation", {}).get("candidateTier", "unknown") for row in candidate_rows
+    )
+    stats["review_candidate_prop_class_counts"] = Counter(
+        row.get("prop", {}).get("propClass") for row in review_rows if row.get("prop", {}).get("propClass")
+    )
+    stats["review_candidate_support_class_counts"] = Counter(
+        row.get("supportParent", {}).get("supportClass")
+        for row in review_rows
+        if row.get("supportParent", {}).get("supportClass")
+    )
 
     write_jsonl(args.out_support_jsonl, support_rows)
     write_jsonl(args.out_prop_jsonl, prop_rows)
@@ -1095,6 +1294,8 @@ def main() -> None:
         "candidate_tier_counts": dict(stats["candidate_tier_counts"].most_common()),
         "review_candidate_prop_class_counts": dict(stats["review_candidate_prop_class_counts"].most_common()),
         "review_candidate_support_class_counts": dict(stats["review_candidate_support_class_counts"].most_common()),
+        "semantic_support_prior_counts": stats["semantic_support_prior_counts"],
+        "semantic_support_prior_promotions": stats["semantic_support_prior_promotions"],
         "notes": [
             "This is a first-pass high-confidence extractor.",
             "Supported-prop rows currently require a direct parentGuid with valid same-cell/component geometry.",
@@ -1102,7 +1303,7 @@ def main() -> None:
             "Supported-prop rows are rejected when the parent is in a different cell/component or when the prop sits below the parent plane.",
             "Review candidates are same-cell, same-component geometric nearest-support guesses and are not yet training-grade labels.",
             "Name hints are used, but hook classes are grounded directly by weenie type 56 and ACE enum-backed names.",
-            "Static DAT-only support furniture is not yet promoted into supported-prop parent inference.",
+            "Static DAT-only support furniture participates in weak parent inference, but only repeated semantic priors can promote geometric candidates into silver labels.",
         ],
     }
     args.out_summary_json.parent.mkdir(parents=True, exist_ok=True)
