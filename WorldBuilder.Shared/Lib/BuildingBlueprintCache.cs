@@ -602,6 +602,83 @@ namespace WorldBuilder.Shared.Lib {
         }
 
         /// <summary>
+        /// Creates in-memory EnvCell objects from a blueprint for editor preview rendering.
+        /// No DAT writes are performed — these cells are purely transient render data.
+        /// The real DAT writes happen at export time via LandblockDocument.SaveToDatsInternal.
+        /// </summary>
+        public static List<EnvCell> ComputePreviewCells(
+            BuildingBlueprint blueprint,
+            Vector3 newOrigin,
+            Quaternion newOrientation,
+            uint lbId) {
+
+            var cells = new List<EnvCell>();
+            var remap = new Dictionary<ushort, ushort>();
+            ushort nextCellId = 0x0100;
+            foreach (var cell in blueprint.Cells)
+                remap[cell.OriginalCellId] = nextCellId++;
+
+            foreach (var cell in blueprint.Cells) {
+                var newCellId = remap[cell.OriginalCellId];
+                uint fullCellId = (lbId << 16) | newCellId;
+
+                var worldOffset = Vector3.Transform(cell.RelativeOrigin, newOrientation);
+                var worldOrientation = Quaternion.Normalize(newOrientation * cell.Orientation);
+
+                var envCell = new EnvCell {
+                    Id = fullCellId,
+                    Flags = cell.Flags,
+                    EnvironmentId = cell.EnvironmentId,
+                    CellStructure = cell.CellStructure,
+                    RestrictionObj = cell.RestrictionObj,
+                    Position = new Frame {
+                        Origin = newOrigin + worldOffset,
+                        Orientation = worldOrientation
+                    }
+                };
+
+                envCell.Surfaces.AddRange(cell.Surfaces);
+
+                foreach (var cp in cell.CellPortals) {
+                    envCell.CellPortals.Add(new CellPortal {
+                        Flags = cp.Flags,
+                        PolygonId = cp.PolygonId,
+                        OtherPortalId = cp.OtherPortalId,
+                        OtherCellId = RemapCellId(cp.OtherCellId, remap)
+                    });
+                }
+
+                foreach (var vc in cell.VisibleCells)
+                    envCell.VisibleCells.Add(RemapCellId(vc, remap));
+
+                foreach (var stab in cell.StaticObjects) {
+                    var stabWorldOffset = Vector3.Transform(stab.RelativeOrigin, newOrientation);
+                    envCell.StaticObjects.Add(new Stab {
+                        Id = stab.Id,
+                        Frame = new Frame {
+                            Origin = newOrigin + stabWorldOffset,
+                            Orientation = Quaternion.Normalize(newOrientation * stab.Orientation)
+                        }
+                    });
+                }
+
+                if (envCell.StaticObjects.Count > 0)
+                    envCell.Flags |= EnvCellFlags.HasStaticObjs;
+                else
+                    envCell.Flags &= ~EnvCellFlags.HasStaticObjs;
+
+                if (envCell.RestrictionObj != 0)
+                    envCell.Flags |= EnvCellFlags.HasRestrictionObj;
+                else
+                    envCell.Flags &= ~EnvCellFlags.HasRestrictionObj;
+
+                cells.Add(envCell);
+            }
+
+            return cells;
+        }
+
+        /// <summary>
         /// Remaps a cell ID using the remap table. IDs not in the table (e.g. outdoor cells) pass through unchanged.
         /// </summary>
         private static ushort RemapCellId(ushort cellId, Dictionary<ushort, ushort> remap) {

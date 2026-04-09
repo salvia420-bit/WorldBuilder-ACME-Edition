@@ -28,6 +28,24 @@ namespace WorldBuilder.Editors.Landscape {
         private readonly ConcurrentDictionary<(uint Id, bool IsSetup), (Vector3 Min, Vector3 Max)> _boundsCache = new();
         private PortalDatDocument? _portalDoc;
 
+        /// <summary>
+        /// When set, remaps SurfaceTexture IDs during rendering so overrides are applied live.
+        /// Key = original SurfaceTexture DID (0x05...), Value = replacement SurfaceTexture DID.
+        /// </summary>
+        public Dictionary<uint, uint>? TextureRemapping { get; set; }
+
+        /// <summary>
+        /// When set, part indices contained in this set are excluded from setup rendering.
+        /// </summary>
+        public HashSet<int>? HiddenPartIndices { get; set; }
+
+        /// <summary>
+        /// When set, replaces the GfxObj used for specific part indices.
+        /// Key = part index, Value = replacement GfxObj DID.
+        /// Used for mix-and-match creature part swaps (weenie_properties_anim_part preview).
+        /// </summary>
+        public Dictionary<int, uint>? GfxObjRemapping { get; set; }
+
         public StaticObjectManager(OpenGLRenderer renderer, IDatReaderWriter dats, TextureDiskCache? textureCache = null) {
             _renderer = renderer;
             _dats = dats;
@@ -217,7 +235,11 @@ namespace WorldBuilder.Editors.Landscape {
             var placementFrame = GetDefaultPlacementFrame(setup);
 
             for (int i = 0; i < setup.Parts.Count; i++) {
+                if (HiddenPartIndices?.Contains(i) == true) continue;
                 var partId = setup.Parts[i];
+                // Apply GfxObj remapping for mix-and-match part swaps
+                uint gfxObjId = (GfxObjRemapping != null && GfxObjRemapping.TryGetValue(i, out var remapped))
+                    ? remapped : (uint)partId;
                 var transform = Matrix4x4.Identity;
 
                 if (placementFrame?.Frames != null && i < placementFrame.Frames.Count) {
@@ -225,7 +247,7 @@ namespace WorldBuilder.Editors.Landscape {
                         * Matrix4x4.CreateTranslation(placementFrame.Frames[i].Origin);
                 }
 
-                parts.Add((partId, transform));
+                parts.Add((gfxObjId, transform));
             }
 
             var data = new StaticObjectRenderData {
@@ -716,7 +738,9 @@ namespace WorldBuilder.Editors.Landscape {
                 return (solidData, texWidth, texHeight, TextureFormat.RGBA8, PixelFormat.Rgba, null, 0);
             }
 
-            if (!_dats.TryGet<SurfaceTexture>(surface.OrigTextureId, out var surfaceTexture) ||
+            var surfTexId = (TextureRemapping != null && TextureRemapping.TryGetValue((uint)surface.OrigTextureId, out var remapped))
+                ? remapped : (uint)surface.OrigTextureId;
+            if (!_dats.TryGet<SurfaceTexture>(surfTexId, out var surfaceTexture) ||
                 surfaceTexture.Textures?.Any() != true) {
                 return null;
             }

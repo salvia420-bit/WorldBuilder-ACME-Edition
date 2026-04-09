@@ -27,6 +27,7 @@ namespace WorldBuilder.Shared.Documents {
 
         public Guid ClientId => _clientId;
         public ConcurrentDictionary<string, BaseDocument> ActiveDocs => _activeDocs;
+        public bool SkipDatStatics { get; set; }
 
         private record DocumentUpdate(string DocumentId, BaseDocument Document, DateTime Timestamp);
 

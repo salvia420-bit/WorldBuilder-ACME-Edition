@@ -432,7 +432,7 @@ namespace WorldBuilder.Editors.Dungeon {
 
         const long MaxDecodePixels = 4096L * 4096L;
 
-        static WriteableBitmap? TryBitmapFromRenderSurface(RenderSurface renderSurface, IDatReaderWriter dats, int maxEdge) {
+        internal static WriteableBitmap? TryBitmapFromRenderSurface(RenderSurface renderSurface, IDatReaderWriter dats, int maxEdge) {
             var src = renderSurface.SourceData;
             int w = renderSurface.Width, h = renderSurface.Height;
             if (src == null || src.Length == 0 || w <= 0 || h <= 0) return null;

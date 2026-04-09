@@ -162,7 +162,7 @@ namespace WorldBuilder.Lib.Settings {
 
         [SettingDescription("Always show building interior geometry, even when the camera is outside the building")]
         [SettingOrder(3)]
-        private bool _showBuildingInteriors = false;
+        private bool _showBuildingInteriors = true;
         public bool ShowBuildingInteriors { get => _showBuildingInteriors; set => SetProperty(ref _showBuildingInteriors, value); }
 
         [SettingDescription("Show weenie spawns from ACE database (creatures, NPCs, generators, etc.)")]

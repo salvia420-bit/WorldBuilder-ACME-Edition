@@ -24,6 +24,24 @@ namespace WorldBuilder.Lib {
             }
         }
 
+        /// <summary>
+        /// Loads a SurfaceTexture (0x05xxxxxx) directly into a bitmap, following the
+        /// SurfaceTexture → Textures.Last() → RenderSurface chain.
+        /// Uses the full decode path including INDEX16/palette support.
+        /// </summary>
+        public static WriteableBitmap? LoadSurfaceTextureIcon(IDatReaderWriter dats, uint surfaceTextureId, int size = 64) {
+            try {
+                if (surfaceTextureId == 0) return null;
+                if (!dats.TryGet<SurfaceTexture>(surfaceTextureId, out var st) || st?.Textures == null || st.Textures.Count == 0) return null;
+                var rsId = st.Textures[st.Textures.Count - 1];
+                if (!dats.TryGet<RenderSurface>(rsId, out var rs) || rs == null) return null;
+                return WorldBuilder.Editors.Dungeon.SurfaceBrowserViewModel.TryBitmapFromRenderSurface(rs, dats, size);
+            }
+            catch {
+                return null;
+            }
+        }
+
         public static WriteableBitmap? LoadSurfaceIcon(IDatReaderWriter dats, uint surfaceId, int size = 32) {
             try {
                 if (surfaceId == 0) return null;

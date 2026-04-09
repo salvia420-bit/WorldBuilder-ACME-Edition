@@ -114,6 +114,9 @@ namespace WorldBuilder.Editors.Landscape {
         private readonly HashSet<ushort> _pendingSceneryRegen = new();
         private Task? _envCellRetryTask;
         private readonly HashSet<ushort> _pendingEnvCellRetries = new();
+        // Preview cells computed from blueprints without DAT writes, keyed by landblock.
+        // Set by PreviewBuildingInterior(); drained by RetryMissingEnvCells() on the next tick.
+        private readonly ConcurrentDictionary<ushort, List<EnvCell>> _pendingPreviewCells = new();
         private HashSet<ushort>? _lastVisibleLandblocks;
 
         public HashSet<ushort>? VisibleLandblocks => _lastVisibleLandblocks;
@@ -419,6 +422,7 @@ namespace WorldBuilder.Editors.Landscape {
         /// </summary>
         private void RetryMissingEnvCells(Vector3 cameraPosition) {
             if (_envCellRetryTask != null && !_envCellRetryTask.IsCompleted) return;
+            if (_documentManager.SkipDatStatics && _pendingPreviewCells.IsEmpty) return;
 
             var envCellManager = _contexts.Values.FirstOrDefault()?.EnvCellManager;
             if (envCellManager == null) return;
@@ -432,6 +436,12 @@ namespace WorldBuilder.Editors.Landscape {
                 var lbKey = ushort.Parse(docId.Replace("landblock_", ""), System.Globalization.NumberStyles.HexNumber);
                 if (envCellManager.HasLoadedCells(lbKey)) continue;
                 if (_pendingEnvCellRetries.Contains(lbKey)) continue;
+
+                // Always include landblocks with pending preview cells regardless of distance
+                if (_pendingPreviewCells.ContainsKey(lbKey)) {
+                    missing.Add(lbKey);
+                    continue;
+                }
 
                 float dist = Vector2.Distance(camPos2D, LandblockCenter(lbKey));
                 if (dist <= dungeonThreshold) {
@@ -447,6 +457,8 @@ namespace WorldBuilder.Editors.Landscape {
             var dats = _dats;
             var resultQueue = _backgroundLoadResults;
             var contexts = _contexts;
+            var pendingPreview = _pendingPreviewCells;
+            var skipDatStatics = _documentManager.SkipDatStatics;
 
             _envCellRetryTask = Task.Run(() => {
                 var mgr = contexts.Values.FirstOrDefault()?.EnvCellManager;
@@ -455,6 +467,18 @@ namespace WorldBuilder.Editors.Landscape {
                 foreach (var lbKey in missing) {
                     if (mgr.HasLoadedCells(lbKey)) continue;
                     try {
+                        // Preview cells take priority — no DAT reads needed
+                        if (pendingPreview.TryRemove(lbKey, out var previewCells)) {
+                            var batch = mgr.PrepareLandblockEnvCells(lbKey, (uint)lbKey, previewCells, isDungeonOnly: false);
+                            if (batch != null) {
+                                var docId = $"landblock_{lbKey:X4}";
+                                resultQueue.Enqueue(new BackgroundLoadResult(lbKey, docId, new List<StaticObject>(), new HashSet<(uint, bool)>(), 0, 0, 0, batch));
+                            }
+                            continue;
+                        }
+
+                        if (skipDatStatics) continue;
+
                         uint lbId = (uint)lbKey;
                         uint infoId = lbId << 16 | 0xFFFE;
                         if (!dats.TryGet<LandBlockInfo>(infoId, out var lbi) || lbi.NumCells == 0) continue;
@@ -469,10 +493,10 @@ namespace WorldBuilder.Editors.Landscape {
                         if (envCells.Count == 0) continue;
 
                         bool isDungeonOnly = lbi.Buildings == null || lbi.Buildings.Count == 0;
-                        var batch = mgr.PrepareLandblockEnvCells(lbKey, lbId, envCells, isDungeonOnly);
-                        if (batch != null) {
+                        var batch2 = mgr.PrepareLandblockEnvCells(lbKey, lbId, envCells, isDungeonOnly);
+                        if (batch2 != null) {
                             var docId = $"landblock_{lbKey:X4}";
-                            resultQueue.Enqueue(new BackgroundLoadResult(lbKey, docId, new List<StaticObject>(), new HashSet<(uint, bool)>(), 0, 0, 0, batch));
+                            resultQueue.Enqueue(new BackgroundLoadResult(lbKey, docId, new List<StaticObject>(), new HashSet<(uint, bool)>(), 0, 0, 0, batch2));
                         }
                     }
                     catch (Exception ex) {
@@ -638,6 +662,7 @@ namespace WorldBuilder.Editors.Landscape {
                     foreach (var context in _contexts.Values) {
                         context.EnvCellManager.UnloadLandblock(lbKey);
                     }
+                    _pendingPreviewCells.TryRemove(lbKey, out _);
 
                     if (_dungeonStaticObjects.TryGetValue(lbKey, out var dungeonObjs)) {
                         foreach (var obj in dungeonObjs) {
@@ -703,6 +728,7 @@ namespace WorldBuilder.Editors.Landscape {
                 foreach (var context in _contexts.Values) {
                     context.EnvCellManager.UnloadLandblock(lbKey);
                 }
+                _pendingPreviewCells.TryRemove(lbKey, out _);
 
                 if (_dungeonStaticObjects.TryGetValue(lbKey, out var dungeonObjs)) {
                     foreach (var obj in dungeonObjs) {
@@ -1314,6 +1340,19 @@ namespace WorldBuilder.Editors.Landscape {
             _particleEmitters.Clear();
         }
 
+        public void InvalidateEnvCellsForLandblock(ushort lbKey) {
+            _pendingEnvCellRetries.Remove(lbKey);
+            foreach (var context in _contexts.Values)
+                context.EnvCellManager.QueueUnload(lbKey);
+        }
+
+        public void PreviewBuildingInterior(ushort lbKey, List<EnvCell> previewCells) {
+            _pendingPreviewCells[lbKey] = previewCells;
+            _pendingEnvCellRetries.Remove(lbKey);
+            foreach (var context in _contexts.Values)
+                context.EnvCellManager.QueueUnload(lbKey);
+        }
+
         /// <summary>Replaces (or sets) the weenie-spawn list for a landblock and triggers a static-cache rebuild.</summary>
         public void SetWeenieSpawns(ushort lbKey, List<StaticObject> spawns) {
             _weenieSpawnObjects[lbKey] = spawns;
@@ -1378,6 +1417,7 @@ namespace WorldBuilder.Editors.Landscape {
                 _buildingStaticParentCells.Clear();
                 _pendingLoadLandblocks.Clear();
                 _pendingEnvCellRetries.Clear();
+                _pendingPreviewCells.Clear();
                 _pendingSceneryRegen.Clear();
 
                 _cachedStaticObjects = null;

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Numerics;
 using WorldBuilder.Lib.History;
 using WorldBuilder.Shared.Documents;
+using WorldBuilder.Shared.Lib;
 
 namespace WorldBuilder.Editors.Landscape.Commands {
 
@@ -200,6 +201,39 @@ namespace WorldBuilder.Editors.Landscape.Commands {
 
             // Eagerly load render data so the object renders immediately
             _context.TerrainSystem.Scene.AnyObjectManager?.GetRenderData(_object.Id, _object.IsSetup);
+
+            // If this is a building model, compute preview cells from the blueprint and
+            // hand them to the EnvCellManager for in-editor rendering. No DAT writes —
+            // export (LandblockDocument.SaveToDatsInternal) handles the real write.
+            if (!_object.IsParticleEmitter) {
+                var dats = _context.TerrainSystem.Dats;
+                if (BuildingBlueprintCache.IsBuildingModelId(_object.Id, dats)) {
+                    var blueprint = BuildingBlueprintCache.GetBlueprint(_object.Id, dats);
+                    if (blueprint != null && blueprint.Cells.Count > 0) {
+                        uint lbId = _landblockKey;
+                        uint lbX = (uint)((_landblockKey >> 8) & 0xFF);
+                        uint lbY = (uint)(_landblockKey & 0xFF);
+                        var localOrigin = new Vector3(
+                            _object.Origin.X - lbX * 192f,
+                            _object.Origin.Y - lbY * 192f,
+                            _object.Origin.Z);
+
+                        var previewCells = BuildingBlueprintCache.ComputePreviewCells(
+                            blueprint, localOrigin, _object.Orientation, lbId);
+
+                        if (previewCells.Count > 0) {
+                            _context.TerrainSystem.Scene.PreviewBuildingInterior(_landblockKey, previewCells);
+                            Console.WriteLine($"[Blueprint] Placed 0x{_object.Id:X8}: queued {previewCells.Count} preview cells for LB 0x{_landblockKey:X4}");
+                        }
+                        else {
+                            Console.WriteLine($"[Blueprint] Placed 0x{_object.Id:X8}: ComputePreviewCells returned empty");
+                        }
+                    }
+                    else {
+                        Console.WriteLine($"[Blueprint] Placed 0x{_object.Id:X8}: no valid blueprint (blueprint={blueprint != null}, cells={blueprint?.Cells.Count ?? 0})");
+                    }
+                }
+            }
 
             _context.TerrainSystem.Scene.InvalidateStaticObjectsCache();
             return true;
