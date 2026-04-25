@@ -14,6 +14,7 @@ import argparse
 import json
 import math
 import re
+import sys
 from collections import Counter
 from pathlib import Path
 
@@ -21,6 +22,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 REFERENCE_DIR = ROOT / "pipeline_data" / "reference"
 ENRICHMENT_DIR = ROOT / "pipeline_data" / "enrichment"
+
+# Make `PopulationPipeline.lib` importable when running this file directly.
+_SCRIPTS_ROOT = ROOT / "scripts"
+if str(_SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_ROOT))
+
+from PopulationPipeline.lib.unified_ontology import (  # noqa: E402
+    DEFAULT_UNIFIED_PATH as DEFAULT_UNIFIED_ONTOLOGY_PATH,
+    UnifiedOntology,
+)
 
 DEFAULT_RAW_JSONL = REFERENCE_DIR / "raw_world_facts_full_with_components_v2.jsonl"
 DEFAULT_COMPONENT_JSONL = REFERENCE_DIR / "envcell_components_full.jsonl"
@@ -31,12 +42,19 @@ DEFAULT_CANONICAL_ENRICHMENT_JSON = ENRICHMENT_DIR / "canonical_enrichment.json"
 DEFAULT_OUT_SUPPORT_JSONL = REFERENCE_DIR / "interior_support_objects_highconf.jsonl"
 DEFAULT_OUT_PROP_JSONL = REFERENCE_DIR / "interior_supported_props_highconf.jsonl"
 DEFAULT_OUT_SILVER_JSONL = REFERENCE_DIR / "interior_supported_props_silver.jsonl"
+DEFAULT_OUT_BRONZE_JSONL = REFERENCE_DIR / "interior_supported_props_bronze.jsonl"
 DEFAULT_OUT_SUMMARY_JSON = REFERENCE_DIR / "interior_support_dataset_highconf_summary.json"
 DEFAULT_OUT_REVIEW_JSONL = REFERENCE_DIR / "interior_supported_prop_candidates_review.jsonl"
 DEFAULT_OUT_CANDIDATES_JSONL = REFERENCE_DIR / "interior_supported_prop_candidates_ranked.jsonl"
 DEFAULT_OUT_MOTIFS_JSONL = REFERENCE_DIR / "interior_supported_prop_motifs.jsonl"
 DEFAULT_OUT_REVIEW_PACKETS_JSONL = REFERENCE_DIR / "interior_supported_prop_review_packets.jsonl"
 DEFAULT_OUT_BOOTSTRAP_JSONL = REFERENCE_DIR / "interior_supported_props_bootstrap.jsonl"
+
+DEFAULT_EXCLUDED_ANCHOR_MODEL_IDS = {
+    0x01000E3B,  # cottage / housing shell
+    0x01000E11,  # cottage / housing shell variant
+    0x01000F69,  # housing shell variant
+}
 
 
 SUPPORT_NAME_HINTS = {
@@ -94,6 +112,28 @@ STATIC_SETUP_EXCLUDE_HINTS = (
     "eastern temple tablet",
     "unstable mana stone",
 )
+STATIC_SURFACE_FALSE_SUPPORT_HINTS = (
+    "resonator",
+    "crystal",
+    "deposit",
+    "portal",
+    "shrine",
+    "switch",
+    "lily",
+)
+STATIC_PROP_EXCLUDE_HINTS = (
+    "wall",
+    "floor",
+    "ceiling",
+    "door",
+    "arch",
+    "stair",
+    "stairs",
+    "ramp",
+    "pillar",
+    "column",
+    "window",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -103,9 +143,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grounding-jsonl", type=Path, default=DEFAULT_GROUNDING_JSONL)
     parser.add_argument("--wcid-types-json", type=Path, default=DEFAULT_WCID_TYPES_JSON)
     parser.add_argument("--canonical-enrichment-json", type=Path, default=DEFAULT_CANONICAL_ENRICHMENT_JSON)
+    parser.add_argument(
+        "--unified-ontology-json",
+        type=Path,
+        default=DEFAULT_UNIFIED_ONTOLOGY_PATH,
+        help="Merged ontology (canonical + ACE world DB + Setup→Parts inheritance + DAT signals + geometry). "
+             "If absent the extractor falls back to canonical_enrichment alone.",
+    )
     parser.add_argument("--out-support-jsonl", type=Path, default=DEFAULT_OUT_SUPPORT_JSONL)
     parser.add_argument("--out-prop-jsonl", type=Path, default=DEFAULT_OUT_PROP_JSONL)
     parser.add_argument("--out-silver-jsonl", type=Path, default=DEFAULT_OUT_SILVER_JSONL)
+    parser.add_argument("--out-bronze-jsonl", type=Path, default=DEFAULT_OUT_BRONZE_JSONL)
     parser.add_argument("--out-summary-json", type=Path, default=DEFAULT_OUT_SUMMARY_JSON)
     parser.add_argument("--out-review-jsonl", type=Path, default=DEFAULT_OUT_REVIEW_JSONL)
     parser.add_argument("--out-candidates-jsonl", type=Path, default=DEFAULT_OUT_CANDIDATES_JSONL)
@@ -113,6 +161,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-review-packets-jsonl", type=Path, default=DEFAULT_OUT_REVIEW_PACKETS_JSONL)
     parser.add_argument("--out-bootstrap-jsonl", type=Path, default=DEFAULT_OUT_BOOTSTRAP_JSONL)
     parser.add_argument("--review-decisions-jsonl", type=Path, default=None)
+    parser.add_argument(
+        "--exclude-anchor-model-id",
+        action="append",
+        default=[],
+        help="Exclude anchored interior components whose anchor model_id matches this value. Repeatable.",
+    )
     return parser.parse_args()
 
 
@@ -201,6 +255,31 @@ def load_component_cells(path: Path) -> tuple[dict[int, dict], dict[tuple[int, i
             print(f"  Components loaded: {idx:,}")
 
     return components, cells
+
+
+def parse_excluded_anchor_model_ids(raw_values: list[str]) -> set[int]:
+    excluded = set(DEFAULT_EXCLUDED_ANCHOR_MODEL_IDS)
+    for value in raw_values:
+        parsed = parse_hexish(value)
+        if parsed is not None:
+            excluded.add(int(parsed))
+    return excluded
+
+
+def component_anchor_model_id(component_info: dict | None) -> int | None:
+    if not isinstance(component_info, dict):
+        return None
+    anchor = component_info.get("anchor") or {}
+    class_space = anchor.get("classIdSpace")
+    class_id = anchor.get("classId")
+    if class_space != "model_id" or class_id is None:
+        return None
+    return int(class_id)
+
+
+def component_excluded(component_info: dict | None, excluded_anchor_model_ids: set[int]) -> bool:
+    anchor_model_id = component_anchor_model_id(component_info)
+    return anchor_model_id in excluded_anchor_model_ids if anchor_model_id is not None else False
 
 
 def build_canonical_index(canonical_enrichment: dict) -> dict[int, dict]:
@@ -394,6 +473,64 @@ def classify_static_support_name(name: str) -> tuple[str | None, float, str]:
     return None, 0.0, "unclassified"
 
 
+def classify_static_support_object(name: str | None, row: dict) -> tuple[str | None, float, str]:
+    if isinstance(name, str) and name.strip():
+        support_class, support_conf, support_mode = classify_static_support_name(name)
+        if support_class is not None:
+            return support_class, support_conf, support_mode
+        lower_name = name.strip().lower()
+        if any(name_has_hint(lower_name, hint) for hint in STATIC_SURFACE_FALSE_SUPPORT_HINTS):
+            return None, 0.0, "excluded_surface_name"
+
+    support_surface_hint = best_support_surface_hint(row)
+    if support_surface_hint is None:
+        return None, 0.0, "unclassified"
+
+    support_class = support_surface_hint.get("supportClass")
+    if not isinstance(support_class, str) or not support_class.strip():
+        return None, 0.0, "unclassified"
+    support_class = support_class.strip()
+    if support_class == "unknown_support":
+        return "unknown_support", 0.38, "static_surface_hint"
+    return support_class, 0.74, "static_surface_hint"
+
+
+def aabb_span(aabb_local: dict | None) -> tuple[float, float, float]:
+    if not isinstance(aabb_local, dict):
+        return 0.0, 0.0, 0.0
+    return (
+        max(float(aabb_local.get("maxX", 0.0)) - float(aabb_local.get("minX", 0.0)), 0.0),
+        max(float(aabb_local.get("maxY", 0.0)) - float(aabb_local.get("minY", 0.0)), 0.0),
+        max(float(aabb_local.get("maxZ", 0.0)) - float(aabb_local.get("minZ", 0.0)), 0.0),
+    )
+
+
+def classify_static_prop_name(name: str, aabb_local: dict | None) -> tuple[str | None, float, str]:
+    lower_name = name.strip().lower()
+    if lower_name:
+        if any(name_has_hint(lower_name, hint) for hint in STATIC_SETUP_EXCLUDE_HINTS):
+            return None, 0.0, "excluded_name"
+        if any(name_has_hint(lower_name, hint) for hint in STATIC_PROP_EXCLUDE_HINTS):
+            return None, 0.0, "excluded_structure"
+
+        for prop_class, hints in PROP_NAME_HINTS.items():
+            if any(name_has_hint(lower_name, hint) for hint in hints):
+                return prop_class, 0.78, "static_name_hint"
+
+        if is_document_like_prop({"name": lower_name}):
+            return "document_like", 0.76, "static_semantic_name"
+        if is_potion_like_prop({"name": lower_name}):
+            return "potion_like", 0.76, "static_semantic_name"
+
+    span_x, span_y, span_z = aabb_span(aabb_local)
+    footprint = max(span_x, span_y)
+    if footprint <= 0.8 and span_z <= 0.8:
+        return "static_clutter", 0.48, "static_geometry_small"
+    if footprint <= 0.45 and span_z <= 1.2:
+        return "static_clutter", 0.42, "static_geometry_tall_small"
+    return None, 0.0, "unclassified"
+
+
 def yaw_deg(row: dict) -> float:
     if row.get("yawDeg") is not None:
         return float(row["yawDeg"])
@@ -553,6 +690,14 @@ def build_room_context(row: dict, component_info: dict | None, cell_info: dict |
     }
 
 
+def synthetic_static_guid(component_id: int | None, cell_num: int | None, ordinal: int) -> int:
+    component_part = int(component_id or 0) & 0xFFFFFFFF
+    cell_part = int(cell_num or 0) & 0xFFFF
+    ordinal_part = int(ordinal) & 0xFFFF
+    encoded = (component_part << 32) | (cell_part << 16) | ordinal_part
+    return -encoded if encoded > 0 else -(ordinal_part + 1)
+
+
 def build_scene_key(row: dict) -> tuple[int, int, str, int | None]:
     return (
         int(row["landblockX"]),
@@ -634,6 +779,12 @@ def build_supported_prop_row(
     dy = float(row.get("localY", 0.0)) - float(parent_row.get("localY", 0.0))
     dz = float(row.get("z", 0.0)) - float(parent_row.get("z", 0.0))
     same_cell = row.get("cellId") == parent_row.get("cellId")
+    prop_guid = row.get("guid")
+    if prop_guid is None and row.get("syntheticGuid") is not None:
+        prop_guid = row.get("syntheticGuid")
+    parent_guid = parent_row.get("guid")
+    if parent_guid is None and parent_row.get("syntheticGuid") is not None:
+        parent_guid = parent_row.get("syntheticGuid")
     relation_kind = "hook_attached" if parent_support_class.startswith("hook_") else "linked_child_of_support"
     relation_confidence = min(prop_confidence, parent_support_confidence)
     support_metrics = support_anchor_metrics(row, parent_row)
@@ -647,7 +798,7 @@ def build_supported_prop_row(
         "componentId": row.get("envCellComponentId"),
         "componentKind": row.get("envCellComponentKind"),
         "prop": {
-            "guid": row.get("guid"),
+            "guid": prop_guid,
             "classIdSpace": row.get("classIdSpace"),
             "classId": row.get("classId"),
             "wcid": row.get("wcid"),
@@ -656,6 +807,7 @@ def build_supported_prop_row(
             "propClass": prop_class,
             "propConfidence": round(prop_confidence, 4),
             "propInferenceMode": prop_mode,
+            "sourceKind": row.get("sourceKind", "ace_instance"),
             "positionLocal": {
                 "x": float(row.get("localX", 0.0)),
                 "y": float(row.get("localY", 0.0)),
@@ -669,7 +821,7 @@ def build_supported_prop_row(
             },
         },
         "supportParent": {
-            "guid": parent_row.get("guid"),
+            "guid": parent_guid,
             "classIdSpace": parent_row.get("classIdSpace"),
             "classId": parent_row.get("classId"),
             "wcid": parent_row.get("wcid"),
@@ -678,6 +830,7 @@ def build_supported_prop_row(
             "supportClass": parent_support_class,
             "supportConfidence": round(parent_support_confidence, 4),
             "supportInferenceMode": parent_support_mode,
+            "sourceKind": parent_row.get("sourceKind", "ace_instance"),
         },
         "supportRelation": {
             "kind": relation_kind,
@@ -751,14 +904,93 @@ def classify_candidate_tier(
     support_class: str,
     support_name: str,
     support_mode: str,
+    within_surface_footprint: bool,
     horizontal_distance: float,
     dz: float,
     competing_parent_count: int,
     candidate_score: float,
 ) -> tuple[str, bool]:
     furniture_like = support_class in {"table_like", "desk_like", "altar_like", "shelf_like"}
-    if furniture_like and support_mode == "static_setup_name":
-        if horizontal_distance <= 0.9 and 0.0 <= dz <= 0.35 and competing_parent_count == 0 and candidate_score >= 0.72:
+    static_geometry_backed = support_mode in {"static_setup_name", "static_surface_hint"}
+    prop_bucket = semantic_prop_bucket(prop_row)
+    if furniture_like and static_geometry_backed:
+        strong_surface_fit = horizontal_distance <= 0.45 and -0.28 <= dz <= 0.25
+        medium_surface_fit = horizontal_distance <= 0.7 and -0.3 <= dz <= 0.4
+        moderate_footprint_fit = within_surface_footprint and horizontal_distance <= 0.5 and -0.3 <= dz <= 0.3
+        broad_footprint_fit = within_surface_footprint and horizontal_distance <= 0.7 and -0.35 <= dz <= 0.4
+        broad_retail_fit = within_surface_footprint and horizontal_distance <= 0.6 and -0.22 <= dz <= 0.28
+        if (
+            support_class in {"table_like", "desk_like", "altar_like"}
+            and strong_surface_fit
+            and competing_parent_count <= 1
+            and candidate_score >= 1.15
+        ):
+            return "silver_static", True
+        if (
+            support_class in {"table_like", "desk_like", "altar_like"}
+            and strong_surface_fit
+            and candidate_score >= 1.24
+        ):
+            return "silver_static", True
+        if (
+            support_class in {"table_like", "desk_like", "altar_like"}
+            and moderate_footprint_fit
+            and competing_parent_count <= 2
+            and candidate_score >= 0.98
+        ):
+            return "silver_static", True
+        if (
+            support_class in {"table_like", "desk_like", "altar_like"}
+            and broad_retail_fit
+            and prop_bucket in {"document_like", "book_like", "bottle_like", "scroll_like", "gem_like"}
+            and competing_parent_count <= 2
+            and candidate_score >= 0.92
+        ):
+            return "silver_static", True
+        if (
+            support_class in {"table_like", "desk_like", "altar_like"}
+            and broad_retail_fit
+            and competing_parent_count <= 2
+            and candidate_score >= 1.08
+        ):
+            return "silver_static", True
+        if (
+            support_class == "shelf_like"
+            and prop_bucket in {"document_like", "book_like"}
+            and horizontal_distance <= 0.7
+            and -0.2 <= dz <= 0.22
+            and competing_parent_count <= 1
+            and candidate_score >= 1.0
+        ):
+            return "silver_static", True
+        if (
+            support_class == "shelf_like"
+            and moderate_footprint_fit
+            and competing_parent_count <= 2
+            and candidate_score >= 1.02
+        ):
+            return "silver_static", True
+        if (
+            support_class == "shelf_like"
+            and broad_retail_fit
+            and prop_bucket in {"document_like", "book_like", "bottle_like", "scroll_like"}
+            and competing_parent_count <= 2
+            and candidate_score >= 0.94
+        ):
+            return "silver_static", True
+        if (
+            support_class == "shelf_like"
+            and broad_retail_fit
+            and competing_parent_count <= 1
+            and candidate_score >= 1.1
+        ):
+            return "silver_static", True
+        if (
+            support_class == "shelf_like"
+            and medium_surface_fit
+            and competing_parent_count == 0
+            and candidate_score >= 1.22
+        ):
             return "silver_static", True
         if (
             support_class == "shelf_like"
@@ -770,10 +1002,19 @@ def classify_candidate_tier(
             and candidate_score >= 0.9
         ):
             return "silver_static", True
-        if horizontal_distance <= 1.35 and 0.0 <= dz <= 0.5 and competing_parent_count <= 1 and candidate_score >= 0.58:
+        if (
+            horizontal_distance <= 0.9
+            and -0.3 <= dz <= 0.6
+            and competing_parent_count <= 2
+            and candidate_score >= 1.0
+        ):
+            return "bronze_static", False
+        if broad_footprint_fit and competing_parent_count <= 2 and candidate_score >= 0.9:
+            return "bronze_static", False
+        if horizontal_distance <= 1.35 and -0.2 <= dz <= 0.75 and competing_parent_count <= 2 and candidate_score >= 0.72:
             return "bronze_static", False
     if support_class == "container_top":
-        if horizontal_distance <= 0.9 and 0.0 <= dz <= 0.2 and competing_parent_count == 0 and candidate_score >= 0.62:
+        if horizontal_distance <= 0.9 and -0.2 <= dz <= 0.25 and competing_parent_count <= 1 and candidate_score >= 0.8:
             return "bronze_container", False
     return "review_only", False
 
@@ -1259,14 +1500,34 @@ def main() -> None:
     grounding_by_wcid = load_grounding(args.grounding_jsonl)
     canonical_enrichment = load_json_dict(args.canonical_enrichment_json)
     canonical_by_wcid = build_canonical_index(canonical_enrichment)
-    setup_name_by_model_id = build_setup_name_index(canonical_enrichment)
+
+    unified = UnifiedOntology.load(args.unified_ontology_json)
+    if unified.loaded:
+        # Unified ontology covers canonical + ACE world DB + Setup→Parts
+        # inheritance + DAT building/scenery signals + geometry. The
+        # canonical-only fallback is kept for the rare case where the
+        # merged file isn't built yet.
+        setup_name_by_model_id = unified.model_id_name_index()
+        stats = unified.stats
+        print(
+            f"[ontology] unified loaded: setups={stats.get('setups', {}).get('named', 0):,} named, "
+            f"gfx_objs={stats.get('gfx_objs', {}).get('named', 0):,} named, "
+            f"resolved {stats.get('setups', {}).get('resolved', 0):,}/{stats.get('setups', {}).get('total', 0):,} setups, "
+            f"{stats.get('gfx_objs', {}).get('resolved', 0):,}/{stats.get('gfx_objs', {}).get('total', 0):,} gfx_objs"
+        )
+    else:
+        setup_name_by_model_id = build_setup_name_index(canonical_enrichment)
+        print(f"[ontology] unified ontology not found at {args.unified_ontology_json}; "
+              f"falling back to canonical_enrichment ({len(setup_name_by_model_id):,} setup names)")
     _wcid_types = load_json_dict(args.wcid_types_json)
     component_by_id, cells_by_lb_cell = load_component_cells(args.component_jsonl)
+    excluded_anchor_model_ids = parse_excluded_anchor_model_ids(args.exclude_anchor_model_id)
 
     raw_rows_by_guid: dict[int, dict] = {}
     support_rows: list[dict] = []
     prop_rows: list[dict] = []
     silver_rows: list[dict] = []
+    bronze_rows: list[dict] = []
     review_rows: list[dict] = []
     candidate_rows: list[dict] = []
     motif_rows: list[dict] = []
@@ -1279,6 +1540,7 @@ def main() -> None:
         "support_objects_emitted": 0,
         "supported_props_emitted": 0,
         "silver_props_emitted": 0,
+        "bronze_props_emitted": 0,
         "skipped_non_interior": 0,
         "skipped_non_wcid": 0,
         "skipped_non_instance": 0,
@@ -1324,6 +1586,7 @@ def main() -> None:
     support_cache: dict[int, tuple[str | None, float, str, dict | None, dict | None]] = {}
     prop_cache: dict[int, tuple[str | None, float, str, dict | None, dict | None]] = {}
     supports_by_scene: dict[tuple[int, int, str, int | None], list[tuple[int, dict, str | None, float, str, dict | None, dict | None]]] = {}
+    candidate_prop_rows: list[dict] = []
 
     for idx, (guid, row) in enumerate(raw_rows_by_guid.items(), start=1):
         wcid = int(row.get("wcid") or row.get("classId") or 0)
@@ -1342,6 +1605,8 @@ def main() -> None:
         cell_num = parse_hexish(row.get("cellId"))
         cell_info = cells_by_lb_cell.get((int(row["landblockX"]), int(row["landblockY"]), cell_num or -1))
         component_info = component_by_id.get(int(row["envCellComponentId"])) if row.get("envCellComponentId") is not None else None
+        if component_excluded(component_info, excluded_anchor_model_ids):
+            continue
 
         if support_class is not None:
             support_rows.append(
@@ -1361,26 +1626,31 @@ def main() -> None:
         if idx % 100000 == 0:
             print(f"  Support classification rows processed: {idx:,}")
 
+        if prop_class is not None:
+            candidate_prop_rows.append(row)
+
     print("  Building static support candidates from envcell components")
     for component_info in component_by_id.values():
         pass
+    static_prop_ordinal = 0
     for (landblock_x, landblock_y, cell_num), cell_info in cells_by_lb_cell.items():
+        component_info = cell_info.get("componentInfo")
+        if component_excluded(component_info, excluded_anchor_model_ids):
+            continue
         static_objects = cell_info.get("staticObjects") or []
         if not static_objects:
             continue
-        component_info = cell_info.get("componentInfo")
         for static_idx, static_obj in enumerate(static_objects, start=1):
             if static_obj.get("classIdSpace") != "model_id":
                 continue
             class_id = int(static_obj.get("classId") or 0)
             setup_name = setup_name_by_model_id.get(class_id)
-            if not setup_name:
-                continue
-            support_class, support_conf, support_mode = classify_static_support_name(setup_name)
+            support_class, support_conf, support_mode = classify_static_support_object(setup_name, static_obj)
             if support_class is None:
                 continue
             row = {
                 "guid": None,
+                "sourceKind": "static_envcell_object",
                 "classIdSpace": "model_id",
                 "classId": class_id,
                 "wcid": None,
@@ -1423,14 +1693,69 @@ def main() -> None:
             stats["support_class_counts"][support_class] += 1
             stats["support_inference_mode_counts"][support_mode] += 1
 
-    for idx, (guid, row) in enumerate(raw_rows_by_guid.items(), start=1):
-        prop_class, prop_conf, prop_mode, prop_grounding, _canonical_entry = prop_cache[guid]
+        for static_idx, static_obj in enumerate(static_objects, start=1):
+            if static_obj.get("classIdSpace") != "model_id":
+                continue
+            class_id = int(static_obj.get("classId") or 0)
+            setup_name = setup_name_by_model_id.get(class_id)
+            if not setup_name:
+                setup_name = ""
+            support_class, _, _ = classify_static_support_object(setup_name, static_obj)
+            if support_class is not None:
+                continue
+            prop_class, prop_conf, prop_mode = classify_static_prop_name(setup_name, static_obj.get("aabbLocal"))
+            if prop_class is None:
+                continue
+            static_prop_ordinal += 1
+            synthetic_guid = synthetic_static_guid(
+                component_info.get("componentId") if component_info else None,
+                cell_num,
+                static_prop_ordinal,
+            )
+            row = {
+                "guid": synthetic_guid,
+                "syntheticGuid": synthetic_guid,
+                "sourceKind": "static_envcell_object",
+                "classIdSpace": "model_id",
+                "classId": class_id,
+                "wcid": None,
+                "weenieType": None,
+                "name": setup_name,
+                "landblockId": component_info.get("landblockId") if component_info else None,
+                "landblockX": landblock_x,
+                "landblockY": landblock_y,
+                "cellId": cell_info.get("cellNumber"),
+                "envCellComponentId": component_info.get("componentId") if component_info else None,
+                "envCellComponentKind": component_info.get("componentKind") if component_info else None,
+                "localX": float(static_obj.get("x", 0.0)),
+                "localY": float(static_obj.get("y", 0.0)),
+                "z": float(static_obj.get("z", 0.0)),
+                "qw": float(static_obj.get("qw", 1.0)),
+                "qx": float(static_obj.get("qx", 0.0)),
+                "qy": float(static_obj.get("qy", 0.0)),
+                "qz": float(static_obj.get("qz", 0.0)),
+                "yawDeg": static_obj.get("yawDeg"),
+                "aabbLocal": static_obj.get("aabbLocal"),
+                "supportSurfaceHints": static_obj.get("supportSurfaceHints"),
+            }
+            prop_cache[synthetic_guid] = (prop_class, prop_conf, prop_mode, None, None)
+            candidate_prop_rows.append(row)
+            stats["prop_class_counts"][prop_class] += 1
+            stats["prop_inference_mode_counts"][prop_mode] += 1
+
+    for idx, row in enumerate(candidate_prop_rows, start=1):
+        guid = int(row.get("guid") or row.get("syntheticGuid") or 0)
+        prop_class, prop_conf, prop_mode, prop_grounding, _canonical_entry = prop_cache.get(
+            guid, (None, 0.0, "missing", None, None)
+        )
         if prop_class is None:
             continue
 
         cell_num = parse_hexish(row.get("cellId"))
         cell_info = cells_by_lb_cell.get((int(row["landblockX"]), int(row["landblockY"]), cell_num or -1))
         component_info = component_by_id.get(int(row["envCellComponentId"])) if row.get("envCellComponentId") is not None else None
+        if component_excluded(component_info, excluded_anchor_model_ids):
+            continue
 
         parent_row = None
         parent_support_class = None
@@ -1438,7 +1763,7 @@ def main() -> None:
         parent_support_mode = "missing"
         parent_grounding = None
         parent_guids = row.get("parentGuids") or []
-        if len(parent_guids) == 1:
+        if row.get("sourceKind") != "static_envcell_object" and len(parent_guids) == 1:
             parent_guid = int(parent_guids[0])
             parent_row = raw_rows_by_guid.get(parent_guid)
             if parent_row is not None:
@@ -1499,6 +1824,7 @@ def main() -> None:
                     candidate["support_class"],
                     candidate["support_row"].get("name") or candidate["support_row"].get("className") or "",
                     candidate["support_mode"],
+                    candidate["withinSurfaceFootprint"],
                     candidate["horizontalDistance"],
                     candidate["dz"],
                     competing_parent_count,
@@ -1551,8 +1877,21 @@ def main() -> None:
         and row.get("supportRelation", {}).get("candidateTier") == "silver_static"
         and row.get("validation", {}).get("promotionEligible")
     ]
-    review_rows = [row for row in candidate_rows if row.get("supportRelation", {}).get("candidateRank") == 1]
+    bronze_rows = [
+        row
+        for row in candidate_rows
+        if row.get("supportRelation", {}).get("kind") == "geometry_candidate"
+        and str(row.get("supportRelation", {}).get("candidateTier", "")).startswith("bronze_")
+        and row.get("supportRelation", {}).get("candidateRank") == 1
+    ]
+    review_rows = [
+        row
+        for row in candidate_rows
+        if row.get("supportRelation", {}).get("candidateRank") == 1
+        and row.get("supportRelation", {}).get("candidateTier") == "review_only"
+    ]
     stats["silver_props_emitted"] = len(silver_rows)
+    stats["bronze_props_emitted"] = len(bronze_rows)
     stats["review_candidate_emitted"] = len(review_rows)
     stats["candidate_rows_emitted"] = len(candidate_rows)
     stats["candidate_tier_counts"] = Counter(
@@ -1570,6 +1909,7 @@ def main() -> None:
     write_jsonl(args.out_support_jsonl, support_rows)
     write_jsonl(args.out_prop_jsonl, prop_rows)
     write_jsonl(args.out_silver_jsonl, silver_rows)
+    write_jsonl(args.out_bronze_jsonl, bronze_rows)
     write_jsonl(args.out_review_jsonl, review_rows)
     write_jsonl(args.out_candidates_jsonl, candidate_rows)
     motif_rows = build_candidate_motif_rows(candidate_rows)
@@ -1603,6 +1943,7 @@ def main() -> None:
         "support_output_jsonl": str(args.out_support_jsonl),
         "gold_output_jsonl": str(args.out_prop_jsonl),
         "silver_output_jsonl": str(args.out_silver_jsonl),
+        "bronze_output_jsonl": str(args.out_bronze_jsonl),
         "review_output_jsonl": str(args.out_review_jsonl),
         "candidates_output_jsonl": str(args.out_candidates_jsonl),
         "motifs_output_jsonl": str(args.out_motifs_jsonl),
@@ -1616,6 +1957,7 @@ def main() -> None:
             "static_support_objects_emitted": stats["static_support_objects_emitted"],
             "gold_props_emitted": stats["supported_props_emitted"],
             "silver_props_emitted": stats["silver_props_emitted"],
+            "bronze_props_emitted": stats["bronze_props_emitted"],
             "review_candidate_emitted": stats["review_candidate_emitted"],
             "candidate_rows_emitted": stats["candidate_rows_emitted"],
             "motif_rows_emitted": stats["motif_rows_emitted"],
@@ -1643,7 +1985,7 @@ def main() -> None:
             "Supported-prop rows are rejected when the parent is in a different cell/component or when the prop sits below the parent plane.",
             "Review candidates are same-cell, same-component geometric nearest-support guesses and are not yet training-grade labels.",
             "Name hints are used, but hook classes are grounded directly by weenie type 56 and ACE enum-backed names.",
-            "Static DAT-only support furniture participates in weak parent inference, but only repeated semantic priors can promote geometric candidates into silver labels.",
+            "Static DAT-only support furniture now promotes strong same-cell geometry into silver and emits rank-1 bronze rows as a broader weak-supervision pool.",
             "Review packets group top-k candidate parents per prop and provide stable review keys for semi-automatic promotion.",
             "Bootstrap rows are emitted only when a review-decisions JSONL explicitly accepts a candidate or a prop-level review group.",
         ],
@@ -1656,6 +1998,7 @@ def main() -> None:
     print(f"  Support rows: {len(support_rows):,}")
     print(f"  Gold rows:    {len(prop_rows):,}")
     print(f"  Silver rows:  {len(silver_rows):,}")
+    print(f"  Bronze rows:  {len(bronze_rows):,}")
     print(f"  Review rows:  {len(review_rows):,}")
     print(f"  Candidate rows: {len(candidate_rows):,}")
     print(f"  Motif rows:   {len(motif_rows):,}")
@@ -1664,6 +2007,7 @@ def main() -> None:
     print(f"  Support JSONL: {args.out_support_jsonl}")
     print(f"  Gold JSONL:    {args.out_prop_jsonl}")
     print(f"  Silver JSONL:  {args.out_silver_jsonl}")
+    print(f"  Bronze JSONL:  {args.out_bronze_jsonl}")
     print(f"  Review JSONL:  {args.out_review_jsonl}")
     print(f"  Candidates JSONL: {args.out_candidates_jsonl}")
     print(f"  Motifs JSONL:  {args.out_motifs_jsonl}")
