@@ -6267,8 +6267,6 @@ public class CommandEngine {
         const float LANDBLOCK_SIZE = 192f;
         const float CELL_SIZE = 24f;
         const float SCENERY_EDGE_MARGIN = CELL_SIZE;   // Keep one cell of margin from landblock edges
-        const int EXCLUDED_TERRAIN_TYPE = 32;          // Codebook sentinel (legacy DAT marker, not a real terrain class)
-        const double APPROX_MATCH_DIST_SQ = 2500.0;    // RGB Euclidean² above this counts a vertex as a "fuzzy match"
 
         var rng = seed.HasValue ? new Random(seed.Value) : new Random();
 
@@ -6281,59 +6279,11 @@ public class CommandEngine {
                 $"Codebook not found: {biomeMapPath}");
         }
 
-        // Parse the codebook: extract base colors and height percentiles
-        var terrainBaseColors = new List<(int typeIndex, string name, int r, int g, int b)>();
-        var heightPercentiles = new Dictionary<int, byte[]>(); // typeIndex â†’ 101-entry percentile array
-        var heightMinMax = new Dictionary<int, (byte min, byte max)>(); // typeIndex â†’ (min, max) height
-
+        QuickWorldHelpers.Codebook codebook;
         try {
             var jsonText = File.ReadAllText(biomeMapPath);
-            using var jsonDoc = System.Text.Json.JsonDocument.Parse(jsonText);
-            var root = jsonDoc.RootElement;
-
-            // Parse terrainBaseColors
-            if (root.TryGetProperty("terrainBaseColors", out var colorsArray)) {
-                foreach (var c in colorsArray.EnumerateArray()) {
-                    int ti = c.GetProperty("typeIndex").GetInt32();
-                    if (ti < byte.MinValue || ti > byte.MaxValue) {
-                        Console.WriteLine($"[QuickWorld] Warning: skipping terrain type {ti} (outside byte range 0-255)");
-                        continue;
-                    }
-                    string tn = c.GetProperty("typeName").GetString() ?? $"Type{ti}";
-                    int r = c.GetProperty("baseR").GetInt32();
-                    int g = c.GetProperty("baseG").GetInt32();
-                    int b = c.GetProperty("baseB").GetInt32();
-                    terrainBaseColors.Add((ti, tn, r, g, b));
-                }
-            }
-
-            // Parse heightDistributions
-            if (root.TryGetProperty("heightDistributions", out var distArray)) {
-                foreach (var d in distArray.EnumerateArray()) {
-                    int ti = d.GetProperty("typeIndex").GetInt32();
-                    if (ti < byte.MinValue || ti > byte.MaxValue) {
-                        Console.WriteLine($"[QuickWorld] Warning: skipping height distribution for type {ti} (outside byte range 0-255)");
-                        continue;
-                    }
-                    var data = d.GetProperty("data");
-                    byte min = data.GetProperty("min").GetByte();
-                    byte max = data.GetProperty("max").GetByte();
-                    heightMinMax[ti] = (min, max);
-
-                    if (data.TryGetProperty("percentiles", out var pArr)) {
-                        if (pArr.ValueKind == System.Text.Json.JsonValueKind.String) {
-                            // Base64-encoded byte array
-                            var base64 = pArr.GetString()!;
-                            heightPercentiles[ti] = Convert.FromBase64String(base64);
-                        } else if (pArr.ValueKind == System.Text.Json.JsonValueKind.Array) {
-                            var pList = new List<byte>();
-                            foreach (var p in pArr.EnumerateArray())
-                                pList.Add(p.GetByte());
-                            heightPercentiles[ti] = pList.ToArray();
-                        }
-                    }
-                }
-            }
+            codebook = QuickWorldHelpers.ParseCodebook(jsonText,
+                warning => Console.WriteLine($"[QuickWorld] Warning: {warning}"));
         } catch (Exception ex) {
             sw.Stop();
             return new QuickWorldResult(false, 0, 0, 0, 0, 0,
@@ -6341,36 +6291,15 @@ public class CommandEngine {
                 $"Failed to parse codebook: {ex.Message}");
         }
 
-        if (terrainBaseColors.Count == 0) {
+        if (codebook.Colors.Count == 0) {
             sw.Stop();
             return new QuickWorldResult(false, 0, 0, 0, 0, 0,
                 new Dictionary<string, int>(), Math.Round(sw.Elapsed.TotalMilliseconds, 1),
                 "Codebook contains no terrain base colors");
         }
 
-        Console.WriteLine($"[QuickWorld] Codebook: {terrainBaseColors.Count} terrain types, " +
-                          $"{heightPercentiles.Count} height distributions");
-
-        byte EstimateHeightFromCodebook(int terrainType, double brightness01) {
-            int noise = rng.Next(-2, 3);
-
-            if (heightPercentiles.TryGetValue(terrainType, out var pArr) && pArr.Length > 0) {
-                int pIdx = pArr.Length == 101
-                    ? Math.Clamp((int)Math.Round(brightness01 * 100.0), 0, 100)
-                    : Math.Clamp((int)Math.Round(brightness01 * (pArr.Length - 1)), 0, pArr.Length - 1);
-                int sampled = pArr[pIdx];
-                return (byte)Math.Clamp(sampled + noise, 0, 255);
-            }
-
-            if (heightMinMax.TryGetValue(terrainType, out var minMax)) {
-                int span = minMax.max - minMax.min;
-                int baseH = minMax.min + (int)Math.Round(brightness01 * span);
-                return (byte)Math.Clamp(baseH + noise, 0, 255);
-            }
-
-            int fallback = (int)Math.Round(brightness01 * 255.0);
-            return (byte)Math.Clamp(fallback + noise, 0, 255);
-        }
+        Console.WriteLine($"[QuickWorld] Codebook: {codebook.Colors.Count} terrain types, " +
+                          $"{codebook.HeightPercentiles.Count} height distributions");
 
         // â”€â”€â”€ 2. Load world map image â”€â”€â”€
         Console.WriteLine($"[QuickWorld] Loading world map image: {worldMapImagePath}");
@@ -6419,19 +6348,15 @@ public class CommandEngine {
         int approximateMatches = 0;
         var terrainTypesCounted = new Dictionary<string, int>();
 
-        // Pre-compute base color array for fast nearest-color search
-        var baseColorArr = terrainBaseColors.ToArray();
-        var classificationColors = baseColorArr.Where(c => c.typeIndex != EXCLUDED_TERRAIN_TYPE).ToArray();
-        if (classificationColors.Length == 0) {
+        // Codebook already pre-computes the filtered classification list and typeIndex → name lookup.
+        var classificationColors = codebook.ClassificationColors;
+        if (classificationColors.Count == 0) {
             sw.Stop();
             return new QuickWorldResult(false, 0, 0, 0, 0, 0,
                 new Dictionary<string, int>(), Math.Round(sw.Elapsed.TotalMilliseconds, 1),
-                $"Codebook contains no usable terrain colors (all entries are excluded type {EXCLUDED_TERRAIN_TYPE})");
+                $"Codebook contains no usable terrain colors (all entries are excluded type {QuickWorldHelpers.EXCLUDED_TERRAIN_TYPE})");
         }
-
-        // Pre-compute typeIndex → name lookup so the per-landblock dominant-type lookup is O(1) and allocation-free.
-        var typeNameById = new Dictionary<int, string>(baseColorArr.Length);
-        foreach (var bc in baseColorArr) typeNameById[bc.typeIndex] = bc.name;
+        var typeNameById = codebook.NameByTypeIndex;
 
         // Collect ALL changes in memory before writing to avoid per-landblock I/O
         var allChanges = new Dictionary<ushort, Dictionary<byte, uint>>();
@@ -6441,7 +6366,7 @@ public class CommandEngine {
         var dominantTypes = new Dictionary<ushort, int>();
 
         // Reusable per-landblock buffer; .Clear() preserves capacity and avoids 65k+ Dictionary allocations.
-        var typeCounts = new Dictionary<int, int>(classificationColors.Length);
+        var typeCounts = new Dictionary<int, int>(classificationColors.Count);
 
         for (int lbX = 0; lbX < 255; lbX++) {
             for (int lbY = 0; lbY < 255; lbY++) {
@@ -6479,36 +6404,17 @@ public class CommandEngine {
                             var pixel = pixels[pixY * imgW + pixX];
                             int pr = pixel.Red, pg = pixel.Green, pb = pixel.Blue;
 
-                            // â”€â”€ Classify terrain type: nearest RGB distance â”€â”€
-                            int bestType = classificationColors[0].typeIndex;
-                            double bestDist = double.MaxValue;
-
-                            for (int t = 0; t < classificationColors.Length; t++) {
-                                double dr = pr - classificationColors[t].r;
-                                double dg = pg - classificationColors[t].g;
-                                double db = pb - classificationColors[t].b;
-                                double dist = dr * dr + dg * dg + db * db;
-
-                                if (dist < bestDist) {
-                                    bestDist = dist;
-                                    bestType = classificationColors[t].typeIndex;
-                                }
-                            }
-
-                            if (bestDist > APPROX_MATCH_DIST_SQ)
+                            int bestType = QuickWorldHelpers.ClassifyPixel(pr, pg, pb, classificationColors, out var bestDist);
+                            if (bestDist > QuickWorldHelpers.APPROX_MATCH_DIST_SQ)
                                 approximateMatches++;
 
                             typeCounts.TryGetValue(bestType, out var tc);
                             typeCounts[bestType] = tc + 1;
 
-                            // â”€â”€ Estimate height from brightness â”€â”€
-                            // Prefer terrain-specific codebook distributions (percentiles/min-max),
-                            // fall back to linear mapping if distribution data is unavailable.
-                            // Note: the ±2 jitter in EstimateHeightFromCodebook is applied per-vertex
-                            // independently, which can produce visible spikes between adjacent vertices.
-                            // Switching to a smoothed/low-frequency noise source is a known follow-up.
+                            // Note: ±2 jitter in EstimateHeight is per-vertex by design — switching
+                            // to a smoothed/low-frequency noise source is a known follow-up.
                             double brightness = (pr + pg + pb) / (3.0 * 255.0);
-                            byte heightIdx = EstimateHeightFromCodebook(bestType, brightness);
+                            byte heightIdx = QuickWorldHelpers.EstimateHeight(bestType, brightness, codebook, rng);
 
                             newEntries[vi] = currentData[vi] with {
                                 Height = heightIdx,
