@@ -367,6 +367,11 @@ public record EnrichCanonicalResult(
     string CanonicalPath,
     string? Error = null);
 
+public record EnrichUnifiedResult(
+    bool Success, int EntriesEnriched, int TotalEntries,
+    string UnifiedPath,
+    string? Error = null);
+
 public record ScanBuildingPlacementsResult(
     bool Success, int TotalBuildings, int UniqueSetupIds,
     int LandblocksWithBuildings, double ElapsedMs,

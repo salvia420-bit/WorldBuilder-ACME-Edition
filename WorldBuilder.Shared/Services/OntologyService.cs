@@ -1114,4 +1114,198 @@ public class OntologyService : IOntologyService {
         Console.WriteLine($"[Ontology] Canonical enrichment complete: {total} entries read, {matched} matched to ontology, {enriched} entries enriched");
         return enriched;
     }
+
+    /// <summary>
+    /// Enriches ontology entries from the unified ontology JSON
+    /// (scripts/build_unified_ontology.py). Applies name, types,
+    /// architecture, biome, behavior, creature family, geometry
+    /// category/scale, and the building/scenery DAT classification flags
+    /// — keyed by both setup_did and gfx_obj_id. Returns the number of
+    /// entries enriched.
+    /// </summary>
+    public int EnrichFromUnified(string unifiedOntologyJsonPath) {
+        if (!File.Exists(unifiedOntologyJsonPath))
+            throw new FileNotFoundException($"Unified ontology file not found: {unifiedOntologyJsonPath}");
+
+        var json = File.ReadAllText(unifiedOntologyJsonPath);
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        int enriched = 0;
+        int matched = 0;
+        int total = 0;
+
+        // ── Setup-keyed entries ─────────────────────────────
+        if (root.TryGetProperty("by_setup_did", out var setupMap)
+            && setupMap.ValueKind == System.Text.Json.JsonValueKind.Object) {
+            foreach (var prop in setupMap.EnumerateObject()) {
+                total++;
+                if (!uint.TryParse(prop.Name, out var setupDid)) continue;
+                if (!_entries.TryGetValue(setupDid, out var entry)) continue;
+                matched++;
+                if (ApplyUnifiedEntryToOntology(prop.Value, entry)) enriched++;
+            }
+        }
+
+        // ── GfxObj-keyed entries (Setup→Parts inheritance) ──
+        if (root.TryGetProperty("by_gfx_obj_id", out var gfxMap)
+            && gfxMap.ValueKind == System.Text.Json.JsonValueKind.Object) {
+            foreach (var prop in gfxMap.EnumerateObject()) {
+                total++;
+                if (!uint.TryParse(prop.Name, out var gfxId)) continue;
+                if (!_entries.TryGetValue(gfxId, out var entry)) continue;
+                matched++;
+                if (ApplyUnifiedEntryToOntology(prop.Value, entry)) enriched++;
+            }
+        }
+
+        if (root.TryGetProperty("stats", out var statsEl)
+            && statsEl.ValueKind == System.Text.Json.JsonValueKind.Object) {
+            Console.WriteLine("[Ontology] Unified ontology statistics:");
+            if (statsEl.TryGetProperty("setups", out var s)) {
+                if (s.TryGetProperty("total", out var t)) Console.WriteLine($"  Setups total:    {t.GetInt32():N0}");
+                if (s.TryGetProperty("named", out var n)) Console.WriteLine($"  Setups named:    {n.GetInt32():N0}");
+                if (s.TryGetProperty("resolved", out var r)) Console.WriteLine($"  Setups resolved: {r.GetInt32():N0}");
+            }
+            if (statsEl.TryGetProperty("gfx_objs", out var g)) {
+                if (g.TryGetProperty("total", out var t)) Console.WriteLine($"  GfxObjs total:    {t.GetInt32():N0}");
+                if (g.TryGetProperty("named", out var n)) Console.WriteLine($"  GfxObjs named:    {n.GetInt32():N0}");
+                if (g.TryGetProperty("resolved", out var r)) Console.WriteLine($"  GfxObjs resolved: {r.GetInt32():N0}");
+            }
+        }
+
+        Console.WriteLine($"[Ontology] Unified enrichment complete: {total} entries read, {matched} matched to ontology, {enriched} entries enriched");
+        return enriched;
+    }
+
+    private static bool ApplyUnifiedEntryToOntology(System.Text.Json.JsonElement el, Lib.OntologyEntry entry) {
+        bool changed = false;
+
+        // Name (fill if missing — never overwrite a manually curated one)
+        if (el.TryGetProperty("name", out var nameEl)
+            && nameEl.ValueKind == System.Text.Json.JsonValueKind.String) {
+            var name = nameEl.GetString();
+            if (!string.IsNullOrEmpty(name) && string.IsNullOrEmpty(entry.Name)) {
+                entry.Name = name;
+                changed = true;
+            }
+        }
+
+        // Architecture
+        if (el.TryGetProperty("architectures", out var archEl)
+            && archEl.ValueKind == System.Text.Json.JsonValueKind.Array) {
+            foreach (var a in archEl.EnumerateArray()) {
+                var s = a.GetString();
+                if (!string.IsNullOrEmpty(s)) { entry.Architecture = s; changed = true; break; }
+            }
+        }
+
+        // Biome
+        if (el.TryGetProperty("biomes", out var biomeEl)
+            && biomeEl.ValueKind == System.Text.Json.JsonValueKind.Array) {
+            var biomes = biomeEl.EnumerateArray()
+                .Select(b => b.GetString()!)
+                .Where(b => !string.IsNullOrEmpty(b))
+                .ToArray();
+            if (biomes.Length > 0) { entry.Biome = biomes; changed = true; }
+        }
+
+        // Behavior
+        if (el.TryGetProperty("behaviors", out var behEl)
+            && behEl.ValueKind == System.Text.Json.JsonValueKind.Array) {
+            foreach (var b in behEl.EnumerateArray()) {
+                var s = b.GetString();
+                if (!string.IsNullOrEmpty(s)) { entry.Behavior = s; changed = true; break; }
+            }
+        }
+
+        // Creature family
+        if (el.TryGetProperty("creature_families", out var cfEl)
+            && cfEl.ValueKind == System.Text.Json.JsonValueKind.Array) {
+            foreach (var c in cfEl.EnumerateArray()) {
+                var s = c.GetString();
+                if (!string.IsNullOrEmpty(s)) { entry.CreatureFamilyName = s; changed = true; break; }
+            }
+        }
+
+        // Category (prefer first explicit type, fall back to geom_category)
+        if (string.Equals(entry.Category, "Unknown", StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrEmpty(entry.Category)) {
+            if (el.TryGetProperty("types", out var typesEl)
+                && typesEl.ValueKind == System.Text.Json.JsonValueKind.Array) {
+                foreach (var t in typesEl.EnumerateArray()) {
+                    var s = t.GetString();
+                    if (!string.IsNullOrEmpty(s)) {
+                        entry.Category = s;
+                        if (string.IsNullOrEmpty(entry.ClassificationSource)
+                            || entry.ClassificationSource == "Heuristic")
+                            entry.ClassificationSource = "Unified";
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+            if ((string.IsNullOrEmpty(entry.Category) || entry.Category == "Unknown")
+                && el.TryGetProperty("geom_category", out var gcEl)
+                && gcEl.ValueKind == System.Text.Json.JsonValueKind.String) {
+                var s = gcEl.GetString();
+                if (!string.IsNullOrEmpty(s) && s != "Unknown") {
+                    entry.Category = s;
+                    changed = true;
+                }
+            }
+        }
+
+        // Scale (only fill if currently Unknown)
+        if (string.Equals(entry.Scale, "Unknown", StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrEmpty(entry.Scale)) {
+            if (el.TryGetProperty("geom_scale", out var gsEl)
+                && gsEl.ValueKind == System.Text.Json.JsonValueKind.String) {
+                var s = gsEl.GetString();
+                if (!string.IsNullOrEmpty(s) && s != "Unknown") {
+                    entry.Scale = s;
+                    changed = true;
+                }
+            }
+        }
+
+        // WeenieClassId (first wcid in the merged list, only if missing)
+        if (entry.WeenieClassId == null
+            && el.TryGetProperty("wcids", out var wcidsEl)
+            && wcidsEl.ValueKind == System.Text.Json.JsonValueKind.Array) {
+            foreach (var w in wcidsEl.EnumerateArray()) {
+                if (w.ValueKind == System.Text.Json.JsonValueKind.Number) {
+                    entry.WeenieClassId = w.GetInt32();
+                    changed = true;
+                    break;
+                }
+            }
+        }
+
+        // Building/scenery flags merged into Tags so keyword search picks them up
+        var tagsList = new List<string>(entry.Tags ?? Array.Empty<string>());
+        if (el.TryGetProperty("is_building", out var ibEl)
+            && ibEl.ValueKind == System.Text.Json.JsonValueKind.True
+            && !tagsList.Contains("dat:building")) {
+            tagsList.Add("dat:building"); changed = true;
+        }
+        if (el.TryGetProperty("is_scenery", out var isEl)
+            && isEl.ValueKind == System.Text.Json.JsonValueKind.True
+            && !tagsList.Contains("dat:scenery")) {
+            tagsList.Add("dat:scenery"); changed = true;
+        }
+        if (el.TryGetProperty("building_via_parent", out var bpEl)
+            && bpEl.ValueKind == System.Text.Json.JsonValueKind.True
+            && !tagsList.Contains("dat:building_inherited")) {
+            tagsList.Add("dat:building_inherited"); changed = true;
+        }
+        if (el.TryGetProperty("scenery_via_parent", out var spEl)
+            && spEl.ValueKind == System.Text.Json.JsonValueKind.True
+            && !tagsList.Contains("dat:scenery_inherited")) {
+            tagsList.Add("dat:scenery_inherited"); changed = true;
+        }
+        if (changed) entry.Tags = tagsList.Distinct().ToArray();
+
+        return changed;
+    }
 }

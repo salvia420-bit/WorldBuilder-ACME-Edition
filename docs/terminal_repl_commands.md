@@ -81,11 +81,22 @@ This is the full interactive REPL command catalog (as shown by `help`), grouped 
 
 ## Ontology Export & Enrichment
 - `export-ontology <outputPath>`
+- `export-setup-parts <outputPath>`
+- `export-classification-signals <outputPath>`
 - `mine-strings [outputPath] [filter]`
 - `enrich-ontology`
+- `enrich-unified <unified-ontology-json>`
 - `import-catalog <index.json>`
 - `classify-ontology`
 - `enrich-materials`
+
+The unified ontology pipeline is:
+
+1. `scan-ontology` — DAT geometry scan
+2. `export-setup-parts <outputPath>` — Setup → Parts (GfxObj) JSONL
+3. `export-classification-signals <outputPath>` — building/scenery model_id sets
+4. `python3 scripts/build_unified_ontology.py` — merges the above with `canonical_enrichment.json` and `ace_world_setup_names.json` into `pipeline_data/enrichment/unified_ontology.json`
+5. `enrich-unified pipeline_data/enrichment/unified_ontology.json` — applies the merged ontology to the live `OntologyService`
 
 ## LSD Data Ingestion
 - `ingest-weenies <lsd-path> [output]`

@@ -125,6 +125,7 @@ public class TerminalRepl {
             ["ingest-weenies"] = HandleIngestWeenies,
             ["enrich-weenies"] = HandleEnrichWeenies,
             ["enrich-canonical"] = HandleEnrichCanonical,
+            ["enrich-unified"] = HandleEnrichUnified,
             ["scan-building-placements"] = HandleScanBuildingPlacements,
             ["difficulty-gradient"] = HandleDifficultyGradient,
             ["apply-population"] = HandleApplyPopulation,
@@ -1447,6 +1448,7 @@ public class TerminalRepl {
         Console.WriteLine("  ingest-weenies <lsd-path> [output]             Batch-extract weenie data to summary");
         Console.WriteLine("  enrich-weenies <summary-path>                  Merge weenie data into live ontology");
         Console.WriteLine("  enrich-canonical <json-path>                   Merge canonical enrichment (arch/biome/behavior)");
+        Console.WriteLine("  enrich-unified <json-path>                     Merge unified ontology (full stack: canonical + ACE world + parts + DAT signals + geometry)");
         Console.WriteLine("  scan-building-placements [output]               Extract building positions for culture mapping");
         Console.WriteLine("  difficulty-gradient [json-path]                 Load & validate difficulty gradient");
         Console.WriteLine("  apply-population <plan-path> [--dry-run]        Apply population plan to world");
@@ -1815,6 +1817,31 @@ public class TerminalRepl {
         }
         Console.WriteLine();
         Console.WriteLine($"  â•â•â• Weenie Enrichment Complete â•â•â•");
+        Console.WriteLine($"  Entries enriched : {r.EntriesEnriched}");
+        Console.WriteLine($"  Total entries    : {r.TotalEntries}");
+        Console.WriteLine();
+    }
+
+    private void HandleEnrichUnified(string[] tokens) {
+        if (tokens.Length < 2) {
+            Console.WriteLine("Usage: enrich-unified <unified-ontology-json>");
+            Console.WriteLine("  Merges the unified ontology (canonical + ACE world DB +");
+            Console.WriteLine("  Setup→Parts inheritance + DAT building/scenery signals + geometry)");
+            Console.WriteLine("  produced by scripts/build_unified_ontology.py.");
+            Console.WriteLine("  Prerequisite: scan-ontology must be run first.");
+            Console.WriteLine("  Example: enrich-unified pipeline_data/enrichment/unified_ontology.json");
+            return;
+        }
+        Console.WriteLine($"Enriching ontology from unified data: {tokens[1]}");
+        var r = _engine.EnrichUnified(tokens[1]);
+        if (!r.Success) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Error: {r.Error}");
+            Console.ResetColor();
+            return;
+        }
+        Console.WriteLine();
+        Console.WriteLine($"  === Unified Enrichment Complete ===");
         Console.WriteLine($"  Entries enriched : {r.EntriesEnriched}");
         Console.WriteLine($"  Total entries    : {r.TotalEntries}");
         Console.WriteLine();

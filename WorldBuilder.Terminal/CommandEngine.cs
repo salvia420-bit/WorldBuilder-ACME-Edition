@@ -2299,6 +2299,25 @@ public class CommandEngine {
     }
 
     /// <summary>
+    /// Enriches the live ontology from unified_ontology.json (built by
+    /// scripts/build_unified_ontology.py). Applies the full ontology stack
+    /// — canonical + ACE world DB + Setup→Parts inheritance + DAT building/
+    /// scenery signals + geometry — keyed by both setup_did and gfx_obj_id.
+    /// </summary>
+    public EnrichUnifiedResult EnrichUnified(string unifiedJsonPath) {
+        if (!_ontologyService.IsScanned)
+            throw new InvalidOperationException(
+                "Ontology has not been scanned yet. Run 'scan-ontology' first.");
+
+        try {
+            int enriched = _ontologyService.EnrichFromUnified(unifiedJsonPath);
+            return new EnrichUnifiedResult(true, enriched, _ontologyService.Count, unifiedJsonPath);
+        } catch (Exception ex) {
+            return new EnrichUnifiedResult(false, 0, _ontologyService.Count, unifiedJsonPath, ex.Message);
+        }
+    }
+
+    /// <summary>
     /// Scans all 255Ã—255 retail landblocks from the DAT and extracts every building's
     /// Setup ID + world XY position. Writes building_placements.jsonl for the Python
     /// geocoder (scan_building_cultures.py) to map models to cultural architectures.

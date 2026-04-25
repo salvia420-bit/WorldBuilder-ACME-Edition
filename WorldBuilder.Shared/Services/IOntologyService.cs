@@ -93,4 +93,13 @@ public interface IOntologyService {
     /// Returns the number of entries enriched.
     /// </summary>
     int EnrichFromCanonical(string canonicalJsonPath);
+
+    /// <summary>
+    /// Enriches ontology entries from the unified ontology JSON produced by
+    /// scripts/build_unified_ontology.py. Applies the full ontology stack
+    /// (canonical + ACE world DB + Setup→Parts inheritance + DAT building/
+    /// scenery signals + geometry classification) in one pass, keyed by both
+    /// setup_did and gfx_obj_id. Returns the number of entries enriched.
+    /// </summary>
+    int EnrichFromUnified(string unifiedOntologyJsonPath);
 }

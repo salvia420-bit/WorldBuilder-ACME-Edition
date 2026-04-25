@@ -165,6 +165,7 @@ public class JsonCommandProcessor {
             ["ingest-weenies"] = CmdIngestWeenies,
             ["enrich-weenies"] = CmdEnrichWeenies,
             ["enrich-canonical"] = CmdEnrichCanonical,
+            ["enrich-unified"] = CmdEnrichUnified,
             ["scan-building-placements"] = CmdScanBuildingPlacements,
             ["difficulty-gradient"] = CmdDifficultyGradient,
             ["apply-population"] = CmdApplyPopulation,
@@ -807,6 +808,7 @@ public class JsonCommandProcessor {
             new { name = "ingest-weenies",  args = "lsdPath, outputPath?",                     description = "Batch-extract weenie data to summary file" },
             new { name = "enrich-weenies",  args = "summaryPath",                               description = "Merge weenie data into live ontology" },
             new { name = "enrich-canonical", args = "path",                                      description = "Merge canonical enrichment (architecture, biome, behavior)" },
+            new { name = "enrich-unified",   args = "path",                                      description = "Merge unified ontology (canonical + ACE world + Setup->Parts + DAT signals + geometry)" },
             new { name = "scan-building-placements", args = "outputPath?",                         description = "Extract building positions for culture mapping" },
             new { name = "difficulty-gradient", args = "gradientPath?",                             description = "Load & validate difficulty gradient" },
             new { name = "apply-population", args = "planPath, dryRun?",                            description = "Apply population plan to world" },
@@ -998,6 +1000,18 @@ public class JsonCommandProcessor {
         return Serialize(new { success = r.Success, command = "enrich-weenies",
             entriesEnriched = r.EntriesEnriched, totalEntries = r.TotalEntries,
             error = r.Error });
+    }
+
+    private string CmdEnrichUnified(System.Text.Json.Nodes.JsonNode node) {
+        var path = node["path"]?.GetValue<string>()
+            ?? node["unifiedJsonPath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'path' field");
+        var r = _engine.EnrichUnified(path);
+        return Serialize(new {
+            success = r.Success, command = "enrich-unified",
+            entriesEnriched = r.EntriesEnriched, totalEntries = r.TotalEntries,
+            unifiedPath = r.UnifiedPath, error = r.Error,
+        });
     }
 
     private string CmdEnrichCanonical(System.Text.Json.Nodes.JsonNode node) {
