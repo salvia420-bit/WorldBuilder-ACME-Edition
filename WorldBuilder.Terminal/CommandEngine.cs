@@ -6257,18 +6257,26 @@ public class CommandEngine {
     /// Other sizes are bilinearly scaled to match the vertex grid.
     /// </summary>
     public QuickWorldResult QuickWorld(string biomeMapPath, string worldMapImagePath,
-        int seed = 0) {
+        int? seed = null) {
         RequireProject();
         var sw = new System.Diagnostics.Stopwatch();
         sw.Start();
 
-        var rng = seed != 0 ? new Random(seed) : new Random();
+        // Magic numbers from this method, hoisted to named constants.
+        const int VERTEX_GRID = 2041;                  // 255 landblocks × 8 cells + 1 edge pixel
+        const float LANDBLOCK_SIZE = 192f;
+        const float CELL_SIZE = 24f;
+        const float SCENERY_EDGE_MARGIN = CELL_SIZE;   // Keep one cell of margin from landblock edges
+        const int EXCLUDED_TERRAIN_TYPE = 32;          // Codebook sentinel (legacy DAT marker, not a real terrain class)
+        const double APPROX_MATCH_DIST_SQ = 2500.0;    // RGB Euclidean² above this counts a vertex as a "fuzzy match"
+
+        var rng = seed.HasValue ? new Random(seed.Value) : new Random();
 
         // â”€â”€â”€ 1. Load codebook (terrain_codebook.json) â”€â”€â”€
         Console.WriteLine($"[QuickWorld] Loading codebook: {biomeMapPath}");
         if (!File.Exists(biomeMapPath)) {
             sw.Stop();
-            return new QuickWorldResult(false, 0, 0, 0, 0,
+            return new QuickWorldResult(false, 0, 0, 0, 0, 0,
                 new Dictionary<string, int>(), Math.Round(sw.Elapsed.TotalMilliseconds, 1),
                 $"Codebook not found: {biomeMapPath}");
         }
@@ -6303,6 +6311,10 @@ public class CommandEngine {
             if (root.TryGetProperty("heightDistributions", out var distArray)) {
                 foreach (var d in distArray.EnumerateArray()) {
                     int ti = d.GetProperty("typeIndex").GetInt32();
+                    if (ti < byte.MinValue || ti > byte.MaxValue) {
+                        Console.WriteLine($"[QuickWorld] Warning: skipping height distribution for type {ti} (outside byte range 0-255)");
+                        continue;
+                    }
                     var data = d.GetProperty("data");
                     byte min = data.GetProperty("min").GetByte();
                     byte max = data.GetProperty("max").GetByte();
@@ -6324,14 +6336,14 @@ public class CommandEngine {
             }
         } catch (Exception ex) {
             sw.Stop();
-            return new QuickWorldResult(false, 0, 0, 0, 0,
+            return new QuickWorldResult(false, 0, 0, 0, 0, 0,
                 new Dictionary<string, int>(), Math.Round(sw.Elapsed.TotalMilliseconds, 1),
                 $"Failed to parse codebook: {ex.Message}");
         }
 
         if (terrainBaseColors.Count == 0) {
             sw.Stop();
-            return new QuickWorldResult(false, 0, 0, 0, 0,
+            return new QuickWorldResult(false, 0, 0, 0, 0, 0,
                 new Dictionary<string, int>(), Math.Round(sw.Elapsed.TotalMilliseconds, 1),
                 "Codebook contains no terrain base colors");
         }
@@ -6364,29 +6376,32 @@ public class CommandEngine {
         Console.WriteLine($"[QuickWorld] Loading world map image: {worldMapImagePath}");
         if (!File.Exists(worldMapImagePath)) {
             sw.Stop();
-            return new QuickWorldResult(false, 0, 0, 0, 0,
+            return new QuickWorldResult(false, 0, 0, 0, 0, 0,
                 new Dictionary<string, int>(), Math.Round(sw.Elapsed.TotalMilliseconds, 1),
                 $"World map image not found: {worldMapImagePath}");
         }
 
-        SkiaSharp.SKBitmap? bitmap;
+        // Read all pixels into a managed array up front: SKBitmap.GetPixel is a per-call native
+        // interop hop (~5.3M calls in the loop below), whereas Pixels copies once and lets us
+        // index directly. After this block we no longer need the bitmap.
+        SkiaSharp.SKColor[] pixels;
         int imgW, imgH;
         try {
-            var imgData = SkiaSharp.SKData.Create(worldMapImagePath);
-            bitmap = SkiaSharp.SKBitmap.Decode(imgData);
+            using var imgData = SkiaSharp.SKData.Create(worldMapImagePath);
+            using var bitmap = SkiaSharp.SKBitmap.Decode(imgData);
             if (bitmap == null) throw new Exception("Failed to decode image");
             imgW = bitmap.Width;
             imgH = bitmap.Height;
+            pixels = bitmap.Pixels;
         } catch (Exception ex) {
             sw.Stop();
-            return new QuickWorldResult(false, 0, 0, 0, 0,
+            return new QuickWorldResult(false, 0, 0, 0, 0, 0,
                 new Dictionary<string, int>(), Math.Round(sw.Elapsed.TotalMilliseconds, 1),
                 $"Failed to load image: {ex.Message}");
         }
 
         // The AC world map is 2041 pixels (255*8+1) â€” one pixel per terrain vertex.
-        // Scale factor for non-standard image sizes:
-        const int VERTEX_GRID = 2041; // 255 landblocks Ã— 8 cells + 1 edge pixel
+        // Scale factor for non-standard image sizes (VERTEX_GRID is declared at the top of the method):
         double scaleX = (double)imgW / VERTEX_GRID;
         double scaleY = (double)imgH / VERTEX_GRID;
         bool isExact = (imgW == VERTEX_GRID && imgH == VERTEX_GRID);
@@ -6406,13 +6421,17 @@ public class CommandEngine {
 
         // Pre-compute base color array for fast nearest-color search
         var baseColorArr = terrainBaseColors.ToArray();
-        var classificationColors = baseColorArr.Where(c => c.typeIndex != 32).ToArray();
+        var classificationColors = baseColorArr.Where(c => c.typeIndex != EXCLUDED_TERRAIN_TYPE).ToArray();
         if (classificationColors.Length == 0) {
             sw.Stop();
-            return new QuickWorldResult(false, 0, 0, 0, 0,
+            return new QuickWorldResult(false, 0, 0, 0, 0, 0,
                 new Dictionary<string, int>(), Math.Round(sw.Elapsed.TotalMilliseconds, 1),
-                "Codebook contains no usable terrain colors (all entries are excluded type 32)");
+                $"Codebook contains no usable terrain colors (all entries are excluded type {EXCLUDED_TERRAIN_TYPE})");
         }
+
+        // Pre-compute typeIndex → name lookup so the per-landblock dominant-type lookup is O(1) and allocation-free.
+        var typeNameById = new Dictionary<int, string>(baseColorArr.Length);
+        foreach (var bc in baseColorArr) typeNameById[bc.typeIndex] = bc.name;
 
         // Collect ALL changes in memory before writing to avoid per-landblock I/O
         var allChanges = new Dictionary<ushort, Dictionary<byte, uint>>();
@@ -6420,6 +6439,9 @@ public class CommandEngine {
         var newEntriesMap = new Dictionary<ushort, TerrainEntry[]>();
         // Track dominant types per landblock for scenery
         var dominantTypes = new Dictionary<ushort, int>();
+
+        // Reusable per-landblock buffer; .Clear() preserves capacity and avoids 65k+ Dictionary allocations.
+        var typeCounts = new Dictionary<int, int>(classificationColors.Length);
 
         for (int lbX = 0; lbX < 255; lbX++) {
             for (int lbY = 0; lbY < 255; lbY++) {
@@ -6435,7 +6457,7 @@ public class CommandEngine {
 
                     // â”€â”€â”€ Per-vertex terrain reconstruction â”€â”€â”€
                     int dominantType = -1;
-                    var typeCounts = new Dictionary<int, int>();
+                    typeCounts.Clear();
 
                     for (int vx = 0; vx < 9; vx++) {
                         for (int vy = 0; vy < 9; vy++) {
@@ -6454,7 +6476,7 @@ public class CommandEngine {
                             pixX = Math.Clamp(pixX, 0, imgW - 1);
                             pixY = Math.Clamp(pixY, 0, imgH - 1);
 
-                            var pixel = bitmap.GetPixel(pixX, pixY);
+                            var pixel = pixels[pixY * imgW + pixX];
                             int pr = pixel.Red, pg = pixel.Green, pb = pixel.Blue;
 
                             // â”€â”€ Classify terrain type: nearest RGB distance â”€â”€
@@ -6473,7 +6495,7 @@ public class CommandEngine {
                                 }
                             }
 
-                            if (bestDist > 2500)
+                            if (bestDist > APPROX_MATCH_DIST_SQ)
                                 approximateMatches++;
 
                             typeCounts.TryGetValue(bestType, out var tc);
@@ -6482,6 +6504,9 @@ public class CommandEngine {
                             // â”€â”€ Estimate height from brightness â”€â”€
                             // Prefer terrain-specific codebook distributions (percentiles/min-max),
                             // fall back to linear mapping if distribution data is unavailable.
+                            // Note: the ±2 jitter in EstimateHeightFromCodebook is applied per-vertex
+                            // independently, which can produce visible spikes between adjacent vertices.
+                            // Switching to a smoothed/low-frequency noise source is a known follow-up.
                             double brightness = (pr + pg + pb) / (3.0 * 255.0);
                             byte heightIdx = EstimateHeightFromCodebook(bestType, brightness);
 
@@ -6512,7 +6537,7 @@ public class CommandEngine {
                         if (cnt > maxCount) { maxCount = cnt; dominantType = tt; }
                     }
                     dominantTypes[lbKey] = dominantType;
-                    string typeName = baseColorArr.FirstOrDefault(bc => bc.typeIndex == dominantType).name ?? $"Type{dominantType}";
+                    string typeName = typeNameById.TryGetValue(dominantType, out var n) ? n : $"Type{dominantType}";
                     terrainTypesCounted.TryGetValue(typeName, out var existing);
                     terrainTypesCounted[typeName] = existing + 1;
 
@@ -6523,12 +6548,10 @@ public class CommandEngine {
                 }
             }
 
-            if (lbX % 20 == 0 && lbX > 0)
+            if (lbX % 20 == 0)
                 Console.WriteLine($"[QuickWorld] ...computed row {lbX}/254, {stamped} landblocks, " +
                                   $"{approximateMatches} approximate matches");
         }
-
-        bitmap?.Dispose();
 
         Console.WriteLine($"[QuickWorld] Phase 1 complete: {allChanges.Count} landblocks with changes computed in memory.");
 
@@ -6538,6 +6561,8 @@ public class CommandEngine {
         Console.WriteLine($"[QuickWorld] Phase 2 complete: terrain written.");
 
         // â”€â”€â”€ 5. Scatter scenery objects â”€â”€â”€
+        // FIXME: scenery model IDs are hardcoded retail object IDs. This contradicts the
+        // codebook abstraction; should be loaded from ontology or appended to terrain_codebook.json.
         Console.WriteLine($"[QuickWorld] Phase 3: Scattering scenery objects...");
         var sceneryByType = new Dictionary<int, uint[]> {
             [0x03] = new uint[] { 0x02000B53, 0x02000B57, 0x02000BE0, 0x02000BDE, 0x02000B5B }, // LushGrass
@@ -6550,6 +6575,10 @@ public class CommandEngine {
             [0x06] = new uint[] { 0x02000B95, 0x02000B97 },                                       // ObsidianPlain
         };
 
+        // [0, LANDBLOCK_SIZE - 2*SCENERY_EDGE_MARGIN) range for the random offset, centered with the margin.
+        const float SCENERY_RANGE = LANDBLOCK_SIZE - 2 * SCENERY_EDGE_MARGIN;
+        int sceneryFailures = 0;
+
         foreach (var (lbKey, entries) in newEntriesMap) {
             if (!dominantTypes.TryGetValue(lbKey, out var domType)) continue;
             if (!sceneryByType.TryGetValue(domType, out var models) || models.Length == 0) continue;
@@ -6559,17 +6588,20 @@ public class CommandEngine {
 
             try {
                 int numScenery = rng.Next(1, 5);
-                float worldMinX = lbX * 192f;
-                float worldMinY = lbY * 192f;
+                float worldMinX = lbX * LANDBLOCK_SIZE;
+                float worldMinY = lbY * LANDBLOCK_SIZE;
 
                 var lbDoc = GetLandblockDoc(lbKey);
                 for (int s = 0; s < numScenery; s++) {
                     uint modelId = models[rng.Next(models.Length)];
-                    float ox = worldMinX + 24f + (float)rng.NextDouble() * 144f;
-                    float oy = worldMinY + 24f + (float)rng.NextDouble() * 144f;
+                    float ox = worldMinX + SCENERY_EDGE_MARGIN + (float)rng.NextDouble() * SCENERY_RANGE;
+                    float oy = worldMinY + SCENERY_EDGE_MARGIN + (float)rng.NextDouble() * SCENERY_RANGE;
 
-                    int gx = Math.Clamp((int)((ox - worldMinX) / 24f), 0, 8);
-                    int gy = Math.Clamp((int)((oy - worldMinY) / 24f), 0, 8);
+                    // ox-worldMinX is in [SCENERY_EDGE_MARGIN, LANDBLOCK_SIZE - SCENERY_EDGE_MARGIN);
+                    // dividing by CELL_SIZE gives [1, 7) so the resulting vertex index is always
+                    // valid â€” the clamp is purely defensive against floating-point rounding at the edges.
+                    int gx = Math.Clamp((int)((ox - worldMinX) / CELL_SIZE), 0, 8);
+                    int gy = Math.Clamp((int)((oy - worldMinY) / CELL_SIZE), 0, 8);
                     int vi = gx * 9 + gy;
                     float z = GetHeightTable()[entries[vi].Height];
 
@@ -6584,17 +6616,25 @@ public class CommandEngine {
                     lbDoc.AddStaticObject(obj);
                     objectsPlaced++;
                 }
-            } catch { /* non-fatal */ }
+            } catch (Exception ex) when (ex is not OutOfMemoryException && ex is not StackOverflowException) {
+                sceneryFailures++;
+                if (sceneryFailures <= 3)
+                    Console.WriteLine($"[QuickWorld] Warning: scenery scatter failed for ({lbX},{lbY}): {ex.Message}");
+            }
         }
+
+        if (sceneryFailures > 3)
+            Console.WriteLine($"[QuickWorld] Warning: {sceneryFailures - 3} additional scenery-scatter failures (suppressed).");
 
         sw.Stop();
         double elapsedMs = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
         Console.WriteLine($"[QuickWorld] Complete: {stamped} stamped, " +
                           $"{skipped} skipped, {objectsPlaced} objects, " +
-                          $"{approximateMatches} approximate color matches, {elapsedMs}ms");
+                          $"{approximateMatches} approximate color matches, " +
+                          $"{sceneryFailures} scenery failures, {elapsedMs}ms");
 
         return new QuickWorldResult(true, stamped, skipped, objectsPlaced,
-            0, terrainTypesCounted, elapsedMs);
+            approximateMatches, sceneryFailures, terrainTypesCounted, elapsedMs);
     }
 
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•

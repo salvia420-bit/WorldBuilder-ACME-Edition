@@ -608,8 +608,9 @@ public record QuickWorldResult(
     int LandblocksStamped,
     int LandblocksSkipped,
     int ObjectsPlaced,
-    int HeightmapPoolSize,
-    Dictionary<string, int> BiomesStamped,
+    int ApproximateColorMatches,
+    int SceneryFailures,
+    Dictionary<string, int> TerrainTypesStamped,
     double ElapsedMs,
     string? Error = null);
 

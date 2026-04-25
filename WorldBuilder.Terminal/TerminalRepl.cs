@@ -2884,8 +2884,11 @@ public class TerminalRepl {
 
         string codebookPath = tokens[1];
         string worldMapPath = tokens[2];
-        int seed = 0;
-        if (tokens.Length >= 4 && !TryParseInt(tokens[3], "seed", out seed)) return;
+        int? seed = null;
+        if (tokens.Length >= 4) {
+            if (!TryParseInt(tokens[3], "seed", out var s)) return;
+            seed = s;
+        }
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Cyan;
@@ -2893,7 +2896,7 @@ public class TerminalRepl {
         Console.ResetColor();
         Console.WriteLine($"  Codebook:   {codebookPath}");
         Console.WriteLine($"  World map:  {worldMapPath}");
-        Console.WriteLine($"  Seed:       {seed}");
+        Console.WriteLine($"  Seed:       {(seed.HasValue ? seed.Value.ToString() : "(non-deterministic)")}");
         Console.WriteLine();
 
         var r = _engine.QuickWorld(codebookPath, worldMapPath, seed);
@@ -2908,17 +2911,19 @@ public class TerminalRepl {
             Console.ResetColor();
         }
 
-        Console.WriteLine($"  Landblocks stamped : {r.LandblocksStamped:N0}");
-        Console.WriteLine($"  Landblocks skipped : {r.LandblocksSkipped:N0}");
-        Console.WriteLine($"  Objects placed     : {r.ObjectsPlaced:N0}");
-        Console.WriteLine($"  Elapsed            : {r.ElapsedMs:F0} ms ({r.ElapsedMs / 1000.0:F1} sec)");
+        Console.WriteLine($"  Landblocks stamped     : {r.LandblocksStamped:N0}");
+        Console.WriteLine($"  Landblocks skipped     : {r.LandblocksSkipped:N0}");
+        Console.WriteLine($"  Objects placed         : {r.ObjectsPlaced:N0}");
+        Console.WriteLine($"  Approximate matches    : {r.ApproximateColorMatches:N0}");
+        Console.WriteLine($"  Scenery failures       : {r.SceneryFailures:N0}");
+        Console.WriteLine($"  Elapsed                : {r.ElapsedMs:F0} ms ({r.ElapsedMs / 1000.0:F1} sec)");
         Console.WriteLine();
 
-        if (r.BiomesStamped.Count > 0) {
+        if (r.TerrainTypesStamped.Count > 0) {
             Console.ForegroundColor = ConsoleColor.White;
             Console.WriteLine("  Terrain Type Distribution:");
             Console.ResetColor();
-            foreach (var kv in r.BiomesStamped.OrderByDescending(kv => kv.Value)) {
+            foreach (var kv in r.TerrainTypesStamped.OrderByDescending(kv => kv.Value)) {
                 double pct = r.LandblocksStamped > 0 ? 100.0 * kv.Value / r.LandblocksStamped : 0;
                 Console.WriteLine($"    {kv.Key,-24} : {kv.Value,6}  ({pct:F1}%)");
             }
