@@ -1693,6 +1693,90 @@ public class CommandEngine {
     private static string Csv(string? val) =>
         val == null ? "" : val.Contains(',') || val.Contains('"') ? $"\"{val.Replace("\"", "\"\"")}\"" : val;
 
+    public ExportClassificationSignalsResult ExportClassificationSignals(string outputPath) {
+        RequireProject();
+        var dats = _projectManager.CurrentProject!.DocumentManager.Dats;
+
+        var buildingIds = new HashSet<uint>();
+        int lbiScanned = 0;
+        try {
+            var allLbiIds = dats.Dats.Cell.GetAllIdsOfType<LandBlockInfo>().ToArray();
+            if (allLbiIds.Length == 0) {
+                for (uint x = 0; x < 255; x++) {
+                    for (uint y = 0; y < 255; y++) {
+                        var infoId = (uint)(((x << 8) | y) << 16 | 0xFFFE);
+                        if (dats.TryGet<LandBlockInfo>(infoId, out var lbi)) {
+                            lbiScanned++;
+                            foreach (var b in lbi.Buildings) buildingIds.Add(b.ModelId);
+                        }
+                    }
+                }
+            } else {
+                foreach (var infoId in allLbiIds) {
+                    if (dats.TryGet<LandBlockInfo>(infoId, out var lbi)) {
+                        lbiScanned++;
+                        foreach (var b in lbi.Buildings) buildingIds.Add(b.ModelId);
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            return new ExportClassificationSignalsResult(false, 0, lbiScanned, 0, 0, outputPath, ex.Message);
+        }
+
+        var scenerySetupIds = new HashSet<uint>();
+        int scenesScanned = 0;
+        try {
+            var sceneIds = dats.Dats.Portal.GetAllIdsOfType<Scene>().ToArray();
+            foreach (var sceneId in sceneIds) {
+                if (dats.TryGet<Scene>(sceneId, out var scene)) {
+                    scenesScanned++;
+                    foreach (var obj in scene.Objects) scenerySetupIds.Add(obj.ObjectId);
+                }
+            }
+        } catch (Exception ex) {
+            return new ExportClassificationSignalsResult(false, buildingIds.Count, lbiScanned, 0, scenesScanned, outputPath, ex.Message);
+        }
+
+        var dir = Path.GetDirectoryName(outputPath);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+        using (var w = new StreamWriter(outputPath, false, System.Text.Encoding.UTF8)) {
+            w.Write("{\"buildingCount\":");
+            w.Write(buildingIds.Count);
+            w.Write(",\"landBlockInfoScanned\":");
+            w.Write(lbiScanned);
+            w.Write(",\"sceneryCount\":");
+            w.Write(scenerySetupIds.Count);
+            w.Write(",\"scenesScanned\":");
+            w.Write(scenesScanned);
+
+            w.Write(",\"buildingModelIds\":[");
+            bool first = true;
+            foreach (var id in buildingIds.OrderBy(i => i)) {
+                if (!first) w.Write(',');
+                first = false;
+                w.Write("\"0x");
+                w.Write(id.ToString("X8"));
+                w.Write('"');
+            }
+            w.Write("]");
+
+            w.Write(",\"scenerySetupIds\":[");
+            first = true;
+            foreach (var id in scenerySetupIds.OrderBy(i => i)) {
+                if (!first) w.Write(',');
+                first = false;
+                w.Write("\"0x");
+                w.Write(id.ToString("X8"));
+                w.Write('"');
+            }
+            w.Write("]}");
+        }
+
+        return new ExportClassificationSignalsResult(true,
+            buildingIds.Count, lbiScanned, scenerySetupIds.Count, scenesScanned, outputPath);
+    }
+
     public ExportSetupPartsResult ExportSetupParts(string outputPath) {
         RequireProject();
         var dats = _projectManager.CurrentProject!.DocumentManager.Dats;

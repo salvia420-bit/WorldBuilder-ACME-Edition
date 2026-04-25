@@ -236,6 +236,16 @@ public record ExportSetupPartsResult(
     int TotalParts, int UniqueParts, string OutputPath,
     string? Error = null);
 
+// ── Classification Signals Export ────────────────────────
+public record ExportClassificationSignalsResult(
+    bool Success,
+    int BuildingModelCount,
+    int LandBlockInfoScanned,
+    int ScenerySetupCount,
+    int ScenesScanned,
+    string OutputPath,
+    string? Error = null);
+
 // ── StringTable Mining ───────────────────────────────────
 public record StringTableEntry(uint Hash, string Text, string TableType);
 

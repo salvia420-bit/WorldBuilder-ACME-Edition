@@ -116,6 +116,7 @@ public class TerminalRepl {
             ["defragment-dat"] = HandleDefragmentDat,
             ["export-ontology"] = HandleExportOntology,
             ["export-setup-parts"] = HandleExportSetupParts,
+            ["export-classification-signals"] = HandleExportClassificationSignals,
             ["mine-strings"] = HandleMineStrings,
             ["enrich-ontology"] = _ => HandleEnrichOntology(),
             ["import-catalog"] = HandleImportCatalog,
@@ -1432,6 +1433,7 @@ public class TerminalRepl {
         Console.ResetColor();
         Console.WriteLine("  export-ontology <outputPath>                   Export ontology to CSV");
         Console.WriteLine("  export-setup-parts <outputPath>                Export Setup -> Parts (GfxObj) JSONL");
+        Console.WriteLine("  export-classification-signals <outputPath>     Export building/scenery setup IDs (JSON)");
         Console.WriteLine("  mine-strings [outputPath] [filter]             Extract DAT StringTable strings");
         Console.WriteLine("  enrich-ontology                                Enrich ontology with schema data");
         Console.WriteLine("  import-catalog <index.json>                    Import ACViewer catalog into ontology");
@@ -1645,6 +1647,18 @@ public class TerminalRepl {
             return;
         }
         Console.WriteLine($"Exported {r.SetupsExported}/{r.SetupsScanned} setups, {r.TotalParts} parts ({r.UniqueParts} unique GfxObj ids) to {r.OutputPath}");
+    }
+
+    private void HandleExportClassificationSignals(string[] tokens) {
+        if (tokens.Length < 2) { Console.WriteLine("Usage: export-classification-signals <outputPath>"); return; }
+        var r = _engine.ExportClassificationSignals(tokens[1]);
+        if (!r.Success) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Failed: {r.Error}");
+            Console.ResetColor();
+            return;
+        }
+        Console.WriteLine($"Exported {r.BuildingModelCount} building model ids ({r.LandBlockInfoScanned} LBI scanned), {r.ScenerySetupCount} scenery setup ids ({r.ScenesScanned} scenes scanned) to {r.OutputPath}");
     }
 
     private void HandleMineStrings(string[] tokens) {
