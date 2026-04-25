@@ -230,6 +230,12 @@ public record DefragmentDatResult(
 public record ExportOntologyResult(
     bool Success, int EntriesExported, string OutputPath);
 
+// ── Setup → Parts Export ─────────────────────────────────
+public record ExportSetupPartsResult(
+    bool Success, int SetupsScanned, int SetupsExported,
+    int TotalParts, int UniqueParts, string OutputPath,
+    string? Error = null);
+
 // ── StringTable Mining ───────────────────────────────────
 public record StringTableEntry(uint Hash, string Text, string TableType);
 

@@ -115,6 +115,7 @@ public class TerminalRepl {
             ["clone-dat"] = HandleCloneDat,
             ["defragment-dat"] = HandleDefragmentDat,
             ["export-ontology"] = HandleExportOntology,
+            ["export-setup-parts"] = HandleExportSetupParts,
             ["mine-strings"] = HandleMineStrings,
             ["enrich-ontology"] = _ => HandleEnrichOntology(),
             ["import-catalog"] = HandleImportCatalog,
@@ -1430,6 +1431,7 @@ public class TerminalRepl {
         Console.WriteLine("â•â•â• Ontology Export & Enrichment â•â•â•");
         Console.ResetColor();
         Console.WriteLine("  export-ontology <outputPath>                   Export ontology to CSV");
+        Console.WriteLine("  export-setup-parts <outputPath>                Export Setup -> Parts (GfxObj) JSONL");
         Console.WriteLine("  mine-strings [outputPath] [filter]             Extract DAT StringTable strings");
         Console.WriteLine("  enrich-ontology                                Enrich ontology with schema data");
         Console.WriteLine("  import-catalog <index.json>                    Import ACViewer catalog into ontology");
@@ -1631,6 +1633,18 @@ public class TerminalRepl {
         if (tokens.Length < 2) { Console.WriteLine("Usage: export-ontology <outputPath>"); return; }
         var r = _engine.ExportOntology(tokens[1]);
         Console.WriteLine($"Exported {r.EntriesExported} entries to {r.OutputPath}");
+    }
+
+    private void HandleExportSetupParts(string[] tokens) {
+        if (tokens.Length < 2) { Console.WriteLine("Usage: export-setup-parts <outputPath>"); return; }
+        var r = _engine.ExportSetupParts(tokens[1]);
+        if (!r.Success) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Failed: {r.Error}");
+            Console.ResetColor();
+            return;
+        }
+        Console.WriteLine($"Exported {r.SetupsExported}/{r.SetupsScanned} setups, {r.TotalParts} parts ({r.UniqueParts} unique GfxObj ids) to {r.OutputPath}");
     }
 
     private void HandleMineStrings(string[] tokens) {

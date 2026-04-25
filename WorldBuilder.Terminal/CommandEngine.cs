@@ -1693,6 +1693,70 @@ public class CommandEngine {
     private static string Csv(string? val) =>
         val == null ? "" : val.Contains(',') || val.Contains('"') ? $"\"{val.Replace("\"", "\"\"")}\"" : val;
 
+    public ExportSetupPartsResult ExportSetupParts(string outputPath) {
+        RequireProject();
+        var dats = _projectManager.CurrentProject!.DocumentManager.Dats;
+
+        uint[] setupIds;
+        try {
+            setupIds = dats.Dats.Portal.GetAllIdsOfType<Setup>().ToArray();
+        } catch (Exception ex) {
+            return new ExportSetupPartsResult(false, 0, 0, 0, 0, outputPath, ex.Message);
+        }
+
+        int exported = 0;
+        long totalParts = 0;
+        var uniqueParts = new HashSet<uint>();
+
+        var dir = Path.GetDirectoryName(outputPath);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+        using var writer = new StreamWriter(outputPath, false, System.Text.Encoding.UTF8);
+        var sb = new System.Text.StringBuilder();
+
+        foreach (var id in setupIds) {
+            try {
+                if (!dats.TryGet<Setup>(id, out var setup)) continue;
+
+                int partCount = setup.Parts?.Count ?? 0;
+                sb.Clear();
+                sb.Append("{\"setupId\":\"0x");
+                sb.Append(id.ToString("X8"));
+                sb.Append("\",\"setupIdInt\":");
+                sb.Append(id);
+                sb.Append(",\"partCount\":");
+                sb.Append(partCount);
+                sb.Append(",\"parts\":[");
+                if (partCount > 0) {
+                    for (int i = 0; i < partCount; i++) {
+                        uint partId = setup.Parts![i];
+                        if (i > 0) sb.Append(',');
+                        sb.Append("\"0x");
+                        sb.Append(partId.ToString("X8"));
+                        sb.Append('"');
+                        uniqueParts.Add(partId);
+                        totalParts++;
+                    }
+                }
+                sb.Append("],\"partsInt\":[");
+                if (partCount > 0) {
+                    for (int i = 0; i < partCount; i++) {
+                        if (i > 0) sb.Append(',');
+                        sb.Append(setup.Parts![i]);
+                    }
+                }
+                sb.Append("]}");
+                writer.WriteLine(sb.ToString());
+                exported++;
+            } catch {
+                // skip individual failures
+            }
+        }
+
+        return new ExportSetupPartsResult(true, setupIds.Length, exported,
+            (int)totalParts, uniqueParts.Count, outputPath);
+    }
+
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     //  StringTable mining (DAT string extraction)
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•

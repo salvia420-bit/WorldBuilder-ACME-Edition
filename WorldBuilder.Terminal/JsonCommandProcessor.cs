@@ -155,6 +155,7 @@ public class JsonCommandProcessor {
             ["clone-dat"] = CmdCloneDat,
             ["defragment-dat"] = CmdDefragmentDat,
             ["export-ontology"] = CmdExportOntology,
+            ["export-setup-parts"] = CmdExportSetupParts,
             ["mine-strings"] = CmdMineStrings,
             ["enrich-ontology"] = _ => CmdEnrichOntology(),
             ["import-catalog"] = CmdImportCatalog,
@@ -795,6 +796,7 @@ public class JsonCommandProcessor {
             new { name = "clone-dat",        args = "outputPath",                              description = "Clone portal DAT to a new file" },
             new { name = "defragment-dat",   args = "datType, outputPath",                     description = "Defragment DAT (portal/cell/local)" },
             new { name = "export-ontology",  args = "outputPath",                              description = "Export ontology to CSV" },
+            new { name = "export-setup-parts", args = "outputPath",                            description = "Export Setup -> Parts (GfxObj) JSONL" },
             new { name = "mine-strings",     args = "outputPath?, filter?",                     description = "Extract strings from DAT StringTables" },
             new { name = "enrich-ontology",  args = "",                                      description = "Enrich ontology with schema names & creature families" },
             new { name = "import-catalog",   args = "indexPath",                                description = "Import ACViewer catalog into ontology" },
@@ -899,6 +901,18 @@ public class JsonCommandProcessor {
         var r = _engine.ExportOntology(outputPath);
         return Serialize(new { success = r.Success, command = "export-ontology",
             entriesExported = r.EntriesExported, outputPath = r.OutputPath });
+    }
+
+    private string CmdExportSetupParts(System.Text.Json.Nodes.JsonNode node) {
+        var outputPath = node["outputPath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'outputPath' field");
+        var r = _engine.ExportSetupParts(outputPath);
+        return Serialize(new {
+            success = r.Success, command = "export-setup-parts",
+            setupsScanned = r.SetupsScanned, setupsExported = r.SetupsExported,
+            totalParts = r.TotalParts, uniqueParts = r.UniqueParts,
+            outputPath = r.OutputPath, error = r.Error
+        });
     }
 
     private string CmdMineStrings(System.Text.Json.Nodes.JsonNode node) {
