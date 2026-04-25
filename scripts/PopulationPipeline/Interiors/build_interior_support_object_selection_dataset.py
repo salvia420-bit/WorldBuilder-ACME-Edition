@@ -206,6 +206,42 @@ def ontology_signature(uo_entry: dict | None) -> tuple[str, str, str]:
     )
 
 
+def candidate_geom_scale(candidate: dict, unified: UnifiedOntology) -> str:
+    prop = candidate.get("prop") or candidate.get("object") or {}
+    uo = lookup_unified(prop, unified)
+    if not uo:
+        return "<none>"
+    return uo.get("geom_scale") or "<none>"
+
+
+def pick_first_negative(
+    pool_iter,
+    *,
+    pos_obj_keys: set,
+    seen_neg_keys: set,
+    pos_obj_key: str | None,
+    prefer_geom_scale: str | None,
+    unified: UnifiedOntology,
+):
+    """Two-pass selection: first emit a same-scale candidate if one exists,
+    otherwise fall back to any compatible candidate. Returns the candidate
+    object (raw) or None."""
+    candidates = list(pool_iter)
+    # Preferred pass: matching geomScale.
+    if prefer_geom_scale and prefer_geom_scale != "<none>":
+        for cand_key, cand in candidates:
+            if cand_key == pos_obj_key or cand_key in pos_obj_keys or cand_key in seen_neg_keys:
+                continue
+            if candidate_geom_scale(cand, unified) == prefer_geom_scale:
+                return cand_key, cand
+    # Fallback pass: any.
+    for cand_key, cand in candidates:
+        if cand_key == pos_obj_key or cand_key in pos_obj_keys or cand_key in seen_neg_keys:
+            continue
+        return cand_key, cand
+    return None, None
+
+
 def grounded_object_identity(
     prop: dict,
     grounding_index: dict[tuple[str, int], dict],
@@ -308,9 +344,17 @@ def confuser_signature(candidate: dict) -> tuple:
     )
 
 
-def semantics_signature_from_candidate(candidate: dict, semantics_index: dict[str, dict]) -> tuple:
+def semantics_signature_from_candidate(candidate: dict, semantics_index: dict[str, dict], unified: UnifiedOntology) -> tuple:
+    """Bucket key for the legacy 'same semantic signature' confuser pool.
+
+    Includes the unified-ontology geomScale so confusers default to the same
+    size bucket as the positive — without this, ~half of pairs end up with
+    >=3x size mismatch and the trainer wins by max-dim discrimination alone.
+    """
     prop = candidate.get("prop") or {}
     semantics = semantic_summary(lookup_semantics(prop, semantics_index))
+    uo_entry = lookup_unified(prop, unified)
+    geom_cat, geom_scale, _ = ontology_signature(uo_entry)
     return (
         semantics.get("dominantWeenieType") if semantics else None,
         semantics.get("lsdItemType1") if semantics else None,
@@ -318,6 +362,8 @@ def semantics_signature_from_candidate(candidate: dict, semantics_index: dict[st
         semantics.get("lsdTargetType94") if semantics else None,
         semantics.get("dominantLsdHookType") if semantics else None,
         semantics.get("dominantPropClass") if semantics else prop.get("propClass"),
+        geom_cat,
+        geom_scale,
     )
 
 
@@ -356,7 +402,7 @@ def main() -> None:
             prop_class = str(obj.get("propClass") or "<none>")
             key = object_key(obj)
             positive_pool_by_support_class[support_class][prop_class][key] = candidate
-            semantic_pool_by_support_class[support_class][semantics_signature_from_candidate(candidate, semantics_index)][key] = candidate
+            semantic_pool_by_support_class[support_class][semantics_signature_from_candidate(candidate, semantics_index, unified)][key] = candidate
             uo_entry = lookup_unified(obj, unified)
             geom_cat, geom_scale, primary = ontology_signature(uo_entry)
             onto_pool_t1[(support_class, geom_cat, geom_scale, primary)][key] = candidate
@@ -407,16 +453,31 @@ def main() -> None:
         for positive in positives:
             prop_class = str(((positive.get("object") or {}).get("propClass")) or "<none>")
             pool = positive_pool_by_support_class.get(support_class, {}).get(prop_class, {})
+            pos_obj_for_sig = positive.get("object") or {}
+            pos_uo_for_sig = (pos_obj_for_sig.get("unifiedOntology") or {})
             pos_signature = (
-                (positive.get("object") or {}).get("weenieType"),
-                ((positive.get("object") or {}).get("semanticSummary") or {}).get("lsdItemType1"),
-                ((positive.get("object") or {}).get("semanticSummary") or {}).get("lsdUseability16"),
-                ((positive.get("object") or {}).get("semanticSummary") or {}).get("lsdTargetType94"),
-                ((positive.get("object") or {}).get("semanticSummary") or {}).get("dominantLsdHookType"),
-                ((positive.get("object") or {}).get("semanticSummary") or {}).get("dominantPropClass"),
+                pos_obj_for_sig.get("weenieType"),
+                ((pos_obj_for_sig.get("semanticSummary") or {}).get("lsdItemType1")),
+                ((pos_obj_for_sig.get("semanticSummary") or {}).get("lsdUseability16")),
+                ((pos_obj_for_sig.get("semanticSummary") or {}).get("lsdTargetType94")),
+                ((pos_obj_for_sig.get("semanticSummary") or {}).get("dominantLsdHookType")),
+                ((pos_obj_for_sig.get("semanticSummary") or {}).get("dominantPropClass")),
+                pos_uo_for_sig.get("geomCategory") or "<none>",
+                pos_uo_for_sig.get("geomScale") or "<none>",
             )
+            pos_obj_key_str = (positive.get("object") or {}).get("objectKey")
+            pos_geom_scale_pref = pos_uo_for_sig.get("geomScale") or "<none>"
+
             semantic_pool = semantic_pool_by_support_class.get(support_class, {}).get(pos_signature, {})
-            for candidate in semantic_pool.values():
+            cand_key, candidate = pick_first_negative(
+                semantic_pool.items(),
+                pos_obj_keys=positive_object_keys,
+                seen_neg_keys=seen_negative_keys,
+                pos_obj_key=pos_obj_key_str,
+                prefer_geom_scale=pos_geom_scale_pref,
+                unified=unified,
+            )
+            if candidate is not None:
                 built = candidate_from_candidate(
                     candidate,
                     0,
@@ -427,16 +488,21 @@ def main() -> None:
                     semantics_index,
                     unified,
                 )
-                key = built["object"]["objectKey"]
-                if key in positive_object_keys or key in seen_negative_keys:
-                    continue
-                seen_negative_keys.add(key)
+                seen_negative_keys.add(built["object"]["objectKey"])
                 negatives.append(built)
                 negative_reason_counts[built["candidateReason"]] += 1
                 if built["object"].get("preferredName"):
                     grounded_negative_names += 1
-                break
-            for candidate in pool.values():
+
+            cand_key, candidate = pick_first_negative(
+                pool.items(),
+                pos_obj_keys=positive_object_keys,
+                seen_neg_keys=seen_negative_keys,
+                pos_obj_key=pos_obj_key_str,
+                prefer_geom_scale=pos_geom_scale_pref,
+                unified=unified,
+            )
+            if candidate is not None:
                 built = candidate_from_candidate(
                     candidate,
                     0,
@@ -447,15 +513,11 @@ def main() -> None:
                     semantics_index,
                     unified,
                 )
-                key = built["object"]["objectKey"]
-                if key in positive_object_keys or key in seen_negative_keys:
-                    continue
-                seen_negative_keys.add(key)
+                seen_negative_keys.add(built["object"]["objectKey"])
                 negatives.append(built)
                 negative_reason_counts[built["candidateReason"]] += 1
                 if built["object"].get("preferredName"):
                     grounded_negative_names += 1
-                break
 
             # NEW ontology-aware confuser tiers (rely on unified ontology — these
             # produce well-distinguished confusers when the propClass-based pool
@@ -544,28 +606,31 @@ def main() -> None:
             for other_prop_class, other_pool in positive_pool_by_support_class.get(support_class, {}).items():
                 if other_prop_class == prop_class:
                     continue
-                for candidate in other_pool.values():
-                    built = candidate_from_candidate(
-                        candidate,
-                        0,
-                        "negative_same_supportclass_other_propclass",
-                        grounding_index,
-                        canonical_enrichment,
-                        wcid_types,
-                        semantics_index,
-                        unified,
-                    )
-                    key = built["object"]["objectKey"]
-                    if key in positive_object_keys or key in seen_negative_keys:
-                        continue
-                    seen_negative_keys.add(key)
-                    negatives.append(built)
-                    negative_reason_counts[built["candidateReason"]] += 1
-                    if built["object"].get("preferredName"):
-                        grounded_negative_names += 1
-                    break
-                else:
+                cand_key, candidate = pick_first_negative(
+                    other_pool.items(),
+                    pos_obj_keys=positive_object_keys,
+                    seen_neg_keys=seen_negative_keys,
+                    pos_obj_key=pos_obj_key_str,
+                    prefer_geom_scale=pos_geom_scale_pref,
+                    unified=unified,
+                )
+                if candidate is None:
                     continue
+                built = candidate_from_candidate(
+                    candidate,
+                    0,
+                    "negative_same_supportclass_other_propclass",
+                    grounding_index,
+                    canonical_enrichment,
+                    wcid_types,
+                    semantics_index,
+                    unified,
+                )
+                seen_negative_keys.add(built["object"]["objectKey"])
+                negatives.append(built)
+                negative_reason_counts[built["candidateReason"]] += 1
+                if built["object"].get("preferredName"):
+                    grounded_negative_names += 1
                 break
 
         if not positives:
