@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\WorldBuilder.Shared\WorldBuilder.Shared.csproj" />
+    <ProjectReference Include="..\WorldBuilder.Terminal\WorldBuilder.Terminal.csproj" />
   </ItemGroup>
 
   <ItemGroup>
