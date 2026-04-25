@@ -372,6 +372,14 @@ public record EnrichUnifiedResult(
     string UnifiedPath,
     string? Error = null);
 
+public record CacheOntologyResult(
+    bool Success, int EntriesCached, string OutputPath,
+    string? Error = null);
+
+public record LoadOntologyCacheResult(
+    bool Success, int EntriesLoaded, string InputPath,
+    string? Error = null);
+
 public record ScanBuildingPlacementsResult(
     bool Success, int TotalBuildings, int UniqueSetupIds,
     int LandblocksWithBuildings, double ElapsedMs,

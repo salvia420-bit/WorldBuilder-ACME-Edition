@@ -86,6 +86,8 @@ This is the full interactive REPL command catalog (as shown by `help`), grouped 
 - `mine-strings [outputPath] [filter]`
 - `enrich-ontology`
 - `enrich-unified <unified-ontology-json>`
+- `cache-ontology [outputPath]` — persist live ontology to JSONL (default `<project_dir>/ontology_cache.jsonl`)
+- `load-ontology-cache [inputPath]` — restore ontology from JSONL cache (auto-runs on `load` if a sibling `ontology_cache.jsonl` exists)
 - `import-catalog <index.json>`
 - `classify-ontology`
 - `enrich-materials`

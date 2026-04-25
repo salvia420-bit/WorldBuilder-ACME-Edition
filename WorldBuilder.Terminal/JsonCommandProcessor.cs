@@ -166,6 +166,8 @@ public class JsonCommandProcessor {
             ["enrich-weenies"] = CmdEnrichWeenies,
             ["enrich-canonical"] = CmdEnrichCanonical,
             ["enrich-unified"] = CmdEnrichUnified,
+            ["cache-ontology"] = CmdCacheOntology,
+            ["load-ontology-cache"] = CmdLoadOntologyCache,
             ["scan-building-placements"] = CmdScanBuildingPlacements,
             ["difficulty-gradient"] = CmdDifficultyGradient,
             ["apply-population"] = CmdApplyPopulation,
@@ -809,6 +811,8 @@ public class JsonCommandProcessor {
             new { name = "enrich-weenies",  args = "summaryPath",                               description = "Merge weenie data into live ontology" },
             new { name = "enrich-canonical", args = "path",                                      description = "Merge canonical enrichment (architecture, biome, behavior)" },
             new { name = "enrich-unified",   args = "path",                                      description = "Merge unified ontology (canonical + ACE world + Setup->Parts + DAT signals + geometry)" },
+            new { name = "cache-ontology",   args = "outputPath?",                              description = "Persist live ontology to JSONL (default <project_dir>/ontology_cache.jsonl)" },
+            new { name = "load-ontology-cache", args = "inputPath?",                            description = "Restore ontology from JSONL cache" },
             new { name = "scan-building-placements", args = "outputPath?",                         description = "Extract building positions for culture mapping" },
             new { name = "difficulty-gradient", args = "gradientPath?",                             description = "Load & validate difficulty gradient" },
             new { name = "apply-population", args = "planPath, dryRun?",                            description = "Apply population plan to world" },
@@ -1000,6 +1004,26 @@ public class JsonCommandProcessor {
         return Serialize(new { success = r.Success, command = "enrich-weenies",
             entriesEnriched = r.EntriesEnriched, totalEntries = r.TotalEntries,
             error = r.Error });
+    }
+
+    private string CmdCacheOntology(System.Text.Json.Nodes.JsonNode node) {
+        var outputPath = node["outputPath"]?.GetValue<string>() ?? node["path"]?.GetValue<string>()
+            ?? _engine.DefaultOntologyCachePath();
+        var r = _engine.CacheOntology(outputPath);
+        return Serialize(new {
+            success = r.Success, command = "cache-ontology",
+            entriesCached = r.EntriesCached, outputPath = r.OutputPath, error = r.Error,
+        });
+    }
+
+    private string CmdLoadOntologyCache(System.Text.Json.Nodes.JsonNode node) {
+        var inputPath = node["inputPath"]?.GetValue<string>() ?? node["path"]?.GetValue<string>()
+            ?? _engine.DefaultOntologyCachePath();
+        var r = _engine.LoadOntologyCache(inputPath);
+        return Serialize(new {
+            success = r.Success, command = "load-ontology-cache",
+            entriesLoaded = r.EntriesLoaded, inputPath = r.InputPath, error = r.Error,
+        });
     }
 
     private string CmdEnrichUnified(System.Text.Json.Nodes.JsonNode node) {

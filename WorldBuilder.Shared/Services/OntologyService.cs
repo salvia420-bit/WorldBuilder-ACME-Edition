@@ -1131,6 +1131,18 @@ public class OntologyService : IOntologyService {
         using var doc = System.Text.Json.JsonDocument.Parse(json);
         var root = doc.RootElement;
 
+        // Build a snapshot of the by_wcid index so the per-setup loop can
+        // pull Level / DifficultyTier / CreatureType / WeenieType from the
+        // first matching wcid without re-walking JSON each time.
+        var byWcid = new Dictionary<int, System.Text.Json.JsonElement>();
+        if (root.TryGetProperty("by_wcid", out var wcidMap)
+            && wcidMap.ValueKind == System.Text.Json.JsonValueKind.Object) {
+            foreach (var prop in wcidMap.EnumerateObject()) {
+                if (int.TryParse(prop.Name, out var wcid))
+                    byWcid[wcid] = prop.Value;
+            }
+        }
+
         int enriched = 0;
         int matched = 0;
         int total = 0;
@@ -1143,7 +1155,9 @@ public class OntologyService : IOntologyService {
                 if (!uint.TryParse(prop.Name, out var setupDid)) continue;
                 if (!_entries.TryGetValue(setupDid, out var entry)) continue;
                 matched++;
-                if (ApplyUnifiedEntryToOntology(prop.Value, entry)) enriched++;
+                bool changed = ApplyUnifiedEntryToOntology(prop.Value, entry);
+                if (ApplyWcidLookupToEntry(prop.Value, entry, byWcid)) changed = true;
+                if (changed) enriched++;
             }
         }
 
@@ -1307,5 +1321,193 @@ public class OntologyService : IOntologyService {
         if (changed) entry.Tags = tagsList.Distinct().ToArray();
 
         return changed;
+    }
+
+    /// <summary>
+    /// Cross-reference: for each wcid in the unified setup entry, look up
+    /// the by_wcid bucket and propagate Level / DifficultyTier / WeenieType
+    /// / CreatureFamilyName into the OntologyEntry. Skips fields already
+    /// populated.
+    /// </summary>
+    private static bool ApplyWcidLookupToEntry(
+        System.Text.Json.JsonElement setupEl,
+        Lib.OntologyEntry entry,
+        IReadOnlyDictionary<int, System.Text.Json.JsonElement> byWcid) {
+        if (!setupEl.TryGetProperty("wcids", out var wcidsEl)
+            || wcidsEl.ValueKind != System.Text.Json.JsonValueKind.Array)
+            return false;
+
+        bool changed = false;
+        foreach (var wEl in wcidsEl.EnumerateArray()) {
+            if (wEl.ValueKind != System.Text.Json.JsonValueKind.Number) continue;
+            int wcid = wEl.GetInt32();
+            if (!byWcid.TryGetValue(wcid, out var wcidEntry)) continue;
+
+            if (entry.Level == null
+                && wcidEntry.TryGetProperty("level", out var lvlEl)
+                && lvlEl.ValueKind == System.Text.Json.JsonValueKind.Number) {
+                entry.Level = lvlEl.GetInt32();
+                changed = true;
+            }
+            if (string.IsNullOrEmpty(entry.DifficultyTier)
+                && wcidEntry.TryGetProperty("difficulty_tier", out var dtEl)
+                && dtEl.ValueKind == System.Text.Json.JsonValueKind.String) {
+                var dt = dtEl.GetString();
+                if (!string.IsNullOrEmpty(dt)) { entry.DifficultyTier = dt; changed = true; }
+            }
+            if (entry.WeenieType == null
+                && wcidEntry.TryGetProperty("weenie_type", out var wtEl)
+                && wtEl.ValueKind == System.Text.Json.JsonValueKind.Number) {
+                entry.WeenieType = wtEl.GetInt32();
+                changed = true;
+            }
+            if (string.IsNullOrEmpty(entry.CreatureFamilyName)
+                && wcidEntry.TryGetProperty("creature_family", out var cfEl)
+                && cfEl.ValueKind == System.Text.Json.JsonValueKind.String) {
+                var cf = cfEl.GetString();
+                if (!string.IsNullOrEmpty(cf)) { entry.CreatureFamilyName = cf; changed = true; }
+            }
+            // Stop after first wcid that yielded something useful — multiple
+            // wcids per setup are common (e.g. cultural variants) but their
+            // Level/Tier/Family are typically equivalent.
+            if (changed) break;
+        }
+        return changed;
+    }
+
+    // ════════════════════════════════════════════════════
+    //  Persistence (cache to / load from JSONL)
+    // ════════════════════════════════════════════════════
+
+    public int CacheToFile(string outputPath) {
+        var dir = Path.GetDirectoryName(outputPath);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+        int count = 0;
+        using var w = new StreamWriter(outputPath, false, System.Text.Encoding.UTF8);
+        var jsonOpts = new System.Text.Json.JsonSerializerOptions {
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+        };
+        foreach (var entry in _entries.Values.OrderBy(e => e.ObjectId)) {
+            var dto = new {
+                id = entry.ObjectId,
+                type = entry.DatType,
+                bMin = new[] { entry.BoundsMin.X, entry.BoundsMin.Y, entry.BoundsMin.Z },
+                bMax = new[] { entry.BoundsMax.X, entry.BoundsMax.Y, entry.BoundsMax.Z },
+                maxDim = entry.MaxDimension,
+                partCount = entry.PartCount,
+                polyCount = entry.PolyCount,
+                aspectRatio = entry.AspectRatio,
+                scale = entry.Scale,
+                category = entry.Category,
+                classSource = entry.ClassificationSource,
+                tags = entry.Tags,
+                vertexCount = entry.VertexCount,
+                surfaceIds = entry.SurfaceIds,
+                thumbnailPath = entry.ThumbnailPath,
+                name = entry.Name,
+                materialTags = entry.MaterialTags,
+                weenieClassId = entry.WeenieClassId,
+                weenieType = entry.WeenieType,
+                level = entry.Level,
+                creatureType = entry.CreatureType,
+                difficultyTier = entry.DifficultyTier,
+                architecture = entry.Architecture,
+                biome = entry.Biome,
+                behavior = entry.Behavior,
+                creatureFamilyName = entry.CreatureFamilyName,
+            };
+            w.WriteLine(System.Text.Json.JsonSerializer.Serialize(dto, jsonOpts));
+            count++;
+        }
+        Console.WriteLine($"[Ontology] Cached {count:N0} entries -> {outputPath}");
+        return count;
+    }
+
+    public int LoadFromCache(string inputPath) {
+        if (!File.Exists(inputPath))
+            throw new FileNotFoundException($"Ontology cache file not found: {inputPath}");
+
+        var loaded = new ConcurrentDictionary<uint, Lib.OntologyEntry>();
+        int count = 0;
+        foreach (var line in File.ReadLines(inputPath)) {
+            var trimmed = line.Trim();
+            if (string.IsNullOrEmpty(trimmed)) continue;
+            try {
+                using var doc = System.Text.Json.JsonDocument.Parse(trimmed);
+                var root = doc.RootElement;
+                var entry = new Lib.OntologyEntry {
+                    ObjectId = root.GetProperty("id").GetUInt32(),
+                    DatType = TryGetString(root, "type") ?? "",
+                    MaxDimension = TryGetSingle(root, "maxDim") ?? 0f,
+                    PartCount = TryGetInt32(root, "partCount") ?? 0,
+                    PolyCount = TryGetInt32(root, "polyCount") ?? 0,
+                    AspectRatio = TryGetSingle(root, "aspectRatio") ?? 0f,
+                    Scale = TryGetString(root, "scale") ?? "Unknown",
+                    Category = TryGetString(root, "category") ?? "Unknown",
+                    ClassificationSource = TryGetString(root, "classSource") ?? "Heuristic",
+                    Tags = TryGetStringArray(root, "tags") ?? Array.Empty<string>(),
+                    VertexCount = TryGetInt32(root, "vertexCount") ?? 0,
+                    SurfaceIds = TryGetStringList(root, "surfaceIds"),
+                    ThumbnailPath = TryGetString(root, "thumbnailPath"),
+                    Name = TryGetString(root, "name"),
+                    MaterialTags = TryGetStringArray(root, "materialTags"),
+                    WeenieClassId = TryGetInt32(root, "weenieClassId"),
+                    WeenieType = TryGetInt32(root, "weenieType"),
+                    Level = TryGetInt32(root, "level"),
+                    CreatureType = TryGetInt32(root, "creatureType"),
+                    DifficultyTier = TryGetString(root, "difficultyTier"),
+                    Architecture = TryGetString(root, "architecture"),
+                    Biome = TryGetStringArray(root, "biome"),
+                    Behavior = TryGetString(root, "behavior"),
+                    CreatureFamilyName = TryGetString(root, "creatureFamilyName"),
+                    BoundsMin = TryGetVec3(root, "bMin"),
+                    BoundsMax = TryGetVec3(root, "bMax"),
+                };
+                loaded[entry.ObjectId] = entry;
+                count++;
+            } catch (Exception ex) {
+                Console.WriteLine($"[Ontology] Skipping malformed cache line: {ex.Message}");
+            }
+        }
+
+        _entries.Clear();
+        foreach (var kv in loaded) _entries[kv.Key] = kv.Value;
+        _isScanned = true;
+        Console.WriteLine($"[Ontology] Loaded {count:N0} entries from cache <- {inputPath}");
+        return count;
+    }
+
+    private static string? TryGetString(System.Text.Json.JsonElement root, string name) {
+        if (!root.TryGetProperty(name, out var el)) return null;
+        return el.ValueKind == System.Text.Json.JsonValueKind.String ? el.GetString() : null;
+    }
+    private static int? TryGetInt32(System.Text.Json.JsonElement root, string name) {
+        if (!root.TryGetProperty(name, out var el)) return null;
+        return el.ValueKind == System.Text.Json.JsonValueKind.Number ? el.GetInt32() : null;
+    }
+    private static float? TryGetSingle(System.Text.Json.JsonElement root, string name) {
+        if (!root.TryGetProperty(name, out var el)) return null;
+        return el.ValueKind == System.Text.Json.JsonValueKind.Number ? el.GetSingle() : null;
+    }
+    private static string[]? TryGetStringArray(System.Text.Json.JsonElement root, string name) {
+        if (!root.TryGetProperty(name, out var el) || el.ValueKind != System.Text.Json.JsonValueKind.Array) return null;
+        return el.EnumerateArray()
+            .Select(x => x.ValueKind == System.Text.Json.JsonValueKind.String ? x.GetString() : null)
+            .Where(s => !string.IsNullOrEmpty(s))
+            .Cast<string>()
+            .ToArray();
+    }
+    private static List<string>? TryGetStringList(System.Text.Json.JsonElement root, string name) {
+        var arr = TryGetStringArray(root, name);
+        return arr != null ? new List<string>(arr) : null;
+    }
+    private static Vector3 TryGetVec3(System.Text.Json.JsonElement root, string name) {
+        if (!root.TryGetProperty(name, out var el) || el.ValueKind != System.Text.Json.JsonValueKind.Array) return Vector3.Zero;
+        var vals = el.EnumerateArray().Select(x => x.GetSingle()).Take(3).ToArray();
+        return new Vector3(
+            vals.Length > 0 ? vals[0] : 0f,
+            vals.Length > 1 ? vals[1] : 0f,
+            vals.Length > 2 ? vals[2] : 0f);
     }
 }

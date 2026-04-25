@@ -102,4 +102,17 @@ public interface IOntologyService {
     /// setup_did and gfx_obj_id. Returns the number of entries enriched.
     /// </summary>
     int EnrichFromUnified(string unifiedOntologyJsonPath);
+
+    /// <summary>
+    /// Serializes the live ontology (every OntologyEntry) to a JSONL file
+    /// so it can be re-loaded across REPL sessions without re-running
+    /// scan-ontology + enrich-* every time. Returns entries written.
+    /// </summary>
+    int CacheToFile(string outputPath);
+
+    /// <summary>
+    /// Restores a previously cached ontology from JSONL. Replaces the
+    /// in-memory index and sets IsScanned=true. Returns entries loaded.
+    /// </summary>
+    int LoadFromCache(string inputPath);
 }

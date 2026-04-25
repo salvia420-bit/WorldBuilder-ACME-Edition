@@ -57,6 +57,17 @@ public class CommandEngine {
         _projectManager.LoadProject(projectPath);
         InvalidateCaches();
         var p = _projectManager.CurrentProject!;
+        // Auto-restore ontology cache if a sibling file exists. Saves
+        // re-running scan-ontology + enrich-unified across sessions.
+        try {
+            var cachePath = Path.Combine(p.ProjectDirectory, "ontology_cache.jsonl");
+            if (File.Exists(cachePath)) {
+                int restored = _ontologyService.LoadFromCache(cachePath);
+                Console.WriteLine($"[Ontology] Auto-restored {restored:N0} entries from {cachePath}");
+            }
+        } catch (Exception ex) {
+            Console.WriteLine($"[Ontology] Auto-restore skipped: {ex.Message}");
+        }
         return new LoadResult(p.Name, p.FilePath, p.ProjectDirectory, p.BaseDatDirectory);
     }
 
@@ -1680,14 +1691,72 @@ public class CommandEngine {
 
         int count = 0;
         using (var writer = new StreamWriter(outputPath, false, System.Text.Encoding.UTF8)) {
-            writer.WriteLine("ObjectId,DatType,Category,Scale,MaxDimension,AspectRatio,PartCount,PolyCount,Tags,ClassificationSource");
+            writer.WriteLine(
+                "ObjectId,DatType,Category,Scale,MaxDimension,AspectRatio,PartCount,PolyCount," +
+                "Tags,ClassificationSource,Name,Architecture,Biome,Behavior,CreatureFamilyName," +
+                "WeenieClassId,WeenieType,Level,DifficultyTier,MaterialTags,SurfaceIds,VertexCount");
             foreach (var entry in _ontologyService.GetAllEntries()) {
-                writer.WriteLine($"0x{entry.ObjectId:X8},{entry.DatType},{Csv(entry.Category)},{Csv(entry.Scale)},{entry.MaxDimension:F2},{entry.AspectRatio:F2},{entry.PartCount},{entry.PolyCount},{Csv(string.Join(";", entry.Tags ?? Array.Empty<string>()))},{Csv(entry.ClassificationSource)}");
+                writer.WriteLine(string.Join(",", new string[] {
+                    $"0x{entry.ObjectId:X8}",
+                    entry.DatType,
+                    Csv(entry.Category),
+                    Csv(entry.Scale),
+                    entry.MaxDimension.ToString("F2"),
+                    entry.AspectRatio.ToString("F2"),
+                    entry.PartCount.ToString(),
+                    entry.PolyCount.ToString(),
+                    Csv(string.Join(";", entry.Tags ?? Array.Empty<string>())),
+                    Csv(entry.ClassificationSource),
+                    Csv(entry.Name),
+                    Csv(entry.Architecture),
+                    Csv(string.Join(";", entry.Biome ?? Array.Empty<string>())),
+                    Csv(entry.Behavior),
+                    Csv(entry.CreatureFamilyName),
+                    entry.WeenieClassId?.ToString() ?? "",
+                    entry.WeenieType?.ToString() ?? "",
+                    entry.Level?.ToString() ?? "",
+                    Csv(entry.DifficultyTier),
+                    Csv(string.Join(";", entry.MaterialTags ?? Array.Empty<string>())),
+                    Csv(string.Join(";", entry.SurfaceIds ?? new List<string>())),
+                    entry.VertexCount.ToString(),
+                }));
                 count++;
             }
         }
 
         return new ExportOntologyResult(true, count, outputPath);
+    }
+
+    public CacheOntologyResult CacheOntology(string outputPath) {
+        if (!_ontologyService.IsScanned)
+            throw new InvalidOperationException(
+                "Ontology has not been scanned yet. Run 'scan-ontology' first.");
+        try {
+            int count = _ontologyService.CacheToFile(outputPath);
+            return new CacheOntologyResult(true, count, outputPath);
+        } catch (Exception ex) {
+            return new CacheOntologyResult(false, 0, outputPath, ex.Message);
+        }
+    }
+
+    public LoadOntologyCacheResult LoadOntologyCache(string inputPath) {
+        try {
+            int count = _ontologyService.LoadFromCache(inputPath);
+            return new LoadOntologyCacheResult(true, count, inputPath);
+        } catch (Exception ex) {
+            return new LoadOntologyCacheResult(false, 0, inputPath, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Default location for the per-project ontology cache. Lets the REPL
+    /// auto-restore enriched ontology state across sessions without needing
+    /// to re-run scan-ontology + enrich-unified each time.
+    /// </summary>
+    public string DefaultOntologyCachePath() {
+        var p = _projectManager.CurrentProject
+            ?? throw new InvalidOperationException("No project loaded.");
+        return Path.Combine(p.ProjectDirectory, "ontology_cache.jsonl");
     }
 
     private static string Csv(string? val) =>

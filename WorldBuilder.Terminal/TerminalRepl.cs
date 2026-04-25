@@ -126,6 +126,8 @@ public class TerminalRepl {
             ["enrich-weenies"] = HandleEnrichWeenies,
             ["enrich-canonical"] = HandleEnrichCanonical,
             ["enrich-unified"] = HandleEnrichUnified,
+            ["cache-ontology"] = HandleCacheOntology,
+            ["load-ontology-cache"] = HandleLoadOntologyCache,
             ["scan-building-placements"] = HandleScanBuildingPlacements,
             ["difficulty-gradient"] = HandleDifficultyGradient,
             ["apply-population"] = HandleApplyPopulation,
@@ -1449,6 +1451,8 @@ public class TerminalRepl {
         Console.WriteLine("  enrich-weenies <summary-path>                  Merge weenie data into live ontology");
         Console.WriteLine("  enrich-canonical <json-path>                   Merge canonical enrichment (arch/biome/behavior)");
         Console.WriteLine("  enrich-unified <json-path>                     Merge unified ontology (full stack: canonical + ACE world + parts + DAT signals + geometry)");
+        Console.WriteLine("  cache-ontology [outputPath]                    Persist live ontology to JSONL (default <project_dir>/ontology_cache.jsonl)");
+        Console.WriteLine("  load-ontology-cache [inputPath]                Restore ontology from a JSONL cache (auto-runs on 'load' if cache file exists)");
         Console.WriteLine("  scan-building-placements [output]               Extract building positions for culture mapping");
         Console.WriteLine("  difficulty-gradient [json-path]                 Load & validate difficulty gradient");
         Console.WriteLine("  apply-population <plan-path> [--dry-run]        Apply population plan to world");
@@ -1820,6 +1824,30 @@ public class TerminalRepl {
         Console.WriteLine($"  Entries enriched : {r.EntriesEnriched}");
         Console.WriteLine($"  Total entries    : {r.TotalEntries}");
         Console.WriteLine();
+    }
+
+    private void HandleCacheOntology(string[] tokens) {
+        string outputPath = tokens.Length >= 2 ? tokens[1] : _engine.DefaultOntologyCachePath();
+        var r = _engine.CacheOntology(outputPath);
+        if (!r.Success) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Failed: {r.Error}");
+            Console.ResetColor();
+            return;
+        }
+        Console.WriteLine($"Cached {r.EntriesCached} ontology entries to {r.OutputPath}");
+    }
+
+    private void HandleLoadOntologyCache(string[] tokens) {
+        string inputPath = tokens.Length >= 2 ? tokens[1] : _engine.DefaultOntologyCachePath();
+        var r = _engine.LoadOntologyCache(inputPath);
+        if (!r.Success) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Failed: {r.Error}");
+            Console.ResetColor();
+            return;
+        }
+        Console.WriteLine($"Loaded {r.EntriesLoaded} ontology entries from {r.InputPath}");
     }
 
     private void HandleEnrichUnified(string[] tokens) {
