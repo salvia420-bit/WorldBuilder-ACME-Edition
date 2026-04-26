@@ -25,7 +25,7 @@ namespace WorldBuilder.Editors.Landscape {
         private readonly ConcurrentDictionary<uint, int> _usageCount = new();
         private readonly HashSet<uint> _failedIds = new();
         private readonly TextureDiskCache? _textureCache;
-        private readonly Dictionary<(uint Id, bool IsSetup), (Vector3 Min, Vector3 Max)> _boundsCache = new();
+        private readonly ConcurrentDictionary<(uint Id, bool IsSetup), (Vector3 Min, Vector3 Max)> _boundsCache = new();
         private PortalDatDocument? _portalDoc;
 
         public StaticObjectManager(OpenGLRenderer renderer, IDatReaderWriter dats, TextureDiskCache? textureCache = null) {
@@ -150,6 +150,15 @@ namespace WorldBuilder.Editors.Landscape {
         private void UnloadObject(uint key) {
             if (!_renderData.TryGetValue(key, out var data)) return;
 
+            // Setups own their parts; release each part recursively so the
+            // GfxObj-level usage count actually drops to zero when the setup
+            // is the only reference holder.
+            if (data.IsSetup && data.SetupParts != null) {
+                foreach (var (partId, _) in data.SetupParts) {
+                    ReleaseRenderData(partId, false);
+                }
+            }
+
             var gl = _renderer.GraphicsDevice.GL;
             if (data.VAO != 0) gl.DeleteVertexArray(data.VAO);
             if (data.VBO != 0) gl.DeleteBuffer(data.VBO);
@@ -165,8 +174,8 @@ namespace WorldBuilder.Editors.Landscape {
             _renderData.Remove(key);
 
             // Invalidate cached bounds for this object
-            _boundsCache.Remove((key, true));
-            _boundsCache.Remove((key, false));
+            _boundsCache.TryRemove((key, true), out _);
+            _boundsCache.TryRemove((key, false), out _);
         }
 
         private StaticObjectRenderData? CreateRenderData(uint id, bool isSetup) {
