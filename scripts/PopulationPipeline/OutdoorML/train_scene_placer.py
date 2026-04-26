@@ -132,6 +132,14 @@ DEFAULT_CONFIG = {
     "lambda_link": 5.0,
     "lambda_entropy": 0.15,  # Entropy regularization to prevent mode collapse
     "lambda_dense_repeat": 0.35,
+    # Focal loss on the wcid head. 0.0 = pure CE (legacy behaviour).
+    # 1.0-2.0 down-weights gradient from already-confident classes so rare
+    # weenies (which are most of the 4584-class vocab) get more signal.
+    "focal_gamma": 0.0,
+
+    # Cosine warm restart: when set to an epoch index, the cosine scheduler
+    # resets to peak LR at that epoch and starts a fresh decay. 0 = no restart.
+    "cosine_restart_epoch": 0,
     
     # Data augmentation
     "context_jitter_std": 0.05,
@@ -597,13 +605,27 @@ def compute_loss(model, batch, config, device):
     B, T, V = wcid_logits.shape
     active = mask.float()  # (B, T)
     
-    # wcid cross-entropy with label smoothing
+    # wcid cross-entropy with label smoothing.
+    # When focal_gamma > 0, scale the per-token CE by (1 - p_t)^gamma so
+    # already-confident predictions contribute less gradient. p_t is read
+    # off the raw (non-smoothed) softmax of the target class — keeping the
+    # smoothing in the CE term itself but using the sharp probability for
+    # the down-weighting factor.
     wcid_ce = F.cross_entropy(
         wcid_logits.reshape(-1, V),
         target_wcid.reshape(-1),
         label_smoothing=config['label_smoothing'],
         reduction='none'
     ).reshape(B, T)
+    focal_gamma = config.get('focal_gamma', 0.0)
+    if focal_gamma > 0:
+        with torch.no_grad():
+            sharp_logp = F.log_softmax(wcid_logits.reshape(-1, V), dim=-1)
+            p_t = sharp_logp.gather(
+                -1, target_wcid.reshape(-1, 1)
+            ).exp().reshape(B, T)
+            focal_weight = (1.0 - p_t).clamp_(min=0.0).pow(focal_gamma)
+        wcid_ce = wcid_ce * focal_weight
     L_wcid = (wcid_ce * active).sum() / active.sum()
     
     # Position MSE (normalized, only for real tokens)
@@ -997,11 +1019,35 @@ def build_stage_boundaries(total_epochs: int, warmup_epochs: int) -> list[int]:
 def build_lr_scheduler(optimizer, config: dict, effective_warmup_epochs: int):
     schedule_name = config.get("lr_schedule", "staged")
     if schedule_name == "cosine":
-        return torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=max(1, config['epochs'] - effective_warmup_epochs),
-            eta_min=config['lr_min'],
-        )
+        restart_epoch = int(config.get("cosine_restart_epoch", 0) or 0)
+        # restart_epoch is in absolute epoch indices. Translate to "epochs after
+        # warmup ends" since the scheduler only steps post-warmup.
+        restart_after_warmup = restart_epoch - effective_warmup_epochs
+        if restart_after_warmup <= 0:
+            return torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=max(1, config['epochs'] - effective_warmup_epochs),
+                eta_min=config['lr_min'],
+            )
+
+        # Two-phase cosine: descend over [0, restart), reset to peak,
+        # descend over [restart, end). Using a LambdaLR that returns the
+        # multiplier on lr_max so phase boundaries are exact.
+        eta_ratio = max(config['lr_min'] / max(config['lr_max'], 1e-12), 1e-6)
+        post_warmup_epochs = max(1, config['epochs'] - effective_warmup_epochs)
+        phase1_len = restart_after_warmup
+        phase2_len = max(1, post_warmup_epochs - phase1_len)
+
+        def lr_lambda(epoch_idx: int):
+            if epoch_idx < phase1_len:
+                progress = epoch_idx / max(phase1_len, 1)
+            else:
+                progress = (epoch_idx - phase1_len) / max(phase2_len, 1)
+            progress = min(max(progress, 0.0), 1.0)
+            cosine_mix = 0.5 * (1.0 + math.cos(math.pi * progress))
+            return eta_ratio + (1.0 - eta_ratio) * cosine_mix
+
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
     boundaries = build_stage_boundaries(config['epochs'], effective_warmup_epochs)
     scales = (1.0, 0.60, 0.30, 0.12, max(config['lr_min'] / max(config['lr_max'], 1e-12), 1e-4))
@@ -1461,6 +1507,10 @@ def main():
     parser.add_argument("--val-split-mode", type=str, choices=("random", "region"), default=None)
     parser.add_argument("--region-tile-size", type=int, default=None)
     parser.add_argument("--lr-schedule", type=str, choices=("cosine", "staged"), default=None)
+    parser.add_argument("--focal-gamma", type=float, default=None,
+                        help="Focal loss gamma on the wcid head. 0 = pure CE; 1.0-2.0 down-weights confident predictions to give rare classes more gradient.")
+    parser.add_argument("--cosine-restart-epoch", type=int, default=None,
+                        help="When using --lr-schedule cosine, reset LR to peak at this absolute epoch and start a fresh cosine descent. 0 = no restart.")
     args = parser.parse_args()
     
     config = DEFAULT_CONFIG.copy()
@@ -1494,6 +1544,10 @@ def main():
         config['region_tile_size'] = args.region_tile_size
     if args.lr_schedule:
         config['lr_schedule'] = args.lr_schedule
+    if args.focal_gamma is not None:
+        config['focal_gamma'] = args.focal_gamma
+    if args.cosine_restart_epoch is not None:
+        config['cosine_restart_epoch'] = args.cosine_restart_epoch
     config['tensor_path'] = args.tensor_path
     config['vocab_path'] = args.vocab_path
     config['max_train_batches'] = args.max_train_batches
