@@ -6365,20 +6365,21 @@ public class CommandEngine {
         // Track dominant types per landblock for scenery
         var dominantTypes = new Dictionary<ushort, int>();
 
-        // Reusable per-landblock buffer; .Clear() preserves capacity and avoids 65k+ Dictionary allocations.
+        // Reusable per-landblock buffers; .Clear() / stack reuse avoids 65k+ heap allocations.
         var typeCounts = new Dictionary<int, int>(classificationColors.Count);
+        const int LANDBLOCK_VERTEX_COUNT = 81;
+        Span<TerrainEntry> currentData = stackalloc TerrainEntry[LANDBLOCK_VERTEX_COUNT];
 
         for (int lbX = 0; lbX < 255; lbX++) {
             for (int lbY = 0; lbY < 255; lbY++) {
                 try {
                     ushort lbKey = LbKey((uint)lbX, (uint)lbY);
-                    var currentData = terrainDoc.GetLandblockInternal(lbKey);
-                    if (currentData == null) {
+                    if (!terrainDoc.TryGetLandblockInternal(lbKey, currentData)) {
                         skipped++;
                         continue;
                     }
 
-                    var newEntries = new TerrainEntry[81];
+                    var newEntries = new TerrainEntry[LANDBLOCK_VERTEX_COUNT];
 
                     // â”€â”€â”€ Per-vertex terrain reconstruction â”€â”€â”€
                     int dominantType = -1;
