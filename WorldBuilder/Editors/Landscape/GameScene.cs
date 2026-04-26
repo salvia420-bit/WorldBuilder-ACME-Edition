@@ -2,6 +2,7 @@ using Chorizite.ACProtocol.Types;
 using Chorizite.Core.Render;
 using Chorizite.Core.Render.Vertex;
 using Chorizite.OpenGLSDLBackend;
+using DatReaderWriter;
 using DatReaderWriter.DBObjs;
 using Silk.NET.OpenGL;
 using System;
@@ -1487,6 +1488,7 @@ namespace WorldBuilder.Editors.Landscape {
 
             if (editingContext.ObjectSelection.HasSelection) {
                 RenderSelectionHighlight(context, editingContext.ObjectSelection, camera, viewProjection);
+                RenderTransformGizmo(context, editingContext.ObjectSelection, camera, viewProjection);
             }
 
             if (editingContext.ObjectSelection.IsPlacementMode && editingContext.ObjectSelection.PlacementPreview.HasValue) {
@@ -1504,6 +1506,72 @@ namespace WorldBuilder.Editors.Landscape {
             }
 
             _thumbnailService?.ProcessQueue(renderer);
+        }
+
+        static bool TryGetParticleGfxId(IDatReaderWriter dats, uint emitterDid, out uint gfxId) =>
+            AcParticleEmitterSimulator.TryResolveVisualGfxObjectIdFromPortal(dats, emitterDid, out gfxId);
+
+        bool TryGetStaticDrawModel(StaticObject obj, out uint modelId, out bool isSetup) {
+            if (!obj.IsParticleEmitter) {
+                modelId = obj.Id;
+                isSetup = obj.IsSetup;
+                return true;
+            }
+            if (!TryGetParticleGfxId(_dats, obj.Id, out modelId)) {
+                isSetup = false;
+                return false;
+            }
+            isSetup = false;
+            return modelId != 0;
+        }
+
+        private void RenderTransformGizmo(SceneContext context, ObjectSelectionState selection, ICamera camera, Matrix4x4 viewProjection) {
+            if (!selection.HasSelection || selection.HasEnvCellSelection || selection.IsPlacementMode || !selection.HasEditableEntry) return;
+            var entries = selection.SelectedEntries;
+            if (entries.Count == 0) return;
+
+            var gizmo = context.Gizmo;
+            gizmo.UseLocalSpace = _settings.Landscape.Snap.UseLocalSpace;
+
+            // Compute gizmo center (centroid of all selected objects)
+            var center = Vector3.Zero;
+            foreach (var e in entries) center += e.Object.Origin;
+            center /= entries.Count;
+
+            // Use first object's orientation for local-space gizmo
+            var orientation = entries.Count == 1 ? entries[0].Object.Orientation : Quaternion.Identity;
+
+            var gl = context.Renderer.GraphicsDevice.GL;
+            gizmo.Render(gl, viewProjection, camera, center, orientation, true);
+
+            // Render wireframe bounding boxes for each selected object
+            foreach (var entry in entries) {
+                var obj = entry.Object;
+                if (!TryGetStaticDrawModel(obj, out var gMid, out var gSetup)) continue;
+                var bounds = context.ObjectManager.GetBounds(gMid, gSetup);
+                if (bounds == null) continue;
+                var (localMin, localMax) = bounds.Value;
+                var worldTransform = Matrix4x4.CreateScale(obj.Scale)
+                    * Matrix4x4.CreateFromQuaternion(obj.Orientation)
+                    * Matrix4x4.CreateTranslation(obj.Origin);
+
+                var worldCorners = new Vector3[8];
+                worldCorners[0] = Vector3.Transform(new(localMin.X, localMin.Y, localMin.Z), worldTransform);
+                worldCorners[1] = Vector3.Transform(new(localMax.X, localMin.Y, localMin.Z), worldTransform);
+                worldCorners[2] = Vector3.Transform(new(localMax.X, localMax.Y, localMin.Z), worldTransform);
+                worldCorners[3] = Vector3.Transform(new(localMin.X, localMax.Y, localMin.Z), worldTransform);
+                worldCorners[4] = Vector3.Transform(new(localMin.X, localMin.Y, localMax.Z), worldTransform);
+                worldCorners[5] = Vector3.Transform(new(localMax.X, localMin.Y, localMax.Z), worldTransform);
+                worldCorners[6] = Vector3.Transform(new(localMax.X, localMax.Y, localMax.Z), worldTransform);
+                worldCorners[7] = Vector3.Transform(new(localMin.X, localMax.Y, localMax.Z), worldTransform);
+
+                var wMin = worldCorners[0]; var wMax = worldCorners[0];
+                for (int i = 1; i < 8; i++) {
+                    wMin = Vector3.Min(wMin, worldCorners[i]);
+                    wMax = Vector3.Max(wMax, worldCorners[i]);
+                }
+                gizmo.RenderSelectionBox(gl, viewProjection, camera, wMin, wMax, new Vector3(1f, 0.85f, 0.15f));
+            }
         }
 
         private unsafe void RenderSelectionHighlight(SceneContext context, ObjectSelectionState selection, ICamera camera, Matrix4x4 viewProjection) {
