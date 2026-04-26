@@ -1,0 +1,44 @@
+[
+  {
+    "id": "ace-generic",
+    "title": "Generic object",
+    "description": "WeenieType Generic (1). Set Setup (DID 1), Icon (DID 8), and physics ints to match your DAT.",
+    "weenieType": 1,
+    "strings": [{ "type": 1, "value": "New Generic" }]
+  },
+  {
+    "id": "ace-creature",
+    "title": "Creature (stub)",
+    "description": "WeenieType Creature (10). Add motion/combat/sound tables, skills, generator data, etc.",
+    "weenieType": 10,
+    "strings": [{ "type": 1, "value": "New Creature" }]
+  },
+  {
+    "id": "ace-portal",
+    "title": "Portal (stub)",
+    "description": "WeenieType Portal (7). Set LinkedPortal DIDs, PortalBitmask, and appraisal strings.",
+    "weenieType": 7,
+    "strings": [{ "type": 1, "value": "New Portal" }]
+  },
+  {
+    "id": "ace-vendor",
+    "title": "Vendor (stub)",
+    "description": "WeenieType Vendor (12). Add generator / merchandise properties as needed.",
+    "weenieType": 12,
+    "strings": [{ "type": 1, "value": "New Vendor" }]
+  },
+  {
+    "id": "ace-door",
+    "title": "Door (stub)",
+    "description": "WeenieType Door (19). Add use/lock strings and linked open/close setups.",
+    "weenieType": 19,
+    "strings": [{ "type": 1, "value": "New Door" }]
+  },
+  {
+    "id": "ace-container",
+    "title": "Container (stub)",
+    "description": "WeenieType Container (21). Set capacity, burden, and lock properties.",
+    "weenieType": 21,
+    "strings": [{ "type": 1, "value": "New Container" }]
+  }
+]

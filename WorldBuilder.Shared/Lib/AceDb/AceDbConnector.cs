@@ -9,7 +9,7 @@ namespace WorldBuilder.Shared.Lib.AceDb {
     /// Thin wrapper around MySqlConnector for reading/writing the ACE
     /// ace_world.landblock_instance table.
     /// </summary>
-    public class AceDbConnector : IDisposable {
+    public partial class AceDbConnector : IDisposable {
         private readonly AceDbSettings _settings;
 
         public AceDbConnector(AceDbSettings settings) {
