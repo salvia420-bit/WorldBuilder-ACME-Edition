@@ -21,6 +21,8 @@
 
 	<ItemGroup>
 		<None Remove="Shaders\fragment.glsl" />
+		<None Remove="Shaders\Gizmo.frag" />
+		<None Remove="Shaders\Gizmo.vert" />
 		<None Remove="Shaders\Sphere.frag" />
 		<None Remove="Shaders\Sphere.vert" />
 		<None Remove="Shaders\vertex.glsl" />
@@ -29,6 +31,12 @@
 	<ItemGroup>
 		<EmbeddedResource Include="Shaders\fragment.glsl">
 			<CopyToOutputDirectory>Never</CopyToOutputDirectory>
+		</EmbeddedResource>
+		<EmbeddedResource Include="Shaders\Gizmo.frag">
+		  <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+		</EmbeddedResource>
+		<EmbeddedResource Include="Shaders\Gizmo.vert">
+		  <CopyToOutputDirectory>Never</CopyToOutputDirectory>
 		</EmbeddedResource>
 		<EmbeddedResource Include="Shaders\Sphere.frag">
 		  <CopyToOutputDirectory>Never</CopyToOutputDirectory>

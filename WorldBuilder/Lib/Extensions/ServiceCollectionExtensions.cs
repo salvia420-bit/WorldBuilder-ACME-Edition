@@ -6,6 +6,8 @@ using WorldBuilder.Editors.Dungeon;
 using WorldBuilder.Editors.Landscape;
 using WorldBuilder.Editors.Landscape.ViewModels;
 using WorldBuilder.Editors.Landscape.Views;
+using WorldBuilder.Editors.ObjectDebug;
+using WorldBuilder.Editors.Weenie;
 using WorldBuilder.Editors.CharGen;
 using WorldBuilder.Editors.Experience;
 using WorldBuilder.Editors.Layout;
@@ -77,7 +79,8 @@ namespace WorldBuilder.Lib.Extensions {
             collection.AddSingleton<VitalEditorViewModel>();
             collection.AddSingleton<CharGenEditorViewModel>();
             collection.AddSingleton<LayoutEditorViewModel>();
-            collection.AddTransient<ObjectDebugViewModel>();
+            collection.AddSingleton<ObjectDebugEditorViewModel>();
+            collection.AddSingleton<WeenieEditorViewModel>();
             collection.AddTransient<HistorySnapshotPanelViewModel>();
         }
     }

@@ -12,6 +12,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using WorldBuilder.Lib;
+using WorldBuilder.Shared.Documents;
 using WorldBuilder.Shared.Lib;
 using PixelFormat = Silk.NET.OpenGL.PixelFormat;
 
@@ -25,6 +26,7 @@ namespace WorldBuilder.Editors.Landscape {
         private readonly HashSet<uint> _failedIds = new();
         private readonly TextureDiskCache? _textureCache;
         private readonly Dictionary<(uint Id, bool IsSetup), (Vector3 Min, Vector3 Max)> _boundsCache = new();
+        private PortalDatDocument? _portalDoc;
 
         public StaticObjectManager(OpenGLRenderer renderer, IDatReaderWriter dats, TextureDiskCache? textureCache = null) {
             _renderer = renderer;
@@ -35,6 +37,73 @@ namespace WorldBuilder.Editors.Landscape {
             _objectShader = _renderer.GraphicsDevice.CreateShader("StaticObject",
                 GameScene.GetEmbeddedResource("Chorizite.OpenGLSDLBackend.Shaders.StaticObject.vert", assembly),
                 GameScene.GetEmbeddedResource("Chorizite.OpenGLSDLBackend.Shaders.StaticObject.frag", assembly));
+        }
+
+        /// <summary>Optional project overlay (GfxObj / Setup stored in <see cref="PortalDatDocument"/> but not yet in portal.dat).</summary>
+        public void SetPortalDatDocument(PortalDatDocument? portalDoc) => _portalDoc = portalDoc;
+
+        private bool TryGetSetup(uint id, out Setup? setup) {
+            if (_dats.TryGet<Setup>(id, out setup) && setup != null)
+                return true;
+            if (_portalDoc != null && _portalDoc.TryGetEntry<Setup>(id, out var p) && p != null) {
+                setup = p;
+                return true;
+            }
+            setup = null;
+            return false;
+        }
+
+        private bool TryGetGfxObj(uint id, out GfxObj? gfx) {
+            if (_dats.TryGet<GfxObj>(id, out gfx) && gfx != null)
+                return true;
+            if (_portalDoc != null && _portalDoc.TryGetEntry<GfxObj>(id, out var p) && p != null) {
+                gfx = p;
+                return true;
+            }
+            gfx = null;
+            return false;
+        }
+
+        /// <summary>
+        /// Register a pre-built GfxObj for rendering without requiring it to be in the DAT files.
+        /// Used when an object has been imported into the PortalDatDocument but not yet exported.
+        /// </summary>
+        public StaticObjectRenderData? RegisterGfxObj(uint id, GfxObj gfxObj) {
+            try {
+                _failedIds.Remove(id);
+                var data = CreateGfxObjRenderData(id, gfxObj, Vector3.One);
+                if (data != null) {
+                    _renderData[id] = data;
+                    _usageCount[id] = 1;
+                }
+                return data;
+            }
+            catch (Exception ex) {
+                Console.WriteLine($"Error registering GfxObj 0x{id:X8}: {ex}");
+                _failedIds.Add(id);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Register a pre-built Setup for rendering without requiring it to be in the DAT files.
+        /// Used when an object has been imported into the PortalDatDocument but not yet exported.
+        /// </summary>
+        public StaticObjectRenderData? RegisterSetup(uint id, Setup setup) {
+            try {
+                _failedIds.Remove(id);
+                var data = CreateSetupRenderData(id, setup);
+                if (data != null) {
+                    _renderData[id] = data;
+                    _usageCount[id] = 1;
+                }
+                return data;
+            }
+            catch (Exception ex) {
+                Console.WriteLine($"Error registering Setup 0x{id:X8}: {ex}");
+                _failedIds.Add(id);
+                return null;
+            }
         }
 
         /// <summary>
@@ -103,11 +172,11 @@ namespace WorldBuilder.Editors.Landscape {
         private StaticObjectRenderData? CreateRenderData(uint id, bool isSetup) {
             try {
                 if (isSetup) {
-                    if (!_dats.TryGet<Setup>(id, out var setup)) return null;
+                    if (!TryGetSetup(id, out var setup) || setup == null) return null;
                     return CreateSetupRenderData(id, setup);
                 }
                 else {
-                    if (!_dats.TryGet<GfxObj>(id, out var gfxObj)) return null;
+                    if (!TryGetGfxObj(id, out var gfxObj) || gfxObj == null) return null;
                     return CreateGfxObjRenderData(id, gfxObj, Vector3.One);
                 }
             }
@@ -168,7 +237,7 @@ namespace WorldBuilder.Editors.Landscape {
             try {
                 (Vector3 Min, Vector3 Max)? result;
                 if (isSetup) {
-                    if (!_dats.TryGet<Setup>(id, out var setup)) return null;
+                    if (!TryGetSetup(id, out var setup) || setup == null) return null;
                     var parts = new List<(uint GfxObjId, Matrix4x4 Transform)>();
                     var placementFrame = GetDefaultPlacementFrame(setup);
                     for (int i = 0; i < setup.Parts.Count; i++) {
@@ -184,7 +253,7 @@ namespace WorldBuilder.Editors.Landscape {
                     var max = new Vector3(float.MinValue);
                     bool hasBounds = false;
                     foreach (var (partId, transform) in parts) {
-                        if (_dats.TryGet<GfxObj>(partId, out var partGfx)) {
+                        if (TryGetGfxObj(partId, out var partGfx) && partGfx != null) {
                             var (partMin, partMax) = ComputeBounds(partGfx, Vector3.One);
                             // Approximate transformed AABB (same as original; for exact, transform 8 corners)
                             var transMin = Vector3.Transform(partMin, transform);
@@ -197,7 +266,7 @@ namespace WorldBuilder.Editors.Landscape {
                     result = hasBounds ? (min, max) : null;
                 }
                 else {
-                    if (!_dats.TryGet<GfxObj>(id, out var gfxObj)) return null;
+                    if (!TryGetGfxObj(id, out var gfxObj) || gfxObj == null) return null;
                     result = ComputeBounds(gfxObj, Vector3.One);
                 }
 
@@ -402,7 +471,7 @@ namespace WorldBuilder.Editors.Landscape {
 
             try {
                 if (isSetup) {
-                    if (!_dats.TryGet<Setup>(id, out var setup)) return null;
+                    if (!TryGetSetup(id, out var setup) || setup == null) return null;
                     var parts = new List<(uint GfxObjId, Matrix4x4 Transform)>();
                     var placementFrame = GetDefaultPlacementFrame(setup);
                     for (int i = 0; i < setup.Parts.Count; i++) {
@@ -417,7 +486,7 @@ namespace WorldBuilder.Editors.Landscape {
                     return new PreparedModelData { Id = id, IsSetup = true, SetupParts = parts };
                 }
                 else {
-                    if (!_dats.TryGet<GfxObj>(id, out var gfxObj)) return null;
+                    if (!TryGetGfxObj(id, out var gfxObj) || gfxObj == null) return null;
                     return PrepareGfxObjData(id, gfxObj, Vector3.One);
                 }
             }

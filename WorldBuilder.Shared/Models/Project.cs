@@ -103,6 +103,26 @@ namespace WorldBuilder.Shared.Models {
             CustomTextures = new CustomTextureStore(ProjectDirectory);
         }
 
+        /// <summary>
+        /// Recreates read-only DAT handles after another process (or a short-lived ReadWrite connection)
+        /// wrote new portal files — e.g. OBJ import into <c>client_portal.dat</c>.
+        /// </summary>
+        public void ReloadDatReadersAfterExternalWrite() {
+            var oldProj = DatReaderWriter;
+            var oldDoc = DocumentManager?.Dats;
+            var fresh = new DefaultDatReaderWriter(BaseDatDirectory, DatAccessType.Read);
+            DatReaderWriter = fresh;
+            if (DocumentManager != null)
+                DocumentManager.Dats = fresh;
+            if (!ReferenceEquals(oldProj, oldDoc)) {
+                oldProj?.Dispose();
+                oldDoc?.Dispose();
+            }
+            else {
+                oldProj?.Dispose();
+            }
+        }
+
         public void Save() {
             var tmp = Path.GetTempFileName();
             try {
@@ -393,6 +413,9 @@ namespace WorldBuilder.Shared.Models {
                 }
                 else if (doc is PortalDatDocument portalDoc) {
                     portalDoc.SaveToDats(writer, portalIteration);
+                }
+                else if (doc is LayoutDatDocument layoutDoc) {
+                    layoutDoc.SaveToDats(writer, portalIteration);
                 }
             }
 

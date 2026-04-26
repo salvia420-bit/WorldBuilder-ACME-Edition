@@ -5,7 +5,9 @@ namespace WorldBuilder.Shared.Services {
 
     public enum CustomTextureUsage {
         DungeonSurface,
-        TerrainReplace
+        TerrainReplace,
+        /// <summary>Deprecated. Was used for unsafe new portal writes; remove entries from custom_textures.json.</summary>
+        UiRenderSurface
     }
 
     public class CustomTextureEntry {

@@ -41,6 +41,12 @@ namespace WorldBuilder.Lib.Settings {
             set => SetProperty(ref _input, value);
         }
 
+        private AceDbConnectionSettings _aceDbConnection = new();
+        public AceDbConnectionSettings AceDbConnection {
+            get => _aceDbConnection;
+            set => SetProperty(ref _aceDbConnection, value);
+        }
+
         public WorldBuilderSettings() { }
 
         public WorldBuilderSettings(ILogger<WorldBuilderSettings> log) {

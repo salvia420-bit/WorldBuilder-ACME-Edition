@@ -1,12 +1,110 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MySqlConnector;
 
 namespace WorldBuilder.Shared.Lib.AceDb {
     public partial class AceDbConnector {
+
+        /// <summary>Picker-list row: weenie class id + display name + setup DID for thumbnails.</summary>
+        public record WeenieEntry(uint ClassId, string Name, uint SetupId);
+
+        /// <summary>
+        /// Loads weenie class IDs, names, and setup DIDs from ace_world for picker/list UI.
+        /// Name comes from weenie_properties_string type 1 (PropertyString.Name).
+        /// Setup DID comes from weenie_properties_d_i_d type 1 (PropertyDataId.Setup).
+        /// </summary>
+        /// <param name="search">Optional filter: names containing this text (case-insensitive). Supports partial matching.</param>
+        /// <param name="limit">Max results (default 500).</param>
+        public async Task<List<WeenieEntry>> GetWeenieNamesAsync(string? search = null, int limit = 500, CancellationToken ct = default) {
+            var results = new List<WeenieEntry>();
+            try {
+                await using var conn = new MySqlConnection(_settings.ConnectionString);
+                await conn.OpenAsync(ct);
+
+                string sql;
+                if (string.IsNullOrWhiteSpace(search)) {
+                    sql = @"
+                        SELECT n.`object_Id`, n.`value` AS `name`,
+                               COALESCE(d.`value`, 0) AS `setup_did`
+                        FROM `weenie_properties_string` n
+                        LEFT JOIN `weenie_properties_d_i_d` d
+                            ON d.`object_Id` = n.`object_Id` AND d.`type` = 1
+                        WHERE n.`type` = 1
+                        ORDER BY n.`value`
+                        LIMIT @limit";
+                }
+                else {
+                    sql = @"
+                        SELECT n.`object_Id`, n.`value` AS `name`,
+                               COALESCE(d.`value`, 0) AS `setup_did`
+                        FROM `weenie_properties_string` n
+                        LEFT JOIN `weenie_properties_d_i_d` d
+                            ON d.`object_Id` = n.`object_Id` AND d.`type` = 1
+                        WHERE n.`type` = 1
+                          AND n.`value` LIKE CONCAT('%', @search, '%')
+                        ORDER BY n.`value`
+                        LIMIT @limit";
+                }
+
+                await using var cmd = new MySqlCommand(sql, conn);
+                cmd.Parameters.AddWithValue("@limit", limit);
+                if (!string.IsNullOrWhiteSpace(search))
+                    cmd.Parameters.AddWithValue("@search", search.Trim());
+
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct)) {
+                    results.Add(new WeenieEntry(
+                        reader.GetUInt32("object_Id"),
+                        reader.GetString("name"),
+                        reader.IsDBNull(reader.GetOrdinal("setup_did")) ? 0 : reader.GetUInt32("setup_did")
+                    ));
+                }
+            }
+            catch (MySqlException) {
+            }
+
+            return results;
+        }
+
+        /// <summary>
+        /// Batch lookup of Setup DIDs (PropertyDataId.Setup = type 1) for a set of weenie class IDs.
+        /// Returns a dictionary mapping WCID -> Setup DID. WCIDs without a Setup are omitted.
+        /// </summary>
+        public async Task<Dictionary<uint, uint>> GetSetupDidsAsync(
+            IEnumerable<uint> weenieClassIds, CancellationToken ct = default) {
+            var result = new Dictionary<uint, uint>();
+            var idList = new HashSet<uint>(weenieClassIds).ToList();
+            if (idList.Count == 0) return result;
+
+            try {
+                await using var conn = new MySqlConnection(_settings.ConnectionString);
+                await conn.OpenAsync(ct);
+
+                for (int offset = 0; offset < idList.Count; offset += 500) {
+                    var batch = idList.Skip(offset).Take(500).ToList();
+                    var paramNames = string.Join(",", batch.Select((_, i) => $"@w{offset + i}"));
+                    var sql = $@"SELECT `object_Id`, `value`
+                                 FROM `weenie_properties_d_i_d`
+                                 WHERE `type` = 1 AND `object_Id` IN ({paramNames})";
+
+                    await using var cmd = new MySqlCommand(sql, conn);
+                    for (int i = 0; i < batch.Count; i++)
+                        cmd.Parameters.AddWithValue($"@w{offset + i}", batch[i]);
+
+                    await using var reader = await cmd.ExecuteReaderAsync(ct);
+                    while (await reader.ReadAsync(ct))
+                        result.TryAdd(reader.GetUInt32("object_Id"), reader.GetUInt32("value"));
+                }
+            }
+            catch (MySqlException) {
+            }
+
+            return result;
+        }
 
         /// <summary>Loads scalar weenie properties and row counts for complex tables. Returns null if the weenie row is missing.</summary>
         public async Task<AceWeenieSnapshot?> LoadWeenieSnapshotAsync(uint classId, CancellationToken ct = default) {

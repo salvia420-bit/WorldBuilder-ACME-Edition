@@ -80,6 +80,11 @@ namespace WorldBuilder.Shared.Lib {
             return _buildingModelIds!.Contains(modelId);
         }
 
+        public static IReadOnlyCollection<uint> GetAllBuildingModelIds(IDatReaderWriter dats) {
+            EnsureBuildingIdsSscanned(dats);
+            return _buildingModelIds!;
+        }
+
         /// <summary>
         /// Gets or extracts a blueprint for the given building model ID.
         /// Returns null if no existing instance can be found in the dat.

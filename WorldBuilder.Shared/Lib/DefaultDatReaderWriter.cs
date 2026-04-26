@@ -33,6 +33,7 @@ namespace WorldBuilder.Shared.Lib {
                     Type _ when typeof(T) == typeof(EnvCell) => Dats.Cell.TryGet(id, out file),
                     Type _ when typeof(T) == typeof(Setup) => Dats.Portal.TryGet(id, out file),
                     Type _ when typeof(T) == typeof(GfxObj) => Dats.Portal.TryGet(id, out file),
+                    Type _ when typeof(T) == typeof(ParticleEmitter) => Dats.Portal.TryGet(id, out file),
                     Type _ when typeof(T) == typeof(Region) => Dats.Portal.TryGet(id, out file),
                     Type _ when typeof(T) == typeof(Scene) => Dats.Portal.TryGet(id, out file),
                     Type _ when typeof(T) == typeof(Surface) => Dats.Portal.TryGet(id, out file),
@@ -61,6 +62,7 @@ namespace WorldBuilder.Shared.Lib {
                     Type _ when typeof(T) == typeof(EnvCell) => Dats.Cell.TryWriteFile(file, iteration),
                     Type _ when typeof(T) == typeof(Setup) => Dats.Portal.TryWriteFile(file, iteration),
                     Type _ when typeof(T) == typeof(GfxObj) => Dats.Portal.TryWriteFile(file, iteration),
+                    Type _ when typeof(T) == typeof(ParticleEmitter) => Dats.Portal.TryWriteFile(file, iteration),
                     Type _ when typeof(T) == typeof(Region) => Dats.Portal.TryWriteFile(file, iteration),
                     Type _ when typeof(T) == typeof(Scene) => Dats.Portal.TryWriteFile(file, iteration),
                     Type _ when typeof(T) == typeof(RenderTexture) => Dats.Portal.TryWriteFile(file, iteration),
@@ -74,6 +76,7 @@ namespace WorldBuilder.Shared.Lib {
                     Type _ when typeof(T) == typeof(SkillTable) => Dats.Portal.TryWriteFile(file, iteration),
                     Type _ when typeof(T) == typeof(VitalTable) => Dats.Portal.TryWriteFile(file, iteration),
                     Type _ when typeof(T) == typeof(CharGen) => Dats.Portal.TryWriteFile(file, iteration),
+                    Type _ when typeof(T) == typeof(LayoutDesc) => Dats.TryWriteFile(file, iteration),
                     _ => throw new NotImplementedException($"DefaultDatReaderWriter does not currently support {typeof(T)}"),
                 };
             }

@@ -20,11 +20,17 @@ using static System.Runtime.InteropServices.JavaScript.JSType;
 namespace WorldBuilder.Shared.Documents {
     [MemoryPack.MemoryPackable]
     public partial struct StaticObject {
-        public uint Id; // GfxObj or Setup ID
-        public bool IsSetup; // True for Setup, false for GfxObj
+        public uint Id; // GfxObj or Setup ID, or ParticleEmitter DID when IsParticleEmitter is true
+        public bool IsSetup; // True for Setup, false for GfxObj (ignored when IsParticleEmitter)
         public Vector3 Origin; // World-space position
         public Quaternion Orientation; // World-space rotation
         public Vector3 Scale;
+
+        /// <summary>
+        /// When true, <see cref="Id"/> is a portal <c>ParticleEmitter</c> definition; particles render via the simulator.
+        /// Retail outdoor stabs may store these DIDs; we persist them as normal <c>Stab</c> rows on export.
+        /// </summary>
+        public bool IsParticleEmitter;
     }
 
     [MemoryPack.MemoryPackable]
@@ -55,12 +61,20 @@ namespace WorldBuilder.Shared.Documents {
 
             if (datreader.TryGet<LandBlockInfo>(infoId, out var lbi)) {
                 foreach (var obj in lbi.Objects) {
+                    // Only IDs in the 0x32xxxxxx range can be ParticleEmitter entries.
+                    // Portal.TryGet is a generic ID lookup, so non-emitter files (Setup 0x02,
+                    // GfxObj 0x01, etc.) would be found and mis-parsed as ParticleEmitter,
+                    // producing garbage data with non-zero GfxObjId fields.
+                    bool isParticle = (obj.Id >> 24) == 0x32
+                        && AcParticleEmitterSimulator.TryResolveVisualGfxObjectIdFromPortal(datreader, obj.Id, out _);
+
                     _data.StaticObjects.Add(new StaticObject {
                         Id = obj.Id,
-                        IsSetup = (obj.Id & 0x02000000) != 0,
+                        IsSetup = isParticle ? false : (obj.Id & 0x02000000) != 0,
                         Origin = Offset(obj.Frame.Origin, lbId),
                         Orientation = obj.Frame.Orientation,
-                        Scale = Vector3.One
+                        Scale = Vector3.One,
+                        IsParticleEmitter = isParticle
                     });
                 }
 
@@ -135,7 +149,7 @@ namespace WorldBuilder.Shared.Documents {
                 for (int i = 0; i < _data.StaticObjects.Count; i++) {
                     if (consumed.Contains(i)) continue;
                     var obj = _data.StaticObjects[i];
-                    if (obj.Id != building.ModelId) continue;
+                    if (obj.IsParticleEmitter || obj.Id != building.ModelId) continue;
 
                     // If this placement has a donor hint from a different source landblock,
                     // treat it as an imported building to instantiate later (do not recycle
@@ -489,6 +503,7 @@ namespace WorldBuilder.Shared.Documents {
                     // Remove by matching Id and Origin
                     var idx = _data.StaticObjects.FindIndex(o =>
                         o.Id == objEvt.Object.Id &&
+                        o.IsParticleEmitter == objEvt.Object.IsParticleEmitter &&
                         Vector3.Distance(o.Origin, objEvt.Object.Origin) < 0.01f);
                     if (idx >= 0) {
                         _data.StaticObjects.RemoveAt(idx);
