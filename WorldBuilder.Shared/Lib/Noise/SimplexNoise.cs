@@ -143,6 +143,31 @@ public sealed class SimplexNoise {
         return sum / maxAmplitude;
     }
 
+    /// <summary>
+    /// Upstream-compatible FBM signature (positional octaves + persistence/lacunarity).
+    /// Equivalent to <see cref="FBm"/> with frequency=1.
+    /// </summary>
+    public float FBM(float x, float y, int octaves, float persistence = 0.5f, float lacunarity = 2.0f)
+        => FBm(x, y, octaves, lacunarity, persistence, 1f);
+
+    /// <summary>Ridged noise variant for mountain ranges. Returns [0, 1].</summary>
+    public float RidgedNoise(float x, float y, int octaves, float persistence = 0.5f, float lacunarity = 2.0f) {
+        float total = 0f;
+        float amplitude = 1f;
+        float frequency = 1f;
+        float maxAmplitude = 0f;
+
+        for (int i = 0; i < octaves; i++) {
+            float n = 1f - MathF.Abs(Evaluate(x * frequency, y * frequency));
+            total += n * n * amplitude;
+            maxAmplitude += amplitude;
+            amplitude *= persistence;
+            frequency *= lacunarity;
+        }
+
+        return total / maxAmplitude;
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int FastFloor(float x) {
         int xi = (int)x;
