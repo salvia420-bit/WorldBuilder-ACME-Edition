@@ -6338,9 +6338,7 @@ public class CommandEngine {
         Console.WriteLine($"[QuickWorld] Image: {imgW}Ã—{imgH}, scale: {scaleX:F3}Ã—{scaleY:F3}" +
                           (isExact ? " (exact vertex resolution)" : " (scaled)"));
 
-        // â”€â”€â”€ 3. Stamp each landblock (in-memory pass) â”€â”€â”€
-        Console.WriteLine($"[QuickWorld] Phase 1: Computing terrain for 255Ã—255 landblocks in memory...");
-
+        // â”€â”€â”€ 3. Stamp each landblock (parallel in-memory pass) â”€â”€â”€
         var terrainDoc = GetTerrainDoc();
         int stamped = 0;
         int skipped = 0;
@@ -6358,113 +6356,142 @@ public class CommandEngine {
         }
         var typeNameById = codebook.NameByTypeIndex;
 
-        // Collect ALL changes in memory before writing to avoid per-landblock I/O
-        var allChanges = new Dictionary<ushort, Dictionary<byte, uint>>();
-        // Also track new entries per-landblock for scenery placement later
-        var newEntriesMap = new Dictionary<ushort, TerrainEntry[]>();
-        // Track dominant types per landblock for scenery
-        var dominantTypes = new Dictionary<ushort, int>();
+        // Phase 1 writes to these from many threads; ConcurrentDictionary handles the contention.
+        var allChanges = new System.Collections.Concurrent.ConcurrentDictionary<ushort, Dictionary<byte, uint>>();
+        var newEntriesMap = new System.Collections.Concurrent.ConcurrentDictionary<ushort, TerrainEntry[]>();
+        var dominantTypes = new System.Collections.Concurrent.ConcurrentDictionary<ushort, int>();
+        var terrainTypesConc = new System.Collections.Concurrent.ConcurrentDictionary<string, int>();
 
-        // Reusable per-landblock buffers; .Clear() / stack reuse avoids 65k+ heap allocations.
-        var typeCounts = new Dictionary<int, int>(classificationColors.Count);
         const int LANDBLOCK_VERTEX_COUNT = 81;
-        Span<TerrainEntry> currentData = stackalloc TerrainEntry[LANDBLOCK_VERTEX_COUNT];
+        int parallelism = Math.Max(1, System.Environment.ProcessorCount);
+        Console.WriteLine($"[QuickWorld] Phase 1: Parallelizing across {parallelism} threads (255×255 landblocks)...");
 
-        for (int lbX = 0; lbX < 255; lbX++) {
-            for (int lbY = 0; lbY < 255; lbY++) {
-                try {
-                    ushort lbKey = LbKey((uint)lbX, (uint)lbY);
-                    if (!terrainDoc.TryGetLandblockInternal(lbKey, currentData)) {
-                        skipped++;
-                        continue;
-                    }
+        // Counters shared across worker threads; only touched via Interlocked.
+        int skippedCounter = 0;
+        int stampedCounter = 0;
+        int approxMatchCounter = 0;
+        int reportedSkipMessages = 0;
 
-                    var newEntries = new TerrainEntry[LANDBLOCK_VERTEX_COUNT];
+        System.Threading.Tasks.Parallel.ForEach(
+            System.Collections.Concurrent.Partitioner.Create(0, 255),
+            new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = parallelism },
+            // localInit: each thread gets its own typeCounts buffer + Random.
+            // For the unseeded case we use one Random per thread (concurrent new Random() can collide
+            // on time-based seeds). For the seeded case we still hand out a per-thread Random as the
+            // fallback path — see RngFor below for the deterministic per-iteration override.
+            () => new {
+                TypeCounts = new Dictionary<int, int>(classificationColors.Count),
+                ThreadRng = seed.HasValue
+                    ? new Random(unchecked(seed.Value ^ System.Threading.Thread.CurrentThread.ManagedThreadId))
+                    : new Random(),
+            },
+            (range, _, threadCtx) => {
+                Span<TerrainEntry> currentData = stackalloc TerrainEntry[LANDBLOCK_VERTEX_COUNT];
 
-                    // â”€â”€â”€ Per-vertex terrain reconstruction â”€â”€â”€
-                    int dominantType = -1;
-                    typeCounts.Clear();
-
-                    for (int vx = 0; vx < 9; vx++) {
-                        for (int vy = 0; vy < 9; vy++) {
-                            int vi = vx * 9 + vy;
-
-                            // Map vertex to pixel coordinate
-                            int pixX, pixY;
-                            if (isExact) {
-                                pixX = lbX * 8 + vx;
-                                pixY = VERTEX_GRID - 1 - (lbY * 8 + vy);
-                            } else {
-                                pixX = (int)Math.Round((lbX * 8 + vx) * scaleX);
-                                pixY = (int)Math.Round((VERTEX_GRID - 1 - (lbY * 8 + vy)) * scaleY);
+                for (int lbX = range.Item1; lbX < range.Item2; lbX++) {
+                    for (int lbY = 0; lbY < 255; lbY++) {
+                        try {
+                            ushort lbKey = LbKey((uint)lbX, (uint)lbY);
+                            if (!terrainDoc.TryGetLandblockInternal(lbKey, currentData)) {
+                                System.Threading.Interlocked.Increment(ref skippedCounter);
+                                continue;
                             }
 
-                            pixX = Math.Clamp(pixX, 0, imgW - 1);
-                            pixY = Math.Clamp(pixY, 0, imgH - 1);
+                            var newEntries = new TerrainEntry[LANDBLOCK_VERTEX_COUNT];
 
-                            var pixel = pixels[pixY * imgW + pixX];
-                            int pr = pixel.Red, pg = pixel.Green, pb = pixel.Blue;
+                            // For deterministic seeded mode, derive a per-iteration RNG so output is
+                            // independent of how the partitioner chunks the work across threads.
+                            // Unseeded mode uses the per-thread Random for speed.
+                            Random rngForLb = seed.HasValue
+                                ? new Random(unchecked(seed.Value * 65537 + (lbX << 8) + lbY))
+                                : threadCtx.ThreadRng;
 
-                            int bestType = QuickWorldHelpers.ClassifyPixel(pr, pg, pb, classificationColors, out var bestDist);
-                            if (bestDist > QuickWorldHelpers.APPROX_MATCH_DIST_SQ)
-                                approximateMatches++;
+                            int dominantType = -1;
+                            threadCtx.TypeCounts.Clear();
 
-                            typeCounts.TryGetValue(bestType, out var tc);
-                            typeCounts[bestType] = tc + 1;
+                            for (int vx = 0; vx < 9; vx++) {
+                                for (int vy = 0; vy < 9; vy++) {
+                                    int vi = vx * 9 + vy;
 
-                            // Note: ±2 jitter in EstimateHeight is per-vertex by design — switching
-                            // to a smoothed/low-frequency noise source is a known follow-up.
-                            double brightness = (pr + pg + pb) / (3.0 * 255.0);
-                            byte heightIdx = QuickWorldHelpers.EstimateHeight(bestType, brightness, codebook, rng);
+                                    int pixX, pixY;
+                                    if (isExact) {
+                                        pixX = lbX * 8 + vx;
+                                        pixY = VERTEX_GRID - 1 - (lbY * 8 + vy);
+                                    } else {
+                                        pixX = (int)Math.Round((lbX * 8 + vx) * scaleX);
+                                        pixY = (int)Math.Round((VERTEX_GRID - 1 - (lbY * 8 + vy)) * scaleY);
+                                    }
+                                    pixX = Math.Clamp(pixX, 0, imgW - 1);
+                                    pixY = Math.Clamp(pixY, 0, imgH - 1);
 
-                            newEntries[vi] = currentData[vi] with {
-                                Height = heightIdx,
-                                Type = (byte)bestType
-                            };
+                                    var pixel = pixels[pixY * imgW + pixX];
+                                    int pr = pixel.Red, pg = pixel.Green, pb = pixel.Blue;
+
+                                    int bestType = QuickWorldHelpers.ClassifyPixel(pr, pg, pb, classificationColors, out var bestDist);
+                                    if (bestDist > QuickWorldHelpers.APPROX_MATCH_DIST_SQ)
+                                        System.Threading.Interlocked.Increment(ref approxMatchCounter);
+
+                                    threadCtx.TypeCounts.TryGetValue(bestType, out var tc);
+                                    threadCtx.TypeCounts[bestType] = tc + 1;
+
+                                    // Note: ±2 jitter in EstimateHeight is per-vertex by design — switching
+                                    // to a smoothed/low-frequency noise source is a known follow-up.
+                                    double brightness = (pr + pg + pb) / (3.0 * 255.0);
+                                    byte heightIdx = QuickWorldHelpers.EstimateHeight(bestType, brightness, codebook, rngForLb);
+
+                                    newEntries[vi] = currentData[vi] with {
+                                        Height = heightIdx,
+                                        Type = (byte)bestType
+                                    };
+                                }
+                            }
+
+                            var lbChanges = new Dictionary<byte, uint>();
+                            for (byte i = 0; i < 81; i++) {
+                                if (!currentData[i].Equals(newEntries[i])) {
+                                    lbChanges[i] = newEntries[i].ToUInt();
+                                }
+                            }
+                            if (lbChanges.Count > 0) {
+                                allChanges[lbKey] = lbChanges;
+                                newEntriesMap[lbKey] = newEntries;
+                            }
+                            System.Threading.Interlocked.Increment(ref stampedCounter);
+
+                            int maxCount = 0;
+                            dominantType = 0;
+                            foreach (var (tt, cnt) in threadCtx.TypeCounts) {
+                                if (cnt > maxCount) { maxCount = cnt; dominantType = tt; }
+                            }
+                            dominantTypes[lbKey] = dominantType;
+                            string typeName = typeNameById.TryGetValue(dominantType, out var n) ? n : $"Type{dominantType}";
+                            terrainTypesConc.AddOrUpdate(typeName, 1, (_, existing) => existing + 1);
+
+                        } catch (Exception ex) {
+                            System.Threading.Interlocked.Increment(ref skippedCounter);
+                            if (System.Threading.Interlocked.Increment(ref reportedSkipMessages) <= 5)
+                                Console.WriteLine($"[QuickWorld] Warning: ({lbX},{lbY}) skipped: {ex.Message}");
                         }
                     }
-
-                    // Collect changes for this landblock (diff against current)
-                    var lbChanges = new Dictionary<byte, uint>();
-                    for (byte i = 0; i < 81; i++) {
-                        if (!currentData[i].Equals(newEntries[i])) {
-                            lbChanges[i] = newEntries[i].ToUInt();
-                        }
-                    }
-                    if (lbChanges.Count > 0) {
-                        allChanges[lbKey] = lbChanges;
-                        newEntriesMap[lbKey] = newEntries;
-                    }
-                    stamped++;
-
-                    // Track dominant terrain type
-                    int maxCount = 0;
-                    dominantType = 0;
-                    foreach (var (tt, cnt) in typeCounts) {
-                        if (cnt > maxCount) { maxCount = cnt; dominantType = tt; }
-                    }
-                    dominantTypes[lbKey] = dominantType;
-                    string typeName = typeNameById.TryGetValue(dominantType, out var n) ? n : $"Type{dominantType}";
-                    terrainTypesCounted.TryGetValue(typeName, out var existing);
-                    terrainTypesCounted[typeName] = existing + 1;
-
-                } catch (Exception ex) {
-                    skipped++;
-                    if (skipped <= 5)
-                        Console.WriteLine($"[QuickWorld] Warning: ({lbX},{lbY}) skipped: {ex.Message}");
                 }
-            }
+                return threadCtx;
+            },
+            _ => { /* no merge needed — concurrent dicts collected everything */ });
 
-            if (lbX % 20 == 0)
-                Console.WriteLine($"[QuickWorld] ...computed row {lbX}/254, {stamped} landblocks, " +
-                                  $"{approximateMatches} approximate matches");
-        }
+        // Hand the per-counter values back to the names the rest of the method already uses.
+        skipped = skippedCounter;
+        stamped = stampedCounter;
+        approximateMatches = approxMatchCounter;
+        foreach (var kv in terrainTypesConc) terrainTypesCounted[kv.Key] = kv.Value;
 
         Console.WriteLine($"[QuickWorld] Phase 1 complete: {allChanges.Count} landblocks with changes computed in memory.");
 
         // â”€â”€â”€ 4. Bulk-write all terrain changes at once â”€â”€â”€
         Console.WriteLine($"[QuickWorld] Phase 2: Writing {allChanges.Count} landblocks to terrain document (single batch)...");
-        terrainDoc.UpdateLandblocksBatchInternal(allChanges, out _);
+        // UpdateLandblocksBatchInternal expects a plain Dictionary, so flatten the ConcurrentDictionary at the boundary.
+        var allChangesPlain = new Dictionary<ushort, Dictionary<byte, uint>>(allChanges.Count);
+        foreach (var kv in allChanges) allChangesPlain[kv.Key] = kv.Value;
+        terrainDoc.UpdateLandblocksBatchInternal(allChangesPlain, out _);
         Console.WriteLine($"[QuickWorld] Phase 2 complete: terrain written.");
 
         // â”€â”€â”€ 5. Scatter scenery objects â”€â”€â”€
