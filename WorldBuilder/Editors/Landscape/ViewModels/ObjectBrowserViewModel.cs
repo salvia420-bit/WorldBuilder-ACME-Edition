@@ -330,6 +330,26 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
                 (service == null ? " (WARNING: render service not yet available)" : ""));
         }
 
+        /// <summary>
+        /// Queue a specific set of DAT object IDs for thumbnail generation, independent of the current UI filter.
+        /// Returns the normalized items that were requested.
+        /// </summary>
+        public IReadOnlyList<ObjectBrowserItem> QueueExplicitIds(IEnumerable<uint> ids) {
+            var uniqueIds = ids.Distinct().ToArray();
+            var items = new ObservableCollection<ObjectBrowserItem>();
+
+            foreach (var id in uniqueIds) {
+                var isSetup = (id & 0xFF000000) == 0x02000000;
+                var tags = _tagIndex.IsLoaded ? _tagIndex.GetTagString(id) : null;
+                var item = new ObjectBrowserItem(id, isSetup, tags);
+                _itemLookup[id] = item;
+                items.Add(item);
+            }
+
+            RequestThumbnails(items);
+            return items.ToList();
+        }
+
         private void ApplyFilter() {
             // When buildings filter is active, show building IDs directly
             if (ShowBuildingsOnly) {

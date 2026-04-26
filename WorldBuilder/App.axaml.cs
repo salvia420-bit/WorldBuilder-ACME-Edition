@@ -21,6 +21,7 @@ using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using System.Runtime.InteropServices;
+using System.Collections.Generic;
 using WorldBuilder.Lib;
 using WorldBuilder.Lib.Demo;
 using WorldBuilder.Lib.Extensions;
@@ -43,6 +44,13 @@ public partial class App : Application {
     /// </summary>
     public static string? DemoProjectPath { get; set; }
     public static bool DemoModeEnabled => !string.IsNullOrEmpty(DemoProjectPath);
+    public static string? BatchThumbnailProjectPath { get; set; }
+    public static string? BatchThumbnailIdsPath { get; set; }
+    public static string? BatchThumbnailOutputDir { get; set; }
+    public static bool BatchThumbnailModeEnabled =>
+        !string.IsNullOrEmpty(BatchThumbnailProjectPath) &&
+        !string.IsNullOrEmpty(BatchThumbnailIdsPath) &&
+        !string.IsNullOrEmpty(BatchThumbnailOutputDir);
 
     public override void Initialize() {
         AvaloniaXamlLoader.Load(this);
@@ -90,6 +98,9 @@ public partial class App : Application {
                     // Start demo after the window has had a chance to layout and create the landscape view (so Init runs and Tools are populated)
                     Dispatcher.UIThread.Post(() => _ = RunDemoSequenceAsync(), DispatcherPriority.Loaded);
                 }
+                if (BatchThumbnailModeEnabled) {
+                    Dispatcher.UIThread.Post(() => _ = RunBatchThumbnailExportAsync(), DispatcherPriority.Loaded);
+                }
             }
             else if (ApplicationLifetime is ISingleViewApplicationLifetime singleViewPlatform) {
                 singleViewPlatform.MainView = new MainView { DataContext = mainVM };
@@ -101,10 +112,11 @@ public partial class App : Application {
             desktop.MainWindow.Show();
 
             // Demo mode: auto-open the project so the user can record without clicking
-            if (DemoModeEnabled && !string.IsNullOrEmpty(DemoProjectPath) && File.Exists(DemoProjectPath)) {
+            var autoOpenProject = BatchThumbnailModeEnabled ? BatchThumbnailProjectPath : DemoProjectPath;
+            if (!string.IsNullOrEmpty(autoOpenProject) && File.Exists(autoOpenProject)) {
                 Dispatcher.UIThread.Post(() => {
                     WeakReferenceMessenger.Default.Send(new SplashPageChangedMessage(SplashPageViewModel.SplashPage.Loading));
-                    WeakReferenceMessenger.Default.Send(new StartProjectLoadMessage(DemoProjectPath!));
+                    WeakReferenceMessenger.Default.Send(new StartProjectLoadMessage(autoOpenProject!));
                 }, DispatcherPriority.Background);
             }
 
@@ -199,5 +211,84 @@ public partial class App : Application {
         if (_projectManager == null) return;
         var script = DemoRunner.BuildDefaultScript();
         await DemoRunner.RunAsync(_projectManager, script);
+    }
+
+    private async Task RunBatchThumbnailExportAsync() {
+        if (_projectManager == null || string.IsNullOrEmpty(BatchThumbnailIdsPath) || string.IsNullOrEmpty(BatchThumbnailOutputDir)) {
+            return;
+        }
+
+        var idsPath = BatchThumbnailIdsPath!;
+        var outputDir = BatchThumbnailOutputDir!;
+        Directory.CreateDirectory(outputDir);
+
+        var ids = File.ReadAllLines(idsPath)
+            .Select(line => line.Trim())
+            .Where(line => !string.IsNullOrWhiteSpace(line) && !line.StartsWith("#", StringComparison.Ordinal))
+            .Select(ParseObjectId)
+            .Where(id => id.HasValue)
+            .Select(id => id!.Value)
+            .Distinct()
+            .ToArray();
+
+        if (ids.Length == 0) {
+            Console.WriteLine("[BatchThumbnail] No valid IDs supplied.");
+            if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop0) {
+                desktop0.Shutdown();
+            }
+            return;
+        }
+
+        Console.WriteLine($"[BatchThumbnail] Queuing {ids.Length} DAT object IDs");
+        await Task.Delay(5000);
+
+        var editorVm = _projectManager.GetProjectService<Editors.Landscape.ViewModels.LandscapeEditorViewModel>();
+        if (editorVm?.ObjectBrowser == null) {
+            Console.WriteLine("[BatchThumbnail] Landscape editor / object browser not available.");
+            if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop1) {
+                desktop1.Shutdown();
+            }
+            return;
+        }
+
+        var cache = new ThumbnailCache();
+        editorVm.ObjectBrowser.QueueExplicitIds(ids);
+
+        const int timeoutSeconds = 180;
+        var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+        while (DateTime.UtcNow < deadline) {
+            var ready = ids.Count(cache.HasCached);
+            Console.WriteLine($"[BatchThumbnail] Ready {ready}/{ids.Length}");
+            if (ready >= ids.Length) break;
+            await Task.Delay(1000);
+        }
+
+        var exported = 0;
+        foreach (var id in ids) {
+            var src = cache.GetCachePathForId(id);
+            if (!File.Exists(src)) continue;
+            var dst = Path.Combine(outputDir, $"{id:X8}.png");
+            File.Copy(src, dst, overwrite: true);
+            exported++;
+        }
+
+        Console.WriteLine($"[BatchThumbnail] Exported {exported}/{ids.Length} thumbnails to {outputDir}");
+        if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop2) {
+            desktop2.Shutdown();
+        }
+    }
+
+    private static uint? ParseObjectId(string text) {
+        var trimmed = text.Trim();
+        if (trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) {
+            trimmed = trimmed[2..];
+        }
+        if (uint.TryParse(trimmed, System.Globalization.NumberStyles.HexNumber, null, out var hexValue)) {
+            return hexValue;
+        }
+        if (uint.TryParse(trimmed, out var decValue)) {
+            return decValue;
+        }
+        return null;
     }
 }

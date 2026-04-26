@@ -46,6 +46,14 @@ namespace WorldBuilder.Lib {
             }
         }
 
+        public bool HasCached(uint objectId) {
+            return File.Exists(GetCachePath(objectId));
+        }
+
+        public string GetCachePathForId(uint objectId) {
+            return GetCachePath(objectId);
+        }
+
         /// <summary>
         /// Save RGBA pixel data as a PNG to the cache directory.
         /// Runs on a background thread (fire-and-forget).

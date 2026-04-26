@@ -38,6 +38,26 @@ sealed class Program
             {
             }
 
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (args[i] == "--demo" && i + 1 < args.Length)
+                {
+                    App.DemoProjectPath = args[i + 1];
+                    Console.WriteLine($"Demo mode: auto-opening project {App.DemoProjectPath}");
+                    i++;
+                    continue;
+                }
+                if (args[i] == "--batch-thumbnails" && i + 3 < args.Length)
+                {
+                    App.BatchThumbnailProjectPath = args[i + 1];
+                    App.BatchThumbnailIdsPath = args[i + 2];
+                    App.BatchThumbnailOutputDir = args[i + 3];
+                    Console.WriteLine($"Batch thumbnail mode: project={App.BatchThumbnailProjectPath} ids={App.BatchThumbnailIdsPath} out={App.BatchThumbnailOutputDir}");
+                    i += 3;
+                    continue;
+                }
+            }
+
             BuildAvaloniaApp()
                 .StartWithClassicDesktopLifetime(args);
         }
