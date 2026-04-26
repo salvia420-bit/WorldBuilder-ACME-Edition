@@ -9352,7 +9352,21 @@ public class CommandEngine {
     /// returns a summary. Does NOT mutate the project documents — results are dry-run only.
     /// Optionally writes the full <see cref="WorldGeneratorResult"/> to JSON for later inspection.
     /// </summary>
-    public WorldGenResult WorldGenDryRun(WorldGeneratorParams p, string? outputJsonPath = null) {
+    public WorldGenResult WorldGenDryRun(WorldGeneratorParams p, string? outputJsonPath = null)
+        => RunWorldGenInternal(p, applyChanges: false, outputJsonPath);
+
+    /// <summary>
+    /// Runs the WorldGenerator pipeline AND applies the result to project documents:
+    ///   - <see cref="TerrainDocument.UpdateLandblocksBatchInternal"/> for vertex/road/scenery/type packed entries.
+    ///   - <see cref="LandblockDocument.AddStaticObject"/> for planned buildings (per landblock).
+    ///   - <see cref="LandblockDocument.AddStaticObject"/> for placed decorations (per landblock).
+    /// Existing terrain entries at affected vertices are overwritten; existing static objects are preserved
+    /// (buildings/decorations are appended). Save the project afterwards to persist.
+    /// </summary>
+    public WorldGenResult WorldGenApply(WorldGeneratorParams p, string? outputJsonPath = null)
+        => RunWorldGenInternal(p, applyChanges: true, outputJsonPath);
+
+    private WorldGenResult RunWorldGenInternal(WorldGeneratorParams p, bool applyChanges, string? outputJsonPath) {
         RequireProject();
         var dats = _projectManager.CurrentProject!.DocumentManager.Dats;
 
@@ -9367,13 +9381,19 @@ public class CommandEngine {
                 new List<TownSummary>(), Error: "WorldGenerator.Generate returned null.");
         }
 
-        var towns = new List<TownSummary>(result.Towns.Count);
-        foreach (var t in result.Towns) {
-            towns.Add(new TownSummary(t.Name, t.SizeLabel,
-                t.CenterLbX, t.CenterLbY,
-                t.WorldCenter.X, t.WorldCenter.Y, t.WorldCenter.Z,
-                t.Radius, t.BuildingCount));
+        bool applied = false;
+        if (applyChanges) {
+            try { ApplyWorldGenResult(result); applied = true; }
+            catch (Exception ex) {
+                return new WorldGenResult(false, p.Seed,
+                    result.TerrainChanges.Count, result.TotalVerticesModified,
+                    result.Towns.Count, result.TotalBuildingsPlaced,
+                    result.TotalDecorationsPlaced, result.TotalRoadVertices,
+                    BuildTownSummaries(result), Applied: false, Error: $"Apply failed: {ex.Message}");
+            }
         }
+
+        var towns = BuildTownSummaries(result);
 
         if (!string.IsNullOrEmpty(outputJsonPath)) {
             try {
@@ -9381,6 +9401,7 @@ public class CommandEngine {
                 if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
                 var serialized = System.Text.Json.JsonSerializer.Serialize(new {
                     seed = p.Seed,
+                    applied = applyChanges,
                     bounds = new { p.StartX, p.StartY, p.Width, p.Height, p.FullWorld },
                     towns = result.Towns,
                     plannedBuildings = result.BuildingPlacements
@@ -9400,7 +9421,7 @@ public class CommandEngine {
                     result.TerrainChanges.Count, result.TotalVerticesModified,
                     result.Towns.Count, result.TotalBuildingsPlaced,
                     result.TotalDecorationsPlaced, result.TotalRoadVertices,
-                    towns, Error: $"Generated OK, but JSON write failed: {ex.Message}");
+                    towns, Applied: applied, Error: $"{(applied ? "Applied" : "Generated")} OK, but JSON write failed: {ex.Message}");
             }
         }
 
@@ -9408,7 +9429,54 @@ public class CommandEngine {
             result.TerrainChanges.Count, result.TotalVerticesModified,
             result.Towns.Count, result.TotalBuildingsPlaced,
             result.TotalDecorationsPlaced, result.TotalRoadVertices,
-            towns, outputJsonPath);
+            towns, outputJsonPath, Applied: applied);
+    }
+
+    private static List<TownSummary> BuildTownSummaries(WorldGeneratorResult result) {
+        var towns = new List<TownSummary>(result.Towns.Count);
+        foreach (var t in result.Towns) {
+            towns.Add(new TownSummary(t.Name, t.SizeLabel,
+                t.CenterLbX, t.CenterLbY,
+                t.WorldCenter.X, t.WorldCenter.Y, t.WorldCenter.Z,
+                t.Radius, t.BuildingCount));
+        }
+        return towns;
+    }
+
+    /// <summary>
+    /// Writes a generated <see cref="WorldGeneratorResult"/> through to the project's
+    /// terrain + landblock documents. Buildings and decorations are <em>appended</em> to
+    /// existing static-object lists; terrain vertices are overwritten in place.
+    /// </summary>
+    private void ApplyWorldGenResult(WorldGeneratorResult result) {
+        // 1. Terrain (packed road/scenery/type/height per vertex). UpdateLandblocksBatchInternal
+        //    handles edge sync between adjacent landblocks, so we can pass the dict whole.
+        if (result.TerrainChanges.Count > 0) {
+            var terrainDoc = GetTerrainDoc();
+            terrainDoc.UpdateLandblocksBatchInternal(result.TerrainChanges, out _);
+        }
+
+        // 2. Buildings: planned model + world position + orientation, per landblock.
+        foreach (var (lbKey, plans) in result.BuildingPlacements) {
+            if (plans.Count == 0) continue;
+            var lbDoc = GetLandblockDoc(lbKey);
+            foreach (var pb in plans) {
+                lbDoc.AddStaticObject(new StaticObject {
+                    Id = pb.ModelId,
+                    IsSetup = (pb.ModelId & 0x02000000) != 0,
+                    Origin = pb.WorldPosition,
+                    Orientation = pb.Orientation,
+                    Scale = Vector3.One
+                });
+            }
+        }
+
+        // 3. Decorations: already StaticObject records; append as-is.
+        foreach (var (lbKey, decs) in result.DecorationPlacements) {
+            if (decs.Count == 0) continue;
+            var lbDoc = GetLandblockDoc(lbKey);
+            foreach (var d in decs) lbDoc.AddStaticObject(d);
+        }
     }
 
     /// <summary>

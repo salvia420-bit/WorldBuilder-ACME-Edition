@@ -1447,7 +1447,7 @@ public class TerminalRepl {
         Console.WriteLine("  weenie-snapshot <classId>                      Read scalar weenie properties from ACE DB");
         Console.WriteLine("  weenie-template-list <bundle.json>             List weenie templates in a JSON bundle");
         Console.WriteLine("  weenie-template-apply <bundle.json> <id> <classId>  Apply template scalars to a weenie");
-        Console.WriteLine("  worldgen [--seed n] [--size w h] [--towns n] [--out plan.json]   Run WorldGen pipeline (dry-run)");
+        Console.WriteLine("  worldgen [--seed n] [--size w h] [--towns n] [--out plan.json] [--apply]  Run WorldGen pipeline");
         Console.WriteLine("  worldgen-analyze-buildings [--out catalog.json]                  Scan DATs for placeable building models");
         Console.WriteLine("  worldgen-scan-retail-towns [--out stats.json]                    Scan DATs for retail-style town models");
         Console.WriteLine();
@@ -4233,7 +4233,10 @@ public class TerminalRepl {
         if (tokens.Length < 2 || tokens[1] == "--help") {
             Console.WriteLine("Usage: worldgen [options]");
             Console.WriteLine("  Runs the WorldGenerator pipeline (terrain + biomes + towns + roads + buildings).");
-            Console.WriteLine("  DRY-RUN ONLY — does not mutate project documents. Pass --out to dump full plan to JSON.");
+            Console.WriteLine("  DRY-RUN by default. Add --apply to actually mutate project documents:");
+            Console.WriteLine("    terrain → TerrainDocument.UpdateLandblocksBatchInternal (vertices overwritten)");
+            Console.WriteLine("    buildings/decorations → LandblockDocument.AddStaticObject (appended)");
+            Console.WriteLine("  Run 'export <dir>' afterwards to write to DATs.");
             Console.WriteLine();
             Console.WriteLine("  Options:");
             Console.WriteLine("    --seed <n>            (default 0 = random)");
@@ -4250,13 +4253,15 @@ public class TerminalRepl {
             Console.WriteLine("    --no-buildings");
             Console.WriteLine("    --retail-only         restrict building catalog to retail-style town models");
             Console.WriteLine("    --out <path.json>     dump the full WorldGeneratorResult plan");
+            Console.WriteLine("    --apply               write changes through to project documents");
             Console.WriteLine();
             Console.WriteLine("  Example: worldgen --seed 42 --size 40 40 --towns 10 --out /tmp/plan.json");
+            Console.WriteLine("           worldgen --seed 42 --size 40 40 --towns 10 --apply");
             return;
         }
 
-        if (!TryParseWorldGenParams(tokens, out var p, out var outPath)) return;
-        var r = _engine.WorldGenDryRun(p, outPath);
+        if (!TryParseWorldGenParams(tokens, out var p, out var outPath, out var apply)) return;
+        var r = apply ? _engine.WorldGenApply(p, outPath) : _engine.WorldGenDryRun(p, outPath);
         Console.WriteLine();
         if (!r.Success) {
             Console.ForegroundColor = ConsoleColor.Red;
@@ -4266,7 +4271,7 @@ public class TerminalRepl {
             return;
         }
         Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine($"  ═══ WorldGen plan (seed={r.Seed}) ═══");
+        Console.WriteLine($"  ═══ WorldGen {(r.Applied ? "APPLIED" : "plan")} (seed={r.Seed}) ═══");
         Console.ResetColor();
         Console.WriteLine($"  Terrain         : {r.TerrainLandblocksAffected} landblocks affected, {r.TotalVerticesModified:N0} vertices");
         Console.WriteLine($"  Roads           : {r.TotalRoadVertices:N0} vertices");
@@ -4281,12 +4286,15 @@ public class TerminalRepl {
         }
         if (!string.IsNullOrEmpty(r.OutputPath))
             Console.WriteLine($"  Plan written to : {r.OutputPath}");
+        if (r.Applied)
+            Console.WriteLine("  Save the project (or run 'export <dir>') to persist these changes.");
         Console.WriteLine();
     }
 
-    private bool TryParseWorldGenParams(string[] tokens, out WorldGeneratorParams p, out string? outPath) {
+    private bool TryParseWorldGenParams(string[] tokens, out WorldGeneratorParams p, out string? outPath, out bool apply) {
         p = new WorldGeneratorParams();
         outPath = null;
+        apply = false;
         // Default values come from the record initializers
         int seed = p.Seed;
         bool fullWorld = p.FullWorld;
@@ -4323,6 +4331,7 @@ public class TerminalRepl {
                 case "--no-buildings": buildings = false; break;
                 case "--retail-only":  retailOnly = true; break;
                 case "--out":          if (!RequireNext(tokens, i, "--out", out var op)) return false; outPath = op; i++; break;
+                case "--apply":        apply = true; break;
                 default:
                     Console.WriteLine($"Unknown option: {tokens[i]}. Run 'worldgen --help' for usage.");
                     return false;

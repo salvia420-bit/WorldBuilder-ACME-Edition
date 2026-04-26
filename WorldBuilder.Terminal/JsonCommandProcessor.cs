@@ -1566,9 +1566,10 @@ public class JsonCommandProcessor {
             RetailTownBuildingsOnly = node["retailTownBuildingsOnly"]?.GetValue<bool>() ?? false,
         };
         var outPath = node["outputPath"]?.GetValue<string>();
-        var r = _engine.WorldGenDryRun(p, outPath);
+        bool apply = node["apply"]?.GetValue<bool>() ?? false;
+        var r = apply ? _engine.WorldGenApply(p, outPath) : _engine.WorldGenDryRun(p, outPath);
         return Serialize(new { success = r.Success, command = "worldgen",
-            seed = r.Seed,
+            seed = r.Seed, applied = r.Applied,
             terrainLandblocksAffected = r.TerrainLandblocksAffected,
             totalVerticesModified = r.TotalVerticesModified,
             townCount = r.TownCount,

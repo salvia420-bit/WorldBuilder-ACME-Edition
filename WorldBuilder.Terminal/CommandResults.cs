@@ -899,6 +899,7 @@ public record WorldGenResult(
     int TotalRoadVertices,
     List<TownSummary> Towns,
     string? OutputPath = null,
+    bool Applied = false,
     string? Error = null);
 
 public record BuildingProfileSummary(
