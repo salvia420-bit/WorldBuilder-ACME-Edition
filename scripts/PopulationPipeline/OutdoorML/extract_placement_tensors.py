@@ -46,6 +46,10 @@ DEFAULT_RETAIL_SQL = os.environ.get(
     "ACE_RETAIL_SQL",
     os.path.join(BASE_DIR, "ace_world_release", "ACE-World-Database-v0.9.292.sql"),
 )
+DEFAULT_WORLD_FEATURES = os.environ.get(
+    "ACE_WORLD_FEATURES",
+    os.path.join(BASE_DIR, "pipeline_data", "heightmaps", "retail_heightmaps.jsonl"),
+)
 HEIGHTS_PATH = os.path.join(BASE_DIR, "pipeline_data", "population_output", "vanquish_heights.json")
 BIOME_MAP = os.path.join(BASE_DIR, "pipeline_data", "enrichment", "biome_map.json")
 DIFFICULTY_GRADIENT = os.path.join(BASE_DIR, "pipeline_data", "enrichment", "difficulty_gradient.json")
@@ -95,6 +99,20 @@ SLUMLORD_TOKEN_BY_HOUSE_TYPE = {
 CULTURE_CODES = {
     "Neutral": 0, "Aluvian": 1, "Sho": 2, "Gharu'ndim": 3,
     "Viamontian": 4, "Empyrean": 5
+}
+BIOME_CODES = {
+    "ocean": 0,
+    "water": 1,
+    "impassable_water": 2,
+    "grassland": 3,
+    "forest": 4,
+    "desert": 5,
+    "snow": 6,
+    "swamp": 7,
+    "barren": 8,
+    "obsidian": 9,
+    "road": 10,
+    "mountain": 11,
 }
 
 # ─── Step 1: Build vocabulary from enrichment ────────────────────────────────
@@ -315,24 +333,132 @@ def parse_retail_sql(sql_path: str) -> Tuple[Dict[Tuple[int,int], list], list, D
 
 # ─── Step 4: Build context vectors ───────────────────────────────────────────
 
-def load_height_grid(heights_path: str) -> np.ndarray:
-    """Load 255x255 grid of per-LB height arrays."""
-    if not os.path.exists(heights_path):
-        print(f"    WARNING: {heights_path} not found, using zeros")
+def _normalize_height_values(values) -> np.ndarray:
+    arr = np.array(values, dtype=np.float32).reshape(-1)
+    if arr.size >= 81:
+        return arr[:81]
+    if arr.size == 0:
+        return np.zeros(81, dtype=np.float32)
+    padded = np.zeros(81, dtype=np.float32)
+    padded[:arr.size] = arr
+    return padded
+
+
+def _extract_height_values(rec: dict) -> np.ndarray:
+    if "heightIndices" in rec:
+        return _normalize_height_values(rec["heightIndices"])
+    if "heightsWorld" in rec:
+        return _normalize_height_values([float(v) * 0.5 for v in rec["heightsWorld"]])
+    if "heights" in rec:
+        return _normalize_height_values(rec["heights"])
+    return np.zeros(81, dtype=np.float32)
+
+
+def _extract_terrain_values(rec: dict) -> Optional[np.ndarray]:
+    values = rec.get("terrainTypes")
+    if values is None:
+        return None
+    return _normalize_height_values(values)
+
+
+def _extract_road_values(rec: dict) -> Optional[np.ndarray]:
+    values = rec.get("roadFlags")
+    if values is None:
+        return None
+    arr = np.array(values, dtype=np.float32).reshape(-1)
+    if arr.size >= 81:
+        arr = arr[:81]
+    elif arr.size < 81:
+        padded = np.zeros(81, dtype=np.float32)
+        padded[:arr.size] = arr
+        arr = padded
+    return (arr > 0).astype(np.float32)
+
+
+def load_world_feature_grid(path: str) -> Dict[Tuple[int, int], dict]:
+    """
+    Load per-landblock world features.
+
+    Supported formats:
+    - JSONL world facts / heightmaps with lbX/lbY and optional terrainTypes/roadFlags
+    - legacy JSON map of "x,y" -> [81 heights]
+    """
+    if not path or not os.path.exists(path):
+        print(f"    WARNING: {path} not found, using zeroed context features")
         return {}
-    
-    print(f"  Loading height data...")
-    with open(heights_path) as f:
-        raw = json.load(f)
-    
-    heights = {}
-    for key, vals in raw.items():
-        parts = key.split(",")
-        x, y = int(parts[0]), int(parts[1])
-        heights[(x, y)] = np.array(vals, dtype=np.float32)
-    
-    print(f"    Loaded heights for {len(heights)} landblocks")
-    return heights
+
+    print(f"  Loading world features...")
+    world = {}
+    terrain_count = 0
+    road_count = 0
+
+    if path.endswith(".jsonl"):
+        with open(path, "r", encoding="utf-8-sig") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                rec = json.loads(line)
+                lb_x = rec.get("lbX", rec.get("landblockX"))
+                lb_y = rec.get("lbY", rec.get("landblockY"))
+                if lb_x is None or lb_y is None:
+                    continue
+                key = (int(lb_x), int(lb_y))
+                if key in world:
+                    continue
+                terrain = _extract_terrain_values(rec)
+                roads = _extract_road_values(rec)
+                world[key] = {
+                    "heights": _extract_height_values(rec),
+                    "terrain": terrain,
+                    "roads": roads,
+                }
+                terrain_count += int(terrain is not None)
+                road_count += int(roads is not None)
+    else:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            raw = json.load(f)
+        for key, vals in raw.items():
+            parts = key.split(",")
+            lb_x, lb_y = int(parts[0]), int(parts[1])
+            world[(lb_x, lb_y)] = {
+                "heights": _normalize_height_values(vals),
+                "terrain": None,
+                "roads": None,
+            }
+
+    print(
+        f"    Loaded {len(world)} landblocks "
+        f"(terrain={terrain_count}, roads={road_count})"
+    )
+    return world
+
+
+def load_height_grid(heights_path: str) -> np.ndarray:
+    """Backward-compatible height loader used by inference helpers."""
+    world = load_world_feature_grid(heights_path)
+    return {key: value["heights"] for key, value in world.items()}
+
+
+def load_biome_grid(path: str) -> Optional[np.ndarray]:
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8-sig") as f:
+        data = json.load(f)
+    raw_grid = data.get("biomeGrid") or data.get("grid")
+    if raw_grid is None:
+        return None
+
+    grid = np.zeros((255, 255), dtype=np.int32)
+    for x in range(min(255, len(raw_grid))):
+        row = raw_grid[x]
+        for y in range(min(255, len(row))):
+            cell = row[y]
+            if isinstance(cell, str):
+                grid[x, y] = BIOME_CODES.get(cell, 0)
+            else:
+                grid[x, y] = int(cell)
+    return grid
 
 
 def load_difficulty_grid(path: str) -> Optional[np.ndarray]:
@@ -373,6 +499,8 @@ def build_context_vector(lb_x: int, lb_y: int,
                          heights: dict,
                          difficulty_grid: Optional[np.ndarray],
                          culture_grid: np.ndarray,
+                         biome_grid: Optional[np.ndarray],
+                         world_features: Optional[Dict[Tuple[int, int], dict]],
                          instance_counts: Dict[Tuple[int,int], int],
                          settlement_role: Optional[str] = None,
                          settlement_archetype: Optional[str] = None) -> np.ndarray:
@@ -395,6 +523,8 @@ def build_context_vector(lb_x: int, lb_y: int,
     """
     ctx = np.zeros(CONTEXT_DIM, dtype=np.float32)
     
+    feature_rec = world_features.get((lb_x, lb_y), {}) if world_features is not None else {}
+
     # Terrain heights (9×9 = 81 values)
     h = heights.get((lb_x, lb_y))
     if h is not None:
@@ -402,21 +532,29 @@ def build_context_vector(lb_x: int, lb_y: int,
         h_norm = (h[:81] - 129.0) / 35.0 if len(h) >= 81 else np.zeros(81)
         ctx[0:81] = h_norm
 
-    # Terrain type and road flags are placeholders until DAT extraction is available
-    # ctx[81:145] = terrain types (future)
-    # ctx[145:209] = road flags (future)
+    terrain = feature_rec.get("terrain")
+    if terrain is not None and len(terrain) >= 81:
+        terrain_grid = terrain[:81].reshape(9, 9)
+        ctx[81:145] = (terrain_grid[:8, :8].reshape(-1) / 31.0).astype(np.float32)
+
+    roads = feature_rec.get("roads")
+    if roads is not None and len(roads) >= 81:
+        road_grid = roads[:81].reshape(9, 9)
+        ctx[145:209] = road_grid[:8, :8].reshape(-1).astype(np.float32)
     
     # Normalized position
     ctx[209] = lb_x / 255.0
     ctx[210] = lb_y / 255.0
     
-    # Biome (inferred from latitude for now)
-    if lb_y < 85:
-        ctx[211] = 0.0  # Arid
+    # Biome (prefer real biome map when available)
+    if biome_grid is not None and 0 <= lb_x < 255 and 0 <= lb_y < 255:
+        ctx[211] = biome_grid[lb_x, lb_y] / max(1.0, float(max(BIOME_CODES.values())))
+    elif lb_y < 85:
+        ctx[211] = 0.0
     elif lb_y < 170:
-        ctx[211] = 0.5  # Temperate
+        ctx[211] = 0.5
     else:
-        ctx[211] = 1.0  # Cold/Forest
+        ctx[211] = 1.0
     
     # Cultural zone
     if 0 <= lb_x < 255 and 0 <= lb_y < 255:
@@ -525,7 +663,7 @@ def classify_housing_token(wcid: int, wtype: int,
 
 def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
                             heights, difficulty_grid, culture_grid,
-                            wcid_names):
+                            wcid_names, biome_grid=None, world_features=None):
     """
     Convert raw SQL data into structured training arrays.
     
@@ -590,7 +728,7 @@ def build_training_examples(instances_by_lb, links, wcid_to_idx, wcid_types,
 
         # Build context vector after computing the supervised settlement role.
         contexts[idx] = build_context_vector(
-            lb_x, lb_y, heights, difficulty_grid, culture_grid, instance_counts,
+            lb_x, lb_y, heights, difficulty_grid, culture_grid, biome_grid, world_features, instance_counts,
             settlement_role=settlement_role,
             settlement_archetype=settlement_archetype,
         )
@@ -706,6 +844,11 @@ def parse_args():
         default=DEFAULT_RETAIL_SQL,
         help="Path to the ACE world SQL dump. Defaults to $ACE_RETAIL_SQL or the repo-local ace_world_release copy.",
     )
+    parser.add_argument(
+        "--world-features",
+        default=DEFAULT_WORLD_FEATURES,
+        help="Retail world-feature JSONL/JSON used for context (heightIndices, terrainTypes, roadFlags).",
+    )
     return parser.parse_args()
 
 
@@ -745,8 +888,15 @@ def main():
     
     # Step 3: Load auxiliary data
     print("[Step 3] Loading auxiliary data...")
-    heights = load_height_grid(HEIGHTS_PATH)
+    world_features_path = os.path.abspath(args.world_features)
+    print(f"  World features: {world_features_path}")
+    world_features = load_world_feature_grid(world_features_path)
+    heights = {key: value["heights"] for key, value in world_features.items()}
+    if not heights:
+        heights = load_height_grid(HEIGHTS_PATH)
+        world_features = {key: {"heights": value, "terrain": None, "roads": None} for key, value in heights.items()}
     difficulty_grid = load_difficulty_grid(DIFFICULTY_GRADIENT)
+    biome_grid = load_biome_grid(BIOME_MAP)
     culture_grid = build_cultural_zones()
     print()
     
@@ -762,7 +912,8 @@ def main():
         settlement_signature_counts,
     ) = build_training_examples(
         instances_by_lb, links, wcid_to_idx, wcid_types,
-        heights, difficulty_grid, culture_grid, wcid_names
+        heights, difficulty_grid, culture_grid, wcid_names,
+        biome_grid=biome_grid, world_features=world_features,
     )
     print()
     

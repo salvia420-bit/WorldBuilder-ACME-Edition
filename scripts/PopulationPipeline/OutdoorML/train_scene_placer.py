@@ -48,6 +48,11 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True, write_through=True)
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(line_buffering=True, write_through=True)
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from settlement_signatures import (
     SETTLEMENT_ROLE_LABELS,
@@ -111,12 +116,12 @@ DEFAULT_CONFIG = {
     "obj_dim": 10,
     
     # Training
-    "epochs": 10000,
+    "epochs": 1000,
     "batch_size": 64,
-    "lr_max": 1e-4,
+    "lr_max": 7e-5,
     "lr_min": 1e-6,
-    "warmup_epochs": 200,
-    "warmup_fraction_cap": 0.2,
+    "warmup_epochs": 20,
+    "warmup_fraction_cap": 0.05,
     "warmup_min_epochs": 10,
     "weight_decay": 0.02,
     "ema_decay": 0.999,
@@ -125,7 +130,7 @@ DEFAULT_CONFIG = {
     "lambda_pos": 10.0,
     "lambda_rot": 1.0,
     "lambda_link": 5.0,
-    "lambda_entropy": 0.1,  # Entropy regularization to prevent mode collapse
+    "lambda_entropy": 0.15,  # Entropy regularization to prevent mode collapse
     "lambda_dense_repeat": 0.35,
     
     # Data augmentation
@@ -134,11 +139,11 @@ DEFAULT_CONFIG = {
     "rotation_augment": True,
     
     # Early stopping
-    "patience": 500,
+    "patience": 12,
     "overfit_gap_threshold": 10.0,
-    "min_overfit_epoch": 200,
+    "min_overfit_epoch": 60,
     "entropy_collapse_threshold": 2.0,
-    "min_entropy_check_epoch": 200,
+    "min_entropy_check_epoch": 60,
     "entropy_lr_halving_enabled": True,
     
     # Checkpointing
@@ -147,6 +152,11 @@ DEFAULT_CONFIG = {
     
     # Validation
     "val_split": 0.15,
+    "validation_every": 5,
+    "val_split_mode": "region",
+    "region_tile_size": 8,
+    "split_seed": 42,
+    "lr_schedule": "staged",
     "tensor_path": TENSOR_PATH,
     "vocab_path": VOCAB_PATH,
     "max_train_batches": None,
@@ -192,19 +202,25 @@ def build_token_family_index(vocab_size: int, vocab_path: str) -> torch.Tensor:
     token_family = np.zeros(vocab_size, dtype=np.int64)
     wcid_types = load_wcid_types()
     vocab = load_vocab_metadata(vocab_path)
+    target_token_mode = str(vocab.get("target_token_mode", "exact")).lower()
     idx_to_wcid = {int(k): int(v) for k, v in vocab.get("idx_to_wcid", {}).items()}
     idx_to_class_key = {int(k): v for k, v in vocab.get("idx_to_class_key", {}).items()}
 
     for token_idx in range(vocab_size):
         if token_idx in (PAD_TOKEN, STOP_TOKEN):
             family = FAMILY_OTHER
-        elif token_idx in (2, 3, 4):
+        elif target_token_mode == "exact" and token_idx in (2, 3, 4):
             family = FAMILY_HOUSING
         else:
             wcid = idx_to_wcid.get(token_idx)
             if wcid is None:
                 class_key = idx_to_class_key.get(token_idx)
-                if class_key and len(class_key) == 2 and class_key[0] == 'wcid':
+                if (
+                    target_token_mode == "exact" and
+                    class_key and
+                    len(class_key) == 2 and
+                    class_key[0] == 'wcid'
+                ):
                     wcid = int(class_key[1])
             wtype = wcid_types.get(wcid, 0) if wcid is not None else 0
             if wtype == WT_CREATURE:
@@ -246,10 +262,15 @@ class PlacementDataset(Dataset):
     
     def __init__(self, contexts: np.ndarray, sequences: np.ndarray,
                  seq_lengths: np.ndarray, config: dict,
+                 indices: Optional[np.ndarray] = None,
                  augment: bool = True):
         self.contexts = torch.from_numpy(contexts).float()
         self.sequences = torch.from_numpy(sequences).float()
         self.seq_lengths = torch.from_numpy(seq_lengths).long()
+        if indices is None:
+            self.indices = torch.arange(len(self.contexts), dtype=torch.long)
+        else:
+            self.indices = torch.from_numpy(np.asarray(indices, dtype=np.int64)).long()
         self.config = config
         self.augment = augment
         self.max_len = sequences.shape[1]
@@ -259,12 +280,13 @@ class PlacementDataset(Dataset):
         self.link_idx = int(config.get('link_idx', 7))
 
     def __len__(self):
-        return len(self.contexts)
+        return len(self.indices)
     
     def __getitem__(self, idx):
-        ctx = self.contexts[idx].clone()
-        seq = self.sequences[idx].clone()
-        seq_len = self.seq_lengths[idx].item()
+        src_idx = self.indices[idx].item()
+        ctx = self.contexts[src_idx].clone()
+        seq = self.sequences[src_idx].clone()
+        seq_len = self.seq_lengths[src_idx].item()
         
         if self.augment:
             jitter_std = self.config['context_jitter_std']
@@ -892,6 +914,111 @@ def load_compatible_state_dict(module: nn.Module, state_dict: dict, label: str) 
     return skipped, list(missing)
 
 
+def load_resume_payload(path: str, device: torch.device) -> tuple[str, dict]:
+    """
+    Load either a full training checkpoint or a weights-only checkpoint.
+    Returns a payload type of "training" or "weights".
+    """
+    lower_path = path.lower()
+    if lower_path.endswith(".safetensors"):
+        from safetensors.torch import load_file
+        return "weights", load_file(path, device=str(device))
+
+    checkpoint = torch.load(path, map_location=device)
+    if not isinstance(checkpoint, dict):
+        raise ValueError(f"Unsupported checkpoint format: {path}")
+    if "model_state_dict" in checkpoint:
+        return "training", checkpoint
+    return "weights", checkpoint
+
+
+def split_indices_for_validation(
+    lb_coords: np.ndarray,
+    val_split: float,
+    mode: str,
+    region_tile_size: int,
+    seed: int,
+):
+    n = len(lb_coords)
+    indices = np.arange(n)
+    if n == 0:
+        return indices, indices
+
+    if mode != "region":
+        shuffled = np.random.RandomState(seed).permutation(n)
+        val_n = max(1, int(n * val_split))
+        val_idx = shuffled[:val_n]
+        train_idx = shuffled[val_n:]
+        return train_idx, val_idx
+
+    tile_size = max(int(region_tile_size), 1)
+    region_keys = np.asarray([(int(x) // tile_size, int(y) // tile_size) for x, y in lb_coords], dtype=np.int32)
+    unique_regions, inverse = np.unique(region_keys, axis=0, return_inverse=True)
+    region_order = np.random.RandomState(seed).permutation(len(unique_regions))
+    target_val_n = max(1, int(n * val_split))
+
+    selected_regions = set()
+    selected_count = 0
+    for region_idx in region_order:
+        selected_regions.add(int(region_idx))
+        selected_count += int(np.sum(inverse == region_idx))
+        if selected_count >= target_val_n:
+            break
+
+    val_mask = np.isin(inverse, list(selected_regions))
+    val_idx = indices[val_mask]
+    train_idx = indices[~val_mask]
+
+    if len(train_idx) == 0 or len(val_idx) == 0:
+        shuffled = np.random.RandomState(seed).permutation(n)
+        val_n = max(1, int(n * val_split))
+        val_idx = shuffled[:val_n]
+        train_idx = shuffled[val_n:]
+
+    return train_idx, val_idx
+
+
+def build_stage_boundaries(total_epochs: int, warmup_epochs: int) -> list[int]:
+    post_warmup = max(total_epochs - warmup_epochs, 1)
+    raw_boundaries = (
+        warmup_epochs,
+        warmup_epochs + int(post_warmup * 0.15),
+        warmup_epochs + int(post_warmup * 0.40),
+        warmup_epochs + int(post_warmup * 0.70),
+        total_epochs,
+    )
+    boundaries = [0]
+    for boundary in raw_boundaries:
+        boundaries.append(max(boundaries[-1] + 1, min(boundary, total_epochs)))
+    boundaries[-1] = total_epochs
+    return boundaries
+
+
+def build_lr_scheduler(optimizer, config: dict, effective_warmup_epochs: int):
+    schedule_name = config.get("lr_schedule", "staged")
+    if schedule_name == "cosine":
+        return torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=max(1, config['epochs'] - effective_warmup_epochs),
+            eta_min=config['lr_min'],
+        )
+
+    boundaries = build_stage_boundaries(config['epochs'], effective_warmup_epochs)
+    scales = (1.0, 0.60, 0.30, 0.12, max(config['lr_min'] / max(config['lr_max'], 1e-12), 1e-4))
+
+    def lr_lambda(epoch_idx: int):
+        actual_epoch = epoch_idx + effective_warmup_epochs
+        for start, end, start_scale, end_scale in zip(boundaries[1:-1], boundaries[2:], scales[:-1], scales[1:]):
+            if actual_epoch <= end:
+                span = max(end - start, 1)
+                progress = min(max((actual_epoch - start) / span, 0.0), 1.0)
+                cosine_mix = 0.5 * (1.0 + math.cos(math.pi * progress))
+                return end_scale + (start_scale - end_scale) * cosine_mix
+        return scales[-1]
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+
+
 def train(config: dict, resume_path: Optional[str] = None):
     """Main training loop."""
     
@@ -909,9 +1036,11 @@ def train(config: dict, resume_path: Optional[str] = None):
     contexts = data['contexts']
     sequences = data['sequences']
     seq_lengths = data['seq_lengths']
+    lb_coords = data['lb_coords'] if 'lb_coords' in data.files else None
     sample_weights = data['sample_weights'] if 'sample_weights' in data.files else np.ones(len(contexts), dtype=np.float32)
     vocab = load_vocab_metadata(vocab_path)
     vocab_size = int(vocab.get('vocab_size', int(np.max(sequences[:, :, 0])) + 1))
+    config['target_token_mode'] = str(vocab.get('target_token_mode', 'exact')).lower()
 
     if 'component_index_by_object' in data.files:
         component_features = build_component_feature_matrix(data, vocab_size)
@@ -940,26 +1069,32 @@ def train(config: dict, resume_path: Optional[str] = None):
     print(f"  Loaded {len(contexts)} examples, context_dim={contexts.shape[1]}, "
           f"max_seq={sequences.shape[1]}, obj_dim={sequences.shape[2]}")
     print(f"  Dataset schema: {config['dataset_schema']}")
+    print(f"  Target token mode: {config['target_token_mode']}")
     print(f"  Effective warmup epochs: {effective_warmup_epochs}")
     print(f"  Run name: {run_name}")
     
     # ── Train/val split ──
-    n = len(contexts)
-    indices = np.random.RandomState(42).permutation(n)
-    val_n = int(n * config['val_split'])
-    val_idx = indices[:val_n]
-    train_idx = indices[val_n:]
+    if lb_coords is None:
+        lb_coords = np.zeros((len(contexts), 2), dtype=np.int16)
+    train_idx, val_idx = split_indices_for_validation(
+        lb_coords=lb_coords,
+        val_split=config['val_split'],
+        mode=config.get('val_split_mode', 'random'),
+        region_tile_size=config.get('region_tile_size', 8),
+        seed=config.get('split_seed', 42),
+    )
     
     train_ds = PlacementDataset(
-        contexts[train_idx], sequences[train_idx], seq_lengths[train_idx],
-        config, augment=True
+        contexts, sequences, seq_lengths,
+        config, indices=train_idx, augment=True
     )
     val_ds = PlacementDataset(
-        contexts[val_idx], sequences[val_idx], seq_lengths[val_idx],
-        config, augment=False
+        contexts, sequences, seq_lengths,
+        config, indices=val_idx, augment=False
     )
     
     print(f"  Train: {len(train_ds)}, Val: {len(val_ds)}")
+    print(f"  Validation split mode: {config.get('val_split_mode', 'random')}")
     train_weights = torch.as_tensor(sample_weights[train_idx], dtype=torch.double)
     print(
         f"  Train sample weights: min={train_weights.min().item():.2f}, "
@@ -978,9 +1113,13 @@ def train(config: dict, resume_path: Optional[str] = None):
     model = ScenePlacerTransformer(config).to(device)
     param_count = model.count_parameters()
     print(f"  Parameters: {param_count:,} ({param_count/1e6:.1f}M)")
-    token_family_index = build_token_family_index(model.vocab_size, vocab_path)
-    config['token_family_index'] = token_family_index.to(device)
-    config['family_projection'] = build_family_projection(token_family_index, model.vocab_size).to(device)
+    if config.get('target_token_mode', 'exact') == 'exact':
+        token_family_index = build_token_family_index(model.vocab_size, vocab_path)
+        config['token_family_index'] = token_family_index.to(device)
+        config['family_projection'] = build_family_projection(token_family_index, model.vocab_size).to(device)
+    else:
+        config['token_family_index'] = None
+        config['family_projection'] = None
     
     # ── Batch size auto-detection ──
     if device.type == 'cuda':
@@ -1008,10 +1147,7 @@ def train(config: dict, resume_path: Optional[str] = None):
     )
     
     # Cosine annealing with warmup
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=max(1, config['epochs'] - effective_warmup_epochs),
-        eta_min=config['lr_min']
-    )
+    scheduler = build_lr_scheduler(optimizer, config, effective_warmup_epochs)
     
     # EMA
     ema = EMA(model, decay=config['ema_decay'])
@@ -1025,26 +1161,42 @@ def train(config: dict, resume_path: Optional[str] = None):
     
     if resume_path and os.path.exists(resume_path):
         print(f"\n  Resuming from {resume_path}...")
-        checkpoint = torch.load(resume_path, map_location=device)
-        model_skipped, _ = load_compatible_state_dict(
-            model, checkpoint['model_state_dict'], "Model checkpoint"
-        )
+        payload_type, checkpoint = load_resume_payload(resume_path, device)
         ema_skipped = []
-        if 'ema_state_dict' in checkpoint:
-            ema = EMA(model, decay=config['ema_decay'])
-            _, ema_skipped = filter_compatible_state_dict(model, checkpoint['ema_state_dict'])
-            if not ema_skipped:
-                ema.load_state_dict(checkpoint['ema_state_dict'])
+
+        if payload_type == "training":
+            model_skipped, _ = load_compatible_state_dict(
+                model, checkpoint['model_state_dict'], "Model checkpoint"
+            )
+            if 'ema_state_dict' in checkpoint:
+                ema = EMA(model, decay=config['ema_decay'])
+                _, ema_skipped = filter_compatible_state_dict(model, checkpoint['ema_state_dict'])
+                if not ema_skipped:
+                    ema.load_state_dict(checkpoint['ema_state_dict'])
+                else:
+                    print(f"  EMA checkpoint: skipped {len(ema_skipped)} incompatible tensors; rebuilding EMA from current model state.")
+            if not model_skipped and not ema_skipped:
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                scheduler_state = checkpoint.get('scheduler_state_dict')
+                if scheduler_state:
+                    try:
+                        scheduler.load_state_dict(scheduler_state)
+                    except KeyError as exc:
+                        print(f"  Scheduler checkpoint missing expected key ({exc}); keeping fresh scheduler state for resumed run.")
             else:
-                print(f"  EMA checkpoint: skipped {len(ema_skipped)} incompatible tensors; rebuilding EMA from current model state.")
-        if not model_skipped and not ema_skipped:
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                print("  Resume note: context shape changed, keeping model weights where compatible and resetting optimizer/scheduler state.")
+            start_epoch = checkpoint['epoch'] + 1
+            best_val_loss = checkpoint['best_val_loss']
+            print(f"  Resumed at epoch {start_epoch}, best_val_loss={best_val_loss:.4f}")
         else:
-            print("  Resume note: context shape changed, keeping model weights where compatible and resetting optimizer/scheduler state.")
-        start_epoch = checkpoint['epoch'] + 1
-        best_val_loss = checkpoint['best_val_loss']
-        print(f"  Resumed at epoch {start_epoch}, best_val_loss={best_val_loss:.4f}")
+            model_skipped, _ = load_compatible_state_dict(
+                model, checkpoint, "Weights checkpoint"
+            )
+            if model_skipped:
+                print("  Weights-only resume: some tensors were incompatible; starting a fresh optimizer/scheduler state.")
+            else:
+                print("  Weights-only resume: loaded model weights and starting a fresh optimizer/scheduler state.")
+            ema = EMA(model, decay=config['ema_decay'])
     
     # ── Training ──
     print(f"\n[3/5] Training for {config['epochs']} epochs...")
@@ -1110,7 +1262,7 @@ def train(config: dict, resume_path: Optional[str] = None):
             
             # ── Validation ──
             val_metrics = {}
-            if (epoch + 1) % 10 == 0 or epoch == config['epochs'] - 1:
+            if (epoch + 1) % config.get('validation_every', 10) == 0 or epoch == config['epochs'] - 1:
                 model.eval()
                 ema.apply_shadow()  # Use EMA weights for validation
                 
@@ -1292,6 +1444,12 @@ def main():
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
+    parser.add_argument("--lr-min", type=float, default=None)
+    parser.add_argument("--patience", type=int, default=None)
+    parser.add_argument("--warmup-epochs", type=int, default=None)
+    parser.add_argument("--warmup-min-epochs", type=int, default=None)
+    parser.add_argument("--warmup-fraction-cap", type=float, default=None)
+    parser.add_argument("--weight-decay", type=float, default=None)
     parser.add_argument("--tensor-path", type=str, default=TENSOR_PATH)
     parser.add_argument("--vocab-path", type=str, default=VOCAB_PATH)
     parser.add_argument("--max-train-batches", type=int, default=None)
@@ -1299,6 +1457,10 @@ def main():
     parser.add_argument("--run-name", type=str, default="scene_placer")
     parser.add_argument("--checkpoint-every", type=int, default=None)
     parser.add_argument("--resume-checkpoint-every", type=int, default=None)
+    parser.add_argument("--validation-every", type=int, default=None)
+    parser.add_argument("--val-split-mode", type=str, choices=("random", "region"), default=None)
+    parser.add_argument("--region-tile-size", type=int, default=None)
+    parser.add_argument("--lr-schedule", type=str, choices=("cosine", "staged"), default=None)
     args = parser.parse_args()
     
     config = DEFAULT_CONFIG.copy()
@@ -1308,10 +1470,30 @@ def main():
         config['batch_size'] = args.batch
     if args.lr:
         config['lr_max'] = args.lr
+    if args.lr_min is not None:
+        config['lr_min'] = args.lr_min
+    if args.patience is not None:
+        config['patience'] = args.patience
+    if args.warmup_epochs is not None:
+        config['warmup_epochs'] = args.warmup_epochs
+    if args.warmup_min_epochs is not None:
+        config['warmup_min_epochs'] = args.warmup_min_epochs
+    if args.warmup_fraction_cap is not None:
+        config['warmup_fraction_cap'] = args.warmup_fraction_cap
+    if args.weight_decay is not None:
+        config['weight_decay'] = args.weight_decay
     if args.checkpoint_every:
         config['checkpoint_every'] = args.checkpoint_every
     if args.resume_checkpoint_every:
         config['resume_checkpoint_every'] = args.resume_checkpoint_every
+    if args.validation_every:
+        config['validation_every'] = args.validation_every
+    if args.val_split_mode:
+        config['val_split_mode'] = args.val_split_mode
+    if args.region_tile_size:
+        config['region_tile_size'] = args.region_tile_size
+    if args.lr_schedule:
+        config['lr_schedule'] = args.lr_schedule
     config['tensor_path'] = args.tensor_path
     config['vocab_path'] = args.vocab_path
     config['max_train_batches'] = args.max_train_batches

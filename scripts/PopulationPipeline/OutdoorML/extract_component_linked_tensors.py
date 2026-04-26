@@ -23,7 +23,7 @@ import numpy as np
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 REFERENCE_DIR = os.path.join(BASE_DIR, "pipeline_data", "reference")
 
-DEFAULT_RAW_JSONL = os.path.join(REFERENCE_DIR, "raw_world_facts_full.jsonl")
+DEFAULT_RAW_JSONL = os.path.join(REFERENCE_DIR, "raw_world_facts_full_with_components_v2.jsonl")
 DEFAULT_COMPONENT_JSONL = os.path.join(REFERENCE_DIR, "envcell_components_full.jsonl")
 DEFAULT_OUT_NPZ = os.path.join(REFERENCE_DIR, "component_linked_tensors.npz")
 DEFAULT_OUT_VOCAB = os.path.join(REFERENCE_DIR, "component_linked_vocab.json")
@@ -35,6 +35,7 @@ OBJECT_FEATURE_DIM = 14
 PAD_TOKEN = 0
 STOP_TOKEN = 1
 FIRST_REAL_TOKEN = 2
+TARGET_TOKEN_MODES = ("exact", "abstract_ace")
 
 SOURCE_DB_CODES = {"dat": 1, "ace": 2}
 CLASS_SPACE_CODES = {"model_id": 1, "wcid": 2}
@@ -46,6 +47,17 @@ COMPONENT_KIND_CODES = {
 
 RAW_SCAN_PROGRESS_EVERY = 100000
 COMPONENT_SCAN_PROGRESS_EVERY = 10000
+
+VIEW_STRATEGIES = (
+    "xy",
+    "yx",
+    "component",
+    "radial",
+    "interior_source",
+    "serpentine",
+)
+DEFAULT_VIEWS_PER_LANDBLOCK = len(VIEW_STRATEGIES)
+ABSTRACT_ACE_SPACE = "ace_abstract"
 
 
 def iter_jsonl(path):
@@ -75,7 +87,33 @@ def build_class_vocab(class_keys):
     return key_to_idx, idx_to_key
 
 
-def scan_component_jsonl(path):
+def canonical_class_key(row, target_token_mode):
+    class_space = row.get("classIdSpace")
+    class_id = row.get("classId")
+    if class_space is None or class_id is None:
+        return None
+
+    if target_token_mode == "exact":
+        return (class_space, int(class_id))
+    if target_token_mode != "abstract_ace":
+        raise ValueError(f"Unknown target token mode: {target_token_mode}")
+
+    if class_space == "model_id":
+        return ("model_id", int(class_id))
+    if class_space != "wcid":
+        return (class_space, int(class_id))
+
+    source_table = row.get("sourceTable") or "unknown"
+    type_id = int(row.get("typeId") or row.get("weenieType") or 0)
+    component_kind = row.get("envCellComponentKind") or "none"
+    source_db = row.get("sourceDb") or "unknown"
+    cell_id = parse_hexish(row.get("cellId")) or 0
+    interior_flag = "interior" if cell_id >= 0x0100 else "surface"
+    abstract_label = f"{source_db}|{source_table}|type_{type_id}|{component_kind}|{interior_flag}"
+    return (ABSTRACT_ACE_SPACE, abstract_label)
+
+
+def scan_component_jsonl(path, target_token_mode):
     component_entries = []
     component_class_keys = set()
     component_count = 0
@@ -84,8 +122,19 @@ def scan_component_jsonl(path):
         anchor = row.get("anchor") or {}
         anchor_class_space = anchor.get("classIdSpace")
         anchor_class_id = int(anchor["classId"]) if anchor.get("classId") is not None else None
+        anchor_row = {
+            "classIdSpace": anchor_class_space,
+            "classId": anchor_class_id,
+            "sourceDb": anchor.get("sourceDb"),
+            "sourceTable": anchor.get("sourceTable"),
+            "typeId": anchor.get("typeId"),
+            "envCellComponentKind": row.get("componentKind"),
+            "cellId": anchor.get("cellId"),
+        }
+        anchor_class_key = None
         if anchor_class_space is not None and anchor_class_id is not None:
-            component_class_keys.add((anchor_class_space, anchor_class_id))
+            anchor_class_key = canonical_class_key(anchor_row, target_token_mode)
+            component_class_keys.add(anchor_class_key)
 
         bounds = row.get("boundsLocal") or {}
         component_entries.append({
@@ -96,7 +145,7 @@ def scan_component_jsonl(path):
             "cell_count": int(row.get("cellCount", 0)),
             "static_object_count": int(row.get("staticObjectCount", 0)),
             "entry_count": len(anchor.get("entryCellIds", [])),
-            "anchor_class_key": (anchor_class_space, anchor_class_id) if anchor_class_space is not None and anchor_class_id is not None else None,
+            "anchor_class_key": anchor_class_key,
             "anchor_pos": (
                 float(anchor.get("x", 0.0)),
                 float(anchor.get("y", 0.0)),
@@ -118,7 +167,7 @@ def scan_component_jsonl(path):
     return component_entries, component_class_keys, component_count
 
 
-def scan_raw_jsonl(path):
+def scan_raw_jsonl(path, target_token_mode):
     raw_class_keys = set()
     rows_by_lb = defaultdict(list)
     stats_by_lb = defaultdict(lambda: {
@@ -143,8 +192,9 @@ def scan_raw_jsonl(path):
         lb_key = (int(row["landblockX"]), int(row["landblockY"]))
         class_space = row.get("classIdSpace")
         class_id = int(row["classId"]) if row.get("classId") is not None else None
-        if class_space is not None and class_id is not None:
-            raw_class_keys.add((class_space, class_id))
+        canonical_key = canonical_class_key(row, target_token_mode)
+        if canonical_key is not None:
+            raw_class_keys.add(canonical_key)
 
         local_x = float(row.get("localX", 0.0))
         local_y = float(row.get("localY", 0.0))
@@ -169,6 +219,7 @@ def scan_raw_jsonl(path):
             class_id or 0,
             class_space,
             class_id,
+            canonical_key,
             class_space_code,
             yaw_deg,
             type_id,
@@ -256,23 +307,160 @@ def build_component_tables(component_entries, class_key_to_idx):
     }
 
 
-def build_landblock_tensors(rows_by_lb, stats_by_lb, class_key_to_idx, component_id_to_index):
-    populated_lbs = sorted(rows_by_lb.keys())
-    contexts = np.zeros((len(populated_lbs), 16), dtype=np.float32)
-    sequences = np.zeros((len(populated_lbs), MAX_OBJECTS_PER_LB, OBJECT_FEATURE_DIM), dtype=np.float32)
-    seq_lengths = np.zeros(len(populated_lbs), dtype=np.int32)
-    component_index_by_object = np.full((len(populated_lbs), MAX_OBJECTS_PER_LB), -1, dtype=np.int32)
+def structural_signature(stats):
+    row_count = max(stats["count"], 1)
+    linked_ratio = stats["linked_count"] / row_count
+    interior_ratio = stats["interior_count"] / row_count
+    dat_ratio = stats["dat_count"] / row_count
+    model_ratio = stats["model_id_count"] / row_count
+    activity_level = (
+        int(stats["building_count"] > 0) +
+        int(stats["encounter_count"] > 0) +
+        int(stats["instance_count"] > 0)
+    )
 
-    dropped_objects = 0
+    return (
+        min(int(math.log2(row_count + 1)), 8),
+        min(int(linked_ratio * 6.0), 5),
+        min(int(interior_ratio * 6.0), 5),
+        0 if dat_ratio < 0.35 else 1 if dat_ratio < 0.65 else 2,
+        0 if model_ratio < 0.35 else 1 if model_ratio < 0.65 else 2,
+        activity_level,
+    )
+
+
+def build_structural_weights(populated_lbs, stats_by_lb):
+    signature_counts = defaultdict(int)
+    signatures = {}
+
+    for lb_key in populated_lbs:
+        signature = structural_signature(stats_by_lb[lb_key])
+        signatures[lb_key] = signature
+        signature_counts[signature] += 1
+
+    raw_weights = []
+    for lb_key in populated_lbs:
+        freq = signature_counts[signatures[lb_key]]
+        raw_weights.append(1.0 / math.sqrt(freq))
+
+    raw_weights = np.asarray(raw_weights, dtype=np.float32)
+    mean_weight = float(np.mean(raw_weights)) if len(raw_weights) else 1.0
+    if mean_weight <= 0:
+        mean_weight = 1.0
+
+    normalized = raw_weights / mean_weight
+    boosted = []
+    for base_weight, lb_key in zip(normalized, populated_lbs):
+        stats = stats_by_lb[lb_key]
+        row_count = max(stats["count"], 1)
+        linked_ratio = stats["linked_count"] / row_count
+        interior_ratio = stats["interior_count"] / row_count
+        density_ratio = stats["count"] / max(MAX_OBJECTS_PER_LB - 1, 1)
+
+        if linked_ratio > 0.0:
+            base_weight *= 1.35
+        if interior_ratio >= 0.5:
+            base_weight *= 1.15
+        if density_ratio > 1.0:
+            base_weight *= min(1.30, 1.0 + 0.12 * math.log2(density_ratio + 1.0))
+        boosted.append(base_weight)
+
+    return np.clip(np.asarray(boosted, dtype=np.float32), 0.75, 4.0)
+
+
+def sorted_view_rows(rows, strategy):
+    if strategy == "xy":
+        return sorted(rows, key=lambda row: (row[0], row[1], row[2], row[3]))
+    if strategy == "yx":
+        return sorted(rows, key=lambda row: (row[1], row[0], row[2], row[3]))
+    if strategy == "component":
+        return sorted(rows, key=lambda row: (row[14] is None, row[14] or -1, row[0], row[1], row[2], row[3]))
+    if strategy == "radial":
+        cx = LB_SIZE * 0.5
+        cy = LB_SIZE * 0.5
+        return sorted(
+            rows,
+            key=lambda row: (
+                (row[0] - cx) ** 2 + (row[1] - cy) ** 2,
+                math.atan2(row[1] - cy, row[0] - cx),
+                row[2],
+                row[3],
+            ),
+        )
+    if strategy == "interior_source":
+        return sorted(
+            rows,
+            key=lambda row: (
+                0 if row[10] >= 0x0100 else 1,
+                row[9],
+                row[13],
+                row[0],
+                row[1],
+                row[2],
+                row[3],
+            ),
+        )
+    if strategy == "serpentine":
+        bucketed = defaultdict(list)
+        for row in rows:
+            bucketed[int(row[1] // 16.0)].append(row)
+        ordered = []
+        for stripe_idx in sorted(bucketed):
+            stripe_rows = sorted(bucketed[stripe_idx], key=lambda row: (row[0], row[2], row[3]))
+            if stripe_idx % 2 == 1:
+                stripe_rows.reverse()
+            ordered.extend(stripe_rows)
+        return ordered
+    raise ValueError(f"Unknown view strategy: {strategy}")
+
+
+def compute_chunk_offsets(row_count, chunk_capacity):
+    if row_count <= 0:
+        return [0]
+
+    chunk_count = max(1, math.ceil(row_count / chunk_capacity))
+    if chunk_count == 1:
+        return [0]
+
+    max_start = max(row_count - chunk_capacity, 0)
+    offsets = []
+    for chunk_idx in range(chunk_count):
+        if chunk_count == 1:
+            start = 0
+        else:
+            start = round((max_start * chunk_idx) / max(chunk_count - 1, 1))
+        offsets.append(int(start))
+
+    deduped = []
+    seen = set()
+    for start in offsets:
+        if start not in seen:
+            deduped.append(start)
+            seen.add(start)
+    return deduped
+
+
+def build_landblock_tensors(rows_by_lb, stats_by_lb, class_key_to_idx, component_id_to_index, views_per_landblock):
+    populated_lbs = sorted(rows_by_lb.keys())
+    view_count = max(1, min(int(views_per_landblock), len(VIEW_STRATEGIES)))
+    chunk_capacity = MAX_OBJECTS_PER_LB - 1
+    contexts = []
+    sequences = []
+    seq_lengths = []
+    component_index_by_object = []
+    lb_coords = []
+    sample_weights = []
+    structural_weights = build_structural_weights(populated_lbs, stats_by_lb)
+
     linked_objects = 0
+    chunked_views = 0
+    max_chunks_per_view = 1
 
     for lb_idx, (lb_x, lb_y) in enumerate(populated_lbs):
         rows = rows_by_lb[(lb_x, lb_y)]
-        rows.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
         stats = stats_by_lb[(lb_x, lb_y)]
         row_count = max(stats["count"], 1)
-
-        contexts[lb_idx] = np.array([
+        base_context = np.array([
             lb_x / 254.0,
             lb_y / 254.0,
             len(rows) / MAX_OBJECTS_PER_LB,
@@ -291,66 +479,93 @@ def build_landblock_tensors(rows_by_lb, stats_by_lb, class_key_to_idx, component
             stats["instance_count"] / row_count,
         ], dtype=np.float32)
 
-        n = min(len(rows), MAX_OBJECTS_PER_LB - 1)
-        for obj_idx, row in enumerate(rows[:n]):
-            class_space = row[4]
-            class_id = row[5]
-            class_space_code = row[6]
-            yaw_rad = math.radians(row[7])
-            type_id = row[8]
-            source_db_code = row[9]
-            cell_id = row[10]
-            terrain_delta_z = row[11]
-            slope_deg = row[12]
-            component_kind_code = row[13]
-            component_id = row[14]
-            class_key = (class_space, class_id) if class_space is not None and class_id is not None else None
-            class_token = class_key_to_idx.get(class_key, PAD_TOKEN)
-            local_x = row[0]
-            local_y = row[1]
-            z = row[2]
-            is_interior = 1.0 if cell_id >= 0x0100 else 0.0
+        for view_idx in range(view_count):
+            strategy = VIEW_STRATEGIES[view_idx]
+            ordered_rows = sorted_view_rows(rows, strategy)
+            chunk_offsets = compute_chunk_offsets(len(ordered_rows), chunk_capacity)
+            if len(chunk_offsets) > 1:
+                chunked_views += 1
+            max_chunks_per_view = max(max_chunks_per_view, len(chunk_offsets))
 
-            sequences[lb_idx, obj_idx] = np.array([
-                float(class_token),
-                float(class_space_code),
-                local_x / LB_SIZE,
-                local_y / LB_SIZE,
-                z / 512.0,
-                math.sin(yaw_rad),
-                math.cos(yaw_rad),
-                type_id / 255.0,
-                float(source_db_code),
-                cell_id / 65535.0,
-                terrain_delta_z / 64.0,
-                slope_deg / 90.0,
-                float(component_kind_code),
-                is_interior,
-            ], dtype=np.float32)
+            for chunk_idx, start in enumerate(chunk_offsets):
+                chunk_rows = ordered_rows[start:start + chunk_capacity]
+                seq = np.zeros((MAX_OBJECTS_PER_LB, OBJECT_FEATURE_DIM), dtype=np.float32)
+                comp_idx = np.full(MAX_OBJECTS_PER_LB, -1, dtype=np.int32)
+                ctx = np.zeros(20, dtype=np.float32)
+                ctx[:16] = base_context
+                ctx[16] = view_idx / max(view_count - 1, 1)
+                ctx[17] = VIEW_STRATEGIES.index(strategy) / max(len(VIEW_STRATEGIES) - 1, 1)
+                ctx[18] = chunk_idx / max(len(chunk_offsets) - 1, 1)
+                ctx[19] = len(chunk_rows) / max(len(ordered_rows), 1)
 
-            if component_id is not None:
-                component_index_by_object[lb_idx, obj_idx] = component_id_to_index.get(component_id, -1)
-                if component_index_by_object[lb_idx, obj_idx] >= 0:
-                    linked_objects += 1
+                for obj_idx, row in enumerate(chunk_rows):
+                    class_space = row[4]
+                    class_id = row[5]
+                    canonical_key = row[6]
+                    class_space_code = row[7]
+                    yaw_rad = math.radians(row[8])
+                    type_id = row[9]
+                    source_db_code = row[10]
+                    cell_id = row[11]
+                    terrain_delta_z = row[12]
+                    slope_deg = row[13]
+                    component_kind_code = row[14]
+                    component_id = row[15]
+                    class_key = canonical_key
+                    class_token = class_key_to_idx.get(class_key, PAD_TOKEN)
+                    local_x = row[0]
+                    local_y = row[1]
+                    z = row[2]
+                    is_interior = 1.0 if cell_id >= 0x0100 else 0.0
 
-        if len(rows) >= MAX_OBJECTS_PER_LB:
-            dropped_objects += len(rows) - (MAX_OBJECTS_PER_LB - 1)
+                    seq[obj_idx] = np.array([
+                        float(class_token),
+                        float(class_space_code),
+                        local_x / LB_SIZE,
+                        local_y / LB_SIZE,
+                        z / 512.0,
+                        math.sin(yaw_rad),
+                        math.cos(yaw_rad),
+                        type_id / 255.0,
+                        float(source_db_code),
+                        cell_id / 65535.0,
+                        terrain_delta_z / 64.0,
+                        slope_deg / 90.0,
+                        float(component_kind_code),
+                        is_interior,
+                    ], dtype=np.float32)
 
-        sequences[lb_idx, n, 0] = STOP_TOKEN
-        seq_lengths[lb_idx] = n + 1
+                    if component_id is not None:
+                        comp_idx[obj_idx] = component_id_to_index.get(component_id, -1)
+                        if comp_idx[obj_idx] >= 0:
+                            linked_objects += 1
+
+                stop_index = len(chunk_rows)
+                seq[stop_index, 0] = STOP_TOKEN
+
+                contexts.append(ctx)
+                sequences.append(seq)
+                seq_lengths.append(stop_index + 1)
+                component_index_by_object.append(comp_idx)
+                lb_coords.append((lb_x, lb_y))
+                sample_weights.append(structural_weights[lb_idx])
 
     return {
         "populated_lbs": populated_lbs,
-        "contexts": contexts,
-        "sequences": sequences,
-        "seq_lengths": seq_lengths,
-        "component_index_by_object": component_index_by_object,
-        "dropped_objects": dropped_objects,
+        "contexts": np.asarray(contexts, dtype=np.float32),
+        "sequences": np.asarray(sequences, dtype=np.float32),
+        "seq_lengths": np.asarray(seq_lengths, dtype=np.int32),
+        "component_index_by_object": np.asarray(component_index_by_object, dtype=np.int32),
+        "lb_coords": np.asarray(lb_coords, dtype=np.int16),
+        "sample_weights": np.asarray(sample_weights, dtype=np.float32),
         "linked_objects": linked_objects,
+        "views_per_landblock": view_count,
+        "chunked_views": chunked_views,
+        "max_chunks_per_view": max_chunks_per_view,
     }
 
 
-def save_outputs(out_npz, out_vocab, class_key_to_idx, idx_to_key, lb_data, component_data):
+def save_outputs(out_npz, out_vocab, class_key_to_idx, idx_to_key, lb_data, component_data, target_token_mode):
     os.makedirs(os.path.dirname(out_npz), exist_ok=True)
 
     np.savez_compressed(
@@ -358,7 +573,8 @@ def save_outputs(out_npz, out_vocab, class_key_to_idx, idx_to_key, lb_data, comp
         contexts=lb_data["contexts"],
         sequences=lb_data["sequences"],
         seq_lengths=lb_data["seq_lengths"],
-        lb_coords=np.array(lb_data["populated_lbs"], dtype=np.int16),
+        lb_coords=lb_data["lb_coords"],
+        sample_weights=lb_data["sample_weights"],
         component_index_by_object=lb_data["component_index_by_object"],
         component_ids=component_data["component_ids"],
         component_kind=component_data["component_kind"],
@@ -382,6 +598,31 @@ def save_outputs(out_npz, out_vocab, class_key_to_idx, idx_to_key, lb_data, comp
         "component_kind_codes": {str(k): v for k, v in COMPONENT_KIND_CODES.items()},
         "object_feature_dim": OBJECT_FEATURE_DIM,
         "max_objects_per_lb": MAX_OBJECTS_PER_LB,
+        "views_per_landblock": lb_data["views_per_landblock"],
+        "view_strategies": list(VIEW_STRATEGIES[:lb_data["views_per_landblock"]]),
+        "target_token_mode": target_token_mode,
+        "context_feature_names": [
+            "lb_x",
+            "lb_y",
+            "object_count",
+            "dat_ratio",
+            "ace_ratio",
+            "model_ratio",
+            "wcid_ratio",
+            "linked_ratio",
+            "interior_ratio",
+            "terrain_delta_mean",
+            "slope_mean",
+            "parent_count_mean",
+            "child_count_mean",
+            "building_count_mean",
+            "encounter_count_mean",
+            "instance_count_mean",
+            "view_ordinal",
+            "view_strategy",
+            "chunk_ordinal",
+            "chunk_coverage",
+        ],
     }
     with open(out_vocab, "w", encoding="utf-8") as f:
         json.dump(vocab, f, indent=2)
@@ -393,6 +634,9 @@ def parse_args():
     parser.add_argument("--component-jsonl", default=DEFAULT_COMPONENT_JSONL, help="Path to export-envcell-components JSONL")
     parser.add_argument("--out-npz", default=DEFAULT_OUT_NPZ, help="Output NPZ path")
     parser.add_argument("--out-vocab", default=DEFAULT_OUT_VOCAB, help="Output vocab JSON path")
+    parser.add_argument("--views-per-landblock", type=int, default=DEFAULT_VIEWS_PER_LANDBLOCK, help="Number of structurally distinct sequence views to emit per landblock")
+    parser.add_argument("--target-token-mode", choices=TARGET_TOKEN_MODES, default="exact",
+                        help="exact keeps raw WCIDs/model IDs; abstract_ace collapses ACE WCIDs into structural classes")
     return parser.parse_args()
 
 
@@ -406,6 +650,7 @@ def main():
     print(f"  Components    : {args.component_jsonl}")
     print(f"  Output NPZ    : {args.out_npz}")
     print(f"  Output vocab  : {args.out_vocab}")
+    print(f"  Token mode    : {args.target_token_mode}")
     print()
 
     if not os.path.exists(args.raw_jsonl):
@@ -414,8 +659,8 @@ def main():
         raise SystemExit(f"Missing component JSONL: {args.component_jsonl}")
 
     print("[1/4] Streaming JSONL inputs...")
-    component_entries, component_class_keys, component_count = scan_component_jsonl(args.component_jsonl)
-    rows_by_lb, stats_by_lb, raw_class_keys, raw_count = scan_raw_jsonl(args.raw_jsonl)
+    component_entries, component_class_keys, component_count = scan_component_jsonl(args.component_jsonl, args.target_token_mode)
+    rows_by_lb, stats_by_lb, raw_class_keys, raw_count = scan_raw_jsonl(args.raw_jsonl, args.target_token_mode)
     print(f"  Raw rows      : {raw_count:,}")
     print(f"  Components    : {component_count:,}")
     print()
@@ -427,14 +672,23 @@ def main():
     print()
 
     print("[3/4] Building landblock tensors...")
-    lb_data = build_landblock_tensors(rows_by_lb, stats_by_lb, class_key_to_idx, component_data["component_id_to_index"])
+    lb_data = build_landblock_tensors(
+        rows_by_lb,
+        stats_by_lb,
+        class_key_to_idx,
+        component_data["component_id_to_index"],
+        args.views_per_landblock,
+    )
     print(f"  Landblocks    : {len(lb_data['populated_lbs']):,}")
+    print(f"  Examples      : {len(lb_data['contexts']):,}")
+    print(f"  Views / LB    : {lb_data['views_per_landblock']}")
     print(f"  Linked objs   : {lb_data['linked_objects']:,}")
-    print(f"  Dropped objs  : {lb_data['dropped_objects']:,}")
+    print(f"  Chunked views : {lb_data['chunked_views']:,}")
+    print(f"  Max chunks/view: {lb_data['max_chunks_per_view']}")
     print()
 
     print("[4/4] Saving outputs...")
-    save_outputs(args.out_npz, args.out_vocab, class_key_to_idx, idx_to_key, lb_data, component_data)
+    save_outputs(args.out_npz, args.out_vocab, class_key_to_idx, idx_to_key, lb_data, component_data, args.target_token_mode)
     size_mb = os.path.getsize(args.out_npz) / 1024 / 1024
     print(f"  NPZ size      : {size_mb:.1f} MB")
     print("  Done.")

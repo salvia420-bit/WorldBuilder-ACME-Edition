@@ -36,6 +36,13 @@ Current gaps:
 - no room-local placement target
 - no clear distinction between structural/support objects and micro props
 
+Important clarification from investigation work after this note:
+
+- interior support research must not treat "the building interior" and "the EnvCell component" as the same modeling object
+- the anchored EnvCell component is the shell/container for the interior scene
+- the strongest recoverable supervision inside many retail interiors is static-object-on-static-support placement within that component
+- `parentGuids` are still useful when valid, but they are not the primary supervision source for table-top, shelf-top, or desk-top clutter
+
 If we train directly on the current sequence tensors, the model is being asked to
 infer retail GUI placement behavior from the wrong representation.
 
@@ -104,6 +111,8 @@ From `export-envcell-components`:
 - cell origin and orientation
 - component bounds
 - portal refs and visible-cell refs
+- static-object conservative bounds (`aabbLocal`)
+- support-surface hints (`supportSurfaceHints`) that already expose top-plane support classes such as `table_like` and `shelf_like`
 
 From `export-raw-world-facts`:
 
@@ -115,6 +124,24 @@ From `export-raw-world-facts`:
 - object pose
 
 These are strong enough to justify a support-aware attempt.
+
+In practice, the priority order for supervision should be:
+
+1. static prop vs static support geometry in the same cell/component
+2. repeated semantic motifs over those static placements
+3. direct ACE parent/child links only when they survive same-cell/same-component validation
+
+For dataset assembly, the label tiers should map to evidence quality rather than to whether the source row happened to come from an ACE graph link:
+
+1. gold
+   - validated ACE graph links that survive same-cell/component checks
+   - reviewed/bootstrap-promoted geometry matches
+2. silver
+   - strong static geometry matches on support surfaces in the same cell/component
+   - tight footprint fit with plausible height above the support plane
+3. bronze
+   - top-ranked static geometry matches that are plausible but still ambiguous among nearby supports
+   - useful as a larger weak-supervision pool for curriculum or confidence-weighted training
 
 ## Dataset Units
 
@@ -398,4 +425,3 @@ export later for support-aware supervision:
 
 That should be a later program improvement, not a blocker for the first
 extractor attempt.
-

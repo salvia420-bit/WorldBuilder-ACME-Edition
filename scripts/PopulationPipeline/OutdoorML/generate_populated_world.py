@@ -58,8 +58,8 @@ from housing_linker import (
     classify_slumlord_house_type,
 )
 from extract_placement_tensors import (
-    BASE_CONTEXT_DIM, build_context_vector, load_height_grid, load_difficulty_grid,
-    build_cultural_zones, load_wcid_types, STOP_TOKEN, PAD_TOKEN,
+    BASE_CONTEXT_DIM, build_context_vector, load_world_feature_grid, load_height_grid,
+    load_difficulty_grid, load_biome_grid, build_cultural_zones, load_wcid_types, STOP_TOKEN, PAD_TOKEN,
     FIRST_REAL_TOKEN, HOUSING_COTTAGE_TOKEN, HOUSING_VILLA_TOKEN, HOUSING_MANSION_TOKEN,
 )
 from settlement_signatures import SETTLEMENT_ARCHETYPE_LABELS, SETTLEMENT_ROLE_LABELS
@@ -72,6 +72,7 @@ MODEL_DIR = os.path.join(BASE_DIR, "pipeline_data", "models")
 PLANNER_MODEL_PATH = os.path.join(MODEL_DIR, "settlement_planner.pt")
 VOCAB_PATH = os.path.join(BASE_DIR, "pipeline_data", "reference", "placement_vocab.json")
 HEIGHTS_PATH = os.path.join(BASE_DIR, "pipeline_data", "population_output", "vanquish_heights.json")
+WORLD_FEATURES_PATH = os.path.join(BASE_DIR, "pipeline_data", "population_output", "vanquish_heights.json")
 DIFFICULTY_GRADIENT = os.path.join(BASE_DIR, "pipeline_data", "enrichment", "difficulty_gradient.json")
 
 OUTPUT_DIR = os.path.join(BASE_DIR, "pipeline_data", "population_output")
@@ -1665,8 +1666,13 @@ def generate_world(args):
     
     # ── Load auxiliary data ──
     print("\n[3/6] Loading terrain & gradient data...")
-    heights = load_height_grid(HEIGHTS_PATH)
+    world_features = load_world_feature_grid(args.world_features)
+    heights = {key: value["heights"] for key, value in world_features.items()}
+    if not heights:
+        heights = load_height_grid(HEIGHTS_PATH)
+        world_features = {key: {"heights": value, "terrain": None, "roads": None} for key, value in heights.items()}
     difficulty_grid = load_difficulty_grid(DIFFICULTY_GRADIENT)
+    biome_grid = load_biome_grid(os.path.join(BASE_DIR, "pipeline_data", "enrichment", "biome_map.json"))
     culture_grid = build_cultural_zones()
 
     ocean_mask = None
@@ -1749,7 +1755,7 @@ def generate_world(args):
 
             ctx = build_context_vector(
                 lb_x, lb_y, heights, difficulty_grid,
-                culture_grid, instance_counts
+                culture_grid, biome_grid, world_features, instance_counts
             )
             culture_code = culture_grid[lb_x, lb_y] if 0 <= lb_x < 255 and 0 <= lb_y < 255 else 0
             culture_name = CULTURE_NAME_BY_CODE.get(int(culture_code), "Neutral")
@@ -2184,6 +2190,8 @@ def main():
                        help="Optional SQL output path (defaults to pipeline_data/population_output/vanquish_ml_populated.sql)")
     parser.add_argument("--summary-json", type=str, default=None,
                        help="Optional JSON summary output path for automated probe runs")
+    parser.add_argument("--world-features", type=str, default=WORLD_FEATURES_PATH,
+                       help="Generated-world JSON/JSONL with heights and optional terrainTypes/roadFlags")
     parser.add_argument("--require-cuda", action="store_true",
                        help="Fail fast if CUDA is unavailable instead of silently running on CPU")
     args = parser.parse_args()

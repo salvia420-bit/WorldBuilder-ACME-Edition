@@ -44,6 +44,13 @@ python3 -u scripts/PopulationPipeline/OutdoorML/extract_component_linked_tensors
 
 The extractor is streaming and is intended for the full 255x255 world export without materializing all raw rows as Python dicts at once.
 
+Current extractor behavior is intentionally biased toward preserving the rare linked/interior-heavy examples:
+
+- defaults to `raw_world_facts_full_with_components_v2.jsonl`
+- emits all structural view strategies, including `interior_source`
+- chunks dense landblocks into multiple sequence windows instead of silently dropping the tail beyond the 255-object cap
+- boosts sample weights for linked, interior-heavy, and over-cap landblocks so they are not drowned out by the sparse outdoor majority
+
 ## Training
 
 Default training now points at the component-linked dataset:

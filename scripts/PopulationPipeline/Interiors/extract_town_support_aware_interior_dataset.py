@@ -17,6 +17,7 @@ DEFAULT_TOWN_MANIFEST = REFERENCE_DIR / "world_grammar_town_with_interiors_manif
 DEFAULT_OUT_SUPPORT_JSONL = REFERENCE_DIR / "town_interior_support_objects_highconf.jsonl"
 DEFAULT_OUT_PROP_JSONL = REFERENCE_DIR / "town_interior_supported_props_highconf.jsonl"
 DEFAULT_OUT_SILVER_JSONL = REFERENCE_DIR / "town_interior_supported_props_silver.jsonl"
+DEFAULT_OUT_BRONZE_JSONL = REFERENCE_DIR / "town_interior_supported_props_bronze.jsonl"
 DEFAULT_OUT_REVIEW_JSONL = REFERENCE_DIR / "town_interior_supported_prop_candidates_review.jsonl"
 DEFAULT_OUT_CANDIDATES_JSONL = REFERENCE_DIR / "town_interior_supported_prop_candidates_ranked.jsonl"
 DEFAULT_OUT_MOTIFS_JSONL = REFERENCE_DIR / "town_interior_supported_prop_motifs.jsonl"
@@ -73,6 +74,8 @@ def main() -> None:
         interior_args.extend(["--out-prop-jsonl", str(DEFAULT_OUT_PROP_JSONL)])
     if not _has_flag("--out-silver-jsonl"):
         interior_args.extend(["--out-silver-jsonl", str(DEFAULT_OUT_SILVER_JSONL)])
+    if not _has_flag("--out-bronze-jsonl"):
+        interior_args.extend(["--out-bronze-jsonl", str(DEFAULT_OUT_BRONZE_JSONL)])
     if not _has_flag("--out-review-jsonl"):
         interior_args.extend(["--out-review-jsonl", str(DEFAULT_OUT_REVIEW_JSONL)])
     if not _has_flag("--out-candidates-jsonl"):
@@ -90,6 +93,7 @@ def main() -> None:
             "--out-support-jsonl",
             "--out-prop-jsonl",
             "--out-silver-jsonl",
+            "--out-bronze-jsonl",
             "--out-review-jsonl",
             "--out-candidates-jsonl",
             "--out-motifs-jsonl",
