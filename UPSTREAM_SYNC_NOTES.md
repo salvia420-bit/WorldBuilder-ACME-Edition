@@ -88,7 +88,7 @@ Sorted chronologically.
 | `cd3e377` | 03-12 | dungeon 'world template' WIP | many | medium | 🔒 DEFERRED | Dungeon refactor chain. |
 | `6a317bc` | 03-12 | world mini map fix, remove templates | 26 | +116/-604 | 🔒 DEFERRED | Mostly DELETIONS (template removal). Don't port without verifying we want those deletions. |
 | `0998c38` | 03-13 | landscape refactor, dungeon scene + settings | 51 | +1 197/-358 | 🔒 DEFERRED | Big landscape refactor. |
-| `f26345e` | 03-22 | weenie editor, layout overhaul, transform gizmo, world gen, mesh import/export, texture | 86 | +10 452/-661 | 🔒 DEFERRED | Megafeature commit. Do not attempt as one cherry-pick. |
+| `f26345e` | 03-22 | weenie editor, layout overhaul, transform gizmo, world gen, mesh import/export, texture | 86 | +10 452/-661 | 🟡 PARTIAL | See "f26345e split into 4 slices" below. Slices 1-3 (headless) ✅ PORTED. Slice 4 (GUI) ✅ waves A-D, ⏳ waves E-G remain. |
 | `fa7c58c` | 03-22 | Surface browser paging + dungeon scan fixes | 6 | +479/-75 | ⏳ TODO | Smaller; check feasibility. |
 | `ee39f71` | 03-22 | fix dungeon export crash on corrupt setup | 1 | +9/-1 | 🚫 BLOCKED | Needs `SanitizeEnvCellSurfacesForExport` (hundreds of lines of upstream `DungeonDocument.cs` we don't have). |
 | `4dc3983` | 03-23 | Weenie property enums + DID/int pickers | many | medium | ⏳ TODO | Cluster B (weenie/spell editor). |
@@ -109,10 +109,108 @@ Sorted chronologically.
 
 ### Tally
 - **7 ✅ PORTED** (in the side branch we just merged)
+- **1 🟡 PARTIAL** (`f26345e` slices 1-3 + slice 4 waves A-D done; waves E-G remain)
 - **5 🚫 BLOCKED** (attempted, prereq gap documented above)
-- **15 🔒 DEFERRED** (large refactors or stacked dungeon-chain — port only with in-game testing)
+- **14 🔒 DEFERRED** (large refactors or stacked dungeon-chain — port only with in-game testing)
 - **1 🔧 PERMISSIONS** (just needs the right token to push)
 - **14 ⏳ TODO** (not yet attempted, lower-risk than the deferred set)
+
+## f26345e split into 4 slices
+
+`f26345e` was too large to cherry-pick as a unit (86 files, +10 452 LOC). It was
+decomposed into 4 slices, each on its own side branch stacked off the previous:
+
+### Slice 1 — Mesh I/O + BSP + particle simulator (headless backend) ✅
+Branch: `sync/f26345e-slice1-mesh-particle`
+
+5 net-new pure-backend files in `WorldBuilder.Shared/Lib/`:
+`AcParticleEmitterSimulator`, `BspGenerator`, `ObjSingleMeshImporter`,
+`WavefrontMeshExport`, `LayoutDescBinary`. Plus `PortalDatDocument` extended
+to dispatch `GfxObj`/`Setup` saves with an unpack-failure cache and
+`GetEntryIds()`. Wired into headless via 3 REPL/JSON commands:
+`obj-export`, `obj-import`, `bsp-build`.
+
+### Slice 2 — AceDb weenie data layer (headless backend) ✅
+Branch: `sync/f26345e-slice2-weenie-data` (stacked on slice 1)
+
+7 net-new files: `AceWeenieSnapshot`, `AceWeenieTypes`,
+`WeenieTemplateDefinition`, `AceDbConnector.Weenie` (partial),
+plus GUI-side `WorldBuilder/Lib/WeenieTemplateCatalog` and
+`WorldBuilder/Data/WeenieTemplates.json` (embedded). `AceDbConnector` is
+now `partial`. The Weenie partial also gained `GetWeenieNamesAsync` +
+`GetSetupDidsAsync` + `WeenieEntry` (slice 4 wave C added these here
+rather than touch the heavily-locally-modified `AceDbConnector.cs`).
+Headless wired via 3 commands: `weenie-snapshot`, `weenie-template-list`,
+`weenie-template-apply`.
+
+### Slice 3 — WorldGen pipeline (relocated to Shared.Lib) ✅
+Branch: `sync/f26345e-slice3-worldgen` (stacked on slice 2)
+
+10 net-new files relocated from upstream's `WorldBuilder.Editors.Landscape.WorldGen`
+(GUI namespace) to `WorldBuilder.Shared.Lib.WorldGen` since they have zero
+Avalonia dependencies. Files: `BiomeMapper`, `BuildingAnalyzer`,
+`BuildingPlacer`, `HeightMapGenerator`, `RetailTownBuildingScanner`,
+`RoadGenerator`, `TownDecorationCatalog`, `TownPlacer`, `WorldGenerator`,
+`WorldGeneratorParams`. `Shared/Lib/Noise/SimplexNoise` extended with
+upstream-compatible `FBM` and `RidgedNoise` methods.
+
+Headless wired via 3 commands: `worldgen` (dry-run + `--apply` flag for
+TerrainDocument/LandblockDocument writes), `worldgen-analyze-buildings`,
+`worldgen-scan-retail-towns`.
+
+### Slice 4 — GUI changes 🟡 in progress
+Branch: `sync/f26345e-slice4-gui` (stacked on slice 3)
+
+Decomposed into waves:
+
+**Wave A** ✅ — extract clean-add files (`LayoutDatDocument`, `TransformGizmo`,
+`SetObjectOrientationCommand`, Gizmo shaders, Layout helpers, full
+Weenie editor, full ObjectDebug refactor with old paths deleted,
+`WorldGeneratorDialogService`).
+
+**Wave B** ✅ — Shared diff hunks (`LandblockDocument` particle-emitter
+detection, `Project.ReloadDatReadersAfterExternalWrite` +
+`LayoutDatDocument` save dispatch, `BuildingBlueprintCache.GetAllBuildingModelIds`,
+`DefaultDatReaderWriter` `ParticleEmitter` + `LayoutDesc` routes,
+`CustomTextureStore.UiRenderSurface` legacy enum value, csproj
+embedded shaders/JSON).
+
+**Wave C** ✅ — fix the 13 build errors via `AceDbConnectionSettings`
+new file, `WorldBuilderSettings.AceDbConnection` property,
+`JsonSourceGenerationContext` registration, `ServiceCollectionExtensions`
+DI for `ObjectDebugEditorViewModel` + `WeenieEditorViewModel` (replacing
+the deleted `AddTransient<ObjectDebugViewModel>()`),
+`StaticObjectManager.SetPortalDatDocument` + `TryGetSetup`/`TryGetGfxObj`
+overlay + `RegisterGfxObj`/`RegisterSetup`,
+`AceDbConnector.Weenie` extended with `WeenieEntry`/`GetWeenieNamesAsync`/`GetSetupDidsAsync`.
+
+**Wave D** ✅ — small-file diff hunks (EnvCellManager buffer-grow fix,
+ObjectSelectionState.HasEditableEntry, SceneContext gizmo init,
+TerrainEditingContext normal/align helpers, DungeonScene gizmo render,
+DungeonSelectionManager position tracking, MainViewModel + MainView axaml
+menu items + DataTemplates for the two new editors, full SnapSettings
+class on LandscapeEditorSettings, ShowParticles/ShowWeenieSpawns overlay
+toggles).
+
+**Waves E–G** ⏳ remaining (deferred — heavy local merge work):
+- Wave E: ObjectBrowserItem/ViewModel particle-emitter integration,
+  SelectorToolViewModel + SelectSubToolViewModel align-to-surface command
+  + new placement flow, dungeon SelectTool gizmo wiring (+232),
+  TextureImportService improvements (+148), ObjectRaycast (+84),
+  StaticObjectManager rendering changes beyond the wave C overlay (+96),
+  ProjectManager (+/-), corresponding axaml view bindings.
+- Wave F: Layout editor view+vm overhaul (+416 + 260 + 188 + 85). The
+  Layout editor was substantially rewritten upstream.
+- Wave G: GameScene (+328) gains gizmo render/hit-test integration; and
+  LandscapeEditorViewModel (+490 with heavy local mods) gains
+  GenerateWorldCommand wiring, gizmo state, ShowParticles/ShowWeenieSpawns
+  bindings, etc. This is the hardest merge — local has been heavily
+  modified along with upstream.
+
+The minimum viable slice 4 (waves A-D) leaves the GUI compiling cleanly
+with the new editors visible from the menu, gizmo infrastructure ready,
+and headless backend fully wired. Waves E-G add behaviour to existing
+editor surfaces but the editors themselves are present and functional.
 
 ## Workflow for porting future commits
 
