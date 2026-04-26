@@ -886,6 +886,42 @@ public record RemapBuildingsSqlResult(
     List<string>? Warnings = null,
     string? Error = null);
 
+// ── Weenie / ACE DB (slice 2 of f26345e) ───────────────────
+public record WeenieSnapshotResult(
+    bool Success,
+    uint ClassId,
+    uint WeenieType = 0,
+    string? Name = null,
+    uint SetupDid = 0,
+    uint IconDid = 0,
+    int IntCount = 0, int Int64Count = 0, int BoolCount = 0,
+    int FloatCount = 0, int StringCount = 0,
+    int DataIdCount = 0, int InstanceIdCount = 0,
+    int SpellBookCount = 0, int CreateListCount = 0,
+    int EmoteCount = 0, int BookCount = 0,
+    int PositionCount = 0, int AttributeCount = 0,
+    int Attribute2ndCount = 0, int SkillCount = 0,
+    DateTime? LastModified = null,
+    object? Snapshot = null,
+    string? Error = null);
+
+public record WeenieTemplateInfo(
+    string Id, string Title, string? Description, uint WeenieType,
+    int IntCount, int Int64Count, int BoolCount, int FloatCount,
+    int StringCount, int DataIdCount, int InstanceIdCount);
+
+public record WeenieTemplateListResult(
+    bool Success, string? BundlePath,
+    int TemplateCount,
+    List<WeenieTemplateInfo> Templates,
+    string? Error = null);
+
+public record WeenieTemplateApplyResult(
+    bool Success, string? BundlePath,
+    string TemplateId, uint ClassId,
+    int ScalarsApplied,
+    string? Error = null);
+
 // ── Mesh / BSP (slice 1 of f26345e) ────────────────────────
 public record ObjExportResult(
     uint DatId, string HexId, string DatType,

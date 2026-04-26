@@ -9343,6 +9343,138 @@ public class CommandEngine {
     }
 
     // ═══════════════════════════════════════════════════════════
+    //  Weenie / ACE DB (slice 2 of f26345e port)
+    // ═══════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Loads scalar weenie properties (and complex-table counts) from ACE DB. Read-only.
+    /// </summary>
+    public async Task<WeenieSnapshotResult> WeenieSnapshotAsync(uint classId) {
+        var settings = _projectManager.CurrentProject?.AceDb;
+        if (settings == null)
+            return new WeenieSnapshotResult(false, classId,
+                Error: "No ACE database settings configured. Use 'ace-db connect' first.");
+
+        try {
+            using var connector = new AceDbConnector(settings);
+            var snap = await connector.LoadWeenieSnapshotAsync(classId);
+            if (snap == null)
+                return new WeenieSnapshotResult(false, classId, Error: $"Weenie {classId} not found.");
+
+            string? name = null;
+            foreach (var s in snap.Strings) {
+                if (s.Type == 1) { name = s.Value; break; } // PropertyString.Name = 1
+            }
+
+            return new WeenieSnapshotResult(
+                Success: true,
+                ClassId: snap.ClassId,
+                WeenieType: snap.WeenieType,
+                Name: name,
+                SetupDid: snap.SetupDid,
+                IconDid: snap.IconDid,
+                IntCount: snap.Ints.Count,
+                Int64Count: snap.Int64s.Count,
+                BoolCount: snap.Bools.Count,
+                FloatCount: snap.Floats.Count,
+                StringCount: snap.Strings.Count,
+                DataIdCount: snap.DataIds.Count,
+                InstanceIdCount: snap.InstanceIds.Count,
+                SpellBookCount: snap.SpellBookCount,
+                CreateListCount: snap.CreateListCount,
+                EmoteCount: snap.EmoteCount,
+                BookCount: snap.BookCount,
+                PositionCount: snap.PositionCount,
+                AttributeCount: snap.AttributeCount,
+                Attribute2ndCount: snap.Attribute2ndCount,
+                SkillCount: snap.SkillCount,
+                LastModified: snap.LastModified,
+                Snapshot: snap);
+        }
+        catch (Exception ex) {
+            return new WeenieSnapshotResult(false, classId, Error: ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Parses a JSON template bundle and lists the templates inside.
+    /// Bundle may be a single object or an array of templates.
+    /// </summary>
+    public WeenieTemplateListResult WeenieTemplateList(string bundlePath) {
+        if (!File.Exists(bundlePath))
+            return new WeenieTemplateListResult(false, bundlePath, 0, new List<WeenieTemplateInfo>(),
+                $"Bundle file not found: {bundlePath}");
+        try {
+            var defs = WeenieTemplateJson.ParseBundle(File.ReadAllText(bundlePath));
+            var infos = new List<WeenieTemplateInfo>(defs.Count);
+            foreach (var d in defs) {
+                infos.Add(new WeenieTemplateInfo(d.Id, d.Title, d.Description, d.WeenieType,
+                    d.Ints.Count, d.Int64s.Count, d.Bools.Count, d.Floats.Count,
+                    d.Strings.Count, d.DataIds.Count, d.InstanceIds.Count));
+            }
+            return new WeenieTemplateListResult(true, bundlePath, infos.Count, infos);
+        }
+        catch (Exception ex) {
+            return new WeenieTemplateListResult(false, bundlePath, 0, new List<WeenieTemplateInfo>(), ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Applies a template's scalar properties to a weenie classId via SaveWeenieScalarsAsync.
+    /// Existing scalars not in the template are left untouched.
+    /// </summary>
+    public async Task<WeenieTemplateApplyResult> WeenieTemplateApplyAsync(string bundlePath, string templateId, uint classId) {
+        var settings = _projectManager.CurrentProject?.AceDb;
+        if (settings == null)
+            return new WeenieTemplateApplyResult(false, bundlePath, templateId, classId, 0,
+                "No ACE database settings configured. Use 'ace-db connect' first.");
+
+        if (!File.Exists(bundlePath))
+            return new WeenieTemplateApplyResult(false, bundlePath, templateId, classId, 0,
+                $"Bundle file not found: {bundlePath}");
+
+        WeenieTemplateDefinition? def;
+        try {
+            var defs = WeenieTemplateJson.ParseBundle(File.ReadAllText(bundlePath));
+            def = null;
+            foreach (var d in defs) {
+                if (string.Equals(d.Id, templateId, StringComparison.OrdinalIgnoreCase)) {
+                    def = d; break;
+                }
+            }
+            if (def == null)
+                return new WeenieTemplateApplyResult(false, bundlePath, templateId, classId, 0,
+                    $"Template '{templateId}' not found in bundle.");
+        }
+        catch (Exception ex) {
+            return new WeenieTemplateApplyResult(false, bundlePath, templateId, classId, 0, ex.Message);
+        }
+
+        // Build snapshot from the template.
+        var snap = new AceWeenieSnapshot { ClassId = classId, WeenieType = def.WeenieType };
+        foreach (var (t, v) in def.Ints)        snap.Ints.Add(new AceWeenieRowInt { Type = t, Value = v });
+        foreach (var (t, v) in def.Int64s)      snap.Int64s.Add(new AceWeenieRowInt64 { Type = t, Value = v });
+        foreach (var (t, v) in def.Bools)       snap.Bools.Add(new AceWeenieRowBool { Type = t, Value = v });
+        foreach (var (t, v) in def.Floats)      snap.Floats.Add(new AceWeenieRowFloat { Type = t, Value = v });
+        foreach (var (t, v) in def.Strings)     snap.Strings.Add(new AceWeenieRowString { Type = t, Value = v });
+        foreach (var (t, v) in def.DataIds)     snap.DataIds.Add(new AceWeenieRowDid { Type = t, Value = v });
+        foreach (var (t, v) in def.InstanceIds) snap.InstanceIds.Add(new AceWeenieRowIid { Type = t, Value = v });
+
+        int scalarCount = snap.Ints.Count + snap.Int64s.Count + snap.Bools.Count
+            + snap.Floats.Count + snap.Strings.Count + snap.DataIds.Count + snap.InstanceIds.Count;
+
+        try {
+            using var connector = new AceDbConnector(settings);
+            var ok = await connector.SaveWeenieScalarsAsync(snap);
+            return new WeenieTemplateApplyResult(ok, bundlePath, templateId, classId, scalarCount,
+                ok ? null : "SaveWeenieScalarsAsync returned false.");
+        }
+        catch (Exception ex) {
+            return new WeenieTemplateApplyResult(false, bundlePath, templateId, classId, scalarCount, ex.Message);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
     //  Mesh I/O & BSP (slice 1 of f26345e port)
     // ═══════════════════════════════════════════════════════════
 

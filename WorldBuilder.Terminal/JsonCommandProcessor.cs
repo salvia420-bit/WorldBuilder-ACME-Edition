@@ -193,6 +193,9 @@ public class JsonCommandProcessor {
             ["obj-export"] = CmdObjExport,
             ["obj-import"] = CmdObjImport,
             ["bsp-build"] = CmdBspBuild,
+            ["weenie-snapshot"] = CmdWeenieSnapshot,
+            ["weenie-template-list"] = CmdWeenieTemplateList,
+            ["weenie-template-apply"] = CmdWeenieTemplateApply,
             ["help"] = _ => CmdHelp(),
         };
 
@@ -1533,6 +1536,58 @@ public class JsonCommandProcessor {
             diagnostics = report.Diagnostics.Select(d => new {
                 severity = d.Severity.ToString().ToLowerInvariant(),
                 code = d.Code, message = d.Message, context = d.Context }).ToArray() });
+    }
+
+    // ════════════════════════════════════════════════════
+    //  Weenie / ACE DB (slice 2 of f26345e port)
+    // ════════════════════════════════════════════════════
+
+    private string CmdWeenieSnapshot(System.Text.Json.Nodes.JsonNode node) {
+        uint classId = U(node, "classId");
+        bool full = node["full"]?.GetValue<bool>() ?? false;
+        var r = _engine.WeenieSnapshotAsync(classId).GetAwaiter().GetResult();
+        if (!r.Success)
+            return Serialize(new { success = false, command = "weenie-snapshot", classId = r.ClassId, error = r.Error });
+        return Serialize(new { success = true, command = "weenie-snapshot",
+            classId = r.ClassId, weenieType = r.WeenieType, name = r.Name,
+            setupDid = $"0x{r.SetupDid:X8}", iconDid = $"0x{r.IconDid:X8}",
+            counts = new {
+                ints = r.IntCount, int64s = r.Int64Count, bools = r.BoolCount,
+                floats = r.FloatCount, strings = r.StringCount,
+                dataIds = r.DataIdCount, instanceIds = r.InstanceIdCount,
+                spellBook = r.SpellBookCount, createList = r.CreateListCount,
+                emote = r.EmoteCount, book = r.BookCount,
+                position = r.PositionCount, attribute = r.AttributeCount,
+                attribute2nd = r.Attribute2ndCount, skill = r.SkillCount },
+            lastModified = r.LastModified,
+            snapshot = full ? r.Snapshot : null });
+    }
+
+    private string CmdWeenieTemplateList(System.Text.Json.Nodes.JsonNode node) {
+        var bundlePath = node["bundlePath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'bundlePath' field");
+        var r = _engine.WeenieTemplateList(bundlePath);
+        return Serialize(new { success = r.Success, command = "weenie-template-list",
+            bundlePath = r.BundlePath, templateCount = r.TemplateCount,
+            templates = r.Templates.Select(t => new {
+                id = t.Id, title = t.Title, description = t.Description,
+                weenieType = t.WeenieType,
+                counts = new { ints = t.IntCount, int64s = t.Int64Count, bools = t.BoolCount,
+                    floats = t.FloatCount, strings = t.StringCount,
+                    dataIds = t.DataIdCount, instanceIds = t.InstanceIdCount } }).ToArray(),
+            error = r.Error });
+    }
+
+    private string CmdWeenieTemplateApply(System.Text.Json.Nodes.JsonNode node) {
+        var bundlePath = node["bundlePath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'bundlePath' field");
+        var templateId = node["templateId"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'templateId' field");
+        uint classId = U(node, "classId");
+        var r = _engine.WeenieTemplateApplyAsync(bundlePath, templateId, classId).GetAwaiter().GetResult();
+        return Serialize(new { success = r.Success, command = "weenie-template-apply",
+            bundlePath = r.BundlePath, templateId = r.TemplateId, classId = r.ClassId,
+            scalarsApplied = r.ScalarsApplied, error = r.Error });
     }
 
     // ════════════════════════════════════════════════════

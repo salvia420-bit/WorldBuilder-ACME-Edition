@@ -161,6 +161,9 @@ public class TerminalRepl {
             ["obj-export"] = HandleObjExport,
             ["obj-import"] = HandleObjImport,
             ["bsp-build"] = HandleBspBuild,
+            ["weenie-snapshot"] = HandleWeenieSnapshot,
+            ["weenie-template-list"] = HandleWeenieTemplateList,
+            ["weenie-template-apply"] = HandleWeenieTemplateApply,
             ["help"] = _ => PrintHelp(),
         };
 
@@ -1437,6 +1440,9 @@ public class TerminalRepl {
         Console.WriteLine("  obj-export <datId> <output.obj>                Setup/GfxObj → Wavefront .obj");
         Console.WriteLine("  obj-import <input.obj> <surfaceDid> [gfx] [setup]  .obj → GfxObj+Setup (staged in PortalDatDocument)");
         Console.WriteLine("  bsp-build <gfxObjId>                           Rebuild Physics+Drawing BSP for a GfxObj");
+        Console.WriteLine("  weenie-snapshot <classId>                      Read scalar weenie properties from ACE DB");
+        Console.WriteLine("  weenie-template-list <bundle.json>             List weenie templates in a JSON bundle");
+        Console.WriteLine("  weenie-template-apply <bundle.json> <id> <classId>  Apply template scalars to a weenie");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
@@ -4208,6 +4214,93 @@ public class TerminalRepl {
         Console.WriteLine($"  Triangles      : {r.TriangleCount}");
         Console.WriteLine($"  Vertices       : {r.VertexCount}");
         Console.WriteLine("  Stored in PortalDatDocument; will persist on next 'export'.");
+        Console.WriteLine();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  Weenie / ACE DB (slice 2 of f26345e port)
+    // ═══════════════════════════════════════════════════════════
+
+    private void HandleWeenieSnapshot(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 2) {
+            Console.WriteLine("Usage: weenie-snapshot <classId>");
+            Console.WriteLine("  Reads scalar weenie properties from the configured ACE DB.");
+            Console.WriteLine("  Requires 'ace-db connect' first. classId may be decimal or 0x-hex.");
+            Console.WriteLine("  Example: weenie-snapshot 31226");
+            return;
+        }
+        if (!TryParseUint(tokens[1], "classId", out uint classId)) return;
+        var r = _engine.WeenieSnapshotAsync(classId).GetAwaiter().GetResult();
+        Console.WriteLine();
+        if (!r.Success) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  weenie-snapshot {classId}: FAILED — {r.Error}");
+            Console.ResetColor();
+            Console.WriteLine();
+            return;
+        }
+        Console.WriteLine($"  ═══ Weenie {r.ClassId} ═══");
+        if (!string.IsNullOrEmpty(r.Name))
+            Console.WriteLine($"  Name           : {r.Name}");
+        Console.WriteLine($"  WeenieType     : {r.WeenieType}");
+        Console.WriteLine($"  Setup DID      : 0x{r.SetupDid:X8}");
+        Console.WriteLine($"  Icon DID       : 0x{r.IconDid:X8}");
+        Console.WriteLine($"  Scalars        : ints={r.IntCount} int64={r.Int64Count} bool={r.BoolCount} float={r.FloatCount} str={r.StringCount} did={r.DataIdCount} iid={r.InstanceIdCount}");
+        Console.WriteLine($"  Complex tables : spellbook={r.SpellBookCount} createList={r.CreateListCount} emote={r.EmoteCount} book={r.BookCount} pos={r.PositionCount} attr={r.AttributeCount} attr2nd={r.Attribute2ndCount} skill={r.SkillCount}");
+        if (r.LastModified != null)
+            Console.WriteLine($"  Last modified  : {r.LastModified:yyyy-MM-dd HH:mm:ss}");
+        Console.WriteLine();
+    }
+
+    private void HandleWeenieTemplateList(string[] tokens) {
+        if (tokens.Length < 2) {
+            Console.WriteLine("Usage: weenie-template-list <bundle.json>");
+            Console.WriteLine("  Parses a JSON bundle (single object or array) of weenie templates.");
+            Console.WriteLine("  Example: weenie-template-list ./templates/weapons.json");
+            return;
+        }
+        var r = _engine.WeenieTemplateList(tokens[1]);
+        Console.WriteLine();
+        if (!r.Success) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  weenie-template-list: FAILED — {r.Error}");
+            Console.ResetColor();
+            Console.WriteLine();
+            return;
+        }
+        Console.WriteLine($"  ═══ {r.TemplateCount} template(s) in {r.BundlePath} ═══");
+        foreach (var t in r.Templates) {
+            int scalars = t.IntCount + t.Int64Count + t.BoolCount + t.FloatCount + t.StringCount + t.DataIdCount + t.InstanceIdCount;
+            Console.WriteLine($"  {t.Id,-30} type={t.WeenieType,-3} scalars={scalars,3}  {t.Title}");
+            if (!string.IsNullOrEmpty(t.Description))
+                Console.WriteLine($"    {t.Description}");
+        }
+        Console.WriteLine();
+    }
+
+    private void HandleWeenieTemplateApply(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 4) {
+            Console.WriteLine("Usage: weenie-template-apply <bundle.json> <templateId> <classId>");
+            Console.WriteLine("  Applies a template's scalar properties to a weenie via ACE DB.");
+            Console.WriteLine("  Requires 'ace-db connect' first. Existing scalars NOT in the template are left untouched.");
+            Console.WriteLine("  Example: weenie-template-apply ./templates/weapons.json basic_sword 31226");
+            return;
+        }
+        if (!TryParseUint(tokens[3], "classId", out uint classId)) return;
+        var r = _engine.WeenieTemplateApplyAsync(tokens[1], tokens[2], classId).GetAwaiter().GetResult();
+        Console.WriteLine();
+        if (!r.Success) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  weenie-template-apply: FAILED — {r.Error}");
+            Console.ResetColor();
+            Console.WriteLine();
+            return;
+        }
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine($"  weenie-template-apply: OK — applied template '{r.TemplateId}' ({r.ScalarsApplied} scalars) to weenie {r.ClassId}");
+        Console.ResetColor();
         Console.WriteLine();
     }
 
