@@ -73,6 +73,62 @@ namespace WorldBuilder.Shared.Lib.AceDb {
         }
 
         /// <summary>
+        /// Queries landblock_instance rows for a single landblock, optionally restricted by cell range.
+        /// Use this to load all instances (outdoor + dungeon), or only outdoor cells (1..64) for
+        /// weenie spawn rendering. When includeAngles is true, reads angles_w/x/y/z so the
+        /// orientation can be reconstructed for in-world rendering.
+        /// </summary>
+        public async Task<List<LandblockInstanceRecord>> GetInstancesAsync(
+            ushort landblockId,
+            ushort? cellMin = null,
+            ushort? cellMax = null,
+            bool includeAngles = true,
+            CancellationToken ct = default) {
+
+            ushort cMin = cellMin ?? 1;
+            ushort cMax = cellMax ?? 0xFFFE;
+            uint lbIdShifted = (uint)landblockId << 16;
+            uint minCellId = lbIdShifted | cMin;
+            uint maxCellId = lbIdShifted | cMax;
+
+            string cols = includeAngles
+                ? "`guid`, `weenie_Class_Id`, `obj_Cell_Id`, `origin_X`, `origin_Y`, `origin_Z`, `angles_w`, `angles_x`, `angles_y`, `angles_z`"
+                : "`guid`, `weenie_Class_Id`, `obj_Cell_Id`, `origin_X`, `origin_Y`, `origin_Z`";
+
+            string sql = $@"
+                SELECT {cols}
+                FROM `landblock_instance`
+                WHERE `obj_Cell_Id` >= @minCell AND `obj_Cell_Id` <= @maxCell";
+
+            var results = new List<LandblockInstanceRecord>();
+            await using var conn = new MySqlConnection(_settings.ConnectionString);
+            await conn.OpenAsync(ct);
+            await using var cmd = new MySqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@minCell", minCellId);
+            cmd.Parameters.AddWithValue("@maxCell", maxCellId);
+
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct)) {
+                var rec = new LandblockInstanceRecord {
+                    Guid = reader.GetUInt32("guid"),
+                    WeenieClassId = reader.GetUInt32("weenie_Class_Id"),
+                    ObjCellId = reader.GetUInt32("obj_Cell_Id"),
+                    OriginX = reader.GetFloat("origin_X"),
+                    OriginY = reader.GetFloat("origin_Y"),
+                    OriginZ = reader.GetFloat("origin_Z"),
+                };
+                if (includeAngles && reader["angles_w"] != System.DBNull.Value) {
+                    rec.AnglesW = reader.GetFloat("angles_w");
+                    rec.AnglesX = reader.GetFloat("angles_x");
+                    rec.AnglesY = reader.GetFloat("angles_y");
+                    rec.AnglesZ = reader.GetFloat("angles_z");
+                }
+                results.Add(rec);
+            }
+            return results;
+        }
+
+        /// <summary>
         /// Queries indoor (interior cell) landblock_instance rows for the
         /// given landblocks. Indoor cells are 0x0100–0xFFFD. Used by the
         /// reposition service's indoor pass — these NPCs need to ride the

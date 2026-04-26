@@ -1,6 +1,7 @@
 namespace WorldBuilder.Shared.Lib.AceDb {
     /// <summary>
     /// Lightweight projection of a row from the ACE ace_world.landblock_instance table.
+    /// Includes position and optional rotation (quaternion) for full placement round-trip.
     /// </summary>
     public class LandblockInstanceRecord {
         public uint Guid { get; set; }
@@ -9,6 +10,14 @@ namespace WorldBuilder.Shared.Lib.AceDb {
         public float OriginX { get; set; }
         public float OriginY { get; set; }
         public float OriginZ { get; set; }
+        /// <summary>Quaternion W (scalar). Null if angles were not read from DB.</summary>
+        public float? AnglesW { get; set; }
+        /// <summary>Quaternion X. Null if angles were not read from DB.</summary>
+        public float? AnglesX { get; set; }
+        /// <summary>Quaternion Y. Null if angles were not read from DB.</summary>
+        public float? AnglesY { get; set; }
+        /// <summary>Quaternion Z. Null if angles were not read from DB.</summary>
+        public float? AnglesZ { get; set; }
 
         public ushort LandblockId => (ushort)(ObjCellId >> 16);
         public ushort CellId => (ushort)(ObjCellId & 0xFFFF);

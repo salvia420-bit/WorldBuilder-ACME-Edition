@@ -14,6 +14,7 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Linq;
 using System.Numerics;
+using System.Threading;
 using System.Threading.Tasks;
 using WorldBuilder.Editors.Landscape;
 using WorldBuilder.Lib;
@@ -24,6 +25,7 @@ using WorldBuilder.Lib.Settings;
 using WorldBuilder.Shared.Documents;
 using DatReaderWriter.DBObjs;
 using WorldBuilder.Shared.Lib;
+using WorldBuilder.Shared.Lib.AceDb;
 using WorldBuilder.Shared.Lib.WorldGen;
 using WorldBuilder.Shared.Models;
 using WorldBuilder.ViewModels;
@@ -105,7 +107,18 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
 
         public bool ShowWeenieSpawns {
             get => Settings.Landscape.Overlay.ShowWeenieSpawns;
-            set { Settings.Landscape.Overlay.ShowWeenieSpawns = value; OnPropertyChanged(); }
+            set {
+                Settings.Landscape.Overlay.ShowWeenieSpawns = value;
+                OnPropertyChanged();
+                if (value) {
+                    LoadWeenieSpawnsForLoadedLandblocks();
+                }
+                else {
+                    _weenieLoadedLandblocks.Clear();
+                    _weenieLoadingLandblocks.Clear();
+                    TerrainSystem?.Scene?.ClearAllWeenieSpawns();
+                }
+            }
         }
 
         private Project? _project;
@@ -113,6 +126,18 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
         public TerrainSystem? TerrainSystem { get; private set; }
         public WorldBuilderSettings Settings { get; }
         public InputManager InputManager { get; }
+
+        // Weenie spawn caches: WCID->SetupId, plus per-landblock load tracking
+        // so we don't re-issue DB queries for landblocks already loaded or in flight.
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<uint, uint> _weenieSetupCache = new();
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<ushort, byte> _weenieLoadedLandblocks = new();
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<ushort, byte> _weenieLoadingLandblocks = new();
+
+        /// <summary>
+        /// Limits parallel landblock spawn queries so many open docs do not exhaust the MySQL connector pool
+        /// (Connect Timeout / all pooled connections in use).
+        /// </summary>
+        private static readonly SemaphoreSlim WeenieSpawnDbConcurrency = new(initialCount: 8, maxCount: 8);
 
         private readonly ILogger<TerrainSystem> _logger;
         private readonly TextureImportService? _textureImport;
@@ -189,6 +214,8 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
 
             LeftPanelContent = ObjectBrowser;
             LeftPanelTitle = "Object Browser";
+
+            TerrainSystem.Scene.LandblockIntegrated += OnLandblockIntegrated;
 
             InitDocking();
         }
@@ -992,6 +1019,117 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
 
             TerrainSystem?.Dispose();
             TerrainSystem = null;
+        }
+
+        // ─── Weenie spawn loading ───────────────────────────────────────
+        // Triggered by ShowWeenieSpawns toggle and by Scene.LandblockIntegrated.
+        // Each landblock load runs concurrently, gated by a semaphore so we
+        // don't exhaust the MySQL connector pool when many docs are open.
+
+        private void OnLandblockIntegrated(ushort lbKey) {
+            if (!ShowWeenieSpawns) return;
+            _ = LoadWeenieSpawnsForLandblockAsync(lbKey);
+        }
+
+        private void LoadWeenieSpawnsForLoadedLandblocks() {
+            var scene = TerrainSystem?.Scene;
+            if (scene == null) return;
+            var docMgr = TerrainSystem?.DocumentManager;
+            if (docMgr == null) return;
+
+            int count = 0;
+            foreach (var docId in docMgr.ActiveDocs.Keys) {
+                if (!docId.StartsWith("landblock_")) continue;
+                var hex = docId.Replace("landblock_", "");
+                if (ushort.TryParse(hex, NumberStyles.HexNumber, null, out var lbKey)) {
+                    _ = LoadWeenieSpawnsForLandblockAsync(lbKey);
+                    count++;
+                }
+            }
+            Console.WriteLine($"[Spawns] Toggle ON — queued {count} landblocks for weenie spawn loading");
+        }
+
+        private async Task LoadWeenieSpawnsForLandblockAsync(ushort lbKey) {
+            if (_weenieLoadedLandblocks.ContainsKey(lbKey)) return;
+            if (!_weenieLoadingLandblocks.TryAdd(lbKey, 0)) return;
+
+            await WeenieSpawnDbConcurrency.WaitAsync();
+            try {
+                var aceConn = Settings?.AceDbConnection;
+                if (aceConn == null || string.IsNullOrWhiteSpace(aceConn.Host)) {
+                    Console.WriteLine($"[Spawns] No ACE DB configured — cannot load weenie spawns");
+                    return;
+                }
+
+                var aceSettings = aceConn.ToAceDbSettings();
+                using var connector = new AceDbConnector(aceSettings);
+
+                var err = await connector.TestConnectionAsync();
+                if (err != null) {
+                    Console.WriteLine($"[Spawns] DB connection failed: {err}");
+                    return;
+                }
+
+                var records = await connector.GetInstancesAsync(
+                    lbKey, cellMin: 1, cellMax: 64, includeAngles: true);
+                if (records.Count == 0) {
+                    _weenieLoadedLandblocks.TryAdd(lbKey, 0);
+                    return;
+                }
+
+                // Resolve any setup DIDs we don't already have cached.
+                var wcids = records.Select(r => r.WeenieClassId).Distinct().ToList();
+                var missingWcids = wcids.Where(w => !_weenieSetupCache.ContainsKey(w)).ToList();
+                if (missingWcids.Count > 0) {
+                    var newSetups = await connector.GetSetupDidsAsync(missingWcids);
+                    foreach (var (wcid, setupId) in newSetups) {
+                        if (setupId != 0)
+                            _weenieSetupCache.TryAdd(wcid, setupId);
+                    }
+                    Console.WriteLine($"[Spawns] Resolved {newSetups.Count}/{missingWcids.Count} Setup DIDs for {lbKey:X4}");
+                }
+
+                int blockX = (lbKey >> 8) & 0xFF;
+                int blockY = lbKey & 0xFF;
+                var lbOffset = new Vector3(blockX * 192f, blockY * 192f, 0f);
+
+                var spawns = new List<StaticObject>();
+                int noSetup = 0;
+                foreach (var r in records) {
+                    if (!_weenieSetupCache.TryGetValue(r.WeenieClassId, out var setupId) || setupId == 0) {
+                        noSetup++;
+                        continue;
+                    }
+
+                    bool isSetup = (setupId & 0x02000000) != 0;
+                    var orientation = (r.AnglesW.HasValue)
+                        ? new Quaternion(r.AnglesX ?? 0f, r.AnglesY ?? 0f, r.AnglesZ ?? 0f, r.AnglesW.Value)
+                        : Quaternion.Identity;
+
+                    spawns.Add(new StaticObject {
+                        Id = setupId,
+                        IsSetup = isSetup,
+                        Origin = new Vector3(r.OriginX, r.OriginY, r.OriginZ) + lbOffset,
+                        Orientation = orientation,
+                        Scale = Vector3.One
+                    });
+                }
+
+                if (spawns.Count > 0) {
+                    TerrainSystem?.Scene.SetWeenieSpawns(lbKey, spawns);
+                    TerrainSystem?.Scene.InvalidateStaticObjectsCache();
+                }
+
+                _weenieLoadedLandblocks.TryAdd(lbKey, 0);
+                Console.WriteLine($"[Spawns] {lbKey:X4}: {spawns.Count} rendered, {noSetup} missing model, {records.Count} total DB rows");
+            }
+            catch (Exception ex) {
+                Console.WriteLine($"[Spawns] Failed for {lbKey:X4}: {ex.Message}");
+            }
+            finally {
+                WeenieSpawnDbConcurrency.Release();
+                _weenieLoadingLandblocks.TryRemove(lbKey, out _);
+            }
         }
     }
 

@@ -405,8 +405,12 @@ namespace WorldBuilder.Editors.Landscape {
 
                 _staticObjectsDirty = true;
                 integrated++;
+                LandblockIntegrated?.Invoke(result.LbKey);
             }
         }
+
+        /// <summary>Fires when a background-loaded landblock has been integrated into the live scene.</summary>
+        public event Action<ushort>? LandblockIntegrated;
 
         /// <summary>
         /// Picks up landblocks that were loaded before the render context existed and
