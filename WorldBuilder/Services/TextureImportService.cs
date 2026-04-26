@@ -1,6 +1,7 @@
 using Avalonia.Media.Imaging;
 using DatReaderWriter.DBObjs;
 using DatReaderWriter.Enums;
+using DatReaderWriter.Options;
 using DatReaderWriter.Types;
 using DatPixelFormat = DatReaderWriter.Enums.PixelFormat;
 using SixLabors.ImageSharp;
@@ -39,6 +40,11 @@ namespace WorldBuilder.Services {
         private void EnsureGidsAllocated() {
             bool changed = false;
             foreach (var entry in _store.Entries) {
+                if (entry.Usage == CustomTextureUsage.UiRenderSurface) {
+                    Console.WriteLine($"[TextureImport] Ignoring deprecated UiRenderSurface entry '{entry.Name}' — remove it from custom_textures.json.");
+                    continue;
+                }
+
                 if (entry.RenderSurfaceGid == 0) {
                     AllocateGidsForEntry(entry);
                     changed = true;
@@ -129,12 +135,142 @@ namespace WorldBuilder.Services {
             return bgra;
         }
 
+        /// <summary>True for full DAT ids in the RenderSurface portal range (0x06……), not 0x08… Surface ids.</summary>
+        public static bool IsRenderSurfaceDatId(uint id) => (id & 0xFF000000) == 0x06000000;
+
+        /// <summary>
+        /// Overwrites pixel data for an existing portal RenderSurface only (same width/height as the DAT entry).
+        /// Uses a short-lived <see cref="DatAccessType.ReadWrite"/> connection — <see cref="Project.DocumentManager"/>.Dats stays read-only.
+        /// </summary>
+        public bool TryOverwriteUiRenderSurface(string imagePath, uint renderSurfaceId) {
+            if (!File.Exists(imagePath)) {
+                Console.WriteLine("[TextureImport] Replace UI texture: file not found.");
+                return false;
+            }
+
+            var readDats = _project.DocumentManager?.Dats;
+            if (readDats == null) {
+                Console.WriteLine("[TextureImport] Replace UI texture: DocumentManager.Dats is null.");
+                return false;
+            }
+
+            int? iteration = 0;
+            try {
+                iteration = readDats.Dats.Portal.Iteration.CurrentIteration;
+            }
+            catch (Exception ex) {
+                Console.WriteLine($"[TextureImport] Replace UI texture: could not read portal iteration ({ex.Message}); using 0.");
+                iteration = 0;
+            }
+
+            try {
+                using var rw = new DefaultDatReaderWriter(_project.BaseDatDirectory, DatAccessType.ReadWrite);
+                if (!rw.TryGet<RenderSurface>(renderSurfaceId, out var existing) || existing == null) {
+                    Console.WriteLine($"[TextureImport] Replace UI texture: no RenderSurface at 0x{renderSurfaceId:X8} (TryGet failed).");
+                    return false;
+                }
+
+                int w = existing.Width;
+                int h = existing.Height;
+                if (w <= 0 || h <= 0) {
+                    Console.WriteLine($"[TextureImport] Replace UI texture: invalid size {w}x{h} for 0x{renderSurfaceId:X8}.");
+                    return false;
+                }
+
+                if (existing.Format != DatPixelFormat.PFID_A8R8G8B8) {
+                    Console.WriteLine($"[TextureImport] Replace UI texture: 0x{renderSurfaceId:X8} uses {existing.Format}; only PFID_A8R8G8B8 (raw BGRA) can be replaced from an image.");
+                    return false;
+                }
+
+                byte[] bgra;
+                try {
+                    bgra = LoadImageAsBgra(imagePath, w, h);
+                }
+                catch (Exception ex) {
+                    Console.WriteLine($"[TextureImport] Replace UI texture: could not load/resize image: {ex.Message}");
+                    return false;
+                }
+
+                if (bgra.Length < (long)w * h * 4) {
+                    Console.WriteLine($"[TextureImport] Replace UI texture: decoded buffer too small for {w}x{h} A8R8G8B8.");
+                    return false;
+                }
+
+                // Pack must match original metadata (palette id, format, etc.); a bare CreateRenderSurface breaks Unpack on read.
+                var rs = RenderSurfaceWithReplacedPixels(existing, bgra);
+                if (!rw.TrySave(rs, iteration)) {
+                    Console.WriteLine($"[TextureImport] Replace UI texture: TrySave(RenderSurface 0x{renderSurfaceId:X8}) returned false (locked DAT, permission, or library error).");
+                    return false;
+                }
+
+                Console.WriteLine($"[TextureImport] Replace UI texture: OK 0x{renderSurfaceId:X8} ({w}x{h}).");
+                return true;
+            }
+            catch (Exception ex) {
+                Console.WriteLine($"[TextureImport] Replace UI texture: {ex.GetType().Name}: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>CPU preview for layout panel after a disk replace (same proportional sizing as DAT decode).</summary>
+        public static WriteableBitmap? TryCreateWriteableBitmapPreview(string imagePath, int maxEdge) {
+            if (!File.Exists(imagePath) || maxEdge < 1) return null;
+            try {
+                using var img = Image.Load<Rgba32>(imagePath);
+                int w = img.Width, h = img.Height;
+                int dw = maxEdge, dh = maxEdge;
+                if (w > h)
+                    dh = Math.Max(1, h * maxEdge / w);
+                else if (h > w)
+                    dw = Math.Max(1, w * maxEdge / h);
+                if (w != dw || h != dh)
+                    img.Mutate(x => x.Resize(dw, dh));
+
+                var rgba = new byte[dw * dh * 4];
+                for (int y = 0; y < dh; y++) {
+                    for (int x = 0; x < dw; x++) {
+                        var pixel = img[x, y];
+                        int idx = (y * dw + x) * 4;
+                        rgba[idx + 0] = pixel.R;
+                        rgba[idx + 1] = pixel.G;
+                        rgba[idx + 2] = pixel.B;
+                        rgba[idx + 3] = pixel.A;
+                    }
+                }
+
+                var bitmap = new WriteableBitmap(
+                    new Avalonia.PixelSize(dw, dh),
+                    new Avalonia.Vector(96, 96),
+                    Avalonia.Platform.PixelFormat.Rgba8888,
+                    Avalonia.Platform.AlphaFormat.Premul);
+                using (var fb = bitmap.Lock())
+                    Marshal.Copy(rgba, 0, fb.Address, rgba.Length);
+                return bitmap;
+            }
+            catch (Exception ex) {
+                Console.WriteLine($"[TextureImport] Preview from file failed: {ex.Message}");
+                return null;
+            }
+        }
+
         public static RenderSurface CreateRenderSurface(uint gid, byte[] bgraData, int width, int height) {
             return new RenderSurface {
                 Id = gid,
                 Width = width,
                 Height = height,
                 Format = DatPixelFormat.PFID_A8R8G8B8,
+                SourceData = bgraData
+            };
+        }
+
+        /// <summary>Preserves portal fields from an unpacked <see cref="RenderSurface"/>; only replaces <see cref="RenderSurface.SourceData"/>.</summary>
+        public static RenderSurface RenderSurfaceWithReplacedPixels(RenderSurface existing, byte[] bgraData) {
+            return new RenderSurface {
+                Id = existing.Id,
+                Width = existing.Width,
+                Height = existing.Height,
+                Format = existing.Format,
+                DefaultPaletteId = existing.DefaultPaletteId,
                 SourceData = bgraData
             };
         }
