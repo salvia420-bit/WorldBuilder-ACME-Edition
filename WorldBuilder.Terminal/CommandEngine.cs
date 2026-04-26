@@ -9341,4 +9341,151 @@ public class CommandEngine {
             throw new ArgumentException(
                 $"Invalid index {index}. Landblock has {count} objects.");
     }
+
+    // ═══════════════════════════════════════════════════════════
+    //  Mesh I/O & BSP (slice 1 of f26345e port)
+    // ═══════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Writes a Setup (0x02xxxxxx) or GfxObj (0x01xxxxxx) to a Wavefront .obj file.
+    /// Reads from project DATs (no mutation).
+    /// </summary>
+    public ObjExportResult ObjExport(uint datId, string outputPath) {
+        RequireProject();
+        var dats = _projectManager.CurrentProject!.DocumentManager.Dats;
+        bool isSetup = (datId >> 24) == 0x02;
+        bool isGfxObj = (datId >> 24) == 0x01;
+        string datType = isSetup ? "Setup" : isGfxObj ? "GfxObj" : "Unknown";
+        string hexId = $"0x{datId:X8}";
+
+        if (!isSetup && !isGfxObj)
+            return new ObjExportResult(datId, hexId, datType, false, Error: "ID must be 0x01xxxxxx (GfxObj) or 0x02xxxxxx (Setup).");
+
+        var dir = Path.GetDirectoryName(outputPath);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+        try {
+            using var w = new StreamWriter(outputPath);
+            if (isSetup) {
+                if (!WavefrontMeshExport.TryWriteSetup(dats, datId, w, out var error))
+                    return new ObjExportResult(datId, hexId, datType, false, Error: error);
+                if (!dats.TryGet<Setup>(datId, out var setup) || setup == null)
+                    return new ObjExportResult(datId, hexId, datType, false, Error: "Setup vanished mid-export.");
+                int parts = setup.Parts?.Count ?? 0;
+                return new ObjExportResult(datId, hexId, datType, true, outputPath, parts);
+            }
+            else {
+                if (!dats.TryGet<GfxObj>(datId, out var gfx) || gfx == null)
+                    return new ObjExportResult(datId, hexId, datType, false, Error: "GfxObj not found in DATs.");
+                WavefrontMeshExport.WriteGfxObj(gfx, datId, w);
+                return new ObjExportResult(datId, hexId, datType, true, outputPath, 1, gfx.Polygons?.Count ?? 0);
+            }
+        }
+        catch (Exception ex) {
+            return new ObjExportResult(datId, hexId, datType, false, Error: ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Reads a Wavefront .obj and stores the resulting GfxObj+Setup in <see cref="PortalDatDocument"/>.
+    /// They get persisted on the next project export. If <paramref name="gfxObjId"/> or
+    /// <paramref name="setupId"/> is 0 the engine allocates a free ID in the 0x01FF.. / 0x02FF.. custom range.
+    /// </summary>
+    public ObjImportResult ObjImport(string objPath, uint surfaceDid, uint gfxObjId = 0, uint setupId = 0) {
+        RequireProject();
+        var project = _projectManager.CurrentProject!;
+        var dats = project.DocumentManager.Dats;
+
+        if (!File.Exists(objPath))
+            return new ObjImportResult(false, 0, 0, 0, 0, $"OBJ file not found: {objPath}");
+
+        var portalDoc = project.DocumentManager
+            .GetOrCreateDocumentAsync<PortalDatDocument>(PortalDatDocument.DocumentId)
+            .GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("Could not load portal-dat document.");
+
+        // Allocate IDs in the custom 0xXXFFxxxx range when not specified, considering both
+        // existing portal entries and prior-imported entries we've stashed in PortalDatDocument.
+        if (gfxObjId == 0) {
+            var existing = CollectExistingIds<GfxObj>(dats, portalDoc, 0x01000000);
+            gfxObjId = ObjSingleMeshImporter.AllocateNextId(0x01000000, existing);
+        }
+        if (setupId == 0) {
+            var existing = CollectExistingIds<Setup>(dats, portalDoc, 0x02000000);
+            setupId = ObjSingleMeshImporter.AllocateNextId(0x02000000, existing);
+        }
+
+        string objText;
+        try { objText = File.ReadAllText(objPath); }
+        catch (Exception ex) { return new ObjImportResult(false, 0, 0, 0, 0, ex.Message); }
+
+        if (!ObjSingleMeshImporter.TryBuild(objText, surfaceDid, gfxObjId, setupId,
+                out var gfx, out var setup, out var error) || gfx == null || setup == null) {
+            return new ObjImportResult(false, gfxObjId, setupId, 0, 0, error ?? "OBJ build failed.");
+        }
+
+        // Build BSP so the imported mesh has physics + drawing trees.
+        BspGenerator.Build(gfx);
+
+        portalDoc.SetEntry(gfxObjId, gfx);
+        portalDoc.SetEntry(setupId, setup);
+
+        int triCount = gfx.Polygons?.Count ?? 0;
+        int vtxCount = gfx.VertexArray?.Vertices?.Count ?? 0;
+        return new ObjImportResult(true, gfxObjId, setupId, triCount, vtxCount);
+    }
+
+    /// <summary>
+    /// Rebuilds Physics+Drawing BSP trees on a GfxObj (project portal override or DAT-resident).
+    /// The result is stored in <see cref="PortalDatDocument"/> so the next export persists it.
+    /// </summary>
+    public BspBuildResult BspBuild(uint gfxObjId) {
+        RequireProject();
+        var project = _projectManager.CurrentProject!;
+        string hexId = $"0x{gfxObjId:X8}";
+
+        if ((gfxObjId >> 24) != 0x01)
+            return new BspBuildResult(gfxObjId, hexId, false, false, Error: "ID must be 0x01xxxxxx (GfxObj).");
+
+        var portalDoc = project.DocumentManager
+            .GetOrCreateDocumentAsync<PortalDatDocument>(PortalDatDocument.DocumentId)
+            .GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("Could not load portal-dat document.");
+
+        // Project override wins; otherwise read from DATs.
+        GfxObj? gfx = null;
+        if (portalDoc.TryGetEntry<GfxObj>(gfxObjId, out var pendingGfx) && pendingGfx != null) {
+            gfx = pendingGfx;
+        }
+        else if (project.DocumentManager.Dats.TryGet<GfxObj>(gfxObjId, out var datGfx) && datGfx != null) {
+            gfx = datGfx;
+        }
+
+        if (gfx == null)
+            return new BspBuildResult(gfxObjId, hexId, false, false, Error: "GfxObj not found.");
+
+        try {
+            BspGenerator.Build(gfx);
+        }
+        catch (Exception ex) {
+            return new BspBuildResult(gfxObjId, hexId, true, false, gfx.Polygons?.Count ?? 0, ex.Message);
+        }
+
+        portalDoc.SetEntry(gfxObjId, gfx);
+        return new BspBuildResult(gfxObjId, hexId, true, true, gfx.Polygons?.Count ?? 0);
+    }
+
+    /// <summary>Collects already-allocated IDs in <paramref name="rangeBase"/>'s 0xXXFFxxxx custom band — both DAT-resident and project-overridden.</summary>
+    private static IEnumerable<uint> CollectExistingIds<T>(IDatReaderWriter dats, PortalDatDocument portalDoc, uint rangeBase)
+        where T : DatReaderWriter.Lib.IO.IDBObj, new() {
+        uint customBase = rangeBase | 0x00FF0000;
+        uint customEnd = rangeBase | 0x00FFFFFF;
+        // Pending project entries first (cheap).
+        foreach (var id in portalDoc.GetEntryIds())
+            if ((id & 0xFF000000) == rangeBase && id >= customBase && id <= customEnd)
+                yield return id;
+        // DAT-resident IDs in the custom range — DatReaderWriter doesn't expose enumeration here,
+        // so we let AllocateNextId start from customBase if nothing is found. Prior imports persisted
+        // to disk get rediscovered when the project reopens (they live in PortalDatDocument again).
+    }
 }

@@ -885,3 +885,22 @@ public record RemapBuildingsSqlResult(
     bool Applied = false,
     List<string>? Warnings = null,
     string? Error = null);
+
+// ── Mesh / BSP (slice 1 of f26345e) ────────────────────────
+public record ObjExportResult(
+    uint DatId, string HexId, string DatType,
+    bool Found, string? OutputPath = null,
+    int PartCount = 0, int TriangleCount = 0,
+    string? Error = null);
+
+public record ObjImportResult(
+    bool Success,
+    uint GfxObjId, uint SetupId,
+    int TriangleCount, int VertexCount,
+    string? Error = null);
+
+public record BspBuildResult(
+    uint GfxObjId, string HexId,
+    bool Found, bool Built,
+    int PolygonCount = 0,
+    string? Error = null);

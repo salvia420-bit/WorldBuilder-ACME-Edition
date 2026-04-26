@@ -190,6 +190,9 @@ public class JsonCommandProcessor {
             ["generate-settlement"] = CmdGenerateSettlement,
             ["extract-retail-heightmaps"] = CmdExtractRetailHeightmaps,
             ["compute-vanilla-baseline"] = CmdComputeVanillaBaseline,
+            ["obj-export"] = CmdObjExport,
+            ["obj-import"] = CmdObjImport,
+            ["bsp-build"] = CmdBspBuild,
             ["help"] = _ => CmdHelp(),
         };
 
@@ -1530,6 +1533,42 @@ public class JsonCommandProcessor {
             diagnostics = report.Diagnostics.Select(d => new {
                 severity = d.Severity.ToString().ToLowerInvariant(),
                 code = d.Code, message = d.Message, context = d.Context }).ToArray() });
+    }
+
+    // ════════════════════════════════════════════════════
+    //  Mesh I/O & BSP (slice 1 of f26345e port)
+    // ════════════════════════════════════════════════════
+
+    private string CmdObjExport(System.Text.Json.Nodes.JsonNode node) {
+        uint datId = U(node, "datId");
+        var outputPath = node["outputPath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'outputPath' field");
+        var r = _engine.ObjExport(datId, outputPath);
+        return Serialize(new { success = r.Found, command = "obj-export",
+            datId = r.HexId, datType = r.DatType, found = r.Found,
+            outputPath = r.OutputPath, partCount = r.PartCount,
+            triangleCount = r.TriangleCount, error = r.Error });
+    }
+
+    private string CmdObjImport(System.Text.Json.Nodes.JsonNode node) {
+        var objPath = node["objPath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'objPath' field");
+        uint surfaceDid = U(node, "surfaceDid");
+        uint gfxObjId = node["gfxObjId"] != null ? U(node, "gfxObjId") : 0;
+        uint setupId = node["setupId"] != null ? U(node, "setupId") : 0;
+        var r = _engine.ObjImport(objPath, surfaceDid, gfxObjId, setupId);
+        return Serialize(new { success = r.Success, command = "obj-import",
+            gfxObjId = $"0x{r.GfxObjId:X8}", setupId = $"0x{r.SetupId:X8}",
+            triangleCount = r.TriangleCount, vertexCount = r.VertexCount,
+            error = r.Error });
+    }
+
+    private string CmdBspBuild(System.Text.Json.Nodes.JsonNode node) {
+        uint gfxObjId = U(node, "gfxObjId");
+        var r = _engine.BspBuild(gfxObjId);
+        return Serialize(new { success = r.Built, command = "bsp-build",
+            gfxObjId = r.HexId, found = r.Found, built = r.Built,
+            polygonCount = r.PolygonCount, error = r.Error });
     }
 
     private static string Serialize(object obj) => JsonSerializer.Serialize(obj, JsonOpts);

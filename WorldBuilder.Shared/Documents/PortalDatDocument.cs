@@ -33,6 +33,7 @@ namespace WorldBuilder.Shared.Documents {
 
         private PortalDatData _data = new();
         private readonly Dictionary<uint, object> _objectCache = new();
+        private readonly HashSet<uint> _unpackFailures = new();
 
         public PortalDatDocument(ILogger logger) : base(logger) { }
 
@@ -40,6 +41,8 @@ namespace WorldBuilder.Shared.Documents {
             _objectCache.ContainsKey(fileId) || _data.Entries.ContainsKey(fileId);
 
         public int EntryCount => _data.Entries.Count;
+
+        public IEnumerable<uint> GetEntryIds() => _data.Entries.Keys;
 
         /// <summary>
         /// Store a modified IDBObj in the document. Packs the object to bytes for
@@ -79,6 +82,11 @@ namespace WorldBuilder.Shared.Documents {
                 return true;
             }
 
+            if (_unpackFailures.Contains(fileId)) {
+                obj = default;
+                return false;
+            }
+
             if (_data.Entries.TryGetValue(fileId, out var entry) && entry.Data.Length > 0) {
                 try {
                     obj = new T();
@@ -88,7 +96,8 @@ namespace WorldBuilder.Shared.Documents {
                     return true;
                 }
                 catch (Exception ex) {
-                    _logger.LogError(ex, "[PortalDatDoc] Failed to unpack entry 0x{FileId:X8}", fileId);
+                    _logger.LogError(ex, "[PortalDatDoc] Failed to unpack entry 0x{FileId:X8} (will not retry)", fileId);
+                    _unpackFailures.Add(fileId);
                 }
             }
 
@@ -99,6 +108,7 @@ namespace WorldBuilder.Shared.Documents {
         public void RemoveEntry(uint fileId) {
             _data.Entries.Remove(fileId);
             _objectCache.Remove(fileId);
+            _unpackFailures.Remove(fileId);
             MarkDirty();
             OnUpdate(new BaseDocumentEvent());
         }
@@ -117,11 +127,13 @@ namespace WorldBuilder.Shared.Documents {
             try {
                 _data = MemoryPackSerializer.Deserialize<PortalDatData>(projection) ?? new();
                 _objectCache.Clear();
+                _unpackFailures.Clear();
                 return true;
             }
             catch (MemoryPackSerializationException) {
                 _data = new();
                 _objectCache.Clear();
+                _unpackFailures.Clear();
                 return true;
             }
         }
@@ -176,6 +188,8 @@ namespace WorldBuilder.Shared.Documents {
                 SkillTable t => writer.TrySave(t, iteration),
                 ExperienceTable t => writer.TrySave(t, iteration),
                 CharGen t => writer.TrySave(t, iteration),
+                GfxObj t => writer.TrySave(t, iteration),
+                Setup t => writer.TrySave(t, iteration),
                 _ => false
             };
         }
@@ -188,6 +202,8 @@ namespace WorldBuilder.Shared.Documents {
                     nameof(SkillTable) => UnpackAndSave<SkillTable>(writer, entry.Data, iteration),
                     nameof(ExperienceTable) => UnpackAndSave<ExperienceTable>(writer, entry.Data, iteration),
                     nameof(CharGen) => UnpackAndSave<CharGen>(writer, entry.Data, iteration),
+                    nameof(GfxObj) => UnpackAndSave<GfxObj>(writer, entry.Data, iteration),
+                    nameof(Setup) => UnpackAndSave<Setup>(writer, entry.Data, iteration),
                     _ => false
                 };
             }

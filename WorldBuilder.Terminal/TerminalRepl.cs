@@ -158,6 +158,9 @@ public class TerminalRepl {
             ["remap-buildings-sql"] = HandleRemapBuildingsSql,
             ["ace-db"] = HandleAceDb,
             ["dungeon"] = HandleDungeon,
+            ["obj-export"] = HandleObjExport,
+            ["obj-import"] = HandleObjImport,
+            ["bsp-build"] = HandleBspBuild,
             ["help"] = _ => PrintHelp(),
         };
 
@@ -1431,6 +1434,9 @@ public class TerminalRepl {
         Console.WriteLine("  import-texture <textureId> <imagePath>         Replace texture from file");
         Console.WriteLine("  clone-dat <outputPath>                         Clone portal DAT");
         Console.WriteLine("  defragment-dat <portal|cell|local> <outPath>   Defragment a DAT file");
+        Console.WriteLine("  obj-export <datId> <output.obj>                Setup/GfxObj → Wavefront .obj");
+        Console.WriteLine("  obj-import <input.obj> <surfaceDid> [gfx] [setup]  .obj → GfxObj+Setup (staged in PortalDatDocument)");
+        Console.WriteLine("  bsp-build <gfxObjId>                           Rebuild Physics+Drawing BSP for a GfxObj");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
@@ -4137,6 +4143,103 @@ public class TerminalRepl {
             Console.WriteLine($"  Difference       : {r.Difference:F4} (on vertex)");
             Console.ResetColor();
         }
+        Console.WriteLine();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  Mesh I/O & BSP (slice 1 of f26345e port)
+    // ═══════════════════════════════════════════════════════════
+
+    private void HandleObjExport(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 3) {
+            Console.WriteLine("Usage: obj-export <datId> <output.obj>");
+            Console.WriteLine("  Exports a Setup (0x02xxxxxx) or GfxObj (0x01xxxxxx) to Wavefront .obj.");
+            Console.WriteLine("  Example: obj-export 0x02001234 ./model.obj");
+            return;
+        }
+        if (!TryParseHex(tokens[1], "datId", out uint datId)) return;
+        var r = _engine.ObjExport(datId, tokens[2]);
+        Console.WriteLine();
+        if (!r.Found) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  obj-export {r.HexId} ({r.DatType}): FAILED — {r.Error}");
+            Console.ResetColor();
+            Console.WriteLine();
+            return;
+        }
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine($"  obj-export {r.HexId} ({r.DatType}) → {r.OutputPath}");
+        Console.ResetColor();
+        Console.WriteLine($"  Parts          : {r.PartCount}");
+        if (r.TriangleCount > 0)
+            Console.WriteLine($"  Polygons       : {r.TriangleCount}");
+        Console.WriteLine();
+    }
+
+    private void HandleObjImport(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 3) {
+            Console.WriteLine("Usage: obj-import <input.obj> <surfaceDid> [gfxObjId] [setupId]");
+            Console.WriteLine("  Imports a Wavefront .obj as GfxObj+Setup into the project's portal-dat overrides.");
+            Console.WriteLine("  Set gfxObjId/setupId to 0 (or omit) to auto-allocate in the 0x01FFxxxx / 0x02FFxxxx custom range.");
+            Console.WriteLine("  Persisted on the next 'export'.");
+            Console.WriteLine("  Example: obj-import ./tower.obj 0x08000123");
+            return;
+        }
+        if (!TryParseHex(tokens[2], "surfaceDid", out uint surfaceDid)) return;
+        uint gfxObjId = 0, setupId = 0;
+        if (tokens.Length >= 4 && !TryParseHex(tokens[3], "gfxObjId", out gfxObjId)) return;
+        if (tokens.Length >= 5 && !TryParseHex(tokens[4], "setupId", out setupId)) return;
+        var r = _engine.ObjImport(tokens[1], surfaceDid, gfxObjId, setupId);
+        Console.WriteLine();
+        if (!r.Success) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  obj-import: FAILED — {r.Error}");
+            Console.ResetColor();
+            Console.WriteLine();
+            return;
+        }
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine($"  obj-import: OK");
+        Console.ResetColor();
+        Console.WriteLine($"  GfxObj id      : 0x{r.GfxObjId:X8}");
+        Console.WriteLine($"  Setup id       : 0x{r.SetupId:X8}");
+        Console.WriteLine($"  Triangles      : {r.TriangleCount}");
+        Console.WriteLine($"  Vertices       : {r.VertexCount}");
+        Console.WriteLine("  Stored in PortalDatDocument; will persist on next 'export'.");
+        Console.WriteLine();
+    }
+
+    private void HandleBspBuild(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 2) {
+            Console.WriteLine("Usage: bsp-build <gfxObjId>");
+            Console.WriteLine("  Rebuilds Physics+Drawing BSP trees on a GfxObj (0x01xxxxxx).");
+            Console.WriteLine("  Reads project portal override if present, else DAT-resident GfxObj. Result is staged in PortalDatDocument.");
+            Console.WriteLine("  Example: bsp-build 0x01FF0001");
+            return;
+        }
+        if (!TryParseHex(tokens[1], "gfxObjId", out uint gfxObjId)) return;
+        var r = _engine.BspBuild(gfxObjId);
+        Console.WriteLine();
+        if (!r.Found) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  bsp-build {r.HexId}: NOT FOUND — {r.Error}");
+            Console.ResetColor();
+            Console.WriteLine();
+            return;
+        }
+        if (!r.Built) {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"  bsp-build {r.HexId}: build failed — {r.Error}");
+            Console.ResetColor();
+            Console.WriteLine();
+            return;
+        }
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine($"  bsp-build {r.HexId}: OK ({r.PolygonCount} polygons)");
+        Console.ResetColor();
         Console.WriteLine();
     }
 }
