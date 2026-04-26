@@ -60,6 +60,7 @@ namespace WorldBuilder.Editors.Landscape {
         private readonly Dictionary<ushort, List<StaticObject>> _sceneryObjects = new();
         private readonly Dictionary<ushort, List<StaticObject>> _dungeonStaticObjects = new();
         private readonly Dictionary<ushort, List<StaticObject>> _buildingStaticObjects = new();
+        private readonly ConcurrentDictionary<ushort, List<StaticObject>> _weenieSpawnObjects = new();
         private readonly Dictionary<ushort, List<uint>> _dungeonStaticParentCells = new();
         private readonly Dictionary<ushort, List<uint>> _buildingStaticParentCells = new();
         internal readonly TerrainSystem _terrainSystem;
@@ -79,6 +80,7 @@ namespace WorldBuilder.Editors.Landscape {
         private bool _cachedShowScenery = true;
         private bool _cachedShowDungeons = true;
         private bool _cachedShowBuildingInteriors = false;
+        private bool _cachedShowWeenieSpawns = false;
         private ushort? _cachedFocusedDungeonLB = null;
 
         // Reusable collections
@@ -651,6 +653,13 @@ namespace WorldBuilder.Editors.Landscape {
                         _buildingStaticObjects.Remove(lbKey);
                         _buildingStaticParentCells.Remove(lbKey);
                     }
+                    if (_weenieSpawnObjects.TryRemove(lbKey, out var weenieObjs)) {
+                        foreach (var obj in weenieObjs) {
+                            foreach (var context in _contexts.Values) {
+                                context.ObjectManager.ReleaseRenderData(obj.Id, obj.IsSetup);
+                            }
+                        }
+                    }
 
                     _ = _documentManager.CloseDocumentAsync(docId);
                     _staticObjectsDirty = true;
@@ -709,6 +718,7 @@ namespace WorldBuilder.Editors.Landscape {
                     _buildingStaticObjects.Remove(lbKey);
                     _buildingStaticParentCells.Remove(lbKey);
                 }
+                _weenieSpawnObjects.TryRemove(lbKey, out _);
                 _staticObjectsDirty = true;
             }
         }
@@ -1230,6 +1240,7 @@ namespace WorldBuilder.Editors.Landscape {
                 || _cachedShowScenery != ShowScenery
                 || _cachedShowDungeons != ShowDungeons
                 || _cachedShowBuildingInteriors != ShowBuildingInteriors
+                || _cachedShowWeenieSpawns != ShowWeenieSpawns
                 || _cachedFocusedDungeonLB != focusedLB
                 || visibility != null) {
                 var statics = new List<StaticObject>();
@@ -1240,6 +1251,9 @@ namespace WorldBuilder.Editors.Landscape {
                 }
                 if (ShowScenery) {
                     statics.AddRange(_sceneryObjects.Values.SelectMany(x => x));
+                }
+                if (ShowWeenieSpawns) {
+                    statics.AddRange(_weenieSpawnObjects.Values.SelectMany(x => x));
                 }
 
                 if (ShowDungeons || ShowBuildingInteriors) {
@@ -1284,6 +1298,7 @@ namespace WorldBuilder.Editors.Landscape {
                 _cachedShowScenery = ShowScenery;
                 _cachedShowDungeons = ShowDungeons;
                 _cachedShowBuildingInteriors = ShowBuildingInteriors;
+                _cachedShowWeenieSpawns = ShowWeenieSpawns;
                 _cachedFocusedDungeonLB = focusedLB;
                 _staticObjectsDirty = false;
             }
@@ -1293,6 +1308,24 @@ namespace WorldBuilder.Editors.Landscape {
         public void InvalidateStaticObjectsCache() {
             _staticObjectsDirty = true;
             _particleEmitters.Clear();
+        }
+
+        /// <summary>Replaces (or sets) the weenie-spawn list for a landblock and triggers a static-cache rebuild.</summary>
+        public void SetWeenieSpawns(ushort lbKey, List<StaticObject> spawns) {
+            _weenieSpawnObjects[lbKey] = spawns;
+            _staticObjectsDirty = true;
+        }
+
+        /// <summary>Removes weenie spawns for one landblock (e.g. when its document unloads).</summary>
+        public void ClearWeenieSpawns(ushort lbKey) {
+            _weenieSpawnObjects.TryRemove(lbKey, out _);
+            _staticObjectsDirty = true;
+        }
+
+        /// <summary>Clears every landblock's weenie spawns at once (e.g. project switch).</summary>
+        public void ClearAllWeenieSpawns() {
+            _weenieSpawnObjects.Clear();
+            _staticObjectsDirty = true;
         }
 
         /// <summary>
