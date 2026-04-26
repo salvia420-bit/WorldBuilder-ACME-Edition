@@ -85,6 +85,22 @@ namespace WorldBuilder.Editors.Landscape {
         private readonly Dictionary<(uint Id, bool IsSetup), List<Matrix4x4>> _objectGroupBuffer = new();
         private readonly List<Matrix4x4> _tempInstanceTransforms = new();
 
+        private struct BatchDrawEntry {
+            public uint VAO;
+            public List<RenderBatch> Batches;
+            public int InstanceCount;
+            public int BufferFloatOffset;
+        }
+        private readonly List<BatchDrawEntry> _batchDrawPlan = new();
+
+        // Particle emitter simulation: per-(landblock,index) simulator + scratch lists
+        // for collected per-particle draw entries. Cleared on InvalidateStaticObjectsCache.
+        private readonly Dictionary<(ushort LbKey, int Index), AcParticleEmitterSimulator> _particleEmitters = new();
+        private readonly List<Matrix4x4> _particleInstanceScratch = new();
+        private readonly List<StaticObject> _particleDrawObjects = new();
+        private readonly List<Matrix4x4> _particleDrawTransforms = new();
+        private double _lastParticleWallSeconds = -1;
+
         // Background loading
         private Task? _modelPrepTask;
         private const int MaxChunkUploadsPerFrame = 4;
@@ -169,6 +185,16 @@ namespace WorldBuilder.Editors.Landscape {
         public bool ShowBuildingInteriors {
             get => _settings.Landscape.Overlay.ShowBuildingInteriors;
             set => _settings.Landscape.Overlay.ShowBuildingInteriors = value;
+        }
+
+        public bool ShowWeenieSpawns {
+            get => _settings.Landscape.Overlay.ShowWeenieSpawns;
+            set => _settings.Landscape.Overlay.ShowWeenieSpawns = value;
+        }
+
+        public bool ShowParticles {
+            get => _settings.Landscape.Overlay.ShowParticles;
+            set => _settings.Landscape.Overlay.ShowParticles = value;
         }
 
         public bool ShowSlopeHighlight {
@@ -1266,6 +1292,7 @@ namespace WorldBuilder.Editors.Landscape {
 
         public void InvalidateStaticObjectsCache() {
             _staticObjectsDirty = true;
+            _particleEmitters.Clear();
         }
 
         /// <summary>
@@ -1320,6 +1347,7 @@ namespace WorldBuilder.Editors.Landscape {
                 _cachedNonDungeonStatics = null;
                 _cachedDungeonStatics = null;
                 _staticObjectsDirty = true;
+                _particleEmitters.Clear();
 
                 DataManager.ClearChunks();
 
@@ -1447,6 +1475,8 @@ namespace WorldBuilder.Editors.Landscape {
             var allObjects = GetAllStaticObjects();
             var visibleObjects = new List<StaticObject>();
             foreach (var obj in allObjects) {
+                if (obj.IsParticleEmitter) continue;
+
                 var localBounds = context.ObjectManager.GetBounds(obj.Id, obj.IsSetup);
                 Chorizite.Core.Lib.BoundingBox objBounds;
                 if (localBounds.HasValue) {
@@ -1481,6 +1511,20 @@ namespace WorldBuilder.Editors.Landscape {
             if (visibleObjects.Count > 0) {
                 RenderStaticObjects(context, visibleObjects, camera, viewProjection);
             }
+
+            // Particles render in their own pass with additive blend so they
+            // brighten the scene rather than alpha-replacing it. Per-particle
+            // world transforms come from the simulator; we feed them through
+            // RenderStaticObjectsPreTransformed which skips the per-object
+            // matrix synthesis path.
+            double wallSec = System.Environment.TickCount64 / 1000.0;
+            float pDt = _lastParticleWallSeconds < 0 ? 1f / 60f : (float)(wallSec - _lastParticleWallSeconds);
+            _lastParticleWallSeconds = wallSec;
+            CollectParticleDraws(context, frustum, wallSec, Math.Clamp(pDt, 0f, 0.25f));
+            if (_particleDrawObjects.Count > 0) {
+                RenderStaticObjectsPreTransformed(context, _particleDrawObjects, _particleDrawTransforms, camera, viewProjection, additiveBlend: true);
+            }
+
             long renderStaticsMs = renderSw.ElapsedMilliseconds;
             if (renderStaticsMs > 200) {
                 Console.WriteLine($"[GameScene.Render] Static objects: {renderStaticsMs}ms ({visibleObjects.Count} objects)");
@@ -1523,6 +1567,69 @@ namespace WorldBuilder.Editors.Landscape {
             }
             isSetup = false;
             return modelId != 0;
+        }
+
+        bool ParticleAnchorInFrustum(SceneContext context, StaticObject anchor, Matrix4x4 worldTransform, Frustum frustum) {
+            if (!TryGetParticleGfxId(_dats, anchor.Id, out var gfxId)) return true;
+            var localBounds = context.ObjectManager.GetBounds(gfxId, false);
+            if (!localBounds.HasValue) return true;
+            var (localMin, localMax) = localBounds.Value;
+            var worldMin = new Vector3(float.MaxValue);
+            var worldMax = new Vector3(float.MinValue);
+            for (int ci = 0; ci < 8; ci++) {
+                var corner = new Vector3(
+                    (ci & 1) == 0 ? localMin.X : localMax.X,
+                    (ci & 2) == 0 ? localMin.Y : localMax.Y,
+                    (ci & 4) == 0 ? localMin.Z : localMax.Z);
+                var wc = Vector3.Transform(corner, worldTransform);
+                worldMin = Vector3.Min(worldMin, wc);
+                worldMax = Vector3.Max(worldMax, wc);
+            }
+            return frustum.IntersectsBoundingBox(new Chorizite.Core.Lib.BoundingBox(worldMin, worldMax));
+        }
+
+        void CollectParticleDraws(SceneContext context, Frustum frustum, double wallSeconds, float deltaTime) {
+            _particleDrawObjects.Clear();
+            _particleDrawTransforms.Clear();
+            if (!ShowParticles)
+                return;
+            foreach (var kv in _documentManager.ActiveDocs) {
+                if (kv.Value is not LandblockDocument lbDoc) continue;
+                if (!kv.Key.StartsWith("landblock_", StringComparison.Ordinal)) continue;
+                if (!ushort.TryParse(kv.Key.Replace("landblock_", "", StringComparison.Ordinal), System.Globalization.NumberStyles.HexNumber, null, out var lbKey)) continue;
+
+                for (int i = 0; i < lbDoc.StaticObjectCount; i++) {
+                    var obj = lbDoc.GetStaticObject(i);
+                    if (!obj.IsParticleEmitter) continue;
+                    if (!TryGetParticleGfxId(_dats, obj.Id, out var gfxId)) continue;
+
+                    var anchorWorld = Matrix4x4.CreateScale(obj.Scale)
+                        * Matrix4x4.CreateFromQuaternion(obj.Orientation)
+                        * Matrix4x4.CreateTranslation(obj.Origin);
+                    if (!ParticleAnchorInFrustum(context, obj, anchorWorld, frustum)) continue;
+
+                    var key = (lbKey, i);
+                    if (!_particleEmitters.TryGetValue(key, out var sim) || sim.EmitterId != obj.Id) {
+                        sim = new AcParticleEmitterSimulator();
+                        if (!sim.TryLoad(_dats, obj.Id)) continue;
+                        sim.Begin(wallSeconds, anchorWorld);
+                        _particleEmitters[key] = sim;
+                    }
+
+                    sim.Advance(wallSeconds, deltaTime, anchorWorld, _particleInstanceScratch);
+                    foreach (var wm in _particleInstanceScratch) {
+                        _particleDrawObjects.Add(new StaticObject {
+                            Id = gfxId,
+                            IsSetup = false,
+                            Origin = default,
+                            Orientation = Quaternion.Identity,
+                            Scale = Vector3.One,
+                            IsParticleEmitter = false
+                        });
+                        _particleDrawTransforms.Add(wm);
+                    }
+                }
+            }
         }
 
         private void RenderTransformGizmo(SceneContext context, ObjectSelectionState selection, ICamera camera, Matrix4x4 viewProjection) {
@@ -1870,6 +1977,177 @@ namespace WorldBuilder.Editors.Landscape {
             gl.Disable(EnableCap.Blend);
         }
 
+
+        private static void EnsureUploadBuffer(SceneContext context, int requiredFloats) {
+            if (context.InstanceUploadBuffer.Length < requiredFloats) {
+                int newSize = (int)BitOperations.RoundUpToPowerOf2((uint)Math.Max(requiredFloats, 256));
+                var newBuf = new float[newSize];
+                Array.Copy(context.InstanceUploadBuffer, newBuf, context.InstanceUploadBuffer.Length);
+                context.InstanceUploadBuffer = newBuf;
+            }
+        }
+
+        private static void WriteMatrixToBuffer(float[] buf, int offset, in Matrix4x4 m) {
+            buf[offset +  0] = m.M11; buf[offset +  1] = m.M12; buf[offset +  2] = m.M13; buf[offset +  3] = m.M14;
+            buf[offset +  4] = m.M21; buf[offset +  5] = m.M22; buf[offset +  6] = m.M23; buf[offset +  7] = m.M24;
+            buf[offset +  8] = m.M31; buf[offset +  9] = m.M32; buf[offset + 10] = m.M33; buf[offset + 11] = m.M34;
+            buf[offset + 12] = m.M41; buf[offset + 13] = m.M42; buf[offset + 14] = m.M43; buf[offset + 15] = m.M44;
+        }
+
+        private unsafe void RenderStaticObjectsPreTransformed(SceneContext context, List<StaticObject> objects, List<Matrix4x4> transforms, ICamera camera, Matrix4x4 viewProjection, bool additiveBlend = false) {
+            var gl = context.Renderer.GraphicsDevice.GL;
+            gl.Enable(EnableCap.DepthTest);
+            gl.Enable(EnableCap.Blend);
+            if (additiveBlend) {
+                gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.One);
+                gl.DepthMask(false);
+            }
+            else {
+                gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            }
+            gl.Enable(EnableCap.CullFace);
+            gl.CullFace(TriangleFace.Back);
+
+            var objectManager = context.ObjectManager;
+            objectManager._objectShader.Bind();
+            objectManager._objectShader.SetUniform("uViewProjection", viewProjection);
+            objectManager._objectShader.SetUniform("uCameraPosition", camera.Position);
+            objectManager._objectShader.SetUniform("uLightDirection", Vector3.Normalize(LightDirection));
+            objectManager._objectShader.SetUniform("uAmbientIntensity", AmbientLightIntensity);
+            objectManager._objectShader.SetUniform("uSpecularPower", SpecularPower);
+
+            foreach (var list in _objectGroupBuffer.Values) list.Clear();
+            for (int i = 0; i < objects.Count; i++) {
+                var key = (objects[i].Id, objects[i].IsSetup);
+                if (!_objectGroupBuffer.TryGetValue(key, out var list)) {
+                    list = new List<Matrix4x4>();
+                    _objectGroupBuffer[key] = list;
+                }
+                list.Add(transforms[i]);
+            }
+
+            _batchDrawPlan.Clear();
+            int totalFloats = 0;
+
+            foreach (var group in _objectGroupBuffer) {
+                if (group.Value.Count == 0) continue;
+                var (id, isSetup) = group.Key;
+
+                var renderData = objectManager.TryGetCachedRenderData(id);
+                if (renderData == null) {
+                    if (!context.ModelsPreparing.Contains(id) && !objectManager.IsKnownFailure(id)) {
+                        context.ModelWarmupQueue.Enqueue((id, isSetup));
+                    }
+                    continue;
+                }
+
+                if (isSetup && renderData.SetupParts != null) {
+                    foreach (var (partId, partTransform) in renderData.SetupParts) {
+                        var partRenderData = objectManager.TryGetCachedRenderData(partId);
+                        if (partRenderData == null) continue;
+
+                        int offset = totalFloats;
+                        int needed = totalFloats + group.Value.Count * 16;
+                        EnsureUploadBuffer(context, needed);
+
+                        foreach (var instanceMatrix in group.Value) {
+                            var m = partTransform * instanceMatrix;
+                            WriteMatrixToBuffer(context.InstanceUploadBuffer, totalFloats, in m);
+                            totalFloats += 16;
+                        }
+
+                        _batchDrawPlan.Add(new BatchDrawEntry {
+                            VAO = partRenderData.VAO,
+                            Batches = partRenderData.Batches,
+                            InstanceCount = group.Value.Count,
+                            BufferFloatOffset = offset
+                        });
+                    }
+                }
+                else {
+                    int offset = totalFloats;
+                    int needed = totalFloats + group.Value.Count * 16;
+                    EnsureUploadBuffer(context, needed);
+
+                    foreach (var m in group.Value) {
+                        WriteMatrixToBuffer(context.InstanceUploadBuffer, totalFloats, in m);
+                        totalFloats += 16;
+                    }
+
+                    _batchDrawPlan.Add(new BatchDrawEntry {
+                        VAO = renderData.VAO,
+                        Batches = renderData.Batches,
+                        InstanceCount = group.Value.Count,
+                        BufferFloatOffset = offset
+                    });
+                }
+            }
+
+            if (totalFloats == 0) {
+                gl.UseProgram(0);
+                if (additiveBlend) gl.DepthMask(true);
+                return;
+            }
+
+            if (context.InstanceVBO == 0) {
+                gl.GenBuffers(1, out uint vbo);
+                context.InstanceVBO = vbo;
+            }
+
+            gl.BindBuffer(GLEnum.ArrayBuffer, context.InstanceVBO);
+            fixed (float* ptr = context.InstanceUploadBuffer) {
+                if (totalFloats > context.InstanceBufferCapacity) {
+                    int newCapacity = (int)BitOperations.RoundUpToPowerOf2((uint)Math.Max(totalFloats, 256));
+                    context.InstanceBufferCapacity = newCapacity;
+                    gl.BufferData(GLEnum.ArrayBuffer, (nuint)(newCapacity * sizeof(float)), ptr, GLEnum.DynamicDraw);
+                }
+                else {
+                    gl.BufferSubData(GLEnum.ArrayBuffer, 0, (nuint)(totalFloats * sizeof(float)), ptr);
+                }
+            }
+
+            bool cullFaceEnabled = true;
+            foreach (var entry in _batchDrawPlan) {
+                gl.BindVertexArray(entry.VAO);
+
+                int byteOffset = entry.BufferFloatOffset * sizeof(float);
+                gl.BindBuffer(GLEnum.ArrayBuffer, context.InstanceVBO);
+                for (int i = 0; i < 4; i++) {
+                    gl.EnableVertexAttribArray((uint)(3 + i));
+                    gl.VertexAttribPointer((uint)(3 + i), 4, GLEnum.Float, false,
+                        (uint)(16 * sizeof(float)), (void*)(byteOffset + i * 4 * sizeof(float)));
+                    gl.VertexAttribDivisor((uint)(3 + i), 1);
+                }
+
+                foreach (var batch in entry.Batches) {
+                    if (batch.TextureArray == null) continue;
+
+                    if (batch.IsDoubleSided && cullFaceEnabled) {
+                        gl.Disable(EnableCap.CullFace);
+                        cullFaceEnabled = false;
+                    }
+                    else if (!batch.IsDoubleSided && !cullFaceEnabled) {
+                        gl.Enable(EnableCap.CullFace);
+                        cullFaceEnabled = true;
+                    }
+
+                    batch.TextureArray.Bind(0);
+                    objectManager._objectShader.SetUniform("uTextureArray", 0);
+                    objectManager._objectShader.SetUniform("uTextureIndex", (float)batch.TextureIndex);
+                    gl.DisableVertexAttribArray(7);
+                    gl.VertexAttrib1((uint)7, (float)batch.TextureIndex);
+
+                    gl.BindBuffer(GLEnum.ElementArrayBuffer, batch.IBO);
+                    gl.DrawElementsInstanced(GLEnum.Triangles, (uint)batch.IndexCount, GLEnum.UnsignedShort, null, (uint)entry.InstanceCount);
+                }
+            }
+
+            if (!cullFaceEnabled) gl.Enable(EnableCap.CullFace);
+            gl.BindVertexArray(0);
+            gl.UseProgram(0);
+            gl.Disable(EnableCap.Blend);
+            if (additiveBlend) gl.DepthMask(true);
+        }
 
         private unsafe void RenderStaticObjects(SceneContext context, List<StaticObject> objects, ICamera camera, Matrix4x4 viewProjection) {
             var gl = context.Renderer.GraphicsDevice.GL;
