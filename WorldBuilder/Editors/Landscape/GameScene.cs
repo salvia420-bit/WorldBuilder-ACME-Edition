@@ -40,6 +40,8 @@ namespace WorldBuilder.Editors.Landscape {
         private readonly ConcurrentDictionary<OpenGLRenderer, SceneContext> _contexts = new();
         private readonly TextureDiskCache _textureCache;
 
+        internal TransformGizmo? _gizmo => _contexts.Values.FirstOrDefault()?.Gizmo;
+
         private ThumbnailRenderService? _thumbnailService;
         public ThumbnailRenderService? ThumbnailService => _thumbnailService;
         private IDatReaderWriter _dats => _terrainSystem.Dats;
