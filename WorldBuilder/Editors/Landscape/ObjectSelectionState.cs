@@ -63,6 +63,8 @@ namespace WorldBuilder.Editors.Landscape {
         public StaticObject? Clipboard { get; set; }
         public List<StaticObject>? ClipboardMulti { get; set; }
 
+        public bool HasEditableEntry => _selectedObjects.Any(e => !e.IsScenery && e.ObjectIndex >= 0);
+
         public bool IsPlacementMode { get; set; }
         public StaticObject? PlacementPreview { get; set; }
         public List<StaticObject>? PlacementPreviewMulti { get; set; }

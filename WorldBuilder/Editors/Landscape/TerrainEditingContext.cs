@@ -115,6 +115,32 @@ namespace WorldBuilder.Editors.Landscape {
         }
 
         /// <summary>
+        /// Computes the terrain surface normal at a world position by sampling neighboring heights.
+        /// </summary>
+        public Vector3 GetTerrainNormal(float x, float y) {
+            const float step = 1.0f;
+            float hL = _terrainSystem.Scene.DataManager.GetHeightAtPosition(x - step, y);
+            float hR = _terrainSystem.Scene.DataManager.GetHeightAtPosition(x + step, y);
+            float hD = _terrainSystem.Scene.DataManager.GetHeightAtPosition(x, y - step);
+            float hU = _terrainSystem.Scene.DataManager.GetHeightAtPosition(x, y + step);
+            var normal = new Vector3(hL - hR, hD - hU, 2f * step);
+            return Vector3.Normalize(normal);
+        }
+
+        /// <summary>
+        /// Computes a quaternion that aligns an object's up-vector to the given surface normal.
+        /// </summary>
+        public static Quaternion AlignToNormal(Vector3 surfaceNormal) {
+            var up = Vector3.UnitZ;
+            if (Vector3.Dot(up, surfaceNormal) > 0.9999f) return Quaternion.Identity;
+            var axis = Vector3.Cross(up, surfaceNormal);
+            if (axis.LengthSquared() < 1e-10f) return Quaternion.Identity;
+            axis = Vector3.Normalize(axis);
+            float angle = MathF.Acos(Math.Clamp(Vector3.Dot(up, surfaceNormal), -1f, 1f));
+            return Quaternion.CreateFromAxisAngle(axis, angle);
+        }
+
+        /// <summary>
         /// Adds a vertex to the active set
         /// </summary>
         public void AddActiveVertex(Vector2 vertex) {

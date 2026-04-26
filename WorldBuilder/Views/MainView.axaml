@@ -21,6 +21,10 @@
     xmlns:charGenVm="clr-namespace:WorldBuilder.Editors.CharGen"
     xmlns:layoutEditors="clr-namespace:WorldBuilder.Editors.Layout.Views"
     xmlns:layoutVm="clr-namespace:WorldBuilder.Editors.Layout"
+    xmlns:objectDebugVm="clr-namespace:WorldBuilder.Editors.ObjectDebug;assembly=WorldBuilder"
+    xmlns:objectDebugEditors="clr-namespace:WorldBuilder.Editors.ObjectDebug.Views;assembly=WorldBuilder"
+    xmlns:weenieVm="clr-namespace:WorldBuilder.Editors.Weenie;assembly=WorldBuilder"
+    xmlns:weenieEditors="clr-namespace:WorldBuilder.Editors.Weenie.Views;assembly=WorldBuilder"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:vm="clr-namespace:WorldBuilder.ViewModels"
     xmlns:docking="clr-namespace:WorldBuilder.Lib.Docking;assembly=WorldBuilder"
@@ -80,6 +84,8 @@
                     <MenuItem Command="{Binding SwitchToCharGenEditorCommand}" Header="Character Creation Editor" />
                     <Separator />
                     <MenuItem Command="{Binding SwitchToLayoutEditorCommand}" Header="UI Layout Viewer" />
+                    <MenuItem Command="{Binding SwitchToObjectDebugEditorCommand}" Header="Object Debug" />
+                    <MenuItem Command="{Binding SwitchToWeenieEditorCommand}" Header="Weenie Editor" />
                 </MenuItem>
                 <MenuItem Header="_Windows" ItemsSource="{Binding DockingPanels}">
                     <MenuItem.Styles>
@@ -148,6 +154,12 @@
                 </DataTemplate>
                 <DataTemplate DataType="{x:Type layoutVm:LayoutEditorViewModel}">
                     <layoutEditors:LayoutEditorView />
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type objectDebugVm:ObjectDebugEditorViewModel}">
+                    <objectDebugEditors:ObjectDebugEditorView />
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type weenieVm:WeenieEditorViewModel}">
+                    <weenieEditors:WeenieEditorView />
                 </DataTemplate>
             </ContentControl.DataTemplates>
         </ContentControl>

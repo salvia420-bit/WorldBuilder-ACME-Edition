@@ -32,6 +32,7 @@ namespace WorldBuilder.Editors.Dungeon {
         private bool _gpuInitialized;
 
         public EnvCellManager? EnvCellManager => _sceneContext?.EnvCellManager;
+        public Landscape.TransformGizmo? Gizmo => _sceneContext?.Gizmo;
 
         public ThumbnailRenderService? ThumbnailService { get; private set; }
 
@@ -54,6 +55,12 @@ namespace WorldBuilder.Editors.Dungeon {
         /// (worldMin, worldMax) of the selected object's bounding box.
         /// </summary>
         public (Vector3 Min, Vector3 Max)? SelectedObjectBounds { get; set; }
+
+        /// <summary>
+        /// World-space position and orientation of the selected object for gizmo rendering.
+        /// </summary>
+        public Vector3? SelectedObjectPosition { get; set; }
+        public Quaternion SelectedObjectOrientation { get; set; } = Quaternion.Identity;
 
         /// <summary>
         /// Set by the editor when in object placement mode. Rendered as a ghost preview
@@ -445,9 +452,18 @@ namespace WorldBuilder.Editors.Dungeon {
                 RenderSelectionBoxes(gl, viewProjection);
             }
 
-            // Render selected object highlight
+            // Render selected object highlight + gizmo
             if (SelectedObjectBounds.HasValue) {
                 RenderObjectSelectionBox(gl, viewProjection, SelectedObjectBounds.Value.Min, SelectedObjectBounds.Value.Max);
+            }
+            if (SelectedObjectPosition.HasValue && Gizmo != null) {
+                Gizmo.UseLocalSpace = _settings.Landscape.Snap.UseLocalSpace;
+                Gizmo.Render(gl, viewProjection, Camera, SelectedObjectPosition.Value, SelectedObjectOrientation, true);
+                if (SelectedObjectBounds.HasValue) {
+                    Gizmo.RenderSelectionBox(gl, viewProjection, Camera,
+                        SelectedObjectBounds.Value.Min, SelectedObjectBounds.Value.Max,
+                        new Vector3(1f, 0.6f, 0.15f));
+                }
             }
 
             // Render placement preview (ghost object following mouse)

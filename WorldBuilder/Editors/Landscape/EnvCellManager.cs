@@ -944,11 +944,14 @@ namespace WorldBuilder.Editors.Landscape {
 
             // Ensure CPU-side upload buffer is large enough
             if (_instanceUploadBuffer.Length < requiredFloats) {
-                if (_instanceUploadBufferRented > 0)
-                    ArrayPool<float>.Shared.Return(_instanceUploadBuffer);
                 int newSize = Math.Max(requiredFloats, 256);
                 newSize = (int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)newSize);
-                _instanceUploadBuffer = ArrayPool<float>.Shared.Rent(newSize);
+                var newBuffer = ArrayPool<float>.Shared.Rent(newSize);
+                if (_instanceUploadBuffer.Length > 0)
+                    Array.Copy(_instanceUploadBuffer, newBuffer, _instanceUploadBuffer.Length);
+                if (_instanceUploadBufferRented > 0)
+                    ArrayPool<float>.Shared.Return(_instanceUploadBuffer);
+                _instanceUploadBuffer = newBuffer;
                 _instanceUploadBufferRented = newSize;
             }
 
@@ -1023,11 +1026,14 @@ namespace WorldBuilder.Editors.Landscape {
 
             int requiredFloats = instanceTransforms.Count * 16;
             if (_instanceUploadBuffer.Length < requiredFloats) {
-                if (_instanceUploadBufferRented > 0)
-                    ArrayPool<float>.Shared.Return(_instanceUploadBuffer);
                 int newSize = Math.Max(requiredFloats, 256);
                 newSize = (int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)newSize);
-                _instanceUploadBuffer = ArrayPool<float>.Shared.Rent(newSize);
+                var newBuffer = ArrayPool<float>.Shared.Rent(newSize);
+                if (_instanceUploadBuffer.Length > 0)
+                    Array.Copy(_instanceUploadBuffer, newBuffer, _instanceUploadBuffer.Length);
+                if (_instanceUploadBufferRented > 0)
+                    ArrayPool<float>.Shared.Return(_instanceUploadBuffer);
+                _instanceUploadBuffer = newBuffer;
                 _instanceUploadBufferRented = newSize;
             }
 

@@ -111,7 +111,10 @@ namespace WorldBuilder.Editors.Dungeon {
             _selectedObjCellNum = 0;
             _selectedObjIndex = -1;
             SyncToContext();
-            if (_ctx.Scene != null) _ctx.Scene.SelectedObjectBounds = null;
+            if (_ctx.Scene != null) {
+                _ctx.Scene.SelectedObjectBounds = null;
+                _ctx.Scene.SelectedObjectPosition = null;
+            }
             ObjectDeselected?.Invoke();
         }
 
@@ -146,6 +149,8 @@ namespace WorldBuilder.Editors.Dungeon {
             var worldMax = Vector3.Transform(bounds.Value.Max, worldTransform);
 
             _ctx.Scene.SelectedObjectBounds = (Vector3.Min(worldMin, worldMax), Vector3.Max(worldMin, worldMax));
+            _ctx.Scene.SelectedObjectPosition = worldOrigin;
+            _ctx.Scene.SelectedObjectOrientation = stab.Orientation;
         }
 
         /// <summary>
@@ -174,11 +179,17 @@ namespace WorldBuilder.Editors.Dungeon {
                 var cell = _ctx.Document?.GetCell(_selectedObjCellNum);
                 if (cell != null && _selectedObjIndex < cell.StaticObjects.Count) {
                     var stab = cell.StaticObjects[_selectedObjIndex];
+                    UpdateObjectSelectionHighlight(stab);
                     objArgs = new ObjectSelectionChangedArgs {
                         CellNum = _selectedObjCellNum,
                         ObjectIndex = _selectedObjIndex,
                         Stab = stab
                     };
+                }
+            } else {
+                if (_ctx.Scene != null) {
+                    _ctx.Scene.SelectedObjectBounds = null;
+                    _ctx.Scene.SelectedObjectPosition = null;
                 }
             }
 

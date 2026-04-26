@@ -20,7 +20,9 @@ namespace WorldBuilder.Editors.Landscape {
         public EnvCellManager EnvCellManager { get; }
         public IShader TerrainShader { get; }
         public IShader SphereShader { get; }
+        public IShader GizmoShader { get; }
         public IShader PreviewShader { get; }
+        public TransformGizmo Gizmo { get; }
 
         public uint PreviewVAO { get; set; }
         public uint PreviewVBO { get; set; }
@@ -60,6 +62,13 @@ namespace WorldBuilder.Editors.Landscape {
             SphereShader = renderer.GraphicsDevice.CreateShader("Sphere",
                 GameScene.GetEmbeddedResource("WorldBuilder.Shaders.Sphere.vert", typeof(GameScene).Assembly),
                 GameScene.GetEmbeddedResource("WorldBuilder.Shaders.Sphere.frag", typeof(GameScene).Assembly));
+
+            GizmoShader = renderer.GraphicsDevice.CreateShader("Gizmo",
+                GameScene.GetEmbeddedResource("WorldBuilder.Shaders.Gizmo.vert", typeof(GameScene).Assembly),
+                GameScene.GetEmbeddedResource("WorldBuilder.Shaders.Gizmo.frag", typeof(GameScene).Assembly));
+
+            Gizmo = new TransformGizmo();
+            Gizmo.Initialize(renderer.GraphicsDevice.GL, GizmoShader);
 
             var openGlAssembly = typeof(OpenGLRenderer).Assembly;
             PreviewShader = renderer.GraphicsDevice.CreateShader("Preview",
@@ -214,6 +223,7 @@ namespace WorldBuilder.Editors.Landscape {
             if (PreviewVBO != 0) gl.DeleteBuffer(PreviewVBO);
             if (PreviewEBO != 0) gl.DeleteBuffer(PreviewEBO);
             if (PreviewVAO != 0) gl.DeleteVertexArray(PreviewVAO);
+            Gizmo.Dispose(gl);
 
             EnvCellManager.Dispose();
             ObjectManager.Dispose();

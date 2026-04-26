@@ -27,6 +27,9 @@ namespace WorldBuilder.Lib.Settings {
         private UIStateSettings _uiState = new();
         public UIStateSettings UIState { get => _uiState; set => SetProperty(ref _uiState, value); }
 
+        private SnapSettings _snap = new();
+        public SnapSettings Snap { get => _snap; set => SetProperty(ref _snap, value); }
+
         public List<CameraBookmark> Bookmarks { get; set; } = new();
 
         public LandscapeEditorSettings() {
@@ -162,28 +165,38 @@ namespace WorldBuilder.Lib.Settings {
         private bool _showBuildingInteriors = false;
         public bool ShowBuildingInteriors { get => _showBuildingInteriors; set => SetProperty(ref _showBuildingInteriors, value); }
 
-        [SettingDescription("Highlight unwalkable slopes with a color overlay")]
+        [SettingDescription("Show weenie spawns from ACE database (creatures, NPCs, generators, etc.)")]
         [SettingOrder(4)]
+        private bool _showWeenieSpawns = false;
+        public bool ShowWeenieSpawns { get => _showWeenieSpawns; set => SetProperty(ref _showWeenieSpawns, value); }
+
+        [SettingDescription("Show simulated particle effects from placed particle emitters")]
+        [SettingOrder(5)]
+        private bool _showParticles = true;
+        public bool ShowParticles { get => _showParticles; set => SetProperty(ref _showParticles, value); }
+
+        [SettingDescription("Highlight unwalkable slopes with a color overlay")]
+        [SettingOrder(6)]
         private bool _showSlopeHighlight = false;
         public bool ShowSlopeHighlight { get => _showSlopeHighlight; set => SetProperty(ref _showSlopeHighlight, value); }
 
         [SettingDescription("Slope angle threshold in degrees above which terrain is considered unwalkable")]
         [SettingRange(5.0, 85.0, 1.0, 5.0)]
         [SettingFormat("{0:F0}°")]
-        [SettingOrder(5)]
+        [SettingOrder(7)]
         private float _slopeThreshold = 45f;
         public float SlopeThreshold { get => _slopeThreshold; set => SetProperty(ref _slopeThreshold, value); }
 
         [SettingDescription("Color for unwalkable slope highlighting (RGB values 0-1)")]
         [SettingDisplayName("Slope Highlight Color")]
-        [SettingOrder(6)]
+        [SettingOrder(8)]
         private Vector3 _slopeHighlightColor = new(1.0f, 0.2f, 0.2f);
         public Vector3 SlopeHighlightColor { get => _slopeHighlightColor; set => SetProperty(ref _slopeHighlightColor, value); }
 
         [SettingDescription("Opacity of the slope highlight overlay")]
         [SettingRange(0.0, 1.0, 0.05, 0.1)]
         [SettingFormat("{0:P0}")]
-        [SettingOrder(7)]
+        [SettingOrder(9)]
         private float _slopeHighlightOpacity = 0.5f;
         public float SlopeHighlightOpacity { get => _slopeHighlightOpacity; set => SetProperty(ref _slopeHighlightOpacity, value); }
     }
@@ -232,5 +245,47 @@ namespace WorldBuilder.Lib.Settings {
         public string Id { get; set; } = "";
         public string Location { get; set; } = "Left";
         public bool IsVisible { get; set; } = true;
+    }
+
+    [SettingCategory("Snap", ParentCategory = "Landscape Editor", Order = 6)]
+    public partial class SnapSettings : ObservableObject {
+        [SettingDescription("Enable grid snapping for object placement and movement")]
+        [SettingOrder(0)]
+        private bool _snapToGrid = false;
+        public bool SnapToGrid { get => _snapToGrid; set => SetProperty(ref _snapToGrid, value); }
+
+        [SettingDescription("Grid spacing in world units (e.g. 1, 6, 12, 24)")]
+        [SettingRange(0.25, 192.0, 0.25, 1.0)]
+        [SettingFormat("{0:F2}")]
+        [SettingOrder(1)]
+        private float _gridSize = 6f;
+        public float GridSize { get => _gridSize; set => SetProperty(ref _gridSize, value); }
+
+        [SettingDescription("Snap rotation to fixed degree increments")]
+        [SettingOrder(2)]
+        private bool _snapRotation = false;
+        public bool SnapRotation { get => _snapRotation; set => SetProperty(ref _snapRotation, value); }
+
+        [SettingDescription("Rotation snap increment in degrees")]
+        [SettingRange(1.0, 90.0, 1.0, 5.0)]
+        [SettingFormat("{0:F0}°")]
+        [SettingOrder(3)]
+        private float _rotationIncrement = 15f;
+        public float RotationIncrement { get => _rotationIncrement; set => SetProperty(ref _rotationIncrement, value); }
+
+        [SettingDescription("Snap objects to terrain surface height")]
+        [SettingOrder(4)]
+        private bool _snapToTerrain = true;
+        public bool SnapToTerrain { get => _snapToTerrain; set => SetProperty(ref _snapToTerrain, value); }
+
+        [SettingDescription("Align object orientation to terrain surface normal")]
+        [SettingOrder(5)]
+        private bool _alignToSurface = false;
+        public bool AlignToSurface { get => _alignToSurface; set => SetProperty(ref _alignToSurface, value); }
+
+        [SettingDescription("Apply transforms in object-local space instead of world space")]
+        [SettingOrder(6)]
+        private bool _useLocalSpace = false;
+        public bool UseLocalSpace { get => _useLocalSpace; set => SetProperty(ref _useLocalSpace, value); }
     }
 }
