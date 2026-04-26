@@ -192,25 +192,65 @@ menu items + DataTemplates for the two new editors, full SnapSettings
 class on LandscapeEditorSettings, ShowParticles/ShowWeenieSpawns overlay
 toggles).
 
-**Waves E–G** ⏳ remaining (deferred — heavy local merge work):
-- Wave E: ObjectBrowserItem/ViewModel particle-emitter integration,
-  SelectorToolViewModel + SelectSubToolViewModel align-to-surface command
-  + new placement flow, dungeon SelectTool gizmo wiring (+232),
-  TextureImportService improvements (+148), ObjectRaycast (+84),
-  StaticObjectManager rendering changes beyond the wave C overlay (+96),
-  ProjectManager (+/-), corresponding axaml view bindings.
-- Wave F: Layout editor view+vm overhaul (+416 + 260 + 188 + 85). The
-  Layout editor was substantially rewritten upstream.
-- Wave G: GameScene (+328) gains gizmo render/hit-test integration; and
-  LandscapeEditorViewModel (+490 with heavy local mods) gains
-  GenerateWorldCommand wiring, gizmo state, ShowParticles/ShowWeenieSpawns
-  bindings, etc. This is the hardest merge — local has been heavily
-  modified along with upstream.
+**Wave E** ✅ landed:
+- ObjectBrowserItem.cs replaced with upstream (gains particle-emitter
+  ctor, weenie ctor, IsParticleEmitter / ThumbnailGraphicsId properties).
+- ObjectRaycast.cs full diff applied — particle-emitter visual-resolve
+  helper used by world-ray hit, scenery hit, screen-rect hit; new
+  scenery loop in marquee selection.
+- SelectSubToolViewModel: AlignToSurfaceCommand + view button +
+  keyboard-shortcut hint; placement-side IsParticleEmitter wiring (3
+  sites); selection routes through PromoteSceneryToDocument helper for
+  click + marquee.
+- LandscapeEditorViewModel: ShowParticles / ShowWeenieSpawns toggles;
+  GenerateWorldCommand opens WorldGeneratorDialogService and applies
+  the result through TerrainDocument + LandblockDocument.
+- LandscapeEditorView.axaml: Particles + Spawns overlay toggles +
+  Generate... action button.
+- SelectorToolViewModel.cs replaced wholesale (local was undivergent).
+- Dungeon Tools/SelectTool.cs replaced wholesale (same).
+- ScaleObjectSubToolViewModel.cs new file + ScaleObjectCommand added
+  to ObjectCommands.cs.
+- GameScene._gizmo accessor (delegates to first context's Gizmo).
+- TextureImportService: UI render-surface replacement API
+  (TryOverwriteUiRenderSurface, TryCreateWriteableBitmapPreview,
+  RenderSurfaceWithReplacedPixels, IsRenderSurfaceDatId), plus
+  EnsureGidsAllocated filters out deprecated UiRenderSurface entries.
 
-The minimum viable slice 4 (waves A-D) leaves the GUI compiling cleanly
-with the new editors visible from the menu, gizmo infrastructure ready,
-and headless backend fully wired. Waves E-G add behaviour to existing
-editor surfaces but the editors themselves are present and functional.
+**Wave G** 🟡 partial:
+- GameScene.RenderTransformGizmo + TryGetParticleGfxId + TryGetStaticDrawModel
+  helpers added; render call sits alongside RenderSelectionHighlight
+  in the per-frame render loop. Gizmo is now end-to-end functional in
+  the landscape editor.
+- Still un-ported from GameScene's +328 line diff: particle simulation
+  pipeline (CollectParticleDraws + _particleEmitters dict + additive
+  blend mode), weenie-spawn rendering pipeline (_weenieSpawnObjects +
+  SetWeenieSpawns), model warmup queue (_pendingModelWarmup +
+  DrainPendingModelWarmup), visibility-change hash. These would need
+  a RenderStaticObjectsPreTransformed method that local doesn't have
+  (local renders by reconstructing transforms inside RenderStaticObjects
+  rather than receiving them).
+- LandscapeEditorViewModel +490 still mostly untouched — the small
+  pieces (ShowParticles/ShowWeenieSpawns, GenerateWorldCommand) landed
+  in wave E above; the rest (gizmo state, scene wiring through to
+  ObjectSelection, etc.) is the hardest merge in this slice.
+
+**Wave F** ⏳ deferred:
+- Layout editor overhaul: LayoutEditorViewModel (+416), LayoutPreviewCanvas
+  (+260), LayoutEditorView axaml (+188) + axaml.cs (+85). Local has 57
+  / 60 / 6 / 2 own lines respectively, so a clean replace would lose
+  local edits. A careful merge is needed; not started.
+
+**Other deferred from f26345e:**
+- ObjectBrowserViewModel (+135 upstream / 71 local divergent — particle/
+  weenie loading, picker filter logic).
+- ObjectBrowserView.axaml particle/weenie checkboxes (depend on the VM).
+- SurfaceBrowserViewModel paging (+112 upstream / many local — local
+  has its own ObservableCollection-based shape).
+- StaticObjectManager remaining ~96 LOC (vertex-array Dictionary access
+  refinements, recursive part release).
+- Particle and weenie-spawn rendering in GameScene (~120 LOC, blocked
+  on porting RenderStaticObjectsPreTransformed first).
 
 ## Workflow for porting future commits
 
