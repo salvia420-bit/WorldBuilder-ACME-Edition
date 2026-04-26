@@ -453,29 +453,5 @@ namespace WorldBuilder.Shared.Lib {
                 return count + idx;
             return idx - 1;
         }
-
-        /// <summary>Writes GfxObj + Setup to portal using a short-lived read-write connection.</summary>
-        public static bool TrySaveToPortal(string baseDatDirectory, GfxObj gfx, Setup setup, out string? error) {
-            error = null;
-            try {
-                using var rw = new DefaultDatReaderWriter(baseDatDirectory, DatReaderWriter.Options.DatAccessType.ReadWrite);
-                int? iteration = 0;
-                try { iteration = rw.Dats.Portal.Iteration.CurrentIteration; } catch { iteration = 0; }
-
-                if (!rw.TrySave(gfx, iteration)) {
-                    error = "TrySave(GfxObj) failed.";
-                    return false;
-                }
-                if (!rw.TrySave(setup, iteration)) {
-                    error = "TrySave(Setup) failed.";
-                    return false;
-                }
-                return true;
-            }
-            catch (Exception ex) {
-                error = ex.Message;
-                return false;
-            }
-        }
     }
 }

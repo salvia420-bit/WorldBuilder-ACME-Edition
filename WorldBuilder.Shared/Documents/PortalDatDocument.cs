@@ -190,6 +190,7 @@ namespace WorldBuilder.Shared.Documents {
                 CharGen t => writer.TrySave(t, iteration),
                 GfxObj t => writer.TrySave(t, iteration),
                 Setup t => writer.TrySave(t, iteration),
+                RenderSurface t => writer.TrySave(t, iteration),
                 _ => false
             };
         }
@@ -204,6 +205,7 @@ namespace WorldBuilder.Shared.Documents {
                     nameof(CharGen) => UnpackAndSave<CharGen>(writer, entry.Data, iteration),
                     nameof(GfxObj) => UnpackAndSave<GfxObj>(writer, entry.Data, iteration),
                     nameof(Setup) => UnpackAndSave<Setup>(writer, entry.Data, iteration),
+                    nameof(RenderSurface) => UnpackAndSave<RenderSurface>(writer, entry.Data, iteration),
                     _ => false
                 };
             }

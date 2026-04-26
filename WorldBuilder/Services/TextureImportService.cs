@@ -1,7 +1,6 @@
 using Avalonia.Media.Imaging;
 using DatReaderWriter.DBObjs;
 using DatReaderWriter.Enums;
-using DatReaderWriter.Options;
 using DatReaderWriter.Types;
 using DatPixelFormat = DatReaderWriter.Enums.PixelFormat;
 using SixLabors.ImageSharp;
@@ -13,6 +12,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using WorldBuilder.Shared.Documents;
 using WorldBuilder.Shared.Lib;
 using WorldBuilder.Shared.Models;
 using WorldBuilder.Shared.Services;
@@ -139,10 +139,11 @@ namespace WorldBuilder.Services {
         public static bool IsRenderSurfaceDatId(uint id) => (id & 0xFF000000) == 0x06000000;
 
         /// <summary>
-        /// Overwrites pixel data for an existing portal RenderSurface only (same width/height as the DAT entry).
-        /// Uses a short-lived <see cref="DatAccessType.ReadWrite"/> connection — <see cref="Project.DocumentManager"/>.Dats stays read-only.
+        /// Replaces pixel data for an existing portal RenderSurface (same width/height as the DAT entry)
+        /// and stores the result in the <paramref name="portalDoc"/> for deferred export.
+        /// The base DAT files are never modified directly.
         /// </summary>
-        public bool TryOverwriteUiRenderSurface(string imagePath, uint renderSurfaceId) {
+        public bool TryOverwriteUiRenderSurface(string imagePath, uint renderSurfaceId, PortalDatDocument portalDoc) {
             if (!File.Exists(imagePath)) {
                 Console.WriteLine("[TextureImport] Replace UI texture: file not found.");
                 return false;
@@ -154,18 +155,8 @@ namespace WorldBuilder.Services {
                 return false;
             }
 
-            int? iteration = 0;
             try {
-                iteration = readDats.Dats.Portal.Iteration.CurrentIteration;
-            }
-            catch (Exception ex) {
-                Console.WriteLine($"[TextureImport] Replace UI texture: could not read portal iteration ({ex.Message}); using 0.");
-                iteration = 0;
-            }
-
-            try {
-                using var rw = new DefaultDatReaderWriter(_project.BaseDatDirectory, DatAccessType.ReadWrite);
-                if (!rw.TryGet<RenderSurface>(renderSurfaceId, out var existing) || existing == null) {
+                if (!readDats.TryGet<RenderSurface>(renderSurfaceId, out var existing) || existing == null) {
                     Console.WriteLine($"[TextureImport] Replace UI texture: no RenderSurface at 0x{renderSurfaceId:X8} (TryGet failed).");
                     return false;
                 }
@@ -196,14 +187,10 @@ namespace WorldBuilder.Services {
                     return false;
                 }
 
-                // Pack must match original metadata (palette id, format, etc.); a bare CreateRenderSurface breaks Unpack on read.
                 var rs = RenderSurfaceWithReplacedPixels(existing, bgra);
-                if (!rw.TrySave(rs, iteration)) {
-                    Console.WriteLine($"[TextureImport] Replace UI texture: TrySave(RenderSurface 0x{renderSurfaceId:X8}) returned false (locked DAT, permission, or library error).");
-                    return false;
-                }
+                portalDoc.SetEntry<RenderSurface>(renderSurfaceId, rs);
 
-                Console.WriteLine($"[TextureImport] Replace UI texture: OK 0x{renderSurfaceId:X8} ({w}x{h}).");
+                Console.WriteLine($"[TextureImport] Replace UI texture: stored 0x{renderSurfaceId:X8} ({w}x{h}) — will be written to DAT on export.");
                 return true;
             }
             catch (Exception ex) {

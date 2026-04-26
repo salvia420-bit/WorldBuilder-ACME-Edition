@@ -102,18 +102,18 @@ Sorted chronologically.
 | `3457ea7` | 04-10 | feat(SpellEditor): add copy spell | 5 | +2 008/-471 | ⏳ TODO | Cluster B. |
 | `d780244` | 04-11 | improve spell editor UX | many | medium | ⏳ TODO | Cluster B. |
 | `55604d2` | 04-11 | fix spell editor rebase | 1 | +77/-127 | ⏳ TODO | Cluster B. |
-| `34c612b` | 04-11 | Defer portal writes via PortalDatDocument; simplify world-gen buildings | 5 | +27/-104 | ⏳ TODO | Net negative refactor; relatively focused, attempt next. |
+| `34c612b` | 04-11 | Defer portal writes via PortalDatDocument; simplify world-gen buildings | 5 | +27/-104 | 🟡 PARTIAL | PortalDatDocument RenderSurface dispatch ✅; `ObjSingleMeshImporter.TrySaveToPortal` deleted (dead code) ✅; `TextureImportService.TryOverwriteUiRenderSurface` now defers via PortalDatDocument ✅; LandscapeEditorViewModel world-gen simplify N/A (local already uses simple AddStaticObject pattern); LayoutEditorViewModel `_portalDoc` plumbing **deferred to Wave F**. |
 | `38b22c2` | 04-12 | texture fixes; documentation | many | small | ⏳ TODO | Look first. |
 | `7d6ce84` | 04-12 | UI layout additions (some names from string) | 8 | +576/-37 | ⏳ TODO | Look first. |
 | `15cb9ed` | 04-14 | add logging, fix texture import/dat export | 9 | +506/-4 | 🚫 BLOCKED | Needs `FileLoggerProvider` + related logging infrastructure. |
 
 ### Tally
 - **7 ✅ PORTED** (in the side branch we just merged)
-- **1 🟡 PARTIAL** (`f26345e` slices 1-3 ✅ + slice 4 waves A, B, C, D, E, G ✅; wave F (Layout editor) ⏳)
+- **2 🟡 PARTIAL** (`f26345e` slices 1-3 ✅ + slice 4 waves A, B, C, D, E, G ✅; wave F (Layout editor) ⏳ — and `34c612b` portal-defer + dead-code deletion ✅; LayoutEditorViewModel plumbing pending Wave F)
 - **5 🚫 BLOCKED** (attempted, prereq gap documented above)
 - **14 🔒 DEFERRED** (large refactors or stacked dungeon-chain — port only with in-game testing)
 - **1 🔧 PERMISSIONS** (just needs the right token to push)
-- **14 ⏳ TODO** (not yet attempted, lower-risk than the deferred set)
+- **13 ⏳ TODO** (not yet attempted, lower-risk than the deferred set)
 
 ## f26345e split into 4 slices
 
