@@ -191,6 +191,33 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
             Context.TerrainSystem.Scene.InvalidateStaticObjectsCache();
         }
 
+        [RelayCommand]
+        private void AlignToSurface() {
+            if (_suppressPropertyUpdates || !HasEditableSelection) return;
+            var sel = Context.ObjectSelection;
+            if (!sel.HasSelection || sel.IsScenery || sel.SelectedObjectIndex < 0) return;
+
+            var doc = GetDocument();
+            if (doc == null) return;
+
+            var obj = doc.GetStaticObject(sel.SelectedObjectIndex);
+            var normal = Context.GetTerrainNormal(obj.Origin.X, obj.Origin.Y);
+            var surfaceRot = TerrainEditingContext.AlignToNormal(normal);
+
+            // Preserve the object's existing yaw (Z rotation) while aligning pitch/roll to surface
+            QuaternionToEuler(obj.Orientation, out _, out _, out float existingYaw);
+            var yawRot = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, existingYaw * MathF.PI / 180f);
+            var newRot = Quaternion.Normalize(surfaceRot * yawRot);
+
+            if (Quaternion.Dot(obj.Orientation, newRot) > 0.9999f) return;
+
+            var cmd = new RotateObjectCommand(Context, sel.SelectedLandblockKey, sel.SelectedObjectIndex, obj.Orientation, newRot);
+            _commandHistory.ExecuteCommand(cmd);
+            sel.RefreshFromDocument(doc);
+            Context.TerrainSystem.Scene.InvalidateStaticObjectsCache();
+            UpdateSelectionInfo();
+        }
+
         /// <summary>
         /// Converts a quaternion to Euler angles (degrees) in XYZ order.
         /// </summary>

@@ -1,11 +1,25 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using DatReaderWriter;
+using DatReaderWriter.DBObjs;
 using WorldBuilder.Lib;
 using WorldBuilder.Shared.Documents;
+using WorldBuilder.Shared.Lib;
 
 namespace WorldBuilder.Editors.Landscape {
     public static class ObjectRaycast {
+        static bool TryGetBoundsSource(StaticObject obj, GameScene scene, out uint modelId, out bool isSetup) {
+            modelId = obj.Id;
+            isSetup = obj.IsSetup;
+            if (!obj.IsParticleEmitter) return true;
+            var dats = scene._terrainSystem.Dats;
+            if (!AcParticleEmitterSimulator.TryResolveVisualGfxObjectIdFromPortal(dats, obj.Id, out modelId))
+                return false;
+            isSetup = false;
+            return true;
+        }
+
         public struct ObjectRaycastHit {
             public bool Hit;
             public StaticObject Object;
@@ -60,7 +74,8 @@ namespace WorldBuilder.Editors.Landscape {
 
                 for (int i = 0; i < lbDoc.StaticObjectCount; i++) {
                     var obj = lbDoc.GetStaticObject(i);
-                    var bounds = scene.AnyObjectManager?.GetBounds(obj.Id, obj.IsSetup);
+                    if (!TryGetBoundsSource(obj, scene, out var mid, out var mSetup)) continue;
+                    var bounds = scene.AnyObjectManager?.GetBounds(mid, mSetup);
                     if (bounds == null) continue;
 
                     var (localMin, localMax) = bounds.Value;
@@ -93,10 +108,11 @@ namespace WorldBuilder.Editors.Landscape {
                 }
             }
 
-            // Also test against scenery objects
+            // Also test against scenery and building interior objects
             var allStatics = scene.GetAllStaticObjects();
             foreach (var obj in allStatics) {
-                var bounds = scene.AnyObjectManager?.GetBounds(obj.Id, obj.IsSetup);
+                if (!TryGetBoundsSource(obj, scene, out var midS, out var setupS)) continue;
+                var bounds = scene.AnyObjectManager?.GetBounds(midS, setupS);
                 if (bounds == null) continue;
 
                 var (localMin, localMax) = bounds.Value;
@@ -167,7 +183,8 @@ namespace WorldBuilder.Editors.Landscape {
                     var obj = lbDoc.GetStaticObject(i);
 
                     // Project the object's bounding box to screen space for accurate hit testing
-                    var bounds = scene.AnyObjectManager?.GetBounds(obj.Id, obj.IsSetup);
+                    if (!TryGetBoundsSource(obj, scene, out var midB, out var setupB)) continue;
+                    var bounds = scene.AnyObjectManager?.GetBounds(midB, setupB);
                     if (bounds == null) {
                         // Fallback: use origin point if no bounds available
                         var screenPos = WorldToScreen(obj.Origin, viewProjection, viewportWidth, viewportHeight);
@@ -227,6 +244,62 @@ namespace WorldBuilder.Editors.Landscape {
                             IsScenery = false
                         });
                     }
+                }
+            }
+
+            // Also test scenery and building interior objects
+            var allStatics = scene.GetAllStaticObjects();
+            foreach (var obj in allStatics) {
+                if (!TryGetBoundsSource(obj, scene, out var midSc, out var setupSc)) continue;
+                var bounds = scene.AnyObjectManager?.GetBounds(midSc, setupSc);
+                if (bounds == null) continue;
+
+                var (localMin, localMax) = bounds.Value;
+                var worldTransform = Matrix4x4.CreateScale(obj.Scale)
+                    * Matrix4x4.CreateFromQuaternion(obj.Orientation)
+                    * Matrix4x4.CreateTranslation(obj.Origin);
+
+                float sMinX = float.MaxValue, sMinY = float.MaxValue;
+                float sMaxX = float.MinValue, sMaxY = float.MinValue;
+                bool anyVis = false;
+
+                for (int cx = 0; cx <= 1; cx++) {
+                    for (int cy = 0; cy <= 1; cy++) {
+                        for (int cz = 0; cz <= 1; cz++) {
+                            var corner = new Vector3(
+                                cx == 0 ? localMin.X : localMax.X,
+                                cy == 0 ? localMin.Y : localMax.Y,
+                                cz == 0 ? localMin.Z : localMax.Z);
+                            var worldCorner = Vector3.Transform(corner, worldTransform);
+                            var screenCorner = WorldToScreen(worldCorner, viewProjection, viewportWidth, viewportHeight);
+                            if (screenCorner.HasValue) {
+                                anyVis = true;
+                                sMinX = MathF.Min(sMinX, screenCorner.Value.X);
+                                sMinY = MathF.Min(sMinY, screenCorner.Value.Y);
+                                sMaxX = MathF.Max(sMaxX, screenCorner.Value.X);
+                                sMaxY = MathF.Max(sMaxY, screenCorner.Value.Y);
+                            }
+                        }
+                    }
+                }
+
+                if (!anyVis) continue;
+
+                if (sMaxX >= rectMinX && sMinX <= rectMaxX &&
+                    sMaxY >= rectMinY && sMinY <= rectMaxY) {
+                    int lbX = (int)Math.Floor(obj.Origin.X / 192f);
+                    int lbY = (int)Math.Floor(obj.Origin.Y / 192f);
+                    ushort lbKey = (ushort)((lbX << 8) | lbY);
+
+                    results.Add(new ObjectRaycastHit {
+                        Hit = true,
+                        Object = obj,
+                        LandblockKey = lbKey,
+                        ObjectIndex = -1,
+                        Distance = 0,
+                        HitPosition = obj.Origin,
+                        IsScenery = true
+                    });
                 }
             }
 
