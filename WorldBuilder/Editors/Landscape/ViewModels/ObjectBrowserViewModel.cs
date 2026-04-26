@@ -122,10 +122,17 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
             var bitmap = ThumbnailCache.CreateBitmapFromRgba(rgbaPixels,
                 ThumbnailRenderService.ThumbnailSize, ThumbnailRenderService.ThumbnailSize);
 
-            // Dispatch to UI thread to update the item
+            // Dispatch to UI thread to update the item.
+            // A single rendered DAT id can map to multiple browser entries: the
+            // GfxObj/Setup itself, plus any particle emitter whose visual resolves
+            // to the same GfxObj. Walk the visible list so all matching items
+            // pick up the bitmap.
             Dispatcher.UIThread.Post(() => {
-                if (_itemLookup.TryGetValue(objectId, out var item)) {
-                    item.Thumbnail = bitmap;
+                foreach (var item in FilteredItems) {
+                    if (item.ThumbnailGraphicsId == objectId ||
+                        (!item.IsParticleEmitter && item.Id == objectId)) {
+                        item.Thumbnail = bitmap;
+                    }
                 }
             });
         }
@@ -239,6 +246,10 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
             ApplyFilter();
         }
 
+        partial void OnShowParticleEmittersChanged(bool value) {
+            ApplyFilter();
+        }
+
         /// <summary>
         /// Returns true if the search text looks like a hex ID search (starts with 0x or is all hex chars).
         /// </summary>
@@ -288,7 +299,7 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
         /// Items start with placeholder thumbnails. Call RequestThumbnails() separately
         /// to load cached images and queue missing ones for rendering.
         /// </summary>
-        private ObservableCollection<ObjectBrowserItem> BuildItems(uint[] setups, uint[] gfxObjs) {
+        private ObservableCollection<ObjectBrowserItem> BuildItems(uint[] setups, uint[] gfxObjs, uint[]? particles = null) {
             var items = new ObservableCollection<ObjectBrowserItem>();
             _itemLookup.Clear();
 
@@ -303,6 +314,14 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
                 var item = new ObjectBrowserItem(id, isSetup: false, tags);
                 items.Add(item);
                 _itemLookup[id] = item;
+            }
+            if (particles != null) {
+                foreach (var id in particles) {
+                    var tags = _tagIndex.IsLoaded ? _tagIndex.GetTagString(id) : null;
+                    var item = new ObjectBrowserItem(id, tags, _dats);
+                    items.Add(item);
+                    _itemLookup[id] = item;
+                }
             }
 
             // Only request thumbnails after initial startup has settled.
@@ -329,10 +348,13 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
 
             int cached = 0, queued = 0, skipped = 0;
             foreach (var item in items) {
-                if (item.Thumbnail != null) { skipped++; continue; }
+                if (item.Thumbnail != null || item.Id == 0) { skipped++; continue; }
+
+                // Particle emitters render the resolved GfxObj, not the emitter id itself.
+                var thumbId = item.ThumbnailGraphicsId;
 
                 // Try disk cache first
-                var cachedBitmap = _thumbnailCache.TryLoadCached(item.Id);
+                var cachedBitmap = _thumbnailCache.TryLoadCached(thumbId);
                 if (cachedBitmap != null) {
                     item.Thumbnail = cachedBitmap;
                     cached++;
@@ -341,7 +363,7 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
 
                 // Queue for rendering (only if service is available)
                 if (service != null) {
-                    service.RequestThumbnail(item.Id, item.IsSetup);
+                    service.RequestThumbnail(thumbId, item.IsParticleEmitter ? false : item.IsSetup);
                     queued++;
                 }
             }
@@ -412,15 +434,34 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
                 return;
             }
 
-            // Normal mode: show all Setups / GfxObjs
+            // Normal mode: show all Setups / GfxObjs (and particle emitters if enabled)
             IEnumerable<uint> setups = ShowSetups ? _allSetupIds : Array.Empty<uint>();
             IEnumerable<uint> gfxObjs = ShowGfxObjs ? _allGfxObjIds : Array.Empty<uint>();
 
             var (fSetups, fGfx) = ApplySearchFilter(setups, gfxObjs, out var statusSuffix);
             var setupResult = fSetups.Take(100).ToArray();
             var gfxResult = fGfx.Take(100).ToArray();
-            FilteredItems = BuildItems(setupResult, gfxResult);
-            Status = statusSuffix ?? $"Showing {setupResult.Length} Setups, {gfxResult.Length} GfxObjs";
+
+            uint[] particleResult = Array.Empty<uint>();
+            if (ShowParticleEmitters && _allParticleEmitterIds.Length > 0) {
+                IEnumerable<uint> parts = _allParticleEmitterIds;
+                if (!string.IsNullOrWhiteSpace(SearchText)) {
+                    if (IsHexSearch(SearchText, out var hexSearch)) {
+                        parts = parts.Where(id => id.ToString("X8").Contains(hexSearch));
+                    }
+                    else if (_tagIndex.IsLoaded) {
+                        var matched = _tagIndex.Search(SearchText);
+                        parts = parts.Where(id => matched.Contains(id));
+                    }
+                    else {
+                        parts = Array.Empty<uint>();
+                    }
+                }
+                particleResult = parts.Take(100).ToArray();
+            }
+
+            FilteredItems = BuildItems(setupResult, gfxResult, particleResult);
+            Status = statusSuffix ?? $"Showing {setupResult.Length} Setups, {gfxResult.Length} GfxObjs, {particleResult.Length} Particles";
         }
 
         /// <summary>

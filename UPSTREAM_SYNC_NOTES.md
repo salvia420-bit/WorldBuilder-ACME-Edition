@@ -272,10 +272,16 @@ toggles).
   synchronized port is needed; not started.
 
 **Wave E partial follow-ups remaining:**
-- ObjectBrowserViewModel BuildItems hasn't been taught to USE the new
-  ShowParticleEmitters flag yet (just declares + scans the IDs). The
-  particle entries won't show up in the browser until the BuildItems
-  filter is extended.
+- ~~ObjectBrowserViewModel BuildItems hasn't been taught to USE the new
+  ShowParticleEmitters flag yet~~ ✅ landed 2026-04-26: BuildItems now
+  takes an optional particle array; normal-mode ApplyFilter passes the
+  `_allParticleEmitterIds` slice (filtered by hex / keyword index) when
+  ShowParticleEmitters is true. `OnThumbnailReady` walks FilteredItems
+  matching on both `ThumbnailGraphicsId` and `Id` so particle entries
+  share thumbnails with their resolved GfxObj. `RequestThumbnails`
+  caches/queues by `ThumbnailGraphicsId` and routes the IsSetup flag
+  through `IsParticleEmitter ? false : item.IsSetup`. ObjectBrowserView
+  axaml already had the "Particles" checkbox bound.
 - StaticObjectManager Vertices.TryGetValue refinements (defensive
   against missing vertex keys) — skipped because we currently throw,
   which surfaces bugs faster.
