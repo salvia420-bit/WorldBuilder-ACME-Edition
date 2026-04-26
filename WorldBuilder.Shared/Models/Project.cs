@@ -156,7 +156,7 @@ namespace WorldBuilder.Shared.Models {
         [JsonIgnore]
         public Func<RepositionContext, Task>? OnExportReposition { get; set; }
 
-        public bool ExportDats(string exportDirectory, int portalIteration) {
+        public bool ExportDats(string exportDirectory, int portalIteration, Action<string>? onProgress = null) {
             if (!Directory.Exists(exportDirectory)) {
                 Directory.CreateDirectory(exportDirectory);
             }
@@ -166,6 +166,7 @@ namespace WorldBuilder.Shared.Models {
                 "client_cell_1.dat", "client_portal.dat", "client_highres.dat", "client_local_English.dat"
             };
 
+            onProgress?.Invoke("Copying base DAT files...");
             foreach (var datFile in datFiles) {
                 var sourcePath = Path.Combine(BaseDatDirectory, datFile);
                 var destPath = Path.Combine(exportDirectory, datFile);
@@ -208,6 +209,8 @@ namespace WorldBuilder.Shared.Models {
 
             const int LANDBLOCK_SIZE = 81;
 
+            onProgress?.Invoke($"Preparing {modifiedLandblocks.Count} terrain landblocks...");
+
             // Capture old terrain from base DATs for reposition delta calculation
             var oldTerrain = new Dictionary<ushort, TerrainEntry[]>();
             var newTerrain = new Dictionary<ushort, TerrainEntry[]>();
@@ -228,7 +231,11 @@ namespace WorldBuilder.Shared.Models {
             }
 
             // Process and save each modified landblock
+            int terrainWritten = 0;
             foreach (var lbKey in modifiedLandblocks) {
+                if (++terrainWritten % 1000 == 0) {
+                    onProgress?.Invoke($"Writing terrain {terrainWritten} / {modifiedLandblocks.Count}...");
+                }
                 var lbId = (uint)(lbKey << 16) | 0xFFFF;
 
                 var currentEntries = terrainDoc.GetLandblockInternal(lbKey);
@@ -288,6 +295,57 @@ namespace WorldBuilder.Shared.Models {
                 if (!writer.TrySave(lb, portalIteration)) {
                     // Log error? Project doesn't store logger directly but could throw or ignore.
                 }
+            }
+
+            // Reposition DAT static objects (LandBlockInfo.Objects) to match new terrain heights.
+            // Must happen BEFORE LandblockDocument.SaveToDats below, which may rewrite the
+            // same LBI entries.
+            float[]? repoHeightTable = null;
+            if (DatReaderWriter.TryGet<Region>(0x13000000, out var repoRegion)) {
+                repoHeightTable = repoRegion.LandDefs.LandHeightTable;
+            }
+
+            if (repoHeightTable != null && oldTerrain.Count > 0 && newTerrain.Count > 0) {
+                onProgress?.Invoke("Repositioning DAT statics...");
+                int repoCount = 0;
+                foreach (var lbKey in modifiedLandblocks) {
+                    if (!oldTerrain.TryGetValue(lbKey, out var oldEntries)) continue;
+                    if (!newTerrain.TryGetValue(lbKey, out var newEntries2)) continue;
+
+                    var infoId = (uint)(lbKey << 16) | 0xFFFE;
+                    if (!writer.TryGet<LandBlockInfo>(infoId, out var lbi)) continue;
+                    if (lbi.Objects == null || lbi.Objects.Count == 0) continue;
+
+                    uint landblockX = (uint)(lbKey >> 8) & 0xFF;
+                    uint landblockY = (uint)(lbKey & 0xFF);
+                    bool anyMoved = false;
+
+                    foreach (var stab in lbi.Objects) {
+                        float localX = stab.Frame.Origin.X;
+                        float localY = stab.Frame.Origin.Y;
+                        if (localX < 0 || localX > 192f || localY < 0 || localY > 192f) continue;
+
+                        float oldZ = TerrainHeightSampler.SampleHeightTriangle(
+                            oldEntries, repoHeightTable, localX, localY, landblockX, landblockY);
+                        float newZ = TerrainHeightSampler.SampleHeightTriangle(
+                            newEntries2, repoHeightTable, localX, localY, landblockX, landblockY);
+
+                        float delta = newZ - oldZ;
+                        if (MathF.Abs(delta) < 0.01f) continue;
+
+                        stab.Frame.Origin = new Vector3(
+                            stab.Frame.Origin.X,
+                            stab.Frame.Origin.Y,
+                            stab.Frame.Origin.Z + delta);
+                        anyMoved = true;
+                    }
+
+                    if (anyMoved) {
+                        writer.TrySave(lbi, portalIteration);
+                        repoCount++;
+                    }
+                }
+                onProgress?.Invoke($"Repositioned statics in {repoCount} landblocks");
             }
 
             // Export static object changes from LandblockDocuments, dungeon data, and portal table edits.
@@ -385,9 +443,14 @@ namespace WorldBuilder.Shared.Models {
                 }
             }
 
+            onProgress?.Invoke("Writing static objects and dungeons...");
+
             int lbDocsSaved = 0;
             foreach (var docId in lbDocIds) {
                 if (DocumentManager.ActiveDocs.TryGetValue(docId, out var doc) && doc is LandblockDocument lbDoc) {
+                    // Streamed-in but unmodified docs must not overwrite the base DAT content
+                    // (which may have been repositioned above).
+                    if (!lbDoc.IsDirty) continue;
                     lbDoc.SaveToDats(writer, portalIteration);
                     lbDocsSaved++;
 
@@ -422,6 +485,8 @@ namespace WorldBuilder.Shared.Models {
             // Free blueprint cache memory after all buildings have been instantiated
             BuildingBlueprintCache.ClearCache();
 
+            onProgress?.Invoke("Writing custom textures...");
+
             // Write custom imported textures and update Region for terrain replacements
             try {
                 OnExportCustomTextures?.Invoke(writer, portalIteration);
@@ -432,6 +497,8 @@ namespace WorldBuilder.Shared.Models {
 
             // TODO: all other dat iterations
             writer.Dats.Portal.Iteration.CurrentIteration = portalIteration;
+
+            onProgress?.Invoke("Running instance reposition...");
 
             // Instance reposition: build context and invoke hook if wired
             if (OnExportReposition != null && oldTerrain.Count > 0 && newTerrain.Count > 0) {

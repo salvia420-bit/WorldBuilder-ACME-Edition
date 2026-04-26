@@ -178,6 +178,36 @@ namespace WorldBuilder.Shared.Documents {
             return result;
         }
 
+        /// <summary>
+        /// Applies bulk vertex changes directly without firing update events.
+        /// Does NOT trigger background document saves — the data lives in memory
+        /// and will be persisted on project save, export, or close. Used for large
+        /// imports (heightmaps) to avoid a serialization storm from the save queue.
+        /// </summary>
+        public void ApplyBulkImport(Dictionary<ushort, Dictionary<byte, uint>> allChanges) {
+            if (allChanges.Count == 0) return;
+
+            lock (_stateLock) {
+                foreach (var (lbKey, updates) in allChanges) {
+                    if (!TerrainData.Landblocks.TryGetValue(lbKey, out var lbTerrain)) {
+                        if (!_baseTerrainCache.TryGetValue(lbKey, out var baseTerrain)) {
+                            continue;
+                        }
+                        lbTerrain = new uint[baseTerrain.Length];
+                        Array.Copy(baseTerrain, lbTerrain, baseTerrain.Length);
+                        TerrainData.Landblocks[lbKey] = lbTerrain;
+                    }
+
+                    foreach (var (index, value) in updates) {
+                        lbTerrain[index] = value;
+                    }
+                }
+            }
+
+            MarkDirty();
+            _logger.LogInformation("Bulk import applied {Count} landblock changes", allChanges.Count);
+        }
+
         public void UpdateLandblocksBatchInternal(
             Dictionary<ushort, Dictionary<byte, uint>> allChanges,
             out HashSet<ushort> modifiedLandblocks) {

@@ -68,7 +68,7 @@ Sorted chronologically.
 | `7b89961` | 03-04 | More prefab stuff, generator, favorites | many | large | 🔒 DEFERRED | Dungeon prefab + generator. |
 | `67912c1` | 03-04 | add SQL connector to export, direct DB Z-shift | 13 | +705/-102 | ⏳ TODO | Touches our heavily-modified `AceDbConnector.cs`. Manually port the SQL-export logic. |
 | `f45e230` | 03-05 | Dungeon generator v2: favorites, room furnishing | many | large | 🔒 DEFERRED | Dungeon refactor chain. |
-| `5faec77` | 03-05 | heightmap import, export progress, static repositioning | 11 | +718/-22 | ⏳ TODO | **Prereq for `7293629` (mini map).** Adds `LandSurfaceManager.GetTerrainAverageColors`. |
+| `5faec77` | 03-05 | heightmap import, export progress, static repositioning | 11 | +718/-22 | ✅ PORTED | All 11 files: 2 net-new (`HeightImportCommand`, `HeightmapImportService`), additive on `TerrainDocument` (`ApplyBulkImport`), `LandSurfaceManager` (`GetTerrainAverageColors`), `CommandHistory` (`AddExecutedCommand[Async]`), `Project` (`ExportDats` progress + DAT static reposition + dirty skip), `ExportDatsWindowViewModel` (progress dialog), `AceDbConnector.GetOutdoorInstancesAsync` (bulk-or-batched), `LandscapeEditorViewModel` (Import Heightmap command + dialog), axaml button, csproj `SixLabors.ImageSharp`. Skipped FreshStart batch refactor — not present locally. |
 | `c66b13f` | 03-05 | add history to dungeon editor | many | medium | 🔒 DEFERRED | Dungeon refactor chain. |
 | `40e9567` | 03-05 | fix dungeon dock crash | 4 | +61/-4 | 🚫 BLOCKED | Needs `DungeonGraphPanelViewModel` + `HistoryPanel` from earlier dungeon refactors. |
 | `675fb1d` | 03-05 | grid and recenter view for dungeon editor | 3 | +181/-6 | 🔒 DEFERRED | Dungeon UI feature. |
@@ -84,7 +84,7 @@ Sorted chronologically.
 | `af985b2` | 03-10 | Changelog from commit messages; add `release.yml` | 3 | +58/-32 | 🔧 PERMISSIONS | OAuth token lacks `workflow` scope — modifies `.github/workflows/BuildEdge.yml`. Push from a session with `workflow` scope, or split changelog from yml. |
 | `f29948e` | 03-11 | fix fill tool preview | 1 | +2/-2 | ✅ PORTED | Cherry-picked. |
 | `9a0dbc3` | 03-11 | Dungeon editor improvements | many | medium | 🔒 DEFERRED | Dungeon refactor chain. |
-| `7293629` | 03-11 | mini map for terrain editor | 5 | +539/-0 | 🚫 BLOCKED | Pure addition, but calls `LandSurfaceManager.GetTerrainAverageColors` which is added by `5faec77`. Port that first, then this. |
+| `7293629` | 03-11 | mini map for terrain editor | 5 | +539/-0 | ✅ PORTED | Unblocked once `5faec77` landed. 4 net-new files (`WorldMapPanelViewModel`, `WorldMapCanvas`, `WorldMapPanelView` axaml + .cs); `LandscapeEditorViewModel` adds `WorldMapPanel` observable + DI + dock register. ViewLocator picks up the View by name. |
 | `cd3e377` | 03-12 | dungeon 'world template' WIP | many | medium | 🔒 DEFERRED | Dungeon refactor chain. |
 | `6a317bc` | 03-12 | world mini map fix, remove templates | 26 | +116/-604 | 🔒 DEFERRED | Mostly DELETIONS (template removal). Don't port without verifying we want those deletions. |
 | `0998c38` | 03-13 | landscape refactor, dungeon scene + settings | 51 | +1 197/-358 | 🔒 DEFERRED | Big landscape refactor. |
@@ -108,12 +108,12 @@ Sorted chronologically.
 | `15cb9ed` | 04-14 | add logging, fix texture import/dat export | 9 | +506/-4 | 🚫 BLOCKED | Needs `FileLoggerProvider` + related logging infrastructure. |
 
 ### Tally
-- **7 ✅ PORTED** (in the side branch we just merged)
+- **9 ✅ PORTED** (incl. `5faec77` heightmap import + `7293629` mini map landed 2026-04-26)
 - **2 🟡 PARTIAL** (`f26345e` slices 1-3 ✅ + slice 4 waves A, B, C, D, E, G ✅; wave F (Layout editor) ⏳ — and `34c612b` portal-defer + dead-code deletion ✅; LayoutEditorViewModel plumbing pending Wave F)
-- **5 🚫 BLOCKED** (attempted, prereq gap documented above)
+- **4 🚫 BLOCKED** (attempted, prereq gap documented above)
 - **14 🔒 DEFERRED** (large refactors or stacked dungeon-chain — port only with in-game testing)
 - **1 🔧 PERMISSIONS** (just needs the right token to push)
-- **13 ⏳ TODO** (not yet attempted, lower-risk than the deferred set)
+- **12 ⏳ TODO** (not yet attempted, lower-risk than the deferred set)
 
 ## f26345e split into 4 slices
 
