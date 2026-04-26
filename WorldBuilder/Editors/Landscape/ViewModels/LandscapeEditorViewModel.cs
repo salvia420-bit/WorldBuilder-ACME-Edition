@@ -24,8 +24,10 @@ using WorldBuilder.Lib.Settings;
 using WorldBuilder.Shared.Documents;
 using DatReaderWriter.DBObjs;
 using WorldBuilder.Shared.Lib;
+using WorldBuilder.Shared.Lib.WorldGen;
 using WorldBuilder.Shared.Models;
 using WorldBuilder.ViewModels;
+using WorldBuilder.Editors.Landscape.WorldGen;
 
 namespace WorldBuilder.Editors.Landscape.ViewModels {
     public partial class LandscapeEditorViewModel : ViewModelBase {
@@ -94,6 +96,16 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
         public bool ShowSlopeHighlight {
             get => Settings.Landscape.Overlay.ShowSlopeHighlight;
             set { Settings.Landscape.Overlay.ShowSlopeHighlight = value; OnPropertyChanged(); }
+        }
+
+        public bool ShowParticles {
+            get => Settings.Landscape.Overlay.ShowParticles;
+            set { Settings.Landscape.Overlay.ShowParticles = value; OnPropertyChanged(); }
+        }
+
+        public bool ShowWeenieSpawns {
+            get => Settings.Landscape.Overlay.ShowWeenieSpawns;
+            set { Settings.Landscape.Overlay.ShowWeenieSpawns = value; OnPropertyChanged(); }
         }
 
         private Project? _project;
@@ -510,6 +522,79 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
             else if (SelectedSubTool is BucketFillSubToolViewModel fill) {
                 fill.SelectedTerrainType = type;
             }
+        }
+
+        [RelayCommand]
+        private async Task GenerateWorld() {
+            if (TerrainSystem == null || _project == null) return;
+            var dats = TerrainSystem.Dats;
+            if (dats == null) return;
+
+            // Show parameter dialog. User-cancel returns null.
+            WorldGeneratorParams? p;
+            try {
+                p = await WorldGeneratorDialogService.ShowDialog();
+            }
+            catch (Exception ex) {
+                _logger.LogError(ex, "[WorldGen] Dialog failed to open");
+                return;
+            }
+            if (p == null) return;
+
+            if (!dats.TryGet<DatReaderWriter.DBObjs.Region>(0x13000000, out var region) || region == null) {
+                _logger.LogWarning("[WorldGen] Failed to load Region 0x13000000 from DATs");
+                return;
+            }
+
+            WorldGeneratorResult? result;
+            try {
+                result = WorldGenerator.Generate(p, dats, region, msg => _logger.LogInformation("[WorldGen] {Msg}", msg));
+            }
+            catch (Exception ex) {
+                _logger.LogError(ex, "[WorldGen] Generate threw");
+                return;
+            }
+            if (result == null) {
+                _logger.LogWarning("[WorldGen] Generate returned null");
+                return;
+            }
+
+            // Apply: terrain via TerrainDocument batch, statics via per-landblock LandblockDocument.
+            var terrainDoc = await _project.DocumentManager.GetOrCreateDocumentAsync<TerrainDocument>("terrain");
+            if (terrainDoc != null && result.TerrainChanges.Count > 0) {
+                terrainDoc.UpdateLandblocksBatchInternal(result.TerrainChanges, out _);
+            }
+
+            foreach (var (lbKey, plans) in result.BuildingPlacements) {
+                if (plans.Count == 0) continue;
+                var docId = $"landblock_{lbKey:X4}";
+                var lbDoc = await _project.DocumentManager.GetOrCreateDocumentAsync<LandblockDocument>(docId);
+                if (lbDoc == null) continue;
+                foreach (var pb in plans) {
+                    lbDoc.AddStaticObject(new StaticObject {
+                        Id = pb.ModelId,
+                        IsSetup = (pb.ModelId & 0x02000000) != 0,
+                        Origin = pb.WorldPosition,
+                        Orientation = pb.Orientation,
+                        Scale = Vector3.One
+                    });
+                }
+            }
+
+            foreach (var (lbKey, decs) in result.DecorationPlacements) {
+                if (decs.Count == 0) continue;
+                var docId = $"landblock_{lbKey:X4}";
+                var lbDoc = await _project.DocumentManager.GetOrCreateDocumentAsync<LandblockDocument>(docId);
+                if (lbDoc == null) continue;
+                foreach (var d in decs) lbDoc.AddStaticObject(d);
+            }
+
+            TerrainSystem.Scene.InvalidateStaticObjectsCache();
+
+            _logger.LogInformation(
+                "[WorldGen] Applied: {Lbs} landblocks, {Verts} vertices, {Towns} towns, {Buildings} buildings, {Decorations} decorations",
+                result.TerrainChanges.Count, result.TotalVerticesModified,
+                result.Towns.Count, result.TotalBuildingsPlaced, result.TotalDecorationsPlaced);
         }
 
         [RelayCommand]

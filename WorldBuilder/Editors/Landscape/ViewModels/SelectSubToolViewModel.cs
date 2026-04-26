@@ -296,7 +296,7 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
                     // Building-specific placement: cell-center snapping, donor orientation, terrain flattening.
                     // Non-building objects (scenery, trees, etc.) are placed at the exact click position.
                     var dats = Context.TerrainSystem.Dats;
-                    bool isBuilding = dats != null && BuildingBlueprintCache.IsBuildingModelId(preview.Id, dats);
+                    bool isBuilding = !preview.IsParticleEmitter && dats != null && BuildingBlueprintCache.IsBuildingModelId(preview.Id, dats);
 
                     if (isBuilding) {
                         // Snap to the center of the nearest outdoor cell (24x24 grid).
@@ -330,7 +330,8 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
                         IsSetup = preview.IsSetup,
                         Origin = placementPos,
                         Orientation = orientation,
-                        Scale = preview.Scale
+                        Scale = preview.Scale,
+                        IsParticleEmitter = preview.IsParticleEmitter
                     };
 
                     // Flatten terrain under buildings only — scenery objects sit on existing terrain.
@@ -355,11 +356,17 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
 
             // Normal selection (Ctrl+Click = toggle multi-select)
             if (mouseState.ObjectHit.HasValue && mouseState.ObjectHit.Value.Hit) {
+                var hit = mouseState.ObjectHit.Value;
+
+                if (hit.IsScenery) {
+                    hit = PromoteSceneryToDocument(hit);
+                }
+
                 if (mouseState.CtrlPressed) {
-                    Context.ObjectSelection.ToggleSelectFromHit(mouseState.ObjectHit.Value);
+                    Context.ObjectSelection.ToggleSelect(hit.Object, hit.LandblockKey, hit.ObjectIndex, hit.IsScenery);
                 }
                 else {
-                    Context.ObjectSelection.SelectFromHit(mouseState.ObjectHit.Value);
+                    Context.ObjectSelection.Select(hit.Object, hit.LandblockKey, hit.ObjectIndex, hit.IsScenery);
                 }
                 return true;
             }
@@ -424,7 +431,8 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
                     IsSetup = preview.IsSetup,
                     Origin = terrainPos,
                     Orientation = preview.Orientation,
-                    Scale = preview.Scale
+                    Scale = preview.Scale,
+                    IsParticleEmitter = preview.IsParticleEmitter
                 };
             }
             return false;
@@ -448,10 +456,28 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
             }
 
             foreach (var hit in hits) {
-                sel.ToggleSelect(hit.Object, hit.LandblockKey, hit.ObjectIndex, hit.IsScenery);
+                var h = hit;
+                if (h.IsScenery) h = PromoteSceneryToDocument(h);
+                sel.ToggleSelect(h.Object, h.LandblockKey, h.ObjectIndex, h.IsScenery);
             }
 
             Console.WriteLine($"[Selector] Marquee selected {hits.Count} object(s)");
+        }
+
+        private ObjectRaycast.ObjectRaycastHit PromoteSceneryToDocument(ObjectRaycast.ObjectRaycastHit hit) {
+            var cmd = new AddObjectCommand(Context, hit.LandblockKey, hit.Object);
+            _commandHistory.ExecuteCommand(cmd);
+            Context.TerrainSystem.Scene.InvalidateStaticObjectsCache();
+
+            return new ObjectRaycast.ObjectRaycastHit {
+                Hit = true,
+                Object = hit.Object,
+                LandblockKey = hit.LandblockKey,
+                ObjectIndex = cmd.AddedIndex,
+                Distance = hit.Distance,
+                HitPosition = hit.HitPosition,
+                IsScenery = false
+            };
         }
 
         /// <summary>

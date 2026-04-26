@@ -355,6 +355,15 @@
                         </ToggleButton>
                         <ToggleButton
                             Classes="vp-toggle"
+                            IsChecked="{Binding ShowParticles}"
+                            ToolTip.Tip="Toggle particle effects from placed emitters">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <TextBlock Text="&#x2728;" FontSize="13" />
+                                <TextBlock Text="Particles" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </ToggleButton>
+                        <ToggleButton
+                            Classes="vp-toggle"
                             IsChecked="{Binding ShowDungeons}"
                             ToolTip.Tip="Toggle Dungeon Geometry">
                             <StackPanel Orientation="Horizontal" Spacing="4">
@@ -369,6 +378,15 @@
                             <StackPanel Orientation="Horizontal" Spacing="4">
                                 <TextBlock Text="&#x1F3DB;" FontSize="13" />
                                 <TextBlock Text="Interiors" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </ToggleButton>
+                        <ToggleButton
+                            Classes="vp-toggle"
+                            IsChecked="{Binding ShowWeenieSpawns}"
+                            ToolTip.Tip="Show weenie spawns from ACE database (creatures, NPCs, generators)">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <TextBlock Text="&#x1F47E;" FontSize="13" />
+                                <TextBlock Text="Spawns" VerticalAlignment="Center" />
                             </StackPanel>
                         </ToggleButton>
                         <ToggleButton
@@ -388,6 +406,16 @@
                             <StackPanel Orientation="Horizontal" Spacing="4">
                                 <TextBlock Text="&#x1F3AF;" FontSize="13" />
                                 <TextBlock Text="Reset" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                        <Border Width="1" Background="#3d2a5c" Margin="4,4" />
+                        <Button
+                            Classes="vp-action"
+                            Command="{Binding GenerateWorldCommand}"
+                            ToolTip.Tip="Procedurally generate terrain with biomes, towns, and roads">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <TextBlock Text="&#x1F30D;" FontSize="13" />
+                                <TextBlock Text="Generate..." VerticalAlignment="Center" />
                             </StackPanel>
                         </Button>
                         <Border Width="1" Background="#3d2a5c" Margin="4,4" />
