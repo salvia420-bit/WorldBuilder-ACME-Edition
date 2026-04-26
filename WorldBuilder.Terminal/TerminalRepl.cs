@@ -3,6 +3,7 @@ using System.Numerics;
 using System.Text;
 using WorldBuilder.Shared.Lib.Dungeon;
 using WorldBuilder.Shared.Lib.Validation;
+using WorldBuilder.Shared.Lib.WorldGen;
 using WorldBuilder.Shared.Services;
 
 namespace WorldBuilder.Terminal;
@@ -164,6 +165,9 @@ public class TerminalRepl {
             ["weenie-snapshot"] = HandleWeenieSnapshot,
             ["weenie-template-list"] = HandleWeenieTemplateList,
             ["weenie-template-apply"] = HandleWeenieTemplateApply,
+            ["worldgen"] = HandleWorldGen,
+            ["worldgen-analyze-buildings"] = HandleWorldGenAnalyzeBuildings,
+            ["worldgen-scan-retail-towns"] = HandleWorldGenScanRetailTowns,
             ["help"] = _ => PrintHelp(),
         };
 
@@ -1443,6 +1447,9 @@ public class TerminalRepl {
         Console.WriteLine("  weenie-snapshot <classId>                      Read scalar weenie properties from ACE DB");
         Console.WriteLine("  weenie-template-list <bundle.json>             List weenie templates in a JSON bundle");
         Console.WriteLine("  weenie-template-apply <bundle.json> <id> <classId>  Apply template scalars to a weenie");
+        Console.WriteLine("  worldgen [--seed n] [--size w h] [--towns n] [--out plan.json]   Run WorldGen pipeline (dry-run)");
+        Console.WriteLine("  worldgen-analyze-buildings [--out catalog.json]                  Scan DATs for placeable building models");
+        Console.WriteLine("  worldgen-scan-retail-towns [--out stats.json]                    Scan DATs for retail-style town models");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
@@ -4214,6 +4221,197 @@ public class TerminalRepl {
         Console.WriteLine($"  Triangles      : {r.TriangleCount}");
         Console.WriteLine($"  Vertices       : {r.VertexCount}");
         Console.WriteLine("  Stored in PortalDatDocument; will persist on next 'export'.");
+        Console.WriteLine();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  WorldGen (slice 3 of f26345e port)
+    // ═══════════════════════════════════════════════════════════
+
+    private void HandleWorldGen(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 2 || tokens[1] == "--help") {
+            Console.WriteLine("Usage: worldgen [options]");
+            Console.WriteLine("  Runs the WorldGenerator pipeline (terrain + biomes + towns + roads + buildings).");
+            Console.WriteLine("  DRY-RUN ONLY — does not mutate project documents. Pass --out to dump full plan to JSON.");
+            Console.WriteLine();
+            Console.WriteLine("  Options:");
+            Console.WriteLine("    --seed <n>            (default 0 = random)");
+            Console.WriteLine("    --start <x> <y>       (default 0 0)");
+            Console.WriteLine("    --size <w> <h>        (default 20 20)");
+            Console.WriteLine("    --full-world          override start/size; cover the entire 254×254 region");
+            Console.WriteLine("    --continents <n>      (default 1)");
+            Console.WriteLine("    --islands <n>         (default 0)");
+            Console.WriteLine("    --land-coverage <0-1> (default 0.5)");
+            Console.WriteLine("    --roughness <0-1>     (default 0.5)");
+            Console.WriteLine("    --towns <n>           (default 5)");
+            Console.WriteLine("    --town-spacing <f>    (default 30)");
+            Console.WriteLine("    --no-roads");
+            Console.WriteLine("    --no-buildings");
+            Console.WriteLine("    --retail-only         restrict building catalog to retail-style town models");
+            Console.WriteLine("    --out <path.json>     dump the full WorldGeneratorResult plan");
+            Console.WriteLine();
+            Console.WriteLine("  Example: worldgen --seed 42 --size 40 40 --towns 10 --out /tmp/plan.json");
+            return;
+        }
+
+        if (!TryParseWorldGenParams(tokens, out var p, out var outPath)) return;
+        var r = _engine.WorldGenDryRun(p, outPath);
+        Console.WriteLine();
+        if (!r.Success) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  worldgen: FAILED — {r.Error}");
+            Console.ResetColor();
+            Console.WriteLine();
+            return;
+        }
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine($"  ═══ WorldGen plan (seed={r.Seed}) ═══");
+        Console.ResetColor();
+        Console.WriteLine($"  Terrain         : {r.TerrainLandblocksAffected} landblocks affected, {r.TotalVerticesModified:N0} vertices");
+        Console.WriteLine($"  Roads           : {r.TotalRoadVertices:N0} vertices");
+        Console.WriteLine($"  Towns           : {r.TownCount}");
+        Console.WriteLine($"  Buildings       : {r.TotalBuildingsPlaced:N0}");
+        Console.WriteLine($"  Decorations     : {r.TotalDecorationsPlaced:N0}");
+        if (r.Towns.Count > 0) {
+            Console.WriteLine();
+            Console.WriteLine("  Towns:");
+            foreach (var t in r.Towns)
+                Console.WriteLine($"    {t.SizeLabel,-9} {t.Name,-24} lb=({t.CenterLbX,3},{t.CenterLbY,3}) world=({t.CenterX,7:F1},{t.CenterY,7:F1}) r={t.Radius:F1} bldgs={t.BuildingCount}");
+        }
+        if (!string.IsNullOrEmpty(r.OutputPath))
+            Console.WriteLine($"  Plan written to : {r.OutputPath}");
+        Console.WriteLine();
+    }
+
+    private bool TryParseWorldGenParams(string[] tokens, out WorldGeneratorParams p, out string? outPath) {
+        p = new WorldGeneratorParams();
+        outPath = null;
+        // Default values come from the record initializers
+        int seed = p.Seed;
+        bool fullWorld = p.FullWorld;
+        int startX = p.StartX, startY = p.StartY;
+        int width = p.Width, height = p.Height;
+        int continents = p.ContinentCount, islands = p.IslandCount;
+        float landCov = p.LandCoverage, rough = p.Roughness;
+        int townCount = p.TownCount;
+        float townSpacing = p.TownSpacing;
+        bool roads = p.GenerateRoads, buildings = p.GenerateBuildings;
+        bool retailOnly = p.RetailTownBuildingsOnly;
+
+        for (int i = 1; i < tokens.Length; i++) {
+            switch (tokens[i]) {
+                case "--seed": if (!RequireNext(tokens, i, "--seed", out var v0)) return false; if (!int.TryParse(v0, out seed)) { Console.WriteLine("Invalid --seed value."); return false; } i++; break;
+                case "--start":
+                    if (!RequireNext(tokens, i, "--start (x)", out var sx)) return false;
+                    if (!RequireNext(tokens, i + 1, "--start (y)", out var sy)) return false;
+                    if (!int.TryParse(sx, out startX) || !int.TryParse(sy, out startY)) { Console.WriteLine("Invalid --start values."); return false; }
+                    i += 2; break;
+                case "--size":
+                    if (!RequireNext(tokens, i, "--size (w)", out var sw)) return false;
+                    if (!RequireNext(tokens, i + 1, "--size (h)", out var sh)) return false;
+                    if (!int.TryParse(sw, out width) || !int.TryParse(sh, out height)) { Console.WriteLine("Invalid --size values."); return false; }
+                    i += 2; break;
+                case "--full-world":   fullWorld = true; break;
+                case "--continents":   if (!RequireNext(tokens, i, "--continents", out var cv)) return false; if (!int.TryParse(cv, out continents)) { Console.WriteLine("Invalid --continents value."); return false; } i++; break;
+                case "--islands":      if (!RequireNext(tokens, i, "--islands", out var iv)) return false; if (!int.TryParse(iv, out islands)) { Console.WriteLine("Invalid --islands value."); return false; } i++; break;
+                case "--land-coverage": if (!RequireNext(tokens, i, "--land-coverage", out var lc)) return false; if (!float.TryParse(lc, NumberStyles.Float, CultureInfo.InvariantCulture, out landCov)) { Console.WriteLine("Invalid --land-coverage value."); return false; } i++; break;
+                case "--roughness":    if (!RequireNext(tokens, i, "--roughness", out var rg)) return false; if (!float.TryParse(rg, NumberStyles.Float, CultureInfo.InvariantCulture, out rough)) { Console.WriteLine("Invalid --roughness value."); return false; } i++; break;
+                case "--towns":        if (!RequireNext(tokens, i, "--towns", out var tv)) return false; if (!int.TryParse(tv, out townCount)) { Console.WriteLine("Invalid --towns value."); return false; } i++; break;
+                case "--town-spacing": if (!RequireNext(tokens, i, "--town-spacing", out var ts)) return false; if (!float.TryParse(ts, NumberStyles.Float, CultureInfo.InvariantCulture, out townSpacing)) { Console.WriteLine("Invalid --town-spacing value."); return false; } i++; break;
+                case "--no-roads":     roads = false; break;
+                case "--no-buildings": buildings = false; break;
+                case "--retail-only":  retailOnly = true; break;
+                case "--out":          if (!RequireNext(tokens, i, "--out", out var op)) return false; outPath = op; i++; break;
+                default:
+                    Console.WriteLine($"Unknown option: {tokens[i]}. Run 'worldgen --help' for usage.");
+                    return false;
+            }
+        }
+
+        p = new WorldGeneratorParams {
+            Seed = seed, FullWorld = fullWorld,
+            StartX = startX, StartY = startY,
+            Width = width, Height = height,
+            ContinentCount = continents, IslandCount = islands,
+            LandCoverage = landCov, Roughness = rough,
+            TownCount = townCount, TownSpacing = townSpacing,
+            GenerateRoads = roads, GenerateBuildings = buildings,
+            RetailTownBuildingsOnly = retailOnly
+        };
+        return true;
+    }
+
+    private static bool RequireNext(string[] tokens, int i, string label, out string value) {
+        if (i + 1 >= tokens.Length) {
+            Console.WriteLine($"Missing value for {label}.");
+            value = "";
+            return false;
+        }
+        value = tokens[i + 1];
+        return true;
+    }
+
+    private void HandleWorldGenAnalyzeBuildings(string[] tokens) {
+        if (!CheckProject()) return;
+        string? outPath = null;
+        for (int i = 1; i < tokens.Length; i++) {
+            if (tokens[i] == "--out" && i + 1 < tokens.Length) { outPath = tokens[i + 1]; i++; }
+            else if (tokens[i] == "--help") {
+                Console.WriteLine("Usage: worldgen-analyze-buildings [--out <path.json>]");
+                Console.WriteLine("  Scans DATs for 'complete' building models (used by WorldGen for town placement).");
+                Console.WriteLine("  Read-only. Pass --out to dump the full profile list to JSON.");
+                return;
+            }
+        }
+        var r = _engine.WorldGenAnalyzeBuildings(outPath);
+        Console.WriteLine();
+        if (!r.Success) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  worldgen-analyze-buildings: FAILED — {r.Error}");
+            Console.ResetColor();
+            Console.WriteLine();
+            return;
+        }
+        Console.WriteLine($"  ═══ Building catalog ═══");
+        Console.WriteLine($"  Total          : {r.Total}");
+        Console.WriteLine($"  With interior  : {r.WithInterior}");
+        Console.WriteLine($"  Paired halves  : {r.Paired}");
+        if (!string.IsNullOrEmpty(r.OutputPath))
+            Console.WriteLine($"  Profiles JSON  : {r.OutputPath}");
+        Console.WriteLine();
+    }
+
+    private void HandleWorldGenScanRetailTowns(string[] tokens) {
+        if (!CheckProject()) return;
+        string? outPath = null;
+        for (int i = 1; i < tokens.Length; i++) {
+            if (tokens[i] == "--out" && i + 1 < tokens.Length) { outPath = tokens[i + 1]; i++; }
+            else if (tokens[i] == "--help") {
+                Console.WriteLine("Usage: worldgen-scan-retail-towns [--out <path.json>]");
+                Console.WriteLine("  Scans DATs for retail-style town building models. Read-only.");
+                return;
+            }
+        }
+        var r = _engine.WorldGenScanRetailTowns(outPath);
+        Console.WriteLine();
+        if (!r.Success) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  worldgen-scan-retail-towns: FAILED — {r.Error}");
+            Console.ResetColor();
+            Console.WriteLine();
+            return;
+        }
+        Console.WriteLine($"  ═══ Retail-town building stats ═══");
+        Console.WriteLine($"  Distinct models : {r.ModelCount}");
+        if (r.Stats.Count > 0) {
+            int show = Math.Min(15, r.Stats.Count);
+            Console.WriteLine($"  Top {show} by town hits:");
+            foreach (var s in r.Stats.OrderByDescending(s => s.TownLandblockHits).Take(show))
+                Console.WriteLine($"    {s.HexId}  hits={s.TownLandblockHits,4}  singletons={s.SingletonTownHits,4}  ratio={s.SingletonRatio:F2}  maxCopies={s.MaxCopiesInOneTownLb}");
+        }
+        if (!string.IsNullOrEmpty(r.OutputPath))
+            Console.WriteLine($"  Stats JSON     : {r.OutputPath}");
         Console.WriteLine();
     }
 

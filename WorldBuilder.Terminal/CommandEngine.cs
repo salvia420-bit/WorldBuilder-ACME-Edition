@@ -11,6 +11,7 @@ using WorldBuilder.Shared.Lib.Dungeon;
 using WorldBuilder.Shared.Lib.Noise;
 using WorldBuilder.Shared.Lib.Terrain;
 using WorldBuilder.Shared.Lib.Validation;
+using WorldBuilder.Shared.Lib.WorldGen;
 using WorldBuilder.Shared.Models;
 using WorldBuilder.Shared.Services;
 
@@ -9340,6 +9341,143 @@ public class CommandEngine {
         if (index < 0 || index >= count)
             throw new ArgumentException(
                 $"Invalid index {index}. Landblock has {count} objects.");
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  WorldGen (slice 3 of f26345e port)
+    // ═══════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Runs the WorldGenerator pipeline (terrain + biomes + towns + roads + buildings) and
+    /// returns a summary. Does NOT mutate the project documents — results are dry-run only.
+    /// Optionally writes the full <see cref="WorldGeneratorResult"/> to JSON for later inspection.
+    /// </summary>
+    public WorldGenResult WorldGenDryRun(WorldGeneratorParams p, string? outputJsonPath = null) {
+        RequireProject();
+        var dats = _projectManager.CurrentProject!.DocumentManager.Dats;
+
+        if (!dats.TryGet<DatReaderWriter.DBObjs.Region>(0x13000000, out var region) || region == null) {
+            return new WorldGenResult(false, p.Seed, 0, 0, 0, 0, 0, 0,
+                new List<TownSummary>(), Error: "Failed to load Region 0x13000000 from DATs.");
+        }
+
+        var result = WorldGenerator.Generate(p, dats, region);
+        if (result == null) {
+            return new WorldGenResult(false, p.Seed, 0, 0, 0, 0, 0, 0,
+                new List<TownSummary>(), Error: "WorldGenerator.Generate returned null.");
+        }
+
+        var towns = new List<TownSummary>(result.Towns.Count);
+        foreach (var t in result.Towns) {
+            towns.Add(new TownSummary(t.Name, t.SizeLabel,
+                t.CenterLbX, t.CenterLbY,
+                t.WorldCenter.X, t.WorldCenter.Y, t.WorldCenter.Z,
+                t.Radius, t.BuildingCount));
+        }
+
+        if (!string.IsNullOrEmpty(outputJsonPath)) {
+            try {
+                var dir = Path.GetDirectoryName(outputJsonPath);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                var serialized = System.Text.Json.JsonSerializer.Serialize(new {
+                    seed = p.Seed,
+                    bounds = new { p.StartX, p.StartY, p.Width, p.Height, p.FullWorld },
+                    towns = result.Towns,
+                    plannedBuildings = result.BuildingPlacements
+                        .ToDictionary(kvp => $"0x{kvp.Key:X4}", kvp => kvp.Value),
+                    decorationCounts = result.DecorationPlacements
+                        .ToDictionary(kvp => $"0x{kvp.Key:X4}", kvp => kvp.Value.Count),
+                    terrainLandblocksAffected = result.TerrainChanges.Count,
+                    totalVerticesModified = result.TotalVerticesModified,
+                    totalBuildingsPlaced = result.TotalBuildingsPlaced,
+                    totalDecorationsPlaced = result.TotalDecorationsPlaced,
+                    totalRoadVertices = result.TotalRoadVertices,
+                }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(outputJsonPath, serialized);
+            }
+            catch (Exception ex) {
+                return new WorldGenResult(false, p.Seed,
+                    result.TerrainChanges.Count, result.TotalVerticesModified,
+                    result.Towns.Count, result.TotalBuildingsPlaced,
+                    result.TotalDecorationsPlaced, result.TotalRoadVertices,
+                    towns, Error: $"Generated OK, but JSON write failed: {ex.Message}");
+            }
+        }
+
+        return new WorldGenResult(true, p.Seed,
+            result.TerrainChanges.Count, result.TotalVerticesModified,
+            result.Towns.Count, result.TotalBuildingsPlaced,
+            result.TotalDecorationsPlaced, result.TotalRoadVertices,
+            towns, outputJsonPath);
+    }
+
+    /// <summary>
+    /// Scans the loaded project's DATs for "complete" building models — used by the WorldGen pipeline
+    /// to pick what to place in towns. Read-only; clears the upstream cache first to force a fresh scan.
+    /// </summary>
+    public AnalyzeBuildingsResult WorldGenAnalyzeBuildings(string? outputJsonPath = null) {
+        RequireProject();
+        var dats = _projectManager.CurrentProject!.DocumentManager.Dats;
+
+        try {
+            BuildingAnalyzer.ClearCache();
+            var profiles = BuildingAnalyzer.AnalyzeAll(dats);
+            int withInterior = 0, paired = 0;
+            var summaries = new List<BuildingProfileSummary>(profiles.Count);
+            foreach (var b in profiles) {
+                if (b.HasInterior) withInterior++;
+                if (b.IsPairedHalf) paired++;
+                summaries.Add(new BuildingProfileSummary(
+                    b.ModelId, $"0x{b.ModelId:X8}", b.NumLeaves,
+                    b.CellCount, b.PortalCount, b.TotalStatics,
+                    b.OccurrenceCount, b.UniqueLandblocks,
+                    b.HasInterior, b.IsPairedHalf));
+            }
+
+            if (!string.IsNullOrEmpty(outputJsonPath)) {
+                var dir = Path.GetDirectoryName(outputJsonPath);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                File.WriteAllText(outputJsonPath, System.Text.Json.JsonSerializer.Serialize(
+                    summaries, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            }
+
+            return new AnalyzeBuildingsResult(true, summaries.Count, withInterior, paired, summaries, outputJsonPath);
+        }
+        catch (Exception ex) {
+            return new AnalyzeBuildingsResult(false, 0, 0, 0,
+                new List<BuildingProfileSummary>(), Error: ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Scans the loaded project's DATs for retail-style town buildings. Pairs well with
+    /// <see cref="WorldGenAnalyzeBuildings"/> when building a stricter town-building catalog.
+    /// </summary>
+    public ScanRetailTownsResult WorldGenScanRetailTowns(string? outputJsonPath = null) {
+        RequireProject();
+        var dats = _projectManager.CurrentProject!.DocumentManager.Dats;
+
+        try {
+            var stats = RetailTownBuildingScanner.Scan(dats);
+            var rows = new List<RetailTownStat>(stats.Count);
+            foreach (var (modelId, s) in stats) {
+                rows.Add(new RetailTownStat(modelId, $"0x{modelId:X8}",
+                    s.TownLandblockHits, s.SingletonTownHits,
+                    s.MaxCopiesInOneTownLb, s.SingletonRatio));
+            }
+
+            if (!string.IsNullOrEmpty(outputJsonPath)) {
+                var dir = Path.GetDirectoryName(outputJsonPath);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                File.WriteAllText(outputJsonPath, System.Text.Json.JsonSerializer.Serialize(
+                    rows, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            }
+
+            return new ScanRetailTownsResult(true, rows.Count, rows, outputJsonPath);
+        }
+        catch (Exception ex) {
+            return new ScanRetailTownsResult(false, 0, new List<RetailTownStat>(), Error: ex.Message);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════

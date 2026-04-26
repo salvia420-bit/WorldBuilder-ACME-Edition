@@ -2,6 +2,7 @@ using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using WorldBuilder.Shared.Lib.Validation;
+using WorldBuilder.Shared.Lib.WorldGen;
 using WorldBuilder.Shared.Services;
 
 namespace WorldBuilder.Terminal;
@@ -196,6 +197,9 @@ public class JsonCommandProcessor {
             ["weenie-snapshot"] = CmdWeenieSnapshot,
             ["weenie-template-list"] = CmdWeenieTemplateList,
             ["weenie-template-apply"] = CmdWeenieTemplateApply,
+            ["worldgen"] = CmdWorldGen,
+            ["worldgen-analyze-buildings"] = CmdWorldGenAnalyzeBuildings,
+            ["worldgen-scan-retail-towns"] = CmdWorldGenScanRetailTowns,
             ["help"] = _ => CmdHelp(),
         };
 
@@ -1536,6 +1540,59 @@ public class JsonCommandProcessor {
             diagnostics = report.Diagnostics.Select(d => new {
                 severity = d.Severity.ToString().ToLowerInvariant(),
                 code = d.Code, message = d.Message, context = d.Context }).ToArray() });
+    }
+
+    // ════════════════════════════════════════════════════
+    //  WorldGen (slice 3 of f26345e port)
+    // ════════════════════════════════════════════════════
+
+    private string CmdWorldGen(System.Text.Json.Nodes.JsonNode node) {
+        // All params are optional; missing fields fall back to WorldGeneratorParams defaults.
+        var p = new WorldGeneratorParams {
+            Seed = node["seed"]?.GetValue<int>() ?? 0,
+            FullWorld = node["fullWorld"]?.GetValue<bool>() ?? false,
+            StartX = node["startX"]?.GetValue<int>() ?? 0,
+            StartY = node["startY"]?.GetValue<int>() ?? 0,
+            Width = node["width"]?.GetValue<int>() ?? 20,
+            Height = node["height"]?.GetValue<int>() ?? 20,
+            ContinentCount = node["continentCount"]?.GetValue<int>() ?? 1,
+            IslandCount = node["islandCount"]?.GetValue<int>() ?? 0,
+            LandCoverage = node["landCoverage"]?.GetValue<float>() ?? 0.5f,
+            Roughness = node["roughness"]?.GetValue<float>() ?? 0.5f,
+            TownCount = node["townCount"]?.GetValue<int>() ?? 5,
+            TownSpacing = node["townSpacing"]?.GetValue<float>() ?? 30f,
+            GenerateRoads = node["generateRoads"]?.GetValue<bool>() ?? true,
+            GenerateBuildings = node["generateBuildings"]?.GetValue<bool>() ?? true,
+            RetailTownBuildingsOnly = node["retailTownBuildingsOnly"]?.GetValue<bool>() ?? false,
+        };
+        var outPath = node["outputPath"]?.GetValue<string>();
+        var r = _engine.WorldGenDryRun(p, outPath);
+        return Serialize(new { success = r.Success, command = "worldgen",
+            seed = r.Seed,
+            terrainLandblocksAffected = r.TerrainLandblocksAffected,
+            totalVerticesModified = r.TotalVerticesModified,
+            townCount = r.TownCount,
+            totalBuildingsPlaced = r.TotalBuildingsPlaced,
+            totalDecorationsPlaced = r.TotalDecorationsPlaced,
+            totalRoadVertices = r.TotalRoadVertices,
+            towns = r.Towns,
+            outputPath = r.OutputPath, error = r.Error });
+    }
+
+    private string CmdWorldGenAnalyzeBuildings(System.Text.Json.Nodes.JsonNode node) {
+        var outPath = node["outputPath"]?.GetValue<string>();
+        var r = _engine.WorldGenAnalyzeBuildings(outPath);
+        return Serialize(new { success = r.Success, command = "worldgen-analyze-buildings",
+            total = r.Total, withInterior = r.WithInterior, paired = r.Paired,
+            buildings = r.Buildings, outputPath = r.OutputPath, error = r.Error });
+    }
+
+    private string CmdWorldGenScanRetailTowns(System.Text.Json.Nodes.JsonNode node) {
+        var outPath = node["outputPath"]?.GetValue<string>();
+        var r = _engine.WorldGenScanRetailTowns(outPath);
+        return Serialize(new { success = r.Success, command = "worldgen-scan-retail-towns",
+            modelCount = r.ModelCount, stats = r.Stats,
+            outputPath = r.OutputPath, error = r.Error });
     }
 
     // ════════════════════════════════════════════════════

@@ -886,6 +886,43 @@ public record RemapBuildingsSqlResult(
     List<string>? Warnings = null,
     string? Error = null);
 
+// ── WorldGen (slice 3 of f26345e) ──────────────────────────
+public record TownSummary(string Name, string SizeLabel,
+    int CenterLbX, int CenterLbY,
+    float CenterX, float CenterY, float CenterZ,
+    float Radius, int BuildingCount);
+
+public record WorldGenResult(
+    bool Success, int Seed,
+    int TerrainLandblocksAffected, int TotalVerticesModified,
+    int TownCount, int TotalBuildingsPlaced, int TotalDecorationsPlaced,
+    int TotalRoadVertices,
+    List<TownSummary> Towns,
+    string? OutputPath = null,
+    string? Error = null);
+
+public record BuildingProfileSummary(
+    uint ModelId, string HexId, uint NumLeaves,
+    int CellCount, int PortalCount, int TotalStatics,
+    int OccurrenceCount, int UniqueLandblocks,
+    bool HasInterior, bool IsPairedHalf);
+
+public record AnalyzeBuildingsResult(
+    bool Success, int Total, int WithInterior, int Paired,
+    List<BuildingProfileSummary> Buildings,
+    string? OutputPath = null,
+    string? Error = null);
+
+public record RetailTownStat(uint ModelId, string HexId,
+    int TownLandblockHits, int SingletonTownHits,
+    int MaxCopiesInOneTownLb, float SingletonRatio);
+
+public record ScanRetailTownsResult(
+    bool Success, int ModelCount,
+    List<RetailTownStat> Stats,
+    string? OutputPath = null,
+    string? Error = null);
+
 // ── Weenie / ACE DB (slice 2 of f26345e) ───────────────────
 public record WeenieSnapshotResult(
     bool Success,
