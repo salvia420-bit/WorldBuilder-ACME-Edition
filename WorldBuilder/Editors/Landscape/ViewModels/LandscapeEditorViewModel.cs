@@ -216,8 +216,25 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
             LeftPanelTitle = "Object Browser";
 
             TerrainSystem.Scene.LandblockIntegrated += OnLandblockIntegrated;
+            ObjectBrowser.WeenieSetupsLoaded += OnWeenieSetupsLoaded;
 
             InitDocking();
+        }
+
+        private void OnWeenieSetupsLoaded(object? sender, IReadOnlyList<(uint WeenieClassId, uint SetupId)> mappings) {
+            bool anyNew = false;
+            foreach (var (wcid, setupId) in mappings) {
+                if (setupId != 0 && _weenieSetupCache.TryAdd(wcid, setupId))
+                    anyNew = true;
+            }
+            if (anyNew) ReloadAllWeenieSpawns();
+        }
+
+        private void ReloadAllWeenieSpawns() {
+            foreach (var lbKey in _weenieLoadedLandblocks.Keys.ToList()) {
+                _weenieLoadedLandblocks.TryRemove(lbKey, out _);
+                _ = LoadWeenieSpawnsForLandblockAsync(lbKey);
+            }
         }
 
         private void InitDocking() {

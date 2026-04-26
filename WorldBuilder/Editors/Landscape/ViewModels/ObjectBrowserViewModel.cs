@@ -1,6 +1,7 @@
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using DatReaderWriter;
 using DatReaderWriter.DBObjs;
 using System;
 using System.Collections.Generic;
@@ -28,6 +29,7 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
         private bool _subscribedToThumbnailReady;
         private uint[] _allSetupIds = Array.Empty<uint>();
         private uint[] _allGfxObjIds = Array.Empty<uint>();
+        private uint[] _allParticleEmitterIds = Array.Empty<uint>();
         private HashSet<uint> _buildingIds = new();
         private bool _buildingIdsLoaded;
         private HashSet<uint> _sceneryIds = new();
@@ -44,6 +46,16 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
         [ObservableProperty] private bool _showGfxObjs = true;
         [ObservableProperty] private bool _showBuildingsOnly;
         [ObservableProperty] private bool _showSceneryOnly;
+        /// <summary>When true, particle emitter definitions are included in the browser list (loaded from portal.dat).</summary>
+        [ObservableProperty] private bool _showParticleEmitters = true;
+
+        /// <summary>
+        /// Fired when a batch of (WeenieClassId, SetupId) mappings has been resolved
+        /// — usually by the manual "Load Weenies (DB)" action. Subscribers (e.g.
+        /// LandscapeEditorViewModel's spawn-rendering cache) can warm their own
+        /// caches without re-querying the DB.
+        /// </summary>
+        public event EventHandler<IReadOnlyList<(uint WeenieClassId, uint SetupId)>>? WeenieSetupsLoaded;
 
         /// <summary>
         /// Gets the tag index for use by the view (e.g., tooltips).
@@ -64,7 +76,14 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
             try {
                 _allSetupIds = _dats.Dats.Portal.GetAllIdsOfType<Setup>().OrderBy(id => id).ToArray();
                 _allGfxObjIds = _dats.Dats.Portal.GetAllIdsOfType<GfxObj>().OrderBy(id => id).ToArray();
-                Console.WriteLine($"[ObjectBrowser] Loaded {_allSetupIds.Length} Setups, {_allGfxObjIds.Length} GfxObjs");
+                try {
+                    _allParticleEmitterIds = _dats.Dats.Portal.GetAllIdsOfType<ParticleEmitter>().OrderBy(id => id).ToArray();
+                }
+                catch (Exception pex) {
+                    Console.WriteLine($"[ObjectBrowser] ParticleEmitter ID listing failed: {pex.Message}");
+                    _allParticleEmitterIds = Array.Empty<uint>();
+                }
+                Console.WriteLine($"[ObjectBrowser] Loaded {_allSetupIds.Length} Setups, {_allGfxObjIds.Length} GfxObjs, {_allParticleEmitterIds.Length} ParticleEmitters");
             }
             catch (Exception ex) {
                 Console.WriteLine($"[ObjectBrowser] Error loading object IDs: {ex.Message}");
