@@ -338,6 +338,136 @@ namespace WorldBuilder.Editors.Dungeon {
             }
         }
 
+        /// <summary>
+        /// Decode texture data to a CPU bitmap. Tries <see cref="RenderSurface"/> at <paramref name="surfaceId"/> first
+        /// (UI/layout media and icons use 0x06… ids), then the <see cref="Surface"/> → <see cref="SurfaceTexture"/> chain (0x08…).
+        /// Used by both the Surface Browser thumbnail path and the Layout editor's media preview.
+        /// </summary>
+        internal static WriteableBitmap? DecodeSurfaceToBitmap(uint surfaceId, IDatReaderWriter dats, int maxEdge) {
+            try {
+                if (dats.TryGet<RenderSurface>(surfaceId, out var rsDirect) && rsDirect != null) {
+                    var fromRs = TryBitmapFromRenderSurface(rsDirect, dats, maxEdge);
+                    if (fromRs != null) return fromRs;
+                }
+
+                if (!dats.TryGet<Surface>(surfaceId, out var surface) || surface == null) return null;
+
+                bool isSolid = surface.Type.HasFlag(SurfaceType.Base1Solid);
+                if (isSolid) {
+                    var solidData = TextureHelpers.CreateSolidColorTexture(surface.ColorValue, maxEdge, maxEdge);
+                    return CreateBitmap(solidData, maxEdge, maxEdge);
+                }
+
+                if (!dats.TryGet<SurfaceTexture>(surface.OrigTextureId, out var surfaceTexture) ||
+                    surfaceTexture.Textures?.Any() != true) {
+                    return null;
+                }
+
+                var renderSurfaceId = surfaceTexture.Textures.Last();
+                if (!dats.TryGet<RenderSurface>(renderSurfaceId, out var renderSurface) || renderSurface == null)
+                    return null;
+
+                return TryBitmapFromRenderSurface(renderSurface, dats, maxEdge);
+            }
+            catch {
+                return null;
+            }
+        }
+
+        const long MaxDecodePixels = 4096L * 4096L;
+
+        static WriteableBitmap? TryBitmapFromRenderSurface(RenderSurface renderSurface, IDatReaderWriter dats, int maxEdge) {
+            var src = renderSurface.SourceData;
+            int w = renderSurface.Width, h = renderSurface.Height;
+            if (src == null || src.Length == 0 || w <= 0 || h <= 0) return null;
+            if ((long)w * h > MaxDecodePixels) return null;
+
+            byte[]? rgba = null;
+
+            try {
+                switch (renderSurface.Format) {
+                    case DatReaderWriter.Enums.PixelFormat.PFID_A8R8G8B8:
+                        if (src.Length < (long)w * h * 4) return null;
+                        rgba = DatIconLoader.SwizzleBgraToRgba(src, w * h);
+                        break;
+
+                    case DatReaderWriter.Enums.PixelFormat.PFID_R8G8B8:
+                        if (src.Length < (long)w * h * 3) return null;
+                        rgba = new byte[w * h * 4];
+                        for (int i = 0; i < w * h; i++) {
+                            rgba[i * 4 + 0] = src[i * 3 + 2];
+                            rgba[i * 4 + 1] = src[i * 3 + 1];
+                            rgba[i * 4 + 2] = src[i * 3 + 0];
+                            rgba[i * 4 + 3] = 255;
+                        }
+                        break;
+
+                    case DatReaderWriter.Enums.PixelFormat.PFID_INDEX16:
+                        if (src.Length < (long)w * h * 2) return null;
+                        if (!dats.TryGet<Palette>(renderSurface.DefaultPaletteId, out var palette) ||
+                            palette.Colors == null || palette.Colors.Count == 0) return null;
+                        rgba = new byte[w * h * 4];
+                        FillIndex16Safe(src, palette, rgba.AsSpan(), w, h);
+                        break;
+
+                    case DatReaderWriter.Enums.PixelFormat.PFID_DXT1:
+                        rgba = DecompressDxt1(src, w, h);
+                        break;
+
+                    case DatReaderWriter.Enums.PixelFormat.PFID_DXT3:
+                    case DatReaderWriter.Enums.PixelFormat.PFID_DXT5:
+                        rgba = DecompressDxt5(src, w, h,
+                            renderSurface.Format == DatReaderWriter.Enums.PixelFormat.PFID_DXT3);
+                        break;
+
+                    default:
+                        return null;
+                }
+            }
+            catch {
+                return null;
+            }
+
+            if (rgba == null) return null;
+            int dw = maxEdge, dh = maxEdge;
+            if (w > h) {
+                dh = System.Math.Max(1, h * maxEdge / w);
+            }
+            else if (h > w) {
+                dw = System.Math.Max(1, w * maxEdge / h);
+            }
+            if (w != dw || h != dh) {
+                rgba = DownsampleNearest(rgba, w, h, dw, dh);
+            }
+            return CreateBitmap(rgba, dw, dh);
+        }
+
+        /// <summary>
+        /// Like <see cref="TextureHelpers.FillIndex16"/> but skips out-of-range palette indices (corrupt UI mips).
+        /// </summary>
+        static void FillIndex16Safe(byte[] src, Palette palette, Span<byte> dst, int width, int height) {
+            int palCount = palette.Colors.Count;
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    var srcIdx = (y * width + x) * 2;
+                    var palIdx = (ushort)(src[srcIdx] | (src[srcIdx + 1] << 8));
+                    var dstIdx = (y * width + x) * 4;
+                    if (palIdx >= palCount) {
+                        dst[dstIdx + 0] = 0;
+                        dst[dstIdx + 1] = 0;
+                        dst[dstIdx + 2] = 0;
+                        dst[dstIdx + 3] = 0;
+                        continue;
+                    }
+                    var color = palette.Colors[palIdx];
+                    dst[dstIdx + 0] = color.Red;
+                    dst[dstIdx + 1] = color.Green;
+                    dst[dstIdx + 2] = color.Blue;
+                    dst[dstIdx + 3] = color.Alpha;
+                }
+            }
+        }
+
         internal static WriteableBitmap CreateBitmap(byte[] rgba, int width, int height) {
             var bitmap = new WriteableBitmap(
                 new PixelSize(width, height),
@@ -364,7 +494,7 @@ namespace WorldBuilder.Editors.Dungeon {
             return dst;
         }
 
-        private static byte[] DecompressDxt1(byte[] data, int width, int height) {
+        internal static byte[] DecompressDxt1(byte[] data, int width, int height) {
             var rgba = new byte[width * height * 4];
             int blocksW = Math.Max(1, (width + 3) / 4);
             int blocksH = Math.Max(1, (height + 3) / 4);
@@ -407,7 +537,7 @@ namespace WorldBuilder.Editors.Dungeon {
             return rgba;
         }
 
-        private static byte[] DecompressDxt5(byte[] data, int width, int height, bool isDxt3) {
+        internal static byte[] DecompressDxt5(byte[] data, int width, int height, bool isDxt3) {
             var rgba = new byte[width * height * 4];
             int blocksW = Math.Max(1, (width + 3) / 4);
             int blocksH = Math.Max(1, (height + 3) / 4);
