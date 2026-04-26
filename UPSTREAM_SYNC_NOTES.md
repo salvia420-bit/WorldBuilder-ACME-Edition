@@ -88,7 +88,7 @@ Sorted chronologically.
 | `cd3e377` | 03-12 | dungeon 'world template' WIP | many | medium | 🔒 DEFERRED | Dungeon refactor chain. |
 | `6a317bc` | 03-12 | world mini map fix, remove templates | 26 | +116/-604 | 🔒 DEFERRED | Mostly DELETIONS (template removal). Don't port without verifying we want those deletions. |
 | `0998c38` | 03-13 | landscape refactor, dungeon scene + settings | 51 | +1 197/-358 | 🔒 DEFERRED | Big landscape refactor. |
-| `f26345e` | 03-22 | weenie editor, layout overhaul, transform gizmo, world gen, mesh import/export, texture | 86 | +10 452/-661 | 🟡 PARTIAL | See "f26345e split into 4 slices" below. Slices 1-3 (headless) ✅ PORTED. Slice 4 (GUI) ✅ waves A-D, ⏳ waves E-G remain. |
+| `f26345e` | 03-22 | weenie editor, layout overhaul, transform gizmo, world gen, mesh import/export, texture | 86 | +10 452/-661 | 🟡 PARTIAL | See "f26345e split into 4 slices" below. Slices 1-3 (headless) ✅ PORTED. Slice 4 waves A-E ✅, G ✅. Wave F (Layout editor overhaul) ⏳ deferred. |
 | `fa7c58c` | 03-22 | Surface browser paging + dungeon scan fixes | 6 | +479/-75 | ⏳ TODO | Smaller; check feasibility. |
 | `ee39f71` | 03-22 | fix dungeon export crash on corrupt setup | 1 | +9/-1 | 🚫 BLOCKED | Needs `SanitizeEnvCellSurfacesForExport` (hundreds of lines of upstream `DungeonDocument.cs` we don't have). |
 | `4dc3983` | 03-23 | Weenie property enums + DID/int pickers | many | medium | ⏳ TODO | Cluster B (weenie/spell editor). |
@@ -109,7 +109,7 @@ Sorted chronologically.
 
 ### Tally
 - **7 ✅ PORTED** (in the side branch we just merged)
-- **1 🟡 PARTIAL** (`f26345e` slices 1-3 + slice 4 waves A-D done; waves E-G remain)
+- **1 🟡 PARTIAL** (`f26345e` slices 1-3 ✅ + slice 4 waves A, B, C, D, E, G ✅; wave F (Layout editor) ⏳)
 - **5 🚫 BLOCKED** (attempted, prereq gap documented above)
 - **14 🔒 DEFERRED** (large refactors or stacked dungeon-chain — port only with in-game testing)
 - **1 🔧 PERMISSIONS** (just needs the right token to push)
@@ -158,7 +158,7 @@ Headless wired via 3 commands: `worldgen` (dry-run + `--apply` flag for
 TerrainDocument/LandblockDocument writes), `worldgen-analyze-buildings`,
 `worldgen-scan-retail-towns`.
 
-### Slice 4 — GUI changes 🟡 in progress
+### Slice 4 — GUI changes 🟡 in progress (waves A-E + G done; F deferred)
 Branch: `sync/f26345e-slice4-gui` (stacked on slice 3)
 
 Decomposed into waves:
@@ -217,40 +217,78 @@ toggles).
   RenderSurfaceWithReplacedPixels, IsRenderSurfaceDatId), plus
   EnsureGidsAllocated filters out deprecated UiRenderSurface entries.
 
-**Wave G** 🟡 partial:
+**Wave G** ✅ landed:
 - GameScene.RenderTransformGizmo + TryGetParticleGfxId + TryGetStaticDrawModel
   helpers added; render call sits alongside RenderSelectionHighlight
-  in the per-frame render loop. Gizmo is now end-to-end functional in
-  the landscape editor.
-- Still un-ported from GameScene's +328 line diff: particle simulation
-  pipeline (CollectParticleDraws + _particleEmitters dict + additive
-  blend mode), weenie-spawn rendering pipeline (_weenieSpawnObjects +
-  SetWeenieSpawns), model warmup queue (_pendingModelWarmup +
-  DrainPendingModelWarmup), visibility-change hash. These would need
-  a RenderStaticObjectsPreTransformed method that local doesn't have
-  (local renders by reconstructing transforms inside RenderStaticObjects
-  rather than receiving them).
-- LandscapeEditorViewModel +490 still mostly untouched — the small
-  pieces (ShowParticles/ShowWeenieSpawns, GenerateWorldCommand) landed
-  in wave E above; the rest (gizmo state, scene wiring through to
-  ObjectSelection, etc.) is the hardest merge in this slice.
+  in the per-frame render loop.
+- RenderStaticObjectsPreTransformed (with EnsureUploadBuffer +
+  WriteMatrixToBuffer + BatchDrawEntry) ported — accepts a parallel
+  list of pre-computed transforms (needed for particles).
+- Particle simulation pipeline ported: _particleEmitters dict per
+  (lbKey, index), CollectParticleDraws, ParticleAnchorInFrustum,
+  per-frame Begin/Advance, additive-blend render call. Particles in
+  the visible-objects loop are skipped (rendered separately). Cache
+  cleared on InvalidateStaticObjectsCache + ClearAllChunks.
+- Weenie spawn pipeline ported: _weenieSpawnObjects ConcurrentDictionary
+  with SetWeenieSpawns/ClearWeenieSpawns/ClearAllWeenieSpawns API.
+  GetAllStaticObjects folds spawns in when ShowWeenieSpawns is true;
+  cleanup hooks in both landblock-unload paths.
+- LandblockIntegrated event on GameScene fires when background-loaded
+  landblocks fold into the scene.
+- LandblockInstanceRecord gains AnglesW/X/Y/Z fields.
+- AceDbConnector.GetInstancesAsync(landblockId, cellMin, cellMax,
+  includeAngles) for single-landblock outdoor queries.
+- LandscapeEditorViewModel weenie spawn loading: ShowWeenieSpawns
+  setter triggers LoadWeenieSpawnsForLoadedLandblocks; subscribes to
+  Scene.LandblockIntegrated for newly-loaded landblocks; ACE DB
+  connection + spawn-fetch + setup-DID resolve + StaticObject build +
+  Scene.SetWeenieSpawns; SemaphoreSlim caps DB concurrency at 8.
+- ObjectBrowserViewModel.WeenieSetupsLoaded event fires; LandscapeEditor
+  ReloadAllWeenieSpawns when new mappings arrive so already-rendered
+  landblocks refresh.
+
+**Skipped from upstream's Wave G** (deliberately):
+- _pendingModelWarmup queue + DrainPendingModelWarmup helper — would
+  smooth weenie-spawn mesh loading. Without it, spawns pointing at
+  models not yet warmed will silently skip until something else
+  triggers a load. Worth revisiting if it shows up in practice.
+- _lastSpawnDiag log throttling — diagnostic only.
+- _lastVisibleCellHash visibility-cache hash refinement — perf only.
+- The fancy GenerateWorld replacement in LandscapeEditorViewModel
+  (minimap data + progress dialog + town summary panel + CSV export).
+  See "the big GenerateWorld upgrade remaining" below.
 
 **Wave F** ⏳ deferred:
 - Layout editor overhaul: LayoutEditorViewModel (+416), LayoutPreviewCanvas
-  (+260), LayoutEditorView axaml (+188) + axaml.cs (+85). Local has 57
-  / 60 / 6 / 2 own lines respectively, so a clean replace would lose
-  local edits. A careful merge is needed; not started.
+  (+260), LayoutEditorView axaml (+188) + axaml.cs (+85). The four
+  files are tightly coupled — the VM gains many new property names
+  (`ElementGeomXText/YText/WidthText/HeightText/ZText/LeftText/TopText/
+  RightText/BottomText`, `ElementReadOrderText`, `ElementTextures`)
+  and `ElementTreeNode` gains `PropertyChanged` + `SetBounds` that the
+  axaml.cs and PreviewCanvas both consume. Local has its own 100+ LOC
+  of `LayoutEditorViewModel` work (custom `LayoutListItem` ctor,
+  `BaseLayoutId/BaseLayoutHex` properties, `Summary` field) that a
+  wholesale upstream replace would clobber. A careful four-file
+  synchronized port is needed; not started.
 
-**Other deferred from f26345e:**
-- ObjectBrowserViewModel (+135 upstream / 71 local divergent — particle/
-  weenie loading, picker filter logic).
-- ObjectBrowserView.axaml particle/weenie checkboxes (depend on the VM).
-- SurfaceBrowserViewModel paging (+112 upstream / many local — local
-  has its own ObservableCollection-based shape).
-- StaticObjectManager remaining ~96 LOC (vertex-array Dictionary access
-  refinements, recursive part release).
-- Particle and weenie-spawn rendering in GameScene (~120 LOC, blocked
-  on porting RenderStaticObjectsPreTransformed first).
+**Wave E partial follow-ups remaining:**
+- ObjectBrowserViewModel BuildItems hasn't been taught to USE the new
+  ShowParticleEmitters flag yet (just declares + scans the IDs). The
+  particle entries won't show up in the browser until the BuildItems
+  filter is extended.
+- StaticObjectManager Vertices.TryGetValue refinements (defensive
+  against missing vertex keys) — skipped because we currently throw,
+  which surfaces bugs faster.
+- TextureAtlasManager.FlushMipmaps calls — Chorizite NuGet pin (0.0.17)
+  doesn't expose the method. Bump the package or skip permanently.
+
+**The big GenerateWorld upgrade remaining:**
+- Upstream replaces our simple Wave E GenerateWorld with one that
+  shows a progress dialog, runs Generate on a Task, and after the
+  result builds a town summary panel + CSV export. Depends on
+  LandblockDocument.ClearAllStatics, TerrainDocument.ApplyBulkImport,
+  DocumentManager.SkipDatStatics, Scene.QueueModelWarmup — none of
+  which are ported. Our simpler version still works.
 
 ## Workflow for porting future commits
 
