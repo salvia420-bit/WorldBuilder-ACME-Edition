@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using WorldBuilder.Shared.Documents;
+using WorldBuilder.Shared.Lib;
 using WorldBuilder.Shared.Lib.Dungeon;
 
 namespace WorldBuilder.Shared.Lib.Validation;
@@ -47,6 +48,20 @@ public record ValidationReport(
 /// </summary>
 public static class ValidationEngine {
     public const float DefaultCliffThreshold = 12f;
+
+    // ── Footprint flushness thresholds (LBK010) ──
+    // A corner of a Structure is "not flush" when terrain at that corner
+    // differs from the modelled foundation by more than these tolerances.
+    // Values are in world units (≈ metres).
+    public const float FootprintCornerFlushTol = 0.25f;
+    public const float FootprintCornerSinkErrorTol = 1.0f;
+    // Halo around the perimeter (2 m by default) where terrain is allowed to
+    // dip below the foundation by up to BasementDepth + this slack, since
+    // basements legitimately protrude into the immediate surroundings.
+    public const float FootprintHaloRadius = 2.0f;
+    public const float FootprintHaloSlack = 0.5f;
+    // Per-corner BasementDepth fallback when ontology has no value.
+    public const float DefaultBasementDepth = 0.0f;
 
     // ════════════════════════════════════════════════════════════
     //  Dungeon validation
@@ -208,7 +223,8 @@ public static class ValidationEngine {
         LandblockDocument lbDoc,
         ushort lbKey,
         Func<float, float, float>? heightLookup = null,
-        IDatReaderWriter? dats = null) {
+        IDatReaderWriter? dats = null,
+        Func<uint, OntologyEntry?>? ontologyLookup = null) {
 
         var diagnostics = new List<ValidationDiagnostic>();
         var target = $"landblock_{lbKey:X4}";
@@ -260,6 +276,21 @@ public static class ValidationEngine {
                     }
                 } catch {
                     // Height lookup may fail for positions outside loaded terrain
+                }
+            }
+
+            // ── Footprint flushness (LBK010) ──
+            // Sample terrain at each corner of the building's modelled
+            // footprint and flag corners that sink into or stick out of the
+            // ground beyond a tight tolerance. Only meaningful for objects
+            // we've classified as Structures (houses, walls, towers); skipped
+            // for props/scenery/creatures whose visible base needn't be flush.
+            if (heightLookup != null && ontologyLookup != null) {
+                var entry = ontologyLookup(obj.Id);
+                if (entry?.Category == "Structure" && entry.FootprintCorners.Length >= 3) {
+                    EvaluateFootprintFlushness(
+                        obj.Id, prefix, obj.Origin, obj.Orientation,
+                        entry, heightLookup, diagnostics);
                 }
             }
 
@@ -616,7 +647,8 @@ public static class ValidationEngine {
         float[]? heightTable,
         Func<float, float, float>? heightLookup,
         IDatReaderWriter? dats,
-        float cliffThreshold = DefaultCliffThreshold) {
+        float cliffThreshold = DefaultCliffThreshold,
+        Func<uint, OntologyEntry?>? ontologyLookup = null) {
 
         var allDiagnostics = new List<ValidationDiagnostic>();
         var target = $"all_{lbKey:X4}";
@@ -629,7 +661,7 @@ public static class ValidationEngine {
 
         // ── Landblock objects ──
         if (lbDoc != null) {
-            var r = ValidateLandblock(lbDoc, lbKey, heightLookup, dats);
+            var r = ValidateLandblock(lbDoc, lbKey, heightLookup, dats, ontologyLookup);
             allDiagnostics.AddRange(r.Diagnostics);
         }
 
@@ -724,5 +756,138 @@ public static class ValidationEngine {
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Evaluates corner-flushness for a single Structure-classified object.
+    /// Samples terrain at each footprint corner (rotated by the placement
+    /// quaternion and translated to world space) and at perimeter midpoints,
+    /// then flags corners where terrain materially deviates from the modelled
+    /// foundation Z. Also samples a 2 m halo to detect basements that
+    /// protrude into significantly lower terrain.
+    /// </summary>
+    private static void EvaluateFootprintFlushness(
+        uint objectId,
+        string prefix,
+        Vector3 origin,
+        Quaternion orientation,
+        OntologyEntry entry,
+        Func<float, float, float> heightLookup,
+        List<ValidationDiagnostic> diagnostics) {
+
+        var corners = entry.FootprintCorners;
+        int n = corners.Length;
+        if (n < 3) return;
+
+        // Foundation Z in world space: the model-local Z of the bottom-storey
+        // ring projected to world coordinates by adding the placement origin Z.
+        float foundationWorldZ = origin.Z + entry.FoundationZ;
+        float basementDepth = MathF.Max(0f, entry.BasementDepth);
+
+        float worstSink = 0f;       // terrain above foundation by this much
+        float worstStickup = 0f;    // foundation above terrain by this much
+        int sinkCount = 0, stickupCount = 0;
+
+        // Sample each corner.
+        for (int i = 0; i < n; i++) {
+            var (wx, wy) = TransformLocalXYToWorld(corners[i], orientation, origin);
+            float? gap = SampleFlushGap(wx, wy, foundationWorldZ, heightLookup);
+            if (gap == null) continue;
+            UpdateExtremes(gap.Value, ref worstSink, ref worstStickup, ref sinkCount, ref stickupCount);
+        }
+
+        // Sample perimeter midpoints — catches walls that cross a slope
+        // between two corner samples.
+        for (int i = 0; i < n; i++) {
+            var midLocal = (corners[i] + corners[(i + 1) % n]) * 0.5f;
+            var (wx, wy) = TransformLocalXYToWorld(midLocal, orientation, origin);
+            float? gap = SampleFlushGap(wx, wy, foundationWorldZ, heightLookup);
+            if (gap == null) continue;
+            UpdateExtremes(gap.Value, ref worstSink, ref worstStickup, ref sinkCount, ref stickupCount);
+        }
+
+        // Halo: corners pushed outward by FootprintHaloRadius along their
+        // outward bisector. In this band, terrain may dip by up to
+        // basementDepth + FootprintHaloSlack without being a problem; deeper
+        // dips suggest the foundation is exposed.
+        var centroid = ComputeCentroid(corners);
+        for (int i = 0; i < n; i++) {
+            var dir = corners[i] - centroid;
+            float len = dir.Length();
+            if (len < 1e-4f) continue;
+            var haloLocal = corners[i] + dir / len * FootprintHaloRadius;
+            var (wx, wy) = TransformLocalXYToWorld(haloLocal, orientation, origin);
+            float terrainZ;
+            try { terrainZ = heightLookup(wx, wy); } catch { continue; }
+            float haloGap = foundationWorldZ - terrainZ; // positive means terrain below foundation
+            float allowedDip = basementDepth + FootprintHaloSlack;
+            if (haloGap > allowedDip) {
+                // Terrain in the halo is more than (basement + slack) below
+                // the foundation — basement is visibly exposed at this corner.
+                diagnostics.Add(new(ValidationSeverity.Info, "LBK010",
+                    $"{prefix} foundation is exposed in the {FootprintHaloRadius:F0}m halo at corner {i}: " +
+                    $"terrain {haloGap:F2}m below foundation (basement depth {basementDepth:F2}m).",
+                    prefix));
+            }
+        }
+
+        // Emit a single severity-graded LBK010 for the worst per-corner result.
+        if (worstSink >= FootprintCornerSinkErrorTol) {
+            diagnostics.Add(new(ValidationSeverity.Error, "LBK010",
+                $"{prefix} is not flush — worst corner sinks {worstSink:F2}m into terrain " +
+                $"({sinkCount} of {n * 2} samples below tolerance).", prefix));
+        } else if (worstSink >= FootprintCornerFlushTol) {
+            diagnostics.Add(new(ValidationSeverity.Warning, "LBK010",
+                $"{prefix} is not flush — worst corner sinks {worstSink:F2}m into terrain " +
+                $"({sinkCount} of {n * 2} samples below tolerance).", prefix));
+        }
+
+        if (worstStickup >= FootprintCornerFlushTol) {
+            diagnostics.Add(new(ValidationSeverity.Warning, "LBK010",
+                $"{prefix} is not flush — worst corner sticks {worstStickup:F2}m above terrain " +
+                $"({stickupCount} of {n * 2} samples above tolerance).", prefix));
+        }
+    }
+
+    private static (float X, float Y) TransformLocalXYToWorld(
+        Vector2 local, Quaternion orientation, Vector3 origin) {
+        // Rotate (local.X, local.Y, 0) by the placement quaternion, then add
+        // the origin XY. We only care about the XY of the result for a 2D
+        // ground-plane sample.
+        var rotated = Vector3.Transform(new Vector3(local.X, local.Y, 0f), orientation);
+        return (origin.X + rotated.X, origin.Y + rotated.Y);
+    }
+
+    private static float? SampleFlushGap(
+        float worldX, float worldY, float foundationZ,
+        Func<float, float, float> heightLookup) {
+        try {
+            float terrainZ = heightLookup(worldX, worldY);
+            // Positive = terrain ABOVE foundation (building sinks into terrain).
+            // Negative = terrain BELOW foundation (corner sticks up).
+            return terrainZ - foundationZ;
+        } catch {
+            return null;
+        }
+    }
+
+    private static void UpdateExtremes(
+        float gap,
+        ref float worstSink, ref float worstStickup,
+        ref int sinkCount, ref int stickupCount) {
+        if (gap > FootprintCornerFlushTol) {
+            sinkCount++;
+            if (gap > worstSink) worstSink = gap;
+        } else if (gap < -FootprintCornerFlushTol) {
+            stickupCount++;
+            float magnitude = -gap;
+            if (magnitude > worstStickup) worstStickup = magnitude;
+        }
+    }
+
+    private static Vector2 ComputeCentroid(Vector2[] points) {
+        var sum = Vector2.Zero;
+        foreach (var p in points) sum += p;
+        return sum / points.Length;
     }
 }

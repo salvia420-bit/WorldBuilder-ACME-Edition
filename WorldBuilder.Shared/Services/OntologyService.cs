@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Numerics;
 using DatReaderWriter.DBObjs;
 using WorldBuilder.Shared.Lib;
+using WorldBuilder.Shared.Lib.Geometry;
 
 namespace WorldBuilder.Shared.Services;
 
@@ -266,6 +267,16 @@ public class OntologyService : IOntologyService {
             entry.ClassificationSource = "Heuristic";
         }
 
+        // Footprint geometry — only interesting for buildable / structure-like
+        // objects. Skip on Furniture/Prop/Creature/Tiny to keep the scan fast.
+        if (entry.Category == "Structure" || entry.Category == "Scenery") {
+            var fp = FootprintExtractor.FromSetup(setup, dats);
+            entry.FootprintShape = fp.Shape;
+            entry.FootprintCorners = fp.Corners;
+            entry.FoundationZ = fp.FoundationZ;
+            entry.BasementDepth = MathF.Max(0f, -fp.FoundationZ);
+        }
+
         // Build tags
         entry.Tags = BuildTags(entry);
 
@@ -294,6 +305,15 @@ public class OntologyService : IOntologyService {
         entry.Category = ClassifyCategoryByHeuristic(
             entry.MaxDimension, entry.AspectRatio, 1, polyCount);
         entry.ClassificationSource = "Heuristic";
+
+        if (entry.Category == "Structure" || entry.Category == "Scenery") {
+            var fp = FootprintExtractor.FromGfxObj(gfxObj);
+            entry.FootprintShape = fp.Shape;
+            entry.FootprintCorners = fp.Corners;
+            entry.FoundationZ = fp.FoundationZ;
+            entry.BasementDepth = MathF.Max(0f, -fp.FoundationZ);
+        }
+
         entry.Tags = BuildTags(entry);
 
         return entry;

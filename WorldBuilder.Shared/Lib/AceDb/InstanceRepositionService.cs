@@ -39,11 +39,25 @@ namespace WorldBuilder.Shared.Lib.AceDb {
             try {
                 using var connector = new AceDbConnector(settings);
 
-                var instances = await connector.GetOutdoorInstancesAsync(ctx.ModifiedLandblocks, ct);
-                result.InstancesChecked = instances.Count;
+                var outdoorInstances = await connector.GetOutdoorInstancesAsync(ctx.ModifiedLandblocks, ct);
+                result.InstancesChecked = outdoorInstances.Count;
                 result.LandblocksProcessed = ctx.ModifiedLandblocks.Count;
 
-                var updates = ComputeDeltas(instances, ctx, settings.Threshold);
+                var updates = ComputeDeltas(outdoorInstances, ctx, settings.Threshold);
+
+                // Indoor pass — only runs when the caller supplied per-
+                // building Z deltas. Indoor NPCs ride their building's
+                // delta directly; terrain Z under interior cells is not
+                // meaningful (the floor is the building, not the ground).
+                if (ctx.IndoorBuildingDeltas != null && ctx.IndoorBuildingDeltas.Count > 0) {
+                    var indoorLandblocks = ctx.IndoorBuildingDeltas
+                        .Select(d => d.LandblockId).Distinct().ToList();
+                    var indoorInstances = await connector.GetIndoorInstancesAsync(indoorLandblocks, ct);
+                    result.InstancesChecked += indoorInstances.Count;
+                    var indoorUpdates = ComputeIndoorDeltas(indoorInstances, ctx, settings.Threshold);
+                    updates.AddRange(indoorUpdates);
+                }
+
                 result.InstancesUpdated = updates.Count;
 
                 if (updates.Count > 0) {
@@ -103,6 +117,46 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                     NewTerrainZ = newZ,
                     Delta = delta,
                     NewOriginZ = inst.OriginZ + delta
+                });
+            }
+
+            return updates;
+        }
+
+        /// <summary>
+        /// Indoor pass. For each interior weenie, look up its (landblock, cell)
+        /// in the supplied <see cref="BuildingDelta"/> set and apply the
+        /// building's Z shift directly. No terrain sampling — interior cells
+        /// are not on terrain, they're attached to the building.
+        /// </summary>
+        private List<InstanceUpdate> ComputeIndoorDeltas(
+            List<LandblockInstanceRecord> instances,
+            RepositionContext ctx,
+            float threshold) {
+
+            var updates = new List<InstanceUpdate>();
+            if (ctx.IndoorBuildingDeltas == null || ctx.IndoorBuildingDeltas.Count == 0)
+                return updates;
+
+            // Build (landblockId, cellId) → deltaZ index for O(1) lookup.
+            var deltaByCell = new Dictionary<(ushort lb, ushort cell), float>();
+            foreach (var bd in ctx.IndoorBuildingDeltas) {
+                foreach (var cell in bd.OldCellIds) {
+                    deltaByCell[(bd.LandblockId, cell)] = bd.DeltaZ;
+                }
+            }
+
+            foreach (var inst in instances) {
+                if (inst.IsOutdoor) continue;
+                if (!deltaByCell.TryGetValue((inst.LandblockId, inst.CellId), out float dz)) continue;
+                if (MathF.Abs(dz) < threshold) continue;
+
+                updates.Add(new InstanceUpdate {
+                    Record = inst,
+                    OldTerrainZ = float.NaN,
+                    NewTerrainZ = float.NaN,
+                    Delta = dz,
+                    NewOriginZ = inst.OriginZ + dz,
                 });
             }
 

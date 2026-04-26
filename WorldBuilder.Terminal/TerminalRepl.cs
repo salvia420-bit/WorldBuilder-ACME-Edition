@@ -1377,11 +1377,11 @@ public class TerminalRepl {
         Console.WriteLine("â•â•â• Validation â•â•â•");
         Console.ResetColor();
         Console.WriteLine("  validate-dungeon <lbX> <lbY>           Validate dungeon structure/portals");
-        Console.WriteLine("  validate-landblock <lbX> <lbY>         Validate landblock objects");
+        Console.WriteLine("  validate-landblock <lbX> <lbY>         Validate landblock objects (LBK010 footprint flush check when ontology is scanned)");
         Console.WriteLine("  validate-terrain <lbX> <lbY> [thresh]  Validate terrain (cliffs, edges)");
         Console.WriteLine("  validate-building-shells <lbX> <lbY>   Validate exterior building shell data");
         Console.WriteLine("  validate-building-portals <lbX> <lbY>  Validate interior EnvCell portal links");
-        Console.WriteLine("  validate-all <lbX> <lbY> [thresh]      Run ALL validators on a landblock");
+        Console.WriteLine("  validate-all <lbX> <lbY> [thresh]      Run ALL validators on a landblock (footprint flush + cliffs + portals)");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
@@ -1499,7 +1499,7 @@ public class TerminalRepl {
         Console.WriteLine("â•â•â• Building Remap â•â•â•");
         Console.ResetColor();
         Console.WriteLine("  remap-buildings <lb_remap.json> <out_dir> [--apply]  Move buildings + SQL");
-        Console.WriteLine("  remap-buildings-v2 <lb_remap.json> [--flatten-radius=N] [--flatten-strength=S] [--no-validate] [--preserve-retail-z]  Layer pipeline remap");
+        Console.WriteLine("  remap-buildings-v2 <lb_remap.json> [--flatten-radius=N] [--flatten-strength=S] [--no-validate] [--preserve-retail-z]  Footprint-aware flush placement; doors ride buildings");
         Console.WriteLine("  remap-buildings-sql <lb_remap.json> <export_dir> <out.sql> [--apply]  Interior cell remap SQL");
         Console.WriteLine();
 

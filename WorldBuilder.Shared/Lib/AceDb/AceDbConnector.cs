@@ -73,6 +73,50 @@ namespace WorldBuilder.Shared.Lib.AceDb {
         }
 
         /// <summary>
+        /// Queries indoor (interior cell) landblock_instance rows for the
+        /// given landblocks. Indoor cells are 0x0100–0xFFFD. Used by the
+        /// reposition service's indoor pass — these NPCs need to ride the
+        /// building's Z delta, not the terrain delta.
+        /// </summary>
+        public async Task<List<LandblockInstanceRecord>> GetIndoorInstancesAsync(
+            IEnumerable<ushort> landblockIds, CancellationToken ct = default) {
+
+            var results = new List<LandblockInstanceRecord>();
+            await using var conn = new MySqlConnection(_settings.ConnectionString);
+            await conn.OpenAsync(ct);
+
+            foreach (var lbId in landblockIds) {
+                uint lbIdShifted = (uint)lbId << 16;
+                uint minCellId = lbIdShifted | 0x0100;
+                uint maxCellId = lbIdShifted | 0xFFFD;
+
+                const string sql = @"
+                    SELECT `guid`, `weenie_Class_Id`, `obj_Cell_Id`,
+                           `origin_X`, `origin_Y`, `origin_Z`
+                    FROM `landblock_instance`
+                    WHERE `obj_Cell_Id` >= @minCell AND `obj_Cell_Id` <= @maxCell";
+
+                await using var cmd = new MySqlCommand(sql, conn);
+                cmd.Parameters.AddWithValue("@minCell", minCellId);
+                cmd.Parameters.AddWithValue("@maxCell", maxCellId);
+
+                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct)) {
+                    results.Add(new LandblockInstanceRecord {
+                        Guid = reader.GetUInt32("guid"),
+                        WeenieClassId = reader.GetUInt32("weenie_Class_Id"),
+                        ObjCellId = reader.GetUInt32("obj_Cell_Id"),
+                        OriginX = reader.GetFloat("origin_X"),
+                        OriginY = reader.GetFloat("origin_Y"),
+                        OriginZ = reader.GetFloat("origin_Z"),
+                    });
+                }
+            }
+
+            return results;
+        }
+
+        /// <summary>
         /// Executes a batch of SQL statements (the generated reposition script) against the database.
         /// </summary>
         public async Task<int> ExecuteSqlAsync(string sql, CancellationToken ct = default) {

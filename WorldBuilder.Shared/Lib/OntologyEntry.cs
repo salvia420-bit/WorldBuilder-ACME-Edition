@@ -84,6 +84,55 @@ public class OntologyEntry {
 
     /// <summary>Creature family name from CreatureType enum (e.g. "drudge", "olthoi").</summary>
     public string? CreatureFamilyName { get; set; }
+
+    // ── Footprint geometry (used by validators and the placer) ───────────
+    // These describe the building's interaction with the ground plane:
+    // the 2D shape it occupies, the corner positions that must sit flush
+    // with terrain, and how far the model extends below its origin Z
+    // (the "basement" that justifies a small terrain margin around the
+    // perimeter).
+
+    /// <summary>Classified footprint shape — guides shape-aware placement and validation.</summary>
+    public FootprintShape FootprintShape { get; set; } = FootprintShape.Unknown;
+
+    /// <summary>
+    /// Footprint corners in model-local XY (Z dropped). Ordered CCW around the
+    /// bottom storey. Empty for objects without a meaningful ground footprint.
+    /// </summary>
+    public Vector2[] FootprintCorners { get; set; } = Array.Empty<Vector2>();
+
+    /// <summary>
+    /// Lowest Z among bottom-storey vertices in model-local space. Negative
+    /// when the model has a basement that protrudes below the placement origin.
+    /// </summary>
+    public float FoundationZ { get; set; }
+
+    /// <summary>
+    /// Depth of the basement below origin Z, i.e. max(0, -FoundationZ). The
+    /// validator and placer use this to size the margin around the perimeter
+    /// inside which terrain may legitimately be slightly lower than the building.
+    /// </summary>
+    public float BasementDepth { get; set; }
+}
+
+/// <summary>
+/// Coarse classification of a building's bottom-storey footprint shape. Drives
+/// shape-aware terrain flatten/validation: a hex tower carves a hex, a
+/// fortress wall checks corners against a long thin rectangle, etc.
+/// </summary>
+public enum FootprintShape {
+    /// <summary>No footprint extracted (failed extraction or non-structure).</summary>
+    Unknown,
+    /// <summary>Approximately axis-aligned rectangle (most houses, walls, gates).</summary>
+    Rectangle,
+    /// <summary>Roughly regular 6-gon (e.g. some mage towers).</summary>
+    Hexagon,
+    /// <summary>Roughly regular 8-gon (octagonal towers, some shrines).</summary>
+    Octagon,
+    /// <summary>Many sides, near-circular hull (round towers, wells, fountains).</summary>
+    Round,
+    /// <summary>Convex polygon that doesn't fit any of the above categories.</summary>
+    Polygon,
 }
 
 /// <summary>

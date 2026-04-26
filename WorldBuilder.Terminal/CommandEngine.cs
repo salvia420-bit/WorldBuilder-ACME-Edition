@@ -1021,7 +1021,8 @@ public class CommandEngine {
         var dats = _projectManager.CurrentProject!.DocumentManager.Dats;
         Func<float, float, float>? heightLookup = null;
         try { (_, _, heightLookup) = GetTerrainHelpers(); } catch { }
-        return ValidationEngine.ValidateLandblock(lbDoc, lbKey, heightLookup, dats);
+        var ontoLookup = OntologyLookupOrNull();
+        return ValidationEngine.ValidateLandblock(lbDoc, lbKey, heightLookup, dats, ontoLookup);
     }
 
     public ValidationReport ValidateTerrain(uint lbX, uint lbY, float cliffThreshold = ValidationEngine.DefaultCliffThreshold) {
@@ -1068,7 +1069,18 @@ public class CommandEngine {
         } catch { }
 
         return ValidationEngine.ValidateAll(
-            lbKey, dungeonDoc, lbDoc, terrainDoc, heightTable, heightLookup, dats, cliffThreshold);
+            lbKey, dungeonDoc, lbDoc, terrainDoc, heightTable, heightLookup, dats, cliffThreshold,
+            OntologyLookupOrNull());
+    }
+
+    /// <summary>
+    /// Returns a lookup that resolves an object id to its OntologyEntry, or
+    /// null if no ontology has been scanned yet. The validator uses this to
+    /// drive the LBK010 footprint-flushness check; absence is silent.
+    /// </summary>
+    private Func<uint, WorldBuilder.Shared.Lib.OntologyEntry?>? OntologyLookupOrNull() {
+        if (_ontologyService == null || !_ontologyService.IsScanned) return null;
+        return id => _ontologyService.GetEntry(id);
     }
 
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -7374,8 +7386,6 @@ public class CommandEngine {
             flattenStrength = Math.Clamp(flattenStrength, 0f, 1f);
             BuildingBlueprintCache.ClearPlacementDonorHints();
 
-            const float maxBuildingBurialMeters = 0.1f;
-            const float maxBuildingFloatMeters = 1.0f;
             const float foundationAutoFixThresholdMeters = 0.75f;
             const float foundationResidualWarnThresholdMeters = 1.0f;
 
@@ -7497,6 +7507,57 @@ public class CommandEngine {
                 }
 
                 return sampleCount > 0 ? maxAbsDiff : 0f;
+            }
+
+            // Sample destination terrain at every footprint corner + perimeter
+            // midpoint and return the maximum. AC buildings have flat bottoms,
+            // so taking the max corner means no part of the foundation can stick
+            // out — any sinking happens at the lower corners and is invisible
+            // (under the surface). Returns null when no ontology footprint is
+            // available (caller falls back to a single centre sample).
+            float? SampleFootprintMaxGroundZ(
+                uint modelId, ushort lbKey, float localX, float localY,
+                System.Numerics.Quaternion orientation) {
+                var entry = _ontologyService.IsScanned ? _ontologyService.GetEntry(modelId) : null;
+                var corners = entry?.FootprintCorners;
+                if (corners == null || corners.Length < 3) return null;
+
+                var terrainData = terrainDoc.GetLandblockInternal(lbKey);
+                if (terrainData == null) return null;
+
+                uint lbX = (uint)(lbKey >> 8) & 0xFF;
+                uint lbY = (uint)lbKey & 0xFF;
+
+                float maxZ = float.NegativeInfinity;
+                bool any = false;
+
+                void SampleAt(float lx, float ly) {
+                    // SampleHeightTriangle clamps to [0,192] internally; for
+                    // corners that spill past the landblock edge this gives the
+                    // edge value, which is acceptable.
+                    float clx = Math.Clamp(lx, 0f, 192f);
+                    float cly = Math.Clamp(ly, 0f, 192f);
+                    float z = TerrainHeightSampler.SampleHeightTriangle(
+                        terrainData, heightTable, clx, cly, lbX, lbY);
+                    if (z > maxZ) maxZ = z;
+                    any = true;
+                }
+
+                // Corners
+                for (int i = 0; i < corners.Length; i++) {
+                    var rotated = System.Numerics.Vector3.Transform(
+                        new System.Numerics.Vector3(corners[i].X, corners[i].Y, 0f), orientation);
+                    SampleAt(localX + rotated.X, localY + rotated.Y);
+                }
+                // Perimeter midpoints — catches walls crossing slopes between corners
+                for (int i = 0; i < corners.Length; i++) {
+                    var mid = (corners[i] + corners[(i + 1) % corners.Length]) * 0.5f;
+                    var rotated = System.Numerics.Vector3.Transform(
+                        new System.Numerics.Vector3(mid.X, mid.Y, 0f), orientation);
+                    SampleAt(localX + rotated.X, localY + rotated.Y);
+                }
+
+                return any ? maxZ : (float?)null;
             }
 
             float EstimateModelFootprintRadius(uint modelId) {
@@ -7710,52 +7771,65 @@ public class CommandEngine {
 
                 var destDoc = GetLandblockDoc(newLbKey);
 
-                // 3a. Copy objects (stabs).
-                foreach (var obj in oldLbi.Objects) {
-                    float worldX = newLbX * 192f + obj.Frame.Origin.X;
-                    float worldY = newLbY * 192f + obj.Frame.Origin.Y;
-                    var placement = ComputePlacementDeltaDetailed(oldLbKey, newLbKey, obj.Frame.Origin.X, obj.Frame.Origin.Y, fallbackDeltaZ);
-                    float sourceGroundZ = placement.sourceGroundZ ?? (obj.Frame.Origin.Z - fallbackDeltaZ);
-                    float sourceOriginToGroundOffset = obj.Frame.Origin.Z - sourceGroundZ;
-                    float retainedOriginToGroundOffset = preserveRetailZProfile
-                        ? sourceOriginToGroundOffset
-                        : Math.Clamp(sourceOriginToGroundOffset, -3f, 4f);
-                    float targetGroundZ = placement.destinationGroundZ ?? (sourceGroundZ + fallbackDeltaZ);
-                    float newZ = targetGroundZ + retainedOriginToGroundOffset;
-                    float placedZ = flattenTerrain ? heightTable[FindClosestHeightIdx(newZ)] : newZ;
+                // 3a. Copy buildings FIRST. Buildings define footprints that
+                // doors/decorations ride on, so they must be placed before
+                // Objects so we can test object containment against the
+                // freshly-computed building polygons.
+                //
+                // For each building we record:
+                //   sourceFootprint: 4–N corner polygon in source-LB-local
+                //                    coords, used to test obj containment;
+                //   buildingDeltaZ:  newZ - sourceOriginZ, applied to any
+                //                    Object/door whose XY falls inside.
+                var sourceBuildingFootprints =
+                    new List<(System.Numerics.Vector2[] poly, float deltaZ, uint modelId)>();
 
-                    destDoc.AddStaticObject(new StaticObject {
-                        Id = obj.Id,
-                        IsSetup = (obj.Id & 0x02000000) != 0,
-                        Origin = new Vector3(worldX, worldY, placedZ),
-                        Orientation = obj.Frame.Orientation,
-                        Scale = Vector3.One
-                    });
-
-                    staticObjectsCopied++;
-                }
-
-                // 3b. Copy buildings (shells; interiors handled later via blueprint export).
                 for (int bIdx = 0; bIdx < oldLbi.Buildings.Count; bIdx++) {
                     var building = oldLbi.Buildings[bIdx];
 
                     float worldX = newLbX * 192f + building.Frame.Origin.X;
                     float worldY = newLbY * 192f + building.Frame.Origin.Y;
-                    var placement = ComputePlacementDeltaDetailed(oldLbKey, newLbKey, building.Frame.Origin.X, building.Frame.Origin.Y, fallbackDeltaZ);
-                    float sourceGroundZ = placement.sourceGroundZ ?? (building.Frame.Origin.Z - fallbackDeltaZ);
+
+                    // Centre-sample fallback (used when no ontology footprint
+                    // is available, or to fill in source-side ground Z).
+                    var placement = ComputePlacementDeltaDetailed(
+                        oldLbKey, newLbKey,
+                        building.Frame.Origin.X, building.Frame.Origin.Y, fallbackDeltaZ);
+                    float sourceGroundZ = placement.sourceGroundZ
+                        ?? (building.Frame.Origin.Z - fallbackDeltaZ);
                     float sourceOriginToGroundOffset = building.Frame.Origin.Z - sourceGroundZ;
+
+                    // Footprint-aware destination ground sample (max of
+                    // corner+midpoint heights). AC buildings have flat
+                    // bottoms, so raising the foundation to the highest
+                    // corner means nothing sticks out; the lower corners
+                    // sink invisibly under the surface, which is fine.
+                    float? footprintMaxZ = SampleFootprintMaxGroundZ(
+                        building.ModelId, newLbKey,
+                        building.Frame.Origin.X, building.Frame.Origin.Y,
+                        building.Frame.Orientation);
+                    float targetGroundZ = footprintMaxZ
+                        ?? placement.destinationGroundZ
+                        ?? (sourceGroundZ + fallbackDeltaZ);
+
+                    // Z policy:
+                    //  - preserveRetailZProfile=true: keep the retail
+                    //    origin-to-ground offset exactly (legacy path).
+                    //  - default (flush): place the origin AT targetGroundZ.
+                    //    AC's flat-bottom buildings sit cleanly on the
+                    //    raised-corner ground; the offset is implicitly 0.
                     float retainedOriginToGroundOffset = preserveRetailZProfile
                         ? sourceOriginToGroundOffset
-                        : Math.Clamp(sourceOriginToGroundOffset, -maxBuildingBurialMeters, maxBuildingFloatMeters);
-                    float targetGroundZ = placement.destinationGroundZ ?? (sourceGroundZ + fallbackDeltaZ);
+                        : 0f;
                     float newZ = targetGroundZ + retainedOriginToGroundOffset;
                     float placedZ = flattenTerrain ? heightTable[FindClosestHeightIdx(newZ)] : newZ;
 
                     if (!preserveRetailZProfile &&
-                        Math.Abs(retainedOriginToGroundOffset - sourceOriginToGroundOffset) > 0.01f) {
+                        Math.Abs(sourceOriginToGroundOffset) > 1.0f) {
                         warnings.Add(
-                            $"Building 0x{building.ModelId:X8} in LB 0x{newLbKey:X4}: clamped retail ground offset " +
-                            $"from {sourceOriginToGroundOffset:F2}m to {retainedOriginToGroundOffset:F2}m");
+                            $"Building 0x{building.ModelId:X8} in LB 0x{newLbKey:X4}: " +
+                            $"retail Z profile differed from ground by {sourceOriginToGroundOffset:F2}m " +
+                            $"(replaced with flush placement; doors/NPCs ride the same shift)");
                     }
 
                     destDoc.AddStaticObject(new StaticObject {
@@ -7770,11 +7844,31 @@ public class CommandEngine {
                         building.Frame.Origin.X, building.Frame.Origin.Y, placedZ);
                     BuildingBlueprintCache.RegisterPlacementDonorHint(
                         building.ModelId, newLbKey, destinationLocalOrigin, oldLbKey, bIdx);
-                    // Prime donor-specific blueprint cache from base DATs before export mutates donor landblocks.
                     _ = BuildingBlueprintCache.GetBlueprintFromDonor(
                         building.ModelId, oldLbKey, bIdx, dats);
 
-                    // Flatten terrain to estimated ground level, not model-origin Z.
+                    // Build a source-LB-local footprint polygon for door
+                    // containment tests below. Falls back to None when the
+                    // ontology has no footprint — those buildings still
+                    // place correctly, but their doors will use per-position
+                    // sampling (legacy behaviour).
+                    System.Numerics.Vector2[] sourcePoly = Array.Empty<System.Numerics.Vector2>();
+                    var ontEntry = _ontologyService.IsScanned
+                        ? _ontologyService.GetEntry(building.ModelId) : null;
+                    if (ontEntry?.FootprintCorners is { Length: >= 3 } modelCorners) {
+                        sourcePoly = WorldBuilder.Shared.Lib.Geometry.FootprintGeometry.WorldFootprint(
+                            modelCorners, building.Frame.Orientation,
+                            building.Frame.Origin.X, building.Frame.Origin.Y);
+                    }
+                    float buildingDeltaZ = placedZ - building.Frame.Origin.Z;
+                    if (sourcePoly.Length >= 3) {
+                        sourceBuildingFootprints.Add((sourcePoly, buildingDeltaZ, building.ModelId));
+                    }
+
+                    // Flatten terrain under the building. We still use the
+                    // circumradius for the carve area itself (the carve is
+                    // just an approximation of where to flatten); the Z we
+                    // flatten TO is now the corner-max targetGroundZ.
                     if (flattenTerrain) {
                         float modelRadius = EstimateModelFootprintRadius(building.ModelId);
                         float effectiveFlattenRadius = Math.Clamp(
@@ -7806,15 +7900,79 @@ public class CommandEngine {
                         oldLbKey,
                         oldBuildingIndex = bIdx,
                         newLbKey,
+                        sourceLocalOrigin = new {
+                            x = building.Frame.Origin.X,
+                            y = building.Frame.Origin.Y,
+                            z = building.Frame.Origin.Z
+                        },
                         destinationLocalOrigin = new {
                             x = destinationLocalOrigin.X,
                             y = destinationLocalOrigin.Y,
                             z = destinationLocalOrigin.Z
                         },
+                        // Per-building Z delta. Indoor NPC reposition uses
+                        // this to apply the same shift to every weenie that
+                        // lives in this building's interior cells.
+                        deltaZ = buildingDeltaZ,
                         oldCells = oldCellIds.OrderBy(c => c).ToArray()
                     };
 
                     buildingShellsCopied++;
+                }
+
+                // 3b. Copy objects. Doors and decorations whose XY falls
+                // inside any building's footprint ride that building's Z
+                // delta — they were retail-aligned to the building, not to
+                // the underlying terrain, so independent terrain-sampling
+                // would re-introduce the half-metre door-too-high bug.
+                foreach (var obj in oldLbi.Objects) {
+                    float worldX = newLbX * 192f + obj.Frame.Origin.X;
+                    float worldY = newLbY * 192f + obj.Frame.Origin.Y;
+
+                    float? rideDeltaZ = null;
+                    var objLocalXY = new System.Numerics.Vector2(
+                        obj.Frame.Origin.X, obj.Frame.Origin.Y);
+                    foreach (var (poly, dz, _) in sourceBuildingFootprints) {
+                        if (WorldBuilder.Shared.Lib.Geometry.FootprintGeometry.PointInPolygon(
+                                objLocalXY, poly)) {
+                            rideDeltaZ = dz;
+                            break;
+                        }
+                    }
+
+                    float newZ;
+                    if (rideDeltaZ.HasValue) {
+                        // Inside a building footprint — preserve retail
+                        // relative-to-building Z exactly. No terrain sample,
+                        // no clamp.
+                        newZ = obj.Frame.Origin.Z + rideDeltaZ.Value;
+                    } else {
+                        // Outside any footprint — terrain-relative object
+                        // (statue, post, well). Use per-position sampling.
+                        var placement = ComputePlacementDeltaDetailed(
+                            oldLbKey, newLbKey,
+                            obj.Frame.Origin.X, obj.Frame.Origin.Y, fallbackDeltaZ);
+                        float sourceGroundZ = placement.sourceGroundZ
+                            ?? (obj.Frame.Origin.Z - fallbackDeltaZ);
+                        float sourceOriginToGroundOffset = obj.Frame.Origin.Z - sourceGroundZ;
+                        float retainedOriginToGroundOffset = preserveRetailZProfile
+                            ? sourceOriginToGroundOffset
+                            : Math.Clamp(sourceOriginToGroundOffset, -3f, 4f);
+                        float targetGroundZ = placement.destinationGroundZ
+                            ?? (sourceGroundZ + fallbackDeltaZ);
+                        newZ = targetGroundZ + retainedOriginToGroundOffset;
+                    }
+                    float placedZ = flattenTerrain ? heightTable[FindClosestHeightIdx(newZ)] : newZ;
+
+                    destDoc.AddStaticObject(new StaticObject {
+                        Id = obj.Id,
+                        IsSetup = (obj.Id & 0x02000000) != 0,
+                        Origin = new Vector3(worldX, worldY, placedZ),
+                        Orientation = obj.Frame.Orientation,
+                        Scale = Vector3.One
+                    });
+
+                    staticObjectsCopied++;
                 }
 
                 var totalCopied = staticObjectsCopied + buildingShellsCopied;
