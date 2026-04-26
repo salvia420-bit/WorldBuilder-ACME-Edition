@@ -117,7 +117,7 @@ namespace WorldBuilder.Shared.Documents {
         [ObservableProperty]
         private TerrainData _terrainData = new();
 
-        private ConcurrentDictionary<ushort, uint[]> _baseTerrainCache;
+        private ConcurrentDictionary<ushort, uint[]> _baseTerrainCache = new();
         private readonly HashSet<ushort> _dirtyLandblocks = new();
         private readonly object _dirtyLock = new();
 
@@ -134,6 +134,28 @@ namespace WorldBuilder.Shared.Documents {
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// Allocation-free variant of <see cref="GetLandblockInternal(ushort)"/>: copies this
+        /// landblock's <see cref="TerrainEntry"/>s into <paramref name="destination"/> and returns true.
+        /// Returns false if the landblock is not present in either the live data or the base cache.
+        /// Throws when <paramref name="destination"/> is shorter than the underlying array (81 entries).
+        /// </summary>
+        public bool TryGetLandblockInternal(ushort lbKey, Span<TerrainEntry> destination) {
+            if (TerrainData.Landblocks.TryGetValue(lbKey, out var lbTerrain) ||
+                _baseTerrainCache.TryGetValue(lbKey, out lbTerrain)) {
+                if (destination.Length < lbTerrain.Length) {
+                    throw new ArgumentException(
+                        $"destination must hold at least {lbTerrain.Length} entries (got {destination.Length})",
+                        nameof(destination));
+                }
+                for (int i = 0; i < lbTerrain.Length; i++) {
+                    destination[i] = new TerrainEntry(lbTerrain[i]);
+                }
+                return true;
+            }
+            return false;
         }
 
         /// <summary>
