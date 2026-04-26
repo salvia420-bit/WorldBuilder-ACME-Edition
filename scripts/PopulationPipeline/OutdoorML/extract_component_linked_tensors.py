@@ -25,12 +25,14 @@ REFERENCE_DIR = os.path.join(BASE_DIR, "pipeline_data", "reference")
 
 DEFAULT_RAW_JSONL = os.path.join(REFERENCE_DIR, "raw_world_facts_full_with_components_v2.jsonl")
 DEFAULT_COMPONENT_JSONL = os.path.join(REFERENCE_DIR, "envcell_components_full.jsonl")
-DEFAULT_OUT_NPZ = os.path.join(REFERENCE_DIR, "component_linked_tensors.npz")
-DEFAULT_OUT_VOCAB = os.path.join(REFERENCE_DIR, "component_linked_vocab.json")
+DEFAULT_OUT_NPZ = os.path.join(REFERENCE_DIR, "component_linked_unified_tensors.npz")
+DEFAULT_OUT_VOCAB = os.path.join(REFERENCE_DIR, "component_linked_unified_vocab.json")
 
 LB_SIZE = 192.0
 MAX_OBJECTS_PER_LB = 256
 OBJECT_FEATURE_DIM = 14
+BASE_CONTEXT_DIM = 20
+EXTENDED_CONTEXT_DIM = 31
 
 PAD_TOKEN = 0
 STOP_TOKEN = 1
@@ -44,6 +46,9 @@ COMPONENT_KIND_CODES = {
     "surface_anchor_component": 1,
     "unanchored_envcell_component": 2,
 }
+SCENE_KIND_OUTDOOR = 0
+SCENE_KIND_INTERIOR_ANCHORED = 1
+SCENE_KIND_INTERIOR_UNANCHORED = 2
 
 RAW_SCAN_PROGRESS_EVERY = 100000
 COMPONENT_SCAN_PROGRESS_EVERY = 10000
@@ -113,10 +118,23 @@ def canonical_class_key(row, target_token_mode):
     return (ABSTRACT_ACE_SPACE, abstract_label)
 
 
-def scan_component_jsonl(path, target_token_mode):
+def scan_component_jsonl(path, target_token_mode, rows_by_component, stats_by_component):
+    """Iterate the envcell components export.
+
+    Builds the per-component table (anchor, bounds, portal counts, …) used as
+    the lookup for context features. Also harvests every static object inside
+    every cell as an interior row tuple in the same shape `scan_raw_jsonl`
+    produces, appending into `rows_by_component` / `stats_by_component`. This
+    is the load-bearing change for full interior coverage: ACE-dynamic interior
+    rows alone covered ~7K of 16K components; static furniture fills the rest.
+
+    Both data sources use the same component-local coordinate frame for x/y/z,
+    so positions are appended without further transform.
+    """
     component_entries = []
     component_class_keys = set()
     component_count = 0
+    static_rows_emitted = 0
 
     for component_count, row in enumerate(iter_jsonl(path), start=1):
         anchor = row.get("anchor") or {}
@@ -137,9 +155,11 @@ def scan_component_jsonl(path, target_token_mode):
             component_class_keys.add(anchor_class_key)
 
         bounds = row.get("boundsLocal") or {}
+        component_id = int(row["componentId"])
+        component_kind_code = COMPONENT_KIND_CODES.get(row.get("componentKind"), 0)
         component_entries.append({
-            "component_id": int(row["componentId"]),
-            "component_kind": COMPONENT_KIND_CODES.get(row.get("componentKind"), 0),
+            "component_id": component_id,
+            "component_kind": component_kind_code,
             "landblock_x": int(row["landblockX"]),
             "landblock_y": int(row["landblockY"]),
             "cell_count": int(row.get("cellCount", 0)),
@@ -161,16 +181,69 @@ def scan_component_jsonl(path, target_token_mode):
             ),
             "portal_ref_count": sum(len(cell.get("portalRefs", [])) for cell in row.get("cells", [])),
         })
+
+        for cell in row.get("cells", []):
+            cell_id = parse_hexish(cell.get("cellId")) or 0
+            if cell_id < 0x0100:
+                continue
+            for obj in cell.get("staticObjects", []):
+                cls_id_raw = obj.get("classId")
+                if cls_id_raw is None:
+                    continue
+                cls_id = int(cls_id_raw)
+                cls_space = obj.get("classIdSpace") or "model_id"
+                static_canonical_key = canonical_class_key({
+                    "classIdSpace": cls_space,
+                    "classId": cls_id,
+                    "sourceDb": "dat",
+                    "sourceTable": "envcell_static",
+                    "typeId": 0,
+                    "envCellComponentKind": row.get("componentKind"),
+                    "cellId": cell.get("cellId"),
+                }, target_token_mode)
+                if static_canonical_key is not None:
+                    component_class_keys.add(static_canonical_key)
+
+                local_x = float(obj.get("x", 0.0))
+                local_y = float(obj.get("y", 0.0))
+                local_z = float(obj.get("z", 0.0))
+                yaw_deg = float(obj.get("yawDeg", 0.0))
+                source_db_code = SOURCE_DB_CODES.get("dat", 0)
+                class_space_code = CLASS_SPACE_CODES.get(cls_space, 0)
+
+                row_tuple = (
+                    local_x,
+                    local_y,
+                    local_z,
+                    cls_id,
+                    cls_space,
+                    cls_id,
+                    static_canonical_key,
+                    class_space_code,
+                    yaw_deg,
+                    0.0,
+                    source_db_code,
+                    cell_id,
+                    0.0,
+                    0.0,
+                    component_kind_code,
+                    component_id,
+                )
+                rows_by_component[component_id].append(row_tuple)
+                _accumulate_stats(stats_by_component[component_id], (
+                    source_db_code, cls_space, component_id, cell_id,
+                    0.0, 0.0, 0, 0, "envcell_static",
+                ))
+                static_rows_emitted += 1
+
         if component_count % COMPONENT_SCAN_PROGRESS_EVERY == 0:
-            print(f"  Components scanned: {component_count:,}")
+            print(f"  Components scanned: {component_count:,} ({static_rows_emitted:,} static rows so far)")
 
-    return component_entries, component_class_keys, component_count
+    return component_entries, component_class_keys, component_count, static_rows_emitted
 
 
-def scan_raw_jsonl(path, target_token_mode):
-    raw_class_keys = set()
-    rows_by_lb = defaultdict(list)
-    stats_by_lb = defaultdict(lambda: {
+def _empty_stats():
+    return {
         "count": 0,
         "dat_count": 0,
         "ace_count": 0,
@@ -185,7 +258,43 @@ def scan_raw_jsonl(path, target_token_mode):
         "building_count": 0,
         "encounter_count": 0,
         "instance_count": 0,
-    })
+    }
+
+
+def _accumulate_stats(stats, row_data):
+    (source_db_code, class_space, component_id, cell_id,
+     terrain_delta_z, slope_deg, parent_count, child_count, source_table) = row_data
+    stats["count"] += 1
+    if source_db_code == SOURCE_DB_CODES["dat"]:
+        stats["dat_count"] += 1
+    elif source_db_code == SOURCE_DB_CODES["ace"]:
+        stats["ace_count"] += 1
+    if class_space == "model_id":
+        stats["model_id_count"] += 1
+    elif class_space == "wcid":
+        stats["wcid_count"] += 1
+    if component_id is not None:
+        stats["linked_count"] += 1
+    if cell_id >= 0x0100:
+        stats["interior_count"] += 1
+    stats["terrain_delta_sum"] += terrain_delta_z
+    stats["slope_sum"] += slope_deg
+    stats["parent_count_sum"] += parent_count
+    stats["child_count_sum"] += child_count
+    if source_table == "landblock_info_building":
+        stats["building_count"] += 1
+    elif source_table == "encounter":
+        stats["encounter_count"] += 1
+    elif source_table == "landblock_instance":
+        stats["instance_count"] += 1
+
+
+def scan_raw_jsonl(path, target_token_mode):
+    raw_class_keys = set()
+    rows_by_lb = defaultdict(list)
+    stats_by_lb = defaultdict(_empty_stats)
+    rows_by_component = defaultdict(list)
+    stats_by_component = defaultdict(_empty_stats)
     raw_count = 0
 
     for raw_count, row in enumerate(iter_jsonl(path), start=1):
@@ -212,7 +321,7 @@ def scan_raw_jsonl(path, target_token_mode):
         child_count = len(row.get("childGuids", []))
         source_table = row.get("sourceTable")
 
-        rows_by_lb[lb_key].append((
+        row_tuple = (
             local_x,
             local_y,
             z,
@@ -229,37 +338,24 @@ def scan_raw_jsonl(path, target_token_mode):
             slope_deg,
             component_kind_code,
             component_id,
-        ))
+        )
+        rows_by_lb[lb_key].append(row_tuple)
 
-        stats = stats_by_lb[lb_key]
-        stats["count"] += 1
-        if source_db_code == SOURCE_DB_CODES["dat"]:
-            stats["dat_count"] += 1
-        elif source_db_code == SOURCE_DB_CODES["ace"]:
-            stats["ace_count"] += 1
-        if class_space == "model_id":
-            stats["model_id_count"] += 1
-        elif class_space == "wcid":
-            stats["wcid_count"] += 1
-        if component_id is not None:
-            stats["linked_count"] += 1
-        if cell_id >= 0x0100:
-            stats["interior_count"] += 1
-        stats["terrain_delta_sum"] += terrain_delta_z
-        stats["slope_sum"] += slope_deg
-        stats["parent_count_sum"] += parent_count
-        stats["child_count_sum"] += child_count
-        if source_table == "landblock_info_building":
-            stats["building_count"] += 1
-        elif source_table == "encounter":
-            stats["encounter_count"] += 1
-        elif source_table == "landblock_instance":
-            stats["instance_count"] += 1
+        stat_data = (source_db_code, class_space, component_id, cell_id,
+                     terrain_delta_z, slope_deg, parent_count, child_count, source_table)
+        _accumulate_stats(stats_by_lb[lb_key], stat_data)
+
+        # Interior rows additionally bucket into per-component sequences when a
+        # component link is known. Components that span multiple landblocks still
+        # group cleanly because component_id is globally unique.
+        if cell_id >= 0x0100 and component_id is not None:
+            rows_by_component[component_id].append(row_tuple)
+            _accumulate_stats(stats_by_component[component_id], stat_data)
 
         if raw_count % RAW_SCAN_PROGRESS_EVERY == 0:
             print(f"  Raw rows scanned: {raw_count:,}")
 
-    return rows_by_lb, stats_by_lb, raw_class_keys, raw_count
+    return rows_by_lb, stats_by_lb, rows_by_component, stats_by_component, raw_class_keys, raw_count
 
 
 def build_component_tables(component_entries, class_key_to_idx):
@@ -440,48 +536,178 @@ def compute_chunk_offsets(row_count, chunk_capacity):
     return deduped
 
 
-def build_landblock_tensors(rows_by_lb, stats_by_lb, class_key_to_idx, component_id_to_index, views_per_landblock):
+def _build_base_context_block(stats, total_object_count):
+    """First 16 dims of the context vector — aggregate stats over a scene."""
+    row_count = max(stats["count"], 1)
+    return np.array([
+        # The first two slots are landblock-position placeholders. Callers fill
+        # them with the landblock or parent-landblock coordinates of the scene.
+        0.0,
+        0.0,
+        total_object_count / MAX_OBJECTS_PER_LB,
+        stats["dat_count"] / row_count,
+        stats["ace_count"] / row_count,
+        stats["model_id_count"] / row_count,
+        stats["wcid_count"] / row_count,
+        stats["linked_count"] / row_count,
+        stats["interior_count"] / row_count,
+        stats["terrain_delta_sum"] / row_count,
+        (stats["slope_sum"] / row_count) / 90.0,
+        stats["parent_count_sum"] / row_count,
+        stats["child_count_sum"] / row_count,
+        stats["building_count"] / row_count,
+        stats["encounter_count"] / row_count,
+        stats["instance_count"] / row_count,
+    ], dtype=np.float32)
+
+
+def _serialize_chunk(chunk_rows, class_key_to_idx, component_id_to_index,
+                     norm_x, norm_y, norm_z):
+    """Serialize an ordered list of rows into the (MAX_OBJECTS_PER_LB, 14) tensor.
+
+    norm_x / norm_y / norm_z are callables that map raw row coordinates to [0, 1]
+    relative to the sequence's coordinate frame (landblock or component bounds).
+    """
+    seq = np.zeros((MAX_OBJECTS_PER_LB, OBJECT_FEATURE_DIM), dtype=np.float32)
+    comp_idx = np.full(MAX_OBJECTS_PER_LB, -1, dtype=np.int32)
+    linked = 0
+    for obj_idx, row in enumerate(chunk_rows):
+        canonical_key = row[6]
+        class_space_code = row[7]
+        yaw_rad = math.radians(row[8])
+        type_id = row[9]
+        source_db_code = row[10]
+        cell_id = row[11]
+        terrain_delta_z = row[12]
+        slope_deg = row[13]
+        component_kind_code = row[14]
+        component_id = row[15]
+        class_token = class_key_to_idx.get(canonical_key, PAD_TOKEN)
+        is_interior = 1.0 if cell_id >= 0x0100 else 0.0
+
+        seq[obj_idx] = np.array([
+            float(class_token),
+            float(class_space_code),
+            norm_x(row[0]),
+            norm_y(row[1]),
+            norm_z(row[2]),
+            math.sin(yaw_rad),
+            math.cos(yaw_rad),
+            type_id / 255.0,
+            float(source_db_code),
+            cell_id / 65535.0,
+            terrain_delta_z / 64.0,
+            slope_deg / 90.0,
+            float(component_kind_code),
+            is_interior,
+        ], dtype=np.float32)
+
+        if component_id is not None:
+            mapped = component_id_to_index.get(component_id, -1)
+            comp_idx[obj_idx] = mapped
+            if mapped >= 0:
+                linked += 1
+    return seq, comp_idx, linked
+
+
+def _scene_kind_block(scene_kind, *, span_x_norm=0.0, span_y_norm=0.0,
+                      span_z_norm=0.0, cell_count_norm=0.0,
+                      density_norm=0.0, portal_degree_norm=0.0):
+    """Last 11 dims of the unified context: scene_kind one-hot + interior context.
+
+    Layout:
+      [0:3]  scene_kind one-hot (outdoor / interior_anchored / interior_unanchored)
+      [3]    is_interior flag (redundant w/ one-hot but cheap and matches token dim 13)
+      [4]    component span x (normalized)
+      [5]    component span y (normalized)
+      [6]    component span z (normalized)
+      [7]    component cell count (normalized)
+      [8]    component object density per cell (normalized)
+      [9]    mean per-cell portal degree (normalized)
+      [10]   reserved (0.0)
+    """
+    block = np.zeros(11, dtype=np.float32)
+    block[scene_kind] = 1.0
+    if scene_kind != SCENE_KIND_OUTDOOR:
+        block[3] = 1.0
+        block[4] = span_x_norm
+        block[5] = span_y_norm
+        block[6] = span_z_norm
+        block[7] = cell_count_norm
+        block[8] = density_norm
+        block[9] = portal_degree_norm
+    return block
+
+
+def build_unified_tensors(
+    rows_by_lb,
+    stats_by_lb,
+    rows_by_component,
+    stats_by_component,
+    class_key_to_idx,
+    component_data,
+    views_per_landblock,
+):
+    """Emit landblock (outdoor-only) sequences plus per-component interior sequences.
+
+    Output shape matches the legacy single-array layout — both scene types share
+    the same arrays and are distinguished by the `scene_kind` slot of the context
+    vector and by an explicit `scene_kinds` parallel array.
+    """
     populated_lbs = sorted(rows_by_lb.keys())
     view_count = max(1, min(int(views_per_landblock), len(VIEW_STRATEGIES)))
     chunk_capacity = MAX_OBJECTS_PER_LB - 1
+    component_id_to_index = component_data["component_id_to_index"]
+    component_bounds = component_data["component_bounds"]
+    component_kind = component_data["component_kind"]
+    component_cell_count = component_data["component_cell_count"]
+    component_static_count = component_data["component_static_count"]
+    component_portal_ref_count = component_data["component_portal_ref_count"]
+    component_lb_coords_arr = component_data["component_lb_coords"]
+
     contexts = []
     sequences = []
     seq_lengths = []
     component_index_by_object = []
     lb_coords = []
     sample_weights = []
+    scene_kinds = []
     structural_weights = build_structural_weights(populated_lbs, stats_by_lb)
 
     linked_objects = 0
     chunked_views = 0
     max_chunks_per_view = 1
+    landblock_examples = 0
+    component_examples = 0
+    landblocks_emitted = 0
+    components_emitted = 0
+    components_skipped_unknown_id = 0
+    components_skipped_empty = 0
 
+    # ── Outdoor landblock sequences ─────────────────────────────────────────
     for lb_idx, (lb_x, lb_y) in enumerate(populated_lbs):
-        rows = rows_by_lb[(lb_x, lb_y)]
+        all_rows = rows_by_lb[(lb_x, lb_y)]
+        # Interior rows now have their own per-component sequences. Strip them
+        # from landblock sequences so each physical object appears in exactly
+        # one training example.
+        outdoor_rows = [row for row in all_rows if row[11] < 0x0100]
+        if not outdoor_rows:
+            continue
+        landblocks_emitted += 1
+
         stats = stats_by_lb[(lb_x, lb_y)]
-        row_count = max(stats["count"], 1)
-        base_context = np.array([
-            lb_x / 254.0,
-            lb_y / 254.0,
-            len(rows) / MAX_OBJECTS_PER_LB,
-            stats["dat_count"] / row_count,
-            stats["ace_count"] / row_count,
-            stats["model_id_count"] / row_count,
-            stats["wcid_count"] / row_count,
-            stats["linked_count"] / row_count,
-            stats["interior_count"] / row_count,
-            stats["terrain_delta_sum"] / row_count,
-            (stats["slope_sum"] / row_count) / 90.0,
-            stats["parent_count_sum"] / row_count,
-            stats["child_count_sum"] / row_count,
-            stats["building_count"] / row_count,
-            stats["encounter_count"] / row_count,
-            stats["instance_count"] / row_count,
-        ], dtype=np.float32)
+        base_context = _build_base_context_block(stats, len(all_rows))
+        base_context[0] = lb_x / 254.0
+        base_context[1] = lb_y / 254.0
+        scene_kind_block = _scene_kind_block(SCENE_KIND_OUTDOOR)
+
+        def norm_lb_x(x): return x / LB_SIZE
+        def norm_lb_y(y): return y / LB_SIZE
+        def norm_lb_z(z): return z / 512.0
 
         for view_idx in range(view_count):
             strategy = VIEW_STRATEGIES[view_idx]
-            ordered_rows = sorted_view_rows(rows, strategy)
+            ordered_rows = sorted_view_rows(outdoor_rows, strategy)
             chunk_offsets = compute_chunk_offsets(len(ordered_rows), chunk_capacity)
             if len(chunk_offsets) > 1:
                 chunked_views += 1
@@ -489,57 +715,19 @@ def build_landblock_tensors(rows_by_lb, stats_by_lb, class_key_to_idx, component
 
             for chunk_idx, start in enumerate(chunk_offsets):
                 chunk_rows = ordered_rows[start:start + chunk_capacity]
-                seq = np.zeros((MAX_OBJECTS_PER_LB, OBJECT_FEATURE_DIM), dtype=np.float32)
-                comp_idx = np.full(MAX_OBJECTS_PER_LB, -1, dtype=np.int32)
-                ctx = np.zeros(20, dtype=np.float32)
+                ctx = np.zeros(EXTENDED_CONTEXT_DIM, dtype=np.float32)
                 ctx[:16] = base_context
                 ctx[16] = view_idx / max(view_count - 1, 1)
                 ctx[17] = VIEW_STRATEGIES.index(strategy) / max(len(VIEW_STRATEGIES) - 1, 1)
                 ctx[18] = chunk_idx / max(len(chunk_offsets) - 1, 1)
                 ctx[19] = len(chunk_rows) / max(len(ordered_rows), 1)
+                ctx[20:31] = scene_kind_block
 
-                for obj_idx, row in enumerate(chunk_rows):
-                    class_space = row[4]
-                    class_id = row[5]
-                    canonical_key = row[6]
-                    class_space_code = row[7]
-                    yaw_rad = math.radians(row[8])
-                    type_id = row[9]
-                    source_db_code = row[10]
-                    cell_id = row[11]
-                    terrain_delta_z = row[12]
-                    slope_deg = row[13]
-                    component_kind_code = row[14]
-                    component_id = row[15]
-                    class_key = canonical_key
-                    class_token = class_key_to_idx.get(class_key, PAD_TOKEN)
-                    local_x = row[0]
-                    local_y = row[1]
-                    z = row[2]
-                    is_interior = 1.0 if cell_id >= 0x0100 else 0.0
-
-                    seq[obj_idx] = np.array([
-                        float(class_token),
-                        float(class_space_code),
-                        local_x / LB_SIZE,
-                        local_y / LB_SIZE,
-                        z / 512.0,
-                        math.sin(yaw_rad),
-                        math.cos(yaw_rad),
-                        type_id / 255.0,
-                        float(source_db_code),
-                        cell_id / 65535.0,
-                        terrain_delta_z / 64.0,
-                        slope_deg / 90.0,
-                        float(component_kind_code),
-                        is_interior,
-                    ], dtype=np.float32)
-
-                    if component_id is not None:
-                        comp_idx[obj_idx] = component_id_to_index.get(component_id, -1)
-                        if comp_idx[obj_idx] >= 0:
-                            linked_objects += 1
-
+                seq, comp_idx, n_linked = _serialize_chunk(
+                    chunk_rows, class_key_to_idx, component_id_to_index,
+                    norm_lb_x, norm_lb_y, norm_lb_z,
+                )
+                linked_objects += n_linked
                 stop_index = len(chunk_rows)
                 seq[stop_index, 0] = STOP_TOKEN
 
@@ -549,6 +737,102 @@ def build_landblock_tensors(rows_by_lb, stats_by_lb, class_key_to_idx, component
                 component_index_by_object.append(comp_idx)
                 lb_coords.append((lb_x, lb_y))
                 sample_weights.append(structural_weights[lb_idx])
+                scene_kinds.append(SCENE_KIND_OUTDOOR)
+                landblock_examples += 1
+
+    # ── Interior component sequences ────────────────────────────────────────
+    for component_id in sorted(rows_by_component.keys()):
+        rows = rows_by_component[component_id]
+        if not rows:
+            components_skipped_empty += 1
+            continue
+        comp_table_idx = component_id_to_index.get(component_id)
+        if comp_table_idx is None:
+            components_skipped_unknown_id += 1
+            continue
+
+        bounds = component_bounds[comp_table_idx]
+        comp_kind_code = int(component_kind[comp_table_idx])
+        cell_count = int(component_cell_count[comp_table_idx])
+        portal_refs_total = int(component_portal_ref_count[comp_table_idx])
+        static_count = int(component_static_count[comp_table_idx])
+        comp_lb_x = int(component_lb_coords_arr[comp_table_idx][0])
+        comp_lb_y = int(component_lb_coords_arr[comp_table_idx][1])
+
+        # Per Q2: inherit the parent landblock's outdoor stats so the interior
+        # context includes terrain/biome signal from the surrounding world.
+        # Fall back to the component's own stats if the parent landblock has no
+        # rows (rare but possible for orphan components).
+        parent_lb_stats = stats_by_lb.get((comp_lb_x, comp_lb_y))
+        comp_stats = stats_by_component[component_id]
+        inherited_stats = parent_lb_stats if (parent_lb_stats and parent_lb_stats["count"] > 0) else comp_stats
+
+        base_context = _build_base_context_block(inherited_stats, max(static_count, len(rows)))
+        base_context[0] = comp_lb_x / 254.0
+        base_context[1] = comp_lb_y / 254.0
+
+        span_x = max(float(bounds[3] - bounds[0]), 1e-3)
+        span_y = max(float(bounds[4] - bounds[1]), 1e-3)
+        span_z = max(float(bounds[5] - bounds[2]), 1e-3)
+        density = (static_count / max(cell_count, 1))
+        mean_portal_degree = (portal_refs_total / max(cell_count, 1))
+        scene_kind = (
+            SCENE_KIND_INTERIOR_ANCHORED
+            if comp_kind_code == COMPONENT_KIND_CODES["surface_anchor_component"]
+            else SCENE_KIND_INTERIOR_UNANCHORED
+        )
+        scene_kind_block = _scene_kind_block(
+            scene_kind,
+            span_x_norm=min(span_x / 200.0, 1.0),
+            span_y_norm=min(span_y / 200.0, 1.0),
+            span_z_norm=min(span_z / 100.0, 1.0),
+            cell_count_norm=min(cell_count / 64.0, 1.0),
+            density_norm=min(density / 4.0, 1.0),
+            portal_degree_norm=min(mean_portal_degree / 8.0, 1.0),
+        )
+
+        # Component-local normalization: clamp to [0, 1] in case rare rows fall
+        # outside the reported bounds (defensive — should be rare).
+        def norm_comp_x(x, bx=float(bounds[0]), sx=span_x):
+            return max(0.0, min(1.0, (x - bx) / sx))
+        def norm_comp_y(y, by=float(bounds[1]), sy=span_y):
+            return max(0.0, min(1.0, (y - by) / sy))
+        def norm_comp_z(z, bz=float(bounds[2]), sz=span_z):
+            return max(0.0, min(1.0, (z - bz) / sz))
+
+        ordered_rows = sorted_view_rows(rows, "component")
+        chunk_offsets = compute_chunk_offsets(len(ordered_rows), chunk_capacity)
+        if len(chunk_offsets) > 1:
+            chunked_views += 1
+        max_chunks_per_view = max(max_chunks_per_view, len(chunk_offsets))
+
+        for chunk_idx, start in enumerate(chunk_offsets):
+            chunk_rows = ordered_rows[start:start + chunk_capacity]
+            ctx = np.zeros(EXTENDED_CONTEXT_DIM, dtype=np.float32)
+            ctx[:16] = base_context
+            ctx[16] = 0.0
+            ctx[17] = VIEW_STRATEGIES.index("component") / max(len(VIEW_STRATEGIES) - 1, 1)
+            ctx[18] = chunk_idx / max(len(chunk_offsets) - 1, 1)
+            ctx[19] = len(chunk_rows) / max(len(ordered_rows), 1)
+            ctx[20:31] = scene_kind_block
+
+            seq, comp_idx, n_linked = _serialize_chunk(
+                chunk_rows, class_key_to_idx, component_id_to_index,
+                norm_comp_x, norm_comp_y, norm_comp_z,
+            )
+            linked_objects += n_linked
+            stop_index = len(chunk_rows)
+            seq[stop_index, 0] = STOP_TOKEN
+
+            contexts.append(ctx)
+            sequences.append(seq)
+            seq_lengths.append(stop_index + 1)
+            component_index_by_object.append(comp_idx)
+            lb_coords.append((comp_lb_x, comp_lb_y))
+            sample_weights.append(1.0)
+            scene_kinds.append(scene_kind)
+            component_examples += 1
+        components_emitted += 1
 
     return {
         "populated_lbs": populated_lbs,
@@ -558,10 +842,17 @@ def build_landblock_tensors(rows_by_lb, stats_by_lb, class_key_to_idx, component
         "component_index_by_object": np.asarray(component_index_by_object, dtype=np.int32),
         "lb_coords": np.asarray(lb_coords, dtype=np.int16),
         "sample_weights": np.asarray(sample_weights, dtype=np.float32),
+        "scene_kinds": np.asarray(scene_kinds, dtype=np.int8),
         "linked_objects": linked_objects,
         "views_per_landblock": view_count,
         "chunked_views": chunked_views,
         "max_chunks_per_view": max_chunks_per_view,
+        "landblock_examples": landblock_examples,
+        "component_examples": component_examples,
+        "landblocks_emitted": landblocks_emitted,
+        "components_emitted": components_emitted,
+        "components_skipped_unknown_id": components_skipped_unknown_id,
+        "components_skipped_empty": components_skipped_empty,
     }
 
 
@@ -575,6 +866,7 @@ def save_outputs(out_npz, out_vocab, class_key_to_idx, idx_to_key, lb_data, comp
         seq_lengths=lb_data["seq_lengths"],
         lb_coords=lb_data["lb_coords"],
         sample_weights=lb_data["sample_weights"],
+        scene_kinds=lb_data["scene_kinds"],
         component_index_by_object=lb_data["component_index_by_object"],
         component_ids=component_data["component_ids"],
         component_kind=component_data["component_kind"],
@@ -596,8 +888,14 @@ def save_outputs(out_npz, out_vocab, class_key_to_idx, idx_to_key, lb_data, comp
         "source_db_codes": SOURCE_DB_CODES,
         "class_space_codes": CLASS_SPACE_CODES,
         "component_kind_codes": {str(k): v for k, v in COMPONENT_KIND_CODES.items()},
+        "scene_kind_codes": {
+            "outdoor": SCENE_KIND_OUTDOOR,
+            "interior_anchored": SCENE_KIND_INTERIOR_ANCHORED,
+            "interior_unanchored": SCENE_KIND_INTERIOR_UNANCHORED,
+        },
         "object_feature_dim": OBJECT_FEATURE_DIM,
         "max_objects_per_lb": MAX_OBJECTS_PER_LB,
+        "context_dim": EXTENDED_CONTEXT_DIM,
         "views_per_landblock": lb_data["views_per_landblock"],
         "view_strategies": list(VIEW_STRATEGIES[:lb_data["views_per_landblock"]]),
         "target_token_mode": target_token_mode,
@@ -622,6 +920,17 @@ def save_outputs(out_npz, out_vocab, class_key_to_idx, idx_to_key, lb_data, comp
             "view_strategy",
             "chunk_ordinal",
             "chunk_coverage",
+            "scene_kind_outdoor",
+            "scene_kind_interior_anchored",
+            "scene_kind_interior_unanchored",
+            "is_interior",
+            "component_span_x",
+            "component_span_y",
+            "component_span_z",
+            "component_cell_count",
+            "component_object_density",
+            "component_mean_portal_degree",
+            "reserved",
         ],
     }
     with open(out_vocab, "w", encoding="utf-8") as f:
@@ -659,10 +968,27 @@ def main():
         raise SystemExit(f"Missing component JSONL: {args.component_jsonl}")
 
     print("[1/4] Streaming JSONL inputs...")
-    component_entries, component_class_keys, component_count = scan_component_jsonl(args.component_jsonl, args.target_token_mode)
-    rows_by_lb, stats_by_lb, raw_class_keys, raw_count = scan_raw_jsonl(args.raw_jsonl, args.target_token_mode)
-    print(f"  Raw rows      : {raw_count:,}")
-    print(f"  Components    : {component_count:,}")
+    rows_by_component = defaultdict(list)
+    stats_by_component = defaultdict(_empty_stats)
+    component_entries, component_class_keys, component_count, static_rows_emitted = scan_component_jsonl(
+        args.component_jsonl, args.target_token_mode,
+        rows_by_component, stats_by_component,
+    )
+    rows_by_lb, stats_by_lb, _rbc_unused, _sbc_unused, raw_class_keys, raw_count = scan_raw_jsonl(
+        args.raw_jsonl, args.target_token_mode,
+    )
+    # Merge ACE-dynamic interior rows from raw_world_facts into the per-component
+    # containers populated by scan_component_jsonl.
+    for cid, rows in _rbc_unused.items():
+        rows_by_component[cid].extend(rows)
+    for cid, stats in _sbc_unused.items():
+        merged = stats_by_component[cid]
+        for key, value in stats.items():
+            merged[key] = merged.get(key, 0) + value
+    print(f"  Raw rows                  : {raw_count:,}")
+    print(f"  Components                : {component_count:,}")
+    print(f"  Static interior rows      : {static_rows_emitted:,}")
+    print(f"  Interior comps with rows  : {len(rows_by_component):,}  (was 7,092 with ACE-only)")
     print()
 
     print("[2/4] Building vocabulary + component tables...")
@@ -671,20 +997,28 @@ def main():
     print(f"  Vocab size    : {len(class_key_to_idx) + FIRST_REAL_TOKEN:,}")
     print()
 
-    print("[3/4] Building landblock tensors...")
-    lb_data = build_landblock_tensors(
+    print("[3/4] Building unified tensors (landblock + component)...")
+    lb_data = build_unified_tensors(
         rows_by_lb,
         stats_by_lb,
+        rows_by_component,
+        stats_by_component,
         class_key_to_idx,
-        component_data["component_id_to_index"],
+        component_data,
         args.views_per_landblock,
     )
-    print(f"  Landblocks    : {len(lb_data['populated_lbs']):,}")
-    print(f"  Examples      : {len(lb_data['contexts']):,}")
-    print(f"  Views / LB    : {lb_data['views_per_landblock']}")
-    print(f"  Linked objs   : {lb_data['linked_objects']:,}")
-    print(f"  Chunked views : {lb_data['chunked_views']:,}")
-    print(f"  Max chunks/view: {lb_data['max_chunks_per_view']}")
+    print(f"  Landblocks emitted    : {lb_data['landblocks_emitted']:,}")
+    print(f"  Landblock examples    : {lb_data['landblock_examples']:,}")
+    print(f"  Components emitted    : {lb_data['components_emitted']:,}")
+    print(f"  Component examples    : {lb_data['component_examples']:,}")
+    print(f"  Components w/o table  : {lb_data['components_skipped_unknown_id']:,}")
+    print(f"  Components empty rows : {lb_data['components_skipped_empty']:,}")
+    print(f"  Total examples        : {len(lb_data['contexts']):,}")
+    print(f"  Views / LB            : {lb_data['views_per_landblock']}")
+    print(f"  Linked objs           : {lb_data['linked_objects']:,}")
+    print(f"  Chunked views         : {lb_data['chunked_views']:,}")
+    print(f"  Max chunks/view       : {lb_data['max_chunks_per_view']}")
+    print(f"  Context dim           : {EXTENDED_CONTEXT_DIM}")
     print()
 
     print("[4/4] Saving outputs...")
