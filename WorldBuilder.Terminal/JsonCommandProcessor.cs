@@ -182,6 +182,8 @@ public class JsonCommandProcessor {
             ["generate-dungeon"] = CmdGenerateDungeon,
             ["auto-paint"] = _ => CmdAutoPaint(),
             ["analyze-landblock-patterns"] = CmdAnalyzeLandblockPatterns,
+            ["extract-building-pairings"] = CmdExtractBuildingPairings,
+            ["load-building-pairings"] = CmdLoadBuildingPairings,
             ["export-training-data"] = CmdExportTrainingData,
             ["export-raw-world-facts"] = CmdExportRawWorldFacts,
             ["export-envcell-components"] = CmdExportEnvCellComponents,
@@ -780,7 +782,7 @@ public class JsonCommandProcessor {
             new { name = "validate-dungeon", args = "lbX, lbY",                              description = "Validate dungeon" },
             new { name = "validate-landblock", args = "lbX, lbY",                            description = "Validate landblock objects (LBK010 footprint flush check fires when ontology is scanned)" },
             new { name = "validate-terrain", args = "lbX, lbY, cliffThreshold?",             description = "Validate terrain" },
-            new { name = "validate-building-shells", args = "lbX, lbY",                      description = "Validate building shells" },
+            new { name = "validate-building-shells", args = "lbX, lbY",                      description = "Validate building shells (BSH009 group-Z divergence when pairings are loaded)" },
             new { name = "validate-building-portals", args = "lbX, lbY",                     description = "Validate building portals" },
             new { name = "validate-all",     args = "lbX, lbY, cliffThreshold?",             description = "Run all validators (footprint flush + cliffs + portals)" },
             new { name = "list-landblocks",  args = "minX?, minY?, maxX?, maxY?, limit?",    description = "List landblocks" },
@@ -827,6 +829,8 @@ public class JsonCommandProcessor {
             new { name = "generate-dungeon", args = "lbX, lbY, depth?, branching?, seed?, minRooms?, maxRooms?, theme?", description = "Generate procedural dungeon from graph grammar" },
             new { name = "auto-paint",       args = "",                                            description = "Re-paint all terrain types from heightmap" },
             new { name = "analyze-landblock-patterns", args = "minX?, minY?, maxX?, maxY?, outputPath?", description = "Extract spatial design patterns from populated landblocks" },
+            new { name = "extract-building-pairings", args = "minCount5?, outputPath?", description = "Mine retail Structure×Structure adjacency at 5m → building_pairings.json (drives group-aware placement)" },
+            new { name = "load-building-pairings", args = "path", description = "Load building_pairings.json into the live registry" },
             new { name = "export-training-data", args = "minX?, minY?, maxX?, maxY?, outputPath?, nearbyLimit?", description = "Export placement examples as JSONL (one per object with terrain + neighbors + ontology)" },
             new { name = "export-raw-world-facts", args = "minX?, minY?, maxX?, maxY?, outputPath?, includeAceDb?, includeLinks?", description = "Export raw DAT/SQL/spawn facts as JSONL" },
             new { name = "export-envcell-components", args = "minX?, minY?, maxX?, maxY?, outputPath?", description = "Export linked surface-anchor and EnvCell components as JSONL" },
@@ -1307,6 +1311,32 @@ public class JsonCommandProcessor {
             }).ToArray(),
             outputPath = r.OutputPath,
             error = r.Error });
+    }
+
+    private string CmdExtractBuildingPairings(System.Text.Json.Nodes.JsonNode node) {
+        int minCount5 = node["minCount5"]?.GetValue<int>() ?? 3;
+        string? outputPath = node["outputPath"]?.GetValue<string>();
+        var r = _engine.ExtractBuildingPairings(minCount5, outputPath);
+        return Serialize(new {
+            success = r.Success, command = "extract-building-pairings",
+            structuresScanned = r.StructuresScanned,
+            pairsKept = r.PairsKept,
+            groupCount = r.GroupCount,
+            outputPath = r.OutputPath,
+            elapsedMs = r.ElapsedMs,
+            error = r.Error,
+        });
+    }
+
+    private string CmdLoadBuildingPairings(System.Text.Json.Nodes.JsonNode node) {
+        string path = node["path"]?.GetValue<string>() ?? throw new ArgumentException("Missing 'path' field");
+        var r = _engine.LoadBuildingPairings(path);
+        return Serialize(new {
+            success = r.Success, command = "load-building-pairings",
+            edgeCount = r.EdgeCount,
+            groupCount = r.GroupCount,
+            error = r.Error,
+        });
     }
 
     private string CmdExportTrainingData(System.Text.Json.Nodes.JsonNode node) {

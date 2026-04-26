@@ -482,6 +482,21 @@ public record AnalyzeLandblockPatternsResult(
     string? OutputPath = null,
     string? Error = null);
 
+public record ExtractBuildingPairingsResult(
+    bool Success,
+    int StructuresScanned,
+    int PairsKept,
+    int GroupCount,
+    string? OutputPath = null,
+    long ElapsedMs = 0,
+    string? Error = null);
+
+public record LoadBuildingPairingsResult(
+    bool Success,
+    int EdgeCount,
+    int GroupCount,
+    string? Error = null);
+
 // ═══════════════════════════════════════════════════════
 //  Phase 10 — Export Training Data
 // ═══════════════════════════════════════════════════════

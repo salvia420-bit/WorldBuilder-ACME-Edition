@@ -5,6 +5,7 @@ using System.Reflection;
 using WorldBuilder.Shared.Documents;
 using WorldBuilder.Shared.Lib;
 using WorldBuilder.Shared.Lib.Geometry;
+using WorldBuilder.Shared.Lib.Pairings;
 using WorldBuilder.Shared.Lib.Validation;
 
 namespace WorldBuilder.Tests;
@@ -365,5 +366,78 @@ public class FootprintGeometryTests {
     private static void AssertVecApprox(Vector2 expected, Vector2 actual, float tol = 1e-3f) {
         Assert.InRange(actual.X, expected.X - tol, expected.X + tol);
         Assert.InRange(actual.Y, expected.Y - tol, expected.Y + tol);
+    }
+}
+
+public class BuildingPairingsTests {
+    [Fact]
+    public void AddPair_TwoModels_AreInSameGroup() {
+        var p = new BuildingPairings();
+        p.AddPair(0x02000001u, 0x02000002u);
+        Assert.True(p.AreInSameGroup(0x02000001u, 0x02000002u));
+        Assert.False(p.AreInSameGroup(0x02000001u, 0x02000003u));
+    }
+
+    [Fact]
+    public void AddPair_TransitiveClosure_ReachableViaUnionFind() {
+        // A↔B and B↔C, so {A,B,C} share a group even without A↔C.
+        var p = new BuildingPairings();
+        p.AddPair(0xA, 0xB);
+        p.AddPair(0xB, 0xC);
+
+        Assert.True(p.AreInSameGroup(0xA, 0xC));
+        Assert.Equal(p.GroupKey(0xA), p.GroupKey(0xC));
+    }
+
+    [Fact]
+    public void GroupKey_UnregisteredModel_ReturnsItself() {
+        var p = new BuildingPairings();
+        // Singletons fall through as their own group of one — placement
+        // treats them as un-paired.
+        Assert.Equal(0x99u, p.GroupKey(0x99u));
+        Assert.False(p.HasPairs(0x99u));
+    }
+
+    [Fact]
+    public void AddPair_SelfPair_IsIgnored() {
+        var p = new BuildingPairings();
+        p.AddPair(0xA, 0xA);
+        Assert.Equal(0, p.EdgeCount);
+        Assert.False(p.HasPairs(0xA));
+    }
+
+    [Fact]
+    public void GroupCount_ThreeIslandsAndASingleton_ReportsTwo() {
+        var p = new BuildingPairings();
+        p.AddPair(0xA, 0xB);   // group 1
+        p.AddPair(0xC, 0xD);   // group 2
+        p.AddPair(0xD, 0xE);   // joins group 2: {C,D,E}
+        // 0xZ is never added → not counted.
+        Assert.Equal(2, p.GroupCount);
+        Assert.True(p.AreInSameGroup(0xC, 0xE));
+        Assert.False(p.AreInSameGroup(0xA, 0xC));
+    }
+
+    [Fact]
+    public void SaveAndLoadJson_RoundTrips() {
+        var p = new BuildingPairings();
+        p.AddPair(0x02000010u, 0x02000020u);
+        p.AddPair(0x02000020u, 0x02000030u);
+        var path = Path.Combine(Path.GetTempPath(), $"bp-{Guid.NewGuid():N}.json");
+        try {
+            p.SaveToJsonFile(path, minCount5: 3);
+            var loaded = BuildingPairings.LoadFromJsonFile(path);
+            Assert.True(loaded.AreInSameGroup(0x02000010u, 0x02000030u));
+            Assert.Equal(2, loaded.EdgeCount);
+        } finally {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void LoadFromMissingFile_ReturnsEmptyRegistry() {
+        var loaded = BuildingPairings.LoadFromJsonFile("/no/such/file/here.json");
+        Assert.Equal(0, loaded.EdgeCount);
+        Assert.Equal(0, loaded.GroupCount);
     }
 }

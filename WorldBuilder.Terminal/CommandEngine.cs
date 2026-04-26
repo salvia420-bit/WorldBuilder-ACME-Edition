@@ -34,6 +34,11 @@ public class CommandEngine {
     private TerrainDocument? _terrainDocCache;
     private float[]? _heightTableCache;
 
+    // Building-pairings registry. Auto-loaded on project load when a sibling
+    // building_pairings.json exists. Used by RemapBuildingsV2 to share a
+    // single targetGroundZ across grouped buildings (fortress walls, etc.).
+    private WorldBuilder.Shared.Lib.Pairings.BuildingPairings _buildingPairings = new();
+
     public CommandEngine(
         HeadlessProjectManager projectManager,
         ITerrainService terrainService,
@@ -67,6 +72,20 @@ public class CommandEngine {
             }
         } catch (Exception ex) {
             Console.WriteLine($"[Ontology] Auto-restore skipped: {ex.Message}");
+        }
+        // Auto-load building pairings if present.
+        try {
+            var pairingsPath = Path.Combine(p.ProjectDirectory, "building_pairings.json");
+            if (File.Exists(pairingsPath)) {
+                _buildingPairings = WorldBuilder.Shared.Lib.Pairings.BuildingPairings.LoadFromJsonFile(pairingsPath);
+                Console.WriteLine($"[Pairings] Auto-loaded {_buildingPairings.EdgeCount} pair edges " +
+                    $"({_buildingPairings.GroupCount} groups) from {pairingsPath}");
+            } else {
+                _buildingPairings = new WorldBuilder.Shared.Lib.Pairings.BuildingPairings();
+            }
+        } catch (Exception ex) {
+            Console.WriteLine($"[Pairings] Auto-load skipped: {ex.Message}");
+            _buildingPairings = new WorldBuilder.Shared.Lib.Pairings.BuildingPairings();
         }
         return new LoadResult(p.Name, p.FilePath, p.ProjectDirectory, p.BaseDatDirectory);
     }
@@ -1036,7 +1055,8 @@ public class CommandEngine {
         RequireProject();
         ushort lbKey = LbKey(lbX, lbY);
         return ValidationEngine.ValidateBuildingShells(lbKey,
-            _projectManager.CurrentProject!.DocumentManager.Dats);
+            _projectManager.CurrentProject!.DocumentManager.Dats,
+            PairingsGroupKeyOrNull());
     }
 
     public ValidationReport ValidateBuildingPortals(uint lbX, uint lbY) {
@@ -1070,7 +1090,7 @@ public class CommandEngine {
 
         return ValidationEngine.ValidateAll(
             lbKey, dungeonDoc, lbDoc, terrainDoc, heightTable, heightLookup, dats, cliffThreshold,
-            OntologyLookupOrNull());
+            OntologyLookupOrNull(), PairingsGroupKeyOrNull());
     }
 
     /// <summary>
@@ -1081,6 +1101,15 @@ public class CommandEngine {
     private Func<uint, WorldBuilder.Shared.Lib.OntologyEntry?>? OntologyLookupOrNull() {
         if (_ontologyService == null || !_ontologyService.IsScanned) return null;
         return id => _ontologyService.GetEntry(id);
+    }
+
+    /// <summary>
+    /// Returns a group-key resolver from the pairings registry, or null when
+    /// no pairings are loaded. Drives the BSH009 group-Z divergence check.
+    /// </summary>
+    private Func<uint, uint>? PairingsGroupKeyOrNull() {
+        if (_buildingPairings == null || _buildingPairings.EdgeCount == 0) return null;
+        return id => _buildingPairings.GroupKey(id);
     }
 
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -3816,6 +3845,106 @@ public class CommandEngine {
             OrientationBias: orientBias,
             ElapsedMs: elapsedMs,
             OutputPath: outputPath);
+    }
+
+    /// <summary>
+    /// Mines building pairings from retail co-occurrence data: walks every
+    /// landblock, finds Structure-classified Setups within 5 m of each
+    /// other, and records the pair when the encounter count meets the
+    /// threshold. Writes <c>building_pairings.json</c> in the project dir
+    /// (or the given path) and loads it into the live registry.
+    /// </summary>
+    public ExtractBuildingPairingsResult ExtractBuildingPairings(
+        int minCount5 = 3, string? outputPath = null) {
+        RequireProject();
+        if (!_ontologyService.IsScanned) {
+            return new ExtractBuildingPairingsResult(false, 0, 0, 0,
+                Error: "Ontology not scanned. Run scan-ontology first.");
+        }
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var terrainDoc = GetTerrainDoc();
+        // Collect Structure positions across the world.
+        var structures = new List<(ushort lb, System.Numerics.Vector3 pos, uint id)>();
+        for (uint lbX = 0; lbX <= 254; lbX++) {
+            for (uint lbY = 0; lbY <= 254; lbY++) {
+                ushort lbKey = LbKey(lbX, lbY);
+                LandblockDocument lbDoc;
+                try { lbDoc = GetLandblockDoc(lbKey); } catch { continue; }
+                foreach (var obj in lbDoc.GetStaticObjects()) {
+                    var entry = _ontologyService.GetEntry(obj.Id);
+                    if (entry?.Category == "Structure") {
+                        structures.Add((lbKey, obj.Origin, obj.Id));
+                    }
+                }
+            }
+        }
+
+        // Spatial bucket (5 m) and count pair encounters at ≤ 5 m.
+        const float pairRadius = 5f;
+        var buckets = new Dictionary<(int, int), List<int>>();
+        for (int i = 0; i < structures.Count; i++) {
+            int bx = (int)MathF.Floor(structures[i].pos.X / pairRadius);
+            int by = (int)MathF.Floor(structures[i].pos.Y / pairRadius);
+            var key = (bx, by);
+            if (!buckets.TryGetValue(key, out var list)) { list = new(); buckets[key] = list; }
+            list.Add(i);
+        }
+
+        var pairCounts = new Dictionary<(uint, uint), int>();
+        float r2 = pairRadius * pairRadius;
+        foreach (var (bkey, indices) in buckets) {
+            for (int dx = 0; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) {
+                if (dx == 0 && dy < 0) continue;
+                if (!buckets.TryGetValue((bkey.Item1 + dx, bkey.Item2 + dy), out var nbrs)) continue;
+                foreach (int i in indices) foreach (int j in nbrs) {
+                    if (j <= i) continue;
+                    var pi = structures[i].pos; var pj = structures[j].pos;
+                    if ((pi - pj).LengthSquared() > r2) continue;
+                    uint a = structures[i].id, b = structures[j].id;
+                    if (a == b) continue;
+                    var k = a < b ? (a, b) : (b, a);
+                    pairCounts.TryGetValue(k, out int c);
+                    pairCounts[k] = c + 1;
+                }
+            }
+        }
+
+        var registry = new WorldBuilder.Shared.Lib.Pairings.BuildingPairings();
+        int pairsKept = 0;
+        foreach (var (k, c) in pairCounts) {
+            if (c >= minCount5) {
+                registry.AddPair(k.Item1, k.Item2);
+                pairsKept++;
+            }
+        }
+
+        outputPath ??= Path.Combine(_projectManager.CurrentProject!.ProjectDirectory, "building_pairings.json");
+        registry.SaveToJsonFile(outputPath, minCount5);
+        _buildingPairings = registry;
+
+        sw.Stop();
+        return new ExtractBuildingPairingsResult(
+            Success: true,
+            StructuresScanned: structures.Count,
+            PairsKept: pairsKept,
+            GroupCount: registry.GroupCount,
+            OutputPath: outputPath,
+            ElapsedMs: sw.ElapsedMilliseconds);
+    }
+
+    /// <summary>
+    /// Loads <c>building_pairings.json</c> from disk into the live registry.
+    /// Used to restore a pairing dataset without re-running extraction.
+    /// </summary>
+    public LoadBuildingPairingsResult LoadBuildingPairings(string path) {
+        RequireProject();
+        if (!File.Exists(path)) {
+            return new LoadBuildingPairingsResult(false, 0, 0, Error: $"File not found: {path}");
+        }
+        _buildingPairings = WorldBuilder.Shared.Lib.Pairings.BuildingPairings.LoadFromJsonFile(path);
+        return new LoadBuildingPairingsResult(true,
+            _buildingPairings.EdgeCount, _buildingPairings.GroupCount);
     }
 
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -7784,6 +7913,37 @@ public class CommandEngine {
                 var sourceBuildingFootprints =
                     new List<(System.Numerics.Vector2[] poly, float deltaZ, uint modelId)>();
 
+                // 3a-pre. Group resolution: every building whose model id
+                // pairs (transitively) with another model id on this landblock
+                // shares a single targetGroundZ. This is what stops a fortress
+                // wall from stair-stepping across a slope — all members sit
+                // flush at the union-max of every member's corner samples.
+                var groupTargetZ = new Dictionary<uint, float>();
+                if (_buildingPairings.EdgeCount > 0) {
+                    var pendingByGroup = new Dictionary<uint, List<float>>();
+                    for (int gIdx = 0; gIdx < oldLbi.Buildings.Count; gIdx++) {
+                        var b = oldLbi.Buildings[gIdx];
+                        uint groupKey = _buildingPairings.GroupKey(b.ModelId);
+                        if (!_buildingPairings.HasPairs(b.ModelId)) continue;
+                        float? gMax = SampleFootprintMaxGroundZ(
+                            b.ModelId, newLbKey,
+                            b.Frame.Origin.X, b.Frame.Origin.Y, b.Frame.Orientation);
+                        if (!gMax.HasValue) continue;
+                        if (!pendingByGroup.TryGetValue(groupKey, out var list)) {
+                            list = new List<float>(); pendingByGroup[groupKey] = list;
+                        }
+                        list.Add(gMax.Value);
+                    }
+                    foreach (var (gk, samples) in pendingByGroup) {
+                        if (samples.Count >= 2) {
+                            // Only commit a shared group Z when 2+ members
+                            // contributed; a singleton on this landblock is
+                            // not a group worth coordinating.
+                            groupTargetZ[gk] = samples.Max();
+                        }
+                    }
+                }
+
                 for (int bIdx = 0; bIdx < oldLbi.Buildings.Count; bIdx++) {
                     var building = oldLbi.Buildings[bIdx];
 
@@ -7808,7 +7968,14 @@ public class CommandEngine {
                         building.ModelId, newLbKey,
                         building.Frame.Origin.X, building.Frame.Origin.Y,
                         building.Frame.Orientation);
-                    float targetGroundZ = footprintMaxZ
+                    // Group override: when this building belongs to a
+                    // multi-member group on this landblock, use the shared
+                    // group Z so all members are coplanar.
+                    uint myGroupKey = _buildingPairings.GroupKey(building.ModelId);
+                    float? groupZ = groupTargetZ.TryGetValue(myGroupKey, out var gz)
+                        ? gz : (float?)null;
+                    float targetGroundZ = groupZ
+                        ?? footprintMaxZ
                         ?? placement.destinationGroundZ
                         ?? (sourceGroundZ + fallbackDeltaZ);
 

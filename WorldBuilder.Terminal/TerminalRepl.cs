@@ -142,6 +142,8 @@ public class TerminalRepl {
             ["generate-dungeon"] = HandleGenerateDungeon,
             ["auto-paint"] = _ => HandleAutoPaint(),
             ["analyze-landblock-patterns"] = HandleAnalyzeLandblockPatterns,
+            ["extract-building-pairings"] = HandleExtractBuildingPairings,
+            ["load-building-pairings"] = HandleLoadBuildingPairings,
             ["export-training-data"] = HandleExportTrainingData,
             ["export-raw-world-facts"] = HandleExportRawWorldFacts,
             ["export-envcell-components"] = HandleExportEnvCellComponents,
@@ -1379,7 +1381,7 @@ public class TerminalRepl {
         Console.WriteLine("  validate-dungeon <lbX> <lbY>           Validate dungeon structure/portals");
         Console.WriteLine("  validate-landblock <lbX> <lbY>         Validate landblock objects (LBK010 footprint flush check when ontology is scanned)");
         Console.WriteLine("  validate-terrain <lbX> <lbY> [thresh]  Validate terrain (cliffs, edges)");
-        Console.WriteLine("  validate-building-shells <lbX> <lbY>   Validate exterior building shell data");
+        Console.WriteLine("  validate-building-shells <lbX> <lbY>   Validate exterior building shell data (BSH009 group-Z divergence when pairings are loaded)");
         Console.WriteLine("  validate-building-portals <lbX> <lbY>  Validate interior EnvCell portal links");
         Console.WriteLine("  validate-all <lbX> <lbY> [thresh]      Run ALL validators on a landblock (footprint flush + cliffs + portals)");
         Console.WriteLine();
@@ -1479,6 +1481,8 @@ public class TerminalRepl {
         Console.WriteLine("     depth=8, branching=2.0, seed=0 (random). Full: generate-dungeon 1 217 8 2.0 42");
         Console.WriteLine("  auto-paint                                       Re-paint terrain types from heightmap");
         Console.WriteLine("  analyze-landblock-patterns [minX minY maxX maxY] [output]  Extract spatial design patterns");
+        Console.WriteLine("  extract-building-pairings [minCount5=3] [output]  Mine retail Structure×Structure adjacency → building_pairings.json");
+        Console.WriteLine("  load-building-pairings <path>          Load building_pairings.json into the live registry");
         Console.WriteLine("  export-training-data [minX minY maxX maxY] [output] [nearbyN]  Export placement examples as JSONL");
         Console.WriteLine("  export-raw-world-facts [minX minY maxX maxY] [output] [--ace-db] [--links]  Export raw DAT/SQL/spawn facts");
         Console.WriteLine("  export-envcell-components [minX minY maxX maxY] [output]  Export linked surface-anchor and EnvCell components");
@@ -2488,6 +2492,39 @@ public class TerminalRepl {
         else
             Console.WriteLine("  Tip: Use 'analyze-landblock-patterns [minX minY maxX maxY] <output.json>' to save results.");
         Console.WriteLine();
+    }
+
+    private void HandleExtractBuildingPairings(string[] tokens) {
+        if (!CheckProject()) return;
+        int minCount5 = 3;
+        string? outputPath = null;
+        for (int i = 1; i < tokens.Length; i++) {
+            if (int.TryParse(tokens[i], out int n)) minCount5 = n;
+            else outputPath = tokens[i];
+        }
+        var r = _engine.ExtractBuildingPairings(minCount5, outputPath);
+        if (!r.Success) {
+            Console.WriteLine($"  Error: {r.Error}");
+            return;
+        }
+        Console.WriteLine($"  Scanned {r.StructuresScanned:N0} structures, kept {r.PairsKept} pair edges " +
+            $"(minCount5={minCount5}), {r.GroupCount} groups in {r.ElapsedMs}ms");
+        if (!string.IsNullOrEmpty(r.OutputPath))
+            Console.WriteLine($"  Saved to: {r.OutputPath}");
+    }
+
+    private void HandleLoadBuildingPairings(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 2) {
+            Console.WriteLine("Usage: load-building-pairings <path>");
+            return;
+        }
+        var r = _engine.LoadBuildingPairings(tokens[1]);
+        if (!r.Success) {
+            Console.WriteLine($"  Error: {r.Error}");
+            return;
+        }
+        Console.WriteLine($"  Loaded {r.EdgeCount} pair edges, {r.GroupCount} groups");
     }
 
     private void HandleExportTrainingData(string[] tokens) {

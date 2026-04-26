@@ -439,7 +439,8 @@ public static class ValidationEngine {
     /// </summary>
     public static ValidationReport ValidateBuildingShells(
         ushort lbKey,
-        IDatReaderWriter dats) {
+        IDatReaderWriter dats,
+        Func<uint, uint>? pairingsGroupKey = null) {
 
         var diagnostics = new List<ValidationDiagnostic>();
         var target = $"building_shells_{lbKey:X4}";
@@ -515,6 +516,38 @@ public static class ValidationEngine {
             diagnostics.Add(new(ValidationSeverity.Warning, "BSH008",
                 $"Building shell model 0x{dup.Key.Split('@')[0]} appears {dup.Value} times at {dup.Key.Split('@')[1]}.",
                 "Duplicates"));
+        }
+
+        // ── BSH009: paired-group Z divergence ──
+        // When two or more buildings on this landblock are members of the
+        // same building group (mined from retail co-occurrence), their
+        // origin Z must agree to within 10 cm. Stair-stepped fortress walls
+        // — the visible failure mode that motivated Phase 3 — produce a
+        // BSH009 here.
+        if (pairingsGroupKey != null) {
+            var byGroup = new Dictionary<uint, List<(int idx, float z)>>();
+            for (int i = 0; i < lbi.Buildings.Count; i++) {
+                var b = lbi.Buildings[i];
+                uint gk = pairingsGroupKey(b.ModelId);
+                if (!byGroup.TryGetValue(gk, out var list)) {
+                    list = new List<(int, float)>(); byGroup[gk] = list;
+                }
+                list.Add((i, b.Frame.Origin.Z));
+            }
+            foreach (var (gk, members) in byGroup) {
+                if (members.Count < 2) continue;
+                float minZ = members.Min(m => m.z);
+                float maxZ = members.Max(m => m.z);
+                float spread = maxZ - minZ;
+                if (spread > FootprintCornerFlushTol) {
+                    var idxList = string.Join(", ", members.Select(m => $"[{m.idx}]"));
+                    diagnostics.Add(new(ValidationSeverity.Warning, "BSH009",
+                        $"Paired building group (key 0x{gk:X8}) has {spread:F2}m Z-spread across " +
+                        $"{members.Count} members ({idxList}). Members of the same group should " +
+                        $"share a foundation Z (max-of-corners union); see Phase 3 group resolution.",
+                        $"Group 0x{gk:X8}"));
+                }
+            }
         }
 
         return BuildReport("building-shells", target, diagnostics);
@@ -648,7 +681,8 @@ public static class ValidationEngine {
         Func<float, float, float>? heightLookup,
         IDatReaderWriter? dats,
         float cliffThreshold = DefaultCliffThreshold,
-        Func<uint, OntologyEntry?>? ontologyLookup = null) {
+        Func<uint, OntologyEntry?>? ontologyLookup = null,
+        Func<uint, uint>? pairingsGroupKey = null) {
 
         var allDiagnostics = new List<ValidationDiagnostic>();
         var target = $"all_{lbKey:X4}";
@@ -673,7 +707,7 @@ public static class ValidationEngine {
 
         // ── Building shells (exterior model data) ──
         if (dats != null) {
-            var r = ValidateBuildingShells(lbKey, dats);
+            var r = ValidateBuildingShells(lbKey, dats, pairingsGroupKey);
             allDiagnostics.AddRange(r.Diagnostics);
         }
 
