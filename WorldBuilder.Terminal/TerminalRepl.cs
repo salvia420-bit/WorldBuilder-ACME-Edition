@@ -169,6 +169,7 @@ public class TerminalRepl {
             ["worldgen-analyze-buildings"] = HandleWorldGenAnalyzeBuildings,
             ["worldgen-scan-retail-towns"] = HandleWorldGenScanRetailTowns,
             ["render-preview"] = HandleRenderPreview,
+            ["compare-to-retail"] = HandleCompareToRetail,
             ["help"] = _ => PrintHelp(),
         };
 
@@ -1502,6 +1503,7 @@ public class TerminalRepl {
         Console.WriteLine("  worldgen [--seed n] [--size w h] [--towns n] [--out plan.json] [--apply]  Run WorldGen pipeline");
         Console.WriteLine("  worldgen-analyze-buildings [--out catalog.json]                  Scan DATs for placeable building models");
         Console.WriteLine("  worldgen-scan-retail-towns [--out stats.json]                    Scan DATs for retail-style town models");
+        Console.WriteLine("  compare-to-retail <generated.jsonl> [--retail-baseline path]     Score generated world vs retail (subprocess)");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
@@ -4593,6 +4595,140 @@ public class TerminalRepl {
         Console.ForegroundColor = ConsoleColor.Green;
         Console.WriteLine($"  bsp-build {r.HexId}: OK ({r.PolygonCount} polygons)");
         Console.ResetColor();
+        Console.WriteLine();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  compare-to-retail
+    // ═══════════════════════════════════════════════════════════
+
+    private void HandleCompareToRetail(string[] tokens) {
+        if (tokens.Length < 2 || tokens[1] == "--help") {
+            Console.WriteLine("Usage: compare-to-retail <generated.jsonl> [options]");
+            Console.WriteLine("  Scores a generated world against retail by subprocessing");
+            Console.WriteLine("  scripts/PopulationPipeline/Validation/compare_world_to_retail.py.");
+            Console.WriteLine("  The 'region' is auto-derived from lb_x/lb_y in <generated.jsonl>;");
+            Console.WriteLine("  retail is filtered to that landblock set before scoring.");
+            Console.WriteLine();
+            Console.WriteLine("  Options:");
+            Console.WriteLine("    --retail-baseline <path>   override default retail JSONL");
+            Console.WriteLine("    --top-k <N>                rows per anomaly table (default 30)");
+            Console.WriteLine("    --anomaly-min-model <N>    threshold for over/under tables (default 20)");
+            Console.WriteLine("    --no-per-lb                skip the per-landblock breakdown");
+            Console.WriteLine("    --cache-dir <path>         retail snapshot cache (default: $TMP/wb_compare_cache)");
+            Console.WriteLine();
+            Console.WriteLine("  Env: WORLDBUILDER_COMPARATOR_PY overrides script path.");
+            Console.WriteLine("       WORLDBUILDER_PYTHON       overrides python interpreter.");
+            return;
+        }
+
+        string generated = tokens[1];
+        string? retailBaseline = null;
+        string? cacheDir = null;
+        int topK = 30;
+        int anomalyMin = 20;
+        bool perLb = true;
+
+        for (int i = 2; i < tokens.Length; i++) {
+            switch (tokens[i]) {
+                case "--retail-baseline":
+                    if (i + 1 >= tokens.Length) { Console.WriteLine("Missing path after --retail-baseline"); return; }
+                    retailBaseline = tokens[++i]; break;
+                case "--cache-dir":
+                    if (i + 1 >= tokens.Length) { Console.WriteLine("Missing path after --cache-dir"); return; }
+                    cacheDir = tokens[++i]; break;
+                case "--top-k":
+                    if (i + 1 >= tokens.Length || !int.TryParse(tokens[i + 1], out topK)) {
+                        Console.WriteLine("--top-k expects an integer"); return;
+                    }
+                    i++; break;
+                case "--anomaly-min-model":
+                    if (i + 1 >= tokens.Length || !int.TryParse(tokens[i + 1], out anomalyMin)) {
+                        Console.WriteLine("--anomaly-min-model expects an integer"); return;
+                    }
+                    i++; break;
+                case "--no-per-lb":
+                    perLb = false; break;
+                default:
+                    Console.WriteLine($"Unknown flag: {tokens[i]}"); return;
+            }
+        }
+
+        var r = _engine.CompareToRetail(generated, retailBaseline, topK, anomalyMin, perLb, cacheDir);
+        Console.WriteLine();
+        if (!r.Success) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  compare-to-retail: FAILED — {r.Error}");
+            Console.ResetColor();
+            Console.WriteLine();
+            return;
+        }
+
+        Console.WriteLine($"  ═══ compare-to-retail ({r.ElapsedSeconds:F2}s, cache {(r.RetailCacheHit ? "HIT" : "miss")}) ═══");
+        Console.WriteLine($"  Generated  : {r.Generated}");
+        Console.WriteLine($"  Retail     : {r.Retail}");
+        if (r.Region != null) {
+            Console.WriteLine($"  Region     : {r.Region.NLandblocks} LBs  "
+                + $"x∈[{r.Region.XMin},{r.Region.XMax}]  y∈[{r.Region.YMin},{r.Region.YMax}]");
+        }
+        Console.WriteLine($"  Volumes    : model={r.GeneratedCount:N0}  retail={r.RetailCount:N0}  "
+            + $"density Δ={r.DensityDeltaPct:+0.0;-0.0;0.0}%");
+        if (r.ModelDensity != null && r.RetailDensity != null) {
+            Console.WriteLine($"  Density/LB : model mean={r.ModelDensity.Mean:F2} p50={r.ModelDensity.P50} p95={r.ModelDensity.P95}");
+            Console.WriteLine($"               retail mean={r.RetailDensity.Mean:F2} p50={r.RetailDensity.P50} p95={r.RetailDensity.P95}");
+        }
+        if (r.Coverage != null) {
+            Console.WriteLine($"  Coverage   : model={r.Coverage.ModelUnique} unique  retail={r.Coverage.RetailUnique} unique  "
+                + $"both={r.Coverage.Both}  novel={r.Coverage.Novel}  missing={r.Coverage.Missing}");
+        }
+        if (r.SurfaceInterior != null) {
+            Console.WriteLine($"  Surface/Int: model {r.SurfaceInterior.ModelSurfacePct:F1}/{r.SurfaceInterior.ModelInteriorPct:F1}%  "
+                + $"retail {r.SurfaceInterior.RetailSurfacePct:F1}/{r.SurfaceInterior.RetailInteriorPct:F1}%");
+        }
+        if (r.LbJaccard != null && r.LbJaccard.Mean.HasValue) {
+            Console.WriteLine($"  LB Jaccard : n={r.LbJaccard.N}  mean={r.LbJaccard.Mean:F4}  p50={r.LbJaccard.P50:F4}  p10={r.LbJaccard.P10:F4}");
+        }
+        if (r.Anomalies != null) {
+            Console.WriteLine($"  Out-of-ctx : {100 * r.Anomalies.Frac:F1}% of LB-wcid pairs are novel "
+                + $"({r.Anomalies.NovelUnique}/{r.Anomalies.EmittedUnique})");
+        }
+        if (r.ClassSpace != null) {
+            var spaces = string.Join("  ", r.ClassSpace.Retail
+                .OrderByDescending(kv => kv.Value)
+                .Select(kv => $"{kv.Key}={kv.Value:N0}"));
+            Console.WriteLine($"  ClassSpace : retail {spaces}");
+            Console.Write($"               model emits wcid only; coverage(wcid)=");
+            Console.Write(r.ClassSpace.CoverageOfRetailWcid.HasValue
+                ? $"{r.ClassSpace.CoverageOfRetailWcid:F4}" : "n/a");
+            Console.WriteLine($"  coverage(all)={r.ClassSpace.CoverageOfRetailAll:F4}");
+        }
+        if (r.Wcids != null) {
+            int over = r.Wcids.Over.Count, under = r.Wcids.Under.Count,
+                novel = r.Wcids.Novel.Count, missing = r.Wcids.Missing.Count;
+            Console.WriteLine($"  Wcid bands : over={over} under={under} novel={novel} missing={missing}");
+            if (over > 0) {
+                Console.WriteLine($"    top over-rep:");
+                foreach (var w in r.Wcids.Over.Take(5))
+                    Console.WriteLine($"      wcid={w.Wcid,-7} model={w.ModelCount,-6} retail={w.RetailCount,-6} ratio={w.Ratio:F2}");
+            }
+            if (under > 0) {
+                Console.WriteLine($"    top under-rep:");
+                foreach (var w in r.Wcids.Under.Take(5))
+                    Console.WriteLine($"      wcid={w.Wcid,-7} model={w.ModelCount,-6} retail={w.RetailCount,-6} ratio={w.Ratio:F2}");
+            }
+        }
+        if (r.PerLandblock != null && r.PerLandblock.Count > 0) {
+            Console.WriteLine($"  Per-LB rows: {r.PerLandblock.Count} (top 5 by |density delta|):");
+            foreach (var lb in r.PerLandblock.Take(5)) {
+                Console.WriteLine($"      ({lb.LbX,3},{lb.LbY,3})  Δ={lb.DensityDelta,+5}  "
+                    + $"model={lb.ModelCount,-4} retail={lb.RetailCount,-4} "
+                    + $"jaccard={(lb.WcidJaccard?.ToString("F3") ?? "n/a"),-6} "
+                    + $"novel={lb.NovelInLb}");
+            }
+        }
+        if (!string.IsNullOrEmpty(r.OutJsonPath)) {
+            Console.WriteLine($"  JSON       : {r.OutJsonPath}");
+        }
         Console.WriteLine();
     }
 }

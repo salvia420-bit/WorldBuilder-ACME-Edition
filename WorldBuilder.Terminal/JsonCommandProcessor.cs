@@ -201,8 +201,48 @@ public class JsonCommandProcessor {
             ["worldgen-analyze-buildings"] = CmdWorldGenAnalyzeBuildings,
             ["worldgen-scan-retail-towns"] = CmdWorldGenScanRetailTowns,
             ["render-preview"] = CmdRenderPreview,
+            ["compare-to-retail"] = CmdCompareToRetail,
             ["help"] = _ => CmdHelp(),
         };
+
+    private string CmdCompareToRetail(System.Text.Json.Nodes.JsonNode node) {
+        var generated = node["generated"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'generated' field");
+        string? retailBaseline = node["retailBaseline"]?.GetValue<string>();
+        int topK = node["topK"]?.GetValue<int>() ?? 30;
+        int anomalyMin = node["anomalyMinModel"]?.GetValue<int>() ?? 20;
+        bool perLb = node["perLandblock"]?.GetValue<bool>() ?? true;
+        string? cacheDir = node["cacheDir"]?.GetValue<string>();
+
+        var r = _engine.CompareToRetail(generated, retailBaseline, topK, anomalyMin, perLb, cacheDir);
+        if (!r.Success)
+            return Serialize(new { success = false, command = "compare-to-retail",
+                generated = r.Generated, retail = r.Retail, error = r.Error });
+
+        return Serialize(new {
+            success = true,
+            command = "compare-to-retail",
+            generated = r.Generated,
+            retail = r.Retail,
+            elapsedSeconds = r.ElapsedSeconds,
+            retailCacheHit = r.RetailCacheHit,
+            region = r.Region,
+            volumes = new {
+                generated = r.GeneratedCount,
+                retail = r.RetailCount,
+                densityDeltaPct = r.DensityDeltaPct,
+            },
+            density = new { model = r.ModelDensity, retail = r.RetailDensity },
+            coverage = r.Coverage,
+            surfaceInterior = r.SurfaceInterior,
+            lbJaccard = r.LbJaccard,
+            anomalies = r.Anomalies,
+            classSpace = r.ClassSpace,
+            wcids = r.Wcids,
+            perLandblock = r.PerLandblock,
+            outJsonPath = r.OutJsonPath,
+        });
+    }
 
     private string CmdRenderPreview(System.Text.Json.Nodes.JsonNode node) {
         uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
@@ -876,6 +916,7 @@ public class JsonCommandProcessor {
             new { name = "extract-retail-heightmaps", args = "outputPath?", description = "Dump all 255×255 landblock heightmaps as JSONL" },
             new { name = "compute-vanilla-baseline", args = "outputPath?", description = "Compute retail quality baseline metrics (density, terrain dist, etc.)" },
             new { name = "render-preview",   args = "lbX, lbY, radius?, resolution?, overlay?, includePng?, outputPath?", description = "Top-down PNG of an N×N landblock region (terrain + objects + cliff/pairing overlays). Returns base64 PNG." },
+            new { name = "compare-to-retail", args = "generated, retailBaseline?, topK?, anomalyMinModel?, perLandblock?, cacheDir?", description = "Subprocess the Python comparator; score generated world vs retail with per-LB drilldown and class-space ratio. Caches retail snapshot for tight tuning loops." },
             new { name = "quit",             args = "",                                      description = "Exit terminal" }
         };
         return Serialize(new { success = true, command = "help", protocol = "json-line", version = "1.5",

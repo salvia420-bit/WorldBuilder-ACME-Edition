@@ -28,9 +28,11 @@ Failure modes this catches by design:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
+import pickle
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -96,18 +98,23 @@ def load_generated(path):
     return per_lb, wcid_counts, wcid_by_lb, surface, interior, total, region
 
 
-def load_retail(path, region):
+def load_retail(path, region, *, quiet=False):
     """Stream retail JSONL, keep only rows whose (lbX, lbY) is in `region`,
     keep only wcid-space rows (model can only resolve to wcids).
 
     Also accumulates `wcid_to_wtype_counts[wcid][wtype] -> count` so the caller
     can derive a wcid→modal-wtype lookup without a second pass over the file.
+
+    `class_space_counts` tallies retail rows in-region by classIdSpace
+    BEFORE the wcid filter, so callers can report wcid vs model_id vs
+    ace_abstract vs building_model coverage of retail's full class space.
     """
     per_lb = Counter()
     wcid_counts = Counter()
     wcid_by_lb = defaultdict(set)
     wtype_counts = Counter()
     wcid_to_wtype_counts: dict[int, Counter] = defaultdict(Counter)
+    class_space_counts: Counter = Counter()
     surface = 0
     interior = 0
     total = 0
@@ -118,7 +125,9 @@ def load_retail(path, region):
             continue
         if region and lb not in region:
             continue
-        if row.get("classIdSpace") != "wcid":
+        cls_space = row.get("classIdSpace") or "unknown"
+        class_space_counts[cls_space] += 1
+        if cls_space != "wcid":
             continue
         wcid = row.get("classId")
         try:
@@ -140,9 +149,78 @@ def load_retail(path, region):
         else:
             surface += 1
         total += 1
-        if n % 1_000_000 == 0:
+        if n % 1_000_000 == 0 and not quiet:
             print(f"  retail rows scanned: {n:,}", file=sys.stderr)
-    return per_lb, wcid_counts, wcid_by_lb, wtype_counts, surface, interior, total, wcid_to_wtype_counts
+    return (per_lb, wcid_counts, wcid_by_lb, wtype_counts,
+            surface, interior, total, wcid_to_wtype_counts, class_space_counts)
+
+
+# ─── Retail snapshot cache ──────────────────────────────────────────────
+# Hot-loop callers (the in-terminal compare-to-retail command) may compare
+# the same region many times in a row while tuning. The retail JSONL scan
+# is by far the dominant cost. Cache the post-filter result keyed by
+# (retail file path, region landblock set, retail file mtime+size).
+
+CACHE_VERSION = 2  # bump when load_retail's return shape changes
+
+def _region_cache_key(retail_path: Path, region: set) -> str:
+    try:
+        st = retail_path.stat()
+        sig = f"{retail_path.resolve()}|{st.st_size}|{int(st.st_mtime)}"
+    except OSError:
+        sig = str(retail_path.resolve())
+    region_sig = ",".join(f"{x}_{y}" for x, y in sorted(region))
+    h = hashlib.sha1(f"{sig}|{region_sig}".encode("utf-8")).hexdigest()[:16]
+    return f"retail_v{CACHE_VERSION}_{h}.pkl"
+
+def _try_load_cache(cache_dir: Path, key: str, *, quiet=False):
+    cache_file = cache_dir / key
+    if not cache_file.exists():
+        return None
+    try:
+        with cache_file.open("rb") as f:
+            data = pickle.load(f)
+        if not isinstance(data, dict) or data.get("v") != CACHE_VERSION:
+            return None
+        if not quiet:
+            print(f"  retail cache hit: {cache_file}", file=sys.stderr)
+        return data
+    except (pickle.PickleError, EOFError, OSError):
+        return None
+
+def _store_cache(cache_dir: Path, key: str, payload: dict, *, quiet=False) -> None:
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = cache_dir / key
+        tmp = cache_file.with_suffix(".tmp")
+        with tmp.open("wb") as f:
+            pickle.dump({"v": CACHE_VERSION, **payload}, f, protocol=pickle.HIGHEST_PROTOCOL)
+        tmp.replace(cache_file)
+        if not quiet:
+            print(f"  retail cache stored: {cache_file}", file=sys.stderr)
+    except OSError as ex:
+        if not quiet:
+            print(f"  retail cache store failed: {ex}", file=sys.stderr)
+
+def load_retail_cached(retail_path: Path, region: set, cache_dir: Path | None,
+                       *, quiet=False):
+    """Wrapper around load_retail() with optional pickle cache."""
+    if cache_dir is not None and region:
+        key = _region_cache_key(retail_path, region)
+        hit = _try_load_cache(cache_dir, key, quiet=quiet)
+        if hit is not None:
+            return (hit["per_lb"], hit["wcid"], hit["wcid_by_lb"], hit["wtype"],
+                    hit["surf"], hit["intr"], hit["total"], hit["w2wt"], hit["cls_space"])
+
+    result = load_retail(retail_path, region, quiet=quiet)
+    if cache_dir is not None and region:
+        per_lb, wcid, wcid_by_lb, wtype, surf, intr, total, w2wt, cls_space = result
+        _store_cache(cache_dir, key, {
+            "per_lb": per_lb, "wcid": wcid, "wcid_by_lb": wcid_by_lb,
+            "wtype": wtype, "surf": surf, "intr": intr, "total": total,
+            "w2wt": w2wt, "cls_space": cls_space,
+        }, quiet=quiet)
+    return result
 
 
 def density_stats(per_lb, region):
@@ -220,6 +298,64 @@ def over_under_table(model_counts, retail_counts, *, min_model=20, k=30):
 def share_table(counts):
     total = sum(counts.values()) or 1
     return {k: counts[k] / total for k in counts}
+
+
+def per_landblock_breakdown(region, m_per_lb, r_per_lb,
+                            m_wcid_by_lb, r_wcid_by_lb):
+    """Per-LB drill-down so a tuning agent can inspect outliers.
+
+    Returned rows sort by abs(model - retail) density delta descending so the
+    most-divergent landblocks float to the top. The agent loop is expected to
+    consume this directly; we keep the row count == |region| (no truncation)
+    because the caller knows the size of the region they asked about.
+    """
+    rows = []
+    for lb in region:
+        lbx, lby = lb
+        m_count = m_per_lb.get(lb, 0)
+        r_count = r_per_lb.get(lb, 0)
+        m_set = m_wcid_by_lb.get(lb, set())
+        r_set = r_wcid_by_lb.get(lb, set())
+        novel = m_set - r_set
+        missing = r_set - m_set
+        rows.append({
+            "lbX": lbx,
+            "lbY": lby,
+            "modelCount": m_count,
+            "retailCount": r_count,
+            "densityDelta": m_count - r_count,
+            "modelWcidUnique": len(m_set),
+            "retailWcidUnique": len(r_set),
+            "wcidJaccard": round(jaccard(m_set, r_set), 4) if (m_set or r_set) else None,
+            "novelInLb": len(novel),
+            "missingInLb": len(missing),
+        })
+    rows.sort(key=lambda r: -abs(r["densityDelta"]))
+    return rows
+
+
+def class_space_summary(retail_class_counts: Counter, model_total: int):
+    """Summarize retail classIdSpace distribution and the model's coverage.
+
+    Today the v3 unified model only emits in the wcid space, so the
+    'modelEmitted' bucket is reported as wcid-only. The retail bucket
+    spans wcid + model_id + ace_abstract + building_model + ... and lets
+    the caller see what fraction of retail's placements are classes the
+    model doesn't yet emit at all.
+    """
+    retail_total = sum(retail_class_counts.values()) or 1
+    return {
+        "retail": {k: int(v) for k, v in retail_class_counts.items()},
+        "retailTotal": int(retail_total),
+        "retailFractions": {k: round(v / retail_total, 4) for k, v in retail_class_counts.items()},
+        "modelEmitted": {"wcid": int(model_total)},
+        "modelTotal": int(model_total),
+        "coverageOfRetailWcid": (
+            round(model_total / retail_class_counts["wcid"], 4)
+            if retail_class_counts.get("wcid") else None
+        ),
+        "coverageOfRetailAll": round(model_total / retail_total, 4),
+    }
 
 
 def context_anomalies(model_by_lb, retail_by_lb, region):
@@ -356,6 +492,16 @@ def main():
                     help="Minimum model count to surface a wcid in over/under tables")
     ap.add_argument("--top-k", type=int, default=30,
                     help="How many rows per anomaly table")
+    ap.add_argument("--retail-cache-dir", type=Path, default=None,
+                    help="Directory for region-filtered retail snapshot cache (speeds up tight tuning loops)")
+    ap.add_argument("--stdout-json", action="store_true",
+                    help="Also print the JSON report to stdout (for subprocess consumers)")
+    ap.add_argument("--no-md", action="store_true",
+                    help="Skip writing the markdown report")
+    ap.add_argument("--no-per-lb", action="store_true",
+                    help="Skip the per-landblock breakdown in the JSON output")
+    ap.add_argument("--quiet", action="store_true",
+                    help="Suppress progress output on stderr")
     args = ap.parse_args()
 
     if not args.generated.exists():
@@ -363,19 +509,24 @@ def main():
     if not args.retail.exists():
         raise SystemExit(f"Retail JSONL not found: {args.retail}")
 
-    print(f"[1/3] Loading generated: {args.generated}", file=sys.stderr)
-    m_per_lb, m_wcid, m_wcid_by_lb, m_surf, m_int, m_total, region = load_generated(args.generated)
-    print(f"  generated rows: {m_total:,}  unique wcids: {len(m_wcid):,}  region: {len(region):,} LBs", file=sys.stderr)
+    def log(msg):
+        if not args.quiet:
+            print(msg, file=sys.stderr)
 
-    print(f"[2/3] Streaming retail (region-filtered): {args.retail}", file=sys.stderr)
-    r_per_lb, r_wcid, r_wcid_by_lb, r_wtype, r_surf, r_int, r_total, wcid_to_wtype_counts = load_retail(
-        args.retail, region
+    log(f"[1/3] Loading generated: {args.generated}")
+    m_per_lb, m_wcid, m_wcid_by_lb, m_surf, m_int, m_total, region = load_generated(args.generated)
+    log(f"  generated rows: {m_total:,}  unique wcids: {len(m_wcid):,}  region: {len(region):,} LBs")
+
+    log(f"[2/3] Streaming retail (region-filtered): {args.retail}")
+    (r_per_lb, r_wcid, r_wcid_by_lb, r_wtype, r_surf, r_int, r_total,
+     wcid_to_wtype_counts, r_class_space) = load_retail_cached(
+        args.retail, region, args.retail_cache_dir, quiet=args.quiet
     )
-    print(f"  retail rows in region: {r_total:,}  unique wcids: {len(r_wcid):,}", file=sys.stderr)
+    log(f"  retail rows in region: {r_total:,}  unique wcids: {len(r_wcid):,}")
 
     # Model JSONL doesn't carry weenieType; map each wcid to its most-common
     # wtype as observed in retail-in-region.
-    print("[3/3] Computing comparisons...", file=sys.stderr)
+    log("[3/3] Computing comparisons...")
     wcid_to_wtype = {w: c.most_common(1)[0][0] for w, c in wcid_to_wtype_counts.items() if c}
 
     m_wtype = Counter()
@@ -459,6 +610,7 @@ def main():
         "surface_interior": surface_interior,
         "lb_jaccard": per_lb_jaccard(m_wcid_by_lb, r_wcid_by_lb, region),
         "anomalies": context_anomalies(m_wcid_by_lb, r_wcid_by_lb, region),
+        "class_space": class_space_summary(r_class_space, m_total),
         "wtype_share": wtype_share,
         "wcids": {
             "over": [[w, m, r, round(ratio, 3)] for (w, m, r, ratio) in over],
@@ -468,15 +620,25 @@ def main():
         },
     }
 
-    out_json = args.out_json or args.generated.with_suffix(".comparison.json")
-    out_md = args.out_md or args.generated.with_suffix(".comparison.md")
-    out_json.parent.mkdir(parents=True, exist_ok=True)
-    out_md.parent.mkdir(parents=True, exist_ok=True)
-    out_json.write_text(json.dumps(report, indent=2))
-    out_md.write_text(render_md(report))
+    if not args.no_per_lb:
+        report["per_landblock"] = per_landblock_breakdown(
+            region, m_per_lb, r_per_lb, m_wcid_by_lb, r_wcid_by_lb)
 
-    print(f"  JSON report: {out_json}", file=sys.stderr)
-    print(f"  MD report:   {out_md}", file=sys.stderr)
+    out_json = args.out_json or args.generated.with_suffix(".comparison.json")
+    out_json.parent.mkdir(parents=True, exist_ok=True)
+    out_json.write_text(json.dumps(report, indent=2))
+    log(f"  JSON report: {out_json}")
+
+    if not args.no_md:
+        out_md = args.out_md or args.generated.with_suffix(".comparison.md")
+        out_md.parent.mkdir(parents=True, exist_ok=True)
+        out_md.write_text(render_md(report))
+        log(f"  MD report:   {out_md}")
+
+    if args.stdout_json:
+        sys.stdout.write(json.dumps(report))
+        sys.stdout.write("\n")
+        sys.stdout.flush()
 
 
 if __name__ == "__main__":

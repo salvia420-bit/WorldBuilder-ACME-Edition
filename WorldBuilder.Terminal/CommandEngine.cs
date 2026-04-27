@@ -9903,6 +9903,343 @@ public class CommandEngine {
         return new BspBuildResult(gfxObjId, hexId, true, true, gfx.Polygons?.Count ?? 0);
     }
 
+    // ═══════════════════════════════════════════════════════════
+    //  compare-to-retail: subprocesses the Python comparator so the
+    //  train → place → score → tune loop can run hot inside one process.
+    //  We subprocess (rather than re-implement in C#) for two reasons:
+    //  (1) the retail JSONL parser doesn't exist in the terminal — only
+    //  generated DATs are loaded; (2) re-implementation risks silent
+    //  numeric drift from prior offline runs. Caching the region-filtered
+    //  retail snapshot inside the Python script keeps tight loops fast.
+    // ═══════════════════════════════════════════════════════════
+
+    private string? _compareRetailDefaultBaseline;
+    private string? _compareCacheDir;
+
+    public CompareToRetailResult CompareToRetail(
+        string generated,
+        string? retailBaseline = null,
+        int topK = 30,
+        int anomalyMinModel = 20,
+        bool perLandblock = true,
+        string? cacheDirOverride = null) {
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        if (string.IsNullOrWhiteSpace(generated))
+            return new CompareToRetailResult(false, generated ?? "", retailBaseline ?? "",
+                Error: "Missing generated JSONL path");
+        if (!File.Exists(generated))
+            return new CompareToRetailResult(false, generated, retailBaseline ?? "",
+                Error: $"Generated JSONL not found: {generated}");
+
+        var retailPath = retailBaseline
+            ?? _compareRetailDefaultBaseline
+            ?? ResolveDefaultRetailBaseline();
+        if (retailPath == null)
+            return new CompareToRetailResult(false, generated, "",
+                Error: "Retail baseline not specified and default not found "
+                     + "(pipeline_data/reference/raw_world_facts_full_with_components_v2.jsonl). "
+                     + "Pass --retail-baseline.");
+        if (!File.Exists(retailPath))
+            return new CompareToRetailResult(false, generated, retailPath,
+                Error: $"Retail baseline not found: {retailPath}");
+        // Persist the resolved retail path for subsequent calls in this session.
+        _compareRetailDefaultBaseline = retailPath;
+
+        var scriptPath = ResolveCompareScript();
+        if (scriptPath == null)
+            return new CompareToRetailResult(false, generated, retailPath,
+                Error: "compare_world_to_retail.py not found. "
+                     + "Set WORLDBUILDER_COMPARATOR_PY or run from a worldbuilder checkout.");
+
+        var cacheDir = cacheDirOverride
+            ?? _compareCacheDir
+            ?? Path.Combine(Path.GetTempPath(), "wb_compare_cache");
+        _compareCacheDir = cacheDir;
+        try { Directory.CreateDirectory(cacheDir); } catch { /* fall through; cache is best-effort */ }
+
+        // Detect cache hit by checking whether the snapshot file exists *before*
+        // the script runs. We can't know the exact key without rebuilding it
+        // here, so we just observe whether the cache dir grew — good enough for
+        // the agent's "did this hit cache?" telemetry.
+        int cacheFilesBefore = SafeCountCacheFiles(cacheDir);
+
+        var args = new List<string> {
+            scriptPath,
+            "--generated", generated,
+            "--retail", retailPath,
+            "--top-k", topK.ToString(CultureInfo.InvariantCulture),
+            "--anomaly-min-model", anomalyMinModel.ToString(CultureInfo.InvariantCulture),
+            "--retail-cache-dir", cacheDir,
+            "--stdout-json",
+            "--no-md",
+            "--quiet",
+        };
+        if (!perLandblock) args.Add("--no-per-lb");
+
+        string stdoutText;
+        string stderrText;
+        int exitCode;
+        try {
+            (stdoutText, stderrText, exitCode) = RunPython(args);
+        } catch (Exception ex) {
+            return new CompareToRetailResult(false, generated, retailPath,
+                Error: $"Failed to launch python: {ex.Message}");
+        }
+        if (exitCode != 0) {
+            return new CompareToRetailResult(false, generated, retailPath,
+                Error: $"compare_world_to_retail.py exited {exitCode}: "
+                     + (string.IsNullOrWhiteSpace(stderrText) ? stdoutText : stderrText).Trim());
+        }
+        if (string.IsNullOrWhiteSpace(stdoutText)) {
+            return new CompareToRetailResult(false, generated, retailPath,
+                Error: "compare_world_to_retail.py produced no stdout JSON");
+        }
+
+        CompareToRetailResult parsed;
+        try {
+            parsed = ParseCompareReport(stdoutText, generated, retailPath);
+        } catch (Exception ex) {
+            return new CompareToRetailResult(false, generated, retailPath,
+                Error: $"Failed to parse comparator JSON: {ex.Message}");
+        }
+
+        int cacheFilesAfter = SafeCountCacheFiles(cacheDir);
+        bool cacheHit = cacheFilesAfter == cacheFilesBefore;
+
+        return parsed with {
+            ElapsedSeconds = Math.Round(sw.Elapsed.TotalSeconds, 3),
+            RetailCacheHit = cacheHit,
+        };
+    }
+
+    private static int SafeCountCacheFiles(string dir) {
+        try { return Directory.GetFiles(dir, "retail_v*.pkl").Length; }
+        catch { return 0; }
+    }
+
+    /// <summary>
+    /// Locates compare_world_to_retail.py. Resolution order:
+    ///   1. WORLDBUILDER_COMPARATOR_PY env var
+    ///   2. Walk up from the current directory looking for scripts/PopulationPipeline/Validation/
+    ///   3. Walk up from the assembly location
+    /// </summary>
+    private static string? ResolveCompareScript() {
+        var envPath = System.Environment.GetEnvironmentVariable("WORLDBUILDER_COMPARATOR_PY");
+        if (!string.IsNullOrEmpty(envPath) && File.Exists(envPath)) return envPath;
+
+        const string rel = "scripts/PopulationPipeline/Validation/compare_world_to_retail.py";
+        foreach (var anchor in new[] { System.Environment.CurrentDirectory, AppContext.BaseDirectory }) {
+            string? dir = anchor;
+            for (int i = 0; i < 8 && dir != null; i++) {
+                var candidate = Path.Combine(dir, rel);
+                if (File.Exists(candidate)) return candidate;
+                dir = Path.GetDirectoryName(dir);
+            }
+        }
+        return null;
+    }
+
+    private static string? ResolveDefaultRetailBaseline() {
+        const string rel = "pipeline_data/reference/raw_world_facts_full_with_components_v2.jsonl";
+        foreach (var anchor in new[] { System.Environment.CurrentDirectory, AppContext.BaseDirectory }) {
+            string? dir = anchor;
+            for (int i = 0; i < 8 && dir != null; i++) {
+                var candidate = Path.Combine(dir, rel);
+                if (File.Exists(candidate)) return candidate;
+                dir = Path.GetDirectoryName(dir);
+            }
+        }
+        return null;
+    }
+
+    private static (string Stdout, string Stderr, int ExitCode) RunPython(IEnumerable<string> args) {
+        var pythonExe = System.Environment.GetEnvironmentVariable("WORLDBUILDER_PYTHON")
+            ?? (OperatingSystem.IsWindows() ? "python" : "python3");
+        var psi = new System.Diagnostics.ProcessStartInfo(pythonExe) {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+
+        using var proc = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start python process");
+
+        // Read both streams concurrently to avoid deadlock when the child
+        // fills one pipe while we're blocked reading the other.
+        var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+        var stderrTask = proc.StandardError.ReadToEndAsync();
+        proc.WaitForExit();
+        return (stdoutTask.Result, stderrTask.Result, proc.ExitCode);
+    }
+
+    private static CompareToRetailResult ParseCompareReport(
+        string stdoutJson, string generated, string retail) {
+        // Run with --quiet --stdout-json, so stdout is a single JSON object on
+        // a single line. No need to extract — just trim and parse.
+        using var doc = System.Text.Json.JsonDocument.Parse(stdoutJson.Trim());
+        var root = doc.RootElement;
+
+        var region = root.TryGetProperty("region", out var regionEl)
+            ? new CompareRegionBbox(
+                regionEl.GetProperty("n_landblocks").GetInt32(),
+                regionEl.GetProperty("x_min").GetInt32(),
+                regionEl.GetProperty("x_max").GetInt32(),
+                regionEl.GetProperty("y_min").GetInt32(),
+                regionEl.GetProperty("y_max").GetInt32())
+            : null;
+
+        var volumes = root.GetProperty("volumes");
+        int generatedCount = volumes.GetProperty("generated").GetInt32();
+        int retailCount = volumes.GetProperty("retail").GetInt32();
+        double densityDeltaPct = volumes.GetProperty("density_delta_pct").GetDouble();
+
+        var density = root.GetProperty("density");
+        var modelDensity = ParseDensity(density.GetProperty("model"));
+        var retailDensity = ParseDensity(density.GetProperty("retail"));
+
+        var coverageEl = root.GetProperty("coverage");
+        var coverage = new CompareCoverage(
+            coverageEl.GetProperty("model_unique").GetInt32(),
+            coverageEl.GetProperty("retail_unique").GetInt32(),
+            coverageEl.GetProperty("both").GetInt32(),
+            coverageEl.GetProperty("novel").GetInt32(),
+            coverageEl.GetProperty("missing").GetInt32());
+
+        var siEl = root.GetProperty("surface_interior");
+        var si = new CompareSurfaceInterior(
+            siEl.GetProperty("model_surface").GetInt32(),
+            siEl.GetProperty("model_interior").GetInt32(),
+            siEl.GetProperty("model_surface_pct").GetDouble(),
+            siEl.GetProperty("model_interior_pct").GetDouble(),
+            siEl.GetProperty("retail_surface").GetInt32(),
+            siEl.GetProperty("retail_interior").GetInt32(),
+            siEl.GetProperty("retail_surface_pct").GetDouble(),
+            siEl.GetProperty("retail_interior_pct").GetDouble());
+
+        var jaccEl = root.GetProperty("lb_jaccard");
+        var jaccard = new CompareLbJaccard(
+            jaccEl.GetProperty("n").GetInt32(),
+            ReadNullableDouble(jaccEl, "mean"),
+            ReadNullableDouble(jaccEl, "p50"),
+            ReadNullableDouble(jaccEl, "p10"));
+
+        var anomEl = root.GetProperty("anomalies");
+        var anomalies = new CompareAnomalySummary(
+            anomEl.GetProperty("frac").GetDouble(),
+            anomEl.GetProperty("novel_unique").GetInt32(),
+            anomEl.GetProperty("emitted_unique").GetInt32());
+
+        CompareClassSpace? classSpace = null;
+        if (root.TryGetProperty("class_space", out var csEl)) {
+            classSpace = new CompareClassSpace(
+                ParseStringIntDict(csEl.GetProperty("retail")),
+                csEl.GetProperty("retailTotal").GetInt32(),
+                ParseStringDoubleDict(csEl.GetProperty("retailFractions")),
+                ParseStringIntDict(csEl.GetProperty("modelEmitted")),
+                csEl.GetProperty("modelTotal").GetInt32(),
+                ReadNullableDouble(csEl, "coverageOfRetailWcid"),
+                csEl.GetProperty("coverageOfRetailAll").GetDouble());
+        }
+
+        var wcidsEl = root.GetProperty("wcids");
+        var wcids = new CompareWcidAnomalies(
+            ParseWcidRows(wcidsEl.GetProperty("over")),
+            ParseWcidRows(wcidsEl.GetProperty("under")),
+            ParseWcidSimpleRows(wcidsEl.GetProperty("novel")),
+            ParseWcidSimpleRows(wcidsEl.GetProperty("missing")));
+
+        List<ComparePerLbRow>? perLb = null;
+        if (root.TryGetProperty("per_landblock", out var perLbEl)) {
+            perLb = new List<ComparePerLbRow>(perLbEl.GetArrayLength());
+            foreach (var r in perLbEl.EnumerateArray()) {
+                perLb.Add(new ComparePerLbRow(
+                    r.GetProperty("lbX").GetInt32(),
+                    r.GetProperty("lbY").GetInt32(),
+                    r.GetProperty("modelCount").GetInt32(),
+                    r.GetProperty("retailCount").GetInt32(),
+                    r.GetProperty("densityDelta").GetInt32(),
+                    r.GetProperty("modelWcidUnique").GetInt32(),
+                    r.GetProperty("retailWcidUnique").GetInt32(),
+                    ReadNullableDouble(r, "wcidJaccard"),
+                    r.GetProperty("novelInLb").GetInt32(),
+                    r.GetProperty("missingInLb").GetInt32()));
+            }
+        }
+
+        string? outJson = null;
+        if (root.TryGetProperty("inputs", out var inputsEl)) {
+            // The script writes its JSON report to disk too. Path is implicit
+            // (generated.with_suffix(".comparison.json")). Compute it the same way.
+            var gen = inputsEl.GetProperty("generated").GetString() ?? generated;
+            outJson = Path.ChangeExtension(gen, ".comparison.json");
+        }
+
+        return new CompareToRetailResult(
+            Success: true,
+            Generated: generated,
+            Retail: retail,
+            Region: region,
+            GeneratedCount: generatedCount,
+            RetailCount: retailCount,
+            DensityDeltaPct: densityDeltaPct,
+            ModelDensity: modelDensity,
+            RetailDensity: retailDensity,
+            Coverage: coverage,
+            SurfaceInterior: si,
+            LbJaccard: jaccard,
+            Anomalies: anomalies,
+            ClassSpace: classSpace,
+            Wcids: wcids,
+            PerLandblock: perLb,
+            OutJsonPath: outJson);
+    }
+
+    private static CompareDensityStats ParseDensity(System.Text.Json.JsonElement el) =>
+        new(el.GetProperty("n").GetInt32(),
+            el.GetProperty("min").GetInt32(),
+            el.GetProperty("p50").GetInt32(),
+            el.GetProperty("mean").GetDouble(),
+            el.GetProperty("p95").GetInt32(),
+            el.GetProperty("max").GetInt32(),
+            el.GetProperty("total").GetInt32());
+
+    private static double? ReadNullableDouble(System.Text.Json.JsonElement el, string name) {
+        if (!el.TryGetProperty(name, out var v)) return null;
+        return v.ValueKind == System.Text.Json.JsonValueKind.Null ? null : v.GetDouble();
+    }
+
+    private static Dictionary<string, int> ParseStringIntDict(System.Text.Json.JsonElement el) {
+        var d = new Dictionary<string, int>();
+        foreach (var p in el.EnumerateObject()) d[p.Name] = p.Value.GetInt32();
+        return d;
+    }
+
+    private static Dictionary<string, double> ParseStringDoubleDict(System.Text.Json.JsonElement el) {
+        var d = new Dictionary<string, double>();
+        foreach (var p in el.EnumerateObject()) d[p.Name] = p.Value.GetDouble();
+        return d;
+    }
+
+    private static List<CompareWcidRow> ParseWcidRows(System.Text.Json.JsonElement arr) {
+        var rows = new List<CompareWcidRow>(arr.GetArrayLength());
+        foreach (var r in arr.EnumerateArray()) {
+            rows.Add(new CompareWcidRow(
+                r[0].GetInt32(), r[1].GetInt32(), r[2].GetInt32(), r[3].GetDouble()));
+        }
+        return rows;
+    }
+
+    private static List<CompareWcidSimpleRow> ParseWcidSimpleRows(System.Text.Json.JsonElement arr) {
+        var rows = new List<CompareWcidSimpleRow>(arr.GetArrayLength());
+        foreach (var r in arr.EnumerateArray()) {
+            rows.Add(new CompareWcidSimpleRow(r[0].GetInt32(), r[1].GetInt32()));
+        }
+        return rows;
+    }
+
     /// <summary>Collects already-allocated IDs in <paramref name="rangeBase"/>'s 0xXXFFxxxx custom band — both DAT-resident and project-overridden.</summary>
     private static IEnumerable<uint> CollectExistingIds<T>(IDatReaderWriter dats, PortalDatDocument portalDoc, uint rangeBase)
         where T : DatReaderWriter.Lib.IO.IDBObj, new() {

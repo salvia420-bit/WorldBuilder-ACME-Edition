@@ -133,6 +133,23 @@ render-preview <lbX> <lbY> [radius] [resolution] [--no-overlay] [--out path]
 
 Sample renders covering the design space — town, wilderness, ocean, multi-LB region — live in [`docs/images/render_preview/`](docs/images/render_preview/).
 
+### Quantitative Channel — `compare-to-retail`
+
+`render-preview` catches visual mistakes; `compare-to-retail` catches *statistical* ones. It scores a generated world's placements against the retail world facts that produced its training data, surfacing mode collapse, density drift, surface/interior shift, long-tail loss, and out-of-context placements as numbers an autonomous tuning agent can drill into. Designed for the train → place → score → tune loop to run hot inside a single agent process.
+
+```
+compare-to-retail <generated.jsonl> [--retail-baseline path] [--top-k N] [--anomaly-min-model N] [--no-per-lb]
+```
+
+- **Region** — auto-derived from `lb_x/lb_y` in the generated JSONL; retail is filtered to the same landblock set before scoring
+- **Signals** — per-LB density (min/p50/mean/p95/max), wcid coverage, per-LB Jaccard (theme/context coherence), surface vs. interior split, over/under-replicated wcids, novel and missing wcids, out-of-context fraction, weenieType share
+- **Class-space ratio** — model-emitted vs. retail by `classIdSpace` (`wcid` / `model_id` / `ace_abstract` / `building_model`), so an agent can see what fraction of retail's placements live in class spaces the model doesn't yet emit
+- **Per-landblock breakdown** — every LB in the region returned with model count, retail count, density delta, Jaccard, novel/missing wcid counts; sorted by `|density delta|` so outliers float to the top
+- **Hot-loop caching** — region-keyed pickle snapshot of the filtered retail JSONL is reused across calls; the response carries `retailCacheHit` + elapsed seconds for telemetry
+- **Implementation** — subprocesses `scripts/PopulationPipeline/Validation/compare_world_to_retail.py` so numeric semantics stay identical to prior offline runs
+
+Available on both REPL and JSON-agent channels. Override the script path with `WORLDBUILDER_COMPARATOR_PY` and the python interpreter with `WORLDBUILDER_PYTHON`.
+
 ### Object Ontology Service
 
 The `OntologyService` provides semantic awareness — mapping raw DAT model IDs to human-readable tags (`Architecture: Aluvian`, `Biome: Desert`, `Type: Scenery_Tree`) so that AI agents can make aesthetically and logically coherent placement decisions:

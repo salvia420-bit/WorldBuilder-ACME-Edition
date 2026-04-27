@@ -987,3 +987,72 @@ public record BspBuildResult(
     bool Found, bool Built,
     int PolygonCount = 0,
     string? Error = null);
+
+// ── compare-to-retail (subprocesses scripts/.../compare_world_to_retail.py) ──
+public record CompareRegionBbox(
+    int NLandblocks, int XMin, int XMax, int YMin, int YMax);
+
+public record CompareDensityStats(
+    int N, int Min, int P50, double Mean, int P95, int Max, int Total);
+
+public record CompareCoverage(
+    int ModelUnique, int RetailUnique, int Both, int Novel, int Missing);
+
+public record CompareSurfaceInterior(
+    int ModelSurface, int ModelInterior,
+    double ModelSurfacePct, double ModelInteriorPct,
+    int RetailSurface, int RetailInterior,
+    double RetailSurfacePct, double RetailInteriorPct);
+
+public record CompareLbJaccard(int N, double? Mean, double? P50, double? P10);
+
+public record CompareAnomalySummary(double Frac, int NovelUnique, int EmittedUnique);
+
+public record CompareClassSpace(
+    Dictionary<string, int> Retail,
+    int RetailTotal,
+    Dictionary<string, double> RetailFractions,
+    Dictionary<string, int> ModelEmitted,
+    int ModelTotal,
+    double? CoverageOfRetailWcid,
+    double CoverageOfRetailAll);
+
+public record CompareWcidRow(int Wcid, int ModelCount, int RetailCount, double Ratio);
+
+public record CompareWcidSimpleRow(int Wcid, int Count);
+
+public record CompareWcidAnomalies(
+    List<CompareWcidRow> Over,
+    List<CompareWcidRow> Under,
+    List<CompareWcidSimpleRow> Novel,
+    List<CompareWcidSimpleRow> Missing);
+
+public record ComparePerLbRow(
+    int LbX, int LbY,
+    int ModelCount, int RetailCount, int DensityDelta,
+    int ModelWcidUnique, int RetailWcidUnique,
+    double? WcidJaccard,
+    int NovelInLb, int MissingInLb);
+
+public record CompareToRetailResult(
+    bool Success,
+    string Generated,
+    string Retail,
+    CompareRegionBbox? Region = null,
+    int GeneratedCount = 0,
+    int RetailCount = 0,
+    double DensityDeltaPct = 0,
+    CompareDensityStats? ModelDensity = null,
+    CompareDensityStats? RetailDensity = null,
+    CompareCoverage? Coverage = null,
+    CompareSurfaceInterior? SurfaceInterior = null,
+    CompareLbJaccard? LbJaccard = null,
+    CompareAnomalySummary? Anomalies = null,
+    CompareClassSpace? ClassSpace = null,
+    CompareWcidAnomalies? Wcids = null,
+    List<ComparePerLbRow>? PerLandblock = null,
+    string? OutJsonPath = null,
+    string? OutMdPath = null,
+    bool RetailCacheHit = false,
+    double ElapsedSeconds = 0,
+    string? Error = null);
