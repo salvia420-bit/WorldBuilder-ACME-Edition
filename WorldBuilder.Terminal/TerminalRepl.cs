@@ -177,6 +177,13 @@ public class TerminalRepl {
             ["render-preview"] = HandleRenderPreview,
             ["compare-to-retail"] = HandleCompareToRetail,
             ["transact"] = HandleTransact,
+            ["get-tile"] = HandleGetTile,
+            ["tile-stats"] = _ => HandleTileStats(),
+            ["regenerate-dirty-tiles"] = _ => HandleRegenerateDirtyTiles(),
+            ["list-dirty-tiles"] = _ => HandleListDirtyTiles(),
+            ["mark-tiles-clean"] = _ => HandleMarkTilesClean(),
+            ["prune-tiles"] = HandlePruneTiles,
+            ["generate-atlas-tiles"] = HandleGenerateAtlasTiles,
             ["help"] = _ => PrintHelp(),
         };
 
@@ -231,7 +238,197 @@ public class TerminalRepl {
         Console.WriteLine();
     }
 
-    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ═════════════════════════════════════════════════════════
+    //  Living Atlas — tile pyramid (lb / region / world zooms)
+    // ═════════════════════════════════════════════════════════
+
+    private void HandleGetTile(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 2) {
+            Console.WriteLine("Usage: get-tile <lb|region|world> [args] [--out <path>]");
+            Console.WriteLine("  get-tile lb <lbX> <lbY>");
+            Console.WriteLine("  get-tile region <region-name>     (e.g. \"Aluvian Heartlands\")");
+            Console.WriteLine("  get-tile world");
+            return;
+        }
+        string zoom = tokens[1].ToLowerInvariant();
+        string? outPath = null;
+        for (int i = 2; i < tokens.Length; i++) {
+            if (tokens[i] == "--out" && i + 1 < tokens.Length) { outPath = tokens[++i]; }
+        }
+
+        WorldBuilder.Terminal.TileEntry entry;
+        try {
+            if (zoom == "lb") {
+                if (tokens.Length < 4) { Console.WriteLine("Usage: get-tile lb <lbX> <lbY>"); return; }
+                if (!TryParseUint(tokens[2], "lbX", out uint lbX)) return;
+                if (!TryParseUint(tokens[3], "lbY", out uint lbY)) return;
+                entry = _engine.GetLbTile(lbX, lbY);
+            } else if (zoom == "region") {
+                if (tokens.Length < 3) { Console.WriteLine("Usage: get-tile region <region-name>"); return; }
+                entry = _engine.GetRegionTile(tokens[2]);
+            } else if (zoom == "world") {
+                entry = _engine.GetWorldTile();
+            } else {
+                Console.WriteLine($"Unknown zoom '{zoom}'; expected 'lb', 'region', or 'world'.");
+                return;
+            }
+        } catch (Exception ex) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  get-tile failed: {ex.Message}");
+            Console.ResetColor();
+            return;
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"  Tile        : {entry.Key}  ({zoom} zoom)");
+        Console.WriteLine($"  Path        : {entry.Path}");
+        Console.WriteLine($"  Size        : {entry.SizeBytes / 1024.0:F1} KB");
+        Console.WriteLine($"  Generated   : {entry.GeneratedAt:O}");
+        if (outPath != null) {
+            var srcAbs = Path.Combine(_engine.TileCachePathOrEmpty(), entry.Path);
+            File.Copy(srcAbs, outPath, overwrite: true);
+            Console.WriteLine($"  Wrote       : {outPath}");
+        }
+        Console.WriteLine();
+    }
+
+    private void HandleTileStats() {
+        if (!CheckProject()) return;
+        var s = _engine.GetTileStats();
+        long budget = Math.Max(1, s.BytesBudget);
+        double percent = 100.0 * s.BytesUsed / budget;
+        Console.WriteLine();
+        Console.WriteLine($"  Tiles       : total={s.TotalCount}  lb={s.LbCount}  region={s.RegionCount}  world={s.WorldCount}");
+        Console.WriteLine($"  Dirty       : tiles={s.DirtyTileCount}  lbs={s.DirtyLbCount}");
+        Console.WriteLine($"  Disk        : {s.BytesUsed / (1024.0 * 1024):F1} MB / {s.BytesBudget / (1024.0 * 1024):F0} MB ({percent:F1}%)");
+        Console.WriteLine();
+    }
+
+    private void HandleRegenerateDirtyTiles() {
+        if (!CheckProject()) return;
+        var (n, bytes, errors) = _engine.RegenerateDirtyTiles();
+        Console.WriteLine();
+        Console.WriteLine($"  Regenerated : {n} tile(s), {bytes / 1024.0:F1} KB written");
+        if (errors.Count > 0) {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"  Errors      : {errors.Count}");
+            foreach (var e in errors.Take(10)) Console.WriteLine($"    • {e}");
+            Console.ResetColor();
+        }
+        Console.WriteLine();
+    }
+
+    private void HandleListDirtyTiles() {
+        if (!CheckProject()) return;
+        var dirty = _engine.ListDirtyTiles();
+        Console.WriteLine();
+        if (dirty.Count == 0) { Console.WriteLine("  No dirty tiles."); Console.WriteLine(); return; }
+        Console.WriteLine($"  Dirty landblocks ({dirty.Count}):");
+        foreach (var d in dirty.Take(50)) {
+            uint lbX = (uint)((d.lbKey >> 8) & 0xFF), lbY = (uint)(d.lbKey & 0xFF);
+            Console.WriteLine($"    0x{d.hex}  ({lbX}, {lbY})");
+        }
+        if (dirty.Count > 50) Console.WriteLine($"    … +{dirty.Count - 50} more");
+        Console.WriteLine();
+    }
+
+    private void HandleMarkTilesClean() {
+        if (!CheckProject()) return;
+        _engine.MarkTilesClean();
+        Console.WriteLine("  All tiles marked clean.");
+    }
+
+    private void HandlePruneTiles(string[] tokens) {
+        if (!CheckProject()) return;
+        int? keepNewest = null;
+        DateTime? olderThan = null;
+        for (int i = 1; i < tokens.Length; i++) {
+            if (tokens[i] == "--keep-newest" && i + 1 < tokens.Length) {
+                if (!int.TryParse(tokens[++i], out int k)) {
+                    Console.WriteLine($"Invalid --keep-newest value: {tokens[i]}"); return;
+                }
+                keepNewest = k;
+            } else if (tokens[i] == "--older-than" && i + 1 < tokens.Length) {
+                if (!DateTime.TryParse(tokens[++i], null, DateTimeStyles.RoundtripKind, out DateTime dt)) {
+                    Console.WriteLine($"Invalid --older-than timestamp (expect ISO 8601): {tokens[i]}"); return;
+                }
+                olderThan = dt;
+            } else {
+                Console.WriteLine("Usage: prune-tiles [--keep-newest N] [--older-than ISO8601]");
+                return;
+            }
+        }
+        var r = _engine.PruneTiles(keepNewest, olderThan);
+        Console.WriteLine();
+        Console.WriteLine($"  Evicted     : {r.Evicted} tile(s), {r.BytesFreed / 1024.0:F1} KB freed");
+        Console.WriteLine($"  Remaining   : {r.RemainingCount} tile(s), {r.RemainingBytes / (1024.0 * 1024):F1} MB");
+        Console.WriteLine();
+    }
+
+    private void HandleGenerateAtlasTiles(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 2) {
+            Console.WriteLine("Usage: generate-atlas-tiles <lbs|regions|world|all> [<lbX> <lbY> ...]");
+            Console.WriteLine("  lbs:     specify LBs as space-separated lbX lbY pairs");
+            Console.WriteLine("  regions: regenerates every known region tile");
+            Console.WriteLine("  world:   single composite world tile");
+            Console.WriteLine("  all:     world + every region + sweep all 255x255 LB tiles (slow!)");
+            return;
+        }
+        string mode = tokens[1].ToLowerInvariant();
+        if (mode != "lbs" && mode != "regions" && mode != "world" && mode != "all") {
+            Console.WriteLine($"Unknown mode '{mode}'; expected 'lbs', 'regions', 'world', or 'all'.");
+            return;
+        }
+        int generated = 0, skipped = 0;
+        long bytes = 0;
+        var errors = new List<string>();
+
+        if (mode == "world" || mode == "all") {
+            try { var w = _engine.GetWorldTile(); generated++; bytes += w.SizeBytes; }
+            catch (Exception ex) { errors.Add($"world: {ex.Message}"); }
+        }
+        if (mode == "regions" || mode == "all") {
+            foreach (var r in _engine.ListRegionNames()) {
+                try { var t = _engine.GetRegionTile(r); generated++; bytes += t.SizeBytes; }
+                catch (Exception ex) { errors.Add($"region {r}: {ex.Message}"); }
+            }
+        }
+        if (mode == "lbs" || mode == "all") {
+            List<(uint, uint)> lbs;
+            if (mode == "lbs") {
+                if ((tokens.Length - 2) < 2 || (tokens.Length - 2) % 2 != 0) {
+                    Console.WriteLine("mode=lbs requires lbX lbY pair(s) after the mode."); return;
+                }
+                lbs = new List<(uint, uint)>();
+                for (int i = 2; i < tokens.Length; i += 2) {
+                    if (!TryParseUint(tokens[i], "lbX", out uint x)) return;
+                    if (!TryParseUint(tokens[i + 1], "lbY", out uint y)) return;
+                    lbs.Add((x, y));
+                }
+            } else {
+                lbs = new List<(uint, uint)>(255 * 255);
+                for (uint x = 0; x < 255; x++) for (uint y = 0; y < 255; y++) lbs.Add((x, y));
+            }
+            var (g, s, b, e) = _engine.GenerateBulkLbTiles(lbs);
+            generated += g; skipped += s; bytes += b; errors.AddRange(e);
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"  Mode        : {mode}");
+        Console.WriteLine($"  Generated   : {generated} tile(s){(skipped > 0 ? $", {skipped} skipped" : "")}");
+        Console.WriteLine($"  Disk        : {bytes / (1024.0 * 1024):F1} MB written");
+        if (errors.Count > 0) {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"  Errors      : {errors.Count}");
+            foreach (var e in errors.Take(10)) Console.WriteLine($"    • {e}");
+            Console.ResetColor();
+        }
+        Console.WriteLine();
+    }
+
+    //â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     //  Project management
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
@@ -1608,6 +1805,21 @@ public class TerminalRepl {
         Console.WriteLine("  extract-retail-heightmaps [output.jsonl]           Dump all 255Ã—255 landblock heightmaps");
         Console.WriteLine("  compute-vanilla-baseline [output.json]             Compute retail quality baseline metrics");
         Console.WriteLine("  render-preview <lbX> <lbY> [r] [res] [--no-overlay] [--out path]   Top-down PNG of an N×N region (terrain + objects + cliff overlay)");
+        Console.WriteLine();
+
+        Console.ForegroundColor = ConsoleColor.White;
+        Console.WriteLine("=== Living Atlas ===");
+        Console.ResetColor();
+        Console.WriteLine("  describe-landblock <lbX> <lbY>                               Verbal + structured description (terrain, structures, spawns, POIs, validation)");
+        Console.WriteLine("  get-tile lb <lbX> <lbY> [--out path]                         Cached LB tile (PNG); generates on miss, JPEG q85 ~20 KB");
+        Console.WriteLine("  get-tile region <region-name> [--out path]                   Region tile, e.g. \"Aluvian Heartlands\"");
+        Console.WriteLine("  get-tile world [--out path]                                  Composite world tile (~150 KB JPEG)");
+        Console.WriteLine("  tile-stats                                                   Tile-cache counts, dirty flags, disk used vs. budget");
+        Console.WriteLine("  list-dirty-tiles                                             LBs whose tiles need regeneration after recent edits");
+        Console.WriteLine("  regenerate-dirty-tiles                                       Rebuild every dirty tile and clear the dirty bits");
+        Console.WriteLine("  mark-tiles-clean                                             Force-clear dirty bits without regenerating");
+        Console.WriteLine("  prune-tiles [--keep-newest N] [--older-than ISO8601]         LRU prune the LB-tile layer (region+world pinned)");
+        Console.WriteLine("  generate-atlas-tiles <lbs|regions|world|all> [lbX lbY ...]   Bulk-generate tiles; 'all' sweeps every LB (slow)");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;

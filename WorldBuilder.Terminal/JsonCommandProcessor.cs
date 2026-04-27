@@ -1058,6 +1058,14 @@ public class JsonCommandProcessor {
             new { name = "render-preview",   args = "lbX, lbY, radius?, resolution?, overlay?, includePng?, outputPath?", description = "Top-down PNG of an N×N landblock region (terrain + objects + cliff/pairing overlays). Returns base64 PNG." },
             new { name = "compare-to-retail", args = "generated, retailBaseline?, topK?, anomalyMinModel?, perLandblock?, cacheDir?", description = "Subprocess the Python comparator; score generated world vs retail with per-LB drilldown and class-space ratio. Caches retail snapshot for tight tuning loops." },
             new { name = "transact",         args = "ops[] | opsFile, rollback_on_fail?, validate?", description = "Stage N mutating ops, validate the staged delta, atomically commit or rollback. Allow-list: terrain edits, object placement, generate-dungeon. validate=auto|all|none|{landblocks:[...]}." },
+            new { name = "describe-landblock", args = "lbX, lbY",                            description = "Living Atlas: verbal + deeply structured per-LB description (terrain, structures, spawns, POIs, validation). Composes ontology + region/town gazetteer + Acpedia + LSD spawnMap." },
+            new { name = "get-tile",         args = "zoom, lbX?, lbY?, region?, includeBase64?", description = "Living Atlas tile pyramid. zoom=lb (LB-keyed), region (region name), or world. Returns path + size + optional base64 PNG." },
+            new { name = "tile-stats",       args = "",                                      description = "Tile-cache totals, dirty counts, disk used vs. budget" },
+            new { name = "regenerate-dirty-tiles", args = "",                                description = "Rebuild every tile flagged dirty (e.g. by transact-journal invalidation) and clear dirty bits." },
+            new { name = "list-dirty-tiles", args = "",                                      description = "Enumerate LBs whose tiles need regeneration." },
+            new { name = "mark-tiles-clean", args = "",                                      description = "Force-clear all dirty bits without regenerating." },
+            new { name = "prune-tiles",      args = "keepNewest?, olderThan?",               description = "LRU-prune the LB-tile layer; region+world tiles are pinned." },
+            new { name = "generate-atlas-tiles", args = "mode, lbList?",                     description = "Bulk-generate tiles. mode=lbs|regions|world|all. mode=lbs requires lbList[{lbX,lbY}]; mode=all sweeps every LB and may take many minutes." },
             new { name = "quit",             args = "",                                      description = "Exit terminal" }
         };
         return Serialize(new { success = true, command = "help", protocol = "json-line", version = "1.5",
