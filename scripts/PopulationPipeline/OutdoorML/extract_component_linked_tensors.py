@@ -537,28 +537,21 @@ def compute_chunk_offsets(row_count, chunk_capacity):
 
 
 def _build_base_context_block(stats, total_object_count):
-    """First 16 dims of the context vector — aggregate stats over a scene."""
-    row_count = max(stats["count"], 1)
-    return np.array([
-        # The first two slots are landblock-position placeholders. Callers fill
-        # them with the landblock or parent-landblock coordinates of the scene.
-        0.0,
-        0.0,
-        total_object_count / MAX_OBJECTS_PER_LB,
-        stats["dat_count"] / row_count,
-        stats["ace_count"] / row_count,
-        stats["model_id_count"] / row_count,
-        stats["wcid_count"] / row_count,
-        stats["linked_count"] / row_count,
-        stats["interior_count"] / row_count,
-        stats["terrain_delta_sum"] / row_count,
-        (stats["slope_sum"] / row_count) / 90.0,
-        stats["parent_count_sum"] / row_count,
-        stats["child_count_sum"] / row_count,
-        stats["building_count"] / row_count,
-        stats["encounter_count"] / row_count,
-        stats["instance_count"] / row_count,
-    ], dtype=np.float32)
+    """First 16 dims of the context vector.
+
+    Only the first two slots (landblock-position placeholders, filled by
+    the caller) carry information available at inference time. Slots 2–15
+    used to encode scene-aggregate stats (dat/ace/wcid counts, building
+    count, slope sums, etc.) but those are derived from the scene that the
+    model is asked to *generate*, so feeding them at training time induced
+    train/test distribution shift — the model learned to rely on features
+    that inference cannot supply, and at sampling time it received zeros
+    or worse, garbage from the legacy 235-dim context truncated to 31
+    dims, producing the v2/v3 vocab-collapse failure mode.
+
+    Zeroed here so training and inference see the same feature surface.
+    """
+    return np.zeros(16, dtype=np.float32)
 
 
 def _serialize_chunk(chunk_rows, class_key_to_idx, component_id_to_index,

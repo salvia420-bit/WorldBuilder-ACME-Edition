@@ -290,6 +290,32 @@ def build_class_space_weight(vocab_size: int, vocab_path: str,
     return weight
 
 
+def build_ace_abstract_mask(vocab_size: int, vocab_path: str) -> torch.Tensor:
+    """Boolean (V,) mask: True for token indices that map to ace_abstract.
+
+    Used by validation diagnostics to surface vocab-space collapse — when
+    the argmax over the validation set is overwhelmingly model_id even
+    though the corpus is majority-ace_abstract, training has gone wrong
+    (the v2/v3 failure mode) and no eyeballing of the loss curve catches
+    it.
+    """
+    mask = torch.zeros(vocab_size, dtype=torch.bool)
+    try:
+        with open(vocab_path, "r", encoding="utf-8") as f:
+            vocab = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return mask
+    for raw_idx, kv in (vocab.get("idx_to_class_key") or {}).items():
+        if isinstance(kv, (list, tuple)) and len(kv) == 2 and kv[0] == "ace_abstract":
+            try:
+                idx = int(raw_idx)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= idx < vocab_size:
+                mask[idx] = True
+    return mask
+
+
 def build_family_projection(token_family_index: torch.Tensor, vocab_size: int) -> torch.Tensor:
     family_projection = torch.zeros(vocab_size, FAMILY_COUNT, dtype=torch.float32)
     family_projection[torch.arange(vocab_size), token_family_index] = 1.0
@@ -810,30 +836,40 @@ def compute_diversity_metrics(model, val_loader, config, device):
                 all_pos_preds.extend(positions.tolist())
     
     if not all_wcid_preds:
-        return {'wcid_entropy': 0, 'unique_ratio': 0, 'pos_std': 0}
-    
+        return {'wcid_entropy': 0, 'unique_ratio': 0, 'pos_std': 0, 'ace_emit_frac': 0.0}
+
     # Wcid entropy
     from collections import Counter
     wcid_counts = Counter(all_wcid_preds)
     total = sum(wcid_counts.values())
     probs = np.array([c / total for c in wcid_counts.values()])
     wcid_entropy = -np.sum(probs * np.log2(probs + 1e-10))
-    
+
     # Unique wcid ratio
     unique_ratio = len(wcid_counts) / max(total, 1)
-    
+
     # Position standard deviation
     pos_arr = np.array(all_pos_preds)
     pos_std = pos_arr.std() if len(pos_arr) > 0 else 0
-    
-    # Top-1 and top-5 accuracy (against target)
-    # (computed separately in the main training loop)
-    
+
+    # ace_abstract emission fraction — key signal for vocab-space collapse.
+    ace_mask = config.get('ace_abstract_token_mask')
+    ace_emit_frac = 0.0
+    if ace_mask is not None:
+        ace_mask_cpu = ace_mask.detach().cpu().numpy().astype(bool)
+        if ace_mask_cpu.any():
+            preds_arr = np.asarray(all_wcid_preds, dtype=np.int64)
+            in_range = preds_arr < ace_mask_cpu.shape[0]
+            preds_arr = preds_arr[in_range]
+            if preds_arr.size:
+                ace_emit_frac = float(ace_mask_cpu[preds_arr].mean())
+
     return {
         'wcid_entropy': float(wcid_entropy),
         'unique_wcids': len(wcid_counts),
         'unique_ratio': float(unique_ratio),
         'pos_std': float(pos_std),
+        'ace_emit_frac': ace_emit_frac,
     }
 
 
@@ -1220,6 +1256,10 @@ def train(config: dict, resume_path: Optional[str] = None):
         ).to(device)
     else:
         config['class_space_weight'] = None
+
+    config['ace_abstract_token_mask'] = build_ace_abstract_mask(
+        model.vocab_size, vocab_path,
+    ).to(device)
     
     # ── Batch size auto-detection ──
     if device.type == 'cuda':
@@ -1472,7 +1512,8 @@ def train(config: dict, resume_path: Optional[str] = None):
             if val_metrics:
                 val_str = (f"  val={val_metrics.get('val_total', 0):.4f} "
                           f"ent={val_metrics.get('wcid_entropy', 0):.1f} "
-                          f"gap={val_metrics.get('overfit_gap', 0):.3f}")
+                          f"gap={val_metrics.get('overfit_gap', 0):.3f} "
+                          f"ace={val_metrics.get('ace_emit_frac', 0)*100:.1f}%")
             
             print(f"  Epoch {epoch:4d}/{config['epochs']}  "
                   f"loss={train_metrics['total']:.4f} "

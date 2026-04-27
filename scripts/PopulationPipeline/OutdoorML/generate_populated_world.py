@@ -253,6 +253,37 @@ def _pad_or_trim_context(context: np.ndarray, target_dim: int) -> np.ndarray:
     return context
 
 
+UNIFIED_SCENE_CONTEXT_DIM = 31
+SCENE_KIND_OUTDOOR_CODE = 0
+SCENE_KIND_INTERIOR_ANCHORED_CODE = 1
+SCENE_KIND_INTERIOR_UNANCHORED_CODE = 2
+
+
+def build_unified_scene_context(lb_x: int, lb_y: int,
+                                scene_kind: int = SCENE_KIND_OUTDOOR_CODE) -> np.ndarray:
+    """Construct the 31-dim context expected by the unified scene-placer.
+
+    Layout matches `extract_component_linked_tensors.py`:
+      [0:2]   normalized landblock position
+      [2:16]  scene-aggregate stats (zeroed at inference — these features
+              encode post-generation scene composition during training, so
+              they are unavailable a priori; the model must marginalize)
+      [16:20] view-strategy metadata (default to view_idx=0, strategy="xy",
+              single chunk covering the full sequence)
+      [20:23] scene_kind one-hot (outdoor / interior_anchored / interior_unanchored)
+      [23]    is_interior flag
+      [24:31] interior context (zero for outdoor)
+    """
+    ctx = np.zeros(UNIFIED_SCENE_CONTEXT_DIM, dtype=np.float32)
+    ctx[0] = lb_x / 254.0
+    ctx[1] = lb_y / 254.0
+    ctx[19] = 1.0
+    ctx[20 + int(scene_kind)] = 1.0
+    if scene_kind != SCENE_KIND_OUTDOOR_CODE:
+        ctx[23] = 1.0
+    return ctx
+
+
 @torch.inference_mode()
 def predict_settlement_plan(planner_bundle: Optional[dict], context: np.ndarray, device: torch.device) -> Optional[dict]:
     if planner_bundle is None:
@@ -1900,21 +1931,27 @@ def generate_world(args):
                 debug_totals['ocean_skips'] += 1
                 continue
 
-            ctx = build_context_vector(
+            ctx_legacy = build_context_vector(
                 lb_x, lb_y, heights, difficulty_grid,
                 culture_grid, biome_grid, world_features, instance_counts
             )
+            if config['context_dim'] == UNIFIED_SCENE_CONTEXT_DIM:
+                ctx_scene = build_unified_scene_context(
+                    lb_x, lb_y, scene_kind=SCENE_KIND_OUTDOOR_CODE
+                )
+            else:
+                ctx_scene = ctx_legacy
             culture_code = culture_grid[lb_x, lb_y] if 0 <= lb_x < 255 and 0 <= lb_y < 255 else 0
             culture_name = CULTURE_NAME_BY_CODE.get(int(culture_code), "Neutral")
             prepared.append({
                 'lb_x': lb_x,
                 'lb_y': lb_y,
-                'ctx': ctx,
+                'ctx': ctx_scene,
                 'culture_name': culture_name,
                 'height_grid': heights.get((lb_x, lb_y)),
                 'progress_index': progress_index,
             })
-            planner_contexts.append(ctx)
+            planner_contexts.append(ctx_legacy)
 
         planner_plans = predict_settlement_plans(planner_bundle, planner_contexts, device)
 
