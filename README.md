@@ -83,9 +83,9 @@ Agent                               WorldBuilder.Terminal
 
 The full protocol reference — every command, parameter, response schema, coordinate system, and diagnostic code — is documented in **[`docs/agent_api_reference.md`](docs/agent_api_reference.md)** and the companion **[`docs/agent_api_schema.json`](docs/agent_api_schema.json)**.
 
-### Available Commands (40+)
+### Available Commands
 
-For the complete, fully grouped REPL command catalog (including sub-commands), see **[`docs/terminal_repl_commands.md`](docs/terminal_repl_commands.md)**.
+The agent JSON protocol exposes **32 documented commands**; the REPL surface is wider (**110+ commands**, including bulk operations, image-driven terrain, ontology export, ACE-database I/O, and dungeon document editing). The table below is a flavor sample — for the full grouped catalog see **[`docs/terminal_repl_commands.md`](docs/terminal_repl_commands.md)**, and for the JSON protocol see **[`docs/agent_api_schema.json`](docs/agent_api_schema.json)**.
 
 | Category | Commands |
 |----------|----------|
@@ -94,18 +94,20 @@ For the complete, fully grouped REPL command catalog (including sub-commands), s
 | **Terrain Queries** | `get-height`, `terrain-info`, `get-heightmap`, `get-terrain-data` |
 | **Object Management** | `list-objects`, `add-object`, `remove-object`, `move-object`, `rotate-object` |
 | **Spatial Queries** | `query-radius` |
-| **Dungeon Tools** | `analyze-dungeons`, `get-dungeon-info` |
-| **Validation** | `validate-dungeon`, `validate-landblock`, `validate-terrain`, `validate-building-portals`, `validate-all` |
+| **Dungeon Tools** | `analyze-dungeons`, `analyze-dungeon-topology`, `get-dungeon-info` |
+| **Validation** | `validate-dungeon`, `validate-landblock`, `validate-terrain`, `validate-building-shells`, `validate-building-portals`, `validate-all` |
 | **World Observation** | `list-landblocks`, `get-world-info`, `get-region` |
-| **Ontology** | `scan-ontology`, `query-ontology`, `ontology-stats` |
+| **Ontology** | `scan-ontology`, `query-ontology`, `ontology-stats`, `enrich-unified` |
+| **Bulk** | `set-landblock-heightmap`, `set-landblock-terrain`, `bulk-place-objects`, `benchmark` |
+| **Image-Driven Terrain** | `calibrate-world-map`, `quick-world`, `analyze-map-image`, `extract-retail-heightmaps` |
 | **Control** | `help`, `quit` / `exit` |
 
 ### Validation Engine
 
-The terminal includes a headless **validation engine** with 30 diagnostic codes across four validators, designed to catch agent mistakes before they corrupt DAT data:
+The terminal includes a headless **validation engine** with 34 diagnostic codes across four validators, designed to catch agent mistakes before they corrupt DAT data:
 
 - **Dungeon** (DNG001–DNG011) — broken portal links, orphaned cells, portal symmetry, environment references, connectivity
-- **Landblock** (LBK001–LBK009) — object bounds, Z-axis clamping, zero-scale, degenerate quaternions, model existence
+- **Landblock** (LBK001–LBK010) — object bounds, Z-axis clamping, zero-scale, degenerate quaternions, model existence
 - **Terrain** (TRN001–TRN005) — cliff detection, edge stitching, flat/mono-type warnings
 - **Building Portals** (BLD001–BLD008) — portal targets, reciprocal exits, interior BFS, VisibleCells
 
@@ -165,36 +167,50 @@ The headless `ValidationEngine` acts as a strict gatekeeper:
 - Terrain edge stitching validation between adjacent landblocks
 - Cliff detection with configurable thresholds
 - Degenerate quaternion and zero-scale detection
-- 30 structured diagnostic codes with error/warning/info severity levels
+- 34 structured diagnostic codes with error/warning/info severity levels
 
-### Phase 4 — Speed Testing & Bulk Operations 🔲
+### Phase 4 — Speed Testing & Bulk Operations 🟡
 
-Before any procedural generation, the engine must prove sustained throughput:
+Per-vertex commands plus bulk variants for high-throughput agent or pipeline use:
 
-- Benchmark harness measuring terrain edit, object placement, and validation throughput (ops/sec)
-- Bulk landblock operations (`set-landblock-heightmap`, `set-landblock-terrain`) to bypass per-vertex overhead
-- Memory growth and GC pressure analysis over 65K+ operations
-- Throughput degradation detection over sustained runs
+- `benchmark` — measures terrain edit, object placement, and validation throughput
+- `set-landblock-heightmap` / `set-landblock-terrain` — replace a full landblock in one call
+- `bulk-place-objects` — atomic JSON-array placement of many objects
+- Image-driven worldgen (`quick-world`, `extract-retail-heightmaps`, etc.) routinely exercises the bulk path at scale
 
-### Phase 5 — ML-Driven World Generation 🔲
+The primitives are in place. A sustained-throughput regression suite and a memory-pressure dashboard are still wishlist items — most observed degradation today is caught by the worldgen pipeline rather than by an automated harness.
 
-The core approach: feed raw DAT data directly into ML models and let them discover every relationship in Dereth implicitly — terrain-to-object correlations, biome boundaries, building clusters, creature distributions, dungeon layouts. No hand-crafted rules. The model sees object IDs, positions, and spatial context, and learns to place with retail-level accuracy but with variance.
+### Phase 5 — ML-Driven World Generation 🟡
 
-- **Terrain**: Diffusion models trained on retail heightmaps (V3 smoother is the first proof of this — overtrained on retail data, used at low strength)
-- **Object Placement**: Autoregressive scene models that learn which objects co-occur, at what densities, in what terrain contexts — directly from extracted DAT placements
-- **Dungeons**: Graph-based models that learn valid portal topologies and room connectivity from the full retail dungeon corpus
-- **Training Data**: All sourced from the retail DAT files via the Terminal's extraction commands — no manual labeling required
+The hypothesis: feed raw DAT data directly into ML models and let them discover Dereth's spatial grammar implicitly. No hand-crafted rules. The model sees object IDs, positions, and per-landblock context, and learns to place with retail-level accuracy plus controlled variance. Training data is sourced entirely from the retail DAT files via the Terminal's extraction commands — no manual labeling.
 
-### Phase 6 — Semantic Tagging & Ontology (Optional Track) 🔲
+**Status as of April 2026:**
 
-An alternative path for agent-driven or rule-based workflows. The `OntologyService` provides human-readable semantic tags for DAT object IDs, enabling AI agents to make explicit placement decisions rather than learning implicitly:
+| Lane | Model | Status | What it produces |
+|---|---|---|---|
+| **Terrain smoothing** | V3 conditional DDPM (~61M params) | ✅ Production | Retail-feel heightmaps from QuickWorld output, ~15% denoise strength |
+| **Macro / archetype** | Settlement planner MLP (~100K params) | ✅ Working | Per-landblock archetype + family-bin distribution; conditions the scene placer |
+| **Outdoor population** | Scene placer Transformer (50.5M params) | ✅ **The thing that works** | Autoregressive object sequences scoring **83–85/100** on retail 20×20 regions — currently the only stage with end-to-end measured quality |
+| **Unified outdoor + interior** | Same Transformer, `scene_kind` context (~38M params) | 🟡 In flight | Replaces the outdoor placer and adds interior component sequences in one corpus; first overnight runs underway |
+| **Encounters / NPCs / vendors** | — | 🔲 Not started | Architecturally siblings of the scene placer trained on different retail tables |
+| **Quests / loot tables** | — | 🔲 Not ML | Better solved with rules + a small LLM than a custom-trained model |
 
-- Object ontology schema with type taxonomy and tag dimensions (architecture, biome, era, function)
-- `OntologyService` auto-classification pipeline (21K+ entries from DAT scan, string table enrichment, material tagging)
-- Constraint presets for aesthetic cohesion (Desert_Outpost, Aluvian_Village, Sho_Settlement, etc.)
-- Creature family taxonomy with 28 families, level ranges, and biome affinities
+The placement Transformer's architecture generalizes — encounters, NPCs, and vendor inventories all fit the same "given context, emit a sequence of (entity_id, position) tuples" mold, so future lanes are mostly fresh corpora on the same model class, not new architectures.
 
-This track is complementary to the ML approach — useful for an agent that builds slowly and deliberately, or for manual curation of generated output. The project can pursue both directions.
+**The outdoor result is the load-bearing claim.** If the unified run lifts interior placement to comparable quality, the architectural shell of an AC-style world becomes reachable. If it doesn't, every claim in this phase that depends on the same recipe needs to be re-examined honestly.
+
+### Phase 6 — Gameplay Population 🔲
+
+Phase 6 is contingent on Phase 5 hitting retail-quality population — a beautiful empty world is still empty. It is the layer that turns a *visitable* world into a *playable* one:
+
+- Encounter / monster spawn model (same Transformer class, conditioned on landblock context and a difficulty band)
+- Vendor inventory generator (per-archetype distribution over WCIDs)
+- NPC placement and dialogue templates (small LLM driving structured templates, not a trained placement model)
+- Treasure / loot tables (rule-based imports plus per-area scaling)
+- Quest scaffolds (template + LLM)
+- Geometric overlap rejection and DAT writer parity for any new token vocabularies the unified placer emits
+
+This phase is intentionally sketched, not specified — until Phase 5's unified scene placer converges and is wired into inference, the shape of Phase 6 is a hypothesis. The existing **`OntologyService`** (semantic tagging, constraint presets, 28-family creature taxonomy) is the natural input substrate for these gameplay-population models when they arrive, and is also the fallback for any agent-driven or human-curated workflow that prefers explicit rules over learned priors.
 
 ---
 
@@ -265,19 +281,19 @@ Open **[`tools/town_placer.html`](tools/town_placer.html)** in any browser. Load
 
 ## ML Models
 
-Pre-trained model weights are included in the repository via **Git LFS**. When you clone, you get everything.
+Pre-trained terrain model weights are included in the repository via **Git LFS**. When you clone and `git lfs pull`, you get everything needed to run the terrain pipeline end-to-end.
 
-| Model | Architecture | Size | Purpose | Hardware | Training Script |
+| Model | Architecture | Params | Size | Purpose | Training Script |
 |---|---|---|---|---|---|
-| **V1** | Conditional U-Net | 62 MB | Image → terrain heightmap + texture type | GTX 1070 (10-30 min training) | [`scripts/train_terrain_unet.py`](scripts/train_terrain_unet.py) |
-| **V2** | Conditional U-Net (smaller) | 16 MB | Experimental iteration | — | — |
-| **V3** | Conditional DDPM U-Net | 232 MB | Diffusion-based terrain smoothing | GTX 1070 (few min inference) | [`scripts/train_terrain_v3.py`](scripts/train_terrain_v3.py) |
+| **V1** | Conditional U-Net | 5.4M | 62 MB | Image → terrain heightmap + texture type (early experiment) | [`scripts/train_terrain_unet.py`](scripts/train_terrain_unet.py) |
+| **V2** | Conditional U-Net (smaller) | 1.4M | 16 MB | Smaller iteration with augmentation, kept for reference | [`scripts/train_terrain_unet_v2.py`](scripts/train_terrain_unet_v2.py) |
+| **V3** | Conditional DDPM U-Net | 60.8M | 232 MB | **Diffusion-based terrain smoothing — production** | [`scripts/train_terrain_v3.py`](scripts/train_terrain_v3.py) |
+
+The **outdoor scene placer** (50.5M-parameter Transformer) and the **settlement planner** (~100K MLP) live alongside these and are the population-pipeline counterpart to V3 — see the Phase 5 roadmap entry above for status. Their training and inference flow lives under [`scripts/PopulationPipeline/`](scripts/PopulationPipeline/), and their checkpoints (`scene_placer_*.safetensors`, `settlement_planner.pt`) sit in `pipeline_data/models/` and are also tracked via LFS.
 
 ### Pipeline Data (Git LFS)
 
-The essential pipeline files are tracked via **Git LFS** (~530 MB total). Clone the repo and `git lfs pull` to get everything needed to run the terrain pipeline.
-
-**LFS-tracked files:**
+The terrain-pipeline LFS payload is ~530 MB. Clone the repo and `git lfs pull` to materialize:
 
 ```
 pipeline_data/
@@ -285,14 +301,17 @@ pipeline_data/
 │   ├── terrain_unet.pt              # V1 weights (62 MB)
 │   ├── v1/terrain_unet.pt           # V1 weights (62 MB)
 │   ├── v2/terrain_unet_v2.pt        # V2 weights (16 MB)
-│   └── v3/terrain_diffusion_v3.pt   # V3 diffusion weights (232 MB)
+│   ├── v3/terrain_diffusion_v3.pt   # V3 diffusion weights (232 MB)
+│   ├── scene_placer_*.safetensors   # Outdoor scene-placement Transformer checkpoints
+│   └── settlement_planner.pt        # Macro/archetype MLP
 ├── heightmaps/
-│   └── retail_heightmaps.jsonl      # Training data from retail DATs (61 MB)
+│   └── retail_heightmaps.jsonl      # Training data from retail DATs (~61 MB)
 └── reference/
-    └── retail_dungeon_topology.json # Dungeon reference data (113 MB)
+    ├── retail_dungeon_topology.json # Dungeon reference data (~108 MB)
+    └── placement_tensors.npz        # Outdoor placement training tensors
 ```
 
-Model configs (`.json`), training loss plots (`.png`), and other small metadata files are tracked normally (not LFS). Additional pipeline data (enrichment, screenshots, population output) is generated locally and gitignored.
+Model configs (`.json`), training loss plots (`.png`), and other small metadata files are tracked normally (not LFS). Additional pipeline data (enrichment, screenshots, population output, search runs) is generated locally and gitignored.
 
 ### Retraining
 
@@ -309,7 +328,7 @@ python scripts/train_terrain_v3.py \
     --output pipeline_data/models/v3/terrain_diffusion_v3.pt
 ```
 
-Training runs in 10–30 minutes on a GTX 1070. The model converges quickly because the retail terrain data is relatively uniform — this is actually desirable, since the V3 model works best as a smoother (not a generator) at 15% diffusion strength.
+The shipped V3 checkpoint took **~12 hours on a GTX 1070** (197 epochs over 65,025 samples). For a quick smoke run you can stop early — the loss curve is nearly flat after the first few hours, and the model's job is to *smooth* (not *generate*) at ~15% diffusion strength, so it tolerates an undertrained checkpoint surprisingly well. Inference on a full 255×255 grid takes a few minutes on the same card.
 
 ---
 
@@ -320,6 +339,10 @@ Training runs in 10–30 minutes on a GTX 1070. The model converges quickly beca
 Interactive, browser-based town placement tool. Open it directly in any browser — no server, no dependencies, no build step. Select towns from the sidebar, click to place them on the world map, and export the placement JSON for the building remap pipeline.
 
 This is the first tool that allows moving Asheron's Call towns to new locations. Exported placements feed into `remap-buildings-v2` in the Terminal.
+
+### Heightmap Extractor — [`tools/heightmap_extractor.html`](tools/heightmap_extractor.html)
+
+Companion browser tool for inspecting and exporting heightmap data alongside the town-placement workflow. Same zero-dependency model — open it in any browser.
 
 ---
 
@@ -547,44 +570,59 @@ All settings are configurable in the Settings panel and persist between sessions
 
 ```
 WorldBuilder-ACME-Edition/
-├── WorldBuilder/              # GUI application (Avalonia UI)
-├── WorldBuilder.Shared/       # Shared services, algorithms, and data models
-│   ├── Services/              #   ITerrainService, IObjectPlacementService, IDungeonService, etc.
-│   ├── Lib/                   #   Pure algorithms (terrain, dungeon, validation, ontology)
-│   │   ├── Terrain/           #     TerrainAlgorithms, SceneryAlgorithms, StampAlgorithms
-│   │   ├── Dungeon/           #     PortalSnapAlgorithms, DungeonRoomAnalyzer
-│   │   └── Validation/        #     ValidationEngine (30 diagnostic codes)
-│   └── Documents/             #   SQLite-backed document storage
-├── WorldBuilder.Terminal/     # Headless CLI (batch, REPL, agent stdin mode)
-│   ├── Program.cs             #   Entry point — mode routing
-│   ├── CommandEngine.cs       #   Shared business logic for all commands
-│   ├── JsonCommandProcessor.cs#   stdin/stdout JSON-line protocol handler
-│   ├── TerminalRepl.cs        #   Human-friendly interactive REPL
-│   └── HeadlessProjectManager.cs  # DI-based project management
-├── WorldBuilder.Windows/      # Windows platform target
-├── WorldBuilder.Mac/          # macOS platform target
-├── WorldBuilder.Linux/        # Linux platform target
-├── pipeline_data/             # ML models, heightmaps, training data (Git LFS)
-│   ├── models/                #   V1/V2/V3 model weights + configs
-│   ├── heightmaps/            #   Extracted terrain data (JSONL, 40-85 MB each)
-│   ├── data/                  #   Biome grids, feature catalogs
-│   ├── enrichment/            #   Calibration codebooks, baselines
-│   └── reference/             #   Retail dungeon topology, training data
-├── scripts/                   # Python ML scripts
-│   ├── train_terrain_v3.py    #   Train V3 conditional diffusion model
-│   ├── smooth_vanquish_v3.py  #   Apply V3 smoothing to QuickWorld terrain
-│   └── train_terrain_unet.py  #   Train V1 U-Net model
-├── tools/                     # Browser-based utilities
-│   └── town_placer.html       #   Interactive town placement (zero-dependency)
-├── docs/                      # Documentation
-│   ├── HowToMakeNewWorlds.md  #   World generation pipeline guide
-│   ├── agent_api_reference.md #   Full command reference (1,400+ lines)
-│   └── agent_api_schema.json  #   JSON schema for all commands
-├── tests/                     # Integration test suites
-│   ├── test_agent_protocol.py #   Python: 55+ protocol tests
-│   └── Test-AgentProtocol.ps1 #   PowerShell: 25 smoke tests
-└── projects/                  # World projects
-    └── TestProject/           #   Sample project with retail DATs
+├── WorldBuilder/                  # GUI application (Avalonia UI)
+├── WorldBuilder.Shared/           # Shared services, algorithms, and data models
+│   ├── Services/                  #   ITerrainService, IObjectPlacementService, IDungeonService, etc.
+│   ├── Lib/                       #   Pure algorithms (terrain, dungeon, validation, ontology)
+│   │   ├── Terrain/               #     TerrainAlgorithms, SceneryAlgorithms, StampAlgorithms
+│   │   ├── Dungeon/               #     PortalSnapAlgorithms, DungeonRoomAnalyzer
+│   │   └── Validation/            #     ValidationEngine (34 diagnostic codes)
+│   └── Documents/                 #   SQLite-backed document storage
+├── WorldBuilder.Terminal/         # Headless CLI (batch, REPL, agent stdin mode)
+│   ├── Program.cs                 #   Entry point — mode routing
+│   ├── CommandEngine.cs           #   Shared business logic for all commands
+│   ├── JsonCommandProcessor.cs    #   stdin/stdout JSON-line protocol handler
+│   ├── TerminalRepl.cs            #   Human-friendly interactive REPL
+│   └── HeadlessProjectManager.cs  #   DI-based project management
+├── WorldBuilder.Windows/          # Windows platform target
+├── WorldBuilder.Mac/              # macOS platform target
+├── WorldBuilder.Linux/            # Linux platform target
+├── WorldBuilder.Browser/          # Experimental browser/WASM build target
+├── WorldBuilder.Tests/            # xUnit tests for shared services and algorithms
+├── pipeline_data/                 # ML models, heightmaps, training data (Git LFS)
+│   ├── models/                    #   V1/V2/V3 + scene placer + settlement planner weights
+│   ├── heightmaps/                #   Extracted terrain data (JSONL)
+│   ├── data/                      #   Biome grids, feature catalogs
+│   ├── enrichment/                #   Calibration codebooks, unified ontology, baselines
+│   ├── reference/                 #   Retail dungeon topology, placement tensors, vocabs
+│   └── population_output/         #   Generated population runs and summaries (gitignored)
+├── scripts/                       # Python ML & worldgen scripts
+│   ├── PopulationPipeline/        #   Staged population pipeline (the ML home)
+│   │   ├── OutdoorML/             #     Scene-placer transformer + planner
+│   │   ├── WorldGrammar/          #     Retail world-grammar prior
+│   │   ├── Interiors/             #     Interior support / micro-placement research
+│   │   ├── Planning/              #     Heuristic + semantic planning passes
+│   │   ├── MacroPlacement/        #     Deterministic reseed/remap helpers
+│   │   ├── Scatter/ Encounters/   #     Stage placeholders
+│   │   └── Validation/            #     Eval-time scoring harness
+│   ├── train_terrain_v3.py        #   Train V3 conditional diffusion model
+│   ├── smooth_vanquish_v3.py      #   Apply V3 smoothing to QuickWorld terrain
+│   └── train_terrain_unet.py      #   Train V1 U-Net model
+├── tools/                         # Browser-based utilities (zero-dependency)
+│   ├── town_placer.html           #   Interactive town placement
+│   └── heightmap_extractor.html   #   Heightmap extraction helper
+├── town_kits/                     # Per-town placement kits driving the population pipeline
+├── external/                      # Vendored third-party data (e.g. LSD-Partial)
+├── docs/                          # Documentation
+│   ├── HowToMakeNewWorlds.md      #   World generation pipeline guide
+│   ├── agent_api_reference.md     #   Full command reference (1,400+ lines)
+│   ├── agent_api_schema.json      #   JSON schema for all commands
+│   └── PopulationPipeline*.md     #   ML pipeline strategy / progress notes
+├── tests/                         # Integration test suites
+│   ├── test_agent_protocol.py     #   Python: 50+ protocol tests
+│   └── Test-AgentProtocol.ps1     #   PowerShell: ~25 smoke checks
+└── projects/                      # World projects
+    └── TestProject/               #   Sample project with retail DATs
 ```
 
 ---
