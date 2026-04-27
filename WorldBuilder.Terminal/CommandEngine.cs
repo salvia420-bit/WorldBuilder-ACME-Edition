@@ -69,23 +69,23 @@ public class CommandEngine {
             var cachePath = Path.Combine(p.ProjectDirectory, "ontology_cache.jsonl");
             if (File.Exists(cachePath)) {
                 int restored = _ontologyService.LoadFromCache(cachePath);
-                Console.WriteLine($"[Ontology] Auto-restored {restored:N0} entries from {cachePath}");
+                Console.Error.WriteLine($"[Ontology] Auto-restored {restored:N0} entries from {cachePath}");
             }
         } catch (Exception ex) {
-            Console.WriteLine($"[Ontology] Auto-restore skipped: {ex.Message}");
+            Console.Error.WriteLine($"[Ontology] Auto-restore skipped: {ex.Message}");
         }
         // Auto-load building pairings if present.
         try {
             var pairingsPath = Path.Combine(p.ProjectDirectory, "building_pairings.json");
             if (File.Exists(pairingsPath)) {
                 _buildingPairings = WorldBuilder.Shared.Lib.Pairings.BuildingPairings.LoadFromJsonFile(pairingsPath);
-                Console.WriteLine($"[Pairings] Auto-loaded {_buildingPairings.EdgeCount} pair edges " +
+                Console.Error.WriteLine($"[Pairings] Auto-loaded {_buildingPairings.EdgeCount} pair edges " +
                     $"({_buildingPairings.GroupCount} groups) from {pairingsPath}");
             } else {
                 _buildingPairings = new WorldBuilder.Shared.Lib.Pairings.BuildingPairings();
             }
         } catch (Exception ex) {
-            Console.WriteLine($"[Pairings] Auto-load skipped: {ex.Message}");
+            Console.Error.WriteLine($"[Pairings] Auto-load skipped: {ex.Message}");
             _buildingPairings = new WorldBuilder.Shared.Lib.Pairings.BuildingPairings();
         }
         return new LoadResult(p.Name, p.FilePath, p.ProjectDirectory, p.BaseDatDirectory);
@@ -840,7 +840,7 @@ public class CommandEngine {
             string graphSummary = DungeonGrammar.FormatSummary(graph);
 
             // â”€â”€ Step 2: Extract room catalog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-            Console.WriteLine("[GenerateDungeon] Extracting room catalog...");
+            Console.Error.WriteLine("[GenerateDungeon] Extracting room catalog...");
             var catalog = DungeonRoomAnalyzer.ExtractCatalog(dats);
 
             if (catalog.Templates.Count == 0) {

@@ -1,8 +1,35 @@
 using System.Numerics;
 using WorldBuilder.Shared.Documents;
 using WorldBuilder.Shared.Lib;
+using WorldBuilder.Shared.Lib.Validation;
 
 namespace WorldBuilder.Terminal;
+
+// ── Transact (batched stage / validate / commit-or-rollback) ─
+public record TransactOpOutcome(
+    int Index,
+    string Command,
+    bool Success,
+    string ResponseJson,
+    string? Error = null);
+
+public record TransactJournal(
+    Guid TransactionId,
+    DateTime StartedAt,
+    DateTime FinishedAt,
+    List<string> DocumentsTouched,
+    List<string> DocumentsCreated,
+    int OpsApplied,
+    int OpsRolledBack);
+
+public record TransactResult(
+    bool Success,
+    string Status,
+    string Reason,
+    List<TransactOpOutcome> Ops,
+    List<ValidationReport>? Validation,
+    TransactJournal Journal,
+    string? Error = null);
 
 // ═══════════════════════════════════════════════════════════
 //  Result records returned by CommandEngine.

@@ -113,6 +113,30 @@ The terminal includes a headless **validation engine** with 34 diagnostic codes 
 
 The recommended agent workflow: **mutate → `validate-all` → fix errors → repeat**.
 
+### Atomic Batches — `transact`
+
+`transact` collapses the mutate → validate-all → fix → repeat loop into a single round-trip with a built-in safety net. The agent stages N existing commands as one batch; the engine snapshots affected document projections, runs the ops sequentially, validates the staged delta, and either commits atomically or rolls back the in-memory state on any failure.
+
+```jsonc
+{
+  "command": "transact",
+  "ops": [
+    { "command": "set-landblock-heightmap", "lbX": 169, "lbY": 180, "heights": [/*81*/] },
+    { "command": "bulk-place-objects",      "lbX": 169, "lbY": 180, "objects": [/*…*/] }
+  ],
+  "rollback_on_fail": true,
+  "validate": "auto"
+}
+```
+
+- **Op alphabet** — reuses the existing JSON command surface; each op is a normal agent command. Allow-listed to mutating commands only (terrain edits, object placement, `generate-dungeon`, `paste-stamp`, etc.); read-only and side-effecting ops are rejected, as is nesting.
+- **Rollback layer** — restores via `BaseDocument.LoadFromProjection` on touched documents and deletes any documents the batch created. Failure modes are distinguished by `reason` (`op-threw` / `op-returned-failure` / `validation-failure` / `rejected`).
+- **Validation scope** — `auto` validates the touched landblocks and runs cheap terrain-only checks on their right/top neighbors to catch `TRN005` edge mismatches; `all`, `none`, or an explicit `{ "landblocks": [...] }` list are also supported.
+- **Large batches** — pass `"opsFile": "/path/to/ops.json"` instead of inline `ops` to dodge stdin line-buffer limits on multi-thousand-op transactions.
+- **Journal** — every response carries a transaction id, op-by-op outcome (with each inner command's full response embedded), the validation report, and a list of documents touched / created. Returned in v1, designed to be the seed for replay/forensic tooling.
+
+Available on both REPL (`transact <ops.json>`) and JSON-agent channels.
+
 ### Visual Channel — `render-preview`
 
 Validation catches structural mistakes symbolically. `render-preview` catches *visual* mistakes — clustering, mode-collapse, density drift, awkward placement — by handing a vision-capable LLM a literal top-down PNG of any region it just edited. Same JSON-agent channel, returned as a base64 PNG.

@@ -24,7 +24,9 @@ namespace WorldBuilder.Terminal;
 /// </summary>
 public class JsonCommandProcessor {
     private readonly CommandEngine _engine;
+    private readonly HeadlessProjectManager _projectManager;
     private readonly Dictionary<string, Func<System.Text.Json.Nodes.JsonNode, string>> _commandHandlers;
+    private readonly TransactionEngine _transactionEngine;
 
     private static readonly JsonSerializerOptions JsonOpts = new() {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -38,8 +40,10 @@ public class JsonCommandProcessor {
         IDungeonService dungeonService,
         IOntologyService ontologyService,
         IStampService stampService) {
+        _projectManager = projectManager;
         _engine = new CommandEngine(projectManager, terrainService, objectPlacementService, dungeonService, ontologyService, stampService);
         _commandHandlers = BuildCommandHandlers();
+        _transactionEngine = new TransactionEngine(this, projectManager);
     }
 
     /// <summary>
@@ -70,6 +74,28 @@ public class JsonCommandProcessor {
     /// This is the main entry point — can also be called directly for testing.
     /// </summary>
     public string ProcessCommand(string jsonLine) => ProcessCommandInternal(jsonLine).Result;
+
+    /// <summary>
+    /// Re-entrant dispatch: invoke a registered handler with an already-parsed JSON node.
+    /// Used by <see cref="TransactionEngine"/> to run staged sub-ops through the same
+    /// handler dictionary as a top-level stdin command, without re-parsing a stdin line.
+    /// </summary>
+    internal string DispatchInternal(string commandName, System.Text.Json.Nodes.JsonNode node) {
+        if (string.IsNullOrWhiteSpace(commandName))
+            return Serialize(new { success = false, command = "parse_error", error = "Missing 'command'" });
+        var command = commandName.Trim();
+        try {
+            if (_commandHandlers.TryGetValue(command, out var handler)) {
+                return handler(node);
+            }
+            return Serialize(new { success = false, command, error = $"Unknown command: '{command}'" });
+        } catch (Exception ex) {
+            return Serialize(new { success = false, command, error = ex.Message });
+        }
+    }
+
+    /// <summary>Exposes the command engine to <see cref="TransactionEngine"/>.</summary>
+    internal CommandEngine Engine => _engine;
 
     private (string Result, bool IsQuit) ProcessCommandInternal(string jsonLine) {
         System.Text.Json.Nodes.JsonNode? node;
@@ -202,6 +228,7 @@ public class JsonCommandProcessor {
             ["worldgen-scan-retail-towns"] = CmdWorldGenScanRetailTowns,
             ["render-preview"] = CmdRenderPreview,
             ["compare-to-retail"] = CmdCompareToRetail,
+            ["transact"] = CmdTransact,
             ["help"] = _ => CmdHelp(),
         };
 
@@ -917,6 +944,7 @@ public class JsonCommandProcessor {
             new { name = "compute-vanilla-baseline", args = "outputPath?", description = "Compute retail quality baseline metrics (density, terrain dist, etc.)" },
             new { name = "render-preview",   args = "lbX, lbY, radius?, resolution?, overlay?, includePng?, outputPath?", description = "Top-down PNG of an N×N landblock region (terrain + objects + cliff/pairing overlays). Returns base64 PNG." },
             new { name = "compare-to-retail", args = "generated, retailBaseline?, topK?, anomalyMinModel?, perLandblock?, cacheDir?", description = "Subprocess the Python comparator; score generated world vs retail with per-LB drilldown and class-space ratio. Caches retail snapshot for tight tuning loops." },
+            new { name = "transact",         args = "ops[] | opsFile, rollback_on_fail?, validate?", description = "Stage N mutating ops, validate the staged delta, atomically commit or rollback. Allow-list: terrain edits, object placement, generate-dungeon. validate=auto|all|none|{landblocks:[...]}." },
             new { name = "quit",             args = "",                                      description = "Exit terminal" }
         };
         return Serialize(new { success = true, command = "help", protocol = "json-line", version = "1.5",
@@ -1752,6 +1780,89 @@ public class JsonCommandProcessor {
         return Serialize(new { success = r.Built, command = "bsp-build",
             gfxObjId = r.HexId, found = r.Found, built = r.Built,
             polygonCount = r.PolygonCount, error = r.Error });
+    }
+
+    // ════════════════════════════════════════════════════
+    //  Transact — batched stage / validate / commit-or-rollback.
+    //  Reuses the JSON handler dictionary as the op alphabet.
+    // ════════════════════════════════════════════════════
+
+    private string CmdTransact(System.Text.Json.Nodes.JsonNode node) {
+        // Two ways to supply ops: inline `ops` array, or `opsFile` pointing at a JSON
+        // file whose top-level is `{ "ops": [...] }` (or just an array). The file form
+        // dodges stdin line-buffer corner cases for large batches.
+        System.Text.Json.Nodes.JsonArray? opsArray = node["ops"] as System.Text.Json.Nodes.JsonArray;
+        var opsFile = node["opsFile"]?.GetValue<string>();
+        if (opsArray == null && !string.IsNullOrEmpty(opsFile)) {
+            try {
+                var raw = File.ReadAllText(opsFile);
+                var parsed = System.Text.Json.Nodes.JsonNode.Parse(raw);
+                opsArray = parsed switch {
+                    System.Text.Json.Nodes.JsonArray arr => arr,
+                    System.Text.Json.Nodes.JsonObject obj => obj["ops"] as System.Text.Json.Nodes.JsonArray,
+                    _ => null,
+                };
+                if (opsArray == null) {
+                    return Serialize(new { success = false, command = "transact",
+                        error = $"opsFile '{opsFile}' did not contain an ops array" });
+                }
+            } catch (Exception ex) {
+                return Serialize(new { success = false, command = "transact",
+                    error = $"Failed to read opsFile '{opsFile}': {ex.Message}" });
+            }
+        }
+        if (opsArray == null) {
+            return Serialize(new { success = false, command = "transact",
+                error = "Provide either 'ops' (array) or 'opsFile' (path)" });
+        }
+
+        bool rollbackOnFail = node["rollback_on_fail"]?.GetValue<bool>() ?? true;
+        var validateNode = node["validate"];
+        var result = _transactionEngine.Run(opsArray, rollbackOnFail, validateNode);
+
+        // Serialize the response. Each op outcome embeds the inner handler's full
+        // response JSON under `response` so callers can inspect placed counts, ids, etc.
+        var opsOut = result.Ops.Select(o => new {
+            index = o.Index,
+            command = o.Command,
+            success = o.Success,
+            response = TryParseJson(o.ResponseJson),
+            error = o.Error,
+        }).ToArray();
+
+        var validationOut = result.Validation?.Select(v => new {
+            checkType = v.CheckType, target = v.Target,
+            isValid = v.IsValid,
+            errorCount = v.ErrorCount, warningCount = v.WarningCount, infoCount = v.InfoCount,
+            diagnostics = v.Diagnostics.Select(d => new {
+                severity = d.Severity.ToString().ToLowerInvariant(),
+                code = d.Code, message = d.Message, context = d.Context,
+            }).ToArray(),
+        }).ToArray();
+
+        return Serialize(new {
+            success = result.Success,
+            command = "transact",
+            status = result.Status,
+            reason = result.Reason,
+            ops = opsOut,
+            validation = validationOut,
+            journal = new {
+                transactionId = result.Journal.TransactionId.ToString(),
+                startedAt = result.Journal.StartedAt.ToString("o"),
+                finishedAt = result.Journal.FinishedAt.ToString("o"),
+                documentsTouched = result.Journal.DocumentsTouched,
+                documentsCreated = result.Journal.DocumentsCreated,
+                opsApplied = result.Journal.OpsApplied,
+                opsRolledBack = result.Journal.OpsRolledBack,
+            },
+            error = result.Error,
+        });
+    }
+
+    private static System.Text.Json.Nodes.JsonNode? TryParseJson(string s) {
+        try { return System.Text.Json.Nodes.JsonNode.Parse(s); }
+        catch { return null; }
     }
 
     private static string Serialize(object obj) => JsonSerializer.Serialize(obj, JsonOpts);

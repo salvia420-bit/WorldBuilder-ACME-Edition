@@ -15,6 +15,7 @@ namespace WorldBuilder.Terminal;
 /// </summary>
 public class TerminalRepl {
     private readonly CommandEngine _engine;
+    private readonly JsonCommandProcessor _jsonProcessor;
     private readonly Dictionary<string, Action<string[]>> _commandHandlers;
 
     public TerminalRepl(HeadlessProjectManager projectManager,
@@ -24,6 +25,10 @@ public class TerminalRepl {
         IOntologyService ontologyService,
         IStampService stampService) {
         _engine = new CommandEngine(projectManager, terrainService, objectPlacementService, dungeonService, ontologyService, stampService);
+        // Used solely so the REPL `transact` command can re-enter the JSON dispatch
+        // surface. Both processors share the same projectManager → same DocumentManager
+        // → same singleton document instances, so mutations land in one place.
+        _jsonProcessor = new JsonCommandProcessor(projectManager, terrainService, objectPlacementService, dungeonService, ontologyService, stampService);
         _commandHandlers = BuildCommandHandlers();
     }
 
@@ -170,6 +175,7 @@ public class TerminalRepl {
             ["worldgen-scan-retail-towns"] = HandleWorldGenScanRetailTowns,
             ["render-preview"] = HandleRenderPreview,
             ["compare-to-retail"] = HandleCompareToRetail,
+            ["transact"] = HandleTransact,
             ["help"] = _ => PrintHelp(),
         };
 
@@ -1504,6 +1510,7 @@ public class TerminalRepl {
         Console.WriteLine("  worldgen-analyze-buildings [--out catalog.json]                  Scan DATs for placeable building models");
         Console.WriteLine("  worldgen-scan-retail-towns [--out stats.json]                    Scan DATs for retail-style town models");
         Console.WriteLine("  compare-to-retail <generated.jsonl> [--retail-baseline path]     Score generated world vs retail (subprocess)");
+        Console.WriteLine("  transact <ops.json>                            Stage/validate/commit a batch of mutating commands; rollback on failure");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
@@ -4730,5 +4737,72 @@ public class TerminalRepl {
             Console.WriteLine($"  JSON       : {r.OutJsonPath}");
         }
         Console.WriteLine();
+    }
+
+    // ════════════════════════════════════════════════════
+    //  transact — batched stage / validate / commit-or-rollback.
+    //  REPL form takes a JSON file path; the file holds the same
+    //  payload as the JSON-agent `{ "command": "transact", ops: [...] }`.
+    // ════════════════════════════════════════════════════
+
+    private void HandleTransact(string[] tokens) {
+        if (tokens.Length < 2 || tokens[1] == "--help") {
+            Console.WriteLine("Usage: transact <path-to-ops.json>");
+            Console.WriteLine("  The file may be either a top-level array of ops, or a full payload");
+            Console.WriteLine("  object: { \"ops\": [...], \"rollback_on_fail\": true, \"validate\": \"auto\" }.");
+            Console.WriteLine("  Each op has the same shape as a normal JSON-agent command:");
+            Console.WriteLine("    { \"command\": \"bulk-place-objects\", \"lbX\": 169, \"lbY\": 180, \"objects\": [...] }");
+            Console.WriteLine();
+            Console.WriteLine("  Validation modes: \"auto\" (default), \"all\", \"none\", or { \"landblocks\": [...] }.");
+            return;
+        }
+        var path = tokens[1];
+        if (!File.Exists(path)) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"File not found: {path}");
+            Console.ResetColor();
+            return;
+        }
+
+        string json;
+        try {
+            json = File.ReadAllText(path);
+        } catch (Exception ex) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Failed to read {path}: {ex.Message}");
+            Console.ResetColor();
+            return;
+        }
+
+        // Normalize: a top-level array is shorthand for { "ops": [...] }.
+        // Either way, prepend `command: "transact"` so the JSON dispatcher routes here.
+        System.Text.Json.Nodes.JsonNode? parsed;
+        try {
+            parsed = System.Text.Json.Nodes.JsonNode.Parse(json);
+        } catch (Exception ex) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Invalid JSON in {path}: {ex.Message}");
+            Console.ResetColor();
+            return;
+        }
+
+        System.Text.Json.Nodes.JsonObject payload;
+        if (parsed is System.Text.Json.Nodes.JsonArray arr) {
+            payload = new System.Text.Json.Nodes.JsonObject {
+                ["command"] = "transact",
+                ["ops"] = arr.DeepClone(),
+            };
+        } else if (parsed is System.Text.Json.Nodes.JsonObject obj) {
+            payload = (System.Text.Json.Nodes.JsonObject)obj.DeepClone();
+            payload["command"] = "transact";
+        } else {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine("Top-level JSON must be an object or array.");
+            Console.ResetColor();
+            return;
+        }
+
+        var response = _jsonProcessor.ProcessCommand(payload.ToJsonString());
+        Console.WriteLine(response);
     }
 }
