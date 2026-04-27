@@ -96,6 +96,15 @@ public record RotateObjectResult(
     ushort LbKey, int Index, uint ModelId,
     Quaternion OldOrientation, Quaternion NewOrientation);
 
+// ── Region Render ──────────────────────────────────────────
+public record RenderPreviewResult(
+    uint CenterLbX, uint CenterLbY, ushort CenterLbKey,
+    int Radius, int Resolution, int LbPixelSize,
+    int LandblockCount, int ObjectCount, int CliffCount,
+    bool OverlayApplied,
+    byte[] PngBytes,
+    string? OutputPath);
+
 // ── Spatial Queries ────────────────────────────────────────
 public record FoundObject(
     float Distance, ushort LbKey, int Index, StaticObject Object);

@@ -200,8 +200,36 @@ public class JsonCommandProcessor {
             ["worldgen"] = CmdWorldGen,
             ["worldgen-analyze-buildings"] = CmdWorldGenAnalyzeBuildings,
             ["worldgen-scan-retail-towns"] = CmdWorldGenScanRetailTowns,
+            ["render-preview"] = CmdRenderPreview,
             ["help"] = _ => CmdHelp(),
         };
+
+    private string CmdRenderPreview(System.Text.Json.Nodes.JsonNode node) {
+        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        int radius = node["radius"]?.GetValue<int>() ?? 0;
+        int resolution = node["resolution"]?.GetValue<int>() ?? 1024;
+        bool overlay = node["overlay"]?.GetValue<bool>() ?? true;
+        bool includePng = node["includePng"]?.GetValue<bool>() ?? true;
+        string? outPath = node["outputPath"]?.GetValue<string>();
+
+        var r = _engine.RenderPreview(lbX, lbY, radius, resolution, overlay, outPath);
+        return Serialize(new {
+            success = true,
+            command = "render-preview",
+            landblock = $"0x{r.CenterLbKey:X4}",
+            centerLbX = r.CenterLbX, centerLbY = r.CenterLbY,
+            radius = r.Radius,
+            resolution = r.Resolution,
+            lbPixelSize = r.LbPixelSize,
+            landblockCount = r.LandblockCount,
+            objectCount = r.ObjectCount,
+            cliffCount = r.CliffCount,
+            overlayApplied = r.OverlayApplied,
+            outputPath = r.OutputPath,
+            pngBytes = r.PngBytes.Length,
+            pngBase64 = includePng ? Convert.ToBase64String(r.PngBytes) : null,
+        });
+    }
 
     // ════════════════════════════════════════════════════
     //  Project management
@@ -847,6 +875,7 @@ public class JsonCommandProcessor {
             new { name = "generate-settlement", args = "template, centerX, centerY, seed?", description = "Generate constraint-based settlement from template" },
             new { name = "extract-retail-heightmaps", args = "outputPath?", description = "Dump all 255×255 landblock heightmaps as JSONL" },
             new { name = "compute-vanilla-baseline", args = "outputPath?", description = "Compute retail quality baseline metrics (density, terrain dist, etc.)" },
+            new { name = "render-preview",   args = "lbX, lbY, radius?, resolution?, overlay?, includePng?, outputPath?", description = "Top-down PNG of an N×N landblock region (terrain + objects + cliff/pairing overlays). Returns base64 PNG." },
             new { name = "quit",             args = "",                                      description = "Exit terminal" }
         };
         return Serialize(new { success = true, command = "help", protocol = "json-line", version = "1.5",

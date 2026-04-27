@@ -468,6 +468,96 @@ public class CommandEngine {
         return new TerrainDataResult(lbKey, lbX, lbY, true, vertices);
     }
 
+    // ---------------------------------------------------------------------
+    //  Region render
+    // ---------------------------------------------------------------------
+
+    public RenderPreviewResult RenderPreview(
+        uint centerLbX, uint centerLbY,
+        int radius, int resolution, bool overlay,
+        string? outputPath) {
+
+        RequireProject();
+        if (radius < 0) throw new ArgumentException("radius must be >= 0");
+        if (radius > 16) throw new ArgumentException("radius must be <= 16 (33x33 LBs)");
+        if (resolution < 64 || resolution > 8192)
+            throw new ArgumentException("resolution must be in [64, 8192]");
+        if (centerLbX > 255 || centerLbY > 255)
+            throw new ArgumentException("centerLb must have lbX, lbY in [0, 255]");
+
+        int gridSize = 2 * radius + 1;
+        int lbPx = Math.Max(8, resolution / gridSize);
+        int finalRes = lbPx * gridSize;
+
+        var terrainDoc = GetTerrainDoc();
+        var ht = GetHeightTable();
+
+        var terrainByCell = new Dictionary<(int col, int row), TerrainEntry[]?>();
+        var objectsByCell = new Dictionary<(int col, int row), List<StaticObject>>();
+        int lbCount = 0, objCount = 0;
+
+        for (int row = 0; row < gridSize; row++) {
+            for (int col = 0; col < gridSize; col++) {
+                long absX = (long)centerLbX - radius + col;
+                long absY = (long)centerLbY - radius + row;
+                if (absX < 0 || absX > 255 || absY < 0 || absY > 255) {
+                    terrainByCell[(col, row)] = null;
+                    objectsByCell[(col, row)] = new List<StaticObject>();
+                    continue;
+                }
+                ushort lbKey = (ushort)((absX << 8) | absY);
+                var data = terrainDoc.GetLandblockInternal(lbKey);
+                terrainByCell[(col, row)] = data;
+                if (data != null) lbCount++;
+
+                List<StaticObject> objs;
+                try {
+                    var lbDoc = GetLandblockDoc(lbKey);
+                    objs = lbDoc.GetStaticObjects().ToList();
+                } catch {
+                    objs = new List<StaticObject>();
+                }
+                objectsByCell[(col, row)] = objs;
+                objCount += objs.Count;
+            }
+        }
+
+        var input = new RenderPreviewRenderer.Input {
+            CenterLbX = centerLbX,
+            CenterLbY = centerLbY,
+            Radius = radius,
+            GridSize = gridSize,
+            LbPx = lbPx,
+            FinalRes = finalRes,
+            Overlay = overlay,
+            Terrain = terrainByCell,
+            Objects = objectsByCell,
+            HeightTable = ht,
+            Ontology = id => _ontologyService.GetEntry(id),
+            PairingsGroupKey = id => _buildingPairings.GroupKey(id),
+            CliffThreshold = WorldBuilder.Shared.Lib.Validation.ValidationEngine.DefaultCliffThreshold,
+        };
+
+        var renderOut = RenderPreviewRenderer.Render(input);
+
+        if (!string.IsNullOrEmpty(outputPath)) {
+            var dir = Path.GetDirectoryName(outputPath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+            File.WriteAllBytes(outputPath, renderOut.PngBytes);
+        }
+
+        ushort centerKey = LbKey(centerLbX, centerLbY);
+        return new RenderPreviewResult(
+            centerLbX, centerLbY, centerKey,
+            radius, finalRes, lbPx,
+            lbCount, objCount, renderOut.CliffCount,
+            overlay,
+            renderOut.PngBytes,
+            outputPath);
+    }
+
+
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     //  Object management
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•

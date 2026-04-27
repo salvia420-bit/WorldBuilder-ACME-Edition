@@ -168,8 +168,60 @@ public class TerminalRepl {
             ["worldgen"] = HandleWorldGen,
             ["worldgen-analyze-buildings"] = HandleWorldGenAnalyzeBuildings,
             ["worldgen-scan-retail-towns"] = HandleWorldGenScanRetailTowns,
+            ["render-preview"] = HandleRenderPreview,
             ["help"] = _ => PrintHelp(),
         };
+
+    private void HandleRenderPreview(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 3) {
+            Console.WriteLine("Usage: render-preview <lbX> <lbY> [radius] [resolution] [--no-overlay] [--out <path>]");
+            Console.WriteLine("  Examples:");
+            Console.WriteLine("    render-preview 169 180                         # single LB (Holtburg) @1024");
+            Console.WriteLine("    render-preview 169 180 2 1536                  # 5x5 grid @ 1536");
+            Console.WriteLine("    render-preview 169 180 0 1024 --out hb.png");
+            return;
+        }
+        if (!TryParseUint(tokens[1], "lbX", out uint lbX)) return;
+        if (!TryParseUint(tokens[2], "lbY", out uint lbY)) return;
+
+        int radius = 0;
+        int resolution = 1024;
+        bool overlay = true;
+        string? outPath = null;
+
+        // Optional positional radius + resolution.
+        int posIdx = 3;
+        if (tokens.Length > posIdx && !tokens[posIdx].StartsWith("--") &&
+            int.TryParse(tokens[posIdx], out var r)) { radius = r; posIdx++; }
+        if (tokens.Length > posIdx && !tokens[posIdx].StartsWith("--") &&
+            int.TryParse(tokens[posIdx], out var rs)) { resolution = rs; posIdx++; }
+
+        for (int i = posIdx; i < tokens.Length; i++) {
+            if (tokens[i] == "--no-overlay") overlay = false;
+            else if (tokens[i] == "--overlay") overlay = true;
+            else if (tokens[i] == "--out" && i + 1 < tokens.Length) {
+                outPath = tokens[++i];
+            } else {
+                Console.WriteLine($"Unknown flag: {tokens[i]}");
+                return;
+            }
+        }
+
+        // Default to a project-relative path if --out not specified.
+        outPath ??= Path.Combine(Environment.CurrentDirectory,
+            $"render_{lbX:X2}{lbY:X2}_r{radius}.png");
+
+        var result = _engine.RenderPreview(lbX, lbY, radius, resolution, overlay, outPath);
+        Console.WriteLine();
+        Console.WriteLine($"  Rendered 0x{result.CenterLbKey:X4} ({lbX},{lbY}) radius={result.Radius} → {result.Resolution}×{result.Resolution} px");
+        Console.WriteLine($"  Landblocks  : {result.LandblockCount} populated of {(2*result.Radius+1)*(2*result.Radius+1)}");
+        Console.WriteLine($"  Objects     : {result.ObjectCount}");
+        Console.WriteLine($"  Cliffs      : {result.CliffCount} (overlay {(result.OverlayApplied ? "ON" : "OFF")})");
+        Console.WriteLine($"  PNG size    : {result.PngBytes.Length / 1024.0:F1} KB");
+        if (result.OutputPath != null) Console.WriteLine($"  Wrote       : {result.OutputPath}");
+        Console.WriteLine();
+    }
 
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     //  Project management
@@ -1508,6 +1560,7 @@ public class TerminalRepl {
         Console.WriteLine("  generate-settlement <template> <cx> <cy> [seed]  Place settlement from constraint templates");
         Console.WriteLine("  extract-retail-heightmaps [output.jsonl]           Dump all 255Ã—255 landblock heightmaps");
         Console.WriteLine("  compute-vanilla-baseline [output.json]             Compute retail quality baseline metrics");
+        Console.WriteLine("  render-preview <lbX> <lbY> [r] [res] [--no-overlay] [--out path]   Top-down PNG of an N×N region (terrain + objects + cliff overlay)");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;

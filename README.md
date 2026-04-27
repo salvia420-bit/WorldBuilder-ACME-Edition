@@ -113,6 +113,26 @@ The terminal includes a headless **validation engine** with 34 diagnostic codes 
 
 The recommended agent workflow: **mutate → `validate-all` → fix errors → repeat**.
 
+### Visual Channel — `render-preview`
+
+Validation catches structural mistakes symbolically. `render-preview` catches *visual* mistakes — clustering, mode-collapse, density drift, awkward placement — by handing a vision-capable LLM a literal top-down PNG of any region it just edited. Same JSON-agent channel, returned as a base64 PNG.
+
+<p align="center">
+  <img src="docs/images/render_preview/holtburg_r2.png" width="640" alt="render-preview of a 5×5 region around Holtburg (0xA9B4)">
+</p>
+<p align="center"><em>5×5 region around Holtburg (0xA9B4): bilinearly-blended terrain colors, north-west hillshade, road network in tan, object glyphs by ontology category (▲ scenery, ■ structure, ● prop, ◆ creature), red dashed cliff overlay tracing the highland-to-river drop, subtle landblock grid.</em></p>
+
+```
+render-preview <lbX> <lbY> [radius] [resolution] [--no-overlay] [--out path]
+```
+
+- **Region** — single landblock (`radius=0`) or `(2r+1)×(2r+1)` grid centered on `(lbX, lbY)`
+- **Encoded** — terrain elevation (hillshade) + terrain type (color) + roads + object positions (glyphs sized by ontology scale, shaped by category) + cliff/portal/building-pairing overlays
+- **Returned** — base64 PNG over the JSON channel; optionally also written to disk via `--out`
+- **Headless** — pure SkiaSharp raster, no GPU, no GUI dependencies
+
+Sample renders covering the design space — town, wilderness, ocean, multi-LB region — live in [`docs/images/render_preview/`](docs/images/render_preview/).
+
 ### Object Ontology Service
 
 The `OntologyService` provides semantic awareness — mapping raw DAT model IDs to human-readable tags (`Architecture: Aluvian`, `Biome: Desert`, `Type: Scenery_Tree`) so that AI agents can make aesthetically and logically coherent placement decisions:
