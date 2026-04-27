@@ -185,6 +185,52 @@ The `OntologyService` provides semantic awareness — mapping raw DAT model IDs 
 - Object ontology schema with 80+ manually tagged entries, 28 creature families, and 5 constraint presets
 - Constraint presets enforce aesthetic cohesion (e.g., a "Desert Outpost" preset rejects Snowy-tagged objects)
 
+### Living Atlas — `describe-landblock` and the Tile Pyramid
+
+The third observation channel: factual, on-demand descriptions of any landblock — verbal block, deeply structured fields, and an LRU-cached tile pyramid. Composes on top of the document/ontology/render-preview surfaces. Architectural axiom: **identity is stored, context is derived.** Object positions, model IDs, and ontology tags persist on the documents; descriptions are computed fresh from current state on every call. When the world mutates via `transact`, the journal's affected landblocks are marked dirty in the tile cache and the next `get-tile`/`describe-landblock` regenerates — no stale prose.
+
+```
+Holtburg, Aluvian Heartlands (LB 0xA9B4, 169,180). Aluvian settlement. Rugged,
+mostly lushgrass, road present, cliff-heavy (Z 30.0..96.0). 126 objects (12 structures).
+Two-story building with 17 interior cells at (32532,34692) z=66.0 containing 7 objects
+across 2 Z-bands. (+11 more structures.) Interior cells: 123, Z 66.0..94.0 (2 bands),
+292 interior edges, 50 exterior portals.
+  spawns [quest npc] (8): Alcott; Sean the Speedy; Buckminster; Alfrin; Worcer (+3)
+  spawns [shopkeeper] (7): Sedor Wystan the Blacksmith; Monyra the Jeweler; Asenala (+4)
+  wiki POI [Quest NPC]: Ahyara, Alcott, Brentsella (+10)
+  validation: isValid=false, errors=1, warnings=19, info=48
+```
+
+Five data layers compose into the per-LB output, all activated lazily from project-directory JSON files:
+
+1. **Structure derivation** — terrain summary (biome/cliff/road), real `FootprintExtractor` for Setups + GfxObj fallback, vertex Z-histogram for visual story counts, top/base XY-span ratio for roof shape (`spire` <15% / `tapered` 15–50% / `pitched` 50–85% / `flat`), AC environment cell attribution per building, type description like *"two-story Aluvian building with pitched roof, 17 interior cells."* Memoized per model_id.
+
+2. **Region + town gazetteer** — 13 AC-canonical cultural regions (Aluvian Heartlands, Sho Heartlands, Gharu'ndim Plains, Linvak Mountain, Empyrean Ruins, …) and 60 named retail towns with culture tags. Per-LB region resolved via nearest-town anchor with cache. Honors the inheritance rule from the brief: parent zoom names biome+culture, LB stops repeating it. Files: `<project>/region_gazetteer.json`, `<project>/town_gazetteer.json`.
+
+3. **Acpedia POI integration** — the AC community wiki XML dump (53k pages) streamed into a coordinate-keyed POI gazetteer via the validated wiki-N/E → LB-key formula `lbX = round((E·240 + 24384) / 192)`. **4,910 georeferenced wiki pages → 2,044 LBs with named POIs** (NPCs, shopkeepers, quest objects, landmarks). Loaded from `<project>/poi_gazetteer.json`.
+
+4. **wcid → Acpedia per-object naming** — 14,915 LSD weenie wcids matched to Acpedia pages with confidence tiering (HIGH/MED/LOW/NONE) by name + weenie-type → wiki-category alignment. **Sanity gate** required: `entry.Name == acpedia.Title` (case-insensitive); catches setupID-collision false positives like the *"Renald's Old Mug → Cutters Cup"* failure mode where `EnrichFromWeenies`'s last-write-wins behavior produces inconsistent name/wcid pairs. File: `<project>/wcid_acpedia_join.jsonl`.
+
+5. **LSD spawnMap integration** — server-spawn data (1,162 spawnMaps → 53k spawn entries → ~2k player-visible after server-managed filter). Each LB shows its NPCs, creatures, quest objects with positions and Acpedia categories. Spawn-cluster detection surfaces creature packs and architectural patterns, e.g. *"3× Drudge Prowler within ~5m at (153,−140) — encounter group."* Filtering rules drop generators (`Linkable Monster Generator`, `Door`, `Chest`, `Pressure Plate`), suffix-strip placement metadata (`Apprentice Alchemist   Overworld` → `Apprentice Alchemist`), and skip wcids absent from the LSD-Partial dump (Empyrean traps surface as `?` — not narratable). File: `<project>/spawn_gazetteer.json`.
+
+Plus a per-LB **validation overlay** (the existing 45 codes across DNG/LBK/TRN/BSH/BLD), structure containment and Z-band relations, and an extensible relations layer that emits the full structured trace for downstream consumers — the LLM is reduced to an optional prose-synthesizer over the structured output, never a fact-extractor over raw DAT data.
+
+#### Tile pyramid
+
+The atlas exposes three zoom levels via `get-tile`:
+
+| Zoom | Source | Default size | Typical encoded |
+|---|---|---:|---:|
+| `lb` | `render-preview` at 1024² → JPEG q85 at 512² | 512×512 | ~20 KB |
+| `region` | `render-preview` at radius covering the region's town anchors → JPEG | 1024×1024 | 50–170 KB |
+| `world` | SkiaSharp composite of all 13 region tiles → JPEG | 2048×2048 | ~150 KB |
+
+Tiles are persisted under `<project>/atlas_tiles/{lb,region}/…jpg` with a `manifest.json` tracking sizes, generated/accessed timestamps, and dirty flags. **Lazy generation** — tiles are produced on first `get-tile` request, cached, served from disk thereafter. **2 GB LRU cache cap** by default; when exceeded, oldest-accessed LB tiles evict (region/world tiles pinned).
+
+The transact-journal subscription wires this directly to the editor: when a `transact` commits, the journal's `documentsTouched` is parsed (`landblock_HEX` / `dungeon_HEX` → that LB dirty; `terrain` → all tiles dirty), region tiles for affected LBs are marked dirty too, and the next `get-tile` regenerates. The describer's `body.validation`, `body.namedObjects`, `body.spawns`, and `body.knownPois` fields likewise reflect the new state immediately — descriptions never go stale.
+
+JSON commands: `get-tile {zoom, lbX?, lbY?, region?, includeBase64?}`, `tile-stats`, `regenerate-dirty-tiles`, `list-dirty-tiles`, `mark-tiles-clean`, `prune-tiles {keepNewest?, olderThan?}`, `generate-atlas-tiles {mode: "lbs"|"regions"|"world"|"all"}`. Realistic full-pyramid disk for a populated retail world: **~360 MB** at LB-zoom + ~1.5 MB for region+world — far under the cache cap.
+
 ### Integration Tests
 
 Both **Python** (55+ tests) and **PowerShell** (25 checks) test harnesses validate the full `--stdin` protocol surface — startup handshake, error handling, CRUD roundtrips, validation report shapes, and serialization contracts. Zero external dependencies. See **[`tests/README.md`](tests/README.md)**.

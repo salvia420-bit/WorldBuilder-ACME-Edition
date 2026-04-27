@@ -88,6 +88,7 @@ public class TerminalRepl {
             ["get-terrain-data"] = HandleGetTerrainData,
             ["terrain"] = HandleTerrain,
             ["list-objects"] = HandleListObjects,
+            ["describe-landblock"] = HandleDescribeLandblock,
             ["add-object"] = HandleAddObject,
             ["remove-object"] = HandleRemoveObject,
             ["clear-objects"] = HandleClearObjects,
@@ -573,6 +574,43 @@ public class TerminalRepl {
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     //  Object management
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+    private void HandleDescribeLandblock(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 3) {
+            Console.WriteLine("Usage: describe-landblock <lbX> <lbY>");
+            Console.WriteLine("  Example: describe-landblock 169 180");
+            return;
+        }
+        if (!TryParseUint(tokens[1], "lbX", out uint lbX)) return;
+        if (!TryParseUint(tokens[2], "lbY", out uint lbY)) return;
+        var r = _engine.DescribeLandblock(lbX, lbY);
+
+        Console.WriteLine();
+        Console.WriteLine($"  {r.Verbal}");
+        Console.WriteLine();
+        Console.WriteLine($"  Context:    biome={r.Context.Biome ?? "?"}  conf={r.Context.BiomeConfidence:F2}  road={r.Context.HasRoad}  settlement={r.Context.SettlementHint ?? "—"}  arch={r.Context.DominantArchitecture ?? "—"}");
+        Console.WriteLine($"  Terrain:    {r.Terrain.Summary}  cliffs={r.Terrain.CliffCount}  Z={r.Terrain.HeightMin:F1}..{r.Terrain.HeightMax:F1}");
+        Console.WriteLine($"  Objects:    total={r.Body.ObjectTotal}  loose={r.Body.LooseObjectCount}  untagged={r.Body.UntaggedIndices.Count}");
+        if (r.Body.ByCategory.Count > 0) {
+            Console.WriteLine($"              by category: {string.Join(", ", r.Body.ByCategory.Select(c => $"{c.Category}={c.Count}"))}");
+        }
+        if (r.Body.Structures.Count > 0) {
+            Console.WriteLine($"  Structures: {r.Body.Structures.Count}");
+            foreach (var s in r.Body.Structures) {
+                Console.WriteLine($"    [{s.Index,3}] {s.ModelId}  ({s.Origin.X,7:F1}, {s.Origin.Y,7:F1}, {s.Origin.Z,5:F1})  cells={s.AttributedCellCount}  contains={s.ContainedIndices.Count}");
+                Console.WriteLine($"          → {s.TypeDescription}");
+            }
+        }
+        if (r.Body.Interior != null) {
+            Console.WriteLine($"  Interior:   {r.Body.Interior.CellCount} cells, Z={r.Body.Interior.ZMin:F1}..{r.Body.Interior.ZMax:F1}, bands={r.Body.Interior.ZBandCount}, cell-edges={r.Body.Interior.CellGraphEdges}, exterior-portals={r.Body.Interior.ExteriorPortals}");
+        }
+        if (r.Relations.Count > 0) {
+            Console.WriteLine("  Relations:");
+            foreach (var rel in r.Relations) Console.WriteLine($"    • {rel}");
+        }
+        Console.WriteLine();
+    }
 
     private void HandleListObjects(string[] tokens) {
         if (!CheckProject()) return;

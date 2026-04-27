@@ -149,6 +149,7 @@ public class JsonCommandProcessor {
             ["get-heightmap"] = CmdGetHeightmap,
             ["get-terrain-data"] = CmdGetTerrainData,
             ["list-objects"] = CmdListObjects,
+            ["describe-landblock"] = CmdDescribeLandblock,
             ["add-object"] = CmdAddObject,
             ["remove-object"] = CmdRemoveObject,
             ["clear-objects"] = CmdClearObjects,
@@ -229,6 +230,13 @@ public class JsonCommandProcessor {
             ["render-preview"] = CmdRenderPreview,
             ["compare-to-retail"] = CmdCompareToRetail,
             ["transact"] = CmdTransact,
+            ["get-tile"] = CmdGetTile,
+            ["tile-stats"] = _ => CmdTileStats(),
+            ["regenerate-dirty-tiles"] = _ => CmdRegenerateDirtyTiles(),
+            ["list-dirty-tiles"] = _ => CmdListDirtyTiles(),
+            ["mark-tiles-clean"] = _ => CmdMarkTilesClean(),
+            ["prune-tiles"] = CmdPruneTiles,
+            ["generate-atlas-tiles"] = CmdGenerateAtlasTiles,
             ["help"] = _ => CmdHelp(),
         };
 
@@ -444,6 +452,111 @@ public class JsonCommandProcessor {
                 x = Math.Round(obj.Origin.X, 2), y = Math.Round(obj.Origin.Y, 2), z = Math.Round(obj.Origin.Z, 2),
                 orientation = FmtQ(obj.Orientation), scale = new { x = Math.Round(obj.Scale.X, 3), y = Math.Round(obj.Scale.Y, 3), z = Math.Round(obj.Scale.Z, 3) }
             }).ToArray() });
+    }
+
+    private string CmdDescribeLandblock(System.Text.Json.Nodes.JsonNode node) {
+        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        bool includeFootprints = node["includeFootprints"]?.GetValue<bool>() ?? false;
+        var r = _engine.DescribeLandblock(lbX, lbY);
+        return Serialize(new {
+            success = true,
+            command = "describe-landblock",
+            landblock = r.Landblock,
+            lbX = r.LbX,
+            lbY = r.LbY,
+            context = new {
+                regionName = r.Context.RegionName,
+                regionDescription = r.Context.RegionDescription,
+                townName = r.Context.TownName,
+                culture = r.Context.Culture,
+                gazetteerNotes = r.Context.GazetteerNotes,
+                knownPoiCount = r.Context.KnownPois?.Count ?? 0,
+                knownPois = r.Context.KnownPois?.Select(p => new {
+                    title = p.Title, categories = p.Categories, description = p.Description
+                }).ToArray(),
+                biome = r.Context.Biome,
+                biomeConfidence = Math.Round(r.Context.BiomeConfidence, 3),
+                hasRoad = r.Context.HasRoad,
+                settlementHint = r.Context.SettlementHint,
+                dominantArchitecture = r.Context.DominantArchitecture,
+                structureCount = r.Context.StructureCount,
+                dominantTerrainTypes = r.Context.DominantTerrainTypes.Select(t => new {
+                    type = t.Type, name = t.Name, vertexCount = t.VertexCount, share = Math.Round(t.Share, 3)
+                }).ToArray()
+            },
+            terrain = new {
+                heightMin = Math.Round(r.Terrain.HeightMin, 2),
+                heightMax = Math.Round(r.Terrain.HeightMax, 2),
+                heightRange = Math.Round(r.Terrain.HeightRange, 2),
+                cliffCount = r.Terrain.CliffCount,
+                vertexCount = r.Terrain.VertexCount,
+                summary = r.Terrain.Summary
+            },
+            body = new {
+                objectTotal = r.Body.ObjectTotal,
+                byCategory = r.Body.ByCategory.Select(c => new { category = c.Category, count = c.Count }).ToArray(),
+                structures = r.Body.Structures.Select(s => new {
+                    index = s.Index,
+                    modelId = s.ModelId,
+                    typeDescription = s.TypeDescription,
+                    origin = new { x = Math.Round(s.Origin.X, 2), y = Math.Round(s.Origin.Y, 2), z = Math.Round(s.Origin.Z, 2) },
+                    footprintShape = s.FootprintShape,
+                    floorZ = Math.Round(s.FloorZ, 2),
+                    topZ = Math.Round(s.TopZ, 2),
+                    architecture = s.Architecture,
+                    stories = s.Stories,
+                    playableFloors = s.PlayableFloors,
+                    roofShape = s.RoofShape,
+                    attributedCellCount = s.AttributedCellCount,
+                    materialTags = s.MaterialTags,
+                    nameHint = s.NameHint,
+                    tags = s.Tags,
+                    containedIndices = s.ContainedIndices,
+                    zBands = s.ZBands.Select(b => new { min = Math.Round(b.Min, 2), max = Math.Round(b.Max, 2), count = b.Count }).ToArray(),
+                    footprintWorld = includeFootprints
+                        ? s.FootprintWorld.Select(p => new { x = Math.Round(p.X, 2), y = Math.Round(p.Y, 2) }).ToArray()
+                        : null
+                }).ToArray(),
+                looseObjectCount = r.Body.LooseObjectCount,
+                looseZBands = r.Body.LooseZBands.Select(b => new { min = Math.Round(b.Min, 2), max = Math.Round(b.Max, 2), count = b.Count }).ToArray(),
+                untaggedIndices = r.Body.UntaggedIndices,
+                interior = r.Body.Interior == null ? null : new {
+                    cellCount = r.Body.Interior.CellCount,
+                    zMin = Math.Round(r.Body.Interior.ZMin, 2),
+                    zMax = Math.Round(r.Body.Interior.ZMax, 2),
+                    zRange = Math.Round(r.Body.Interior.ZRange, 2),
+                    zBandCount = r.Body.Interior.ZBandCount,
+                    cellGraphEdges = r.Body.Interior.CellGraphEdges,
+                    exteriorPortals = r.Body.Interior.ExteriorPortals,
+                    staticObjectCount = r.Body.Interior.StaticObjectCount
+                },
+                namedObjects = r.Body.NamedObjects.Select(n => new {
+                    index = n.Index, modelId = n.ModelId, wcid = n.Wcid,
+                    weenieName = n.WeenieName, acpediaTitle = n.AcpediaTitle,
+                    acpediaCategories = n.AcpediaCategories,
+                    acpediaDescription = n.AcpediaDescription, tier = n.Tier
+                }).ToArray(),
+                spawnCount = r.Body.Spawns.Count,
+                spawns = r.Body.Spawns.Select(s => new {
+                    wcid = s.Wcid, name = s.Name, placement = s.Placement,
+                    weenieType = s.WeenieType, acpediaTitle = s.AcpediaTitle,
+                    acpediaCategories = s.AcpediaCategories, acpediaTier = s.AcpediaTier,
+                    x = Math.Round(s.X, 2), y = Math.Round(s.Y, 2), z = Math.Round(s.Z, 2),
+                    cell = s.Cell
+                }).ToArray()
+            },
+            relations = r.Relations,
+            verbal = r.Verbal,
+            validation = r.Validation == null ? null : new {
+                isValid = r.Validation.IsValid,
+                errorCount = r.Validation.ErrorCount,
+                warningCount = r.Validation.WarningCount,
+                infoCount = r.Validation.InfoCount,
+                diagnostics = r.Validation.Diagnostics.Select(d => new {
+                    severity = d.Severity, code = d.Code, message = d.Message, context = d.Context
+                }).ToArray()
+            }
+        });
     }
 
     private string CmdAddObject(System.Text.Json.Nodes.JsonNode node) {
@@ -1840,6 +1953,14 @@ public class JsonCommandProcessor {
             }).ToArray(),
         }).ToArray();
 
+        // Tile-cache invalidation hook: when a transact actually committed,
+        // notify the tile pipeline so its manifest reflects the dirty LBs.
+        // No-op if the tile pipeline hasn't been initialized yet.
+        if (result.Success && result.Status == "committed") {
+            try { _engine.OnTransactCommitted(result.Journal.DocumentsTouched); }
+            catch (Exception ex) { Console.Error.WriteLine($"[Tiles] Invalidation skipped: {ex.Message}"); }
+        }
+
         return Serialize(new {
             success = result.Success,
             command = "transact",
@@ -1863,6 +1984,131 @@ public class JsonCommandProcessor {
     private static System.Text.Json.Nodes.JsonNode? TryParseJson(string s) {
         try { return System.Text.Json.Nodes.JsonNode.Parse(s); }
         catch { return null; }
+    }
+
+    // ════════════════════════════════════════════════════
+    //  Tile pipeline (atlas tile pyramid)
+    // ════════════════════════════════════════════════════
+
+    private string CmdGetTile(System.Text.Json.Nodes.JsonNode node) {
+        var zoom = node["zoom"]?.GetValue<string>() ?? "lb";
+        bool includeBase64 = node["includeBase64"]?.GetValue<bool>() ?? false;
+        TileEntry entry;
+        if (zoom == "lb") {
+            uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+            entry = _engine.GetLbTile(lbX, lbY);
+        } else if (zoom == "region") {
+            var region = node["region"]?.GetValue<string>()
+                ?? throw new ArgumentException("Missing 'region' field for zoom=region");
+            entry = _engine.GetRegionTile(region);
+        } else if (zoom == "world") {
+            entry = _engine.GetWorldTile();
+        } else {
+            return Serialize(new { success = false, command = "get-tile",
+                error = $"Unknown zoom '{zoom}'; expected 'lb', 'region', or 'world'" });
+        }
+        return Serialize(new {
+            success = true, command = "get-tile",
+            zoom, key = entry.Key, path = entry.Path,
+            sizeBytes = entry.SizeBytes,
+            generatedAt = entry.GeneratedAt.ToString("o"),
+            base64 = includeBase64 ? Convert.ToBase64String(File.ReadAllBytes(
+                Path.Combine(_engine.TileCachePathOrEmpty(), entry.Path))) : null,
+        });
+    }
+
+    private string CmdTileStats() {
+        var s = _engine.GetTileStats();
+        return Serialize(new {
+            success = true, command = "tile-stats",
+            totalCount = s.TotalCount, lbCount = s.LbCount,
+            regionCount = s.RegionCount, worldCount = s.WorldCount,
+            dirtyTileCount = s.DirtyTileCount, dirtyLbCount = s.DirtyLbCount,
+            bytesUsed = s.BytesUsed, bytesBudget = s.BytesBudget,
+            percentFull = Math.Round(100.0 * s.BytesUsed / Math.Max(1, s.BytesBudget), 2),
+        });
+    }
+
+    private string CmdRegenerateDirtyTiles() {
+        var (n, bytes, errors) = _engine.RegenerateDirtyTiles();
+        return Serialize(new {
+            success = true, command = "regenerate-dirty-tiles",
+            regenerated = n, bytesWritten = bytes,
+            errorCount = errors.Count, errors = errors.Take(10).ToArray(),
+        });
+    }
+
+    private string CmdListDirtyTiles() {
+        var dirty = _engine.ListDirtyTiles();
+        return Serialize(new {
+            success = true, command = "list-dirty-tiles",
+            count = dirty.Count,
+            lbs = dirty.Select(d => new { lbKey = $"0x{d.hex}", lbX = (d.lbKey >> 8) & 0xFF, lbY = d.lbKey & 0xFF }).ToArray(),
+        });
+    }
+
+    private string CmdMarkTilesClean() {
+        _engine.MarkTilesClean();
+        return Serialize(new { success = true, command = "mark-tiles-clean" });
+    }
+
+    private string CmdPruneTiles(System.Text.Json.Nodes.JsonNode node) {
+        int? keepNewest = node["keepNewest"]?.GetValue<int>();
+        DateTime? olderThan = null;
+        var olderStr = node["olderThan"]?.GetValue<string>();
+        if (!string.IsNullOrEmpty(olderStr) && DateTime.TryParse(olderStr, out var dt)) olderThan = dt;
+        var r = _engine.PruneTiles(keepNewest, olderThan);
+        return Serialize(new {
+            success = true, command = "prune-tiles",
+            evicted = r.Evicted, bytesFreed = r.BytesFreed,
+            remainingCount = r.RemainingCount, remainingBytes = r.RemainingBytes,
+        });
+    }
+
+    private string CmdGenerateAtlasTiles(System.Text.Json.Nodes.JsonNode node) {
+        // Modes: lb-list (specific LBs), region-list (specific regions), world (single tile),
+        //        all (everything). Defaults to listed LBs only — eager full-world generation
+        //        is opt-in to avoid surprise disk usage.
+        var mode = node["mode"]?.GetValue<string>() ?? "lbs";
+        int generated = 0, skipped = 0;
+        long bytes = 0;
+        var errors = new List<string>();
+        if (mode == "world" || mode == "all") {
+            try { var w = _engine.GetWorldTile(); generated++; bytes += w.SizeBytes; }
+            catch (Exception ex) { errors.Add($"world: {ex.Message}"); }
+        }
+        if (mode == "regions" || mode == "all") {
+            // Iterate all known regions
+            foreach (var r in _engine.ListRegionNames()) {
+                try { var t = _engine.GetRegionTile(r); generated++; bytes += t.SizeBytes; }
+                catch (Exception ex) { errors.Add($"region {r}: {ex.Message}"); }
+            }
+        }
+        if (mode == "lbs" || mode == "all") {
+            // For 'all', fall back to a sweep of the world (every 1 LB) — caller-beware,
+            // this can take many minutes. For 'lbs', expect explicit lbList.
+            var lbList = node["lbList"] as System.Text.Json.Nodes.JsonArray;
+            List<(uint, uint)> lbs;
+            if (lbList != null) {
+                lbs = lbList.Where(e => e is System.Text.Json.Nodes.JsonObject)
+                    .Select(e => ((uint)e!["lbX"]!.GetValue<int>(), (uint)e["lbY"]!.GetValue<int>()))
+                    .ToList();
+            } else if (mode == "all") {
+                lbs = new List<(uint, uint)>();
+                for (uint x = 0; x < 255; x++) for (uint y = 0; y < 255; y++) lbs.Add((x, y));
+            } else {
+                return Serialize(new { success = false, command = "generate-atlas-tiles",
+                    error = "mode=lbs requires 'lbList' (array of {lbX,lbY})" });
+            }
+            var (g, s, b, e) = _engine.GenerateBulkLbTiles(lbs);
+            generated += g; skipped += s; bytes += b; errors.AddRange(e);
+        }
+        return Serialize(new {
+            success = errors.Count == 0,
+            command = "generate-atlas-tiles",
+            mode, generated, skipped, bytesWritten = bytes,
+            errorCount = errors.Count, errors = errors.Take(10).ToArray(),
+        });
     }
 
     private static string Serialize(object obj) => JsonSerializer.Serialize(obj, JsonOpts);

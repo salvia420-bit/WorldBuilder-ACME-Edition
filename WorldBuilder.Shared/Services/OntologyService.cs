@@ -938,12 +938,16 @@ public class OntologyService : IOntologyService {
                     };
                 }
 
-                // Update category based on weenie type
+                // Update category based on weenie type. Values match the canonical
+                // ACE enum at ACE/Source/ACE.Entity/Enum/WeenieType.cs (zero-indexed).
+                // Earlier code here had values from an older AC numbering scheme
+                // (Door=14, Portal=37, House=55) that don't match LSD-Partial 2025 data.
                 string? newCategory = weenieType switch {
-                    7  => "Creature",
-                    12 => "NPC",
-                    14 => "Structure",  // Door
-                    37 => "Portal",
+                    7  => "Interactive_Portal",  // Portal
+                    10 => "Creature",            // Creature
+                    12 => "NPC",                 // Vendor (an NPC for our purposes)
+                    28 => "NPC",                 // Healer (NPC vendor variant)
+                    53 => "Structure",           // House — load-bearing for atlas building tagging
                     _  => null
                 };
                 if (newCategory != null && entry.Category != newCategory) {
@@ -954,21 +958,24 @@ public class OntologyService : IOntologyService {
                 // Build additional tags
                 var newTags = new List<string>(entry.Tags ?? Array.Empty<string>());
 
-                // Add weenie type tag
+                // Add weenie type tag (also corrected against current ACE enum)
                 string? weenieTag = weenieType switch {
                     1  => "generic",
-                    5  => "food",
-                    6  => "container",
-                    7  => "creature",
-                    10 => "missile",
+                    7  => "portal",
+                    10 => "creature",
                     12 => "vendor",
-                    14 => "door",
-                    15 => "corpse",
-                    18 => "gem",
-                    35 => "crafttool",
-                    36 => "spell_component",
-                    37 => "portal",
-                    55 => "house",
+                    18 => "food",
+                    19 => "door",
+                    20 => "chest",
+                    21 => "container",
+                    24 => "pressureplate",
+                    26 => "switch",
+                    28 => "healer",
+                    29 => "lightsource",
+                    34 => "scroll",
+                    38 => "gem",
+                    44 => "crafttool",
+                    53 => "house",
                     _  => null
                 };
                 if (weenieTag != null && !newTags.Contains(weenieTag))
@@ -1262,18 +1269,22 @@ public class OntologyService : IOntologyService {
             }
         }
 
-        // Category (prefer first explicit type, fall back to geom_category)
-        if (string.Equals(entry.Category, "Unknown", StringComparison.OrdinalIgnoreCase)
-            || string.IsNullOrEmpty(entry.Category)) {
+        // Category — Unified is higher confidence than Heuristic, so allow it to
+        // override an existing Heuristic classification. Never override Building /
+        // Weenie / Scene (each of those is a definitive retail cross-reference).
+        bool canOverrideCategory =
+            string.IsNullOrEmpty(entry.Category)
+            || string.Equals(entry.Category, "Unknown", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(entry.ClassificationSource, "Heuristic", StringComparison.OrdinalIgnoreCase);
+
+        if (canOverrideCategory) {
             if (el.TryGetProperty("types", out var typesEl)
                 && typesEl.ValueKind == System.Text.Json.JsonValueKind.Array) {
                 foreach (var t in typesEl.EnumerateArray()) {
                     var s = t.GetString();
                     if (!string.IsNullOrEmpty(s)) {
                         entry.Category = s;
-                        if (string.IsNullOrEmpty(entry.ClassificationSource)
-                            || entry.ClassificationSource == "Heuristic")
-                            entry.ClassificationSource = "Unified";
+                        entry.ClassificationSource = "Unified";
                         changed = true;
                         break;
                     }
@@ -1316,12 +1327,25 @@ public class OntologyService : IOntologyService {
             }
         }
 
-        // Building/scenery flags merged into Tags so keyword search picks them up
+        // Building/scenery flags merged into Tags so keyword search picks them up.
+        // is_building=true is a definitive retail signal (LandBlockInfo.Buildings
+        // cross-reference), so it also promotes the Category over a heuristic guess —
+        // many buildings are 8m single-part GfxObjs and the geometry threshold puts
+        // them in "Scenery", which silently strips them from any structure-aware
+        // surface (description, validation, footprint extraction).
         var tagsList = new List<string>(entry.Tags ?? Array.Empty<string>());
-        if (el.TryGetProperty("is_building", out var ibEl)
-            && ibEl.ValueKind == System.Text.Json.JsonValueKind.True
-            && !tagsList.Contains("dat:building")) {
+        bool isBuildingFlag = el.TryGetProperty("is_building", out var ibEl)
+            && ibEl.ValueKind == System.Text.Json.JsonValueKind.True;
+        if (isBuildingFlag && !tagsList.Contains("dat:building")) {
             tagsList.Add("dat:building"); changed = true;
+        }
+        if (isBuildingFlag
+            && string.Equals(entry.ClassificationSource, "Heuristic", StringComparison.OrdinalIgnoreCase)
+            && (entry.Category == "Scenery" || entry.Category == "Prop"
+                || entry.Category == "Unknown" || string.IsNullOrEmpty(entry.Category))) {
+            entry.Category = "Structure";
+            entry.ClassificationSource = "Unified";
+            changed = true;
         }
         if (el.TryGetProperty("is_scenery", out var isEl)
             && isEl.ValueKind == System.Text.Json.JsonValueKind.True

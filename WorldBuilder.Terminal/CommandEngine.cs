@@ -40,6 +40,45 @@ public class CommandEngine {
     // single targetGroundZ across grouped buildings (fortress walls, etc.).
     private WorldBuilder.Shared.Lib.Pairings.BuildingPairings _buildingPairings = new();
 
+    // Town gazetteer keyed by lbKey: maps a known landblock to its town name + culture.
+    // Loaded from project-directory `town_gazetteer.json` if present. Acts as the
+    // "parent zoom" parent context the describer uses to override per-LB inference
+    // — see the atlas inheritance rule in the brief.
+    private Dictionary<ushort, LandblockDescriber.TownContext> _townGazetteer = new();
+    private bool _townGazetteerLoaded = false;
+
+    // Acpedia-derived POI index keyed by lbKey: maps each landblock to wiki POIs
+    // (NPCs, landmarks, objects, etc.) the wiki places there. Loaded from project-
+    // directory `poi_gazetteer.json` if present.
+    private Dictionary<ushort, List<LandblockDescriber.NamedPoi>> _poiGazetteer = new();
+    private bool _poiGazetteerLoaded = false;
+
+    // wcid → Acpedia page; built offline from LSD weenies × Acpedia by name match.
+    // Used to attribute placed creatures/NPCs/items to wiki pages so the describer
+    // can surface "Buckminster the Barkeeper" instead of just "Creature index 47".
+    private Dictionary<int, LandblockDescriber.AcpediaMatch> _wcidToAcpedia = new();
+    private bool _wcidToAcpediaLoaded = false;
+
+    // Server-spawn gazetteer (from LSD spawnMaps): which weenies the AC server
+    // dynamically spawns at each landblock, filtered to player-visible only.
+    // Distinct from static `_wcidToAcpedia` (which annotates DAT-placed objects).
+    private Dictionary<ushort, List<LandblockDescriber.SpawnEntry>> _spawnGazetteer = new();
+    private bool _spawnGazetteerLoaded = false;
+
+    // Region gazetteer (parent zoom above LB). Maps each LB to a named region
+    // via nearest-town assignment using anchor points loaded from JSON.
+    private record RegionAnchor(int LbX, int LbY, string Region);
+    private Dictionary<string, LandblockDescriber.RegionContext> _regions = new();
+    private List<RegionAnchor> _regionAnchors = new();
+    private Dictionary<ushort, LandblockDescriber.RegionContext> _lbToRegionCache = new();
+    private bool _regionGazetteerLoaded = false;
+
+    // Tile cache + generator (lazy-init on first tile call). The cache backs to
+    // disk under projects/<name>/atlas_tiles; the generator uses render-preview.
+    private TileCache? _tileCache;
+    private TileGenerator? _tileGenerator;
+    private double _tileBudgetGB = 2.0;
+
     public CommandEngine(
         HeadlessProjectManager projectManager,
         ITerrainService terrainService,
@@ -88,7 +127,45 @@ public class CommandEngine {
             Console.Error.WriteLine($"[Pairings] Auto-load skipped: {ex.Message}");
             _buildingPairings = new WorldBuilder.Shared.Lib.Pairings.BuildingPairings();
         }
+        // Auto-load town gazetteer if present.
+        try {
+            var gazPath = Path.Combine(p.ProjectDirectory, "town_gazetteer.json");
+            if (File.Exists(gazPath)) {
+                _townGazetteer = LoadTownGazetteer(gazPath);
+                _townGazetteerLoaded = true;
+                Console.Error.WriteLine($"[Gazetteer] Auto-loaded {_townGazetteer.Count} towns from {gazPath}");
+            } else {
+                _townGazetteer = new();
+            }
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"[Gazetteer] Auto-load skipped: {ex.Message}");
+            _townGazetteer = new();
+        }
         return new LoadResult(p.Name, p.FilePath, p.ProjectDirectory, p.BaseDatDirectory);
+    }
+
+    private static Dictionary<ushort, LandblockDescriber.TownContext> LoadTownGazetteer(string path) {
+        var result = new Dictionary<ushort, LandblockDescriber.TownContext>();
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        foreach (var entry in doc.RootElement.EnumerateObject()) {
+            var name = entry.Name;
+            var v = entry.Value;
+            if (!v.TryGetProperty("lb_key", out var lbEl) || lbEl.ValueKind != System.Text.Json.JsonValueKind.Number)
+                continue;
+            int lbInt = lbEl.GetInt32();
+            if (lbInt <= 0 || lbInt > 0xFFFF) continue;
+            ushort lbKey = (ushort)lbInt;
+            string? culture = v.TryGetProperty("culture", out var cEl) && cEl.ValueKind == System.Text.Json.JsonValueKind.String
+                ? cEl.GetString() : null;
+            string? notes = v.TryGetProperty("notes", out var nEl) && nEl.ValueKind == System.Text.Json.JsonValueKind.String
+                ? nEl.GetString() : null;
+            // First write wins so the canonical town name (typically the first
+            // primary entry per LB) takes precedence over secondary entries.
+            if (!result.ContainsKey(lbKey)) {
+                result[lbKey] = new LandblockDescriber.TownContext(name, culture, notes);
+            }
+        }
+        return result;
     }
 
     public ExportResult Export(string directory, int? iteration) {
@@ -567,6 +644,365 @@ public class CommandEngine {
         ushort lbKey = LbKey(lbX, lbY);
         var lbDoc = GetLandblockDoc(lbKey);
         return new ListObjectsResult(lbKey, lbDoc.GetStaticObjects().ToList());
+    }
+
+    public LandblockDescriber.LandblockDescriptionResult DescribeLandblock(uint lbX, uint lbY) {
+        RequireProject();
+        ushort lbKey = LbKey(lbX, lbY);
+        var lbDoc = GetLandblockDoc(lbKey);
+        var terrainDoc = GetTerrainDoc();
+        var dungeonDoc = GetDungeonDoc(lbKey);
+        var heightTable = GetHeightTable();
+        var dats = _projectManager.CurrentProject!.DocumentManager.Dats;
+
+        Dictionary<int, string>? terrainTypeNames = null;
+        try {
+            if (dats.TryGet<DatReaderWriter.DBObjs.Region>(0x13000000, out var region)) {
+                var types = region.TerrainInfo?.TerrainTypes;
+                if (types != null) {
+                    terrainTypeNames = new Dictionary<int, string>();
+                    for (int i = 0; i < types.Count; i++) {
+                        try { terrainTypeNames[i] = types[i].TerrainName; } catch { }
+                    }
+                }
+            }
+        } catch { }
+
+        // Lazy-load gazetteers on first describe call. stdin-mode skips
+        // CommandEngine.Load(), so the eager auto-load in Load() never fires there.
+        if (!_townGazetteerLoaded) {
+            try {
+                var gazPath = Path.Combine(_projectManager.CurrentProject!.ProjectDirectory, "town_gazetteer.json");
+                if (File.Exists(gazPath)) {
+                    _townGazetteer = LoadTownGazetteer(gazPath);
+                    Console.Error.WriteLine($"[Gazetteer] Lazy-loaded {_townGazetteer.Count} towns from {gazPath}");
+                }
+            } catch (Exception ex) {
+                Console.Error.WriteLine($"[Gazetteer] Lazy-load skipped: {ex.Message}");
+            }
+            _townGazetteerLoaded = true;
+        }
+        if (!_poiGazetteerLoaded) {
+            try {
+                var poiPath = Path.Combine(_projectManager.CurrentProject!.ProjectDirectory, "poi_gazetteer.json");
+                if (File.Exists(poiPath)) {
+                    _poiGazetteer = LoadPoiGazetteer(poiPath);
+                    Console.Error.WriteLine($"[Gazetteer] Lazy-loaded POIs for {_poiGazetteer.Count} landblocks from {poiPath}");
+                }
+            } catch (Exception ex) {
+                Console.Error.WriteLine($"[Gazetteer] POI lazy-load skipped: {ex.Message}");
+            }
+            _poiGazetteerLoaded = true;
+        }
+        if (!_wcidToAcpediaLoaded) {
+            try {
+                var wcidPath = Path.Combine(_projectManager.CurrentProject!.ProjectDirectory, "wcid_acpedia_join.jsonl");
+                if (File.Exists(wcidPath)) {
+                    _wcidToAcpedia = LoadWcidAcpedia(wcidPath);
+                    Console.Error.WriteLine($"[Gazetteer] Lazy-loaded Acpedia matches for {_wcidToAcpedia.Count} wcids from {wcidPath}");
+                }
+            } catch (Exception ex) {
+                Console.Error.WriteLine($"[Gazetteer] wcid→Acpedia lazy-load skipped: {ex.Message}");
+            }
+            _wcidToAcpediaLoaded = true;
+        }
+        if (!_spawnGazetteerLoaded) {
+            try {
+                var spawnPath = Path.Combine(_projectManager.CurrentProject!.ProjectDirectory, "spawn_gazetteer.json");
+                if (File.Exists(spawnPath)) {
+                    _spawnGazetteer = LoadSpawnGazetteer(spawnPath);
+                    Console.Error.WriteLine($"[Gazetteer] Lazy-loaded spawns for {_spawnGazetteer.Count} landblocks from {spawnPath}");
+                }
+            } catch (Exception ex) {
+                Console.Error.WriteLine($"[Gazetteer] Spawn lazy-load skipped: {ex.Message}");
+            }
+            _spawnGazetteerLoaded = true;
+        }
+        if (!_regionGazetteerLoaded) {
+            try {
+                var regionPath = Path.Combine(_projectManager.CurrentProject!.ProjectDirectory, "region_gazetteer.json");
+                if (File.Exists(regionPath)) {
+                    LoadRegionGazetteer(regionPath);
+                    Console.Error.WriteLine($"[Gazetteer] Lazy-loaded {_regions.Count} regions, {_regionAnchors.Count} anchor points from {regionPath}");
+                }
+            } catch (Exception ex) {
+                Console.Error.WriteLine($"[Gazetteer] Region lazy-load skipped: {ex.Message}");
+            }
+            _regionGazetteerLoaded = true;
+        }
+
+        var regionContext = ResolveRegionForLb(lbKey, lbX, lbY);
+        _townGazetteer.TryGetValue(lbKey, out var townContext);
+        _poiGazetteer.TryGetValue(lbKey, out var pois);
+        _spawnGazetteer.TryGetValue(lbKey, out var spawns);
+
+        // Validation overlay — call ValidateAll with whatever docs we have. This
+        // is per-LB structural correctness (cliffs, below-terrain objects, broken
+        // portals, etc.); ~45 codes across DNG/LBK/TRN/BSH/BLD categories. Soft-
+        // fail to null on any error so describe never breaks on validation issues.
+        LandblockDescriber.ValidationOverlay? validation = null;
+        try {
+            var report = ValidateAll(lbX, lbY);
+            validation = new LandblockDescriber.ValidationOverlay(
+                IsValid: report.IsValid,
+                ErrorCount: report.ErrorCount,
+                WarningCount: report.WarningCount,
+                InfoCount: report.InfoCount,
+                Diagnostics: report.Diagnostics.Select(d => new LandblockDescriber.ValidationDiagnosticEntry(
+                    Severity: d.Severity.ToString().ToLowerInvariant(),
+                    Code: d.Code,
+                    Message: d.Message,
+                    Context: d.Context)).ToList());
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"[Validation] Skipped for 0x{lbKey:X4}: {ex.Message}");
+        }
+
+        return LandblockDescriber.Describe(lbKey, lbDoc, terrainDoc, dungeonDoc,
+            _ontologyService, heightTable, terrainTypeNames, dats, townContext, pois,
+            _wcidToAcpedia.Count > 0 ? _wcidToAcpedia : null,
+            spawns, validation, regionContext);
+    }
+
+    private void LoadRegionGazetteer(string path) {
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        var root = doc.RootElement;
+        if (root.TryGetProperty("regions", out var regionsEl) && regionsEl.ValueKind == System.Text.Json.JsonValueKind.Object) {
+            foreach (var r in regionsEl.EnumerateObject()) {
+                string? culture = r.Value.TryGetProperty("culture", out var cEl) && cEl.ValueKind == System.Text.Json.JsonValueKind.String ? cEl.GetString() : null;
+                string? biome = r.Value.TryGetProperty("biome", out var bEl) && bEl.ValueKind == System.Text.Json.JsonValueKind.String ? bEl.GetString() : null;
+                string? desc = r.Value.TryGetProperty("description", out var dEl) && dEl.ValueKind == System.Text.Json.JsonValueKind.String ? dEl.GetString() : null;
+                _regions[r.Name] = new LandblockDescriber.RegionContext(r.Name, culture, biome, desc);
+            }
+        }
+        if (root.TryGetProperty("town_anchors", out var anchorsEl) && anchorsEl.ValueKind == System.Text.Json.JsonValueKind.Array) {
+            foreach (var a in anchorsEl.EnumerateArray()) {
+                int x = a.TryGetProperty("lb_x", out var xEl) ? xEl.GetInt32() : -1;
+                int y = a.TryGetProperty("lb_y", out var yEl) ? yEl.GetInt32() : -1;
+                string? region = a.TryGetProperty("region", out var rEl) && rEl.ValueKind == System.Text.Json.JsonValueKind.String ? rEl.GetString() : null;
+                if (x < 0 || y < 0 || string.IsNullOrEmpty(region)) continue;
+                _regionAnchors.Add(new RegionAnchor(x, y, region));
+            }
+        }
+    }
+
+    // ── Tile pipeline ──────────────────────────────────────────
+
+    private (TileCache cache, TileGenerator gen) GetOrCreateTilePipeline() {
+        RequireProject();
+        if (_tileCache != null && _tileGenerator != null) return (_tileCache, _tileGenerator);
+        var p = _projectManager.CurrentProject!;
+        _tileCache = new TileCache(p.ProjectDirectory, _tileBudgetGB);
+        _tileGenerator = new TileGenerator(this, _tileCache);
+        // Make sure the region gazetteer is loaded so the generator can compute
+        // region bounding boxes from anchor points.
+        if (!_regionGazetteerLoaded) {
+            try {
+                var regionPath = Path.Combine(p.ProjectDirectory, "region_gazetteer.json");
+                if (File.Exists(regionPath)) LoadRegionGazetteer(regionPath);
+            } catch { }
+            _regionGazetteerLoaded = true;
+        }
+        // Compute per-region anchor lists for region tiles.
+        var byRegion = new Dictionary<string, List<(uint x, uint y)>>();
+        foreach (var anchor in _regionAnchors) {
+            if (!byRegion.ContainsKey(anchor.Region)) byRegion[anchor.Region] = new List<(uint, uint)>();
+            byRegion[anchor.Region].Add(((uint)anchor.LbX, (uint)anchor.LbY));
+        }
+        _tileGenerator.SetRegionAnchors(byRegion);
+        return (_tileCache, _tileGenerator);
+    }
+
+    public TileEntry GetLbTile(uint lbX, uint lbY) {
+        var (_, gen) = GetOrCreateTilePipeline();
+        var entry = gen.GetOrGenerateLbTile(lbX, lbY);
+        _tileCache!.SaveManifest();
+        return entry;
+    }
+
+    public TileEntry GetRegionTile(string regionName) {
+        var (_, gen) = GetOrCreateTilePipeline();
+        var entry = gen.GetOrGenerateRegionTile(regionName);
+        _tileCache!.SaveManifest();
+        return entry;
+    }
+
+    public TileEntry GetWorldTile() {
+        var (_, gen) = GetOrCreateTilePipeline();
+        var entry = gen.GetOrGenerateWorldTile();
+        _tileCache!.SaveManifest();
+        return entry;
+    }
+
+    public TileStats GetTileStats() {
+        var (cache, _) = GetOrCreateTilePipeline();
+        return cache.Stats();
+    }
+
+    public PruneResult PruneTiles(int? keepNewest, DateTime? olderThan) {
+        var (cache, _) = GetOrCreateTilePipeline();
+        return cache.Prune(keepNewest, olderThan);
+    }
+
+    public (int regenerated, long bytes, List<string> errors) RegenerateDirtyTiles() {
+        var (_, gen) = GetOrCreateTilePipeline();
+        return gen.RegenerateDirty();
+    }
+
+    public List<(ushort lbKey, string hex)> ListDirtyTiles() {
+        var (cache, _) = GetOrCreateTilePipeline();
+        return cache.ListDirty();
+    }
+
+    public void MarkTilesClean() {
+        var (cache, _) = GetOrCreateTilePipeline();
+        cache.ClearDirty();
+        cache.SaveManifest();
+    }
+
+    public string TileCachePathOrEmpty() => _tileCache?.Root ?? "";
+
+    public IEnumerable<string> ListRegionNames() {
+        if (!_regionGazetteerLoaded || _regions.Count == 0) {
+            // Trigger lazy load via tile pipeline init
+            try { GetOrCreateTilePipeline(); } catch { }
+        }
+        return _regions.Keys;
+    }
+
+    public (int generated, int skipped, long bytes, List<string> errors)
+            GenerateBulkLbTiles(List<(uint x, uint y)> lbs) {
+        var (_, gen) = GetOrCreateTilePipeline();
+        return gen.GenerateBulkLbTiles(lbs);
+    }
+
+    /// <summary>
+    /// Called by JsonCommandProcessor after a successful transact. Walks the
+    /// journal's DocumentsTouched and marks affected tiles dirty.
+    /// `landblock_HEX` and `dungeon_HEX` → that LB's tile dirty.
+    /// `terrain` → every LB tile dirty (terrain edits affect rendering globally).
+    /// </summary>
+    public void OnTransactCommitted(List<string> documentsTouched) {
+        if (_tileCache == null) return; // No tile pipeline initialized; nothing to invalidate.
+        bool terrainTouched = false;
+        foreach (var docId in documentsTouched) {
+            if (docId == "terrain") { terrainTouched = true; continue; }
+            // landblock_XXXX or dungeon_XXXX
+            var idx = docId.IndexOf('_');
+            if (idx <= 0) continue;
+            var hex = docId.Substring(idx + 1);
+            if (!ushort.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out var lbKey)) continue;
+            _tileCache.MarkLbDirty(lbKey);
+            // Also mark the region tile dirty if we know which region this LB belongs to.
+            uint lbX = (uint)((lbKey >> 8) & 0xFF), lbY = (uint)(lbKey & 0xFF);
+            var rc = ResolveRegionForLb(lbKey, lbX, lbY);
+            if (rc != null) _tileCache.MarkRegionDirty(rc.Name);
+        }
+        if (terrainTouched) _tileCache.MarkAllLbTilesDirty();
+        _tileCache.SaveManifest();
+    }
+
+    private LandblockDescriber.RegionContext? ResolveRegionForLb(ushort lbKey, uint lbX, uint lbY) {
+        if (_regionAnchors.Count == 0) return null;
+        if (_lbToRegionCache.TryGetValue(lbKey, out var cached)) return cached;
+        // Find nearest anchor by squared Euclidean distance (avoid sqrt). 58 anchors,
+        // O(n) per lookup is fine; cache results so repeated describes are O(1).
+        int bestDistSq = int.MaxValue;
+        string? bestRegion = null;
+        int ix = (int)lbX, iy = (int)lbY;
+        foreach (var a in _regionAnchors) {
+            int dx = a.LbX - ix, dy = a.LbY - iy;
+            int d = dx * dx + dy * dy;
+            if (d < bestDistSq) { bestDistSq = d; bestRegion = a.Region; }
+        }
+        if (bestRegion == null || !_regions.TryGetValue(bestRegion, out var rc)) return null;
+        _lbToRegionCache[lbKey] = rc;
+        return rc;
+    }
+
+    private static Dictionary<ushort, List<LandblockDescriber.SpawnEntry>> LoadSpawnGazetteer(string path) {
+        var result = new Dictionary<ushort, List<LandblockDescriber.SpawnEntry>>();
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        foreach (var entry in doc.RootElement.EnumerateObject()) {
+            var keyStr = entry.Name.StartsWith("0x") || entry.Name.StartsWith("0X")
+                ? entry.Name.Substring(2) : entry.Name;
+            if (!ushort.TryParse(keyStr, System.Globalization.NumberStyles.HexNumber, null, out var lbKey)) continue;
+            var spawns = new List<LandblockDescriber.SpawnEntry>();
+            foreach (var item in entry.Value.EnumerateArray()) {
+                // Filter at load time: skip server-managed weenies (Doors, Chests,
+                // Generators) so describer always gets player-visible only.
+                bool serverManaged = item.TryGetProperty("is_server_managed", out var sEl)
+                    && sEl.ValueKind == System.Text.Json.JsonValueKind.True;
+                if (serverManaged) continue;
+                int wcid = item.TryGetProperty("wcid", out var wEl) && wEl.ValueKind == System.Text.Json.JsonValueKind.Number ? wEl.GetInt32() : 0;
+                if (wcid == 0) continue;
+                string name = item.TryGetProperty("name", out var nEl) && nEl.ValueKind == System.Text.Json.JsonValueKind.String ? nEl.GetString()! : "?";
+                // Filter unidentified weenies (wcids absent from the LSD-Partial dump).
+                // These are typically Empyrean traps, magic effects, particle emitters
+                // — not player-narratable entities. Skip them rather than surface as "?".
+                if (string.IsNullOrEmpty(name) || name.Trim() == "?") continue;
+                string? placement = item.TryGetProperty("placement", out var pEl) && pEl.ValueKind == System.Text.Json.JsonValueKind.String ? pEl.GetString() : null;
+                int? wt = item.TryGetProperty("weenie_type", out var wtEl) && wtEl.ValueKind == System.Text.Json.JsonValueKind.Number ? wtEl.GetInt32() : (int?)null;
+                string? acTitle = item.TryGetProperty("acpedia_title", out var atEl) && atEl.ValueKind == System.Text.Json.JsonValueKind.String ? atEl.GetString() : null;
+                string[]? acCats = item.TryGetProperty("acpedia_cats", out var acEl) && acEl.ValueKind == System.Text.Json.JsonValueKind.Array
+                    ? acEl.EnumerateArray().Select(e => e.GetString() ?? "").Where(s => !string.IsNullOrEmpty(s)).ToArray() : null;
+                string? acTier = item.TryGetProperty("acpedia_tier", out var tEl) && tEl.ValueKind == System.Text.Json.JsonValueKind.String ? tEl.GetString() : null;
+                float x = item.TryGetProperty("x", out var xEl) ? xEl.GetSingle() : 0;
+                float y = item.TryGetProperty("y", out var yEl) ? yEl.GetSingle() : 0;
+                float z = item.TryGetProperty("z", out var zEl) ? zEl.GetSingle() : 0;
+                int cell = item.TryGetProperty("cell", out var cEl) && cEl.ValueKind == System.Text.Json.JsonValueKind.Number ? cEl.GetInt32() : 0;
+                spawns.Add(new LandblockDescriber.SpawnEntry(wcid, name, placement, wt, acTitle, acCats, acTier, x, y, z, cell));
+            }
+            if (spawns.Count > 0) result[lbKey] = spawns;
+        }
+        return result;
+    }
+
+    private static Dictionary<int, LandblockDescriber.AcpediaMatch> LoadWcidAcpedia(string path) {
+        var result = new Dictionary<int, LandblockDescriber.AcpediaMatch>();
+        // JSONL — one record per line. Skip records without a match (tier=NONE) to
+        // keep memory tight; the describer treats missing entries as no-match.
+        foreach (var line in File.ReadLines(path)) {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            using var doc = System.Text.Json.JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("wcid", out var wcidEl) || wcidEl.ValueKind != System.Text.Json.JsonValueKind.Number) continue;
+            if (!root.TryGetProperty("tier", out var tierEl) || tierEl.ValueKind != System.Text.Json.JsonValueKind.String) continue;
+            string tier = tierEl.GetString()!;
+            if (tier == "NONE") continue;
+            string? title = root.TryGetProperty("acpedia_title", out var tEl) && tEl.ValueKind == System.Text.Json.JsonValueKind.String ? tEl.GetString() : null;
+            if (string.IsNullOrEmpty(title)) continue;
+            string[] cats = root.TryGetProperty("acpedia_cats", out var cEl) && cEl.ValueKind == System.Text.Json.JsonValueKind.Array
+                ? cEl.EnumerateArray().Select(e => e.GetString() ?? "").Where(s => !string.IsNullOrEmpty(s)).ToArray()
+                : Array.Empty<string>();
+            string? desc = root.TryGetProperty("acpedia_description", out var dEl) && dEl.ValueKind == System.Text.Json.JsonValueKind.String ? dEl.GetString() : null;
+            result[wcidEl.GetInt32()] = new LandblockDescriber.AcpediaMatch(title, cats, desc, tier);
+        }
+        return result;
+    }
+
+    private static Dictionary<ushort, List<LandblockDescriber.NamedPoi>> LoadPoiGazetteer(string path) {
+        var result = new Dictionary<ushort, List<LandblockDescriber.NamedPoi>>();
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        foreach (var entry in doc.RootElement.EnumerateObject()) {
+            // Keys are hex strings like "0xA9B4"
+            var keyStr = entry.Name.StartsWith("0x") || entry.Name.StartsWith("0X")
+                ? entry.Name.Substring(2) : entry.Name;
+            if (!ushort.TryParse(keyStr, System.Globalization.NumberStyles.HexNumber, null, out var lbKey)) continue;
+            var pois = new List<LandblockDescriber.NamedPoi>();
+            foreach (var item in entry.Value.EnumerateArray()) {
+                string? title = item.TryGetProperty("title", out var tEl) && tEl.ValueKind == System.Text.Json.JsonValueKind.String
+                    ? tEl.GetString() : null;
+                if (string.IsNullOrEmpty(title)) continue;
+                string[] cats = item.TryGetProperty("categories", out var cEl) && cEl.ValueKind == System.Text.Json.JsonValueKind.Array
+                    ? cEl.EnumerateArray().Select(e => e.GetString() ?? "").Where(s => !string.IsNullOrEmpty(s)).ToArray()
+                    : Array.Empty<string>();
+                string? desc = item.TryGetProperty("description", out var dEl) && dEl.ValueKind == System.Text.Json.JsonValueKind.String
+                    ? dEl.GetString() : null;
+                pois.Add(new LandblockDescriber.NamedPoi(title, cats, desc));
+            }
+            if (pois.Count > 0) result[lbKey] = pois;
+        }
+        return result;
     }
 
     public AddObjectResult AddObject(uint lbX, uint lbY, uint modelId,
