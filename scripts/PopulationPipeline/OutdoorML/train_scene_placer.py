@@ -250,6 +250,46 @@ def build_token_family_index(vocab_size: int, vocab_path: str) -> torch.Tensor:
     return torch.from_numpy(token_family)
 
 
+def build_class_space_weight(vocab_size: int, vocab_path: str,
+                             ace_abstract_weight: float) -> torch.Tensor:
+    """Per-vocab-idx weight applied to the wcid cross-entropy.
+
+    The unified abstract_ace vocab is roughly 4474 model_id (DAT) tokens vs
+    108 ace_abstract (ACE/wcid) tokens. Cross-entropy without rebalancing
+    reproduces that ratio at sampling time, collapsing onto DAT props and
+    almost never emitting ACE objects (creatures, NPCs, vendors). This
+    helper builds a (V,) weight tensor that up-weights ace_abstract entries
+    so per-class-space gradient magnitudes are comparable.
+
+    A weight of 1.0 (the default) leaves the loss unchanged.
+    """
+    weight = torch.ones(vocab_size, dtype=torch.float32)
+    if abs(ace_abstract_weight - 1.0) < 1e-9:
+        return weight
+    try:
+        with open(vocab_path, "r", encoding="utf-8") as f:
+            vocab = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return weight
+    idx_to_class_key = vocab.get("idx_to_class_key") or {}
+    boosted = 0
+    for raw_idx, kv in idx_to_class_key.items():
+        if not isinstance(kv, (list, tuple)) or len(kv) != 2:
+            continue
+        if kv[0] != "ace_abstract":
+            continue
+        try:
+            idx = int(raw_idx)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= idx < vocab_size:
+            weight[idx] = ace_abstract_weight
+            boosted += 1
+    print(f"  class_space_weight: {boosted} ace_abstract tokens × {ace_abstract_weight}, "
+          f"{vocab_size - boosted} other tokens × 1.0")
+    return weight
+
+
 def build_family_projection(token_family_index: torch.Tensor, vocab_size: int) -> torch.Tensor:
     family_projection = torch.zeros(vocab_size, FAMILY_COUNT, dtype=torch.float32)
     family_projection[torch.arange(vocab_size), token_family_index] = 1.0
@@ -626,6 +666,12 @@ def compute_loss(model, batch, config, device):
             ).exp().reshape(B, T)
             focal_weight = (1.0 - p_t).clamp_(min=0.0).pow(focal_gamma)
         wcid_ce = wcid_ce * focal_weight
+    class_space_weight = config.get('class_space_weight')
+    if class_space_weight is not None:
+        per_target_weight = class_space_weight.index_select(
+            0, target_wcid.reshape(-1).clamp(0, class_space_weight.shape[0] - 1)
+        ).reshape(B, T)
+        wcid_ce = wcid_ce * per_target_weight
     L_wcid = (wcid_ce * active).sum() / active.sum()
     
     # Position MSE (normalized, only for real tokens)
@@ -1166,6 +1212,14 @@ def train(config: dict, resume_path: Optional[str] = None):
     else:
         config['token_family_index'] = None
         config['family_projection'] = None
+
+    ace_abstract_weight = float(config.get('ace_abstract_weight', 1.0))
+    if ace_abstract_weight != 1.0:
+        config['class_space_weight'] = build_class_space_weight(
+            model.vocab_size, vocab_path, ace_abstract_weight,
+        ).to(device)
+    else:
+        config['class_space_weight'] = None
     
     # ── Batch size auto-detection ──
     if device.type == 'cuda':
@@ -1509,6 +1563,9 @@ def main():
     parser.add_argument("--lr-schedule", type=str, choices=("cosine", "staged"), default=None)
     parser.add_argument("--focal-gamma", type=float, default=None,
                         help="Focal loss gamma on the wcid head. 0 = pure CE; 1.0-2.0 down-weights confident predictions to give rare classes more gradient.")
+    parser.add_argument("--ace-abstract-weight", type=float, default=None,
+                        help="Per-token CE weight for ace_abstract vocab entries (relative to model_id at 1.0). "
+                             "Counteracts the ~41x DAT-vs-ACE vocab imbalance. Try 5-20.")
     parser.add_argument("--cosine-restart-epoch", type=int, default=None,
                         help="When using --lr-schedule cosine, reset LR to peak at this absolute epoch and start a fresh cosine descent. 0 = no restart.")
     args = parser.parse_args()
@@ -1546,6 +1603,8 @@ def main():
         config['lr_schedule'] = args.lr_schedule
     if args.focal_gamma is not None:
         config['focal_gamma'] = args.focal_gamma
+    if args.ace_abstract_weight is not None:
+        config['ace_abstract_weight'] = args.ace_abstract_weight
     if args.cosine_restart_epoch is not None:
         config['cosine_restart_epoch'] = args.cosine_restart_epoch
     config['tensor_path'] = args.tensor_path

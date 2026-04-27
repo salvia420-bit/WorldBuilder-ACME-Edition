@@ -197,6 +197,29 @@ def infer_context_dim_from_state_dict(state_dict: dict, default: int) -> int:
     return int(weight.shape[1])
 
 
+def infer_max_seq_len_from_state_dict(state_dict: dict, default: int) -> int:
+    """Infer max sequence length from the cached causal mask. Mask is
+    (max_seq_len + 1) × (max_seq_len + 1) because of the leading context token."""
+    mask = state_dict.get('causal_mask')
+    if mask is None or len(mask.shape) != 2 or mask.shape[0] != mask.shape[1]:
+        # Fall back to positional-encoding shape if available
+        pe = state_dict.get('pos_encoding.pe')
+        if pe is not None and len(pe.shape) == 3:
+            return int(pe.shape[1]) - 1
+        return default
+    return int(mask.shape[0]) - 1
+
+
+def infer_obj_dim_from_state_dict(state_dict: dict, default: int) -> int:
+    """Infer object feature width from the continuous-projection layer.
+    Width is obj_dim - 1 because the leading class-index column is split off
+    before continuous projection."""
+    weight = state_dict.get('obj_embed.continuous_proj.weight')
+    if weight is None or len(weight.shape) != 2:
+        return default
+    return int(weight.shape[1]) + 1
+
+
 def load_settlement_planner(planner_path: str, device: torch.device) -> Optional[dict]:
     if not planner_path or not os.path.exists(planner_path):
         return None
@@ -548,6 +571,88 @@ ENCOUNTER_GENERATORS_BY_TIER = {
 
 # ─── Inference Engine ────────────────────────────────────────────────────────
 
+class WcidResolver:
+    """Drop-in replacement for ``vocab['idx_to_wcid']`` that supports both the
+    legacy direct-wcid vocab and the new abstract_ace vocab.
+
+    Legacy vocab (has ``idx_to_wcid``): identical to a plain dict.
+
+    New vocab (has ``idx_to_class_key`` with class_space ∈ {'model_id','ace_abstract'}):
+      - 'model_id:N'     → returns N. The downstream wcid_types lookup will
+                            miss, which is correct: a DAT model id is not a wcid.
+      - 'ace_abstract:B' → samples a wcid from the resolver table for bucket B,
+                            frequency-weighted (tunable via temperature).
+
+    Implements ``.get(idx, default)``, ``.items()``, ``__contains__``, ``__len__``
+    so existing call sites keep working unchanged.
+    """
+
+    def __init__(self, vocab, resolver_table=None, temperature=1.0, rng=None):
+        self._rng = rng or random
+        self._temp = max(0.01, float(temperature))
+        self._modal: dict[int, int] = {}
+        self._sampler: dict[int, "callable"] = {}
+
+        if 'idx_to_wcid' in vocab:
+            for k, v in vocab['idx_to_wcid'].items():
+                idx = int(k)
+                vid = int(v)
+                self._modal[idx] = vid
+                self._sampler[idx] = (lambda v=vid: v)
+            return
+
+        idx_to_key = vocab.get('idx_to_class_key') or {}
+        for raw_idx, value in idx_to_key.items():
+            idx = int(raw_idx)
+            if not isinstance(value, (list, tuple)) or len(value) != 2:
+                continue
+            space, ident = value
+            if space == 'model_id':
+                try:
+                    mid = int(ident)
+                except (TypeError, ValueError):
+                    continue
+                self._modal[idx] = mid
+                self._sampler[idx] = (lambda v=mid: v)
+            elif space == 'ace_abstract':
+                if not resolver_table:
+                    continue
+                bucket = resolver_table.get(ident)
+                if not bucket:
+                    continue
+                pairs = bucket.get('wcids') or []
+                if not pairs:
+                    continue
+                wcids = [int(w) for w, _ in pairs]
+                weights = [int(c) for _, c in pairs]
+                self._modal[idx] = wcids[0]
+                self._sampler[idx] = self._make_sampler(wcids, weights)
+
+    def _make_sampler(self, wcids, weights):
+        wcids_local = list(wcids)
+        if abs(self._temp - 1.0) < 1e-9:
+            weights_local = list(weights)
+            return lambda: self._rng.choices(wcids_local, weights=weights_local, k=1)[0]
+        t = self._temp
+        tw = [max(1e-9, float(w)) ** (1.0 / t) for w in weights]
+        return lambda: self._rng.choices(wcids_local, weights=tw, k=1)[0]
+
+    def get(self, idx, default=None):
+        s = self._sampler.get(int(idx))
+        if s is None:
+            return default
+        return s()
+
+    def items(self):
+        return self._modal.items()
+
+    def __contains__(self, idx):
+        return int(idx) in self._sampler
+
+    def __len__(self):
+        return len(self._sampler)
+
+
 class PlacementGenerator:
     """
     Autoregressive placement generator with quality controls.
@@ -559,7 +664,9 @@ class PlacementGenerator:
                  wcid_types=None, pad_logit_bias=0.0, stop_logit_bias=0.0,
                  adaptive_min_objects_bonus=0, housing_logit_bias=0.0,
                  housing_flatness_threshold=0.6, housing_difficulty_ceiling=0.6,
-                 housing_min_placements=2, max_housing_per_lb=1):
+                 housing_min_placements=2, max_housing_per_lb=1,
+                 resolver_table=None, resolver_temperature=1.0,
+                 obj_dim=10):
         self.model = model
         self.vocab = vocab
         self.device = device
@@ -579,8 +686,13 @@ class PlacementGenerator:
         self.housing_min_placements = housing_min_placements
         self.max_housing_per_lb = max_housing_per_lb
         
-        self.idx_to_wcid = {int(k): v for k, v in vocab['idx_to_wcid'].items()}
+        self.idx_to_wcid = WcidResolver(
+            vocab,
+            resolver_table=resolver_table,
+            temperature=resolver_temperature,
+        )
         self.vocab_size = vocab['vocab_size']
+        self.obj_dim = int(obj_dim)
         self.role_offset = BASE_CONTEXT_DIM
         self.role_labels = tuple(SETTLEMENT_ROLE_LABELS)
         self.role_index = {label: self.role_offset + i for i, label in enumerate(self.role_labels)}
@@ -1082,7 +1194,7 @@ class PlacementGenerator:
         
         # Initialize sequence with an explicit start token. Training now uses a
         # shifted-right sequence, so a zero token is the correct first prompt.
-        seq = torch.zeros(1, self.max_objects + 1, 10, device=self.device)
+        seq = torch.zeros(1, self.max_objects + 1, self.obj_dim, device=self.device)
         seq_len = 1
         
         placements = []
@@ -1238,20 +1350,24 @@ class PlacementGenerator:
             placements.append(placement)
             wcid_freq[wcid_idx] += 1
             
-            # Build next input token
+            # Build next input token (14-feature extract schema; idx 14-25 stay 0
+            # for surface/no-component placements, matching the all-zero "no component"
+            # row in the training-time component_features matrix).
             wcid = placement['wcid']
             seq[0, seq_len, :] = 0.0
-            seq[0, seq_len, 0] = wcid_idx
-            seq[0, seq_len, 1] = float(pos[0])
-            seq[0, seq_len, 2] = float(pos[1])
-            seq[0, seq_len, 4] = float(rot[0])
-            seq[0, seq_len, 5] = float(rot[1])
-            seq[0, seq_len, 7] = float(link > 0.5)
+            seq[0, seq_len, 0] = wcid_idx                                  # class_token
+            seq[0, seq_len, 1] = 2.0                                       # class_space (2=wcid baseline)
+            seq[0, seq_len, 2] = float(pos[0])                             # norm_x
+            seq[0, seq_len, 3] = float(pos[1])                             # norm_y
+            # idx 4 (norm_z) unknown at gen time → 0
+            seq[0, seq_len, 5] = float(rot[0])                             # sin(yaw)
+            seq[0, seq_len, 6] = float(rot[1])                             # cos(yaw)
             if placement['is_housing']:
-                seq[0, seq_len, 6] = WT_SLUMLORD / 55.0
+                seq[0, seq_len, 7] = WT_SLUMLORD / 255.0                   # type_id / 255
             elif isinstance(wcid, int):
-                seq[0, seq_len, 6] = self.wcid_types.get(wcid, 0) / 55.0
-            seq[0, seq_len, 9] = min((len(placements) - 1) / MAX_OBJECTS_PER_LB, 1.0)
+                seq[0, seq_len, 7] = self.wcid_types.get(wcid, 0) / 255.0
+            # idx 8-13 left at 0 (source_db, cell_id, terrain delta, slope,
+            # component_kind, is_interior — all surface/outdoor defaults)
             seq_len += 1
         else:
             debug['max_steps_reached'] = True
@@ -1270,7 +1386,7 @@ class PlacementGenerator:
         batch_size = len(contexts)
         planner_plans = planner_plans or [None] * batch_size
         ctx_batch = torch.from_numpy(np.stack(contexts).astype(np.float32, copy=False)).to(self.device)
-        seq = torch.zeros(batch_size, self.max_objects + 1, 10, device=self.device)
+        seq = torch.zeros(batch_size, self.max_objects + 1, self.obj_dim, device=self.device)
         seq_mask = torch.zeros(batch_size, self.max_objects + 1, dtype=torch.bool, device=self.device)
         seq_mask[:, 0] = True
         seq_lens = torch.ones(batch_size, dtype=torch.long, device=self.device)
@@ -1451,17 +1567,16 @@ class PlacementGenerator:
 
                 seq_pos = int(seq_lens[lb_idx].item())
                 seq[lb_idx, seq_pos, :] = 0.0
-                seq[lb_idx, seq_pos, 0] = wcid_idx
-                seq[lb_idx, seq_pos, 1] = float(pos[0])
-                seq[lb_idx, seq_pos, 2] = float(pos[1])
-                seq[lb_idx, seq_pos, 4] = float(rot[0])
-                seq[lb_idx, seq_pos, 5] = float(rot[1])
-                seq[lb_idx, seq_pos, 7] = float(link > 0.5)
+                seq[lb_idx, seq_pos, 0] = wcid_idx                              # class_token
+                seq[lb_idx, seq_pos, 1] = 2.0                                   # class_space (wcid)
+                seq[lb_idx, seq_pos, 2] = float(pos[0])                         # norm_x
+                seq[lb_idx, seq_pos, 3] = float(pos[1])                         # norm_y
+                seq[lb_idx, seq_pos, 5] = float(rot[0])                         # sin(yaw)
+                seq[lb_idx, seq_pos, 6] = float(rot[1])                         # cos(yaw)
                 if placement['is_housing']:
-                    seq[lb_idx, seq_pos, 6] = WT_SLUMLORD / 55.0
+                    seq[lb_idx, seq_pos, 7] = WT_SLUMLORD / 255.0
                 elif isinstance(sampled_wcid, int):
-                    seq[lb_idx, seq_pos, 6] = self.wcid_types.get(sampled_wcid, 0) / 55.0
-                seq[lb_idx, seq_pos, 9] = min((len(placements) - 1) / MAX_OBJECTS_PER_LB, 1.0)
+                    seq[lb_idx, seq_pos, 7] = self.wcid_types.get(sampled_wcid, 0) / 255.0
                 seq_mask[lb_idx, seq_pos] = True
                 seq_lens[lb_idx] += 1
                 next_active.append(lb_idx)
@@ -1636,7 +1751,9 @@ def generate_world(args):
     config = DEFAULT_CONFIG.copy()
     # Legacy scene-placer checkpoints are tied to the classic placement vocab,
     # not the newer component-linked training artifacts imported via DEFAULT_CONFIG.
-    config['vocab_path'] = VOCAB_PATH
+    # --vocab overrides the default for new abstract_ace models.
+    vocab_path = args.vocab or VOCAB_PATH
+    config['vocab_path'] = vocab_path
     cuda_available = torch.cuda.is_available()
     if args.require_cuda and not cuda_available:
         print("  ERROR: CUDA was requested with --require-cuda, but torch.cuda.is_available() is false.")
@@ -1653,6 +1770,10 @@ def generate_world(args):
     # Load weights
     state, state_source = load_inference_state_dict(model_path, device)
     config['context_dim'] = infer_context_dim_from_state_dict(state, config['context_dim'])
+    config['max_seq_len'] = infer_max_seq_len_from_state_dict(state, config['max_seq_len'])
+    config['obj_dim'] = infer_obj_dim_from_state_dict(state, config['obj_dim'])
+    print(f"  Inferred config: context_dim={config['context_dim']}, "
+          f"max_seq_len={config['max_seq_len']}, obj_dim={config['obj_dim']}")
     model = ScenePlacerTransformer(config).to(device)
     load_model_for_inference(model, state, model_path)
     model.eval()
@@ -1660,9 +1781,27 @@ def generate_world(args):
     
     # ── Load vocab ──
     print("\n[2/6] Loading vocab...")
-    with open(VOCAB_PATH) as f:
+    with open(vocab_path) as f:
         vocab = json.load(f)
-    print(f"  Vocab size: {vocab['vocab_size']}")
+    print(f"  Vocab size: {vocab['vocab_size']}  (path: {vocab_path})")
+
+    # If vocab uses abstract_ace tokens, load the bucket→wcid resolver table
+    resolver_table = None
+    needs_resolver = 'idx_to_wcid' not in vocab
+    if needs_resolver:
+        if not args.abstract_resolver:
+            raise SystemExit(
+                f"  ERROR: vocab '{vocab_path}' has no idx_to_wcid; "
+                f"--abstract-resolver <path> is required for abstract_ace vocabs."
+            )
+        with open(args.abstract_resolver) as f:
+            resolver_payload = json.load(f)
+        resolver_table = resolver_payload.get('buckets', {})
+        print(f"  Resolver: {len(resolver_table):,} buckets, "
+              f"{resolver_payload.get('stats', {}).get('unique_wcids', '?'):,} unique wcids "
+              f"(temperature={args.abstract_resolver_temperature})")
+    elif args.abstract_resolver:
+        print("  WARNING: --abstract-resolver given but vocab has direct idx_to_wcid; resolver ignored.")
     
     # ── Load auxiliary data ──
     print("\n[3/6] Loading terrain & gradient data...")
@@ -1711,6 +1850,9 @@ def generate_world(args):
         housing_difficulty_ceiling=args.housing_difficulty_ceiling,
         housing_min_placements=args.housing_min_placements,
         max_housing_per_lb=args.max_housing_per_lb,
+        resolver_table=resolver_table,
+        resolver_temperature=args.abstract_resolver_temperature,
+        obj_dim=config['obj_dim'],
     )
     
     housing_linker = HousingLinker(GuidAllocator(start=0x70000000))
@@ -1728,6 +1870,11 @@ def generate_world(args):
     all_link_stmts = []
     all_encounter_stmts = []  # encounter table rows
     all_house_portal_stmts = []  # house_portal table rows
+    jsonl_handle = None
+    if args.output_jsonl:
+        os.makedirs(os.path.dirname(os.path.abspath(args.output_jsonl)) or ".", exist_ok=True)
+        jsonl_handle = open(args.output_jsonl, "w", encoding="utf-8")
+        print(f"  JSONL placements → {args.output_jsonl}")
     lb_count = 0
     total_objects = 0
     housing_count = 0
@@ -1844,6 +1991,30 @@ def generate_world(args):
 
                     world_x = lb_x * LB_SIZE + p['local_x']
                     world_y = lb_y * LB_SIZE + p['local_y']
+
+                    if jsonl_handle is not None:
+                        wcid_val = p.get('wcid')
+                        if isinstance(wcid_val, int) and wcid_val < 0 and not p.get('is_housing'):
+                            pass  # special leak; SQL path skips it too
+                        else:
+                            jsonl_handle.write(json.dumps({
+                                'lb_x': int(lb_x),
+                                'lb_y': int(lb_y),
+                                'cell_id': int(cell_id),
+                                'wcid': int(wcid_val) if isinstance(wcid_val, (int,)) else wcid_val,
+                                'wcid_idx': int(p['wcid_idx']) if p.get('wcid_idx') is not None else None,
+                                'local_x': float(p['local_x']),
+                                'local_y': float(p['local_y']),
+                                'local_z': float(p['local_z']),
+                                'world_x': float(round(world_x, 6)),
+                                'world_y': float(round(world_y, 6)),
+                                'rot_w': float(p.get('rot_w', 1.0)),
+                                'rot_z': float(p.get('rot_z', 0.0)),
+                                'is_link_child': bool(p.get('is_link_child', False)),
+                                'is_housing': bool(p.get('is_housing', False)),
+                                'housing_type': p.get('housing_type'),
+                                'culture': culture_name,
+                            }) + "\n")
 
                     if p.get('is_housing') and p.get('housing_type'):
                         housing_stmts = housing_linker.place_housing(
@@ -2118,6 +2289,9 @@ def generate_world(args):
         with open(summary_path, 'w', encoding='utf-8') as f:
             json.dump(summary, f, indent=2)
         print(f"  Summary JSON:         {summary_path}")
+    if jsonl_handle is not None:
+        jsonl_handle.close()
+        print(f"  JSONL placements:     {args.output_jsonl}")
     return 0
 
 
@@ -2188,12 +2362,20 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-sql", type=str, default=None,
                        help="Optional SQL output path (defaults to pipeline_data/population_output/vanquish_ml_populated.sql)")
+    parser.add_argument("--output-jsonl", type=str, default=None,
+                       help="Optional JSONL output path: one placement record per line (raw dicts pre-SQL). Used by compare_world_to_retail.py")
     parser.add_argument("--summary-json", type=str, default=None,
                        help="Optional JSON summary output path for automated probe runs")
     parser.add_argument("--world-features", type=str, default=WORLD_FEATURES_PATH,
                        help="Generated-world JSON/JSONL with heights and optional terrainTypes/roadFlags")
     parser.add_argument("--require-cuda", action="store_true",
                        help="Fail fast if CUDA is unavailable instead of silently running on CPU")
+    parser.add_argument("--vocab", type=str, default=None,
+                       help="Path to vocab JSON (overrides the legacy placement_vocab.json default)")
+    parser.add_argument("--abstract-resolver", type=str, default=None,
+                       help="Path to bucket→wcid resolver JSON. Required when the vocab uses abstract_ace tokens.")
+    parser.add_argument("--abstract-resolver-temperature", type=float, default=1.0,
+                       help="Temperature for sampling within an abstract bucket (1.0=frequency-weighted, <1=peakier toward modal wcid, >1=flatter)")
     args = parser.parse_args()
     
     random.seed(args.seed)
