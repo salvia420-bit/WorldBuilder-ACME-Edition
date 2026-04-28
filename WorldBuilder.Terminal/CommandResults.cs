@@ -31,6 +31,96 @@ public record TransactResult(
     TransactJournal Journal,
     string? Error = null);
 
+// ── Transact-Diff (structured before/after report) ──────────
+public record TransactDiffObject(
+    int? Wcid,
+    string Model,
+    Vector3 Position,
+    string[] Ontology);
+
+public record TransactDiffMove(
+    int? Wcid,
+    string Model,
+    Vector3 From,
+    Vector3 To,
+    double DeltaXY,
+    double DeltaZ);
+
+public record TransactDiffStructure(
+    string Model,
+    Vector3 Origin,
+    string? Architecture,
+    string FootprintShape);
+
+public record TransactDiffValidationEntry(
+    string Code,
+    string Severity,
+    string Msg,
+    string? Context = null);
+
+public record TransactDiffSpawn(
+    int Wcid,
+    string Name,
+    Vector3 Position);
+
+public record TransactDiffPoi(
+    string Title,
+    string[] Categories);
+
+public record TransactDiffPerLandblock(
+    uint LbX,
+    uint LbY,
+    string LbHex,
+    DiffSet<TransactDiffObject> Objects,
+    TransactDiffMoves Moves,
+    DiffSet<TransactDiffStructure> Structures,
+    DiffSet<TransactDiffValidationEntry> Validation,
+    DiffSet<TransactDiffSpawn> Spawns,
+    DiffSet<TransactDiffPoi> Pois,
+    TransactDiffCategorical Categorical,
+    bool CreatedByBatch);
+
+public record DiffSet<T>(List<T> Added, List<T> Removed);
+public record TransactDiffMoves(List<TransactDiffMove> Moved);
+public record TransactDiffCategorical(
+    string? BiomeBefore, string? BiomeAfter,
+    bool RoadBefore, bool RoadAfter,
+    int CliffsBefore, int CliffsAfter);
+
+public record TransactDiffSummary(
+    int DocumentsTouched,
+    int ObjectsAdded, int ObjectsRemoved, int ObjectsMoved,
+    int StructuresAdded, int StructuresRemoved,
+    int ValidationErrorsDelta, int ValidationWarningsDelta, int ValidationInfoDelta,
+    int SpawnsAdded, int SpawnsRemoved,
+    int PoisAdded, int PoisRemoved,
+    bool BiomeShift, bool RoadShift, bool CliffShift);
+
+public record TransactDiffTerrainSummary(
+    Dictionary<int, int> BiomeBefore,
+    Dictionary<int, int> BiomeAfter,
+    int VertexHeightChanged,
+    int VertexTypeChanged,
+    int VertexRoadChanged);
+
+public record TransactDiffVisual(
+    string Mode,
+    byte[]? PngBytes,
+    int Width,
+    int Height,
+    string? Note,
+    string? OutPath);
+
+public record TransactDiffResult(
+    bool Success,
+    Guid TxId,
+    string? ErrorCode,
+    string? Error,
+    TransactDiffSummary? Summary,
+    List<TransactDiffPerLandblock>? PerLandblock,
+    TransactDiffTerrainSummary? TerrainSummary,
+    TransactDiffVisual? Visual);
+
 // ═══════════════════════════════════════════════════════════
 //  Result records returned by CommandEngine.
 //  Both TerminalRepl (console formatting) and

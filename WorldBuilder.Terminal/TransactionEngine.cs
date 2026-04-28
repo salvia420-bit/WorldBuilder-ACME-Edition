@@ -62,9 +62,28 @@ internal sealed class TransactionEngine {
     private readonly JsonCommandProcessor _processor;
     private readonly HeadlessProjectManager _projectManager;
 
-    public TransactionEngine(JsonCommandProcessor processor, HeadlessProjectManager projectManager) {
+    // ── Snapshot retention (powers transact-diff). ──────────────────────
+    // Committed transactions retain pre+post projections in an LRU. Rolled-back
+    // ones get a lightweight marker in a separate bounded set so transact-diff
+    // can return TXDIFF-ROLLED-BACK instead of TXDIFF-EXPIRED for them — those
+    // are different signals to the agent (one means "your batch was rejected",
+    // the other means "the snapshot scrolled out of cache").
+    private readonly int _retentionCount;
+    private readonly long _retentionMemCapBytes;
+    private readonly Dictionary<Guid, LinkedListNode<TransactSnapshotEntry>> _snapshotIndex = new();
+    private readonly LinkedList<TransactSnapshotEntry> _snapshotOrder = new();
+    private long _snapshotBytesUsed;
+
+    private const int RolledBackMarkerCap = 256;
+    private readonly Dictionary<Guid, DateTime> _rolledBackMarkers = new();
+    private readonly Queue<Guid> _rolledBackOrder = new();
+
+    public TransactionEngine(JsonCommandProcessor processor, HeadlessProjectManager projectManager,
+            int retentionCount = 32, int retentionMemCapMb = 256) {
         _processor = processor;
         _projectManager = projectManager;
+        _retentionCount = Math.Max(1, retentionCount);
+        _retentionMemCapBytes = Math.Max(1, (long)retentionMemCapMb) * 1024L * 1024L;
     }
 
     public TransactResult Run(JsonArray ops, bool rollbackOnFail, JsonNode? validateNode) {
@@ -77,6 +96,7 @@ internal sealed class TransactionEngine {
         // batches that are also broken (nested transact, unknown op, etc.).
         var preOpRejection = PreflightOps(ops);
         if (preOpRejection != null) {
+            RecordRolledBack(txId);
             return new TransactResult(
                 Success: false, Status: "rolled-back", Reason: "rejected",
                 Ops: new List<TransactOpOutcome>(),
@@ -87,6 +107,7 @@ internal sealed class TransactionEngine {
         }
 
         if (_projectManager.CurrentProject == null) {
+            RecordRolledBack(txId);
             return new TransactResult(
                 Success: false, Status: "rolled-back", Reason: "rejected",
                 Ops: new List<TransactOpOutcome>(),
@@ -206,9 +227,13 @@ internal sealed class TransactionEngine {
                     // Storage delete may fail if the doc was never persisted yet — ignore.
                 }
             }
+            RecordRolledBack(txId);
         } else {
-            // Committed — record the docs the batch created so the journal is complete.
+            // Committed — record the docs the batch created so the journal is complete,
+            // then promote the pre-snapshots to the retention LRU alongside fresh
+            // post-snapshots so transact-diff can reconstruct the change later.
             documentsCreated.AddRange(createdNow);
+            CapturePostStateAndRetain(txId, snapshots, createdNow, dm);
         }
 
         var finishedAt = DateTime.UtcNow;
@@ -468,4 +493,109 @@ internal sealed class TransactionEngine {
         };
         return obj.ToJsonString();
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    //  Snapshot retention — internal LRU keyed by transaction id.
+    //  Lookups feed transact-diff. The dispatch loop is single-threaded so
+    //  the dictionary + linked list pair needs no locks.
+    // ─────────────────────────────────────────────────────────────────────
+
+    private void CapturePostStateAndRetain(Guid txId, Dictionary<string, byte[]> preSnapshots,
+            List<string> createdNow, DocumentManager dm) {
+        var preState = new Dictionary<string, byte[]>(preSnapshots, StringComparer.Ordinal);
+
+        // Post-state covers every doc that had a pre-state plus any docs the batch
+        // created. We snapshot post-state from the live ActiveDocs after commit;
+        // a doc that's no longer active (rare in practice — commit doesn't delete)
+        // is omitted from postState, signalling "removed" to the diff engine.
+        var postState = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        foreach (var docId in preState.Keys) {
+            if (dm.ActiveDocs.TryGetValue(docId, out var doc)) {
+                postState[docId] = doc.SaveToProjection();
+            }
+        }
+        foreach (var docId in createdNow) {
+            if (postState.ContainsKey(docId)) continue;
+            if (dm.ActiveDocs.TryGetValue(docId, out var doc)) {
+                postState[docId] = doc.SaveToProjection();
+            }
+        }
+
+        long bytes = 0;
+        foreach (var b in preState.Values) bytes += b.LongLength;
+        foreach (var b in postState.Values) bytes += b.LongLength;
+
+        var entry = new TransactSnapshotEntry(
+            TxId: txId,
+            CapturedAt: DateTime.UtcNow,
+            PreState: preState,
+            PostState: postState,
+            DocumentsCreated: new HashSet<string>(createdNow, StringComparer.Ordinal),
+            ApproxBytes: bytes);
+
+        // Replace any existing entry with the same txId (txId is a fresh GUID per
+        // Run() so collisions are theoretical, but the index must stay consistent).
+        if (_snapshotIndex.TryGetValue(txId, out var existing)) {
+            _snapshotBytesUsed -= existing.Value.ApproxBytes;
+            _snapshotOrder.Remove(existing);
+            _snapshotIndex.Remove(txId);
+        }
+        var node = _snapshotOrder.AddFirst(entry);
+        _snapshotIndex[txId] = node;
+        _snapshotBytesUsed += bytes;
+
+        EvictUntilUnderLimits();
+    }
+
+    private void EvictUntilUnderLimits() {
+        while (_snapshotIndex.Count > _retentionCount ||
+               _snapshotBytesUsed > _retentionMemCapBytes) {
+            var oldest = _snapshotOrder.Last;
+            if (oldest == null) break;
+            _snapshotOrder.RemoveLast();
+            _snapshotIndex.Remove(oldest.Value.TxId);
+            _snapshotBytesUsed -= oldest.Value.ApproxBytes;
+        }
+    }
+
+    private void RecordRolledBack(Guid txId) {
+        if (_rolledBackMarkers.ContainsKey(txId)) return;
+        _rolledBackMarkers[txId] = DateTime.UtcNow;
+        _rolledBackOrder.Enqueue(txId);
+        while (_rolledBackOrder.Count > RolledBackMarkerCap) {
+            var evicted = _rolledBackOrder.Dequeue();
+            _rolledBackMarkers.Remove(evicted);
+        }
+    }
+
+    public TransactSnapshotLookup Lookup(Guid txId) {
+        if (_snapshotIndex.TryGetValue(txId, out var node)) {
+            // Bump to head — a successful diff read counts as access for LRU.
+            _snapshotOrder.Remove(node);
+            _snapshotOrder.AddFirst(node);
+            return new TransactSnapshotLookup(TransactSnapshotStatus.Available, node.Value);
+        }
+        if (_rolledBackMarkers.ContainsKey(txId)) {
+            return new TransactSnapshotLookup(TransactSnapshotStatus.RolledBack, null);
+        }
+        return new TransactSnapshotLookup(TransactSnapshotStatus.Expired, null);
+    }
 }
+
+internal enum TransactSnapshotStatus {
+    Available,
+    RolledBack,
+    Expired,
+}
+
+internal sealed record TransactSnapshotLookup(
+    TransactSnapshotStatus Status,
+    TransactSnapshotEntry? Entry);
+
+internal sealed record TransactSnapshotEntry(
+    Guid TxId,
+    DateTime CapturedAt,
+    Dictionary<string, byte[]> PreState,
+    Dictionary<string, byte[]> PostState,
+    HashSet<string> DocumentsCreated,
+    long ApproxBytes);

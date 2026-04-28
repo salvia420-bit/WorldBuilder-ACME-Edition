@@ -23,12 +23,15 @@ public class TerminalRepl {
         IObjectPlacementService objectPlacementService,
         IDungeonService dungeonService,
         IOntologyService ontologyService,
-        IStampService stampService) {
+        IStampService stampService,
+        int transactDiffRetention = 32,
+        int transactDiffMemCapMb = 256) {
         _engine = new CommandEngine(projectManager, terrainService, objectPlacementService, dungeonService, ontologyService, stampService);
         // Used solely so the REPL `transact` command can re-enter the JSON dispatch
         // surface. Both processors share the same projectManager → same DocumentManager
         // → same singleton document instances, so mutations land in one place.
-        _jsonProcessor = new JsonCommandProcessor(projectManager, terrainService, objectPlacementService, dungeonService, ontologyService, stampService);
+        _jsonProcessor = new JsonCommandProcessor(projectManager, terrainService, objectPlacementService, dungeonService, ontologyService, stampService,
+            transactDiffRetention, transactDiffMemCapMb);
         _commandHandlers = BuildCommandHandlers();
     }
 
@@ -177,6 +180,7 @@ public class TerminalRepl {
             ["render-preview"] = HandleRenderPreview,
             ["compare-to-retail"] = HandleCompareToRetail,
             ["transact"] = HandleTransact,
+            ["transact-diff"] = HandleTransactDiff,
             ["get-tile"] = HandleGetTile,
             ["tile-stats"] = _ => HandleTileStats(),
             ["regenerate-dirty-tiles"] = _ => HandleRegenerateDirtyTiles(),
@@ -1746,6 +1750,8 @@ public class TerminalRepl {
         Console.WriteLine("  worldgen-scan-retail-towns [--out stats.json]                    Scan DATs for retail-style town models");
         Console.WriteLine("  compare-to-retail <generated.jsonl> [--retail-baseline path]     Score generated world vs retail (subprocess)");
         Console.WriteLine("  transact <ops.json>                            Stage/validate/commit a batch of mutating commands; rollback on failure");
+        Console.WriteLine("  transact-diff <txId> [--render] [--mode overlay|side-by-side|after-only-with-diff] [--lb X,Y]... [--res N] [--out path]");
+        Console.WriteLine("                                                Structured before/after report for a committed transaction (writes PNG with --out, returns base64 otherwise)");
         Console.WriteLine();
 
         Console.ForegroundColor = ConsoleColor.White;
@@ -5051,6 +5057,71 @@ public class TerminalRepl {
             Console.ResetColor();
             return;
         }
+
+        var response = _jsonProcessor.ProcessCommand(payload.ToJsonString());
+        Console.WriteLine(response);
+    }
+
+    // ════════════════════════════════════════════════════
+    //  transact-diff — structured before/after report.
+    //  Composes against the JSON dispatcher so the wire format and the
+    //  REPL share one implementation; only the argument parsing differs.
+    // ════════════════════════════════════════════════════
+
+    private void HandleTransactDiff(string[] tokens) {
+        if (tokens.Length < 2 || tokens[1] == "--help") {
+            Console.WriteLine("Usage: transact-diff <txId> [--render] [--mode overlay|side-by-side|after-only-with-diff] [--lb X,Y]... [--res N] [--out path]");
+            Console.WriteLine("  --render            Also produce a visual diff PNG.");
+            Console.WriteLine("  --mode <m>          overlay (default), side-by-side, or after-only-with-diff.");
+            Console.WriteLine("  --lb X,Y            Restrict the diff to a specific landblock; repeatable.");
+            Console.WriteLine("  --res N             Render resolution in pixels (default 1024).");
+            Console.WriteLine("  --out <path>        Write the visual PNG to disk instead of returning base64.");
+            return;
+        }
+
+        string txIdRaw = tokens[1];
+        bool render = false;
+        string mode = "overlay";
+        int resolution = 1024;
+        string? outPath = null;
+        var lbs = new System.Text.Json.Nodes.JsonArray();
+
+        for (int i = 2; i < tokens.Length; i++) {
+            var t = tokens[i];
+            if (t.Equals("--render", StringComparison.OrdinalIgnoreCase)) { render = true; continue; }
+            if (t.Equals("--mode", StringComparison.OrdinalIgnoreCase) && i + 1 < tokens.Length) {
+                mode = tokens[++i].ToLowerInvariant(); continue;
+            }
+            if (t.Equals("--lb", StringComparison.OrdinalIgnoreCase) && i + 1 < tokens.Length) {
+                var pair = tokens[++i].Split(',');
+                if (pair.Length == 2 && uint.TryParse(pair[0], out var lbX) && uint.TryParse(pair[1], out var lbY)) {
+                    lbs.Add(new System.Text.Json.Nodes.JsonArray((int)lbX, (int)lbY));
+                } else {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine($"Invalid --lb value '{tokens[i]}' — expected 'X,Y'.");
+                    Console.ResetColor();
+                    return;
+                }
+                continue;
+            }
+            if (t.Equals("--res", StringComparison.OrdinalIgnoreCase) && i + 1 < tokens.Length) {
+                if (int.TryParse(tokens[++i], out var n) && n >= 64 && n <= 8192) resolution = n;
+                continue;
+            }
+            if (t.Equals("--out", StringComparison.OrdinalIgnoreCase) && i + 1 < tokens.Length) {
+                outPath = tokens[++i]; continue;
+            }
+        }
+
+        var payload = new System.Text.Json.Nodes.JsonObject {
+            ["command"] = "transact-diff",
+            ["txId"] = txIdRaw,
+            ["render"] = render,
+            ["renderMode"] = mode,
+            ["resolution"] = resolution,
+        };
+        if (lbs.Count > 0) payload["lbs"] = lbs;
+        if (outPath != null) payload["out"] = outPath;
 
         var response = _jsonProcessor.ProcessCommand(payload.ToJsonString());
         Console.WriteLine(response);

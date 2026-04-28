@@ -18,6 +18,18 @@ public class CommandLineArgs {
     public bool StdinMode { get; set; }
 
     /// <summary>
+    /// How many committed transactions to retain in the transact-diff snapshot LRU
+    /// (32 by default). Older entries return TXDIFF-EXPIRED to transact-diff.
+    /// </summary>
+    public int TransactDiffRetention { get; set; } = 32;
+
+    /// <summary>
+    /// Memory cap for the transact-diff snapshot LRU, in megabytes (256 by default).
+    /// Whichever bound — count or memory — is hit first triggers eviction.
+    /// </summary>
+    public int TransactDiffMemCapMb { get; set; } = 256;
+
+    /// <summary>
     /// Non-fatal warnings collected during argument parsing.
     /// The caller should print these to stderr after parsing.
     /// </summary>
@@ -76,6 +88,34 @@ public class CommandLineArgs {
                 continue;
             }
 
+            if (arg.Equals("--transact-diff-retention", StringComparison.OrdinalIgnoreCase)) {
+                if (i + 1 < args.Length && !LooksLikeFlag(args[i + 1])) {
+                    var raw = args[++i];
+                    if (int.TryParse(raw, out var n) && n > 0) {
+                        result.TransactDiffRetention = n;
+                    } else {
+                        result.Warnings.Add($"Warning: Invalid --transact-diff-retention value '{raw}' — expected a positive integer. Ignored.");
+                    }
+                } else {
+                    result.Warnings.Add("Warning: Missing value for --transact-diff-retention. Ignored.");
+                }
+                continue;
+            }
+
+            if (arg.Equals("--transact-diff-mem-cap", StringComparison.OrdinalIgnoreCase)) {
+                if (i + 1 < args.Length && !LooksLikeFlag(args[i + 1])) {
+                    var raw = args[++i];
+                    if (int.TryParse(raw, out var n) && n > 0) {
+                        result.TransactDiffMemCapMb = n;
+                    } else {
+                        result.Warnings.Add($"Warning: Invalid --transact-diff-mem-cap value '{raw}' — expected a positive integer (MB). Ignored.");
+                    }
+                } else {
+                    result.Warnings.Add("Warning: Missing value for --transact-diff-mem-cap. Ignored.");
+                }
+                continue;
+            }
+
             if (MatchesOption(arg, "--help", "-h")) {
                 result.ShowHelp = true;
                 continue;
@@ -125,9 +165,11 @@ public class CommandLineArgs {
         Console.WriteLine("  --project, -p <path>      Path to a .wbproj project file");
         Console.WriteLine("  --export,  -e <path>      Directory to export DAT files into");
         Console.WriteLine("  --iteration, -i <number>  Portal iteration number (default: current + 1)");
-        Console.WriteLine("  --stdin                   JSON-line stdin/stdout mode (for agents)");
-        Console.WriteLine("  --version, -v             Show version information");
-        Console.WriteLine("  --help, -h                Show this help message");
+        Console.WriteLine("  --stdin                          JSON-line stdin/stdout mode (for agents)");
+        Console.WriteLine("  --transact-diff-retention <n>    transact-diff snapshot LRU size (default 32)");
+        Console.WriteLine("  --transact-diff-mem-cap <mb>     transact-diff snapshot LRU memory cap, MB (default 256)");
+        Console.WriteLine("  --version, -v                    Show version information");
+        Console.WriteLine("  --help, -h                       Show this help message");
         Console.WriteLine();
         Console.WriteLine("MODES:");
         Console.WriteLine("  Batch:       Provide --project AND --export to export and exit.");
