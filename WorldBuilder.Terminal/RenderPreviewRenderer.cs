@@ -286,7 +286,13 @@ internal static class RenderPreviewRenderer {
         float worldSpanX   = gridSize * 192f;
         float worldSpanY   = gridSize * 192f;
 
-        int rendered = 0;
+        // Build a flat list of glyphs so we can z-order them deterministically.
+        // Drawing in raw foreach order let later glyphs paint on top of earlier
+        // ones; if scenery happened to follow a building in the document's
+        // object list, the tree triangle covered the brown house square. The
+        // priority key here pushes Structure last (= drawn on top) so buildings
+        // are never visually occluded by adjacent scenery.
+        var glyphs = new List<(float pxX, float pxY, float sizePx, string category, SKColor fill, uint pairingRoot, uint objId)>();
         foreach (var kv in input.Objects) {
             foreach (var obj in kv.Value) {
                 float wx = obj.Origin.X - worldOriginX;
@@ -301,7 +307,26 @@ internal static class RenderPreviewRenderer {
                 var entry = input.Ontology?.Invoke(obj.Id);
                 string category = entry?.Category ?? "Unknown";
                 string scale    = entry?.Scale    ?? "Small";
-                fillPaint.Color = CategoryFill.TryGetValue(category, out var c) ? c : UnknownFill;
+
+                // Defense-in-depth promotion: the ontology cache may classify
+                // a building as Scenery / Prop / Unknown when the unified
+                // enrichment hasn't run on this project (or didn't see this
+                // ID). Tags carry an authoritative `dat:building` /
+                // `dat:building_inherited` flag from the unified-ontology
+                // analysis; trust it over the heuristic Category. This was
+                // the failure mode that hid Holtburg's eleven Aluvian houses
+                // — all flagged dat:building but cached as Scenery.
+                if (entry?.Tags is { Length: > 0 } tags) {
+                    foreach (var t in tags) {
+                        if (string.Equals(t, "dat:building", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(t, "dat:building_inherited", StringComparison.OrdinalIgnoreCase)) {
+                            category = "Structure";
+                            break;
+                        }
+                    }
+                }
+
+                var fill = CategoryFill.TryGetValue(category, out var c) ? c : UnknownFill;
 
                 float sizePx = scale switch {
                     "Massive" => 12f,
@@ -314,19 +339,34 @@ internal static class RenderPreviewRenderer {
                 if (sizePx < 1.5f) sizePx = 1.5f;
                 if (sizePx > 18f)  sizePx = 18f;
 
-                DrawGlyph(canvas, pxX, pxY, sizePx, category, fillPaint, outlinePaint);
-
-                if (input.PairingsGroupKey != null) {
-                    uint root = input.PairingsGroupKey(obj.Id);
-                    if (root != 0 && root != obj.Id) {
-                        ringPaint.Color = HueRingColor(root);
-                        canvas.DrawCircle(pxX, pxY, sizePx + 2.5f, ringPaint);
-                    }
-                }
-                rendered++;
+                uint root = input.PairingsGroupKey != null ? input.PairingsGroupKey(obj.Id) : 0u;
+                glyphs.Add((pxX, pxY, sizePx, category, fill, root, obj.Id));
             }
         }
-        output.RenderedObjectCount = rendered;
+
+        // Z-priority: smaller key paints first (i.e. underneath). Structures
+        // last so they never disappear under a tree.
+        static int CategoryZ(string cat) {
+            if (string.Equals(cat, "Scenery",   StringComparison.OrdinalIgnoreCase)) return 0;
+            if (string.Equals(cat, "Prop",      StringComparison.OrdinalIgnoreCase)) return 1;
+            if (string.Equals(cat, "Furniture", StringComparison.OrdinalIgnoreCase)
+                || cat.StartsWith("Furniture_", StringComparison.OrdinalIgnoreCase))  return 2;
+            if (string.Equals(cat, "Unknown",   StringComparison.OrdinalIgnoreCase)) return 3;
+            if (string.Equals(cat, "Creature",  StringComparison.OrdinalIgnoreCase)) return 4;
+            if (string.Equals(cat, "Structure", StringComparison.OrdinalIgnoreCase)) return 5;
+            return 3;  // default: alongside Unknown
+        }
+        glyphs.Sort((a, b) => CategoryZ(a.category).CompareTo(CategoryZ(b.category)));
+
+        foreach (var g in glyphs) {
+            fillPaint.Color = g.fill;
+            DrawGlyph(canvas, g.pxX, g.pxY, g.sizePx, g.category, fillPaint, outlinePaint);
+            if (g.pairingRoot != 0 && g.pairingRoot != g.objId) {
+                ringPaint.Color = HueRingColor(g.pairingRoot);
+                canvas.DrawCircle(g.pxX, g.pxY, g.sizePx + 2.5f, ringPaint);
+            }
+        }
+        output.RenderedObjectCount = glyphs.Count;
 
         // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
         //  Phase 4: cliff overlay (only when overlay enabled).
