@@ -87,16 +87,33 @@
   // ── Map init ──────────────────────────────────────────────────────────
 
   function initMap() {
+    // Why: L.CRS.Simple's default transformation is 1:1 (1 latLng unit = 1
+    // pixel at z=0). With a 49,152-unit world, that puts the world at
+    // 49,152 px = 192 tiles per side at z=0 — Leaflet then asks for tile
+    // coords that don't match our emitter's pyramid (which writes 1 tile
+    // per side at z=0 covering the whole world). Compress the projection
+    // so the world fits in one 256-px tile at z=0; then at z=N there are
+    // 2^N tiles per side, exactly matching the emitter.
+    //
+    // Transformation params: pixel.x = scale * (a*lng + b);
+    //                        pixel.y = scale * (c*lat + d).
+    //  a = TILE_PX/WORLD_EXTENT puts lng=0..49152 into px x=0..256 at z=0.
+    //  c = -a flips Y so world+Y (north) reads as up; the d=TILE_PX
+    //  offset shifts the resulting negative range back into [0, 256], so
+    //  Leaflet asks for non-negative tile y coords that match our emitter.
+    const pxPerWuAtZ0 = TILE_PX / WORLD_EXTENT;
+    const crs = L.extend({}, L.CRS.Simple, {
+      transformation: new L.Transformation(pxPerWuAtZ0, 0, -pxPerWuAtZ0, TILE_PX),
+    });
     map = L.map('map', {
-      crs: L.CRS.Simple,
+      crs: crs,
       minZoom: 3, maxZoom: 12,
       zoomSnap: 1, zoomDelta: 1,
       attributionControl: false,
     });
-    // World bounds in latLng (lat=worldY, lng=worldX).
-    const sw = map.unproject([0, WORLD_EXTENT], 8);  // bottom-left in pixel coords
-    const ne = map.unproject([WORLD_EXTENT, 0], 8);  // top-right
-    // unproject above is tricky with CRS.Simple; simpler:
+    // World bounds in latLng (lat=worldY, lng=worldX). Leaflet's projection
+    // sends north (high worldY) to negative pixel.y → screen-up; the custom
+    // transformation above preserves that, so worldY+ reads as up.
     const bounds = L.latLngBounds(L.latLng(0, 0), L.latLng(WORLD_EXTENT, WORLD_EXTENT));
     map.setMaxBounds(bounds.pad(0.1));
 
@@ -121,6 +138,7 @@
         setStatus('meta.js loaded but PROJECT_' + safe + ' is undefined.');
         return;
       }
+      projectLbSet = new Set(activeProjectMeta.lbList);
       installTileLayers(slug);
       installOverlays(slug);
       restoreOrInitView(initial);
@@ -251,13 +269,20 @@
   // ── Hover/click describe panel ────────────────────────────────────────
 
   let hoverDebounce = 0;
+  // Lookup index of LBs the project actually has desc files for. Built once
+  // at project-load time so onMouseMove can skip prefetches for LBs that
+  // are guaranteed-404 — saves a console warning per cursor LB.
+  let projectLbSet = null;
+
   function onMouseMove(e) {
     const ll = e.latlng;
     const lbHex = lbHexFor(ll);
     if (lbHex == null) return;
     setStatus('LB ' + lbHex + ' · z=' + map.getZoom() + ' · ' +
       'world (' + Math.round(ll.lng) + ', ' + Math.round(ll.lat) + ')');
-    // Light prefetch: load desc/<hex>.js so click is instant.
+    // Skip prefetch for LBs the project doesn't ship a desc for; otherwise
+    // every mousemove over the world's empty area generates a 404.
+    if (projectLbSet && !projectLbSet.has(lbHex)) return;
     if (!DESC[lbHex] && !SCRIPT_PROMISES[descPath(lbHex)]) {
       clearTimeout(hoverDebounce);
       hoverDebounce = setTimeout(function () {
@@ -471,24 +496,90 @@
   }
 
   function restoreOrInitView(initial) {
-    const z = initial.z || 5;
-    let center;
+    // URL-anchored deep link wins — restore the exact LB the user shared.
     if (!isNaN(initial.x) && !isNaN(initial.y)) {
-      // x,y are LB coords from URL.
       const cx = initial.x * LB_SIZE + LB_SIZE / 2;
       const cy = initial.y * LB_SIZE + LB_SIZE / 2;
-      center = L.latLng(cy, cx);
+      map.setView(L.latLng(cy, cx), initial.z || 9);
+      if (!isNaN(initial.floor)) {
+        const lbHex = '0x' +
+          initial.x.toString(16).toUpperCase().padStart(2, '0') +
+          initial.y.toString(16).toUpperCase().padStart(2, '0');
+        setTimeout(function () { showFloor(lbHex, initial.floor); }, 50);
+      }
+      return;
+    }
+    // Why: a fresh load has no URL params. Renders typically cover a small
+    // contiguous cluster (a town + neighbors), but a project may have
+    // scattered LBs (e.g. a town + a far-off dungeon). Fitting to the
+    // global bbox of all LBs in that case zooms out so far the user sees
+    // a black void with a few tiny tiles. Instead, pick the largest
+    // cluster and fit to that — the user can still navigate to outliers
+    // via overlays or deep-link.
+    const cluster = densestCluster(activeProjectMeta.lbList, 4);
+    const lbBounds = lbListBounds(cluster.length ? cluster : activeProjectMeta.lbList);
+    if (lbBounds) {
+      map.fitBounds(lbBounds, { padding: [40, 40], maxZoom: initial.z || 9 });
     } else {
-      center = L.latLng(WORLD_EXTENT / 2, WORLD_EXTENT / 2);
+      map.fitBounds(L.latLngBounds(L.latLng(0, 0), L.latLng(WORLD_EXTENT, WORLD_EXTENT)));
     }
-    map.setView(center, z);
-    if (!isNaN(initial.floor) && !isNaN(initial.x) && !isNaN(initial.y)) {
-      const lbHex = '0x' +
-        initial.x.toString(16).toUpperCase().padStart(2, '0') +
-        initial.y.toString(16).toUpperCase().padStart(2, '0');
-      // Defer floor activation slightly so the meta is fully wired.
-      setTimeout(function () { showFloor(lbHex, initial.floor); }, 50);
+  }
+
+  // Compute a latLng bounds covering every LB in the given list.
+  function lbListBounds(lbList) {
+    if (!lbList || !lbList.length) return null;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    lbList.forEach(function (hex) {
+      const lbX = parseInt(hex.slice(2, 4), 16);
+      const lbY = parseInt(hex.slice(4, 6), 16);
+      const x0 = lbX * LB_SIZE, x1 = x0 + LB_SIZE;
+      const y0 = lbY * LB_SIZE, y1 = y0 + LB_SIZE;
+      if (x0 < minX) minX = x0;
+      if (x1 > maxX) maxX = x1;
+      if (y0 < minY) minY = y0;
+      if (y1 > maxY) maxY = y1;
+    });
+    return L.latLngBounds(L.latLng(minY, minX), L.latLng(maxY, maxX));
+  }
+
+  // Pick the largest connected-by-Chebyshev-distance cluster of LBs from
+  // the list. Anchor: the LB with the most neighbors within `threshold`,
+  // then BFS its component. Returns the cluster's LB hexes; empty list
+  // when the input is empty. Used so a project with both a town and a
+  // far-off dungeon doesn't make fitBounds zoom out to fit both.
+  function densestCluster(lbList, threshold) {
+    if (!lbList || !lbList.length) return [];
+    const lbs = lbList.map(function (hex) {
+      return {
+        hex: hex,
+        x: parseInt(hex.slice(2, 4), 16),
+        y: parseInt(hex.slice(4, 6), 16),
+      };
+    });
+    let bestIdx = 0, bestCount = -1;
+    for (let i = 0; i < lbs.length; i++) {
+      let count = 0;
+      for (let j = 0; j < lbs.length; j++) {
+        if (i === j) continue;
+        if (Math.abs(lbs[i].x - lbs[j].x) <= threshold &&
+            Math.abs(lbs[i].y - lbs[j].y) <= threshold) count++;
+      }
+      if (count > bestCount) { bestCount = count; bestIdx = i; }
     }
+    const visited = new Set([bestIdx]);
+    const queue = [bestIdx];
+    while (queue.length) {
+      const i = queue.shift();
+      for (let j = 0; j < lbs.length; j++) {
+        if (visited.has(j)) continue;
+        if (Math.abs(lbs[i].x - lbs[j].x) <= threshold &&
+            Math.abs(lbs[i].y - lbs[j].y) <= threshold) {
+          visited.add(j);
+          queue.push(j);
+        }
+      }
+    }
+    return Array.from(visited).map(function (i) { return lbs[i].hex; });
   }
 
   function onViewChanged() {

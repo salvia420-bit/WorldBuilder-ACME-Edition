@@ -1,0 +1,1 @@
+LOAD_DUNGEON('0xAAB5', {"landblock":"0xAAB5","floorCount":1,"floors":[{"index":0,"zMin":27.9936,"zMax":27.9936,"cellCount":1,"cellResidentObjects":18,"looseObjectsInFloor":31,"verbal":"Landblock 0xAAB5, top: 1 cell between Z 28.0 and 28.0, 18 cell-resident objects, 31 loose objects in band."}]});
