@@ -249,7 +249,13 @@ JSON commands: `get-tile {zoom, lbX?, lbY?, region?, includeBase64?}`, `tile-sta
 
 ### DerethMaps Enhanced — `emit-static-site`
 
+![DerethMaps Enhanced — Holtburg at z=12 with the Leaflet frontend](docs/images/DerethMapsEnhanced.png)
+
+*Holtburg in the live Phase 5 frontend at zoom 12. Buildings render as their own top-down sprites with drop shadows and true world-bounds scaling; the side panel lazy-loads the full `describe-landblock` output (region, town, architecture, terrain summary, body, verbal); the project switcher, floor selector, and overlay toggles are docked top and right. Rendered from the dist that ships at `docs/sample-dist/`.*
+
 The three observation channels (`render-preview`, `describe-landblock`, `compare-to-retail`) plus the action loop (`transact`/`transact-diff`) are powerful primitives, but the only consumers were agent processes piping JSON over stdin. `emit-static-site` is the human-viewable demonstration: a one-shot batch that composes the entire WB.Terminal observation stack into a self-contained `dist/` folder a viewer can drag onto Google Drive, Cloudflare Pages, or their desktop and explore via Leaflet.
+
+**When fully built, the viewer experience will be:** open `index.html` from anywhere (HTTP origin or `file://`) and the entire generated world is browsable in a Google-Maps-style interface. Pan and zoom across the full 256×256 landblock grid; the renderer auto-switches between five visual tiers — terrain only at world zoom, structure footprints at region zoom, glyph dispatch at landblock zoom, per-object sprite renders at z≥11, and per-floor dungeon floor plans at deep zoom. Hover any landblock and the right panel populates with the full structured describer output: which town it's in, the cultural region, dominant architecture, terrain summary, named POIs, server-spawn rosters, validation diagnostics, and the verbal paragraph. Click any sprite or glyph and the panel narrows to that specific placement — model id, ontology category, position, and the matched Acpedia weenie page when one exists. Toggle overlays for towns, housing zones, NPC spawns, POIs, the landblock grid, and validation issues from a layers panel. Multiple worlds (vanilla AC, custom-generated worlds, regenerations of the same world) coexist in one dist via a project picker; deep-link any view via `?project=&z=&x=&y=&floor=`. The dist is a stable handoff format — drop it in S3, on Google Drive, on Cloudflare Pages, or hand someone a zip and a browser is all they need.
 
 ```bash
 echo '{"command":"emit-static-site","projectSlug":"vanilla","outDir":"./dist","maxZoom":12,"emitObject":true,"emitFloor":true}' | dotnet run --project WorldBuilder.Terminal -- --stdin --project projects/RetailSmoke/RetailSmoke.wbproj
