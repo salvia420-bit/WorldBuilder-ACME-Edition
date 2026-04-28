@@ -238,30 +238,31 @@ internal static class RenderPreviewRenderer {
             StrokeCap = SKStrokeCap.Round,
         };
 
+        // Emit each undirected edge exactly once by walking from every vertex
+        // to its E, N, NE, and NW neighbors only. Cardinal-only emission (the
+        // prior version) silently dropped any road whose road=1 vertices ran
+        // along a diagonal — the LLM critic then saw an empty corridor where a
+        // road should have been. Slight cost: at L-corners with three road=1
+        // vertices the hypotenuse also renders, thickening the bend; this is
+        // acceptable schematic noise in exchange for not dropping signal.
+        // Direction offsets: (du, dv).
+        ReadOnlySpan<(int du, int dv)> roadDirs =
+            stackalloc (int, int)[] { (1, 0), (0, 1), (1, 1), (-1, 1) };
+
         for (int vv = 0; vv < VH; vv++) {
             for (int vu = 0; vu < VW; vu++) {
                 int idx = vu + vv * VW;
                 if (!hasData[idx] || roads[idx] == 0) continue;
 
-                // Right neighbor.
-                if (vu + 1 < VW) {
-                    int rIdx = idx + 1;
-                    if (hasData[rIdx] && roads[rIdx] != 0) {
-                        canvas.DrawLine(
-                            VertexToPixel(vu,     vv,     VW, VH, W, H),
-                            VertexToPixel(vu + 1, vv,     VW, VH, W, H),
-                            roadPaint);
-                    }
-                }
-                // Up neighbor (in world; this is screen-down due to Y-flip).
-                if (vv + 1 < VH) {
-                    int uIdx = idx + VW;
-                    if (hasData[uIdx] && roads[uIdx] != 0) {
-                        canvas.DrawLine(
-                            VertexToPixel(vu,     vv,     VW, VH, W, H),
-                            VertexToPixel(vu,     vv + 1, VW, VH, W, H),
-                            roadPaint);
-                    }
+                foreach (var (du, dv) in roadDirs) {
+                    int nu = vu + du, nv = vv + dv;
+                    if (nu < 0 || nu >= VW || nv < 0 || nv >= VH) continue;
+                    int nIdx = nu + nv * VW;
+                    if (!hasData[nIdx] || roads[nIdx] == 0) continue;
+                    canvas.DrawLine(
+                        VertexToPixel(vu, vv, VW, VH, W, H),
+                        VertexToPixel(nu, nv, VW, VH, W, H),
+                        roadPaint);
                 }
             }
         }
@@ -343,25 +344,28 @@ internal static class RenderPreviewRenderer {
                     Math.Max(2f, input.LbPx / 120f) }, 0f),
             };
 
+            // Same 4-direction emission as roads (E, N, NE, NW) so cliff
+            // edges that run diagonally — escarpments, river-cut ridgelines,
+            // tower-building footprints — aren't dropped. The L-corner
+            // hypotenuse artifact applies here too but matters less for
+            // cliffs since the dashed style already reads as schematic.
+            ReadOnlySpan<(int du, int dv)> cliffDirs =
+                stackalloc (int, int)[] { (1, 0), (0, 1), (1, 1), (-1, 1) };
+
             int cliffCount = 0;
             for (int vv = 0; vv < VH; vv++) {
                 for (int vu = 0; vu < VW; vu++) {
                     int idx = vu + vv * VW;
                     if (!hasData[idx]) continue;
-                    if (vu + 1 < VW && hasData[idx + 1]) {
-                        if (Math.Abs(heights[idx + 1] - heights[idx]) > input.CliffThreshold) {
+                    foreach (var (du, dv) in cliffDirs) {
+                        int nu = vu + du, nv = vv + dv;
+                        if (nu < 0 || nu >= VW || nv < 0 || nv >= VH) continue;
+                        int nIdx = nu + nv * VW;
+                        if (!hasData[nIdx]) continue;
+                        if (Math.Abs(heights[nIdx] - heights[idx]) > input.CliffThreshold) {
                             canvas.DrawLine(
-                                VertexToPixel(vu,     vv, VW, VH, W, H),
-                                VertexToPixel(vu + 1, vv, VW, VH, W, H),
-                                cliffPaint);
-                            cliffCount++;
-                        }
-                    }
-                    if (vv + 1 < VH && hasData[idx + VW]) {
-                        if (Math.Abs(heights[idx + VW] - heights[idx]) > input.CliffThreshold) {
-                            canvas.DrawLine(
-                                VertexToPixel(vu, vv,     VW, VH, W, H),
-                                VertexToPixel(vu, vv + 1, VW, VH, W, H),
+                                VertexToPixel(vu, vv, VW, VH, W, H),
+                                VertexToPixel(nu, nv, VW, VH, W, H),
                                 cliffPaint);
                             cliffCount++;
                         }
@@ -403,55 +407,59 @@ internal static class RenderPreviewRenderer {
 
     private static void DrawGlyph(SKCanvas canvas, float cx, float cy, float size,
                                   string category, SKPaint fill, SKPaint outline) {
-        switch (category) {
-            case "Structure":
-                canvas.DrawRect(cx - size, cy - size, size * 2, size * 2, fill);
-                canvas.DrawRect(cx - size, cy - size, size * 2, size * 2, outline);
-                break;
-            case "Furniture":
-            case "Furniture_Storage":
-            case "Furniture_Light": {
-                float s = size * 0.85f;
-                canvas.DrawRect(cx - s, cy - s, s * 2, s * 2, fill);
-                if (s >= 3f) canvas.DrawRect(cx - s, cy - s, s * 2, s * 2, outline);
-                break;
-            }
-            case "Scenery": {
-                using var path = new SKPath();
-                path.MoveTo(cx, cy - size);
-                path.LineTo(cx - size, cy + size * 0.7f);
-                path.LineTo(cx + size, cy + size * 0.7f);
-                path.Close();
-                canvas.DrawPath(path, fill);
-                if (size >= 3f) canvas.DrawPath(path, outline);
-                break;
-            }
-            case "Creature": {
-                using var path = new SKPath();
-                path.MoveTo(cx,        cy - size);
-                path.LineTo(cx + size, cy);
-                path.LineTo(cx,        cy + size);
-                path.LineTo(cx - size, cy);
-                path.Close();
-                canvas.DrawPath(path, fill);
-                if (size >= 3f) canvas.DrawPath(path, outline);
-                break;
-            }
-            case "Prop":
-                canvas.DrawCircle(cx, cy, size * 0.85f, fill);
-                if (size >= 3f) canvas.DrawCircle(cx, cy, size * 0.85f, outline);
-                break;
-            default:
-                using (var paint = new SKPaint {
-                    IsAntialias = true,
-                    Style = SKPaintStyle.Stroke,
-                    StrokeWidth = Math.Max(1f, size * 0.4f),
-                    Color = UnknownFill,
-                }) {
-                    canvas.DrawLine(cx - size, cy - size, cx + size, cy + size, paint);
-                    canvas.DrawLine(cx - size, cy + size, cx + size, cy - size, paint);
-                }
-                break;
+        // Case-insensitive dispatch: the CategoryFill table uses
+        // OrdinalIgnoreCase, so a non-canonical-cased category from the
+        // ontology would pick up the right *color* and then fall through to
+        // the unknown-X glyph here, silently dropping signal — the same
+        // failure mode that masked misclassified buildings before the
+        // ontology was unified. Mirror the comparer used for the fill.
+        if (string.Equals(category, "Structure", StringComparison.OrdinalIgnoreCase)) {
+            canvas.DrawRect(cx - size, cy - size, size * 2, size * 2, fill);
+            canvas.DrawRect(cx - size, cy - size, size * 2, size * 2, outline);
+            return;
+        }
+        if (string.Equals(category, "Furniture", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(category, "Furniture_Storage", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(category, "Furniture_Light", StringComparison.OrdinalIgnoreCase)) {
+            float s = size * 0.85f;
+            canvas.DrawRect(cx - s, cy - s, s * 2, s * 2, fill);
+            if (s >= 3f) canvas.DrawRect(cx - s, cy - s, s * 2, s * 2, outline);
+            return;
+        }
+        if (string.Equals(category, "Scenery", StringComparison.OrdinalIgnoreCase)) {
+            using var path = new SKPath();
+            path.MoveTo(cx, cy - size);
+            path.LineTo(cx - size, cy + size * 0.7f);
+            path.LineTo(cx + size, cy + size * 0.7f);
+            path.Close();
+            canvas.DrawPath(path, fill);
+            if (size >= 3f) canvas.DrawPath(path, outline);
+            return;
+        }
+        if (string.Equals(category, "Creature", StringComparison.OrdinalIgnoreCase)) {
+            using var path = new SKPath();
+            path.MoveTo(cx,        cy - size);
+            path.LineTo(cx + size, cy);
+            path.LineTo(cx,        cy + size);
+            path.LineTo(cx - size, cy);
+            path.Close();
+            canvas.DrawPath(path, fill);
+            if (size >= 3f) canvas.DrawPath(path, outline);
+            return;
+        }
+        if (string.Equals(category, "Prop", StringComparison.OrdinalIgnoreCase)) {
+            canvas.DrawCircle(cx, cy, size * 0.85f, fill);
+            if (size >= 3f) canvas.DrawCircle(cx, cy, size * 0.85f, outline);
+            return;
+        }
+        using (var paint = new SKPaint {
+            IsAntialias = true,
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = Math.Max(1f, size * 0.4f),
+            Color = UnknownFill,
+        }) {
+            canvas.DrawLine(cx - size, cy - size, cx + size, cy + size, paint);
+            canvas.DrawLine(cx - size, cy + size, cx + size, cy - size, paint);
         }
     }
 
