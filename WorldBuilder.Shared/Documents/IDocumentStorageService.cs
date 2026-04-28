@@ -55,5 +55,12 @@ namespace WorldBuilder.Shared.Documents {
         Task<List<DBSnapshot>> GetSnapshotsAsync(string documentId);
         Task<bool> DeleteSnapshotAsync(Guid snapshotId);
         Task UpdateSnapshotNameAsync(Guid snapshotId, string newName);
+
+        /// <summary>
+        /// Returns every document Id, optionally filtered to those starting with
+        /// <paramref name="prefix"/>. Used by batch ops that iterate all loaded
+        /// landblock_/dungeon_ documents without instantiating each.
+        /// </summary>
+        Task<List<string>> ListDocumentIdsAsync(string? prefix = null);
     }
 }

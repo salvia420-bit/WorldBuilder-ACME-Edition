@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Numerics;
 using DatReaderWriter.DBObjs;
+using SkiaSharp;
 using DatReaderWriter.Options;
 using DatReaderWriter.Types;
 using DatReaderWriter.Extensions.DBObjs;
@@ -561,7 +562,7 @@ public class CommandEngine {
     public RenderPreviewResult RenderPreview(
         uint centerLbX, uint centerLbY,
         int radius, int resolution, bool overlay,
-        string? outputPath) {
+        string? outputPath, bool useSprites = false) {
 
         RequireProject();
         if (radius < 0) throw new ArgumentException("radius must be >= 0");
@@ -608,6 +609,8 @@ public class CommandEngine {
             }
         }
 
+        SpriteAtlasLoader? atlas = useSprites ? GetOrLoadSpriteAtlas() : null;
+
         var input = new RenderPreviewRenderer.Input {
             CenterLbX = centerLbX,
             CenterLbY = centerLbY,
@@ -622,6 +625,10 @@ public class CommandEngine {
             Ontology = id => _ontologyService.GetEntry(id),
             PairingsGroupKey = id => _buildingPairings.GroupKey(id),
             CliffThreshold = WorldBuilder.Shared.Lib.Validation.ValidationEngine.DefaultCliffThreshold,
+            UseSprites = useSprites && atlas != null,
+            Sprites = atlas == null ? null : id => atlas.TryLookup(id, out var rect)
+                ? new RenderPreviewRenderer.SpriteInfo(atlas.Atlas, rect.X, rect.Y, rect.W, rect.H, rect.WorldWidth, rect.WorldHeight)
+                : null,
         };
 
         var renderOut = RenderPreviewRenderer.Render(input);
@@ -10718,5 +10725,459 @@ public class CommandEngine {
         // DAT-resident IDs in the custom range — DatReaderWriter doesn't expose enumeration here,
         // so we let AllocateNextId start from customBase if nothing is found. Prior imports persisted
         // to disk get rediscovered when the project reopens (they live in PortalDatDocument again).
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  DerethMapsEnhanced: Phase 1 extraction commands.
+    //  Produce per-cell footprint cache and per-model sprite cache used
+    //  later by render-dungeon, emit-tile-pyramid, and emit-static-site.
+    // ═══════════════════════════════════════════════════════════════════
+
+    public record CellFootprintsResult(
+        int CellsExtracted,
+        int Synthetic,
+        int DungeonsScanned,
+        string CachePath);
+
+    public record ObjectSpritesResult(
+        int ModelsCollected,
+        int ModelsRendered,
+        int ModelsFailed,
+        int AtlasWidth,
+        int AtlasHeight,
+        string SpritesDir,
+        string AtlasPath,
+        string ManifestPath);
+
+    public record DungeonRenderResult(
+        ushort LbKey,
+        int FloorIndexRendered,        // -1 = all
+        int FloorCount,
+        int CellsRendered,
+        float FloorZMin,
+        float FloorZMax,
+        byte[] PngBytes,
+        string? OutputPath);
+
+    public record TilePyramidResult(
+        int MaxZoom,
+        int MinZoom,
+        int LbsProcessed,
+        int ExteriorTilesAtMaxZoom,
+        int ObjectTilesAtMaxZoom,
+        int FloorTilesWritten,
+        int DownsampledTiles,
+        string OutDir);
+
+    private SpriteAtlasLoader? _spriteAtlas;
+    private string? _spriteAtlasDir;
+
+    private SpriteAtlasLoader? GetOrLoadSpriteAtlas() {
+        var p = _projectManager.CurrentProject!;
+        var dir = Path.Combine(p.ProjectDirectory, "sprites");
+        if (_spriteAtlas != null && string.Equals(_spriteAtlasDir, dir, StringComparison.Ordinal))
+            return _spriteAtlas;
+        _spriteAtlas?.Dispose();
+        _spriteAtlas = SpriteAtlasLoader.TryLoad(dir);
+        _spriteAtlasDir = dir;
+        return _spriteAtlas;
+    }
+
+    public DungeonRenderResult RenderDungeon(uint lbX, uint lbY, int? floor, int resolution, string? outputPath) {
+        RequireProject();
+        ushort lbKey = LbKey(lbX, lbY);
+        var p = _projectManager.CurrentProject!;
+        var dungeon = GetDungeonDoc(lbKey)
+            ?? throw new InvalidOperationException($"No dungeon document for landblock 0x{lbKey:X4}.");
+        var lb = GetLandblockDoc(lbKey);
+        var footprints = LoadCellFootprintsForLb(p, lbKey);
+        if (footprints.Count == 0) {
+            // Auto-extract on demand if cache missing — saves the user a step.
+            ExtractCellFootprints(new[] { lbKey }, force: true);
+            footprints = LoadCellFootprintsForLb(p, lbKey);
+        }
+
+        var input = new DungeonRenderer.Input {
+            LbKey = lbKey,
+            FloorIndex = floor,
+            Resolution = resolution,
+            CellFootprints = footprints,
+            Dungeon = dungeon,
+            Lb = lb,
+            SpriteAtlas = GetOrLoadSpriteAtlas(),
+            Ontology = id => _ontologyService.GetEntry(id),
+        };
+        var output = DungeonRenderer.Render(input);
+
+        if (!string.IsNullOrEmpty(outputPath)) {
+            var dir = Path.GetDirectoryName(outputPath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+            File.WriteAllBytes(outputPath, output.PngBytes);
+        }
+        return new DungeonRenderResult(
+            lbKey, output.FloorIndexRendered, output.FloorCount, output.CellsRendered,
+            output.FloorZMin, output.FloorZMax, output.PngBytes, outputPath);
+    }
+
+    private List<CellFootprintExtractor.CellFootprint> LoadCellFootprintsForLb(
+            WorldBuilder.Shared.Models.Project p, ushort lbKey) {
+        var path = Path.Combine(p.ProjectDirectory, "cell_footprints.jsonl");
+        if (!File.Exists(path)) return new List<CellFootprintExtractor.CellFootprint>();
+        // Why: filter on the qualified cellId field so we don't false-match
+        // on envCellId / cellStructure / portal toCellId values that happen
+        // to share the same hex prefix as a different LB's id. Earlier loose
+        // substring matching caused render-dungeon to compose footprints
+        // from entirely unrelated landblocks.
+        string lbPrefix = $"\"cellId\":\"0x{lbKey:X4}";
+        var result = new List<CellFootprintExtractor.CellFootprint>();
+        foreach (var line in File.ReadLines(path)) {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            if (!line.Contains(lbPrefix, StringComparison.Ordinal)) continue;
+            var fp = ParseCellFootprintLine(line);
+            if (fp != null) result.Add(fp);
+        }
+        return result;
+    }
+
+    private static CellFootprintExtractor.CellFootprint? ParseCellFootprintLine(string line) {
+        try {
+            using var doc = System.Text.Json.JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            uint cellId = ParseHexU32(root.GetProperty("cellId").GetString() ?? "0");
+            ushort envCellId = ParseHexU16(root.GetProperty("envCellId").GetString() ?? "0");
+            ushort cellStructure = ParseHexU16(root.GetProperty("cellStructure").GetString() ?? "0");
+            var poly = root.GetProperty("polygon");
+            var corners = new Vector2[poly.GetArrayLength()];
+            for (int i = 0; i < corners.Length; i++) {
+                var pt = poly[i];
+                corners[i] = new Vector2(pt[0].GetSingle(), pt[1].GetSingle());
+            }
+            var zr = root.GetProperty("zRange");
+            float zMin = zr[0].GetSingle();
+            float zMax = zr[1].GetSingle();
+            var portals = new List<CellFootprintExtractor.PortalSpan>();
+            foreach (var portalEl in root.GetProperty("portals").EnumerateArray()) {
+                ushort to = ParseHexU16(portalEl.GetProperty("toCellId").GetString() ?? "0");
+                var span = portalEl.GetProperty("wallSpan");
+                var a = new Vector2(span[0][0].GetSingle(), span[0][1].GetSingle());
+                var b = new Vector2(span[1][0].GetSingle(), span[1][1].GetSingle());
+                portals.Add(new CellFootprintExtractor.PortalSpan(to, a, b));
+            }
+            bool synthetic = root.TryGetProperty("synthetic", out var sx) && sx.GetBoolean();
+            return new CellFootprintExtractor.CellFootprint(
+                cellId, envCellId, cellStructure, corners, zMin, zMax, portals, synthetic);
+        } catch {
+            return null;
+        }
+    }
+
+    private static uint ParseHexU32(string s) {
+        if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) s = s.Substring(2);
+        return uint.TryParse(s, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var v) ? v : 0u;
+    }
+
+    private static ushort ParseHexU16(string s) {
+        if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) s = s.Substring(2);
+        return ushort.TryParse(s, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var v) ? v : (ushort)0;
+    }
+
+    public CellFootprintsResult ExtractCellFootprints(IReadOnlyList<ushort>? lbFilter, bool force) {
+        RequireProject();
+        var p = _projectManager.CurrentProject!;
+        var dats = p.DocumentManager.Dats;
+        var outPath = Path.Combine(p.ProjectDirectory, "cell_footprints.jsonl");
+
+        if (!force && File.Exists(outPath)) {
+            int existing = File.ReadAllLines(outPath).Length;
+            return new CellFootprintsResult(existing, 0, 0, outPath);
+        }
+
+        // Filtered re-extract preserves entries for LBs not in the filter.
+        // Why: render-dungeon auto-extracts on cache miss; without merge
+        // semantics, a single render call would nuke the full 37k-line cache
+        // and leave only the one LB just rendered.
+        bool incremental = lbFilter is { Count: > 0 } && File.Exists(outPath);
+        var keepLines = incremental ? PreserveCacheLinesExcluding(outPath, lbFilter!) : null;
+
+        var dungeonIds = ListDungeonDocIds(p, lbFilter);
+        int total = 0, synthetic = 0, scanned = 0;
+        using (var sw = new StreamWriter(outPath, append: false)) {
+            if (keepLines != null) {
+                foreach (var line in keepLines) sw.WriteLine(line);
+            }
+            foreach (var lbKey in dungeonIds) {
+                var dungeon = GetDungeonDoc(lbKey);
+                if (dungeon == null || dungeon.Cells.Count == 0) continue;
+                scanned++;
+                foreach (var cell in dungeon.Cells) {
+                    var fp = CellFootprintExtractor.Extract(cell, lbKey, dats);
+                    sw.WriteLine(SerializeCellFootprint(fp));
+                    total++;
+                    if (fp.Synthetic) synthetic++;
+                }
+            }
+        }
+        if (keepLines != null) total += keepLines.Count;
+        return new CellFootprintsResult(total, synthetic, scanned, outPath);
+    }
+
+    private static List<string> PreserveCacheLinesExcluding(string cachePath, IReadOnlyList<ushort> excluded) {
+        var excludedPrefixes = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var lb in excluded) excludedPrefixes.Add($"\"cellId\":\"0x{lb:X4}");
+        var kept = new List<string>();
+        foreach (var line in File.ReadLines(cachePath)) {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            bool drop = false;
+            foreach (var pref in excludedPrefixes) {
+                if (line.Contains(pref, StringComparison.Ordinal)) { drop = true; break; }
+            }
+            if (!drop) kept.Add(line);
+        }
+        return kept;
+    }
+
+    public ObjectSpritesResult GenerateObjectSprites(IReadOnlyList<ushort>? lbFilter, int spritePx, bool force) {
+        RequireProject();
+        var p = _projectManager.CurrentProject!;
+        var dats = p.DocumentManager.Dats;
+        var spritesDir = Path.Combine(p.ProjectDirectory, "sprites");
+        Directory.CreateDirectory(spritesDir);
+        var manifestPath = Path.Combine(spritesDir, "manifest.jsonl");
+        var atlasPath = Path.Combine(spritesDir, "atlas.png");
+
+        if (!force && File.Exists(manifestPath) && File.Exists(atlasPath)) {
+            int existing = File.ReadAllLines(manifestPath).Length;
+            using var probe = SkiaSharp.SKBitmap.Decode(atlasPath);
+            return new ObjectSpritesResult(existing, existing, 0,
+                probe?.Width ?? 0, probe?.Height ?? 0, spritesDir, atlasPath, manifestPath);
+        }
+
+        var modelIds = CollectPlacedModelIds(p, lbFilter);
+        Console.Error.WriteLine($"[Sprites] Collected {modelIds.Count} model ids" +
+            (modelIds.Count > 0 ? $" (sample: 0x{modelIds.First():X8})" : ""));
+        var (rendered, failed, atlasW, atlasH) = ObjectSpriteGenerator.Run(
+            modelIds, spritePx, spritesDir, atlasPath, manifestPath, dats,
+            id => _ontologyService.GetEntry(id));
+        return new ObjectSpritesResult(modelIds.Count, rendered, failed, atlasW, atlasH, spritesDir, atlasPath, manifestPath);
+    }
+
+    private List<ushort> ListDungeonDocIds(WorldBuilder.Shared.Models.Project p, IReadOnlyList<ushort>? lbFilter) {
+        if (lbFilter is { Count: > 0 }) return new List<ushort>(lbFilter);
+        var ids = p.DocumentManager.DocumentStorageService
+            .ListDocumentIdsAsync("dungeon_").GetAwaiter().GetResult();
+        var keys = new List<ushort>(ids.Count);
+        foreach (var id in ids) {
+            var hex = id.Substring("dungeon_".Length);
+            if (ushort.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var k))
+                keys.Add(k);
+        }
+        keys.Sort();
+        return keys;
+    }
+
+    private HashSet<uint> CollectPlacedModelIds(WorldBuilder.Shared.Models.Project p, IReadOnlyList<ushort>? lbFilter) {
+        var result = new HashSet<uint>();
+        var storage = p.DocumentManager.DocumentStorageService;
+
+        IEnumerable<ushort> lbKeys;
+        if (lbFilter is { Count: > 0 }) {
+            lbKeys = lbFilter;
+        } else {
+            var lbIds = storage.ListDocumentIdsAsync("landblock_").GetAwaiter().GetResult();
+            var parsed = new List<ushort>(lbIds.Count);
+            foreach (var id in lbIds) {
+                var hex = id.Substring("landblock_".Length);
+                if (ushort.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var k))
+                    parsed.Add(k);
+            }
+            lbKeys = parsed;
+        }
+
+        foreach (var lbKey in lbKeys) {
+            var lbDoc = GetLandblockDoc(lbKey);
+            foreach (var obj in lbDoc.GetStaticObjects()) {
+                if (obj.IsParticleEmitter) continue;
+                result.Add(obj.Id);
+            }
+        }
+
+        var dungeonKeys = lbFilter is { Count: > 0 }
+            ? new List<ushort>(lbFilter)
+            : ListDungeonDocIds(p, null);
+        foreach (var lbKey in dungeonKeys) {
+            var dungeon = GetDungeonDoc(lbKey);
+            if (dungeon == null) continue;
+            foreach (var cell in dungeon.Cells) {
+                foreach (var stab in cell.StaticObjects) result.Add(stab.Id);
+            }
+        }
+        return result;
+    }
+
+    private static string SerializeCellFootprint(CellFootprintExtractor.CellFootprint fp) {
+        var poly = new object[fp.Polygon.Length];
+        for (int i = 0; i < fp.Polygon.Length; i++)
+            poly[i] = new[] { Math.Round(fp.Polygon[i].X, 4), Math.Round(fp.Polygon[i].Y, 4) };
+        var portals = new object[fp.Portals.Count];
+        for (int i = 0; i < fp.Portals.Count; i++) {
+            var ps = fp.Portals[i];
+            portals[i] = new {
+                toCellId = $"0x{ps.ToCellId:X4}",
+                wallSpan = new object[] {
+                    new[] { Math.Round(ps.A.X, 4), Math.Round(ps.A.Y, 4) },
+                    new[] { Math.Round(ps.B.X, 4), Math.Round(ps.B.Y, 4) },
+                },
+            };
+        }
+        return System.Text.Json.JsonSerializer.Serialize(new {
+            cellId = $"0x{fp.CellId:X8}",
+            envCellId = $"0x{fp.EnvCellId:X4}",
+            cellStructure = $"0x{fp.CellStructure:X4}",
+            polygon = poly,
+            zRange = new[] { Math.Round(fp.ZMin, 4), Math.Round(fp.ZMax, 4) },
+            portals,
+            synthetic = fp.Synthetic,
+        }, CellFootprintJsonOpts);
+    }
+
+    private static readonly System.Text.Json.JsonSerializerOptions CellFootprintJsonOpts = new() {
+        PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+        WriteIndented = false,
+    };
+
+    public int GetDungeonFloorCount(ushort lbKey) {
+        RequireProject();
+        var dungeon = GetDungeonDoc(lbKey);
+        if (dungeon == null || dungeon.Cells.Count == 0) return 0;
+        return LandblockDescriber.ClusterByCellZ(dungeon.Cells.Select(c => c.Origin.Z)).Count;
+    }
+
+    public StaticSiteEmitter.EmissionStats EmitStaticSite(string projectSlug, string outDir,
+            IReadOnlyList<ushort>? lbFilter, int maxZoom, int minZoom,
+            bool emitObjectTier, bool emitFloorTier) {
+        RequireProject();
+        return StaticSiteEmitter.Emit(this, projectSlug, outDir, lbFilter, maxZoom, minZoom,
+            emitObjectTier, emitFloorTier);
+    }
+
+    public LandblockDescriber.FloorDescriptionResult DescribeFloor(uint lbX, uint lbY, int floorIndex) {
+        RequireProject();
+        ushort lbKey = LbKey(lbX, lbY);
+        var lbDoc = GetLandblockDoc(lbKey);
+        var dungeonDoc = GetDungeonDoc(lbKey)
+            ?? throw new InvalidOperationException($"No dungeon document for landblock 0x{lbKey:X4}.");
+        return LandblockDescriber.DescribeFloor(lbKey, floorIndex, lbDoc, dungeonDoc, _wcidToAcpedia);
+    }
+
+    public TilePyramidResult EmitTilePyramid(IReadOnlyList<ushort>? lbFilter, string outDir,
+            int maxZoom, int minZoom, bool dirtyOnly, bool emitObjectLayer, bool emitFloorLayer) {
+        RequireProject();
+        if (maxZoom < 8 || maxZoom > 12) throw new ArgumentException("maxZoom must be in [8, 12]");
+        if (minZoom < 1 || minZoom > maxZoom) throw new ArgumentException("minZoom must be in [1, maxZoom]");
+
+        var p = _projectManager.CurrentProject!;
+        var exteriorDir = Path.Combine(outDir, "exterior");
+        var objectDir = Path.Combine(outDir, "object");
+        var floorDir = Path.Combine(outDir, "floor");
+        Directory.CreateDirectory(exteriorDir);
+        if (emitObjectLayer) Directory.CreateDirectory(objectDir);
+        if (emitFloorLayer) Directory.CreateDirectory(floorDir);
+
+        IReadOnlyList<ushort> targetLbs = ResolveTargetLbs(lbFilter, dirtyOnly);
+
+        // Each LB is rendered at LbPx = TilePx * 2^(maxZoom - 8). For maxZoom=8
+        // that's 256px (one tile per LB); for 12, 4096px.
+        int lbPx = TilePyramidEmitter.TilePx * (1 << (maxZoom - 8));
+
+        int exteriorTiles = 0, objectTiles = 0, floorTiles = 0, processed = 0;
+        SpriteAtlasLoader? atlas = emitObjectLayer ? GetOrLoadSpriteAtlas() : null;
+
+        foreach (var lbKey in targetLbs) {
+            uint lbX = (uint)((lbKey >> 8) & 0xFF);
+            uint lbY = (uint)(lbKey & 0xFF);
+
+            var glyphPng = RenderLbForPyramid(lbX, lbY, lbPx, useSprites: false);
+            if (glyphPng != null) {
+                using var bmp = SKBitmap.Decode(glyphPng);
+                if (bmp != null && bmp.Width == lbPx && bmp.Height == lbPx) {
+                    exteriorTiles += TilePyramidEmitter.SliceLbRender(bmp, lbKey, maxZoom, exteriorDir);
+                }
+            }
+
+            if (emitObjectLayer && atlas != null) {
+                var spritePng = RenderLbForPyramid(lbX, lbY, lbPx, useSprites: true);
+                if (spritePng != null) {
+                    using var bmp = SKBitmap.Decode(spritePng);
+                    if (bmp != null && bmp.Width == lbPx && bmp.Height == lbPx) {
+                        objectTiles += TilePyramidEmitter.SliceLbRender(bmp, lbKey, maxZoom, objectDir);
+                    }
+                }
+            }
+
+            if (emitFloorLayer) {
+                var dungeon = GetDungeonDoc(lbKey);
+                if (dungeon != null && dungeon.Cells.Count > 0) {
+                    var bands = LandblockDescriber.ClusterByCellZ(dungeon.Cells.Select(c => c.Origin.Z));
+                    int floorCount = bands.Count;
+                    for (int f = 0; f < floorCount; f++) {
+                        var dungeonResult = RenderDungeon(lbX, lbY, f, lbPx, outputPath: null);
+                        using var dbmp = SKBitmap.Decode(dungeonResult.PngBytes);
+                        if (dbmp != null) {
+                            TilePyramidEmitter.WriteFloorTile(dbmp, lbKey, f, floorDir, maxZoom);
+                            floorTiles++;
+                        }
+                    }
+                }
+            }
+            processed++;
+        }
+
+        int downsampled = TilePyramidEmitter.Downsample(exteriorDir, maxZoom, minZoom);
+        if (emitObjectLayer && atlas != null) {
+            // Object tier downsamples only to z=11 (per spec); below that
+            // the exterior tier carries glyph-mode renders.
+            int objectMin = Math.Max(11, minZoom);
+            downsampled += TilePyramidEmitter.Downsample(objectDir, maxZoom, objectMin);
+        }
+
+        return new TilePyramidResult(maxZoom, minZoom, processed,
+            exteriorTiles, objectTiles, floorTiles, downsampled, outDir);
+    }
+
+    private byte[]? RenderLbForPyramid(uint lbX, uint lbY, int lbPx, bool useSprites) {
+        try {
+            var r = RenderPreview(lbX, lbY, radius: 0, resolution: lbPx, overlay: false,
+                outputPath: null, useSprites: useSprites);
+            return r.PngBytes;
+        } catch {
+            return null;
+        }
+    }
+
+    private IReadOnlyList<ushort> ResolveTargetLbs(IReadOnlyList<ushort>? lbFilter, bool dirtyOnly) {
+        if (lbFilter is { Count: > 0 }) return lbFilter;
+        var p = _projectManager.CurrentProject!;
+        if (dirtyOnly && _tileCache != null) {
+            var dirty = new List<ushort>();
+            foreach (var hex in _tileCache.DirtyLbs) {
+                if (ushort.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var k))
+                    dirty.Add(k);
+            }
+            return dirty;
+        }
+        var ids = p.DocumentManager.DocumentStorageService
+            .ListDocumentIdsAsync().GetAwaiter().GetResult();
+        var keys = new HashSet<ushort>();
+        foreach (var id in ids) {
+            string? hex = id.StartsWith("landblock_", StringComparison.Ordinal) ? id.Substring("landblock_".Length)
+                : id.StartsWith("dungeon_", StringComparison.Ordinal) ? id.Substring("dungeon_".Length)
+                : null;
+            if (hex == null) continue;
+            if (ushort.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var k))
+                keys.Add(k);
+        }
+        return keys.OrderBy(k => k).ToList();
     }
 }

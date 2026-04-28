@@ -41,4 +41,13 @@
 		</Reference>
 	</ItemGroup>
 
+	<ItemGroup>
+		<!-- Static site assets shipped with the binary so emit-static-site can
+		     copy them into dist/ regardless of CWD. -->
+		<Content Include="StaticSite\**\*">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+		</Content>
+	</ItemGroup>
+
 </Project>

@@ -1449,6 +1449,189 @@ Returns the full height lookup table and all terrain type names defined in the g
 
 ---
 
+## DerethMaps Enhanced
+
+The `emit-static-site` command and its supporting batch commands compose the
+WorldBuilder observation stack into a self-contained `dist/` folder that
+viewers can drag onto Google Drive (or any HTTP origin, including
+`file://`) and explore as a Leaflet-based map. The set of commands below
+are designed to be called in order, but each is independently usable —
+the orchestrator just glues them together.
+
+### extract-cell-footprints
+
+Walks every cached dungeon document, projects each `EnvCell`'s wall
+vertices through the cell's frame, and emits a 2D polygon + portal
+wall-spans + Z range to `projects/<name>/cell_footprints.jsonl`. Cells
+whose `Environment` can't be resolved fall back to a synthetic 24u AABB
+around `cell.Origin` (so the renderer always has *something* to draw).
+
+**Request:**
+```json
+{"command":"extract-cell-footprints","force":false,"lbFilter":["0xA9B4"]}
+```
+
+`lbFilter` (optional) is an array of LB hex strings or numeric keys; when
+provided, the cache is updated **incrementally** — entries for other LBs
+are preserved. Without `lbFilter`, the full cache is rebuilt.
+
+**Response:**
+```json
+{"success":true,"command":"extract-cell-footprints",
+ "cellsExtracted":37272,"synthetic":7,"dungeonsScanned":179,
+ "cachePath":"projects/RetailSmoke/cell_footprints.jsonl"}
+```
+
+---
+
+### generate-object-sprites
+
+Renders top-down orthographic PNG sprites for every model id placed in
+the project's loaded landblock + dungeon documents. Each sprite is sized
+at `spritePx` pixels per the model's longest XY world dim — uniform
+fidelity per pixel of model surface across all sprites. Lighting matches
+`render-preview`'s hillshade convention (sun at azimuth 135°, elevation
+60°, Lambert shade with floor 0.55). Albedo comes from the model's
+`Surface` texture(s) (DXT skipped, falls back to ontology category color
+if texture decode fails). Soft drop shadow composited under the silhouette.
+Output: per-sprite PNG + a packed `atlas.png` + `manifest.jsonl`.
+
+**Request:**
+```json
+{"command":"generate-object-sprites","force":false,"spritePx":512,
+ "lbFilter":["0xA9B4"]}
+```
+
+**Response:**
+```json
+{"success":true,"command":"generate-object-sprites",
+ "modelsCollected":119,"modelsRendered":108,"modelsFailed":11,
+ "atlasWidth":4096,"atlasHeight":1296,
+ "spritesDir":"…/sprites","atlasPath":"…/sprites/atlas.png",
+ "manifestPath":"…/sprites/manifest.jsonl"}
+```
+
+`modelsFailed` covers degenerate cases (no triangles, no top-facing
+faces, sub-millimeter XY extent) and DAT-record corruption that the
+renderer handles with `SafeTryGet`-wrapped reads.
+
+---
+
+### render-dungeon
+
+Per-floor interior renderer. Reuses `LandblockDescriber.ClusterByCellZ`
+for the floor partition (top-down ordered: index 0 = highest Z = closest
+to surface). Draws cell-fills with deterministic per-cell hue jitter
+inside each floor's hue family, exterior walls (thick) + interior strokes
+(thin), portal classification (same-floor → dark gap, cross-floor →
+amber marker, exterior → green marker), cell-resident `DungeonStabData`
+objects via the sprite atlas if loaded (else a glyph fallback), and
+LB-doc loose objects filtered by Z band + point-in-polygon test.
+
+**Request:**
+```json
+{"command":"render-dungeon","lbX":0,"lbY":176,"floor":0,"resolution":1024,
+ "outputPath":"/tmp/dungeon.png"}
+```
+
+`floor` (optional, integer) selects a single floor; omit to render all
+floors on one canvas with floor distinguished by hue.
+
+**Response:**
+```json
+{"success":true,"command":"render-dungeon","landblock":"0x00B0",
+ "floorIndex":0,"floorCount":4,"cellsRendered":810,
+ "floorZMin":18,"floorZMax":18,
+ "outputPath":"/tmp/dungeon.png","pngBytes":78471}
+```
+
+---
+
+### emit-tile-pyramid
+
+Standard Leaflet z/x/y pyramid generator. Renders each LB once at the
+deepest zoom (`LbPx = 256 · 2^(maxZoom−8)`), slices into 256×256 tiles,
+then 2×2 mitchell-downsamples to fill all lower zooms. Skips
+fully-transparent tiles so the dist doesn't accumulate empty PNGs over
+ocean. Optional `emitObject` produces a sprite-mode tier at z≥11; optional
+`emitFloor` emits a per-LB-per-floor image overlay for every dungeon LB.
+
+**Request:**
+```json
+{"command":"emit-tile-pyramid","outDir":"/tmp/dist/projects/foo/tiles",
+ "maxZoom":12,"minZoom":3,"emitObject":true,"emitFloor":true,
+ "dirtyOnly":false,"lbFilter":null}
+```
+
+`maxZoom` is constrained to `[8, 12]`. `dirtyOnly` reuses the existing
+`_tileCache.DirtyLbs` set populated by `OnTransactCommitted` — re-renders
+after a small `transact` complete in seconds rather than re-rendering
+every LB.
+
+**Response:**
+```json
+{"success":true,"command":"emit-tile-pyramid",
+ "maxZoom":12,"minZoom":3,"lbsProcessed":4,
+ "exteriorTilesAtMaxZoom":1024,"objectTilesAtMaxZoom":1024,
+ "floorTilesWritten":12,"downsampledTiles":348,"outDir":"…/tiles"}
+```
+
+---
+
+### describe-floor
+
+Per-floor variant of `describe-landblock`. Returns cell count, Z band,
+cell-resident object count, loose objects in band, and a one-line verbal
+summary specific to the floor.
+
+**Request:**
+```json
+{"command":"describe-floor","lbX":0,"lbY":176,"floor":0}
+```
+
+**Response:**
+```json
+{"success":true,"command":"describe-floor","landblock":"0x00B0",
+ "floorIndex":0,"floorCount":4,"zMin":18,"zMax":18,
+ "cellCount":810,"cellResidentObjects":2048,"looseObjectsInFloor":120,
+ "verbal":"Landblock 0x00B0, top: 810 cells between Z 18.0 and 18.0, …"}
+```
+
+---
+
+### emit-static-site
+
+The orchestrator. Composes everything above into a self-contained
+`dist/` folder per the contract documented at the top of
+`docs/prompts/dereth_maps_enhanced.md`. Multi-project support: a second
+invocation with a different `projectSlug` into the same `outDir` merges
+into `manifest.js` rather than wiping it.
+
+**Request:**
+```json
+{"command":"emit-static-site","projectSlug":"vanilla","outDir":"/tmp/dist",
+ "maxZoom":12,"minZoom":3,"emitObject":true,"emitFloor":true,
+ "lbFilter":null}
+```
+
+**Response:**
+```json
+{"success":true,"command":"emit-static-site","projectSlug":"vanilla",
+ "outDir":"/tmp/dist","lbsDescribed":4928,"dungeonsEmitted":179,
+ "overlaysEmitted":4,"tilesAtMaxZoom":1262144,"frontendFilesCopied":10,
+ "manifestProjectCount":1}
+```
+
+The frontend bundle (vendored Leaflet 1.9.4 + `index.html` / `app.js` /
+`app.css`) ships next to the binary as `Content` resources and is copied
+into `outDir` on every emit. The bundle's only runtime dependency is the
+JSONP-style data files (`manifest.js`, `meta.js`, `desc/*.js`,
+`dungeons/*.js`, `overlays/*.js`, `sprites/atlas.js`) — all loaded via
+dynamic `<script>` tag injection so the dist is `file://`-viable without
+fetch flags.
+
+---
+
 ## Control
 
 ### help

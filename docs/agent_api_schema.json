@@ -1104,6 +1104,235 @@
                 ]
             }
         },
+        "extract-cell-footprints": {
+            "category": "dereth-maps-enhanced",
+            "description": "Extract per-cell wall polygons + portal wall-spans for every cached dungeon document. Cells with missing Environment entries fall back to a synthetic AABB. Filtered re-extracts merge with the existing cache rather than overwriting.",
+            "parameters": {
+                "force": {
+                    "type": "bool",
+                    "required": false,
+                    "default": false,
+                    "description": "Re-extract even if cache exists."
+                },
+                "lbFilter": {
+                    "type": "string[] | int[]",
+                    "required": false,
+                    "description": "Restrict to specific landblocks (hex strings like '0xA9B4' or numeric ushorts). Without this, every dungeon doc in the project is processed."
+                }
+            },
+            "response": {
+                "cellsExtracted": "int",
+                "synthetic": "int",
+                "dungeonsScanned": "int",
+                "cachePath": "string"
+            }
+        },
+        "generate-object-sprites": {
+            "category": "dereth-maps-enhanced",
+            "description": "Render top-down ortho sprites for every model id placed in the project, with texture-based albedo + Lambert shade matching render-preview's hillshade. Outputs per-sprite PNGs, a packed atlas.png, and manifest.jsonl.",
+            "parameters": {
+                "force": {
+                    "type": "bool",
+                    "required": false,
+                    "default": false
+                },
+                "spritePx": {
+                    "type": "int",
+                    "required": false,
+                    "default": 512,
+                    "description": "Pixels per longest world dim. 256 = quick test, 512 = production."
+                },
+                "lbFilter": {
+                    "type": "string[] | int[]",
+                    "required": false
+                }
+            },
+            "response": {
+                "modelsCollected": "int",
+                "modelsRendered": "int",
+                "modelsFailed": "int",
+                "atlasWidth": "int",
+                "atlasHeight": "int",
+                "spritesDir": "string",
+                "atlasPath": "string",
+                "manifestPath": "string"
+            }
+        },
+        "render-dungeon": {
+            "category": "dereth-maps-enhanced",
+            "description": "Per-floor interior renderer. Reuses LandblockDescriber.ClusterByCellZ for the floor partition (top-down ordered, floor 0 = highest Z). Draws cell-fills with per-floor hue family, walls, portal classification (same-floor gap / cross-floor amber / exterior green), and cell-resident + LB-doc loose objects via the sprite atlas if loaded.",
+            "parameters": {
+                "lbX": {
+                    "type": "uint",
+                    "required": true
+                },
+                "lbY": {
+                    "type": "uint",
+                    "required": true
+                },
+                "floor": {
+                    "type": "int?",
+                    "required": false,
+                    "description": "Floor index (0 = top). Omit for an all-floors render with hue distinction."
+                },
+                "resolution": {
+                    "type": "int",
+                    "required": false,
+                    "default": 1024
+                },
+                "outputPath": {
+                    "type": "string?",
+                    "required": false
+                },
+                "includePng": {
+                    "type": "bool",
+                    "required": false,
+                    "default": false
+                }
+            },
+            "response": {
+                "landblock": "string (hex)",
+                "floorIndex": "int? (null when all floors rendered)",
+                "floorCount": "int",
+                "cellsRendered": "int",
+                "floorZMin": "float",
+                "floorZMax": "float",
+                "outputPath": "string?",
+                "pngBytes": "int",
+                "pngBase64": "string?"
+            }
+        },
+        "emit-tile-pyramid": {
+            "category": "dereth-maps-enhanced",
+            "description": "Standard Leaflet z/x/y pyramid generator. Renders each LB once at the deepest zoom (LbPx = 256 * 2^(maxZoom-8)), slices into 256x256 tiles, then 2x2 mitchell-downsamples to fill lower zooms. Optionally emits a sprite-mode object tier and per-LB-per-floor dungeon image overlays.",
+            "parameters": {
+                "outDir": {
+                    "type": "string",
+                    "required": true
+                },
+                "maxZoom": {
+                    "type": "int",
+                    "required": false,
+                    "default": 12,
+                    "range": "[8, 12]"
+                },
+                "minZoom": {
+                    "type": "int",
+                    "required": false,
+                    "default": 3
+                },
+                "emitObject": {
+                    "type": "bool",
+                    "required": false,
+                    "default": true
+                },
+                "emitFloor": {
+                    "type": "bool",
+                    "required": false,
+                    "default": true
+                },
+                "dirtyOnly": {
+                    "type": "bool",
+                    "required": false,
+                    "default": false,
+                    "description": "Reuse the tile cache's DirtyLbs set populated by OnTransactCommitted for incremental re-renders."
+                },
+                "lbFilter": {
+                    "type": "string[] | int[]",
+                    "required": false
+                }
+            },
+            "response": {
+                "maxZoom": "int",
+                "minZoom": "int",
+                "lbsProcessed": "int",
+                "exteriorTilesAtMaxZoom": "int",
+                "objectTilesAtMaxZoom": "int",
+                "floorTilesWritten": "int",
+                "downsampledTiles": "int",
+                "outDir": "string"
+            }
+        },
+        "describe-floor": {
+            "category": "dereth-maps-enhanced",
+            "description": "Per-floor variant of describe-landblock. Returns cell count, Z band, cell-resident object count, loose objects in band, and a one-line verbal summary specific to the floor.",
+            "parameters": {
+                "lbX": {
+                    "type": "uint",
+                    "required": true
+                },
+                "lbY": {
+                    "type": "uint",
+                    "required": true
+                },
+                "floor": {
+                    "type": "int",
+                    "required": false,
+                    "default": 0
+                }
+            },
+            "response": {
+                "landblock": "string (hex)",
+                "floorIndex": "int",
+                "floorCount": "int",
+                "zMin": "float",
+                "zMax": "float",
+                "cellCount": "int",
+                "cellResidentObjects": "int",
+                "looseObjectsInFloor": "int",
+                "verbal": "string"
+            }
+        },
+        "emit-static-site": {
+            "category": "dereth-maps-enhanced",
+            "description": "Orchestrator that composes extract-cell-footprints + generate-object-sprites + emit-tile-pyramid + describe-landblock + describe-floor + gazetteer-driven overlays + the vendored Leaflet frontend bundle into a self-contained dist/ folder. Multi-project: a second invocation with a different projectSlug into the same outDir merges into manifest.js rather than wiping it.",
+            "parameters": {
+                "projectSlug": {
+                    "type": "string",
+                    "required": true,
+                    "description": "Identifier under projects/<slug>/ in the dist tree."
+                },
+                "outDir": {
+                    "type": "string",
+                    "required": true,
+                    "description": "Top-level dist root. Will be created if absent."
+                },
+                "maxZoom": {
+                    "type": "int",
+                    "required": false,
+                    "default": 10
+                },
+                "minZoom": {
+                    "type": "int",
+                    "required": false,
+                    "default": 3
+                },
+                "emitObject": {
+                    "type": "bool",
+                    "required": false,
+                    "default": false
+                },
+                "emitFloor": {
+                    "type": "bool",
+                    "required": false,
+                    "default": false
+                },
+                "lbFilter": {
+                    "type": "string[] | int[]",
+                    "required": false
+                }
+            },
+            "response": {
+                "projectSlug": "string",
+                "outDir": "string",
+                "lbsDescribed": "int",
+                "dungeonsEmitted": "int",
+                "overlaysEmitted": "int",
+                "tilesAtMaxZoom": "int",
+                "frontendFilesCopied": "int",
+                "manifestProjectCount": "int"
+            }
+        },
         "help": {
             "category": "control",
             "description": "Returns the command list as structured JSON.",

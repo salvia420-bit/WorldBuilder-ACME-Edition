@@ -103,15 +103,18 @@ class TerminalSession:
         self._startup_response = self._read_response(timeout=STARTUP_TIMEOUT)
         return self._startup_response
 
-    def send(self, command: dict) -> dict:
-        """Send a JSON command and return the parsed response."""
+    def send(self, command: dict, timeout: Optional[float] = None) -> dict:
+        """Send a JSON command and return the parsed response. Optional
+        per-call timeout overrides the default COMMAND_TIMEOUT — useful
+        for batch ops (sprite gen, tile pyramid) that legitimately exceed
+        the default."""
         if self.proc is None or self.proc.poll() is not None:
             raise RuntimeError("Terminal process is not running")
 
         line = json.dumps(command, separators=(",", ":"))
         self.proc.stdin.write(line + "\n")
         self.proc.stdin.flush()
-        return self._read_response(timeout=COMMAND_TIMEOUT)
+        return self._read_response(timeout=timeout if timeout is not None else COMMAND_TIMEOUT)
 
     def send_raw(self, raw_line: str) -> dict:
         """Send a raw string line (for testing malformed input)."""
@@ -1207,6 +1210,589 @@ class TestSerializationContract(RuntimeRequiredTestCase):
         raw = self.session.proc.stdout.readline()
         self.assertEqual(raw.count("\n"), 1,
                          "Response should be exactly one line")
+
+
+# ─────────────────────────────────────────────────────────────
+# Test Suite: DerethMapsEnhanced Phase 1 (extract-cell-footprints,
+# generate-object-sprites). These run against the user's RetailSmoke
+# project at the absolute path below, with single-LB filters to keep
+# wall-clock under a minute. Skips when RetailSmoke is unavailable.
+# ─────────────────────────────────────────────────────────────
+
+RETAILSMOKE_PROJECT = Path("/home/salvia420/projects/RetailSmoke/RetailSmoke.wbproj")
+# Holtburg's main outdoor LB — populated with structures, scenery, NPCs.
+HOLTBURG_LB = "0xA9B4"
+# A multi-floor dungeon LB known to be populated in RetailSmoke's project.db.
+# Verified via cell_footprints.jsonl: 2160 cells across 4 Z-bands.
+DUNGEON_LB_HEX = "0x00B0"
+DUNGEON_LB_X = 0x00
+DUNGEON_LB_Y = 0xB0
+
+
+class TestDerethMapsPhase1(RuntimeRequiredTestCase):
+    """Phase 1 batch extraction commands (cell footprints + object sprites).
+    Cell extraction has no lbFilter (cheap per-cell); sprite generation is
+    filtered to one LB so the test finishes quickly."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        if not RETAILSMOKE_PROJECT.exists():
+            raise unittest.SkipTest(
+                f"RetailSmoke project not found at {RETAILSMOKE_PROJECT}; "
+                "Phase 1 extractor tests need a real project with DATs.")
+
+    def setUp(self):
+        self.session = TerminalSession(project_path=str(RETAILSMOKE_PROJECT))
+        self.session.start()
+
+    def tearDown(self):
+        self.session.close()
+
+    def test_01_extract_cell_footprints(self):
+        """extract-cell-footprints writes a non-empty jsonl cache covering every
+        cell of every dungeon doc; each line is well-formed JSON with the
+        documented schema."""
+        resp = self.session.send({"command": "extract-cell-footprints", "force": True})
+        assert_success(resp, "extract-cell-footprints")
+        assert_has_fields(resp, "cellsExtracted", "synthetic", "dungeonsScanned", "cachePath")
+        self.assertGreater(resp["cellsExtracted"], 0,
+                           "Expected at least one cell extracted from RetailSmoke")
+        self.assertGreater(resp["dungeonsScanned"], 0,
+                           "Expected at least one dungeon doc scanned")
+
+        cache_path = Path(resp["cachePath"])
+        self.assertTrue(cache_path.exists(), f"Cache file missing: {cache_path}")
+
+        # Spot-check the first few lines for shape conformance.
+        with open(cache_path, "r") as f:
+            for i, line in enumerate(f):
+                if i >= 5:
+                    break
+                entry = json.loads(line)
+                for key in ("cellId", "envCellId", "cellStructure", "polygon",
+                            "zRange", "portals", "synthetic"):
+                    self.assertIn(key, entry, f"Missing key '{key}' in cell entry: {entry}")
+                self.assertTrue(entry["cellId"].startswith("0x"))
+                self.assertGreaterEqual(len(entry["polygon"]), 3,
+                                        "Cell polygon should have at least 3 vertices")
+                self.assertEqual(len(entry["zRange"]), 2)
+                for vertex in entry["polygon"]:
+                    self.assertEqual(len(vertex), 2,
+                                     "Polygon vertices should be [x, y] pairs")
+
+    def test_02_extract_cell_footprints_idempotent(self):
+        """Running without force on an existing cache short-circuits and reports
+        the cached row count rather than re-extracting."""
+        # First run with force to populate.
+        first = self.session.send({"command": "extract-cell-footprints", "force": True})
+        assert_success(first, "extract-cell-footprints")
+        # Second run without force — should match count and not re-scan dungeons.
+        second = self.session.send({"command": "extract-cell-footprints", "force": False})
+        assert_success(second, "extract-cell-footprints")
+        self.assertEqual(first["cellsExtracted"], second["cellsExtracted"])
+        self.assertEqual(second["dungeonsScanned"], 0,
+                         "Cached run should report zero dungeons scanned")
+
+    def test_03_generate_object_sprites_holtburg(self):
+        """generate-object-sprites against Holtburg writes per-model PNGs, an
+        atlas, and a manifest covering every model placed in that LB."""
+        resp = self.session.send({
+            "command": "generate-object-sprites",
+            "force": True,
+            "spritePx": 256,  # smaller than default 512 for faster test
+            "lbFilter": [HOLTBURG_LB],
+        }, timeout=300)  # Sprite rendering exceeds the 15s default.
+        assert_success(resp, "generate-object-sprites")
+        assert_has_fields(resp, "modelsRendered", "modelsFailed",
+                          "atlasWidth", "atlasHeight",
+                          "spritesDir", "atlasPath", "manifestPath")
+        self.assertGreater(resp["modelsRendered"], 0,
+                           "Expected at least one model rendered for Holtburg")
+
+        atlas = Path(resp["atlasPath"])
+        manifest = Path(resp["manifestPath"])
+        self.assertTrue(atlas.exists(), f"Atlas missing: {atlas}")
+        self.assertTrue(manifest.exists(), f"Manifest missing: {manifest}")
+        self.assertGreater(atlas.stat().st_size, 0)
+
+        # Manifest line count == modelsRendered.
+        lines = manifest.read_text().strip().splitlines()
+        self.assertEqual(len(lines), resp["modelsRendered"],
+                         "Manifest line count should match modelsRendered")
+        # Each line is JSON with the documented atlas-region shape.
+        for line in lines[:5]:
+            entry = json.loads(line)
+            for key in ("modelId", "x", "y", "w", "h", "worldBounds"):
+                self.assertIn(key, entry)
+            self.assertTrue(entry["modelId"].startswith("0x"))
+            self.assertEqual(len(entry["worldBounds"]), 2)
+            self.assertGreater(entry["worldBounds"][0], 0)
+            self.assertGreater(entry["worldBounds"][1], 0)
+
+
+# ─────────────────────────────────────────────────────────────
+# Test Suite: DerethMapsEnhanced Phase 2 (render-dungeon, render-preview
+# sprite mode). Builds on Phase 1 output (cell_footprints.jsonl + sprites/
+# atlas.png + manifest.jsonl) — make sure Phase 1 ran first locally.
+# ─────────────────────────────────────────────────────────────
+
+
+class TestDerethMapsPhase2(RuntimeRequiredTestCase):
+    """Phase 2 renderer extensions: per-floor dungeon plan + sprite-mode
+    render-preview."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        if not RETAILSMOKE_PROJECT.exists():
+            raise unittest.SkipTest(
+                f"RetailSmoke project not found at {RETAILSMOKE_PROJECT}; "
+                "Phase 2 renderer tests need a real project with DATs.")
+        # Phase 2 tests assume Phase 1 caches exist locally.
+        if not (RETAILSMOKE_PROJECT.parent / "cell_footprints.jsonl").exists():
+            raise unittest.SkipTest(
+                "cell_footprints.jsonl missing; run Phase 1 tests first or "
+                "extract-cell-footprints manually.")
+
+    def setUp(self):
+        self.session = TerminalSession(project_path=str(RETAILSMOKE_PROJECT))
+        self.session.start()
+
+    def tearDown(self):
+        self.session.close()
+
+    def test_01_render_dungeon_all_floors(self):
+        """render-dungeon without floor index returns a PNG covering every
+        cell in the dungeon, with floorCount > 1 for a multi-floor LB."""
+        out_path = "/tmp/test_dungeon_all_floors.png"
+        resp = self.session.send({
+            "command": "render-dungeon",
+            "lbX": DUNGEON_LB_X, "lbY": DUNGEON_LB_Y,
+            "resolution": 768,
+            "outputPath": out_path,
+        }, timeout=60)
+        assert_success(resp, "render-dungeon")
+        assert_has_fields(resp, "landblock", "floorCount", "cellsRendered",
+                          "floorZMin", "floorZMax", "outputPath", "pngBytes")
+        self.assertEqual(resp["landblock"], DUNGEON_LB_HEX)
+        self.assertGreater(resp["floorCount"], 1, "Test dungeon should be multi-floor")
+        self.assertGreater(resp["cellsRendered"], 0)
+        self.assertGreater(resp["pngBytes"], 1000, "PNG should be non-trivial")
+        self.assertTrue(Path(out_path).exists())
+        self.assertNotIn("floorIndex", {k: v for k, v in resp.items() if v is not None})
+
+    def test_02_render_dungeon_single_floor(self):
+        """render-dungeon with floor=0 renders only the top floor and reports
+        a single-band Z range."""
+        out_path = "/tmp/test_dungeon_floor0.png"
+        resp = self.session.send({
+            "command": "render-dungeon",
+            "lbX": DUNGEON_LB_X, "lbY": DUNGEON_LB_Y,
+            "floor": 0,
+            "resolution": 768,
+            "outputPath": out_path,
+        }, timeout=60)
+        assert_success(resp, "render-dungeon")
+        self.assertEqual(resp["floorIndex"], 0)
+        self.assertGreater(resp["cellsRendered"], 0)
+        self.assertTrue(Path(out_path).exists())
+        # Single-floor render covers a strict subset of the all-floors render.
+
+    def test_03_render_dungeon_out_of_range_floor(self):
+        """A floor index past the partition's range produces an empty PNG
+        (fallback) but does not error."""
+        resp = self.session.send({
+            "command": "render-dungeon",
+            "lbX": DUNGEON_LB_X, "lbY": DUNGEON_LB_Y,
+            "floor": 99,
+            "resolution": 256,
+        }, timeout=60)
+        assert_success(resp, "render-dungeon")
+        self.assertEqual(resp["cellsRendered"], 0)
+
+    def test_04_render_preview_sprite_mode(self):
+        """render-preview with useSprites=true succeeds against an LB with
+        a populated sprite atlas. Output is a non-trivial PNG."""
+        out_path = "/tmp/test_render_preview_sprites.png"
+        resp = self.session.send({
+            "command": "render-preview",
+            "lbX": 169, "lbY": 180,  # Holtburg
+            "radius": 0,
+            "resolution": 1024,
+            "overlay": True,
+            "useSprites": True,
+            "includePng": False,
+            "outputPath": out_path,
+        }, timeout=60)
+        assert_success(resp, "render-preview")
+        self.assertGreater(resp["pngBytes"], 5000)
+        self.assertTrue(Path(out_path).exists())
+
+
+# ─────────────────────────────────────────────────────────────
+# Test Suite: DerethMapsEnhanced Phase 3 (emit-tile-pyramid + describe-floor)
+# ─────────────────────────────────────────────────────────────
+
+
+class TestDerethMapsPhase3(RuntimeRequiredTestCase):
+    """Phase 3: tile pyramid emitter + per-floor describer extension."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        if not RETAILSMOKE_PROJECT.exists():
+            raise unittest.SkipTest(
+                f"RetailSmoke project not found at {RETAILSMOKE_PROJECT}; "
+                "Phase 3 tests need a real project with DATs.")
+
+    def setUp(self):
+        self.session = TerminalSession(project_path=str(RETAILSMOKE_PROJECT))
+        self.session.start()
+
+    def tearDown(self):
+        self.session.close()
+
+    def test_01_emit_tile_pyramid_4lb(self):
+        """emit-tile-pyramid with maxZoom=8 against 4 LBs produces 4 tiles
+        at z=8 and a clean downsample chain to z=3."""
+        out_dir = "/tmp/test_phase3_pyramid"
+        # Clean previous run.
+        if Path(out_dir).exists():
+            for p in sorted(Path(out_dir).rglob("*"), reverse=True):
+                if p.is_file():
+                    p.unlink()
+                elif p.is_dir():
+                    p.rmdir()
+            Path(out_dir).rmdir()
+
+        resp = self.session.send({
+            "command": "emit-tile-pyramid",
+            "outDir": out_dir,
+            "maxZoom": 8,
+            "minZoom": 3,
+            "emitObject": False,
+            "emitFloor": False,
+            "lbFilter": ["0xA9B4", "0xAAB4", "0xA9B5", "0xAAB5"],
+        }, timeout=180)
+        assert_success(resp, "emit-tile-pyramid")
+        assert_has_fields(resp, "maxZoom", "minZoom", "lbsProcessed",
+                          "exteriorTilesAtMaxZoom", "downsampledTiles", "outDir")
+        self.assertEqual(resp["lbsProcessed"], 4)
+        self.assertEqual(resp["exteriorTilesAtMaxZoom"], 4,
+                         "At maxZoom=8 each LB is exactly one tile")
+        self.assertGreaterEqual(resp["downsampledTiles"], 1)
+
+        # Verify the actual tile tree.
+        ext = Path(out_dir) / "exterior"
+        for z in range(3, 9):
+            zoom_dir = ext / str(z)
+            self.assertTrue(zoom_dir.exists(), f"Missing zoom dir z={z}")
+            tiles = list(zoom_dir.rglob("*.png"))
+            self.assertGreater(len(tiles), 0, f"No tiles at z={z}")
+        # z=8 specifically should have 4 tiles for our 4-LB filter.
+        z8_tiles = list((ext / "8").rglob("*.png"))
+        self.assertEqual(len(z8_tiles), 4)
+
+    def test_02_describe_floor(self):
+        """describe-floor on a multi-floor dungeon LB returns a per-floor
+        record with cell counts, Z bounds, and a verbal summary."""
+        # Use the same multi-floor dungeon as Phase 2.
+        resp = self.session.send({
+            "command": "describe-floor",
+            "lbX": DUNGEON_LB_X, "lbY": DUNGEON_LB_Y,
+            "floor": 0,
+        })
+        assert_success(resp, "describe-floor")
+        assert_has_fields(resp, "landblock", "floorIndex", "floorCount",
+                          "zMin", "zMax", "cellCount", "verbal")
+        self.assertEqual(resp["landblock"], DUNGEON_LB_HEX)
+        self.assertEqual(resp["floorIndex"], 0)
+        self.assertGreater(resp["floorCount"], 1, "Test dungeon should be multi-floor")
+        self.assertGreater(resp["cellCount"], 0)
+        # Z bounds should be a non-degenerate band.
+        self.assertGreaterEqual(resp["zMax"], resp["zMin"])
+        self.assertIn(DUNGEON_LB_HEX.replace("0x", "0x"), resp["verbal"])
+
+    def test_03_describe_floor_out_of_range(self):
+        """An out-of-range floor index returns an empty result rather than erroring."""
+        resp = self.session.send({
+            "command": "describe-floor",
+            "lbX": DUNGEON_LB_X, "lbY": DUNGEON_LB_Y,
+            "floor": 999,
+        })
+        assert_success(resp, "describe-floor")
+        self.assertEqual(resp["cellCount"], 0)
+
+
+# ─────────────────────────────────────────────────────────────
+# Test Suite: DerethMapsEnhanced Phase 4 (emit-static-site orchestrator)
+# ─────────────────────────────────────────────────────────────
+
+
+class TestDerethMapsPhase4(RuntimeRequiredTestCase):
+    """Phase 4: emit-static-site composes the dist contract."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        if not RETAILSMOKE_PROJECT.exists():
+            raise unittest.SkipTest(
+                f"RetailSmoke project not found at {RETAILSMOKE_PROJECT}; "
+                "Phase 4 tests need a real project with DATs.")
+
+    def setUp(self):
+        self.session = TerminalSession(project_path=str(RETAILSMOKE_PROJECT))
+        self.session.start()
+        self.dist = Path("/tmp/test_phase4_dist")
+        if self.dist.exists():
+            for p in sorted(self.dist.rglob("*"), reverse=True):
+                if p.is_file():
+                    p.unlink()
+                elif p.is_dir():
+                    p.rmdir()
+
+    def tearDown(self):
+        self.session.close()
+
+    def test_01_emit_static_site_produces_dist_contract(self):
+        """emit-static-site against 2 LBs writes the documented dist tree:
+        manifest.js, projects/<slug>/{tiles,desc,dungeons,overlays,sprites,meta.js,README.txt},
+        and the frontend bundle (index.html, app.js, app.css, leaflet/)."""
+        resp = self.session.send({
+            "command": "emit-static-site",
+            "projectSlug": "phase4test",
+            "outDir": str(self.dist),
+            "maxZoom": 8,
+            "minZoom": 3,
+            "emitObject": False,
+            "emitFloor": False,
+            "lbFilter": ["0xA9B4", "0xAAB4"],
+        }, timeout=180)
+        assert_success(resp, "emit-static-site")
+        assert_has_fields(resp, "projectSlug", "outDir", "lbsDescribed",
+                          "dungeonsEmitted", "overlaysEmitted",
+                          "tilesAtMaxZoom", "frontendFilesCopied",
+                          "manifestProjectCount")
+
+        self.assertEqual(resp["lbsDescribed"], 2)
+        self.assertGreater(resp["overlaysEmitted"], 0)
+        self.assertEqual(resp["tilesAtMaxZoom"], 2)
+        self.assertGreaterEqual(resp["frontendFilesCopied"], 4,
+                                "Should copy at least index.html + app.js + app.css + leaflet/*")
+        self.assertEqual(resp["manifestProjectCount"], 1)
+
+        # Dist contract files.
+        for required in [
+                "index.html", "app.js", "app.css", "manifest.js",
+                "leaflet/leaflet.js", "leaflet/leaflet.css",
+                "projects/phase4test/meta.js",
+                "projects/phase4test/README.txt",
+                "projects/phase4test/desc/0xA9B4.js",
+                "projects/phase4test/desc/0xAAB4.js",
+                "projects/phase4test/overlays/grid.js",
+                "projects/phase4test/tiles/exterior/8/169/75.png",
+        ]:
+            self.assertTrue((self.dist / required).exists(), f"Missing: {required}")
+
+        # manifest.js shape — JSONP-style const + valid embedded JSON.
+        manifest_text = (self.dist / "manifest.js").read_text()
+        self.assertTrue(manifest_text.startswith("const MANIFEST ="))
+        # Strip prefix + trailing semicolon and re-parse.
+        manifest_json = manifest_text[len("const MANIFEST = "):].rstrip().rstrip(";")
+        manifest = json.loads(manifest_json)
+        self.assertEqual(manifest["protocolVersion"], 1)
+        self.assertEqual(len(manifest["projects"]), 1)
+        self.assertEqual(manifest["projects"][0]["slug"], "phase4test")
+
+        # desc/<hex>.js shape — LOAD_DESC('<hex>', {...});
+        desc_text = (self.dist / "projects/phase4test/desc/0xA9B4.js").read_text()
+        self.assertTrue(desc_text.startswith("LOAD_DESC('0xA9B4', "))
+        self.assertTrue(desc_text.rstrip().endswith(");"))
+
+    def test_02_multi_project_appends_to_manifest(self):
+        """A second emit-static-site into the same outDir with a different
+        slug merges into the manifest rather than wiping it."""
+        # First emission.
+        first = self.session.send({
+            "command": "emit-static-site",
+            "projectSlug": "first",
+            "outDir": str(self.dist),
+            "maxZoom": 8,
+            "minZoom": 3,
+            "emitObject": False, "emitFloor": False,
+            "lbFilter": ["0xA9B4"],
+        }, timeout=120)
+        assert_success(first, "emit-static-site")
+        self.assertEqual(first["manifestProjectCount"], 1)
+
+        # Second emission — same outDir, different slug.
+        second = self.session.send({
+            "command": "emit-static-site",
+            "projectSlug": "second",
+            "outDir": str(self.dist),
+            "maxZoom": 8,
+            "minZoom": 3,
+            "emitObject": False, "emitFloor": False,
+            "lbFilter": ["0xAAB4"],
+        }, timeout=120)
+        assert_success(second, "emit-static-site")
+        self.assertEqual(second["manifestProjectCount"], 2,
+                         "Manifest should now reference both projects")
+
+        # First project's dist data must still exist.
+        self.assertTrue((self.dist / "projects/first/desc/0xA9B4.js").exists(),
+                        "First project's per-LB desc must survive the second emit")
+        self.assertTrue((self.dist / "projects/second/desc/0xAAB4.js").exists())
+
+        # Manifest JSON includes both slugs.
+        manifest_text = (self.dist / "manifest.js").read_text()
+        manifest = json.loads(manifest_text[len("const MANIFEST = "):].rstrip().rstrip(";"))
+        slugs = sorted(p["slug"] for p in manifest["projects"])
+        self.assertEqual(slugs, ["first", "second"])
+
+
+# ─────────────────────────────────────────────────────────────
+# Test Suite: DerethMapsEnhanced Phase 5 (Leaflet frontend bundle)
+# ─────────────────────────────────────────────────────────────
+
+
+class TestDerethMapsPhase5(RuntimeRequiredTestCase):
+    """Phase 5: real Leaflet 1.9.x bundle copied into dist by emit-static-site."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        if not RETAILSMOKE_PROJECT.exists():
+            raise unittest.SkipTest(
+                f"RetailSmoke project not found at {RETAILSMOKE_PROJECT}; "
+                "Phase 5 tests need a real project with DATs.")
+
+    def setUp(self):
+        self.session = TerminalSession(project_path=str(RETAILSMOKE_PROJECT))
+        self.session.start()
+        self.dist = Path("/tmp/test_phase5_dist")
+        if self.dist.exists():
+            for p in sorted(self.dist.rglob("*"), reverse=True):
+                if p.is_file():
+                    p.unlink()
+                elif p.is_dir():
+                    p.rmdir()
+
+    def tearDown(self):
+        self.session.close()
+
+    def test_01_real_leaflet_shipped(self):
+        """The dist contains the real Leaflet 1.9.x distribution (not the
+        Phase 4 stub) plus the marker icon assets."""
+        resp = self.session.send({
+            "command": "emit-static-site",
+            "projectSlug": "p5",
+            "outDir": str(self.dist),
+            "maxZoom": 8, "minZoom": 3,
+            "emitObject": False, "emitFloor": False,
+            "lbFilter": ["0xA9B4"],
+        }, timeout=120)
+        assert_success(resp, "emit-static-site")
+        self.assertGreaterEqual(resp["frontendFilesCopied"], 8,
+                                "Bundle should include leaflet.js, leaflet.css, "
+                                "5 marker images, app.{js,css,html}")
+
+        leaflet_js = self.dist / "leaflet" / "leaflet.js"
+        self.assertTrue(leaflet_js.exists())
+        self.assertGreater(leaflet_js.stat().st_size, 100_000,
+                           "Real Leaflet 1.9.x is ~150KB; stub would be tiny")
+        # Header should identify it as the real distribution.
+        header = leaflet_js.read_text()[:300]
+        self.assertIn("Leaflet 1.9", header)
+
+        # Marker icons are required for default L.marker styling to work.
+        for img in ["marker-icon.png", "marker-shadow.png", "layers.png"]:
+            self.assertTrue((self.dist / "leaflet" / "images" / img).exists(),
+                            f"Missing leaflet asset: {img}")
+
+    def test_02_index_html_references_leaflet_in_correct_order(self):
+        """index.html must load leaflet.js before manifest.js before app.js,
+        and link leaflet.css before app.css."""
+        self.session.send({
+            "command": "emit-static-site",
+            "projectSlug": "p5",
+            "outDir": str(self.dist),
+            "maxZoom": 8, "minZoom": 3,
+            "emitObject": False, "emitFloor": False,
+            "lbFilter": ["0xA9B4"],
+        }, timeout=120)
+        html = (self.dist / "index.html").read_text()
+        # CSS order
+        leaflet_css = html.find("leaflet/leaflet.css")
+        app_css = html.find("app.css")
+        self.assertGreater(leaflet_css, 0)
+        self.assertGreater(app_css, leaflet_css)
+        # Script order
+        leaflet_js = html.find("leaflet/leaflet.js")
+        manifest_js = html.find("manifest.js")
+        app_js = html.find('"app.js"')
+        self.assertGreater(leaflet_js, 0)
+        self.assertGreater(manifest_js, leaflet_js)
+        self.assertGreater(app_js, manifest_js)
+
+    def test_04_object_index_in_desc(self):
+        """desc/<lbHex>.js must include body.objectIndex (Phase 5 follow-up):
+        a flat list of placed objects with world XY/Z and ontology category,
+        plus optional cross-refs into body.namedObjects. The frontend uses
+        this for click-to-identify."""
+        out = "/tmp/test_p5_objidx"
+        if Path(out).exists():
+            for p in sorted(Path(out).rglob("*"), reverse=True):
+                if p.is_file():
+                    p.unlink()
+                elif p.is_dir():
+                    p.rmdir()
+        self.session.send({
+            "command": "emit-static-site",
+            "projectSlug": "oi",
+            "outDir": out,
+            "maxZoom": 8, "minZoom": 3,
+            "emitObject": False, "emitFloor": False,
+            "lbFilter": ["0xA9B4"],
+        }, timeout=120)
+        text = (Path(out) / "projects/oi/desc/0xA9B4.js").read_text()
+        # Strip JSONP envelope LOAD_DESC('<hex>', {...});
+        import re as _re
+        m = _re.search(r"LOAD_DESC\('0xA9B4', (.+)\);", text, _re.DOTALL)
+        self.assertIsNotNone(m, "desc file does not match LOAD_DESC envelope")
+        data = json.loads(m.group(1))
+        oi = data["body"].get("objectIndex")
+        self.assertIsNotNone(oi, "body.objectIndex must be present")
+        self.assertGreater(len(oi), 0, "Holtburg should have placed objects")
+        # Schema spot-check on the first entry.
+        entry = oi[0]
+        for key in ("index", "modelId", "type", "category", "x", "y", "z"):
+            self.assertIn(key, entry, f"objectIndex entry missing '{key}'")
+        self.assertTrue(entry["modelId"].startswith("0x"))
+        self.assertIn(entry["type"], ("Setup", "GfxObj"))
+        # Object total reported by body must >= objectIndex length (particle
+        # emitters are excluded from objectIndex but counted in objectTotal).
+        self.assertGreaterEqual(data["body"]["objectTotal"], len(oi))
+
+    def test_03_dist_app_js_passes_node_syntax_check(self):
+        """The emitted app.js must parse cleanly (no ES6 syntax errors that
+        Chrome would also reject)."""
+        if shutil.which("node") is None:
+            self.skipTest("node not available for syntax check")
+        self.session.send({
+            "command": "emit-static-site",
+            "projectSlug": "p5",
+            "outDir": str(self.dist),
+            "maxZoom": 8, "minZoom": 3,
+            "emitObject": False, "emitFloor": False,
+            "lbFilter": ["0xA9B4"],
+        }, timeout=120)
+        result = subprocess.run(
+            ["node", "--check", str(self.dist / "app.js")],
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0,
+                         f"node --check failed:\nstdout: {result.stdout}\nstderr: {result.stderr}")
 
 
 # ─────────────────────────────────────────────────────────────

@@ -14,6 +14,15 @@ namespace WorldBuilder.Terminal;
 /// Each landblock is 192Ã—192 world units = 8Ã—8 cells = 9Ã—9 vertices on a 24-unit grid.
 /// </summary>
 internal static class RenderPreviewRenderer {
+
+    /// <summary>
+    /// One sprite-atlas region for an object: where the sprite lives in the
+    /// shared atlas bitmap (atlasRect), and the sprite's true world bounds
+    /// (worldWidth × worldHeight) so the renderer can scale it to its
+    /// actual world footprint at the current zoom.
+    /// </summary>
+    public sealed record SpriteInfo(SKBitmap Atlas, int X, int Y, int W, int H, float WorldWidth, float WorldHeight);
+
     public sealed class Input {
         public uint CenterLbX;
         public uint CenterLbY;
@@ -28,6 +37,15 @@ internal static class RenderPreviewRenderer {
         public Func<uint, OntologyEntry?>? Ontology;
         public Func<uint, uint>? PairingsGroupKey;
         public float CliffThreshold = 12f;
+
+        // ── Sprite mode (Phase 2 + onward) ─────────────────────────────
+        // When true, replace per-object glyph dispatch with sprite lookups.
+        // Each object draws as (worldBounds × pxPerWorldUnit) pixels at its
+        // world position, scaled to its true footprint regardless of zoom.
+        // Below 4 px per object world-largest-dim, falls back to glyph so
+        // far-zoomed renders stay readable.
+        public bool UseSprites = false;
+        public Func<uint, SpriteInfo?>? Sprites;
     }
 
     public sealed class Output {
@@ -413,7 +431,8 @@ internal static class RenderPreviewRenderer {
         // object list, the tree triangle covered the brown house square. The
         // priority key here pushes Structure last (= drawn on top) so buildings
         // are never visually occluded by adjacent scenery.
-        var glyphs = new List<(float pxX, float pxY, float sizePx, GlyphShape shape, SKColor fill, uint pairingRoot, uint objId)>();
+        float pxPerWorldUnit = input.LbPx / 192f;
+        var glyphs = new List<(float pxX, float pxY, float sizePx, GlyphShape shape, SKColor fill, uint pairingRoot, uint objId, SpriteInfo? sprite, Quaternion orientation)>();
         foreach (var kv in input.Objects) {
             foreach (var obj in kv.Value) {
                 float wx = obj.Origin.X - worldOriginX;
@@ -461,7 +480,8 @@ internal static class RenderPreviewRenderer {
                 if (sizePx > 18f)  sizePx = 18f;
 
                 uint root = input.PairingsGroupKey != null ? input.PairingsGroupKey(obj.Id) : 0u;
-                glyphs.Add((pxX, pxY, sizePx, shape, fill, root, obj.Id));
+                SpriteInfo? sprite = (input.UseSprites && input.Sprites != null) ? input.Sprites(obj.Id) : null;
+                glyphs.Add((pxX, pxY, sizePx, shape, fill, root, obj.Id, sprite, obj.Orientation));
             }
         }
 
@@ -484,6 +504,30 @@ internal static class RenderPreviewRenderer {
         glyphs.Sort((a, b) => ShapeZ(a.shape).CompareTo(ShapeZ(b.shape)));
 
         foreach (var g in glyphs) {
+            // Sprite mode: if the object has a sprite registered AND it would
+            // render at ≥ 4px on its largest world dim, blit the atlas region
+            // scaled to true world bounds. Otherwise fall back to glyph so
+            // far-zoomed renders stay readable.
+            if (g.sprite != null) {
+                float wPx = g.sprite.WorldWidth * pxPerWorldUnit;
+                float hPx = g.sprite.WorldHeight * pxPerWorldUnit;
+                if (MathF.Max(wPx, hPx) >= 4f) {
+                    var dest = new SKRect(g.pxX - wPx * 0.5f, g.pxY - hPx * 0.5f,
+                                          g.pxX + wPx * 0.5f, g.pxY + hPx * 0.5f);
+                    var src = new SKRect(g.sprite.X, g.sprite.Y,
+                                         g.sprite.X + g.sprite.W, g.sprite.Y + g.sprite.H);
+                    float yawDeg = QuaternionYawDegrees(g.orientation);
+                    canvas.Save();
+                    canvas.RotateDegrees(-yawDeg, g.pxX, g.pxY);
+                    canvas.DrawBitmap(g.sprite.Atlas, src, dest);
+                    canvas.Restore();
+                    if (g.pairingRoot != 0 && g.pairingRoot != g.objId) {
+                        ringPaint.Color = HueRingColor(g.pairingRoot);
+                        canvas.DrawCircle(g.pxX, g.pxY, MathF.Max(wPx, hPx) * 0.5f + 2.5f, ringPaint);
+                    }
+                    continue;
+                }
+            }
             fillPaint.Color = g.fill;
             DrawGlyph(canvas, g.pxX, g.pxY, g.sizePx, g.shape, fillPaint, outlinePaint);
             if (g.pairingRoot != 0 && g.pairingRoot != g.objId) {
@@ -670,5 +714,12 @@ internal static class RenderPreviewRenderer {
         uint h = key * 2654435761u;
         float hue = (h % 360u);
         return SKColor.FromHsv(hue, 80f, 95f).WithAlpha(0xC8);
+    }
+
+    private static float QuaternionYawDegrees(Quaternion q) {
+        // Yaw about +Z. AC's quaternion uses Z up.
+        float siny_cosp = 2f * (q.W * q.Z + q.X * q.Y);
+        float cosy_cosp = 1f - 2f * (q.Y * q.Y + q.Z * q.Z);
+        return MathF.Atan2(siny_cosp, cosy_cosp) * 180f / MathF.PI;
     }
 }

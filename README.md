@@ -247,6 +247,28 @@ The transact-journal subscription wires this directly to the editor: when a `tra
 
 JSON commands: `get-tile {zoom, lbX?, lbY?, region?, includeBase64?}`, `tile-stats`, `regenerate-dirty-tiles`, `list-dirty-tiles`, `mark-tiles-clean`, `prune-tiles {keepNewest?, olderThan?}`, `generate-atlas-tiles {mode: "lbs"|"regions"|"world"|"all"}`. Realistic full-pyramid disk for a populated retail world: **~360 MB** at LB-zoom + ~1.5 MB for region+world — far under the cache cap.
 
+### DerethMaps Enhanced — `emit-static-site`
+
+The three observation channels (`render-preview`, `describe-landblock`, `compare-to-retail`) plus the action loop (`transact`/`transact-diff`) are powerful primitives, but the only consumers were agent processes piping JSON over stdin. `emit-static-site` is the human-viewable demonstration: a one-shot batch that composes the entire WB.Terminal observation stack into a self-contained `dist/` folder a viewer can drag onto Google Drive, Cloudflare Pages, or their desktop and explore via Leaflet.
+
+```bash
+echo '{"command":"emit-static-site","projectSlug":"vanilla","outDir":"./dist","maxZoom":12,"emitObject":true,"emitFloor":true}' | dotnet run --project WorldBuilder.Terminal -- --stdin --project projects/RetailSmoke/RetailSmoke.wbproj
+```
+
+Five visual tiers compose into the rendered map:
+
+1. **World view (z=3)** — terrain palette only, 64 tiles covering the full 49,152 × 49,152 wu world.
+2. **Region view (z=4–6)** — terrain + structure footprints, downsampled from the deepest zoom.
+3. **Landblock view (z=7–10)** — terrain + structures + the existing glyph dispatch from `render-preview` (Structure brown squares, Scenery green triangles, Creature red diamonds, NPC yellow diamonds, Interactive teal rings, Sign orange triangles).
+4. **Object view (z=11–12)** — sprite-mode swap-in: every placed model renders as its own top-down sprite from `generate-object-sprites`, scaled to true world bounds, lit by the same hillshade convention as the terrain. Atlas-packed for runtime efficiency.
+5. **Floor view (z=12+)** — for any landblock with a `dungeon_<hex>` document, the floor selector exposes per-floor renders from `render-dungeon`. The floor partition is the cell Z-band clustering produced by the existing `LandblockDescriber.ClusterByCellZ`, so vertical megadungeons (the Pit, Halls of Helm) get one image per playable level, with the central shaft visible as cross-floor portal markers.
+
+Hover over any landblock and the right-side panel lazy-loads `desc/<lbHex>.js` (the full `describe-landblock` output: context block, terrain summary, body schema, named POIs, spawns, validation). Toggle overlays (towns, housing, spawns, POIs, landblock grid, validation diagnostics) via the `L.control.layers` panel. Switch between rendered projects via the dropdown; share a deep link via `?project=…&z=…&x=…&y=…&floor=…`. The frontend is plain ES6 + vendored Leaflet 1.9.4 — no build step, no npm, no `fetch()` (data files load via JSONP-style `<script>` injection so `file://` works without flags).
+
+The architectural payoff: `emit-static-site` forces every observation pipeline to support full-world batch emission and a static deployment target. Once that exists, a future live-admin overlay is purely additive — drop a `dynamic_players.js` next to the static dist and the existing frontend renders blinking dots. Multi-project: a second invocation with a different `projectSlug` into the same `outDir` merges into `manifest.js` rather than wiping it, so you can ship vanilla AC + your custom worlds from one URL.
+
+JSON commands (full schema in `docs/agent_api_reference.md` and `docs/agent_api_schema.json`): `extract-cell-footprints`, `generate-object-sprites`, `render-dungeon`, `emit-tile-pyramid`, `describe-floor`, `emit-static-site`. The orchestrator chains them; each is independently runnable for inspection or partial regeneration.
+
 ### Integration Tests
 
 Both **Python** (55+ tests) and **PowerShell** (25 checks) test harnesses validate the full `--stdin` protocol surface — startup handshake, error handling, CRUD roundtrips, validation report shapes, and serialization contracts. Zero external dependencies. See **[`tests/README.md`](tests/README.md)**.

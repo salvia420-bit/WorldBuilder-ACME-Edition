@@ -349,6 +349,18 @@ namespace WorldBuilder.Shared.Documents {
             return totalDeleted;
         }
 
+        public Task<List<string>> ListDocumentIdsAsync(string? prefix = null) {
+            var ids = new List<string>();
+            lock (_fileLock) {
+                foreach (var file in Directory.GetFiles(_storageDirectory, "*.doc")) {
+                    var id = Path.GetFileNameWithoutExtension(file);
+                    if (string.IsNullOrEmpty(prefix) || id.StartsWith(prefix, StringComparison.Ordinal))
+                        ids.Add(id);
+                }
+            }
+            return Task.FromResult(ids);
+        }
+
         public void Dispose() {
             // No resources to dispose
         }

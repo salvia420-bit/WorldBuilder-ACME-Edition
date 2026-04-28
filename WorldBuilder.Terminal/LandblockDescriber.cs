@@ -131,7 +131,20 @@ public static class LandblockDescriber {
         List<int> UntaggedIndices,
         InteriorBlock? Interior,
         List<NamedObject> NamedObjects,
-        List<SpawnEntry> Spawns);
+        List<SpawnEntry> Spawns,
+        // Flat per-object index used by the static-site frontend to resolve a
+        // click on a sprite/glyph to a specific placement (modelId + position +
+        // optional NamedObjects cross-ref). Populated from the LB doc's static
+        // object list; ParticleEmitters are excluded since they don't render.
+        List<ObjectIndexEntry> ObjectIndex);
+
+    public record ObjectIndexEntry(
+        int Index,
+        string ModelId,
+        string Type,        // "Setup" or "GfxObj"
+        string Category,    // ontology category, "Unknown" if absent
+        float X, float Y, float Z,
+        int? NamedIndex);   // index into NamedObjects when matched
 
     public record NamedObject(
         int Index,
@@ -153,6 +166,100 @@ public static class LandblockDescriber {
         List<string> Relations,
         string Verbal,
         ValidationOverlay? Validation);
+
+    // Per-floor scope of a landblock's interior — cells in one Z band plus
+    // any LB-doc loose object in that same band whose XY falls within a cell.
+    public record FloorDescriptionResult(
+        string Landblock,
+        int FloorIndex,            // 0 = top floor, FloorCount-1 = bottom
+        int FloorCount,
+        float ZMin,
+        float ZMax,
+        int CellCount,
+        int CellResidentObjects,
+        int LooseObjectsInFloor,
+        List<NamedObject> NamedObjects,
+        string Verbal);
+
+    /// <summary>
+    /// Describe a single floor of a dungeon LB. Floor partition is the
+    /// cell-Z clustering produced by <see cref="ClusterByCellZ"/>; floors
+    /// are ordered top-down (index 0 = highest Z = closest to surface) so
+    /// callers think of floor 1 as "ground level" of a multi-storey hall.
+    /// </summary>
+    public static FloorDescriptionResult DescribeFloor(
+            ushort lbKey, int floorIndex,
+            LandblockDocument lbDoc, DungeonDocument dungeonDoc,
+            IReadOnlyDictionary<int, AcpediaMatch>? wcidToAcpedia = null) {
+        var bandsAsc = ClusterByCellZ(dungeonDoc.Cells.Select(c => c.Origin.Z));
+        // Top-down ordering matches the prompt's frontend convention (floor
+        // selector is a vertical strip with top at the top).
+        var bands = bandsAsc.OrderByDescending(b => b.Min).ToList();
+        if (bands.Count == 0 || floorIndex < 0 || floorIndex >= bands.Count) {
+            return new FloorDescriptionResult(
+                $"0x{lbKey:X4}", floorIndex, bands.Count,
+                0f, 0f, 0, 0, 0, new List<NamedObject>(),
+                "Empty floor.");
+        }
+        var band = bands[floorIndex];
+
+        var cellsOnFloor = dungeonDoc.Cells
+            .Where(c => c.Origin.Z >= band.Min - 0.01f && c.Origin.Z <= band.Max + 0.01f)
+            .ToList();
+
+        int cellResident = cellsOnFloor.Sum(c => c.StaticObjects.Count);
+
+        // LB-doc loose objects in this floor's Z band. We don't filter by
+        // point-in-polygon here because the describer is structural; the
+        // renderer does the spatial filter when drawing.
+        int looseInBand = 0;
+        var named = new List<NamedObject>();
+        if (lbDoc != null) {
+            uint lbX = (uint)((lbKey >> 8) & 0xFF);
+            uint lbY = (uint)(lbKey & 0xFF);
+            float floorZTol = 4.0f;  // a player's-height of headroom either side
+            int idx = -1;
+            foreach (var obj in lbDoc.GetStaticObjects()) {
+                idx++;
+                if (obj.IsParticleEmitter) continue;
+                if (obj.Origin.Z < band.Min - floorZTol || obj.Origin.Z > band.Max + floorZTol) continue;
+                looseInBand++;
+                // Surface a NamedObject if the wcid happens to be wired up via
+                // the project's acpedia join. Most are not — leave it sparse.
+                if (wcidToAcpedia != null) {
+                    // We don't have a wcid lookup directly from StaticObject;
+                    // leaving the named-object enrichment to callers that
+                    // already do the cross-ref (the full describer does it).
+                }
+            }
+        }
+
+        string verbal = BuildFloorVerbal(lbKey, floorIndex, bands.Count, band,
+            cellsOnFloor.Count, cellResident, looseInBand);
+
+        return new FloorDescriptionResult(
+            $"0x{lbKey:X4}", floorIndex, bands.Count,
+            band.Min, band.Max,
+            cellsOnFloor.Count, cellResident, looseInBand,
+            named, verbal);
+    }
+
+    private static string BuildFloorVerbal(ushort lbKey, int floorIdx, int total,
+            ZBand band, int cells, int residentObjs, int looseObjs) {
+        string ordinal = floorIdx == 0 ? "top" :
+            floorIdx == total - 1 ? "bottom" :
+            $"floor {floorIdx + 1} of {total}";
+        var sb = new StringBuilder();
+        sb.Append($"Landblock 0x{lbKey:X4}, {ordinal}: ");
+        sb.Append($"{cells} cell{(cells == 1 ? "" : "s")} ");
+        sb.Append($"between Z {band.Min:F1} and {band.Max:F1}");
+        if (residentObjs > 0)
+            sb.Append($", {residentObjs} cell-resident object{(residentObjs == 1 ? "" : "s")}");
+        if (looseObjs > 0)
+            sb.Append($", {looseObjs} loose object{(looseObjs == 1 ? "" : "s")} in band");
+        sb.Append('.');
+        return sb.ToString();
+    }
 
     private const float ZBandGap = 3.0f;            // object-Z band split: 1 floor of headroom = ~3 world units
     private const float CellZBandGap = 2.0f;        // cell-Z band split: tighter, since AC inter-floor cell-origin spacing is ~3m
@@ -400,6 +507,28 @@ public static class LandblockDescriber {
             }
         }
 
+        // Per-object index for click-to-identify in the static-site frontend.
+        // Build a quick lookup from object index → NamedObject index so the
+        // frontend can pull the curated Acpedia title without a second pass.
+        var namedByObjIdx = new Dictionary<int, int>(namedObjects.Count);
+        for (int i = 0; i < namedObjects.Count; i++) namedByObjIdx[namedObjects[i].Index] = i;
+
+        var objectIndex = new List<ObjectIndexEntry>(objects.Count);
+        for (int i = 0; i < objects.Count; i++) {
+            var o = objects[i];
+            if (o.IsParticleEmitter) continue;
+            string type = (o.Id & 0x02000000) != 0 ? "Setup" : "GfxObj";
+            string category = enriched[i].Entry?.Category ?? "Unknown";
+            namedByObjIdx.TryGetValue(i, out int namedIdx);
+            objectIndex.Add(new ObjectIndexEntry(
+                Index: i,
+                ModelId: $"0x{o.Id:X8}",
+                Type: type,
+                Category: category,
+                X: o.Origin.X, Y: o.Origin.Y, Z: o.Origin.Z,
+                NamedIndex: namedByObjIdx.ContainsKey(i) ? namedIdx : (int?)null));
+        }
+
         var body = new LandblockBody(
             ObjectTotal: objects.Count,
             ByCategory: byCategory,
@@ -409,7 +538,8 @@ public static class LandblockDescriber {
             UntaggedIndices: untagged,
             Interior: interior,
             NamedObjects: namedObjects,
-            Spawns: spawns ?? new List<SpawnEntry>());
+            Spawns: spawns ?? new List<SpawnEntry>(),
+            ObjectIndex: objectIndex);
 
         var relations = SurfaceRelationsWithPois(structureBlocks, looseZBands, untagged, interior, knownPois, namedObjects, spawns);
         var verbal = ComposeVerbal(landblock, lbX, lbY, context, terrainBlock, body);
@@ -612,6 +742,23 @@ public static class LandblockDescriber {
         }
         return clusters.OrderByDescending(c => c.Count).ToList();
     }
+
+    /// <summary>
+    /// Cluster a sequence of Z values into bands using the cell-Z gap (2u),
+    /// matching the partition the describer uses to enumerate dungeon floors.
+    /// Exposed for renderers (DungeonRenderer, the static-site emitter) so
+    /// they share the same floor partition without parallel-implementing it.
+    /// </summary>
+    public static List<ZBand> ClusterByCellZ(IEnumerable<float> zs) =>
+        ClusterByZ(zs, CellZBandGap);
+
+    /// <summary>
+    /// Cluster a sequence of Z values into bands using the object-Z gap (3u).
+    /// This is the public alias for the internal helper; the describer uses
+    /// it for loose-object floor inference.
+    /// </summary>
+    public static List<ZBand> ClusterByObjectZ(IEnumerable<float> zs) =>
+        ClusterByZ(zs, ZBandGap);
 
     private static List<ZBand> ClusterByZ(IEnumerable<float> zs, float gap = ZBandGap) {
         var sorted = zs.OrderBy(z => z).ToList();

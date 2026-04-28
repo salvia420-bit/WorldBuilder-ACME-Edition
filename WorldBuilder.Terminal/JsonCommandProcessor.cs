@@ -245,8 +245,161 @@ public class JsonCommandProcessor {
             ["mark-tiles-clean"] = _ => CmdMarkTilesClean(),
             ["prune-tiles"] = CmdPruneTiles,
             ["generate-atlas-tiles"] = CmdGenerateAtlasTiles,
+            ["extract-cell-footprints"] = CmdExtractCellFootprints,
+            ["generate-object-sprites"] = CmdGenerateObjectSprites,
+            ["render-dungeon"] = CmdRenderDungeon,
+            ["emit-tile-pyramid"] = CmdEmitTilePyramid,
+            ["describe-floor"] = CmdDescribeFloor,
+            ["emit-static-site"] = CmdEmitStaticSite,
             ["help"] = _ => CmdHelp(),
         };
+
+    private string CmdEmitStaticSite(System.Text.Json.Nodes.JsonNode node) {
+        string slug = node["projectSlug"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'projectSlug' field");
+        string outDir = node["outDir"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'outDir' field");
+        int maxZoom = node["maxZoom"]?.GetValue<int>() ?? 10;
+        int minZoom = node["minZoom"]?.GetValue<int>() ?? 3;
+        bool emitObject = node["emitObject"]?.GetValue<bool>() ?? false;
+        bool emitFloor = node["emitFloor"]?.GetValue<bool>() ?? false;
+        var lbFilter = ParseLbFilter(node);
+
+        var r = _engine.EmitStaticSite(slug, outDir, lbFilter, maxZoom, minZoom,
+            emitObject, emitFloor);
+        return Serialize(new {
+            success = true,
+            command = "emit-static-site",
+            projectSlug = r.ProjectSlug,
+            outDir = r.OutDir,
+            lbsDescribed = r.LbsDescribed,
+            dungeonsEmitted = r.DungeonsEmitted,
+            overlaysEmitted = r.OverlaysEmitted,
+            tilesAtMaxZoom = r.TilesAtMaxZoom,
+            frontendFilesCopied = r.FrontendFilesCopied,
+            manifestProjectCount = r.ManifestProjectCount,
+        });
+    }
+
+    private string CmdDescribeFloor(System.Text.Json.Nodes.JsonNode node) {
+        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        int floor = node["floor"]?.GetValue<int>() ?? 0;
+        var r = _engine.DescribeFloor(lbX, lbY, floor);
+        return Serialize(new {
+            success = true,
+            command = "describe-floor",
+            landblock = r.Landblock,
+            floorIndex = r.FloorIndex,
+            floorCount = r.FloorCount,
+            zMin = r.ZMin,
+            zMax = r.ZMax,
+            cellCount = r.CellCount,
+            cellResidentObjects = r.CellResidentObjects,
+            looseObjectsInFloor = r.LooseObjectsInFloor,
+            verbal = r.Verbal,
+        });
+    }
+
+    private string CmdEmitTilePyramid(System.Text.Json.Nodes.JsonNode node) {
+        var outDir = node["outDir"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'outDir' field");
+        int maxZoom = node["maxZoom"]?.GetValue<int>() ?? 12;
+        int minZoom = node["minZoom"]?.GetValue<int>() ?? 3;
+        bool dirtyOnly = node["dirtyOnly"]?.GetValue<bool>() ?? false;
+        bool emitObject = node["emitObject"]?.GetValue<bool>() ?? true;
+        bool emitFloor = node["emitFloor"]?.GetValue<bool>() ?? true;
+        var lbFilter = ParseLbFilter(node);
+
+        var r = _engine.EmitTilePyramid(lbFilter, outDir, maxZoom, minZoom,
+            dirtyOnly, emitObject, emitFloor);
+        return Serialize(new {
+            success = true,
+            command = "emit-tile-pyramid",
+            maxZoom = r.MaxZoom,
+            minZoom = r.MinZoom,
+            lbsProcessed = r.LbsProcessed,
+            exteriorTilesAtMaxZoom = r.ExteriorTilesAtMaxZoom,
+            objectTilesAtMaxZoom = r.ObjectTilesAtMaxZoom,
+            floorTilesWritten = r.FloorTilesWritten,
+            downsampledTiles = r.DownsampledTiles,
+            outDir = r.OutDir,
+        });
+    }
+
+    private string CmdRenderDungeon(System.Text.Json.Nodes.JsonNode node) {
+        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        int? floor = node["floor"]?.GetValue<int>();
+        int resolution = node["resolution"]?.GetValue<int>() ?? 1024;
+        bool includePng = node["includePng"]?.GetValue<bool>() ?? false;
+        string? outPath = node["outputPath"]?.GetValue<string>();
+
+        var r = _engine.RenderDungeon(lbX, lbY, floor, resolution, outPath);
+        return Serialize(new {
+            success = true,
+            command = "render-dungeon",
+            landblock = $"0x{r.LbKey:X4}",
+            floorIndex = r.FloorIndexRendered < 0 ? (int?)null : r.FloorIndexRendered,
+            floorCount = r.FloorCount,
+            cellsRendered = r.CellsRendered,
+            floorZMin = r.FloorZMin,
+            floorZMax = r.FloorZMax,
+            outputPath = r.OutputPath,
+            pngBytes = r.PngBytes.Length,
+            pngBase64 = includePng ? Convert.ToBase64String(r.PngBytes) : null,
+        });
+    }
+
+    private string CmdExtractCellFootprints(System.Text.Json.Nodes.JsonNode node) {
+        bool force = node["force"]?.GetValue<bool>() ?? false;
+        var lbFilter = ParseLbFilter(node);
+        var r = _engine.ExtractCellFootprints(lbFilter, force);
+        return Serialize(new {
+            success = true,
+            command = "extract-cell-footprints",
+            cellsExtracted = r.CellsExtracted,
+            synthetic = r.Synthetic,
+            dungeonsScanned = r.DungeonsScanned,
+            cachePath = r.CachePath,
+        });
+    }
+
+    private string CmdGenerateObjectSprites(System.Text.Json.Nodes.JsonNode node) {
+        bool force = node["force"]?.GetValue<bool>() ?? false;
+        int spritePx = node["spritePx"]?.GetValue<int>() ?? 512;
+        var lbFilter = ParseLbFilter(node);
+        var r = _engine.GenerateObjectSprites(lbFilter, spritePx, force);
+        return Serialize(new {
+            success = true,
+            command = "generate-object-sprites",
+            modelsCollected = r.ModelsCollected,
+            modelsRendered = r.ModelsRendered,
+            modelsFailed = r.ModelsFailed,
+            atlasWidth = r.AtlasWidth,
+            atlasHeight = r.AtlasHeight,
+            spritesDir = r.SpritesDir,
+            atlasPath = r.AtlasPath,
+            manifestPath = r.ManifestPath,
+        });
+    }
+
+    private static List<ushort>? ParseLbFilter(System.Text.Json.Nodes.JsonNode node) {
+        if (node["lbFilter"] is not System.Text.Json.Nodes.JsonArray arr) return null;
+        var result = new List<ushort>(arr.Count);
+        foreach (var item in arr) {
+            if (item is null) continue;
+            // Accept "0xA9B4", "A9B4", or numeric.
+            if (item.GetValueKind() == System.Text.Json.JsonValueKind.String) {
+                var s = item.GetValue<string>().Trim();
+                if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) s = s.Substring(2);
+                if (ushort.TryParse(s, System.Globalization.NumberStyles.HexNumber,
+                        System.Globalization.CultureInfo.InvariantCulture, out var k))
+                    result.Add(k);
+            } else {
+                result.Add((ushort)item.GetValue<int>());
+            }
+        }
+        return result;
+    }
 
     private string CmdCompareToRetail(System.Text.Json.Nodes.JsonNode node) {
         var generated = node["generated"]?.GetValue<string>()
@@ -293,9 +446,10 @@ public class JsonCommandProcessor {
         int resolution = node["resolution"]?.GetValue<int>() ?? 1024;
         bool overlay = node["overlay"]?.GetValue<bool>() ?? true;
         bool includePng = node["includePng"]?.GetValue<bool>() ?? true;
+        bool useSprites = node["useSprites"]?.GetValue<bool>() ?? false;
         string? outPath = node["outputPath"]?.GetValue<string>();
 
-        var r = _engine.RenderPreview(lbX, lbY, radius, resolution, overlay, outPath);
+        var r = _engine.RenderPreview(lbX, lbY, radius, resolution, overlay, outPath, useSprites);
         return Serialize(new {
             success = true,
             command = "render-preview",
