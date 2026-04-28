@@ -80,19 +80,92 @@ internal static class RenderPreviewRenderer {
     private static readonly (byte R, byte G, byte B) BackgroundColor = ( 0x12, 0x12, 0x14 );
     private static readonly (byte R, byte G, byte B) RoadColor       = ( 0xC4, 0xA8, 0x78 );
 
-    // Object glyph colors per ontology category.
+    // Object glyph colors per ontology category. Lookups are
+    // case-insensitive; the resolver below also handles family prefix
+    // matching (Furniture_*, Scenery_*, NPC*, Interactive_*, Sign_*).
     private static readonly Dictionary<string, SKColor> CategoryFill = new(StringComparer.OrdinalIgnoreCase) {
         ["Structure"]         = new SKColor(0x4A, 0x3A, 0x2A),
         ["Furniture"]         = new SKColor(0x8B, 0x6F, 0x4A),
         ["Furniture_Storage"] = new SKColor(0x8B, 0x6F, 0x4A),
         ["Furniture_Light"]   = new SKColor(0xE8, 0xC4, 0x6A),  // lamps stand out
+        ["Furniture_Table"]   = new SKColor(0x8B, 0x6F, 0x4A),
         ["Scenery"]           = new SKColor(0x2D, 0x5A, 0x2D),
+        ["Scenery_Water"]     = new SKColor(0x3E, 0x6A, 0x9F),  // water glyphs read as blue
         ["Prop"]              = new SKColor(0xC2, 0xA3, 0x68),
         ["Creature"]          = new SKColor(0xC0, 0x39, 0x2B),
+        ["NPC"]               = new SKColor(0xE2, 0xC8, 0x4F),  // humanoid yellow, distinct from Creature red
+        ["NPC_Archmage"]      = new SKColor(0xB6, 0x7F, 0xD8),  // a recognizable purple for casters
+        ["Interactive_Portal"] = new SKColor(0x6E, 0xC8, 0xE0),
+        ["Interactive_Switch"] = new SKColor(0x6E, 0xC8, 0xE0),
+        ["Interactive_Door"]   = new SKColor(0x6E, 0xC8, 0xE0),
+        ["Sign_Town"]         = new SKColor(0xE0, 0x9A, 0x3F),
     };
+    // Family-level fallbacks for any new subcategory (Furniture_Foo,
+    // NPC_Bar) that lands in the ontology before the renderer is updated.
+    // Inheriting the family glyph keeps signal on the page rather than
+    // silently dropping it to an X.
+    private static readonly SKColor NpcFill         = new(0xE2, 0xC8, 0x4F);
+    private static readonly SKColor InteractiveFill = new(0x6E, 0xC8, 0xE0);
+    private static readonly SKColor SignFill        = new(0xE0, 0x9A, 0x3F);
+    private static readonly SKColor WaterFill       = new(0x3E, 0x6A, 0x9F);
     private static readonly SKColor UnknownFill = new(0x77, 0x77, 0x77);
     private static readonly SKColor GlyphOutline = new(0x10, 0x10, 0x10, 0xC0);
     private static readonly SKColor CliffStroke  = new(0xE0, 0x35, 0x35, 0xD8);
+
+    /// <summary>
+    /// Resolve a category string to (shape kind, fill color). Prefix matching
+    /// means that any future subcategory under a known family (Furniture_*,
+    /// Scenery_*, NPC*, Interactive_*, Sign_*) inherits its family's glyph
+    /// instead of falling through to the unknown-X — addresses the
+    /// "regression-resistant" objective: degrade plausibly when the ontology
+    /// gains a new category before the renderer is updated.
+    /// </summary>
+    private static (GlyphShape shape, SKColor fill) ResolveGlyph(string category) {
+        if (string.IsNullOrEmpty(category)) return (GlyphShape.Unknown, UnknownFill);
+
+        if (string.Equals(category, "Structure", StringComparison.OrdinalIgnoreCase))
+            return (GlyphShape.Structure, CategoryFill["Structure"]);
+
+        if (category.StartsWith("Furniture", StringComparison.OrdinalIgnoreCase)) {
+            var fill = CategoryFill.TryGetValue(category, out var c) ? c : CategoryFill["Furniture"];
+            return (GlyphShape.Furniture, fill);
+        }
+        if (category.StartsWith("Scenery", StringComparison.OrdinalIgnoreCase)) {
+            var fill = CategoryFill.TryGetValue(category, out var c) ? c
+                : (category.StartsWith("Scenery_Water", StringComparison.OrdinalIgnoreCase) ? WaterFill : CategoryFill["Scenery"]);
+            return (GlyphShape.Scenery, fill);
+        }
+        if (category.StartsWith("NPC", StringComparison.OrdinalIgnoreCase)) {
+            var fill = CategoryFill.TryGetValue(category, out var c) ? c : NpcFill;
+            return (GlyphShape.Npc, fill);
+        }
+        if (string.Equals(category, "Creature", StringComparison.OrdinalIgnoreCase))
+            return (GlyphShape.Creature, CategoryFill["Creature"]);
+        if (category.StartsWith("Interactive", StringComparison.OrdinalIgnoreCase)) {
+            var fill = CategoryFill.TryGetValue(category, out var c) ? c : InteractiveFill;
+            return (GlyphShape.Interactive, fill);
+        }
+        if (category.StartsWith("Sign", StringComparison.OrdinalIgnoreCase)) {
+            var fill = CategoryFill.TryGetValue(category, out var c) ? c : SignFill;
+            return (GlyphShape.Sign, fill);
+        }
+        if (string.Equals(category, "Prop", StringComparison.OrdinalIgnoreCase))
+            return (GlyphShape.Prop, CategoryFill["Prop"]);
+
+        return (GlyphShape.Unknown, UnknownFill);
+    }
+
+    private enum GlyphShape {
+        Unknown,
+        Structure,    // filled brown square — buildings
+        Furniture,    // smaller filled square
+        Scenery,      // upright filled triangle (tree-like)
+        Creature,     // filled diamond, brick red
+        Npc,          // filled diamond, yellow/violet — humanoid
+        Prop,         // filled circle
+        Interactive,  // hollow ring with a center dot — portals/switches/doors
+        Sign,         // small upward triangle with stem — orientation marker
+    }
 
     public static Output Render(Input input) {
         var output = new Output();
@@ -292,7 +365,7 @@ internal static class RenderPreviewRenderer {
         // object list, the tree triangle covered the brown house square. The
         // priority key here pushes Structure last (= drawn on top) so buildings
         // are never visually occluded by adjacent scenery.
-        var glyphs = new List<(float pxX, float pxY, float sizePx, string category, SKColor fill, uint pairingRoot, uint objId)>();
+        var glyphs = new List<(float pxX, float pxY, float sizePx, GlyphShape shape, SKColor fill, uint pairingRoot, uint objId)>();
         foreach (var kv in input.Objects) {
             foreach (var obj in kv.Value) {
                 float wx = obj.Origin.X - worldOriginX;
@@ -326,7 +399,7 @@ internal static class RenderPreviewRenderer {
                     }
                 }
 
-                var fill = CategoryFill.TryGetValue(category, out var c) ? c : UnknownFill;
+                var (shape, fill) = ResolveGlyph(category);
 
                 float sizePx = scale switch {
                     "Massive" => 12f,
@@ -340,27 +413,31 @@ internal static class RenderPreviewRenderer {
                 if (sizePx > 18f)  sizePx = 18f;
 
                 uint root = input.PairingsGroupKey != null ? input.PairingsGroupKey(obj.Id) : 0u;
-                glyphs.Add((pxX, pxY, sizePx, category, fill, root, obj.Id));
+                glyphs.Add((pxX, pxY, sizePx, shape, fill, root, obj.Id));
             }
         }
 
-        // Z-priority: smaller key paints first (i.e. underneath). Structures
-        // last so they never disappear under a tree.
-        static int CategoryZ(string cat) {
-            if (string.Equals(cat, "Scenery",   StringComparison.OrdinalIgnoreCase)) return 0;
-            if (string.Equals(cat, "Prop",      StringComparison.OrdinalIgnoreCase)) return 1;
-            if (string.Equals(cat, "Furniture", StringComparison.OrdinalIgnoreCase)
-                || cat.StartsWith("Furniture_", StringComparison.OrdinalIgnoreCase))  return 2;
-            if (string.Equals(cat, "Unknown",   StringComparison.OrdinalIgnoreCase)) return 3;
-            if (string.Equals(cat, "Creature",  StringComparison.OrdinalIgnoreCase)) return 4;
-            if (string.Equals(cat, "Structure", StringComparison.OrdinalIgnoreCase)) return 5;
-            return 3;  // default: alongside Unknown
-        }
-        glyphs.Sort((a, b) => CategoryZ(a.category).CompareTo(CategoryZ(b.category)));
+        // Z-priority by shape family. Smaller key paints first (= underneath).
+        // Structure goes on top so buildings never disappear under a tree;
+        // NPCs and Creatures float above static placement so the LLM critic
+        // can spot encounter groups against the scenery.
+        static int ShapeZ(GlyphShape s) => s switch {
+            GlyphShape.Scenery     => 0,
+            GlyphShape.Prop        => 1,
+            GlyphShape.Furniture   => 2,
+            GlyphShape.Sign        => 2,
+            GlyphShape.Interactive => 3,
+            GlyphShape.Unknown     => 3,
+            GlyphShape.Creature    => 4,
+            GlyphShape.Npc         => 4,
+            GlyphShape.Structure   => 5,
+            _                      => 3,
+        };
+        glyphs.Sort((a, b) => ShapeZ(a.shape).CompareTo(ShapeZ(b.shape)));
 
         foreach (var g in glyphs) {
             fillPaint.Color = g.fill;
-            DrawGlyph(canvas, g.pxX, g.pxY, g.sizePx, g.category, fillPaint, outlinePaint);
+            DrawGlyph(canvas, g.pxX, g.pxY, g.sizePx, g.shape, fillPaint, outlinePaint);
             if (g.pairingRoot != 0 && g.pairingRoot != g.objId) {
                 ringPaint.Color = HueRingColor(g.pairingRoot);
                 canvas.DrawCircle(g.pxX, g.pxY, g.sizePx + 2.5f, ringPaint);
@@ -446,60 +523,96 @@ internal static class RenderPreviewRenderer {
     }
 
     private static void DrawGlyph(SKCanvas canvas, float cx, float cy, float size,
-                                  string category, SKPaint fill, SKPaint outline) {
-        // Case-insensitive dispatch: the CategoryFill table uses
-        // OrdinalIgnoreCase, so a non-canonical-cased category from the
-        // ontology would pick up the right *color* and then fall through to
-        // the unknown-X glyph here, silently dropping signal — the same
-        // failure mode that masked misclassified buildings before the
-        // ontology was unified. Mirror the comparer used for the fill.
-        if (string.Equals(category, "Structure", StringComparison.OrdinalIgnoreCase)) {
-            canvas.DrawRect(cx - size, cy - size, size * 2, size * 2, fill);
-            canvas.DrawRect(cx - size, cy - size, size * 2, size * 2, outline);
-            return;
-        }
-        if (string.Equals(category, "Furniture", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(category, "Furniture_Storage", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(category, "Furniture_Light", StringComparison.OrdinalIgnoreCase)) {
-            float s = size * 0.85f;
-            canvas.DrawRect(cx - s, cy - s, s * 2, s * 2, fill);
-            if (s >= 3f) canvas.DrawRect(cx - s, cy - s, s * 2, s * 2, outline);
-            return;
-        }
-        if (string.Equals(category, "Scenery", StringComparison.OrdinalIgnoreCase)) {
-            using var path = new SKPath();
-            path.MoveTo(cx, cy - size);
-            path.LineTo(cx - size, cy + size * 0.7f);
-            path.LineTo(cx + size, cy + size * 0.7f);
-            path.Close();
-            canvas.DrawPath(path, fill);
-            if (size >= 3f) canvas.DrawPath(path, outline);
-            return;
-        }
-        if (string.Equals(category, "Creature", StringComparison.OrdinalIgnoreCase)) {
-            using var path = new SKPath();
-            path.MoveTo(cx,        cy - size);
-            path.LineTo(cx + size, cy);
-            path.LineTo(cx,        cy + size);
-            path.LineTo(cx - size, cy);
-            path.Close();
-            canvas.DrawPath(path, fill);
-            if (size >= 3f) canvas.DrawPath(path, outline);
-            return;
-        }
-        if (string.Equals(category, "Prop", StringComparison.OrdinalIgnoreCase)) {
-            canvas.DrawCircle(cx, cy, size * 0.85f, fill);
-            if (size >= 3f) canvas.DrawCircle(cx, cy, size * 0.85f, outline);
-            return;
-        }
-        using (var paint = new SKPaint {
-            IsAntialias = true,
-            Style = SKPaintStyle.Stroke,
-            StrokeWidth = Math.Max(1f, size * 0.4f),
-            Color = UnknownFill,
-        }) {
-            canvas.DrawLine(cx - size, cy - size, cx + size, cy + size, paint);
-            canvas.DrawLine(cx - size, cy + size, cx + size, cy - size, paint);
+                                  GlyphShape shape, SKPaint fill, SKPaint outline) {
+        switch (shape) {
+            case GlyphShape.Structure:
+                canvas.DrawRect(cx - size, cy - size, size * 2, size * 2, fill);
+                canvas.DrawRect(cx - size, cy - size, size * 2, size * 2, outline);
+                return;
+
+            case GlyphShape.Furniture: {
+                float s = size * 0.85f;
+                canvas.DrawRect(cx - s, cy - s, s * 2, s * 2, fill);
+                if (s >= 3f) canvas.DrawRect(cx - s, cy - s, s * 2, s * 2, outline);
+                return;
+            }
+
+            case GlyphShape.Scenery: {
+                using var path = new SKPath();
+                path.MoveTo(cx, cy - size);
+                path.LineTo(cx - size, cy + size * 0.7f);
+                path.LineTo(cx + size, cy + size * 0.7f);
+                path.Close();
+                canvas.DrawPath(path, fill);
+                if (size >= 3f) canvas.DrawPath(path, outline);
+                return;
+            }
+
+            case GlyphShape.Creature:
+            case GlyphShape.Npc: {
+                using var path = new SKPath();
+                path.MoveTo(cx,        cy - size);
+                path.LineTo(cx + size, cy);
+                path.LineTo(cx,        cy + size);
+                path.LineTo(cx - size, cy);
+                path.Close();
+                canvas.DrawPath(path, fill);
+                if (size >= 3f) canvas.DrawPath(path, outline);
+                return;
+            }
+
+            case GlyphShape.Prop:
+                canvas.DrawCircle(cx, cy, size * 0.85f, fill);
+                if (size >= 3f) canvas.DrawCircle(cx, cy, size * 0.85f, outline);
+                return;
+
+            case GlyphShape.Interactive: {
+                // Hollow ring with a filled centre dot — reads as a "thing
+                // you can interact with" without competing visually with the
+                // solid shapes used for static world objects.
+                using var ringStroke = new SKPaint {
+                    Style = SKPaintStyle.Stroke,
+                    StrokeWidth = Math.Max(1f, size * 0.35f),
+                    IsAntialias = true,
+                    Color = fill.Color,
+                };
+                canvas.DrawCircle(cx, cy, size, ringStroke);
+                canvas.DrawCircle(cx, cy, Math.Max(1f, size * 0.32f), fill);
+                return;
+            }
+
+            case GlyphShape.Sign: {
+                // Upward triangle with a short stem — orientation marker,
+                // distinct from Scenery's symmetric tree triangle.
+                using var path = new SKPath();
+                path.MoveTo(cx,            cy - size);
+                path.LineTo(cx - size * 0.75f, cy);
+                path.LineTo(cx + size * 0.75f, cy);
+                path.Close();
+                canvas.DrawPath(path, fill);
+                if (size >= 3f) canvas.DrawPath(path, outline);
+                using var stem = new SKPaint {
+                    Style = SKPaintStyle.Stroke,
+                    StrokeWidth = Math.Max(1f, size * 0.25f),
+                    IsAntialias = true,
+                    Color = fill.Color,
+                };
+                canvas.DrawLine(cx, cy, cx, cy + size * 0.7f, stem);
+                return;
+            }
+
+            case GlyphShape.Unknown:
+            default:
+                using (var paint = new SKPaint {
+                    IsAntialias = true,
+                    Style = SKPaintStyle.Stroke,
+                    StrokeWidth = Math.Max(1f, size * 0.4f),
+                    Color = UnknownFill,
+                }) {
+                    canvas.DrawLine(cx - size, cy - size, cx + size, cy + size, paint);
+                    canvas.DrawLine(cx - size, cy + size, cx + size, cy - size, paint);
+                }
+                return;
         }
     }
 
