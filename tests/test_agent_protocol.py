@@ -854,6 +854,294 @@ class TestProjectCommands(RuntimeRequiredTestCase):
 
 
 # ─────────────────────────────────────────────────────────────
+# Test Suite 2b: transact-diff round-trip
+# ─────────────────────────────────────────────────────────────
+
+@unittest.skipUnless(TEST_PROJECT.exists(),
+                     f"TestProject not found at {TEST_PROJECT}")
+class TestTransactDiff(RuntimeRequiredTestCase):
+    """Round-trip tests covering the transact-diff acceptance criteria:
+    add/remove/move detection, rollback markers, LRU eviction, inline
+    diff field on transact, and visual diff PNG dimensions."""
+
+    LBX, LBY = 100, 100
+    MODEL_ID = "0x02000001"
+
+    def setUp(self):
+        # Each test gets its own session so the snapshot LRU starts fresh.
+        # The default retention (32) is fine for every test except the
+        # eviction one, which overrides it on its own session.
+        self.session = TerminalSession(project_path=str(TEST_PROJECT))
+        self.session.start()
+        # The --project flag pre-loads, but --stdin reports 'ready' before
+        # the load completes asynchronously on some hosts; verify the
+        # project is loaded before issuing any mutating ops.
+        info = self.session.send({"command": "info"})
+        assert_success(info, "info")
+        self.assertTrue(info.get("loaded"),
+                        f"TestProject failed to pre-load: {info}")
+
+    def tearDown(self):
+        self.session.close()
+
+    # ── helpers ──────────────────────────────────────────────
+
+    def _world_xyz(self, dx=96.0, dy=96.0, dz=0.0):
+        return (self.LBX * 192 + dx, self.LBY * 192 + dy, dz)
+
+    def _commit(self, ops, **extra):
+        payload = {"command": "transact", "ops": ops}
+        payload.update(extra)
+        resp = self.session.send(payload)
+        assert_success(resp, "transact")
+        self.assertEqual(resp["status"], "committed",
+                         f"Expected committed, got {resp.get('status')}: {resp}")
+        return resp
+
+    def _diff(self, tx_id, **extra):
+        payload = {"command": "transact-diff", "txId": tx_id}
+        payload.update(extra)
+        return self.session.send(payload)
+
+    # ── 1. add-object diff ───────────────────────────────────
+
+    def test_01_add_object_appears_in_added(self):
+        """An add-object inside a transact should surface under objects.added
+        with model id and position preserved."""
+        x, y, z = self._world_xyz(96.0, 96.0, 0.0)
+        commit = self._commit([{
+            "command": "add-object",
+            "lbX": self.LBX, "lbY": self.LBY,
+            "modelId": self.MODEL_ID,
+            "x": x, "y": y, "z": z,
+        }])
+        tx_id = commit["journal"]["transactionId"]
+
+        diff = self._diff(tx_id)
+        self.assertTrue(diff["success"], f"diff failed: {diff}")
+        self.assertEqual(diff["txId"], tx_id)
+        self.assertIn("perLandblock", diff)
+        self.assertEqual(len(diff["perLandblock"]), 1)
+        lb = diff["perLandblock"][0]
+        self.assertEqual(lb["lbX"], self.LBX)
+        self.assertEqual(lb["lbY"], self.LBY)
+        added = lb["objects"]["added"]
+        self.assertEqual(len(added), 1, f"expected one added object, got {added}")
+        self.assertEqual(added[0]["model"].lower(), self.MODEL_ID.lower())
+        self.assertAlmostEqual(added[0]["position"][0], x, places=1)
+        self.assertAlmostEqual(added[0]["position"][1], y, places=1)
+        # ontology array is permitted to be empty when the test ontology
+        # doesn't have an entry for this model — only assert the field
+        # exists and is a list.
+        self.assertIsInstance(added[0]["ontology"], list)
+        self.assertEqual(diff["summary"]["objectsAdded"], 1)
+
+    # ── 2. remove-object diff ────────────────────────────────
+
+    def test_02_remove_object_appears_in_removed(self):
+        """An object placed before the diff window and removed inside one
+        should surface under objects.removed."""
+        x, y, z = self._world_xyz(80.0, 80.0, 0.0)
+        # Place outside the transact (so it exists in pre-state).
+        add_resp = self.session.send({
+            "command": "add-object",
+            "lbX": self.LBX, "lbY": self.LBY,
+            "modelId": self.MODEL_ID,
+            "x": x, "y": y, "z": z,
+        })
+        assert_success(add_resp, "add-object")
+        idx = add_resp["index"]
+
+        # Now remove it inside a transact.
+        commit = self._commit([{
+            "command": "remove-object",
+            "lbX": self.LBX, "lbY": self.LBY,
+            "index": idx,
+        }])
+        tx_id = commit["journal"]["transactionId"]
+
+        diff = self._diff(tx_id)
+        self.assertTrue(diff["success"])
+        lb = diff["perLandblock"][0]
+        removed = lb["objects"]["removed"]
+        self.assertEqual(len(removed), 1, f"expected one removed object, got {removed}")
+        self.assertEqual(removed[0]["model"].lower(), self.MODEL_ID.lower())
+        self.assertEqual(diff["summary"]["objectsRemoved"], 1)
+
+    # ── 3. move-object diff ──────────────────────────────────
+
+    def test_03_move_object_appears_in_moved_with_delta(self):
+        """A move > 0.1m should surface under objects.moved with deltaXY."""
+        x0, y0, z0 = self._world_xyz(60.0, 60.0, 0.0)
+        x1, y1, z1 = self._world_xyz(70.0, 75.0, 0.0)   # delta_xy ≈ sqrt(100+225)=18.0
+        add_resp = self.session.send({
+            "command": "add-object",
+            "lbX": self.LBX, "lbY": self.LBY,
+            "modelId": self.MODEL_ID,
+            "x": x0, "y": y0, "z": z0,
+        })
+        assert_success(add_resp, "add-object")
+        idx = add_resp["index"]
+
+        commit = self._commit([{
+            "command": "move-object",
+            "lbX": self.LBX, "lbY": self.LBY,
+            "index": idx,
+            "x": x1, "y": y1, "z": z1,
+        }])
+        tx_id = commit["journal"]["transactionId"]
+
+        diff = self._diff(tx_id)
+        self.assertTrue(diff["success"])
+        lb = diff["perLandblock"][0]
+        moved = lb["objects"]["moved"]
+        self.assertEqual(len(moved), 1, f"expected one moved object, got {moved}")
+        m = moved[0]
+        self.assertEqual(m["model"].lower(), self.MODEL_ID.lower())
+        expected = ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
+        self.assertAlmostEqual(m["deltaXY"], expected, places=1,
+                               msg=f"deltaXY mismatch: {m}")
+        self.assertGreater(m["deltaXY"], 0.1, "deltaXY should clear the 0.1m hide threshold")
+
+    # ── 4. rollback marker ───────────────────────────────────
+
+    def test_04_rolled_back_transaction_returns_marker(self):
+        """A transact that fails and rolls back should mark the txId as
+        rolled-back; a follow-up transact-diff returns TXDIFF-ROLLED-BACK."""
+        # remove-object with an out-of-range index will fail at op-time
+        # and trigger rollback (rollback_on_fail defaults to true).
+        resp = self.session.send({
+            "command": "transact",
+            "ops": [{
+                "command": "remove-object",
+                "lbX": self.LBX, "lbY": self.LBY,
+                "index": 999999,
+            }],
+        })
+        # The transact command itself returns success=false with status
+        # rolled-back when an op fails and rollback_on_fail=true.
+        self.assertEqual(resp.get("status"), "rolled-back",
+                         f"expected rolled-back status, got {resp}")
+        tx_id = resp["journal"]["transactionId"]
+
+        diff = self._diff(tx_id)
+        self.assertFalse(diff.get("success", True))
+        self.assertEqual(diff.get("errorCode"), "TXDIFF-ROLLED-BACK",
+                         f"expected TXDIFF-ROLLED-BACK, got {diff}")
+
+    # ── 5. LRU eviction ──────────────────────────────────────
+
+    def test_05_lru_evicts_oldest_after_retention_overflow(self):
+        """The (retention+1)-th committed transact should evict the first;
+        a transact-diff on the evicted txId must return TXDIFF-EXPIRED."""
+        # Spin a fresh session with retention=2 so we don't have to issue 33
+        # transacts to verify eviction. The retention semantics are the same
+        # at any size, so a tighter bound just speeds up the test.
+        session = TerminalSession(project_path=str(TEST_PROJECT),
+                                  extra_args=["--transact-diff-retention", "2"])
+        try:
+            session.start()
+            info = session.send({"command": "info"})
+            assert_success(info, "info")
+
+            tx_ids = []
+            for i in range(3):     # 3 commits with cap=2 → 1st must evict
+                x, y, z = (self.LBX * 192 + 30.0 + i * 5,
+                            self.LBY * 192 + 30.0 + i * 5,
+                            0.0)
+                resp = session.send({
+                    "command": "transact",
+                    "ops": [{
+                        "command": "add-object",
+                        "lbX": self.LBX, "lbY": self.LBY,
+                        "modelId": self.MODEL_ID,
+                        "x": x, "y": y, "z": z,
+                    }],
+                })
+                assert_success(resp, "transact")
+                self.assertEqual(resp["status"], "committed")
+                tx_ids.append(resp["journal"]["transactionId"])
+
+            # The first txId should now be evicted.
+            evicted = session.send({"command": "transact-diff", "txId": tx_ids[0]})
+            self.assertFalse(evicted.get("success", True))
+            self.assertEqual(evicted.get("errorCode"), "TXDIFF-EXPIRED",
+                             f"expected TXDIFF-EXPIRED, got {evicted}")
+
+            # The latest txId should still resolve.
+            latest = session.send({"command": "transact-diff", "txId": tx_ids[-1]})
+            self.assertTrue(latest.get("success"),
+                            f"latest tx should still resolve, got {latest}")
+        finally:
+            session.close()
+
+    # ── 6. inline diff on transact ───────────────────────────
+
+    def test_06_inline_diff_field_returns_diff_block(self):
+        """transact with diff:true should return the diff block in the same
+        response — no follow-up call required."""
+        x, y, z = self._world_xyz(120.0, 120.0, 0.0)
+        resp = self.session.send({
+            "command": "transact",
+            "ops": [{
+                "command": "add-object",
+                "lbX": self.LBX, "lbY": self.LBY,
+                "modelId": self.MODEL_ID,
+                "x": x, "y": y, "z": z,
+            }],
+            "diff": True,
+        })
+        assert_success(resp, "transact")
+        self.assertEqual(resp["status"], "committed")
+        self.assertIn("diff", resp, f"missing diff block in inline response: {resp}")
+        diff = resp["diff"]
+        self.assertTrue(diff.get("success"),
+                        f"inline diff success should be true: {diff}")
+        self.assertEqual(diff["txId"], resp["journal"]["transactionId"])
+        self.assertGreaterEqual(diff["summary"]["objectsAdded"], 1)
+
+    # ── 7. visual diff PNG ───────────────────────────────────
+
+    def test_07_visual_diff_returns_base64_png_with_matching_dimensions(self):
+        """transact-diff with render:true and renderMode:overlay should
+        return a non-empty pngBase64 whose decoded dimensions match the
+        requested resolution."""
+        import base64
+        import struct
+
+        x, y, z = self._world_xyz(140.0, 140.0, 0.0)
+        commit = self._commit([{
+            "command": "add-object",
+            "lbX": self.LBX, "lbY": self.LBY,
+            "modelId": self.MODEL_ID,
+            "x": x, "y": y, "z": z,
+        }])
+        tx_id = commit["journal"]["transactionId"]
+
+        diff = self._diff(tx_id, render=True, renderMode="overlay", resolution=512)
+        self.assertTrue(diff.get("success"), f"diff failed: {diff}")
+        self.assertIn("visual", diff)
+        v = diff["visual"]
+        self.assertEqual(v["mode"], "overlay")
+        self.assertIn("pngBase64", v)
+        png = base64.b64decode(v["pngBase64"])
+        self.assertGreater(len(png), 0, "decoded PNG must be non-empty")
+        # PNG magic: 0x89 'P' 'N' 'G'
+        self.assertEqual(png[:4], b"\x89PNG")
+        # IHDR is at offset 8, width/height are big-endian u32 starting at 16.
+        width, height = struct.unpack(">II", png[16:24])
+        self.assertEqual(width, v["width"], "reported width vs PNG IHDR width")
+        self.assertEqual(height, v["height"], "reported height vs PNG IHDR height")
+        # Resolution is the long edge target — overlay mode is square, so
+        # both axes should equal the requested 512 (give or take grid-cell
+        # rounding from RenderPreview's gridSize×lbPx product).
+        self.assertEqual(width, height,
+                         "overlay mode should produce a square image")
+        self.assertGreaterEqual(width, 256, "rendered too small")
+        self.assertLessEqual(width, 1024, "rendered too large")
+
+
+# ─────────────────────────────────────────────────────────────
 # Test Suite 3: Startup with --project flag
 # ─────────────────────────────────────────────────────────────
 

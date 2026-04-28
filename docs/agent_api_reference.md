@@ -45,6 +45,9 @@
   - [validate-terrain](#validate-terrain)
   - [validate-building-portals](#validate-building-portals)
   - [validate-all](#validate-all)
+- [Transact](#transact)
+  - [transact](#transact-1)
+  - [transact-diff](#transact-diff)
 - [World Observation](#world-observation)
   - [list-landblocks](#list-landblocks)
   - [get-world-info](#get-world-info)
@@ -189,6 +192,8 @@ WorldBuilder.Terminal [options]
 | `validate-terrain` | Validation | `lbX`, `lbY`, `cliffThreshold?` | Validate terrain data |
 | `validate-building-portals` | Validation | `lbX`, `lbY` | Validate building portal links |
 | `validate-all` | Validation | `lbX`, `lbY`, `cliffThreshold?` | Run all validators |
+| `transact` | Transact | `ops[]` or `opsFile`, `rollback_on_fail?`, `validate?`, `diff?` | Atomic batched mutations with rollback on failure |
+| `transact-diff` | Transact | `txId`, `render?`, `renderMode?`, `lbs?`, `resolution?`, `out?` | Structured before/after report for a committed transaction |
 | `list-landblocks` | World | `minX?`, `minY?`, `maxX?`, `maxY?`, `limit?` | List landblocks with height stats |
 | `get-world-info` | World | — | World metadata and constants |
 | `get-region` | World | — | Height table and terrain type names |
@@ -1146,6 +1151,179 @@ Runs **all four validators** in a single call and returns a combined report. Thi
 | `lbX` | uint | ✅ | — | Landblock grid X |
 | `lbY` | uint | ✅ | — | Landblock grid Y |
 | `cliffThreshold` | float | ❌ | 12.0 | Cliff warning threshold |
+
+---
+
+## Transact
+
+The `transact` command and its `transact-diff` companion close the agent **action loop**: stage a batch of mutations, validate the staged delta, atomically commit or rollback, and (optionally) inspect *what changed* via a structured before/after report.
+
+### transact
+
+Stages N mutating ops as one atomic batch. The engine snapshots affected document projections before any op runs, executes them sequentially, validates the staged delta, and either commits or rolls back the in-memory state.
+
+**Request:**
+```jsonc
+{
+  "command": "transact",
+  "ops": [
+    {"command": "set-landblock-heightmap", "lbX": 169, "lbY": 180, "heights": [/*81*/]},
+    {"command": "bulk-place-objects",      "lbX": 169, "lbY": 180, "objects": [/*…*/]}
+  ],
+  "rollback_on_fail": true,
+  "validate": "auto",
+  "diff": false
+}
+```
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `ops` | object[] | ❌* | — | Inline list of op objects (each shaped as a normal JSON command) |
+| `opsFile` | string | ❌* | — | Path to a JSON file holding either a top-level array or `{"ops": [...]}`. Use when stdin line-buffer would clip a large inline payload |
+| `rollback_on_fail` | bool | ❌ | `true` | Restore pre-state on any failure |
+| `validate` | string \| object | ❌ | `"auto"` | `auto` (touched LBs + right/top neighbors), `all`, `none`, or `{"landblocks": ["0xXXXX"]}` |
+| `diff` | bool \| string | ❌ | `false` | When set, returns the [transact-diff](#transact-diff) response inline. Values: `true \| "structured" \| "visual" \| "both"` |
+| `renderMode` | string | ❌ | `"overlay"` | Visual diff mode when `diff` includes a visual: `overlay \| side-by-side \| after-only-with-diff` |
+| `resolution` | int | ❌ | 1024 | Visual diff resolution in pixels (square) |
+
+*Exactly one of `ops` or `opsFile` must be supplied.
+
+**Response:**
+```jsonc
+{
+  "success": true,
+  "command": "transact",
+  "status": "committed",        // or "rolled-back"
+  "reason": "ok",               // ok | rejected | op-threw | op-returned-failure | validation-failure
+  "ops": [/* per-op outcome with embedded inner response */],
+  "validation": [/* validationReport[] */],
+  "journal": {
+    "transactionId": "<guid>",
+    "startedAt": "<ISO-8601>",
+    "finishedAt": "<ISO-8601>",
+    "documentsTouched": ["terrain", "landblock_A9B4"],
+    "documentsCreated": [],
+    "opsApplied": 2,
+    "opsRolledBack": 0
+  },
+  "diff": {/* present only when `diff` was requested */}
+}
+```
+
+**Op alphabet** — a transact composes existing JSON commands rather than introducing a parallel mutation language. The allow-list covers terrain edits (`set-landblock-heightmap`, `set-landblock-terrain`, `raise`, `lower`, `smooth`, `set-height`, `paint`, `fill`, `road`, `paste-stamp`), object placement (`add-object`, `remove-object`, `move-object`, `rotate-object`, `clear-objects`, `bulk-place-objects`), and `generate-dungeon`. Read-only and side-effecting ops are rejected, as is nesting.
+
+**Failure modes** — `reason` distinguishes rejection (op not in allow-list, malformed batch), op throw, op returning `success:false`, and validation failure on the staged delta.
+
+---
+
+### transact-diff
+
+Produces a structured before/after report for a previously committed transaction, plus an optional visual diff PNG. Field semantics mirror `describe-landblock`'s body schema where applicable — added/removed/moved objects, structure deltas, validation regressions cleared/added, plus categorical biome/road/cliffs comparison.
+
+**Request:**
+```jsonc
+{
+  "command": "transact-diff",
+  "txId": "<guid from a prior transact response>",
+  "render": true,
+  "renderMode": "overlay",
+  "lbs": [[7, 10]],
+  "resolution": 1024,
+  "out": null
+}
+```
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `txId` | string | ✅ | — | Transaction GUID returned by a prior transact |
+| `render` | bool | ❌ | `false` | Also return a visual diff PNG |
+| `renderMode` | string | ❌ | `"overlay"` | `overlay` (after-state + diff overlay), `side-by-side` (before \| after panels with separator), `after-only-with-diff` (alias of overlay) |
+| `lbs` | `[int,int][]` | ❌ | all touched | Restrict diff to specific `[lbX, lbY]` pairs |
+| `resolution` | int | ❌ | 1024 | Visual diff pixel resolution |
+| `out` | string | ❌ | — | Write PNG to disk; response then carries `outPath` instead of `pngBase64` |
+
+**Response (success):**
+```jsonc
+{
+  "success": true,
+  "command": "transact-diff",
+  "txId": "<guid>",
+  "summary": {
+    "documentsTouched": 3,
+    "objectsAdded": 12, "objectsRemoved": 4, "objectsMoved": 2,
+    "structuresAdded": 1, "structuresRemoved": 0,
+    "validationDelta": {"errors": -1, "warnings": 3, "info": 8},
+    "spawnsAdded": 0, "spawnsRemoved": 0,
+    "poisAdded": 0, "poisRemoved": 0,
+    "biomeShift": false, "roadShift": false, "cliffShift": false
+  },
+  "perLandblock": [
+    {
+      "lbX": 7, "lbY": 10, "lbHex": "0x0707",
+      "createdByBatch": false,
+      "objects": {
+        "added":   [{"wcid": 1234, "model": "0x02000abc", "position": [x, y, z], "ontology": ["Architecture", "Aluvian"]}],
+        "removed": [],
+        "moved":   [{"wcid": 5678, "model": "0x02000def", "from": [x, y, z], "to": [x, y, z], "deltaXY": 1.7, "deltaZ": 0.0}]
+      },
+      "structures": {"added": [], "removed": []},
+      "validation": {"added": [{"code": "BLD-3", "severity": "warning", "msg": "..."}], "cleared": []},
+      "spawns": {"added": [], "removed": []},
+      "pois":   {"added": [], "removed": []},
+      "categorical": {
+        "biomeBefore": "grassland", "biomeAfter": "grassland",
+        "roadBefore": true, "roadAfter": true,
+        "cliffsBefore": 0, "cliffsAfter": 0
+      }
+    }
+  ],
+  "visual": {
+    "mode": "overlay",
+    "width": 1024, "height": 1024,
+    "pngBase64": "..."
+  }
+}
+```
+
+**Response (error):**
+```jsonc
+{"success": false, "command": "transact-diff", "txId": "<guid>", "errorCode": "TXDIFF-EXPIRED", "error": "..."}
+```
+
+| Error code | Meaning |
+|-----------|---------|
+| `TXDIFF-EXPIRED` | The transaction's snapshot has been evicted from the LRU (default 32 entries / 256 MB). Reissue the transact if you need the diff |
+| `TXDIFF-ROLLED-BACK` | The transaction was rolled back; no diff is retained for it |
+
+**Retention** — committed transactions are held in an in-memory LRU keyed by transaction id. Defaults: 32 entries or 256 MB, whichever bound is hit first. Configurable via `--transact-diff-retention <n>` and `--transact-diff-mem-cap <mb>` on the Terminal CLI. Lookups bump LRU on access. Rolled-back transactions are not retained — they leave a lightweight marker in a separate bounded set so the diff command can distinguish "rolled back" from "expired".
+
+**Visual diff overlay glyphs:**
+
+| Color | Meaning |
+|-------|---------|
+| 🟥 Red | Object removed (drawn at original position) |
+| 🟩 Green | Object added (drawn at new position) |
+| 🟨 Yellow + arrow | Object moved (arrow from old to new; hidden when `deltaXY < 0.1m`) |
+| Cyan outline | Validation regressed on this LB |
+| Magenta outline | Validation cleared on this LB |
+
+Glyph shape and size match `render-preview`'s dispatch — a removed structure draws as a red filled square (the same shape `render-preview` uses for buildings), so identity is preserved across the diff.
+
+**Terrain-only batches** — when only the terrain doc was touched (so all 256² LBs are dirty), per-LB enumeration is suppressed. The response carries a `terrainSummary` block instead:
+
+```jsonc
+{
+  "terrainSummary": {
+    "biomeBefore": {"1": 12345, "21": 6789, /*...*/},   // terrain-type → vertex count
+    "biomeAfter":  {"1": 11200, "21": 7890, /*...*/},
+    "vertexHeightChanged": 4521,
+    "vertexTypeChanged":  1109,
+    "vertexRoadChanged":   233
+  }
+}
+```
+
+In that case the `visual` block is also omitted with an info note unless `lbs` is supplied to scope the render.
 
 ---
 

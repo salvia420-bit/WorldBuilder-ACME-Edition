@@ -137,6 +137,22 @@ The recommended agent workflow: **mutate → `validate-all` → fix errors → r
 
 Available on both REPL (`transact <ops.json>`) and JSON-agent channels.
 
+#### Diff — `transact-diff`
+
+`render-preview`, `describe-landblock`, and `compare-to-retail` all describe *current state*. `transact-diff` closes the action loop by describing the *change* a `transact` produced — added / removed / moved objects, structure deltas, validation regressions, and (optionally) a single visual diff PNG. Read-only; reuses the snapshot bytes the transact engine already retains in an LRU keyed by transaction id.
+
+```jsonc
+{ "command": "transact-diff", "txId": "<guid from a prior transact>", "render": true, "renderMode": "overlay" }
+```
+
+- **Structured body** — symmetrical with `describe-landblock`'s body schema. Per-LB `objects.{added,removed,moved}` (positions, ontology, deltaXY/Z), `structures.{added,removed}`, `validation.{added,cleared}`, plus categorical `biome/road/cliffs` before-vs-after. Top-level summary aggregates counts across all touched LBs.
+- **Visual diff** — one PNG with red glyphs at removed positions, green at added, yellow at moved (with arrow from old position), cyan/magenta cell outlines for validation regressions / clears. Glyphs reuse the same shape and sizing as `render-preview` so removed-glyph identity reads at a glance. Modes: `overlay` (default), `side-by-side` (pre/post panels with separator), `after-only-with-diff` (alias of overlay).
+- **Two access patterns** — standalone `transact-diff <txId>`, or inline by setting `"diff": true | "structured" | "visual" | "both"` on the original `transact` call to piggy-back the diff onto the same response.
+- **Retention** — committed transactions are held in an in-memory LRU (default: 32 entries / 256 MB, configurable via `--transact-diff-retention <n>` and `--transact-diff-mem-cap <mb>`). Lookups bump LRU on access; older entries return `errorCode: "TXDIFF-EXPIRED"`. Rolled-back transactions are not retained — `transact-diff` returns `errorCode: "TXDIFF-ROLLED-BACK"`. Nothing is persisted to disk.
+- **Terrain-only batches** — when only the terrain doc was touched (so all LBs are dirty), the response carries a `terrainSummary` block with biome distributions and per-vertex change counts instead of enumerating 256² LBs.
+
+Available on both REPL (`transact-diff <txId> [--render] [--mode ...] [--lb X,Y]... [--out path]`) and JSON-agent channels.
+
 ### Visual Channel — `render-preview`
 
 Validation catches structural mistakes symbolically. `render-preview` catches *visual* mistakes — clustering, mode-collapse, density drift, awkward placement — by handing a vision-capable LLM a literal top-down PNG of any region it just edited. Same JSON-agent channel, returned as a base64 PNG.

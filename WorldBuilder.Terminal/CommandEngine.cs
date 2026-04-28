@@ -94,6 +94,15 @@ public class CommandEngine {
         _stampService = stampService;
     }
 
+    // ─── Internal accessors used by TransactDiffEngine. ───────────────────
+    // The diff engine needs the same ontology / pairings / height-table
+    // wiring the live render-preview path uses; exposing them here keeps
+    // the diff engine from re-deriving any of this state.
+    internal IOntologyService Ontology => _ontologyService;
+    internal Func<uint, uint> PairingsGroupKey => id => _buildingPairings.GroupKey(id);
+    internal HeadlessProjectManager ProjectManager => _projectManager;
+    internal float[] GetHeightTableForDiff() => GetHeightTable();
+
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     //  Project management
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -652,6 +661,21 @@ public class CommandEngine {
         var lbDoc = GetLandblockDoc(lbKey);
         var terrainDoc = GetTerrainDoc();
         var dungeonDoc = GetDungeonDoc(lbKey);
+        return DescribeLandblockFromDocs(lbX, lbY, lbDoc, terrainDoc, dungeonDoc, includeValidation: true);
+    }
+
+    /// <summary>
+    /// Describer entry point that accepts caller-supplied document instances rather than
+    /// pulling the live ones from the project. Used by transact-diff to describe a pre-state
+    /// projection: the caller hydrates ephemeral documents from snapshot bytes and passes
+    /// them in, so the describer can run unchanged against pre- or post-batch worlds.
+    /// </summary>
+    internal LandblockDescriber.LandblockDescriptionResult DescribeLandblockFromDocs(
+            uint lbX, uint lbY,
+            LandblockDocument lbDoc, TerrainDocument terrainDoc, DungeonDocument? dungeonDoc,
+            bool includeValidation) {
+        RequireProject();
+        ushort lbKey = LbKey(lbX, lbY);
         var heightTable = GetHeightTable();
         var dats = _projectManager.CurrentProject!.DocumentManager.Dats;
 
@@ -740,21 +764,27 @@ public class CommandEngine {
         // is per-LB structural correctness (cliffs, below-terrain objects, broken
         // portals, etc.); ~45 codes across DNG/LBK/TRN/BSH/BLD categories. Soft-
         // fail to null on any error so describe never breaks on validation issues.
+        // The diff engine sets includeValidation=false when describing ephemeral
+        // pre-state docs — running the live ValidationEngine against pre-state
+        // would require swapping live docs in and out, which the diff engine
+        // handles separately with explicit pre/post validation passes.
         LandblockDescriber.ValidationOverlay? validation = null;
-        try {
-            var report = ValidateAll(lbX, lbY);
-            validation = new LandblockDescriber.ValidationOverlay(
-                IsValid: report.IsValid,
-                ErrorCount: report.ErrorCount,
-                WarningCount: report.WarningCount,
-                InfoCount: report.InfoCount,
-                Diagnostics: report.Diagnostics.Select(d => new LandblockDescriber.ValidationDiagnosticEntry(
-                    Severity: d.Severity.ToString().ToLowerInvariant(),
-                    Code: d.Code,
-                    Message: d.Message,
-                    Context: d.Context)).ToList());
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"[Validation] Skipped for 0x{lbKey:X4}: {ex.Message}");
+        if (includeValidation) {
+            try {
+                var report = ValidateAll(lbX, lbY);
+                validation = new LandblockDescriber.ValidationOverlay(
+                    IsValid: report.IsValid,
+                    ErrorCount: report.ErrorCount,
+                    WarningCount: report.WarningCount,
+                    InfoCount: report.InfoCount,
+                    Diagnostics: report.Diagnostics.Select(d => new LandblockDescriber.ValidationDiagnosticEntry(
+                        Severity: d.Severity.ToString().ToLowerInvariant(),
+                        Code: d.Code,
+                        Message: d.Message,
+                        Context: d.Context)).ToList());
+            } catch (Exception ex) {
+                Console.Error.WriteLine($"[Validation] Skipped for 0x{lbKey:X4}: {ex.Message}");
+            }
         }
 
         return LandblockDescriber.Describe(lbKey, lbDoc, terrainDoc, dungeonDoc,

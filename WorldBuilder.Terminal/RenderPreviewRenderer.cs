@@ -155,7 +155,7 @@ internal static class RenderPreviewRenderer {
         return (GlyphShape.Unknown, UnknownFill);
     }
 
-    private enum GlyphShape {
+    internal enum GlyphShape {
         Unknown,
         Structure,    // filled brown square — buildings
         Furniture,    // smaller filled square
@@ -165,6 +165,54 @@ internal static class RenderPreviewRenderer {
         Prop,         // filled circle
         Interactive,  // hollow ring with a center dot — portals/switches/doors
         Sign,         // small upward triangle with stem — orientation marker
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    //  Helpers shared with TransactDiffEngine. The diff overlay reuses the
+    //  same shape dispatch and per-scale sizing as the main render path so
+    //  a red "removed" glyph is the same shape and size the live render
+    //  would have drawn for that object — agents read shape as identity.
+    //  Keeping these as the only entry points means we don't introduce a
+    //  second glyph table that could drift from the primary one.
+    // ─────────────────────────────────────────────────────────────────────
+
+    internal static GlyphShape ResolveShapeForObject(OntologyEntry? entry) {
+        string category = entry?.Category ?? "Unknown";
+        if (entry?.Tags is { Length: > 0 } tags) {
+            foreach (var t in tags) {
+                if (string.Equals(t, "dat:building", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(t, "dat:building_inherited", StringComparison.OrdinalIgnoreCase)) {
+                    category = "Structure";
+                    break;
+                }
+            }
+        }
+        var (shape, _) = ResolveGlyph(category);
+        return shape;
+    }
+
+    internal static float ResolveSizePxForObject(OntologyEntry? entry, int lbPx) {
+        string scale = entry?.Scale ?? "Small";
+        float scaleFactor = MathF.Sqrt(Math.Max(64, lbPx) / 256f);
+        float sizePx = scale switch {
+            "Massive" => 12f,
+            "Large"   =>  9f,
+            "Medium"  =>  6f,
+            "Small"   =>  4f,
+            "Tiny"    =>  2.5f,
+            _         =>  3f,
+        } * scaleFactor;
+        if (sizePx < 1.5f) sizePx = 1.5f;
+        if (sizePx > 18f)  sizePx = 18f;
+        return sizePx;
+    }
+
+    internal static void DrawObjectGlyphInColor(SKCanvas canvas, float pxX, float pxY,
+            float sizePx, GlyphShape shape, SKColor fill) {
+        using var fillPaint = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Fill, Color = fill };
+        using var outlinePaint = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke,
+            StrokeWidth = 1f, Color = GlyphOutline };
+        DrawGlyph(canvas, pxX, pxY, sizePx, shape, fillPaint, outlinePaint);
     }
 
     public static Output Render(Input input) {

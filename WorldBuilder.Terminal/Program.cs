@@ -100,7 +100,8 @@ if (cliArgs.StdinMode) {
         }
     }
 
-    var processor = new JsonCommandProcessor(projectManager, terrainService, objectPlacementService, dungeonService, ontologyService, stampService);
+    var processor = new JsonCommandProcessor(projectManager, terrainService, objectPlacementService, dungeonService, ontologyService, stampService,
+        cliArgs.TransactDiffRetention, cliArgs.TransactDiffMemCapMb);
     processor.RunStdinLoop();
     return 0;
 }
@@ -116,7 +117,8 @@ if (!string.IsNullOrEmpty(cliArgs.ProjectPath)) {
     }
 }
 
-var repl = new TerminalRepl(projectManager, terrainService, objectPlacementService, dungeonService, ontologyService, stampService);
+var repl = new TerminalRepl(projectManager, terrainService, objectPlacementService, dungeonService, ontologyService, stampService,
+    cliArgs.TransactDiffRetention, cliArgs.TransactDiffMemCapMb);
 repl.Run();
 
 return 0;

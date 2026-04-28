@@ -27,6 +27,7 @@ public class JsonCommandProcessor {
     private readonly HeadlessProjectManager _projectManager;
     private readonly Dictionary<string, Func<System.Text.Json.Nodes.JsonNode, string>> _commandHandlers;
     private readonly TransactionEngine _transactionEngine;
+    private readonly TransactDiffEngine _transactDiffEngine;
 
     private static readonly JsonSerializerOptions JsonOpts = new() {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -39,12 +40,18 @@ public class JsonCommandProcessor {
         IObjectPlacementService objectPlacementService,
         IDungeonService dungeonService,
         IOntologyService ontologyService,
-        IStampService stampService) {
+        IStampService stampService,
+        int transactDiffRetention = 32,
+        int transactDiffMemCapMb = 256) {
         _projectManager = projectManager;
         _engine = new CommandEngine(projectManager, terrainService, objectPlacementService, dungeonService, ontologyService, stampService);
         _commandHandlers = BuildCommandHandlers();
-        _transactionEngine = new TransactionEngine(this, projectManager);
+        _transactionEngine = new TransactionEngine(this, projectManager, transactDiffRetention, transactDiffMemCapMb);
+        _transactDiffEngine = new TransactDiffEngine(_transactionEngine, _engine);
     }
+
+    /// <summary>Exposes the transaction engine to the REPL/dispatch wiring of transact-diff.</summary>
+    internal TransactionEngine Transactions => _transactionEngine;
 
     /// <summary>
     /// Runs the stdin loop: reads one JSON line at a time, processes it, writes one JSON line response.
@@ -230,6 +237,7 @@ public class JsonCommandProcessor {
             ["render-preview"] = CmdRenderPreview,
             ["compare-to-retail"] = CmdCompareToRetail,
             ["transact"] = CmdTransact,
+            ["transact-diff"] = CmdTransactDiff,
             ["get-tile"] = CmdGetTile,
             ["tile-stats"] = _ => CmdTileStats(),
             ["regenerate-dirty-tiles"] = _ => CmdRegenerateDirtyTiles(),
@@ -1057,7 +1065,8 @@ public class JsonCommandProcessor {
             new { name = "compute-vanilla-baseline", args = "outputPath?", description = "Compute retail quality baseline metrics (density, terrain dist, etc.)" },
             new { name = "render-preview",   args = "lbX, lbY, radius?, resolution?, overlay?, includePng?, outputPath?", description = "Top-down PNG of an N×N landblock region (terrain + objects + cliff/pairing overlays). Returns base64 PNG." },
             new { name = "compare-to-retail", args = "generated, retailBaseline?, topK?, anomalyMinModel?, perLandblock?, cacheDir?", description = "Subprocess the Python comparator; score generated world vs retail with per-LB drilldown and class-space ratio. Caches retail snapshot for tight tuning loops." },
-            new { name = "transact",         args = "ops[] | opsFile, rollback_on_fail?, validate?", description = "Stage N mutating ops, validate the staged delta, atomically commit or rollback. Allow-list: terrain edits, object placement, generate-dungeon. validate=auto|all|none|{landblocks:[...]}." },
+            new { name = "transact",         args = "ops[] | opsFile, rollback_on_fail?, validate?, diff?", description = "Stage N mutating ops, validate the staged delta, atomically commit or rollback. Allow-list: terrain edits, object placement, generate-dungeon. validate=auto|all|none|{landblocks:[...]}. diff=true|\"structured\"|\"visual\"|\"both\" inlines the transact-diff response." },
+            new { name = "transact-diff",    args = "txId, render?, renderMode?, lbs?, resolution?, out?",        description = "Structured before/after report for a committed transaction. renderMode=overlay|side-by-side|after-only-with-diff. Returns TXDIFF-EXPIRED or TXDIFF-ROLLED-BACK if the snapshot is unavailable." },
             new { name = "describe-landblock", args = "lbX, lbY",                            description = "Living Atlas: verbal + deeply structured per-LB description (terrain, structures, spawns, POIs, validation). Composes ontology + region/town gazetteer + Acpedia + LSD spawnMap." },
             new { name = "get-tile",         args = "zoom, lbX?, lbY?, region?, includeBase64?", description = "Living Atlas tile pyramid. zoom=lb (LB-keyed), region (region name), or world. Returns path + size + optional base64 PNG." },
             new { name = "tile-stats",       args = "",                                      description = "Tile-cache totals, dirty counts, disk used vs. budget" },
@@ -1969,6 +1978,35 @@ public class JsonCommandProcessor {
             catch (Exception ex) { Console.Error.WriteLine($"[Tiles] Invalidation skipped: {ex.Message}"); }
         }
 
+        // Inline diff: when the caller sets "diff", piggy-back the transact-diff
+        // response on this transact response. Three forms — true/"both" yield
+        // structured + visual; "structured" omits the visual; "visual" only
+        // requests the visual block (still emits the summary as cheap context).
+        var diffNode = node["diff"];
+        System.Text.Json.Nodes.JsonNode? inlineDiff = null;
+        if (diffNode != null && !(diffNode.GetValueKind() == JsonValueKind.False)) {
+            string mode = "both";
+            if (diffNode.GetValueKind() == JsonValueKind.String) {
+                mode = diffNode.GetValue<string>().ToLowerInvariant();
+            }
+            bool wantVisual = mode is "true" or "both" or "visual";
+            bool wantStructured = mode is "true" or "both" or "structured" or "visual";   // visual still wants summary
+            string renderMode = node["renderMode"]?.GetValue<string>()?.ToLowerInvariant() ?? "overlay";
+            int resolution = (node["resolution"]?.GetValueKind() == JsonValueKind.Number)
+                ? node["resolution"]!.GetValue<int>() : 1024;
+            if (result.Status != "committed") {
+                inlineDiff = new System.Text.Json.Nodes.JsonObject {
+                    ["errorCode"] = "TXDIFF-ROLLED-BACK",
+                    ["error"] = "Transaction was rolled back — no diff is retained for it.",
+                };
+            } else {
+                var diffResult = _transactDiffEngine.Run(
+                    result.Journal.TransactionId, wantVisual, renderMode, lbFilter: null,
+                    resolution: resolution, outPath: null);
+                inlineDiff = SerializeTransactDiffToNode(diffResult, wantStructured, wantVisual);
+            }
+        }
+
         return Serialize(new {
             success = result.Success,
             command = "transact",
@@ -1986,12 +2024,254 @@ public class JsonCommandProcessor {
                 opsRolledBack = result.Journal.OpsRolledBack,
             },
             error = result.Error,
+            diff = inlineDiff,
         });
     }
 
     private static System.Text.Json.Nodes.JsonNode? TryParseJson(string s) {
         try { return System.Text.Json.Nodes.JsonNode.Parse(s); }
         catch { return null; }
+    }
+
+    // ════════════════════════════════════════════════════
+    //  Transact-Diff — structured before/after report.
+    // ════════════════════════════════════════════════════
+
+    private string CmdTransactDiff(System.Text.Json.Nodes.JsonNode node) {
+        var txIdRaw = node["txId"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(txIdRaw) || !Guid.TryParse(txIdRaw, out var txId)) {
+            return Serialize(new { success = false, command = "transact-diff",
+                error = "Missing or invalid 'txId' (expected a transaction GUID from a prior transact response)." });
+        }
+
+        bool render = node["render"]?.GetValue<bool>() ?? false;
+        string renderMode = node["renderMode"]?.GetValue<string>()?.ToLowerInvariant() ?? "overlay";
+        int resolution = (node["resolution"]?.GetValueKind() == JsonValueKind.Number)
+            ? node["resolution"]!.GetValue<int>() : 1024;
+        string? outPath = node["out"]?.GetValueKind() == JsonValueKind.String
+            ? node["out"]!.GetValue<string>() : null;
+
+        HashSet<ushort>? lbFilter = null;
+        if (node["lbs"] is System.Text.Json.Nodes.JsonArray lbArr && lbArr.Count > 0) {
+            lbFilter = new HashSet<ushort>();
+            foreach (var item in lbArr.OfType<System.Text.Json.Nodes.JsonNode>()) {
+                if (item is System.Text.Json.Nodes.JsonArray pair && pair.Count == 2) {
+                    uint lbX = pair[0]!.GetValue<uint>();
+                    uint lbY = pair[1]!.GetValue<uint>();
+                    lbFilter.Add((ushort)((lbX << 8) | lbY));
+                }
+            }
+        }
+
+        var result = _transactDiffEngine.Run(txId, render, renderMode, lbFilter, resolution, outPath);
+        var body = SerializeTransactDiffToNode(result, includeStructured: true, includeVisual: render);
+        if (body is System.Text.Json.Nodes.JsonObject obj) {
+            obj["command"] = "transact-diff";
+        }
+        return body?.ToJsonString(JsonOpts) ?? Serialize(new { success = false, command = "transact-diff", error = "Diff serialization failed." });
+    }
+
+    /// <summary>
+    /// Serialize a TransactDiffResult to the spec wire shape. The transact inline
+    /// path and the standalone transact-diff path both consume this.
+    /// </summary>
+    private static System.Text.Json.Nodes.JsonNode SerializeTransactDiffToNode(
+            TransactDiffResult r, bool includeStructured, bool includeVisual) {
+        var obj = new System.Text.Json.Nodes.JsonObject {
+            ["success"] = r.Success,
+            ["txId"] = r.TxId.ToString(),
+        };
+        if (!r.Success) {
+            obj["errorCode"] = r.ErrorCode;
+            obj["error"] = r.Error;
+            return obj;
+        }
+        if (includeStructured && r.Summary != null) {
+            obj["summary"] = new System.Text.Json.Nodes.JsonObject {
+                ["documentsTouched"] = r.Summary.DocumentsTouched,
+                ["objectsAdded"] = r.Summary.ObjectsAdded,
+                ["objectsRemoved"] = r.Summary.ObjectsRemoved,
+                ["objectsMoved"] = r.Summary.ObjectsMoved,
+                ["structuresAdded"] = r.Summary.StructuresAdded,
+                ["structuresRemoved"] = r.Summary.StructuresRemoved,
+                ["validationDelta"] = new System.Text.Json.Nodes.JsonObject {
+                    ["errors"] = r.Summary.ValidationErrorsDelta,
+                    ["warnings"] = r.Summary.ValidationWarningsDelta,
+                    ["info"] = r.Summary.ValidationInfoDelta,
+                },
+                ["spawnsAdded"] = r.Summary.SpawnsAdded,
+                ["spawnsRemoved"] = r.Summary.SpawnsRemoved,
+                ["poisAdded"] = r.Summary.PoisAdded,
+                ["poisRemoved"] = r.Summary.PoisRemoved,
+                ["biomeShift"] = r.Summary.BiomeShift,
+                ["roadShift"] = r.Summary.RoadShift,
+                ["cliffShift"] = r.Summary.CliffShift,
+            };
+        }
+        if (includeStructured && r.PerLandblock != null && r.PerLandblock.Count > 0) {
+            var arr = new System.Text.Json.Nodes.JsonArray();
+            foreach (var lb in r.PerLandblock) {
+                arr.Add(SerializePerLandblock(lb));
+            }
+            obj["perLandblock"] = arr;
+        }
+        if (includeStructured && r.TerrainSummary != null) {
+            var ts = r.TerrainSummary;
+            obj["terrainSummary"] = new System.Text.Json.Nodes.JsonObject {
+                ["biomeBefore"] = HistogramToNode(ts.BiomeBefore),
+                ["biomeAfter"] = HistogramToNode(ts.BiomeAfter),
+                ["vertexHeightChanged"] = ts.VertexHeightChanged,
+                ["vertexTypeChanged"] = ts.VertexTypeChanged,
+                ["vertexRoadChanged"] = ts.VertexRoadChanged,
+            };
+        }
+        if (includeVisual && r.Visual != null) {
+            var v = new System.Text.Json.Nodes.JsonObject {
+                ["mode"] = r.Visual.Mode,
+                ["width"] = r.Visual.Width,
+                ["height"] = r.Visual.Height,
+            };
+            if (r.Visual.PngBytes != null && r.Visual.PngBytes.Length > 0
+                    && string.IsNullOrEmpty(r.Visual.OutPath)) {
+                v["pngBase64"] = Convert.ToBase64String(r.Visual.PngBytes);
+            }
+            if (!string.IsNullOrEmpty(r.Visual.OutPath)) v["outPath"] = r.Visual.OutPath;
+            if (!string.IsNullOrEmpty(r.Visual.Note)) v["note"] = r.Visual.Note;
+            obj["visual"] = v;
+        }
+        return obj;
+    }
+
+    private static System.Text.Json.Nodes.JsonObject SerializePerLandblock(TransactDiffPerLandblock lb) {
+        return new System.Text.Json.Nodes.JsonObject {
+            ["lbX"] = lb.LbX,
+            ["lbY"] = lb.LbY,
+            ["lbHex"] = lb.LbHex,
+            ["createdByBatch"] = lb.CreatedByBatch,
+            ["objects"] = new System.Text.Json.Nodes.JsonObject {
+                ["added"] = ObjectsToArray(lb.Objects.Added),
+                ["removed"] = ObjectsToArray(lb.Objects.Removed),
+                ["moved"] = MovesToArray(lb.Moves.Moved),
+            },
+            ["structures"] = new System.Text.Json.Nodes.JsonObject {
+                ["added"] = StructuresToArray(lb.Structures.Added),
+                ["removed"] = StructuresToArray(lb.Structures.Removed),
+            },
+            ["validation"] = new System.Text.Json.Nodes.JsonObject {
+                ["added"] = ValidationToArray(lb.Validation.Added),
+                ["cleared"] = ValidationToArray(lb.Validation.Removed),
+            },
+            ["spawns"] = new System.Text.Json.Nodes.JsonObject {
+                ["added"] = SpawnsToArray(lb.Spawns.Added),
+                ["removed"] = SpawnsToArray(lb.Spawns.Removed),
+            },
+            ["pois"] = new System.Text.Json.Nodes.JsonObject {
+                ["added"] = PoisToArray(lb.Pois.Added),
+                ["removed"] = PoisToArray(lb.Pois.Removed),
+            },
+            ["categorical"] = new System.Text.Json.Nodes.JsonObject {
+                ["biomeBefore"] = lb.Categorical.BiomeBefore,
+                ["biomeAfter"] = lb.Categorical.BiomeAfter,
+                ["roadBefore"] = lb.Categorical.RoadBefore,
+                ["roadAfter"] = lb.Categorical.RoadAfter,
+                ["cliffsBefore"] = lb.Categorical.CliffsBefore,
+                ["cliffsAfter"] = lb.Categorical.CliffsAfter,
+            },
+        };
+    }
+
+    private static System.Text.Json.Nodes.JsonArray ObjectsToArray(IEnumerable<TransactDiffObject> xs) {
+        var arr = new System.Text.Json.Nodes.JsonArray();
+        foreach (var o in xs) {
+            var oo = new System.Text.Json.Nodes.JsonObject {
+                ["wcid"] = o.Wcid,
+                ["model"] = o.Model,
+                ["position"] = Vector3ToArray(o.Position),
+                ["ontology"] = StringArray(o.Ontology),
+            };
+            arr.Add(oo);
+        }
+        return arr;
+    }
+
+    private static System.Text.Json.Nodes.JsonArray MovesToArray(IEnumerable<TransactDiffMove> xs) {
+        var arr = new System.Text.Json.Nodes.JsonArray();
+        foreach (var m in xs) {
+            arr.Add(new System.Text.Json.Nodes.JsonObject {
+                ["wcid"] = m.Wcid,
+                ["model"] = m.Model,
+                ["from"] = Vector3ToArray(m.From),
+                ["to"] = Vector3ToArray(m.To),
+                ["deltaXY"] = m.DeltaXY,
+                ["deltaZ"] = m.DeltaZ,
+            });
+        }
+        return arr;
+    }
+
+    private static System.Text.Json.Nodes.JsonArray StructuresToArray(IEnumerable<TransactDiffStructure> xs) {
+        var arr = new System.Text.Json.Nodes.JsonArray();
+        foreach (var s in xs) {
+            arr.Add(new System.Text.Json.Nodes.JsonObject {
+                ["model"] = s.Model,
+                ["origin"] = Vector3ToArray(s.Origin),
+                ["architecture"] = s.Architecture,
+                ["footprintShape"] = s.FootprintShape,
+            });
+        }
+        return arr;
+    }
+
+    private static System.Text.Json.Nodes.JsonArray ValidationToArray(IEnumerable<TransactDiffValidationEntry> xs) {
+        var arr = new System.Text.Json.Nodes.JsonArray();
+        foreach (var v in xs) {
+            arr.Add(new System.Text.Json.Nodes.JsonObject {
+                ["code"] = v.Code,
+                ["severity"] = v.Severity,
+                ["msg"] = v.Msg,
+                ["context"] = v.Context,
+            });
+        }
+        return arr;
+    }
+
+    private static System.Text.Json.Nodes.JsonArray SpawnsToArray(IEnumerable<TransactDiffSpawn> xs) {
+        var arr = new System.Text.Json.Nodes.JsonArray();
+        foreach (var s in xs) {
+            arr.Add(new System.Text.Json.Nodes.JsonObject {
+                ["wcid"] = s.Wcid,
+                ["name"] = s.Name,
+                ["position"] = Vector3ToArray(s.Position),
+            });
+        }
+        return arr;
+    }
+
+    private static System.Text.Json.Nodes.JsonArray PoisToArray(IEnumerable<TransactDiffPoi> xs) {
+        var arr = new System.Text.Json.Nodes.JsonArray();
+        foreach (var p in xs) {
+            arr.Add(new System.Text.Json.Nodes.JsonObject {
+                ["title"] = p.Title,
+                ["categories"] = StringArray(p.Categories),
+            });
+        }
+        return arr;
+    }
+
+    private static System.Text.Json.Nodes.JsonArray Vector3ToArray(System.Numerics.Vector3 v) {
+        return new System.Text.Json.Nodes.JsonArray((double)v.X, (double)v.Y, (double)v.Z);
+    }
+
+    private static System.Text.Json.Nodes.JsonArray StringArray(string[] xs) {
+        var arr = new System.Text.Json.Nodes.JsonArray();
+        foreach (var s in xs) arr.Add(s);
+        return arr;
+    }
+
+    private static System.Text.Json.Nodes.JsonObject HistogramToNode(Dictionary<int, int> hist) {
+        var obj = new System.Text.Json.Nodes.JsonObject();
+        foreach (var (k, v) in hist) obj[k.ToString()] = v;
+        return obj;
     }
 
     // ════════════════════════════════════════════════════

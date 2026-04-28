@@ -1129,6 +1129,177 @@
             ],
             "parameters": {},
             "response": {}
+        },
+        "transact": {
+            "category": "transact",
+            "description": "Stage N mutating ops, validate the staged delta, atomically commit or rollback. Allow-list: terrain edits, object placement, generate-dungeon, paste-stamp.",
+            "parameters": {
+                "ops": {
+                    "type": "object[]",
+                    "required": false,
+                    "description": "Inline list of op objects (each shaped as a normal JSON command)."
+                },
+                "opsFile": {
+                    "type": "string",
+                    "required": false,
+                    "description": "Path to a JSON file holding either a top-level array of ops or { \"ops\": [...] }. Use when the inline payload would exceed stdin line-buffer limits."
+                },
+                "rollback_on_fail": {
+                    "type": "bool",
+                    "required": false,
+                    "default": true,
+                    "description": "If true, restore pre-state on any op failure or validation error."
+                },
+                "validate": {
+                    "type": "string|object",
+                    "required": false,
+                    "default": "auto",
+                    "description": "auto | all | none | { landblocks: [string] }."
+                },
+                "diff": {
+                    "type": "bool|string",
+                    "required": false,
+                    "default": false,
+                    "description": "When set, returns transact-diff in the same response. Values: true | \"structured\" | \"visual\" | \"both\"."
+                },
+                "renderMode": {
+                    "type": "string",
+                    "required": false,
+                    "default": "overlay",
+                    "description": "Visual diff mode when diff includes visual: overlay | side-by-side | after-only-with-diff."
+                },
+                "resolution": {
+                    "type": "int",
+                    "required": false,
+                    "default": 1024,
+                    "description": "Visual diff resolution in pixels (square)."
+                }
+            },
+            "response": {
+                "status": "string (committed | rolled-back)",
+                "reason": "string (ok | rejected | op-threw | op-returned-failure | validation-failure)",
+                "ops": "object[] (per-op outcome with embedded inner response)",
+                "validation": "validationReport[]?",
+                "journal": {
+                    "transactionId": "string (guid)",
+                    "startedAt": "string (ISO-8601)",
+                    "finishedAt": "string (ISO-8601)",
+                    "documentsTouched": "string[]",
+                    "documentsCreated": "string[]",
+                    "opsApplied": "int",
+                    "opsRolledBack": "int"
+                },
+                "diff": "transactDiff? (present only when 'diff' was requested; same shape as transact-diff response)"
+            }
+        },
+        "transact-diff": {
+            "category": "transact",
+            "description": "Structured before/after report for a previously committed transact. Reads pre+post projection snapshots retained in an LRU keyed by transaction id; nothing is persisted to disk.",
+            "parameters": {
+                "txId": {
+                    "type": "string",
+                    "required": true,
+                    "description": "Transaction GUID returned by a prior transact response."
+                },
+                "render": {
+                    "type": "bool",
+                    "required": false,
+                    "default": false,
+                    "description": "Also return a visual diff PNG."
+                },
+                "renderMode": {
+                    "type": "string",
+                    "required": false,
+                    "default": "overlay",
+                    "description": "overlay | side-by-side | after-only-with-diff."
+                },
+                "lbs": {
+                    "type": "[int,int][]",
+                    "required": false,
+                    "description": "Restrict diff to specific [lbX, lbY] pairs. Default: all touched LBs."
+                },
+                "resolution": {
+                    "type": "int",
+                    "required": false,
+                    "default": 1024,
+                    "description": "Visual diff resolution in pixels."
+                },
+                "out": {
+                    "type": "string",
+                    "required": false,
+                    "description": "Write the visual PNG to this path; the response then carries outPath instead of pngBase64."
+                }
+            },
+            "response": {
+                "txId": "string (guid)",
+                "errorCode": "string? (TXDIFF-EXPIRED | TXDIFF-ROLLED-BACK when success=false)",
+                "summary": {
+                    "documentsTouched": "int",
+                    "objectsAdded": "int",
+                    "objectsRemoved": "int",
+                    "objectsMoved": "int",
+                    "structuresAdded": "int",
+                    "structuresRemoved": "int",
+                    "validationDelta": {
+                        "errors": "int",
+                        "warnings": "int",
+                        "info": "int"
+                    },
+                    "spawnsAdded": "int",
+                    "spawnsRemoved": "int",
+                    "poisAdded": "int",
+                    "poisRemoved": "int",
+                    "biomeShift": "bool",
+                    "roadShift": "bool",
+                    "cliffShift": "bool"
+                },
+                "perLandblock": [
+                    {
+                        "lbX": "int",
+                        "lbY": "int",
+                        "lbHex": "string (0xXXXX)",
+                        "createdByBatch": "bool",
+                        "objects": {
+                            "added": "[{wcid, model, position:[x,y,z], ontology:string[]}]",
+                            "removed": "[{wcid, model, position:[x,y,z], ontology:string[]}]",
+                            "moved": "[{wcid, model, from:[x,y,z], to:[x,y,z], deltaXY, deltaZ}]"
+                        },
+                        "structures": {
+                            "added": "[{model, origin:[x,y,z], architecture, footprintShape}]",
+                            "removed": "[{model, origin:[x,y,z], architecture, footprintShape}]"
+                        },
+                        "validation": {
+                            "added": "[{code, severity, msg, context?}]",
+                            "cleared": "[{code, severity, msg, context?}]"
+                        },
+                        "spawns": {
+                            "added": "[{wcid, name, position:[x,y,z]}]",
+                            "removed": "[{wcid, name, position:[x,y,z]}]"
+                        },
+                        "pois": {
+                            "added": "[{title, categories:string[]}]",
+                            "removed": "[{title, categories:string[]}]"
+                        },
+                        "categorical": {
+                            "biomeBefore": "string?",
+                            "biomeAfter": "string?",
+                            "roadBefore": "bool",
+                            "roadAfter": "bool",
+                            "cliffsBefore": "int",
+                            "cliffsAfter": "int"
+                        }
+                    }
+                ],
+                "terrainSummary": "object? (only when batch touched terrain doc with no specific landblocks; biome histograms + per-vertex change counts)",
+                "visual": {
+                    "mode": "string",
+                    "width": "int",
+                    "height": "int",
+                    "pngBase64": "string? (omitted when 'out' was supplied)",
+                    "outPath": "string? (present when 'out' was supplied)",
+                    "note": "string? (info-level message, e.g. 'terrain-only batch — no landblocks specified')"
+                }
+            }
         }
     },
     "sharedTypes": {
