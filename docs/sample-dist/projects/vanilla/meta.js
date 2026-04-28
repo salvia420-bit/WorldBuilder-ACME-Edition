@@ -1,0 +1,1 @@
+const PROJECT_vanilla = {"slug":"vanilla","lbList":["0x00B0","0xA9B3","0xA9B4","0xA9B5","0xAAB4"],"dungeonLbs":["0x00B0","0xA9B3","0xA9B4"],"floorCounts":{"0xA9B4":2,"0xA9B3":1,"0x00B0":4},"generated":"2026-04-28T14:24:11.9540160Z"};

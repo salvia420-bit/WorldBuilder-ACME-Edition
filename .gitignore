@@ -487,6 +487,12 @@ mosaicdats/
 output_*/
 remap_output/
 
+# Exception: docs/sample-dist/projects/ is a committed sample of
+# emit-static-site output so reviewers can open the dist directly
+# from a git clone without rebuilding.
+!docs/sample-dist/projects/
+!docs/sample-dist/projects/**
+
 # WorldBuilder project databases & project files (per-machine)
 *.db
 *.wbproj

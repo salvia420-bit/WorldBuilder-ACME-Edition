@@ -1,0 +1,1 @@
+const MANIFEST = {"protocolVersion":1,"generated":"2026-04-28T14:24:11.9640771Z","defaultProject":"vanilla","projects":[{"slug":"vanilla","name":"RetailSmoke","maxZoom":9,"minZoom":3,"generated":"2026-04-28T14:24:11.9635095Z","metaPath":"projects/vanilla/meta.js"}]};

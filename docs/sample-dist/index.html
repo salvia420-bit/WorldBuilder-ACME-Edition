@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WorldBuilder · DerethMaps Enhanced</title>
+  <link rel="stylesheet" href="leaflet/leaflet.css" />
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <header id="header">
+    <div class="brand">DerethMaps Enhanced</div>
+    <label class="project-picker">
+      Project
+      <select id="project-select"></select>
+    </label>
+    <div id="floor-selector"></div>
+    <div id="status-line">loading…</div>
+  </header>
+  <main>
+    <div id="map"></div>
+    <aside id="describe-panel">
+      <div class="panel-empty">Hover over a landblock to see its description.</div>
+    </aside>
+  </main>
+  <script src="leaflet/leaflet.js"></script>
+  <script src="manifest.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

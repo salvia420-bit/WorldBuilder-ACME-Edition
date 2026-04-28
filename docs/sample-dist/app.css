@@ -1,0 +1,66 @@
+html, body {
+  margin: 0; padding: 0;
+  height: 100%; width: 100%;
+  background: #14171c; color: #d8dde6;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+body { display: flex; flex-direction: column; }
+
+#header {
+  display: flex; align-items: center; gap: 1rem;
+  padding: 0.5rem 1rem;
+  background: #1c2128; border-bottom: 1px solid #2a323d;
+  flex: 0 0 auto;
+}
+.brand { font-weight: 600; color: #f0f4fa; }
+.project-picker { font-size: 0.85rem; color: #aab2c0; }
+.project-picker select {
+  background: #2a323d; color: #e0e6f0;
+  border: 1px solid #3a4550; border-radius: 4px;
+  padding: 0.2rem 0.5rem; margin-left: 0.4rem;
+}
+#status-line { margin-left: auto; font-size: 0.8rem; color: #8a93a3; }
+
+main { flex: 1 1 auto; display: flex; min-height: 0; }
+#map { flex: 1 1 auto; background: #14171c; }
+.leaflet-container { background: #14171c; }
+
+#describe-panel {
+  width: 320px; flex: 0 0 320px;
+  background: #1c2128; border-left: 1px solid #2a323d;
+  padding: 0.8rem 1rem;
+  overflow-y: auto;
+  font-size: 0.85rem; line-height: 1.5;
+}
+.panel-empty { color: #6a7282; font-style: italic; }
+.panel-section { margin-bottom: 1rem; }
+.panel-section h3 {
+  margin: 0 0 0.3rem 0; font-size: 0.75rem;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  color: #aab2c0;
+}
+.panel-section p, .panel-section pre {
+  margin: 0; font-size: 0.8rem; color: #d8dde6;
+}
+.panel-section pre {
+  background: #14171c; border: 1px solid #2a323d; border-radius: 4px;
+  padding: 0.4rem 0.6rem; overflow-x: auto; max-height: 200px;
+  font-size: 0.7rem; line-height: 1.4;
+}
+
+#floor-selector {
+  display: none;
+  align-items: center; gap: 0.4rem;
+  font-size: 0.85rem; color: #aab2c0;
+}
+#floor-selector.active { display: flex; }
+#floor-selector .floor-btn {
+  background: #2a323d; color: #d8dde6;
+  border: 1px solid #3a4550; border-radius: 4px;
+  padding: 0.2rem 0.6rem; cursor: pointer;
+  font-family: inherit; font-size: 0.8rem;
+}
+#floor-selector .floor-btn.active {
+  background: #4a90c8; color: #fff; border-color: #4a90c8;
+}
+#floor-selector .floor-btn:hover { background: #3a4550; }
