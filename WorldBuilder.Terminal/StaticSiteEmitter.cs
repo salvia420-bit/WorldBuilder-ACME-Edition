@@ -295,7 +295,11 @@ public static class StaticSiteEmitter {
             floorCounts,
             generated = DateTime.UtcNow.ToString("o"),
         };
-        var js = $"const PROJECT_{SafeSlugForJs(slug)} = " + JsonSerializer.Serialize(meta, JsonOpts) + ";\n";
+        // Why: top-level `const` in a classic <script> is script-scoped — it
+        // does NOT create a property on `window`, so `window['PROJECT_<slug>']`
+        // returns undefined when the frontend tries to look it up. `var` does
+        // attach to window, which is the JSONP convention.
+        var js = $"var PROJECT_{SafeSlugForJs(slug)} = " + JsonSerializer.Serialize(meta, JsonOpts) + ";\n";
         File.WriteAllText(Path.Combine(projectDir, "meta.js"), js);
     }
 
@@ -327,7 +331,9 @@ public static class StaticSiteEmitter {
                 metaPath = $"projects/{p.Slug}/meta.js",
             }).ToArray(),
         };
-        var js = "const MANIFEST = " + JsonSerializer.Serialize(manifestObj, JsonOpts) + ";\n";
+        // Same `var`-not-`const` reasoning as meta.js: top-level const in a
+        // classic <script> doesn't create a window property.
+        var js = "var MANIFEST = " + JsonSerializer.Serialize(manifestObj, JsonOpts) + ";\n";
         File.WriteAllText(manifestPath, js);
         return ordered.Length;
     }
@@ -338,8 +344,15 @@ public static class StaticSiteEmitter {
         var result = new Dictionary<string, ManifestProject>(StringComparer.Ordinal);
         // Strip the `const MANIFEST = ` prefix and trailing `;` to recover JSON.
         var trimmed = manifestJs.TrimStart();
-        const string prefix = "const MANIFEST = ";
-        if (!trimmed.StartsWith(prefix, StringComparison.Ordinal)) return result;
+        // Accept both `var` (current emitter) and `const` (legacy dists from
+        // the initial Phase 4 emit) so the merge path doesn't break against
+        // a manifest a previous version produced.
+        const string varPrefix = "var MANIFEST = ";
+        const string constPrefix = "const MANIFEST = ";
+        string prefix;
+        if (trimmed.StartsWith(varPrefix, StringComparison.Ordinal)) prefix = varPrefix;
+        else if (trimmed.StartsWith(constPrefix, StringComparison.Ordinal)) prefix = constPrefix;
+        else return result;
         var json = trimmed.Substring(prefix.Length).TrimEnd().TrimEnd(';');
         using var doc = JsonDocument.Parse(json);
         if (!doc.RootElement.TryGetProperty("projects", out var arr)) return result;
