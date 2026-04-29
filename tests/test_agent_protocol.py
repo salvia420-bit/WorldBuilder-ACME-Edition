@@ -1479,19 +1479,24 @@ class TestDerethMapsPhase3(RuntimeRequiredTestCase):
         assert_has_fields(resp, "maxZoom", "minZoom", "lbsProcessed",
                           "exteriorTilesAtMaxZoom", "downsampledTiles", "outDir")
         self.assertEqual(resp["lbsProcessed"], 4)
-        self.assertEqual(resp["exteriorTilesAtMaxZoom"], 4,
-                         "At maxZoom=8 each LB is exactly one tile")
+        # exteriorTilesAtMaxZoom is now terrain + objects-glyph combined (each
+        # LB writes a terrain tile and may also write a non-blank glyph tile),
+        # so the field is >= one-per-LB rather than equal.
+        self.assertGreaterEqual(resp["exteriorTilesAtMaxZoom"], 4,
+                                "At maxZoom=8 each LB writes at least one terrain tile")
         self.assertGreaterEqual(resp["downsampledTiles"], 1)
 
-        # Verify the actual tile tree.
-        ext = Path(out_dir) / "exterior"
+        # Verify the actual tile tree. The pyramid emitter splits exterior
+        # output into separate `terrain/` and `objects/` directories so the
+        # frontend's floor mode can hide objects without affecting terrain.
+        terrain = Path(out_dir) / "terrain"
         for z in range(3, 9):
-            zoom_dir = ext / str(z)
+            zoom_dir = terrain / str(z)
             self.assertTrue(zoom_dir.exists(), f"Missing zoom dir z={z}")
             tiles = list(zoom_dir.rglob("*.png"))
             self.assertGreater(len(tiles), 0, f"No tiles at z={z}")
-        # z=8 specifically should have 4 tiles for our 4-LB filter.
-        z8_tiles = list((ext / "8").rglob("*.png"))
+        # z=8 specifically should have 4 terrain tiles for our 4-LB filter.
+        z8_tiles = list((terrain / "8").rglob("*.png"))
         self.assertEqual(len(z8_tiles), 4)
 
     def test_02_describe_floor(self):
@@ -1577,12 +1582,17 @@ class TestDerethMapsPhase4(RuntimeRequiredTestCase):
 
         self.assertEqual(resp["lbsDescribed"], 2)
         self.assertGreater(resp["overlaysEmitted"], 0)
-        self.assertEqual(resp["tilesAtMaxZoom"], 2)
+        # tilesAtMaxZoom counts terrain + objects-glyph after the pyramid tier
+        # split. Each LB always produces a terrain tile; glyph tiles depend on
+        # whether the LB has placed objects, so use a lower bound rather than
+        # the previous strict-equals against the pre-split count.
+        self.assertGreaterEqual(resp["tilesAtMaxZoom"], 2)
         self.assertGreaterEqual(resp["frontendFilesCopied"], 4,
                                 "Should copy at least index.html + app.js + app.css + leaflet/*")
         self.assertEqual(resp["manifestProjectCount"], 1)
 
-        # Dist contract files.
+        # Dist contract files. The pyramid emitter writes terrain tiles to
+        # `tiles/terrain/...` (split from the legacy combined `exterior/`).
         for required in [
                 "index.html", "app.js", "app.css", "manifest.js",
                 "leaflet/leaflet.js", "leaflet/leaflet.css",
@@ -1591,15 +1601,15 @@ class TestDerethMapsPhase4(RuntimeRequiredTestCase):
                 "projects/phase4test/desc/0xA9B4.js",
                 "projects/phase4test/desc/0xAAB4.js",
                 "projects/phase4test/overlays/grid.js",
-                "projects/phase4test/tiles/exterior/8/169/75.png",
+                "projects/phase4test/tiles/terrain/8/169/75.png",
         ]:
             self.assertTrue((self.dist / required).exists(), f"Missing: {required}")
 
         # manifest.js shape — JSONP-style const + valid embedded JSON.
         manifest_text = (self.dist / "manifest.js").read_text()
-        self.assertTrue(manifest_text.startswith("const MANIFEST ="))
+        self.assertTrue(manifest_text.startswith("var MANIFEST ="))
         # Strip prefix + trailing semicolon and re-parse.
-        manifest_json = manifest_text[len("const MANIFEST = "):].rstrip().rstrip(";")
+        manifest_json = manifest_text[len("var MANIFEST = "):].rstrip().rstrip(";")
         manifest = json.loads(manifest_json)
         self.assertEqual(manifest["protocolVersion"], 1)
         self.assertEqual(len(manifest["projects"]), 1)
@@ -1647,7 +1657,7 @@ class TestDerethMapsPhase4(RuntimeRequiredTestCase):
 
         # Manifest JSON includes both slugs.
         manifest_text = (self.dist / "manifest.js").read_text()
-        manifest = json.loads(manifest_text[len("const MANIFEST = "):].rstrip().rstrip(";"))
+        manifest = json.loads(manifest_text[len("var MANIFEST = "):].rstrip().rstrip(";"))
         slugs = sorted(p["slug"] for p in manifest["projects"])
         self.assertEqual(slugs, ["first", "second"])
 

@@ -465,9 +465,12 @@
 
   function showFloor(lbHex, floorIndex) {
     if (floorImageOverlay) { map.removeLayer(floorImageOverlay); floorImageOverlay = null; }
+    const proj = MANIFEST.projects.find(function (p) { return p.slug === activeProject; });
+    const projMaxZoom = (proj && proj.maxZoom) || 12;
     const url = 'projects/' + activeProject + '/tiles/floor/' + lbHex + '/' +
-      MANIFEST.projects.find(function (p) { return p.slug === activeProject; }).maxZoom +
-      '/' + lbBaseTileX(lbHex) + '/' + lbBaseTileY(lbHex) + '/' + floorIndex + '.png';
+      projMaxZoom +
+      '/' + lbBaseTileX(lbHex, projMaxZoom) + '/' + lbBaseTileY(lbHex, projMaxZoom) +
+      '/' + floorIndex + '.png';
     const lbX = parseInt(lbHex.slice(2, 4), 16);
     const lbY = parseInt(lbHex.slice(4, 6), 16);
     const sw = L.latLng(lbY * LB_SIZE, lbX * LB_SIZE);
@@ -496,13 +499,18 @@
     }, function () { /* dungeon JS missing — fine */ });
   }
 
-  function lbBaseTileX(lbHex) {
+  // Why: tilesPerLbSide = 2^(zoom-8). The previous hardcoded `* 16` only
+  // matched maxZoom=12; at maxZoom=8..11 the floor-overlay URL pointed at
+  // a coordinate the emitter had never written to.
+  function lbBaseTileX(lbHex, zoom) {
     const lbX = parseInt(lbHex.slice(2, 4), 16);
-    return lbX * 16;  // assumes maxZoom=12; harmless for lower since path uses real maxZoom.
+    const tilesPerLbSide = 1 << Math.max(0, zoom - 8);
+    return lbX * tilesPerLbSide;
   }
-  function lbBaseTileY(lbHex) {
+  function lbBaseTileY(lbHex, zoom) {
     const lbY = parseInt(lbHex.slice(4, 6), 16);
-    return (255 - lbY) * 16;
+    const tilesPerLbSide = 1 << Math.max(0, zoom - 8);
+    return (255 - lbY) * tilesPerLbSide;
   }
 
   // ── URL deep linking ──────────────────────────────────────────────────
@@ -525,9 +533,12 @@
       const cy = initial.y * LB_SIZE + LB_SIZE / 2;
       map.setView(L.latLng(cy, cx), initial.z || 9);
       if (!isNaN(initial.floor)) {
+        // Why: parseFloat keeps decimals, but lbHex must be 2 hex digits per
+        // axis. Without floor() a deep link like ?x=10.5&y=180.5 produces
+        // '0xA.880B4' — invalid hex that breaks the floor lookup.
         const lbHex = '0x' +
-          initial.x.toString(16).toUpperCase().padStart(2, '0') +
-          initial.y.toString(16).toUpperCase().padStart(2, '0');
+          Math.floor(initial.x).toString(16).toUpperCase().padStart(2, '0') +
+          Math.floor(initial.y).toString(16).toUpperCase().padStart(2, '0');
         setTimeout(function () { showFloor(lbHex, initial.floor); }, 50);
       }
       return;

@@ -233,7 +233,11 @@ public static class StaticSiteEmitter {
                     },
                 };
             }
-            var atlasJs = "const SPRITE_ATLAS = " + JsonSerializer.Serialize(entries, JsonOpts) + ";\n";
+            // Same `var`-not-`const` reasoning as meta.js / manifest.js: a
+            // top-level `const` in a classic <script> is script-scoped and
+            // doesn't attach to `window`, so any consumer that does
+            // `window.SPRITE_ATLAS` would see `undefined`.
+            var atlasJs = "var SPRITE_ATLAS = " + JsonSerializer.Serialize(entries, JsonOpts) + ";\n";
             File.WriteAllText(Path.Combine(dstSprites, "atlas.js"), atlasJs);
             copied++;
         }

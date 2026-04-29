@@ -268,7 +268,11 @@ public class JsonCommandProcessor {
             ?? throw new ArgumentException("Missing 'projectSlug' field");
         string outDir = node["outDir"]?.GetValue<string>()
             ?? throw new ArgumentException("Missing 'outDir' field");
-        int maxZoom = node["maxZoom"]?.GetValue<int>() ?? 10;
+        // Why default 12: the README example, the agent_api_reference
+        // response example, and emit-tile-pyramid's own default all use 12.
+        // The previous default of 10 silently shipped a coarser pyramid than
+        // every documented invocation requested.
+        int maxZoom = node["maxZoom"]?.GetValue<int>() ?? 12;
         int minZoom = node["minZoom"]?.GetValue<int>() ?? 3;
         bool emitObject = node["emitObject"]?.GetValue<bool>() ?? false;
         bool emitFloor = node["emitFloor"]?.GetValue<bool>() ?? false;
