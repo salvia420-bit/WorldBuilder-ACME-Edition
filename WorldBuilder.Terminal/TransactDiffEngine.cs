@@ -39,6 +39,10 @@ internal sealed class TransactDiffEngine {
     public TransactDiffResult Run(Guid txId, bool render, string renderMode,
             HashSet<ushort>? lbFilter, int resolution, string? outPath) {
         var lookup = _txEngine.Lookup(txId);
+        if (lookup.Status == TransactSnapshotStatus.Rejected) {
+            return Failure(txId, "TXDIFF-REJECTED",
+                "Transaction was rejected before any op ran — no diff is retained for it.");
+        }
         if (lookup.Status == TransactSnapshotStatus.RolledBack) {
             return Failure(txId, "TXDIFF-ROLLED-BACK",
                 "Transaction was rolled back — no diff is retained for it.");

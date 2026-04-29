@@ -63,20 +63,27 @@ internal sealed class TransactionEngine {
     private readonly HeadlessProjectManager _projectManager;
 
     // ── Snapshot retention (powers transact-diff). ──────────────────────
-    // Committed transactions retain pre+post projections in an LRU. Rolled-back
-    // ones get a lightweight marker in a separate bounded set so transact-diff
-    // can return TXDIFF-ROLLED-BACK instead of TXDIFF-EXPIRED for them — those
-    // are different signals to the agent (one means "your batch was rejected",
-    // the other means "the snapshot scrolled out of cache").
+    // Committed transactions retain pre+post projections in an LRU. Failed
+    // transactions get a lightweight marker in a separate bounded set so
+    // transact-diff can return a precise error code instead of TXDIFF-EXPIRED.
+    // We distinguish two failure kinds:
+    //   • Rejected — the batch was refused before any op ran (bad allow-list,
+    //     bad validate shape, no project loaded). No snapshot was ever taken.
+    //   • RolledBack — ops staged but a failure triggered restore of the
+    //     pre-state snapshot. State was actually unwound.
+    // Different signals to the agent: rejected means "fix your request",
+    // rolled-back means "your batch was rejected mid-flight".
     private readonly int _retentionCount;
     private readonly long _retentionMemCapBytes;
     private readonly Dictionary<Guid, LinkedListNode<TransactSnapshotEntry>> _snapshotIndex = new();
     private readonly LinkedList<TransactSnapshotEntry> _snapshotOrder = new();
     private long _snapshotBytesUsed;
 
-    private const int RolledBackMarkerCap = 256;
-    private readonly Dictionary<Guid, DateTime> _rolledBackMarkers = new();
-    private readonly Queue<Guid> _rolledBackOrder = new();
+    private const int FailureMarkerCap = 256;
+    private readonly Dictionary<Guid, FailureKind> _failureMarkers = new();
+    private readonly Queue<Guid> _failureOrder = new();
+
+    private enum FailureKind { Rejected, RolledBack }
 
     public TransactionEngine(JsonCommandProcessor processor, HeadlessProjectManager projectManager,
             int retentionCount = 32, int retentionMemCapMb = 256) {
@@ -96,25 +103,18 @@ internal sealed class TransactionEngine {
         // batches that are also broken (nested transact, unknown op, etc.).
         var preOpRejection = PreflightOps(ops);
         if (preOpRejection != null) {
-            RecordRolledBack(txId);
-            return new TransactResult(
-                Success: false, Status: "rolled-back", Reason: "rejected",
-                Ops: new List<TransactOpOutcome>(),
-                Validation: null,
-                Journal: new TransactJournal(txId, startedAt, DateTime.UtcNow,
-                    new List<string>(), new List<string>(), 0, 0),
-                Error: preOpRejection);
+            return RejectBatch(txId, startedAt, preOpRejection);
+        }
+
+        // Reject malformed `validate` parameters up-front so the agent learns the
+        // expected shape instead of having an unknown mode silently treated as auto.
+        var validateRejection = PreflightValidate(validateNode);
+        if (validateRejection != null) {
+            return RejectBatch(txId, startedAt, validateRejection);
         }
 
         if (_projectManager.CurrentProject == null) {
-            RecordRolledBack(txId);
-            return new TransactResult(
-                Success: false, Status: "rolled-back", Reason: "rejected",
-                Ops: new List<TransactOpOutcome>(),
-                Validation: null,
-                Journal: new TransactJournal(txId, startedAt, DateTime.UtcNow,
-                    new List<string>(), new List<string>(), 0, 0),
-                Error: "No project loaded — call 'load' before 'transact'.");
+            return RejectBatch(txId, startedAt, "No project loaded — call 'load' before 'transact'.");
         }
 
         var dm = _projectManager.CurrentProject.DocumentManager;
@@ -147,8 +147,12 @@ internal sealed class TransactionEngine {
             var commandName = GetCommandName(opNode);
             // For generate-dungeon, force the inner op's `validate` flag false so the
             // engine doesn't double-validate (transact runs its own validation step).
+            // We dispatch a clone so the caller's input JSON isn't side-effected — the
+            // caller may inspect / re-send the same ops array elsewhere.
+            JsonNode dispatchNode = opNode;
             if (commandName.Equals("generate-dungeon", StringComparison.OrdinalIgnoreCase)) {
-                opNode["validate"] = false;
+                dispatchNode = JsonNode.Parse(opNode.ToJsonString())!;
+                dispatchNode["validate"] = false;
             }
 
             // Seed touched-LB candidates from explicit args before the op runs.
@@ -158,7 +162,7 @@ internal sealed class TransactionEngine {
 
             string responseJson;
             try {
-                responseJson = _processor.DispatchInternal(commandName, opNode);
+                responseJson = _processor.DispatchInternal(commandName, dispatchNode);
             } catch (Exception ex) {
                 outcomes.Add(new TransactOpOutcome(i, commandName, false,
                     BuildErrorEnvelope(commandName, ex.Message), ex.Message));
@@ -227,7 +231,7 @@ internal sealed class TransactionEngine {
                     // Storage delete may fail if the doc was never persisted yet — ignore.
                 }
             }
-            RecordRolledBack(txId);
+            RecordFailure(txId, FailureKind.RolledBack);
         } else {
             // Committed — record the docs the batch created so the journal is complete,
             // then promote the pre-snapshots to the retention LRU alongside fresh
@@ -274,11 +278,34 @@ internal sealed class TransactionEngine {
             if (!AllowedOps.Contains(commandName))
                 return $"ops[{i}] command '{commandName}' is not transactable";
             if (commandName.Equals("clear-objects", StringComparison.OrdinalIgnoreCase) &&
-                node["all"]?.GetValue<bool>() == true) {
+                TryReadBool(node["all"], out var clearAll) && clearAll) {
                 return $"ops[{i}] clear-objects with all:true mutates every populated landblock and is not transactable";
             }
         }
         return null;
+    }
+
+    // Reject malformed `validate` parameters before mutating anything. The accepted
+    // shapes are: omitted (defaults to auto), the strings "auto"/"all"/"none", or
+    // an object with a `landblocks` array. Anything else used to fall through to
+    // the auto path silently — surfacing the typo to the agent is more useful.
+    private static string? PreflightValidate(JsonNode? validateNode) {
+        if (validateNode == null) return null;
+        var kind = validateNode.GetValueKind();
+        if (kind == System.Text.Json.JsonValueKind.String) {
+            string s;
+            try { s = validateNode.GetValue<string>(); }
+            catch { return "'validate' string could not be read"; }
+            if (s.Equals("auto", StringComparison.OrdinalIgnoreCase)) return null;
+            if (s.Equals("all",  StringComparison.OrdinalIgnoreCase)) return null;
+            if (s.Equals("none", StringComparison.OrdinalIgnoreCase)) return null;
+            return $"'validate' mode '{s}' is not recognized (expected: auto, all, none, or {{landblocks:[...]}})";
+        }
+        if (validateNode is JsonObject obj) {
+            if (obj["landblocks"] is JsonArray) return null;
+            return "'validate' object must contain a 'landblocks' array of hex LB ids";
+        }
+        return "'validate' must be a string (auto|all|none) or object {landblocks:[...]}";
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -375,8 +402,10 @@ internal sealed class TransactionEngine {
         // Explicit landblock list
         if (validateNode is JsonObject obj && obj["landblocks"] is JsonArray lbArr) {
             foreach (var n in lbArr.OfType<JsonNode>()) {
-                var s = n.GetValue<string>();
-                if (TryParseHexLbKey(s, out var lbKey)) {
+                // GetValue<string>() throws on numeric/bool entries — skip those gracefully
+                // rather than aborting the whole validation pass.
+                if (n.GetValueKind() != System.Text.Json.JsonValueKind.String) continue;
+                if (TryParseHexLbKey(n.GetValue<string>(), out var lbKey)) {
                     reports.Add(engine.ValidateAll((uint)((lbKey >> 8) & 0xFF), (uint)(lbKey & 0xFF)));
                 }
             }
@@ -393,15 +422,18 @@ internal sealed class TransactionEngine {
         }
         // Right/top neighbors get terrain-only validation to catch TRN005 edge mismatches
         // without paying the full validate-all cost on landblocks the batch didn't touch.
+        // LB coords are 0..255 inclusive, so the neighbor exists iff the coord stays ≤ 255.
         foreach (var lbKey in touchedLbKeys) {
             uint lbX = (uint)((lbKey >> 8) & 0xFF);
             uint lbY = (uint)(lbKey & 0xFF);
             foreach (var (nx, ny) in new (uint, uint)[] { (lbX + 1, lbY), (lbX, lbY + 1) }) {
-                if (nx > 254 || ny > 254) continue;
+                if (nx > 0xFF || ny > 0xFF) continue;
                 ushort neighborKey = (ushort)((nx << 8) | ny);
                 if (validatedKeys.Contains(neighborKey)) continue;
                 try {
                     reports.Add(engine.ValidateTerrain(nx, ny));
+                    // Track so a second touched LB sharing this neighbor doesn't re-validate it.
+                    validatedKeys.Add(neighborKey);
                 } catch {
                     // Neighbor may not have terrain data — skip silently.
                 }
@@ -425,11 +457,27 @@ internal sealed class TransactionEngine {
         try {
             uint lbX = lbXNode.GetValue<uint>();
             uint lbY = lbYNode.GetValue<uint>();
+            // Reject out-of-range coords rather than silently truncating into the
+            // wrong landblock. AC LB coords are 0..255 inclusive on both axes.
+            if (lbX > 0xFF || lbY > 0xFF) return false;
             lbKey = (ushort)((lbX << 8) | lbY);
             return true;
         } catch {
             return false;
         }
+    }
+
+    // Defensive bool reader — JsonNode.GetValue<bool>() throws NotSupportedException
+    // on non-bool values, so we treat numeric/string truthy values as false here and
+    // let validators upstream complain about the wrong type if they care.
+    private static bool TryReadBool(JsonNode? node, out bool value) {
+        value = false;
+        if (node == null) return false;
+        try {
+            if (node.GetValueKind() == System.Text.Json.JsonValueKind.True) { value = true; return true; }
+            if (node.GetValueKind() == System.Text.Json.JsonValueKind.False) { value = false; return true; }
+        } catch { }
+        return false;
     }
 
     private static bool TryParseHexLbKey(string s, out ushort lbKey) {
@@ -460,29 +508,32 @@ internal sealed class TransactionEngine {
     }
 
     private static void CollectTouchedLbsFromResponse(string responseJson, HashSet<ushort> touched) {
-        try {
-            var n = JsonNode.Parse(responseJson);
-            if (n is null) return;
-            // "landblocks": [ "0xXXXX", ... ]
-            if (n["landblocks"] is JsonArray arr) {
-                foreach (var item in arr.OfType<JsonNode>()) {
+        JsonNode? n;
+        try { n = JsonNode.Parse(responseJson); }
+        catch { return; }
+        if (n is null) return;
+
+        // Per-item try/catch so a single non-string entry doesn't abort the rest of the
+        // collection — earlier versions wrapped the whole block in one catch and lost
+        // every subsequent landblock when one element was malformed.
+        static void CollectArray(JsonArray? arr, HashSet<ushort> touched) {
+            if (arr == null) return;
+            foreach (var item in arr.OfType<JsonNode>()) {
+                if (item.GetValueKind() != System.Text.Json.JsonValueKind.String) continue;
+                try {
                     if (TryParseHexLbKey(item.GetValue<string>(), out var k)) touched.Add(k);
-                }
+                } catch { }
             }
-            // "landblock": "0xXXXX"
-            if (n["landblock"]?.GetValue<string>() is string singleLb &&
-                TryParseHexLbKey(singleLb, out var k2)) {
+        }
+        try { CollectArray(n["landblocks"] as JsonArray, touched); } catch { }
+        try { CollectArray(n["affectedLandblocks"] as JsonArray, touched); } catch { }
+        try {
+            var single = n["landblock"];
+            if (single != null && single.GetValueKind() == System.Text.Json.JsonValueKind.String &&
+                TryParseHexLbKey(single.GetValue<string>(), out var k2)) {
                 touched.Add(k2);
             }
-            // "affectedLandblocks": [ "0xXXXX", ... ]
-            if (n["affectedLandblocks"] is JsonArray arr2) {
-                foreach (var item in arr2.OfType<JsonNode>()) {
-                    if (TryParseHexLbKey(item.GetValue<string>(), out var k)) touched.Add(k);
-                }
-            }
-        } catch {
-            // Best-effort — response may not have landblock fields.
-        }
+        } catch { }
     }
 
     private static string BuildErrorEnvelope(string command, string error) {
@@ -558,14 +609,29 @@ internal sealed class TransactionEngine {
         }
     }
 
-    private void RecordRolledBack(Guid txId) {
-        if (_rolledBackMarkers.ContainsKey(txId)) return;
-        _rolledBackMarkers[txId] = DateTime.UtcNow;
-        _rolledBackOrder.Enqueue(txId);
-        while (_rolledBackOrder.Count > RolledBackMarkerCap) {
-            var evicted = _rolledBackOrder.Dequeue();
-            _rolledBackMarkers.Remove(evicted);
+    private void RecordFailure(Guid txId, FailureKind kind) {
+        if (_failureMarkers.ContainsKey(txId)) return;
+        _failureMarkers[txId] = kind;
+        _failureOrder.Enqueue(txId);
+        while (_failureOrder.Count > FailureMarkerCap) {
+            var evicted = _failureOrder.Dequeue();
+            _failureMarkers.Remove(evicted);
         }
+    }
+
+    // Build the result for a batch refused before any op ran. We record the txId
+    // so a follow-up transact-diff can return TXDIFF-REJECTED instead of the
+    // generic TXDIFF-EXPIRED. Status is "rejected" rather than "rolled-back"
+    // because nothing was actually unwound — there were no snapshots to restore.
+    private TransactResult RejectBatch(Guid txId, DateTime startedAt, string error) {
+        RecordFailure(txId, FailureKind.Rejected);
+        return new TransactResult(
+            Success: false, Status: "rejected", Reason: "rejected",
+            Ops: new List<TransactOpOutcome>(),
+            Validation: null,
+            Journal: new TransactJournal(txId, startedAt, DateTime.UtcNow,
+                new List<string>(), new List<string>(), 0, 0),
+            Error: error);
     }
 
     public TransactSnapshotLookup Lookup(Guid txId) {
@@ -575,8 +641,12 @@ internal sealed class TransactionEngine {
             _snapshotOrder.AddFirst(node);
             return new TransactSnapshotLookup(TransactSnapshotStatus.Available, node.Value);
         }
-        if (_rolledBackMarkers.ContainsKey(txId)) {
-            return new TransactSnapshotLookup(TransactSnapshotStatus.RolledBack, null);
+        if (_failureMarkers.TryGetValue(txId, out var kind)) {
+            return new TransactSnapshotLookup(
+                kind == FailureKind.Rejected
+                    ? TransactSnapshotStatus.Rejected
+                    : TransactSnapshotStatus.RolledBack,
+                null);
         }
         return new TransactSnapshotLookup(TransactSnapshotStatus.Expired, null);
     }
@@ -584,6 +654,7 @@ internal sealed class TransactionEngine {
 
 internal enum TransactSnapshotStatus {
     Available,
+    Rejected,
     RolledBack,
     Expired,
 }
