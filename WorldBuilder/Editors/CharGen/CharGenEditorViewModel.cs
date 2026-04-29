@@ -47,7 +47,7 @@ namespace WorldBuilder.Editors.CharGen {
 
         internal void InitObjectBrowser(Func<Landscape.ThumbnailRenderService?> getThumbnailService) {
             if (_dats == null || ObjectBrowser != null) return;
-            ObjectBrowser = new DungeonObjectBrowserViewModel(_dats, getThumbnailService);
+            ObjectBrowser = new DungeonObjectBrowserViewModel(_dats, getThumbnailService, settings: Settings);
             OnPropertyChanged(nameof(ObjectBrowser));
         }
 

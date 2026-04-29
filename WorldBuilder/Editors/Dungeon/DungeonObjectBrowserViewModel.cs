@@ -11,7 +11,9 @@ using WorldBuilder.Editors.Landscape;
 using WorldBuilder.Editors.Landscape.ViewModels;
 using WorldBuilder.Lib;
 using WorldBuilder.Lib.Converters;
+using WorldBuilder.Lib.Settings;
 using WorldBuilder.Shared.Lib;
+using WorldBuilder.Shared.Lib.AceDb;
 using WorldBuilder.ViewModels;
 
 namespace WorldBuilder.Editors.Dungeon {
@@ -25,29 +27,47 @@ namespace WorldBuilder.Editors.Dungeon {
         private readonly ObjectTagIndex _tagIndex = new();
         private readonly Func<ThumbnailRenderService?> _getThumbnailService;
         private readonly ThumbnailCache _thumbnailCache;
+        private readonly WorldBuilderSettings? _settings;
         private bool _thumbnailsReady;
         private bool _subscribedToThumbnailReady;
         private uint[] _allSetupIds = Array.Empty<uint>();
         private uint[] _allGfxObjIds = Array.Empty<uint>();
+        private List<ObjectBrowserItem> _loadedWeenies = new();
 
         private readonly Dictionary<uint, ObjectBrowserItem> _itemLookup = new();
+        private readonly HashSet<uint> _favoriteIds = new();
 
         [ObservableProperty] private ObservableCollection<ObjectBrowserItem> _filteredItems = new();
         [ObservableProperty] private string _searchText = "";
         [ObservableProperty] private string _status = "Search by name or hex ID";
         [ObservableProperty] private bool _showSetups = true;
         [ObservableProperty] private bool _showGfxObjs = true;
+        [ObservableProperty] private bool _showWeenies;
+        [ObservableProperty] private bool _showFavoritesOnly;
+        [ObservableProperty] private bool _isLoadingWeenies;
+        [ObservableProperty] private bool _hasMore;
+
+        private const int BatchSize = 100;
+        private int _displayLimit = BatchSize;
 
         public ObjectTagIndex TagIndex => _tagIndex;
 
         public event EventHandler<ObjectBrowserItem>? PlacementRequested;
 
+        /// <summary>
+        /// Fired after weenies are loaded from the DB, with all WCID->SetupId mappings
+        /// so the scene can cache them for rendering.
+        /// </summary>
+        public event EventHandler<IReadOnlyList<(uint WeenieClassId, uint SetupId)>>? WeenieSetupsLoaded;
+
         public DungeonObjectBrowserViewModel(IDatReaderWriter dats,
             Func<ThumbnailRenderService?>? getThumbnailService = null,
-            ThumbnailCache? thumbnailCache = null) {
+            ThumbnailCache? thumbnailCache = null,
+            WorldBuilderSettings? settings = null) {
             _dats = dats;
             _getThumbnailService = getThumbnailService ?? (() => null);
             _thumbnailCache = thumbnailCache ?? new ThumbnailCache();
+            _settings = settings;
 
             _tagIndex.LoadFromEmbeddedResource();
             ObjectIdToTagsConverter.TagIndex = _tagIndex;
@@ -60,6 +80,7 @@ namespace WorldBuilder.Editors.Dungeon {
                 Console.WriteLine($"[DungeonObjectBrowser] Error loading object IDs: {ex.Message}");
             }
 
+            LoadObjectFavorites();
             ApplyFilter();
 
             _ = Task.Run(async () => {
@@ -84,9 +105,51 @@ namespace WorldBuilder.Editors.Dungeon {
             });
         }
 
-        partial void OnSearchTextChanged(string value) => ApplyFilter();
-        partial void OnShowSetupsChanged(bool value) => ApplyFilter();
-        partial void OnShowGfxObjsChanged(bool value) => ApplyFilter();
+        partial void OnSearchTextChanged(string value) { _displayLimit = BatchSize; ApplyFilter(); }
+        partial void OnShowSetupsChanged(bool value) { _displayLimit = BatchSize; ApplyFilter(); }
+        partial void OnShowGfxObjsChanged(bool value) { _displayLimit = BatchSize; ApplyFilter(); }
+        partial void OnShowWeeniesChanged(bool value) { _displayLimit = BatchSize; ApplyFilter(); }
+        partial void OnShowFavoritesOnlyChanged(bool value) { _displayLimit = BatchSize; ApplyFilter(); }
+
+        [RelayCommand]
+        private async Task LoadWeeniesFromDbAsync() {
+            if (_settings?.AceDbConnection == null) {
+                Status = "Configure ACE Database in Settings first.";
+                return;
+            }
+
+            IsLoadingWeenies = true;
+            Status = "Loading weenies from DB...";
+            try {
+                var aceSettings = _settings.AceDbConnection.ToAceDbSettings();
+                using var connector = new AceDbConnector(aceSettings);
+                var search = string.IsNullOrWhiteSpace(SearchText) ? null : SearchText.Trim();
+                var list = await connector.GetWeenieNamesAsync(search, limit: 1000);
+
+                _loadedWeenies.Clear();
+                var mappings = new List<(uint, uint)>();
+                foreach (var e in list) {
+                    var item = new ObjectBrowserItem(e.SetupId, e.ClassId, e.Name);
+                    _loadedWeenies.Add(item);
+                    if (e.SetupId != 0)
+                        mappings.Add((e.ClassId, e.SetupId));
+                }
+
+                ShowWeenies = true;
+                Status = _loadedWeenies.Count > 0
+                    ? $"{_loadedWeenies.Count} weenies loaded from DB"
+                    : "No weenies found. Check DB connection.";
+
+                WeenieSetupsLoaded?.Invoke(this, mappings);
+                ApplyFilter();
+            }
+            catch (Exception ex) {
+                Status = "DB error: " + ex.Message;
+            }
+            finally {
+                IsLoadingWeenies = false;
+            }
+        }
 
         private static bool IsHexSearch(string text, out string normalizedHex) {
             normalizedHex = text.TrimStart('0', 'x', 'X').ToUpperInvariant();
@@ -123,9 +186,17 @@ namespace WorldBuilder.Editors.Dungeon {
             );
         }
 
-        private ObservableCollection<ObjectBrowserItem> BuildItems(uint[] setups, uint[] gfxObjs) {
+        private ObservableCollection<ObjectBrowserItem> BuildItems(uint[] setups, uint[] gfxObjs, ObjectBrowserItem[]? weenies = null) {
             var items = new ObservableCollection<ObjectBrowserItem>();
             _itemLookup.Clear();
+
+            if (weenies != null) {
+                foreach (var w in weenies) {
+                    items.Add(w);
+                    if (w.Id != 0 && w.WeenieClassId.HasValue)
+                        _itemLookup.TryAdd(w.Id, w);
+                }
+            }
 
             foreach (var id in setups) {
                 var tags = _tagIndex.IsLoaded ? _tagIndex.GetTagString(id) : null;
@@ -139,6 +210,9 @@ namespace WorldBuilder.Editors.Dungeon {
                 items.Add(item);
                 _itemLookup[id] = item;
             }
+
+            foreach (var item in items)
+                item.IsFavorite = _favoriteIds.Contains(item.Id);
 
             if (_thumbnailsReady) {
                 RequestThumbnails(items);
@@ -156,7 +230,7 @@ namespace WorldBuilder.Editors.Dungeon {
             }
 
             foreach (var item in items) {
-                if (item.Thumbnail != null) continue;
+                if (item.Thumbnail != null || item.Id == 0) continue;
 
                 var cachedBitmap = _thumbnailCache.TryLoadCached(item.Id);
                 if (cachedBitmap != null) {
@@ -169,14 +243,114 @@ namespace WorldBuilder.Editors.Dungeon {
         }
 
         private void ApplyFilter() {
+            if (ShowFavoritesOnly && _favoriteIds.Count > 0) {
+                var favSetups = _favoriteIds.Where(id => (id & 0xFF000000) == 0x02000000).OrderBy(id => id);
+                var favGfx = _favoriteIds.Where(id => (id & 0xFF000000) != 0x02000000).OrderBy(id => id);
+                var (fs, fg) = ApplySearchFilter(favSetups, favGfx, out var sfx);
+                FilteredItems = BuildItems(fs.ToArray(), fg.ToArray());
+                Status = sfx ?? $"{_favoriteIds.Count} favorites";
+                HasMore = false;
+                return;
+            }
+            if (ShowFavoritesOnly) {
+                FilteredItems = new ObservableCollection<ObjectBrowserItem>();
+                Status = "No favorites yet — click the star on any object to add it";
+                HasMore = false;
+                return;
+            }
+
             IEnumerable<uint> setups = ShowSetups ? _allSetupIds : Array.Empty<uint>();
             IEnumerable<uint> gfxObjs = ShowGfxObjs ? _allGfxObjIds : Array.Empty<uint>();
 
             var (fSetups, fGfx) = ApplySearchFilter(setups, gfxObjs, out var statusSuffix);
-            var setupResult = fSetups.Take(100).ToArray();
-            var gfxResult = fGfx.Take(100).ToArray();
-            FilteredItems = BuildItems(setupResult, gfxResult);
-            Status = statusSuffix ?? $"Showing {setupResult.Length} Setups, {gfxResult.Length} GfxObjs";
+
+            var allWeenies = Array.Empty<ObjectBrowserItem>();
+            if (ShowWeenies && _loadedWeenies.Count > 0) {
+                var search = SearchText?.Trim();
+                IEnumerable<ObjectBrowserItem> filtered = _loadedWeenies;
+                if (!string.IsNullOrWhiteSpace(search))
+                    filtered = filtered.Where(w =>
+                        w.DisplayId.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        w.WeenieClassId?.ToString().Contains(search) == true);
+                allWeenies = filtered.ToArray();
+            }
+
+            var combinedDat = fSetups.Concat(fGfx).ToArray();
+            int totalMatches = combinedDat.Length + allWeenies.Length;
+            int showing = Math.Min(totalMatches, _displayLimit);
+
+            var weeniesTaken = allWeenies.Take(_displayLimit).ToArray();
+            int datBudget = Math.Max(0, _displayLimit - weeniesTaken.Length);
+            var datTaken = combinedDat.Take(datBudget).ToArray();
+
+            var setupResult = datTaken.Where(id => (id & 0xFF000000) == 0x02000000).ToArray();
+            var gfxResult = datTaken.Where(id => (id & 0xFF000000) != 0x02000000).ToArray();
+
+            FilteredItems = BuildItems(setupResult, gfxResult, weeniesTaken);
+            HasMore = showing < totalMatches;
+
+            int displayed = weeniesTaken.Length + datTaken.Length;
+            if (statusSuffix != null) {
+                Status = statusSuffix;
+            }
+            else if (totalMatches == 0) {
+                Status = "No results";
+            }
+            else if (HasMore) {
+                Status = $"Showing {displayed} of {totalMatches} — click Show More";
+            }
+            else {
+                Status = $"Showing all {displayed} results";
+            }
+        }
+
+        [RelayCommand]
+        private void ShowMore() {
+            _displayLimit += BatchSize;
+            ApplyFilter();
+        }
+
+        [RelayCommand]
+        private void ToggleFavorite(ObjectBrowserItem item) {
+            if (item == null) return;
+            if (_favoriteIds.Contains(item.Id)) {
+                _favoriteIds.Remove(item.Id);
+                item.IsFavorite = false;
+            } else {
+                _favoriteIds.Add(item.Id);
+                item.IsFavorite = true;
+            }
+            SaveObjectFavorites();
+            if (ShowFavoritesOnly) ApplyFilter();
+        }
+
+        private void LoadObjectFavorites() {
+            try {
+                var path = System.IO.Path.Combine(
+                    System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                    "ACME WorldBuilder", "object_browser_favorites.json");
+                if (!System.IO.File.Exists(path)) return;
+                var json = System.IO.File.ReadAllText(path);
+                using var doc = System.Text.Json.JsonDocument.Parse(json);
+                foreach (var el in doc.RootElement.EnumerateArray())
+                    _favoriteIds.Add(el.GetUInt32());
+            } catch (Exception ex) {
+                Console.WriteLine($"[DungeonObjectBrowser] LoadFavorites: {ex.Message}");
+            }
+        }
+
+        private void SaveObjectFavorites() {
+            try {
+                var path = System.IO.Path.Combine(
+                    System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                    "ACME WorldBuilder", "object_browser_favorites.json");
+                var dir = System.IO.Path.GetDirectoryName(path);
+                if (dir != null) System.IO.Directory.CreateDirectory(dir);
+                var json = System.Text.Json.JsonSerializer.Serialize(_favoriteIds.ToList());
+                System.IO.File.WriteAllText(path, json);
+            } catch (Exception ex) {
+                Console.WriteLine($"[DungeonObjectBrowser] SaveFavorites: {ex.Message}");
+            }
         }
 
         [RelayCommand]

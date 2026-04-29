@@ -198,7 +198,8 @@ namespace WorldBuilder.Editors.Dungeon {
             }
 
             ObjectBrowser = new DungeonObjectBrowserViewModel(_dats,
-                () => _scene?.ThumbnailService);
+                () => _scene?.ThumbnailService,
+                settings: Settings);
             ObjectBrowser.PlacementRequested += OnObjectPlacementRequested;
             OnPropertyChanged(nameof(ObjectBrowser));
 

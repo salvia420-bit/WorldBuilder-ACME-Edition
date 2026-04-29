@@ -54,6 +54,9 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
         [ObservableProperty]
         private Bitmap? _thumbnail;
 
+        [ObservableProperty]
+        private bool _isFavorite;
+
         public ObjectBrowserItem(uint id, bool isSetup, string? tags) {
             Id = id;
             IsSetup = isSetup;
