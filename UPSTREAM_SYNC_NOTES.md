@@ -6,7 +6,7 @@ the two histories **share no common ancestor** — `git merge-base` returns noth
 so a normal `git pull upstream master` is impossible. All sync is manual or
 patch-by-patch.
 
-Last full audit: **2026-04-26** (incremental: 2026-04-29 — `44f47f8` gizmo improvement ported).
+Last full audit: **2026-04-26** (incremental: 2026-04-29 — `44f47f8` gizmo improvement and `fa7c58c` surface-browser paging + terrain conformance ported).
 
 ## Quick orient
 
@@ -89,7 +89,7 @@ Sorted chronologically.
 | `6a317bc` | 03-12 | world mini map fix, remove templates | 26 | +116/-604 | 🔒 DEFERRED | Mostly DELETIONS (template removal). Don't port without verifying we want those deletions. |
 | `0998c38` | 03-13 | landscape refactor, dungeon scene + settings | 51 | +1 197/-358 | 🔒 DEFERRED | Big landscape refactor. |
 | `f26345e` | 03-22 | weenie editor, layout overhaul, transform gizmo, world gen, mesh import/export, texture | 86 | +10 452/-661 | 🟡 PARTIAL | See "f26345e split into 4 slices" below. Slices 1-3 (headless) ✅ PORTED. Slice 4 waves A-E ✅, G ✅. Wave F (Layout editor overhaul) ⏳ deferred. |
-| `fa7c58c` | 03-22 | Surface browser paging + dungeon scan fixes | 6 | +479/-75 | ⏳ TODO | Smaller; check feasibility. |
+| `fa7c58c` | 03-22 | Surface browser paging + dungeon scan fixes | 6 | +479/-75 | ✅ PORTED | Cherry-picked with one trivial conflict (local `items`-named ObservableCollection vs upstream `itemsList`/`FilteredItems`); resolved to upstream form. Adds `WorldBuilder.Tests/ClientReference.cs` (decompiled-AC-client oracle for split-direction + pal-code) and `TerrainConformanceTests.cs` (27 tests, all pass). `TerrainGeometryGenerator.CalculateSplitDirection` now delegates to `TerrainHeightSampler.IsSWtoNEcut` so render and export agree. SurfaceBrowser gains 200-per-page Load More + `CollectDungeonSurfaces` helper + 0xFFFE-LBI fallback scan + 0x06-only RenderSurface guard. `DungeonEditorViewModel.InitDocking` now `DockingManager.Clear()`s before re-registering. |
 | `ee39f71` | 03-22 | fix dungeon export crash on corrupt setup | 1 | +9/-1 | 🚫 BLOCKED | Needs `SanitizeEnvCellSurfacesForExport` (hundreds of lines of upstream `DungeonDocument.cs` we don't have). |
 | `4dc3983` | 03-23 | Weenie property enums + DID/int pickers | many | medium | ⏳ TODO | Cluster B (weenie/spell editor). |
 | `44f47f8` | 03-23 | gizmo improvement | 7 | +679/-110 | ✅ PORTED | Cherry-picked clean (auto-merge in `DungeonEditingContext.cs` + `EnvCellManager.cs`). Adds env-cell collision-mesh ray picking + surface alignment for dungeon and outdoor selectors, full TransformGizmo overhaul (cylindrical shafts / torus rings / sphere center handle / view-axis ring / rotation arc + hover/active highlight uniforms), `GizmoAxis.ViewAxis`, center-handle `All` translate, `GetLocalAxisDirection` API. Builds clean (WorldBuilder + Shared + Terminal + Tests; only pre-existing test failure unrelated). In-game verification still pending. |
@@ -108,12 +108,12 @@ Sorted chronologically.
 | `15cb9ed` | 04-14 | add logging, fix texture import/dat export | 9 | +506/-4 | 🚫 BLOCKED | Needs `FileLoggerProvider` + related logging infrastructure. |
 
 ### Tally
-- **10 ✅ PORTED** (incl. `5faec77` heightmap import + `7293629` mini map landed 2026-04-26; `44f47f8` gizmo improvement landed 2026-04-29)
+- **11 ✅ PORTED** (incl. `5faec77` heightmap import + `7293629` mini map landed 2026-04-26; `44f47f8` gizmo improvement and `fa7c58c` surface-browser paging + terrain conformance landed 2026-04-29)
 - **2 🟡 PARTIAL** (`f26345e` slices 1-3 ✅ + slice 4 waves A, B, C, D, E, G ✅; wave F (Layout editor) ⏳ — and `34c612b` portal-defer + dead-code deletion ✅; LayoutEditorViewModel plumbing pending Wave F)
 - **4 🚫 BLOCKED** (attempted, prereq gap documented above)
 - **14 🔒 DEFERRED** (large refactors or stacked dungeon-chain — port only with in-game testing)
 - **1 🔧 PERMISSIONS** (just needs the right token to push)
-- **11 ⏳ TODO** (not yet attempted, lower-risk than the deferred set)
+- **10 ⏳ TODO** (not yet attempted, lower-risk than the deferred set)
 
 ## f26345e split into 4 slices
 
@@ -344,7 +344,7 @@ that prove the behavior. Verify in-game when possible.
 | C. Landscape / heightmap / mini-map | ~5 commits | Medium | `5faec77 → 7293629` is a tractable chain if heightmap import is wanted. |
 | D. Texture / DAT export / logging | ~3 commits remaining | Medium | `34c612b` is the cleanest; `15cb9ed` needs logging infra prereq. |
 | E. Chorizite / OpenGL backend | (Originally proposed cluster — debunked: those commits are actually multi-subsystem.) | — | Cluster doesn't really exist as I first defined it. |
-| F. Misc fixes | Various | Medium | `fa7c58c`, `44f47f8`, `b9ffe3e` — each individually attempt. |
+| F. Misc fixes | Various | Medium | `b9ffe3e` remains; `fa7c58c` and `44f47f8` ported 2026-04-29. |
 
 ## Subagent pilot finding (2026-04-26)
 
