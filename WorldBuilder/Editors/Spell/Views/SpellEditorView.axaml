@@ -84,77 +84,134 @@
 		</Style>
 	</UserControl.Styles>
 
-	<DockPanel>
-		<!-- Toolbar -->
-		<Border DockPanel.Dock="Top" Background="#120c22" BorderBrush="#2a1d42" BorderThickness="0,0,0,1" Padding="4,2">
-			<DockPanel>
-				<StackPanel Orientation="Horizontal" Spacing="4" DockPanel.Dock="Left">
-					<Button Classes="toolbar-btn" Content="Save Spell" Command="{Binding SaveSpellCommand}" Foreground="#6ec07a" />
-					<CheckBox Content="Save to DB" IsChecked="{Binding SaveToDb}" HorizontalAlignment="Left" FontSize="10" Padding="4,2" />
-					<Button Classes="toolbar-btn" Content="+ New Spell" Command="{Binding AddSpellCommand}" />
-					<Button Classes="toolbar-btn" Content="+ Copy Spell" Command="{Binding CopySpellCommand}" />
-					<Button Classes="toolbar-btn" Content="Delete Spell" Command="{Binding DeleteSpellCommand}" Foreground="#c45858" />
-					<Border Width="1" Background="#2a1d42" Margin="4,2" />
-					<TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" FontSize="12" Foreground="#a89bbe" />
-				</StackPanel>
-				<StackPanel Orientation="Horizontal" Spacing="8" DockPanel.Dock="Right" HorizontalAlignment="Right">
-					<TextBlock Text="{Binding FilteredSpellCount, StringFormat='Showing {0}'}" VerticalAlignment="Center" FontSize="12" Foreground="#8a7a9e" />
-					<TextBlock Text="{Binding TotalSpellCount, StringFormat='of {0} spells'}" VerticalAlignment="Center" FontSize="12" Foreground="#8a7a9e" />
-				</StackPanel>
-			</DockPanel>
-		</Border>
+    <DockPanel>
+        <!-- Toolbar -->
+        <Border DockPanel.Dock="Top" Background="#120c22" BorderBrush="#2a1d42" BorderThickness="0,0,0,1" Padding="4,2">
+            <DockPanel>
+                <StackPanel Orientation="Horizontal" Spacing="4" DockPanel.Dock="Left">
+                    <Button Classes="toolbar-btn" Content="Save Spell" Command="{Binding SaveSpellCommand}" Foreground="#6ec07a" IsEnabled="{Binding CanSave}" />
+                    <CheckBox Content="Save to DB" IsChecked="{Binding SaveToDb}" HorizontalAlignment="Left" FontSize="10" Padding="4,2" />
+                    <Button Classes="toolbar-btn" Content="+ New Spell" Command="{Binding AddSpellCommand}" />
+                    <Button Classes="toolbar-btn" Content="+ Copy Spell" Command="{Binding CopySpellCommand}" />
+                    <ComboBox ItemsSource="{Binding NewSpellPresetOptions}"
+                              SelectedItem="{Binding SelectedPresetOption}"
+                              MinWidth="165"
+                              FontSize="11"
+                              MinHeight="26"
+                              VerticalAlignment="Center" />
+                    <Button Classes="toolbar-btn" Content="Apply Preset" Command="{Binding ApplyPresetToSelectedCommand}" />
+                    <Button Classes="toolbar-btn" Content="Undo Last" Command="{Binding UndoLastActionCommand}" IsEnabled="{Binding HasUndoAction}" />
+                    <Button Classes="toolbar-btn" Content="Go to Newest" Command="{Binding GoToLastCreatedSpellCommand}" IsEnabled="{Binding CanGoToLastCreatedSpell}" />
+                    <Button Classes="toolbar-btn" Content="Delete Spell" Command="{Binding DeleteSpellCommand}" Foreground="#c45858" />
+                    <Border Width="1" Background="#2a1d42" Margin="4,2" />
+                    <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" FontSize="12" Foreground="#a89bbe" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="8" DockPanel.Dock="Right" HorizontalAlignment="Right">
+                    <TextBlock Text="{Binding FilterResultText}" VerticalAlignment="Center" FontSize="12" Foreground="#8a7a9e" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
 
-		<Grid ColumnDefinitions="350,1,*">
-			<!-- Left panel -->
-			<DockPanel Grid.Column="0" Background="#1a1030">
-				<Border DockPanel.Dock="Top" Background="#120c22" Padding="8,6" BorderBrush="#2a1d42" BorderThickness="0,0,0,1">
-					<StackPanel Spacing="6">
-						<TextBox Text="{Binding SearchText}" Watermark="Search spells by name or 0x ID..." FontSize="13" MinHeight="30" Padding="8,4" />
-						<DockPanel>
-							<Button DockPanel.Dock="Right" Classes="toolbar-btn" Content="Clear" Command="{Binding ClearFiltersCommand}" Margin="4,0,0,0" />
-							<StackPanel Orientation="Horizontal" Spacing="6">
-								<ComboBox ItemsSource="{Binding SchoolOptions}" SelectedItem="{Binding FilterSchool}" PlaceholderText="School" MinWidth="100" FontSize="12" MinHeight="28" />
-								<ComboBox ItemsSource="{Binding SpellTypeOptions}" SelectedItem="{Binding FilterSpellType}" PlaceholderText="Type" MinWidth="100" FontSize="12" MinHeight="28" />
-							</StackPanel>
-						</DockPanel>
-					</StackPanel>
-				</Border>
-				<ListBox ItemsSource="{Binding Spells}" SelectedItem="{Binding SelectedSpell}" Background="Transparent" FontSize="13">
-					<ListBox.ItemTemplate>
-						<DataTemplate x:DataType="vm:SpellListItem">
-							<DockPanel Margin="6,3">
-								<TextBlock DockPanel.Dock="Right" Text="{Binding School}" FontSize="11" Foreground="#8a7a9e" VerticalAlignment="Center" Margin="8,0,0,0" />
-								<StackPanel>
-									<TextBlock Text="{Binding Name}" Foreground="#e0d8ef" FontSize="14" />
-									<StackPanel Orientation="Horizontal" Spacing="8">
-										<TextBlock Text="{Binding IdHex}" FontSize="11" Foreground="#8a7a9e" />
-										<TextBlock Text="{Binding MetaSpellType, StringFormat='Type: {0}'}" FontSize="11" Foreground="#8a7a9e" />
-										<TextBlock Text="{Binding Power, StringFormat='Pow: {0}'}" FontSize="11" Foreground="#8a7a9e" />
-									</StackPanel>
-								</StackPanel>
-							</DockPanel>
-						</DataTemplate>
-					</ListBox.ItemTemplate>
-				</ListBox>
-			</DockPanel>
+        <Border DockPanel.Dock="Top" IsVisible="{Binding ShowOnboarding}" Background="#1e1534" BorderBrush="#3d2a5e" BorderThickness="0,0,0,1" Padding="10,8">
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Classes="sm-btn" Content="Dismiss" Command="{Binding DismissOnboardingCommand}" />
+                <StackPanel Spacing="2">
+                    <TextBlock Text="New here? 1) Pick a preset, 2) Create or copy a spell, 3) Save, then File > Export." Foreground="#d8d0ec" FontSize="12" />
+                    <TextBlock Text="{Binding PresetPreviewText, StringFormat='Preset preview: {0}'}" Foreground="#a89bbe" FontSize="11" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
 
-			<GridSplitter Grid.Column="1" Width="1" Background="#2a1d42" ResizeDirection="Columns" />
+        <Grid ColumnDefinitions="350,1,*">
+            <!-- Left panel -->
+            <DockPanel Grid.Column="0" Background="#1a1030">
+                <Border DockPanel.Dock="Top" Background="#120c22" Padding="8,6" BorderBrush="#2a1d42" BorderThickness="0,0,0,1">
+                    <StackPanel Spacing="6">
+                        <TextBox Text="{Binding SearchText}" Watermark="Search spells by name or 0x ID..." FontSize="13" MinHeight="30" Padding="8,4" />
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Classes="toolbar-btn" Content="Clear" Command="{Binding ClearFiltersCommand}" Margin="4,0,0,0" />
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <ComboBox ItemsSource="{Binding SchoolOptions}" SelectedItem="{Binding FilterSchool}" PlaceholderText="School" MinWidth="100" FontSize="12" MinHeight="28" />
+                                <ComboBox ItemsSource="{Binding SpellTypeOptions}" SelectedItem="{Binding FilterSpellType}" PlaceholderText="Type" MinWidth="100" FontSize="12" MinHeight="28" />
+                                <CheckBox Content="Newest First" IsChecked="{Binding NewestFirst}" VerticalAlignment="Center" FontSize="11" />
+                            </StackPanel>
+                        </DockPanel>
+                        <TextBlock Text="{Binding PresetPreviewText, StringFormat='Preset: {0}'}" FontSize="11" Foreground="#8a7a9e" />
+                    </StackPanel>
+                </Border>
+                <Grid RowDefinitions="*,Auto">
+                    <ListBox Grid.Row="0" ItemsSource="{Binding Spells}" SelectedItem="{Binding SelectedSpell}" Background="Transparent" FontSize="13">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:SpellListItem">
+                                <DockPanel Margin="6,3">
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding School}" FontSize="11" Foreground="#8a7a9e" VerticalAlignment="Center" Margin="8,0,0,0" />
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Name}" Foreground="#e0d8ef" FontSize="14" />
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <TextBlock Text="{Binding IdHex}" FontSize="11" Foreground="#8a7a9e" />
+                                            <TextBlock Text="{Binding MetaSpellType, StringFormat='Type: {0}'}" FontSize="11" Foreground="#8a7a9e" />
+                                            <TextBlock Text="{Binding Power, StringFormat='Pow: {0}'}" FontSize="11" Foreground="#8a7a9e" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </DockPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
 
-			<!-- Right panel -->
-			<Border Grid.Column="2" Background="#1a1030">
-				<Panel>
-					<TextBlock Text="Select a spell from the list to view its details"
+                    <Border Grid.Row="1" IsVisible="{Binding HasMoreResults}" Background="#120c22" BorderBrush="#2a1d42" BorderThickness="0,1,0,0" Padding="8,6">
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Left" Text="Showing first page of results. Use search for exact IDs." FontSize="11" Foreground="#8a7a9e" VerticalAlignment="Center" />
+                            <Button DockPanel.Dock="Right" Classes="sm-btn" Content="Load More" Command="{Binding LoadMoreSpellsCommand}" />
+                        </DockPanel>
+                    </Border>
+                </Grid>
+            </DockPanel>
+
+            <GridSplitter Grid.Column="1" Width="1" Background="#2a1d42" ResizeDirection="Columns" />
+
+            <!-- Right panel -->
+            <Border Grid.Column="2" Background="#1a1030">
+                <Panel>
+                    <Border IsVisible="{Binding IsToastVisible}"
+                            HorizontalAlignment="Right" VerticalAlignment="Top"
+                            Margin="12" Padding="10,8"
+                            Background="#2a1d42" BorderBrush="#4e3a72" BorderThickness="1" CornerRadius="6">
+                        <DockPanel LastChildFill="False">
+                            <Button DockPanel.Dock="Right" Classes="sm-btn" Content="x" Command="{Binding DismissToastCommand}" Margin="8,0,0,0" />
+                            <Button DockPanel.Dock="Right" Classes="sm-btn" Content="{Binding ToastActionLabel}" Command="{Binding ExecuteToastActionCommand}" Margin="8,0,0,0"
+                                    IsVisible="{Binding HasToastAction}" />
+                            <TextBlock Text="{Binding ToastMessage}" Foreground="#e0d8ef" MaxWidth="420" TextWrapping="Wrap" />
+                        </DockPanel>
+                    </Border>
+
+                    <TextBlock Text="Select a spell from the list to view its details"
                                HorizontalAlignment="Center" VerticalAlignment="Center"
                                FontSize="14" Foreground="#8a7a9e" Opacity="0.6"
                                IsVisible="{Binding SelectedDetail, Converter={x:Static ObjectConverters.IsNull}}" />
 
-					<TabControl IsVisible="{Binding SelectedDetail, Converter={x:Static ObjectConverters.IsNotNull}}">
-						<TabItem Header="DAT">
-							<ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-								<StackPanel Margin="16,8,16,16" Spacing="4"
+                    <TabControl IsVisible="{Binding SelectedDetail, Converter={x:Static ObjectConverters.IsNotNull}}">
+                        <TabItem Header="DAT">
+                            <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                <StackPanel Margin="16,8,16,16" Spacing="4"
                                             x:CompileBindings="False"
                                             x:Name="DetailPanel"
                                             DataContext="{Binding SelectedDetail}">
+                            <Border Background="#120c22" BorderBrush="#2a1d42" BorderThickness="1" CornerRadius="4" Padding="8,6" Margin="0,0,0,8">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="{Binding $parent[UserControl].DataContext.ValidationMessage}" Foreground="#b0a0c8" FontSize="11" TextWrapping="Wrap" />
+                                    <DockPanel IsVisible="{Binding $parent[UserControl].DataContext.HasUnsavedChanges}">
+                                        <Button DockPanel.Dock="Right" Classes="sm-btn" Content="Discard Edits" Command="{Binding $parent[UserControl].DataContext.DiscardCurrentEditsCommand}" />
+                                        <TextBlock Text="Unsaved changes detected." Foreground="#d9b26f" FontSize="11" VerticalAlignment="Center" />
+                                    </DockPanel>
+                                    <ItemsControl ItemsSource="{Binding $parent[UserControl].DataContext.ChangedFields}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding ., StringFormat='- {0} changed'}" FontSize="11" Foreground="#8a7a9e" />
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
 
 									<!-- Identity + Icon -->
 									<TextBlock Classes="section-header" Text="Identity" />

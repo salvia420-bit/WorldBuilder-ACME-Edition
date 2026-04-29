@@ -8,7 +8,9 @@ using DatReaderWriter.Types;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using WorldBuilder.Lib;
 using WorldBuilder.Lib.Settings;
@@ -29,6 +31,15 @@ namespace WorldBuilder.Editors.Spell {
         private Dictionary<uint, SpellRecord> _dbSpellCache = new();
         private SpellComponentTable? _componentTable;
         private const uint SpellTableId = 0x0E00000E;
+        private const int SpellPageSize = 500;
+        private SpellDetailViewModel? _activeDetail;
+        private Action? _toastAction;
+        private CancellationTokenSource? _toastCts;
+        private uint? _lastCreatedSpellId;
+        private readonly Stack<SpellUndoAction> _undoStack = new();
+        private SpellBase? _baselineSpell;
+        private bool _isSelectionGuardActive;
+        private SpellListItem? _pendingSpellSelection;
 
         [ObservableProperty] private string _statusText = "No spells loaded";
         [ObservableProperty] private string _searchText = "";
@@ -40,6 +51,24 @@ namespace WorldBuilder.Editors.Spell {
         [ObservableProperty] private int _totalSpellCount;
         [ObservableProperty] private int _filteredSpellCount;
         [ObservableProperty] private bool _saveToDb;
+        [ObservableProperty] private int _visibleLimit = SpellPageSize;
+        [ObservableProperty] private bool _hasMoreResults;
+        [ObservableProperty] private SpellPresetOption _selectedPresetOption;
+        [ObservableProperty] private bool _newestFirst = true;
+        [ObservableProperty] private string _filterResultText = "";
+        [ObservableProperty] private bool _showOnboarding = true;
+        [ObservableProperty] private string _toastMessage = "";
+        [ObservableProperty] private string _toastActionLabel = "";
+        [ObservableProperty] private bool _hasToastAction;
+        [ObservableProperty] private bool _isToastVisible;
+        [ObservableProperty] private string _validationMessage = "";
+        [ObservableProperty] private bool _hasBlockingIssues;
+        [ObservableProperty] private bool _canSave = true;
+        [ObservableProperty] private bool _canGoToLastCreatedSpell;
+        [ObservableProperty] private string _presetPreviewText = "";
+        [ObservableProperty] private bool _hasUnsavedChanges;
+        [ObservableProperty] private ObservableCollection<string> _changedFields = new();
+        [ObservableProperty] private bool _hasUndoAction;
 
         public IReadOnlyList<MagicSchool?> SchoolOptions { get; } = new List<MagicSchool?> {
             null, MagicSchool.WarMagic, MagicSchool.LifeMagic,
@@ -53,11 +82,19 @@ namespace WorldBuilder.Editors.Spell {
             SpellType.LifeProjectile, SpellType.FellowBoost, SpellType.FellowEnchantment,
             SpellType.FellowPortalSending, SpellType.FellowDispel, SpellType.EnchantmentProjectile,
         };
+        public IReadOnlyList<SpellPresetOption> NewSpellPresetOptions { get; } = new List<SpellPresetOption> {
+            new(SpellPresetKind.Blank, "Blank", "Creates an empty shell with only a generated name."),
+            new(SpellPresetKind.ProjectileStarter, "Basic Bolt", "War projectile starter with sensible mana/range defaults."),
+            new(SpellPresetKind.EnchantmentStarter, "Basic Buff", "Item enchantment starter with default duration and tuning."),
+            new(SpellPresetKind.PortalStarter, "Basic Portal", "Portal summon starter with basic lifetime and mana values."),
+        };
 
         public WorldBuilderSettings Settings { get; }
 
         public SpellEditorViewModel(WorldBuilderSettings settings) {
             Settings = settings;
+            _selectedPresetOption = NewSpellPresetOptions[0];
+            PresetPreviewText = _selectedPresetOption.Preview;
         }
 
         internal void Init(Project project) {
@@ -92,25 +129,50 @@ namespace WorldBuilder.Editors.Spell {
             StatusText = $"Loaded {TotalSpellCount} spells, {_componentTable?.Components.Count ?? 0} components";
         }
 
-        partial void OnSearchTextChanged(string value) => ApplyFilter();
-        partial void OnFilterSchoolChanged(MagicSchool? value) => ApplyFilter();
-        partial void OnFilterSpellTypeChanged(SpellType? value) => ApplyFilter();
+        partial void OnSearchTextChanged(string value) {
+            VisibleLimit = SpellPageSize;
+            ApplyFilter();
+        }
+        partial void OnFilterSchoolChanged(MagicSchool? value) {
+            VisibleLimit = SpellPageSize;
+            ApplyFilter();
+        }
+        partial void OnFilterSpellTypeChanged(SpellType? value) {
+            VisibleLimit = SpellPageSize;
+            ApplyFilter();
+        }
+        partial void OnNewestFirstChanged(bool value) => ApplyFilter();
+        partial void OnSelectedPresetOptionChanged(SpellPresetOption value) => PresetPreviewText = value.Preview;
+        partial void OnSaveToDbChanged(bool value) {
+            if (value) {
+                ShowToast("Save to DB is enabled. Saving can overwrite ACE spell rows.");
+            }
+        }
         partial void OnSelectedSpellChanged(SpellListItem? value) {
-            if (value != null && _allSpells != null && _allSpells.TryGetValue(value.Id, out var spell) && _dats != null) {
-                var detail = new SpellDetailViewModel(value.Id, spell, _componentTable, _allSpells, _dats);
-                SelectedDetail = detail;
+            if (!_isSelectionGuardActive && value != null && _activeDetail != null && HasUnsavedChanges && value.Id != _activeDetail.SpellId) {
+                _pendingSpellSelection = value;
+                _isSelectionGuardActive = true;
+                SelectedSpell = Spells.FirstOrDefault(s => s.Id == _activeDetail.SpellId);
+                _isSelectionGuardActive = false;
+                ShowToast("You have unsaved changes on this spell.", "Discard and switch", DiscardAndSwitchSelection);
+                return;
+            }
 
-                if (_dbSpellCache.TryGetValue(value.Id, out var spellCache)) {
-                    detail.LoadFromDb(spellCache);
-                } else if (_spellDbDoc != null && _spellDbDoc.TryGet(value.Id, out var localDb)) {
-                    detail.LoadFromDb(localDb);
-                }
-                else {
-                    _ = LoadDbSpellAsync(detail, value.Id);
-                }
+            if (_activeDetail != null) {
+                _activeDetail.PropertyChanged -= SelectedDetailOnPropertyChanged;
+            }
+
+            if (value != null && _allSpells != null && _allSpells.TryGetValue(value.Id, out var spell) && _dats != null) {
+                LoadDetail(value.Id, spell);
+                UpdateValidationStatus();
             }
             else {
+                _activeDetail = null;
                 SelectedDetail = null;
+                ValidationMessage = "";
+                HasBlockingIssues = false;
+                HasUnsavedChanges = false;
+                ChangedFields = new ObservableCollection<string>();
             }
         }
 
@@ -142,7 +204,7 @@ namespace WorldBuilder.Editors.Spell {
             bool hasIdSearch = query.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
                 && uint.TryParse(query.AsSpan(2), System.Globalization.NumberStyles.HexNumber, null, out searchId);
 
-            var filtered = _allSpells
+            var filteredQuery = _allSpells
                 .Where(kvp => {
                     if (hasIdSearch) return kvp.Key == searchId;
                     if (!string.IsNullOrEmpty(query) &&
@@ -151,14 +213,20 @@ namespace WorldBuilder.Editors.Spell {
                     if (FilterSchool.HasValue && kvp.Value.School != FilterSchool.Value) return false;
                     if (FilterSpellType.HasValue && kvp.Value.MetaSpellType != FilterSpellType.Value) return false;
                     return true;
-                })
-                .OrderBy(kvp => kvp.Value.Name?.ToString() ?? "")
-                .Take(500)
+                });
+
+            var sorted = NewestFirst
+                ? filteredQuery.OrderByDescending(kvp => kvp.Key)
+                : filteredQuery.OrderBy(kvp => kvp.Value.Name?.ToString() ?? "").ThenBy(kvp => kvp.Key);
+
+            var filtered = sorted
                 .Select(kvp => new SpellListItem(kvp.Key, kvp.Value))
                 .ToList();
 
-            Spells = new ObservableCollection<SpellListItem>(filtered);
+            HasMoreResults = filtered.Count > VisibleLimit;
+            Spells = new ObservableCollection<SpellListItem>(filtered.Take(VisibleLimit));
             FilteredSpellCount = filtered.Count;
+            FilterResultText = $"Showing {Spells.Count} of {FilteredSpellCount} filtered ({TotalSpellCount} total)";
         }
 
         [RelayCommand]
@@ -166,23 +234,86 @@ namespace WorldBuilder.Editors.Spell {
             SearchText = "";
             FilterSchool = null;
             FilterSpellType = null;
+            NewestFirst = true;
+        }
+
+        [RelayCommand]
+        private void LoadMoreSpells() {
+            if (!HasMoreResults) return;
+            VisibleLimit += SpellPageSize;
+            ApplyFilter();
+            ShowToast($"Loaded more spells ({Spells.Count}/{FilteredSpellCount}).");
+        }
+
+        [RelayCommand]
+        private void DismissOnboarding() {
+            ShowOnboarding = false;
         }
 
         [RelayCommand]
         private void AddSpell() {
-            if (_spellTable == null || _allSpells == null) return;
+            if (_spellTable == null || _portalDoc == null || _allSpells == null) return;
 
-            uint nextId = 1;
-            if (_allSpells.Count > 0)
-                nextId = _allSpells.Keys.Max() + 1;
+            var nextId = GetNextSpellId();
+            var selectedPreset = SelectedPresetOption?.Kind ?? SpellPresetKind.Blank;
 
             var newSpell = new SpellBase { Name = $"New Spell {nextId}", Description = "" };
+            ApplyPreset(newSpell, selectedPreset);
             _allSpells[nextId] = newSpell;
-            TotalSpellCount = _allSpells.Count;
-            ApplyFilter();
+            MarkSpellTableDirty();
+            PushUndo(new SpellUndoAction(SpellUndoActionKind.RemoveCreated, nextId, null));
 
-            SelectedSpell = Spells.FirstOrDefault(s => s.Id == nextId);
-            StatusText = $"Added new spell #{nextId}. Remember to Save.";
+            TotalSpellCount = _allSpells.Count;
+            _lastCreatedSpellId = nextId;
+            CanGoToLastCreatedSpell = true;
+            FocusSpellById(nextId);
+
+            StatusText = $"Added spell 0x{nextId:X4}. Search was set to that ID so it is easy to find; export writes DATs.";
+            ShowToast($"Created spell 0x{nextId:X4}.", "Go to spell", GoToLastCreatedSpell);
+        }
+
+        [RelayCommand]
+        private void CopySpell() {
+            if (SelectedDetail == null || _spellTable == null || _portalDoc == null || _allSpells == null) return;
+
+            var nextId = GetNextSpellId();
+            var copy = new SpellBase();
+            SelectedDetail.ApplyTo(copy);
+
+            if (SelectedDetail.DbSpell != null && _spellDbDoc != null) {
+                var clone = CloneDbSpellRecord(SelectedDetail.DbSpell, nextId);
+                _dbSpellCache[nextId] = clone;
+                _spellDbDoc.Set(nextId, clone);
+            }
+
+            var sourceName = SelectedDetail.Name?.Trim() ?? "";
+            copy.Name = string.IsNullOrWhiteSpace(sourceName)
+                ? $"New Spell {nextId}"
+                : $"{sourceName} (Copy)";
+
+            _allSpells[nextId] = copy;
+            MarkSpellTableDirty();
+            PushUndo(new SpellUndoAction(SpellUndoActionKind.RemoveCreated, nextId, null));
+
+            TotalSpellCount = _allSpells.Count;
+            _lastCreatedSpellId = nextId;
+            CanGoToLastCreatedSpell = true;
+            FocusSpellById(nextId);
+
+            StatusText = $"Copied spell to 0x{nextId:X4} and marked project data dirty. Export writes DATs.";
+            ShowToast($"Copied to 0x{nextId:X4}.", "Go to spell", GoToLastCreatedSpell);
+        }
+
+        [RelayCommand]
+        private void ApplyPresetToSelected() {
+            if (SelectedDetail == null || _dats == null || _allSpells == null) return;
+            var spell = new SpellBase();
+            SelectedDetail.ApplyTo(spell);
+            var selectedPreset = SelectedPresetOption?.Kind ?? SpellPresetKind.Blank;
+            ApplyPreset(spell, selectedPreset);
+            LoadDetail(SelectedDetail.SpellId, spell);
+            StatusText = $"Applied {SelectedPresetOption?.Name ?? "preset"} to selected spell. Save when ready.";
+            ShowToast($"Applied {SelectedPresetOption?.Name ?? "preset"}.");
         }
 
         [RelayCommand]
@@ -190,146 +321,28 @@ namespace WorldBuilder.Editors.Spell {
             if (SelectedDetail == null || _spellTable == null || _portalDoc == null || _allSpells == null) return;
 
             var id = SelectedDetail.SpellId;
+            if (!_allSpells.TryGetValue(id, out var existing)) return;
+            var deletedSnapshot = CloneSpell(existing);
             if (!_allSpells.Remove(id)) return;
 
-            _portalDoc.SetEntry(SpellTableId, _spellTable);
+            MarkSpellTableDirty();
+            PushUndo(new SpellUndoAction(SpellUndoActionKind.RestoreDeleted, id, deletedSnapshot));
 
             SelectedDetail = null;
             TotalSpellCount = _allSpells.Count;
             ApplyFilter();
             StatusText = $"Deleted spell #{id}. Use File > Export to write DATs.";
-        }
-
-        [RelayCommand]
-        private void CopySpell() {
-            if (SelectedSpell == null || SelectedDetail == null || _spellTable == null || _allSpells == null)
-                return;
-
-            if (_allSpells.Count <= 0)
-                return;
-
-            uint nextId = 1;
-            nextId = _allSpells.Keys.Max() + 1;
-
-            var newSpell = new SpellBase();
-
-            SelectedDetail.ApplyTo(newSpell);
-
-            if (SelectedDetail.DbSpell != null && _spellDbDoc != null) {
-                var original = SelectedDetail.DbSpell;
-
-                var clone = new SpellRecord {
-                    Id = nextId,
-                    Name = original.Name,
-
-                    StatModType = original.StatModType,
-                    StatModKey = original.StatModKey,
-                    StatModVal = original.StatModVal,
-
-                    EType = original.EType,
-                    BaseIntensity = original.BaseIntensity,
-                    Variance = original.Variance,
-
-                    Wcid = original.Wcid,
-
-                    NumProjectiles = original.NumProjectiles,
-                    NumProjectilesVariance = original.NumProjectilesVariance,
-                    SpreadAngle = original.SpreadAngle,
-                    VerticalAngle = original.VerticalAngle,
-                    DefaultLaunchAngle = original.DefaultLaunchAngle,
-
-                    NonTracking = original.NonTracking,
-
-                    CreateOffsetOriginX = original.CreateOffsetOriginX,
-                    CreateOffsetOriginY = original.CreateOffsetOriginY,
-                    CreateOffsetOriginZ = original.CreateOffsetOriginZ,
-
-                    PaddingOriginX = original.PaddingOriginX,
-                    PaddingOriginY = original.PaddingOriginY,
-                    PaddingOriginZ = original.PaddingOriginZ,
-
-                    DimsOriginX = original.DimsOriginX,
-                    DimsOriginY = original.DimsOriginY,
-                    DimsOriginZ = original.DimsOriginZ,
-
-                    PeturbationOriginX = original.PeturbationOriginX,
-                    PeturbationOriginY = original.PeturbationOriginY,
-                    PeturbationOriginZ = original.PeturbationOriginZ,
-
-                    ImbuedEffect = original.ImbuedEffect,
-
-                    SlayerCreatureType = original.SlayerCreatureType,
-                    SlayerDamageBonus = original.SlayerDamageBonus,
-
-                    CritFreq = original.CritFreq,
-                    CritMultiplier = original.CritMultiplier,
-
-                    IgnoreMagicResist = original.IgnoreMagicResist,
-                    ElementalModifier = original.ElementalModifier,
-
-                    DrainPercentage = original.DrainPercentage,
-                    DamageRatio = original.DamageRatio,
-
-                    DamageType = original.DamageType,
-
-                    Boost = original.Boost,
-                    BoostVariance = original.BoostVariance,
-
-                    Source = original.Source,
-                    Destination = original.Destination,
-
-                    Proportion = original.Proportion,
-                    LossPercent = original.LossPercent,
-
-                    SourceLoss = original.SourceLoss,
-                    TransferCap = original.TransferCap,
-                    MaxBoostAllowed = original.MaxBoostAllowed,
-
-                    TransferBitfield = original.TransferBitfield,
-
-                    Index = original.Index,
-                    Link = original.Link,
-
-                    PositionObjCellId = original.PositionObjCellId,
-
-                    PositionOriginX = original.PositionOriginX,
-                    PositionOriginY = original.PositionOriginY,
-                    PositionOriginZ = original.PositionOriginZ,
-
-                    PositionAnglesW = original.PositionAnglesW,
-                    PositionAnglesX = original.PositionAnglesX,
-                    PositionAnglesY = original.PositionAnglesY,
-                    PositionAnglesZ = original.PositionAnglesZ,
-
-                    MinPower = original.MinPower,
-                    MaxPower = original.MaxPower,
-                    PowerVariance = original.PowerVariance,
-
-                    DispelSchool = original.DispelSchool,
-
-                    Align = original.Align,
-                    Number = original.Number,
-                    NumberVariance = original.NumberVariance,
-
-                    DotDuration = original.DotDuration
-                };
-
-                _dbSpellCache[nextId] = clone;
-                _spellDbDoc?.Set(nextId, clone);
-            }
-
-            newSpell.Name = newSpell.Name + " - Copy";
-            _allSpells[nextId] = newSpell;
-
-            ApplyFilter();
-
-            SelectedSpell = Spells.FirstOrDefault(s => s.Id == nextId);
-            StatusText = $"Copied spell to new ID: 0x{nextId:X4}. Remember to Save.";
+            ShowToast($"Deleted spell 0x{id:X4}.");
         }
 
         [RelayCommand]
         private async Task SaveSpell() {
             if (SelectedDetail == null || _spellTable == null || _portalDoc == null || _allSpells == null) return;
+            UpdateValidationStatus();
+            if (HasBlockingIssues) {
+                ShowToast("Fix validation issues before saving.");
+                return;
+            }
 
             var detail = SelectedDetail;
             var id = detail.SpellId;
@@ -338,7 +351,9 @@ namespace WorldBuilder.Editors.Spell {
 
             detail.ApplyTo(spell);
 
-            _portalDoc.SetEntry(SpellTableId, _spellTable);
+            MarkSpellTableDirty();
+            _baselineSpell = CloneSpell(spell);
+            RefreshDirtyState();
 
             var idx = Spells.ToList().FindIndex(s => s.Id == id);
             if (idx >= 0) {
@@ -374,7 +389,391 @@ namespace WorldBuilder.Editors.Spell {
             }
 
             StatusText = $"Saved spell #{id}: {spell.Name} to project. Use File > Export to write DATs.";
+            ShowToast($"Saved spell 0x{id:X4}. Export when ready.");
         }
+
+        [RelayCommand]
+        private void GoToLastCreatedSpell() {
+            if (_lastCreatedSpellId == null) return;
+            FocusSpellById(_lastCreatedSpellId.Value);
+        }
+
+        [RelayCommand]
+        private void DismissToast() {
+            IsToastVisible = false;
+            _toastAction = null;
+            ToastActionLabel = "";
+            HasToastAction = false;
+        }
+
+        [RelayCommand]
+        private void ExecuteToastAction() {
+            _toastAction?.Invoke();
+            DismissToast();
+        }
+
+        [RelayCommand]
+        private void DiscardCurrentEdits() {
+            if (SelectedSpell == null || _allSpells == null || !_allSpells.TryGetValue(SelectedSpell.Id, out var sourceSpell)) return;
+            LoadDetail(SelectedSpell.Id, sourceSpell);
+            ShowToast("Discarded unsaved changes.");
+        }
+
+        [RelayCommand]
+        private void UndoLastAction() {
+            if (_undoStack.Count == 0 || _allSpells == null) return;
+
+            var action = _undoStack.Pop();
+            HasUndoAction = _undoStack.Count > 0;
+
+            switch (action.Kind) {
+                case SpellUndoActionKind.RemoveCreated:
+                    if (_allSpells.Remove(action.SpellId)) {
+                        MarkSpellTableDirty();
+                        TotalSpellCount = _allSpells.Count;
+                        ApplyFilter();
+                        ShowToast($"Undid create/copy for 0x{action.SpellId:X4}.");
+                    }
+                    break;
+                case SpellUndoActionKind.RestoreDeleted:
+                    if (action.Snapshot != null) {
+                        _allSpells[action.SpellId] = CloneSpell(action.Snapshot);
+                        MarkSpellTableDirty();
+                        TotalSpellCount = _allSpells.Count;
+                        FocusSpellById(action.SpellId);
+                        ShowToast($"Restored deleted spell 0x{action.SpellId:X4}.");
+                    }
+                    break;
+            }
+        }
+
+        private uint GetNextSpellId() {
+            if (_allSpells == null || _allSpells.Count == 0) return 1;
+            return _allSpells.Keys.Max() + 1;
+        }
+
+        private void FocusSpellById(uint id) {
+            SearchText = $"0x{id:X4}";
+            FilterSchool = null;
+            FilterSpellType = null;
+            ApplyFilter();
+            SelectedSpell = Spells.FirstOrDefault(s => s.Id == id);
+        }
+
+        private void MarkSpellTableDirty() {
+            if (_portalDoc == null || _spellTable == null) return;
+            _portalDoc.SetEntry(SpellTableId, _spellTable);
+        }
+
+        private void LoadDetail(uint spellId, SpellBase spell) {
+            if (_dats == null || _allSpells == null) return;
+            if (_activeDetail != null) {
+                _activeDetail.PropertyChanged -= SelectedDetailOnPropertyChanged;
+            }
+            var detail = new SpellDetailViewModel(spellId, spell, _componentTable, _allSpells, _dats);
+            _activeDetail = detail;
+            _activeDetail.PropertyChanged += SelectedDetailOnPropertyChanged;
+            SelectedDetail = detail;
+
+            if (_dbSpellCache.TryGetValue(spellId, out var spellCache)) {
+                detail.LoadFromDb(spellCache);
+            }
+            else if (_spellDbDoc != null && _spellDbDoc.TryGet(spellId, out var localDb) && localDb != null) {
+                detail.LoadFromDb(localDb);
+            }
+            else {
+                _ = LoadDbSpellAsync(detail, spellId);
+            }
+
+            _baselineSpell = CloneSpell(spell);
+            RefreshDirtyState();
+        }
+
+        private static void ApplyPreset(SpellBase spell, SpellPresetKind preset) {
+            switch (preset) {
+                case SpellPresetKind.ProjectileStarter:
+                    spell.School = MagicSchool.WarMagic;
+                    spell.MetaSpellType = SpellType.Projectile;
+                    spell.Power = 100;
+                    spell.BaseMana = 20;
+                    spell.BaseRangeConstant = 10f;
+                    spell.BaseRangeMod = 0.35f;
+                    spell.Description = "Starter projectile preset.";
+                    break;
+                case SpellPresetKind.EnchantmentStarter:
+                    spell.School = MagicSchool.ItemEnchantment;
+                    spell.MetaSpellType = SpellType.Enchantment;
+                    spell.Power = 120;
+                    spell.BaseMana = 25;
+                    spell.Duration = 90;
+                    spell.DegradeModifier = 0f;
+                    spell.Description = "Starter enchantment preset.";
+                    break;
+                case SpellPresetKind.PortalStarter:
+                    spell.School = MagicSchool.LifeMagic;
+                    spell.MetaSpellType = SpellType.PortalSummon;
+                    spell.BaseMana = 60;
+                    spell.PortalLifetime = 60;
+                    spell.BaseRangeConstant = 0f;
+                    spell.BaseRangeMod = 0f;
+                    spell.Description = "Starter portal preset.";
+                    break;
+                case SpellPresetKind.Blank:
+                default:
+                    break;
+            }
+        }
+
+        private void SelectedDetailOnPropertyChanged(object? sender, PropertyChangedEventArgs e) {
+            UpdateValidationStatus();
+            RefreshDirtyState();
+        }
+
+        private void UpdateValidationStatus() {
+            if (SelectedDetail == null) {
+                ValidationMessage = "";
+                HasBlockingIssues = false;
+                CanSave = true;
+                return;
+            }
+
+            var issues = new List<string>();
+            if (string.IsNullOrWhiteSpace(SelectedDetail.Name)) {
+                issues.Add("Name is required.");
+            }
+
+            if (SelectedDetail.BaseMana > 5000) {
+                issues.Add("Base Mana is unusually high (over 5000).");
+            }
+
+            if (SelectedDetail.ComponentSlots.Count > 8) {
+                issues.Add("A spell can have at most 8 components.");
+            }
+
+            HasBlockingIssues = issues.Any(i => i.Contains("required", StringComparison.OrdinalIgnoreCase) || i.Contains("at most", StringComparison.OrdinalIgnoreCase));
+            ValidationMessage = issues.Count == 0 ? "Looks good." : string.Join(" ", issues);
+            CanSave = !HasBlockingIssues;
+        }
+
+        private void RefreshDirtyState() {
+            if (SelectedDetail == null || _baselineSpell == null) {
+                HasUnsavedChanges = false;
+                ChangedFields = new ObservableCollection<string>();
+                return;
+            }
+
+            var draft = new SpellBase();
+            SelectedDetail.ApplyTo(draft);
+            var changes = GetChangedFields(_baselineSpell, draft);
+            ChangedFields = new ObservableCollection<string>(changes);
+            HasUnsavedChanges = changes.Count > 0;
+        }
+
+        private static List<string> GetChangedFields(SpellBase baseline, SpellBase draft) {
+            var changes = new List<string>();
+            static bool Diff<T>(T a, T b) where T : notnull => !EqualityComparer<T>.Default.Equals(a, b);
+
+            if ((baseline.Name?.ToString() ?? "") != (draft.Name?.ToString() ?? "")) changes.Add("Name");
+            if ((baseline.Description?.ToString() ?? "") != (draft.Description?.ToString() ?? "")) changes.Add("Description");
+            if (Diff(baseline.School, draft.School)) changes.Add("School");
+            if (Diff(baseline.MetaSpellType, draft.MetaSpellType)) changes.Add("Spell Type");
+            if (Diff(baseline.BaseMana, draft.BaseMana)) changes.Add("Base Mana");
+            if (Diff(baseline.Power, draft.Power)) changes.Add("Power");
+            if (Diff(baseline.Icon, draft.Icon)) changes.Add("Icon");
+            if (Diff(baseline.Duration, draft.Duration)) changes.Add("Duration");
+            if (Diff(baseline.PortalLifetime, draft.PortalLifetime)) changes.Add("Portal Lifetime");
+            if (Diff(baseline.ManaMod, draft.ManaMod)) changes.Add("Mana Mod");
+            if (Diff(baseline.DisplayOrder, draft.DisplayOrder)) changes.Add("Display Order");
+
+            var baseComponents = baseline.Components ?? new List<uint>();
+            var draftComponents = draft.Components ?? new List<uint>();
+            if (!baseComponents.SequenceEqual(draftComponents)) {
+                changes.Add("Components");
+            }
+
+            return changes;
+        }
+
+        private static SpellBase CloneSpell(SpellBase source) {
+            return new SpellBase {
+                Name = source.Name?.ToString() ?? "",
+                Description = source.Description?.ToString() ?? "",
+                School = source.School,
+                MetaSpellType = source.MetaSpellType,
+                Category = source.Category,
+                Icon = source.Icon,
+                BaseMana = source.BaseMana,
+                Power = source.Power,
+                BaseRangeConstant = source.BaseRangeConstant,
+                BaseRangeMod = source.BaseRangeMod,
+                SpellEconomyMod = source.SpellEconomyMod,
+                FormulaVersion = source.FormulaVersion,
+                ComponentLoss = source.ComponentLoss,
+                Bitfield = source.Bitfield,
+                MetaSpellId = source.MetaSpellId,
+                Duration = source.Duration,
+                DegradeModifier = source.DegradeModifier,
+                DegradeLimit = source.DegradeLimit,
+                PortalLifetime = source.PortalLifetime,
+                CasterEffect = source.CasterEffect,
+                TargetEffect = source.TargetEffect,
+                FizzleEffect = source.FizzleEffect,
+                RecoveryInterval = source.RecoveryInterval,
+                RecoveryAmount = source.RecoveryAmount,
+                DisplayOrder = source.DisplayOrder,
+                NonComponentTargetType = source.NonComponentTargetType,
+                ManaMod = source.ManaMod,
+                Components = (source.Components ?? new List<uint>()).ToList()
+            };
+        }
+
+        private static SpellRecord CloneDbSpellRecord(SpellRecord source, uint nextId) {
+            return new SpellRecord {
+                Id = nextId,
+                Name = source.Name,
+                StatModType = source.StatModType,
+                StatModKey = source.StatModKey,
+                StatModVal = source.StatModVal,
+                EType = source.EType,
+                BaseIntensity = source.BaseIntensity,
+                Variance = source.Variance,
+                Wcid = source.Wcid,
+                NumProjectiles = source.NumProjectiles,
+                NumProjectilesVariance = source.NumProjectilesVariance,
+                SpreadAngle = source.SpreadAngle,
+                VerticalAngle = source.VerticalAngle,
+                DefaultLaunchAngle = source.DefaultLaunchAngle,
+                NonTracking = source.NonTracking,
+                CreateOffsetOriginX = source.CreateOffsetOriginX,
+                CreateOffsetOriginY = source.CreateOffsetOriginY,
+                CreateOffsetOriginZ = source.CreateOffsetOriginZ,
+                PaddingOriginX = source.PaddingOriginX,
+                PaddingOriginY = source.PaddingOriginY,
+                PaddingOriginZ = source.PaddingOriginZ,
+                DimsOriginX = source.DimsOriginX,
+                DimsOriginY = source.DimsOriginY,
+                DimsOriginZ = source.DimsOriginZ,
+                PeturbationOriginX = source.PeturbationOriginX,
+                PeturbationOriginY = source.PeturbationOriginY,
+                PeturbationOriginZ = source.PeturbationOriginZ,
+                ImbuedEffect = source.ImbuedEffect,
+                SlayerCreatureType = source.SlayerCreatureType,
+                SlayerDamageBonus = source.SlayerDamageBonus,
+                CritFreq = source.CritFreq,
+                CritMultiplier = source.CritMultiplier,
+                IgnoreMagicResist = source.IgnoreMagicResist,
+                ElementalModifier = source.ElementalModifier,
+                DrainPercentage = source.DrainPercentage,
+                DamageRatio = source.DamageRatio,
+                DamageType = source.DamageType,
+                Boost = source.Boost,
+                BoostVariance = source.BoostVariance,
+                Source = source.Source,
+                Destination = source.Destination,
+                Proportion = source.Proportion,
+                LossPercent = source.LossPercent,
+                SourceLoss = source.SourceLoss,
+                TransferCap = source.TransferCap,
+                MaxBoostAllowed = source.MaxBoostAllowed,
+                TransferBitfield = source.TransferBitfield,
+                Index = source.Index,
+                Link = source.Link,
+                PositionObjCellId = source.PositionObjCellId,
+                PositionOriginX = source.PositionOriginX,
+                PositionOriginY = source.PositionOriginY,
+                PositionOriginZ = source.PositionOriginZ,
+                PositionAnglesW = source.PositionAnglesW,
+                PositionAnglesX = source.PositionAnglesX,
+                PositionAnglesY = source.PositionAnglesY,
+                PositionAnglesZ = source.PositionAnglesZ,
+                MinPower = source.MinPower,
+                MaxPower = source.MaxPower,
+                PowerVariance = source.PowerVariance,
+                DispelSchool = source.DispelSchool,
+                Align = source.Align,
+                Number = source.Number,
+                NumberVariance = source.NumberVariance,
+                DotDuration = source.DotDuration,
+                LastModified = source.LastModified
+            };
+        }
+
+        private void DiscardAndSwitchSelection() {
+            if (_pendingSpellSelection == null) return;
+            var target = _pendingSpellSelection;
+            _pendingSpellSelection = null;
+            DiscardCurrentEdits();
+            _isSelectionGuardActive = true;
+            SelectedSpell = target;
+            _isSelectionGuardActive = false;
+        }
+
+        private void PushUndo(SpellUndoAction action) {
+            _undoStack.Push(action);
+            HasUndoAction = true;
+        }
+
+        private async void ShowToast(string message, string actionLabel = "", Action? action = null) {
+            _toastCts?.Cancel();
+            _toastCts = new CancellationTokenSource();
+            var token = _toastCts.Token;
+
+            ToastMessage = message;
+            ToastActionLabel = actionLabel;
+            HasToastAction = !string.IsNullOrWhiteSpace(actionLabel) && action != null;
+            _toastAction = action;
+            IsToastVisible = true;
+
+            try {
+                await Task.Delay(5000, token);
+                if (!token.IsCancellationRequested) {
+                    IsToastVisible = false;
+                    _toastAction = null;
+                    ToastActionLabel = "";
+                    HasToastAction = false;
+                }
+            }
+            catch (TaskCanceledException) {
+            }
+        }
+    }
+
+    public enum SpellPresetKind {
+        Blank,
+        ProjectileStarter,
+        EnchantmentStarter,
+        PortalStarter
+    }
+
+    internal enum SpellUndoActionKind {
+        RemoveCreated,
+        RestoreDeleted
+    }
+
+    internal sealed class SpellUndoAction {
+        public SpellUndoActionKind Kind { get; }
+        public uint SpellId { get; }
+        public SpellBase? Snapshot { get; }
+
+        public SpellUndoAction(SpellUndoActionKind kind, uint spellId, SpellBase? snapshot) {
+            Kind = kind;
+            SpellId = spellId;
+            Snapshot = snapshot;
+        }
+    }
+
+    public sealed class SpellPresetOption {
+        public SpellPresetKind Kind { get; }
+        public string Name { get; }
+        public string Preview { get; }
+
+        public SpellPresetOption(SpellPresetKind kind, string name, string preview) {
+            Kind = kind;
+            Name = name;
+            Preview = preview;
+        }
+
+        public override string ToString() => Name;
     }
 
     public class SpellListItem {
