@@ -6,7 +6,7 @@ the two histories **share no common ancestor** — `git merge-base` returns noth
 so a normal `git pull upstream master` is impossible. All sync is manual or
 patch-by-patch.
 
-Last full audit: **2026-04-26** (incremental: 2026-04-29 — `44f47f8` gizmo improvement and `fa7c58c` surface-browser paging + terrain conformance ported).
+Last full audit: **2026-04-26** (incremental: 2026-04-29 — `44f47f8` gizmo improvement and `fa7c58c` surface-browser paging + terrain conformance ported; later same day `b9ffe3e` dungeon view fill ported and `38b22c2` texture fixes / docs ported partially).
 
 ## Quick orient
 
@@ -80,7 +80,7 @@ Sorted chronologically.
 | `d512ef2` | 03-10 | ACE DB instance placements: weenie picker, panels | many | medium | ⏳ TODO | New editor surface. |
 | `75fb32e` | 03-10 | fix EnvCell log spam | 2 | +10/-17 | ✅ PORTED | Cherry-picked. |
 | `b671cee` | 03-10 | more fixes | 6 | +113/-27 | 🔒 DEFERRED | Touches dungeon-refactor types we don't have. |
-| `b9ffe3e` | 03-10 | make dungeon view fill | 8 | +25/-14 | ⏳ TODO | Mostly csproj changes. |
+| `b9ffe3e` | 03-10 | make dungeon view fill | 8 | +25/-14 | ✅ PORTED | Cherry-picked clean (auto-merge in 4 csprojs + `Base3DView.cs`). Removes the duplicate `<PrivateAssets>all</PrivateAssets>` / `<IncludeAssets>none</IncludeAssets>` lines on `Avalonia.Diagnostics` (the Condition-bearing entries above them already cover Release; in Debug the duplicates were force-stripping the assembly so DevTools never linked). Adds `Base3DView.CurrentRenderSize` accessor + ceiling-based pixel sizing (`Math.Ceiling(viewportBounds.Width * scaling)` with `Max(1, …)`), which `DungeonViewportControl` and `ViewportControl` now read instead of `(int)Bounds.Width/Height` — fixes the right/bottom render gap on fractional-DPI scaling. `MainWindow.AttachDevTools()` re-enabled under `#if DEBUG`. |
 | `af985b2` | 03-10 | Changelog from commit messages; add `release.yml` | 3 | +58/-32 | 🔧 PERMISSIONS | OAuth token lacks `workflow` scope — modifies `.github/workflows/BuildEdge.yml`. Push from a session with `workflow` scope, or split changelog from yml. |
 | `f29948e` | 03-11 | fix fill tool preview | 1 | +2/-2 | ✅ PORTED | Cherry-picked. |
 | `9a0dbc3` | 03-11 | Dungeon editor improvements | many | medium | 🔒 DEFERRED | Dungeon refactor chain. |
@@ -103,17 +103,17 @@ Sorted chronologically.
 | `d780244` | 04-11 | improve spell editor UX | many | medium | ⏳ TODO | Cluster B. |
 | `55604d2` | 04-11 | fix spell editor rebase | 1 | +77/-127 | ⏳ TODO | Cluster B. |
 | `34c612b` | 04-11 | Defer portal writes via PortalDatDocument; simplify world-gen buildings | 5 | +27/-104 | 🟡 PARTIAL | PortalDatDocument RenderSurface dispatch ✅; `ObjSingleMeshImporter.TrySaveToPortal` deleted (dead code) ✅; `TextureImportService.TryOverwriteUiRenderSurface` now defers via PortalDatDocument ✅; LandscapeEditorViewModel world-gen simplify N/A (local already uses simple AddStaticObject pattern); LayoutEditorViewModel `_portalDoc` plumbing **deferred to Wave F**. |
-| `38b22c2` | 04-12 | texture fixes; documentation | many | small | ⏳ TODO | Look first. |
-| `7d6ce84` | 04-12 | UI layout additions (some names from string) | 8 | +576/-37 | ⏳ TODO | Look first. |
+| `38b22c2` | 04-12 | texture fixes; documentation | many | small | 🟡 PARTIAL | Cherry-picked with conflicts on `README.md` (resolved: keep local ACME intro, splice in upstream's User Guide pointer + Custom Textures additions; trimmed Monster Creator references since that editor isn't in this fork) and modify/delete on `WorldBuilder/Editors/Monster/{MonsterEditorViewModel.cs,Views/MonsterPreviewView.axaml}` (deleted from cherry-pick — Cluster B). What landed: `CustomTextureStore` gains `RenderSurfaceReplace` enum + `ReplacesRenderSurfaceId` field + `GetRenderSurfaceReplacement(s)` helpers; `TextureImportService` gains `TryImportRenderSurfaceReplacement` (validates target exists + dimensions + `PFID_A8R8G8B8` format) and a new `WriteRenderSurfaceReplacementsToDats` export path that round-trips through `RenderSurfaceWithReplacedPixels` (preserves original metadata). Existing terrain + dungeon-surface export paths gain the same up-front format/dimension validation so DXT or buffer-size-mismatched data is rejected before write. Background colors set to `#1a1a1a` on `DungeonViewportControl`/`ObjectDebugView`/`ViewportControl` (Transparent panels show black flash during DAT load); `WeenieSetupPreviewView` panel gets explicit `#0d0a14`. `ObjectDebugView` Grid first column changes from `250` to `Auto`. New `docs/USER_GUIDE.md` (Monster-Creator paragraph trimmed). The `ReplaceRenderSurfaceAsync` GUI button is **not** ported (lived on the missing Monster editor); the import API is in place for whatever future editor adds the wiring. |
+| `7d6ce84` | 04-12 | UI layout additions (some names from string) | 8 | +576/-37 | 🚫 BLOCKED | Pure-additive parts (`LayoutUiStringResolver.cs` new file; `DefaultDatReaderWriter` adds `StringTable` to `TryGet`/`TrySave` switches; `LayoutMediaHelper.PopulateStateRows` gains optional `DatCollection?` + `IReadOnlyList<uint>?` params) would land cleanly on their own. The blocker is the `LayoutEditorViewModel.cs` + `LayoutPreviewCanvas.cs` + `LayoutEditorView.axaml` changes: they consume `ElementTreeNode.Caption` / `TreeLine` / `HierarchyTooltip` / `CaptionDisplay` / `TypeLabel` / `EffectiveTypeHint` and assume an upstream-shape `ElementTreeNode(ElementDesc, DatCollection?, uint[]?, uint)` ctor + `LayoutDetailViewModel(_dats, _textureImport, _portalDoc, _stringDats)` shape that this fork doesn't have (our local `ElementTreeNode` is a plain class with the simple `(ElementDesc)` ctor; our `LayoutDetailViewModel` doesn't carry `_dats`). The upstream-shape `LayoutDetailViewModel` overlaps Wave F territory (the deferred Layout overhaul), so a clean port wants Wave F first. A lighter "additive-only" port (resolver + DefaultDatReaderWriter switch entries + optional-param helper) would be dead code with no caller; not worth landing alone. |
 | `15cb9ed` | 04-14 | add logging, fix texture import/dat export | 9 | +506/-4 | 🚫 BLOCKED | Needs `FileLoggerProvider` + related logging infrastructure. |
 
 ### Tally
-- **11 ✅ PORTED** (incl. `5faec77` heightmap import + `7293629` mini map landed 2026-04-26; `44f47f8` gizmo improvement and `fa7c58c` surface-browser paging + terrain conformance landed 2026-04-29)
-- **2 🟡 PARTIAL** (`f26345e` slices 1-3 ✅ + slice 4 waves A, B, C, D, E, G ✅; wave F (Layout editor) ⏳ — and `34c612b` portal-defer + dead-code deletion ✅; LayoutEditorViewModel plumbing pending Wave F)
-- **4 🚫 BLOCKED** (attempted, prereq gap documented above)
+- **12 ✅ PORTED** (incl. `5faec77` heightmap import + `7293629` mini map landed 2026-04-26; `44f47f8` gizmo improvement and `fa7c58c` surface-browser paging + terrain conformance landed 2026-04-29; `b9ffe3e` dungeon view fill landed 2026-04-29)
+- **3 🟡 PARTIAL** (`f26345e` slices 1-3 ✅ + slice 4 waves A, B, C, D, E, G ✅; wave F (Layout editor) ⏳ — `34c612b` portal-defer + dead-code deletion ✅; LayoutEditorViewModel plumbing pending Wave F — `38b22c2` texture-fix subset ✅, Monster-editor `ReplaceRenderSurfaceAsync` button skipped because Monster editor isn't in this fork)
+- **5 🚫 BLOCKED** (`40e9567`, `ee39f71`, `15cb9ed`, `7d6ce84` plus prior; `7d6ce84` blocked on Wave F shape — see row)
 - **14 🔒 DEFERRED** (large refactors or stacked dungeon-chain — port only with in-game testing)
 - **1 🔧 PERMISSIONS** (just needs the right token to push)
-- **10 ⏳ TODO** (not yet attempted, lower-risk than the deferred set)
+- **8 ⏳ TODO** (not yet attempted, lower-risk than the deferred set)
 
 ## f26345e split into 4 slices
 
@@ -344,7 +344,7 @@ that prove the behavior. Verify in-game when possible.
 | C. Landscape / heightmap / mini-map | ~5 commits | Medium | `5faec77 → 7293629` is a tractable chain if heightmap import is wanted. |
 | D. Texture / DAT export / logging | ~3 commits remaining | Medium | `34c612b` is the cleanest; `15cb9ed` needs logging infra prereq. |
 | E. Chorizite / OpenGL backend | (Originally proposed cluster — debunked: those commits are actually multi-subsystem.) | — | Cluster doesn't really exist as I first defined it. |
-| F. Misc fixes | Various | Medium | `b9ffe3e` remains; `fa7c58c` and `44f47f8` ported 2026-04-29. |
+| F. Misc fixes | Various | Medium | `fa7c58c` + `44f47f8` ported 2026-04-29; `b9ffe3e` ported 2026-04-29; `38b22c2` partial port 2026-04-29 (texture-import safety + docs; Monster GUI button skipped). |
 
 ## Subagent pilot finding (2026-04-26)
 
