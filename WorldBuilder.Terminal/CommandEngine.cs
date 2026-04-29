@@ -3979,7 +3979,10 @@ public class CommandEngine {
         memory.Add(new BenchmarkMemorySnapshot("After validation", GC.GetTotalMemory(false)));
 
         // â”€â”€â”€ Test 4: Bulk heightmap throughput (500 set-landblock-heightmap calls) â”€â”€â”€
+        // Segment size is smaller than the per-op tests so first/last comparisons
+        // remain meaningful at this lower op count.
         const int BULK_OPS = 500;
+        const int BULK_SEGMENT_SIZE = 100;
         var bulkHeights = new byte[81];
         for (int i = 0; i < 81; i++) bulkHeights[i] = 128;
 
@@ -3995,7 +3998,7 @@ public class CommandEngine {
             for (int v = 0; v < 81; v++) bulkHeights[v] = (byte)((128 + i + v) % 256);
             SetLandblockHeightmap(lb.x, lb.y, bulkHeights);
 
-            if ((i + 1 - segmentStart) >= SEGMENT_SIZE) {
+            if ((i + 1 - segmentStart) >= BULK_SEGMENT_SIZE) {
                 segmentSw.Stop();
                 segmentTimes.Add(segmentSw.Elapsed.TotalMilliseconds);
                 segmentStart = i + 1;
@@ -4006,8 +4009,8 @@ public class CommandEngine {
 
         double bulkElapsed = sw.Elapsed.TotalMilliseconds;
         double bulkOpsPerSec = BULK_OPS / (bulkElapsed / 1000.0);
-        double? bulkFirstSeg = segmentTimes.Count > 0 ? SEGMENT_SIZE / (segmentTimes[0] / 1000.0) : null;
-        double? bulkLastSeg = segmentTimes.Count > 1 ? SEGMENT_SIZE / (segmentTimes[^1] / 1000.0) : null;
+        double? bulkFirstSeg = segmentTimes.Count > 0 ? BULK_SEGMENT_SIZE / (segmentTimes[0] / 1000.0) : null;
+        double? bulkLastSeg = segmentTimes.Count > 1 ? BULK_SEGMENT_SIZE / (segmentTimes[^1] / 1000.0) : null;
         double? bulkDeg = bulkFirstSeg.HasValue && bulkLastSeg.HasValue && bulkFirstSeg.Value > 0
             ? Math.Round(100.0 * (1.0 - bulkLastSeg.Value / bulkFirstSeg.Value), 1)
             : null;
@@ -4138,9 +4141,16 @@ public class CommandEngine {
 
         foreach (var (modelId, x, y, z) in objects) {
             try {
+                if (!float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z)) {
+                    errors++;
+                    if (errorMsgs.Count < 10)
+                        errorMsgs.Add($"Object 0x{modelId:X8}: non-finite coordinate ({x},{y},{z})");
+                    continue;
+                }
                 var obj = new StaticObject {
                     Id = modelId,
-                    IsSetup = (modelId & 0x02000000) != 0,
+                    // AC type prefix is the high byte (0xPPNNNNNN). 0x02 = Setup.
+                    IsSetup = (modelId & 0xFF000000u) == 0x02000000u,
                     Origin = new Vector3(x, y, z),
                     Orientation = Quaternion.Identity,
                     Scale = Vector3.One
@@ -6547,6 +6557,9 @@ public class CommandEngine {
         };
 
         try {
+            var outDir = Path.GetDirectoryName(outputPath);
+            if (!string.IsNullOrEmpty(outDir))
+                Directory.CreateDirectory(outDir);
             using var writer = new StreamWriter(outputPath, false, System.Text.Encoding.UTF8);
 
             for (uint lbX = 0; lbX <= 254; lbX++) {
@@ -7353,7 +7366,8 @@ public class CommandEngine {
 
                     var obj = new StaticObject {
                         Id = modelId,
-                        IsSetup = (modelId & 0x02000000) != 0,
+                        // AC type prefix is the high byte (0xPPNNNNNN). 0x02 = Setup.
+                        IsSetup = (modelId & 0xFF000000u) == 0x02000000u,
                         Origin = new Vector3(ox, oy, z),
                         Orientation = Quaternion.CreateFromAxisAngle(
                             Vector3.UnitZ, (float)(rng.NextDouble() * Math.PI * 2)),
@@ -7413,11 +7427,18 @@ public class CommandEngine {
                 outputPath, $"Image file not found: {imagePath}");
         }
 
-        SkiaSharp.SKBitmap? bitmap;
+        // Read pixels into a managed array so the inner loop avoids the per-call
+        // native interop hop of SKBitmap.GetPixel (255*255*8*8 ≈ 4.2M calls at
+        // 1:1 resolution). Mirrors the QuickWorld load path.
+        SkiaSharp.SKColor[] pixels;
+        int imgW, imgH;
         try {
-            var data = SkiaSharp.SKData.Create(imagePath);
-            bitmap = SkiaSharp.SKBitmap.Decode(data);
+            using var imgData = SkiaSharp.SKData.Create(imagePath);
+            using var bitmap = SkiaSharp.SKBitmap.Decode(imgData);
             if (bitmap == null) throw new Exception("Failed to decode image");
+            imgW = bitmap.Width;
+            imgH = bitmap.Height;
+            pixels = bitmap.Pixels;
         } catch (Exception ex) {
             sw.Stop();
             return new AnalyzeMapImageResult(false, 0, 0, 0, 0,
@@ -7425,13 +7446,11 @@ public class CommandEngine {
                 outputPath, $"Failed to load image: {ex.Message}");
         }
 
-        Console.WriteLine($"[AnalyzeMapImage] Loaded image: {bitmap.Width}Ã—{bitmap.Height}");
+        Console.WriteLine($"[AnalyzeMapImage] Loaded image: {imgW}Ã—{imgH}");
 
         // The Mapper creates images at LANDSIZE = 255*8+1 = 2041 pixels.
         // But the screenshot may be at a different resolution (e.g., 1280x720 with auto-scaling).
         // We need to handle arbitrary image sizes by scaling pixel coordinates.
-        int imgW = bitmap.Width;
-        int imgH = bitmap.Height;
 
         // â”€â”€â”€ 2. Sample each landblock's 8Ã—8 pixel region â”€â”€â”€
         // The map image coordinate system:
@@ -7464,8 +7483,9 @@ public class CommandEngine {
 
                 int sampleSize = Math.Max(1, (int)Math.Round(8 * Math.Min(scaleX, scaleY)));
                 for (int dx = 0; dx < sampleSize && pixStartX + dx < imgW; dx++) {
+                    int px = pixStartX + dx;
                     for (int dy = 0; dy < sampleSize && pixStartY + dy < imgH; dy++) {
-                        var pixel = bitmap.GetPixel(pixStartX + dx, pixStartY + dy);
+                        var pixel = pixels[(pixStartY + dy) * imgW + px];
                         totalR += pixel.Red;
                         totalG += pixel.Green;
                         totalB += pixel.Blue;
@@ -7506,8 +7526,6 @@ public class CommandEngine {
             if (lbX % 50 == 0 && lbX > 0)
                 Console.WriteLine($"[AnalyzeMapImage] ...column {lbX}/254, {landCells} land, {oceanCells} ocean");
         }
-
-        bitmap.Dispose();
 
         // â”€â”€â”€ 4. Write output JSON â”€â”€â”€
         Console.WriteLine($"[AnalyzeMapImage] Classification complete. Building output...");

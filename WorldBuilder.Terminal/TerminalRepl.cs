@@ -1924,14 +1924,35 @@ public class TerminalRepl {
         var tokens = new List<string>(8);
         var currentToken = new StringBuilder();
         bool inQuotes = false;
+        // Mid-token quote pairs (e.g. JSON like [{"k":"v"}]) keep their quote
+        // characters so the resulting token is still valid JSON. Boundary
+        // quote pairs (e.g. "path with spaces") are stripped as before.
+        bool preserveCurrentQuotes = false;
+        // Track JSON bracket nesting so whitespace inside [...] / {...} stays
+        // glued into a single token without forcing the user to wrap the whole
+        // expression in shell quotes.
+        int bracketDepth = 0;
 
         foreach (char c in line) {
             if (c == '"') {
-                inQuotes = !inQuotes;
+                if (inQuotes) {
+                    if (preserveCurrentQuotes) currentToken.Append(c);
+                    inQuotes = false;
+                    preserveCurrentQuotes = false;
+                } else {
+                    preserveCurrentQuotes = currentToken.Length > 0 || bracketDepth > 0;
+                    if (preserveCurrentQuotes) currentToken.Append(c);
+                    inQuotes = true;
+                }
                 continue;
             }
 
-            if (char.IsWhiteSpace(c) && !inQuotes) {
+            if (!inQuotes) {
+                if (c == '[' || c == '{') bracketDepth++;
+                else if ((c == ']' || c == '}') && bracketDepth > 0) bracketDepth--;
+            }
+
+            if (char.IsWhiteSpace(c) && !inQuotes && bracketDepth == 0) {
                 if (currentToken.Length > 0) {
                     tokens.Add(currentToken.ToString());
                     currentToken.Clear();
@@ -2565,22 +2586,37 @@ public class TerminalRepl {
         if (!TryParseUint(tokens[1], "lbX", out uint lbX)) return;
         if (!TryParseUint(tokens[2], "lbY", out uint lbY)) return;
 
-        // Re-join remaining tokens for JSON (might be split by tokenizer)
-        var jsonStr = string.Join(" ", tokens.Skip(3));
+        // The bracket-aware tokenizer keeps the JSON in a single token. Re-join
+        // any trailing tokens defensively in case the user added stray args.
+        var jsonStr = tokens.Length == 4 ? tokens[3] : string.Join(" ", tokens.Skip(3));
         try {
             using var doc = System.Text.Json.JsonDocument.Parse(jsonStr);
             var objects = new List<(uint modelId, float x, float y, float z)>();
+            int badRows = 0;
             foreach (var elem in doc.RootElement.EnumerateArray()) {
-                var midStr = elem.GetProperty("modelId").GetString() ?? "0";
-                uint mid = uint.Parse(midStr.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+                var midStr = elem.GetProperty("modelId").GetString();
+                if (string.IsNullOrWhiteSpace(midStr) || !TryParseHex(midStr, "modelId", out uint mid)) {
+                    badRows++;
+                    continue;
+                }
                 float x = elem.GetProperty("x").GetSingle();
                 float y = elem.GetProperty("y").GetSingle();
                 float z = elem.GetProperty("z").GetSingle();
+                if (!float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z)) {
+                    Console.WriteLine($"  Skipping non-finite coordinate ({x},{y},{z})");
+                    badRows++;
+                    continue;
+                }
                 objects.Add((mid, x, y, z));
+            }
+            if (objects.Count == 0) {
+                Console.WriteLine($"No valid objects to place ({badRows} skipped).");
+                return;
             }
             var r = _engine.BulkPlaceObjects(lbX, lbY, objects);
             Console.WriteLine($"Placed {r.Placed} objects in landblock 0x{r.LbKey:X4}");
-            if (r.Errors > 0) Console.WriteLine($"  {r.Errors} error(s)");
+            int totalErrors = r.Errors + badRows;
+            if (totalErrors > 0) Console.WriteLine($"  {totalErrors} error(s) ({badRows} input, {r.Errors} placement)");
             if (r.ErrorMessages != null)
                 foreach (var e in r.ErrorMessages) Console.WriteLine($"    {e}");
         } catch (Exception ex) {
@@ -2638,7 +2674,7 @@ public class TerminalRepl {
         Console.ResetColor();
         Console.WriteLine($"  Seed: {seed}  Octaves: {octaves}  Lacunarity: {lacunarity}  Persistence: {persistence}  Amplitude: {amplitude}");
         if (coastline != null) Console.WriteLine($"  Coastline polygon: {coastline.Count} vertices");
-        Console.WriteLine("  Generating 255Ã—255 = 65,025 landblocks (5,266,025 vertices)...");
+        Console.WriteLine("  Generating 255Ã—255 = 65,025 landblocks (5,267,025 vertices)...");
         Console.WriteLine();
 
         var r = _engine.GenerateTerrain(seed, octaves, lacunarity, persistence, amplitude, coastline);

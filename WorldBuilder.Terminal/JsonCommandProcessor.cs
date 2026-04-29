@@ -1650,7 +1650,7 @@ public class JsonCommandProcessor {
     }
 
     private string CmdSetLandblockHeightmap(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         var heightsNode = node["heights"] ?? throw new ArgumentException("Missing 'heights' field");
         byte[] heights = ParseByteArrayField(heightsNode, "heights");
         var r = _engine.SetLandblockHeightmap(lbX, lbY, heights);
@@ -1660,7 +1660,7 @@ public class JsonCommandProcessor {
     }
 
     private string CmdSetLandblockTerrain(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         var typesNode = node["types"] ?? throw new ArgumentException("Missing 'types' field");
         byte[] types = ParseByteArrayField(typesNode, "types");
         var r = _engine.SetLandblockTerrain(lbX, lbY, types);
@@ -1670,16 +1670,18 @@ public class JsonCommandProcessor {
     }
 
     private string CmdBulkPlaceObjects(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         var objectsArr = node["objects"] as System.Text.Json.Nodes.JsonArray
             ?? throw new ArgumentException("Missing 'objects' array");
         var objects = new List<(uint modelId, float x, float y, float z)>(objectsArr.Count);
-        foreach (var obj in objectsArr) {
-            if (obj == null) continue;
-            uint mid = obj["modelId"] != null ? Hex32(obj, "modelId") : 0u;
-            float x = obj["x"]?.GetValue<float>() ?? 0;
-            float y = obj["y"]?.GetValue<float>() ?? 0;
-            float z = obj["z"]?.GetValue<float>() ?? 0;
+        for (int i = 0; i < objectsArr.Count; i++) {
+            var obj = objectsArr[i] ?? throw new ArgumentException($"objects[{i}] is null");
+            uint mid = Hex32(obj, "modelId");
+            float x = obj["x"]?.GetValue<float>() ?? throw new ArgumentException($"objects[{i}]: missing 'x'");
+            float y = obj["y"]?.GetValue<float>() ?? throw new ArgumentException($"objects[{i}]: missing 'y'");
+            float z = obj["z"]?.GetValue<float>() ?? throw new ArgumentException($"objects[{i}]: missing 'z'");
+            if (!float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z))
+                throw new ArgumentException($"objects[{i}]: coordinates must be finite; got ({x},{y},{z})");
             objects.Add((mid, x, y, z));
         }
         var r = _engine.BulkPlaceObjects(lbX, lbY, objects);
