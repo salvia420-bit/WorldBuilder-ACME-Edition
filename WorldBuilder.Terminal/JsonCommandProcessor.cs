@@ -417,13 +417,20 @@ public class JsonCommandProcessor {
     }
 
     private string CmdCompareToRetail(System.Text.Json.Nodes.JsonNode node) {
-        var generated = node["generated"]?.GetValue<string>()
-            ?? throw new ArgumentException("Missing 'generated' field");
-        string? retailBaseline = node["retailBaseline"]?.GetValue<string>();
-        int topK = node["topK"]?.GetValue<int>() ?? 30;
-        int anomalyMin = node["anomalyMinModel"]?.GetValue<int>() ?? 20;
-        bool perLb = node["perLandblock"]?.GetValue<bool>() ?? true;
-        string? cacheDir = node["cacheDir"]?.GetValue<string>();
+        // Defensive readers: a wrong-typed field (e.g. topK as a string,
+        // perLandblock as a number) would otherwise throw inside GetValue<T>()
+        // and tear down the whole stdin loop. Match the transact-diff dispatch
+        // hardening pattern and return a clean error response instead.
+        string? generated = TryReadString(node["generated"]);
+        if (string.IsNullOrWhiteSpace(generated)) {
+            return Serialize(new { success = false, command = "compare-to-retail",
+                error = "Missing or non-string 'generated' field (expected a JSONL path)." });
+        }
+        string? retailBaseline = TryReadString(node["retailBaseline"]);
+        int topK = TryReadIntDefault(node["topK"], 30);
+        int anomalyMin = TryReadIntDefault(node["anomalyMinModel"], 20);
+        bool perLb = node["perLandblock"] == null ? true : TryReadBool(node["perLandblock"]);
+        string? cacheDir = TryReadString(node["cacheDir"]);
 
         var r = _engine.CompareToRetail(generated, retailBaseline, topK, anomalyMin, perLb, cacheDir);
         if (!r.Success)
@@ -2412,6 +2419,14 @@ public class JsonCommandProcessor {
         if (n < 64) return 64;
         if (n > 8192) return 8192;
         return n;
+    }
+
+    // Generic int reader — returns fallback for missing or wrong-typed nodes
+    // instead of throwing inside GetValue<int>(). No clamping; the caller's
+    // own arg semantics decide what's reasonable.
+    private static int TryReadIntDefault(System.Text.Json.Nodes.JsonNode? node, int fallback) {
+        if (node?.GetValueKind() != JsonValueKind.Number) return fallback;
+        try { return node.GetValue<int>(); } catch { return fallback; }
     }
 
     // Returns true and the requested mode if `diff` was set to a truthy form.
