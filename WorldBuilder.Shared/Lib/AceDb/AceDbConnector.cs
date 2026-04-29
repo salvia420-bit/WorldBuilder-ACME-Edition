@@ -1,6 +1,8 @@
 using System.Data;
 
 using MySqlConnector;
+using WorldBuilder.Shared.Documents;
+using WorldBuilder.Shared.Models;
 
 namespace WorldBuilder.Shared.Lib.AceDb {
     /// <summary>
@@ -199,6 +201,97 @@ namespace WorldBuilder.Shared.Lib.AceDb {
             }
 
             return results;
+        }
+
+        /// <summary>
+        /// Generates a single INSERT statement for ace_world.landblock_instance.
+        /// Use for placing generators/items/portals in dungeons. If Guid is 0, a new guid is generated.
+        /// Angles default to identity quaternion (0, 0, 0, 1) when null.
+        /// </summary>
+        public static string GenerateInsertSql(LandblockInstanceRecord record, string databaseName = "ace_world") {
+            uint guid = record.Guid;
+            if (guid == 0)
+                guid = (uint)System.Security.Cryptography.RandomNumberGenerator.GetInt32(1, int.MaxValue);
+
+            float w = record.AnglesW ?? 0f;
+            float x = record.AnglesX ?? 0f;
+            float y = record.AnglesY ?? 0f;
+            float z = record.AnglesZ ?? 1f;
+            if (record.AnglesW == null && record.AnglesX == null && record.AnglesY == null && record.AnglesZ == null) {
+                w = 1f;
+                x = 0f;
+                y = 0f;
+                z = 0f;
+            }
+
+            return string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "INSERT INTO `{0}`.`landblock_instance` (`guid`, `weenie_Class_Id`, `obj_Cell_Id`, `origin_X`, `origin_Y`, `origin_Z`, `angles_w`, `angles_x`, `angles_y`, `angles_z`) VALUES ({1}, {2}, {3}, {4:F6}, {5:F6}, {6:F6}, {7:F6}, {8:F6}, {9:F6}, {10:F6});",
+                databaseName, guid, record.WeenieClassId, record.ObjCellId,
+                record.OriginX, record.OriginY, record.OriginZ,
+                w, x, y, z);
+        }
+
+        /// <summary>
+        /// Generates a batch of INSERT statements for landblock_instance (e.g. dungeon generator placements).
+        /// </summary>
+        public static string GenerateInsertSqlBatch(IEnumerable<LandblockInstanceRecord> records, string databaseName = "ace_world") {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("-- ACME WorldBuilder: landblock_instance (generators/items/portals)");
+            sb.AppendLine($"-- Database: {databaseName}");
+            sb.AppendLine();
+            foreach (var r in records)
+                sb.AppendLine(GenerateInsertSql(r, databaseName));
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Converts dungeon instance placements to landblock_instance records for SQL generation.
+        /// </summary>
+        public static List<LandblockInstanceRecord> ToLandblockInstanceRecords(
+            ushort landblockId,
+            IEnumerable<DungeonInstancePlacement> placements) {
+            var list = new List<LandblockInstanceRecord>();
+            foreach (var p in placements) {
+                uint objCellId = ((uint)landblockId << 16) | p.CellNumber;
+                var q = p.Orientation;
+                list.Add(new LandblockInstanceRecord {
+                    Guid = 0,
+                    WeenieClassId = p.WeenieClassId,
+                    ObjCellId = objCellId,
+                    OriginX = p.Origin.X,
+                    OriginY = p.Origin.Y,
+                    OriginZ = p.Origin.Z,
+                    AnglesW = q.W,
+                    AnglesX = q.X,
+                    AnglesY = q.Y,
+                    AnglesZ = q.Z,
+                });
+            }
+            return list;
+        }
+
+        /// <summary>
+        /// Converts outdoor instance placements to landblock_instance records for SQL generation.
+        /// </summary>
+        public static List<LandblockInstanceRecord> ToLandblockInstanceRecordsFromOutdoor(
+            IEnumerable<OutdoorInstancePlacement> placements) {
+            var list = new List<LandblockInstanceRecord>();
+            foreach (var p in placements) {
+                uint objCellId = ((uint)p.LandblockId << 16) | p.CellNumber;
+                list.Add(new LandblockInstanceRecord {
+                    Guid = 0,
+                    WeenieClassId = p.WeenieClassId,
+                    ObjCellId = objCellId,
+                    OriginX = p.OriginX,
+                    OriginY = p.OriginY,
+                    OriginZ = p.OriginZ,
+                    AnglesW = p.AnglesW,
+                    AnglesX = p.AnglesX,
+                    AnglesY = p.AnglesY,
+                    AnglesZ = p.AnglesZ,
+                });
+            }
+            return list;
         }
 
         /// <summary>

@@ -180,7 +180,7 @@ namespace WorldBuilder.Editors.Landscape {
         /// Building interiors get a small positive Z bump so the floor sits above terrain
         /// and avoids floor/terrain Z-fighting (flashing).
         /// </summary>
-        private const float DungeonDepthOffset = -50f;
+        internal const float DungeonDepthOffset = -50f;
         /// <summary>World-space Z offset so building floor sits above terrain and wins depth; 0.05 was insufficient.</summary>
         private const float BuildingFloorOffset = 0.2f;
 

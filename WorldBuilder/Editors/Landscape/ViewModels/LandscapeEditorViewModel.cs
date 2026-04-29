@@ -133,6 +133,8 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
         }
 
         private Project? _project;
+        /// <summary>Current project (for ACE outdoor instance placements).</summary>
+        public Project? Project => _project;
         private IDatReaderWriter? _dats;
         public TerrainSystem? TerrainSystem { get; private set; }
         public WorldBuilderSettings Settings { get; }
@@ -271,6 +273,8 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
             if (HistorySnapshotPanel != null) Register("History", "History", HistorySnapshotPanel, DockLocation.Right);
             if (BookmarksPanel != null) Register("Bookmarks", "Bookmarks", BookmarksPanel, DockLocation.Right);
             if (WorldMapPanel != null) Register("WorldMap", "World Map", WorldMapPanel, DockLocation.Right);
+
+            Register("AceInstances", "ACE Instances", new AceInstancesPanelViewModel(this), DockLocation.Right);
 
             Register("Toolbox", "Tools", new ToolboxViewModel(this), DockLocation.Right);
 

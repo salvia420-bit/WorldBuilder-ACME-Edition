@@ -26,5 +26,10 @@ namespace WorldBuilder.Shared.Lib.AceDb {
         /// Outdoor cells are 0x0001-0x0040 (1-64). Interior/dungeon cells start at 0x0100.
         /// </summary>
         public bool IsOutdoor => CellId >= 1 && CellId <= 64;
+
+        /// <summary>
+        /// True when this instance is in a dungeon/interior cell (0x0100+).
+        /// </summary>
+        public bool IsDungeon => CellId >= 0x0100;
     }
 }

@@ -4,9 +4,12 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DialogHostAvalonia;
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using WorldBuilder.Lib.Settings;
+using WorldBuilder.Shared.Documents;
 using WorldBuilder.Shared.Lib.AceDb;
 using WorldBuilder.Shared.Models;
 
@@ -109,7 +112,7 @@ namespace WorldBuilder.ViewModels {
             CurrentPortalIteration = _project.DocumentManager.Dats.Dats.Portal.Iteration.CurrentIteration;
             PortalIteration = _project.DocumentManager.Dats.Dats.Portal.Iteration.CurrentIteration;
 
-            // Load saved ACE DB settings from project
+            // Load saved ACE DB settings from project, else pre-fill from app settings
             if (_project.AceDb != null) {
                 EnableReposition = _project.AceDb.EnableReposition;
                 DbHost = _project.AceDb.Host;
@@ -119,6 +122,13 @@ namespace WorldBuilder.ViewModels {
                 DbPassword = _project.AceDb.Password;
                 ApplyDirectly = _project.AceDb.ApplyDirectly;
                 RepositionThreshold = _project.AceDb.Threshold;
+            }
+            else if (_settings.AceDbConnection != null) {
+                DbHost = _settings.AceDbConnection.Host;
+                DbPort = _settings.AceDbConnection.Port;
+                DbDatabase = _settings.AceDbConnection.Database;
+                DbUser = _settings.AceDbConnection.User;
+                DbPassword = _settings.AceDbConnection.Password;
             }
 
             Validate();
@@ -201,6 +211,27 @@ namespace WorldBuilder.ViewModels {
                     _project.OnExportReposition = null;
                 }
 
+                // When AceDb is configured, export dungeon instance placements (generators/items/portals) to SQL
+                _project.OnExportDungeonInstances = (exportDir, dungeonsWithPlacements) => {
+                    if (dungeonsWithPlacements.Count == 0) return;
+                    var allRecords = new List<LandblockInstanceRecord>();
+                    foreach (var doc in dungeonsWithPlacements)
+                        allRecords.AddRange(AceDbConnector.ToLandblockInstanceRecords(doc.LandblockKey, doc.InstancePlacements));
+                    if (allRecords.Count == 0) return;
+                    string sql = AceDbConnector.GenerateInsertSqlBatch(allRecords, aceSettings.Database);
+                    string sqlPath = Path.Combine(exportDir, "dungeon_instances.sql");
+                    File.WriteAllText(sqlPath, sql);
+                    if (aceSettings.ApplyDirectly) {
+                        try {
+                            using var connector = new AceDbConnector(aceSettings);
+                            connector.ExecuteSqlAsync(sql).GetAwaiter().GetResult();
+                        }
+                        catch (Exception ex) {
+                            Console.WriteLine($"[Export] Dungeon instances ApplyDirectly failed: {ex.Message}");
+                        }
+                    }
+                };
+
                 var exportStatusText = new TextBlock {
                     Text = "Starting export...",
                     FontSize = 13,
@@ -246,6 +277,39 @@ namespace WorldBuilder.ViewModels {
                     }
                 }
 
+                // Report dungeon instance export if we had placements
+                var dungeonsWithPlacements = new List<DungeonDocument>();
+                foreach (var (_, doc) in _project.DocumentManager.ActiveDocs) {
+                    if (doc is DungeonDocument dng && dng.InstancePlacements.Count > 0)
+                        dungeonsWithPlacements.Add(dng);
+                }
+                if (dungeonsWithPlacements.Count > 0) {
+                    int totalPlacements = dungeonsWithPlacements.Sum(d => d.InstancePlacements.Count);
+                    successMsg += $"\n\nDungeon instances: wrote dungeon_instances.sql ({totalPlacements} generator/item/portal placement(s) across {dungeonsWithPlacements.Count} dungeon(s)).";
+                    if (aceSettings.ApplyDirectly)
+                        successMsg += " Applied to database.";
+                }
+
+                // Outdoor instance placements (from Terrain editor)
+                if (_project.OutdoorInstancePlacements != null && _project.OutdoorInstancePlacements.Count > 0) {
+                    var outdoorRecords = AceDbConnector.ToLandblockInstanceRecordsFromOutdoor(_project.OutdoorInstancePlacements);
+                    string outdoorSql = AceDbConnector.GenerateInsertSqlBatch(outdoorRecords, aceSettings.Database);
+                    string outdoorPath = Path.Combine(ExportDirectory, "landblock_instances.sql");
+                    File.WriteAllText(outdoorPath, outdoorSql);
+                    if (aceSettings.ApplyDirectly) {
+                        try {
+                            using var connector = new AceDbConnector(aceSettings);
+                            connector.ExecuteSqlAsync(outdoorSql).GetAwaiter().GetResult();
+                        }
+                        catch (Exception ex) {
+                            Console.WriteLine($"[Export] Outdoor instances ApplyDirectly failed: {ex.Message}");
+                        }
+                    }
+                    successMsg += $"\n\nOutdoor instances: wrote landblock_instances.sql ({_project.OutdoorInstancePlacements.Count} placement(s)).";
+                    if (aceSettings.ApplyDirectly)
+                        successMsg += " Applied to database.";
+                }
+
                 await DialogHost.Show(new StackPanel {
                     Margin = new Avalonia.Thickness(10),
                     Spacing = 10,
@@ -284,6 +348,7 @@ namespace WorldBuilder.ViewModels {
             }
             finally {
                 _project.OnExportReposition = null;
+                _project.OnExportDungeonInstances = null;
             }
         }
 

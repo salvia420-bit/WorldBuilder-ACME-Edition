@@ -40,6 +40,12 @@ namespace WorldBuilder.Editors.Dungeon {
         private readonly Dictionary<(uint, bool), List<Matrix4x4>> _objectGroupBuffer = new();
 
         /// <summary>
+        /// Runtime-only cache mapping WeenieClassId -> Setup DID for rendering instance placements.
+        /// Populated from the DB picker; not persisted.
+        /// </summary>
+        private readonly Dictionary<uint, uint> _weenieSetupCache = new();
+
+        /// <summary>
         /// Set by the editor to highlight selected cells with wireframe boxes.
         /// Primary (first) is used for portal indicators.
         /// </summary>
@@ -256,8 +262,59 @@ namespace WorldBuilder.Editors.Dungeon {
                 IntegrateStatics(batch);
             }
 
+            IntegrateInstancePlacements(document);
+
             ecm.FocusedDungeonLB = _loadedLandblockKey;
             _hasLoadedCells = true;
+        }
+
+        /// <summary>
+        /// Register a WeenieClassId -> Setup DID mapping for rendering.
+        /// Called by the ViewModel when weenies are loaded from the DB picker.
+        /// </summary>
+        public void CacheWeenieSetup(uint weenieClassId, uint setupId) {
+            if (setupId != 0)
+                _weenieSetupCache[weenieClassId] = setupId;
+        }
+
+        /// <summary>
+        /// Adds DungeonInstancePlacement entries (weenie/generator placements) to the
+        /// render list so they appear in the viewport alongside cell statics.
+        /// Uses the runtime WCID->SetupId cache for model lookup.
+        /// Caps rendered instances to avoid performance issues in large dungeons.
+        /// </summary>
+        private void IntegrateInstancePlacements(DungeonDocument document) {
+            if (_sceneContext == null) return;
+            var blockX = (_loadedLandblockKey >> 8) & 0xFF;
+            var blockY = _loadedLandblockKey & 0xFF;
+            var lbOffset = new Vector3(blockX * 192f, blockY * 192f, EnvCellManager.DungeonDepthOffset);
+
+            int rendered = 0;
+            const int maxRendered = 50;
+            int newModelsQueued = 0;
+            const int maxNewModels = 10;
+
+            foreach (var p in document.InstancePlacements) {
+                if (rendered >= maxRendered) break;
+                if (!_weenieSetupCache.TryGetValue(p.WeenieClassId, out var setupId) || setupId == 0)
+                    continue;
+                bool isSetup = (setupId & 0x02000000) != 0;
+                _dungeonStatics.Add(new StaticObject {
+                    Id = setupId,
+                    IsSetup = isSetup,
+                    Origin = p.Origin + lbOffset,
+                    Orientation = p.Orientation,
+                    Scale = Vector3.One
+                });
+                rendered++;
+
+                if (newModelsQueued < maxNewModels &&
+                    _sceneContext.ObjectManager.TryGetCachedRenderData(setupId) == null &&
+                    !_sceneContext.ObjectManager.IsKnownFailure(setupId)) {
+                    _sceneContext.ModelWarmupQueue.Enqueue((setupId, isSetup));
+                    newModelsQueued++;
+                }
+            }
         }
 
         private void UpdatePreviewLandblock(EnvCellManager ecm) {

@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.Numerics;
+using WorldBuilder.Editors.Landscape;
 using WorldBuilder.Shared.Documents;
 
 namespace WorldBuilder.Editors.Dungeon {
@@ -16,8 +17,11 @@ namespace WorldBuilder.Editors.Dungeon {
         private uint? _pendingObjectId;
         private bool _pendingObjectIsSetup;
 
+        private uint? _pendingWeenieClassId;
+
         public uint? PendingObjectId => _pendingObjectId;
         public bool PendingObjectIsSetup => _pendingObjectIsSetup;
+        public bool IsWeeniePlacement => _pendingWeenieClassId.HasValue;
 
         public ObjectEditingService(DungeonEditingContext ctx, DungeonSelectionManager selection) {
             _ctx = ctx;
@@ -97,6 +101,13 @@ namespace WorldBuilder.Editors.Dungeon {
         public void SetPendingObject(uint objId, bool isSetup) {
             _pendingObjectId = objId;
             _pendingObjectIsSetup = isSetup;
+            _pendingWeenieClassId = null;
+        }
+
+        public void SetPendingWeenie(uint weenieClassId, uint setupId) {
+            _pendingWeenieClassId = weenieClassId;
+            _pendingObjectId = setupId;
+            _pendingObjectIsSetup = (setupId & 0x02000000) != 0;
         }
 
         public uint? ParseObjectId(string input) {
@@ -110,10 +121,12 @@ namespace WorldBuilder.Editors.Dungeon {
 
         public void ClearPendingObject() {
             _pendingObjectId = null;
+            _pendingWeenieClassId = null;
         }
 
         /// <summary>
         /// Attempt to place the pending object at the raycast hit point.
+        /// When in weenie mode, creates a DungeonInstancePlacement; otherwise a DungeonStabData.
         /// Returns a status message on success, or null if nothing happened.
         /// </summary>
         public string? TryPlaceObject(Vector3 rayOrigin, Vector3 rayDir) {
@@ -133,13 +146,24 @@ namespace WorldBuilder.Editors.Dungeon {
             var lbOffset = new Vector3(blockX * 192f, blockY * 192f, 0f);
 
             var localOrigin = hit.Value.HitPosition - lbOffset;
-            localOrigin.Z += 50f;
 
-            var cmd = new AddStaticObjectCommand(cellNum, _pendingObjectId.Value, localOrigin, Quaternion.Identity);
-            _ctx.CommandHistory.Execute(cmd, _ctx.Document);
-            _ctx.Document.MarkDirty();
-            if (_ctx.Scene != null) _ctx.Scene.PlacementPreview = null;
-            return $"Placed object 0x{_pendingObjectId.Value:X8} in room";
+            if (_pendingWeenieClassId.HasValue) {
+                localOrigin.Z -= EnvCellManager.DungeonDepthOffset;
+                var cmd = new AddInstancePlacementCommand(
+                    _pendingWeenieClassId.Value, cellNum, localOrigin, Quaternion.Identity);
+                _ctx.CommandHistory.Execute(cmd, _ctx.Document);
+                _ctx.Document.MarkDirty();
+                if (_ctx.Scene != null) _ctx.Scene.PlacementPreview = null;
+                return $"Placed weenie {_pendingWeenieClassId.Value} in room 0x{cellNum:X4}";
+            }
+            else {
+                localOrigin.Z += 50f;
+                var cmd = new AddStaticObjectCommand(cellNum, _pendingObjectId.Value, localOrigin, Quaternion.Identity);
+                _ctx.CommandHistory.Execute(cmd, _ctx.Document);
+                _ctx.Document.MarkDirty();
+                if (_ctx.Scene != null) _ctx.Scene.PlacementPreview = null;
+                return $"Placed object 0x{_pendingObjectId.Value:X8} in room";
+            }
         }
     }
 }

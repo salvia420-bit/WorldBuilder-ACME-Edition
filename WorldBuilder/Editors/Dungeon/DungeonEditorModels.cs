@@ -111,4 +111,20 @@ namespace WorldBuilder.Editors.Dungeon {
             }
         }
     }
+
+    /// <summary>Display model for one ACE DB instance placement (generator/item/portal) in the Instance Placements panel.</summary>
+    public class InstancePlacementItemViewModel : ObservableObject {
+        public int Index { get; }
+        public uint WeenieClassId { get; }
+        public ushort CellNumber { get; }
+        public string PositionText { get; }
+        public string DisplayText => $"0x{WeenieClassId:X} in 0x{CellNumber:X4} @ {PositionText}";
+
+        public InstancePlacementItemViewModel(int index, uint weenieClassId, ushort cellNumber, string positionText) {
+            Index = index;
+            WeenieClassId = weenieClassId;
+            CellNumber = cellNumber;
+            PositionText = positionText;
+        }
+    }
 }

@@ -16,6 +16,8 @@ namespace WorldBuilder.Shared.Documents {
     public partial class DungeonData {
         public ushort LandblockKey;
         public List<DungeonCellData> Cells = new();
+        /// <summary>Generators/items/portals to push to ACE landblock_instance on export (when AceDb configured).</summary>
+        public List<DungeonInstancePlacement> InstancePlacements = new();
     }
 
     [MemoryPackable]
@@ -48,6 +50,19 @@ namespace WorldBuilder.Shared.Documents {
         public Quaternion Orientation = Quaternion.Identity;
     }
 
+    /// <summary>
+    /// A generator, item, or portal placement for a dungeon cell to be written to the ACE
+    /// landblock_instance table on export. Lets server operators place spawns in dungeons
+    /// and sync them via the same DB connection used for reposition.
+    /// </summary>
+    [MemoryPackable]
+    public partial class DungeonInstancePlacement {
+        public uint WeenieClassId { get; set; }
+        public ushort CellNumber { get; set; }
+        public Vector3 Origin { get; set; }
+        public Quaternion Orientation { get; set; } = Quaternion.Identity;
+    }
+
     public partial class DungeonDocument : BaseDocument {
         public override string Type => nameof(DungeonDocument);
 
@@ -60,6 +75,12 @@ namespace WorldBuilder.Shared.Documents {
         }
 
         public List<DungeonCellData> Cells => _data.Cells;
+
+        /// <summary>
+        /// Generators, items, or portals to push to the ACE landblock_instance table on export
+        /// when AceDb is configured. Enables server operators to place spawns in dungeons.
+        /// </summary>
+        public List<DungeonInstancePlacement> InstancePlacements => _data.InstancePlacements;
 
         private ushort _nextCellNumber = 0x0100;
 
