@@ -6,7 +6,7 @@ the two histories **share no common ancestor** — `git merge-base` returns noth
 so a normal `git pull upstream master` is impossible. All sync is manual or
 patch-by-patch.
 
-Last full audit: **2026-04-26**.
+Last full audit: **2026-04-26** (incremental: 2026-04-29 — `44f47f8` gizmo improvement ported).
 
 ## Quick orient
 
@@ -92,7 +92,7 @@ Sorted chronologically.
 | `fa7c58c` | 03-22 | Surface browser paging + dungeon scan fixes | 6 | +479/-75 | ⏳ TODO | Smaller; check feasibility. |
 | `ee39f71` | 03-22 | fix dungeon export crash on corrupt setup | 1 | +9/-1 | 🚫 BLOCKED | Needs `SanitizeEnvCellSurfacesForExport` (hundreds of lines of upstream `DungeonDocument.cs` we don't have). |
 | `4dc3983` | 03-23 | Weenie property enums + DID/int pickers | many | medium | ⏳ TODO | Cluster B (weenie/spell editor). |
-| `44f47f8` | 03-23 | gizmo improvement | 7 | +679/-110 | ⏳ TODO | Worth attempting; check prereqs. |
+| `44f47f8` | 03-23 | gizmo improvement | 7 | +679/-110 | ✅ PORTED | Cherry-picked clean (auto-merge in `DungeonEditingContext.cs` + `EnvCellManager.cs`). Adds env-cell collision-mesh ray picking + surface alignment for dungeon and outdoor selectors, full TransformGizmo overhaul (cylindrical shafts / torus rings / sphere center handle / view-axis ring / rotation arc + hover/active highlight uniforms), `GizmoAxis.ViewAxis`, center-handle `All` translate, `GetLocalAxisDirection` API. Builds clean (WorldBuilder + Shared + Terminal + Tests; only pre-existing test failure unrelated). In-game verification still pending. |
 | `5f963ee` | 03-24 | fix(landscape): skip redundant terrain apply, command doc IDs | 4 | +47/-26 | ✅ PORTED | Cherry-picked. |
 | `39d68d7` | 03-31 | World gen: coastal water bands, building/road tweaks | 15 | +351/-120 | ⏳ TODO | Touches WorldGen + DocumentManager. Likely conflicts. |
 | `33709a5` | 03-31 | Dungeon editor: per-static scale, surface alignment | 8 | +446/-24 | 🔒 DEFERRED | Dungeon refactor chain. |
@@ -108,12 +108,12 @@ Sorted chronologically.
 | `15cb9ed` | 04-14 | add logging, fix texture import/dat export | 9 | +506/-4 | 🚫 BLOCKED | Needs `FileLoggerProvider` + related logging infrastructure. |
 
 ### Tally
-- **9 ✅ PORTED** (incl. `5faec77` heightmap import + `7293629` mini map landed 2026-04-26)
+- **10 ✅ PORTED** (incl. `5faec77` heightmap import + `7293629` mini map landed 2026-04-26; `44f47f8` gizmo improvement landed 2026-04-29)
 - **2 🟡 PARTIAL** (`f26345e` slices 1-3 ✅ + slice 4 waves A, B, C, D, E, G ✅; wave F (Layout editor) ⏳ — and `34c612b` portal-defer + dead-code deletion ✅; LayoutEditorViewModel plumbing pending Wave F)
 - **4 🚫 BLOCKED** (attempted, prereq gap documented above)
 - **14 🔒 DEFERRED** (large refactors or stacked dungeon-chain — port only with in-game testing)
 - **1 🔧 PERMISSIONS** (just needs the right token to push)
-- **12 ⏳ TODO** (not yet attempted, lower-risk than the deferred set)
+- **11 ⏳ TODO** (not yet attempted, lower-risk than the deferred set)
 
 ## f26345e split into 4 slices
 
