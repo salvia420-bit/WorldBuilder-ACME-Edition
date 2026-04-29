@@ -634,7 +634,7 @@ public class JsonCommandProcessor {
     private string CmdGetHeight(System.Text.Json.Nodes.JsonNode node) {
         float x = F(node, "x"), y = F(node, "y");
         var r = _engine.GetHeight(x, y);
-        return Serialize(new { success = true, command = "get-height",
+        return Serialize(new { success = r.LandblockId.HasValue, command = "get-height",
             r.X, r.Y, height = Math.Round(r.Height, 2),
             heightIndex = r.HeightIndex, terrainType = r.TerrainType, road = r.Road, scenery = r.Scenery,
             landblock = r.LandblockId.HasValue ? $"0x{r.LandblockId:X4}" : null,
@@ -642,9 +642,9 @@ public class JsonCommandProcessor {
     }
 
     private string CmdTerrainInfo(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         var r = _engine.GetTerrainInfo(lbX, lbY);
-        if (!r.Found) return Serialize(new { success = true, command = "terrain-info", landblock = $"0x{r.LbKey:X4}", found = false });
+        if (!r.Found) return Serialize(new { success = false, command = "terrain-info", landblock = $"0x{r.LbKey:X4}", found = false });
         return Serialize(new { success = true, command = "terrain-info", landblock = $"0x{r.LbKey:X4}", found = true,
             lbX, lbY, worldOriginX = lbX * 192, worldOriginY = lbY * 192,
             vertexCount = r.VertexCount, heightMin = r.HeightMin, heightMax = r.HeightMax, heightAvg = Math.Round(r.HeightAvg, 1),
@@ -652,18 +652,18 @@ public class JsonCommandProcessor {
     }
 
     private string CmdGetHeightmap(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         var r = _engine.GetHeightmap(lbX, lbY);
-        if (!r.Found) return Serialize(new { success = true, command = "get-heightmap", landblock = $"0x{r.LbKey:X4}", found = false });
+        if (!r.Found) return Serialize(new { success = false, command = "get-heightmap", landblock = $"0x{r.LbKey:X4}", found = false });
         return Serialize(new { success = true, command = "get-heightmap", landblock = $"0x{r.LbKey:X4}", found = true,
             lbX, lbY, worldOriginX = lbX * 192, worldOriginY = lbY * 192,
             gridSize = 9, cellSize = 24, heightsWorld = r.HeightsWorld, heightIndices = r.HeightIndices });
     }
 
     private string CmdGetTerrainData(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         var r = _engine.GetTerrainData(lbX, lbY);
-        if (!r.Found) return Serialize(new { success = true, command = "get-terrain-data", landblock = $"0x{r.LbKey:X4}", found = false });
+        if (!r.Found) return Serialize(new { success = false, command = "get-terrain-data", landblock = $"0x{r.LbKey:X4}", found = false });
         return Serialize(new { success = true, command = "get-terrain-data", landblock = $"0x{r.LbKey:X4}", found = true,
             lbX, lbY, worldOriginX = lbX * 192, worldOriginY = lbY * 192,
             vertexCount = r.Vertices!.Count, gridSize = 9, cellSize = 24,
@@ -677,9 +677,9 @@ public class JsonCommandProcessor {
     // ════════════════════════════════════════════════════
 
     private string CmdListObjects(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         var r = _engine.ListObjects(lbX, lbY);
-        return Serialize(new { success = true, command = "list-objects", landblock = $"0x{r.LbKey:X4}", count = r.Objects.Count,
+        return Serialize(new { success = r.Found, command = "list-objects", landblock = $"0x{r.LbKey:X4}", found = r.Found, count = r.Objects.Count,
             objects = r.Objects.Select((obj, i) => new {
                 index = i, modelId = $"0x{obj.Id:X8}", type = obj.IsSetup ? "Setup" : "GfxObj",
                 x = Math.Round(obj.Origin.X, 2), y = Math.Round(obj.Origin.Y, 2), z = Math.Round(obj.Origin.Z, 2),
@@ -688,7 +688,7 @@ public class JsonCommandProcessor {
     }
 
     private string CmdDescribeLandblock(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         bool includeFootprints = node["includeFootprints"]?.GetValue<bool>() ?? false;
         var r = _engine.DescribeLandblock(lbX, lbY);
         return Serialize(new {
@@ -793,14 +793,11 @@ public class JsonCommandProcessor {
     }
 
     private string CmdAddObject(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
-        var modelIdStr = node["modelId"]?.GetValue<string>() ?? throw new ArgumentException("Missing 'modelId'");
-        uint modelId = uint.Parse(modelIdStr.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+        var (lbX, lbY) = Lb(node);
+        uint modelId = Hex32(node, "modelId");
         float x = F(node, "x"), y = F(node, "y"), z = F(node, "z");
 
-        float qw = node["qw"]?.GetValue<float>() ?? 1f, qx = node["qx"]?.GetValue<float>() ?? 0f;
-        float qy = node["qy"]?.GetValue<float>() ?? 0f, qz = node["qz"]?.GetValue<float>() ?? 0f;
-        var orientation = Quaternion.Normalize(new Quaternion(qx, qy, qz, qw));
+        var orientation = ParseQuaternion(node) ?? Quaternion.Identity;
 
         float sx = node["scaleX"]?.GetValue<float>() ?? node["scale"]?.GetValue<float>() ?? 1f;
         float sy = node["scaleY"]?.GetValue<float>() ?? node["scale"]?.GetValue<float>() ?? 1f;
@@ -809,15 +806,16 @@ public class JsonCommandProcessor {
         bool snap = node["snap"]?.GetValue<bool>() ?? false;
 
         var r = _engine.AddObject(lbX, lbY, modelId, x, y, z, orientation, new Vector3(sx, sy, sz), snap);
-        return Serialize(new { success = true, command = "add-object", landblock = $"0x{r.LbKey:X4}",
+        return Serialize(new { success = r.Success, command = "add-object", landblock = $"0x{r.LbKey:X4}",
             index = r.Index, modelId = $"0x{r.Object.Id:X8}", type = r.Object.IsSetup ? "Setup" : "GfxObj",
             x = Math.Round(r.Object.Origin.X, 2), y = Math.Round(r.Object.Origin.Y, 2), z = Math.Round(r.Object.Origin.Z, 2),
-            snapped = snap, orientation = FmtQ(r.Object.Orientation), scale = new { x = sx, y = sy, z = sz } });
+            snapped = snap, orientation = FmtQ(r.Object.Orientation),
+            scale = new { x = Math.Round(r.Object.Scale.X, 3), y = Math.Round(r.Object.Scale.Y, 3), z = Math.Round(r.Object.Scale.Z, 3) } });
     }
 
     private string CmdRemoveObject(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
-        int index = node["index"]?.GetValue<int>() ?? throw new ArgumentException("Missing 'index'");
+        var (lbX, lbY) = Lb(node);
+        int index = RequiredInt(node, "index");
         var r = _engine.RemoveObject(lbX, lbY, index);
         return Serialize(new { success = r.Success, command = "remove-object", landblock = $"0x{r.LbKey:X4}",
             index = r.Index, removedModelId = $"0x{r.RemovedModelId:X8}",
@@ -825,11 +823,11 @@ public class JsonCommandProcessor {
     }
 
     private string CmdMoveObject(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
-        int index = node["index"]?.GetValue<int>() ?? throw new ArgumentException("Missing 'index'");
+        var (lbX, lbY) = Lb(node);
+        int index = RequiredInt(node, "index");
         float x = F(node, "x"), y = F(node, "y"), z = F(node, "z");
         var r = _engine.MoveObject(lbX, lbY, index, x, y, z);
-        return Serialize(new { success = true, command = "move-object", landblock = $"0x{r.LbKey:X4}",
+        return Serialize(new { success = r.Success, command = "move-object", landblock = $"0x{r.LbKey:X4}",
             index = r.Index, modelId = $"0x{r.ModelId:X8}",
             from = new { x = Math.Round(r.From.X, 2), y = Math.Round(r.From.Y, 2), z = Math.Round(r.From.Z, 2) },
             to = new { x, y, z } });
@@ -850,7 +848,7 @@ public class JsonCommandProcessor {
             });
         }
 
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         var result = _engine.ClearObjects(lbX, lbY);
         ushort lbKey = (ushort)((lbX << 8) | lbY);
         return Serialize(new {
@@ -858,21 +856,22 @@ public class JsonCommandProcessor {
             command = "clear-objects",
             all = false,
             landblock = $"0x{lbKey:X4}",
+            found = result.Found,
             objectsRemoved = result.ObjectsRemoved
         });
     }
 
     private string CmdRotateObject(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
-        int index = node["index"]?.GetValue<int>() ?? throw new ArgumentException("Missing 'index'");
+        var (lbX, lbY) = Lb(node);
+        int index = RequiredInt(node, "index");
 
+        var qParsed = ParseQuaternion(node);
+        bool hasYaw = node["yaw"] != null;
         Quaternion newQ;
-        if (node["qw"] != null || node["qx"] != null || node["qy"] != null || node["qz"] != null) {
+        if (qParsed.HasValue) {
             // Absolute quaternion — sets orientation directly (does not compose)
-            float qw = node["qw"]?.GetValue<float>() ?? 1f, qx = node["qx"]?.GetValue<float>() ?? 0f;
-            float qy = node["qy"]?.GetValue<float>() ?? 0f, qz = node["qz"]?.GetValue<float>() ?? 0f;
-            newQ = Quaternion.Normalize(new Quaternion(qx, qy, qz, qw));
-        } else if (node["yaw"] != null) {
+            newQ = qParsed.Value;
+        } else if (hasYaw) {
             // Yaw shorthand — sets Z-axis rotation to this angle (does not add to existing)
             float yawDeg = node["yaw"]!.GetValue<float>();
             newQ = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, yawDeg * MathF.PI / 180f);
@@ -882,7 +881,7 @@ public class JsonCommandProcessor {
         }
 
         var r = _engine.RotateObject(lbX, lbY, index, newQ);
-        return Serialize(new { success = true, command = "rotate-object", landblock = $"0x{r.LbKey:X4}",
+        return Serialize(new { success = r.Success, command = "rotate-object", landblock = $"0x{r.LbKey:X4}",
             index = r.Index, modelId = $"0x{r.ModelId:X8}",
             oldOrientation = FmtQ(r.OldOrientation), newOrientation = FmtQ(r.NewOrientation) });
     }
@@ -1072,9 +1071,8 @@ public class JsonCommandProcessor {
         int limit = node["limit"]?.GetValue<int>() ?? 50;
 
         uint? objectId = null;
-        var idStr = node["objectId"]?.GetValue<string>();
-        if (!string.IsNullOrEmpty(idStr)) {
-            objectId = uint.Parse(idStr.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+        if (node["objectId"] != null) {
+            objectId = Hex32(node, "objectId");
         }
 
         var r = _engine.QueryOntology(category, scale, keyword, objectId, limit);
@@ -1141,8 +1139,7 @@ public class JsonCommandProcessor {
     }
 
     private string CmdGetObjectDetail(System.Text.Json.Nodes.JsonNode node) {
-        var idStr = node["objectId"]?.GetValue<string>() ?? throw new ArgumentException("Missing 'objectId'");
-        uint objectId = uint.Parse(idStr.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+        uint objectId = Hex32(node, "objectId");
         var r = _engine.GetObjectDetail(objectId);
         if (!r.Found) return Serialize(new { success = true, command = "get-object-detail",
             objectId = r.ObjectIdHex, datType = r.DatType, found = false });
@@ -1654,8 +1651,7 @@ public class JsonCommandProcessor {
         var objects = new List<(uint modelId, float x, float y, float z)>(objectsArr.Count);
         foreach (var obj in objectsArr) {
             if (obj == null) continue;
-            var midStr = obj["modelId"]?.GetValue<string>() ?? "0";
-            uint mid = uint.Parse(midStr.Replace("0x", ""), System.Globalization.NumberStyles.HexNumber);
+            uint mid = obj["modelId"] != null ? Hex32(obj, "modelId") : 0u;
             float x = obj["x"]?.GetValue<float>() ?? 0;
             float y = obj["y"]?.GetValue<float>() ?? 0;
             float z = obj["z"]?.GetValue<float>() ?? 0;
@@ -1958,6 +1954,51 @@ public class JsonCommandProcessor {
     // terrain-edit handlers can stop repeating the ?.GetValue<int>() ?? N pattern.
     private static int OptionalInt(System.Text.Json.Nodes.JsonNode node, string field, int fallback) =>
         node[field]?.GetValue<int>() ?? fallback;
+
+    /// <summary>Reads a required int field; matches the F-helper "Missing 'field' field" convention.</summary>
+    private static int RequiredInt(System.Text.Json.Nodes.JsonNode node, string field) =>
+        node[field]?.GetValue<int>() ?? throw new ArgumentException($"Missing '{field}' field");
+
+    /// <summary>Reads a paired lbX/lbY field, rejecting values above 254 with field-named errors.</summary>
+    private static (uint lbX, uint lbY) Lb(System.Text.Json.Nodes.JsonNode node) {
+        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        if (lbX > 254) throw new ArgumentException($"'lbX' must be 0..254; got {lbX}");
+        if (lbY > 254) throw new ArgumentException($"'lbY' must be 0..254; got {lbY}");
+        return (lbX, lbY);
+    }
+
+    /// <summary>Reads a 32-bit hex field, accepting case-insensitive 0x prefix and trimming whitespace.</summary>
+    private static uint Hex32(System.Text.Json.Nodes.JsonNode node, string field) {
+        var jv = node[field] ?? throw new ArgumentException($"Missing '{field}' field");
+        string raw;
+        try { raw = jv.GetValue<string>(); }
+        catch (InvalidOperationException) {
+            throw new ArgumentException($"'{field}' must be a hex string like \"0x12345678\"; got a JSON number");
+        }
+        var trimmed = raw.Trim();
+        if (trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            trimmed = trimmed.Substring(2);
+        if (!uint.TryParse(trimmed, System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture, out var v))
+            throw new ArgumentException($"'{field}' is not a valid 32-bit hex value; got \"{raw}\"");
+        return v;
+    }
+
+    /// <summary>Parses an all-or-nothing quaternion (qw,qx,qy,qz); returns null when no Q field is present.</summary>
+    private static Quaternion? ParseQuaternion(System.Text.Json.Nodes.JsonNode node) {
+        bool any = node["qw"] != null || node["qx"] != null
+                || node["qy"] != null || node["qz"] != null;
+        if (!any) return null;
+        bool all = node["qw"] != null && node["qx"] != null
+                && node["qy"] != null && node["qz"] != null;
+        if (!all) throw new ArgumentException(
+            "Quaternion requires all of qw, qx, qy, qz (or none for identity).");
+        float qw = node["qw"]!.GetValue<float>(), qx = node["qx"]!.GetValue<float>();
+        float qy = node["qy"]!.GetValue<float>(), qz = node["qz"]!.GetValue<float>();
+        if (!float.IsFinite(qw) || !float.IsFinite(qx) || !float.IsFinite(qy) || !float.IsFinite(qz))
+            throw new ArgumentException("Quaternion components must be finite.");
+        return Quaternion.Normalize(new Quaternion(qx, qy, qz, qw));
+    }
 
     private static string[] FormatLbs(HashSet<ushort> lbs) =>
         lbs.Count == 0 ? Array.Empty<string>() : FormatLbsArray(lbs);

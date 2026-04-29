@@ -592,9 +592,7 @@ public class CommandEngine {
     }
 
     public TerrainInfoResult GetTerrainInfo(uint lbX, uint lbY) {
-        RequireProject();
-        ushort lbKey = LbKey(lbX, lbY);
-        var data = GetTerrainDoc().GetLandblockInternal(lbKey);
+        var (lbKey, data) = TryGetLandblockTerrain(lbX, lbY);
 
         if (data == null) return new TerrainInfoResult(lbKey, lbX, lbY, false);
 
@@ -617,9 +615,7 @@ public class CommandEngine {
     }
 
     public HeightmapResult GetHeightmap(uint lbX, uint lbY) {
-        RequireProject();
-        ushort lbKey = LbKey(lbX, lbY);
-        var data = GetTerrainDoc().GetLandblockInternal(lbKey);
+        var (lbKey, data) = TryGetLandblockTerrain(lbX, lbY);
         if (data == null) return new HeightmapResult(lbKey, lbX, lbY, false);
 
         var ht = GetHeightTable();
@@ -640,9 +636,7 @@ public class CommandEngine {
     }
 
     public TerrainDataResult GetTerrainData(uint lbX, uint lbY) {
-        RequireProject();
-        ushort lbKey = LbKey(lbX, lbY);
-        var data = GetTerrainDoc().GetLandblockInternal(lbKey);
+        var (lbKey, data) = TryGetLandblockTerrain(lbX, lbY);
         if (data == null) return new TerrainDataResult(lbKey, lbX, lbY, false);
 
         var ht = GetHeightTable();
@@ -786,8 +780,9 @@ public class CommandEngine {
     public ListObjectsResult ListObjects(uint lbX, uint lbY) {
         RequireProject();
         ushort lbKey = LbKey(lbX, lbY);
-        var lbDoc = GetLandblockDoc(lbKey);
-        return new ListObjectsResult(lbKey, lbDoc.GetStaticObjects().ToList());
+        if (!TryGetLandblockDoc(lbKey, out var lbDoc))
+            return new ListObjectsResult(lbKey, new List<StaticObject>(), Found: false);
+        return new ListObjectsResult(lbKey, lbDoc!.GetStaticObjects().ToList(), Found: true);
     }
 
     public LandblockDescriber.LandblockDescriptionResult DescribeLandblock(uint lbX, uint lbY) {
@@ -1141,8 +1136,19 @@ public class CommandEngine {
         Quaternion? orientation = null, Vector3? scale = null,
         bool snapToCell = false) {
         RequireProject();
+        ValidateLbLocalCoord(lbX, lbY, x, y, "add-object");
         ushort lbKey = LbKey(lbX, lbY);
-        var lbDoc = GetLandblockDoc(lbKey);
+
+        var dats = _projectManager.CurrentProject!.DocumentManager.Dats;
+        bool isSetup = (modelId & 0x02000000) != 0;
+        bool exists = isSetup
+            ? dats.TryGet<Setup>(modelId, out _)
+            : dats.TryGet<GfxObj>(modelId, out _);
+        if (!exists)
+            throw new ArgumentException(
+                $"add-object: modelId 0x{modelId:X8} is not a {(isSetup ? "Setup" : "GfxObj")} in the loaded DAT.");
+
+        var lbDoc = GetLandblockDocOrCreate(lbKey);
 
         // Optionally snap position to the nearest outdoor cell center,
         // matching the behaviour of the UI's building placement tool.
@@ -1153,7 +1159,7 @@ public class CommandEngine {
 
         var obj = new StaticObject {
             Id = modelId,
-            IsSetup = (modelId & 0x02000000) != 0,
+            IsSetup = isSetup,
             Origin = new Vector3(finalX, finalY, z),
             Orientation = orientation ?? Quaternion.Identity,
             Scale = scale ?? Vector3.One
@@ -1165,9 +1171,10 @@ public class CommandEngine {
     public RemoveObjectResult RemoveObject(uint lbX, uint lbY, int index) {
         RequireProject();
         ushort lbKey = LbKey(lbX, lbY);
-        var lbDoc = GetLandblockDoc(lbKey);
-        ValidateObjectIndex(lbDoc, index, "remove-object");
-        var obj = lbDoc.GetStaticObject(index);
+        if (!TryGetLandblockDoc(lbKey, out var lbDoc))
+            throw new ArgumentException($"No landblock 0x{lbKey:X4} in project or DAT");
+        ValidateObjectIndex(lbDoc!, index, "remove-object");
+        var obj = lbDoc!.GetStaticObject(index);
         bool removed = lbDoc.RemoveStaticObject(index);
         return new RemoveObjectResult(removed, lbKey, index, obj.Id, obj.Origin);
     }
@@ -1175,10 +1182,12 @@ public class CommandEngine {
     public MoveObjectResult MoveObject(uint lbX, uint lbY, int index,
         float x, float y, float z) {
         RequireProject();
+        ValidateLbLocalCoord(lbX, lbY, x, y, "move-object");
         ushort lbKey = LbKey(lbX, lbY);
-        var lbDoc = GetLandblockDoc(lbKey);
-        ValidateObjectIndex(lbDoc, index, "move-object");
-        var obj = lbDoc.GetStaticObject(index);
+        if (!TryGetLandblockDoc(lbKey, out var lbDoc))
+            throw new ArgumentException($"No landblock 0x{lbKey:X4} in project or DAT");
+        ValidateObjectIndex(lbDoc!, index, "move-object");
+        var obj = lbDoc!.GetStaticObject(index);
         var oldPos = obj.Origin;
         obj.Origin = new Vector3(x, y, z);
         lbDoc.UpdateStaticObject(index, obj);
@@ -1189,9 +1198,10 @@ public class CommandEngine {
         Quaternion newOrientation) {
         RequireProject();
         ushort lbKey = LbKey(lbX, lbY);
-        var lbDoc = GetLandblockDoc(lbKey);
-        ValidateObjectIndex(lbDoc, index, "rotate-object");
-        var obj = lbDoc.GetStaticObject(index);
+        if (!TryGetLandblockDoc(lbKey, out var lbDoc))
+            throw new ArgumentException($"No landblock 0x{lbKey:X4} in project or DAT");
+        ValidateObjectIndex(lbDoc!, index, "rotate-object");
+        var obj = lbDoc!.GetStaticObject(index);
         var oldQ = obj.Orientation;
         obj.Orientation = newOrientation;
         lbDoc.UpdateStaticObject(index, obj);
@@ -1204,10 +1214,11 @@ public class CommandEngine {
     public ClearObjectsResult ClearObjects(uint lbX, uint lbY) {
         RequireProject();
         ushort lbKey = LbKey(lbX, lbY);
-        var lbDoc = GetLandblockDoc(lbKey);
-        int removed = lbDoc.ClearStaticObjects();
+        if (!TryGetLandblockDoc(lbKey, out var lbDoc))
+            return new ClearObjectsResult(true, 0, 0, new List<ushort>(), Found: false);
+        int removed = lbDoc!.ClearStaticObjects();
         var affected = removed > 0 ? new List<ushort> { lbKey } : new List<ushort>();
-        return new ClearObjectsResult(true, removed, 1, affected);
+        return new ClearObjectsResult(true, removed, 1, affected, Found: true);
     }
 
     /// <summary>
@@ -9937,6 +9948,17 @@ public class CommandEngine {
         return _heightTableCache;
     }
 
+    /// <summary>
+    /// Resolves a landblock's TerrainEntry[] via the terrain doc. Returns
+    /// (lbKey, null) when the LB has no terrain data — query callers propagate
+    /// that as Found=false to the JSON layer.
+    /// </summary>
+    private (ushort LbKey, TerrainEntry[]? Data) TryGetLandblockTerrain(uint lbX, uint lbY) {
+        RequireProject();
+        var lbKey = LbKey(lbX, lbY);
+        return (lbKey, GetTerrainDoc().GetLandblockInternal(lbKey));
+    }
+
     private (TerrainDocument doc,
              Func<ushort, TerrainEntry[]?> terrainLookup,
              Func<float, float, float> heightLookup) GetTerrainHelpers() {
@@ -9948,13 +9970,42 @@ public class CommandEngine {
         return (doc, tl, hl);
     }
 
-    private LandblockDocument GetLandblockDoc(ushort lbKey) {
+    private LandblockDocument GetLandblockDocOrCreate(ushort lbKey) {
         var docId = $"landblock_{lbKey:X4}";
         var doc = _projectManager.CurrentProject!.DocumentManager
             .GetOrCreateDocumentAsync<LandblockDocument>(docId)
             .GetAwaiter().GetResult();
         return doc ?? throw new InvalidOperationException($"Could not load landblock 0x{lbKey:X4}.");
     }
+
+    /// <summary>
+    /// Read-only-shaped landblock-doc fetch. Returns false when the DAT has
+    /// no <see cref="LandBlockInfo"/> for this key AND no doc has been
+    /// explicitly created via add-object — mirrors the filter used by
+    /// clear-objects all=true so query/mutate ops don't lazy-create phantom docs.
+    /// </summary>
+    private bool TryGetLandblockDoc(ushort lbKey, out LandblockDocument? doc) {
+        var docId = $"landblock_{lbKey:X4}";
+        var docMgr = _projectManager.CurrentProject!.DocumentManager;
+        if (docMgr.ActiveDocs.TryGetValue(docId, out var cached) && cached is LandblockDocument cachedLb) {
+            doc = cachedLb;
+            return true;
+        }
+        var dats = docMgr.Dats;
+        uint infoId = (uint)(lbKey << 16) | 0xFFFE;
+        if (!dats.TryGet<LandBlockInfo>(infoId, out _)) {
+            doc = null;
+            return false;
+        }
+        doc = GetLandblockDocOrCreate(lbKey);
+        return true;
+    }
+
+    // Back-compat shim — sites we deliberately keep as lazy-create (sample-neighbor handlers
+    // outside the read-only contract: render-preview, query-radius, validate-all, transact,
+    // and the WorldGen apply pipeline). Routes to the create-or-fetch path explicitly so
+    // callers grepping for the old name are still wired up.
+    private LandblockDocument GetLandblockDoc(ushort lbKey) => GetLandblockDocOrCreate(lbKey);
 
     private DungeonDocument? GetDungeonDoc(ushort lbKey) {
         var docId = $"dungeon_{lbKey:X4}";
@@ -9986,6 +10037,16 @@ public class CommandEngine {
 
         terrainDoc.UpdateLandblocksBatchInternal(batchChanges, out var modifiedLbs);
         return new TerrainEditResult(changes.Count, modifiedLbs);
+    }
+
+    private static void ValidateLbLocalCoord(uint lbX, uint lbY, float x, float y, string command) {
+        float lbMinX = lbX * (float)WorldBuilder.Shared.Lib.Terrain.TerrainAlgorithms.LandblockLength;
+        float lbMinY = lbY * (float)WorldBuilder.Shared.Lib.Terrain.TerrainAlgorithms.LandblockLength;
+        float edge = (float)WorldBuilder.Shared.Lib.Terrain.TerrainAlgorithms.LandblockLength;
+        if (x < lbMinX || x >= lbMinX + edge || y < lbMinY || y >= lbMinY + edge)
+            throw new ArgumentException(
+                $"{command}: ({x:F1}, {y:F1}) is outside landblock 0x{((lbX << 8) | lbY):X4} " +
+                $"[{lbMinX:F0}..{lbMinX + edge:F0}, {lbMinY:F0}..{lbMinY + edge:F0}].");
     }
 
     private static void ValidateObjectIndex(LandblockDocument lbDoc, int index, string command) {

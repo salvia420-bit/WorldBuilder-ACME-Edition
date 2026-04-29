@@ -235,9 +235,11 @@ public record TerrainDataResult(
     List<TerrainVertexInfo>? Vertices = null);
 
 // ── Object Management ──────────────────────────────────────
-public record ListObjectsResult(ushort LbKey, List<StaticObject> Objects);
+public record ListObjectsResult(ushort LbKey, List<StaticObject> Objects, bool Found = true);
 
-public record AddObjectResult(ushort LbKey, int Index, StaticObject Object);
+public record AddObjectResult(ushort LbKey, int Index, StaticObject Object) {
+    public bool Success => true;
+}
 
 public record RemoveObjectResult(
     bool Success, ushort LbKey, int Index,
@@ -245,15 +247,19 @@ public record RemoveObjectResult(
 
 public record ClearObjectsResult(
     bool Success, int ObjectsRemoved, int LandblocksProcessed,
-    List<ushort> AffectedLandblocks);
+    List<ushort> AffectedLandblocks, bool Found = true);
 
 public record MoveObjectResult(
     ushort LbKey, int Index, uint ModelId,
-    Vector3 From, Vector3 To);
+    Vector3 From, Vector3 To) {
+    public bool Success => true;
+}
 
 public record RotateObjectResult(
     ushort LbKey, int Index, uint ModelId,
-    Quaternion OldOrientation, Quaternion NewOrientation);
+    Quaternion OldOrientation, Quaternion NewOrientation) {
+    public bool Success => true;
+}
 
 // ── Region Render ──────────────────────────────────────────
 public record RenderPreviewResult(
