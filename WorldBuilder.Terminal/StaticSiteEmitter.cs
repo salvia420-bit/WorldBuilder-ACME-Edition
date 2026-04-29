@@ -35,7 +35,7 @@ public static class StaticSiteEmitter {
 
     public static EmissionStats Emit(CommandEngine engine, string projectSlug, string outDir,
             IReadOnlyList<ushort>? lbFilter, int maxZoom, int minZoom,
-            bool emitObjectTier, bool emitFloorTier) {
+            bool emitObjectTier, bool emitFloorTier, int throttleMs = 0) {
         Directory.CreateDirectory(outDir);
 
         var p = engine.ProjectManager.CurrentProject!;
@@ -47,7 +47,8 @@ public static class StaticSiteEmitter {
         var tilesDir = Path.Combine(projectDir, "tiles");
         var pyramidResult = engine.EmitTilePyramid(
             lbFilter, tilesDir, maxZoom, minZoom,
-            dirtyOnly: false, emitObjectLayer: emitObjectTier, emitFloorLayer: emitFloorTier);
+            dirtyOnly: false, emitObjectLayer: emitObjectTier, emitFloorLayer: emitFloorTier,
+            throttleMs: throttleMs);
 
         // 2. Sprite atlas: copy from project sprites/ into dist sprites/.
         int spriteCopyCount = CopyProjectSpritesIfPresent(p.ProjectDirectory, projectDir);

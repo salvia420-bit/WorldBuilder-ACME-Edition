@@ -13,7 +13,7 @@ namespace WorldBuilder.Terminal;
 /// Pixel space follows screen +Y down, so the renderer flips Y when sampling.
 /// Each landblock is 192Ã—192 world units = 8Ã—8 cells = 9Ã—9 vertices on a 24-unit grid.
 /// </summary>
-internal static class RenderPreviewRenderer {
+public static class RenderPreviewRenderer {
 
     /// <summary>
     /// One sprite-atlas region for an object: where the sprite lives in the
@@ -22,6 +22,27 @@ internal static class RenderPreviewRenderer {
     /// actual world footprint at the current zoom.
     /// </summary>
     public sealed record SpriteInfo(SKBitmap Atlas, int X, int Y, int W, int H, float WorldWidth, float WorldHeight);
+
+    /// <summary>
+    /// Server-spawn glyph: a position in absolute world coords plus a
+    /// category string the renderer maps to the same glyph-shape palette
+    /// it uses for static objects. Comes from the LSD spawn gazetteer
+    /// (NPCs, creatures, quest items) so populated landblocks render the
+    /// dynamic placements alongside the static DAT objects rather than
+    /// looking like empty terrain on the map.
+    /// </summary>
+    public readonly record struct SpawnGlyph(float X, float Y, string Category, string Scale);
+
+    /// <summary>
+    /// Which compositional layers the renderer should produce. Floor-mode
+    /// in the frontend hides Objects and Sprites while keeping Terrain
+    /// visible, so they need to live in separate tile bitmaps.
+    /// </summary>
+    public enum LayerMode {
+        Combined,    // current behavior: terrain + roads + objects all in one bitmap
+        Terrain,     // terrain raster + roads only; no objects (transparent where no terrain)
+        Objects,     // object glyphs/sprites only; transparent everywhere else
+    }
 
     public sealed class Input {
         public uint CenterLbX;
@@ -46,6 +67,29 @@ internal static class RenderPreviewRenderer {
         // far-zoomed renders stay readable.
         public bool UseSprites = false;
         public Func<uint, SpriteInfo?>? Sprites;
+
+        // Compositional layer to emit. Drives whether the terrain raster
+        // pass and/or the object glyph pass run, and whether the canvas
+        // clears to transparent (Objects mode) or to the dark background.
+        public LayerMode Layer = LayerMode.Combined;
+
+        // Optional spawn-gazetteer glyphs, keyed by (col, row) like Objects
+        // so the lookup respects radius-windowed renders. Each entry's
+        // (X, Y) is in absolute world units and its Category drives glyph
+        // selection through the same palette as static objects. Spawns
+        // are drawn alongside StaticObjects in Phase 3.
+        public Dictionary<(int col, int row), List<SpawnGlyph>>? Spawns;
+
+        // Optional AC terrain texture loader. When non-null the per-pixel
+        // raster pass samples real DAT tiles for each terrain type instead
+        // of the procedural palette. Falls back to the palette per-type
+        // when the loader has no entry for a given byte.
+        public TerrainTextureLoader? TerrainTextures;
+
+        // Tile period (world units per texture-repeat) used when sampling
+        // the AC terrain tiles. AC's outdoor cell size is 24wu; the in-game
+        // tiles repeat once per cell, so 24f matches the client's look.
+        public float TerrainTileWu = 24f;
     }
 
     public sealed class Output {
@@ -280,11 +324,28 @@ internal static class RenderPreviewRenderer {
         var info = new SKImageInfo(W, H, SKColorType.Rgba8888, SKAlphaType.Premul);
         using var bitmap = new SKBitmap(info);
 
+        // Layer split: Objects-only mode skips the per-pixel terrain raster
+        // entirely and starts from a fully transparent canvas so the tile
+        // composites cleanly over a separate terrain tile in the frontend.
+        bool drawTerrain = input.Layer != LayerMode.Objects;
+        bool drawObjects = input.Layer != LayerMode.Terrain;
+
         // Lambert hillshade with light from north-west, ~45Â° elevation.
         // World convention: +X east, +Y north. light_dir = normalize(âˆ’1, +1, +1).
         var lightDir = Vector3.Normalize(new Vector3(-1f, 1f, 1f));
 
+        // World extent (terrain side). Used to convert pixel→world for AC
+        // terrain texture sampling. Mirrors the object-phase math so the
+        // tile period (24wu) repeats at the same density as the client.
+        float terrWorldOriginX = (float)((long)input.CenterLbX - input.Radius) * 192f;
+        float terrWorldOriginY = (float)((long)input.CenterLbY - input.Radius) * 192f;
+        float terrWorldSpanX = gridSize * 192f;
+        float terrWorldSpanY = gridSize * 192f;
+        float tileWu = input.TerrainTileWu > 0.5f ? input.TerrainTileWu : 24f;
+        bool useTerrainTextures = input.TerrainTextures != null;
+
         var pixelBuffer = new byte[W * H * 4];
+        if (drawTerrain) {
         for (int py = 0; py < H; py++) {
             // Flip Y so that world +Y (north) is at the top of the image.
             float worldYFrac = (H - 1 - py) / (float)H;
@@ -323,13 +384,25 @@ internal static class RenderPreviewRenderer {
                 float h1 = h01 + (h11 - h01) * fu;
                 float h  = h0  + (h1  - h0 ) * fv;
 
-                // Bilinear blend of the 4 corner terrain colors. AC's outdoor
-                // terrain uses per-corner texture blending, so this is closer
-                // to in-game appearance than nearest-neighbor.
-                var c00 = types[i00] < TerrainPalette.Length ? TerrainPalette[types[i00]] : BackgroundColor;
-                var c10 = types[i10] < TerrainPalette.Length ? TerrainPalette[types[i10]] : BackgroundColor;
-                var c01 = types[i01] < TerrainPalette.Length ? TerrainPalette[types[i01]] : BackgroundColor;
-                var c11 = types[i11] < TerrainPalette.Length ? TerrainPalette[types[i11]] : BackgroundColor;
+                // 4-corner sample. With AC terrain textures available, sample
+                // each corner's tile at the world-position (mod tileWu) and
+                // blend; without textures, fall back to the procedural
+                // palette. The blend remains the same so the visual result
+                // smoothly degrades when a particular tile fails to decode.
+                float worldX = terrWorldOriginX + worldXFrac * terrWorldSpanX;
+                float worldY = terrWorldOriginY + worldYFrac * terrWorldSpanY;
+                (byte R, byte G, byte B) c00, c10, c01, c11;
+                if (useTerrainTextures) {
+                    c00 = SampleTerrainAt(input.TerrainTextures!, types[i00], worldX, worldY, tileWu);
+                    c10 = SampleTerrainAt(input.TerrainTextures!, types[i10], worldX, worldY, tileWu);
+                    c01 = SampleTerrainAt(input.TerrainTextures!, types[i01], worldX, worldY, tileWu);
+                    c11 = SampleTerrainAt(input.TerrainTextures!, types[i11], worldX, worldY, tileWu);
+                } else {
+                    c00 = types[i00] < TerrainPalette.Length ? TerrainPalette[types[i00]] : BackgroundColor;
+                    c10 = types[i10] < TerrainPalette.Length ? TerrainPalette[types[i10]] : BackgroundColor;
+                    c01 = types[i01] < TerrainPalette.Length ? TerrainPalette[types[i01]] : BackgroundColor;
+                    c11 = types[i11] < TerrainPalette.Length ? TerrainPalette[types[i11]] : BackgroundColor;
+                }
                 float w00 = (1 - fu) * (1 - fv);
                 float w10 = fu * (1 - fv);
                 float w01 = (1 - fu) * fv;
@@ -362,13 +435,15 @@ internal static class RenderPreviewRenderer {
             }
         }
         System.Runtime.InteropServices.Marshal.Copy(pixelBuffer, 0, bitmap.GetPixels(), pixelBuffer.Length);
+        }   // end if (drawTerrain)
 
         using var canvas = new SKCanvas(bitmap);
 
         // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-        //  Phase 2: roads â€” connect adjacent road=1 vertices.
+        //  Phase 2: roads â€” connect adjacent road=1 vertices. Terrain-only.
         // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
+        if (drawTerrain) {
         using var roadPaint = new SKPaint {
             Color = new SKColor(RoadColor.R, RoadColor.G, RoadColor.B, 0xE6),
             StrokeWidth = Math.Max(1.5f, input.LbPx / 90f),
@@ -406,10 +481,13 @@ internal static class RenderPreviewRenderer {
             }
         }
 
+        }   // end if (drawTerrain) — phase 2 roads
+
         // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-        //  Phase 3: object glyphs (category â†’ shape, scale â†’ size).
+        //  Phase 3: object glyphs (category â†’ shape, scale â†’ size). Objects-side.
         // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
+        if (drawObjects) {
         using var fillPaint    = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Fill };
         using var outlinePaint = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke,
             StrokeWidth = Math.Max(0.5f, input.LbPx / 220f), Color = GlyphOutline };
@@ -485,6 +563,36 @@ internal static class RenderPreviewRenderer {
             }
         }
 
+        // Spawn glyphs (NPCs/creatures/quest items from the spawn gazetteer).
+        // No sprite path — these aren't placed DAT objects, so we draw them
+        // as category glyphs so the user sees populated LBs as actually
+        // populated rather than empty.
+        if (input.Spawns != null) {
+            foreach (var kv in input.Spawns) {
+                foreach (var sp in kv.Value) {
+                    float wx = sp.X - worldOriginX;
+                    float wy = sp.Y - worldOriginY;
+                    if (wx < 0 || wy < 0 || wx > worldSpanX || wy > worldSpanY) continue;
+                    float fx = wx / worldSpanX;
+                    float fy = wy / worldSpanY;
+                    float pxX = fx * W;
+                    float pxY = (1f - fy) * H;
+                    var (shape, fill) = ResolveGlyph(sp.Category);
+                    float sizePx = sp.Scale switch {
+                        "Massive" => 12f,
+                        "Large"   =>  9f,
+                        "Medium"  =>  6f,
+                        "Small"   =>  4f,
+                        "Tiny"    =>  2.5f,
+                        _         =>  3f,
+                    } * scaleFactor;
+                    if (sizePx < 1.5f) sizePx = 1.5f;
+                    if (sizePx > 18f)  sizePx = 18f;
+                    glyphs.Add((pxX, pxY, sizePx, shape, fill, 0u, 0u, null, Quaternion.Identity));
+                }
+            }
+        }
+
         // Z-priority by shape family. Smaller key paints first (= underneath).
         // Structure goes on top so buildings never disappear under a tree;
         // NPCs and Creatures float above static placement so the LLM critic
@@ -536,12 +644,13 @@ internal static class RenderPreviewRenderer {
             }
         }
         output.RenderedObjectCount = glyphs.Count;
+        }   // end if (drawObjects) — phase 3 glyphs
 
         // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-        //  Phase 4: cliff overlay (only when overlay enabled).
+        //  Phase 4: cliff overlay (only when overlay enabled, terrain layer).
         // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-        if (input.Overlay) {
+        if (input.Overlay && drawTerrain) {
             using var cliffPaint = new SKPaint {
                 Color = CliffStroke,
                 IsAntialias = true,
@@ -606,6 +715,22 @@ internal static class RenderPreviewRenderer {
         using var data = img.Encode(SKEncodedImageFormat.Png, 100);
         output.PngBytes = data.ToArray();
         return output;
+    }
+
+    private static (byte R, byte G, byte B) SampleTerrainAt(TerrainTextureLoader textures,
+            byte typeByte, float worldX, float worldY, float tileWu) {
+        if (textures.TryGetTile(typeByte, out var tile) && tile != null) {
+            // Tile UV in [0, 1) — wrap by world tile period; some terrain
+            // types fall back to palette, so the lookup miss isn't fatal.
+            float uw = worldX / tileWu; uw -= MathF.Floor(uw);
+            float vw = worldY / tileWu; vw -= MathF.Floor(vw);
+            int tx = Math.Clamp((int)(uw * tile.Width), 0, tile.Width - 1);
+            int ty = Math.Clamp((int)((1f - vw) * tile.Height), 0, tile.Height - 1);
+            int idx = (tx + ty * tile.Width) * 4;
+            return (tile.Rgba[idx], tile.Rgba[idx + 1], tile.Rgba[idx + 2]);
+        }
+        if (typeByte < TerrainPalette.Length) return TerrainPalette[typeByte];
+        return BackgroundColor;
     }
 
     private static SKPoint VertexToPixel(int vu, int vv, int VW, int VH, int W, int H) {

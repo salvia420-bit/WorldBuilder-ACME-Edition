@@ -38,8 +38,10 @@
   let map = null;
   let activeProject = null;
   let activeProjectMeta = null;
-  let exteriorLayer = null;
-  let objectLayer = null;
+  let terrainLayer = null;        // terrain raster + roads only (always visible)
+  let objectsGlyphLayer = null;   // glyph-mode object overlay (hidden in floor mode)
+  let objectLayer = null;         // sprite-mode object overlay at z>=11 (hidden in floor mode)
+  let exteriorLayer = null;       // legacy combined layer; loaded only if dist lacks split layers
   let floorImageOverlay = null;
 
   function boot() {
@@ -150,44 +152,51 @@
   }
 
   function installTileLayers(slug) {
-    if (exteriorLayer) { map.removeLayer(exteriorLayer); exteriorLayer = null; }
+    if (terrainLayer) { map.removeLayer(terrainLayer); terrainLayer = null; }
+    if (objectsGlyphLayer) { map.removeLayer(objectsGlyphLayer); objectsGlyphLayer = null; }
     if (objectLayer) { map.removeLayer(objectLayer); objectLayer = null; }
+    if (exteriorLayer) { map.removeLayer(exteriorLayer); exteriorLayer = null; }
 
-    const exteriorUrl = 'projects/' + slug + '/tiles/exterior/{z}/{x}/{y}.png';
-    exteriorLayer = L.tileLayer(exteriorUrl, {
-      tileSize: TILE_PX,
-      minZoom: MANIFEST.projects.find(function (p) { return p.slug === slug; }).minZoom || 3,
-      maxZoom: MANIFEST.projects.find(function (p) { return p.slug === slug; }).maxZoom || 12,
-      noWrap: true,
-      bounds: L.latLngBounds(L.latLng(0, 0), L.latLng(WORLD_EXTENT, WORLD_EXTENT)),
-      errorTileUrl: '',
-    });
-    exteriorLayer.addTo(map);
+    const proj = MANIFEST.projects.find(function (p) { return p.slug === slug; });
+    const minZ = (proj && proj.minZoom) || 3;
+    const maxZ = (proj && proj.maxZoom) || 12;
+    const worldBounds = L.latLngBounds(L.latLng(0, 0), L.latLng(WORLD_EXTENT, WORLD_EXTENT));
 
-    // Object tier auto-switches in at z>=11. We add it as a second layer
-    // with a higher z-index so it overlays exterior at deep zooms.
-    const objectUrl = 'projects/' + slug + '/tiles/object/{z}/{x}/{y}.png';
-    objectLayer = L.tileLayer(objectUrl, {
-      tileSize: TILE_PX,
-      minZoom: 11, maxZoom: 12, noWrap: true,
-      bounds: L.latLngBounds(L.latLng(0, 0), L.latLng(WORLD_EXTENT, WORLD_EXTENT)),
-      errorTileUrl: '',
-      opacity: 1.0,
-      zIndex: 250,
+    // terrain/  — always visible. Floor mode keeps this so the player has
+    // surface context (rivers, hills, roads) while inspecting an interior.
+    terrainLayer = L.tileLayer('projects/' + slug + '/tiles/terrain/{z}/{x}/{y}.png', {
+      tileSize: TILE_PX, minZoom: minZ, maxZoom: maxZ, noWrap: true,
+      bounds: worldBounds, errorTileUrl: '', zIndex: 100,
     });
-    // Don't auto-add to map — only when zoom >= 11.
+    terrainLayer.addTo(map);
+
+    // objects/ — glyph-mode object overlay, transparent terrain. Hidden in
+    // floor mode so building rectangles (the "roofs" the user was seeing
+    // through the floor plan) disappear cleanly.
+    objectsGlyphLayer = L.tileLayer('projects/' + slug + '/tiles/objects/{z}/{x}/{y}.png', {
+      tileSize: TILE_PX, minZoom: minZ, maxZoom: maxZ, noWrap: true,
+      bounds: worldBounds, errorTileUrl: '', zIndex: 200,
+    });
+    objectsGlyphLayer.addTo(map);
+
+    // object/ — sprite-mode (textured). Now pyramided to all zooms (not
+    // just z>=11) so building textures appear at moderate zoom too.
+    // Loaded eagerly; if the project lacks a sprite atlas the tile dir
+    // simply 404s and the underlying objects-glyph layer remains visible.
+    objectLayer = L.tileLayer('projects/' + slug + '/tiles/object/{z}/{x}/{y}.png', {
+      tileSize: TILE_PX, minZoom: minZ, maxZoom: maxZ, noWrap: true,
+      bounds: worldBounds, errorTileUrl: '', opacity: 1.0, zIndex: 250,
+    });
+    objectLayer.addTo(map);
     map.on('zoomend', updateObjectLayerVisibility);
     updateObjectLayerVisibility();
   }
 
   function updateObjectLayerVisibility() {
+    // Sprite tier now pyramids to every zoom — keep it added unless the
+    // floor selector explicitly removes it. Kept for hook compatibility.
     if (!objectLayer) return;
-    const z = map.getZoom();
-    if (z >= 11 && !map.hasLayer(objectLayer)) {
-      objectLayer.addTo(map);
-    } else if (z < 11 && map.hasLayer(objectLayer)) {
-      map.removeLayer(objectLayer);
-    }
+    if (!map.hasLayer(objectLayer)) objectLayer.addTo(map);
   }
 
   // ── Overlays ──────────────────────────────────────────────────────────
@@ -410,16 +419,25 @@
 
   // ── Floor selector ────────────────────────────────────────────────────
 
+  function clearFloor() {
+    if (floorImageOverlay) { map.removeLayer(floorImageOverlay); floorImageOverlay = null; }
+    if (terrainLayer) terrainLayer.setOpacity(1);
+    if (objectsGlyphLayer && !map.hasLayer(objectsGlyphLayer)) objectsGlyphLayer.addTo(map);
+    if (objectLayer) updateObjectLayerVisibility();
+  }
+
   function updateFloorSelector(centerLbHex) {
     const selector = document.getElementById('floor-selector');
     if (!activeProjectMeta || !centerLbHex) {
       selector.classList.remove('active');
       selector.innerHTML = '';
+      clearFloor();
       return;
     }
     const isDungeon = activeProjectMeta.dungeonLbs.indexOf(centerLbHex) >= 0;
     if (!isDungeon || map.getZoom() < 10) {
       selector.classList.remove('active');
+      clearFloor();
       return;
     }
     const floors = activeProjectMeta.floorCounts[centerLbHex] || 0;
@@ -455,10 +473,15 @@
     const sw = L.latLng(lbY * LB_SIZE, lbX * LB_SIZE);
     const ne = L.latLng((lbY + 1) * LB_SIZE, (lbX + 1) * LB_SIZE);
     floorImageOverlay = L.imageOverlay(url, L.latLngBounds(sw, ne), {
-      opacity: 0.85, interactive: false,
+      opacity: 1.0, interactive: false,
     });
     floorImageOverlay.addTo(map);
-    if (exteriorLayer) exteriorLayer.setOpacity(0.3);
+    // Floor-mode visibility: keep terrain (surface context), hide both
+    // object layers (glyphs + sprites) so building roofs no longer occlude
+    // the dungeon floor plan.
+    if (terrainLayer) terrainLayer.setOpacity(1);
+    if (objectsGlyphLayer && map.hasLayer(objectsGlyphLayer)) map.removeLayer(objectsGlyphLayer);
+    if (objectLayer && map.hasLayer(objectLayer)) map.removeLayer(objectLayer);
 
     // Lazy-load the dungeon describer for this LB.
     loadScript('projects/' + activeProject + '/dungeons/' + lbHex + '.js').then(function () {

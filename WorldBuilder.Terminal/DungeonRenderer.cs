@@ -27,6 +27,13 @@ internal static class DungeonRenderer {
         public LandblockDocument? Lb;
         public SpriteAtlasLoader? SpriteAtlas;
         public Func<uint, OntologyEntry?>? Ontology;
+
+        // When true, force the rendered canvas to span the full LB-local
+        // 0..192 wu square so the output composites correctly into a
+        // Leaflet overlay anchored at the LB's footprint. Why: callers that
+        // ship the PNG into a tile pyramid must align with the LB extent;
+        // freeform CLI inspection can leave this false to get tight zoom.
+        public bool UseLbExtent = false;
     }
 
     public sealed class Output {
@@ -86,22 +93,32 @@ internal static class DungeonRenderer {
         }
         if (renderedCells.Count == 0) return EmptyPng(input.Resolution, output);
 
-        float minX = float.MaxValue, maxX = float.MinValue;
-        float minY = float.MaxValue, maxY = float.MinValue;
-        foreach (var (_, fp, _) in renderedCells) {
-            foreach (var p in fp.Polygon) {
-                if (p.X < minX) minX = p.X; if (p.X > maxX) maxX = p.X;
-                if (p.Y < minY) minY = p.Y; if (p.Y > maxY) maxY = p.Y;
+        float originX, originY, worldExtent;
+        if (input.UseLbExtent) {
+            // Anchor to the LB's full 0..192 wu local extent. AC dungeon
+            // cells are landblock-local in XY (per memory), so this stays
+            // tight around the LB while letting Leaflet overlay the PNG
+            // at the LB's bounded latLng without stretching.
+            originX = 0f;
+            originY = 0f;
+            worldExtent = 192f;
+        } else {
+            float minX = float.MaxValue, maxX = float.MinValue;
+            float minY = float.MaxValue, maxY = float.MinValue;
+            foreach (var (_, fp, _) in renderedCells) {
+                foreach (var p in fp.Polygon) {
+                    if (p.X < minX) minX = p.X; if (p.X > maxX) maxX = p.X;
+                    if (p.Y < minY) minY = p.Y; if (p.Y > maxY) maxY = p.Y;
+                }
             }
+            // Square the world extent + add a small margin so walls don't graze the edge.
+            worldExtent = MathF.Max(maxX - minX, maxY - minY);
+            if (worldExtent <= 1e-3f) return EmptyPng(input.Resolution, output);
+            float margin = worldExtent * 0.04f;
+            originX = (minX + maxX) * 0.5f - worldExtent * 0.5f - margin;
+            originY = (minY + maxY) * 0.5f - worldExtent * 0.5f - margin;
+            worldExtent += 2 * margin;
         }
-
-        // Square the world extent + add a small margin so walls don't graze the edge.
-        float worldExtent = MathF.Max(maxX - minX, maxY - minY);
-        if (worldExtent <= 1e-3f) return EmptyPng(input.Resolution, output);
-        float margin = worldExtent * 0.04f;
-        float originX = (minX + maxX) * 0.5f - worldExtent * 0.5f - margin;
-        float originY = (minY + maxY) * 0.5f - worldExtent * 0.5f - margin;
-        worldExtent += 2 * margin;
 
         int res = Math.Max(64, input.Resolution);
         float pxPerUnit = res / worldExtent;
@@ -109,7 +126,11 @@ internal static class DungeonRenderer {
         var info = new SKImageInfo(res, res, SKColorType.Rgba8888, SKAlphaType.Premul);
         using var bitmap = new SKBitmap(info);
         using (var canvas = new SKCanvas(bitmap)) {
-            canvas.Clear(BackgroundColor);
+            // Why: when the floor PNG is composited as a Leaflet image overlay
+            // anchored to the LB extent, the area outside the dungeon must let
+            // the underlying terrain tile show through. Standalone (CLI) renders
+            // keep the opaque dark background for clean inspection.
+            canvas.Clear(input.UseLbExtent ? SKColors.Transparent : BackgroundColor);
             DrawCellFills(canvas, renderedCells, originX, originY, pxPerUnit, res, orderedBands.Count);
             DrawWallsAndPortals(canvas, renderedCells, floorByCell, originX, originY, pxPerUnit, res);
             DrawObjects(canvas, renderedCells, input, floorByCell, orderedBands, originX, originY, pxPerUnit, res);

@@ -609,7 +609,8 @@ public class CommandEngine {
     public RenderPreviewResult RenderPreview(
         uint centerLbX, uint centerLbY,
         int radius, int resolution, bool overlay,
-        string? outputPath, bool useSprites = false) {
+        string? outputPath, bool useSprites = false,
+        RenderPreviewRenderer.LayerMode layer = RenderPreviewRenderer.LayerMode.Combined) {
 
         RequireProject();
         if (radius < 0) throw new ArgumentException("radius must be >= 0");
@@ -628,6 +629,7 @@ public class CommandEngine {
 
         var terrainByCell = new Dictionary<(int col, int row), TerrainEntry[]?>();
         var objectsByCell = new Dictionary<(int col, int row), List<StaticObject>>();
+        var spawnsByCell = new Dictionary<(int col, int row), List<RenderPreviewRenderer.SpawnGlyph>>();
         int lbCount = 0, objCount = 0;
 
         for (int row = 0; row < gridSize; row++) {
@@ -637,6 +639,7 @@ public class CommandEngine {
                 if (absX < 0 || absX > 255 || absY < 0 || absY > 255) {
                     terrainByCell[(col, row)] = null;
                     objectsByCell[(col, row)] = new List<StaticObject>();
+                    spawnsByCell[(col, row)] = new List<RenderPreviewRenderer.SpawnGlyph>();
                     continue;
                 }
                 ushort lbKey = (ushort)((absX << 8) | absY);
@@ -653,6 +656,22 @@ public class CommandEngine {
                 }
                 objectsByCell[(col, row)] = objs;
                 objCount += objs.Count;
+
+                // Spawn-gazetteer entries for this LB. Render-side categorization
+                // by Acpedia hint or weenie type so creatures and NPCs show
+                // distinct glyphs from generic items.
+                if (_spawnGazetteer.TryGetValue(lbKey, out var spawns) && spawns is { Count: > 0 }) {
+                    var glyphs = new List<RenderPreviewRenderer.SpawnGlyph>(spawns.Count);
+                    foreach (var sp in spawns) {
+                        glyphs.Add(new RenderPreviewRenderer.SpawnGlyph(
+                            X: sp.X, Y: sp.Y,
+                            Category: ResolveSpawnCategory(sp),
+                            Scale: ResolveSpawnScale(sp)));
+                    }
+                    spawnsByCell[(col, row)] = glyphs;
+                } else {
+                    spawnsByCell[(col, row)] = new List<RenderPreviewRenderer.SpawnGlyph>();
+                }
             }
         }
 
@@ -676,6 +695,14 @@ public class CommandEngine {
             Sprites = atlas == null ? null : id => atlas.TryLookup(id, out var rect)
                 ? new RenderPreviewRenderer.SpriteInfo(atlas.Atlas, rect.X, rect.Y, rect.W, rect.H, rect.WorldWidth, rect.WorldHeight)
                 : null,
+            Layer = layer,
+            Spawns = spawnsByCell,
+            // Real AC terrain tiles (Region 0x13000000) replace the procedural
+            // palette during the per-pixel raster. Loader is best-effort —
+            // when a tile fails to decode the palette is still used.
+            TerrainTextures = (layer == RenderPreviewRenderer.LayerMode.Objects)
+                ? null  // Objects layer doesn't run the terrain raster
+                : GetOrLoadTerrainTextures(),
         };
 
         var renderOut = RenderPreviewRenderer.Render(input);
@@ -923,6 +950,50 @@ public class CommandEngine {
         if (bestRegion == null || !_regions.TryGetValue(bestRegion, out var rc)) return null;
         _lbToRegionCache[lbKey] = rc;
         return rc;
+    }
+
+    // Map a SpawnEntry to the renderer's category palette. Why: the spawn
+    // gazetteer carries Acpedia/weenie-type hints rather than ontology
+    // categories, but the renderer's glyph dispatch keys on ontology-style
+    // strings ("Creature", "NPC", "Interactive_Door", …). This mapping
+    // keeps spawn glyphs visually consistent with static-object glyphs.
+    private static string ResolveSpawnCategory(LandblockDescriber.SpawnEntry sp) {
+        if (sp.AcpediaCategories is { Length: > 0 } cats) {
+            foreach (var c in cats) {
+                if (c == null) continue;
+                var lc = c.ToLowerInvariant();
+                if (lc.Contains("creature") || lc.Contains("monster")) return "Creature";
+                if (lc.Contains("npc") || lc.Contains("vendor") || lc.Contains("merchant") ||
+                    lc.Contains("mage") || lc.Contains("blacksmith")) return "NPC";
+                if (lc.Contains("door")) return "Interactive_Door";
+                if (lc.Contains("portal")) return "Interactive_Portal";
+                if (lc.Contains("sign")) return "Sign_Town";
+            }
+        }
+        // Weenie-type fallback. Magic numbers come from ACE's WeenieType enum
+        // (validated against /home/salvia420/ACE/Source/ACE.Entity/Enum/WeenieType.cs
+        // per memory; small set used here is stable retail).
+        return sp.WeenieType switch {
+            10 => "Creature",   // Creature
+            45 => "NPC",        // Vendor
+             1 => "Prop",       // Generic / Item
+             7 => "Interactive_Portal",
+            19 => "Interactive_Door",
+            _  => "Prop",
+        };
+    }
+
+    // Spawns don't carry an ontology Scale field. Approximate by category so
+    // creatures and NPCs render larger than ambient props.
+    private static string ResolveSpawnScale(LandblockDescriber.SpawnEntry sp) {
+        var cat = ResolveSpawnCategory(sp);
+        return cat switch {
+            "Creature" => "Medium",
+            "NPC" => "Medium",
+            "Interactive_Door" => "Small",
+            "Interactive_Portal" => "Medium",
+            _ => "Small",
+        };
     }
 
     private static Dictionary<ushort, List<LandblockDescriber.SpawnEntry>> LoadSpawnGazetteer(string path) {
@@ -10752,7 +10823,27 @@ public class CommandEngine {
         return _spriteAtlas;
     }
 
-    public DungeonRenderResult RenderDungeon(uint lbX, uint lbY, int? floor, int resolution, string? outputPath) {
+    // Cached AC terrain texture tile set, loaded once per project from
+    // Region (0x13000000) → TerrainInfo → LandSurfaces → TexMerge.
+    private TerrainTextureLoader? _terrainTextures;
+    private string? _terrainTexturesProjectDir;
+
+    private TerrainTextureLoader? GetOrLoadTerrainTextures() {
+        var p = _projectManager.CurrentProject!;
+        if (_terrainTextures != null &&
+            string.Equals(_terrainTexturesProjectDir, p.ProjectDirectory, StringComparison.Ordinal))
+            return _terrainTextures;
+        try {
+            _terrainTextures = TerrainTextureLoader.Load(p.DocumentManager.Dats);
+            _terrainTexturesProjectDir = p.ProjectDirectory;
+        } catch {
+            _terrainTextures = null;
+        }
+        return _terrainTextures;
+    }
+
+    public DungeonRenderResult RenderDungeon(uint lbX, uint lbY, int? floor, int resolution,
+            string? outputPath, bool useLbExtent = false) {
         RequireProject();
         ushort lbKey = LbKey(lbX, lbY);
         var p = _projectManager.CurrentProject!;
@@ -10775,6 +10866,7 @@ public class CommandEngine {
             Lb = lb,
             SpriteAtlas = GetOrLoadSpriteAtlas(),
             Ontology = id => _ontologyService.GetEntry(id),
+            UseLbExtent = useLbExtent,
         };
         var output = DungeonRenderer.Render(input);
 
@@ -10906,8 +10998,14 @@ public class CommandEngine {
         return kept;
     }
 
-    public ObjectSpritesResult GenerateObjectSprites(IReadOnlyList<ushort>? lbFilter, int spritePx, bool force) {
+    public ObjectSpritesResult GenerateObjectSprites(IReadOnlyList<ushort>? lbFilter, int spritePx, bool force,
+            int throttleMs = 0) {
         RequireProject();
+        // Co-exist with concurrent ML training.
+        try {
+            System.Diagnostics.Process.GetCurrentProcess().PriorityClass =
+                System.Diagnostics.ProcessPriorityClass.BelowNormal;
+        } catch { }
         var p = _projectManager.CurrentProject!;
         var dats = p.DocumentManager.Dats;
         var spritesDir = Path.Combine(p.ProjectDirectory, "sprites");
@@ -10927,7 +11025,7 @@ public class CommandEngine {
             (modelIds.Count > 0 ? $" (sample: 0x{modelIds.First():X8})" : ""));
         var (rendered, failed, atlasW, atlasH) = ObjectSpriteGenerator.Run(
             modelIds, spritePx, spritesDir, atlasPath, manifestPath, dats,
-            id => _ontologyService.GetEntry(id));
+            id => _ontologyService.GetEntry(id), throttleMs);
         return new ObjectSpritesResult(modelIds.Count, rendered, failed, atlasW, atlasH, spritesDir, atlasPath, manifestPath);
     }
 
@@ -11025,10 +11123,10 @@ public class CommandEngine {
 
     public StaticSiteEmitter.EmissionStats EmitStaticSite(string projectSlug, string outDir,
             IReadOnlyList<ushort>? lbFilter, int maxZoom, int minZoom,
-            bool emitObjectTier, bool emitFloorTier) {
+            bool emitObjectTier, bool emitFloorTier, int throttleMs = 0) {
         RequireProject();
         return StaticSiteEmitter.Emit(this, projectSlug, outDir, lbFilter, maxZoom, minZoom,
-            emitObjectTier, emitFloorTier);
+            emitObjectTier, emitFloorTier, throttleMs);
     }
 
     public LandblockDescriber.FloorDescriptionResult DescribeFloor(uint lbX, uint lbY, int floorIndex) {
@@ -11041,18 +11139,34 @@ public class CommandEngine {
     }
 
     public TilePyramidResult EmitTilePyramid(IReadOnlyList<ushort>? lbFilter, string outDir,
-            int maxZoom, int minZoom, bool dirtyOnly, bool emitObjectLayer, bool emitFloorLayer) {
+            int maxZoom, int minZoom, bool dirtyOnly, bool emitObjectLayer, bool emitFloorLayer,
+            int throttleMs = 0) {
         RequireProject();
         if (maxZoom < 8 || maxZoom > 12) throw new ArgumentException("maxZoom must be in [8, 12]");
         if (minZoom < 1 || minZoom > maxZoom) throw new ArgumentException("minZoom must be in [1, maxZoom]");
 
         var p = _projectManager.CurrentProject!;
-        var exteriorDir = Path.Combine(outDir, "exterior");
+        // Three Leaflet tile layers, separated so the frontend's floor-mode
+        // can hide objects + sprites while keeping terrain visible:
+        //   terrain/  — terrain raster + roads only (opaque)
+        //   objects/  — object glyphs only, transparent everywhere else
+        //   object/   — sprite-mode rendering for z>=11 (existing convention)
+        var terrainDir = Path.Combine(outDir, "terrain");
+        var objectsGlyphDir = Path.Combine(outDir, "objects");
         var objectDir = Path.Combine(outDir, "object");
         var floorDir = Path.Combine(outDir, "floor");
-        Directory.CreateDirectory(exteriorDir);
+        Directory.CreateDirectory(terrainDir);
+        Directory.CreateDirectory(objectsGlyphDir);
         if (emitObjectLayer) Directory.CreateDirectory(objectDir);
         if (emitFloorLayer) Directory.CreateDirectory(floorDir);
+
+        // Throttle: keep heavy raster work from contending with concurrent
+        // ML training. BelowNormal yields the core to higher-priority work
+        // when the scheduler decides to preempt.
+        try {
+            System.Diagnostics.Process.GetCurrentProcess().PriorityClass =
+                System.Diagnostics.ProcessPriorityClass.BelowNormal;
+        } catch { /* not all platforms expose PriorityClass; non-fatal */ }
 
         IReadOnlyList<ushort> targetLbs = ResolveTargetLbs(lbFilter, dirtyOnly);
 
@@ -11060,23 +11174,38 @@ public class CommandEngine {
         // that's 256px (one tile per LB); for 12, 4096px.
         int lbPx = TilePyramidEmitter.TilePx * (1 << (maxZoom - 8));
 
-        int exteriorTiles = 0, objectTiles = 0, floorTiles = 0, processed = 0;
+        int terrainTiles = 0, objectsGlyphTiles = 0, objectTiles = 0, floorTiles = 0, processed = 0;
         SpriteAtlasLoader? atlas = emitObjectLayer ? GetOrLoadSpriteAtlas() : null;
 
         foreach (var lbKey in targetLbs) {
             uint lbX = (uint)((lbKey >> 8) & 0xFF);
             uint lbY = (uint)(lbKey & 0xFF);
 
-            var glyphPng = RenderLbForPyramid(lbX, lbY, lbPx, useSprites: false);
+            // Layer 1: terrain (terrain + roads, opaque background).
+            var terrainPng = RenderLbForPyramid(lbX, lbY, lbPx,
+                useSprites: false, layer: RenderPreviewRenderer.LayerMode.Terrain);
+            if (terrainPng != null) {
+                using var bmp = SKBitmap.Decode(terrainPng);
+                if (bmp != null && bmp.Width == lbPx && bmp.Height == lbPx) {
+                    terrainTiles += TilePyramidEmitter.SliceLbRender(bmp, lbKey, maxZoom, terrainDir);
+                }
+            }
+
+            // Layer 2: object glyphs only (transparent terrain). Hidden by
+            // the frontend in floor mode so building footprints don't bleed
+            // through over the dungeon floor plan.
+            var glyphPng = RenderLbForPyramid(lbX, lbY, lbPx,
+                useSprites: false, layer: RenderPreviewRenderer.LayerMode.Objects);
             if (glyphPng != null) {
                 using var bmp = SKBitmap.Decode(glyphPng);
                 if (bmp != null && bmp.Width == lbPx && bmp.Height == lbPx) {
-                    exteriorTiles += TilePyramidEmitter.SliceLbRender(bmp, lbKey, maxZoom, exteriorDir);
+                    objectsGlyphTiles += TilePyramidEmitter.SliceLbRender(bmp, lbKey, maxZoom, objectsGlyphDir);
                 }
             }
 
             if (emitObjectLayer && atlas != null) {
-                var spritePng = RenderLbForPyramid(lbX, lbY, lbPx, useSprites: true);
+                var spritePng = RenderLbForPyramid(lbX, lbY, lbPx,
+                    useSprites: true, layer: RenderPreviewRenderer.LayerMode.Objects);
                 if (spritePng != null) {
                     using var bmp = SKBitmap.Decode(spritePng);
                     if (bmp != null && bmp.Width == lbPx && bmp.Height == lbPx) {
@@ -11091,7 +11220,13 @@ public class CommandEngine {
                     var bands = LandblockDescriber.ClusterByCellZ(dungeon.Cells.Select(c => c.Origin.Z));
                     int floorCount = bands.Count;
                     for (int f = 0; f < floorCount; f++) {
-                        var dungeonResult = RenderDungeon(lbX, lbY, f, lbPx, outputPath: null);
+                        // Tile-pyramid floor PNGs MUST anchor to the LB extent
+                        // — the frontend overlays them at the LB's full 192×192
+                        // wu footprint, so a tight-bounds dungeon render would
+                        // visibly stretch and shift the cells off their actual
+                        // world positions.
+                        var dungeonResult = RenderDungeon(lbX, lbY, f, lbPx,
+                            outputPath: null, useLbExtent: true);
                         using var dbmp = SKBitmap.Decode(dungeonResult.PngBytes);
                         if (dbmp != null) {
                             TilePyramidEmitter.WriteFloorTile(dbmp, lbKey, f, floorDir, maxZoom);
@@ -11101,24 +11236,34 @@ public class CommandEngine {
                 }
             }
             processed++;
+            // Inter-LB throttle so the renderer yields the core back to a
+            // concurrent ML run. 0 = disabled.
+            if (throttleMs > 0) System.Threading.Thread.Sleep(throttleMs);
         }
 
-        int downsampled = TilePyramidEmitter.Downsample(exteriorDir, maxZoom, minZoom);
+        int downsampled = TilePyramidEmitter.Downsample(terrainDir, maxZoom, minZoom);
+        downsampled += TilePyramidEmitter.Downsample(objectsGlyphDir, maxZoom, minZoom);
         if (emitObjectLayer && atlas != null) {
-            // Object tier downsamples only to z=11 (per spec); below that
-            // the exterior tier carries glyph-mode renders.
-            int objectMin = Math.Max(11, minZoom);
-            downsampled += TilePyramidEmitter.Downsample(objectDir, maxZoom, objectMin);
+            // Pyramid the sprite tier down to minZoom too (was z=11 floor).
+            // Why: the user reported building textures missing at moderate
+            // zooms — that's because the sprite layer simply wasn't being
+            // emitted below z=11. Downsampling preserves the textured
+            // appearance into the low-zoom view; sub-pixel sprites already
+            // gracefully fall back to glyphs inside RenderPreviewRenderer.
+            downsampled += TilePyramidEmitter.Downsample(objectDir, maxZoom, minZoom);
         }
 
+        // exteriorTiles in TilePyramidResult preserves wire compat — return
+        // terrain + objects-glyph as the combined "exterior" count.
         return new TilePyramidResult(maxZoom, minZoom, processed,
-            exteriorTiles, objectTiles, floorTiles, downsampled, outDir);
+            terrainTiles + objectsGlyphTiles, objectTiles, floorTiles, downsampled, outDir);
     }
 
-    private byte[]? RenderLbForPyramid(uint lbX, uint lbY, int lbPx, bool useSprites) {
+    private byte[]? RenderLbForPyramid(uint lbX, uint lbY, int lbPx, bool useSprites,
+            RenderPreviewRenderer.LayerMode layer = RenderPreviewRenderer.LayerMode.Combined) {
         try {
             var r = RenderPreview(lbX, lbY, radius: 0, resolution: lbPx, overlay: false,
-                outputPath: null, useSprites: useSprites);
+                outputPath: null, useSprites: useSprites, layer: layer);
             return r.PngBytes;
         } catch {
             return null;

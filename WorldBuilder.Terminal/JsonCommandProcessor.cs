@@ -272,10 +272,11 @@ public class JsonCommandProcessor {
         int minZoom = node["minZoom"]?.GetValue<int>() ?? 3;
         bool emitObject = node["emitObject"]?.GetValue<bool>() ?? false;
         bool emitFloor = node["emitFloor"]?.GetValue<bool>() ?? false;
+        int throttleMs = node["throttleMs"]?.GetValue<int>() ?? 0;
         var lbFilter = ParseLbFilter(node);
 
         var r = _engine.EmitStaticSite(slug, outDir, lbFilter, maxZoom, minZoom,
-            emitObject, emitFloor);
+            emitObject, emitFloor, throttleMs);
         return Serialize(new {
             success = true,
             command = "emit-static-site",
@@ -317,10 +318,14 @@ public class JsonCommandProcessor {
         bool dirtyOnly = node["dirtyOnly"]?.GetValue<bool>() ?? false;
         bool emitObject = node["emitObject"]?.GetValue<bool>() ?? true;
         bool emitFloor = node["emitFloor"]?.GetValue<bool>() ?? true;
+        // Throttle for ML coexistence: number of ms to sleep between LBs.
+        // 0 disables. Pair with BelowNormal process priority (set inside
+        // EmitTilePyramid) to keep the renderer off the ML run's cores.
+        int throttleMs = node["throttleMs"]?.GetValue<int>() ?? 0;
         var lbFilter = ParseLbFilter(node);
 
         var r = _engine.EmitTilePyramid(lbFilter, outDir, maxZoom, minZoom,
-            dirtyOnly, emitObject, emitFloor);
+            dirtyOnly, emitObject, emitFloor, throttleMs);
         return Serialize(new {
             success = true,
             command = "emit-tile-pyramid",
@@ -375,8 +380,9 @@ public class JsonCommandProcessor {
     private string CmdGenerateObjectSprites(System.Text.Json.Nodes.JsonNode node) {
         bool force = node["force"]?.GetValue<bool>() ?? false;
         int spritePx = node["spritePx"]?.GetValue<int>() ?? 512;
+        int throttleMs = node["throttleMs"]?.GetValue<int>() ?? 0;
         var lbFilter = ParseLbFilter(node);
-        var r = _engine.GenerateObjectSprites(lbFilter, spritePx, force);
+        var r = _engine.GenerateObjectSprites(lbFilter, spritePx, force, throttleMs);
         return Serialize(new {
             success = true,
             command = "generate-object-sprites",

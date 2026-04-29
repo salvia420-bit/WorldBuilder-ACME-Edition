@@ -29,7 +29,8 @@ internal static class ObjectSpriteGenerator {
     public static (int Rendered, int Failed, int AtlasWidth, int AtlasHeight) Run(
             IReadOnlyCollection<uint> modelIds, int spritePx, string spritesDir,
             string atlasPath, string manifestPath,
-            IDatReaderWriter dats, Func<uint, OntologyEntry?> ontology) {
+            IDatReaderWriter dats, Func<uint, OntologyEntry?> ontology,
+            int throttleMs = 0) {
         Directory.CreateDirectory(spritesDir);
         var entries = new List<SpriteEntry>(modelIds.Count);
 
@@ -57,6 +58,8 @@ internal static class ObjectSpriteGenerator {
                     firstError = $"0x{id:X8}: {ex.GetType().Name}: {ex.Message} @ {stack}";
                 }
             }
+            // Yield to a concurrent ML run between sprites.
+            if (throttleMs > 0) System.Threading.Thread.Sleep(throttleMs);
         }
         if (entries.Count == 0 || nullEmptyTris + nullDegenerate + nullNoVisible + threwException > 0) {
             Console.Error.WriteLine($"[Sprites] rendered={entries.Count} " +
@@ -118,14 +121,13 @@ internal static class ObjectSpriteGenerator {
         int W = Math.Max(1, (int)MathF.Ceiling(worldW * pxPerUnit));
         int H = Math.Max(1, (int)MathF.Ceiling(worldH * pxPerUnit));
 
-        // Top-facing triangles only (back-face cull). Sort by centroid Z so
-        // higher (closer-to-viewer) triangles render last.
-        var visible = new List<Tri>(triangles.Count);
-        foreach (var tri in triangles) {
-            if (tri.Normal.Z <= 0f) continue;
-            visible.Add(tri);
-        }
-        if (visible.Count == 0) return (null, NullReason.NoVisible);
+        // Why: don't back-face cull. A top-down map of a fence, sign, or awning
+        // depends on the very faces whose normals lie in the XY plane (or point
+        // down) — culling them strips thin/vertical models to zero visible
+        // pixels and forces the "Unknown" glyph fallback. Painter's algorithm
+        // via Z-sort still gives correct occlusion: highest-Z faces draw last
+        // and visually win.
+        var visible = new List<Tri>(triangles);
         visible.Sort((a, b) => a.CentroidZ.CompareTo(b.CentroidZ));
 
         // Per-surface texture cache, scoped to this model. Failure → null →
@@ -185,8 +187,10 @@ internal static class ObjectSpriteGenerator {
         var p2 = WorldToPx(tri.Pos[2], originX, originYTop, pxPerUnit);
 
         // Per-vertex Lambert shade × sun direction. Floor 0.55 mirrors the
-        // RenderPreviewRenderer hillshade convention.
-        float dot = Math.Max(0f, Vector3.Dot(tri.Normal, SunDirection));
+        // RenderPreviewRenderer hillshade convention. Use abs(dot) so faces
+        // whose normals point away from the sun (or downward) still get a
+        // sensible shade — important now that we render every triangle.
+        float dot = MathF.Abs(Vector3.Dot(tri.Normal, SunDirection));
         float shade = 0.55f + 0.55f * dot;
         if (shade > 1f) shade = 1f;
         byte sb = (byte)(255f * shade);
@@ -375,7 +379,32 @@ internal static class ObjectSpriteGenerator {
     // ────────────────────────────────────────────────────────────────────
 
     private static SKBitmap? TryLoadSurface(IDatReaderWriter dats, uint surfaceDid) {
-        if (!SafeTryGet<RenderSurface>(dats, surfaceDid, out var rs)) return null;
+        // Why: GfxObj.Surfaces[i] is almost always a Surface (0x08xxxxxx) —
+        // the wrapper that holds material params and points at the texture.
+        // Reading it as a RenderSurface (0x06) directly fails silently and
+        // every textured building shows up as a flat fallback color. Walk the
+        // real chain: Surface → OrigTextureId → SurfaceTexture → Textures[0]
+        // → RenderSurface. Some surfaces shortcut to a RenderSurface (0x06)
+        // and a few projects pre-resolve to one; handle both.
+        uint renderSurfaceDid = surfaceDid;
+        uint kind = surfaceDid >> 24;
+        if (kind == 0x08) {
+            if (!SafeTryGet<Surface>(dats, surfaceDid, out var surface)) return null;
+            uint texRef = surface.OrigTextureId.DataId;
+            uint texKind = texRef >> 24;
+            if (texKind == 0x05) {
+                if (!SafeTryGet<SurfaceTexture>(dats, texRef, out var st)) return null;
+                if (st.Textures == null || st.Textures.Count == 0) return null;
+                renderSurfaceDid = st.Textures[0].DataId;
+            } else if (texKind == 0x06) {
+                renderSurfaceDid = texRef;
+            } else {
+                return null;
+            }
+        } else if (kind != 0x06) {
+            return null;
+        }
+        if (!SafeTryGet<RenderSurface>(dats, renderSurfaceDid, out var rs)) return null;
         if (rs.SourceData == null || rs.SourceData.Length == 0) return null;
         try {
             return rs.Format switch {
