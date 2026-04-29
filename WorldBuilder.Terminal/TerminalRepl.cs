@@ -5152,15 +5152,23 @@ public class TerminalRepl {
                 mode = tokens[++i].ToLowerInvariant(); continue;
             }
             if (t.Equals("--lb", StringComparison.OrdinalIgnoreCase) && i + 1 < tokens.Length) {
-                var pair = tokens[++i].Split(',');
-                if (pair.Length == 2 && uint.TryParse(pair[0], out var lbX) && uint.TryParse(pair[1], out var lbY)) {
-                    lbs.Add(new System.Text.Json.Nodes.JsonArray((int)lbX, (int)lbY));
-                } else {
+                var raw = tokens[++i];
+                var pair = raw.Split(',');
+                if (pair.Length != 2 || !uint.TryParse(pair[0], out var lbX) || !uint.TryParse(pair[1], out var lbY)) {
                     Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine($"Invalid --lb value '{tokens[i]}' — expected 'X,Y'.");
+                    Console.WriteLine($"Invalid --lb value '{raw}' — expected 'X,Y'.");
                     Console.ResetColor();
                     return;
                 }
+                // LB coords are 0..255 inclusive. Catching it here is friendlier
+                // than letting the JSON layer silently drop the entry.
+                if (lbX > 0xFF || lbY > 0xFF) {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine($"--lb value '{raw}' out of range — landblock coords are 0..255.");
+                    Console.ResetColor();
+                    return;
+                }
+                lbs.Add(new System.Text.Json.Nodes.JsonArray((int)lbX, (int)lbY));
                 continue;
             }
             if (t.Equals("--res", StringComparison.OrdinalIgnoreCase) && i + 1 < tokens.Length) {
