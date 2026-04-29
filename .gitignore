@@ -469,6 +469,7 @@ Stamps/
 
 # Probe / scratch projects
 _probe/
+_tmp_reflect/
 
 ##
 ## WorldBuilder ACME Edition — Project-Specific Rules

@@ -176,7 +176,16 @@ namespace WorldBuilder.Shared.Models {
                 }
             }
 
-            using var writer = new DefaultDatReaderWriter(exportDirectory, DatAccessType.ReadWrite);
+            // Patch DAT headers to prevent Chorizite's block allocator from
+            // reusing in-use blocks (retail DATs use a linked-list free chain
+            // but Chorizite assumes contiguous allocation). See DatExportFixer.
+            onProgress?.Invoke("Patching DAT free block headers...");
+            foreach (var datFile in datFiles) {
+                var destPath = Path.Combine(exportDirectory, datFile);
+                DatExportFixer.PatchFreeBlocksBeforeExport(destPath);
+            }
+
+            var writer = new DefaultDatReaderWriter(exportDirectory, DatAccessType.ReadWrite);
 
             if (portalIteration == DatReaderWriter.Dats.Portal.Iteration.CurrentIteration) {
                 portalIteration = 0;
@@ -497,6 +506,18 @@ namespace WorldBuilder.Shared.Models {
 
             // TODO: all other dat iterations
             writer.Dats.Portal.Iteration.CurrentIteration = portalIteration;
+
+            writer.Dispose();
+
+            // Fix B-tree leaf node branch sentinels: Chorizite writes 0xCDCDCDCD
+            // for unused slots but ACE expects 0x00000000 to identify leaf nodes.
+            // Run before OnExportReposition so the reposition hook (which uses
+            // ACE's DatLoader) sees fixed-up DATs.
+            onProgress?.Invoke("Fixing DAT B-tree leaf nodes for ACE compatibility...");
+            foreach (var datFile in datFiles) {
+                var destPath = Path.Combine(exportDirectory, datFile);
+                DatExportFixer.FixLeafBranchSentinels(destPath);
+            }
 
             onProgress?.Invoke("Running instance reposition...");
 
