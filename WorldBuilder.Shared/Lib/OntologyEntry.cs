@@ -37,8 +37,22 @@ public class OntologyEntry {
     /// <summary>Auto-classified category: Structure, Scenery, Furniture, Prop, Creature, etc.</summary>
     public string Category { get; set; } = "Unknown";
 
-    /// <summary>How this entry was classified: "Building", "Scenery", "Heuristic", "Manual".</summary>
+    /// <summary>How this entry was classified: "Building", "Scenery", "Heuristic", "BoundsFailed", "Manual".</summary>
     public string ClassificationSource { get; set; } = "Heuristic";
+
+    /// <summary>
+    /// Classifier confidence in [0,1]. Cross-reference hits and exact-rule matches are 1.0;
+    /// heuristic boundary cases are reduced inside the configured margin band; degenerate
+    /// or failed entries are 0.0. Legacy caches default to 1.0.
+    /// </summary>
+    public float Confidence { get; set; } = 1.0f;
+
+    /// <summary>
+    /// Human-readable rule id explaining the classification, e.g. "crossref",
+    /// "heuristic:large-multi-part", "boundary:struct-vs-scenery@9.97m", "no-vertex-data".
+    /// Null when no specific reason was recorded.
+    /// </summary>
+    public string? ClassificationReason { get; set; }
 
     /// <summary>Combined keyword tags for search (e.g. ["tree", "large", "scenery"]).</summary>
     public string[] Tags { get; set; } = Array.Empty<string>();
@@ -154,4 +168,11 @@ public class OntologyScanReport {
 
     /// <summary>Breakdown of how many entries per scale.</summary>
     public Dictionary<string, int> ScaleCounts { get; set; } = new();
+
+    /// <summary>
+    /// Entries whose Setup/GfxObj could not be classified — geometry extraction
+    /// threw, vertex data was empty, or the DAT lookup failed. Each tuple is
+    /// (id, reason). The classifier records these instead of silently skipping.
+    /// </summary>
+    public List<(uint Id, string Reason)> FailedEntries { get; } = new();
 }

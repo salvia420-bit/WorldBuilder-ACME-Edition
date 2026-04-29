@@ -87,7 +87,8 @@ public class OntologyService : IOntologyService {
         uint[] setupIds;
         try {
             setupIds = dats.Dats.Portal.GetAllIdsOfType<Setup>().ToArray();
-        } catch {
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"[Ontology] ERROR enumerating Setup ids: {ex.GetType().Name}: {ex.Message}");
             setupIds = Array.Empty<uint>();
         }
         report.TotalSetups = setupIds.Length;
@@ -99,9 +100,14 @@ public class OntologyService : IOntologyService {
                 if (dats.TryGet<Setup>(id, out var setup)) {
                     var entry = ClassifySetup(id, setup, dats, buildingIds, sceneryIds);
                     _entries[id] = entry;
+                    if (entry.ClassificationSource == "BoundsFailed")
+                        report.FailedEntries.Add((id, entry.ClassificationReason ?? "bounds-failed"));
+                } else {
+                    report.FailedEntries.Add((id, "tryget-returned-false"));
                 }
-            } catch {
-                // Skip individual failures — don't let one bad entry halt the scan
+            } catch (Exception ex) {
+                report.FailedEntries.Add((id, $"{ex.GetType().Name}:{ex.Message}"));
+                Console.Error.WriteLine($"[Ontology] ERROR id=0x{id:X8}: {ex.GetType().Name}: {ex.Message}");
             }
 
             processed++;
@@ -114,7 +120,8 @@ public class OntologyService : IOntologyService {
             uint[] gfxObjIds;
             try {
                 gfxObjIds = dats.Dats.Portal.GetAllIdsOfType<GfxObj>().ToArray();
-            } catch {
+            } catch (Exception ex) {
+                Console.Error.WriteLine($"[Ontology] ERROR enumerating GfxObj ids: {ex.GetType().Name}: {ex.Message}");
                 gfxObjIds = Array.Empty<uint>();
             }
             report.TotalGfxObjs = gfxObjIds.Length;
@@ -127,11 +134,16 @@ public class OntologyService : IOntologyService {
 
                 try {
                     if (dats.TryGet<GfxObj>(id, out var gfxObj)) {
-                        var entry = ClassifyGfxObj(id, gfxObj);
+                        var entry = ClassifyGfxObj(id, gfxObj, buildingIds, sceneryIds);
                         _entries[id] = entry;
+                        if (entry.ClassificationSource == "BoundsFailed")
+                            report.FailedEntries.Add((id, entry.ClassificationReason ?? "bounds-failed"));
+                    } else {
+                        report.FailedEntries.Add((id, "tryget-returned-false"));
                     }
-                } catch {
-                    // Skip individual failures
+                } catch (Exception ex) {
+                    report.FailedEntries.Add((id, $"{ex.GetType().Name}:{ex.Message}"));
+                    Console.Error.WriteLine($"[Ontology] ERROR id=0x{id:X8}: {ex.GetType().Name}: {ex.Message}");
                 }
 
                 processed++;
@@ -160,7 +172,9 @@ public class OntologyService : IOntologyService {
         report.ClassifiedAsUnknown = report.CategoryCounts.GetValueOrDefault("Unknown", 0);
 
         _isScanned = true;
-        Console.Error.WriteLine($"[Ontology] Scan complete: {report.TotalEntries} entries in {report.ScanTimeMs:F0}ms");
+        Console.Error.WriteLine(
+            $"[Ontology] Scan complete: {report.TotalEntries} entries " +
+            $"in {report.ScanTimeMs:F0}ms (failed={report.FailedEntries.Count})");
 
         return report;
     }
@@ -174,31 +188,56 @@ public class OntologyService : IOntologyService {
     /// Same approach as BuildingBlueprintCache.EnsureBuildingIdsScanned().
     /// </summary>
     private static HashSet<uint> ScanBuildingIds(IDatReaderWriter dats) {
+        uint[] enumerated;
+        try {
+            enumerated = dats.Dats.Cell.GetAllIdsOfType<LandBlockInfo>().ToArray();
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"[Ontology] Warning: Could not enumerate LandBlockInfo ids: {ex.GetType().Name}: {ex.Message}");
+            enumerated = Array.Empty<uint>();
+        }
+
+        return CollectBuildingIds(
+            enumerated,
+            id => dats.TryGet<LandBlockInfo>(id, out var lbi) ? lbi : null,
+            msg => Console.Error.WriteLine(msg));
+    }
+
+    /// <summary>
+    /// Iterates every populated <see cref="LandBlockInfo"/> and collects the
+    /// distinct building model ids referenced. When the enumerated id list is
+    /// empty (some dat-readers cannot list LBIs), fall back to a brute-force
+    /// 256×256 lookup using the canonical id formula
+    /// <c>((x &lt;&lt; 8) | y) &lt;&lt; 16 | 0xFFFE</c>. Both paths must produce the same
+    /// set against the same backing dat — this is what the test fixture pins.
+    /// </summary>
+    internal static HashSet<uint> CollectBuildingIds(
+        uint[] enumeratedLbiIds,
+        Func<uint, LandBlockInfo?> tryGetLbi,
+        Action<string> logWarning) {
+
         var ids = new HashSet<uint>();
         try {
-            var allLbiIds = dats.Dats.Cell.GetAllIdsOfType<LandBlockInfo>().ToArray();
-
-            if (allLbiIds.Length == 0) {
+            if (enumeratedLbiIds.Length == 0) {
                 // Brute-force fallback (same pattern as BuildingBlueprintCache)
                 for (uint x = 0; x < 255; x++) {
                     for (uint y = 0; y < 255; y++) {
                         var infoId = (uint)(((x << 8) | y) << 16 | 0xFFFE);
-                        if (dats.TryGet<LandBlockInfo>(infoId, out var lbi)) {
-                            foreach (var b in lbi.Buildings)
-                                ids.Add(b.ModelId);
-                        }
-                    }
-                }
-            } else {
-                foreach (var infoId in allLbiIds) {
-                    if (dats.TryGet<LandBlockInfo>(infoId, out var lbi)) {
+                        var lbi = tryGetLbi(infoId);
+                        if (lbi == null) continue;
                         foreach (var b in lbi.Buildings)
                             ids.Add(b.ModelId);
                     }
                 }
+            } else {
+                foreach (var infoId in enumeratedLbiIds) {
+                    var lbi = tryGetLbi(infoId);
+                    if (lbi == null) continue;
+                    foreach (var b in lbi.Buildings)
+                        ids.Add(b.ModelId);
+                }
             }
         } catch (Exception ex) {
-            Console.Error.WriteLine($"[Ontology] Warning: Could not scan building IDs: {ex.Message}");
+            logWarning($"[Ontology] Warning: Could not scan building IDs: {ex.GetType().Name}: {ex.Message}");
         }
         return ids;
     }
@@ -219,7 +258,7 @@ public class OntologyService : IOntologyService {
                 }
             }
         } catch (Exception ex) {
-            Console.Error.WriteLine($"[Ontology] Warning: Could not scan scenery IDs: {ex.Message}");
+            Console.Error.WriteLine($"[Ontology] Warning: Could not scan scenery IDs: {ex.GetType().Name}: {ex.Message}");
         }
         return ids;
     }
@@ -228,7 +267,7 @@ public class OntologyService : IOntologyService {
     //  Classification logic
     // ════════════════════════════════════════════════════
 
-    private OntologyEntry ClassifySetup(
+    internal OntologyEntry ClassifySetup(
         uint id, Setup setup, IDatReaderWriter dats,
         HashSet<uint> buildingIds, HashSet<uint> sceneryIds) {
 
@@ -238,11 +277,16 @@ public class OntologyService : IOntologyService {
             PartCount = setup.Parts?.Count ?? 0,
         };
 
-        // Compute bounding box from all GfxObj parts
-        ComputeSetupBounds(setup, dats, out var min, out var max, out int totalPolys);
+        // Compute bounding box from all GfxObj parts.
+        ComputeSetupBounds(setup, dats, out var min, out var max, out int totalPolys, out var boundsValid);
+        entry.PolyCount = totalPolys;
+
+        if (!boundsValid) {
+            return MarkBoundsFailed(entry, totalPolys);
+        }
+
         entry.BoundsMin = min;
         entry.BoundsMax = max;
-        entry.PolyCount = totalPolys;
 
         var size = max - min;
         entry.MaxDimension = Math.Max(size.X, Math.Max(size.Y, size.Z));
@@ -251,21 +295,15 @@ public class OntologyService : IOntologyService {
         float footprint = Math.Max(size.X, size.Y);
         entry.AspectRatio = footprint > 0.001f ? size.Z / footprint : 1f;
 
-        // Scale classification
         entry.Scale = ClassifyScale(entry.MaxDimension);
 
-        // Category classification — ordered by confidence
-        if (buildingIds.Contains(id)) {
-            entry.Category = "Structure";
-            entry.ClassificationSource = "Building";
-        } else if (sceneryIds.Contains(id)) {
-            entry.Category = "Scenery";
-            entry.ClassificationSource = "Scene";
-        } else {
-            entry.Category = ClassifyCategoryByHeuristic(
-                entry.MaxDimension, entry.AspectRatio, entry.PartCount, totalPolys);
-            entry.ClassificationSource = "Heuristic";
-        }
+        var (cat, src, conf, reason) = ClassifyByCrossRefOrHeuristic(
+            id, entry.MaxDimension, entry.AspectRatio, entry.PartCount, totalPolys,
+            buildingIds, sceneryIds);
+        entry.Category = cat;
+        entry.ClassificationSource = src;
+        entry.Confidence = conf;
+        entry.ClassificationReason = reason;
 
         // Footprint geometry — only interesting for buildable / structure-like
         // objects. Skip on Furniture/Prop/Creature/Tiny to keep the scan fast.
@@ -277,23 +315,33 @@ public class OntologyService : IOntologyService {
             entry.BasementDepth = MathF.Max(0f, -fp.FoundationZ);
         }
 
-        // Build tags
         entry.Tags = BuildTags(entry);
-
         return entry;
     }
 
-    private OntologyEntry ClassifyGfxObj(uint id, GfxObj gfxObj) {
+    internal OntologyEntry ClassifyGfxObj(
+        uint id, GfxObj gfxObj,
+        HashSet<uint> buildingIds, HashSet<uint> sceneryIds) {
+
         var entry = new OntologyEntry {
             ObjectId = id,
             DatType = "GfxObj",
+            // Treat a standalone GfxObj as a single-part model for the purpose
+            // of cross-ref-or-heuristic. PartCount stays 0 in the cache (it has
+            // no Setup parts), but the heuristic gets partCount=1 below so the
+            // Setup and GfxObj paths agree on the same id.
             PartCount = 0,
         };
 
-        ComputeGfxObjBounds(gfxObj, out var min, out var max, out int polyCount);
+        ComputeGfxObjBounds(gfxObj, out var min, out var max, out int polyCount, out var boundsValid);
+        entry.PolyCount = polyCount;
+
+        if (!boundsValid) {
+            return MarkBoundsFailed(entry, polyCount);
+        }
+
         entry.BoundsMin = min;
         entry.BoundsMax = max;
-        entry.PolyCount = polyCount;
 
         var size = max - min;
         entry.MaxDimension = Math.Max(size.X, Math.Max(size.Y, size.Z));
@@ -302,9 +350,14 @@ public class OntologyService : IOntologyService {
         entry.AspectRatio = footprint > 0.001f ? size.Z / footprint : 1f;
 
         entry.Scale = ClassifyScale(entry.MaxDimension);
-        entry.Category = ClassifyCategoryByHeuristic(
-            entry.MaxDimension, entry.AspectRatio, 1, polyCount);
-        entry.ClassificationSource = "Heuristic";
+
+        var (cat, src, conf, reason) = ClassifyByCrossRefOrHeuristic(
+            id, entry.MaxDimension, entry.AspectRatio, partCount: 1, polyCount,
+            buildingIds, sceneryIds);
+        entry.Category = cat;
+        entry.ClassificationSource = src;
+        entry.Confidence = conf;
+        entry.ClassificationReason = reason;
 
         if (entry.Category == "Structure" || entry.Category == "Scenery") {
             var fp = FootprintExtractor.FromGfxObj(gfxObj);
@@ -315,40 +368,75 @@ public class OntologyService : IOntologyService {
         }
 
         entry.Tags = BuildTags(entry);
-
         return entry;
+    }
+
+    private static OntologyEntry MarkBoundsFailed(OntologyEntry entry, int polyCount) {
+        entry.BoundsMin = Vector3.Zero;
+        entry.BoundsMax = Vector3.Zero;
+        entry.MaxDimension = 0f;
+        entry.AspectRatio = 0f;
+        entry.Scale = "Unknown";
+        entry.Category = "Unknown";
+        entry.ClassificationSource = "BoundsFailed";
+        entry.Confidence = 0f;
+        entry.ClassificationReason = polyCount == 0 ? "no-polygons" : "no-vertex-data";
+        entry.Tags = BuildTags(entry);
+        return entry;
+    }
+
+    /// <summary>
+    /// Single classification entry point shared by Setup and GfxObj paths.
+    /// A cross-reference hit (this id is wired into a building or a scene)
+    /// always wins at confidence 1.0; otherwise we fall through to the
+    /// confidence-aware heuristic.
+    /// </summary>
+    internal static (string Category, string Source, float Confidence, string Reason)
+        ClassifyByCrossRefOrHeuristic(
+            uint id, float maxDim, float aspectRatio, int partCount, int polyCount,
+            HashSet<uint> buildingIds, HashSet<uint> sceneryIds) {
+
+        if (buildingIds.Contains(id))
+            return ("Structure", "Building", 1.0f, "crossref");
+        if (sceneryIds.Contains(id))
+            return ("Scenery", "Scene", 1.0f, "crossref");
+
+        var (cat, conf, reason) = ClassifyCategoryByHeuristic(maxDim, aspectRatio, partCount, polyCount);
+        return (cat, "Heuristic", conf, reason);
     }
 
     // ════════════════════════════════════════════════════
     //  Geometry extraction
     // ════════════════════════════════════════════════════
 
-    private static void ComputeSetupBounds(
+    internal static void ComputeSetupBounds(
         Setup setup, IDatReaderWriter dats,
-        out Vector3 min, out Vector3 max, out int totalPolys) {
+        out Vector3 min, out Vector3 max, out int totalPolys, out bool boundsValid) {
 
         min = new Vector3(float.MaxValue);
         max = new Vector3(float.MinValue);
         totalPolys = 0;
+        boundsValid = false;
 
         if (setup.Parts == null || setup.Parts.Count == 0) {
             min = max = Vector3.Zero;
             return;
         }
 
-        bool anyVertex = false;
+        // PlacementFrames is unordered (Dictionary), so picking by enumeration
+        // order is non-deterministic across runs and runtime versions. Order
+        // by key so the cache is reproducible.
+        var defaultPlacement = (setup.PlacementFrames != null && setup.PlacementFrames.Count > 0)
+            ? setup.PlacementFrames[setup.PlacementFrames.Keys.Min()]
+            : null;
+
         for (int i = 0; i < setup.Parts.Count; i++) {
             var partId = setup.Parts[i];
             if (!dats.TryGet<GfxObj>(partId, out var gfxObj)) continue;
 
-            // Get the part's offset from the setup (if available)
             Vector3 partOffset = Vector3.Zero;
-            if (setup.PlacementFrames != null && setup.PlacementFrames.Count > 0) {
-                // Try the default placement frame (key 0)
-                var defaultPlacement = setup.PlacementFrames.Values.FirstOrDefault();
-                if (defaultPlacement?.Frames != null && i < defaultPlacement.Frames.Count) {
-                    partOffset = defaultPlacement.Frames[i].Origin;
-                }
+            if (defaultPlacement?.Frames != null && i < defaultPlacement.Frames.Count) {
+                partOffset = defaultPlacement.Frames[i].Origin;
             }
 
             if (gfxObj.VertexArray?.Vertices != null) {
@@ -356,35 +444,35 @@ public class OntologyService : IOntologyService {
                     var worldPos = vertex.Origin + partOffset;
                     min = Vector3.Min(min, worldPos);
                     max = Vector3.Max(max, worldPos);
-                    anyVertex = true;
+                    boundsValid = true;
                 }
             }
 
             totalPolys += gfxObj.Polygons?.Count ?? 0;
         }
 
-        if (!anyVertex) {
+        if (!boundsValid) {
             min = max = Vector3.Zero;
         }
     }
 
     private static void ComputeGfxObjBounds(
-        GfxObj gfxObj, out Vector3 min, out Vector3 max, out int polyCount) {
+        GfxObj gfxObj, out Vector3 min, out Vector3 max, out int polyCount, out bool boundsValid) {
 
         min = new Vector3(float.MaxValue);
         max = new Vector3(float.MinValue);
         polyCount = gfxObj.Polygons?.Count ?? 0;
+        boundsValid = false;
 
-        bool anyVertex = false;
         if (gfxObj.VertexArray?.Vertices != null) {
             foreach (var vertex in gfxObj.VertexArray.Vertices.Values) {
                 min = Vector3.Min(min, vertex.Origin);
                 max = Vector3.Max(max, vertex.Origin);
-                anyVertex = true;
+                boundsValid = true;
             }
         }
 
-        if (!anyVertex) {
+        if (!boundsValid) {
             min = max = Vector3.Zero;
         }
     }
@@ -393,7 +481,8 @@ public class OntologyService : IOntologyService {
     //  Heuristic classifiers
     // ════════════════════════════════════════════════════
 
-    private static string ClassifyScale(float maxDim) => maxDim switch {
+    internal static string ClassifyScale(float maxDim) => maxDim switch {
+        <= 0f   => "Unknown",   // Sentinel for failed bounds extraction
         < 0.5f  => "Tiny",      // Candles, buttons, coins
         < 2.0f  => "Small",     // Chairs, lanterns, tools
         < 5.0f  => "Medium",    // Tables, fountains, pillars
@@ -401,38 +490,85 @@ public class OntologyService : IOntologyService {
         _       => "Massive"    // Castles, massive structures
     };
 
-    private static string ClassifyCategoryByHeuristic(
-        float maxDim, float aspectRatio, int partCount, int polyCount) {
+    /// <summary>
+    /// Confidence-aware variant of the legacy six-rule heuristic. The rule
+    /// vocabulary is preserved so already-cached agent training data stays
+    /// valid; what's new is that boundary-straddling rules return a reduced
+    /// confidence inside a configurable margin band, plus a human-readable
+    /// reason id that downstream consumers can grade against.
+    ///
+    /// Boundary rules (1, 2, 3, 4) widen their trigger to the *near edge* of
+    /// the margin band so a model that *almost* qualifies still fires the
+    /// rule — but at reduced confidence. This is the core point of the
+    /// rewrite: callers that care about precision can filter on Confidence
+    /// instead of letting boundary objects silently fall through to a
+    /// less-applicable later rule.
+    ///
+    /// Returns: (Category, Confidence ∈ [0,1], Reason). Outside the band
+    /// (above the far edge) the firing rule returns confidence 1.0; inside
+    /// the band the confidence ramps from 0.5 at the near edge up to 1.0
+    /// at the far edge.
+    /// </summary>
+    internal static (string Category, float Confidence, string Reason)
+        ClassifyCategoryByHeuristic(float maxDim, float aspectRatio, int partCount, int polyCount) {
 
-        // Large multi-part objects are likely structures
-        if (maxDim > 10f && partCount > 3)
-            return "Structure";
+        // Rule 1 — Large multi-part → Structure. Threshold 10m; band [9, 11].
+        if (maxDim >= 9f && partCount > 3) {
+            float conf = (maxDim >= 11f)
+                ? 1.0f
+                : 0.5f + 0.5f * (maxDim - 9f) / 2f;
+            string reason = conf < 1f
+                ? $"boundary:struct-vs-scenery@{maxDim:F2}m"
+                : "heuristic:large-multi-part";
+            return ("Structure", conf, reason);
+        }
 
-        // Very tall and thin — poles, trees, columns
-        if (aspectRatio > 3f && maxDim > 2f)
-            return "Scenery";
+        // Rule 2 — Very tall and thin → Scenery. Threshold AR=3; band [2.7, 3.3].
+        if (aspectRatio >= 2.7f && maxDim > 2f) {
+            float conf = (aspectRatio >= 3.3f)
+                ? 1.0f
+                : 0.5f + 0.5f * (aspectRatio - 2.7f) / 0.6f;
+            string reason = conf < 1f
+                ? $"boundary:tall-thin@{aspectRatio:F2}"
+                : "heuristic:tall-thin-scenery";
+            return ("Scenery", conf, reason);
+        }
 
-        // Large single-part — likely a large scenery piece or terrain feature
-        if (maxDim > 8f && partCount <= 2)
-            return "Scenery";
+        // Rule 3 — Large single-part → Scenery. Threshold 8m; band [7, 9].
+        if (maxDim >= 7f && partCount <= 2) {
+            float conf = (maxDim >= 9f)
+                ? 1.0f
+                : 0.5f + 0.5f * (maxDim - 7f) / 2f;
+            string reason = conf < 1f
+                ? $"boundary:large-single-part@{maxDim:F2}m"
+                : "heuristic:large-single-part-scenery";
+            return ("Scenery", conf, reason);
+        }
 
-        // Small, low poly, single part — decoration / prop
-        if (maxDim < 1f && polyCount < 50)
-            return "Prop";
+        // Rule 4 — Small low-poly → Prop. Threshold 1m; band [0.8, 1.2].
+        if (maxDim <= 1.2f && polyCount < 50) {
+            float conf = (maxDim <= 0.8f)
+                ? 1.0f
+                : 0.5f + 0.5f * (1.2f - maxDim) / 0.4f;
+            string reason = conf < 1f
+                ? $"boundary:small-prop@{maxDim:F2}m"
+                : "heuristic:small-low-poly-prop";
+            return ("Prop", conf, reason);
+        }
 
-        // Small to medium, flat — likely furniture or decoration
+        // Rule 5 — Small flat → Furniture. Categorical (no margin band).
         if (maxDim < 3f && aspectRatio < 0.5f)
-            return "Furniture";
+            return ("Furniture", 0.85f, "heuristic:small-flat-furniture");
 
-        // Medium multi-part — furniture or functional object
+        // Rule 6 — Medium multi-part → Furniture. Categorical.
         if (maxDim >= 1f && maxDim < 5f && partCount >= 2)
-            return "Furniture";
+            return ("Furniture", 0.85f, "heuristic:medium-multi-part-furniture");
 
-        // Medium single part — generic scenery
+        // Rule 7 — Medium single-part → Prop. Categorical.
         if (maxDim >= 1f && maxDim < 8f)
-            return "Prop";
+            return ("Prop", 0.7f, "heuristic:medium-single-part-prop");
 
-        return "Unknown";
+        return ("Unknown", 0f, "heuristic:no-rule-matched");
     }
 
     private static string[] BuildTags(OntologyEntry entry) {
@@ -1433,7 +1569,14 @@ public class OntologyService : IOntologyService {
             DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
         };
         foreach (var entry in _entries.Values.OrderBy(e => e.ObjectId)) {
+            // Only serialize Confidence/ClassificationReason when they carry
+            // information beyond the legacy default. This keeps the cache
+            // forward-compatible with old readers (extra fields are ignored).
+            float? confOut = entry.Confidence < 1.0f ? entry.Confidence : (float?)null;
+            string? reasonOut = entry.ClassificationReason;
+
             var dto = new {
+                cacheVersion = 2,
                 id = entry.ObjectId,
                 type = entry.DatType,
                 bMin = new[] { entry.BoundsMin.X, entry.BoundsMin.Y, entry.BoundsMin.Z },
@@ -1445,6 +1588,8 @@ public class OntologyService : IOntologyService {
                 scale = entry.Scale,
                 category = entry.Category,
                 classSource = entry.ClassificationSource,
+                confidence = confOut,
+                classificationReason = reasonOut,
                 tags = entry.Tags,
                 vertexCount = entry.VertexCount,
                 surfaceIds = entry.SurfaceIds,
@@ -1490,6 +1635,13 @@ public class OntologyService : IOntologyService {
                     Scale = TryGetString(root, "scale") ?? "Unknown",
                     Category = TryGetString(root, "category") ?? "Unknown",
                     ClassificationSource = TryGetString(root, "classSource") ?? "Heuristic",
+                    // Cache compatibility: pre-v2 caches lack these — default to
+                    // Confidence=1.0 (no signal that it was a boundary case) and
+                    // a null reason so downstream consumers can distinguish
+                    // "legacy entry, trust at face value" from "explicitly low
+                    // confidence, this is a boundary call".
+                    Confidence = TryGetSingle(root, "confidence") ?? 1.0f,
+                    ClassificationReason = TryGetString(root, "classificationReason"),
                     Tags = TryGetStringArray(root, "tags") ?? Array.Empty<string>(),
                     VertexCount = TryGetInt32(root, "vertexCount") ?? 0,
                     SurfaceIds = TryGetStringList(root, "surfaceIds"),
