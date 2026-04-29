@@ -699,6 +699,23 @@ public class CommandEngine {
             }
         } catch { }
 
+        // Lazy-load ontology cache on first describe call. stdin-mode skips
+        // CommandEngine.Load(), so the eager auto-restore in Load() never fires.
+        // Without this, _ontologyService.IsScanned stays false and the describer
+        // can't tag any object as Category="Structure" → structureCount is always
+        // 0 and settlementHint (derived from structure count) is always null.
+        if (!_ontologyService.IsScanned) {
+            try {
+                var cachePath = Path.Combine(_projectManager.CurrentProject!.ProjectDirectory, "ontology_cache.jsonl");
+                if (File.Exists(cachePath)) {
+                    int restored = _ontologyService.LoadFromCache(cachePath);
+                    Console.Error.WriteLine($"[Ontology] Lazy-restored {restored:N0} entries from {cachePath}");
+                }
+            } catch (Exception ex) {
+                Console.Error.WriteLine($"[Ontology] Lazy-restore skipped: {ex.Message}");
+            }
+        }
+
         // Lazy-load gazetteers on first describe call. stdin-mode skips
         // CommandEngine.Load(), so the eager auto-load in Load() never fires there.
         if (!_townGazetteerLoaded) {

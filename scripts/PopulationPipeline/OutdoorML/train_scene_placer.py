@@ -251,43 +251,112 @@ def build_token_family_index(vocab_size: int, vocab_path: str) -> torch.Tensor:
 
 
 def build_class_space_weight(vocab_size: int, vocab_path: str,
-                             ace_abstract_weight: float) -> torch.Tensor:
+                             ace_abstract_weight: float,
+                             dat_inv_freq: bool = False,
+                             dat_freq: Optional[np.ndarray] = None,
+                             dat_clamp_min: float = 0.5,
+                             dat_clamp_max: float = 5.0) -> torch.Tensor:
     """Per-vocab-idx weight applied to the wcid cross-entropy.
 
-    The unified abstract_ace vocab is roughly 4474 model_id (DAT) tokens vs
-    108 ace_abstract (ACE/wcid) tokens. Cross-entropy without rebalancing
-    reproduces that ratio at sampling time, collapsing onto DAT props and
-    almost never emitting ACE objects (creatures, NPCs, vendors). This
-    helper builds a (V,) weight tensor that up-weights ace_abstract entries
-    so per-class-space gradient magnitudes are comparable.
+    Two-stage rebalancing:
+      1. ACE entries multiplied by `ace_abstract_weight` (the v3 lever, ~10).
+         This counteracts the ~41:1 DAT-vs-ACE vocab imbalance.
+      2. (V5 addition) When `dat_inv_freq` is set, DAT entries are scaled by
+         sqrt(median_dat_freq / token_dat_freq), clamped to [min, max]. This
+         pushes gradient onto rare DAT tokens — Phase 0 diagnostic showed
+         that the v4 plateau is *intra-DAT* long-tail collapse, not class-
+         space miscalibration. ACE base weight composes multiplicatively
+         with stage 1.
 
-    A weight of 1.0 (the default) leaves the loss unchanged.
+    A weight of 1.0 (the default for both stages) leaves the loss unchanged.
     """
     weight = torch.ones(vocab_size, dtype=torch.float32)
-    if abs(ace_abstract_weight - 1.0) < 1e-9:
-        return weight
     try:
         with open(vocab_path, "r", encoding="utf-8") as f:
             vocab = json.load(f)
     except (OSError, json.JSONDecodeError):
         return weight
     idx_to_class_key = vocab.get("idx_to_class_key") or {}
-    boosted = 0
+
+    ace_indices = []
+    dat_indices = []
     for raw_idx, kv in idx_to_class_key.items():
         if not isinstance(kv, (list, tuple)) or len(kv) != 2:
-            continue
-        if kv[0] != "ace_abstract":
             continue
         try:
             idx = int(raw_idx)
         except (TypeError, ValueError):
             continue
-        if 0 <= idx < vocab_size:
+        if not 0 <= idx < vocab_size:
+            continue
+        if kv[0] == "ace_abstract":
+            ace_indices.append(idx)
+        elif kv[0] == "model_id":
+            dat_indices.append(idx)
+
+    if abs(ace_abstract_weight - 1.0) > 1e-9:
+        for idx in ace_indices:
             weight[idx] = ace_abstract_weight
-            boosted += 1
-    print(f"  class_space_weight: {boosted} ace_abstract tokens × {ace_abstract_weight}, "
-          f"{vocab_size - boosted} other tokens × 1.0")
+        print(f"  class_space_weight: {len(ace_indices)} ace_abstract tokens × {ace_abstract_weight}")
+
+    if dat_inv_freq and dat_freq is not None and dat_indices:
+        dat_freq_arr = np.asarray(dat_freq, dtype=np.float64)
+        dat_only = dat_freq_arr[dat_indices]
+        positive = dat_only[dat_only > 0]
+        if positive.size == 0:
+            print("  WARN: DAT inv-freq requested but no positive DAT counts; skipping.")
+        else:
+            median_freq = float(np.median(positive))
+            mults = np.zeros(vocab_size, dtype=np.float32)
+            mults[:] = 1.0
+            for idx in dat_indices:
+                f = max(float(dat_freq_arr[idx]), 1.0)  # never sqrt(inf); zero-occ → max boost
+                m = math.sqrt(median_freq / f)
+                m = max(dat_clamp_min, min(dat_clamp_max, m))
+                mults[idx] = m
+            weight = weight * torch.from_numpy(mults)
+            applied = mults[dat_indices]
+            n_max = int((np.isclose(applied, dat_clamp_max)).sum())
+            n_min = int((np.isclose(applied, dat_clamp_min)).sum())
+            print(f"  class_space_weight: dat_inv_freq applied to {len(dat_indices)} DAT tokens "
+                  f"(median_freq={median_freq:.0f}, clamp=[{dat_clamp_min}, {dat_clamp_max}], "
+                  f"clamped_max={n_max}, clamped_min={n_min}, "
+                  f"mean={float(applied.mean()):.2f})")
+
+    print(f"  class_space_weight: final stats min={float(weight.min()):.3f} "
+          f"mean={float(weight.mean()):.3f} max={float(weight.max()):.3f}")
     return weight
+
+
+def compute_label_frequencies(sequences: np.ndarray, seq_lengths: np.ndarray,
+                              indices: np.ndarray, vocab_size: int) -> np.ndarray:
+    """Per-vocab-idx label count over the supplied sample indices.
+
+    Used to seed the DAT inverse-frequency weight and the retail marginal
+    (the anti-collapse KL target). Computed from the training split only.
+    """
+    counts = np.zeros(vocab_size, dtype=np.float64)
+    for i in indices:
+        n = int(seq_lengths[i])
+        if n == 0:
+            continue
+        wcids = sequences[i, :n, 0].astype(np.int64)
+        wcids = wcids[(wcids >= 0) & (wcids < vocab_size)]
+        if wcids.size:
+            np.add.at(counts, wcids, 1.0)
+    return counts
+
+
+def build_retail_marginal(label_counts: np.ndarray, eps: float = 1e-12) -> torch.Tensor:
+    """Normalise a label-count array into a probability distribution."""
+    counts = np.asarray(label_counts, dtype=np.float64)
+    total = counts.sum()
+    if total <= 0:
+        return torch.full((counts.shape[0],), 1.0 / counts.shape[0], dtype=torch.float32)
+    probs = counts / total
+    probs = np.maximum(probs, eps)  # smooth to keep KL finite
+    probs = probs / probs.sum()
+    return torch.from_numpy(probs.astype(np.float32))
 
 
 def build_ace_abstract_mask(vocab_size: int, vocab_path: str) -> torch.Tensor:
@@ -337,7 +406,11 @@ class PlacementDataset(Dataset):
     def __init__(self, contexts: np.ndarray, sequences: np.ndarray,
                  seq_lengths: np.ndarray, config: dict,
                  indices: Optional[np.ndarray] = None,
-                 augment: bool = True):
+                 augment: bool = True,
+                 atlas_ids: Optional[np.ndarray] = None,
+                 atlas_scalars: Optional[np.ndarray] = None,
+                 atlas_poi: Optional[np.ndarray] = None,
+                 atlas_mats: Optional[np.ndarray] = None):
         self.contexts = torch.from_numpy(contexts).float()
         self.sequences = torch.from_numpy(sequences).float()
         self.seq_lengths = torch.from_numpy(seq_lengths).long()
@@ -352,6 +425,19 @@ class PlacementDataset(Dataset):
         self.coord_slice = tuple(config.get('coord_slice', (1, 3)))
         self.rot_slice = tuple(config.get('rot_slice', (4, 6)))
         self.link_idx = int(config.get('link_idx', 7))
+        self.has_atlas = atlas_ids is not None
+        if self.has_atlas:
+            self.atlas_ids = torch.from_numpy(atlas_ids).long()
+            self.atlas_scalars = torch.from_numpy(atlas_scalars).float()
+            self.atlas_poi = torch.from_numpy(atlas_poi).float()
+            self.atlas_mats = torch.from_numpy(atlas_mats).float()
+            self.atlas_dropout = float(config.get('atlas_context_dropout', 0.0))
+        else:
+            self.atlas_ids = None
+            self.atlas_scalars = None
+            self.atlas_poi = None
+            self.atlas_mats = None
+            self.atlas_dropout = 0.0
 
     def __len__(self):
         return len(self.indices)
@@ -403,15 +489,43 @@ class PlacementDataset(Dataset):
         # Sequence mask (1 for real tokens, 0 for padding)
         mask = torch.zeros(self.max_len, dtype=torch.bool)
         mask[:seq_len] = True
-        
-        return ctx, input_seq, target_wcid, target_pos, target_rot, target_link, mask, seq_len
+
+        if self.has_atlas:
+            atlas_ids = self.atlas_ids[src_idx].clone()
+            atlas_scalars = self.atlas_scalars[src_idx].clone()
+            atlas_poi = self.atlas_poi[src_idx].clone()
+            atlas_mats = self.atlas_mats[src_idx].clone()
+            if self.augment and self.atlas_dropout > 0.0:
+                # Per-field Bernoulli drop: ids fall back to UNK (0); scalar/
+                # multi-hot blocks zero in place. Forces the model to spread
+                # conditioning across multiple semantic fields rather than
+                # collapsing onto regionName alone.
+                p = self.atlas_dropout
+                if atlas_ids.numel() > 0:
+                    drop_ids = torch.rand(atlas_ids.shape) < p
+                    atlas_ids = torch.where(drop_ids, torch.zeros_like(atlas_ids), atlas_ids)
+                if atlas_scalars.numel() > 0:
+                    drop_sc = torch.rand(atlas_scalars.shape) < p
+                    atlas_scalars = torch.where(drop_sc, torch.zeros_like(atlas_scalars), atlas_scalars)
+                if torch.rand(()).item() < p:
+                    atlas_poi = torch.zeros_like(atlas_poi)
+                if torch.rand(()).item() < p:
+                    atlas_mats = torch.zeros_like(atlas_mats)
+        else:
+            atlas_ids = torch.zeros(0, dtype=torch.long)
+            atlas_scalars = torch.zeros(0, dtype=torch.float32)
+            atlas_poi = torch.zeros(0, dtype=torch.float32)
+            atlas_mats = torch.zeros(0, dtype=torch.float32)
+
+        return (ctx, input_seq, target_wcid, target_pos, target_rot, target_link,
+                mask, seq_len, atlas_ids, atlas_scalars, atlas_poi, atlas_mats)
 
 
 # ─── Model ───────────────────────────────────────────────────────────────────
 
 class ContextProjection(nn.Module):
     """Projects the context vector into d_model space."""
-    
+
     def __init__(self, context_dim: int, d_model: int):
         super().__init__()
         self.proj = nn.Sequential(
@@ -421,9 +535,50 @@ class ContextProjection(nn.Module):
             nn.Linear(d_model, d_model),
             nn.LayerNorm(d_model),
         )
-    
+
     def forward(self, ctx):
         return self.proj(ctx)  # (B, d_model)
+
+
+class AtlasContextEncoder(nn.Module):
+    """V6 atlas-derived semantic context.
+
+    Consumes the four arrays produced by build_atlas_context.py:
+      ids:     (B, n_cat) long  — categorical id-table lookups
+      scalars: (B, n_scl) float — bool/log1p/confidence scalars
+      poi:     (B, P)     float — multi-hot poi categories
+      mats:    (B, M)     float — multi-hot material tags
+
+    Embeds the categorical ids, concatenates with the float blocks, and
+    projects through an MLP to ``output_dim`` (typically d_model // 2).
+    """
+
+    def __init__(self, atlas_meta: dict, output_dim: int):
+        super().__init__()
+        self.field_order = list(atlas_meta["categorical_field_order"])
+        self.embeddings = nn.ModuleList([
+            nn.Embedding(int(atlas_meta["vocab_caps"][k]),
+                         int(atlas_meta["embedding_dims"][k]))
+            for k in self.field_order
+        ])
+        embed_total = sum(int(atlas_meta["embedding_dims"][k]) for k in self.field_order)
+        scalar_total = len(atlas_meta["scalar_field_order"])
+        poi_total = int(atlas_meta["poi_categories_cap"])
+        mat_total = int(atlas_meta["material_tags_cap"])
+        in_dim = embed_total + scalar_total + poi_total + mat_total
+        self.proj = nn.Sequential(
+            nn.Linear(in_dim, output_dim),
+            nn.LayerNorm(output_dim),
+            nn.GELU(),
+            nn.Linear(output_dim, output_dim),
+            nn.LayerNorm(output_dim),
+        )
+
+    def forward(self, ids, scalars, poi, mats):
+        embeds = [emb(ids[:, j].long().clamp(min=0))
+                  for j, emb in enumerate(self.embeddings)]
+        flat = torch.cat([*embeds, scalars, poi, mats], dim=-1)
+        return self.proj(flat)
 
 
 class ObjectTokenEmbedding(nn.Module):
@@ -500,7 +655,22 @@ class ScenePlacerTransformer(nn.Module):
             self.vocab_size = 13000  # Fallback estimate
         
         # Input embeddings
-        self.ctx_proj = ContextProjection(config['context_dim'], d_model)
+        atlas_meta = config.get('atlas_meta')
+        if atlas_meta is not None:
+            half = d_model // 2
+            self.ctx_proj = ContextProjection(config['context_dim'], half)
+            self.atlas_proj = AtlasContextEncoder(atlas_meta, half)
+            self.ctx_combine = nn.Sequential(
+                nn.Linear(d_model, d_model),
+                nn.LayerNorm(d_model),
+                nn.GELU(),
+                nn.Linear(d_model, d_model),
+                nn.LayerNorm(d_model),
+            )
+        else:
+            self.ctx_proj = ContextProjection(config['context_dim'], d_model)
+            self.atlas_proj = None
+            self.ctx_combine = None
         self.obj_embed = ObjectTokenEmbedding(config['obj_dim'], d_model, self.vocab_size)
         self.pos_encoding = PositionalEncoding(d_model, max_seq)
         
@@ -538,15 +708,24 @@ class ScenePlacerTransformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
     
-    def forward(self, context, obj_sequence, mask=None):
+    def forward(self, context, obj_sequence, mask=None,
+                atlas_ids=None, atlas_scalars=None, atlas_poi=None, atlas_mats=None,
+                atlas_zero_mask: bool = False):
         """
         Forward pass.
-        
+
         Args:
             context: (B, context_dim) landblock context
             obj_sequence: (B, T, 10) object tokens
             mask: (B, T) boolean mask (True = valid token)
-        
+            atlas_ids/scalars/poi/mats: V6 atlas conditioning. Required when
+                config['atlas_meta'] is set; ignored otherwise.
+            atlas_zero_mask: if True, the atlas branch's contribution is zeroed
+                before the concat-projection. Used during the warmup-epoch
+                ramp-in so the resumed transformer body sees the V5
+                conditioning distribution while the new context Linear is
+                still initializing.
+
         Returns:
             wcid_logits: (B, T, vocab_size)
             pos_pred: (B, T, 2)
@@ -554,9 +733,17 @@ class ScenePlacerTransformer(nn.Module):
             link_pred: (B, T, 1)
         """
         B, T, _ = obj_sequence.shape
-        
-        # Project context to d_model and prepend as first token
-        ctx_token = self.ctx_proj(context).unsqueeze(1)  # (B, 1, d_model)
+
+        # Project context to d_model and prepend as first token.
+        if self.atlas_proj is not None:
+            ctx_half = self.ctx_proj(context)
+            atlas_half = self.atlas_proj(atlas_ids, atlas_scalars, atlas_poi, atlas_mats)
+            if atlas_zero_mask:
+                atlas_half = atlas_half * 0.0
+            ctx_full = torch.cat([ctx_half, atlas_half], dim=-1)  # (B, d_model)
+            ctx_token = self.ctx_combine(ctx_full).unsqueeze(1)
+        else:
+            ctx_token = self.ctx_proj(context).unsqueeze(1)  # (B, 1, d_model)
         
         # Embed object tokens
         obj_tokens = self.obj_embed(obj_sequence)  # (B, T, d_model)
@@ -652,8 +839,9 @@ class EMA:
 
 def compute_loss(model, batch, config, device):
     """Compute composite loss."""
-    ctx, input_seq, target_wcid, target_pos, target_rot, target_link, mask, seq_len = batch
-    
+    (ctx, input_seq, target_wcid, target_pos, target_rot, target_link,
+     mask, seq_len, atlas_ids, atlas_scalars, atlas_poi, atlas_mats) = batch
+
     ctx = ctx.to(device)
     input_seq = input_seq.to(device)
     target_wcid = target_wcid.to(device)
@@ -661,11 +849,24 @@ def compute_loss(model, batch, config, device):
     target_rot = target_rot.to(device)
     target_link = target_link.to(device)
     mask = mask.to(device)
+    has_atlas = config.get('atlas_meta') is not None
+    if has_atlas:
+        atlas_ids = atlas_ids.to(device)
+        atlas_scalars = atlas_scalars.to(device)
+        atlas_poi = atlas_poi.to(device)
+        atlas_mats = atlas_mats.to(device)
+    else:
+        atlas_ids = atlas_scalars = atlas_poi = atlas_mats = None
     token_family_index = config.get('token_family_index')
     family_projection = config.get('family_projection')
-    
+
     # Forward
-    wcid_logits, pos_pred, rot_pred, link_pred = model(ctx, input_seq, mask)
+    wcid_logits, pos_pred, rot_pred, link_pred = model(
+        ctx, input_seq, mask,
+        atlas_ids=atlas_ids, atlas_scalars=atlas_scalars,
+        atlas_poi=atlas_poi, atlas_mats=atlas_mats,
+        atlas_zero_mask=bool(config.get('_atlas_zero_mask_active', False)),
+    )
     
     # Flatten for loss computation
     B, T, V = wcid_logits.shape
@@ -760,15 +961,39 @@ def compute_loss(model, batch, config, device):
 
     lambda_ent = config.get('lambda_entropy', 0.1)
     lambda_dense_repeat = config.get('lambda_dense_repeat', 0.0)
-    
+    lambda_marginal_kl = config.get('lambda_marginal_kl', 0.0)
+
+    # V5 anti-collapse term: KL(P_retail || batch_marginal). The Phase 0
+    # diagnostic showed v4 under-emits ~2700 supported DAT tokens; pushing
+    # the per-batch model marginal toward retail directly attacks that.
+    # Computed only when lambda > 0 to avoid the extra softmax.full path
+    # for legacy runs.
+    L_marginal_kl = torch.zeros((), device=device)
+    if lambda_marginal_kl > 0.0 and config.get('retail_marginal') is not None:
+        retail_marginal = config['retail_marginal']  # (V,) on device
+        if 'wcid_probs' in locals():
+            probs_for_marginal = wcid_probs
+        else:
+            probs_for_marginal = F.softmax(wcid_logits, dim=-1)
+        # Mask-weighted mean over (B, T)
+        active_3d = active.unsqueeze(-1)  # (B, T, 1)
+        masked_probs = probs_for_marginal * active_3d  # (B, T, V)
+        denom = active.sum().clamp(min=1.0)
+        batch_marginal = masked_probs.sum(dim=(0, 1)) / denom  # (V,)
+        batch_marginal = batch_marginal.clamp(min=1e-12)
+        # KL(retail || batch). retail is already smoothed > 0.
+        L_marginal_kl = (retail_marginal *
+                         (torch.log(retail_marginal) - torch.log(batch_marginal))).sum()
+
     # Composite loss
-    L_total = (L_wcid 
-               + config['lambda_pos'] * L_pos 
-               + config['lambda_rot'] * L_rot 
+    L_total = (L_wcid
+               + config['lambda_pos'] * L_pos
+               + config['lambda_rot'] * L_rot
                + config['lambda_link'] * L_link
                + lambda_ent * L_entropy
-               + lambda_dense_repeat * L_dense_repeat)
-    
+               + lambda_dense_repeat * L_dense_repeat
+               + lambda_marginal_kl * L_marginal_kl)
+
     return L_total, {
         'total': L_total.item(),
         'wcid': L_wcid.item(),
@@ -777,6 +1002,7 @@ def compute_loss(model, batch, config, device):
         'link': L_link.item(),
         'entropy': avg_entropy.item(),
         'dense_repeat': L_dense_repeat.item(),
+        'marginal_kl': L_marginal_kl.item(),
     }
 
 
@@ -807,70 +1033,194 @@ def build_component_feature_matrix(data: np.lib.npyio.NpzFile, vocab_size: int) 
 
 
 def compute_diversity_metrics(model, val_loader, config, device):
-    """Compute diversity metrics on validation set."""
+    """Compute diversity + calibration metrics on the val split.
+
+    Beyond the legacy `wcid_entropy` / `unique_wcids` / `ace_emit_frac`,
+    V5 adds the metrics the Phase 0 diagnostic identified as load-bearing:
+      - top-5 / top-10 wcid acc (overall + per class space)
+      - KL(retail || model) over greedy preds — the headline calibration metric
+      - long-tail recall: frac of retail-supported tokens emitted at least once
+      - ace_emit_frac_ex_specials (the apples-to-apples version of ace_emit_frac)
+    """
     model.eval()
-    
-    all_wcid_preds = []
+
+    vocab_size = model.vocab_size if hasattr(model, "vocab_size") else None
+    if vocab_size is None:
+        wcid_head = getattr(model, "wcid_head", None)
+        vocab_size = wcid_head.out_features if wcid_head is not None else 0
+
+    ace_mask = config.get('ace_abstract_token_mask')  # (V,) bool tensor on device
+    if ace_mask is not None and ace_mask.device != device:
+        ace_mask = ace_mask.to(device)
+    ace_mask_np = ace_mask.detach().cpu().numpy().astype(bool) if ace_mask is not None else None
+    dat_mask_np = (~ace_mask_np) if ace_mask_np is not None else None
+    # Specials are PAD/STOP — strip them out of dat_mask.
+    if dat_mask_np is not None and vocab_size:
+        dat_mask_np = dat_mask_np.copy()
+        for sp in (PAD_TOKEN, STOP_TOKEN):
+            if 0 <= sp < vocab_size:
+                dat_mask_np[sp] = False
+
+    retail_marginal_t = config.get('retail_marginal')
+    retail_marginal_np = retail_marginal_t.detach().cpu().numpy() if retail_marginal_t is not None else None
+
+    pred_count = np.zeros(vocab_size, dtype=np.int64) if vocab_size else None
+
     all_pos_preds = []
-    
+
+    top1 = top5 = top10 = total_pos = 0
+    cls_total = {"ace": 0, "dat": 0, "special": 0}
+    cls_top1 = {"ace": 0, "dat": 0, "special": 0}
+    cls_top5 = {"ace": 0, "dat": 0, "special": 0}
+
+    ace_label_pos = 0
+    ace_pred_pos = 0
+    dat_pred_pos = 0
+    special_pred_pos = 0
+
     with torch.no_grad():
         for batch_idx, batch in enumerate(val_loader):
             max_val_batches = config.get('max_val_batches')
             if max_val_batches is not None and batch_idx >= max_val_batches:
                 break
-            ctx, input_seq, target_wcid, target_pos, target_rot, target_link, mask, seq_len = batch
+            (ctx, input_seq, target_wcid, target_pos, target_rot, target_link,
+             mask, seq_len, atlas_ids, atlas_scalars, atlas_poi, atlas_mats) = batch
             ctx = ctx.to(device)
             input_seq = input_seq.to(device)
-            mask = mask.to(device)
-            
-            wcid_logits, pos_pred, _, _ = model(ctx, input_seq, mask)
-            
-            # Get top-1 predictions
-            wcid_pred = wcid_logits.argmax(dim=-1)  # (B, T)
-            
+            mask_d = mask.to(device)
+            target_wcid_d = target_wcid.to(device)
+            if config.get('atlas_meta') is not None:
+                atlas_ids = atlas_ids.to(device)
+                atlas_scalars = atlas_scalars.to(device)
+                atlas_poi = atlas_poi.to(device)
+                atlas_mats = atlas_mats.to(device)
+            else:
+                atlas_ids = atlas_scalars = atlas_poi = atlas_mats = None
+
+            wcid_logits, pos_pred, _, _ = model(
+                ctx, input_seq, mask_d,
+                atlas_ids=atlas_ids, atlas_scalars=atlas_scalars,
+                atlas_poi=atlas_poi, atlas_mats=atlas_mats,
+                # Diversity metrics always use the trained conditioning, not
+                # the warmup zero-mask, so they reflect what the deployed model
+                # actually sees.
+                atlas_zero_mask=False,
+            )
+            B, T, V = wcid_logits.shape
+            topk = torch.topk(wcid_logits, k=min(10, V), dim=-1).indices  # (B, T, K)
+            wcid_pred = topk[:, :, 0]
+            active = mask_d
+            total_active = int(active.sum().item())
+
+            hit1 = (wcid_pred == target_wcid_d) & active
+            hit5 = (topk[:, :, :5] == target_wcid_d.unsqueeze(-1)).any(-1) & active
+            hit10 = (topk == target_wcid_d.unsqueeze(-1)).any(-1) & active
+
+            top1 += int(hit1.sum().item())
+            top5 += int(hit5.sum().item())
+            top10 += int(hit10.sum().item())
+            total_pos += total_active
+
+            if ace_mask is not None:
+                pred_clamped = wcid_pred.clamp(0, V - 1)
+                target_clamped = target_wcid_d.clamp(0, V - 1)
+                pred_is_ace = ace_mask[pred_clamped] & active
+                label_is_ace = ace_mask[target_clamped] & active
+                # specials: token id == PAD or STOP
+                pred_is_special = ((wcid_pred == PAD_TOKEN) | (wcid_pred == STOP_TOKEN)) & active
+                label_is_special = ((target_wcid_d == PAD_TOKEN) | (target_wcid_d == STOP_TOKEN)) & active
+                pred_is_dat = active & ~pred_is_ace & ~pred_is_special
+                label_is_dat = active & ~label_is_ace & ~label_is_special
+
+                ace_pred_pos += int(pred_is_ace.sum().item())
+                dat_pred_pos += int(pred_is_dat.sum().item())
+                special_pred_pos += int(pred_is_special.sum().item())
+                ace_label_pos += int(label_is_ace.sum().item())
+
+                cls_total["ace"] += int(label_is_ace.sum().item())
+                cls_total["dat"] += int(label_is_dat.sum().item())
+                cls_total["special"] += int(label_is_special.sum().item())
+                cls_top1["ace"] += int((hit1 & label_is_ace).sum().item())
+                cls_top1["dat"] += int((hit1 & label_is_dat).sum().item())
+                cls_top1["special"] += int((hit1 & label_is_special).sum().item())
+                cls_top5["ace"] += int((hit5 & label_is_ace).sum().item())
+                cls_top5["dat"] += int((hit5 & label_is_dat).sum().item())
+                cls_top5["special"] += int((hit5 & label_is_special).sum().item())
+
+            # Streamed counts to support KL + long-tail recall, plus pos_std sample.
+            if pred_count is not None:
+                preds_active = wcid_pred[active].cpu().numpy()
+                if preds_active.size:
+                    np.add.at(pred_count, preds_active, 1)
             for b in range(wcid_pred.size(0)):
-                sl = mask[b].sum().item()
-                preds = wcid_pred[b, :sl].cpu().numpy()
+                sl = int(mask_d[b].sum().item())
+                if sl == 0:
+                    continue
                 positions = pos_pred[b, :sl].cpu().numpy()
-                all_wcid_preds.extend(preds.tolist())
                 all_pos_preds.extend(positions.tolist())
-    
-    if not all_wcid_preds:
-        return {'wcid_entropy': 0, 'unique_ratio': 0, 'pos_std': 0, 'ace_emit_frac': 0.0}
 
-    # Wcid entropy
-    from collections import Counter
-    wcid_counts = Counter(all_wcid_preds)
-    total = sum(wcid_counts.values())
-    probs = np.array([c / total for c in wcid_counts.values()])
-    wcid_entropy = -np.sum(probs * np.log2(probs + 1e-10))
+    if pred_count is None or pred_count.sum() == 0:
+        return {'wcid_entropy': 0.0, 'unique_wcids': 0, 'unique_ratio': 0.0,
+                'pos_std': 0.0, 'ace_emit_frac': 0.0}
 
-    # Unique wcid ratio
-    unique_ratio = len(wcid_counts) / max(total, 1)
+    total_preds = int(pred_count.sum())
+    nonzero = pred_count > 0
+    probs = pred_count[nonzero].astype(np.float64) / total_preds
+    wcid_entropy = float(-(probs * np.log2(probs + 1e-10)).sum())  # bits, legacy
+    unique_wcids = int(nonzero.sum())
+    unique_ratio = unique_wcids / max(total_preds, 1)
 
-    # Position standard deviation
-    pos_arr = np.array(all_pos_preds)
-    pos_std = pos_arr.std() if len(pos_arr) > 0 else 0
+    pos_arr = np.array(all_pos_preds) if all_pos_preds else np.zeros(0)
+    pos_std = float(pos_arr.std()) if pos_arr.size else 0.0
 
-    # ace_abstract emission fraction — key signal for vocab-space collapse.
-    ace_mask = config.get('ace_abstract_token_mask')
-    ace_emit_frac = 0.0
-    if ace_mask is not None:
-        ace_mask_cpu = ace_mask.detach().cpu().numpy().astype(bool)
-        if ace_mask_cpu.any():
-            preds_arr = np.asarray(all_wcid_preds, dtype=np.int64)
-            in_range = preds_arr < ace_mask_cpu.shape[0]
-            preds_arr = preds_arr[in_range]
-            if preds_arr.size:
-                ace_emit_frac = float(ace_mask_cpu[preds_arr].mean())
+    ace_emit_frac = ace_pred_pos / max(total_pos, 1)
+    nonspecial = total_pos - special_pred_pos
+    ace_emit_frac_ex_specials = ace_pred_pos / max(nonspecial, 1)
+    dat_emit_frac = dat_pred_pos / max(total_pos, 1)
+    label_ace_frac = ace_label_pos / max(total_pos, 1)
 
-    return {
-        'wcid_entropy': float(wcid_entropy),
-        'unique_wcids': len(wcid_counts),
-        'unique_ratio': float(unique_ratio),
-        'pos_std': float(pos_std),
+    metrics = {
+        'wcid_entropy': wcid_entropy,
+        'unique_wcids': unique_wcids,
+        'unique_ratio': unique_ratio,
+        'pos_std': pos_std,
         'ace_emit_frac': ace_emit_frac,
+        'ace_emit_frac_ex_specials': ace_emit_frac_ex_specials,
+        'dat_emit_frac': dat_emit_frac,
+        'label_ace_frac': label_ace_frac,
+        'top1_wcid_acc': top1 / max(total_pos, 1),
+        'top5_wcid_acc': top5 / max(total_pos, 1),
+        'top10_wcid_acc': top10 / max(total_pos, 1),
     }
+    for cls in ("ace", "dat", "special"):
+        n = max(cls_total[cls], 1)
+        metrics[f'top1_wcid_acc_{cls}'] = cls_top1[cls] / n
+        metrics[f'top5_wcid_acc_{cls}'] = cls_top5[cls] / n
+
+    if retail_marginal_np is not None and retail_marginal_np.shape[0] == vocab_size:
+        q_pred = pred_count.astype(np.float64) / max(total_preds, 1)
+        eps = 1e-12
+        p = np.maximum(retail_marginal_np.astype(np.float64), 0.0)
+        p = p / max(p.sum(), eps)
+        q = np.maximum(q_pred, eps)
+        # KL(retail || model_argmax). Both supported on full vocab.
+        kl = float((p * (np.log(np.maximum(p, eps)) - np.log(q))).sum())
+        # Excluding specials — apples-to-apples with retail "61.3% / 38.7%" framing.
+        if dat_mask_np is not None and ace_mask_np is not None:
+            ns_mask = ace_mask_np | dat_mask_np
+            p_ns = p[ns_mask]; q_ns = q[ns_mask]
+            p_ns = p_ns / max(p_ns.sum(), eps)
+            q_ns = q_ns / max(q_ns.sum(), eps)
+            kl_ns = float((p_ns * (np.log(np.maximum(p_ns, eps)) - np.log(np.maximum(q_ns, eps)))).sum())
+            metrics['kl_retail_to_model_ex_specials'] = kl_ns
+        metrics['kl_retail_to_model'] = kl
+        supported = retail_marginal_np > 1e-9
+        n_supported = int(supported.sum())
+        n_emitted = int((nonzero & supported).sum())
+        metrics['long_tail_recall'] = n_emitted / max(n_supported, 1)
+        metrics['n_supported'] = n_supported
+
+    return metrics
 
 
 def find_max_batch_size(model, config, device, start=None):
@@ -897,15 +1247,29 @@ def find_max_batch_size(model, config, device, start=None):
     
     candidates = sorted([s for s in [512, 384, 256, 192, 128, 96, 64, 48, 32, 16, 8] if s <= start], reverse=True)
     
+    atlas_meta = config.get('atlas_meta')
+    if atlas_meta is not None:
+        n_cat = len(atlas_meta['categorical_field_order'])
+        n_scl = len(atlas_meta['scalar_field_order'])
+        poi_dim = int(atlas_meta['poi_categories_cap'])
+        mat_dim = int(atlas_meta['material_tags_cap'])
     for batch_size in candidates:
         try:
             torch.cuda.empty_cache()
             dummy_ctx = torch.randn(batch_size, ctx_dim, device=device)
             dummy_seq = torch.randn(batch_size, max_seq, obj_dim, device=device)
             dummy_mask = torch.ones(batch_size, max_seq, dtype=torch.bool, device=device)
-            
+            dummy_atlas_kwargs: dict = {}
+            if atlas_meta is not None:
+                dummy_atlas_kwargs = {
+                    'atlas_ids': torch.zeros(batch_size, n_cat, dtype=torch.long, device=device),
+                    'atlas_scalars': torch.zeros(batch_size, n_scl, device=device),
+                    'atlas_poi': torch.zeros(batch_size, poi_dim, device=device),
+                    'atlas_mats': torch.zeros(batch_size, mat_dim, device=device),
+                }
+
             with autocast(dtype=torch.float16):
-                out = model(dummy_ctx, dummy_seq, dummy_mask)
+                out = model(dummy_ctx, dummy_seq, dummy_mask, **dummy_atlas_kwargs)
                 loss = out[0].sum()
             loss.backward()
             
@@ -1167,6 +1531,37 @@ def train(config: dict, resume_path: Optional[str] = None):
     lb_coords = data['lb_coords'] if 'lb_coords' in data.files else None
     sample_weights = data['sample_weights'] if 'sample_weights' in data.files else np.ones(len(contexts), dtype=np.float32)
     vocab = load_vocab_metadata(vocab_path)
+
+    # ── V6 atlas conditioning ──
+    atlas_tensor_path = config.get('atlas_tensor_path')
+    atlas_vocab_path = config.get('atlas_vocab_path')
+    atlas_ids_arr = atlas_scalars_arr = atlas_poi_arr = atlas_mats_arr = None
+    atlas_meta = None
+    if atlas_tensor_path and atlas_vocab_path and os.path.exists(atlas_tensor_path) and os.path.exists(atlas_vocab_path):
+        atlas_data = np.load(atlas_tensor_path) if atlas_tensor_path != tensor_path else data
+        if 'atlas_ids' in atlas_data.files:
+            atlas_ids_arr = atlas_data['atlas_ids']
+            atlas_scalars_arr = atlas_data['atlas_scalars']
+            atlas_poi_arr = atlas_data['atlas_poi_categories']
+            atlas_mats_arr = atlas_data['atlas_material_tags']
+            with open(atlas_vocab_path, 'r', encoding='utf-8') as _f:
+                atlas_vocab = json.load(_f)
+            atlas_meta = atlas_vocab.get('atlas')
+            if atlas_meta is None:
+                print("  WARN: atlas vocab missing 'atlas' block — disabling atlas conditioning")
+                atlas_ids_arr = atlas_scalars_arr = atlas_poi_arr = atlas_mats_arr = None
+            else:
+                config['atlas_meta'] = atlas_meta
+                print(f"  Atlas conditioning ENABLED: ids={atlas_ids_arr.shape}, "
+                      f"scalars={atlas_scalars_arr.shape}, poi={atlas_poi_arr.shape}, "
+                      f"mats={atlas_mats_arr.shape}")
+                print(f"  Atlas warmup epochs: {config.get('atlas_warmup_epochs', 0)}, "
+                      f"per-field dropout: {config.get('atlas_context_dropout', 0.0)}")
+        else:
+            print(f"  WARN: atlas-tensor-path {atlas_tensor_path} has no atlas_ids — disabling atlas")
+    elif atlas_tensor_path or atlas_vocab_path:
+        print(f"  WARN: atlas paths set but file missing — atlas-tensor={atlas_tensor_path} "
+              f"atlas-vocab={atlas_vocab_path}")
     vocab_size = int(vocab.get('vocab_size', int(np.max(sequences[:, :, 0])) + 1))
     config['target_token_mode'] = str(vocab.get('target_token_mode', 'exact')).lower()
 
@@ -1214,11 +1609,15 @@ def train(config: dict, resume_path: Optional[str] = None):
     
     train_ds = PlacementDataset(
         contexts, sequences, seq_lengths,
-        config, indices=train_idx, augment=True
+        config, indices=train_idx, augment=True,
+        atlas_ids=atlas_ids_arr, atlas_scalars=atlas_scalars_arr,
+        atlas_poi=atlas_poi_arr, atlas_mats=atlas_mats_arr,
     )
     val_ds = PlacementDataset(
         contexts, sequences, seq_lengths,
-        config, indices=val_idx, augment=False
+        config, indices=val_idx, augment=False,
+        atlas_ids=atlas_ids_arr, atlas_scalars=atlas_scalars_arr,
+        atlas_poi=atlas_poi_arr, atlas_mats=atlas_mats_arr,
     )
     
     print(f"  Train: {len(train_ds)}, Val: {len(val_ds)}")
@@ -1250,12 +1649,45 @@ def train(config: dict, resume_path: Optional[str] = None):
         config['family_projection'] = None
 
     ace_abstract_weight = float(config.get('ace_abstract_weight', 1.0))
-    if ace_abstract_weight != 1.0:
+    dat_inv_freq = bool(config.get('dat_inv_freq', False))
+    lambda_marginal_kl = float(config.get('lambda_marginal_kl', 0.0))
+    needs_label_freqs = dat_inv_freq or lambda_marginal_kl > 0.0
+
+    label_freqs = None
+    if needs_label_freqs:
+        print("  Computing per-token label frequencies over training split...")
+        label_freqs = compute_label_frequencies(
+            sequences, seq_lengths, train_idx, model.vocab_size
+        )
+        nz = int((label_freqs > 0).sum())
+        print(f"    train labels: {int(label_freqs.sum())} tokens, "
+              f"{nz} / {model.vocab_size} vocab idxs with positive support")
+
+    if ace_abstract_weight != 1.0 or dat_inv_freq:
         config['class_space_weight'] = build_class_space_weight(
             model.vocab_size, vocab_path, ace_abstract_weight,
+            dat_inv_freq=dat_inv_freq,
+            dat_freq=label_freqs,
+            dat_clamp_min=float(config.get('dat_clamp_min', 0.5)),
+            dat_clamp_max=float(config.get('dat_clamp_max', 5.0)),
         ).to(device)
     else:
         config['class_space_weight'] = None
+
+    if lambda_marginal_kl > 0.0 and label_freqs is not None:
+        retail_marginal = build_retail_marginal(label_freqs).to(device)
+        config['retail_marginal'] = retail_marginal
+        # Also stash a CPU numpy copy for compute_diversity_metrics so the
+        # KL-to-retail metric is available regardless of the loss term.
+        print(f"  retail_marginal: support={int((label_freqs > 0).sum())}, "
+              f"argmax_idx={int(label_freqs.argmax())}, "
+              f"argmax_mass={float(label_freqs.max() / max(label_freqs.sum(), 1)):.4f}")
+    elif label_freqs is not None:
+        # Even without the loss term, expose the marginal so val metrics can
+        # report KL-to-retail.
+        config['retail_marginal'] = build_retail_marginal(label_freqs).to(device)
+    else:
+        config['retail_marginal'] = None
 
     config['ace_abstract_token_mask'] = build_ace_abstract_mask(
         model.vocab_size, vocab_path,
@@ -1356,7 +1788,20 @@ def train(config: dict, resume_path: Optional[str] = None):
         for epoch in range(start_epoch, config['epochs']):
             t_epoch = time.time()
             model.train()
-            
+
+            # V6 atlas warmup: zero-mask the atlas branch's contribution for
+            # the first --atlas-warmup-epochs epochs after a resume so the
+            # transformer body adapts to the new context-encoder-half before
+            # the atlas conditioning kicks in. Without this, the resumed body
+            # sees a different conditioning distribution from epoch 0 and the
+            # position head can spike (the failure mode V5 hit at epoch 17).
+            atlas_warmup_n = int(config.get('atlas_warmup_epochs', 0) or 0)
+            config['_atlas_zero_mask_active'] = (
+                config.get('atlas_meta') is not None and epoch < atlas_warmup_n
+            )
+            if config['_atlas_zero_mask_active']:
+                print(f"  [atlas-warmup] epoch {epoch+1}/{atlas_warmup_n}: atlas branch masked to zero")
+
             epoch_losses = defaultdict(float)
             n_batches = 0
         
@@ -1609,6 +2054,36 @@ def main():
                              "Counteracts the ~41x DAT-vs-ACE vocab imbalance. Try 5-20.")
     parser.add_argument("--cosine-restart-epoch", type=int, default=None,
                         help="When using --lr-schedule cosine, reset LR to peak at this absolute epoch and start a fresh cosine descent. 0 = no restart.")
+    parser.add_argument("--dat-inv-freq", action="store_true",
+                        help="V5: scale DAT (model_id) per-token CE by sqrt(median_dat_freq / token_dat_freq), "
+                             "clamped to [--dat-clamp-min, --dat-clamp-max]. Targets the intra-DAT long-tail collapse "
+                             "surfaced by Phase 0 diagnostic; ACE entries are unaffected.")
+    parser.add_argument("--dat-clamp-min", type=float, default=None,
+                        help="Lower clamp for DAT inv-freq weight (default 0.5).")
+    parser.add_argument("--dat-clamp-max", type=float, default=None,
+                        help="Upper clamp for DAT inv-freq weight (default 5.0).")
+    parser.add_argument("--lambda-marginal-kl", type=float, default=None,
+                        help="V5: weight on the anti-collapse KL(P_retail || batch_marginal) loss term. "
+                             "Pushes the per-batch model token marginal toward the empirical retail "
+                             "distribution. Try 0.02-0.05; default 0 (off).")
+    parser.add_argument("--label-smoothing", type=float, default=None,
+                        help="Label smoothing applied to wcid CE. Default 0.2; raise to 0.3 to spread "
+                             "more mass onto rare tokens.")
+    parser.add_argument("--atlas-tensor-path", type=str, default=None,
+                        help="V6: NPZ with atlas_ids/atlas_scalars/atlas_poi_categories/atlas_material_tags "
+                             "aligned to --tensor-path row order. May be the same file as --tensor-path.")
+    parser.add_argument("--atlas-vocab-path", type=str, default=None,
+                        help="V6: vocab JSON with an 'atlas' block containing categorical_field_order, "
+                             "vocab_caps, embedding_dims, scalar_field_order, poi_categories_cap, "
+                             "material_tags_cap.")
+    parser.add_argument("--atlas-warmup-epochs", type=int, default=None,
+                        help="V6: zero-mask the atlas branch's contribution for this many epochs after a "
+                             "resume so the resumed transformer body adapts to the new context-encoder "
+                             "half before the atlas conditioning kicks in.")
+    parser.add_argument("--atlas-context-dropout", type=float, default=None,
+                        help="V6: per-field Bernoulli drop probability applied to atlas ids (drop to UNK) "
+                             "and scalars (drop to 0) during training. Forces the model to spread "
+                             "conditioning across multiple semantic fields.")
     args = parser.parse_args()
     
     config = DEFAULT_CONFIG.copy()
@@ -1648,11 +2123,29 @@ def main():
         config['ace_abstract_weight'] = args.ace_abstract_weight
     if args.cosine_restart_epoch is not None:
         config['cosine_restart_epoch'] = args.cosine_restart_epoch
+    if args.dat_inv_freq:
+        config['dat_inv_freq'] = True
+    if args.dat_clamp_min is not None:
+        config['dat_clamp_min'] = args.dat_clamp_min
+    if args.dat_clamp_max is not None:
+        config['dat_clamp_max'] = args.dat_clamp_max
+    if args.lambda_marginal_kl is not None:
+        config['lambda_marginal_kl'] = args.lambda_marginal_kl
+    if args.label_smoothing is not None:
+        config['label_smoothing'] = args.label_smoothing
     config['tensor_path'] = args.tensor_path
     config['vocab_path'] = args.vocab_path
     config['max_train_batches'] = args.max_train_batches
     config['max_val_batches'] = args.max_val_batches
     config['run_name'] = args.run_name
+    if args.atlas_tensor_path is not None:
+        config['atlas_tensor_path'] = args.atlas_tensor_path
+    if args.atlas_vocab_path is not None:
+        config['atlas_vocab_path'] = args.atlas_vocab_path
+    if args.atlas_warmup_epochs is not None:
+        config['atlas_warmup_epochs'] = args.atlas_warmup_epochs
+    if args.atlas_context_dropout is not None:
+        config['atlas_context_dropout'] = args.atlas_context_dropout
     
     print("=" * 72)
     print("  Scene Placement Transformer — Training")

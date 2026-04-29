@@ -1518,7 +1518,7 @@ public class OntologyService : IOntologyService {
         _entries.Clear();
         foreach (var kv in loaded) _entries[kv.Key] = kv.Value;
         _isScanned = true;
-        Console.WriteLine($"[Ontology] Loaded {count:N0} entries from cache <- {inputPath}");
+        Console.Error.WriteLine($"[Ontology] Loaded {count:N0} entries from cache <- {inputPath}");
         return count;
     }
 
