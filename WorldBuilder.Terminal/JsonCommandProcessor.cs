@@ -2814,7 +2814,7 @@ public class JsonCommandProcessor {
                     .ToList();
             } else if (mode == "all") {
                 lbs = new List<(uint, uint)>();
-                for (uint x = 0; x < 255; x++) for (uint y = 0; y < 255; y++) lbs.Add((x, y));
+                for (uint x = 0; x < 256; x++) for (uint y = 0; y < 256; y++) lbs.Add((x, y));
             } else {
                 return Serialize(new { success = false, command = "generate-atlas-tiles",
                     error = "mode=lbs requires 'lbList' (array of {lbX,lbY})" });

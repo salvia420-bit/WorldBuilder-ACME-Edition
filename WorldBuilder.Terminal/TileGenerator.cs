@@ -119,10 +119,16 @@ public class TileGenerator {
         using (var canvas = new SKCanvas(canvas_)) {
             canvas.Clear(SKColors.Black);
             foreach (var (regionName, box) in _regionBoxes) {
-                byte[] regionPng;
-                try { regionPng = GenerateRegionTile(regionName); }
+                // Reuse cached region tiles — re-rendering 13 regions on every
+                // world-tile request would dominate runtime and ignore the
+                // already-paid disk cost. GetOrGenerate handles cache miss.
+                TileEntry regionEntry;
+                try { regionEntry = GetOrGenerateRegionTile(regionName); }
                 catch { continue; } // skip regions that fail to render
-                using var srcImage = SKImage.FromEncodedData(regionPng);
+                byte[] regionJpeg;
+                try { regionJpeg = File.ReadAllBytes(_cache.AbsolutePath(regionEntry.Path)); }
+                catch { continue; }
+                using var srcImage = SKImage.FromEncodedData(regionJpeg);
                 if (srcImage == null) continue;
                 // Region tile covers (centerX±radius, centerY±radius) in LB space.
                 int radius = Math.Min(16, box.radius + 2);
@@ -184,20 +190,27 @@ public class TileGenerator {
         int generated = 0, skipped = 0;
         long bytes = 0;
         var errors = new List<string>();
+        var regenerated = new List<ushort>();
         foreach (var (x, y) in lbs) {
             try {
                 ushort lbKey = CommandEngine.LbKey(x, y);
                 var hex = lbKey.ToString("X4");
                 var key = $"lb/{hex}";
+                bool wasDirty = _cache.IsDirtyForLb(lbKey);
                 if (_cache.Lookup(key) != null) { skipped++; continue; }
-                var pngBytes = GenerateLbTile(x, y);
-                StoreLbTile(lbKey, pngBytes);
+                var jpegBytes = GenerateLbTile(x, y);
+                StoreLbTile(lbKey, jpegBytes);
                 generated++;
-                bytes += pngBytes.Length;
+                bytes += jpegBytes.Length;
+                if (wasDirty) regenerated.Add(lbKey);
             } catch (Exception ex) {
                 errors.Add($"({x},{y}): {ex.Message}");
             }
         }
+        // Drop dirty bits for any LB whose tile we just rebuilt — the manifest's
+        // per-tile Dirty flag is reset by Store, but the DirtyLbs index stays
+        // stale otherwise (asymmetric with RegenerateDirty's ClearDirty call).
+        if (regenerated.Count > 0) _cache.ClearDirtyForLbs(regenerated);
         _cache.SaveManifest();
         return (generated, skipped, bytes, errors);
     }

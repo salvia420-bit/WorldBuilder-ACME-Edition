@@ -57,8 +57,10 @@ public class TileCache {
         if (!_manifest.Tiles.TryGetValue(key, out var entry)) return null;
         if (entry.Dirty) return null;
         if (!File.Exists(Path.Combine(_root, entry.Path))) {
-            // Manifest disagrees with disk; remove the orphan
+            // Manifest disagrees with disk; remove the orphan and persist so we
+            // don't re-discard the same ghost on every restart.
             _manifest.Tiles.Remove(key);
+            SaveManifest();
             return null;
         }
         return entry;
@@ -123,20 +125,30 @@ public class TileCache {
 
     /// <summary>
     /// Mark every cached LB tile dirty. Called when a terrain-document edit
-    /// invalidates rendering globally.
+    /// invalidates rendering globally — the world tile and region composites
+    /// depend on the same source so they're invalidated in the same sweep.
     /// </summary>
     public void MarkAllLbTilesDirty() {
         foreach (var entry in _manifest.Tiles.Values) {
-            if (entry.Path.StartsWith("lb/")) entry.Dirty = true;
-        }
-        // Also mark world + region tiles dirty
-        foreach (var entry in _manifest.Tiles.Values) {
-            if (entry.Path.StartsWith("region/") || entry.Path == "world.jpg") entry.Dirty = true;
+            if (entry.Path.StartsWith("lb/")
+                || entry.Path.StartsWith("region/")
+                || entry.Path == "world.jpg") entry.Dirty = true;
         }
     }
 
     public void ClearDirty() {
         _manifest.DirtyLbs.Clear();
+    }
+
+    /// <summary>
+    /// Clear dirty bits for a specific subset of LBs. Used by bulk-generate so
+    /// LBs it just rebuilt drop out of the dirty index without disturbing
+    /// untouched dirty entries.
+    /// </summary>
+    public void ClearDirtyForLbs(IEnumerable<ushort> lbKeys) {
+        foreach (var lb in lbKeys) {
+            _manifest.DirtyLbs.Remove(lb.ToString("X4"));
+        }
     }
 
     /// <summary>

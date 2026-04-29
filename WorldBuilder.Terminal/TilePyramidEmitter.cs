@@ -164,21 +164,20 @@ internal static class TilePyramidEmitter {
     }
 
     private static bool IsBlankTile(SKBitmap bmp) {
-        // Why: skip tiles that are entirely transparent or solid-background.
-        // These accumulate at deep zooms over LBs that have no terrain or
-        // objects in that quadrant; storing them as files just inflates the
-        // dist. Frontend's tile layer can be configured with errorTileUrl
-        // or a transparent fallback instead.
+        // Why: skip tiles that are entirely transparent. These accumulate at
+        // deep zooms over LBs whose quadrant has no terrain or objects; storing
+        // them just inflates the dist. The frontend treats missing tiles as
+        // transparent.
         var pixels = bmp.GetPixelSpan();
-        if (pixels.Length == 0) return true;
-        byte firstA = pixels[3];
-        if (firstA == 0) {
-            // Quick check: if the first pixel is transparent, scan a few more.
-            for (int i = 7; i < Math.Min(pixels.Length, 256 * 4); i += 4 * 32) {
-                if (pixels[i] != 0) return false;
-            }
-            return true;
+        if (pixels.Length < 4) return true;
+        // Sample alpha across the full tile rather than the first scanline. A
+        // 32-pixel stride gives us ~256 samples on a 256×256 RGBA tile — enough
+        // to catch any non-blank quadrant without paying for a full byte sweep.
+        const int bytesPerPixel = 4;
+        int stride = bytesPerPixel * 32;
+        for (int i = 3; i < pixels.Length; i += stride) {
+            if (pixels[i] != 0) return false;
         }
-        return false;
+        return true;
     }
 }
