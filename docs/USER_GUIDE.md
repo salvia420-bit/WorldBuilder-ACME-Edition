@@ -15,7 +15,7 @@ ACME WorldBuilder is a desktop editor for **Asheron's Call** client data. It rea
 - **Windows 10 or 11** is the primary supported platform (installers and updater). `WorldBuilder.Mac` and `WorldBuilder.Linux` exist for developers building from source.
 - **.NET 8.0** runtime (the installer can prompt to install it).
 - A **copy of the game's DAT folder** you are allowed to modify (always work on a copy).
-- For **Weenie Editor** and some **export** options: a reachable **MySQL** server with ACE world data (`ace_world` or your shard's database), configured in **Settings**.
+- For **Weenie Editor**, **Monster Creator**, and some **export** options: a reachable **MySQL** server with ACE world data (`ace_world` or your shard's database), configured in **Settings**.
 
 ---
 
@@ -71,6 +71,7 @@ Most editors are switched from **Editors** in the menu. Landscape is the default
 | Client UI layout tree (`LayoutDesc`) | **UI Layout Viewer** |
 | Inspect or export a single **Setup** / **GfxObj** mesh | **Object Debug** |
 | Edit ACE **weenie** scalar properties in MySQL | **Weenie Editor** |
+| Retexture creatures, mix-and-match parts, generate SQL | **Monster Creator** |
 
 ---
 
@@ -79,7 +80,7 @@ Most editors are switched from **Editors** in the menu. Landscape is the default
 Open **File → Settings**.
 
 - **Paths** — projects directory, defaults for new projects.
-- **ACE / MySQL** — host, port, database name, user, and password used by **Weenie Editor** to list and save weenies. Use **Test Connection** where offered.
+- **ACE / MySQL** — host, port, database name, user, and password used by **Weenie Editor** and **Monster Creator** to list and save weenies. Use **Test Connection** where offered.
 - **Graphics / landscape** — draw distance, overlays, camera, input.
 
 If MySQL is not configured, database-backed editors will show a status message instead of data.
@@ -124,6 +125,24 @@ There is a **3D setup preview** and **icon** preview when the weenie references 
 
 ---
 
+## Monster Creator
+
+For **creature appearance**: which surface texture IDs each body part uses, optional **donor** creature parts, and **SQL** you can apply to ACE.
+
+1. Configure MySQL in **Settings**.
+2. **Editors → Monster Creator**.
+3. **Search** and select a **base creature**. The editor loads parts from DATs and shows thumbnails.
+4. Assign **replacement** surface texture IDs, remove parts, or **apply** a donor part's GfxObj where supported.
+5. Use **SQL output** to capture changes for your shard workflow.
+
+### Replacing a RenderSurface by ID
+
+If you need to swap the **bitmap** behind an existing **RenderSurface** ID (for example a creature texture), use the **Replace RenderSurface** flow in this editor when available. The app only accepts replacements that match the expected **uncompressed A8R8G8B8**-style format for that slot; **DXT** or mismatched sizes are **rejected** with an error instead of corrupting the DAT.
+
+Custom terrain/dungeon imports use the same safety rules on export.
+
+---
+
 ## Data tables (Spell, Skill, Vital, Experience, Spell Set, CharGen, Layout)
 
 These editors read and write structures inside the **DAT** files (and related tables). They are powerful but still treated as **early / beta** in places.
@@ -163,6 +182,7 @@ These features assume you know how your shard applies SQL and how instances are 
 
 - **Terrain** — replace a terrain type's appearance with a custom image where supported.
 - **Dungeon** — add or replace wall/floor **RenderSurface** entries used by dungeon cells.
+- **Creatures** — use **Monster Creator** for texture maps / SQL; use **Replace RenderSurface** when you must target a specific existing RenderSurface ID.
 - **RenderSurface by ID** — overwrite a specific existing **RenderSurface** (for example a creature texture) with a replacement image. Replacements are validated against the original surface's pixel format and dimensions.
 
 Invalid formats (for example **DXT** where an uncompressed **A8R8G8B8** surface is required) **fail with a clear message** and do not write a broken DAT.
