@@ -27,6 +27,7 @@ DEFAULT_RAW_JSONL = os.path.join(REFERENCE_DIR, "raw_world_facts_full_with_compo
 DEFAULT_COMPONENT_JSONL = os.path.join(REFERENCE_DIR, "envcell_components_full.jsonl")
 DEFAULT_OUT_NPZ = os.path.join(REFERENCE_DIR, "component_linked_unified_tensors.npz")
 DEFAULT_OUT_VOCAB = os.path.join(REFERENCE_DIR, "component_linked_unified_vocab.json")
+DEFAULT_WORLD_FEATURES = os.path.join(BASE_DIR, "pipeline_data", "population_output", "vanquish_heights.json")
 
 LB_SIZE = 192.0
 MAX_OBJECTS_PER_LB = 256
@@ -640,12 +641,20 @@ def build_unified_tensors(
     class_key_to_idx,
     component_data,
     views_per_landblock,
+    *,
+    world_lb_universe=None,
+    empty_lb_sample_weight=1.0,
 ):
     """Emit landblock (outdoor-only) sequences plus per-component interior sequences.
 
     Output shape matches the legacy single-array layout — both scene types share
     the same arrays and are distinguished by the `scene_kind` slot of the context
     vector and by an explicit `scene_kinds` parallel array.
+
+    If ``world_lb_universe`` is provided, every (lb_x, lb_y) in the universe that
+    has no outdoor rows emits a STOP-only sequence so the model can learn that
+    most landblocks are empty wilderness. Without this, the model has no
+    representation of "empty LB" and over-populates at inference (~30x retail).
     """
     populated_lbs = sorted(rows_by_lb.keys())
     view_count = max(1, min(int(views_per_landblock), len(VIEW_STRATEGIES)))
@@ -732,6 +741,40 @@ def build_unified_tensors(
                 sample_weights.append(structural_weights[lb_idx])
                 scene_kinds.append(SCENE_KIND_OUTDOOR)
                 landblock_examples += 1
+
+    # ── Outdoor empty-landblock STOP-only sequences ─────────────────────────
+    # The training corpus historically excluded every LB without instances, so
+    # the model learned that *every* prompted LB has objects. Inference then
+    # produced ~10 obj/LB everywhere (vs retail ~0.35 obj/LB). Emit a STOP-only
+    # example for each empty LB in the world grid so STOP is a real choice.
+    empty_landblocks_emitted = 0
+    if world_lb_universe is not None:
+        populated_set = set(populated_lbs)
+        empty_lbs = sorted(lb for lb in world_lb_universe if lb not in populated_set)
+        scene_kind_block_outdoor = _scene_kind_block(SCENE_KIND_OUTDOOR)
+        zero_base_context = _build_base_context_block(_empty_stats(), 0)
+
+        for (lb_x, lb_y) in empty_lbs:
+            ctx = np.zeros(EXTENDED_CONTEXT_DIM, dtype=np.float32)
+            ctx[:16] = zero_base_context
+            ctx[0] = lb_x / 254.0
+            ctx[1] = lb_y / 254.0
+            # ctx[16:20] (view/strategy/chunk/coverage) stay at 0 — empty LBs
+            # have a single canonical "view" of nothing.
+            ctx[20:31] = scene_kind_block_outdoor
+
+            seq = np.zeros((MAX_OBJECTS_PER_LB, OBJECT_FEATURE_DIM), dtype=np.float32)
+            seq[0, 0] = STOP_TOKEN
+            comp_idx = np.full(MAX_OBJECTS_PER_LB, -1, dtype=np.int32)
+
+            contexts.append(ctx)
+            sequences.append(seq)
+            seq_lengths.append(1)
+            component_index_by_object.append(comp_idx)
+            lb_coords.append((lb_x, lb_y))
+            sample_weights.append(float(empty_lb_sample_weight))
+            scene_kinds.append(SCENE_KIND_OUTDOOR)
+            empty_landblocks_emitted += 1
 
     # ── Interior component sequences ────────────────────────────────────────
     for component_id in sorted(rows_by_component.keys()):
@@ -846,6 +889,7 @@ def build_unified_tensors(
         "components_emitted": components_emitted,
         "components_skipped_unknown_id": components_skipped_unknown_id,
         "components_skipped_empty": components_skipped_empty,
+        "empty_landblocks_emitted": empty_landblocks_emitted,
     }
 
 
@@ -939,6 +983,15 @@ def parse_args():
     parser.add_argument("--views-per-landblock", type=int, default=DEFAULT_VIEWS_PER_LANDBLOCK, help="Number of structurally distinct sequence views to emit per landblock")
     parser.add_argument("--target-token-mode", choices=TARGET_TOKEN_MODES, default="exact",
                         help="exact keeps raw WCIDs/model IDs; abstract_ace collapses ACE WCIDs into structural classes")
+    parser.add_argument("--include-empty-lbs", action="store_true", default=False,
+                        help="Emit a STOP-only sequence for every world LB not in the instance corpus. "
+                             "Required for the model to learn empty wilderness; preserves legacy behavior when off.")
+    parser.add_argument("--world-features", default=DEFAULT_WORLD_FEATURES,
+                        help="JSON map of valid outdoor LB coords (vanquish_heights.json layout). "
+                             "Used only when --include-empty-lbs is set.")
+    parser.add_argument("--empty-lb-sample-weight", type=float, default=1.0,
+                        help="Per-example sample weight for empty-LB STOP examples (raise to upweight, "
+                             "lower to downweight relative to populated examples).")
     return parser.parse_args()
 
 
@@ -990,6 +1043,21 @@ def main():
     print(f"  Vocab size    : {len(class_key_to_idx) + FIRST_REAL_TOKEN:,}")
     print()
 
+    world_lb_universe = None
+    if args.include_empty_lbs:
+        if not os.path.exists(args.world_features):
+            raise SystemExit(f"--include-empty-lbs requires --world-features (missing: {args.world_features})")
+        with open(args.world_features, "r", encoding="utf-8") as f:
+            world_features = json.load(f)
+        world_lb_universe = set()
+        for key in world_features.keys():
+            try:
+                lbx_str, lby_str = key.split(",", 1)
+                world_lb_universe.add((int(lbx_str), int(lby_str)))
+            except (ValueError, AttributeError):
+                continue
+        print(f"  World LB universe     : {len(world_lb_universe):,} (from {os.path.basename(args.world_features)})")
+
     print("[3/4] Building unified tensors (landblock + component)...")
     lb_data = build_unified_tensors(
         rows_by_lb,
@@ -999,9 +1067,12 @@ def main():
         class_key_to_idx,
         component_data,
         args.views_per_landblock,
+        world_lb_universe=world_lb_universe,
+        empty_lb_sample_weight=args.empty_lb_sample_weight,
     )
     print(f"  Landblocks emitted    : {lb_data['landblocks_emitted']:,}")
     print(f"  Landblock examples    : {lb_data['landblock_examples']:,}")
+    print(f"  Empty-LB examples     : {lb_data['empty_landblocks_emitted']:,}")
     print(f"  Components emitted    : {lb_data['components_emitted']:,}")
     print(f"  Component examples    : {lb_data['component_examples']:,}")
     print(f"  Components w/o table  : {lb_data['components_skipped_unknown_id']:,}")
