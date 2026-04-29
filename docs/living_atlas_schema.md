@@ -279,21 +279,17 @@ The fix: introduce `JsonCommandProcessor.Preload(path)` and
 through them so the same code path the JSON `load` command uses also
 runs at startup.
 
-The five lazy-load blocks in `CommandEngine.DescribeLandblockFromDocs`
-(lines 707-780) remain in place — they handle the
-`poi_gazetteer.json` / `wcid_acpedia_join.jsonl` /
-`spawn_gazetteer.json` / `region_gazetteer.json` files that
-`Load()` itself never auto-loaded. Until `Load()` is extended to cover
-those four (a separate change), the lazy-loads are still load-bearing
-scaffolding for any code path that bypasses startup pre-load (e.g.
-the JSON `load` command followed immediately by `describe-landblock`
-without an intervening REPL session, or transact-diff describing
-pre-state docs through `DescribeLandblockFromDocs`).
-
-**Recommended v2 follow-up**: extend `CommandEngine.Load()` to also
-auto-load the four gazetteers, then delete the corresponding lazy-load
-blocks in `DescribeLandblockFromDocs`. This collapses the parity surface
-to one entry point.
+**v2 follow-up — landed in this review.** `CommandEngine.Load()` now
+auto-loads all five session-scoped resources (ontology cache, building
+pairings, town gazetteer, POI gazetteer, wcid→Acpedia join, spawn
+gazetteer, region gazetteer). The five lazy-load blocks in
+`DescribeLandblockFromDocs` were deleted as dead code, along with the
+matching `_xLoaded` flag fields and a redundant region-load fallback in
+`GetOrCreateTilePipeline` and `ListRegionNames`. There is now exactly
+one entry point for project-set state: `CommandEngine.Load()`. Any new
+auto-loaded resource lands there. Any future bug of the
+"documented-but-unpopulated" class will surface as a clean failure
+rather than as silent half-loaded state.
 
 # Stdout hygiene fix (O4) — partial
 
@@ -359,5 +355,7 @@ for the REPL (where stderr renders to the same terminal).
 | `WorldBuilder.Terminal/Program.cs`                         | Stdin and interactive pre-load now go through `processor.Preload` / `repl.Preload`. |
 | `WorldBuilder.Terminal/JsonCommandProcessor.cs`            | Added `public LoadResult Preload(string)` → `_engine.Load(path)`. |
 | `WorldBuilder.Terminal/TerminalRepl.cs`                    | Added `public LoadResult Preload(string)` → `_engine.Load(path)`. |
-| `WorldBuilder.Shared/Services/OntologyService.cs`          | `LoadFromCache` malformed-line warning routes to stderr instead of stdout. |
+| `WorldBuilder.Terminal/CommandEngine.cs`                   | `Load()` now auto-loads POI, wcid→Acpedia, spawn, and region gazetteers; the five lazy-load blocks in `DescribeLandblockFromDocs` and the dead `_xLoaded` flags are deleted. Tile-pipeline and `ListRegionNames` lose their redundant region-load fallbacks. |
+| `WorldBuilder.Shared/Services/OntologyService.cs`          | `LoadFromCache` malformed-line warning + every other diagnostic in `WorldBuilder.Shared` routes to stderr instead of stdout. |
+| `WorldBuilder.Shared/Lib/Dungeon/{DungeonRoomAnalyzer,DungeonTopologyAnalyzer}.cs`, `WorldBuilder.Shared/Lib/WorldGen/{BuildingAnalyzer,BuildingPlacer,RetailTownBuildingScanner,TownDecorationCatalog}.cs`, `WorldBuilder.Shared/Models/Project.cs` | Same: stdout → stderr. |
 | `docs/living_atlas_schema.md`                              | This document. |

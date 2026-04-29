@@ -46,25 +46,21 @@ public class CommandEngine {
     // "parent zoom" parent context the describer uses to override per-LB inference
     // — see the atlas inheritance rule in the brief.
     private Dictionary<ushort, LandblockDescriber.TownContext> _townGazetteer = new();
-    private bool _townGazetteerLoaded = false;
 
     // Acpedia-derived POI index keyed by lbKey: maps each landblock to wiki POIs
     // (NPCs, landmarks, objects, etc.) the wiki places there. Loaded from project-
     // directory `poi_gazetteer.json` if present.
     private Dictionary<ushort, List<LandblockDescriber.NamedPoi>> _poiGazetteer = new();
-    private bool _poiGazetteerLoaded = false;
 
     // wcid → Acpedia page; built offline from LSD weenies × Acpedia by name match.
     // Used to attribute placed creatures/NPCs/items to wiki pages so the describer
     // can surface "Buckminster the Barkeeper" instead of just "Creature index 47".
     private Dictionary<int, LandblockDescriber.AcpediaMatch> _wcidToAcpedia = new();
-    private bool _wcidToAcpediaLoaded = false;
 
     // Server-spawn gazetteer (from LSD spawnMaps): which weenies the AC server
     // dynamically spawns at each landblock, filtered to player-visible only.
     // Distinct from static `_wcidToAcpedia` (which annotates DAT-placed objects).
     private Dictionary<ushort, List<LandblockDescriber.SpawnEntry>> _spawnGazetteer = new();
-    private bool _spawnGazetteerLoaded = false;
 
     // Region gazetteer (parent zoom above LB). Maps each LB to a named region
     // via nearest-town assignment using anchor points loaded from JSON.
@@ -72,7 +68,6 @@ public class CommandEngine {
     private Dictionary<string, LandblockDescriber.RegionContext> _regions = new();
     private List<RegionAnchor> _regionAnchors = new();
     private Dictionary<ushort, LandblockDescriber.RegionContext> _lbToRegionCache = new();
-    private bool _regionGazetteerLoaded = false;
 
     // Tile cache + generator (lazy-init on first tile call). The cache backs to
     // disk under projects/<name>/atlas_tiles; the generator uses render-preview.
@@ -142,14 +137,66 @@ public class CommandEngine {
             var gazPath = Path.Combine(p.ProjectDirectory, "town_gazetteer.json");
             if (File.Exists(gazPath)) {
                 _townGazetteer = LoadTownGazetteer(gazPath);
-                _townGazetteerLoaded = true;
                 Console.Error.WriteLine($"[Gazetteer] Auto-loaded {_townGazetteer.Count} towns from {gazPath}");
             } else {
                 _townGazetteer = new();
             }
         } catch (Exception ex) {
-            Console.Error.WriteLine($"[Gazetteer] Auto-load skipped: {ex.Message}");
+            Console.Error.WriteLine($"[Gazetteer] Town auto-load skipped: {ex.Message}");
             _townGazetteer = new();
+        }
+        // Auto-load POI gazetteer if present.
+        try {
+            var poiPath = Path.Combine(p.ProjectDirectory, "poi_gazetteer.json");
+            if (File.Exists(poiPath)) {
+                _poiGazetteer = LoadPoiGazetteer(poiPath);
+                Console.Error.WriteLine($"[Gazetteer] Auto-loaded POIs for {_poiGazetteer.Count} landblocks from {poiPath}");
+            } else {
+                _poiGazetteer = new();
+            }
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"[Gazetteer] POI auto-load skipped: {ex.Message}");
+            _poiGazetteer = new();
+        }
+        // Auto-load wcid → Acpedia join if present.
+        try {
+            var wcidPath = Path.Combine(p.ProjectDirectory, "wcid_acpedia_join.jsonl");
+            if (File.Exists(wcidPath)) {
+                _wcidToAcpedia = LoadWcidAcpedia(wcidPath);
+                Console.Error.WriteLine($"[Gazetteer] Auto-loaded Acpedia matches for {_wcidToAcpedia.Count} wcids from {wcidPath}");
+            } else {
+                _wcidToAcpedia = new();
+            }
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"[Gazetteer] wcid→Acpedia auto-load skipped: {ex.Message}");
+            _wcidToAcpedia = new();
+        }
+        // Auto-load spawn gazetteer if present.
+        try {
+            var spawnPath = Path.Combine(p.ProjectDirectory, "spawn_gazetteer.json");
+            if (File.Exists(spawnPath)) {
+                _spawnGazetteer = LoadSpawnGazetteer(spawnPath);
+                Console.Error.WriteLine($"[Gazetteer] Auto-loaded spawns for {_spawnGazetteer.Count} landblocks from {spawnPath}");
+            } else {
+                _spawnGazetteer = new();
+            }
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"[Gazetteer] Spawn auto-load skipped: {ex.Message}");
+            _spawnGazetteer = new();
+        }
+        // Auto-load region gazetteer if present. Resets the lb→region cache so a
+        // re-load doesn't keep stale region assignments from the previous project.
+        _regions = new();
+        _regionAnchors = new();
+        _lbToRegionCache = new();
+        try {
+            var regionPath = Path.Combine(p.ProjectDirectory, "region_gazetteer.json");
+            if (File.Exists(regionPath)) {
+                LoadRegionGazetteer(regionPath);
+                Console.Error.WriteLine($"[Gazetteer] Auto-loaded {_regions.Count} regions, {_regionAnchors.Count} anchor points from {regionPath}");
+            }
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"[Gazetteer] Region auto-load skipped: {ex.Message}");
         }
         return new LoadResult(p.Name, p.FilePath, p.ProjectDirectory, p.BaseDatDirectory);
     }
@@ -699,86 +746,6 @@ public class CommandEngine {
             }
         } catch { }
 
-        // Lazy-load ontology cache on first describe call. stdin-mode skips
-        // CommandEngine.Load(), so the eager auto-restore in Load() never fires.
-        // Without this, _ontologyService.IsScanned stays false and the describer
-        // can't tag any object as Category="Structure" → structureCount is always
-        // 0 and settlementHint (derived from structure count) is always null.
-        if (!_ontologyService.IsScanned) {
-            try {
-                var cachePath = Path.Combine(_projectManager.CurrentProject!.ProjectDirectory, "ontology_cache.jsonl");
-                if (File.Exists(cachePath)) {
-                    int restored = _ontologyService.LoadFromCache(cachePath);
-                    Console.Error.WriteLine($"[Ontology] Lazy-restored {restored:N0} entries from {cachePath}");
-                }
-            } catch (Exception ex) {
-                Console.Error.WriteLine($"[Ontology] Lazy-restore skipped: {ex.Message}");
-            }
-        }
-
-        // Lazy-load gazetteers on first describe call. stdin-mode skips
-        // CommandEngine.Load(), so the eager auto-load in Load() never fires there.
-        if (!_townGazetteerLoaded) {
-            try {
-                var gazPath = Path.Combine(_projectManager.CurrentProject!.ProjectDirectory, "town_gazetteer.json");
-                if (File.Exists(gazPath)) {
-                    _townGazetteer = LoadTownGazetteer(gazPath);
-                    Console.Error.WriteLine($"[Gazetteer] Lazy-loaded {_townGazetteer.Count} towns from {gazPath}");
-                }
-            } catch (Exception ex) {
-                Console.Error.WriteLine($"[Gazetteer] Lazy-load skipped: {ex.Message}");
-            }
-            _townGazetteerLoaded = true;
-        }
-        if (!_poiGazetteerLoaded) {
-            try {
-                var poiPath = Path.Combine(_projectManager.CurrentProject!.ProjectDirectory, "poi_gazetteer.json");
-                if (File.Exists(poiPath)) {
-                    _poiGazetteer = LoadPoiGazetteer(poiPath);
-                    Console.Error.WriteLine($"[Gazetteer] Lazy-loaded POIs for {_poiGazetteer.Count} landblocks from {poiPath}");
-                }
-            } catch (Exception ex) {
-                Console.Error.WriteLine($"[Gazetteer] POI lazy-load skipped: {ex.Message}");
-            }
-            _poiGazetteerLoaded = true;
-        }
-        if (!_wcidToAcpediaLoaded) {
-            try {
-                var wcidPath = Path.Combine(_projectManager.CurrentProject!.ProjectDirectory, "wcid_acpedia_join.jsonl");
-                if (File.Exists(wcidPath)) {
-                    _wcidToAcpedia = LoadWcidAcpedia(wcidPath);
-                    Console.Error.WriteLine($"[Gazetteer] Lazy-loaded Acpedia matches for {_wcidToAcpedia.Count} wcids from {wcidPath}");
-                }
-            } catch (Exception ex) {
-                Console.Error.WriteLine($"[Gazetteer] wcid→Acpedia lazy-load skipped: {ex.Message}");
-            }
-            _wcidToAcpediaLoaded = true;
-        }
-        if (!_spawnGazetteerLoaded) {
-            try {
-                var spawnPath = Path.Combine(_projectManager.CurrentProject!.ProjectDirectory, "spawn_gazetteer.json");
-                if (File.Exists(spawnPath)) {
-                    _spawnGazetteer = LoadSpawnGazetteer(spawnPath);
-                    Console.Error.WriteLine($"[Gazetteer] Lazy-loaded spawns for {_spawnGazetteer.Count} landblocks from {spawnPath}");
-                }
-            } catch (Exception ex) {
-                Console.Error.WriteLine($"[Gazetteer] Spawn lazy-load skipped: {ex.Message}");
-            }
-            _spawnGazetteerLoaded = true;
-        }
-        if (!_regionGazetteerLoaded) {
-            try {
-                var regionPath = Path.Combine(_projectManager.CurrentProject!.ProjectDirectory, "region_gazetteer.json");
-                if (File.Exists(regionPath)) {
-                    LoadRegionGazetteer(regionPath);
-                    Console.Error.WriteLine($"[Gazetteer] Lazy-loaded {_regions.Count} regions, {_regionAnchors.Count} anchor points from {regionPath}");
-                }
-            } catch (Exception ex) {
-                Console.Error.WriteLine($"[Gazetteer] Region lazy-load skipped: {ex.Message}");
-            }
-            _regionGazetteerLoaded = true;
-        }
-
         var regionContext = ResolveRegionForLb(lbKey, lbX, lbY);
         _townGazetteer.TryGetValue(lbKey, out var townContext);
         _poiGazetteer.TryGetValue(lbKey, out var pois);
@@ -847,15 +814,6 @@ public class CommandEngine {
         var p = _projectManager.CurrentProject!;
         _tileCache = new TileCache(p.ProjectDirectory, _tileBudgetGB);
         _tileGenerator = new TileGenerator(this, _tileCache);
-        // Make sure the region gazetteer is loaded so the generator can compute
-        // region bounding boxes from anchor points.
-        if (!_regionGazetteerLoaded) {
-            try {
-                var regionPath = Path.Combine(p.ProjectDirectory, "region_gazetteer.json");
-                if (File.Exists(regionPath)) LoadRegionGazetteer(regionPath);
-            } catch { }
-            _regionGazetteerLoaded = true;
-        }
         // Compute per-region anchor lists for region tiles.
         var byRegion = new Dictionary<string, List<(uint x, uint y)>>();
         foreach (var anchor in _regionAnchors) {
@@ -915,13 +873,7 @@ public class CommandEngine {
 
     public string TileCachePathOrEmpty() => _tileCache?.Root ?? "";
 
-    public IEnumerable<string> ListRegionNames() {
-        if (!_regionGazetteerLoaded || _regions.Count == 0) {
-            // Trigger lazy load via tile pipeline init
-            try { GetOrCreateTilePipeline(); } catch { }
-        }
-        return _regions.Keys;
-    }
+    public IEnumerable<string> ListRegionNames() => _regions.Keys;
 
     public (int generated, int skipped, long bytes, List<string> errors)
             GenerateBulkLbTiles(List<(uint x, uint y)> lbs) {
