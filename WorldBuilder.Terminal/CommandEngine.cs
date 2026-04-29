@@ -107,98 +107,130 @@ public class CommandEngine {
         _projectManager.LoadProject(projectPath);
         InvalidateCaches();
         var p = _projectManager.CurrentProject!;
-        // Auto-restore ontology cache if a sibling file exists. Saves
-        // re-running scan-ontology + enrich-unified across sessions.
-        try {
-            var cachePath = Path.Combine(p.ProjectDirectory, "ontology_cache.jsonl");
-            if (File.Exists(cachePath)) {
-                int restored = _ontologyService.LoadFromCache(cachePath);
-                Console.Error.WriteLine($"[Ontology] Auto-restored {restored:N0} entries from {cachePath}");
-            }
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"[Ontology] Auto-restore skipped: {ex.Message}");
+
+        var ontology = AutoRestoreOntology(p.ProjectDirectory);
+        var pairings = AutoRestorePairings(p.ProjectDirectory);
+        var towns    = AutoRestoreTownGazetteer(p.ProjectDirectory);
+        var pois     = AutoRestorePoiGazetteer(p.ProjectDirectory);
+        var wcid     = AutoRestoreWcidAcpedia(p.ProjectDirectory);
+        var spawns   = AutoRestoreSpawnGazetteer(p.ProjectDirectory);
+        var regions  = AutoRestoreRegions(p.ProjectDirectory);
+
+        var report = new LoadAutoRestoreReport(
+            ontology, pairings, towns, pois, wcid, spawns, regions);
+        return new LoadResult(p.Name, p.FilePath, p.ProjectDirectory,
+            p.BaseDatDirectory, report);
+    }
+
+    private LoadAutoRestoreEntry AutoRestoreOntology(string projectDir) {
+        var path = Path.Combine(projectDir, "ontology_cache.jsonl");
+        if (!File.Exists(path)) {
+            // Drop the previous project's ontology so it doesn't bleed into
+            // the new one. LoadFromCache replaces the index, but when there's
+            // nothing to load we have to clear explicitly.
+            _ontologyService.Clear();
+            return new LoadAutoRestoreEntry(path, FilePresent: false, Loaded: false, Count: 0);
         }
-        // Auto-load building pairings if present.
         try {
-            var pairingsPath = Path.Combine(p.ProjectDirectory, "building_pairings.json");
-            if (File.Exists(pairingsPath)) {
-                _buildingPairings = WorldBuilder.Shared.Lib.Pairings.BuildingPairings.LoadFromJsonFile(pairingsPath);
-                Console.Error.WriteLine($"[Pairings] Auto-loaded {_buildingPairings.EdgeCount} pair edges " +
-                    $"({_buildingPairings.GroupCount} groups) from {pairingsPath}");
-            } else {
-                _buildingPairings = new WorldBuilder.Shared.Lib.Pairings.BuildingPairings();
-            }
+            int restored = _ontologyService.LoadFromCache(path);
+            return new LoadAutoRestoreEntry(path, FilePresent: true, Loaded: true, Count: restored);
         } catch (Exception ex) {
-            Console.Error.WriteLine($"[Pairings] Auto-load skipped: {ex.Message}");
+            _ontologyService.Clear();
+            return new LoadAutoRestoreEntry(path, FilePresent: true, Loaded: false, Count: 0, Error: ex.Message);
+        }
+    }
+
+    private LoadAutoRestoreEntry AutoRestorePairings(string projectDir) {
+        var path = Path.Combine(projectDir, "building_pairings.json");
+        if (!File.Exists(path)) {
             _buildingPairings = new WorldBuilder.Shared.Lib.Pairings.BuildingPairings();
+            return new LoadAutoRestoreEntry(path, FilePresent: false, Loaded: false, Count: 0);
         }
-        // Auto-load town gazetteer if present.
         try {
-            var gazPath = Path.Combine(p.ProjectDirectory, "town_gazetteer.json");
-            if (File.Exists(gazPath)) {
-                _townGazetteer = LoadTownGazetteer(gazPath);
-                Console.Error.WriteLine($"[Gazetteer] Auto-loaded {_townGazetteer.Count} towns from {gazPath}");
-            } else {
-                _townGazetteer = new();
-            }
+            _buildingPairings = WorldBuilder.Shared.Lib.Pairings.BuildingPairings.LoadFromJsonFile(path);
+            return new LoadAutoRestoreEntry(path, FilePresent: true, Loaded: true, Count: _buildingPairings.EdgeCount);
         } catch (Exception ex) {
-            Console.Error.WriteLine($"[Gazetteer] Town auto-load skipped: {ex.Message}");
+            _buildingPairings = new WorldBuilder.Shared.Lib.Pairings.BuildingPairings();
+            return new LoadAutoRestoreEntry(path, FilePresent: true, Loaded: false, Count: 0, Error: ex.Message);
+        }
+    }
+
+    private LoadAutoRestoreEntry AutoRestoreTownGazetteer(string projectDir) {
+        var path = Path.Combine(projectDir, "town_gazetteer.json");
+        if (!File.Exists(path)) {
             _townGazetteer = new();
+            return new LoadAutoRestoreEntry(path, FilePresent: false, Loaded: false, Count: 0);
         }
-        // Auto-load POI gazetteer if present.
         try {
-            var poiPath = Path.Combine(p.ProjectDirectory, "poi_gazetteer.json");
-            if (File.Exists(poiPath)) {
-                _poiGazetteer = LoadPoiGazetteer(poiPath);
-                Console.Error.WriteLine($"[Gazetteer] Auto-loaded POIs for {_poiGazetteer.Count} landblocks from {poiPath}");
-            } else {
-                _poiGazetteer = new();
-            }
+            _townGazetteer = LoadTownGazetteer(path);
+            return new LoadAutoRestoreEntry(path, FilePresent: true, Loaded: true, Count: _townGazetteer.Count);
         } catch (Exception ex) {
-            Console.Error.WriteLine($"[Gazetteer] POI auto-load skipped: {ex.Message}");
+            _townGazetteer = new();
+            return new LoadAutoRestoreEntry(path, FilePresent: true, Loaded: false, Count: 0, Error: ex.Message);
+        }
+    }
+
+    private LoadAutoRestoreEntry AutoRestorePoiGazetteer(string projectDir) {
+        var path = Path.Combine(projectDir, "poi_gazetteer.json");
+        if (!File.Exists(path)) {
             _poiGazetteer = new();
+            return new LoadAutoRestoreEntry(path, FilePresent: false, Loaded: false, Count: 0);
         }
-        // Auto-load wcid → Acpedia join if present.
         try {
-            var wcidPath = Path.Combine(p.ProjectDirectory, "wcid_acpedia_join.jsonl");
-            if (File.Exists(wcidPath)) {
-                _wcidToAcpedia = LoadWcidAcpedia(wcidPath);
-                Console.Error.WriteLine($"[Gazetteer] Auto-loaded Acpedia matches for {_wcidToAcpedia.Count} wcids from {wcidPath}");
-            } else {
-                _wcidToAcpedia = new();
-            }
+            _poiGazetteer = LoadPoiGazetteer(path);
+            return new LoadAutoRestoreEntry(path, FilePresent: true, Loaded: true, Count: _poiGazetteer.Count);
         } catch (Exception ex) {
-            Console.Error.WriteLine($"[Gazetteer] wcid→Acpedia auto-load skipped: {ex.Message}");
+            _poiGazetteer = new();
+            return new LoadAutoRestoreEntry(path, FilePresent: true, Loaded: false, Count: 0, Error: ex.Message);
+        }
+    }
+
+    private LoadAutoRestoreEntry AutoRestoreWcidAcpedia(string projectDir) {
+        var path = Path.Combine(projectDir, "wcid_acpedia_join.jsonl");
+        if (!File.Exists(path)) {
             _wcidToAcpedia = new();
+            return new LoadAutoRestoreEntry(path, FilePresent: false, Loaded: false, Count: 0);
         }
-        // Auto-load spawn gazetteer if present.
         try {
-            var spawnPath = Path.Combine(p.ProjectDirectory, "spawn_gazetteer.json");
-            if (File.Exists(spawnPath)) {
-                _spawnGazetteer = LoadSpawnGazetteer(spawnPath);
-                Console.Error.WriteLine($"[Gazetteer] Auto-loaded spawns for {_spawnGazetteer.Count} landblocks from {spawnPath}");
-            } else {
-                _spawnGazetteer = new();
-            }
+            _wcidToAcpedia = LoadWcidAcpedia(path);
+            return new LoadAutoRestoreEntry(path, FilePresent: true, Loaded: true, Count: _wcidToAcpedia.Count);
         } catch (Exception ex) {
-            Console.Error.WriteLine($"[Gazetteer] Spawn auto-load skipped: {ex.Message}");
-            _spawnGazetteer = new();
+            _wcidToAcpedia = new();
+            return new LoadAutoRestoreEntry(path, FilePresent: true, Loaded: false, Count: 0, Error: ex.Message);
         }
-        // Auto-load region gazetteer if present. Resets the lb→region cache so a
-        // re-load doesn't keep stale region assignments from the previous project.
+    }
+
+    private LoadAutoRestoreEntry AutoRestoreSpawnGazetteer(string projectDir) {
+        var path = Path.Combine(projectDir, "spawn_gazetteer.json");
+        if (!File.Exists(path)) {
+            _spawnGazetteer = new();
+            return new LoadAutoRestoreEntry(path, FilePresent: false, Loaded: false, Count: 0);
+        }
+        try {
+            _spawnGazetteer = LoadSpawnGazetteer(path);
+            return new LoadAutoRestoreEntry(path, FilePresent: true, Loaded: true, Count: _spawnGazetteer.Count);
+        } catch (Exception ex) {
+            _spawnGazetteer = new();
+            return new LoadAutoRestoreEntry(path, FilePresent: true, Loaded: false, Count: 0, Error: ex.Message);
+        }
+    }
+
+    private LoadAutoRestoreEntry AutoRestoreRegions(string projectDir) {
+        // Reset before attempting load so a re-load can't keep stale region
+        // assignments from the previous project even if the new file is absent.
         _regions = new();
         _regionAnchors = new();
         _lbToRegionCache = new();
-        try {
-            var regionPath = Path.Combine(p.ProjectDirectory, "region_gazetteer.json");
-            if (File.Exists(regionPath)) {
-                LoadRegionGazetteer(regionPath);
-                Console.Error.WriteLine($"[Gazetteer] Auto-loaded {_regions.Count} regions, {_regionAnchors.Count} anchor points from {regionPath}");
-            }
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"[Gazetteer] Region auto-load skipped: {ex.Message}");
+        var path = Path.Combine(projectDir, "region_gazetteer.json");
+        if (!File.Exists(path)) {
+            return new LoadAutoRestoreEntry(path, FilePresent: false, Loaded: false, Count: 0);
         }
-        return new LoadResult(p.Name, p.FilePath, p.ProjectDirectory, p.BaseDatDirectory);
+        try {
+            LoadRegionGazetteer(path);
+            return new LoadAutoRestoreEntry(path, FilePresent: true, Loaded: true, Count: _regions.Count);
+        } catch (Exception ex) {
+            return new LoadAutoRestoreEntry(path, FilePresent: true, Loaded: false, Count: 0, Error: ex.Message);
+        }
     }
 
     private static Dictionary<ushort, LandblockDescriber.TownContext> LoadTownGazetteer(string path) {
@@ -373,43 +405,65 @@ public class CommandEngine {
     //  Terrain editing
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-    public TerrainEditResult Smooth(float x, float y, float radius, float strength = 0.5f) {
-        RequireProject();
-        var (doc, tl, hl) = GetTerrainHelpers();
-        var affected = _terrainService.GetAffectedVertices(new Vector3(x, y, 0), radius, hl);
-        var changes = _terrainService.ComputeSmooth(affected, strength, tl);
-        return ApplyHeightEdit(doc, changes);
-    }
+    public TerrainEditResult Smooth(float x, float y, float radius, float strength = 0.5f) =>
+        ApplyTerrainEdit(new SmoothEdit(x, y, radius, strength));
 
     public TerrainEditResult Raise(float x, float y, float radius, int delta = 5) {
-        RequireProject();
-        var (doc, tl, hl) = GetTerrainHelpers();
-        var affected = _terrainService.GetAffectedVertices(new Vector3(x, y, 0), radius, hl);
-        var changes = _terrainService.ComputeRaiseLower(affected, Math.Abs(delta), tl);
-        return ApplyHeightEdit(doc, changes);
+        // Reject negative input rather than silently flipping it to positive
+        // (the old behavior). Callers wanting to lower terrain should call Lower.
+        if (delta < 0)
+            throw new ArgumentException(
+                $"raise requires delta >= 0; got {delta}. Use 'lower' for negative deltas.");
+        return ApplyTerrainEdit(new RaiseEdit(x, y, radius, delta));
     }
 
     public TerrainEditResult Lower(float x, float y, float radius, int delta = 5) {
-        RequireProject();
-        var (doc, tl, hl) = GetTerrainHelpers();
-        var affected = _terrainService.GetAffectedVertices(new Vector3(x, y, 0), radius, hl);
-        var changes = _terrainService.ComputeRaiseLower(affected, -Math.Abs(delta), tl);
-        return ApplyHeightEdit(doc, changes);
+        if (delta < 0)
+            throw new ArgumentException(
+                $"lower requires delta >= 0; got {delta}. Use 'raise' for the opposite direction.");
+        return ApplyTerrainEdit(new LowerEdit(x, y, radius, delta));
     }
 
-    public TerrainEditResult SetHeight(float x, float y, float radius, byte targetHeight) {
+    public TerrainEditResult SetHeight(float x, float y, float radius, byte targetHeight) =>
+        ApplyTerrainEdit(new SetHeightEdit(x, y, radius, targetHeight));
+
+    public TerrainEditResult Paint(float x, float y, float radius, byte terrainType) =>
+        ApplyTerrainEdit(new PaintEdit(x, y, radius, terrainType));
+
+    /// <summary>
+    /// Single entry point for every terrain-edit op. New ops (ridge, erode,
+    /// slope, etc.) get added by extending the TerrainEditOp record hierarchy
+    /// and a switch arm here, not by copy-pasting the prelude. Validation,
+    /// affected-vertex selection, and batching live here exactly once.
+    /// </summary>
+    public TerrainEditResult ApplyTerrainEdit(TerrainEditOp op) {
         RequireProject();
+        ValidateBrush(op.X, op.Y, op.Radius);
         var (doc, tl, hl) = GetTerrainHelpers();
-        var affected = _terrainService.GetAffectedVertices(new Vector3(x, y, 0), radius, hl);
-        var changes = _terrainService.ComputeSetHeight(affected, targetHeight, tl);
-        return ApplyHeightEdit(doc, changes);
+        var affected = _terrainService.GetAffectedVertices(new Vector3(op.X, op.Y, 0), op.Radius, hl);
+
+        return op switch {
+            SmoothEdit s    => ApplyHeightEdit(doc, _terrainService.ComputeSmooth(affected, s.Strength, tl)),
+            RaiseEdit r     => ApplyHeightEdit(doc, _terrainService.ComputeRaiseLower(affected,  r.Delta, tl)),
+            LowerEdit l     => ApplyHeightEdit(doc, _terrainService.ComputeRaiseLower(affected, -l.Delta, tl)),
+            SetHeightEdit h => ApplyHeightEdit(doc, _terrainService.ComputeSetHeight(affected, h.HeightIndex, tl)),
+            PaintEdit p     => ApplyPaintEdit(doc, affected, p.TerrainType, tl),
+            _ => throw new ArgumentOutOfRangeException(nameof(op), op.GetType().Name, "Unknown terrain edit op")
+        };
     }
 
-    public TerrainEditResult Paint(float x, float y, float radius, byte terrainType) {
-        RequireProject();
-        var (doc, tl, hl) = GetTerrainHelpers();
-        var affected = _terrainService.GetAffectedVertices(new Vector3(x, y, 0), radius, hl);
+    private static void ValidateBrush(float x, float y, float radius) {
+        if (!float.IsFinite(x))      throw new ArgumentException($"x must be finite; got {x}");
+        if (!float.IsFinite(y))      throw new ArgumentException($"y must be finite; got {y}");
+        if (!float.IsFinite(radius)) throw new ArgumentException($"radius must be finite; got {radius}");
+        if (radius <= 0f)            throw new ArgumentException($"radius must be > 0; got {radius}");
+    }
 
+    private static TerrainEditResult ApplyPaintEdit(
+        TerrainDocument doc,
+        List<(ushort LandblockId, int VertexIndex, Vector3 Position)> affected,
+        byte terrainType,
+        Func<ushort, TerrainEntry[]?> tl) {
         int estimatedLandblocks = Math.Min(affected.Count, 256);
         var batchChanges = new Dictionary<ushort, Dictionary<byte, uint>>(estimatedLandblocks);
         var terrainCache = new Dictionary<ushort, TerrainEntry[]?>(estimatedLandblocks);

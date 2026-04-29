@@ -451,13 +451,29 @@ public class TerminalRepl {
         }
         Console.WriteLine($"Loading project: {tokens[1]}");
         var r = _engine.Load(tokens[1]);
-        if (r.ProjectName == null) {
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine("Warning: Project loaded but returned null metadata.");
-            Console.ResetColor();
-            return;
-        }
         Console.WriteLine($"Project '{r.ProjectName}' loaded successfully.");
+        PrintAutoRestoreReport(r.AutoRestore);
+    }
+
+    private static void PrintAutoRestoreReport(LoadAutoRestoreReport ar) {
+        PrintAutoRestoreLine("Ontology",       ar.Ontology,       countLabel: "entries");
+        PrintAutoRestoreLine("Pairings",       ar.Pairings,       countLabel: "edges");
+        PrintAutoRestoreLine("TownGazetteer",  ar.TownGazetteer,  countLabel: "towns");
+        PrintAutoRestoreLine("PoiGazetteer",   ar.PoiGazetteer,   countLabel: "landblocks");
+        PrintAutoRestoreLine("WcidAcpedia",    ar.WcidAcpedia,    countLabel: "wcids");
+        PrintAutoRestoreLine("SpawnGazetteer", ar.SpawnGazetteer, countLabel: "landblocks");
+        PrintAutoRestoreLine("Regions",        ar.Regions,        countLabel: "regions");
+    }
+
+    private static void PrintAutoRestoreLine(string label, LoadAutoRestoreEntry e, string countLabel) {
+        if (!e.FilePresent) return;
+        if (e.Loaded) {
+            Console.WriteLine($"  [{label}] Auto-loaded {e.Count:N0} {countLabel}");
+        } else {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"  [{label}] Auto-load failed: {e.Error}");
+            Console.ResetColor();
+        }
     }
 
     private void HandleExport(string[] tokens) {

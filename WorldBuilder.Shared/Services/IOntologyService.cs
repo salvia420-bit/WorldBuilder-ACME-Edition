@@ -115,4 +115,11 @@ public interface IOntologyService {
     /// in-memory index and sets IsScanned=true. Returns entries loaded.
     /// </summary>
     int LoadFromCache(string inputPath);
+
+    /// <summary>
+    /// Discards the in-memory ontology index. Used by project-load to ensure
+    /// state from the previous project doesn't leak into the new one when
+    /// the new project ships no ontology cache.
+    /// </summary>
+    void Clear();
 }

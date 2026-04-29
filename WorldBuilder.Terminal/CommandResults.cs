@@ -130,7 +130,28 @@ public record TransactDiffResult(
 // ── Project Management ─────────────────────────────────────
 public record LoadResult(
     string ProjectName, string ProjectFile,
-    string ProjectDir, string DatDirectory);
+    string ProjectDir, string DatDirectory,
+    LoadAutoRestoreReport AutoRestore);
+
+// Per-loader status for the six side-channel restores Load() performs
+// (ontology cache, building pairings, town/POI/wcid/spawn/region gazetteers).
+// Surfaced through LoadResult so JSON callers can detect partial-load
+// instead of guessing from the absence of stderr lines.
+public record LoadAutoRestoreEntry(
+    string Source,
+    bool FilePresent,
+    bool Loaded,
+    int Count,
+    string? Error = null);
+
+public record LoadAutoRestoreReport(
+    LoadAutoRestoreEntry Ontology,
+    LoadAutoRestoreEntry Pairings,
+    LoadAutoRestoreEntry TownGazetteer,
+    LoadAutoRestoreEntry PoiGazetteer,
+    LoadAutoRestoreEntry WcidAcpedia,
+    LoadAutoRestoreEntry SpawnGazetteer,
+    LoadAutoRestoreEntry Regions);
 
 public record ExportResult(bool Success, string Directory, int? Iteration);
 
@@ -148,8 +169,29 @@ public record ProjectInfoResult(
     string? DatabasePath = null, int? PortalIteration = null);
 
 // ── Terrain Editing ────────────────────────────────────────
+// Success is true when at least one vertex was modified. A "successful"
+// command with VerticesModified=0 (e.g. radius too small, area already at
+// target) returns Success=false so JSON callers can distinguish no-op from
+// effect without having to inspect the count themselves.
 public record TerrainEditResult(
-    int VerticesModified, HashSet<ushort> ModifiedLandblocks);
+    int VerticesModified, HashSet<ushort> ModifiedLandblocks) {
+    public bool Success => VerticesModified > 0;
+}
+
+// Discriminated union of brush-style terrain-edit operations consumed by
+// CommandEngine.ApplyTerrainEdit. New ops (ridge, erode, slope, ...) extend
+// this hierarchy rather than copy-pasting the engine prelude.
+public abstract record TerrainEditOp(float X, float Y, float Radius);
+public sealed record SmoothEdit(float X, float Y, float Radius, float Strength = 0.5f)
+    : TerrainEditOp(X, Y, Radius);
+public sealed record RaiseEdit(float X, float Y, float Radius, int Delta = 5)
+    : TerrainEditOp(X, Y, Radius);
+public sealed record LowerEdit(float X, float Y, float Radius, int Delta = 5)
+    : TerrainEditOp(X, Y, Radius);
+public sealed record SetHeightEdit(float X, float Y, float Radius, byte HeightIndex)
+    : TerrainEditOp(X, Y, Radius);
+public sealed record PaintEdit(float X, float Y, float Radius, byte TerrainType)
+    : TerrainEditOp(X, Y, Radius);
 
 public record RoadResult(
     int Waypoints, int VerticesModified,

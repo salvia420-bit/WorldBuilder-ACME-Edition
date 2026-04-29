@@ -492,19 +492,64 @@ public class JsonCommandProcessor {
         var r = _engine.Load(path);
         return Serialize(new { success = true, command = "load",
             projectName = r.ProjectName, projectFile = r.ProjectFile,
-            projectDir = r.ProjectDir, datDirectory = r.DatDirectory });
+            projectDir = r.ProjectDir, datDirectory = r.DatDirectory,
+            autoRestore = SerializeAutoRestore(r.AutoRestore) });
     }
 
+    private static object SerializeAutoRestore(LoadAutoRestoreReport ar) => new {
+        ontology       = ToAutoRestoreView(ar.Ontology),
+        pairings       = ToAutoRestoreView(ar.Pairings),
+        townGazetteer  = ToAutoRestoreView(ar.TownGazetteer),
+        poiGazetteer   = ToAutoRestoreView(ar.PoiGazetteer),
+        wcidAcpedia    = ToAutoRestoreView(ar.WcidAcpedia),
+        spawnGazetteer = ToAutoRestoreView(ar.SpawnGazetteer),
+        regions        = ToAutoRestoreView(ar.Regions),
+    };
+
+    private static object ToAutoRestoreView(LoadAutoRestoreEntry e) => new {
+        source = e.Source,
+        filePresent = e.FilePresent,
+        loaded = e.Loaded,
+        count = e.Count,
+        error = e.Error,
+    };
+
     private string CmdExport(System.Text.Json.Nodes.JsonNode node) {
-        var dir = node["directory"]?.GetValue<string>() ?? throw new ArgumentException("Missing 'directory' field");
+        var dir = node["directory"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'directory' field");
         var iteration = node["iteration"]?.GetValue<int>();
-        var r = _engine.Export(dir, iteration);
-        return Serialize(new { success = r.Success, command = "export", directory = r.Directory, iteration = r.Iteration });
+        bool reposition = node["reposition"]?.GetValue<bool>() ?? false;
+
+        if (!reposition) {
+            var r = _engine.Export(dir, iteration);
+            return Serialize(new { success = r.Success, command = "export",
+                directory = r.Directory, iteration = r.Iteration });
+        }
+
+        var rr = _engine.ExportWithRepositionAsync(dir, iteration).GetAwaiter().GetResult();
+        // Composite success: export must succeed AND, if reposition was attempted,
+        // it must have succeeded too. A "reposition attempted but failed" must not
+        // be reported as success — that's how a JSON caller detects the case the
+        // REPL surfaces in yellow.
+        bool success = rr.ExportSuccess && (!rr.RepositionAttempted || rr.RepositionSuccess);
+        return Serialize(new {
+            success,
+            command = "export",
+            directory = rr.Directory,
+            iteration = rr.Iteration,
+            exportSuccess = rr.ExportSuccess,
+            repositionAttempted = rr.RepositionAttempted,
+            repositionSuccess = rr.RepositionSuccess,
+            instancesChecked = rr.InstancesChecked,
+            instancesUpdated = rr.InstancesUpdated,
+            landblocksProcessed = rr.LandblocksProcessed,
+            repositionError = rr.RepositionError,
+        });
     }
 
     private string CmdInfo() {
         var r = _engine.GetInfo();
-        if (!r.Loaded) return Serialize(new { success = true, command = "info", loaded = false });
+        if (!r.Loaded) return Serialize(new { success = false, command = "info", loaded = false });
         return Serialize(new { success = true, command = "info", loaded = true,
             projectName = r.ProjectName, projectFile = r.ProjectFile, projectDir = r.ProjectDir,
             datDirectory = r.DatDirectory, databasePath = r.DatabasePath, portalIteration = r.PortalIteration });
@@ -516,57 +561,68 @@ public class JsonCommandProcessor {
 
     private string CmdSmooth(System.Text.Json.Nodes.JsonNode node) {
         float x = F(node, "x"), y = F(node, "y"), radius = F(node, "radius");
-        float strength = node["strength"]?.GetValue<float>() ?? 0.5f;
-        var r = _engine.Smooth(x, y, radius, strength);
-        return Serialize(new { success = true, command = "smooth",
+        float strength = FloatInRange(node, "strength", 0f, 1f, 0.5f);
+        var r = _engine.ApplyTerrainEdit(new SmoothEdit(x, y, radius, strength));
+        return Serialize(new { success = r.Success, command = "smooth",
             verticesModified = r.VerticesModified, landblocks = FormatLbs(r.ModifiedLandblocks) });
     }
 
     private string CmdRaise(System.Text.Json.Nodes.JsonNode node) {
         float x = F(node, "x"), y = F(node, "y"), radius = F(node, "radius");
-        int delta = node["delta"]?.GetValue<int>() ?? 5;
+        int delta = OptionalInt(node, "delta", 5);
         var r = _engine.Raise(x, y, radius, delta);
-        return Serialize(new { success = true, command = "raise",
+        return Serialize(new { success = r.Success, command = "raise",
             verticesModified = r.VerticesModified, delta, landblocks = FormatLbs(r.ModifiedLandblocks) });
     }
 
     private string CmdLower(System.Text.Json.Nodes.JsonNode node) {
         float x = F(node, "x"), y = F(node, "y"), radius = F(node, "radius");
-        int delta = node["delta"]?.GetValue<int>() ?? 5;
+        int delta = OptionalInt(node, "delta", 5);
         var r = _engine.Lower(x, y, radius, delta);
-        return Serialize(new { success = true, command = "lower",
+        return Serialize(new { success = r.Success, command = "lower",
             verticesModified = r.VerticesModified, delta, landblocks = FormatLbs(r.ModifiedLandblocks) });
     }
 
     private string CmdSetHeight(System.Text.Json.Nodes.JsonNode node) {
         float x = F(node, "x"), y = F(node, "y"), radius = F(node, "radius");
-        byte height = node["height"]?.GetValue<byte>() ?? throw new ArgumentException("Missing 'height' field");
-        var r = _engine.SetHeight(x, y, radius, height);
-        return Serialize(new { success = true, command = "set-height",
-            verticesModified = r.VerticesModified, targetHeight = height, landblocks = FormatLbs(r.ModifiedLandblocks) });
+        // The parameter is an index into the LandHeightTable (~Z/2 in meters),
+        // not a Z coordinate. Accept "heightIndex" as the canonical name; keep
+        // "height" as a deprecated alias for backwards compatibility.
+        var raw = node["heightIndex"] ?? node["height"]
+            ?? throw new ArgumentException("Missing 'heightIndex' field");
+        var rawInt = raw.GetValue<int>();
+        if (rawInt < 0 || rawInt > 255)
+            throw new ArgumentException($"'heightIndex' must be 0..255; got {rawInt}");
+        byte heightIndex = (byte)rawInt;
+        var r = _engine.ApplyTerrainEdit(new SetHeightEdit(x, y, radius, heightIndex));
+        return Serialize(new { success = r.Success, command = "set-height",
+            verticesModified = r.VerticesModified, heightIndex,
+            landblocks = FormatLbs(r.ModifiedLandblocks) });
     }
 
     private string CmdPaint(System.Text.Json.Nodes.JsonNode node) {
         float x = F(node, "x"), y = F(node, "y"), radius = F(node, "radius");
-        byte terrainType = node["type"]?.GetValue<byte>() ?? throw new ArgumentException("Missing 'type' field");
-        var r = _engine.Paint(x, y, radius, terrainType);
-        return Serialize(new { success = true, command = "paint",
-            verticesModified = r.VerticesModified, terrainType, landblocks = FormatLbs(r.ModifiedLandblocks) });
+        byte terrainType = ByteInRange(node, "type");
+        var r = _engine.ApplyTerrainEdit(new PaintEdit(x, y, radius, terrainType));
+        return Serialize(new { success = r.Success, command = "paint",
+            verticesModified = r.VerticesModified, terrainType,
+            landblocks = FormatLbs(r.ModifiedLandblocks) });
     }
 
     private string CmdFill(System.Text.Json.Nodes.JsonNode node) {
         float x = F(node, "x"), y = F(node, "y");
-        byte newType = node["type"]?.GetValue<byte>() ?? throw new ArgumentException("Missing 'type' field");
+        byte newType = ByteInRange(node, "type");
         var r = _engine.Fill(x, y, newType);
-        return Serialize(new { success = true, command = "fill",
-            verticesModified = r.VerticesModified, terrainType = newType, landblocks = FormatLbs(r.ModifiedLandblocks) });
+        return Serialize(new { success = r.Success, command = "fill",
+            verticesModified = r.VerticesModified, terrainType = newType,
+            landblocks = FormatLbs(r.ModifiedLandblocks) });
     }
 
     private string CmdRoad(System.Text.Json.Nodes.JsonNode node) {
         float x1 = F(node, "x1"), y1 = F(node, "y1"), x2 = F(node, "x2"), y2 = F(node, "y2");
-        byte roadValue = node["value"]?.GetValue<byte>() ?? 1;
+        byte roadValue = node["value"] is null ? (byte)1 : ByteInRange(node, "value");
         var r = _engine.DrawRoad(x1, y1, x2, y2, roadValue);
-        return Serialize(new { success = true, command = "road",
+        return Serialize(new { success = r.VerticesModified > 0, command = "road",
             waypoints = r.Waypoints, verticesModified = r.VerticesModified,
             roadValue = r.RoadValue, landblocks = FormatLbs(r.ModifiedLandblocks) });
     }
@@ -1865,11 +1921,43 @@ public class JsonCommandProcessor {
     //  Helpers
     // ════════════════════════════════════════════════════
 
-    private static float F(System.Text.Json.Nodes.JsonNode node, string field) =>
-        node[field]?.GetValue<float>() ?? throw new ArgumentException($"Missing '{field}' field");
+    private static float F(System.Text.Json.Nodes.JsonNode node, string field) {
+        var v = node[field]?.GetValue<float>()
+            ?? throw new ArgumentException($"Missing '{field}' field");
+        if (!float.IsFinite(v))
+            throw new ArgumentException($"'{field}' must be finite; got {v}");
+        return v;
+    }
 
     private static uint U(System.Text.Json.Nodes.JsonNode node, string field) =>
         node[field]?.GetValue<uint>() ?? throw new ArgumentException($"Missing '{field}'");
+
+    // Extracts a 0..max integer field and returns it as a byte. Replaces
+    // raw GetValue<byte>() which throws an opaque InvalidOperationException
+    // for values outside 0..255 with no mention of the field.
+    private static byte ByteInRange(System.Text.Json.Nodes.JsonNode node, string field, int max = 255) {
+        var raw = node[field]?.GetValue<int>()
+            ?? throw new ArgumentException($"Missing '{field}' field");
+        if (raw < 0 || raw > max)
+            throw new ArgumentException($"'{field}' must be 0..{max}; got {raw}");
+        return (byte)raw;
+    }
+
+    private static float FloatInRange(System.Text.Json.Nodes.JsonNode node, string field,
+            float min, float max, float fallback) {
+        var raw = node[field]?.GetValue<float>();
+        if (raw is null) return fallback;
+        if (!float.IsFinite(raw.Value))
+            throw new ArgumentException($"'{field}' must be finite; got {raw}");
+        if (raw < min || raw > max)
+            throw new ArgumentException($"'{field}' must be in [{min}, {max}]; got {raw}");
+        return raw.Value;
+    }
+
+    // Reads an int field with a per-field fallback. Just here so the
+    // terrain-edit handlers can stop repeating the ?.GetValue<int>() ?? N pattern.
+    private static int OptionalInt(System.Text.Json.Nodes.JsonNode node, string field, int fallback) =>
+        node[field]?.GetValue<int>() ?? fallback;
 
     private static string[] FormatLbs(HashSet<ushort> lbs) =>
         lbs.Count == 0 ? Array.Empty<string>() : FormatLbsArray(lbs);

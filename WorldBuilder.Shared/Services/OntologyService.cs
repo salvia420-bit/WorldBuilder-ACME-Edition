@@ -1613,6 +1613,11 @@ public class OntologyService : IOntologyService {
         return count;
     }
 
+    public void Clear() {
+        _entries.Clear();
+        _isScanned = false;
+    }
+
     public int LoadFromCache(string inputPath) {
         if (!File.Exists(inputPath))
             throw new FileNotFoundException($"Ontology cache file not found: {inputPath}");
