@@ -1,6 +1,8 @@
 # ACME WorldBuilder
 
-World building tool for Asheron's Call — edit terrain, dungeons, spells, skills, and more, and export directly to DAT files. The **ACME Edition** extends the original WorldBuilder with a **headless terminal** and **agent-driven pipeline**, laying the groundwork for AI-powered autonomous world development.
+World building tool for Asheron's Call — edit terrain, dungeons, spells, skills, creature visuals, ACE weenie scalars, and more, and export directly to DAT files. The **ACME Edition** extends the original WorldBuilder with a **headless terminal** and **agent-driven pipeline**, laying the groundwork for AI-powered autonomous world development.
+
+**User documentation:** step-by-step setup, which editor to use, export options, and MySQL-backed tools are covered in the [User Guide](docs/USER_GUIDE.md).
 
 <p align="center">
   <img src="docs/images/world_map_before.png" width="380" alt="Retail world map (input to AI)">
@@ -43,7 +45,7 @@ Requires **Windows 10/11**, **.NET 8.0** (installer can prompt to install it). T
 
 ---
 
-> **Beta software.** All features are under active development. The newer data editors (Spell, Skill, Vital, Experience, CharGen, SpellSet, Layout) are especially early and have not been thoroughly tested. Expect rough edges, and back up your DAT files before exporting.
+> **Beta software.** All features are under active development. Table-driven editors (Spell, Skill, Vital, Experience, CharGen, SpellSet, Layout), **Weenie Editor**, and **Object Debug** are powerful but still evolving. Expect rough edges, and back up your DAT files (and ACE database when using DB write features) before exporting or saving.
 
 > **First run note:** The initial launch will be slower than usual. ACME WorldBuilder builds several caches on first run (textures, thumbnails, terrain data) that persist across sessions. Subsequent launches will be significantly faster.
 
@@ -614,11 +616,25 @@ The full visual editor is available via the platform-specific projects (`WorldBu
 - Element tree hierarchy with property inspector
 - Visual preview canvas with selection highlighting
 
+### Object Debug
+
+- Load any **Setup** (`0x02…`) or **GfxObj** (`0x01…`) by ID with searchable ID lists
+- **3D preview** with orbit-style navigation (separate from the main terrain camera)
+- **Export / import Wavefront OBJ** for mesh experimentation; optional **Surface DID** when importing (reuses a retail portal surface material)
+
+### Weenie Editor *(beta)*
+
+- **ACE MySQL** — browse weenies from your world database (configure connection in Settings)
+- Edit **scalar** weenie properties (int, int64, bool, float, string, DID, IID) with add/remove rows per ACE property type
+- **Create new weenie** in the database from scratch or from **JSON starter templates** (built-in + user template folders)
+- **3D setup preview** and **icon** preview driven by DAT assets
+
 ### Custom Textures
 
-- **Terrain texture replacement** — import custom images to replace any terrain type
-- **Dungeon surface import** — create new dungeon wall/floor textures
-- Exports overwrite existing RenderSurface entries in-place (no DAT corruption)
+- **Terrain texture replacement** — import custom images to replace terrain types where supported
+- **Dungeon surface import** — create or replace dungeon wall/floor textures
+- **Safe in-place replacement** — terrain and RenderSurface swaps require a compatible **A8R8G8B8**-style surface; mismatched or DXT data is rejected before write
+- **Replace RenderSurface by ID** — overwrite a specific existing RenderSurface (e.g. creature textures) with a replacement image; import/export **validates pixel format** so incompatible surfaces are rejected with a clear error instead of corrupting the DAT
 
 ### DAT Export
 
@@ -626,6 +642,8 @@ The full visual editor is available via the platform-specific projects (`WorldBu
 - Configurable portal iteration
 - Layer-based export control (toggle which layers are included)
 - Overwrite protection
+- Optional **ACE MySQL instance reposition** after export (with connection test and threshold options)
+- **Instance SQL alongside DATs** (when your project has placements): writes `dungeon_instances.sql` for dungeon generator/item/portal placements, and `landblock_instances.sql` for outdoor placements from the landscape editor; optional **apply directly** to MySQL when enabled in export settings
 
 ### Camera & Navigation
 
@@ -642,9 +660,13 @@ The full visual editor is available via the platform-specific projects (`WorldBu
 
 ### Projects
 
-- Point at your base DAT directory, name your project, and go
+- Point at your **base DAT directory**, choose a **name** and **folder**, and save a **`.wbproj`** file
 - Recent projects list on the splash screen
-- All project data stored in a local SQLite database
+- All edit state stored in a **local SQLite** database inside the project; originals are not modified until you **Export Dats…**
+
+### Other tools
+
+- **File → Analyze Dungeon Rooms…** — utility for dungeon room analysis workflows
 
 ### Performance
 
