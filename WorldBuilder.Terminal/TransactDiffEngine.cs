@@ -76,7 +76,7 @@ internal sealed class TransactDiffEngine {
         // back, so we batch the swap by LB to minimise overhead — one swap
         // per LB covers both pre-validation and pre-describe.
         foreach (var lbKey in touchedLbKeys.OrderBy(k => k)) {
-            var per = BuildPerLandblockDiff(lbKey, entry, terrainTouched);
+            var per = BuildPerLandblockDiff(lbKey, entry);
             if (per == null) continue;
             perLb.Add(per);
 
@@ -142,11 +142,14 @@ internal sealed class TransactDiffEngine {
     //  needs a different path because ValidationEngine reads from the live
     //  ActiveDocs; we cover it by swapping the live doc's projection bytes
     //  to pre-state, validating, and restoring. The dispatch loop is single-
-    //  threaded so this swap is safe.
+    //  threaded so the swap is safe against other dispatch reads — but the
+    //  DocumentManager batch flusher runs on a background thread, so the
+    //  swap+restore re-marks the doc dirty so that the next batch flush
+    //  re-persists post-state and doesn't leave pre-bytes in storage.
     // ─────────────────────────────────────────────────────────────────────
 
     private TransactDiffPerLandblock? BuildPerLandblockDiff(ushort lbKey,
-            TransactSnapshotEntry entry, bool terrainTouched) {
+            TransactSnapshotEntry entry) {
         uint lbX = (uint)((lbKey >> 8) & 0xFF);
         uint lbY = (uint)(lbKey & 0xFF);
         string docId = $"landblock_{lbKey:X4}";
@@ -155,12 +158,18 @@ internal sealed class TransactDiffEngine {
         entry.PreState.TryGetValue(docId, out var preLbBytes);
         entry.PostState.TryGetValue(docId, out var postLbBytes);
 
-        // If the LB doc itself wasn't touched but terrain was, we still want
-        // to surface the terrain-categorical comparison for this LB. Use the
-        // current live LB doc as both pre and post object source — only the
-        // terrain projection changed.
-        var preLbDoc = HydrateLandblockDoc(preLbBytes, lbKey);
-        var postLbDoc = HydrateLandblockDoc(postLbBytes, lbKey);
+        // LB doc unchanged but in-scope only via terrain or dungeon: fall back
+        // to live LB so the describer reports the LB's actual current static
+        // objects on both sides (yielding zero object/structure diff for the
+        // LB) instead of an empty doc that would invent phantom "removed"
+        // entries on the post side or vice versa.
+        bool lbDocUntouched = preLbBytes == null && postLbBytes == null && !createdByBatch;
+        var preLbDoc = lbDocUntouched
+            ? CloneLiveLandblockDoc(docId, lbKey)
+            : HydrateLandblockDoc(preLbBytes, lbKey);
+        var postLbDoc = lbDocUntouched
+            ? CloneLiveLandblockDoc(docId, lbKey)
+            : HydrateLandblockDoc(postLbBytes, lbKey);
 
         // Terrain: pre-state from snapshot if terrain was touched, else live.
         TerrainDocument preTerrain = HydrateTerrainDoc(
@@ -206,8 +215,11 @@ internal sealed class TransactDiffEngine {
         // Validation diff: run ValidateAll once against pre-state via live-doc
         // swap, then again against post-state (which is the live state). The
         // swap is bracketed by try/finally so any exception still restores
-        // the live doc to its post-state.
-        var (valAdded, valCleared) = DiffValidation(lbKey, preLbBytes, postLbBytes, createdByBatch);
+        // the live doc to its post-state. We pass the snapshot entry so the
+        // swap can also stash terrain pre-bytes when terrain was touched —
+        // otherwise the pre-validation runs against pre-LB + post-terrain and
+        // the diff invents bogus TRN-edge regressions on every terrain edit.
+        var (valAdded, valCleared) = DiffValidation(lbKey, preLbBytes, postLbBytes, createdByBatch, entry);
 
         // Spawns/POIs in the describer body come from gazetteers and don't
         // change during a transact, so the diff is empty in v1. We still
@@ -333,8 +345,13 @@ internal sealed class TransactDiffEngine {
         var preMatched = new bool[pre.Count];
         var postMatched = new bool[post.Count];
         for (int i = 0; i < pre.Count; i++) {
+            // Don't match two structures with no model id at all — Ordinal
+            // equality of two nulls would happily collapse unrelated structures
+            // together. A structure without a model is unmatchable identity.
+            if (string.IsNullOrEmpty(pre[i].ModelId)) continue;
             for (int j = 0; j < post.Count; j++) {
                 if (postMatched[j]) continue;
+                if (string.IsNullOrEmpty(post[j].ModelId)) continue;
                 if (!string.Equals(pre[i].ModelId, post[j].ModelId, StringComparison.Ordinal)) continue;
                 if (Vector3.DistanceSquared(pre[i].Origin, post[j].Origin) <= 1f) {
                     preMatched[i] = true;
@@ -373,11 +390,20 @@ internal sealed class TransactDiffEngine {
     // ─────────────────────────────────────────────────────────────────────
 
     private (List<TransactDiffValidationEntry> Added, List<TransactDiffValidationEntry> Cleared)
-            DiffValidation(ushort lbKey, byte[]? preLbBytes, byte[]? postLbBytes, bool createdByBatch) {
+            DiffValidation(ushort lbKey, byte[]? preLbBytes, byte[]? postLbBytes,
+                           bool createdByBatch, TransactSnapshotEntry entry) {
         uint lbX = (uint)((lbKey >> 8) & 0xFF);
         uint lbY = (uint)(lbKey & 0xFF);
         var added = new List<TransactDiffValidationEntry>();
         var cleared = new List<TransactDiffValidationEntry>();
+
+        bool terrainPreAvailable = entry.PreState.ContainsKey("terrain");
+        // If neither the LB doc nor terrain changed, pre and post validation
+        // would produce the same diagnostics by definition — skip the swap and
+        // the post run entirely. (LB might be in scope only via dungeon doc.)
+        if (!createdByBatch && preLbBytes == null && !terrainPreAvailable) {
+            return (added, cleared);
+        }
 
         ValidationReport? postReport = null;
         try { postReport = _cmd.ValidateAll(lbX, lbY); }
@@ -386,8 +412,12 @@ internal sealed class TransactDiffEngine {
         }
 
         ValidationReport? preReport = null;
-        if (!createdByBatch && preLbBytes != null) {
-            preReport = ValidatePreStateViaSwap(lbKey, lbX, lbY, preLbBytes, postLbBytes);
+        if (createdByBatch) {
+            // LB didn't exist before the batch — pre-validation is empty by
+            // definition, so every post diagnostic is "added".
+        } else {
+            byte[]? preTerrainBytes = terrainPreAvailable ? entry.PreState["terrain"] : null;
+            preReport = ValidatePreStateViaSwap(lbKey, lbX, lbY, preLbBytes, preTerrainBytes);
         }
 
         var preDiags = preReport?.Diagnostics
@@ -410,27 +440,58 @@ internal sealed class TransactDiffEngine {
         return (added, cleared);
     }
 
+    // Swap LB and (optionally) terrain to pre-state, run ValidateAll, restore.
+    // preLbBytes==null is allowed — happens when the LB doc itself wasn't
+    // touched but terrain was; only the terrain doc gets swapped in that case.
     private ValidationReport? ValidatePreStateViaSwap(ushort lbKey, uint lbX, uint lbY,
-            byte[] preLbBytes, byte[]? postLbBytes) {
+            byte[]? preLbBytes, byte[]? preTerrainBytes) {
         var dm = _cmd.ProjectManager.CurrentProject?.DocumentManager;
         if (dm == null) return null;
-        string docId = $"landblock_{lbKey:X4}";
-        if (!dm.ActiveDocs.TryGetValue(docId, out var liveDoc)) return null;
+        string lbDocId = $"landblock_{lbKey:X4}";
 
-        // Capture the live (post-state) bytes ourselves rather than trusting
-        // the snapshot's PostState[id] — if any later operation has mutated
-        // the live doc since commit we want to restore to *current* live, not
-        // the historical post-snapshot.
-        byte[] currentLive = liveDoc.SaveToProjection();
+        // Capture current live bytes ourselves rather than trusting the
+        // snapshot's PostState[id] — if any later operation mutated the live
+        // doc since commit we want to restore to *current* live, not the
+        // historical post-snapshot.
+        BaseDocument? liveLb = null;
+        byte[]? currentLiveLb = null;
+        if (preLbBytes != null && dm.ActiveDocs.TryGetValue(lbDocId, out var lbDoc)) {
+            liveLb = lbDoc;
+            currentLiveLb = lbDoc.SaveToProjection();
+        }
+
+        BaseDocument? liveTerrain = null;
+        byte[]? currentLiveTerrain = null;
+        if (preTerrainBytes != null && dm.ActiveDocs.TryGetValue("terrain", out var terrainDoc)) {
+            liveTerrain = terrainDoc;
+            currentLiveTerrain = terrainDoc.SaveToProjection();
+        }
+
+        // Bail if we can't actually do the swap — ValidateAll would report
+        // post-state, which is misleading as a "pre" report.
+        if (liveLb == null && liveTerrain == null) return null;
+
         try {
-            liveDoc.LoadFromProjection(preLbBytes);
+            if (liveLb != null) liveLb.LoadFromProjection(preLbBytes!);
+            if (liveTerrain != null) liveTerrain.LoadFromProjection(preTerrainBytes!);
             return _cmd.ValidateAll(lbX, lbY);
         } catch (Exception ex) {
             Console.Error.WriteLine($"[TransactDiff] Pre-validate swap failed for 0x{lbKey:X4}: {ex.Message}");
             return null;
         } finally {
-            // Always restore — even if validation threw mid-swap.
-            try { liveDoc.LoadFromProjection(currentLive); } catch { }
+            // Always restore — even if validation threw mid-swap. ForceSave
+            // re-queues the doc with post-state on the DocumentManager batch
+            // channel, so a flusher that picked up an in-flight pre-state
+            // write is overwritten by the canonical post-state on the next
+            // 2-second batch.
+            if (liveLb != null && currentLiveLb != null) {
+                try { liveLb.LoadFromProjection(currentLiveLb); } catch { }
+                try { liveLb.ForceSave(); } catch { }
+            }
+            if (liveTerrain != null && currentLiveTerrain != null) {
+                try { liveTerrain.LoadFromProjection(currentLiveTerrain); } catch { }
+                try { liveTerrain.ForceSave(); } catch { }
+            }
         }
     }
 
@@ -744,6 +805,18 @@ internal sealed class TransactDiffEngine {
         var doc = new LandblockDocument(NullLogger.Instance) { Id = $"landblock_{lbKey:X4}" };
         if (bytes != null) doc.LoadFromProjection(bytes);
         return doc;
+    }
+
+    // Copy the live LB doc's bytes into an ephemeral clone so the describer
+    // sees the actual current static-objects state for an LB that's in scope
+    // only via terrain or dungeon (no LB-level snapshot bytes exist).
+    private LandblockDocument CloneLiveLandblockDoc(string docId, ushort lbKey) {
+        var liveDm = _cmd.ProjectManager.CurrentProject?.DocumentManager;
+        if (liveDm != null && liveDm.ActiveDocs.TryGetValue(docId, out var live)
+                && live is LandblockDocument liveLb) {
+            return HydrateLandblockDoc(liveLb.SaveToProjection(), lbKey);
+        }
+        return HydrateLandblockDoc(null, lbKey);
     }
 
     private TerrainDocument HydrateTerrainDoc(byte[]? bytes) {
