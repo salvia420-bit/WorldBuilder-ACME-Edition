@@ -344,8 +344,8 @@ public static class RenderPreviewRenderer {
         float tileWu = input.TerrainTileWu > 0.5f ? input.TerrainTileWu : 24f;
         bool useTerrainTextures = input.TerrainTextures != null;
 
-        var pixelBuffer = new byte[W * H * 4];
         if (drawTerrain) {
+        var pixelBuffer = new byte[W * H * 4];
         for (int py = 0; py < H; py++) {
             // Flip Y so that world +Y (north) is at the top of the image.
             float worldYFrac = (H - 1 - py) / (float)H;
@@ -370,7 +370,8 @@ public static class RenderPreviewRenderer {
 
                 int outIdx = (px + py * W) * 4;
 
-                if (!hasData[i00] && !hasData[i10] && !hasData[i01] && !hasData[i11]) {
+                bool d00 = hasData[i00], d10 = hasData[i10], d01 = hasData[i01], d11 = hasData[i11];
+                if (!d00 && !d10 && !d01 && !d11) {
                     pixelBuffer[outIdx + 0] = BackgroundColor.R;
                     pixelBuffer[outIdx + 1] = BackgroundColor.G;
                     pixelBuffer[outIdx + 2] = BackgroundColor.B;
@@ -378,11 +379,34 @@ public static class RenderPreviewRenderer {
                     continue;
                 }
 
-                // Bilinear-interp height.
-                float h00 = heights[i00], h10 = heights[i10], h01 = heights[i01], h11 = heights[i11];
-                float h0 = h00 + (h10 - h00) * fu;
-                float h1 = h01 + (h11 - h01) * fu;
-                float h  = h0  + (h1  - h0 ) * fv;
+                // Bilinear weights, zeroed for no-data corners and renormalized
+                // over the valid set. Without this, missing vertices contribute
+                // their default values (types=0 → BarrenRock, heights=0) into
+                // the blend, producing a brown/dark halo at every populated /
+                // unpopulated LB seam (world-edge renders, partial regions).
+                float w00 = d00 ? (1 - fu) * (1 - fv) : 0f;
+                float w10 = d10 ? fu * (1 - fv) : 0f;
+                float w01 = d01 ? (1 - fu) * fv : 0f;
+                float w11 = d11 ? fu * fv : 0f;
+                float wsum = w00 + w10 + w01 + w11;
+                if (wsum < 1e-6f) {
+                    // Pixel sits exactly on a corner whose vertex has no data
+                    // but at least one diagonal does. Equal-weight the valid
+                    // corners so we don't divide by zero or fall to background.
+                    int validCount = (d00 ? 1 : 0) + (d10 ? 1 : 0) + (d01 ? 1 : 0) + (d11 ? 1 : 0);
+                    float eq = 1f / validCount;
+                    w00 = d00 ? eq : 0f;
+                    w10 = d10 ? eq : 0f;
+                    w01 = d01 ? eq : 0f;
+                    w11 = d11 ? eq : 0f;
+                } else {
+                    float inv = 1f / wsum;
+                    w00 *= inv; w10 *= inv; w01 *= inv; w11 *= inv;
+                }
+
+                // Bilinear-interp height with renormalized weights.
+                float h = heights[i00] * w00 + heights[i10] * w10
+                        + heights[i01] * w01 + heights[i11] * w11;
 
                 // 4-corner sample. With AC terrain textures available, sample
                 // each corner's tile at the world-position (mod tileWu) and
@@ -403,10 +427,6 @@ public static class RenderPreviewRenderer {
                     c01 = types[i01] < TerrainPalette.Length ? TerrainPalette[types[i01]] : BackgroundColor;
                     c11 = types[i11] < TerrainPalette.Length ? TerrainPalette[types[i11]] : BackgroundColor;
                 }
-                float w00 = (1 - fu) * (1 - fv);
-                float w10 = fu * (1 - fv);
-                float w01 = (1 - fu) * fv;
-                float w11 = fu * fv;
                 var tc = (
                     R: (byte)(c00.R * w00 + c10.R * w10 + c01.R * w01 + c11.R * w11),
                     G: (byte)(c00.G * w00 + c10.G * w10 + c01.G * w01 + c11.G * w11),
@@ -414,10 +434,17 @@ public static class RenderPreviewRenderer {
                 );
 
                 // Slope from finite differences (1 cell = 24 world units).
-                int iuL = Math.Max(0, iu - 1), iuR = Math.Min(VW - 1, iu + 1);
-                int ivD = Math.Max(0, iv - 1), ivU = Math.Min(VH - 1, iv + 1);
-                float dx = (heights[iuR + iv * VW] - heights[iuL + iv * VW]) / ((iuR - iuL) * 24f + 1e-6f);
-                float dy = (heights[iu  + ivU * VW] - heights[iu  + ivD * VW]) / ((ivU - ivD) * 24f + 1e-6f);
+                // Skip neighbors that lack data — sampling them treats the
+                // missing vertex as height 0, producing a fake cliff at every
+                // loaded / unloaded LB boundary that drives shade to floor.
+                int iuL = (iu - 1 >= 0 && hasData[(iu - 1) + iv * VW]) ? iu - 1 : iu;
+                int iuR = (iu + 1 < VW && hasData[(iu + 1) + iv * VW]) ? iu + 1 : iu;
+                int ivD = (iv - 1 >= 0 && hasData[iu + (iv - 1) * VW]) ? iv - 1 : iv;
+                int ivU = (iv + 1 < VH && hasData[iu + (iv + 1) * VW]) ? iv + 1 : iv;
+                float dxDen = (iuR - iuL) * 24f;
+                float dyDen = (ivU - ivD) * 24f;
+                float dx = dxDen > 0f ? (heights[iuR + iv * VW] - heights[iuL + iv * VW]) / dxDen : 0f;
+                float dy = dyDen > 0f ? (heights[iu  + ivU * VW] - heights[iu  + ivD * VW]) / dyDen : 0f;
 
                 var n = Vector3.Normalize(new Vector3(-dx, -dy, 1f));
                 float dot = Vector3.Dot(n, lightDir);

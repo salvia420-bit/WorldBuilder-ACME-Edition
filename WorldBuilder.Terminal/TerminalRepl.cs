@@ -201,11 +201,12 @@ public class TerminalRepl {
     private void HandleRenderPreview(string[] tokens) {
         if (!CheckProject()) return;
         if (tokens.Length < 3) {
-            Console.WriteLine("Usage: render-preview <lbX> <lbY> [radius] [resolution] [--no-overlay] [--out <path>]");
+            Console.WriteLine("Usage: render-preview <lbX> <lbY> [radius] [resolution] [--no-overlay] [--use-sprites] [--out <path>]");
             Console.WriteLine("  Examples:");
             Console.WriteLine("    render-preview 169 180                         # single LB (Holtburg) @1024");
             Console.WriteLine("    render-preview 169 180 2 1536                  # 5x5 grid @ 1536");
             Console.WriteLine("    render-preview 169 180 0 1024 --out hb.png");
+            Console.WriteLine("    render-preview 169 180 0 2048 --use-sprites    # blit DAT sprites (atlas required)");
             return;
         }
         if (!TryParseUint(tokens[1], "lbX", out uint lbX)) return;
@@ -214,6 +215,7 @@ public class TerminalRepl {
         int radius = 0;
         int resolution = 1024;
         bool overlay = true;
+        bool useSprites = false;
         string? outPath = null;
 
         // Optional positional radius + resolution.
@@ -226,6 +228,7 @@ public class TerminalRepl {
         for (int i = posIdx; i < tokens.Length; i++) {
             if (tokens[i] == "--no-overlay") overlay = false;
             else if (tokens[i] == "--overlay") overlay = true;
+            else if (tokens[i] == "--use-sprites") useSprites = true;
             else if (tokens[i] == "--out" && i + 1 < tokens.Length) {
                 outPath = tokens[++i];
             } else {
@@ -238,7 +241,7 @@ public class TerminalRepl {
         outPath ??= Path.Combine(Environment.CurrentDirectory,
             $"render_{lbX:X2}{lbY:X2}_r{radius}.png");
 
-        var result = _engine.RenderPreview(lbX, lbY, radius, resolution, overlay, outPath);
+        var result = _engine.RenderPreview(lbX, lbY, radius, resolution, overlay, outPath, useSprites);
         Console.WriteLine();
         Console.WriteLine($"  Rendered 0x{result.CenterLbKey:X4} ({lbX},{lbY}) radius={result.Radius} → {result.Resolution}×{result.Resolution} px");
         Console.WriteLine($"  Landblocks  : {result.LandblockCount} populated of {(2*result.Radius+1)*(2*result.Radius+1)}");

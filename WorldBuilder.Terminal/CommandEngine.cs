@@ -763,10 +763,14 @@ public class CommandEngine {
         }
 
         ushort centerKey = LbKey(centerLbX, centerLbY);
+        // Report the count actually drawn (renderer's bounds-clipped value)
+        // rather than the pre-clip total — objects whose origin lies outside
+        // the rendered region drop out of the visual but used to inflate the
+        // count, masking real density signal in the JSON channel.
         return new RenderPreviewResult(
             centerLbX, centerLbY, centerKey,
             radius, finalRes, lbPx,
-            lbCount, objCount, renderOut.CliffCount,
+            lbCount, renderOut.RenderedObjectCount, renderOut.CliffCount,
             overlay,
             renderOut.PngBytes,
             outputPath);
