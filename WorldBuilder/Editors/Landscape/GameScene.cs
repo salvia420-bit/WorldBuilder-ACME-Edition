@@ -61,6 +61,10 @@ namespace WorldBuilder.Editors.Landscape {
         private readonly Dictionary<ushort, List<StaticObject>> _dungeonStaticObjects = new();
         private readonly Dictionary<ushort, List<StaticObject>> _buildingStaticObjects = new();
         private readonly ConcurrentDictionary<ushort, List<StaticObject>> _weenieSpawnObjects = new();
+        // Cross-context warmup queue: drained per-frame and routed into each context's
+        // ModelWarmupQueue. Without it, weenie spawns whose models aren't already cached
+        // silently skip rendering until something else triggers a load.
+        private readonly ConcurrentQueue<(uint Id, bool IsSetup)> _pendingModelWarmup = new();
         private readonly Dictionary<ushort, List<uint>> _dungeonStaticParentCells = new();
         private readonly Dictionary<ushort, List<uint>> _buildingStaticParentCells = new();
         internal readonly TerrainSystem _terrainSystem;
@@ -291,6 +295,7 @@ namespace WorldBuilder.Editors.Landscape {
             var requiredChunks = DataManager.GetRequiredChunks(cameraPosition);
 
             IntegrateBackgroundLoadResults();
+            DrainPendingModelWarmup();
             RetryMissingEnvCells(cameraPosition);
             ProcessPendingSceneryRegen();
 
@@ -414,6 +419,34 @@ namespace WorldBuilder.Editors.Landscape {
 
         /// <summary>Fires when a background-loaded landblock has been integrated into the live scene.</summary>
         public event Action<ushort>? LandblockIntegrated;
+
+        /// <summary>Queue a model id for cross-context warmup. Picked up next frame by DrainPendingModelWarmup.</summary>
+        public void QueueModelWarmup(uint modelId, bool isSetup) {
+            _pendingModelWarmup.Enqueue((modelId, isSetup));
+        }
+
+        private void DrainPendingModelWarmup() {
+            if (_pendingModelWarmup.IsEmpty) return;
+            int queued = 0;
+            int alreadyCached = 0;
+            int failed = 0;
+            while (_pendingModelWarmup.TryDequeue(out var item)) {
+                foreach (var context in _contexts.Values) {
+                    if (context.ObjectManager.TryGetCachedRenderData(item.Id) != null) {
+                        alreadyCached++;
+                    }
+                    else if (context.ObjectManager.IsKnownFailure(item.Id)) {
+                        failed++;
+                    }
+                    else {
+                        context.ModelWarmupQueue.Enqueue(item);
+                        queued++;
+                    }
+                }
+            }
+            if (queued > 0 || failed > 0)
+                Console.WriteLine($"[Spawns] DrainWarmup: {queued} queued, {alreadyCached} already cached, {failed} known failures, {_contexts.Count} context(s)");
+        }
 
         /// <summary>
         /// Picks up landblocks that were loaded before the render context existed and
@@ -1356,6 +1389,12 @@ namespace WorldBuilder.Editors.Landscape {
         /// <summary>Replaces (or sets) the weenie-spawn list for a landblock and triggers a static-cache rebuild.</summary>
         public void SetWeenieSpawns(ushort lbKey, List<StaticObject> spawns) {
             _weenieSpawnObjects[lbKey] = spawns;
+            var uniqueIds = new HashSet<uint>();
+            foreach (var obj in spawns) {
+                if (uniqueIds.Add(obj.Id)) {
+                    _pendingModelWarmup.Enqueue((obj.Id, obj.IsSetup));
+                }
+            }
             _staticObjectsDirty = true;
         }
 

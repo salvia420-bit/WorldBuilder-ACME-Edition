@@ -8,6 +8,8 @@ patch-by-patch.
 
 Last full audit: **2026-04-26** (incremental: 2026-04-29 — `44f47f8` gizmo improvement and `fa7c58c` surface-browser paging + terrain conformance ported; later same day `b9ffe3e` dungeon view fill ported, `38b22c2` texture fixes / docs ported partially, and `15cb9ed` logging + dat-export fix ported in full — closed the audit window. Also same day `3457ea7` SpellEditor copy spell ported in full, `39d68d7` WorldGen tweaks ported partially, and `4dc3983` ported in full across two passes — first the dungeon object-browser slice, then the property-pickers + entity-enums + Weenie-editor + remaining dungeon/landscape wire-up. Final 04-29 pass: `67912c1` SQL-export reposition reclassified ✅ PORTED — verification showed the SQL connector + `InstanceRepositionService` + `RepositionContext` + `LandblockInstanceRecord` + DB-export wiring were all already in place from prior slice work and locally extended with indoor-building delta support; doc had it as TODO. Also ported `d780244` spell-editor UX improvements (presets, undo, validation, toast, paging, sort, change tracking) — spell-only slice; the landscape/dungeon/InstancePlacementsPanelView pieces depend on `d512ef2` and stay deferred. Auto-merge produced two `CopySpell` methods (upstream's new one + our 3457ea7 one); resolved with `55604d2`'s pattern (delete the duplicate, hoist DB-clone block into `CloneDbSpellRecord` helper) — so `55604d2` lands ✅ PORTED in the same pass. **2026-04-29 final**: `239c0c1` (new monster builder) + `92fafff` (monster editor improvements) ported — Cluster B almost closed, only `d512ef2` (ACE DB instance placements) remains TODO. The `239c0c1` cherry-pick auto-merged most of the file but conflicted on `LandscapeEditorViewModel.GenerateWorld` (where upstream's pre-commit base differs from ours: upstream had FreshStart + the big GenerateWorld upgrade; we have the simpler version). Resolution: dropped the entire upstream GenerateWorld block and kept ours — Monster editor doesn't depend on it. `GameScene` conflict bringing in duplicate Wave-G content was resolved by keeping only the two genuinely-new methods (`InvalidateEnvCellsForLandblock`, `PreviewBuildingInterior`); `QueueModelWarmup` + `_pendingModelWarmup` were skipped (consistent with the deliberate Wave G skips). Added a stub `DocumentManager.SkipDatStatics { get; set; }` property so the cherry-picked GameScene retry-loop guard compiles. Also backfilled `38b22c2`'s previously-skipped Monster pieces: `ReplaceRenderSurfaceAsync` [RelayCommand] + the GUI button in `MonsterEditorView.axaml` + the `MonsterPreviewView.axaml` inner-Panel `#0d0a14` background.
 
+**2026-04-29 follow-up (common-sense Wave G backfill):** ported the previously-skipped `_pendingModelWarmup` queue + `DrainPendingModelWarmup` helper + `QueueModelWarmup(uint, bool)` public API in `GameScene.cs`. `SetWeenieSpawns` now enqueues each unique spawn id to the cross-context queue. Without this, weenie spawns whose models weren't already in the cache silently skipped rendering until something else triggered a load — exactly the failure mode flagged in the original Wave G skip note. `_lastVisibleCellHash` (visibility-cache hash refinement) was N/A — local doesn't carry the upstream `_lastCameraCellId`/`_lastVisibleCellCount` cache fields and instead aggressively rebuilds whenever `visibility != null`, so the optimization has nothing to attach to. `_lastSpawnDiag` log throttling skipped — depends on per-frame `context` + `_visibleObjectsBuffer` plumbing the local doesn't have in the same shape; `DrainPendingModelWarmup`'s own per-drain `Console.WriteLine` already gives queue-depth visibility. Same pass: `b8a09dd` reclassified ✅ PORTED — its three isolated, non-dungeon-refactor pieces (Landscape.frag/vert shader fixes adopting the AC client's TexMerge sequential-blend + actual `dot(N, -L)` lighting; `DocumentManager` `isNewDoc` flag re-projecting after creation; `LandblockDocument._loadedFromProjection` skip-DAT-reinit) were already silently in place from prior slice work; the doc had this commit listed as DEFERRED on the dungeon-refactor chain.
+
 ## Quick orient
 
 | Side | Branch | HEAD |
@@ -63,7 +65,7 @@ Sorted chronologically.
 
 | SHA | Date | Subject | Files | ± Lines | Status | Notes |
 |---|---|---|---|---|---|---|
-| `b8a09dd` | 03-04 | Dungeon editor refactor, landscape shader fix, doc save bugs | 27 | +1 700/-1 100 | 🔒 DEFERRED | Begins the dungeon-editor refactor chain. |
+| `b8a09dd` | 03-04 | Dungeon editor refactor, landscape shader fix, doc save bugs | 27 | +1 700/-1 100 | 🟡 PARTIAL | Reclassified 2026-04-29. Three isolated non-dungeon pieces already silently in place from prior slice work: `Chorizite.OpenGLSDLBackend/Shaders/Landscape.frag` (sequential overlay blending matching AC client's `TexMerge::FillTempTexBuffer` — `totalAlpha`/`hasAny`/`coverage` form, `maskBlend3` removed), `Landscape.vert` (`vLightingFactor = max(0, dot(vNormal, -normalize(xLightDirection)))` — actual lambert instead of constant 1.0), `DocumentManager.cs` (`isNewDoc` flag + post-create `UpdateDocumentAsync(SaveToProjection())` so a fresh doc is persisted with its initial projection), `LandblockDocument.cs` (`_loadedFromProjection` flag short-circuits `InitInternal` re-fetching from the DAT when the doc was already loaded from the storage projection). The dungeon-editor-refactor majority (DungeonDocument +216, DungeonEditorViewModel rewrite, DungeonGenerator/KnowledgeBuilder/Prefab/CellEditingService/DungeonDialogService net-new, full Commands/* family) remains 🔒 DEFERRED on the chain. |
 | `da88e74` | 03-04 | more prefab stuff | 5 | +356/-39 | 🔒 DEFERRED | Dungeon prefab system. |
 | `7b89961` | 03-04 | More prefab stuff, generator, favorites | many | large | 🔒 DEFERRED | Dungeon prefab + generator. |
 | `67912c1` | 03-04 | add SQL connector to export, direct DB Z-shift | 13 | +705/-102 | ✅ PORTED | Reclassified 2026-04-29. Verification: `AceDbSettings.cs` matches upstream byte-for-byte; `InstanceRepositionService.cs` / `LandblockInstanceRecord.cs` / `RepositionContext.cs` are local supersets (extended with indoor-building Z deltas + quaternion angles for full placement round-trip from later commits — Wave G); `AceDbConnector` has all three methods (`TestConnectionAsync`/`GetOutdoorInstancesAsync`/`ExecuteSqlAsync`); `Project.cs` + `ExportDatsWindowViewModel` + `ServiceCollectionExtensions` + `MainViewModel` all wired. The commit landed silently as part of the slice work — audit had it tagged TODO because the original cherry-pick into our heavily-modified `AceDbConnector.cs` was anticipated to conflict. |
@@ -109,9 +111,9 @@ Sorted chronologically.
 
 ### Tally
 - **20 ✅ PORTED** (incl. `5faec77` heightmap import + `7293629` mini map landed 2026-04-26; `44f47f8` gizmo improvement and `fa7c58c` surface-browser paging + terrain conformance landed 2026-04-29; `b9ffe3e` dungeon view fill landed 2026-04-29; `15cb9ed` logging + dat-export fix landed 2026-04-29 — closed the audit window; `3457ea7` SpellEditor copy spell + ACE-DB save landed 2026-04-29; `4dc3983` Weenie property enums + DID/int pickers + dungeon/landscape browser wire-up landed 2026-04-29 in two passes — landscape-side favorites/paging hunks deferred, see row; `67912c1` SQL-export reposition reclassified ✅ on 2026-04-29 audit — already silently in place from prior slice work; `55604d2` spell-editor rebase fix landed 2026-04-29 as the d780244 merge resolution; `239c0c1` Monster builder + `92fafff` Monster editor improvements landed 2026-04-29 final pass; `38b22c2` reclassified ✅ same pass after Monster-editor backfill of `ReplaceRenderSurfaceAsync` + GUI button + preview-Panel background)
-- **4 🟡 PARTIAL** (`f26345e` slices 1-3 ✅ + slice 4 waves A, B, C, D, E, G ✅; wave F (Layout editor) ⏳ — `34c612b` portal-defer + dead-code deletion ✅; LayoutEditorViewModel plumbing pending Wave F — `39d68d7` WorldGen substantive tweaks ✅; FreshStart + big GenerateWorld upgrade skipped, depends on `ClearAllStatics`/`SkipDatStatics` (now stub-only)/`QueueModelWarmup` — `d780244` spell-editor UX slice ✅ landed 2026-04-29; landscape/dungeon/InstancePlacementsPanelView pieces deferred behind `d512ef2`)
+- **5 🟡 PARTIAL** (`b8a09dd` reclassified 2026-04-29 — landscape shader fixes + DocumentManager/LandblockDocument doc-save bug fixes ✅ already silently in place; dungeon-editor refactor majority remains DEFERRED — `f26345e` slices 1-3 ✅ + slice 4 waves A, B, C, D, E, G ✅ (Wave G `_pendingModelWarmup`/`DrainPendingModelWarmup`/`QueueModelWarmup` backfilled 2026-04-29; `_lastSpawnDiag` and `_lastVisibleCellHash` skipped — see Wave G section); wave F (Layout editor) ⏳ — `34c612b` portal-defer + dead-code deletion ✅; LayoutEditorViewModel plumbing pending Wave F — `39d68d7` WorldGen substantive tweaks ✅; FreshStart + big GenerateWorld upgrade skipped, depends on `ClearAllStatics`/`SkipDatStatics` (now stub-only)/`QueueModelWarmup` (now landed) — `d780244` spell-editor UX slice ✅ landed 2026-04-29; landscape/dungeon/InstancePlacementsPanelView pieces deferred behind `d512ef2`)
 - **4 🚫 BLOCKED** (`40e9567`, `ee39f71`, `7d6ce84` plus prior; `7d6ce84` blocked on Wave F shape — see row)
-- **14 🔒 DEFERRED** (large refactors or stacked dungeon-chain — port only with in-game testing)
+- **13 🔒 DEFERRED** (large refactors or stacked dungeon-chain — port only with in-game testing)
 - **1 🔧 PERMISSIONS** (just needs the right token to push)
 - **1 ⏳ TODO** (`d512ef2` ACE DB instance placements — only TODO remaining after Monster cluster closed)
 
@@ -248,12 +250,24 @@ toggles).
   landblocks refresh.
 
 **Skipped from upstream's Wave G** (deliberately):
-- _pendingModelWarmup queue + DrainPendingModelWarmup helper — would
+- ~~_pendingModelWarmup queue + DrainPendingModelWarmup helper — would
   smooth weenie-spawn mesh loading. Without it, spawns pointing at
   models not yet warmed will silently skip until something else
-  triggers a load. Worth revisiting if it shows up in practice.
-- _lastSpawnDiag log throttling — diagnostic only.
-- _lastVisibleCellHash visibility-cache hash refinement — perf only.
+  triggers a load. Worth revisiting if it shows up in practice.~~
+  ✅ landed 2026-04-29: cross-context `_pendingModelWarmup` queue +
+  `DrainPendingModelWarmup` (called from `Update()` after
+  `IntegrateBackgroundLoadResults`) + public `QueueModelWarmup(uint, bool)`
+  API + `SetWeenieSpawns` enqueue of unique spawn ids. Drain logs
+  per-call queue / cached / failed counts.
+- _lastSpawnDiag log throttling — diagnostic only. Skipped permanently:
+  upstream's diag block depends on per-frame `context` + `_visibleObjectsBuffer`
+  plumbing the local doesn't have in the same shape; the new
+  `DrainPendingModelWarmup` already prints queue activity.
+- _lastVisibleCellHash visibility-cache hash refinement — N/A locally.
+  Local `GetAllStaticObjects` doesn't carry the upstream
+  `_lastCameraCellId`/`_lastVisibleCellCount` cache fields and
+  unconditionally rebuilds whenever `visibility != null`, so the hash
+  optimization has nothing to attach to.
 - The fancy GenerateWorld replacement in LandscapeEditorViewModel
   (minimap data + progress dialog + town summary panel + CSV export).
   See "the big GenerateWorld upgrade remaining" below.
@@ -293,8 +307,11 @@ toggles).
   shows a progress dialog, runs Generate on a Task, and after the
   result builds a town summary panel + CSV export. Depends on
   LandblockDocument.ClearAllStatics, TerrainDocument.ApplyBulkImport,
-  DocumentManager.SkipDatStatics, Scene.QueueModelWarmup — none of
-  which are ported. Our simpler version still works.
+  DocumentManager.SkipDatStatics (stub only — no behaviour),
+  Scene.QueueModelWarmup (✅ landed 2026-04-29 as part of the
+  common-sense Wave G backfill). Still partially blocked on
+  ClearAllStatics / ApplyBulkImport / real SkipDatStatics. Our
+  simpler version still works.
 
 ## Workflow for porting future commits
 
