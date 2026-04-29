@@ -2298,8 +2298,17 @@ public class JsonCommandProcessor {
         // Tile-cache invalidation hook: when a transact actually committed,
         // notify the tile pipeline so its manifest reflects the dirty LBs.
         // No-op if the tile pipeline hasn't been initialized yet.
+        // Touched-only is not enough — a batch that creates a new dungeon doc
+        // (no pre-snapshot, so it lands in DocumentsCreated, not DocumentsTouched)
+        // would otherwise leave that LB's tile stale.
         if (result.Success && result.Status == "committed") {
-            try { _engine.OnTransactCommitted(result.Journal.DocumentsTouched); }
+            try {
+                var dirtyDocs = result.Journal.DocumentsTouched
+                    .Concat(result.Journal.DocumentsCreated)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
+                _engine.OnTransactCommitted(dirtyDocs);
+            }
             catch (Exception ex) { Console.Error.WriteLine($"[Tiles] Invalidation skipped: {ex.Message}"); }
         }
 
@@ -2319,7 +2328,12 @@ public class JsonCommandProcessor {
             string renderMode = node["renderMode"]?.GetValue<string>()?.ToLowerInvariant() ?? "overlay";
             int resolution = (node["resolution"]?.GetValueKind() == JsonValueKind.Number)
                 ? node["resolution"]!.GetValue<int>() : 1024;
-            if (result.Status != "committed") {
+            if (result.Status == "rejected") {
+                inlineDiff = new System.Text.Json.Nodes.JsonObject {
+                    ["errorCode"] = "TXDIFF-REJECTED",
+                    ["error"] = "Transaction was rejected before any op ran — no diff is retained for it.",
+                };
+            } else if (result.Status != "committed") {
                 inlineDiff = new System.Text.Json.Nodes.JsonObject {
                     ["errorCode"] = "TXDIFF-ROLLED-BACK",
                     ["error"] = "Transaction was rolled back — no diff is retained for it.",
@@ -2380,11 +2394,21 @@ public class JsonCommandProcessor {
         if (node["lbs"] is System.Text.Json.Nodes.JsonArray lbArr && lbArr.Count > 0) {
             lbFilter = new HashSet<ushort>();
             foreach (var item in lbArr.OfType<System.Text.Json.Nodes.JsonNode>()) {
-                if (item is System.Text.Json.Nodes.JsonArray pair && pair.Count == 2) {
-                    uint lbX = pair[0]!.GetValue<uint>();
-                    uint lbY = pair[1]!.GetValue<uint>();
-                    lbFilter.Add((ushort)((lbX << 8) | lbY));
-                }
+                if (item is not System.Text.Json.Nodes.JsonArray pair || pair.Count != 2) continue;
+                // GetValue<uint>() throws on non-numeric entries — skip malformed pairs
+                // rather than crashing the whole transact-diff response.
+                if (pair[0] == null || pair[1] == null) continue;
+                if (pair[0]!.GetValueKind() != JsonValueKind.Number ||
+                    pair[1]!.GetValueKind() != JsonValueKind.Number) continue;
+                uint lbX, lbY;
+                try {
+                    lbX = pair[0]!.GetValue<uint>();
+                    lbY = pair[1]!.GetValue<uint>();
+                } catch { continue; }
+                // LB coords are 0..255 inclusive — out-of-range pairs would silently
+                // truncate into the wrong landblock, so reject them outright.
+                if (lbX > 0xFF || lbY > 0xFF) continue;
+                lbFilter.Add((ushort)((lbX << 8) | lbY));
             }
         }
 

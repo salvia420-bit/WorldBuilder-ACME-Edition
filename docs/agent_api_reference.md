@@ -1193,7 +1193,7 @@ Stages N mutating ops as one atomic batch. The engine snapshots affected documen
 {
   "success": true,
   "command": "transact",
-  "status": "committed",        // or "rolled-back"
+  "status": "committed",        // committed | rolled-back | rejected
   "reason": "ok",               // ok | rejected | op-threw | op-returned-failure | validation-failure
   "ops": [/* per-op outcome with embedded inner response */],
   "validation": [/* validationReport[] */],
@@ -1293,9 +1293,10 @@ Produces a structured before/after report for a previously committed transaction
 | Error code | Meaning |
 |-----------|---------|
 | `TXDIFF-EXPIRED` | The transaction's snapshot has been evicted from the LRU (default 32 entries / 256 MB). Reissue the transact if you need the diff |
-| `TXDIFF-ROLLED-BACK` | The transaction was rolled back; no diff is retained for it |
+| `TXDIFF-ROLLED-BACK` | The transaction ran ops then rolled back; no diff is retained for it |
+| `TXDIFF-REJECTED` | The transaction was refused before any op ran (bad allow-list entry, malformed `validate`, no project loaded). Fix the request and resubmit |
 
-**Retention** — committed transactions are held in an in-memory LRU keyed by transaction id. Defaults: 32 entries or 256 MB, whichever bound is hit first. Configurable via `--transact-diff-retention <n>` and `--transact-diff-mem-cap <mb>` on the Terminal CLI. Lookups bump LRU on access. Rolled-back transactions are not retained — they leave a lightweight marker in a separate bounded set so the diff command can distinguish "rolled back" from "expired".
+**Retention** — committed transactions are held in an in-memory LRU keyed by transaction id. Defaults: 32 entries or 256 MB, whichever bound is hit first. Configurable via `--transact-diff-retention <n>` and `--transact-diff-mem-cap <mb>` on the Terminal CLI. Lookups bump LRU on access. Failed transactions are not retained — they leave a lightweight marker in a separate bounded set so the diff command can distinguish "rejected", "rolled back", and "expired".
 
 **Visual diff overlay glyphs:**
 
