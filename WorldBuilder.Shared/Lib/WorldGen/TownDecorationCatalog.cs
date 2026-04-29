@@ -47,7 +47,7 @@ namespace WorldBuilder.Shared.Lib.WorldGen {
                 .Select(kv => kv.Key)
                 .ToList();
 
-            Console.WriteLine($"[TownDecorationCatalog] Scanned {allLbiIds.Length} landblocks, found {result.Count} decoration objects (from {decorationCounts.Count} total unique objects near buildings)");
+            Console.Error.WriteLine($"[TownDecorationCatalog] Scanned {allLbiIds.Length} landblocks, found {result.Count} decoration objects (from {decorationCounts.Count} total unique objects near buildings)");
             return result;
         }
 

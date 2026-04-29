@@ -409,12 +409,12 @@ namespace WorldBuilder.Shared.Models {
                     }
                 }
                 catch (Exception ex) {
-                    Console.WriteLine($"[Export] Warning: failed to load donor map '{donorMapPath}': {ex.Message}");
+                    Console.Error.WriteLine($"[Export] Warning: failed to load donor map '{donorMapPath}': {ex.Message}");
                 }
             }
 
             if (donorHintsLoaded > 0) {
-                Console.WriteLine(
+                Console.Error.WriteLine(
                     $"[Export] Loaded {donorHintsLoaded} donor placement hints and preloaded {donorBlueprintsPreloaded} donor blueprints.");
             }
 
@@ -439,7 +439,7 @@ namespace WorldBuilder.Shared.Models {
                     }
                 }
                 if (preExtracted > 0) {
-                    Console.WriteLine($"[Export] Pre-extracted {preExtracted} building blueprints from base DATs.");
+                    Console.Error.WriteLine($"[Export] Pre-extracted {preExtracted} building blueprints from base DATs.");
                 }
             }
 
@@ -459,13 +459,13 @@ namespace WorldBuilder.Shared.Models {
 
                     // Periodic GC to prevent memory from growing unbounded
                     if (lbDocsSaved % 500 == 0) {
-                        Console.WriteLine($"[Export] {lbDocsSaved}/{lbDocIds.Count} landblock docs saved, releasing memory...");
+                        Console.Error.WriteLine($"[Export] {lbDocsSaved}/{lbDocIds.Count} landblock docs saved, releasing memory...");
                         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
                     }
                 }
             }
             if (lbDocsSaved > 0) {
-                Console.WriteLine($"[Export] All {lbDocsSaved} landblock docs saved.");
+                Console.Error.WriteLine($"[Export] All {lbDocsSaved} landblock docs saved.");
                 GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
             }
 
@@ -492,7 +492,7 @@ namespace WorldBuilder.Shared.Models {
                 OnExportCustomTextures?.Invoke(writer, portalIteration);
             }
             catch (Exception ex) {
-                Console.WriteLine($"[Export] Error writing custom textures: {ex.Message}");
+                Console.Error.WriteLine($"[Export] Error writing custom textures: {ex.Message}");
             }
 
             // TODO: all other dat iterations

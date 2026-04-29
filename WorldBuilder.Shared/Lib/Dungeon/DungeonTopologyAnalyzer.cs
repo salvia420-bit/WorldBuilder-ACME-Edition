@@ -64,7 +64,7 @@ public static class DungeonTopologyAnalyzer {
         int processed = 0;
         int errors = 0;
 
-        Console.WriteLine($"[DungeonTopology] Scanning {lbiIds.Length} landblock info entries for dungeons...");
+        Console.Error.WriteLine($"[DungeonTopology] Scanning {lbiIds.Length} landblock info entries for dungeons...");
 
         foreach (var lbiId in lbiIds) {
             if (!dats.TryGet<LandBlockInfo>(lbiId, out var lbi) || lbi.NumCells == 0) continue;
@@ -85,18 +85,18 @@ public static class DungeonTopologyAnalyzer {
             } catch (Exception ex) {
                 errors++;
                 if (errors <= 5)
-                    Console.WriteLine($"[DungeonTopology] Error processing LB 0x{lbKey:X4}: {ex.Message}");
+                    Console.Error.WriteLine($"[DungeonTopology] Error processing LB 0x{lbKey:X4}: {ex.Message}");
             }
 
             if (processed % 100 == 0 && processed > 0)
-                Console.WriteLine($"[DungeonTopology] ...{processed} dungeons processed ({errors} errors)");
+                Console.Error.WriteLine($"[DungeonTopology] ...{processed} dungeons processed ({errors} errors)");
         }
 
         // Sort by room count descending (largest dungeons first)
         dungeons.Sort((a, b) => b.RoomCount.CompareTo(a.RoomCount));
 
-        Console.WriteLine($"[DungeonTopology] Complete: {dungeons.Count} dungeons analyzed, {totalCells} total cells, {errors} errors");
-        Console.WriteLine($"[DungeonTopology]   Classifications: {string.Join(", ", classificationCounts.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Key}={kv.Value}"))}");
+        Console.Error.WriteLine($"[DungeonTopology] Complete: {dungeons.Count} dungeons analyzed, {totalCells} total cells, {errors} errors");
+        Console.Error.WriteLine($"[DungeonTopology]   Classifications: {string.Join(", ", classificationCounts.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Key}={kv.Value}"))}");
 
         return new TopologyReport(
             DateTime.UtcNow,
@@ -369,7 +369,7 @@ public static class DungeonTopologyAnalyzer {
             lbiIds = dats.Dats.Cell.GetAllIdsOfType<LandBlockInfo>().ToArray();
         }
         if (lbiIds.Length == 0) {
-            Console.WriteLine("[DungeonTopology] GetAllIdsOfType returned 0, brute-force scanning landblocks...");
+            Console.Error.WriteLine("[DungeonTopology] GetAllIdsOfType returned 0, brute-force scanning landblocks...");
             var brute = new List<uint>();
             for (uint x = 0; x < 256; x++) {
                 for (uint y = 0; y < 256; y++) {
@@ -379,7 +379,7 @@ public static class DungeonTopologyAnalyzer {
                 }
             }
             lbiIds = brute.ToArray();
-            Console.WriteLine($"[DungeonTopology] Found {lbiIds.Length} landblocks with cells");
+            Console.Error.WriteLine($"[DungeonTopology] Found {lbiIds.Length} landblocks with cells");
         }
         return lbiIds;
     }

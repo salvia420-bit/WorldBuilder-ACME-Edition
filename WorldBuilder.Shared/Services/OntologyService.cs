@@ -77,11 +77,11 @@ public class OntologyService : IOntologyService {
 
         // 1a. Building model IDs (from LandBlockInfo → BuildingInfo)
         var buildingIds = ScanBuildingIds(dats);
-        Console.WriteLine($"[Ontology] Found {buildingIds.Count} building model IDs");
+        Console.Error.WriteLine($"[Ontology] Found {buildingIds.Count} building model IDs");
 
         // 1b. Scenery Setup IDs (from Scene objects)
         var sceneryIds = ScanSceneryIds(dats);
-        Console.WriteLine($"[Ontology] Found {sceneryIds.Count} scenery Setup IDs from Scenes");
+        Console.Error.WriteLine($"[Ontology] Found {sceneryIds.Count} scenery Setup IDs from Scenes");
 
         // ── Phase 2: Enumerate and classify all Setups ──
         uint[] setupIds;
@@ -91,7 +91,7 @@ public class OntologyService : IOntologyService {
             setupIds = Array.Empty<uint>();
         }
         report.TotalSetups = setupIds.Length;
-        Console.WriteLine($"[Ontology] Scanning {setupIds.Length} Setup models...");
+        Console.Error.WriteLine($"[Ontology] Scanning {setupIds.Length} Setup models...");
 
         int processed = 0;
         foreach (var id in setupIds) {
@@ -106,7 +106,7 @@ public class OntologyService : IOntologyService {
 
             processed++;
             if (processed % 1000 == 0)
-                Console.WriteLine($"[Ontology]   ...{processed}/{setupIds.Length} Setups processed");
+                Console.Error.WriteLine($"[Ontology]   ...{processed}/{setupIds.Length} Setups processed");
         }
 
         // ── Phase 3: Enumerate and classify standalone GfxObjs ──
@@ -118,7 +118,7 @@ public class OntologyService : IOntologyService {
                 gfxObjIds = Array.Empty<uint>();
             }
             report.TotalGfxObjs = gfxObjIds.Length;
-            Console.WriteLine($"[Ontology] Scanning {gfxObjIds.Length} GfxObj models...");
+            Console.Error.WriteLine($"[Ontology] Scanning {gfxObjIds.Length} GfxObj models...");
 
             processed = 0;
             foreach (var id in gfxObjIds) {
@@ -136,7 +136,7 @@ public class OntologyService : IOntologyService {
 
                 processed++;
                 if (processed % 2000 == 0)
-                    Console.WriteLine($"[Ontology]   ...{processed}/{gfxObjIds.Length} GfxObjs processed");
+                    Console.Error.WriteLine($"[Ontology]   ...{processed}/{gfxObjIds.Length} GfxObjs processed");
             }
         }
 
@@ -160,7 +160,7 @@ public class OntologyService : IOntologyService {
         report.ClassifiedAsUnknown = report.CategoryCounts.GetValueOrDefault("Unknown", 0);
 
         _isScanned = true;
-        Console.WriteLine($"[Ontology] Scan complete: {report.TotalEntries} entries in {report.ScanTimeMs:F0}ms");
+        Console.Error.WriteLine($"[Ontology] Scan complete: {report.TotalEntries} entries in {report.ScanTimeMs:F0}ms");
 
         return report;
     }
@@ -198,7 +198,7 @@ public class OntologyService : IOntologyService {
                 }
             }
         } catch (Exception ex) {
-            Console.WriteLine($"[Ontology] Warning: Could not scan building IDs: {ex.Message}");
+            Console.Error.WriteLine($"[Ontology] Warning: Could not scan building IDs: {ex.Message}");
         }
         return ids;
     }
@@ -219,7 +219,7 @@ public class OntologyService : IOntologyService {
                 }
             }
         } catch (Exception ex) {
-            Console.WriteLine($"[Ontology] Warning: Could not scan scenery IDs: {ex.Message}");
+            Console.Error.WriteLine($"[Ontology] Warning: Could not scan scenery IDs: {ex.Message}");
         }
         return ids;
     }
@@ -548,7 +548,7 @@ public class OntologyService : IOntologyService {
             enriched++;
         }
 
-        Console.WriteLine($"[Ontology] Imported catalog: {enriched} entries enriched from {indexJsonPath}");
+        Console.Error.WriteLine($"[Ontology] Imported catalog: {enriched} entries enriched from {indexJsonPath}");
         return enriched;
     }
 
@@ -730,7 +730,7 @@ public class OntologyService : IOntologyService {
             }
         }
 
-        Console.WriteLine($"[Ontology] String enrichment: {enriched} entries updated from {strings.Count} strings");
+        Console.Error.WriteLine($"[Ontology] String enrichment: {enriched} entries updated from {strings.Count} strings");
         return enriched;
     }
 
@@ -809,7 +809,7 @@ public class OntologyService : IOntologyService {
             }
         }
 
-        Console.WriteLine($"[Ontology] Material enrichment: {enriched} entries tagged with materials");
+        Console.Error.WriteLine($"[Ontology] Material enrichment: {enriched} entries tagged with materials");
         return enriched;
     }
 
@@ -1006,10 +1006,10 @@ public class OntologyService : IOntologyService {
             }
 
             if (linesRead % 5000 == 0)
-                Console.WriteLine($"[Ontology] Weenie enrichment: {linesRead} lines processed, {matched} matched, {enriched} enriched...");
+                Console.Error.WriteLine($"[Ontology] Weenie enrichment: {linesRead} lines processed, {matched} matched, {enriched} enriched...");
         }
 
-        Console.WriteLine($"[Ontology] Weenie enrichment complete: {linesRead} lines read, {matched} matched to ontology, {enriched} entries enriched");
+        Console.Error.WriteLine($"[Ontology] Weenie enrichment complete: {linesRead} lines read, {matched} matched to ontology, {enriched} entries enriched");
         return enriched;
     }
 
@@ -1027,7 +1027,7 @@ public class OntologyService : IOntologyService {
         var root = doc.RootElement;
 
         if (!root.TryGetProperty("entries", out var entriesArray)) {
-            Console.WriteLine("[Ontology] Canonical enrichment: no 'entries' array found");
+            Console.Error.WriteLine("[Ontology] Canonical enrichment: no 'entries' array found");
             return 0;
         }
 
@@ -1127,18 +1127,18 @@ public class OntologyService : IOntologyService {
 
         // Print statistics from the canonical file if available
         if (root.TryGetProperty("statistics", out var statsEl)) {
-            Console.WriteLine("[Ontology] Canonical enrichment statistics:");
+            Console.Error.WriteLine("[Ontology] Canonical enrichment statistics:");
             if (statsEl.TryGetProperty("total_entries", out var teEl))
-                Console.WriteLine($"  Total canonical entries: {teEl.GetInt32():N0}");
+                Console.Error.WriteLine($"  Total canonical entries: {teEl.GetInt32():N0}");
             if (statsEl.TryGetProperty("has_architecture", out var haEl))
-                Console.WriteLine($"  With architecture:      {haEl.GetInt32():N0}");
+                Console.Error.WriteLine($"  With architecture:      {haEl.GetInt32():N0}");
             if (statsEl.TryGetProperty("has_biome", out var hbEl))
-                Console.WriteLine($"  With biome:             {hbEl.GetInt32():N0}");
+                Console.Error.WriteLine($"  With biome:             {hbEl.GetInt32():N0}");
             if (statsEl.TryGetProperty("has_type", out var htEl))
-                Console.WriteLine($"  With type:              {htEl.GetInt32():N0}");
+                Console.Error.WriteLine($"  With type:              {htEl.GetInt32():N0}");
         }
 
-        Console.WriteLine($"[Ontology] Canonical enrichment complete: {total} entries read, {matched} matched to ontology, {enriched} entries enriched");
+        Console.Error.WriteLine($"[Ontology] Canonical enrichment complete: {total} entries read, {matched} matched to ontology, {enriched} entries enriched");
         return enriched;
     }
 
@@ -1202,20 +1202,20 @@ public class OntologyService : IOntologyService {
 
         if (root.TryGetProperty("stats", out var statsEl)
             && statsEl.ValueKind == System.Text.Json.JsonValueKind.Object) {
-            Console.WriteLine("[Ontology] Unified ontology statistics:");
+            Console.Error.WriteLine("[Ontology] Unified ontology statistics:");
             if (statsEl.TryGetProperty("setups", out var s)) {
-                if (s.TryGetProperty("total", out var t)) Console.WriteLine($"  Setups total:    {t.GetInt32():N0}");
-                if (s.TryGetProperty("named", out var n)) Console.WriteLine($"  Setups named:    {n.GetInt32():N0}");
-                if (s.TryGetProperty("resolved", out var r)) Console.WriteLine($"  Setups resolved: {r.GetInt32():N0}");
+                if (s.TryGetProperty("total", out var t)) Console.Error.WriteLine($"  Setups total:    {t.GetInt32():N0}");
+                if (s.TryGetProperty("named", out var n)) Console.Error.WriteLine($"  Setups named:    {n.GetInt32():N0}");
+                if (s.TryGetProperty("resolved", out var r)) Console.Error.WriteLine($"  Setups resolved: {r.GetInt32():N0}");
             }
             if (statsEl.TryGetProperty("gfx_objs", out var g)) {
-                if (g.TryGetProperty("total", out var t)) Console.WriteLine($"  GfxObjs total:    {t.GetInt32():N0}");
-                if (g.TryGetProperty("named", out var n)) Console.WriteLine($"  GfxObjs named:    {n.GetInt32():N0}");
-                if (g.TryGetProperty("resolved", out var r)) Console.WriteLine($"  GfxObjs resolved: {r.GetInt32():N0}");
+                if (g.TryGetProperty("total", out var t)) Console.Error.WriteLine($"  GfxObjs total:    {t.GetInt32():N0}");
+                if (g.TryGetProperty("named", out var n)) Console.Error.WriteLine($"  GfxObjs named:    {n.GetInt32():N0}");
+                if (g.TryGetProperty("resolved", out var r)) Console.Error.WriteLine($"  GfxObjs resolved: {r.GetInt32():N0}");
             }
         }
 
-        Console.WriteLine($"[Ontology] Unified enrichment complete: {total} entries read, {matched} matched to ontology, {enriched} entries enriched");
+        Console.Error.WriteLine($"[Ontology] Unified enrichment complete: {total} entries read, {matched} matched to ontology, {enriched} entries enriched");
         return enriched;
     }
 
@@ -1464,7 +1464,7 @@ public class OntologyService : IOntologyService {
             w.WriteLine(System.Text.Json.JsonSerializer.Serialize(dto, jsonOpts));
             count++;
         }
-        Console.WriteLine($"[Ontology] Cached {count:N0} entries -> {outputPath}");
+        Console.Error.WriteLine($"[Ontology] Cached {count:N0} entries -> {outputPath}");
         return count;
     }
 

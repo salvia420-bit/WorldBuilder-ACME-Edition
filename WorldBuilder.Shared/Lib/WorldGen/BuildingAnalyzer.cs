@@ -146,10 +146,10 @@ namespace WorldBuilder.Shared.Lib.WorldGen {
                 .Where(p => p.HasInterior && p.CellCount >= 5 && p.PortalCount >= minPortals)
                 .ToList();
 
-            Console.WriteLine($"[BuildingAnalyzer] Editor catalog tier1: {tier1.Count} candidates (>=5 EnvCells, >={minPortals} portals, !paired)");
+            Console.Error.WriteLine($"[BuildingAnalyzer] Editor catalog tier1: {tier1.Count} candidates (>=5 EnvCells, >={minPortals} portals, !paired)");
 
             var validated = ValidateBlueprints(tier1, minBlueprintCells: 5, dats, out int fail1);
-            Console.WriteLine($"[BuildingAnalyzer] Editor catalog tier1 blueprints: {validated.Count} ok, {fail1} failed");
+            Console.Error.WriteLine($"[BuildingAnalyzer] Editor catalog tier1 blueprints: {validated.Count} ok, {fail1} failed");
 
             if (validated.Count == 0) {
                 // Tier 2: still exclude paired halves / denylist / weak GfxObj; allow 4 cells if interior is furnished.
@@ -159,9 +159,9 @@ namespace WorldBuilder.Shared.Lib.WorldGen {
                     .Where(PassesEditorGfxObjHeuristic)
                     .Where(p => p.HasInterior && p.CellCount >= 4 && p.PortalCount >= minPortals && p.TotalStatics >= 14)
                     .ToList();
-                Console.WriteLine($"[BuildingAnalyzer] Editor catalog tier2: {tier2.Count} candidates (>=4 EnvCells, statics>=14)");
+                Console.Error.WriteLine($"[BuildingAnalyzer] Editor catalog tier2: {tier2.Count} candidates (>=4 EnvCells, statics>=14)");
                 validated = ValidateBlueprints(tier2, minBlueprintCells: 4, dats, out int fail2);
-                Console.WriteLine($"[BuildingAnalyzer] Editor catalog tier2 blueprints: {validated.Count} ok, {fail2} failed");
+                Console.Error.WriteLine($"[BuildingAnalyzer] Editor catalog tier2 blueprints: {validated.Count} ok, {fail2} failed");
             }
 
             return validated;
@@ -207,7 +207,7 @@ namespace WorldBuilder.Shared.Lib.WorldGen {
                 .ToList();
 
             int pairedCount = profiles.Count(p => p.HasInterior && p.IsPairedHalf);
-            Console.WriteLine($"[BuildingAnalyzer] {profiles.Count} total -> {candidates.Count} candidates " +
+            Console.Error.WriteLine($"[BuildingAnalyzer] {profiles.Count} total -> {candidates.Count} candidates " +
                 $"(>=4 cells, >=2 portals, retail town heuristic); {pairedCount} paired halves excluded");
 
             if (candidates.Count == 0) {
@@ -217,17 +217,17 @@ namespace WorldBuilder.Shared.Lib.WorldGen {
                     .Where(p => p.OccurrenceCount >= 1 && p.AvgPerLandblock < 1.4f)
                     .Where(RetailOk)
                     .ToList();
-                Console.WriteLine($"[BuildingAnalyzer] Relaxed filter: {candidates.Count} candidates (>=3 cells, avg/lb<1.4, retail town)");
+                Console.Error.WriteLine($"[BuildingAnalyzer] Relaxed filter: {candidates.Count} candidates (>=3 cells, avg/lb<1.4, retail town)");
             }
 
             if (retailTownBuildingsOnly) {
                 int before = candidates.Count;
                 candidates = candidates.Where(p => retail.ContainsKey(p.ModelId)).ToList();
-                Console.WriteLine($"[BuildingAnalyzer] Retail town buildings only: {candidates.Count} models " +
+                Console.Error.WriteLine($"[BuildingAnalyzer] Retail town buildings only: {candidates.Count} models " +
                     $"(dropped {before - candidates.Count} not seen in town-like retail landblocks)");
             }
 
-            Console.WriteLine($"[BuildingAnalyzer] Pre-extracting blueprints to validate...");
+            Console.Error.WriteLine($"[BuildingAnalyzer] Pre-extracting blueprints to validate...");
 
             var validated = new List<uint>();
             int extractFail = 0;
@@ -240,8 +240,8 @@ namespace WorldBuilder.Shared.Lib.WorldGen {
                 }
             }
 
-            Console.WriteLine($"[BuildingAnalyzer] Blueprint validation: {validated.Count} succeeded, {extractFail} failed extraction");
-            Console.WriteLine($"[BuildingAnalyzer] Final town building catalog: {validated.Count} models");
+            Console.Error.WriteLine($"[BuildingAnalyzer] Blueprint validation: {validated.Count} succeeded, {extractFail} failed extraction");
+            Console.Error.WriteLine($"[BuildingAnalyzer] Final town building catalog: {validated.Count} models");
 
             return validated;
         }
@@ -351,9 +351,9 @@ namespace WorldBuilder.Shared.Lib.WorldGen {
             }
 
             if (verbose) {
-                Console.WriteLine($"[BuildingAnalyzer] === FULL ANALYSIS ===");
-                Console.WriteLine($"[BuildingAnalyzer] Scanned {lbWithBuildings} landblocks with buildings");
-                Console.WriteLine($"[BuildingAnalyzer] Total unique building models: {profiles.Count}");
+                Console.Error.WriteLine($"[BuildingAnalyzer] === FULL ANALYSIS ===");
+                Console.Error.WriteLine($"[BuildingAnalyzer] Scanned {lbWithBuildings} landblocks with buildings");
+                Console.Error.WriteLine($"[BuildingAnalyzer] Total unique building models: {profiles.Count}");
 
                 var noInterior = profiles.Where(p => !p.HasInterior).ToList();
                 var hasInterior = profiles.Where(p => p.HasInterior).ToList();
@@ -362,52 +362,52 @@ namespace WorldBuilder.Shared.Lib.WorldGen {
                 var largeInterior = hasInterior.Where(p => p.CellCount > 6).ToList();
                 var noPortals = profiles.Where(p => p.PortalCount == 0).ToList();
 
-                Console.WriteLine($"[BuildingAnalyzer]   No interior (exterior-only): {noInterior.Count} models");
-                Console.WriteLine($"[BuildingAnalyzer]   Has interior: {hasInterior.Count} models");
-                Console.WriteLine($"[BuildingAnalyzer]     Small (1-2 cells): {smallInterior.Count}");
-                Console.WriteLine($"[BuildingAnalyzer]     Medium (3-6 cells): {medInterior.Count}");
-                Console.WriteLine($"[BuildingAnalyzer]     Large (7+ cells): {largeInterior.Count}");
-                Console.WriteLine($"[BuildingAnalyzer]   No portals: {noPortals.Count} models");
-                Console.WriteLine($"[BuildingAnalyzer]");
+                Console.Error.WriteLine($"[BuildingAnalyzer]   No interior (exterior-only): {noInterior.Count} models");
+                Console.Error.WriteLine($"[BuildingAnalyzer]   Has interior: {hasInterior.Count} models");
+                Console.Error.WriteLine($"[BuildingAnalyzer]     Small (1-2 cells): {smallInterior.Count}");
+                Console.Error.WriteLine($"[BuildingAnalyzer]     Medium (3-6 cells): {medInterior.Count}");
+                Console.Error.WriteLine($"[BuildingAnalyzer]     Large (7+ cells): {largeInterior.Count}");
+                Console.Error.WriteLine($"[BuildingAnalyzer]   No portals: {noPortals.Count} models");
+                Console.Error.WriteLine($"[BuildingAnalyzer]");
 
                 var pairedHalves = hasInterior.Where(p => p.IsPairedHalf).ToList();
                 var standalone = hasInterior.Where(p => !p.IsPairedHalf).ToList();
-                Console.WriteLine($"[BuildingAnalyzer]   Paired halves (avg/lb >= 1.45): {pairedHalves.Count} models");
-                Console.WriteLine($"[BuildingAnalyzer]   Standalone buildings: {standalone.Count} models");
+                Console.Error.WriteLine($"[BuildingAnalyzer]   Paired halves (avg/lb >= 1.45): {pairedHalves.Count} models");
+                Console.Error.WriteLine($"[BuildingAnalyzer]   Standalone buildings: {standalone.Count} models");
 
-                Console.WriteLine($"[BuildingAnalyzer] --- TOP 30 STANDALONE by occurrence (with interior) ---");
+                Console.Error.WriteLine($"[BuildingAnalyzer] --- TOP 30 STANDALONE by occurrence (with interior) ---");
                 foreach (var p in standalone.OrderByDescending(p => p.OccurrenceCount).Take(30)) {
-                    Console.WriteLine($"[BuildingAnalyzer]   0x{p.ModelId:X8}: {p.OccurrenceCount}x in {p.UniqueLandblocks} LBs (avg {p.AvgPerLandblock:F1}/lb), leaves={p.NumLeaves}, {p.CellCount} cells, {p.PortalCount} portals, {p.TotalStatics} statics");
+                    Console.Error.WriteLine($"[BuildingAnalyzer]   0x{p.ModelId:X8}: {p.OccurrenceCount}x in {p.UniqueLandblocks} LBs (avg {p.AvgPerLandblock:F1}/lb), leaves={p.NumLeaves}, {p.CellCount} cells, {p.PortalCount} portals, {p.TotalStatics} statics");
                 }
 
                 if (pairedHalves.Count > 0) {
-                    Console.WriteLine($"[BuildingAnalyzer] --- PAIRED HALVES (excluded) ---");
+                    Console.Error.WriteLine($"[BuildingAnalyzer] --- PAIRED HALVES (excluded) ---");
                     foreach (var p in pairedHalves.OrderByDescending(p => p.OccurrenceCount).Take(15)) {
-                        Console.WriteLine($"[BuildingAnalyzer]   0x{p.ModelId:X8}: {p.OccurrenceCount}x in {p.UniqueLandblocks} LBs (avg {p.AvgPerLandblock:F1}/lb), {p.CellCount} cells, {p.PortalCount} portals");
+                        Console.Error.WriteLine($"[BuildingAnalyzer]   0x{p.ModelId:X8}: {p.OccurrenceCount}x in {p.UniqueLandblocks} LBs (avg {p.AvgPerLandblock:F1}/lb), {p.CellCount} cells, {p.PortalCount} portals");
                     }
                 }
 
-                Console.WriteLine($"[BuildingAnalyzer]");
-                Console.WriteLine($"[BuildingAnalyzer] --- EXTERIOR-ONLY (no cells, possible partial/ruins) ---");
+                Console.Error.WriteLine($"[BuildingAnalyzer]");
+                Console.Error.WriteLine($"[BuildingAnalyzer] --- EXTERIOR-ONLY (no cells, possible partial/ruins) ---");
                 foreach (var p in noInterior.OrderByDescending(p => p.OccurrenceCount).Take(20)) {
-                    Console.WriteLine($"[BuildingAnalyzer]   0x{p.ModelId:X8}: {p.OccurrenceCount}x, leaves={p.NumLeaves}, {p.PortalCount} portals");
+                    Console.Error.WriteLine($"[BuildingAnalyzer]   0x{p.ModelId:X8}: {p.OccurrenceCount}x, leaves={p.NumLeaves}, {p.PortalCount} portals");
                 }
 
-                Console.WriteLine($"[BuildingAnalyzer]");
-                Console.WriteLine($"[BuildingAnalyzer] --- NO PORTALS (possible decoration structures) ---");
+                Console.Error.WriteLine($"[BuildingAnalyzer]");
+                Console.Error.WriteLine($"[BuildingAnalyzer] --- NO PORTALS (possible decoration structures) ---");
                 foreach (var p in noPortals.OrderByDescending(p => p.OccurrenceCount).Take(20)) {
-                    Console.WriteLine($"[BuildingAnalyzer]   0x{p.ModelId:X8}: {p.OccurrenceCount}x, leaves={p.NumLeaves}, {p.CellCount} cells");
+                    Console.Error.WriteLine($"[BuildingAnalyzer]   0x{p.ModelId:X8}: {p.OccurrenceCount}x, leaves={p.NumLeaves}, {p.CellCount} cells");
                 }
 
-                Console.WriteLine($"[BuildingAnalyzer]");
+                Console.Error.WriteLine($"[BuildingAnalyzer]");
                 int totalOccurrences = profiles.Sum(p => p.OccurrenceCount);
-                Console.WriteLine($"[BuildingAnalyzer] --- SUMMARY ---");
-                Console.WriteLine($"[BuildingAnalyzer]   Total building placements across all landblocks: {totalOccurrences}");
-                Console.WriteLine($"[BuildingAnalyzer]   Avg buildings per landblock (that has buildings): {(float)totalOccurrences / Math.Max(1, lbWithBuildings):F1}");
-                Console.WriteLine($"[BuildingAnalyzer]   Avg cells per building (with interior): {(float)hasInterior.Sum(p => p.CellCount) / Math.Max(1, hasInterior.Count):F1}");
+                Console.Error.WriteLine($"[BuildingAnalyzer] --- SUMMARY ---");
+                Console.Error.WriteLine($"[BuildingAnalyzer]   Total building placements across all landblocks: {totalOccurrences}");
+                Console.Error.WriteLine($"[BuildingAnalyzer]   Avg buildings per landblock (that has buildings): {(float)totalOccurrences / Math.Max(1, lbWithBuildings):F1}");
+                Console.Error.WriteLine($"[BuildingAnalyzer]   Avg cells per building (with interior): {(float)hasInterior.Sum(p => p.CellCount) / Math.Max(1, hasInterior.Count):F1}");
 
                 var suitableForTown = standalone.Where(p => p.CellCount >= 4 && p.PortalCount >= 2 && p.OccurrenceCount >= 2).ToList();
-                Console.WriteLine($"[BuildingAnalyzer]   Suitable for town gen (standalone, >=4 cells, >=2 portals): {suitableForTown.Count} unique models");
+                Console.Error.WriteLine($"[BuildingAnalyzer]   Suitable for town gen (standalone, >=4 cells, >=2 portals): {suitableForTown.Count} unique models");
             }
 
             return profiles;

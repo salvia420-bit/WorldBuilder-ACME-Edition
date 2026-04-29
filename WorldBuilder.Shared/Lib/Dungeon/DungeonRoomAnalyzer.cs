@@ -107,7 +107,7 @@ public static class DungeonRoomAnalyzer {
             lbiIds = dats.Dats.Cell.GetAllIdsOfType<LandBlockInfo>().ToArray();
         }
         if (lbiIds.Length == 0) {
-            Console.WriteLine("[DungeonRoomAnalyzer] GetAllIdsOfType returned 0, brute-force scanning landblocks...");
+            Console.Error.WriteLine("[DungeonRoomAnalyzer] GetAllIdsOfType returned 0, brute-force scanning landblocks...");
             var brute = new List<uint>();
             for (uint x = 0; x < 256; x++) {
                 for (uint y = 0; y < 256; y++) {
@@ -117,7 +117,7 @@ public static class DungeonRoomAnalyzer {
                 }
             }
             lbiIds = brute.ToArray();
-            Console.WriteLine($"[DungeonRoomAnalyzer] Found {lbiIds.Length} landblocks with cells");
+            Console.Error.WriteLine($"[DungeonRoomAnalyzer] Found {lbiIds.Length} landblocks with cells");
         }
 
         int totalCells = 0;
@@ -215,7 +215,7 @@ public static class DungeonRoomAnalyzer {
         int totalCells = 0;
         int errors = 0;
 
-        Console.WriteLine($"[DungeonCatalog] Scanning {lbiIds.Length} landblock info entries...");
+        Console.Error.WriteLine($"[DungeonCatalog] Scanning {lbiIds.Length} landblock info entries...");
 
         foreach (var lbiId in lbiIds) {
             if (!dats.TryGet<LandBlockInfo>(lbiId, out var lbi) || lbi.NumCells == 0) continue;
@@ -236,7 +236,7 @@ public static class DungeonRoomAnalyzer {
             }
         }
 
-        Console.WriteLine($"[DungeonCatalog] Found {totalCells} total cells, {usageCount.Count} unique (env, struct) pairs");
+        Console.Error.WriteLine($"[DungeonCatalog] Found {totalCells} total cells, {usageCount.Count} unique (env, struct) pairs");
 
         // Phase 2: For each unique key, load the Environment/CellStruct and extract geometry
         var templates = new List<RoomTemplate>();
@@ -321,18 +321,18 @@ public static class DungeonRoomAnalyzer {
             } catch (Exception ex) {
                 errors++;
                 if (errors <= 5)
-                    Console.WriteLine($"[DungeonCatalog] Error processing Env=0x{envFileId:X8} Struct={cellStructIdx}: {ex.Message}");
+                    Console.Error.WriteLine($"[DungeonCatalog] Error processing Env=0x{envFileId:X8} Struct={cellStructIdx}: {ex.Message}");
             }
 
             if (processed % 100 == 0 && processed > 0)
-                Console.WriteLine($"[DungeonCatalog] ...{processed}/{usageCount.Count} room types processed ({errors} errors)");
+                Console.Error.WriteLine($"[DungeonCatalog] ...{processed}/{usageCount.Count} room types processed ({errors} errors)");
         }
 
         // Sort by usage descending
         templates.Sort((a, b) => b.UsageCount.CompareTo(a.UsageCount));
 
-        Console.WriteLine($"[DungeonCatalog] Complete: {templates.Count} room templates extracted, {errors} errors");
-        Console.WriteLine($"[DungeonCatalog]   Classifications: {string.Join(", ", classificationCounts.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Key}={kv.Value}"))}");
+        Console.Error.WriteLine($"[DungeonCatalog] Complete: {templates.Count} room templates extracted, {errors} errors");
+        Console.Error.WriteLine($"[DungeonCatalog]   Classifications: {string.Join(", ", classificationCounts.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Key}={kv.Value}"))}");
 
         return new CatalogReport(
             DateTime.UtcNow,
@@ -500,7 +500,7 @@ public static class DungeonRoomAnalyzer {
             lbiIds = dats.Dats.Cell.GetAllIdsOfType<LandBlockInfo>().ToArray();
         }
         if (lbiIds.Length == 0) {
-            Console.WriteLine("[DungeonCatalog] GetAllIdsOfType returned 0, brute-force scanning landblocks...");
+            Console.Error.WriteLine("[DungeonCatalog] GetAllIdsOfType returned 0, brute-force scanning landblocks...");
             var brute = new List<uint>();
             for (uint x = 0; x < 256; x++) {
                 for (uint y = 0; y < 256; y++) {
@@ -510,7 +510,7 @@ public static class DungeonRoomAnalyzer {
                 }
             }
             lbiIds = brute.ToArray();
-            Console.WriteLine($"[DungeonCatalog] Found {lbiIds.Length} landblocks with cells");
+            Console.Error.WriteLine($"[DungeonCatalog] Found {lbiIds.Length} landblocks with cells");
         }
         return lbiIds;
     }

@@ -92,8 +92,8 @@ namespace WorldBuilder.Shared.Lib.WorldGen {
                     MaxCopiesInOneTownLb = kv.Value.maxOneLb
                 });
 
-            Console.WriteLine($"[RetailTown] Town-like surface landblocks: {townLbCount}");
-            Console.WriteLine($"[RetailTown] Building models seen in those blocks: {result.Count}");
+            Console.Error.WriteLine($"[RetailTown] Town-like surface landblocks: {townLbCount}");
+            Console.Error.WriteLine($"[RetailTown] Building models seen in those blocks: {result.Count}");
             return result;
         }
 
@@ -132,11 +132,11 @@ namespace WorldBuilder.Shared.Lib.WorldGen {
                 .Take(take)
                 .ToList();
 
-            Console.WriteLine($"[RetailTown] --- Top {take} building models in town-like landblocks (retail DAT) ---");
+            Console.Error.WriteLine($"[RetailTown] --- Top {take} building models in town-like landblocks (retail DAT) ---");
             foreach (var r in lines) {
                 byId.TryGetValue(r.ModelId, out var p);
                 string cells = p != null ? $"{p.CellCount}c/{p.PortalCount}p avgLb={p.AvgPerLandblock:F1}" : "?";
-                Console.WriteLine(
+                Console.Error.WriteLine(
                     $"[RetailTown]   0x{r.ModelId:X8}: townLBs={r.TownLandblockHits}, " +
                     $"singletonRatio={r.SingletonRatio:P0}, maxInOneLB={r.MaxCopiesInOneTownLb}, {cells}");
             }

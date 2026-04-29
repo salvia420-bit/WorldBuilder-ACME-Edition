@@ -65,7 +65,7 @@ namespace WorldBuilder.Shared.Lib.WorldGen {
 
             var townBuildingIds = new List<uint>(BuildingAnalyzer.GetTownBuildings(dats, p.RetailTownBuildingsOnly));
             if (townBuildingIds.Count == 0) {
-                Console.WriteLine("[BuildingPlacer] No suitable complete buildings found -- skipping building placement (decorations only)");
+                Console.Error.WriteLine("[BuildingPlacer] No suitable complete buildings found -- skipping building placement (decorations only)");
             }
 
             var decorationIds = TownDecorationCatalog.GetDecorations(dats);
