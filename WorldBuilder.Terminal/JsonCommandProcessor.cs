@@ -1991,25 +1991,26 @@ public class JsonCommandProcessor {
         // response on this transact response. Three forms — true/"both" yield
         // structured + visual; "structured" omits the visual; "visual" only
         // requests the visual block (still emits the summary as cheap context).
+        // Falsy values (false, null, 0, "false", "none") skip the inline diff.
         var diffNode = node["diff"];
         System.Text.Json.Nodes.JsonNode? inlineDiff = null;
-        if (diffNode != null && !(diffNode.GetValueKind() == JsonValueKind.False)) {
-            string mode = "both";
-            if (diffNode.GetValueKind() == JsonValueKind.String) {
-                mode = diffNode.GetValue<string>().ToLowerInvariant();
-            }
+        if (TryReadDiffMode(diffNode, out var mode)) {
             bool wantVisual = mode is "true" or "both" or "visual";
             bool wantStructured = mode is "true" or "both" or "structured" or "visual";   // visual still wants summary
-            string renderMode = node["renderMode"]?.GetValue<string>()?.ToLowerInvariant() ?? "overlay";
-            int resolution = (node["resolution"]?.GetValueKind() == JsonValueKind.Number)
-                ? node["resolution"]!.GetValue<int>() : 1024;
+            string renderMode = TryReadStringLower(node["renderMode"]) ?? "overlay";
+            int resolution = ReadResolution(node["resolution"], 1024);
+            string txIdString = result.Journal.TransactionId.ToString();
             if (result.Status == "rejected") {
                 inlineDiff = new System.Text.Json.Nodes.JsonObject {
+                    ["success"] = false,
+                    ["txId"] = txIdString,
                     ["errorCode"] = "TXDIFF-REJECTED",
                     ["error"] = "Transaction was rejected before any op ran — no diff is retained for it.",
                 };
             } else if (result.Status != "committed") {
                 inlineDiff = new System.Text.Json.Nodes.JsonObject {
+                    ["success"] = false,
+                    ["txId"] = txIdString,
                     ["errorCode"] = "TXDIFF-ROLLED-BACK",
                     ["error"] = "Transaction was rolled back — no diff is retained for it.",
                 };
@@ -2047,23 +2048,89 @@ public class JsonCommandProcessor {
         catch { return null; }
     }
 
+    // ─────────────────────────────────────────────────────
+    //  Defensive node readers shared by transact + transact-diff dispatch.
+    //  GetValue<T>() throws NotSupportedException on type mismatch — these
+    //  wrappers turn that into a quiet default so one malformed field can't
+    //  crash the whole call.
+    // ─────────────────────────────────────────────────────
+    private static string? TryReadString(System.Text.Json.Nodes.JsonNode? node) {
+        if (node == null) return null;
+        if (node.GetValueKind() != JsonValueKind.String) return null;
+        try { return node.GetValue<string>(); } catch { return null; }
+    }
+
+    private static string? TryReadStringLower(System.Text.Json.Nodes.JsonNode? node) {
+        var s = TryReadString(node);
+        return s?.ToLowerInvariant();
+    }
+
+    private static bool TryReadBool(System.Text.Json.Nodes.JsonNode? node) {
+        if (node == null) return false;
+        var k = node.GetValueKind();
+        if (k == JsonValueKind.True) return true;
+        if (k == JsonValueKind.False) return false;
+        // Be lenient with string forms so REPL-style inputs ("true"/"false") work.
+        if (k == JsonValueKind.String) {
+            var s = TryReadString(node);
+            return string.Equals(s, "true", StringComparison.OrdinalIgnoreCase);
+        }
+        return false;
+    }
+
+    private static int ReadResolution(System.Text.Json.Nodes.JsonNode? node, int fallback) {
+        if (node?.GetValueKind() != JsonValueKind.Number) return fallback;
+        int n;
+        try { n = node.GetValue<int>(); } catch { return fallback; }
+        // Mirror the REPL clamp range so an agent can't request a 0×0 or
+        // 100,000×100,000 PNG that would either crash SkiaSharp or OOM.
+        if (n < 64) return 64;
+        if (n > 8192) return 8192;
+        return n;
+    }
+
+    // Returns true and the requested mode if `diff` was set to a truthy form.
+    // Falsy: missing, false, null, the strings "false" / "none" / unknown,
+    //        any number (including 0). Truthy: bool true, "true"/"both"/
+    //        "structured"/"visual".
+    private static bool TryReadDiffMode(System.Text.Json.Nodes.JsonNode? node, out string mode) {
+        mode = "both";
+        if (node == null) return false;
+        var k = node.GetValueKind();
+        if (k == JsonValueKind.True) { mode = "both"; return true; }
+        if (k == JsonValueKind.False || k == JsonValueKind.Null) return false;
+        if (k == JsonValueKind.String) {
+            var s = TryReadString(node)?.ToLowerInvariant() ?? "";
+            switch (s) {
+                case "true": case "both": case "structured": case "visual":
+                    mode = s; return true;
+                case "false": case "none": case "":
+                    return false;
+                default:
+                    return false;
+            }
+        }
+        return false;
+    }
+
     // ════════════════════════════════════════════════════
     //  Transact-Diff — structured before/after report.
     // ════════════════════════════════════════════════════
 
     private string CmdTransactDiff(System.Text.Json.Nodes.JsonNode node) {
-        var txIdRaw = node["txId"]?.GetValue<string>();
+        // Defensive: GetValue<string>() throws NotSupportedException if txId is
+        // a non-string node. Read the kind first so a malformed input returns
+        // a clean error instead of crashing the whole stdin loop.
+        string? txIdRaw = TryReadString(node["txId"]);
         if (string.IsNullOrWhiteSpace(txIdRaw) || !Guid.TryParse(txIdRaw, out var txId)) {
             return Serialize(new { success = false, command = "transact-diff",
                 error = "Missing or invalid 'txId' (expected a transaction GUID from a prior transact response)." });
         }
 
-        bool render = node["render"]?.GetValue<bool>() ?? false;
-        string renderMode = node["renderMode"]?.GetValue<string>()?.ToLowerInvariant() ?? "overlay";
-        int resolution = (node["resolution"]?.GetValueKind() == JsonValueKind.Number)
-            ? node["resolution"]!.GetValue<int>() : 1024;
-        string? outPath = node["out"]?.GetValueKind() == JsonValueKind.String
-            ? node["out"]!.GetValue<string>() : null;
+        bool render = TryReadBool(node["render"]);
+        string renderMode = TryReadStringLower(node["renderMode"]) ?? "overlay";
+        int resolution = ReadResolution(node["resolution"], 1024);
+        string? outPath = TryReadString(node["out"]);
 
         HashSet<ushort>? lbFilter = null;
         if (node["lbs"] is System.Text.Json.Nodes.JsonArray lbArr && lbArr.Count > 0) {
