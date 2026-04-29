@@ -525,12 +525,17 @@
                                 Background="#100c1e" BorderBrush="#1e1535" BorderThickness="0,0,0,1">
                             <StackPanel Spacing="5">
                                 <DockPanel>
-                                    <Button DockPanel.Dock="Right"
-                                            Content="Import…"
-                                            Command="{Binding ImportTextureCommand}"
-                                            IsVisible="{Binding CanImportTexture}"
-                                            FontSize="10" Padding="6,2"
-                                            ToolTip.Tip="Import an image file as a new texture. Writes to DAT on project export." />
+                                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="4">
+                                        <Button Content="Replace by ID…"
+                                                Command="{Binding ReplaceRenderSurfaceCommand}"
+                                                FontSize="10" Padding="6,2"
+                                                ToolTip.Tip="Replace an existing RenderSurface by ID. Validates format compatibility before importing." />
+                                        <Button Content="Import…"
+                                                Command="{Binding ImportTextureCommand}"
+                                                IsVisible="{Binding CanImportTexture}"
+                                                FontSize="10" Padding="6,2"
+                                                ToolTip.Tip="Import an image file as a new texture. Writes to DAT on project export." />
+                                    </StackPanel>
                                     <TextBlock Text="{Binding ActiveSlotLabel}"
                                                FontSize="11" Foreground="#7a6ab8"
                                                TextTrimming="CharacterEllipsis"
