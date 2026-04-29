@@ -36,6 +36,13 @@ public class TerminalRepl {
     }
 
     /// <summary>
+    /// Pre-load a project through the same path the REPL `load` command uses, so the
+    /// CLI `--project` flag exercises every auto-loader in <see cref="CommandEngine.Load"/>
+    /// instead of going around it via <c>HeadlessProjectManager.LoadProject</c>.
+    /// </summary>
+    public LoadResult Preload(string projectPath) => _engine.Load(projectPath);
+
+    /// <summary>
     /// Runs the REPL loop until the user types quit/exit or presses Ctrl+C.
     /// </summary>
     public void Run() {

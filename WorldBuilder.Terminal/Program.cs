@@ -85,10 +85,17 @@ if (cliArgs.StdinMode) {
     var stdoutWriter = new StreamWriter(Console.OpenStandardOutput(), new System.Text.UTF8Encoding(false)) { AutoFlush = true };
     Console.SetOut(stdoutWriter);
 
-    // Pre-load project if specified
+    var processor = new JsonCommandProcessor(projectManager, terrainService, objectPlacementService, dungeonService, ontologyService, stampService,
+        cliArgs.TransactDiffRetention, cliArgs.TransactDiffMemCapMb);
+
+    // Pre-load through CommandEngine.Load() (via processor.Preload) so every
+    // auto-loader the JSON `load` command runs (ontology cache, building
+    // pairings, town gazetteer) also fires for --project. Going through
+    // projectManager.LoadProject directly would skip them and surface as
+    // silently empty fields in describe-landblock output.
     if (!string.IsNullOrEmpty(cliArgs.ProjectPath)) {
         try {
-            projectManager.LoadProject(cliArgs.ProjectPath);
+            processor.Preload(cliArgs.ProjectPath);
         } catch (Exception ex) {
             // In stdin mode, report errors as JSON
             var errorJson = System.Text.Json.JsonSerializer.Serialize(new {
@@ -100,25 +107,25 @@ if (cliArgs.StdinMode) {
         }
     }
 
-    var processor = new JsonCommandProcessor(projectManager, terrainService, objectPlacementService, dungeonService, ontologyService, stampService,
-        cliArgs.TransactDiffRetention, cliArgs.TransactDiffMemCapMb);
     processor.RunStdinLoop();
     return 0;
 }
 
 // ── Interactive mode ────────────────────────────────
-// If --project was provided but not --export, pre-load the project
+var repl = new TerminalRepl(projectManager, terrainService, objectPlacementService, dungeonService, ontologyService, stampService,
+    cliArgs.TransactDiffRetention, cliArgs.TransactDiffMemCapMb);
+
+// Pre-load through CommandEngine.Load() (via repl.Preload) so the auto-loaders
+// fire on --project the same way they do when the user runs `load` interactively.
 if (!string.IsNullOrEmpty(cliArgs.ProjectPath)) {
     try {
         Console.WriteLine($"Pre-loading project: {cliArgs.ProjectPath}");
-        projectManager.LoadProject(cliArgs.ProjectPath);
+        repl.Preload(cliArgs.ProjectPath);
     } catch (Exception ex) {
         Console.Error.WriteLine($"Warning: Could not pre-load project: {ex.Message}");
     }
 }
 
-var repl = new TerminalRepl(projectManager, terrainService, objectPlacementService, dungeonService, ontologyService, stampService,
-    cliArgs.TransactDiffRetention, cliArgs.TransactDiffMemCapMb);
 repl.Run();
 
 return 0;

@@ -1511,7 +1511,7 @@ public class OntologyService : IOntologyService {
                 loaded[entry.ObjectId] = entry;
                 count++;
             } catch (Exception ex) {
-                Console.WriteLine($"[Ontology] Skipping malformed cache line: {ex.Message}");
+                Console.Error.WriteLine($"[Ontology] Skipping malformed cache line: {ex.Message}");
             }
         }
 

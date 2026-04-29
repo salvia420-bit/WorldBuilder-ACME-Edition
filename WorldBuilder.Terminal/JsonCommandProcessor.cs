@@ -54,6 +54,15 @@ public class JsonCommandProcessor {
     internal TransactionEngine Transactions => _transactionEngine;
 
     /// <summary>
+    /// Pre-load a project through the same path the JSON `load` command uses, so the
+    /// CLI `--project` flag exercises every auto-loader in <see cref="CommandEngine.Load"/>
+    /// (ontology cache, building pairings, town gazetteer). Without this, stdin-mode
+    /// `--project` would call <c>HeadlessProjectManager.LoadProject</c> directly and
+    /// skip the auto-loaders, surfacing as silently empty fields in describe-landblock.
+    /// </summary>
+    public LoadResult Preload(string projectPath) => _engine.Load(projectPath);
+
+    /// <summary>
     /// Runs the stdin loop: reads one JSON line at a time, processes it, writes one JSON line response.
     /// Exits on EOF (stdin closed) or the "quit"/"exit" command.
     /// </summary>
