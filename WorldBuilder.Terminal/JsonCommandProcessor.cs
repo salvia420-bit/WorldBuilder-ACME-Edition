@@ -1029,6 +1029,13 @@ public class JsonCommandProcessor {
         uint minX = node["minX"]?.GetValue<uint>() ?? 0, minY = node["minY"]?.GetValue<uint>() ?? 0;
         uint maxX = node["maxX"]?.GetValue<uint>() ?? 254, maxY = node["maxY"]?.GetValue<uint>() ?? 254;
         int limit = node["limit"]?.GetValue<int>() ?? 500;
+        if (minX > 254) throw new ArgumentException($"'minX' must be 0..254; got {minX}");
+        if (minY > 254) throw new ArgumentException($"'minY' must be 0..254; got {minY}");
+        if (maxX > 254) throw new ArgumentException($"'maxX' must be 0..254; got {maxX}");
+        if (maxY > 254) throw new ArgumentException($"'maxY' must be 0..254; got {maxY}");
+        if (minX > maxX) throw new ArgumentException($"'minX' ({minX}) must be ≤ 'maxX' ({maxX})");
+        if (minY > maxY) throw new ArgumentException($"'minY' ({minY}) must be ≤ 'maxY' ({maxY})");
+        if (limit <= 0) throw new ArgumentException($"'limit' must be > 0; got {limit}");
         var r = _engine.ListLandblocks(minX, minY, maxX, maxY, limit);
         return Serialize(new { success = true, command = "list-landblocks", count = r.Count,
             range = new { minX = r.MinX, minY = r.MinY, maxX = r.MaxX, maxY = r.MaxY },
@@ -1046,7 +1053,11 @@ public class JsonCommandProcessor {
             landblockSize = 192, cellSize = 24, gridPerLandblock = 9, verticesPerLandblock = 81,
             totalLandblocks = 255 * 255, modifiedLandblocks = r.ModifiedLandblocks,
             heightTableSize = r.HeightTableSize, heightMin = r.HeightMin, heightMax = r.HeightMax,
-            portalIteration = r.PortalIteration });
+            portalIteration = r.PortalIteration,
+            activeDocumentCount = r.ActiveDocuments?.Count ?? 0,
+            activeDocuments = r.ActiveDocuments?.Select(d => new {
+                id = d.Id, type = d.Type, isDirty = d.IsDirty
+            }).ToArray() });
     }
 
     private string CmdGetRegion() {
@@ -1080,6 +1091,7 @@ public class JsonCommandProcessor {
         string? scale = node["scale"]?.GetValue<string>();
         string? keyword = node["keyword"]?.GetValue<string>();
         int limit = node["limit"]?.GetValue<int>() ?? 50;
+        if (limit <= 0) throw new ArgumentException($"'limit' must be > 0; got {limit}");
 
         uint? objectId = null;
         if (node["objectId"] != null) {
@@ -1505,6 +1517,8 @@ public class JsonCommandProcessor {
         var path = node["path"]?.GetValue<string>()
             ?? node["unifiedJsonPath"]?.GetValue<string>()
             ?? throw new ArgumentException("Missing 'path' field");
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("'path' must not be empty");
         var r = _engine.EnrichUnified(path);
         return Serialize(new {
             success = r.Success, command = "enrich-unified",
