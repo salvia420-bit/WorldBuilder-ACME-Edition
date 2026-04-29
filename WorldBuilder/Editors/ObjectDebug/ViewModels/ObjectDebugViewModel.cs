@@ -487,6 +487,7 @@ namespace WorldBuilder.Editors.ObjectDebug.ViewModels {
             gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
             gl.Disable(EnableCap.CullFace);
             gl.ClearColor(0.1f, 0.1f, 0.1f, 1f);
+            gl.ClearDepth(1f);
             gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
             // Use PerspectiveCamera directly — matches the proven Heritage preview approach
@@ -551,7 +552,8 @@ namespace WorldBuilder.Editors.ObjectDebug.ViewModels {
                 batch.TextureArray.Bind(0);
                 var shader = _objectManager._objectShader;
                 shader.SetUniform("uTextureArray", 0);
-                shader.SetUniform("uTextureIndex", batch.TextureIndex);
+                gl.DisableVertexAttribArray(7);
+                gl.VertexAttrib1((uint)7, (float)batch.TextureIndex);
 
                 gl.BindBuffer(GLEnum.ElementArrayBuffer, batch.IBO);
                 gl.DrawElementsInstanced(GLEnum.Triangles, (uint)batch.IndexCount, GLEnum.UnsignedShort, null, 1);

@@ -254,6 +254,78 @@ namespace WorldBuilder.Shared.Lib.AceDb {
             }
         }
 
+        /// <summary>
+        /// Creates a new weenie (INSERT into ace_world.weenie) and saves all scalar properties.
+        /// Auto-assigns the next available class_Id (minimum 100000 for custom content).
+        /// Returns the assigned class_Id, or 0 on failure.
+        /// </summary>
+        public async Task<uint> InsertWeenieAsync(string className, AceWeenieSnapshot snapshot, CancellationToken ct = default) {
+            if (string.IsNullOrWhiteSpace(className)) return 0;
+            try {
+                await using var conn = new MySqlConnection(_settings.ConnectionString);
+                await conn.OpenAsync(ct);
+                await using var tx = await conn.BeginTransactionAsync(ct);
+
+                uint newId;
+                await using (var maxCmd = new MySqlCommand(
+                    "SELECT COALESCE(MAX(`class_Id`), 0) FROM `weenie`", conn, (MySqlTransaction)tx)) {
+                    var result = await maxCmd.ExecuteScalarAsync(ct);
+                    var maxId = Convert.ToUInt32(result, CultureInfo.InvariantCulture);
+                    newId = Math.Max(maxId + 1, 100000);
+                }
+
+                await using (var ins = new MySqlCommand(
+                    "INSERT INTO `weenie` (`class_Id`, `class_Name`, `type`, `last_Modified`) VALUES (@id, @name, @type, UTC_TIMESTAMP())",
+                    conn, (MySqlTransaction)tx)) {
+                    ins.Parameters.AddWithValue("@id", newId);
+                    ins.Parameters.AddWithValue("@name", className.Trim());
+                    ins.Parameters.AddWithValue("@type", snapshot.WeenieType);
+                    await ins.ExecuteNonQueryAsync(ct);
+                }
+
+                await ReplaceRowsAsync(conn, tx, "weenie_properties_int", newId,
+                    "INSERT INTO `weenie_properties_int` (`object_Id`, `type`, `value`) VALUES (@o, @t, @v)",
+                    snapshot.Ints, ct,
+                    row => new MySqlParameter[] { new("@o", newId), new("@t", row.Type), new("@v", row.Value) });
+
+                await ReplaceRowsAsync(conn, tx, "weenie_properties_int64", newId,
+                    "INSERT INTO `weenie_properties_int64` (`object_Id`, `type`, `value`) VALUES (@o, @t, @v)",
+                    snapshot.Int64s, ct,
+                    row => new MySqlParameter[] { new("@o", newId), new("@t", row.Type), new("@v", row.Value) });
+
+                await ReplaceRowsAsync(conn, tx, "weenie_properties_bool", newId,
+                    "INSERT INTO `weenie_properties_bool` (`object_Id`, `type`, `value`) VALUES (@o, @t, @v)",
+                    snapshot.Bools, ct,
+                    row => new MySqlParameter[] { new("@o", newId), new("@t", row.Type), new("@v", row.Value) });
+
+                await ReplaceRowsAsync(conn, tx, "weenie_properties_float", newId,
+                    "INSERT INTO `weenie_properties_float` (`object_Id`, `type`, `value`) VALUES (@o, @t, @v)",
+                    snapshot.Floats, ct,
+                    row => new MySqlParameter[] { new("@o", newId), new("@t", row.Type), new("@v", row.Value) });
+
+                await ReplaceRowsAsync(conn, tx, "weenie_properties_string", newId,
+                    "INSERT INTO `weenie_properties_string` (`object_Id`, `type`, `value`) VALUES (@o, @t, @v)",
+                    snapshot.Strings, ct,
+                    row => new MySqlParameter[] { new("@o", newId), new("@t", row.Type), new("@v", row.Value ?? "") });
+
+                await ReplaceRowsAsync(conn, tx, "weenie_properties_d_i_d", newId,
+                    "INSERT INTO `weenie_properties_d_i_d` (`object_Id`, `type`, `value`) VALUES (@o, @t, @v)",
+                    snapshot.DataIds, ct,
+                    row => new MySqlParameter[] { new("@o", newId), new("@t", row.Type), new("@v", row.Value) });
+
+                await ReplaceRowsAsync(conn, tx, "weenie_properties_i_i_d", newId,
+                    "INSERT INTO `weenie_properties_i_i_d` (`object_Id`, `type`, `value`) VALUES (@o, @t, @v)",
+                    snapshot.InstanceIds, ct,
+                    row => new MySqlParameter[] { new("@o", newId), new("@t", row.Type), new("@v", row.Value) });
+
+                await tx.CommitAsync(ct);
+                return newId;
+            }
+            catch (MySqlException) {
+                return 0;
+            }
+        }
+
         static async Task FillIntsAsync(MySqlConnection conn, uint classId, List<AceWeenieRowInt> list, CancellationToken ct) {
             const string sql = "SELECT `type`, `value` FROM `weenie_properties_int` WHERE `object_Id` = @id ORDER BY `type`";
             await using var cmd = new MySqlCommand(sql, conn);

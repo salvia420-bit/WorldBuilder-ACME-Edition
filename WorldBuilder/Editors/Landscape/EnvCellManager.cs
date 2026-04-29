@@ -117,6 +117,11 @@ namespace WorldBuilder.Editors.Landscape {
         // Queue for two-phase loading: CPU-prepared data waiting for GPU upload
         private readonly ConcurrentQueue<PreparedEnvCellBatch> _uploadQueue = new();
 
+        // Queue for deferred unloads: landblock keys to unload on the GL thread.
+        // This avoids deleting GL resources from the UI thread while the render
+        // thread is still referencing them.
+        private readonly ConcurrentQueue<ushort> _pendingUnloads = new();
+
         // Persistent instance buffer for instanced rendering
         private uint _instanceVBO;
         private int _instanceBufferCapacity;
@@ -716,10 +721,23 @@ namespace WorldBuilder.Editors.Landscape {
         }
 
         /// <summary>
-        /// Processes queued GPU uploads. Must be called on the GL thread (e.g. during Update).
-        /// Returns the number of batches processed. Skips uploads if at the cell cap.
+        /// Queues a landblock for deferred unload on the GL thread.
+        /// Safe to call from any thread. The actual GL resource deletion
+        /// happens during <see cref="ProcessUploads"/> on the render thread.
+        /// </summary>
+        public void QueueUnload(ushort lbKey) {
+            _pendingUnloads.Enqueue(lbKey);
+        }
+
+        /// <summary>
+        /// Processes queued unloads then GPU uploads. Must be called on the GL thread.
+        /// Returns the number of upload batches processed. Skips uploads if at the cell cap.
         /// </summary>
         public int ProcessUploads(int maxPerFrame = 4) {
+            while (_pendingUnloads.TryDequeue(out var lbKey)) {
+                UnloadLandblock(lbKey);
+            }
+
             int processed = 0;
             while (processed < maxPerFrame && _uploadQueue.TryDequeue(out var batch)) {
                 // Building interior cells are small and always needed; only cap dungeon-only landblocks

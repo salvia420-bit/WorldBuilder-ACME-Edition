@@ -12,6 +12,13 @@ namespace WorldBuilder.Editors.Dungeon.Views {
             AvaloniaXamlLoader.Load(this);
         }
 
+        private void PrefabItem_PointerPressed(object? sender, PointerPressedEventArgs e) {
+            if (sender is Control c && c.DataContext is PrefabListEntry entry &&
+                DataContext is RoomPaletteViewModel vm) {
+                vm.SelectedPrefab = entry;
+            }
+        }
+
         private void PrefabItem_PointerEntered(object? sender, PointerEventArgs e) {
             if (sender is Control c && c.DataContext is PrefabListEntry entry &&
                 DataContext is RoomPaletteViewModel vm) {

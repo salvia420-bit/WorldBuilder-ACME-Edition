@@ -1,3 +1,5 @@
+using Avalonia;
+using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -13,6 +15,7 @@ using WorldBuilder.Lib.Settings;
 using WorldBuilder.Shared.Lib;
 using WorldBuilder.Shared.Lib.AceDb;
 using WorldBuilder.Shared.Models;
+using WorldBuilder.Editors.Weenie.Views;
 using WorldBuilder.ViewModels;
 
 namespace WorldBuilder.Editors.Weenie {
@@ -20,6 +23,7 @@ namespace WorldBuilder.Editors.Weenie {
     public partial class WeenieIntRow : ObservableObject {
         public ushort PropertyType { get; }
         public string Label => AceWeeniePropertyLabels.Int(PropertyType);
+        public string RowDescription => $"{Label} — ACE weenie_properties_int.type = {PropertyType}";
         [ObservableProperty] private string _valueText;
 
         public WeenieIntRow(ushort propertyType, int value) {
@@ -31,6 +35,7 @@ namespace WorldBuilder.Editors.Weenie {
     public partial class WeenieInt64Row : ObservableObject {
         public ushort PropertyType { get; }
         public string Label => AceWeeniePropertyLabels.Int64(PropertyType);
+        public string RowDescription => $"{Label} — ACE weenie_properties_int64.type = {PropertyType}";
         [ObservableProperty] private string _valueText;
 
         public WeenieInt64Row(ushort propertyType, long value) {
@@ -42,6 +47,7 @@ namespace WorldBuilder.Editors.Weenie {
     public partial class WeenieBoolRow : ObservableObject {
         public ushort PropertyType { get; }
         public string Label => AceWeeniePropertyLabels.Bool(PropertyType);
+        public string RowDescription => $"{Label} — ACE weenie_properties_bool.type = {PropertyType}";
         [ObservableProperty] private bool _value;
 
         public WeenieBoolRow(ushort propertyType, bool value) {
@@ -53,6 +59,7 @@ namespace WorldBuilder.Editors.Weenie {
     public partial class WeenieFloatRow : ObservableObject {
         public ushort PropertyType { get; }
         public string Label => AceWeeniePropertyLabels.Float(PropertyType);
+        public string RowDescription => $"{Label} — ACE weenie_properties_float.type = {PropertyType}";
         [ObservableProperty] private string _valueText;
 
         public WeenieFloatRow(ushort propertyType, double value) {
@@ -64,6 +71,7 @@ namespace WorldBuilder.Editors.Weenie {
     public partial class WeenieStringRow : ObservableObject {
         public ushort PropertyType { get; }
         public string Label => AceWeeniePropertyLabels.String(PropertyType);
+        public string RowDescription => $"{Label} — ACE weenie_properties_string.type = {PropertyType}";
         [ObservableProperty] private string _valueText;
 
         public WeenieStringRow(ushort propertyType, string value) {
@@ -75,6 +83,7 @@ namespace WorldBuilder.Editors.Weenie {
     public partial class WeenieDidRow : ObservableObject {
         public ushort PropertyType { get; }
         public string Label => AceWeeniePropertyLabels.DataId(PropertyType);
+        public string RowDescription => $"{Label} — ACE weenie_properties_d_i_d.type = {PropertyType}";
         [ObservableProperty] private string _valueText;
 
         public WeenieDidRow(ushort propertyType, uint value) {
@@ -86,12 +95,21 @@ namespace WorldBuilder.Editors.Weenie {
     public partial class WeenieIidRow : ObservableObject {
         public ushort PropertyType { get; }
         public string Label => AceWeeniePropertyLabels.InstanceId(PropertyType);
+        public string RowDescription => $"{Label} — ACE weenie_properties_i_i_d.type = {PropertyType}";
         [ObservableProperty] private string _valueText;
 
         public WeenieIidRow(ushort propertyType, ulong value) {
             PropertyType = propertyType;
             _valueText = value.ToString(CultureInfo.InvariantCulture);
         }
+    }
+
+    /// <summary>Dropdown item for the "Add property" ComboBox in each property tab.</summary>
+    public sealed class PropertyTypeOption {
+        public ushort Type { get; }
+        public string Name { get; }
+        public PropertyTypeOption(ushort type, string name) { Type = type; Name = name; }
+        public override string ToString() => $"{Name} ({Type})";
     }
 
     /// <summary>Picker row for JSON starter templates (built-in + user folders).</summary>
@@ -139,6 +157,14 @@ namespace WorldBuilder.Editors.Weenie {
         [ObservableProperty] private WriteableBitmap? _iconBitmap;
         [ObservableProperty] private string _complexSummary = "";
 
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(SaveButtonText))]
+        private bool _isCreatingNew;
+
+        [ObservableProperty] private string _newClassName = "";
+
+        public string SaveButtonText => IsCreatingNew ? "Create in DB" : "Save scalars";
+
         [ObservableProperty] private ObservableCollection<WeenieIntRow> _intRows = new();
         [ObservableProperty] private ObservableCollection<WeenieInt64Row> _int64Rows = new();
         [ObservableProperty] private ObservableCollection<WeenieBoolRow> _boolRows = new();
@@ -149,6 +175,58 @@ namespace WorldBuilder.Editors.Weenie {
 
         [ObservableProperty] private ObservableCollection<WeenieTemplatePickerItem> _weenieTemplates = new();
         [ObservableProperty] private WeenieTemplatePickerItem? _selectedTemplate;
+
+        // "Add property" picker lists (static, built from ACE enums)
+        public static IReadOnlyList<PropertyTypeOption> AllIntTypes { get; } = BuildOptions<AcePropertyInt>();
+        public static IReadOnlyList<PropertyTypeOption> AllInt64Types { get; } = BuildOptions<AcePropertyInt64>();
+        public static IReadOnlyList<PropertyTypeOption> AllBoolTypes { get; } = BuildOptions<AcePropertyBool>();
+        public static IReadOnlyList<PropertyTypeOption> AllFloatTypes { get; } = BuildOptions<AcePropertyFloat>();
+        public static IReadOnlyList<PropertyTypeOption> AllStringTypes { get; } = BuildOptions<AcePropertyString>();
+        public static IReadOnlyList<PropertyTypeOption> AllDidTypes { get; } = BuildOptions<AcePropertyDataId>();
+        public static IReadOnlyList<PropertyTypeOption> AllIidTypes { get; } = BuildOptions<AcePropertyInstanceId>();
+
+        static IReadOnlyList<PropertyTypeOption> BuildOptions<TEnum>() where TEnum : struct, Enum =>
+            Enum.GetValues<TEnum>()
+                .Select(v => new PropertyTypeOption(Convert.ToUInt16(v), v.ToString()))
+                .Where(p => p.Type != 0)
+                .OrderBy(p => p.Name)
+                .ToList();
+
+        // Selected "add" item per tab
+        [ObservableProperty] private PropertyTypeOption? _selectedNewInt;
+        [ObservableProperty] private PropertyTypeOption? _selectedNewInt64;
+        [ObservableProperty] private PropertyTypeOption? _selectedNewBool;
+        [ObservableProperty] private PropertyTypeOption? _selectedNewFloat;
+        [ObservableProperty] private PropertyTypeOption? _selectedNewString;
+        [ObservableProperty] private PropertyTypeOption? _selectedNewDid;
+        [ObservableProperty] private PropertyTypeOption? _selectedNewIid;
+
+        [RelayCommand] private void AddIntProperty() { AddRow(SelectedNewInt, IntRows, t => new WeenieIntRow(t, 0)); SelectedNewInt = null; }
+        [RelayCommand] private void AddInt64Property() { AddRow(SelectedNewInt64, Int64Rows, t => new WeenieInt64Row(t, 0)); SelectedNewInt64 = null; }
+        [RelayCommand] private void AddBoolProperty() { AddRow(SelectedNewBool, BoolRows, t => new WeenieBoolRow(t, false)); SelectedNewBool = null; }
+        [RelayCommand] private void AddFloatProperty() { AddRow(SelectedNewFloat, FloatRows, t => new WeenieFloatRow(t, 0.0)); SelectedNewFloat = null; }
+        [RelayCommand] private void AddStringProperty() { AddRow(SelectedNewString, StringRows, t => new WeenieStringRow(t, "")); SelectedNewString = null; }
+        [RelayCommand] private void AddDidProperty() { AddRow(SelectedNewDid, DidRows, t => new WeenieDidRow(t, 0)); SelectedNewDid = null; }
+        [RelayCommand] private void AddIidProperty() { AddRow(SelectedNewIid, IidRows, t => new WeenieIidRow(t, 0)); SelectedNewIid = null; }
+
+        void AddRow<TRow>(PropertyTypeOption? pick, ObservableCollection<TRow> rows, Func<ushort, TRow> factory)
+            where TRow : ObservableObject {
+            if (pick == null) { StatusText = "Pick a property type from the dropdown first."; return; }
+            var prop = typeof(TRow).GetProperty("PropertyType");
+            if (rows.Any(r => (ushort)prop!.GetValue(r)! == pick.Type)) {
+                StatusText = $"{pick.Name} ({pick.Type}) already exists.";
+                return;
+            }
+            rows.Add(factory(pick.Type));
+        }
+
+        [RelayCommand] private void RemoveIntRow(WeenieIntRow? r) { if (r != null) IntRows.Remove(r); }
+        [RelayCommand] private void RemoveInt64Row(WeenieInt64Row? r) { if (r != null) Int64Rows.Remove(r); }
+        [RelayCommand] private void RemoveBoolRow(WeenieBoolRow? r) { if (r != null) BoolRows.Remove(r); }
+        [RelayCommand] private void RemoveFloatRow(WeenieFloatRow? r) { if (r != null) FloatRows.Remove(r); }
+        [RelayCommand] private void RemoveStringRow(WeenieStringRow? r) { if (r != null) StringRows.Remove(r); }
+        [RelayCommand] private void RemoveDidRow(WeenieDidRow? r) { if (r != null) DidRows.Remove(r); }
+        [RelayCommand] private void RemoveIidRow(WeenieIidRow? r) { if (r != null) IidRows.Remove(r); }
 
         internal void Init(Project project) {
             _project = project;
@@ -165,23 +243,49 @@ namespace WorldBuilder.Editors.Weenie {
         }
 
         [RelayCommand]
+        private void CreateNew() {
+            SelectedWeenie = null;
+            ClearDetail();
+            IsCreatingNew = true;
+            NewClassName = "";
+
+            if (SelectedTemplate != null) {
+                ApplyTemplate(SelectedTemplate.Definition, replaceScalars: true);
+                StatusText = $"New weenie from template \u201c{SelectedTemplate.Title}\u201d. Enter a class name and save.";
+            }
+            else {
+                StatusText = "New weenie. Enter a class name, configure properties (or pick a template), then save.";
+            }
+        }
+
+        [RelayCommand]
+        private void CancelNew() {
+            IsCreatingNew = false;
+            NewClassName = "";
+            ClearDetail();
+            StatusText = "Cancelled new weenie creation.";
+        }
+
+        [RelayCommand]
         private void ApplyTemplateMerge() {
-            if (SelectedWeenie == null || SelectedTemplate == null) {
-                StatusText = "Select a weenie and a template.";
+            if ((SelectedWeenie == null && !IsCreatingNew) || SelectedTemplate == null) {
+                StatusText = "Select a weenie (or create new) and a template.";
                 return;
             }
             ApplyTemplate(SelectedTemplate.Definition, replaceScalars: false);
-            StatusText = $"Merged template “{SelectedTemplate.Title}” into WCID {SelectedWeenie.ClassId} (unsaved).";
+            var mergeTarget = IsCreatingNew ? "new weenie" : $"WCID {SelectedWeenie!.ClassId}";
+            StatusText = $"Merged template \u201c{SelectedTemplate.Title}\u201d into {mergeTarget} (unsaved).";
         }
 
         [RelayCommand]
         private void ApplyTemplateReplaceScalars() {
-            if (SelectedWeenie == null || SelectedTemplate == null) {
-                StatusText = "Select a weenie and a template.";
+            if ((SelectedWeenie == null && !IsCreatingNew) || SelectedTemplate == null) {
+                StatusText = "Select a weenie (or create new) and a template.";
                 return;
             }
             ApplyTemplate(SelectedTemplate.Definition, replaceScalars: true);
-            StatusText = $"Replaced scalar properties with “{SelectedTemplate.Title}” on WCID {SelectedWeenie.ClassId} (unsaved). Spell book / emotes unchanged in DB until you save.";
+            var replaceTarget = IsCreatingNew ? "new weenie" : $"WCID {SelectedWeenie!.ClassId}";
+            StatusText = $"Replaced scalar properties with \u201c{SelectedTemplate.Title}\u201d on {replaceTarget} (unsaved).";
         }
 
         void ApplyTemplate(WeenieTemplateDefinition t, bool replaceScalars) {
@@ -278,13 +382,13 @@ namespace WorldBuilder.Editors.Weenie {
         }
 
         void RefreshPreviewFromScalarRows() {
-            var setupRow = DidRows.FirstOrDefault(r => r.PropertyType == 1);
+            var setupRow = DidRows.FirstOrDefault(r => r.PropertyType == (ushort)AcePropertyDataId.Setup);
             if (setupRow != null && TryParseUInt(setupRow.ValueText, out var setupId))
                 PreviewSetupDid = setupId;
             else
                 PreviewSetupDid = 0;
 
-            var iconRow = DidRows.FirstOrDefault(r => r.PropertyType == 8);
+            var iconRow = DidRows.FirstOrDefault(r => r.PropertyType == (ushort)AcePropertyDataId.Icon);
             if (iconRow != null && TryParseUInt(iconRow.ValueText, out var iconId))
                 LoadIcon(iconId);
             else
@@ -326,6 +430,8 @@ namespace WorldBuilder.Editors.Weenie {
         }
 
         partial void OnSelectedWeenieChanged(WeenieListEntryVm? value) {
+            if (value != null)
+                IsCreatingNew = false;
             _ = LoadDetailAsync(value);
         }
 
@@ -424,6 +530,11 @@ namespace WorldBuilder.Editors.Weenie {
 
         [RelayCommand]
         private async Task SaveAsync() {
+            if (IsCreatingNew) {
+                await InsertNewWeenieAsync();
+                return;
+            }
+
             if (SelectedWeenie == null) {
                 StatusText = "Select a weenie first.";
                 return;
@@ -439,7 +550,7 @@ namespace WorldBuilder.Editors.Weenie {
             }
 
             IsBusy = true;
-            StatusText = "Saving…";
+            StatusText = "Saving\u2026";
             try {
                 var aceSettings = Settings.AceDbConnection.ToAceDbSettings();
                 using var connector = new AceDbConnector(aceSettings);
@@ -456,10 +567,59 @@ namespace WorldBuilder.Editors.Weenie {
             }
         }
 
+        async Task InsertNewWeenieAsync() {
+            if (string.IsNullOrWhiteSpace(NewClassName)) {
+                StatusText = "Enter a class name for the new weenie.";
+                return;
+            }
+            if (Settings?.AceDbConnection == null) {
+                StatusText = "Configure ACE Database in Settings first.";
+                return;
+            }
+            if (!TryBuildSnapshot(0, out var snap, out var err)) {
+                StatusText = err;
+                return;
+            }
+
+            IsBusy = true;
+            StatusText = "Creating new weenie\u2026";
+            try {
+                var aceSettings = Settings.AceDbConnection.ToAceDbSettings();
+                using var connector = new AceDbConnector(aceSettings);
+                var newId = await connector.InsertWeenieAsync(NewClassName.Trim(), snap);
+                if (newId == 0) {
+                    StatusText = "Failed to create weenie (check DB permissions).";
+                    return;
+                }
+
+                IsCreatingNew = false;
+                NewClassName = "";
+                StatusText = $"Created WCID {newId}. Refreshing list\u2026";
+
+                await SearchWeeniesAsync();
+                var created = Weenies.FirstOrDefault(w => w.ClassId == newId);
+                if (created != null)
+                    SelectedWeenie = created;
+            }
+            catch (Exception ex) {
+                StatusText = "Create error: " + ex.Message;
+            }
+            finally {
+                IsBusy = false;
+            }
+        }
+
         [RelayCommand]
         private async Task RevertAsync() {
             if (SelectedWeenie != null)
                 await LoadDetailAsync(SelectedWeenie);
+        }
+
+        [RelayCommand]
+        private Task BrowseDidAsync(WeenieDidRow? row) {
+            // TODO: WeenieDidPickerWindow / WeenieDidPickerViewModel not yet implemented
+            StatusText = "DID picker not yet available. Edit the hex value directly.";
+            return Task.CompletedTask;
         }
 
         bool TryBuildSnapshot(uint classId, out AceWeenieSnapshot snap, out string error) {

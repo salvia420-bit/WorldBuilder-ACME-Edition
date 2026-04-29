@@ -72,6 +72,12 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
         [ObservableProperty]
         private string _currentPositionText = "";
 
+        [ObservableProperty]
+        private bool _isInPlacementMode;
+
+        [ObservableProperty]
+        private string _placementStatusText = "";
+
         public DockingManager DockingManager { get; } = new();
 
         // Overlay toggle properties (bound to toolbar buttons)
@@ -393,6 +399,8 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
                     break;
                 case Avalonia.Input.Key.Escape:
                     TerrainSystem?.EditingContext.ObjectSelection.Deselect();
+                    IsInPlacementMode = false;
+                    PlacementStatusText = "";
                     TerrainSystem?.Scene.InvalidateStaticObjectsCache();
                     break;
             }
@@ -1249,6 +1257,9 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
                 sel.PlacementPreview = preview;
                 sel.PlacementPreviewMulti = previewMulti;
             }
+
+            IsInPlacementMode = sel?.IsPlacementMode ?? false;
+            PlacementStatusText = ObjectBrowser?.Status ?? "Placing object";
         }
 
         public void Cleanup() {

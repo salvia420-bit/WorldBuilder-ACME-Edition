@@ -20,7 +20,7 @@
             <Setter Property="FontSize" Value="11" />
             <Setter Property="Foreground" Value="#8a7a9e" />
             <Setter Property="VerticalAlignment" Value="Center" />
-            <Setter Property="MinWidth" Value="140" />
+            <Setter Property="MinWidth" Value="220" />
         </Style>
         <Style Selector="TextBox.prop-input">
             <Setter Property="FontSize" Value="12" />
@@ -38,6 +38,19 @@
             <Setter Property="Background" Value="#33ffffff" />
             <Setter Property="Foreground" Value="#e0d8ef" />
         </Style>
+        <Style Selector="Button.row-remove">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="4,0" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Foreground" Value="#5a4a6e" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="MinWidth" Value="24" />
+            <Setter Property="MinHeight" Value="20" />
+        </Style>
+        <Style Selector="Button.row-remove:pointerover /template/ ContentPresenter">
+            <Setter Property="Foreground" Value="#d47474" />
+        </Style>
     </UserControl.Styles>
 
     <DockPanel>
@@ -45,8 +58,10 @@
             <DockPanel>
                 <StackPanel Orientation="Horizontal" Spacing="6" DockPanel.Dock="Left">
                     <Button Classes="toolbar-btn" Content="Search" Command="{Binding SearchWeeniesCommand}" />
-                    <Button Classes="toolbar-btn" Content="Save scalars" Command="{Binding SaveCommand}" Foreground="#6ec07a" />
-                    <Button Classes="toolbar-btn" Content="Revert" Command="{Binding RevertCommand}" />
+                    <Button Classes="toolbar-btn" Content="New" Command="{Binding CreateNewCommand}" Foreground="#74b0ec" />
+                    <Button Classes="toolbar-btn" Content="{Binding SaveButtonText}" Command="{Binding SaveCommand}" Foreground="#6ec07a" />
+                    <Button Classes="toolbar-btn" Content="Revert" Command="{Binding RevertCommand}" IsVisible="{Binding !IsCreatingNew}" />
+                    <Button Classes="toolbar-btn" Content="Cancel" Command="{Binding CancelNewCommand}" IsVisible="{Binding IsCreatingNew}" Foreground="#d47474" />
                     <Border Width="1" Background="#2a1d42" Margin="4,0" />
                     <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" FontSize="12" Foreground="#a89bbe" TextWrapping="Wrap" MaxWidth="520" />
                 </StackPanel>
@@ -103,6 +118,10 @@
                                     <Button Classes="toolbar-btn" Content="Replace all scalars" Command="{Binding ApplyTemplateReplaceScalarsCommand}" Foreground="#d4a574" />
                                 </StackPanel>
                                 <TextBlock Classes="section-header" Text="Identity" />
+                                <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsCreatingNew}">
+                                    <TextBlock Classes="field-label" Text="Class name" />
+                                    <TextBox Text="{Binding NewClassName}" Width="280" Classes="prop-input" Watermark="e.g. my-custom-sword (required)" />
+                                </StackPanel>
                                 <StackPanel Orientation="Horizontal" Spacing="8">
                                     <TextBlock Classes="field-label" Text="Weenie type" />
                                     <TextBox Text="{Binding WeenieTypeText}" Width="120" Classes="prop-input" />
@@ -114,103 +133,168 @@
                         </ScrollViewer>
                     </TabItem>
                     <TabItem Header="{Binding IntRows.Count, StringFormat='Ints ({0})'}">
-                        <ScrollViewer>
-                            <ItemsControl Margin="8" ItemsSource="{Binding IntRows}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate DataType="vm:WeenieIntRow">
-                                        <Grid ColumnDefinitions="160,*,80" Margin="0,2">
-                                            <TextBlock Grid.Column="0" Text="{Binding Label}" Classes="field-label" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding PropertyType}" />
-                                            <TextBox Grid.Column="1" Text="{Binding ValueText}" Classes="prop-input" />
-                                            <TextBlock Grid.Column="2" Text="{Binding PropertyType}" FontSize="10" Foreground="#5a4a6e" VerticalAlignment="Center" Margin="8,0,0,0" />
-                                        </Grid>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
+                        <DockPanel>
+                            <Border DockPanel.Dock="Bottom" Padding="8,6" BorderBrush="#2a1d42" BorderThickness="0,1,0,0">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <ComboBox ItemsSource="{x:Static vm:WeenieEditorViewModel.AllIntTypes}" SelectedItem="{Binding SelectedNewInt}" MinWidth="260" FontSize="12" MinHeight="28" />
+                                    <Button Classes="toolbar-btn" Content="+ Add" Command="{Binding AddIntPropertyCommand}" />
+                                </StackPanel>
+                            </Border>
+                            <ScrollViewer>
+                                <ItemsControl Margin="8" ItemsSource="{Binding IntRows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="vm:WeenieIntRow">
+                                            <Grid ColumnDefinitions="220,*,60,24" Margin="0,2">
+                                                <TextBlock Grid.Column="0" Text="{Binding Label}" Classes="field-label" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding RowDescription}" />
+                                                <TextBox Grid.Column="1" Text="{Binding ValueText}" Classes="prop-input" />
+                                                <TextBlock Grid.Column="2" Text="{Binding PropertyType, StringFormat='id {0}'}" FontSize="10" Foreground="#5a4a6e" VerticalAlignment="Center" Margin="8,0,0,0" ToolTip.Tip="{Binding RowDescription}" />
+                                                <Button Grid.Column="3" Classes="row-remove" Content="&#xd7;" Command="{Binding $parent[UserControl].DataContext.RemoveIntRowCommand}" CommandParameter="{Binding}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </DockPanel>
                     </TabItem>
                     <TabItem Header="{Binding Int64Rows.Count, StringFormat='Int64 ({0})'}">
-                        <ScrollViewer>
-                            <ItemsControl Margin="8" ItemsSource="{Binding Int64Rows}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate DataType="vm:WeenieInt64Row">
-                                        <Grid ColumnDefinitions="160,*" Margin="0,2">
-                                            <TextBlock Grid.Column="0" Text="{Binding Label}" Classes="field-label" TextTrimming="CharacterEllipsis" />
-                                            <TextBox Grid.Column="1" Text="{Binding ValueText}" Classes="prop-input" />
-                                        </Grid>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
+                        <DockPanel>
+                            <Border DockPanel.Dock="Bottom" Padding="8,6" BorderBrush="#2a1d42" BorderThickness="0,1,0,0">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <ComboBox ItemsSource="{x:Static vm:WeenieEditorViewModel.AllInt64Types}" SelectedItem="{Binding SelectedNewInt64}" MinWidth="260" FontSize="12" MinHeight="28" />
+                                    <Button Classes="toolbar-btn" Content="+ Add" Command="{Binding AddInt64PropertyCommand}" />
+                                </StackPanel>
+                            </Border>
+                            <ScrollViewer>
+                                <ItemsControl Margin="8" ItemsSource="{Binding Int64Rows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="vm:WeenieInt64Row">
+                                            <Grid ColumnDefinitions="220,*,24" Margin="0,2">
+                                                <TextBlock Grid.Column="0" Text="{Binding Label}" Classes="field-label" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding RowDescription}" />
+                                                <TextBox Grid.Column="1" Text="{Binding ValueText}" Classes="prop-input" />
+                                                <Button Grid.Column="2" Classes="row-remove" Content="&#xd7;" Command="{Binding $parent[UserControl].DataContext.RemoveInt64RowCommand}" CommandParameter="{Binding}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </DockPanel>
                     </TabItem>
                     <TabItem Header="{Binding BoolRows.Count, StringFormat='Bool ({0})'}">
-                        <ScrollViewer>
-                            <ItemsControl Margin="8" ItemsSource="{Binding BoolRows}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate DataType="vm:WeenieBoolRow">
-                                        <Grid ColumnDefinitions="200,*" Margin="0,4">
-                                            <TextBlock Grid.Column="0" Text="{Binding Label}" Classes="field-label" />
-                                            <CheckBox Grid.Column="1" IsChecked="{Binding Value}" VerticalAlignment="Center" />
-                                        </Grid>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
+                        <DockPanel>
+                            <Border DockPanel.Dock="Bottom" Padding="8,6" BorderBrush="#2a1d42" BorderThickness="0,1,0,0">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <ComboBox ItemsSource="{x:Static vm:WeenieEditorViewModel.AllBoolTypes}" SelectedItem="{Binding SelectedNewBool}" MinWidth="260" FontSize="12" MinHeight="28" />
+                                    <Button Classes="toolbar-btn" Content="+ Add" Command="{Binding AddBoolPropertyCommand}" />
+                                </StackPanel>
+                            </Border>
+                            <ScrollViewer>
+                                <ItemsControl Margin="8" ItemsSource="{Binding BoolRows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="vm:WeenieBoolRow">
+                                            <Grid ColumnDefinitions="220,*,24" Margin="0,4">
+                                                <TextBlock Grid.Column="0" Text="{Binding Label}" Classes="field-label" ToolTip.Tip="{Binding RowDescription}" />
+                                                <CheckBox Grid.Column="1" IsChecked="{Binding Value}" VerticalAlignment="Center" />
+                                                <Button Grid.Column="2" Classes="row-remove" Content="&#xd7;" Command="{Binding $parent[UserControl].DataContext.RemoveBoolRowCommand}" CommandParameter="{Binding}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </DockPanel>
                     </TabItem>
                     <TabItem Header="{Binding FloatRows.Count, StringFormat='Float ({0})'}">
-                        <ScrollViewer>
-                            <ItemsControl Margin="8" ItemsSource="{Binding FloatRows}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate DataType="vm:WeenieFloatRow">
-                                        <Grid ColumnDefinitions="160,*" Margin="0,2">
-                                            <TextBlock Grid.Column="0" Text="{Binding Label}" Classes="field-label" TextTrimming="CharacterEllipsis" />
-                                            <TextBox Grid.Column="1" Text="{Binding ValueText}" Classes="prop-input" />
-                                        </Grid>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
+                        <DockPanel>
+                            <Border DockPanel.Dock="Bottom" Padding="8,6" BorderBrush="#2a1d42" BorderThickness="0,1,0,0">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <ComboBox ItemsSource="{x:Static vm:WeenieEditorViewModel.AllFloatTypes}" SelectedItem="{Binding SelectedNewFloat}" MinWidth="260" FontSize="12" MinHeight="28" />
+                                    <Button Classes="toolbar-btn" Content="+ Add" Command="{Binding AddFloatPropertyCommand}" />
+                                </StackPanel>
+                            </Border>
+                            <ScrollViewer>
+                                <ItemsControl Margin="8" ItemsSource="{Binding FloatRows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="vm:WeenieFloatRow">
+                                            <Grid ColumnDefinitions="220,*,24" Margin="0,2">
+                                                <TextBlock Grid.Column="0" Text="{Binding Label}" Classes="field-label" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding RowDescription}" />
+                                                <TextBox Grid.Column="1" Text="{Binding ValueText}" Classes="prop-input" />
+                                                <Button Grid.Column="2" Classes="row-remove" Content="&#xd7;" Command="{Binding $parent[UserControl].DataContext.RemoveFloatRowCommand}" CommandParameter="{Binding}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </DockPanel>
                     </TabItem>
                     <TabItem Header="{Binding StringRows.Count, StringFormat='String ({0})'}">
-                        <ScrollViewer>
-                            <ItemsControl Margin="8" ItemsSource="{Binding StringRows}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate DataType="vm:WeenieStringRow">
-                                        <StackPanel Margin="0,6">
-                                            <TextBlock Text="{Binding Label}" Classes="field-label" />
-                                            <TextBox Text="{Binding ValueText}" Classes="prop-input" AcceptsReturn="True" MinHeight="48" TextWrapping="Wrap" />
-                                        </StackPanel>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
+                        <DockPanel>
+                            <Border DockPanel.Dock="Bottom" Padding="8,6" BorderBrush="#2a1d42" BorderThickness="0,1,0,0">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <ComboBox ItemsSource="{x:Static vm:WeenieEditorViewModel.AllStringTypes}" SelectedItem="{Binding SelectedNewString}" MinWidth="260" FontSize="12" MinHeight="28" />
+                                    <Button Classes="toolbar-btn" Content="+ Add" Command="{Binding AddStringPropertyCommand}" />
+                                </StackPanel>
+                            </Border>
+                            <ScrollViewer>
+                                <ItemsControl Margin="8" ItemsSource="{Binding StringRows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="vm:WeenieStringRow">
+                                            <StackPanel Margin="0,6">
+                                                <DockPanel>
+                                                    <Button DockPanel.Dock="Right" Classes="row-remove" Content="&#xd7;" Command="{Binding $parent[UserControl].DataContext.RemoveStringRowCommand}" CommandParameter="{Binding}" />
+                                                    <TextBlock Text="{Binding Label}" Classes="field-label" ToolTip.Tip="{Binding RowDescription}" />
+                                                </DockPanel>
+                                                <TextBox Text="{Binding ValueText}" Classes="prop-input" AcceptsReturn="True" MinHeight="48" TextWrapping="Wrap" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </DockPanel>
                     </TabItem>
                     <TabItem Header="{Binding DidRows.Count, StringFormat='DID ({0})'}">
-                        <ScrollViewer>
-                            <ItemsControl Margin="8" ItemsSource="{Binding DidRows}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate DataType="vm:WeenieDidRow">
-                                        <Grid ColumnDefinitions="160,*" Margin="0,2">
-                                            <TextBlock Grid.Column="0" Text="{Binding Label}" Classes="field-label" TextTrimming="CharacterEllipsis" />
-                                            <TextBox Grid.Column="1" Text="{Binding ValueText}" Classes="prop-input" FontFamily="Consolas,Courier New,monospace" />
-                                        </Grid>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
+                        <DockPanel>
+                            <Border DockPanel.Dock="Bottom" Padding="8,6" BorderBrush="#2a1d42" BorderThickness="0,1,0,0">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <ComboBox ItemsSource="{x:Static vm:WeenieEditorViewModel.AllDidTypes}" SelectedItem="{Binding SelectedNewDid}" MinWidth="260" FontSize="12" MinHeight="28" />
+                                    <Button Classes="toolbar-btn" Content="+ Add" Command="{Binding AddDidPropertyCommand}" />
+                                </StackPanel>
+                            </Border>
+                            <ScrollViewer>
+                                <ItemsControl Margin="8" ItemsSource="{Binding DidRows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="vm:WeenieDidRow">
+                                            <Grid ColumnDefinitions="220,*,24" Margin="0,2">
+                                                <TextBlock Grid.Column="0" Text="{Binding Label}" Classes="field-label" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding RowDescription}" />
+                                                <TextBox Grid.Column="1" Text="{Binding ValueText}" Classes="prop-input" FontFamily="Consolas,Courier New,monospace" />
+                                                <Button Grid.Column="2" Classes="row-remove" Content="&#xd7;" Command="{Binding $parent[UserControl].DataContext.RemoveDidRowCommand}" CommandParameter="{Binding}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </DockPanel>
                     </TabItem>
                     <TabItem Header="{Binding IidRows.Count, StringFormat='IID ({0})'}">
-                        <ScrollViewer>
-                            <ItemsControl Margin="8" ItemsSource="{Binding IidRows}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate DataType="vm:WeenieIidRow">
-                                        <Grid ColumnDefinitions="160,*" Margin="0,2">
-                                            <TextBlock Grid.Column="0" Text="{Binding Label}" Classes="field-label" TextTrimming="CharacterEllipsis" />
-                                            <TextBox Grid.Column="1" Text="{Binding ValueText}" Classes="prop-input" FontFamily="Consolas,Courier New,monospace" />
-                                        </Grid>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
+                        <DockPanel>
+                            <Border DockPanel.Dock="Bottom" Padding="8,6" BorderBrush="#2a1d42" BorderThickness="0,1,0,0">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <ComboBox ItemsSource="{x:Static vm:WeenieEditorViewModel.AllIidTypes}" SelectedItem="{Binding SelectedNewIid}" MinWidth="260" FontSize="12" MinHeight="28" />
+                                    <Button Classes="toolbar-btn" Content="+ Add" Command="{Binding AddIidPropertyCommand}" />
+                                </StackPanel>
+                            </Border>
+                            <ScrollViewer>
+                                <ItemsControl Margin="8" ItemsSource="{Binding IidRows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="vm:WeenieIidRow">
+                                            <Grid ColumnDefinitions="220,*,24" Margin="0,2">
+                                                <TextBlock Grid.Column="0" Text="{Binding Label}" Classes="field-label" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding RowDescription}" />
+                                                <TextBox Grid.Column="1" Text="{Binding ValueText}" Classes="prop-input" FontFamily="Consolas,Courier New,monospace" />
+                                                <Button Grid.Column="2" Classes="row-remove" Content="&#xd7;" Command="{Binding $parent[UserControl].DataContext.RemoveIidRowCommand}" CommandParameter="{Binding}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </DockPanel>
                     </TabItem>
                 </TabControl>
 

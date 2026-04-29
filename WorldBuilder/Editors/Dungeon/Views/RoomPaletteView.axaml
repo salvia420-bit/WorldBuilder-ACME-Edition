@@ -90,20 +90,24 @@
             </StackPanel>
         </Border>
 
-        <!-- Piece List -->
-        <ListBox ItemsSource="{Binding PrefabEntries}"
-                 SelectedItem="{Binding SelectedPrefab}"
-                 FontSize="11"
-                 Background="Transparent"
-                 IsVisible="{Binding !IsBuildingKnowledgeBase}">
-            <ListBox.ItemTemplate>
-                <DataTemplate x:DataType="vm:PrefabListEntry">
+        <!-- Piece List (wrapping grid when panel is wide) -->
+        <ScrollViewer IsVisible="{Binding !IsBuildingKnowledgeBase}">
+            <ItemsControl ItemsSource="{Binding PrefabEntries}" FontSize="11">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <WrapPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:PrefabListEntry">
                     <Border Margin="2,2" Padding="4,4" CornerRadius="4"
                             Background="#120c22"
                             BorderBrush="{Binding CompatibleBrush}"
                             BorderThickness="1"
                             PointerEntered="PrefabItem_PointerEntered"
-                            PointerExited="PrefabItem_PointerExited">
+                            PointerExited="PrefabItem_PointerExited"
+                            PointerPressed="PrefabItem_PointerPressed"
+                            MaxWidth="320">
                         <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto">
 
                             <!-- Thumbnail with overlay badges -->
@@ -198,7 +202,8 @@
                         </Grid>
                     </Border>
                 </DataTemplate>
-            </ListBox.ItemTemplate>
-        </ListBox>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
     </DockPanel>
 </UserControl>

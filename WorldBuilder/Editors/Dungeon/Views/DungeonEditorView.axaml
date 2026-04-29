@@ -189,7 +189,7 @@
                 <Grid Grid.Column="2">
                     <local:DungeonViewportControl />
 
-                    <!-- Placement mode overlay at top of viewport -->
+                    <!-- Placement mode overlay at top of viewport (room placement) -->
                     <Border VerticalAlignment="Top" HorizontalAlignment="Center"
                             Margin="0,8,0,0" Padding="16,8" CornerRadius="6"
                             Background="#DD0a3040" BorderBrush="#4dbdbd" BorderThickness="1"
@@ -198,6 +198,19 @@
                             <TextBlock Text="{Binding PlacementStatusText}" FontSize="14" FontWeight="SemiBold"
                                        Foreground="#4dbdbd" HorizontalAlignment="Center" />
                             <TextBlock Text="Click to place at the highlighted doorway  |  Escape to cancel"
+                                       FontSize="11" Foreground="#6a8a8a" HorizontalAlignment="Center" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Object placement mode overlay -->
+                    <Border VerticalAlignment="Top" HorizontalAlignment="Center"
+                            Margin="0,8,0,0" Padding="16,8" CornerRadius="6"
+                            Background="#DD0a3040" BorderBrush="#4dbdbd" BorderThickness="1"
+                            IsVisible="{Binding IsObjectPlacementMode}" IsHitTestVisible="False">
+                        <StackPanel Spacing="2" HorizontalAlignment="Center">
+                            <TextBlock Text="Placing object" FontSize="14" FontWeight="SemiBold"
+                                       Foreground="#4dbdbd" HorizontalAlignment="Center" />
+                            <TextBlock Text="Click a surface to place  |  Escape to cancel"
                                        FontSize="11" Foreground="#6a8a8a" HorizontalAlignment="Center" />
                         </StackPanel>
                     </Border>

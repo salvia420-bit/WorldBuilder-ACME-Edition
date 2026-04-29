@@ -408,9 +408,9 @@ namespace WorldBuilder.Editors.Dungeon {
         partial void OnShowFavoritePrefabsModeChanged(bool value) {
             if (value) {
                 ShowCatalogMode = false; ShowStarterMode = false; ShowFavoritesMode = false; ShowPrefabsMode = false;
-                ApplyPrefabFilter();
-                _ = GeneratePrefabThumbnailsAsync();
             }
+            ApplyPrefabFilter();
+            if (value) _ = GeneratePrefabThumbnailsAsync();
         }
 
         public bool IsPrefabFavorite(DungeonPrefab prefab) =>
@@ -579,11 +579,26 @@ namespace WorldBuilder.Editors.Dungeon {
                     entries.Add(BuildPrefabEntry(prefab, isCompatible: false));
             }
 
-            // Apply favorite state to entries
-            foreach (var entry in entries)
+            // Carry over thumbnails and favorite state from previous entries
+            Dictionary<string, WriteableBitmap?>? oldThumbnails = null;
+            if (PrefabEntries.Count > 0) {
+                oldThumbnails = new Dictionary<string, WriteableBitmap?>();
+                foreach (var old in PrefabEntries) {
+                    if (old.Thumbnail != null)
+                        oldThumbnails[old.Prefab.Signature] = old.Thumbnail;
+                }
+            }
+
+            foreach (var entry in entries) {
                 entry.IsFavorite = _favoritePrefabSignatures.Contains(entry.Prefab.Signature);
+                if (oldThumbnails != null && oldThumbnails.TryGetValue(entry.Prefab.Signature, out var thumb))
+                    entry.Thumbnail = thumb;
+            }
 
             PrefabEntries = new ObservableCollection<PrefabListEntry>(entries);
+
+            if (oldThumbnails == null || entries.Any(e => e.Thumbnail == null))
+                _ = GeneratePrefabThumbnailsAsync();
         }
 
         private static PrefabListEntry BuildPrefabEntry(DungeonPrefab prefab, bool isCompatible) {

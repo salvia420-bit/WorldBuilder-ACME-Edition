@@ -155,50 +155,35 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                 ? ((AceWeenieType)type).ToString()
                 : $"Type {type}";
 
-        /// <summary>Best-effort ACE PropertyInt name; falls back to numeric.</summary>
-        public static string Int(ushort type) {
-            // Hot path: common authoring properties (not exhaustive).
-            return type switch {
-                1 => "ItemType",
-                2 => "CreatureType",
-                5 => "EncumbranceVal",
-                6 => "ItemsCapacity",
-                7 => "ContainersCapacity",
-                8 => "Mass",
-                16 => "ItemUseable",
-                19 => "Value",
-                25 => "Level",
-                45 => "DamageType",
-                47 => "AttackType",
-                48 => "WeaponSkill",
-                60 => "WeaponRange",
-                93 => "PhysicsState",
-                94 => "TargetType",
-                111 => "PortalBitmask",
-                131 => "MaterialType",
-                146 => "XpOverride",
-                157 => "WeenieIteration",
-                158 => "WieldRequirements",
-                159 => "WieldSkillType",
-                160 => "WieldDifficulty",
-                179 => "ImbuedEffect",
-                266 => "PetClass",
-                353 => "WeaponType",
-                _ => $"Int {type}",
-            };
-        }
+        /// <summary>ACE PropertyInt name from <see cref="AcePropertyInt"/>; unknown ids shown as PropertyInt N.</summary>
+        public static string Int(ushort type) =>
+            System.Enum.IsDefined(typeof(AcePropertyInt), type)
+                ? ((AcePropertyInt)type).ToString()
+                : $"PropertyInt {type}";
 
-        public static string Int64(ushort type) => $"Int64 {type}";
+        public static string Int64(ushort type) =>
+            System.Enum.IsDefined(typeof(AcePropertyInt64), type)
+                ? ((AcePropertyInt64)type).ToString()
+                : $"PropertyInt64 {type}";
 
-        public static string Bool(ushort type) => $"Bool {type}";
+        public static string Bool(ushort type) =>
+            System.Enum.IsDefined(typeof(AcePropertyBool), type)
+                ? ((AcePropertyBool)type).ToString()
+                : $"PropertyBool {type}";
 
-        public static string Float(ushort type) => $"Float {type}";
+        public static string Float(ushort type) =>
+            System.Enum.IsDefined(typeof(AcePropertyFloat), type)
+                ? ((AcePropertyFloat)type).ToString()
+                : $"PropertyFloat {type}";
 
-        public static string String(ushort type) => type switch {
-            1 => "Name",
-            _ => $"String {type}",
-        };
+        public static string String(ushort type) =>
+            System.Enum.IsDefined(typeof(AcePropertyString), type)
+                ? ((AcePropertyString)type).ToString()
+                : $"PropertyString {type}";
 
-        public static string InstanceId(ushort type) => $"IID {type}";
+        public static string InstanceId(ushort type) =>
+            System.Enum.IsDefined(typeof(AcePropertyInstanceId), type)
+                ? ((AcePropertyInstanceId)type).ToString()
+                : $"PropertyInstanceId {type}";
     }
 }

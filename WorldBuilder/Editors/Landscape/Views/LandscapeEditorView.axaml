@@ -458,6 +458,19 @@
                         Foreground="#d4a843"
                         Text="{Binding CurrentPositionText}" />
                 </Border>
+
+                <!-- Placement mode overlay -->
+                <Border VerticalAlignment="Top" HorizontalAlignment="Center"
+                        Margin="0,48,0,0" Padding="16,8" CornerRadius="6"
+                        Background="#DD0a3040" BorderBrush="#4dbdbd" BorderThickness="1"
+                        IsVisible="{Binding IsInPlacementMode}" IsHitTestVisible="False">
+                    <StackPanel Spacing="2" HorizontalAlignment="Center">
+                        <TextBlock Text="{Binding PlacementStatusText}" FontSize="14" FontWeight="SemiBold"
+                                   Foreground="#4dbdbd" HorizontalAlignment="Center" />
+                        <TextBlock Text="Click terrain to place  |  Escape to cancel"
+                                   FontSize="11" Foreground="#6a8a8a" HorizontalAlignment="Center" />
+                    </StackPanel>
+                </Border>
             </Grid>
 
             <!-- Right Splitter -->

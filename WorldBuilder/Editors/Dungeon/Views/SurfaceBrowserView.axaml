@@ -25,6 +25,15 @@
                           ToolTip.Tip="Show only surfaces on the currently selected cell" />
                 <CheckBox Content="Custom" IsChecked="{Binding ShowCustomOnly}" FontSize="11" Padding="2,0"
                           ToolTip.Tip="Show only imported custom surfaces" />
+                <ToggleButton IsChecked="{Binding ShowFavoritesOnly}" Padding="4,2" FontSize="11"
+                              Background="Transparent" BorderThickness="0" ToolTip.Tip="Show favorites only">
+                    <Panel>
+                        <TextBlock Text="&#x2605;" FontSize="14" Foreground="#c8a832"
+                                   IsVisible="{Binding ShowFavoritesOnly}" />
+                        <TextBlock Text="&#x2606;" FontSize="14" Foreground="#5a4a6e"
+                                   IsVisible="{Binding !ShowFavoritesOnly}" />
+                    </Panel>
+                </ToggleButton>
             </StackPanel>
             <Button Content="Import Surface..." Command="{Binding ImportSurfaceCommand}"
                     FontSize="11" Padding="6,3" HorizontalAlignment="Left"
@@ -68,6 +77,19 @@
                                             Source="{Binding Thumbnail}"
                                             Stretch="Uniform"
                                             IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                                        <Button CornerRadius="0,4,0,0" Padding="1,0"
+                                                Background="#CC1a0e30" BorderThickness="0"
+                                                HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                                                Command="{Binding $parent[UserControl].((vm:SurfaceBrowserViewModel)DataContext).ToggleFavoriteCommand}"
+                                                CommandParameter="{Binding}"
+                                                ToolTip.Tip="Toggle favorite" Cursor="Hand" Focusable="False">
+                                            <Panel>
+                                                <TextBlock Text="&#x2605;" FontSize="10" Foreground="#c8a832"
+                                                           IsVisible="{Binding IsFavorite}" />
+                                                <TextBlock Text="&#x2606;" FontSize="10" Foreground="#5a4a6e"
+                                                           IsVisible="{Binding !IsFavorite}" />
+                                            </Panel>
+                                        </Button>
                                     </Panel>
                                     <TextBlock
                                         Text="{Binding DisplayId}"

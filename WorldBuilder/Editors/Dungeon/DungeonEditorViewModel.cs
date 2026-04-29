@@ -156,6 +156,8 @@ namespace WorldBuilder.Editors.Dungeon {
         }
 
         internal void Init(Project project) {
+            if (_scene != null) return;
+
             _project = project;
             _dats = project.DocumentManager.Dats;
             _scene = new DungeonScene(_dats, Settings);
@@ -214,6 +216,8 @@ namespace WorldBuilder.Editors.Dungeon {
         }
 
         private void InitTools() {
+            Tools.Clear();
+
             var selectTool = new SelectTool(EditingContext);
             var roomTool = new RoomPlacementTool();
             var objectTool = new ObjectPlacementTool();
@@ -505,8 +509,12 @@ namespace WorldBuilder.Editors.Dungeon {
             if (SelectedTool != null && SelectedTool.HandleKeyDown(e, EditingContext)) return;
 
             if (e.Key == Key.Escape) {
-                if (IsObjectPlacementMode) CancelObjectPlacement();
-                else if (IsPlacementMode) CancelPlacement();
+                if (IsObjectPlacementMode || IsPlacementMode) {
+                    if (IsObjectPlacementMode) CancelObjectPlacement();
+                    if (IsPlacementMode) CancelPlacement();
+                    var selectTool = Tools.OfType<SelectTool>().FirstOrDefault();
+                    if (selectTool != null && SelectedTool != selectTool) SelectTool(selectTool);
+                }
                 else if (HasSelectedObject) DeselectObject();
                 else DeselectCell();
             }

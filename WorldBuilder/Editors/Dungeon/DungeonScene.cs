@@ -193,7 +193,7 @@ namespace WorldBuilder.Editors.Dungeon {
             if (ecm == null) return false;
 
             if (_hasLoadedCells) {
-                ecm.UnloadLandblock(_loadedLandblockKey);
+                ecm.QueueUnload(_loadedLandblockKey);
                 _hasLoadedCells = false;
             }
 
@@ -235,7 +235,7 @@ namespace WorldBuilder.Editors.Dungeon {
             if (ecm == null) return;
 
             if (_hasLoadedCells) {
-                ecm.UnloadLandblock(_loadedLandblockKey);
+                ecm.QueueUnload(_loadedLandblockKey);
                 _hasLoadedCells = false;
             }
 
@@ -294,7 +294,7 @@ namespace WorldBuilder.Editors.Dungeon {
             // Set to empty list as the "clear" signal for UpdatePreviewLandblock
             PreviewEnvCells = new List<DatReaderWriter.DBObjs.EnvCell>();
             if (_hasPreviewCells && _sceneContext?.EnvCellManager != null) {
-                _sceneContext.EnvCellManager.UnloadLandblock(PreviewLandblockKey);
+                _sceneContext.EnvCellManager.QueueUnload(PreviewLandblockKey);
                 _hasPreviewCells = false;
             }
         }

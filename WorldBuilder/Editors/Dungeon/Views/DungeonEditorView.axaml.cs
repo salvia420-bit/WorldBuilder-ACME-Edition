@@ -68,7 +68,7 @@ namespace WorldBuilder.Editors.Dungeon.Views {
                 };
             }
 
-            if (ProjectManager.Instance.CurrentProject != null) {
+            if (ProjectManager.Instance.CurrentProject != null && _viewModel.Scene == null) {
                 _viewModel.Init(ProjectManager.Instance.CurrentProject);
             }
         }
@@ -108,10 +108,17 @@ namespace WorldBuilder.Editors.Dungeon.Views {
 
         private void OnTopLevelKeyDown(object? sender, KeyEventArgs e) {
             if (_viewModel == null || !IsEffectivelyVisible) return;
-            if (!e.KeyModifiers.HasFlag(KeyModifiers.Control)) return;
 
             var focused = TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement() as Control;
             if (focused is TextBox) return;
+
+            if (e.Key == Key.Escape) {
+                _viewModel.HandleKeyDown(e);
+                e.Handled = true;
+                return;
+            }
+
+            if (!e.KeyModifiers.HasFlag(KeyModifiers.Control)) return;
 
             if (e.Key == Key.C) {
                 _viewModel.CopySelectedCells();

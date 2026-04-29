@@ -32,6 +32,9 @@ namespace WorldBuilder.Editors.Dungeon {
         [ObservableProperty]
         private WriteableBitmap? _thumbnail;
 
+        [ObservableProperty]
+        private bool _isFavorite;
+
         public SurfaceBrowserItem(uint id) {
             Id = id;
             UnqualifiedId = (ushort)(id & 0xFFFF);
@@ -56,6 +59,7 @@ namespace WorldBuilder.Editors.Dungeon {
         private uint[] _dungeonSurfaceIds = Array.Empty<uint>();
         private uint[] _currentCellSurfaceIds = Array.Empty<uint>();
         private uint[] _customSurfaceIds = Array.Empty<uint>();
+        private readonly HashSet<uint> _favoriteSurfaceIds = new();
         private bool _dungeonSurfacesScanned;
         private int _displayCount = PageSize;
         private int _totalMatchCount;
@@ -66,6 +70,7 @@ namespace WorldBuilder.Editors.Dungeon {
         [ObservableProperty] private bool _showDungeonOnly = true;
         [ObservableProperty] private bool _showCurrentCellOnly;
         [ObservableProperty] private bool _showCustomOnly;
+        [ObservableProperty] private bool _showFavoritesOnly;
         [ObservableProperty] private bool _canLoadMore;
 
         public event EventHandler<ushort>? SurfaceSelected;
@@ -74,6 +79,7 @@ namespace WorldBuilder.Editors.Dungeon {
             _dats = dats;
             _textureImport = textureImport;
             LoadCustomSurfaceIds();
+            LoadSurfaceFavorites();
             _ = LoadSurfacesAsync();
         }
 
@@ -189,17 +195,22 @@ namespace WorldBuilder.Editors.Dungeon {
 
         partial void OnSearchTextChanged(string value) { _displayCount = PageSize; ApplyFilter(); }
         partial void OnShowDungeonOnlyChanged(bool value) {
-            if (value) { ShowCurrentCellOnly = false; ShowCustomOnly = false; }
+            if (value) { ShowCurrentCellOnly = false; ShowCustomOnly = false; ShowFavoritesOnly = false; }
             _displayCount = PageSize;
             ApplyFilter();
         }
         partial void OnShowCurrentCellOnlyChanged(bool value) {
-            if (value) { ShowDungeonOnly = false; ShowCustomOnly = false; }
+            if (value) { ShowDungeonOnly = false; ShowCustomOnly = false; ShowFavoritesOnly = false; }
             _displayCount = PageSize;
             ApplyFilter();
         }
         partial void OnShowCustomOnlyChanged(bool value) {
-            if (value) { ShowDungeonOnly = false; ShowCurrentCellOnly = false; }
+            if (value) { ShowDungeonOnly = false; ShowCurrentCellOnly = false; ShowFavoritesOnly = false; }
+            _displayCount = PageSize;
+            ApplyFilter();
+        }
+        partial void OnShowFavoritesOnlyChanged(bool value) {
+            if (value) { ShowDungeonOnly = false; ShowCurrentCellOnly = false; ShowCustomOnly = false; }
             _displayCount = PageSize;
             ApplyFilter();
         }
@@ -247,7 +258,10 @@ namespace WorldBuilder.Editors.Dungeon {
         private void ApplyFilter() {
             IEnumerable<uint> surfaces;
 
-            if (ShowCustomOnly && _customSurfaceIds.Length > 0) {
+            if (ShowFavoritesOnly) {
+                surfaces = _favoriteSurfaceIds.OrderBy(id => id);
+            }
+            else if (ShowCustomOnly && _customSurfaceIds.Length > 0) {
                 surfaces = _customSurfaceIds;
             }
             else if (ShowCurrentCellOnly && _currentCellSurfaceIds.Length > 0) {
@@ -274,10 +288,14 @@ namespace WorldBuilder.Editors.Dungeon {
             foreach (var id in result) {
                 itemsList.Add(new SurfaceBrowserItem(id));
             }
+            foreach (var item in itemsList)
+                item.IsFavorite = _favoriteSurfaceIds.Contains(item.Id);
+
             FilteredItems = new ObservableCollection<SurfaceBrowserItem>(itemsList);
             CanLoadMore = result.Length < _totalMatchCount;
 
-            string filterLabel = ShowCustomOnly ? "custom" :
+            string filterLabel = ShowFavoritesOnly ? "favorites" :
+                                 ShowCustomOnly ? "custom" :
                                  ShowCurrentCellOnly ? "cell" :
                                  (ShowDungeonOnly && _dungeonSurfaceIds.Length > 0) ? "dungeon" : "all";
             Status = result.Length < _totalMatchCount
@@ -638,6 +656,49 @@ namespace WorldBuilder.Editors.Dungeon {
                 }
             }
             return rgba;
+        }
+
+        [RelayCommand]
+        private void ToggleFavorite(SurfaceBrowserItem item) {
+            if (item == null) return;
+            if (_favoriteSurfaceIds.Contains(item.Id)) {
+                _favoriteSurfaceIds.Remove(item.Id);
+                item.IsFavorite = false;
+            } else {
+                _favoriteSurfaceIds.Add(item.Id);
+                item.IsFavorite = true;
+            }
+            SaveSurfaceFavorites();
+            if (ShowFavoritesOnly) ApplyFilter();
+        }
+
+        private void LoadSurfaceFavorites() {
+            try {
+                var path = Path.Combine(
+                    System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                    "ACME WorldBuilder", "surface_favorites.json");
+                if (!File.Exists(path)) return;
+                var json = File.ReadAllText(path);
+                using var doc = System.Text.Json.JsonDocument.Parse(json);
+                foreach (var el in doc.RootElement.EnumerateArray())
+                    _favoriteSurfaceIds.Add(el.GetUInt32());
+            } catch (Exception ex) {
+                Console.WriteLine($"[SurfaceBrowser] LoadFavorites: {ex.Message}");
+            }
+        }
+
+        private void SaveSurfaceFavorites() {
+            try {
+                var path = Path.Combine(
+                    System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                    "ACME WorldBuilder", "surface_favorites.json");
+                var dir = Path.GetDirectoryName(path);
+                if (dir != null) Directory.CreateDirectory(dir);
+                var json = System.Text.Json.JsonSerializer.Serialize(_favoriteSurfaceIds.ToList());
+                File.WriteAllText(path, json);
+            } catch (Exception ex) {
+                Console.WriteLine($"[SurfaceBrowser] SaveFavorites: {ex.Message}");
+            }
         }
 
         [RelayCommand]
