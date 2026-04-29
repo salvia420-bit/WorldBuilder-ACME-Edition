@@ -10610,12 +10610,6 @@ public class CommandEngine {
         _compareCacheDir = cacheDir;
         try { Directory.CreateDirectory(cacheDir); } catch { /* fall through; cache is best-effort */ }
 
-        // Detect cache hit by checking whether the snapshot file exists *before*
-        // the script runs. We can't know the exact key without rebuilding it
-        // here, so we just observe whether the cache dir grew — good enough for
-        // the agent's "did this hit cache?" telemetry.
-        int cacheFilesBefore = SafeCountCacheFiles(cacheDir);
-
         var args = new List<string> {
             scriptPath,
             "--generated", generated,
@@ -10625,6 +10619,9 @@ public class CommandEngine {
             "--retail-cache-dir", cacheDir,
             "--stdout-json",
             "--no-md",
+            // Skip the side-effect disk write — we already consume stdout JSON,
+            // so a hot tuning loop shouldn't pay extra disk I/O per iteration.
+            "--no-out-json",
             "--quiet",
         };
         if (!perLandblock) args.Add("--no-per-lb");
@@ -10632,11 +10629,16 @@ public class CommandEngine {
         string stdoutText;
         string stderrText;
         int exitCode;
+        bool timedOut;
         try {
-            (stdoutText, stderrText, exitCode) = RunPython(args);
+            (stdoutText, stderrText, exitCode, timedOut) = RunPython(args, CompareTimeout);
         } catch (Exception ex) {
             return new CompareToRetailResult(false, generated, retailPath,
                 Error: $"Failed to launch python: {ex.Message}");
+        }
+        if (timedOut) {
+            return new CompareToRetailResult(false, generated, retailPath,
+                Error: $"compare_world_to_retail.py exceeded {CompareTimeout.TotalMinutes:F0}-minute timeout and was killed.");
         }
         if (exitCode != 0) {
             return new CompareToRetailResult(false, generated, retailPath,
@@ -10656,19 +10658,14 @@ public class CommandEngine {
                 Error: $"Failed to parse comparator JSON: {ex.Message}");
         }
 
-        int cacheFilesAfter = SafeCountCacheFiles(cacheDir);
-        bool cacheHit = cacheFilesAfter == cacheFilesBefore;
-
         return parsed with {
             ElapsedSeconds = Math.Round(sw.Elapsed.TotalSeconds, 3),
-            RetailCacheHit = cacheHit,
         };
     }
 
-    private static int SafeCountCacheFiles(string dir) {
-        try { return Directory.GetFiles(dir, "retail_v*.pkl").Length; }
-        catch { return 0; }
-    }
+    // 10-minute timeout for the comparator. Real runs land in seconds even
+    // for full-world regions; this is a runaway guard, not a budget.
+    private static readonly TimeSpan CompareTimeout = TimeSpan.FromMinutes(10);
 
     /// <summary>
     /// Locates compare_world_to_retail.py. Resolution order:
@@ -10705,7 +10702,8 @@ public class CommandEngine {
         return null;
     }
 
-    private static (string Stdout, string Stderr, int ExitCode) RunPython(IEnumerable<string> args) {
+    private static (string Stdout, string Stderr, int ExitCode, bool TimedOut) RunPython(
+            IEnumerable<string> args, TimeSpan timeout) {
         var pythonExe = System.Environment.GetEnvironmentVariable("WORLDBUILDER_PYTHON")
             ?? (OperatingSystem.IsWindows() ? "python" : "python3");
         var psi = new System.Diagnostics.ProcessStartInfo(pythonExe) {
@@ -10723,8 +10721,17 @@ public class CommandEngine {
         // fills one pipe while we're blocked reading the other.
         var stdoutTask = proc.StandardOutput.ReadToEndAsync();
         var stderrTask = proc.StandardError.ReadToEndAsync();
-        proc.WaitForExit();
-        return (stdoutTask.Result, stderrTask.Result, proc.ExitCode);
+        bool exited = proc.WaitForExit((int)timeout.TotalMilliseconds);
+        if (!exited) {
+            try { proc.Kill(entireProcessTree: true); } catch { /* best effort */ }
+            // Drain pipes after kill so the tasks complete and don't leak.
+            try { proc.WaitForExit(2000); } catch { /* best effort */ }
+            string outSoFar = ""; string errSoFar = "";
+            try { outSoFar = stdoutTask.Result; } catch { /* swallow */ }
+            try { errSoFar = stderrTask.Result; } catch { /* swallow */ }
+            return (outSoFar, errSoFar, -1, true);
+        }
+        return (stdoutTask.Result, stderrTask.Result, proc.ExitCode, false);
     }
 
     private static CompareToRetailResult ParseCompareReport(
@@ -10821,14 +10828,23 @@ public class CommandEngine {
             }
         }
 
-        string? outJson = null;
-        if (root.TryGetProperty("inputs", out var inputsEl)) {
-            // The script writes its JSON report to disk too. Path is implicit
-            // (generated.with_suffix(".comparison.json")). Compute it the same way.
-            var gen = inputsEl.GetProperty("generated").GetString() ?? generated;
-            outJson = Path.ChangeExtension(gen, ".comparison.json");
+        // The Python comparator reports its cache state authoritatively in the
+        // JSON. Older cache-by-file-count heuristics in the C# wrapper would
+        // false-positive when a snapshot store silently failed; trusting the
+        // script's own bookkeeping is the only reliable signal.
+        bool retailCacheHit = false;
+        if (root.TryGetProperty("cache", out var cacheEl)
+                && cacheEl.ValueKind == System.Text.Json.JsonValueKind.Object
+                && cacheEl.TryGetProperty("retail_hit", out var hitEl)
+                && hitEl.ValueKind is System.Text.Json.JsonValueKind.True
+                                  or System.Text.Json.JsonValueKind.False) {
+            retailCacheHit = hitEl.GetBoolean();
         }
 
+        // The C# wrapper passes --no-out-json, so the script no longer writes
+        // <generated>.comparison.json on the hot path. Leave OutJsonPath null
+        // unless we wired the disk write back on (e.g., manual offline runs go
+        // through the script directly, not through this engine).
         return new CompareToRetailResult(
             Success: true,
             Generated: generated,
@@ -10846,7 +10862,8 @@ public class CommandEngine {
             ClassSpace: classSpace,
             Wcids: wcids,
             PerLandblock: perLb,
-            OutJsonPath: outJson);
+            OutJsonPath: null,
+            RetailCacheHit: retailCacheHit);
     }
 
     private static CompareDensityStats ParseDensity(System.Text.Json.JsonElement el) =>

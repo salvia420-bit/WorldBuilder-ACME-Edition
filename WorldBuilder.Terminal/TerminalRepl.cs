@@ -5045,7 +5045,9 @@ public class TerminalRepl {
         if (r.PerLandblock != null && r.PerLandblock.Count > 0) {
             Console.WriteLine($"  Per-LB rows: {r.PerLandblock.Count} (top 5 by |density delta|):");
             foreach (var lb in r.PerLandblock.Take(5)) {
-                Console.WriteLine($"      ({lb.LbX,3},{lb.LbY,3})  Δ={lb.DensityDelta,+5}  "
+                // Composite-format `+N` is alignment-only (no forced sign).
+                // Use the conditional form to actually render Δ as ±.
+                Console.WriteLine($"      ({lb.LbX,3},{lb.LbY,3})  Δ={lb.DensityDelta:+0;-0;0}  "
                     + $"model={lb.ModelCount,-4} retail={lb.RetailCount,-4} "
                     + $"jaccard={(lb.WcidJaccard?.ToString("F3") ?? "n/a"),-6} "
                     + $"novel={lb.NovelInLb}");

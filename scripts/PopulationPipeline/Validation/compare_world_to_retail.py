@@ -56,8 +56,12 @@ def parse_hexish(value):
 
 
 def is_interior_cell(cell_id):
+    """AC convention: the *low 16 bits* of cellId distinguish surface cells
+    (1..0x40, the 8×8 outdoor grid) from interior cells (>= 0x0100). Both retail
+    `cellId` and generated `cell_id` are full 32-bit values like 0xA9B40001, so
+    the mask is required — without it every row reads as interior."""
     cid = parse_hexish(cell_id)
-    return bool(cid is not None and cid >= 0x0100)
+    return bool(cid is not None and (cid & 0xFFFF) >= 0x0100)
 
 
 def stream_jsonl(path):
@@ -204,13 +208,18 @@ def _store_cache(cache_dir: Path, key: str, payload: dict, *, quiet=False) -> No
 
 def load_retail_cached(retail_path: Path, region: set, cache_dir: Path | None,
                        *, quiet=False):
-    """Wrapper around load_retail() with optional pickle cache."""
+    """Wrapper around load_retail() with optional pickle cache.
+
+    Returns (result_tuple, cache_hit). cache_hit is the authoritative signal
+    for the C# wrapper's `retailCacheHit` telemetry — file-count heuristics
+    in the caller would lie if a cache write silently failed."""
     if cache_dir is not None and region:
         key = _region_cache_key(retail_path, region)
         hit = _try_load_cache(cache_dir, key, quiet=quiet)
         if hit is not None:
-            return (hit["per_lb"], hit["wcid"], hit["wcid_by_lb"], hit["wtype"],
-                    hit["surf"], hit["intr"], hit["total"], hit["w2wt"], hit["cls_space"])
+            return ((hit["per_lb"], hit["wcid"], hit["wcid_by_lb"], hit["wtype"],
+                     hit["surf"], hit["intr"], hit["total"], hit["w2wt"], hit["cls_space"]),
+                    True)
 
     result = load_retail(retail_path, region, quiet=quiet)
     if cache_dir is not None and region:
@@ -220,7 +229,7 @@ def load_retail_cached(retail_path: Path, region: set, cache_dir: Path | None,
             "wtype": wtype, "surf": surf, "intr": intr, "total": total,
             "w2wt": w2wt, "cls_space": cls_space,
         }, quiet=quiet)
-    return result
+    return (result, False)
 
 
 def density_stats(per_lb, region):
@@ -498,6 +507,8 @@ def main():
                     help="Also print the JSON report to stdout (for subprocess consumers)")
     ap.add_argument("--no-md", action="store_true",
                     help="Skip writing the markdown report")
+    ap.add_argument("--no-out-json", action="store_true",
+                    help="Skip writing the JSON report to disk (hot-loop subprocess callers consume --stdout-json)")
     ap.add_argument("--no-per-lb", action="store_true",
                     help="Skip the per-landblock breakdown in the JSON output")
     ap.add_argument("--quiet", action="store_true",
@@ -518,11 +529,13 @@ def main():
     log(f"  generated rows: {m_total:,}  unique wcids: {len(m_wcid):,}  region: {len(region):,} LBs")
 
     log(f"[2/3] Streaming retail (region-filtered): {args.retail}")
-    (r_per_lb, r_wcid, r_wcid_by_lb, r_wtype, r_surf, r_int, r_total,
-     wcid_to_wtype_counts, r_class_space) = load_retail_cached(
+    retail_result, retail_cache_hit = load_retail_cached(
         args.retail, region, args.retail_cache_dir, quiet=args.quiet
     )
-    log(f"  retail rows in region: {r_total:,}  unique wcids: {len(r_wcid):,}")
+    (r_per_lb, r_wcid, r_wcid_by_lb, r_wtype, r_surf, r_int, r_total,
+     wcid_to_wtype_counts, r_class_space) = retail_result
+    log(f"  retail rows in region: {r_total:,}  unique wcids: {len(r_wcid):,}"
+        f"  cache: {'hit' if retail_cache_hit else 'miss'}")
 
     # Model JSONL doesn't carry weenieType; map each wcid to its most-common
     # wtype as observed in retail-in-region.
@@ -599,6 +612,10 @@ def main():
             "over_min_model": args.anomaly_min_model,
             "top_k": args.top_k,
         },
+        "cache": {
+            "retail_hit": bool(retail_cache_hit),
+            "dir": str(args.retail_cache_dir) if args.retail_cache_dir else None,
+        },
         "region": region_bbox,
         "volumes": {
             "generated": m_total,
@@ -624,10 +641,11 @@ def main():
         report["per_landblock"] = per_landblock_breakdown(
             region, m_per_lb, r_per_lb, m_wcid_by_lb, r_wcid_by_lb)
 
-    out_json = args.out_json or args.generated.with_suffix(".comparison.json")
-    out_json.parent.mkdir(parents=True, exist_ok=True)
-    out_json.write_text(json.dumps(report, indent=2))
-    log(f"  JSON report: {out_json}")
+    if not args.no_out_json:
+        out_json = args.out_json or args.generated.with_suffix(".comparison.json")
+        out_json.parent.mkdir(parents=True, exist_ok=True)
+        out_json.write_text(json.dumps(report, indent=2))
+        log(f"  JSON report: {out_json}")
 
     if not args.no_md:
         out_md = args.out_md or args.generated.with_suffix(".comparison.md")
