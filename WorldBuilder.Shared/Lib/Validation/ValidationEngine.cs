@@ -521,9 +521,9 @@ public static class ValidationEngine {
         // ── BSH009: paired-group Z divergence ──
         // When two or more buildings on this landblock are members of the
         // same building group (mined from retail co-occurrence), their
-        // origin Z must agree to within 10 cm. Stair-stepped fortress walls
-        // — the visible failure mode that motivated Phase 3 — produce a
-        // BSH009 here.
+        // origin Z must agree to within FootprintCornerFlushTol (currently
+        // 25 cm). Stair-stepped fortress walls — the visible failure mode
+        // that motivated Phase 3 — produce a BSH009 here.
         if (pairingsGroupKey != null) {
             var byGroup = new Dictionary<uint, List<(int idx, float z)>>();
             for (int i = 0; i < lbi.Buildings.Count; i++) {
@@ -594,9 +594,11 @@ public static class ValidationEngine {
                     continue;
                 }
 
-                // Check reciprocal: EnvCell should have a CellPortal back to the outdoor
+                // Check reciprocal: EnvCell should have a CellPortal back to the outdoor.
+                // OtherCellId == 0 is an uninitialised slot (matches the convention used in
+                // ValidateDungeon's portal walks), so we don't count it as a real exterior link.
                 bool hasExteriorLink = envCell.CellPortals.Any(cp =>
-                    cp.OtherCellId < 0x0100 || cp.OtherCellId == 0xFFFF);
+                    (cp.OtherCellId != 0 && cp.OtherCellId < 0x0100) || cp.OtherCellId == 0xFFFF);
                 if (!hasExteriorLink) {
                     diagnostics.Add(new(ValidationSeverity.Warning, "BLD004",
                         $"{bldgLabel} links to EnvCell 0x{portal.OtherCellId:X4} but that cell has no outdoor exit portal.",

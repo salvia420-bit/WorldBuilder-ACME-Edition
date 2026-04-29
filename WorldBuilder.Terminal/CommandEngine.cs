@@ -1274,8 +1274,10 @@ public class CommandEngine {
         for (int bx = lbMinX; bx <= lbMaxX; bx++) {
             for (int by = lbMinY; by <= lbMaxY; by++) {
                 ushort lbKey = (ushort)((bx << 8) | by);
-                LandblockDocument lbDoc;
-                try { lbDoc = GetLandblockDoc(lbKey); } catch { continue; }
+                // Skip LBs with no LandBlockInfo and no in-memory doc — avoids creating
+                // phantom LandblockDocuments for empty cells of the bounding box. ActiveDocs
+                // are still picked up so add-object'd LBs without DAT-side LBI are scanned.
+                if (!TryGetLandblockDoc(lbKey, out var lbDoc) || lbDoc == null) continue;
 
                 int i = 0;
                 foreach (var obj in lbDoc.GetStaticObjects()) {
@@ -10002,9 +10004,9 @@ public class CommandEngine {
     }
 
     // Back-compat shim — sites we deliberately keep as lazy-create (sample-neighbor handlers
-    // outside the read-only contract: render-preview, query-radius, validate-all, transact,
-    // and the WorldGen apply pipeline). Routes to the create-or-fetch path explicitly so
-    // callers grepping for the old name are still wired up.
+    // outside the read-only contract: render-preview, validate-all, transact, and the
+    // WorldGen apply pipeline). Routes to the create-or-fetch path explicitly so callers
+    // grepping for the old name are still wired up.
     private LandblockDocument GetLandblockDoc(ushort lbKey) => GetLandblockDocOrCreate(lbKey);
 
     private DungeonDocument? GetDungeonDoc(ushort lbKey) {

@@ -892,7 +892,14 @@ public class JsonCommandProcessor {
 
     private string CmdQueryRadius(System.Text.Json.Nodes.JsonNode node) {
         float cx = F(node, "x"), cy = F(node, "y"), radius = F(node, "radius");
-        float cz = node["z"]?.GetValue<float>() ?? 0f;
+        if (radius < 0f)
+            throw new ArgumentException($"'radius' must be non-negative; got {radius}");
+        float cz = 0f;
+        if (node["z"] is { } zNode) {
+            cz = zNode.GetValue<float>();
+            if (!float.IsFinite(cz))
+                throw new ArgumentException($"'z' must be finite; got {cz}");
+        }
         bool? includeZ = node["includeZ"]?.GetValue<bool>();
 
         var r = _engine.QueryRadius(cx, cy, radius, cz, includeZ);
@@ -916,20 +923,24 @@ public class JsonCommandProcessor {
 
     private string CmdAnalyzeDungeons(System.Text.Json.Nodes.JsonNode node) {
         string? outputPath = node["outputPath"]?.GetValue<string>();
-        var (report, savedTo) = _engine.AnalyzeDungeons(outputPath);
-        return Serialize(new { success = true, command = "analyze-dungeons",
-            totalLandblocksScanned = report.TotalLandblocksScanned,
-            totalCellsScanned = report.TotalCellsScanned,
-            uniqueRoomTypes = report.UniqueRoomTypes,
-            topStarterCandidates = report.TopStarterCandidates.Select(c => new {
-                envFileId = $"0x{c.EnvFileId:X8}", cellStructIndex = c.CellStructIndex,
-                portalCount = c.PortalCount, usageCount = c.UsageCount,
-                sampleDungeonNames = c.SampleDungeonNames }).ToArray(),
-            savedTo });
+        try {
+            var (report, savedTo) = _engine.AnalyzeDungeons(outputPath);
+            return Serialize(new { success = true, command = "analyze-dungeons",
+                totalLandblocksScanned = report.TotalLandblocksScanned,
+                totalCellsScanned = report.TotalCellsScanned,
+                uniqueRoomTypes = report.UniqueRoomTypes,
+                topStarterCandidates = report.TopStarterCandidates.Select(c => new {
+                    envFileId = $"0x{c.EnvFileId:X8}", cellStructIndex = c.CellStructIndex,
+                    portalCount = c.PortalCount, usageCount = c.UsageCount,
+                    sampleDungeonNames = c.SampleDungeonNames }).ToArray(),
+                savedTo = string.IsNullOrEmpty(savedTo) ? null : savedTo });
+        } catch (Exception ex) {
+            return Serialize(new { success = false, command = "analyze-dungeons", error = ex.Message });
+        }
     }
 
     private string CmdGetDungeonInfo(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         var r = _engine.GetDungeonInfo(lbX, lbY);
         if (!r.HasDungeon) return Serialize(new { success = true, command = "get-dungeon-info", landblock = $"0x{r.LbKey:X4}", hasDungeon = false, cellCount = 0 });
         return Serialize(new { success = true, command = "get-dungeon-info", landblock = $"0x{r.LbKey:X4}",
@@ -979,33 +990,33 @@ public class JsonCommandProcessor {
     // ════════════════════════════════════════════════════
 
     private string CmdValidateDungeon(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         return FormatValidation("validate-dungeon", lbX, lbY, _engine.ValidateDungeon(lbX, lbY));
     }
 
     private string CmdValidateLandblock(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         return FormatValidation("validate-landblock", lbX, lbY, _engine.ValidateLandblock(lbX, lbY));
     }
 
     private string CmdValidateTerrain(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         float threshold = node["cliffThreshold"]?.GetValue<float>() ?? ValidationEngine.DefaultCliffThreshold;
         return FormatValidation("validate-terrain", lbX, lbY, _engine.ValidateTerrain(lbX, lbY, threshold));
     }
 
     private string CmdValidateBuildingShells(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         return FormatValidation("validate-building-shells", lbX, lbY, _engine.ValidateBuildingShells(lbX, lbY));
     }
 
     private string CmdValidateBuildingPortals(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         return FormatValidation("validate-building-portals", lbX, lbY, _engine.ValidateBuildingPortals(lbX, lbY));
     }
 
     private string CmdValidateAll(System.Text.Json.Nodes.JsonNode node) {
-        uint lbX = U(node, "lbX"), lbY = U(node, "lbY");
+        var (lbX, lbY) = Lb(node);
         float threshold = node["cliffThreshold"]?.GetValue<float>() ?? ValidationEngine.DefaultCliffThreshold;
         return FormatValidation("validate-all", lbX, lbY, _engine.ValidateAll(lbX, lbY, threshold));
     }
