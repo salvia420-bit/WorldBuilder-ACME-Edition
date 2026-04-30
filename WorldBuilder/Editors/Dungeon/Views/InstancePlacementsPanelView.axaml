@@ -58,13 +58,36 @@
             <ItemsControl ItemsSource="{Binding InstancePlacementItems}">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:InstancePlacementItemViewModel">
-                        <Border Background="#1a0e30" BorderBrush="#2a1d42" BorderThickness="1" Padding="6,4" Margin="0,0,0,4" CornerRadius="3">
+                        <Border Padding="6,4" Margin="0,0,0,4" CornerRadius="3" BorderThickness="1"
+                                Classes.selected="{Binding IsSelected}"
+                                ToolTip.Tip="Click in the 3D viewport to select. Press Delete to remove selected.">
+                            <Border.Styles>
+                                <Style Selector="Border">
+                                    <Setter Property="Background" Value="#1a0e30" />
+                                    <Setter Property="BorderBrush" Value="#2a1d42" />
+                                </Style>
+                                <Style Selector="Border.selected">
+                                    <Setter Property="Background" Value="#281640" />
+                                    <Setter Property="BorderBrush" Value="#d4a843" />
+                                </Style>
+                            </Border.Styles>
                             <DockPanel>
                                 <Button DockPanel.Dock="Right" Classes="dng-toolbar-btn" Content="&#x2715;" Foreground="#cc6666"
                                         Command="{Binding $parent[UserControl].DataContext.RemoveInstancePlacementCommand}"
                                         CommandParameter="{Binding Index}"
                                         ToolTip.Tip="Remove" />
-                                <TextBlock Text="{Binding DisplayText}" FontSize="10" Foreground="#c0b0d8" TextTrimming="CharacterEllipsis" />
+                                <TextBlock FontSize="10" TextTrimming="CharacterEllipsis"
+                                           Text="{Binding DisplayText}"
+                                           Classes.selected="{Binding IsSelected}">
+                                    <TextBlock.Styles>
+                                        <Style Selector="TextBlock">
+                                            <Setter Property="Foreground" Value="#c0b0d8" />
+                                        </Style>
+                                        <Style Selector="TextBlock.selected">
+                                            <Setter Property="Foreground" Value="#f0d080" />
+                                        </Style>
+                                    </TextBlock.Styles>
+                                </TextBlock>
                             </DockPanel>
                         </Border>
                     </DataTemplate>

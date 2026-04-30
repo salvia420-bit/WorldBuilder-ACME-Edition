@@ -12,10 +12,15 @@ namespace WorldBuilder.Editors.Dungeon {
             public float Distance;
             public Vector3 HitPosition;
             public Vector3 WorldOrigin;
+
+            /// <summary>True when the hit is a DungeonInstancePlacement (weenie), not a cell static object.</summary>
+            public bool IsInstancePlacement;
+            /// <summary>Index into DungeonDocument.InstancePlacements when IsInstancePlacement is true.</summary>
+            public int InstancePlacementIndex;
         }
 
         /// <summary>
-        /// Raycast against all static objects in the dungeon document.
+        /// Raycast against all static objects and instance placements (weenies) in the dungeon document.
         /// Objects are stored in landblock-local coordinates; we transform to world space
         /// using the same offset the scene uses for rendering.
         /// </summary>
@@ -64,9 +69,51 @@ namespace WorldBuilder.Editors.Dungeon {
                                 ObjectId = stab.Id,
                                 Distance = dist,
                                 HitPosition = rayOrigin + rayDir * dist,
-                                WorldOrigin = worldOrigin
+                                WorldOrigin = worldOrigin,
+                                IsInstancePlacement = false,
+                                InstancePlacementIndex = -1
                             };
                         }
+                    }
+                }
+            }
+
+            // Second pass: instance placements (weenies) use their setup model's bounds
+            for (int i = 0; i < document.InstancePlacements.Count; i++) {
+                var placement = document.InstancePlacements[i];
+                if (!scene.TryGetWeenieSetupId(placement.WeenieClassId, out var setupId) || setupId == 0)
+                    continue;
+
+                bool isSetup = (setupId & 0xFF000000) == 0x02000000;
+                var bounds = scene.GetObjectBounds(setupId, isSetup);
+                if (bounds == null) continue;
+
+                var (localMin, localMax) = bounds.Value;
+
+                var worldOrigin = placement.Origin + lbOffset;
+                worldOrigin.Z += dungeonZBump;
+
+                var worldTransform =
+                    Matrix4x4.CreateFromQuaternion(placement.Orientation)
+                    * Matrix4x4.CreateTranslation(worldOrigin);
+
+                var worldMin = Vector3.Transform(localMin, worldTransform);
+                var worldMax = Vector3.Transform(localMax, worldTransform);
+
+                var aabbMin = Vector3.Min(worldMin, worldMax);
+                var aabbMax = Vector3.Max(worldMin, worldMax);
+
+                if (RayIntersectsAABB(rayOrigin, rayDir, aabbMin, aabbMax, out float dist)) {
+                    if (dist < result.Distance) {
+                        result = new DungeonObjectHit {
+                            Hit = true,
+                            IsInstancePlacement = true,
+                            InstancePlacementIndex = i,
+                            ObjectId = setupId,
+                            Distance = dist,
+                            HitPosition = rayOrigin + rayDir * dist,
+                            WorldOrigin = worldOrigin
+                        };
                     }
                 }
             }

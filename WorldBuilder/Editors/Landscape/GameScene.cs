@@ -67,6 +67,14 @@ namespace WorldBuilder.Editors.Landscape {
         private readonly ConcurrentQueue<(uint Id, bool IsSetup)> _pendingModelWarmup = new();
         private readonly Dictionary<ushort, List<uint>> _dungeonStaticParentCells = new();
         private readonly Dictionary<ushort, List<uint>> _buildingStaticParentCells = new();
+
+        /// <summary>
+        /// Rendered representations of Project.OutdoorInstancePlacements.
+        /// Each entry is (placementIndex, staticObject) where placementIndex maps back to
+        /// Project.OutdoorInstancePlacements for picking and deletion.
+        /// </summary>
+        private List<(int PlacementIndex, StaticObject Obj)> _outdoorInstanceRenderObjects = new();
+
         internal readonly TerrainSystem _terrainSystem;
 
         private const float WarmUpTimeBudgetMs = 12f;
@@ -1319,6 +1327,11 @@ namespace WorldBuilder.Editors.Landscape {
                     statics.AddRange(_weenieSpawnObjects.Values.SelectMany(x => x));
                 }
 
+                // Outdoor instance placements are always shown when present
+                if (_outdoorInstanceRenderObjects.Count > 0) {
+                    statics.AddRange(_outdoorInstanceRenderObjects.Select(r => r.Obj));
+                }
+
                 if (ShowDungeons || ShowBuildingInteriors) {
                     ushort? cameraLbKey = visibility?.CameraCell?.LoadedLandblockKey;
                     bool cameraInDungeon = _envCellManager != null && cameraLbKey.HasValue &&
@@ -1409,6 +1422,23 @@ namespace WorldBuilder.Editors.Landscape {
             _weenieSpawnObjects.Clear();
             _staticObjectsDirty = true;
         }
+
+        /// <summary>
+        /// Replaces the rendered outdoor instance placement objects (from Project.OutdoorInstancePlacements).
+        /// Each entry carries a back-reference index into the original placements list for picking.
+        /// </summary>
+        public void SetOutdoorInstanceRenderObjects(IReadOnlyList<(int PlacementIndex, StaticObject Obj)> objects) {
+            _outdoorInstanceRenderObjects = new List<(int, StaticObject)>(objects);
+            foreach (var (_, obj) in _outdoorInstanceRenderObjects)
+                _pendingModelWarmup.Enqueue((obj.Id, obj.IsSetup));
+            _staticObjectsDirty = true;
+        }
+
+        /// <summary>
+        /// Returns the current outdoor instance render objects for raycasting.
+        /// </summary>
+        public IReadOnlyList<(int PlacementIndex, StaticObject Obj)> GetOutdoorInstanceRenderObjects()
+            => _outdoorInstanceRenderObjects;
 
         /// <summary>
         /// Clears all disk and in-memory caches (textures, terrain, GPU resources) and forces a full reload.

@@ -172,6 +172,11 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
 
             TerrainSystem = new TerrainSystem(project, _dats, Settings, _logger);
 
+            // Wire outdoor instance placement rendering to project placements
+            TerrainSystem.EditingContext.OutdoorInstancesChanged += RefreshOutdoorInstanceRenderObjects;
+            // Populate any placements already saved in the project
+            RefreshOutdoorInstanceRenderObjects();
+
             // Create default viewports
             var pCam = TerrainSystem.Scene.PerspectiveCamera;
             var orthoCam = TerrainSystem.Scene.TopDownCamera;
@@ -241,7 +246,36 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
                 if (setupId != 0 && _weenieSetupCache.TryAdd(wcid, setupId))
                     anyNew = true;
             }
-            if (anyNew) ReloadAllWeenieSpawns();
+            if (anyNew) {
+                ReloadAllWeenieSpawns();
+                RefreshOutdoorInstanceRenderObjects();
+            }
+        }
+
+        /// <summary>
+        /// Rebuilds the GameScene render list from Project.OutdoorInstancePlacements,
+        /// converting each entry to a StaticObject using the weenie setup cache.
+        /// Called when placements are added/removed or the weenie setup cache grows.
+        /// </summary>
+        private void RefreshOutdoorInstanceRenderObjects() {
+            var scene = TerrainSystem?.Scene;
+            if (scene == null || _project == null) return;
+
+            var renderObjects = new List<(int, StaticObject)>();
+            for (int i = 0; i < _project.OutdoorInstancePlacements.Count; i++) {
+                var p = _project.OutdoorInstancePlacements[i];
+                if (!_weenieSetupCache.TryGetValue(p.WeenieClassId, out var setupId) || setupId == 0)
+                    continue;
+                bool isSetup = (setupId & 0x02000000) != 0;
+                renderObjects.Add((i, new StaticObject {
+                    Id = setupId,
+                    IsSetup = isSetup,
+                    Origin = p.Origin,
+                    Orientation = p.Orientation,
+                    Scale = System.Numerics.Vector3.One
+                }));
+            }
+            scene.SetOutdoorInstanceRenderObjects(renderObjects);
         }
 
         private void ReloadAllWeenieSpawns() {
@@ -986,7 +1020,20 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
         [RelayCommand]
         public void DeleteSelectedObject() {
             var sel = TerrainSystem?.EditingContext.ObjectSelection;
-            if (sel == null || !sel.HasSelection || sel.SelectedObject == null || sel.IsScenery) return;
+            if (sel == null) return;
+
+            // Handle outdoor instance placement deletion
+            if (sel.HasSelectedOutdoorInstance && _project != null) {
+                var idx = sel.SelectedOutdoorInstanceIndex;
+                if (idx >= 0 && idx < _project.OutdoorInstancePlacements.Count) {
+                    _project.OutdoorInstancePlacements.RemoveAt(idx);
+                    sel.SelectedOutdoorInstanceIndex = -1;
+                    RefreshOutdoorInstanceRenderObjects();
+                    return;
+                }
+            }
+
+            if (!sel.HasSelection || sel.SelectedObject == null || sel.IsScenery) return;
             if (sel.HasEnvCellSelection) return;
 
             var commands = new List<Lib.History.ICommand>();

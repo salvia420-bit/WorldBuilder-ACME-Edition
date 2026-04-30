@@ -32,6 +32,10 @@ namespace WorldBuilder.Editors.Dungeon {
         public int SelectedObjIndex { get; set; } = -1;
         public bool HasSelectedObject => SelectedObjIndex >= 0;
 
+        /// <summary>Index into DungeonDocument.InstancePlacements for the currently selected weenie placement, or -1 if none.</summary>
+        public int SelectedInstancePlacementIndex { get; set; } = -1;
+        public bool HasSelectedInstancePlacement => SelectedInstancePlacementIndex >= 0;
+
         public bool HasDungeon => Document != null && Document.Cells.Count > 0;
 
         // Drag state

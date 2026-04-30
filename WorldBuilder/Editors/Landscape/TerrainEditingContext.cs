@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Numerics;
 using WorldBuilder.Lib;
 using WorldBuilder.Shared.Documents;
+using WorldBuilder.Shared.Models;
 
 namespace WorldBuilder.Editors.Landscape {
     /// <summary>
@@ -55,12 +56,22 @@ namespace WorldBuilder.Editors.Landscape {
             set => _currentLayerDoc = value;
         }
 
-        public TerrainEditingContext(DocumentManager docManager, TerrainSystem terrainSystem) {
+        public TerrainEditingContext(DocumentManager docManager, TerrainSystem terrainSystem, Project? project = null) {
             var terrainDoc = docManager.GetOrCreateDocumentAsync<TerrainDocument>("terrain").Result;
             _terrainDoc = terrainDoc ?? throw new ArgumentNullException(nameof(terrainDoc));
             _terrainSystem = terrainSystem ?? throw new ArgumentNullException(nameof(terrainSystem));
             _currentLayerDoc = _terrainDoc; // Default to base layer
+            Project = project;
         }
+
+        /// <summary>The active project, providing access to OutdoorInstancePlacements.</summary>
+        public Project? Project { get; }
+
+        /// <summary>Fired when OutdoorInstancePlacements are added or removed, so the editor can refresh rendering.</summary>
+        public event Action? OutdoorInstancesChanged;
+
+        /// <summary>Raises <see cref="OutdoorInstancesChanged"/> from within or outside this class.</summary>
+        public void NotifyOutdoorInstancesChanged() => OutdoorInstancesChanged?.Invoke();
 
         /// <summary>
         /// Marks a landblock as modified and queues it for GPU update

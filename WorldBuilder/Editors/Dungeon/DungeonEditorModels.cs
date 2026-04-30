@@ -120,6 +120,12 @@ namespace WorldBuilder.Editors.Dungeon {
         public string PositionText { get; }
         public string DisplayText => $"0x{WeenieClassId:X} in 0x{CellNumber:X4} @ {PositionText}";
 
+        private bool _isSelected;
+        public bool IsSelected {
+            get => _isSelected;
+            set => SetProperty(ref _isSelected, value);
+        }
+
         public InstancePlacementItemViewModel(int index, uint weenieClassId, ushort cellNumber, string positionText) {
             Index = index;
             WeenieClassId = weenieClassId;

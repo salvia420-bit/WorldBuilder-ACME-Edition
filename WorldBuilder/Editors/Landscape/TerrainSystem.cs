@@ -40,7 +40,7 @@ namespace WorldBuilder.Editors.Landscape {
 
             InitAsync(dats).GetAwaiter().GetResult();
             Settings = settings ?? throw new ArgumentNullException(nameof(settings));
-            EditingContext = new TerrainEditingContext(project.DocumentManager, this);
+            EditingContext = new TerrainEditingContext(project.DocumentManager, this, project);
             Region = region;
             Dats = dats ?? throw new ArgumentNullException(nameof(dats));
             BaseDatDirectory = project.BaseDatDirectory;

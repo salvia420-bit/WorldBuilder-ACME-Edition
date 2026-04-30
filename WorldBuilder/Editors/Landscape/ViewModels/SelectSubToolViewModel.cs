@@ -9,6 +9,7 @@ using WorldBuilder.Lib;
 using WorldBuilder.Lib.History;
 using WorldBuilder.Shared.Documents;
 using WorldBuilder.Shared.Lib;
+using WorldBuilder.Shared.Models;
 
 namespace WorldBuilder.Editors.Landscape.ViewModels {
     public partial class SelectSubToolViewModel : SubToolViewModelBase {
@@ -80,6 +81,16 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
                 else {
                     LandcellText = $"LB: 0x{cell.LoadedLandblockKey:X4}  Env: 0x{cell.EnvironmentId:X8}  Surfaces: {cell.SurfaceCount}";
                 }
+            }
+            else if (sel.HasSelectedOutdoorInstance && Context.Project != null &&
+                     sel.SelectedOutdoorInstanceIndex < Context.Project.OutdoorInstancePlacements.Count) {
+                var p = Context.Project.OutdoorInstancePlacements[sel.SelectedOutdoorInstanceIndex];
+                SelectedObjectId = $"WCID {p.WeenieClassId}";
+                SelectedObjectInfo = $"Outdoor Instance  |  LB {p.LandblockId:X4}  cell {p.CellNumber}";
+                HasEditableSelection = false;
+                PositionX = p.OriginX; PositionY = p.OriginY; PositionZ = p.OriginZ;
+                RotationX = 0; RotationY = 0; RotationZ = 0;
+                LandcellText = $"LB: 0x{p.LandblockId:X4}  Cell: {p.CellNumber}  WCID: {p.WeenieClassId}";
             }
             else if (sel.IsMultiSelection) {
                 // Multi-selection: show count, hide individual editing
@@ -290,6 +301,29 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
                     int lbY = (int)Math.Floor(terrainPos.Y / 192f);
                     ushort lbKey = (ushort)((lbX << 8) | lbY);
 
+                    // Weenie placement → OutdoorInstancePlacement (ACE server-side instance, not DAT static)
+                    if (sel.PendingWeenieClassId.HasValue && Context.Project != null) {
+                        // Compute outdoor cell index (1–64, matching ACE's cellMin: 1, cellMax: 64)
+                        float lbOriginXw = lbX * 192f;
+                        float lbOriginYw = lbY * 192f;
+                        int cellXw = Math.Clamp((int)((terrainPos.X - lbOriginXw) / 24f), 0, 7);
+                        int cellYw = Math.Clamp((int)((terrainPos.Y - lbOriginYw) / 24f), 0, 7);
+                        ushort cellNumber = (ushort)(cellYw * 8 + cellXw + 1);
+
+                        var placement = new OutdoorInstancePlacement {
+                            LandblockId = lbKey,
+                            WeenieClassId = sel.PendingWeenieClassId.Value,
+                            CellNumber = cellNumber,
+                            Origin = terrainPos,
+                            Orientation = preview.Orientation
+                        };
+                        Context.Project.OutdoorInstancePlacements.Add(placement);
+                        sel.SelectedOutdoorInstanceIndex = Context.Project.OutdoorInstancePlacements.Count - 1;
+                        Context.NotifyOutdoorInstancesChanged();
+                        Console.WriteLine($"[Selector] Placed weenie {sel.PendingWeenieClassId.Value} at ({terrainPos.X:F1}, {terrainPos.Y:F1}, {terrainPos.Z:F1}) cell {cellNumber}");
+                        return true;
+                    }
+
                     var placementPos = terrainPos;
                     var orientation = preview.Orientation;
 
@@ -357,6 +391,14 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
             // Normal selection (Ctrl+Click = toggle multi-select)
             if (mouseState.ObjectHit.HasValue && mouseState.ObjectHit.Value.Hit) {
                 var hit = mouseState.ObjectHit.Value;
+
+                // Outdoor instance placements (placed weenies) are selectable without promoting to DAT static
+                if (hit.IsOutdoorInstancePlacement) {
+                    sel.Deselect();
+                    sel.SelectedOutdoorInstanceIndex = hit.OutdoorInstanceIndex;
+                    sel.NotifySelectionChanged();
+                    return true;
+                }
 
                 if (hit.IsScenery) {
                     hit = PromoteSceneryToDocument(hit);

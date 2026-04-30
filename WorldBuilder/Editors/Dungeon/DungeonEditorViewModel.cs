@@ -190,6 +190,8 @@ namespace WorldBuilder.Editors.Dungeon {
             Selection.CellDeselected += OnCellDeselected;
             Selection.ObjectSelectionChanged += OnObjectSelectionChanged;
             Selection.ObjectDeselected += OnObjectDeselected;
+            Selection.InstancePlacementSelectionChanged += args => OnInstancePlacementSelected(args.Index);
+            Selection.InstancePlacementDeselected += OnInstancePlacementDeselected;
 
             CellEditing = new CellEditingService(EditingContext, Selection, () => _dats, () => RoomPalette);
             ObjectEditing = new ObjectEditingService(EditingContext, Selection);
@@ -277,7 +279,7 @@ namespace WorldBuilder.Editors.Dungeon {
 
         /// <summary>Sync UI-bound selection properties from the editing context.</summary>
         private void SyncSelectionFromContext() {
-            var (cellArgs, objArgs) = Selection.SyncFromContext();
+            var (cellArgs, objArgs, placementArgs) = Selection.SyncFromContext();
 
             HasSelectedCell = cellArgs?.HasSelection ?? false;
             SelectedCellCount = cellArgs?.Count ?? 0;
@@ -286,12 +288,19 @@ namespace WorldBuilder.Editors.Dungeon {
             if (cellArgs?.HasSelection == true) {
                 OnCellSelectionChanged(cellArgs);
             }
-            else if (!HasSelectedObject) {
+            else if (!HasSelectedObject && placementArgs == null) {
                 OnCellDeselected();
             }
 
             if (objArgs?.HasSelection == true) {
                 SelectObject(objArgs.CellNum, objArgs.ObjectIndex, objArgs.Stab!, objArgs.Stab!.Origin);
+            }
+
+            if (placementArgs?.HasSelection == true) {
+                OnInstancePlacementSelected(placementArgs.Index);
+            }
+            else if (placementArgs == null && !HasSelectedObject) {
+                OnInstancePlacementDeselected();
             }
 
             OnPropertyChanged(nameof(SelectedCellLocationHex));
@@ -680,6 +689,16 @@ namespace WorldBuilder.Editors.Dungeon {
             ObjRotDegrees = "";
         }
 
+        private void OnInstancePlacementSelected(int index) {
+            foreach (var item in InstancePlacementItems)
+                item.IsSelected = item.Index == index;
+        }
+
+        private void OnInstancePlacementDeselected() {
+            foreach (var item in InstancePlacementItems)
+                item.IsSelected = false;
+        }
+
         #region Cell Editing
 
         [RelayCommand]
@@ -883,6 +902,7 @@ namespace WorldBuilder.Editors.Dungeon {
 
         /// <summary>Rebuild InstancePlacementItems and InstancePlacementCellNumbers from the current document.</summary>
         private void RefreshInstancePlacementList() {
+            var selectedIdx = EditingContext.SelectedInstancePlacementIndex;
             InstancePlacementItems.Clear();
             InstancePlacementCellNumbers.Clear();
             if (_document == null) return;
@@ -892,7 +912,9 @@ namespace WorldBuilder.Editors.Dungeon {
             int i = 0;
             foreach (var p in _document.InstancePlacements) {
                 var pos = $"{p.Origin.X:F1}, {p.Origin.Y:F1}, {p.Origin.Z:F1}";
-                InstancePlacementItems.Add(new InstancePlacementItemViewModel(i, p.WeenieClassId, p.CellNumber, pos));
+                var item = new InstancePlacementItemViewModel(i, p.WeenieClassId, p.CellNumber, pos);
+                if (i == selectedIdx) item.IsSelected = true;
+                InstancePlacementItems.Add(item);
                 i++;
             }
             if (InstancePlacementCellNumbers.Count > 0 && !NewPlacementCellNumber.HasValue)
@@ -989,6 +1011,10 @@ namespace WorldBuilder.Editors.Dungeon {
             if (_document == null || index < 0 || index >= _document.InstancePlacements.Count) return;
             _document.InstancePlacements.RemoveAt(index);
             _document.MarkDirty();
+            if (EditingContext.SelectedInstancePlacementIndex == index)
+                EditingContext.SelectedInstancePlacementIndex = -1;
+            else if (EditingContext.SelectedInstancePlacementIndex > index)
+                EditingContext.SelectedInstancePlacementIndex--;
             RefreshInstancePlacementList();
             RefreshRendering();
             StatusText = "Removed instance placement.";

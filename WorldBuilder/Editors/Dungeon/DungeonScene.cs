@@ -278,6 +278,13 @@ namespace WorldBuilder.Editors.Dungeon {
         }
 
         /// <summary>
+        /// Returns the cached Setup DID for a given WeenieClassId, if available.
+        /// Used by the raycast system to test bounds against instance placements.
+        /// </summary>
+        public bool TryGetWeenieSetupId(uint weenieClassId, out uint setupId) =>
+            _weenieSetupCache.TryGetValue(weenieClassId, out setupId);
+
+        /// <summary>
         /// Adds DungeonInstancePlacement entries (weenie/generator placements) to the
         /// render list so they appear in the viewport alongside cell statics.
         /// Uses the runtime WCID->SetupId cache for model lookup.

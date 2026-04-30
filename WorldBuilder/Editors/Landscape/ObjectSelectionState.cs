@@ -27,6 +27,9 @@ namespace WorldBuilder.Editors.Landscape {
         /// </summary>
         public event EventHandler? SelectionChanged;
 
+        /// <summary>Raises <see cref="SelectionChanged"/> from within or outside this class.</summary>
+        public void NotifySelectionChanged() => SelectionChanged?.Invoke(this, EventArgs.Empty);
+
         // --- EnvCell (dungeon cell) selection ---
 
         /// <summary>The currently selected dungeon cell, or null if none.</summary>
@@ -68,6 +71,13 @@ namespace WorldBuilder.Editors.Landscape {
         public bool IsPlacementMode { get; set; }
         public StaticObject? PlacementPreview { get; set; }
         public List<StaticObject>? PlacementPreviewMulti { get; set; }
+
+        /// <summary>When in placement mode for a weenie, the WCID of the weenie being placed.</summary>
+        public uint? PendingWeenieClassId { get; set; }
+
+        /// <summary>Index into Project.OutdoorInstancePlacements of the currently selected outdoor weenie instance, or -1.</summary>
+        public int SelectedOutdoorInstanceIndex { get; set; } = -1;
+        public bool HasSelectedOutdoorInstance => SelectedOutdoorInstanceIndex >= 0;
 
         /// <summary>
         /// Bounds of the selection preview (for Clone tool).
@@ -131,6 +141,7 @@ namespace WorldBuilder.Editors.Landscape {
         public void Deselect() {
             _selectedObjects.Clear();
             SelectedEnvCell = null;
+            SelectedOutdoorInstanceIndex = -1;
             SelectionChanged?.Invoke(this, EventArgs.Empty);
         }
 

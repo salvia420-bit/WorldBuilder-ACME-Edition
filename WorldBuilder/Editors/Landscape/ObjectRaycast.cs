@@ -28,6 +28,11 @@ namespace WorldBuilder.Editors.Landscape {
             public float Distance;
             public Vector3 HitPosition;
             public bool IsScenery;
+
+            /// <summary>True when the hit is a Project.OutdoorInstancePlacement (placed weenie).</summary>
+            public bool IsOutdoorInstancePlacement;
+            /// <summary>Index into Project.OutdoorInstancePlacements when IsOutdoorInstancePlacement is true.</summary>
+            public int OutdoorInstanceIndex;
         }
 
         /// <summary>
@@ -142,6 +147,48 @@ namespace WorldBuilder.Editors.Landscape {
                             Distance = dist,
                             HitPosition = rayOrigin + rayDirection * dist,
                             IsScenery = true
+                        };
+                    }
+                }
+            }
+
+            // Third pass: outdoor instance placements (ACE DB weenies placed in the terrain editor)
+            // These must override IsScenery=true to preserve selection without promoting to DAT static.
+            var outdoorInstances = scene.GetOutdoorInstanceRenderObjects();
+            for (int i = 0; i < outdoorInstances.Count; i++) {
+                var (placementIndex, obj) = outdoorInstances[i];
+                if (!TryGetBoundsSource(obj, scene, out var midO, out var setupO)) continue;
+                var bounds = scene.AnyObjectManager?.GetBounds(midO, setupO);
+                if (bounds == null) continue;
+
+                var (localMin, localMax) = bounds.Value;
+
+                var worldTransform = Matrix4x4.CreateScale(obj.Scale)
+                    * Matrix4x4.CreateFromQuaternion(obj.Orientation)
+                    * Matrix4x4.CreateTranslation(obj.Origin);
+
+                var worldMin = Vector3.Transform(localMin, worldTransform);
+                var worldMax = Vector3.Transform(localMax, worldTransform);
+
+                var aabbMin = Vector3.Min(worldMin, worldMax);
+                var aabbMax = Vector3.Max(worldMin, worldMax);
+
+                if (RayIntersectsAABB(rayOrigin, rayDirection, aabbMin, aabbMax, out float dist)) {
+                    if (dist < result.Distance) {
+                        int lbX = (int)Math.Floor(obj.Origin.X / 192f);
+                        int lbY = (int)Math.Floor(obj.Origin.Y / 192f);
+                        ushort lbKey = (ushort)((lbX << 8) | lbY);
+
+                        result = new ObjectRaycastHit {
+                            Hit = true,
+                            Object = obj,
+                            LandblockKey = lbKey,
+                            ObjectIndex = -1,
+                            Distance = dist,
+                            HitPosition = rayOrigin + rayDirection * dist,
+                            IsScenery = false,
+                            IsOutdoorInstancePlacement = true,
+                            OutdoorInstanceIndex = placementIndex
                         };
                     }
                 }

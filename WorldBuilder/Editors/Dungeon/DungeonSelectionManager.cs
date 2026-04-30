@@ -22,6 +22,12 @@ namespace WorldBuilder.Editors.Dungeon {
         public bool HasSelection => ObjectIndex >= 0;
     }
 
+    public class InstancePlacementSelectionChangedArgs {
+        public int Index { get; init; } = -1;
+        public DungeonInstancePlacement? Placement { get; init; }
+        public bool HasSelection => Index >= 0;
+    }
+
     /// <summary>
     /// Manages cell and object selection state for the dungeon editor.
     /// Fires events when selection changes so the ViewModel can update its bound properties.
@@ -33,6 +39,7 @@ namespace WorldBuilder.Editors.Dungeon {
         private readonly List<LoadedEnvCell> _selectedCells = new();
         private ushort _selectedObjCellNum;
         private int _selectedObjIndex = -1;
+        private int _selectedInstancePlacementIndex = -1;
 
         public LoadedEnvCell? SelectedCell => _selectedCell;
         public IReadOnlyList<LoadedEnvCell> SelectedCells => _selectedCells;
@@ -40,11 +47,15 @@ namespace WorldBuilder.Editors.Dungeon {
         public int SelectedObjIndex => _selectedObjIndex;
         public bool HasSelectedCell => _selectedCell != null;
         public bool HasSelectedObject => _selectedObjIndex >= 0;
+        public int SelectedInstancePlacementIndex => _selectedInstancePlacementIndex;
+        public bool HasSelectedInstancePlacement => _selectedInstancePlacementIndex >= 0;
 
         public event Action<CellSelectionChangedArgs>? CellSelectionChanged;
         public event Action? CellDeselected;
         public event Action<ObjectSelectionChangedArgs>? ObjectSelectionChanged;
         public event Action? ObjectDeselected;
+        public event Action<InstancePlacementSelectionChangedArgs>? InstancePlacementSelectionChanged;
+        public event Action? InstancePlacementDeselected;
 
         public DungeonSelectionManager(DungeonEditingContext ctx) {
             _ctx = ctx;
@@ -54,6 +65,7 @@ namespace WorldBuilder.Editors.Dungeon {
             _selectedCells.Clear();
             _selectedCells.Add(cell);
             _selectedCell = cell;
+            DeselectInstancePlacement(silent: true);
             SyncToContext();
             SyncSceneSelection();
             CellSelectionChanged?.Invoke(new CellSelectionChangedArgs {
@@ -94,6 +106,7 @@ namespace WorldBuilder.Editors.Dungeon {
         public void SelectObject(ushort cellNum, int objectIndex, DungeonStabData stab) {
             DeselectCell();
             DeselectObject();
+            DeselectInstancePlacement(silent: true);
 
             _selectedObjCellNum = cellNum;
             _selectedObjIndex = objectIndex;
@@ -116,6 +129,57 @@ namespace WorldBuilder.Editors.Dungeon {
                 _ctx.Scene.SelectedObjectPosition = null;
             }
             ObjectDeselected?.Invoke();
+        }
+
+        public void SelectInstancePlacement(int index, DungeonInstancePlacement placement) {
+            DeselectCell();
+            DeselectObject();
+            _selectedInstancePlacementIndex = index;
+            SyncToContext();
+            UpdateInstancePlacementSelectionHighlight(placement);
+            InstancePlacementSelectionChanged?.Invoke(new InstancePlacementSelectionChangedArgs {
+                Index = index,
+                Placement = placement
+            });
+        }
+
+        public void DeselectInstancePlacement(bool silent = false) {
+            if (_selectedInstancePlacementIndex < 0) return;
+            _selectedInstancePlacementIndex = -1;
+            SyncToContext();
+            if (_ctx.Scene != null) {
+                _ctx.Scene.SelectedObjectBounds = null;
+                _ctx.Scene.SelectedObjectPosition = null;
+            }
+            if (!silent) InstancePlacementDeselected?.Invoke();
+        }
+
+        private void UpdateInstancePlacementSelectionHighlight(DungeonInstancePlacement placement) {
+            if (_ctx.Scene == null || _ctx.Document == null) return;
+            if (!_ctx.Scene.TryGetWeenieSetupId(placement.WeenieClassId, out var setupId) || setupId == 0) {
+                _ctx.Scene.SelectedObjectBounds = null;
+                return;
+            }
+
+            bool isSetup = (setupId & 0xFF000000) == 0x02000000;
+            var bounds = _ctx.Scene.GetObjectBounds(setupId, isSetup);
+            if (bounds == null) { _ctx.Scene.SelectedObjectBounds = null; return; }
+
+            uint lbId = _ctx.Document.LandblockKey;
+            var blockX = (lbId >> 8) & 0xFF;
+            var blockY = lbId & 0xFF;
+
+            var worldOrigin = placement.Origin + new Vector3(blockX * 192f, blockY * 192f, -50f);
+
+            var worldTransform = Matrix4x4.CreateFromQuaternion(placement.Orientation)
+                * Matrix4x4.CreateTranslation(worldOrigin);
+
+            var worldMin = Vector3.Transform(bounds.Value.Min, worldTransform);
+            var worldMax = Vector3.Transform(bounds.Value.Max, worldTransform);
+
+            _ctx.Scene.SelectedObjectBounds = (Vector3.Min(worldMin, worldMax), Vector3.Max(worldMin, worldMax));
+            _ctx.Scene.SelectedObjectPosition = worldOrigin;
+            _ctx.Scene.SelectedObjectOrientation = placement.Orientation;
         }
 
         public void UpdateObjectSelectionHighlight(DungeonStabData? stab = null) {
@@ -157,15 +221,17 @@ namespace WorldBuilder.Editors.Dungeon {
         /// Sync selection state from the editing context (after tool changes).
         /// Returns the current state so the ViewModel can update its properties.
         /// </summary>
-        public (CellSelectionChangedArgs? cell, ObjectSelectionChangedArgs? obj) SyncFromContext() {
+        public (CellSelectionChangedArgs? cell, ObjectSelectionChangedArgs? obj, InstancePlacementSelectionChangedArgs? placement) SyncFromContext() {
             _selectedCell = _ctx.SelectedCell;
             _selectedCells.Clear();
             _selectedCells.AddRange(_ctx.SelectedCells);
             _selectedObjCellNum = _ctx.SelectedObjCellNum;
             _selectedObjIndex = _ctx.SelectedObjIndex;
+            _selectedInstancePlacementIndex = _ctx.SelectedInstancePlacementIndex;
 
             CellSelectionChangedArgs? cellArgs = null;
             ObjectSelectionChangedArgs? objArgs = null;
+            InstancePlacementSelectionChangedArgs? placementArgs = null;
 
             if (_selectedCell != null) {
                 SyncSceneSelection();
@@ -186,14 +252,24 @@ namespace WorldBuilder.Editors.Dungeon {
                         Stab = stab
                     };
                 }
-            } else {
+            }
+            else if (_selectedInstancePlacementIndex >= 0 && _ctx.Document != null &&
+                     _selectedInstancePlacementIndex < _ctx.Document.InstancePlacements.Count) {
+                var placement = _ctx.Document.InstancePlacements[_selectedInstancePlacementIndex];
+                UpdateInstancePlacementSelectionHighlight(placement);
+                placementArgs = new InstancePlacementSelectionChangedArgs {
+                    Index = _selectedInstancePlacementIndex,
+                    Placement = placement
+                };
+            }
+            else {
                 if (_ctx.Scene != null) {
                     _ctx.Scene.SelectedObjectBounds = null;
                     _ctx.Scene.SelectedObjectPosition = null;
                 }
             }
 
-            return (cellArgs, objArgs);
+            return (cellArgs, objArgs, placementArgs);
         }
 
         public string BuildCellInfoString(LoadedEnvCell cell, bool includeStatics, RoomPaletteViewModel? palette, DungeonDocument? document) {
@@ -332,6 +408,7 @@ namespace WorldBuilder.Editors.Dungeon {
             _ctx.SelectedCells.AddRange(_selectedCells);
             _ctx.SelectedObjCellNum = _selectedObjCellNum;
             _ctx.SelectedObjIndex = _selectedObjIndex;
+            _ctx.SelectedInstancePlacementIndex = _selectedInstancePlacementIndex;
         }
     }
 }
