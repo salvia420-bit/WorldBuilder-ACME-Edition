@@ -264,6 +264,39 @@ namespace WorldBuilder.Shared.Documents {
             }
         }
 
+        /// <summary>
+        /// Reset world documents for a "Fresh Start". Active LandblockDocuments are
+        /// cleared in-memory via <see cref="LandblockDocument.ClearAllStatics"/> (their
+        /// projections persist as empty); inactive ones are deleted from the storage
+        /// service so the next load starts from scratch. All DungeonDocuments are
+        /// evicted from the active cache (without saving) and deleted from storage.
+        /// </summary>
+        public async Task ResetWorldDocumentsAsync() {
+            // --- LandblockDocuments ---
+            var lbIds = await DocumentStorageService.ListDocumentIdsAsync("landblock_");
+            foreach (var docId in lbIds) {
+                if (_activeDocs.TryGetValue(docId, out var active) && active is LandblockDocument lbDoc) {
+                    lbDoc.ClearAllStatics();
+                }
+                else {
+                    await DocumentStorageService.DeleteDocumentAsync(docId);
+                }
+            }
+
+            // --- DungeonDocuments ---
+            var dungeonIds = await DocumentStorageService.ListDocumentIdsAsync("dungeon_");
+            foreach (var docId in dungeonIds) {
+                if (_activeDocs.TryRemove(docId, out var doc)) {
+                    doc.Update -= HandleDocumentUpdate;
+                }
+                await DocumentStorageService.DeleteDocumentAsync(docId);
+            }
+
+            _logger.LogInformation(
+                "[DocumentManager] ResetWorldDocuments: cleared {LbCount} landblock doc(s), deleted {DungeonCount} dungeon doc(s)",
+                lbIds.Count, dungeonIds.Count);
+        }
+
         public async Task CloseDocumentAsync(string documentId) {
             if (_activeDocs.TryRemove(documentId, out var doc)) {
                 doc.Update -= HandleDocumentUpdate;
