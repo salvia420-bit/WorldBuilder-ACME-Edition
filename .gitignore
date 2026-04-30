@@ -616,3 +616,17 @@ vanquishkit/files/
 # Scratch images
 image(3).png
 difficulty_gradient.png
+
+# ACME data blobs — generated/large/transient, live on the 7480, not in git
+.diskcheck
+*.sql.zip
+ace_world_release/
+external/
+overnight_*/
+pipeline_data/models/*.safetensors
+pipeline_data/models/*.pt
+pipeline_data/models/_extracted_manifest.json
+pipeline_data/models/_delete_list.txt
+pipeline_data/models/_deleted_*.log
+pipeline_data/reference/*.npz
+pipeline_data/output/
