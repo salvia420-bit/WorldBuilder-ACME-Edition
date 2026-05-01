@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using WorldBuilder.Shared.Documents;
 using WorldBuilder.Shared.Lib;
+using WorldBuilder.Shared.Lib.Texture;
 using WorldBuilder.Shared.Models;
 
 namespace WorldBuilder.Terminal;
@@ -94,6 +95,13 @@ public sealed class HeadlessProjectManager : IDisposable {
         docManager.Dats = new DefaultDatReaderWriter(project.BaseDatDirectory, DatAccessType.Read);
 
         project.DocumentManager = docManager;
+
+        // Mirror the GUI's TextureImportService wiring: on export, write all
+        // CustomTextureStore entries (RenderSurface replacements, terrain replacements,
+        // dungeon surfaces) into the export DAT through the Shared importer.
+        project.OnExportCustomTextures = (writer, iteration) => {
+            RenderSurfaceImporter.WriteCustomTexturesToDats(writer, project.CustomTextures, iteration);
+        };
 
         // Run EF Core migrations / pragmas
         var dbCtx = _serviceProvider.GetRequiredService<DocumentDbContext>();

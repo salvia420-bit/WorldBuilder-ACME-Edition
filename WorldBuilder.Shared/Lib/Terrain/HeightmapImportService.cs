@@ -6,7 +6,7 @@ using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
 using WorldBuilder.Shared.Documents;
 
-namespace WorldBuilder.Editors.Landscape {
+namespace WorldBuilder.Shared.Lib.Terrain {
     public readonly record struct RgbPixel(byte R, byte G, byte B);
 
     public readonly record struct VertexChange(
@@ -34,9 +34,6 @@ namespace WorldBuilder.Editors.Landscape {
             return (lbCountX * CELLS_PER_BLOCK + 1, lbCountY * CELLS_PER_BLOCK + 1);
         }
 
-        /// <summary>
-        /// Loads an image in full RGB color and resamples to the target vertex grid dimensions.
-        /// </summary>
         public static RgbPixel[,] LoadAndResampleRgb(string filePath, int targetWidth, int targetHeight) {
             using var image = Image.Load<Rgb24>(filePath);
             image.Mutate(ctx => ctx.Resize(targetWidth, targetHeight));
@@ -53,17 +50,10 @@ namespace WorldBuilder.Editors.Landscape {
             return grid;
         }
 
-        /// <summary>
-        /// Computes luminance from RGB using standard BT.601 weights.
-        /// </summary>
         public static byte Luminance(byte r, byte g, byte b) {
             return (byte)Math.Clamp((int)(0.299f * r + 0.587f * g + 0.114f * b + 0.5f), 0, 255);
         }
 
-        /// <summary>
-        /// Finds the terrain type whose average color is closest (Euclidean RGB distance)
-        /// to the given pixel, excluding water types and RoadType.
-        /// </summary>
         public static byte FindClosestTerrainType(
             byte r, byte g, byte b,
             Dictionary<TerrainTextureType, (byte R, byte G, byte B)> averageColors) {
@@ -88,15 +78,11 @@ namespace WorldBuilder.Editors.Landscape {
             return (byte)bestType;
         }
 
-        /// <summary>
-        /// Builds per-landblock changes for both height (from luminance) and terrain type
-        /// (from nearest color match). Only vertices that differ are included.
-        /// </summary>
         public static Dictionary<ushort, List<VertexChange>> BuildChanges(
             RgbPixel[,] grid,
             int startLbX, int startLbY,
             int lbCountX, int lbCountY,
-            TerrainSystem terrainSystem,
+            Func<ushort, TerrainEntry[]?> getLandblockTerrain,
             Dictionary<TerrainTextureType, (byte R, byte G, byte B)> averageColors) {
 
             var changes = new Dictionary<ushort, List<VertexChange>>();
@@ -110,7 +96,7 @@ namespace WorldBuilder.Editors.Landscape {
                     if (lbX < 0 || lbX > 0xFF || lbY < 0 || lbY > 0xFF) continue;
 
                     var lbKey = (ushort)((lbX << 8) | lbY);
-                    var terrainData = terrainSystem.GetLandblockTerrain(lbKey);
+                    var terrainData = getLandblockTerrain(lbKey);
                     if (terrainData == null) continue;
 
                     List<VertexChange>? lbChanges = null;

@@ -18,6 +18,12 @@ public class CommandLineArgs {
     public bool StdinMode { get; set; }
 
     /// <summary>
+    /// Optional path to a log file. When set, a FileLoggerProvider is added that
+    /// writes the same format the GUI writes. Disabled by default.
+    /// </summary>
+    public string? LogFilePath { get; set; }
+
+    /// <summary>
     /// How many committed transactions to retain in the transact-diff snapshot LRU
     /// (32 by default). Older entries return TXDIFF-EXPIRED to transact-diff.
     /// </summary>
@@ -85,6 +91,15 @@ public class CommandLineArgs {
 
             if (arg.Equals("--stdin", StringComparison.OrdinalIgnoreCase)) {
                 result.StdinMode = true;
+                continue;
+            }
+
+            if (arg.Equals("--log-file", StringComparison.OrdinalIgnoreCase)) {
+                if (i + 1 < args.Length && !LooksLikeFlag(args[i + 1])) {
+                    result.LogFilePath = UnquotePath(args[++i]);
+                } else {
+                    result.Warnings.Add("Warning: Missing value for --log-file. Ignored.");
+                }
                 continue;
             }
 
@@ -166,6 +181,7 @@ public class CommandLineArgs {
         Console.WriteLine("  --export,  -e <path>      Directory to export DAT files into");
         Console.WriteLine("  --iteration, -i <number>  Portal iteration number (default: current + 1)");
         Console.WriteLine("  --stdin                          JSON-line stdin/stdout mode (for agents)");
+        Console.WriteLine("  --log-file <path>                Append rotated log entries to <path> (same format as GUI)");
         Console.WriteLine("  --transact-diff-retention <n>    transact-diff snapshot LRU size (default 32)");
         Console.WriteLine("  --transact-diff-mem-cap <mb>     transact-diff snapshot LRU memory cap, MB (default 256)");
         Console.WriteLine("  --version, -v                    Show version information");

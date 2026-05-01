@@ -25,17 +25,20 @@ internal sealed class TransactionEngine {
     // Commands explicitly safe to run inside a transact. Anything else is rejected.
     private static readonly HashSet<string> AllowedOps = new(StringComparer.OrdinalIgnoreCase) {
         "set-landblock-heightmap", "set-landblock-terrain",
+        "import-heightmap",
         "bulk-place-objects",
         "add-object", "remove-object", "move-object", "rotate-object",
         "clear-objects",
         "raise", "lower", "smooth", "set-height", "paint", "fill",
         "road", "paste-stamp",
         "generate-dungeon",
+        "placement-add-outdoor", "placement-add-dungeon", "placement-remove",
     };
 
     // Ops that mutate the singleton TerrainDocument ("terrain").
     private static readonly HashSet<string> TerrainSingletonOps = new(StringComparer.OrdinalIgnoreCase) {
         "set-landblock-heightmap", "set-landblock-terrain",
+        "import-heightmap",
         "raise", "lower", "smooth", "set-height", "paint", "fill",
         "road", "paste-stamp",
     };

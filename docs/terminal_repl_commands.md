@@ -165,6 +165,40 @@ The unified ontology pipeline is:
 - `dungeon set-object-position <lbX> <lbY> <cellNum> <objIndex> <x> <y> <z>`
 - `dungeon set-object-rotation <lbX> <lbY> <cellNum> <objIndex> <degrees>`
 
+## Texture Tools (sync wave 2026-04-30)
+- `import-render-surface <imagePath> <0x06...> [--ui] [--name <name>]`
+- `import-heightmap <imagePath> <startLbX> <startLbY> <lbCountX> <lbCountY> [--apply]`
+
+## ACE Database Editing (sync wave 2026-04-30)
+- `creature get <objectId>`
+- `creature save <objectId> --from-json <path>`
+- `creature export-sql <objectId> [--out <path>]`
+- `spell list [--limit N] [--from-db|--from-dat]`
+- `spell get <id>`
+- `spell save <id> --from-json <path>`
+- `spell copy <fromId> [<newId>]`
+- `spell delete <id>`
+- `weenie save <classId> --from-json <path>`
+- `weenie insert <className> --from-json <path>`
+- `weenie delete <classId>`
+- `weenie list-property-keys <int|int64|bool|float|string|did|iid>`
+- `placement list [--lb <lbX> <lbY>] [--outdoor|--dungeon]`
+- `placement add-outdoor <lbX> <lbY> <wcid> <cellNum> <originX> <originY> <originZ> [--angles w x y z]`
+- `placement add-dungeon <lbX> <lbY> <wcid> <cellNum> <originX> <originY> <originZ> [--angles w x y z]`
+- `placement remove <outdoor|dungeon> <index>`
+- `placement export-sql [--out <dir>] [--apply]`
+
+## Layout Viewer (sync wave 2026-04-30)
+- `layout list [--overlay-only]`
+- `layout get <0xLayoutId>`
+- `layout save <0xLayoutId> --from-json <path>`
+- `layout delete-overlay <0xLayoutId>`
+
+## World Generation (sync wave 2026-04-30)
+- `fresh-start` (interactive confirmation prompt; JSON requires `confirm:true`)
+- `generate-world [--params <json>] [--export-towns-csv <path>] [--apply]`
+- `export-towns-csv --from-result <path> --out <path>`
+
 ## General
 - `help`
 - `quit`

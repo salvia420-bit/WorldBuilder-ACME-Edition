@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using WorldBuilder.Lib.History;
 using WorldBuilder.Shared.Documents;
+using WorldBuilder.Shared.Lib.Terrain;
 
 namespace WorldBuilder.Editors.Landscape.Commands {
     /// <summary>

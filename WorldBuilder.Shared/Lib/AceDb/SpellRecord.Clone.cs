@@ -1,0 +1,80 @@
+namespace WorldBuilder.Shared.Lib.AceDb {
+    public partial class SpellRecord {
+        /// <summary>
+        /// Returns a deep field-for-field copy of this spell with <paramref name="newId"/>
+        /// substituted into the <see cref="Id"/> column. Used by both the GUI editor's
+        /// "Copy" action and the headless `spell copy` command so the two surfaces
+        /// produce identical clones.
+        /// </summary>
+        public SpellRecord CloneWithNewId(uint newId) {
+            return new SpellRecord {
+                Id = newId,
+                Name = Name,
+                StatModType = StatModType,
+                StatModKey = StatModKey,
+                StatModVal = StatModVal,
+                EType = EType,
+                BaseIntensity = BaseIntensity,
+                Variance = Variance,
+                Wcid = Wcid,
+                NumProjectiles = NumProjectiles,
+                NumProjectilesVariance = NumProjectilesVariance,
+                SpreadAngle = SpreadAngle,
+                VerticalAngle = VerticalAngle,
+                DefaultLaunchAngle = DefaultLaunchAngle,
+                NonTracking = NonTracking,
+                CreateOffsetOriginX = CreateOffsetOriginX,
+                CreateOffsetOriginY = CreateOffsetOriginY,
+                CreateOffsetOriginZ = CreateOffsetOriginZ,
+                PaddingOriginX = PaddingOriginX,
+                PaddingOriginY = PaddingOriginY,
+                PaddingOriginZ = PaddingOriginZ,
+                DimsOriginX = DimsOriginX,
+                DimsOriginY = DimsOriginY,
+                DimsOriginZ = DimsOriginZ,
+                PeturbationOriginX = PeturbationOriginX,
+                PeturbationOriginY = PeturbationOriginY,
+                PeturbationOriginZ = PeturbationOriginZ,
+                ImbuedEffect = ImbuedEffect,
+                SlayerCreatureType = SlayerCreatureType,
+                SlayerDamageBonus = SlayerDamageBonus,
+                CritFreq = CritFreq,
+                CritMultiplier = CritMultiplier,
+                IgnoreMagicResist = IgnoreMagicResist,
+                ElementalModifier = ElementalModifier,
+                DrainPercentage = DrainPercentage,
+                DamageRatio = DamageRatio,
+                DamageType = DamageType,
+                Boost = Boost,
+                BoostVariance = BoostVariance,
+                Source = Source,
+                Destination = Destination,
+                Proportion = Proportion,
+                LossPercent = LossPercent,
+                SourceLoss = SourceLoss,
+                TransferCap = TransferCap,
+                MaxBoostAllowed = MaxBoostAllowed,
+                TransferBitfield = TransferBitfield,
+                Index = Index,
+                Link = Link,
+                PositionObjCellId = PositionObjCellId,
+                PositionOriginX = PositionOriginX,
+                PositionOriginY = PositionOriginY,
+                PositionOriginZ = PositionOriginZ,
+                PositionAnglesW = PositionAnglesW,
+                PositionAnglesX = PositionAnglesX,
+                PositionAnglesY = PositionAnglesY,
+                PositionAnglesZ = PositionAnglesZ,
+                MinPower = MinPower,
+                MaxPower = MaxPower,
+                PowerVariance = PowerVariance,
+                DispelSchool = DispelSchool,
+                Align = Align,
+                Number = Number,
+                NumberVariance = NumberVariance,
+                DotDuration = DotDuration,
+                LastModified = LastModified
+            };
+        }
+    }
+}

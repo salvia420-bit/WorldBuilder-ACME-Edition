@@ -221,6 +221,33 @@ public class JsonCommandProcessor {
             ["benchmark"] = _ => CmdBenchmark(),
             ["set-landblock-heightmap"] = CmdSetLandblockHeightmap,
             ["set-landblock-terrain"] = CmdSetLandblockTerrain,
+            ["import-heightmap"] = CmdImportHeightmap,
+            ["import-render-surface"] = CmdImportRenderSurface,
+            ["open-log-folder"] = _ => CmdOpenLogFolder(),
+            ["creature-get"] = CmdCreatureGet,
+            ["creature-save"] = CmdCreatureSave,
+            ["creature-export-sql"] = CmdCreatureExportSql,
+            ["layout-list"] = CmdLayoutList,
+            ["layout-get"] = CmdLayoutGet,
+            ["layout-save"] = CmdLayoutSave,
+            ["layout-delete-overlay"] = CmdLayoutDeleteOverlay,
+            ["spell-list"] = CmdSpellList,
+            ["spell-get"] = CmdSpellGet,
+            ["spell-save"] = CmdSpellSave,
+            ["spell-copy"] = CmdSpellCopy,
+            ["spell-delete"] = CmdSpellDelete,
+            ["weenie-save"] = CmdWeenieSave,
+            ["weenie-insert"] = CmdWeenieInsert,
+            ["weenie-delete"] = CmdWeenieDelete,
+            ["weenie-list-property-keys"] = CmdWeenieListPropertyKeys,
+            ["placement-list"] = CmdPlacementList,
+            ["placement-add-outdoor"] = CmdPlacementAddOutdoor,
+            ["placement-add-dungeon"] = CmdPlacementAddDungeon,
+            ["placement-remove"] = CmdPlacementRemove,
+            ["placement-export-sql"] = CmdPlacementExportSql,
+            ["fresh-start"] = CmdFreshStart,
+            ["generate-world"] = CmdGenerateWorld,
+            ["export-towns-csv"] = CmdExportTownsCsv,
             ["bulk-place-objects"] = CmdBulkPlaceObjects,
             ["generate-terrain"] = CmdGenerateTerrain,
             ["generate-dungeon"] = CmdGenerateDungeon,
@@ -1306,6 +1333,33 @@ public class JsonCommandProcessor {
             new { name = "benchmark",        args = "",                                         description = "Run speed test suite (terrain, objects, validation, bulk)" },
             new { name = "set-landblock-heightmap", args = "lbX, lbY, heights",                  description = "Set all 81 heights in one call" },
             new { name = "set-landblock-terrain", args = "lbX, lbY, types",                      description = "Set all 81 terrain types in one call" },
+            new { name = "import-heightmap", args = "imagePath, startLbX, startLbY, lbCountX, lbCountY, apply?", description = "Import grayscale+colormap PNG; height from luminance, type from nearest texture color" },
+            new { name = "import-render-surface", args = "imagePath, renderSurfaceId, ui?, name?", description = "Import a PNG to replace a RenderSurface (default: register in CustomTextureStore; --ui: deferred portal write)" },
+            new { name = "open-log-folder", args = "",                                            description = "Returns the active --log-file path so the agent can ingest it (no folder-opening side effects)" },
+            new { name = "creature-get", args = "objectId",                                       description = "Loads ACE-DB creature visual overrides (texture map, anim part, palette)" },
+            new { name = "creature-save", args = "objectId, fromJson?",                           description = "Replaces texture-map + anim-part rows for the given object_Id (transactional)" },
+            new { name = "creature-export-sql", args = "objectId, out?",                          description = "Generates idempotent DELETE+INSERT SQL for the creature's overrides" },
+            new { name = "layout-list",         args = "overlayOnly?",                            description = "Lists every LayoutDesc id from the local DAT (or only ones with a project overlay)" },
+            new { name = "layout-get",          args = "layoutId",                                description = "Returns a LayoutDesc as JSON; preferred from project overlay if present" },
+            new { name = "layout-save",         args = "layoutId, fromJson",                      description = "Saves a JSON LayoutDesc into the project's LayoutDatDocument overlay" },
+            new { name = "layout-delete-overlay", args = "layoutId",                              description = "Removes the project overlay for a LayoutDesc id (DAT original is untouched)" },
+            new { name = "spell-list",          args = "limit?, source?",                          description = "Lists newest spell ids by source (\"dat\" default, \"db\" for ace-db); annotates rows that have a project overlay" },
+            new { name = "spell-get",           args = "id",                                       description = "Returns a SpellRecord JSON; project overlay wins, falls back to ace-db" },
+            new { name = "spell-save",          args = "id, fromJson",                             description = "Writes a SpellRecord into the project overlay; if ace-db is connected also UPSERTs the row" },
+            new { name = "spell-copy",          args = "fromId, newId?",                           description = "Clones a spell with a new id (auto-allocates max+1 if newId is omitted)" },
+            new { name = "spell-delete",        args = "id",                                       description = "Removes a spell from the project overlay; if ace-db is connected also DELETEs the row" },
+            new { name = "weenie-save",         args = "classId, fromJson",                        description = "Replaces all scalar weenie_properties_* rows for an existing class_Id" },
+            new { name = "weenie-insert",       args = "className, fromJson",                      description = "Creates a new weenie row (auto-class-id ≥100000) and saves the snapshot scalars" },
+            new { name = "weenie-delete",       args = "classId",                                  description = "Deletes a weenie + every weenie_properties_* row that points at its class_Id" },
+            new { name = "weenie-list-property-keys", args = "family",                             description = "Enumerates AcePropertyXxx names by family (int|int64|bool|float|string|did|iid)" },
+            new { name = "placement-list",      args = "lbX?, lbY?, kind?",                        description = "Lists outdoor/dungeon instance placements (filtered by lb + kind)" },
+            new { name = "placement-add-outdoor", args = "lbX, lbY, wcid, cellNumber?, originX, originY, originZ, anglesW?, anglesX?, anglesY?, anglesZ?", description = "Appends an outdoor instance placement to Project.OutdoorInstancePlacements" },
+            new { name = "placement-add-dungeon", args = "lbX, lbY, wcid, cellNumber?, originX, originY, originZ, anglesW?, anglesX?, anglesY?, anglesZ?", description = "Appends a dungeon instance placement to the dungeon document for the given lb" },
+            new { name = "placement-remove",    args = "kind, index",                              description = "Removes an outdoor or dungeon placement by index in its respective list" },
+            new { name = "placement-export-sql", args = "out?, apply?",                            description = "Writes landblock_instances.sql + dungeon_instances.sql; --apply runs them against ace-db" },
+            new { name = "fresh-start",         args = "confirm",                                  description = "Wipes all terrain to deep sea + deletes all dungeon documents (requires confirm:true)" },
+            new { name = "generate-world",      args = "params?, apply?, exportTownsCsv?",         description = "GUI-parity world generation: ResetWorldDocs → terrain → buildings → decorations; optional CSV emit" },
+            new { name = "export-towns-csv",    args = "fromResult, out",                          description = "Renders the GUI's towns CSV from a worldgen result JSON written by generate-world" },
             new { name = "bulk-place-objects", args = "lbX, lbY, objects[]",                      description = "Place multiple objects in one call" },
             new { name = "generate-terrain", args = "seed, octaves?, lacunarity?, persistence?, amplitude?, coastline?", description = "Generate full-world procedural terrain" },
             new { name = "generate-dungeon", args = "lbX, lbY, depth?, branching?, seed?, minRooms?, maxRooms?, theme?", description = "Generate procedural dungeon from graph grammar" },
@@ -1668,6 +1722,378 @@ public class JsonCommandProcessor {
         return Serialize(new { success = true, command = "set-landblock-heightmap",
             landblock = $"0x{r.LbKey:X4}", verticesModified = r.VerticesModified,
             landblocks = FormatLbs(r.ModifiedLandblocks) });
+    }
+
+    private string CmdFreshStart(System.Text.Json.Nodes.JsonNode node) {
+        bool confirm = node["confirm"]?.GetValue<bool>() ?? false;
+        if (!confirm) {
+            return Serialize(new {
+                success = false, command = "fresh-start",
+                error = "fresh-start is destructive. Re-run with \"confirm\":true."
+            });
+        }
+        var r = _engine.FreshStartAsync().GetAwaiter().GetResult();
+        return Serialize(new {
+            success = r.Success, command = "fresh-start",
+            landblocksReset = r.LandblocksReset,
+            verticesReset = r.VerticesReset
+        });
+    }
+
+    private string CmdGenerateWorld(System.Text.Json.Nodes.JsonNode node) {
+        var paramsNode = node["params"];
+        var p = paramsNode != null
+            ? System.Text.Json.JsonSerializer.Deserialize<WorldBuilder.Shared.Lib.WorldGen.WorldGeneratorParams>(
+                paramsNode.ToJsonString(),
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            : new WorldBuilder.Shared.Lib.WorldGen.WorldGeneratorParams();
+        if (p == null) throw new ArgumentException("Could not parse 'params'.");
+
+        bool apply = node["apply"]?.GetValue<bool>() ?? false;
+        string? csvPath = node["exportTownsCsv"]?.GetValue<string>();
+
+        var r = _engine.GenerateWorldAsync(p, apply, csvPath).GetAwaiter().GetResult();
+        return Serialize(new {
+            success = r.Success, command = "generate-world",
+            seed = r.Seed, applied = r.Applied,
+            landblocksAffected = r.LandblocksAffected,
+            verticesModified = r.VerticesModified,
+            towns = r.Towns, buildingsPlaced = r.BuildingsPlaced,
+            decorationsPlaced = r.DecorationsPlaced, roadVertices = r.RoadVertices,
+            townsCsvPath = r.TownsCsvPath, townsCsvRows = r.TownsCsvRows,
+            townSummaries = r.TownSummaries
+        });
+    }
+
+    private string CmdExportTownsCsv(System.Text.Json.Nodes.JsonNode node) {
+        string fromResult = node["fromResult"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'fromResult' field");
+        string outPath = node["out"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'out' field");
+        var r = _engine.ExportTownsCsv(fromResult, outPath);
+        return Serialize(new {
+            success = r.Success, command = "export-towns-csv",
+            outPath = r.OutPath, rows = r.Rows
+        });
+    }
+
+    private string CmdPlacementList(System.Text.Json.Nodes.JsonNode node) {
+        int? lbX = node["lbX"]?.GetValue<int>();
+        int? lbY = node["lbY"]?.GetValue<int>();
+        string kind = node["kind"]?.GetValue<string>() ?? "all";
+        var r = _engine.PlacementList(lbX, lbY, kind);
+        return Serialize(new {
+            success = true, command = "placement-list",
+            count = r.Count, filter = r.Filter,
+            placements = r.Placements.Select(p => new {
+                kind = p.Kind, index = p.Index, landblock = p.Landblock,
+                wcid = p.Wcid, cellNumber = p.CellNumber,
+                origin = new { x = p.OriginX, y = p.OriginY, z = p.OriginZ },
+                angles = new { w = p.AnglesW, x = p.AnglesX, y = p.AnglesY, z = p.AnglesZ }
+            })
+        });
+    }
+
+    private string CmdPlacementAddOutdoor(System.Text.Json.Nodes.JsonNode node) {
+        int lbX = node["lbX"]?.GetValue<int>() ?? throw new ArgumentException("Missing 'lbX'");
+        int lbY = node["lbY"]?.GetValue<int>() ?? throw new ArgumentException("Missing 'lbY'");
+        uint wcid = ParseUintField(node, "wcid");
+        ushort cellNumber = (ushort)(node["cellNumber"]?.GetValue<int>() ?? 1);
+        float ox = node["originX"]?.GetValue<float>() ?? 0f;
+        float oy = node["originY"]?.GetValue<float>() ?? 0f;
+        float oz = node["originZ"]?.GetValue<float>() ?? 0f;
+        var r = _engine.PlacementAddOutdoor(lbX, lbY, wcid, cellNumber, ox, oy, oz,
+            node["anglesW"]?.GetValue<float>(), node["anglesX"]?.GetValue<float>(),
+            node["anglesY"]?.GetValue<float>(), node["anglesZ"]?.GetValue<float>());
+        return Serialize(new { success = r.Success, command = "placement-add-outdoor",
+            kind = r.Kind, index = r.Index, landblock = r.Landblock });
+    }
+
+    private string CmdPlacementAddDungeon(System.Text.Json.Nodes.JsonNode node) {
+        int lbX = node["lbX"]?.GetValue<int>() ?? throw new ArgumentException("Missing 'lbX'");
+        int lbY = node["lbY"]?.GetValue<int>() ?? throw new ArgumentException("Missing 'lbY'");
+        uint wcid = ParseUintField(node, "wcid");
+        ushort cellNumber = (ushort)(node["cellNumber"]?.GetValue<int>() ?? 0x100);
+        float ox = node["originX"]?.GetValue<float>() ?? 0f;
+        float oy = node["originY"]?.GetValue<float>() ?? 0f;
+        float oz = node["originZ"]?.GetValue<float>() ?? 0f;
+        var r = _engine.PlacementAddDungeon(lbX, lbY, wcid, cellNumber, ox, oy, oz,
+            node["anglesW"]?.GetValue<float>(), node["anglesX"]?.GetValue<float>(),
+            node["anglesY"]?.GetValue<float>(), node["anglesZ"]?.GetValue<float>());
+        return Serialize(new { success = r.Success, command = "placement-add-dungeon",
+            kind = r.Kind, index = r.Index, landblock = r.Landblock });
+    }
+
+    private string CmdPlacementRemove(System.Text.Json.Nodes.JsonNode node) {
+        string kind = node["kind"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'kind' field (outdoor|dungeon)");
+        int index = node["index"]?.GetValue<int>() ?? throw new ArgumentException("Missing 'index'");
+        var r = _engine.PlacementRemove(kind, index);
+        return Serialize(new { success = r.Removed, command = "placement-remove",
+            kind = r.Kind, index = r.Index, landblock = r.Landblock });
+    }
+
+    private string CmdPlacementExportSql(System.Text.Json.Nodes.JsonNode node) {
+        string outDir = node["out"]?.GetValue<string>()
+            ?? _projectManager.CurrentProject?.ProjectDirectory
+            ?? Directory.GetCurrentDirectory();
+        bool apply = node["apply"]?.GetValue<bool>() ?? false;
+        var r = _engine.PlacementExportSqlAsync(outDir, apply).GetAwaiter().GetResult();
+        return Serialize(new { success = r.Success, command = "placement-export-sql",
+            outdoorPath = r.OutdoorPath, outdoorCount = r.OutdoorCount,
+            dungeonPath = r.DungeonPath, dungeonCount = r.DungeonCount,
+            rowsAppliedToDb = r.RowsAppliedToDb });
+    }
+
+    private string CmdWeenieSave(System.Text.Json.Nodes.JsonNode node) {
+        uint classId = ParseUintField(node, "classId");
+        string? jsonPath = node["fromJson"]?.GetValue<string>();
+        var r = _engine.WeenieSaveScalarsAsync(classId, jsonPath).GetAwaiter().GetResult();
+        return Serialize(new {
+            success = r.Success, command = "weenie-save",
+            classId = $"0x{r.ClassId:X8}",
+            ints = r.IntRows, int64s = r.Int64Rows, bools = r.BoolRows, floats = r.FloatRows,
+            strings = r.StringRows, dataIds = r.DataIdRows, instanceIds = r.InstanceIdRows
+        });
+    }
+
+    private string CmdWeenieInsert(System.Text.Json.Nodes.JsonNode node) {
+        string className = node["className"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'className' field");
+        string? jsonPath = node["fromJson"]?.GetValue<string>();
+        var r = _engine.WeenieInsertAsync(className, jsonPath ?? "").GetAwaiter().GetResult();
+        return Serialize(new {
+            success = r.Success, command = "weenie-insert",
+            newClassId = $"0x{r.NewClassId:X8}",
+            className = r.ClassName,
+            totalScalarRows = r.TotalScalarRows
+        });
+    }
+
+    private string CmdWeenieDelete(System.Text.Json.Nodes.JsonNode node) {
+        uint classId = ParseUintField(node, "classId");
+        var r = _engine.WeenieDeleteAsync(classId).GetAwaiter().GetResult();
+        return Serialize(new {
+            success = r.Success, command = "weenie-delete",
+            classId = $"0x{r.ClassId:X8}"
+        });
+    }
+
+    private string CmdWeenieListPropertyKeys(System.Text.Json.Nodes.JsonNode node) {
+        string family = node["family"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'family' field (int|int64|bool|float|string|did|iid)");
+        var r = _engine.WeenieListPropertyKeys(family);
+        return Serialize(new {
+            success = true, command = "weenie-list-property-keys",
+            family = r.Family, count = r.Count,
+            keys = r.Keys.Select(k => new { type = k.Type, name = k.Name })
+        });
+    }
+
+    private string CmdSpellList(System.Text.Json.Nodes.JsonNode node) {
+        int limit = node["limit"]?.GetValue<int>() ?? 500;
+        string source = node["source"]?.GetValue<string>() ?? "dat";
+        var r = _engine.SpellListAsync(limit, source).GetAwaiter().GetResult();
+        return Serialize(new {
+            success = true, command = "spell-list",
+            count = r.Count, source = r.Source,
+            spells = r.Spells.Select(s => new { spellId = s.SpellId, name = s.Name, hasOverlay = s.HasOverlay })
+        });
+    }
+
+    private string CmdSpellGet(System.Text.Json.Nodes.JsonNode node) {
+        uint id = ParseUintField(node, "id");
+        var r = _engine.SpellGetAsync(id).GetAwaiter().GetResult();
+        return Serialize(new {
+            success = r.Success, command = "spell-get",
+            spellId = r.SpellId, source = r.Source, spell = r.Spell
+        });
+    }
+
+    private string CmdSpellSave(System.Text.Json.Nodes.JsonNode node) {
+        uint id = ParseUintField(node, "id");
+        string? jsonPath = node["fromJson"]?.GetValue<string>();
+        var r = _engine.SpellSaveAsync(id, jsonPath).GetAwaiter().GetResult();
+        return Serialize(new {
+            success = r.Success, command = "spell-save",
+            spellId = r.SpellId,
+            savedToOverlay = r.SavedToOverlay,
+            savedToDb = r.SavedToDb
+        });
+    }
+
+    private string CmdSpellCopy(System.Text.Json.Nodes.JsonNode node) {
+        uint fromId = ParseUintField(node, "fromId");
+        uint? newId = node["newId"] != null ? ParseUintField(node, "newId") : null;
+        var r = _engine.SpellCopyAsync(fromId, newId).GetAwaiter().GetResult();
+        return Serialize(new {
+            success = r.Success, command = "spell-copy",
+            fromSpellId = r.FromSpellId, newSpellId = r.NewSpellId,
+            savedToOverlay = r.SavedToOverlay, savedToDb = r.SavedToDb
+        });
+    }
+
+    private string CmdSpellDelete(System.Text.Json.Nodes.JsonNode node) {
+        uint id = ParseUintField(node, "id");
+        var r = _engine.SpellDeleteAsync(id).GetAwaiter().GetResult();
+        return Serialize(new {
+            success = r.Success, command = "spell-delete",
+            spellId = r.SpellId,
+            removedFromOverlay = r.RemovedFromOverlay,
+            deletedFromDb = r.DeletedFromDb
+        });
+    }
+
+    private string CmdLayoutList(System.Text.Json.Nodes.JsonNode node) {
+        bool overlayOnly = node["overlayOnly"]?.GetValue<bool>() ?? false;
+        var r = _engine.LayoutList(overlayOnly);
+        return Serialize(new {
+            success = true, command = "layout-list",
+            count = r.Count,
+            overlayOnly = overlayOnly,
+            layouts = r.Layouts.Select(l => new { layoutId = l.LayoutId, hasOverlay = l.HasOverlay })
+        });
+    }
+
+    private string CmdLayoutGet(System.Text.Json.Nodes.JsonNode node) {
+        uint id = ParseUintField(node, "layoutId");
+        var r = _engine.LayoutGet(id);
+        return Serialize(new {
+            success = r.Success, command = "layout-get",
+            layoutId = r.LayoutId,
+            hasOverlay = r.HasOverlay,
+            layout = r.Layout
+        });
+    }
+
+    private string CmdLayoutSave(System.Text.Json.Nodes.JsonNode node) {
+        uint id = ParseUintField(node, "layoutId");
+        string fromJson = node["fromJson"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'fromJson' field");
+        var r = _engine.LayoutSave(id, fromJson);
+        return Serialize(new {
+            success = r.Success, command = "layout-save",
+            layoutId = r.LayoutId
+        });
+    }
+
+    private string CmdLayoutDeleteOverlay(System.Text.Json.Nodes.JsonNode node) {
+        uint id = ParseUintField(node, "layoutId");
+        var r = _engine.LayoutDeleteOverlay(id);
+        return Serialize(new {
+            success = true, command = "layout-delete-overlay",
+            layoutId = r.LayoutId, removed = r.Removed
+        });
+    }
+
+    private string CmdCreatureGet(System.Text.Json.Nodes.JsonNode node) {
+        uint objectId = ParseUintField(node, "objectId");
+        var r = _engine.CreatureGetAsync(objectId).GetAwaiter().GetResult();
+        return Serialize(new {
+            success = r.Success, command = "creature-get",
+            objectId = $"0x{r.ObjectId:X8}", overrides = r.Overrides
+        });
+    }
+
+    private string CmdCreatureSave(System.Text.Json.Nodes.JsonNode node) {
+        uint objectId = ParseUintField(node, "objectId");
+        string? jsonPath = node["fromJson"]?.GetValue<string>();
+        var r = _engine.CreatureSaveAsync(objectId, jsonPath).GetAwaiter().GetResult();
+        return Serialize(new {
+            success = r.Success, command = "creature-save",
+            objectId = $"0x{r.ObjectId:X8}",
+            textureMapRows = r.TextureMapRows,
+            animPartRows = r.AnimPartRows
+        });
+    }
+
+    private string CmdCreatureExportSql(System.Text.Json.Nodes.JsonNode node) {
+        uint objectId = ParseUintField(node, "objectId");
+        string? outPath = node["out"]?.GetValue<string>();
+        var r = _engine.CreatureExportSql(objectId, outPath);
+        return Serialize(new {
+            success = r.Success, command = "creature-export-sql",
+            objectId = $"0x{r.ObjectId:X8}",
+            sqlBytes = r.Sql.Length,
+            sql = r.Sql,
+            outPath = r.OutPath
+        });
+    }
+
+    private string CmdOpenLogFolder() {
+        var path = CommandEngine.ActiveLogPath;
+        if (string.IsNullOrEmpty(path)) {
+            return Serialize(new {
+                success = false,
+                command = "open-log-folder",
+                error = "No log file is active. Start the terminal with --log-file <path>."
+            });
+        }
+        var folder = System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(path)) ?? path;
+        return Serialize(new {
+            success = true,
+            command = "open-log-folder",
+            logPath = path,
+            folder = folder
+        });
+    }
+
+    private string CmdImportRenderSurface(System.Text.Json.Nodes.JsonNode node) {
+        string imagePath = node["imagePath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'imagePath' field");
+        uint renderSurfaceId = ParseUintField(node, "renderSurfaceId");
+        bool ui = node["ui"]?.GetValue<bool>() ?? false;
+        string? name = node["name"]?.GetValue<string>();
+
+        var r = _engine.ImportRenderSurface(imagePath, renderSurfaceId, ui, name);
+        return Serialize(new {
+            success = r.Success,
+            command = "import-render-surface",
+            renderSurfaceId = $"0x{r.RenderSurfaceId:X8}",
+            name = r.Name,
+            mode = r.Mode,
+            deferred = r.Deferred,
+            error = r.Error
+        });
+    }
+
+    private static uint ParseUintField(System.Text.Json.Nodes.JsonNode node, string field) {
+        var n = node[field] ?? throw new ArgumentException($"Missing '{field}' field");
+        // Accept either int (JSON number) or "0x06000123" string.
+        if (n.GetValueKind() == System.Text.Json.JsonValueKind.String) {
+            var s = n.GetValue<string>();
+            if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                return Convert.ToUInt32(s, 16);
+            return uint.Parse(s);
+        }
+        return n.GetValue<uint>();
+    }
+
+    private string CmdImportHeightmap(System.Text.Json.Nodes.JsonNode node) {
+        string imagePath = node["imagePath"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'imagePath' field");
+        int startLbX = node["startLbX"]?.GetValue<int>() ?? 0;
+        int startLbY = node["startLbY"]?.GetValue<int>() ?? 0;
+        int lbCountX = node["lbCountX"]?.GetValue<int>()
+            ?? throw new ArgumentException("Missing 'lbCountX' field");
+        int lbCountY = node["lbCountY"]?.GetValue<int>()
+            ?? throw new ArgumentException("Missing 'lbCountY' field");
+        bool apply = node["apply"]?.GetValue<bool>() ?? false;
+
+        var r = _engine.ImportHeightmap(imagePath, startLbX, startLbY, lbCountX, lbCountY, apply);
+        return Serialize(new {
+            success = true,
+            command = "import-heightmap",
+            applied = r.Applied,
+            imagePath = r.ImagePath,
+            startLbX = r.StartLbX, startLbY = r.StartLbY,
+            lbCountX = r.LbCountX, lbCountY = r.LbCountY,
+            landblocksConsidered = r.LandblocksConsidered,
+            landblocksChanged = r.LandblocksChanged,
+            verticesChanged = r.VerticesChanged,
+            perLandblock = r.PerLandblock.Select(p => new { landblock = p.Landblock, vertices = p.Vertices }),
+            modifiedLandblocks = FormatLbs(r.ModifiedLandblocks)
+        });
     }
 
     private string CmdSetLandblockTerrain(System.Text.Json.Nodes.JsonNode node) {

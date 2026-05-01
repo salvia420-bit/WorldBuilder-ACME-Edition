@@ -130,36 +130,7 @@ namespace WorldBuilder.Editors.Landscape {
         /// every pixel in the 512x512 source texture from the DAT.
         /// </summary>
         public Dictionary<TerrainTextureType, (byte R, byte G, byte B)> GetTerrainAverageColors() {
-            var result = new Dictionary<TerrainTextureType, (byte, byte, byte)>();
-            var buffer = new byte[512 * 512 * 4];
-            const int pixelCount = 512 * 512;
-
-            foreach (var tmDesc in GetAvailableTerrainTextures()) {
-                try {
-                    if (!_dats.TryGet<SurfaceTexture>(tmDesc.TerrainTex.TextureId, out var st)) continue;
-                    if (!_dats.TryGet<RenderSurface>(st.Textures[^1], out var rs)) continue;
-                    if (rs.Width != 512 || rs.Height != 512) continue;
-
-                    GetReversedRGBA(rs.SourceData.AsSpan(), buffer.AsSpan());
-
-                    long totalR = 0, totalG = 0, totalB = 0;
-                    for (int i = 0; i < pixelCount; i++) {
-                        totalR += buffer[i * 4];
-                        totalG += buffer[i * 4 + 1];
-                        totalB += buffer[i * 4 + 2];
-                    }
-
-                    result[tmDesc.TerrainType] = (
-                        (byte)(totalR / pixelCount),
-                        (byte)(totalG / pixelCount),
-                        (byte)(totalB / pixelCount));
-                }
-                catch {
-                    // Skip textures that fail to load
-                }
-            }
-
-            return result;
+            return WorldBuilder.Shared.Lib.Terrain.TerrainAverageColorBuilder.Build(_dats);
         }
 
         /// <summary>

@@ -24,6 +24,7 @@ using WorldBuilder.Services;
 using WorldBuilder.Shared.Documents;
 using WorldBuilder.Shared.Lib;
 using WorldBuilder.Shared.Lib.AceDb;
+using WorldBuilder.Shared.Lib.Logging;
 using WorldBuilder.Shared.Models;
 using WorldBuilder.Shared.Services;
 using WorldBuilder.ViewModels;
@@ -54,7 +55,7 @@ namespace WorldBuilder.Lib.Extensions {
             }
             catch { }
 
-            var fileLoggerProvider = new FileLoggerProvider(logDir, maxLogBytes);
+            var fileLoggerProvider = new FileLoggerProvider(logDir, maxLogBytes, App.Version);
 
             collection.AddLogging((c) => {
                 c.AddProvider(new ColorConsoleLoggerProvider());

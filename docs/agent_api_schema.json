@@ -1333,6 +1333,280 @@
                 "manifestProjectCount": "int"
             }
         },
+        "import-render-surface": {
+            "category": "texture",
+            "description": "Imports a PNG to replace a RenderSurface (default: register in CustomTextureStore; ui:true: deferred portal write).",
+            "parameters": {
+                "imagePath": { "type": "string", "required": true, "description": "Source PNG path" },
+                "renderSurfaceId": { "type": "string|uint", "required": true, "description": "Target RenderSurface DAT id (0x06xxxxxx)" },
+                "ui": { "type": "boolean", "required": false, "description": "Use deferred portal-doc path (default false)" },
+                "name": { "type": "string", "required": false, "description": "Display name; defaults to image filename stem" }
+            },
+            "response": {
+                "renderSurfaceId": "string",
+                "name": "string",
+                "mode": "string",
+                "deferred": "bool",
+                "error": "string?"
+            }
+        },
+        "import-heightmap": {
+            "category": "terrain",
+            "description": "Imports a heightmap+colormap PNG over a landblock grid (height from luminance, type from nearest texture-color).",
+            "parameters": {
+                "imagePath": { "type": "string", "required": true },
+                "startLbX": { "type": "int", "required": false, "default": 0 },
+                "startLbY": { "type": "int", "required": false, "default": 0 },
+                "lbCountX": { "type": "int", "required": true },
+                "lbCountY": { "type": "int", "required": true },
+                "apply": { "type": "boolean", "required": false, "default": false }
+            },
+            "response": {
+                "applied": "bool",
+                "imagePath": "string",
+                "startLbX": "int", "startLbY": "int",
+                "lbCountX": "int", "lbCountY": "int",
+                "landblocksConsidered": "int",
+                "landblocksChanged": "int",
+                "verticesChanged": "int",
+                "perLandblock": [{ "landblock": "string", "vertices": "int" }],
+                "modifiedLandblocks": ["string"]
+            }
+        },
+        "creature-get": {
+            "category": "ace-db",
+            "description": "Loads ACE-DB creature visual overrides (texture map, anim part, palette).",
+            "parameters": { "objectId": { "type": "string|uint", "required": true } },
+            "response": { "objectId": "string", "overrides": "AceCreatureOverrides" }
+        },
+        "creature-save": {
+            "category": "ace-db",
+            "description": "Replaces texture-map + anim-part rows for the given object_Id (transactional).",
+            "parameters": {
+                "objectId": { "type": "string|uint", "required": true },
+                "fromJson": { "type": "string", "required": true, "description": "Path to AceCreatureOverrides JSON" }
+            },
+            "response": { "objectId": "string", "textureMapRows": "int", "animPartRows": "int" }
+        },
+        "creature-export-sql": {
+            "category": "ace-db",
+            "description": "Generates idempotent DELETE+INSERT SQL for the creature's overrides.",
+            "parameters": {
+                "objectId": { "type": "string|uint", "required": true },
+                "out": { "type": "string", "required": false }
+            },
+            "response": { "objectId": "string", "sqlBytes": "int", "sql": "string", "outPath": "string?" }
+        },
+        "spell-list": {
+            "category": "ace-db",
+            "description": "Lists newest spell ids by source ('dat' default, 'db' for ace-db); annotates rows that have a project overlay.",
+            "parameters": {
+                "limit": { "type": "int", "required": false, "default": 500 },
+                "source": { "type": "string", "required": false, "default": "dat", "enum": ["dat", "db"] }
+            },
+            "response": {
+                "count": "int", "source": "string",
+                "spells": [{ "spellId": "string", "name": "string?", "hasOverlay": "bool" }]
+            }
+        },
+        "spell-get": {
+            "category": "ace-db",
+            "description": "Returns a SpellRecord JSON; project overlay wins, falls back to ace-db.",
+            "parameters": { "id": { "type": "string|uint", "required": true } },
+            "response": { "spellId": "string", "source": "string", "spell": "SpellRecord" }
+        },
+        "spell-save": {
+            "category": "ace-db",
+            "description": "Writes a SpellRecord into the project overlay; if ace-db is connected also UPSERTs the row.",
+            "parameters": {
+                "id": { "type": "string|uint", "required": true },
+                "fromJson": { "type": "string", "required": true }
+            },
+            "response": { "spellId": "string", "savedToOverlay": "bool", "savedToDb": "bool" }
+        },
+        "spell-copy": {
+            "category": "ace-db",
+            "description": "Clones a spell with a new id (auto-allocates max+1 if newId is omitted).",
+            "parameters": {
+                "fromId": { "type": "string|uint", "required": true },
+                "newId": { "type": "string|uint", "required": false }
+            },
+            "response": { "fromSpellId": "string", "newSpellId": "string", "savedToOverlay": "bool", "savedToDb": "bool" }
+        },
+        "spell-delete": {
+            "category": "ace-db",
+            "description": "Removes a spell from the project overlay; if ace-db is connected also DELETEs the row.",
+            "parameters": { "id": { "type": "string|uint", "required": true } },
+            "response": { "spellId": "string", "removedFromOverlay": "bool", "deletedFromDb": "bool" }
+        },
+        "weenie-save": {
+            "category": "ace-db",
+            "description": "Replaces all scalar weenie_properties_* rows for an existing class_Id.",
+            "parameters": {
+                "classId": { "type": "string|uint", "required": true },
+                "fromJson": { "type": "string", "required": true, "description": "Path to AceWeenieSnapshot JSON" }
+            },
+            "response": { "classId": "string", "ints": "int", "int64s": "int", "bools": "int", "floats": "int", "strings": "int", "dataIds": "int", "instanceIds": "int" }
+        },
+        "weenie-insert": {
+            "category": "ace-db",
+            "description": "Creates a new weenie row (auto-class-id ≥100000) and saves the snapshot scalars.",
+            "parameters": {
+                "className": { "type": "string", "required": true },
+                "fromJson": { "type": "string", "required": true }
+            },
+            "response": { "newClassId": "string", "className": "string", "totalScalarRows": "int" }
+        },
+        "weenie-delete": {
+            "category": "ace-db",
+            "description": "Deletes a weenie + every weenie_properties_* row that points at its class_Id.",
+            "parameters": { "classId": { "type": "string|uint", "required": true } },
+            "response": { "classId": "string" }
+        },
+        "weenie-list-property-keys": {
+            "category": "ace-db",
+            "description": "Enumerates AcePropertyXxx names by family.",
+            "parameters": { "family": { "type": "string", "required": true, "enum": ["int", "int64", "bool", "float", "string", "did", "iid"] } },
+            "response": { "family": "string", "count": "int", "keys": [{ "type": "int", "name": "string" }] }
+        },
+        "placement-list": {
+            "category": "ace-db",
+            "description": "Lists outdoor/dungeon instance placements (filtered by lb + kind).",
+            "parameters": {
+                "lbX": { "type": "int", "required": false },
+                "lbY": { "type": "int", "required": false },
+                "kind": { "type": "string", "required": false, "default": "all", "enum": ["all", "outdoor", "dungeon"] }
+            },
+            "response": {
+                "count": "int", "filter": "string",
+                "placements": [{
+                    "kind": "string", "index": "int", "landblock": "string",
+                    "wcid": "uint", "cellNumber": "int",
+                    "origin": { "x": "float", "y": "float", "z": "float" },
+                    "angles": { "w": "float", "x": "float", "y": "float", "z": "float" }
+                }]
+            }
+        },
+        "placement-add-outdoor": {
+            "category": "ace-db",
+            "description": "Appends an outdoor instance placement to Project.OutdoorInstancePlacements.",
+            "parameters": {
+                "lbX": { "type": "int", "required": true }, "lbY": { "type": "int", "required": true },
+                "wcid": { "type": "string|uint", "required": true },
+                "cellNumber": { "type": "int", "required": false, "default": 1 },
+                "originX": { "type": "float", "required": true },
+                "originY": { "type": "float", "required": true },
+                "originZ": { "type": "float", "required": true },
+                "anglesW": { "type": "float", "required": false },
+                "anglesX": { "type": "float", "required": false },
+                "anglesY": { "type": "float", "required": false },
+                "anglesZ": { "type": "float", "required": false }
+            },
+            "response": { "kind": "string", "index": "int", "landblock": "string" }
+        },
+        "placement-add-dungeon": {
+            "category": "ace-db",
+            "description": "Appends a dungeon instance placement to the dungeon document for the given lb.",
+            "parameters": {
+                "lbX": { "type": "int", "required": true }, "lbY": { "type": "int", "required": true },
+                "wcid": { "type": "string|uint", "required": true },
+                "cellNumber": { "type": "int", "required": false, "default": 256 },
+                "originX": { "type": "float", "required": true },
+                "originY": { "type": "float", "required": true },
+                "originZ": { "type": "float", "required": true },
+                "anglesW": { "type": "float", "required": false },
+                "anglesX": { "type": "float", "required": false },
+                "anglesY": { "type": "float", "required": false },
+                "anglesZ": { "type": "float", "required": false }
+            },
+            "response": { "kind": "string", "index": "int", "landblock": "string" }
+        },
+        "placement-remove": {
+            "category": "ace-db",
+            "description": "Removes an outdoor or dungeon placement by index in its respective list.",
+            "parameters": {
+                "kind": { "type": "string", "required": true, "enum": ["outdoor", "dungeon"] },
+                "index": { "type": "int", "required": true }
+            },
+            "response": { "kind": "string", "index": "int", "landblock": "string?" }
+        },
+        "placement-export-sql": {
+            "category": "ace-db",
+            "description": "Writes landblock_instances.sql + dungeon_instances.sql; --apply runs them against ace-db.",
+            "parameters": {
+                "out": { "type": "string", "required": false, "description": "Defaults to project directory" },
+                "apply": { "type": "boolean", "required": false, "default": false }
+            },
+            "response": { "outdoorPath": "string", "outdoorCount": "int", "dungeonPath": "string", "dungeonCount": "int", "rowsAppliedToDb": "int?" }
+        },
+        "layout-list": {
+            "category": "layout",
+            "description": "Lists every LayoutDesc id from the local DAT (or only ones with a project overlay).",
+            "parameters": { "overlayOnly": { "type": "boolean", "required": false, "default": false } },
+            "response": {
+                "count": "int", "overlayOnly": "bool",
+                "layouts": [{ "layoutId": "string", "hasOverlay": "bool" }]
+            }
+        },
+        "layout-get": {
+            "category": "layout",
+            "description": "Returns a LayoutDesc as JSON; preferred from project overlay if present.",
+            "parameters": { "layoutId": { "type": "string|uint", "required": true } },
+            "response": { "layoutId": "string", "hasOverlay": "bool", "layout": "LayoutDesc" }
+        },
+        "layout-save": {
+            "category": "layout",
+            "description": "Saves a JSON LayoutDesc into the project's LayoutDatDocument overlay.",
+            "parameters": {
+                "layoutId": { "type": "string|uint", "required": true },
+                "fromJson": { "type": "string", "required": true }
+            },
+            "response": { "layoutId": "string" }
+        },
+        "layout-delete-overlay": {
+            "category": "layout",
+            "description": "Removes the project overlay for a LayoutDesc id (DAT original is untouched).",
+            "parameters": { "layoutId": { "type": "string|uint", "required": true } },
+            "response": { "layoutId": "string", "removed": "bool" }
+        },
+        "fresh-start": {
+            "category": "world-gen",
+            "description": "Wipes all terrain to deep sea + deletes all dungeon documents (requires confirm:true).",
+            "parameters": { "confirm": { "type": "boolean", "required": true, "description": "Must be true; safety gate against accidental destruction" } },
+            "response": { "landblocksReset": "int", "verticesReset": "int" }
+        },
+        "generate-world": {
+            "category": "world-gen",
+            "description": "GUI-parity world generation: ResetWorldDocs → terrain → buildings → decorations; optional CSV emit.",
+            "parameters": {
+                "params": { "type": "object", "required": false, "description": "WorldGeneratorParams shape (seed, biomes, town count, etc.)" },
+                "apply": { "type": "boolean", "required": false, "default": false },
+                "exportTownsCsv": { "type": "string", "required": false, "description": "Optional path; written via TownsExporter" }
+            },
+            "response": {
+                "seed": "int", "applied": "bool",
+                "landblocksAffected": "int", "verticesModified": "int",
+                "towns": "int", "buildingsPlaced": "int",
+                "decorationsPlaced": "int", "roadVertices": "int",
+                "townsCsvPath": "string?", "townsCsvRows": "int",
+                "townSummaries": "TownSummary[]"
+            }
+        },
+        "export-towns-csv": {
+            "category": "world-gen",
+            "description": "Renders the GUI's towns CSV from a worldgen result JSON written by generate-world.",
+            "parameters": {
+                "fromResult": { "type": "string", "required": true, "description": "Path to worldgen result JSON" },
+                "out": { "type": "string", "required": true }
+            },
+            "response": { "outPath": "string", "rows": "int" }
+        },
+        "open-log-folder": {
+            "category": "control",
+            "description": "Returns the active --log-file path so the agent can ingest it (no folder-opening side effects).",
+            "parameters": {},
+            "response": { "logPath": "string", "folder": "string", "error": "string?" }
+        },
         "help": {
             "category": "control",
             "description": "Returns the command list as structured JSON.",

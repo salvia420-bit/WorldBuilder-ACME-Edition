@@ -25,6 +25,7 @@ using System.Collections.Generic;
 using WorldBuilder.Lib;
 using WorldBuilder.Lib.Demo;
 using WorldBuilder.Lib.Extensions;
+using WorldBuilder.Shared.Lib.Logging;
 using WorldBuilder.Shared.Models;
 using WorldBuilder.ViewModels;
 using WorldBuilder.Views;
@@ -66,8 +67,8 @@ public partial class App : Application {
 
         var settings = Services.GetRequiredService<Lib.Settings.WorldBuilderSettings>();
         var fileLoggerProvider = Services.GetRequiredService<FileLoggerProvider>();
-        fileLoggerProvider.GetMinLevel = () => settings.App.LogLevel;
-        fileLoggerProvider.GetEnabled = () => settings.App.EnableFileLogging;
+        fileLoggerProvider.MinLevelProvider = () => settings.App.LogLevel;
+        fileLoggerProvider.EnabledProvider = () => settings.App.EnableFileLogging;
 
         // Auto-updater is desktop-only (file paths, installers); skip in browser to avoid startup failure
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime) {

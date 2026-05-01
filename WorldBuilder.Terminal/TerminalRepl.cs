@@ -154,6 +154,16 @@ public class TerminalRepl {
             ["benchmark"] = _ => HandleBenchmark(),
             ["set-landblock-heightmap"] = HandleSetLandblockHeightmap,
             ["set-landblock-terrain"] = HandleSetLandblockTerrain,
+            ["import-heightmap"] = HandleImportHeightmap,
+            ["import-render-surface"] = HandleImportRenderSurface,
+            ["creature"] = HandleCreature,
+            ["layout"] = HandleLayout,
+            ["spell"] = HandleSpell,
+            ["weenie"] = HandleWeenie,
+            ["placement"] = HandlePlacement,
+            ["fresh-start"] = HandleFreshStart,
+            ["generate-world"] = HandleGenerateWorld,
+            ["export-towns-csv"] = HandleExportTownsCsv,
             ["bulk-place-objects"] = HandleBulkPlaceObjects,
             ["generate-terrain"] = HandleGenerateTerrain,
             ["generate-dungeon"] = HandleGenerateDungeon,
@@ -1816,6 +1826,8 @@ public class TerminalRepl {
         Console.WriteLine("  benchmark                                        Run speed test suite");
         Console.WriteLine("  set-landblock-heightmap <lbX> <lbY> <h1,h2,...>   Set all 81 heights at once");
         Console.WriteLine("  set-landblock-terrain <lbX> <lbY> <t1,t2,...>     Set all 81 terrain types");
+        Console.WriteLine("  import-heightmap <png> <sX> <sY> <cX> <cY> [--apply]  Import heightmap+colormap PNG to LB grid");
+        Console.WriteLine("  import-render-surface <png> <0x06...>     Replace a RenderSurface (default: store; --ui: portal-doc)");
         Console.WriteLine("  bulk-place-objects <lbX> <lbY> <json-array>       Place multiple objects");
         Console.WriteLine();
 
@@ -2547,6 +2559,471 @@ public class TerminalRepl {
         Console.WriteLine($"Set {r.VerticesModified} heights in landblock 0x{r.LbKey:X4}");
         if (r.ModifiedLandblocks.Count > 0)
             Console.WriteLine($"  Modified {r.ModifiedLandblocks.Count} landblock(s): {string.Join(", ", r.ModifiedLandblocks.Select(lb => $"0x{lb:X4}"))}");
+    }
+
+    private void HandleFreshStart(string[] tokens) {
+        if (!CheckProject()) return;
+        Console.Write("This will wipe all terrain to deep sea AND delete every dungeon. Type 'yes' to confirm: ");
+        var input = Console.ReadLine();
+        if (!string.Equals(input?.Trim(), "yes", StringComparison.OrdinalIgnoreCase)) {
+            Console.WriteLine("Aborted.");
+            return;
+        }
+        try {
+            var r = _engine.FreshStartAsync().GetAwaiter().GetResult();
+            Console.WriteLine($"Reset {r.LandblocksReset} landblock(s), {r.VerticesReset} vertices to WaterDeepSea.");
+            Console.WriteLine("Dungeons deleted. SkipDatStatics restored to false.");
+        }
+        catch (Exception ex) {
+            Console.WriteLine($"Error: {ex.Message}");
+        }
+    }
+
+    private void HandleGenerateWorld(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 2) {
+            Console.WriteLine("Usage: generate-world [--params <json>] [--export-towns-csv <path>] [--apply]");
+            Console.WriteLine("  Default is dry-run (returns counts only).");
+            Console.WriteLine("  --params expects a JSON file matching WorldGeneratorParams.");
+            return;
+        }
+        try {
+            string? paramsPath = null, csvPath = null;
+            bool apply = false;
+            for (int i = 1; i < tokens.Length; i++) {
+                if (tokens[i] == "--params" && i + 1 < tokens.Length) { paramsPath = tokens[i + 1]; i++; }
+                else if (tokens[i] == "--export-towns-csv" && i + 1 < tokens.Length) { csvPath = tokens[i + 1]; i++; }
+                else if (tokens[i] == "--apply") apply = true;
+            }
+            var p = paramsPath != null
+                ? System.Text.Json.JsonSerializer.Deserialize<WorldBuilder.Shared.Lib.WorldGen.WorldGeneratorParams>(
+                    System.IO.File.ReadAllText(paramsPath),
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                : new WorldBuilder.Shared.Lib.WorldGen.WorldGeneratorParams();
+            if (p == null) { Console.WriteLine("Failed to parse --params JSON."); return; }
+
+            var r = _engine.GenerateWorldAsync(p, apply, csvPath).GetAwaiter().GetResult();
+            Console.WriteLine($"{(r.Applied ? "Applied" : "Dry-run")}: seed={r.Seed} {r.Towns} towns, {r.BuildingsPlaced} buildings, {r.DecorationsPlaced} decorations, {r.RoadVertices} road verts, {r.VerticesModified} terrain verts on {r.LandblocksAffected} LBs.");
+            if (r.TownsCsvPath != null) Console.WriteLine($"  Towns CSV: {r.TownsCsvRows} rows → {r.TownsCsvPath}");
+            int shown = 0;
+            foreach (var t in r.TownSummaries) {
+                Console.WriteLine($"  {t.Name} ({t.SizeLabel}) — LB ({t.CenterLbX},{t.CenterLbY}) — {t.BuildingCount} buildings");
+                if (++shown >= 12 && r.TownSummaries.Count > 12) {
+                    Console.WriteLine($"  … {r.TownSummaries.Count - shown} more");
+                    break;
+                }
+            }
+        }
+        catch (Exception ex) {
+            Console.WriteLine($"Error: {ex.Message}");
+        }
+    }
+
+    private void HandleExportTownsCsv(string[] tokens) {
+        if (tokens.Length < 5) {
+            Console.WriteLine("Usage: export-towns-csv --from-result <path> --out <path>");
+            return;
+        }
+        try {
+            string? fromResult = null, outPath = null;
+            for (int i = 1; i < tokens.Length - 1; i++) {
+                if (tokens[i] == "--from-result") fromResult = tokens[i + 1];
+                else if (tokens[i] == "--out") outPath = tokens[i + 1];
+            }
+            if (fromResult == null || outPath == null) { Console.WriteLine("Both --from-result and --out are required."); return; }
+            var r = _engine.ExportTownsCsv(fromResult, outPath);
+            Console.WriteLine($"Wrote {r.Rows} rows → {r.OutPath}");
+        }
+        catch (Exception ex) {
+            Console.WriteLine($"Error: {ex.Message}");
+        }
+    }
+
+    private void HandlePlacement(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 2) {
+            Console.WriteLine("Usage: placement <list|add-outdoor|add-dungeon|remove|export-sql> ...");
+            Console.WriteLine("  placement list [--lb <lbX> <lbY>] [--outdoor|--dungeon]");
+            Console.WriteLine("  placement add-outdoor <lbX> <lbY> <wcid> <cellNum> <originX> <originY> <originZ> [--angles w x y z]");
+            Console.WriteLine("  placement add-dungeon <lbX> <lbY> <wcid> <cellNum> <originX> <originY> <originZ> [--angles w x y z]");
+            Console.WriteLine("  placement remove <outdoor|dungeon> <index>");
+            Console.WriteLine("  placement export-sql [--out <dir>] [--apply]");
+            return;
+        }
+        try {
+            switch (tokens[1].ToLowerInvariant()) {
+                case "list": {
+                    int? lbX = null, lbY = null;
+                    string kind = "all";
+                    for (int i = 2; i < tokens.Length; i++) {
+                        if (tokens[i] == "--lb" && i + 2 < tokens.Length
+                            && int.TryParse(tokens[i + 1], out var x) && int.TryParse(tokens[i + 2], out var y))
+                        { lbX = x; lbY = y; i += 2; }
+                        else if (tokens[i] == "--outdoor") kind = "outdoor";
+                        else if (tokens[i] == "--dungeon") kind = "dungeon";
+                    }
+                    var l = _engine.PlacementList(lbX, lbY, kind);
+                    Console.WriteLine($"{l.Count} placement(s){(kind != "all" ? $" ({kind})" : "")}.");
+                    int shown = 0;
+                    foreach (var p in l.Placements) {
+                        Console.WriteLine($"  [{p.Kind} #{p.Index}] {p.Landblock} wcid={p.Wcid} cell={p.CellNumber} @({p.OriginX:F2},{p.OriginY:F2},{p.OriginZ:F2})");
+                        if (++shown >= 32 && l.Placements.Count > 32) {
+                            Console.WriteLine($"  … {l.Placements.Count - shown} more");
+                            break;
+                        }
+                    }
+                    break;
+                }
+                case "add-outdoor":
+                case "add-dungeon": {
+                    if (tokens.Length < 9) {
+                        Console.WriteLine($"Usage: placement {tokens[1]} <lbX> <lbY> <wcid> <cellNum> <originX> <originY> <originZ> [--angles w x y z]");
+                        return;
+                    }
+                    if (!TryParseInt(tokens[2], "lbX", out var lbX)) return;
+                    if (!TryParseInt(tokens[3], "lbY", out var lbY)) return;
+                    if (!TryParseUint(tokens[4], "wcid", out var wcid)) return;
+                    if (!ushort.TryParse(tokens[5], out var cell)) { Console.WriteLine("Bad cellNum"); return; }
+                    if (!TryParseFloat(tokens[6], "originX", out var ox)) return;
+                    if (!TryParseFloat(tokens[7], "originY", out var oy)) return;
+                    if (!TryParseFloat(tokens[8], "originZ", out var oz)) return;
+                    float? aw = null, ax = null, ay = null, az = null;
+                    for (int i = 9; i < tokens.Length; i++) {
+                        if (tokens[i] == "--angles" && i + 4 < tokens.Length
+                            && float.TryParse(tokens[i + 1], out var w)
+                            && float.TryParse(tokens[i + 2], out var x)
+                            && float.TryParse(tokens[i + 3], out var y)
+                            && float.TryParse(tokens[i + 4], out var z))
+                        { aw = w; ax = x; ay = y; az = z; }
+                    }
+                    var r = tokens[1] == "add-outdoor"
+                        ? _engine.PlacementAddOutdoor(lbX, lbY, wcid, cell, ox, oy, oz, aw, ax, ay, az)
+                        : _engine.PlacementAddDungeon(lbX, lbY, wcid, cell, ox, oy, oz, aw, ax, ay, az);
+                    Console.WriteLine($"{(r.Success ? "Added" : "Failed")}: {r.Kind} #{r.Index} on {r.Landblock}.");
+                    break;
+                }
+                case "remove": {
+                    if (tokens.Length < 4) { Console.WriteLine("Usage: placement remove <outdoor|dungeon> <index>"); return; }
+                    if (!int.TryParse(tokens[3], out var idx)) { Console.WriteLine("Bad index"); return; }
+                    var r = _engine.PlacementRemove(tokens[2], idx);
+                    Console.WriteLine(r.Removed ? $"Removed {r.Kind} #{r.Index} from {r.Landblock}." : $"No {r.Kind} placement at index {r.Index}.");
+                    break;
+                }
+                case "export-sql": {
+                    string? outDir = null;
+                    bool apply = false;
+                    for (int i = 2; i < tokens.Length; i++) {
+                        if (tokens[i] == "--out" && i + 1 < tokens.Length) { outDir = tokens[i + 1]; i++; }
+                        else if (tokens[i] == "--apply") apply = true;
+                    }
+                    outDir ??= _engine.GetCurrentProjectDirectoryOrCwd();
+                    var r = _engine.PlacementExportSqlAsync(outDir, apply).GetAwaiter().GetResult();
+                    Console.WriteLine($"Wrote landblock_instances.sql ({r.OutdoorCount} rows) → {r.OutdoorPath}");
+                    Console.WriteLine($"Wrote dungeon_instances.sql ({r.DungeonCount} rows) → {r.DungeonPath}");
+                    if (r.RowsAppliedToDb.HasValue) Console.WriteLine($"Applied {r.RowsAppliedToDb} row(s) to ace-db.");
+                    break;
+                }
+                default:
+                    Console.WriteLine($"Unknown placement subcommand: {tokens[1]}");
+                    break;
+            }
+        }
+        catch (Exception ex) {
+            Console.WriteLine($"Error: {ex.Message}");
+        }
+    }
+
+    private void HandleWeenie(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 2) {
+            Console.WriteLine("Usage: weenie <save|insert|delete|list-property-keys> ...");
+            Console.WriteLine("  weenie save <classId> --from-json <path>");
+            Console.WriteLine("  weenie insert <className> --from-json <path>");
+            Console.WriteLine("  weenie delete <classId>");
+            Console.WriteLine("  weenie list-property-keys <int|int64|bool|float|string|did|iid>");
+            return;
+        }
+        try {
+            switch (tokens[1].ToLowerInvariant()) {
+                case "save": {
+                    if (tokens.Length < 5 || tokens[3] != "--from-json") { Console.WriteLine("Usage: weenie save <classId> --from-json <path>"); return; }
+                    if (!TryParseUint(tokens[2], "classId", out var cid)) return;
+                    var s = _engine.WeenieSaveScalarsAsync(cid, tokens[4]).GetAwaiter().GetResult();
+                    Console.WriteLine($"{(s.Success ? "Saved" : "Failed")}: 0x{s.ClassId:X8} ({s.IntRows} ints, {s.Int64Rows} i64, {s.BoolRows} bools, {s.FloatRows} floats, {s.StringRows} strs, {s.DataIdRows} dids, {s.InstanceIdRows} iids).");
+                    break;
+                }
+                case "insert": {
+                    if (tokens.Length < 5 || tokens[3] != "--from-json") { Console.WriteLine("Usage: weenie insert <className> --from-json <path>"); return; }
+                    var i = _engine.WeenieInsertAsync(tokens[2], tokens[4]).GetAwaiter().GetResult();
+                    Console.WriteLine($"{(i.Success ? "Inserted" : "Failed")}: '{i.ClassName}' as 0x{i.NewClassId:X8} ({i.TotalScalarRows} scalar rows).");
+                    break;
+                }
+                case "delete": {
+                    if (tokens.Length < 3) { Console.WriteLine("Usage: weenie delete <classId>"); return; }
+                    if (!TryParseUint(tokens[2], "classId", out var did)) return;
+                    var d = _engine.WeenieDeleteAsync(did).GetAwaiter().GetResult();
+                    Console.WriteLine($"{(d.Success ? "Deleted" : "Failed")}: 0x{d.ClassId:X8}.");
+                    break;
+                }
+                case "list-property-keys": {
+                    if (tokens.Length < 3) { Console.WriteLine("Usage: weenie list-property-keys <int|int64|bool|float|string|did|iid>"); return; }
+                    var l = _engine.WeenieListPropertyKeys(tokens[2]);
+                    Console.WriteLine($"{l.Count} {l.Family} property key(s):");
+                    int shown = 0;
+                    foreach (var k in l.Keys) {
+                        Console.WriteLine($"  {k.Type,5}  {k.Name}");
+                        if (++shown >= 32 && l.Keys.Count > 32) {
+                            Console.WriteLine($"  … {l.Keys.Count - shown} more");
+                            break;
+                        }
+                    }
+                    break;
+                }
+                default:
+                    Console.WriteLine($"Unknown weenie subcommand: {tokens[1]}");
+                    break;
+            }
+        }
+        catch (Exception ex) {
+            Console.WriteLine($"Error: {ex.Message}");
+        }
+    }
+
+    private void HandleSpell(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 2) {
+            Console.WriteLine("Usage: spell <list|get|save|copy|delete> ...");
+            Console.WriteLine("  spell list [--limit N] [--from-db|--from-dat]");
+            Console.WriteLine("  spell get <id>");
+            Console.WriteLine("  spell save <id> --from-json <path>");
+            Console.WriteLine("  spell copy <fromId> [<newId>]");
+            Console.WriteLine("  spell delete <id>");
+            return;
+        }
+        try {
+            switch (tokens[1].ToLowerInvariant()) {
+                case "list": {
+                    int limit = 500;
+                    string source = "dat";
+                    for (int i = 2; i < tokens.Length; i++) {
+                        if (tokens[i] == "--limit" && i + 1 < tokens.Length && int.TryParse(tokens[i + 1], out var n)) { limit = n; i++; }
+                        else if (tokens[i] == "--from-db") source = "db";
+                        else if (tokens[i] == "--from-dat") source = "dat";
+                    }
+                    var l = _engine.SpellListAsync(limit, source).GetAwaiter().GetResult();
+                    Console.WriteLine($"{l.Count} spell(s) from {l.Source}.");
+                    int shown = 0;
+                    foreach (var s in l.Spells) {
+                        Console.WriteLine($"  {s.SpellId} {s.Name ?? "(no name)"}{(s.HasOverlay ? " [overlay]" : "")}");
+                        if (++shown >= 32 && l.Spells.Count > 32) {
+                            Console.WriteLine($"  … {l.Spells.Count - shown} more");
+                            break;
+                        }
+                    }
+                    break;
+                }
+                case "get": {
+                    if (tokens.Length < 3) { Console.WriteLine("Usage: spell get <id>"); return; }
+                    if (!TryParseUint(tokens[2], "id", out var id)) return;
+                    var g = _engine.SpellGetAsync(id).GetAwaiter().GetResult();
+                    Console.WriteLine($"Spell {g.SpellId} ({g.Source}): {g.Spell.Name}");
+                    Console.WriteLine($"  Wcid={g.Spell.Wcid} EType={g.Spell.EType} StatModType={g.Spell.StatModType}");
+                    break;
+                }
+                case "save": {
+                    if (tokens.Length < 5 || tokens[3] != "--from-json") { Console.WriteLine("Usage: spell save <id> --from-json <path>"); return; }
+                    if (!TryParseUint(tokens[2], "id", out var id)) return;
+                    var s = _engine.SpellSaveAsync(id, tokens[4]).GetAwaiter().GetResult();
+                    Console.WriteLine($"Saved {s.SpellId} (overlay={s.SavedToOverlay}, db={s.SavedToDb}).");
+                    break;
+                }
+                case "copy": {
+                    if (tokens.Length < 3) { Console.WriteLine("Usage: spell copy <fromId> [<newId>]"); return; }
+                    if (!TryParseUint(tokens[2], "fromId", out var fromId)) return;
+                    uint? newId = null;
+                    if (tokens.Length >= 4 && uint.TryParse(tokens[3], out var nid)) newId = nid;
+                    var c = _engine.SpellCopyAsync(fromId, newId).GetAwaiter().GetResult();
+                    Console.WriteLine($"Copied {c.FromSpellId} → {c.NewSpellId} (overlay={c.SavedToOverlay}, db={c.SavedToDb}).");
+                    break;
+                }
+                case "delete": {
+                    if (tokens.Length < 3) { Console.WriteLine("Usage: spell delete <id>"); return; }
+                    if (!TryParseUint(tokens[2], "id", out var id)) return;
+                    var d = _engine.SpellDeleteAsync(id).GetAwaiter().GetResult();
+                    Console.WriteLine($"Deleted {d.SpellId} (overlay={d.RemovedFromOverlay}, db={d.DeletedFromDb}).");
+                    break;
+                }
+                default:
+                    Console.WriteLine($"Unknown spell subcommand: {tokens[1]}");
+                    break;
+            }
+        }
+        catch (Exception ex) {
+            Console.WriteLine($"Error: {ex.Message}");
+        }
+    }
+
+    private void HandleLayout(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 2) {
+            Console.WriteLine("Usage: layout <list|get|save|delete-overlay> ...");
+            Console.WriteLine("  layout list [--overlay-only]");
+            Console.WriteLine("  layout get <0xLayoutId>");
+            Console.WriteLine("  layout save <0xLayoutId> --from-json <path>");
+            Console.WriteLine("  layout delete-overlay <0xLayoutId>");
+            return;
+        }
+        try {
+            switch (tokens[1].ToLowerInvariant()) {
+                case "list":
+                    bool overlayOnly = tokens.Skip(2).Any(t => t == "--overlay-only");
+                    var l = _engine.LayoutList(overlayOnly);
+                    Console.WriteLine($"{l.Count} LayoutDesc id(s){(overlayOnly ? " (overlay-only)" : "")}.");
+                    int shown = 0;
+                    foreach (var row in l.Layouts) {
+                        Console.WriteLine($"  {row.LayoutId}{(row.HasOverlay ? "*" : "")}");
+                        if (++shown >= 32 && l.Layouts.Count > 32) {
+                            Console.WriteLine($"  … {l.Layouts.Count - shown} more");
+                            break;
+                        }
+                    }
+                    break;
+                case "get":
+                    if (tokens.Length < 3) { Console.WriteLine("Usage: layout get <0xLayoutId>"); return; }
+                    if (!TryParseHex(tokens[2], "layoutId", out var gid)) return;
+                    var g = _engine.LayoutGet(gid);
+                    Console.WriteLine($"LayoutDesc {g.LayoutId}{(g.HasOverlay ? " (overlay)" : "")}: Width={g.Layout.Width} Height={g.Layout.Height}");
+                    Console.WriteLine($"  Elements: {g.Layout.Elements?.Count ?? 0}");
+                    break;
+                case "save":
+                    if (tokens.Length < 5 || tokens[3] != "--from-json") { Console.WriteLine("Usage: layout save <0xLayoutId> --from-json <path>"); return; }
+                    if (!TryParseHex(tokens[2], "layoutId", out var sid)) return;
+                    var s = _engine.LayoutSave(sid, tokens[4]);
+                    Console.WriteLine($"Saved overlay for {s.LayoutId}.");
+                    break;
+                case "delete-overlay":
+                    if (tokens.Length < 3) { Console.WriteLine("Usage: layout delete-overlay <0xLayoutId>"); return; }
+                    if (!TryParseHex(tokens[2], "layoutId", out var did)) return;
+                    var d = _engine.LayoutDeleteOverlay(did);
+                    Console.WriteLine(d.Removed ? $"Removed overlay for {d.LayoutId}." : $"No overlay existed for {d.LayoutId}.");
+                    break;
+                default:
+                    Console.WriteLine($"Unknown layout subcommand: {tokens[1]}");
+                    break;
+            }
+        }
+        catch (Exception ex) {
+            Console.WriteLine($"Error: {ex.Message}");
+        }
+    }
+
+    private void HandleCreature(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 2) {
+            Console.WriteLine("Usage: creature <get|save|export-sql> ...");
+            Console.WriteLine("  creature get <objectId>");
+            Console.WriteLine("  creature save <objectId> --from-json <path>");
+            Console.WriteLine("  creature export-sql <objectId> [--out <path>]");
+            return;
+        }
+        try {
+            switch (tokens[1].ToLowerInvariant()) {
+                case "get":
+                    if (tokens.Length < 3) { Console.WriteLine("Usage: creature get <objectId>"); return; }
+                    if (!TryParseHex(tokens[2], "objectId", out var oid)) return;
+                    var g = _engine.CreatureGetAsync(oid).GetAwaiter().GetResult();
+                    Console.WriteLine($"Loaded overrides for 0x{g.ObjectId:X8}: {g.Overrides.TextureMap.Count} texture-map, {g.Overrides.AnimParts.Count} anim-part, {g.Overrides.PaletteOverrides.Count} palette.");
+                    Console.WriteLine($"  PaletteBase=0x{g.Overrides.PaletteBase:X8} ClothingBase=0x{g.Overrides.ClothingBase:X8} Template={g.Overrides.PaletteTemplate} Shade={g.Overrides.Shade}");
+                    break;
+                case "save":
+                    if (tokens.Length < 5 || tokens[3] != "--from-json") { Console.WriteLine("Usage: creature save <objectId> --from-json <path>"); return; }
+                    if (!TryParseHex(tokens[2], "objectId", out var sid)) return;
+                    var s = _engine.CreatureSaveAsync(sid, tokens[4]).GetAwaiter().GetResult();
+                    Console.WriteLine($"{(s.Success ? "Saved" : "Failed")}: 0x{s.ObjectId:X8} ({s.TextureMapRows} tex-map, {s.AnimPartRows} anim-part).");
+                    break;
+                case "export-sql":
+                    if (tokens.Length < 3) { Console.WriteLine("Usage: creature export-sql <objectId> [--out <path>]"); return; }
+                    if (!TryParseHex(tokens[2], "objectId", out var eid)) return;
+                    string? outPath = null;
+                    for (int i = 3; i < tokens.Length - 1; i++) {
+                        if (tokens[i] == "--out") { outPath = tokens[i + 1]; break; }
+                    }
+                    var e = _engine.CreatureExportSql(eid, outPath);
+                    Console.WriteLine($"Exported SQL ({e.Sql.Length} bytes){(outPath != null ? $" → {outPath}" : "")}.");
+                    if (outPath == null) Console.WriteLine(e.Sql);
+                    break;
+                default:
+                    Console.WriteLine($"Unknown creature subcommand: {tokens[1]}");
+                    break;
+            }
+        }
+        catch (Exception ex) {
+            Console.WriteLine($"Error: {ex.Message}");
+        }
+    }
+
+    private void HandleImportRenderSurface(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 3) {
+            Console.WriteLine("Usage: import-render-surface <imagePath> <renderSurfaceId> [--ui] [--name <name>]");
+            Console.WriteLine("  Default: register in CustomTextureStore (written on next export).");
+            Console.WriteLine("  --ui: deferred portal write through PortalDatDocument (preserves DAT until export).");
+            Console.WriteLine("  Example: import-render-surface monster.png 0x06001234");
+            return;
+        }
+        string imagePath = tokens[1];
+        if (!TryParseHex(tokens[2], "renderSurfaceId", out uint renderSurfaceId)) return;
+        bool ui = tokens.Skip(3).Any(t => t == "--ui");
+        string? name = null;
+        for (int i = 3; i < tokens.Length - 1; i++) {
+            if (tokens[i] == "--name") { name = tokens[i + 1]; break; }
+        }
+
+        try {
+            var r = _engine.ImportRenderSurface(imagePath, renderSurfaceId, ui, name);
+            if (r.Success) {
+                Console.WriteLine($"Imported '{r.Name}' for 0x{r.RenderSurfaceId:X8} via {r.Mode} (deferred until export).");
+            } else {
+                Console.WriteLine($"Failed: {r.Error}");
+            }
+        }
+        catch (Exception ex) {
+            Console.WriteLine($"Error: {ex.Message}");
+        }
+    }
+
+    private void HandleImportHeightmap(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 6) {
+            Console.WriteLine("Usage: import-heightmap <imagePath> <startLbX> <startLbY> <lbCountX> <lbCountY> [--apply]");
+            Console.WriteLine("  Default is dry-run; reports per-LB change counts only.");
+            Console.WriteLine("  --apply writes via TerrainDocument.ApplyBulkImport.");
+            Console.WriteLine("  Example: import-heightmap holtburg.png 169 178 4 4");
+            return;
+        }
+        string imagePath = tokens[1];
+        if (!TryParseInt(tokens[2], "startLbX", out int startLbX)) return;
+        if (!TryParseInt(tokens[3], "startLbY", out int startLbY)) return;
+        if (!TryParseInt(tokens[4], "lbCountX", out int lbCountX)) return;
+        if (!TryParseInt(tokens[5], "lbCountY", out int lbCountY)) return;
+        bool apply = tokens.Skip(6).Any(t => t == "--apply");
+
+        try {
+            var r = _engine.ImportHeightmap(imagePath, startLbX, startLbY, lbCountX, lbCountY, apply);
+            Console.WriteLine($"{(r.Applied ? "Applied" : "Dry-run")}: {r.LandblocksChanged}/{r.LandblocksConsidered} LBs changed, {r.VerticesChanged} vertices.");
+            int shown = 0;
+            foreach (var p in r.PerLandblock) {
+                Console.WriteLine($"  {p.Landblock}: {p.Vertices} vertex change(s)");
+                if (++shown >= 16 && r.PerLandblock.Count > 16) {
+                    Console.WriteLine($"  … {r.PerLandblock.Count - shown} more landblocks");
+                    break;
+                }
+            }
+            if (!r.Applied) Console.WriteLine("  (re-run with --apply to commit)");
+        }
+        catch (Exception ex) {
+            Console.WriteLine($"Error: {ex.Message}");
+        }
     }
 
     private void HandleSetLandblockTerrain(string[] tokens) {

@@ -400,6 +400,54 @@ namespace WorldBuilder.Shared.Lib.AceDb {
                 list.Add(new AceWeenieRowIid { Type = (ushort)reader.GetInt32("type"), Value = reader.GetUInt64("value") });
         }
 
+        /// <summary>
+        /// Deletes a weenie and every <c>weenie_properties_*</c> row that points at its
+        /// <c>class_Id</c>. The wipe runs in a single transaction so a partial failure
+        /// rolls back. Returns true when the weenie row itself existed and was deleted.
+        /// </summary>
+        public async Task<bool> DeleteWeenieAsync(uint classId, CancellationToken ct = default) {
+            try {
+                await using var conn = new MySqlConnection(_settings.ConnectionString);
+                await conn.OpenAsync(ct);
+                await using var tx = await conn.BeginTransactionAsync(ct);
+
+                string[] propTables = {
+                    "weenie_properties_int", "weenie_properties_int64",
+                    "weenie_properties_bool", "weenie_properties_float",
+                    "weenie_properties_string", "weenie_properties_d_i_d",
+                    "weenie_properties_i_i_d", "weenie_properties_position",
+                    "weenie_properties_attribute", "weenie_properties_attribute_2nd",
+                    "weenie_properties_skill", "weenie_properties_spell_book",
+                    "weenie_properties_create_list", "weenie_properties_emote",
+                    "weenie_properties_emote_action", "weenie_properties_book",
+                    "weenie_properties_book_page_data", "weenie_properties_palette",
+                    "weenie_properties_texture_map", "weenie_properties_anim_part",
+                    "weenie_properties_body_part", "weenie_properties_event_filter",
+                    "weenie_properties_generator"
+                };
+                foreach (var t in propTables) {
+                    await using var del = new MySqlCommand(
+                        $"DELETE FROM `{t}` WHERE `object_Id` = @id", conn, (MySqlTransaction)tx);
+                    del.Parameters.AddWithValue("@id", classId);
+                    try { await del.ExecuteNonQueryAsync(ct); }
+                    catch (MySqlException) { /* table may not exist on older schemas */ }
+                }
+
+                int deleted;
+                await using (var del = new MySqlCommand(
+                    "DELETE FROM `weenie` WHERE `class_Id` = @id", conn, (MySqlTransaction)tx)) {
+                    del.Parameters.AddWithValue("@id", classId);
+                    deleted = await del.ExecuteNonQueryAsync(ct);
+                }
+
+                await tx.CommitAsync(ct);
+                return deleted > 0;
+            }
+            catch (MySqlException) {
+                return false;
+            }
+        }
+
         static async Task<int> CountAsync(MySqlConnection conn, string table, uint classId, CancellationToken ct) {
             var sql = $@"SELECT COUNT(*) FROM `{table}` WHERE `object_Id` = @id";
             await using var cmd = new MySqlCommand(sql, conn);

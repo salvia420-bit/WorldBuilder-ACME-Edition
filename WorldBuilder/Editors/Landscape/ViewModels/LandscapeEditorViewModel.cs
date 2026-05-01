@@ -28,6 +28,7 @@ using WorldBuilder.Shared.Documents;
 using DatReaderWriter.DBObjs;
 using WorldBuilder.Shared.Lib;
 using WorldBuilder.Shared.Lib.AceDb;
+using WorldBuilder.Shared.Lib.Terrain;
 using WorldBuilder.Shared.Lib.WorldGen;
 using WorldBuilder.Shared.Models;
 using WorldBuilder.ViewModels;
@@ -886,59 +887,13 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
             }
         }
 
-        /// <summary>
-        /// Prefer centroid of buildings in this settlement so @teleloc lands among structures,
-        /// not an empty landblock center.
-        /// </summary>
         private static Vector3 GetTownTelelocAnchor(TownSite town,
-            Dictionary<ushort, List<PlannedBuilding>> placements) {
-            var pts = new List<Vector3>();
-            foreach (var list in placements.Values) {
-                foreach (var pb in list) {
-                    if (!string.Equals(pb.TownName, town.Name, StringComparison.Ordinal))
-                        continue;
-                    pts.Add(pb.WorldPosition);
-                }
-            }
+            Dictionary<ushort, List<PlannedBuilding>> placements)
+            => TownsExporter.GetTownTelelocAnchor(town, placements);
 
-            if (pts.Count == 0)
-                return town.WorldCenter;
-
-            float sx = 0f, sy = 0f, sz = 0f;
-            foreach (var p in pts) {
-                sx += p.X;
-                sy += p.Y;
-                sz += p.Z;
-            }
-
-            float n = pts.Count;
-            return new Vector3(sx / n, sy / n, sz / n);
-        }
-
-        /// <summary>
-        /// ACE / @teleloc outdoor format: full id = (landblockKey * 65536) | outdoorCellId,
-        /// landblockKey = (lbX * 256) | lbY. Bracket coords are landblock-local X/Y and world Z.
-        /// Outdoor cells use indices 1..64; we clamp to inner cells 1..6 like the placement tool.
-        /// </summary>
         private static (ushort landblockKey, ushort outdoorCell, string telelocLine) BuildAceTeleLoc(
-            float worldX, float worldY, float worldZ) {
-
-            int lbX = Math.Clamp((int)Math.Floor(worldX / 192f), 0, 254);
-            int lbY = Math.Clamp((int)Math.Floor(worldY / 192f), 0, 254);
-            float localX = worldX - lbX * 192f;
-            float localY = worldY - lbY * 192f;
-
-            int cellX = Math.Clamp((int)(localX / 24f), 1, 6);
-            int cellY = Math.Clamp((int)(localY / 24f), 1, 6);
-            ushort outdoorCell = (ushort)(cellX * 8 + cellY + 1);
-            ushort lbKey = (ushort)((lbX << 8) | lbY);
-            uint fullId = ((uint)lbKey << 16) | outdoorCell;
-
-            string teleloc = string.Format(CultureInfo.InvariantCulture,
-                "0x{0:X8} [{1:F6} {2:F6} {3:F6}] 1.000000 0.000000 0.000000 0.000000",
-                fullId, localX, localY, worldZ);
-            return (lbKey, outdoorCell, teleloc);
-        }
+            float worldX, float worldY, float worldZ)
+            => TownsExporter.BuildAceTeleLoc(worldX, worldY, worldZ);
 
         private async Task<bool> ShowFreshStartConfirmation() {
             bool confirmed = false;
@@ -1108,7 +1063,7 @@ namespace WorldBuilder.Editors.Landscape.ViewModels {
 
                     var changes = HeightmapImportService.BuildChanges(
                         grid, capturedStartX, capturedStartY, capturedCountX, capturedCountY,
-                        terrainSystem, averageColors);
+                        terrainSystem.GetLandblockTerrain, averageColors);
 
                     if (changes.Count == 0) return;
 

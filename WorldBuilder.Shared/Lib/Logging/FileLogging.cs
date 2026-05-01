@@ -7,22 +7,33 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace WorldBuilder.Lib {
+namespace WorldBuilder.Shared.Lib.Logging {
 
     [ProviderAlias("File")]
     public sealed class FileLoggerProvider : ILoggerProvider {
         private readonly ConcurrentDictionary<string, FileLogger> _loggers = new(StringComparer.OrdinalIgnoreCase);
         private readonly FileLogSink _sink;
 
-        public FileLoggerProvider(string logDirectory, long maxFileBytes = 5 * 1024 * 1024) {
+        public FileLoggerProvider(string logDirectory, long maxFileBytes = 5 * 1024 * 1024, string? appVersion = null) {
             LogDirectory = logDirectory;
             _sink = new FileLogSink(logDirectory, maxFileBytes);
-            WriteSessionHeader();
+            WriteSessionHeader(appVersion);
         }
 
         public string LogDirectory { get; }
+        public string LogFilePath => Path.Combine(LogDirectory, "worldbuilder.log");
         internal Func<LogLevel> GetMinLevel { get; set; } = () => LogLevel.Information;
         internal Func<bool> GetEnabled { get; set; } = () => true;
+
+        public Func<LogLevel> MinLevelProvider {
+            get => GetMinLevel;
+            set => GetMinLevel = value ?? throw new ArgumentNullException(nameof(value));
+        }
+
+        public Func<bool> EnabledProvider {
+            get => GetEnabled;
+            set => GetEnabled = value ?? throw new ArgumentNullException(nameof(value));
+        }
 
         public ILogger CreateLogger(string categoryName) =>
             _loggers.GetOrAdd(categoryName, name => new FileLogger(name, this, _sink));
@@ -32,8 +43,10 @@ namespace WorldBuilder.Lib {
             _sink.Dispose();
         }
 
-        private void WriteSessionHeader() {
-            var version = App.Version != "0.0.0" ? App.Version : Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "unknown";
+        private void WriteSessionHeader(string? appVersion) {
+            var version = !string.IsNullOrWhiteSpace(appVersion)
+                ? appVersion
+                : Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "unknown";
             var os = RuntimeInformation.OSDescription;
             var runtime = RuntimeInformation.FrameworkDescription;
 

@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using WorldBuilder.Terminal;
 using WorldBuilder.Shared.Lib.Extensions;
+using WorldBuilder.Shared.Lib.Logging;
 using WorldBuilder.Shared.Services;
 
 // ──────────────────────────────────────────────────────
@@ -30,6 +31,16 @@ if (cliArgs.ShowVersion) {
     return 0;
 }
 
+// Optional file logger shared across all modes.
+FileLoggerProvider? fileLoggerProvider = null;
+if (!string.IsNullOrWhiteSpace(cliArgs.LogFilePath)) {
+    var logDir = Path.GetDirectoryName(Path.GetFullPath(cliArgs.LogFilePath));
+    if (string.IsNullOrEmpty(logDir)) logDir = Directory.GetCurrentDirectory();
+    var version = typeof(CommandLineArgs).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+    fileLoggerProvider = new FileLoggerProvider(logDir, 5L * 1024 * 1024, version);
+    CommandEngine.ActiveLogPath = fileLoggerProvider.LogFilePath;
+}
+
 // ── Batch mode ──────────────────────────────────────
 if (cliArgs.IsBatchMode && !cliArgs.StdinMode) {
     // Batch export only needs logging + project manager, so avoid constructing
@@ -37,6 +48,7 @@ if (cliArgs.IsBatchMode && !cliArgs.StdinMode) {
     var batchServices = new ServiceCollection();
     batchServices.AddLogging(c => {
         c.AddConsole();
+        if (fileLoggerProvider != null) c.AddProvider(fileLoggerProvider);
         c.SetMinimumLevel(LogLevel.Information);
     });
     using var batchProvider = batchServices.BuildServiceProvider();
@@ -64,6 +76,7 @@ services.AddLogging(c => {
     if (!cliArgs.StdinMode) {
         c.AddConsole();
     }
+    if (fileLoggerProvider != null) c.AddProvider(fileLoggerProvider);
     c.SetMinimumLevel(cliArgs.StdinMode ? LogLevel.Warning : LogLevel.Information);
 });
 services.AddWorldBuilder();  // Register ITerrainService, IObjectPlacementService, etc.

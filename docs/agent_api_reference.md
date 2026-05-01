@@ -1806,3 +1806,111 @@ The process exits after sending this response.
 3. **After `remove-object`**, re-query `list-objects` — indices have shifted.
 4. **Retry on transient errors** (file locks, DAT read failures).
 5. **Validate before export** — run `validate-all` on all modified landblocks.
+
+---
+
+## Sync Wave 2026-04-30 — Headless Parity Commands
+
+These commands close the headless-parity debt opened by the 2026-04-26 → 2026-04-30 upstream sync wave. Each one matches a GUI editor surface; see `wireprompt.md` for the architectural mapping.
+
+### Texture & Heightmap
+
+#### `import-render-surface`
+
+**Request:** `{"command":"import-render-surface","imagePath":"…","renderSurfaceId":"0x06000123","ui":false,"name":"…"}`
+**Response:** `{success, command, renderSurfaceId, name, mode, deferred, error?}`
+
+Default mode (`ui=false`) registers the image in the project's `CustomTextureStore`; the next `export` writes it to the DAT via `RenderSurfaceImporter.WriteCustomTexturesToDats`. `ui=true` uses the deferred portal-doc path so the original DAT stays untouched until export. Both modes require the source image to match the target RenderSurface dimensions and `PFID_A8R8G8B8` format.
+
+#### `import-heightmap`
+
+**Request:** `{"command":"import-heightmap","imagePath":"…","startLbX":169,"startLbY":178,"lbCountX":4,"lbCountY":4,"apply":false}`
+**Response:** `{success, command, applied, imagePath, startLbX, startLbY, lbCountX, lbCountY, landblocksConsidered, landblocksChanged, verticesChanged, perLandblock[], modifiedLandblocks[]}`
+
+Default is dry-run (returns per-LB change counts only). `apply:true` writes via `TerrainDocument.ApplyBulkImport` and is allow-listed in `transact`. Height comes from luminance, terrain type from nearest texture-color match (uses `TerrainAverageColorBuilder` over the project's local DAT).
+
+### ACE DB Editing
+
+#### `creature-get`, `creature-save`, `creature-export-sql`
+
+- `{"command":"creature-get","objectId":31226}`
+- `{"command":"creature-save","objectId":31226,"fromJson":"…"}` — JSON shape is `AceCreatureOverrides`
+- `{"command":"creature-export-sql","objectId":31226,"out":"…"}`
+
+Routes through `AceDbConnector.{LoadCreatureOverridesAsync,SaveCreatureOverridesAsync,GenerateCreatureOverridesSql}`. The save path replaces all `weenie_properties_texture_map` and `weenie_properties_anim_part` rows in a single transaction.
+
+#### `spell-list`, `spell-get`, `spell-save`, `spell-copy`, `spell-delete`
+
+- `{"command":"spell-list","limit":500,"source":"dat"}` — source is `"dat"` or `"db"`
+- `{"command":"spell-get","id":1234}`
+- `{"command":"spell-save","id":1234,"fromJson":"…"}` — JSON shape is `SpellRecord`
+- `{"command":"spell-copy","fromId":1234,"newId":99999}` — `newId` auto-allocates `max+1` if omitted
+- `{"command":"spell-delete","id":1234}`
+
+`spell save/copy/delete` always update the project's `SpellDbDocument` overlay; if `ace-db` is connected they also push UPSERT/DELETE through MySQL. `spell get` prefers the project overlay then falls back to ace-db.
+
+#### `weenie-save`, `weenie-insert`, `weenie-delete`, `weenie-list-property-keys`
+
+- `{"command":"weenie-save","classId":31226,"fromJson":"…"}` — JSON shape is `AceWeenieSnapshot`
+- `{"command":"weenie-insert","className":"my_thing","fromJson":"…"}` — auto-class-id ≥ 100 000
+- `{"command":"weenie-delete","classId":99999}` — wipes weenie row + every `weenie_properties_*` row
+- `{"command":"weenie-list-property-keys","family":"int"}` — family ∈ `int|int64|bool|float|string|did|iid`
+
+Insert + save mirror `AceDbConnector.Weenie.cs:262/163`; delete uses the new transactional helper that strips every property table.
+
+### Outdoor + Dungeon Instance Placements
+
+- `{"command":"placement-list","lbX":169,"lbY":178,"kind":"outdoor"}` — kind ∈ `all|outdoor|dungeon`
+- `{"command":"placement-add-outdoor","lbX":169,"lbY":178,"wcid":7777,"cellNumber":1,"originX":96,"originY":96,"originZ":120,"anglesW":1,"anglesX":0,"anglesY":0,"anglesZ":0}`
+- `{"command":"placement-add-dungeon","lbX":169,"lbY":178,"wcid":7777,"cellNumber":256,…}`
+- `{"command":"placement-remove","kind":"outdoor","index":3}`
+- `{"command":"placement-export-sql","out":"…","apply":false}`
+
+`placement-export-sql` writes `landblock_instances.sql` (outdoor) and `dungeon_instances.sql` (dungeon) into the chosen directory. With `apply:true` and ace-db configured, both files are also executed against the database. `add-outdoor`, `add-dungeon`, and `remove` are allow-listed in `transact`; `export-sql` is excluded as a side-effecting op.
+
+### Layout Viewer / Overlay (no preview canvas)
+
+- `{"command":"layout-list","overlayOnly":false}` — annotates rows with `hasOverlay`
+- `{"command":"layout-get","layoutId":"0x16000010"}`
+- `{"command":"layout-save","layoutId":"0x16000010","fromJson":"…"}`
+- `{"command":"layout-delete-overlay","layoutId":"0x16000010"}`
+
+Reads the local DAT's `LayoutDesc` enumeration; prefers the project overlay (`LayoutDatDocument`) when present. Save accepts a JSON `LayoutDesc` and stores it in the overlay; the next `export` packs it back into the local DAT.
+
+### FreshStart + GenerateWorld + Towns CSV
+
+#### `fresh-start`
+
+**Request:** `{"command":"fresh-start","confirm":true}` — *destructive*; requires explicit `confirm:true`
+**Response:** `{success, command, landblocksReset, verticesReset}`
+
+Wipes all terrain to `WaterDeepSea`, sets `SkipDatStatics=true` while running, then calls `DocumentManager.ResetWorldDocumentsAsync` (clears active landblock docs, deletes inactive landblock + dungeon docs).
+
+#### `generate-world`
+
+**Request:** `{"command":"generate-world","params":{…WorldGeneratorParams…},"apply":false,"exportTownsCsv":"…"}`
+**Response:** `{success, command, seed, applied, landblocksAffected, verticesModified, towns, buildingsPlaced, decorationsPlaced, roadVertices, townsCsvPath, townsCsvRows, townSummaries[]}`
+
+Mirrors the GUI's GenerateWorld flow when `apply:true`: ResetWorldDocs → bulk-import terrain → place buildings → place decorations. Optionally writes the towns CSV through `TownsExporter.Write` so the byte-for-byte output matches the GUI's "Export Towns CSV" button.
+
+#### `export-towns-csv`
+
+**Request:** `{"command":"export-towns-csv","fromResult":"…worldgen-result.json","out":"…towns.csv"}`
+**Response:** `{success, command, outPath, rows}`
+
+Renders the towns CSV from a serialized `WorldGenerator` result (the JSON shape produced by `worldgen --output` / `generate-world`).
+
+### Logging
+
+#### `open-log-folder`
+
+**Request:** `{"command":"open-log-folder"}`
+**Response:** `{success, command, logPath, folder}` (or `{success:false, error}` if `--log-file` was not passed at startup)
+
+Returns the active log path so the agent can ingest the file directly. **No folder-opening side effects** — the JSON-mode terminal never spawns a UI process.
+
+### CLI flags added in this wave
+
+| Flag | Effect |
+|---|---|
+| `--log-file <path>` | Adds a rotated `FileLoggerProvider` that writes the same format as the GUI's `worldbuilder.log`. Sets `CommandEngine.ActiveLogPath` so `open-log-folder` can surface it. |

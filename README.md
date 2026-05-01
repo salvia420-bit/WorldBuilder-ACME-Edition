@@ -140,12 +140,12 @@ Full protocol — every command, parameter, response schema, coordinate conventi
 
 ### Command Catalog
 
-The agent JSON protocol exposes **32 documented commands**; the REPL surface is wider — **110+ commands** including bulk operations, image-driven terrain, ontology export, ACE-database I/O, and dungeon document editing. Sample categories:
+The agent JSON protocol exposes **58 documented commands**; the REPL surface is wider — **135+ commands** including bulk operations, image-driven terrain, ontology export, ACE-database I/O, and dungeon document editing. Sample categories:
 
 | Category | Commands |
 |---|---|
 | **Project** | `load`, `export`, `info` |
-| **Terrain Editing** | `smooth`, `raise`, `lower`, `set-height`, `paint`, `fill`, `road` |
+| **Terrain Editing** | `smooth`, `raise`, `lower`, `set-height`, `paint`, `fill`, `road`, `import-heightmap` |
 | **Terrain Queries** | `get-height`, `terrain-info`, `get-heightmap`, `get-terrain-data` |
 | **Object Management** | `list-objects`, `add-object`, `remove-object`, `move-object`, `rotate-object` |
 | **Spatial Queries** | `query-radius` |
@@ -155,6 +155,11 @@ The agent JSON protocol exposes **32 documented commands**; the REPL surface is 
 | **Ontology** | `scan-ontology`, `query-ontology`, `ontology-stats`, `enrich-unified` |
 | **Bulk** | `set-landblock-heightmap`, `set-landblock-terrain`, `bulk-place-objects`, `benchmark` |
 | **Image-Driven Terrain** | `calibrate-world-map`, `quick-world`, `analyze-map-image`, `extract-retail-heightmaps` |
+| **Texture Tools** | `import-render-surface` (default + `ui:true` deferred portal write) |
+| **ACE DB Editing** | `creature-{get,save,export-sql}`, `spell-{list,get,save,copy,delete}`, `weenie-{save,insert,delete,list-property-keys}`, `placement-{list,add-outdoor,add-dungeon,remove,export-sql}` |
+| **Layout Overlay** | `layout-{list,get,save,delete-overlay}` |
+| **World Generation** | `fresh-start`, `generate-world`, `export-towns-csv` |
+| **Logging** | `open-log-folder` (paired with `--log-file <path>` CLI flag) |
 | **Control** | `help`, `quit` / `exit` |
 
 Full grouped catalog in **[`docs/terminal_repl_commands.md`](docs/terminal_repl_commands.md)**.
@@ -186,7 +191,7 @@ Recommended agent loop: **mutate → `validate-all` → fix errors → repeat**.
 }
 ```
 
-- **Op alphabet** — reuses the JSON command surface; allow-listed to mutating commands only (terrain edits, object placement, `generate-dungeon`, `paste-stamp`). Read-only and side-effecting ops are rejected, as is nesting.
+- **Op alphabet** — reuses the JSON command surface; allow-listed to mutating commands only (terrain edits, object placement, `generate-dungeon`, `paste-stamp`, `import-heightmap`, `placement-add-outdoor`, `placement-add-dungeon`, `placement-remove`). Read-only and side-effecting ops are rejected, as is nesting. Destructive ops like `fresh-start` are deliberately excluded from the allow-list and require explicit per-call confirmation.
 - **Rollback** — restores via `BaseDocument.LoadFromProjection` on touched documents and deletes any documents the batch created. Failure modes are distinguished by `reason` (`op-threw` / `op-returned-failure` / `validation-failure` / `rejected`).
 - **Validation scope** — `auto` validates the touched landblocks plus cheap terrain checks on right/top neighbors (catches `TRN005` edge mismatches); `all`, `none`, or an explicit `{ "landblocks": [...] }` list are also supported.
 - **Large batches** — pass `"opsFile": "/path/to/ops.json"` instead of inline `ops` to dodge stdin line-buffer limits on multi-thousand-op transactions.
@@ -320,7 +325,7 @@ JSON commands (full schema in `docs/agent_api_reference.md`): `extract-cell-foot
 
 ### Integration Tests
 
-Both **Python** (55+ tests) and **PowerShell** (25 checks) test harnesses validate the full `--stdin` protocol surface — startup handshake, error handling, CRUD roundtrips, validation report shapes, and serialization contracts. Zero external dependencies. See **[`tests/README.md`](tests/README.md)**.
+Both **Python** (75+ tests) and **PowerShell** (25 checks) test harnesses validate the full `--stdin` protocol surface — startup handshake, error handling, CRUD roundtrips, validation report shapes, and serialization contracts. Zero external dependencies. See **[`tests/README.md`](tests/README.md)**.
 
 ---
 

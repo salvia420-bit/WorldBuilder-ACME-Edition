@@ -24,7 +24,14 @@ namespace WorldBuilder.Terminal;
 /// delegate to this class. The engine operates on parsed parameters and
 /// returns structured result records â€” it never touches Console or JSON directly.
 /// </summary>
-public class CommandEngine {
+public partial class CommandEngine {
+    /// <summary>
+    /// Active log file path when --log-file was passed at startup. Null otherwise.
+    /// Set by Program.cs after constructing FileLoggerProvider so commands like
+    /// `open-log-folder` can surface it to agents without folder-opening side effects.
+    /// </summary>
+    public static string? ActiveLogPath { get; set; }
+
     private readonly HeadlessProjectManager _projectManager;
     private readonly ITerrainService _terrainService;
     private readonly IObjectPlacementService _objectPlacementService;

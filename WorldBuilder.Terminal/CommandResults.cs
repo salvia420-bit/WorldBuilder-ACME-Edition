@@ -1221,3 +1221,149 @@ public record CompareToRetailResult(
     bool RetailCacheHit = false,
     double ElapsedSeconds = 0,
     string? Error = null);
+
+// ── O8: FreshStart + GenerateWorld + Towns CSV ─────────────
+public record FreshStartResult(bool Success, int LandblocksReset, int VerticesReset);
+
+public record GenerateWorldResult(
+    bool Success,
+    int Seed,
+    bool Applied,
+    int LandblocksAffected,
+    int VerticesModified,
+    int Towns,
+    int BuildingsPlaced,
+    int DecorationsPlaced,
+    int RoadVertices,
+    string? TownsCsvPath,
+    int TownsCsvRows,
+    List<TownSummary> TownSummaries);
+
+public record ExportTownsCsvResult(bool Success, string OutPath, int Rows);
+
+// ── O6: Outdoor + Dungeon Instance Placements ──────────────
+public record PlacementListRow(
+    string Kind,
+    int Index,
+    string Landblock,
+    uint Wcid,
+    ushort CellNumber,
+    float OriginX, float OriginY, float OriginZ,
+    float AnglesW, float AnglesX, float AnglesY, float AnglesZ);
+
+public record PlacementListResult(int Count, string Filter, List<PlacementListRow> Placements);
+
+public record PlacementAddResult(bool Success, string Kind, int Index, string Landblock);
+
+public record PlacementRemoveResult(bool Removed, string Kind, int Index, string? Landblock);
+
+public record PlacementExportSqlResult(
+    bool Success,
+    string OutdoorPath, int OutdoorCount,
+    string DungeonPath, int DungeonCount,
+    int? RowsAppliedToDb);
+
+// ── O4: ACE DB Weenie CRUD ─────────────────────────────────
+public record WeenieSaveScalarsResult(
+    bool Success,
+    uint ClassId,
+    int IntRows, int Int64Rows, int BoolRows, int FloatRows,
+    int StringRows, int DataIdRows, int InstanceIdRows);
+
+public record WeenieInsertResult(
+    bool Success,
+    uint NewClassId,
+    string ClassName,
+    int TotalScalarRows);
+
+public record WeenieDeleteResult(bool Success, uint ClassId);
+
+public record WeeniePropertyKey(ushort Type, string Name);
+
+public record WeeniePropertyKeysResult(string Family, int Count, List<WeeniePropertyKey> Keys);
+
+// ── O3: Spell DB CRUD ──────────────────────────────────────
+public record SpellListRow(string SpellId, string? Name, bool HasOverlay);
+
+public record SpellListResult(int Count, string Source, List<SpellListRow> Spells);
+
+public record SpellGetResult(
+    bool Success,
+    string SpellId,
+    string Source,
+    WorldBuilder.Shared.Lib.AceDb.SpellRecord Spell);
+
+public record SpellSaveResult(
+    bool Success,
+    string SpellId,
+    bool SavedToOverlay,
+    bool SavedToDb);
+
+public record SpellCopyResult(
+    bool Success,
+    string FromSpellId,
+    string NewSpellId,
+    bool SavedToOverlay,
+    bool SavedToDb);
+
+public record SpellDeleteResult(
+    bool Success,
+    string SpellId,
+    bool RemovedFromOverlay,
+    bool DeletedFromDb);
+
+// ── O7: Layout viewer / overlay ────────────────────────────
+public record LayoutListRow(string LayoutId, bool HasOverlay);
+
+public record LayoutListResult(int Count, List<LayoutListRow> Layouts);
+
+public record LayoutGetResult(
+    bool Success,
+    string LayoutId,
+    bool HasOverlay,
+    DatReaderWriter.DBObjs.LayoutDesc Layout);
+
+public record LayoutSaveResult(bool Success, string LayoutId);
+
+public record LayoutDeleteOverlayResult(bool Removed, string LayoutId);
+
+// ── O5: ACE DB Creature overrides ──────────────────────────
+public record CreatureGetResult(
+    bool Success,
+    uint ObjectId,
+    WorldBuilder.Shared.Lib.AceDb.AceCreatureOverrides Overrides);
+
+public record CreatureSaveResult(
+    bool Success,
+    uint ObjectId,
+    int TextureMapRows,
+    int AnimPartRows);
+
+public record CreatureExportSqlResult(
+    bool Success,
+    uint ObjectId,
+    string Sql,
+    string? OutPath);
+
+// ── O1: RenderSurface texture import ───────────────────────
+public record ImportRenderSurfaceResult(
+    bool Success,
+    uint RenderSurfaceId,
+    string Name,
+    bool Deferred,
+    string Mode,
+    string? Error);
+
+// ── O2: Heightmap import ───────────────────────────────────
+public record ImportHeightmapPerLb(string Landblock, int Vertices);
+
+public record ImportHeightmapResult(
+    bool Applied,
+    string ImagePath,
+    int StartLbX, int StartLbY,
+    int LbCountX, int LbCountY,
+    int LandblocksConsidered,
+    int LandblocksChanged,
+    int VerticesChanged,
+    List<ImportHeightmapPerLb> PerLandblock,
+    HashSet<ushort> ModifiedLandblocks);

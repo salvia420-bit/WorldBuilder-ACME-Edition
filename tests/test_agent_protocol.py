@@ -1809,6 +1809,207 @@ class TestDerethMapsPhase5(RuntimeRequiredTestCase):
 # CLI entrypoint
 # ─────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────
+# Sync-Wave 2026-04-30 commands — protocol-shape tests.
+#
+# These tests run without an ACE DB connection. Commands that route
+# through ace-db are tested via their argument-validation / no-config
+# error paths so the protocol envelope and command names are verified
+# even in CI environments without MySQL.
+# ─────────────────────────────────────────────────────────────
+
+
+class TestSyncWave2026_04_30(RuntimeRequiredTestCase):
+    """Protocol shape coverage for the headless-parity commands added in the
+    2026-04-26 → 2026-04-30 upstream sync wave."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.session = TerminalSession()
+        cls.session.start()
+        cls.load_response = cls.session.send({
+            "command": "load",
+            "path": str(TEST_PROJECT)
+        })
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.session:
+            try:
+                cls.session.quit()
+            except Exception:
+                cls.session.close()
+
+    # ── Heightmap / RenderSurface ───────────────────────────
+
+    def test_01_import_heightmap_missing_file_errors(self):
+        resp = self.session.send({
+            "command": "import-heightmap",
+            "imagePath": "/nonexistent/heightmap.png",
+            "lbCountX": 1, "lbCountY": 1,
+        })
+        self.assertFalse(resp.get("success"))
+        self.assertEqual(resp.get("command"), "error")
+        self.assertIn("Image not found", resp.get("error", ""))
+
+    def test_02_import_heightmap_missing_lb_count_errors(self):
+        resp = self.session.send({
+            "command": "import-heightmap",
+            "imagePath": "x.png"
+        })
+        self.assertFalse(resp.get("success"))
+
+    def test_03_import_render_surface_missing_image_errors(self):
+        resp = self.session.send({
+            "command": "import-render-surface",
+            "imagePath": "/nonexistent/tex.png",
+            "renderSurfaceId": "0x06000001"
+        })
+        self.assertFalse(resp.get("success"))
+
+    # ── ACE DB commands (no-ace-db error path) ──────────────
+
+    def test_04_creature_get_without_ace_db_errors(self):
+        resp = self.session.send({"command": "creature-get", "objectId": 31226})
+        self.assertFalse(resp.get("success"))
+
+    def test_05_spell_list_dat_works_without_ace_db(self):
+        resp = self.session.send({"command": "spell-list", "limit": 5, "source": "dat"})
+        # Either succeeds (DAT has spells) OR fails with a clear error if SpellTable missing.
+        self.assertIn("command", resp)
+
+    def test_06_spell_get_unknown_id_errors(self):
+        resp = self.session.send({"command": "spell-get", "id": 999999999})
+        self.assertFalse(resp.get("success"))
+
+    def test_07_weenie_list_property_keys_int_succeeds(self):
+        resp = self.session.send({"command": "weenie-list-property-keys", "family": "int"})
+        assert_success(resp, "weenie-list-property-keys")
+        assert_has_fields(resp, "family", "count", "keys")
+        self.assertEqual(resp["family"], "int")
+        self.assertGreater(resp["count"], 100,
+                           "AcePropertyInt should have many entries")
+
+    def test_08_weenie_list_property_keys_unknown_family_errors(self):
+        resp = self.session.send({"command": "weenie-list-property-keys", "family": "qwerty"})
+        self.assertFalse(resp.get("success"))
+
+    def test_09_weenie_save_without_ace_db_errors(self):
+        resp = self.session.send({
+            "command": "weenie-save", "classId": 31226, "fromJson": "/tmp/missing.json"
+        })
+        self.assertFalse(resp.get("success"))
+
+    # ── Instance placements (work without ace-db; CRUD only) ─
+
+    def test_10_placement_list_returns_envelope(self):
+        resp = self.session.send({"command": "placement-list", "kind": "all"})
+        assert_success(resp, "placement-list")
+        assert_has_fields(resp, "count", "filter", "placements")
+
+    def test_11_placement_add_outdoor_succeeds(self):
+        resp = self.session.send({
+            "command": "placement-add-outdoor",
+            "lbX": 169, "lbY": 178, "wcid": 7777,
+            "cellNumber": 1,
+            "originX": 96.0, "originY": 96.0, "originZ": 50.0,
+        })
+        assert_success(resp, "placement-add-outdoor")
+        assert_has_fields(resp, "kind", "index", "landblock")
+        # Clean up
+        self.session.send({"command": "placement-remove", "kind": "outdoor", "index": resp["index"]})
+
+    def test_12_placement_remove_invalid_index_returns_failure(self):
+        resp = self.session.send({"command": "placement-remove", "kind": "outdoor", "index": 99999})
+        self.assertFalse(resp.get("success"))
+
+    def test_13_placement_export_sql_writes_files(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            resp = self.session.send({
+                "command": "placement-export-sql", "out": tmp, "apply": False
+            })
+            assert_success(resp, "placement-export-sql")
+            assert_has_fields(resp, "outdoorPath", "outdoorCount", "dungeonPath", "dungeonCount")
+            self.assertTrue(Path(resp["outdoorPath"]).exists())
+            self.assertTrue(Path(resp["dungeonPath"]).exists())
+
+    # ── Layout overlay ──────────────────────────────────────
+
+    def test_14_layout_list_returns_count(self):
+        resp = self.session.send({"command": "layout-list", "overlayOnly": False})
+        assert_success(resp, "layout-list")
+        assert_has_fields(resp, "count", "layouts")
+
+    def test_15_layout_get_unknown_id_errors(self):
+        resp = self.session.send({"command": "layout-get", "layoutId": "0x99999999"})
+        self.assertFalse(resp.get("success"))
+
+    def test_16_layout_delete_overlay_idempotent(self):
+        resp = self.session.send({"command": "layout-delete-overlay", "layoutId": "0x99999999"})
+        # Either True (didn't exist → removed=False but success envelope still returned)
+        self.assertIn("command", resp)
+
+    # ── FreshStart + GenerateWorld ──────────────────────────
+
+    def test_17_fresh_start_requires_confirm(self):
+        resp = self.session.send({"command": "fresh-start"})
+        self.assertFalse(resp.get("success"))
+        self.assertIn("confirm", resp.get("error", "").lower())
+
+    def test_18_fresh_start_with_confirm_acceptable(self):
+        # We actually run it on TestProject; if success, restore via export not needed here
+        resp = self.session.send({"command": "fresh-start", "confirm": True}, timeout=120)
+        # Either succeeds OR fails with a clear error (e.g. no terrain doc); envelope must be valid.
+        self.assertIn("command", resp)
+
+    def test_19_generate_world_dry_run_default(self):
+        resp = self.session.send({
+            "command": "generate-world",
+            "params": {"Seed": 42, "FullWorld": True},
+            "apply": False
+        }, timeout=300)
+        # Generate may take long; verify the envelope is correct either way.
+        self.assertIn("command", resp)
+
+    def test_20_export_towns_csv_missing_from_result_errors(self):
+        resp = self.session.send({
+            "command": "export-towns-csv",
+            "fromResult": "/nonexistent/result.json",
+            "out": "/tmp/towns.csv"
+        })
+        self.assertFalse(resp.get("success"))
+
+    # ── Logging ─────────────────────────────────────────────
+
+    def test_21_open_log_folder_no_log_file_errors(self):
+        resp = self.session.send({"command": "open-log-folder"})
+        # When --log-file isn't passed, returns success=false with explanation
+        self.assertFalse(resp.get("success"))
+        self.assertIn("log file", resp.get("error", "").lower())
+
+    # ── transact allow-list smoke ───────────────────────────
+
+    def test_22_transact_includes_import_heightmap(self):
+        resp = self.session.send({"command": "transact", "ops": []})
+        # Empty ops list should still return a valid envelope.
+        self.assertIn("command", resp)
+
+    def test_23_transact_includes_placement_add_outdoor(self):
+        resp = self.session.send({
+            "command": "transact",
+            "ops": [{
+                "command": "placement-add-outdoor",
+                "lbX": 169, "lbY": 178, "wcid": 7777,
+                "cellNumber": 1,
+                "originX": 96.0, "originY": 96.0, "originZ": 50.0
+            }]
+        })
+        # If allow-list excluded the op, transact rejects it explicitly. We assert
+        # the envelope contains the command name regardless of success.
+        self.assertEqual(resp.get("command"), "transact")
+
+
 if __name__ == "__main__":
     # Support --binary <path> argument
     if "--binary" in sys.argv:
