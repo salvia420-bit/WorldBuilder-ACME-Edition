@@ -104,9 +104,14 @@ internal static class ObjectSpriteGenerator {
         var triangles = TriangulateModel(modelId, dats);
         if (triangles.Count == 0) return (null, NullReason.NoTriangles);
 
-        // World XY bounds across all triangles.
+        // World XYZ bounds across all triangles. We need Z to detect models
+        // that are mostly vertical (doors, signs, fences) where the
+        // top-down projection of every face produces a smear of the front
+        // face filling the sprite. Compute Z extent alongside XY for the
+        // dominance check below.
         float minX = float.MaxValue, maxX = float.MinValue;
         float minY = float.MaxValue, maxY = float.MinValue;
+        float minZ = float.MaxValue, maxZ = float.MinValue;
         foreach (var tri in triangles) {
             for (int v = 0; v < 3; v++) {
                 var p = tri.Pos[v];
@@ -114,22 +119,49 @@ internal static class ObjectSpriteGenerator {
                 if (p.X > maxX) maxX = p.X;
                 if (p.Y < minY) minY = p.Y;
                 if (p.Y > maxY) maxY = p.Y;
+                if (p.Z < minZ) minZ = p.Z;
+                if (p.Z > maxZ) maxZ = p.Z;
             }
         }
         float worldW = maxX - minX, worldH = maxY - minY;
+        float worldZ = maxZ - minZ;
         if (worldW <= 1e-3f || worldH <= 1e-3f) return (null, NullReason.Degenerate);
 
         float pxPerUnit = spritePx / Math.Max(worldW, worldH);
         int W = Math.Max(1, (int)MathF.Ceiling(worldW * pxPerUnit));
         int H = Math.Max(1, (int)MathF.Ceiling(worldH * pxPerUnit));
 
-        // Why: don't back-face cull. A top-down map of a fence, sign, or awning
-        // depends on the very faces whose normals lie in the XY plane (or point
-        // down) — culling them strips thin/vertical models to zero visible
-        // pixels and forces the "Unknown" glyph fallback. Painter's algorithm
-        // via Z-sort still gives correct occlusion: highest-Z faces draw last
-        // and visually win.
-        var visible = new List<Tri>(triangles);
+        // Pick the visible triangle set. Three regimes:
+        //
+        // 1. **Z-dominant** (door / signpost / banner): Z extent is much
+        //    larger than the largest XY extent. Drawing every face with
+        //    no back-face culling renders the front face on top of every
+        //    pixel and the sprite becomes "wood grain filling the frame"
+        //    — the "feet in the ground looking at a door" effect users
+        //    reported. Filter to top-facing triangles (Normal.Z > 0.5)
+        //    so we only see the actual top-down silhouette of the model.
+        //    If that leaves nothing (every face is vertical, e.g. a
+        //    paper-thin sign), fall through to regime 3 so the sprite
+        //    still has visible pixels.
+        //
+        // 2. **Normal** (building / barrel / stone / tree): Z extent is
+        //    not dominant. Render all faces, painter-sort by centroid Z
+        //    so the highest faces (roofs, foliage) draw last. This is
+        //    the existing path that produced the good building sprites.
+        //
+        // 3. **Sign / awning fallback**: Z-dominant model with no
+        //    top-facing triangles. Drawing all faces is the only way to
+        //    get any visible pixels at all.
+        float xyMax = MathF.Max(worldW, worldH);
+        bool zDominant = worldZ > 1.5f * xyMax;
+        List<Tri> visible;
+        if (zDominant) {
+            var tops = new List<Tri>();
+            foreach (var t in triangles) if (t.Normal.Z > 0.5f) tops.Add(t);
+            visible = tops.Count > 0 ? tops : new List<Tri>(triangles);
+        } else {
+            visible = new List<Tri>(triangles);
+        }
         visible.Sort((a, b) => a.CentroidZ.CompareTo(b.CentroidZ));
 
         // Per-surface texture cache, scoped to this model. Failure → null →
