@@ -471,8 +471,26 @@ public static class RenderPreviewRenderer {
         // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
         if (drawTerrain) {
+        // When AC terrain textures are loaded, paint the road stroke with
+        // the road-dirt tile (TerrainTextureType.RoadType = 32) as a
+        // repeating shader instead of the flat skia-yellow line. Falls
+        // back to the flat colour when the texture isn't available.
+        SKShader? roadShader = null;
+        SKBitmap? roadShaderBmp = null;
+        if (input.TerrainTextures != null
+            && input.TerrainTextures.TryGetTile(32, out var roadTile) && roadTile != null) {
+            var rsInfo = new SKImageInfo(roadTile.Width, roadTile.Height,
+                SKColorType.Rgba8888, SKAlphaType.Unpremul);
+            roadShaderBmp = new SKBitmap(rsInfo);
+            System.Runtime.InteropServices.Marshal.Copy(
+                roadTile.Rgba, 0, roadShaderBmp.GetPixels(), roadTile.Rgba.Length);
+            roadShader = SKShader.CreateBitmap(roadShaderBmp,
+                SKShaderTileMode.Repeat, SKShaderTileMode.Repeat);
+        }
         using var roadPaint = new SKPaint {
-            Color = new SKColor(RoadColor.R, RoadColor.G, RoadColor.B, 0xE6),
+            Color = roadShader != null ? SKColors.White
+                : new SKColor(RoadColor.R, RoadColor.G, RoadColor.B, 0xE6),
+            Shader = roadShader,
             StrokeWidth = Math.Max(1.5f, input.LbPx / 90f),
             IsAntialias = true,
             Style = SKPaintStyle.Stroke,
@@ -507,6 +525,8 @@ public static class RenderPreviewRenderer {
                 }
             }
         }
+        roadShader?.Dispose();
+        roadShaderBmp?.Dispose();
 
         }   // end if (drawTerrain) — phase 2 roads
 
