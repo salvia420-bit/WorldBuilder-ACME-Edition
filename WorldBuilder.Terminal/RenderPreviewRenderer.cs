@@ -650,10 +650,21 @@ public static class RenderPreviewRenderer {
                     if (sizePx < 1.5f) sizePx = 1.5f;
                     if (sizePx > 18f)  sizePx = 18f;
                     SpriteInfo? sprite = null;
+                    uint resolvedSetup = 0;
                     if (sp.Wcid > 0 && input.WcidToSetup != null
                             && input.UseSprites && input.Sprites != null) {
-                        uint setupId = input.WcidToSetup(sp.Wcid);
-                        if (setupId != 0) sprite = input.Sprites(setupId);
+                        resolvedSetup = input.WcidToSetup(sp.Wcid);
+                        if (resolvedSetup != 0) sprite = input.Sprites(resolvedSetup);
+                    }
+                    if (sprite == null) {
+                        // Spawn fell to glyph: log under the resolved
+                        // setupId when the wcid → setup map worked, or
+                        // under the raw wcid (cast) when it didn't, so
+                        // both classes of miss are inspectable.
+                        uint diagId = resolvedSetup != 0 ? resolvedSetup : (uint)sp.Wcid;
+                        GlyphFallbackDiag.Note(diagId,
+                            input.Ontology?.Invoke(diagId),
+                            GlyphFallbackDiag.Source.Spawn);
                     }
                     glyphs.Add((pxX, pxY, sizePx, shape, fill, 0u, 0u, sprite, Quaternion.Identity));
                 }
@@ -702,6 +713,16 @@ public static class RenderPreviewRenderer {
                     }
                     continue;
                 }
+            }
+            // Note glyph fallbacks for ontology-grouped diagnostic. We
+            // separate "placed" (objId != 0) from "spawn" (objId == 0)
+            // so the report reveals which class needs attention. The
+            // ontology entry, when available, drives bucket selection
+            // — entry==null means we have no ontology coverage for that
+            // setupId, which is itself diagnostic.
+            if (g.sprite == null && g.objId != 0) {
+                GlyphFallbackDiag.Note(g.objId, input.Ontology?.Invoke(g.objId),
+                    GlyphFallbackDiag.Source.Placed);
             }
             fillPaint.Color = g.fill;
             DrawGlyph(canvas, g.pxX, g.pxY, g.sizePx, g.shape, fillPaint, outlinePaint);

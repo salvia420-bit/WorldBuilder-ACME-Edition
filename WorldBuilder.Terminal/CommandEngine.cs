@@ -11386,6 +11386,11 @@ public class CommandEngine {
         if (maxZoom < 8 || maxZoom > 12) throw new ArgumentException("maxZoom must be in [8, 12]");
         if (minZoom < 1 || minZoom > maxZoom) throw new ArgumentException("minZoom must be in [1, maxZoom]");
 
+        // Reset the glyph-fallback counter at the start of each emit so
+        // the report at the bottom is per-emit (not cumulative across
+        // multiple commands in one stdin session).
+        GlyphFallbackDiag.Reset();
+
         var p = _projectManager.CurrentProject!;
         // Three Leaflet tile layers, separated so the frontend's floor-mode
         // can hide objects + sprites while keeping terrain visible:
@@ -11509,6 +11514,23 @@ public class CommandEngine {
             // appearance into the low-zoom view; sub-pixel sprites already
             // gracefully fall back to glyphs inside RenderPreviewRenderer.
             downsampled += TilePyramidEmitter.Downsample(objectDir, maxZoom, minZoom);
+        }
+
+        // Glyph-fallback diagnostic: write the per-bucket report to
+        // <outDir>/glyph_fallback.txt so the static-site dist carries
+        // it next to the tile pyramid, and echo a summary line to
+        // stderr for log-tailing during long emits. The file is text
+        // (not JSON) because the report is for humans / agents to read,
+        // not for the frontend to parse.
+        try {
+            var report = GlyphFallbackDiag.Report();
+            File.WriteAllText(Path.Combine(outDir, "glyph_fallback.txt"), report);
+            // Print only the first ~12 lines to stderr (header + a few
+            // top buckets) so the stdin-mode JSON response stays clean.
+            var lines = report.Split('\n').Take(12).ToArray();
+            foreach (var ln in lines) Console.Error.WriteLine(ln);
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"[GlyphFallback] write failed: {ex.Message}");
         }
 
         // exteriorTiles in TilePyramidResult preserves wire compat — return
