@@ -12,14 +12,6 @@ namespace WorldBuilder.Terminal;
 /// Used by <see cref="DungeonRenderer"/> and the sprite-mode branch of
 /// <see cref="RenderPreviewRenderer"/> so both share one bitmap copy
 /// rather than re-decoding the atlas per render call.
-///
-/// Lookups optionally filter by setupId class. AC building meshes live in
-/// class <c>0x01xxxxxx</c>; weenie/item meshes (doors, signs, props) live
-/// in <c>0x02xxxxxx</c>. The renderer's per-pixel projection works well
-/// for top-down building footprints but produces front-face/awkward views
-/// for thin vertical objects (a door's mesh is mostly a vertical
-/// rectangle whose XY footprint shows the front face), so filtering to
-/// buildings keeps tiles clean. See <see cref="OnlyBuildings"/>.
 /// </summary>
 internal sealed class SpriteAtlasLoader : IDisposable {
 
@@ -30,25 +22,13 @@ internal sealed class SpriteAtlasLoader : IDisposable {
 
     public int Count => _byModel.Count;
 
-    /// <summary>
-    /// When true, lookups for non-<c>0x01xxxxxx</c> setupIds (i.e. items
-    /// and weenies) return false even if the sprite is in the atlas. The
-    /// caller falls back to glyph rendering. Stops the "door front face
-    /// fills the sprite" effect that comes from rendering thin vertical
-    /// meshes via top-down projection.
-    /// </summary>
-    public bool OnlyBuildings { get; set; } = true;
-
     private SpriteAtlasLoader(SKBitmap atlas, Dictionary<uint, SpriteRect> byModel) {
         Atlas = atlas;
         _byModel = byModel;
     }
 
-    public bool TryLookup(uint modelId, out SpriteRect rect) {
-        rect = null!;
-        if (OnlyBuildings && (modelId >> 24) != 0x01) return false;
-        return _byModel.TryGetValue(modelId, out rect!);
-    }
+    public bool TryLookup(uint modelId, out SpriteRect rect) =>
+        _byModel.TryGetValue(modelId, out rect!);
 
     public static SpriteAtlasLoader? TryLoad(string spritesDir) {
         var atlasPath = Path.Combine(spritesDir, "atlas.png");

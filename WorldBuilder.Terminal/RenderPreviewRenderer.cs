@@ -25,13 +25,14 @@ public static class RenderPreviewRenderer {
 
     /// <summary>
     /// Server-spawn glyph: a position in absolute world coords plus a
-    /// category string the renderer maps to the same glyph-shape palette
-    /// it uses for static objects. Comes from the LSD spawn gazetteer
-    /// (NPCs, creatures, quest items) so populated landblocks render the
-    /// dynamic placements alongside the static DAT objects rather than
-    /// looking like empty terrain on the map.
+    /// category string and the source weenie class id. <c>Wcid</c> is
+    /// looked up via <see cref="Input.WcidToSetup"/> at render time and,
+    /// when a sprite is present in the atlas for the resolved setupId,
+    /// the renderer draws the sprite instead of the category glyph.
+    /// Wcid==0 means "no resolution available, use glyph" — matches the
+    /// pre-resolve behaviour for backward compatibility.
     /// </summary>
-    public readonly record struct SpawnGlyph(float X, float Y, string Category, string Scale);
+    public readonly record struct SpawnGlyph(float X, float Y, string Category, string Scale, int Wcid);
 
     /// <summary>
     /// Which compositional layers the renderer should produce. Floor-mode
@@ -79,6 +80,15 @@ public static class RenderPreviewRenderer {
         // selection through the same palette as static objects. Spawns
         // are drawn alongside StaticObjects in Phase 3.
         public Dictionary<(int col, int row), List<SpawnGlyph>>? Spawns;
+
+        /// <summary>
+        /// Optional wcid → setupId resolver. When non-null, the spawn-glyph
+        /// path tries to look up a sprite via <c>Sprites(WcidToSetup(wcid))</c>
+        /// and only falls back to the category glyph if no sprite exists or
+        /// the wcid doesn't resolve. Built once per render at the
+        /// CommandEngine level from the ontology's WeenieClassId index.
+        /// </summary>
+        public Func<int, uint>? WcidToSetup;
 
         // Optional AC terrain texture loader. When non-null the per-pixel
         // raster pass samples real DAT tiles for each terrain type instead
@@ -610,10 +620,14 @@ public static class RenderPreviewRenderer {
             }
         }
 
-        // Spawn glyphs (NPCs/creatures/quest items from the spawn gazetteer).
-        // No sprite path — these aren't placed DAT objects, so we draw them
-        // as category glyphs so the user sees populated LBs as actually
-        // populated rather than empty.
+        // Spawn glyphs (NPCs/creatures/quest items/scenery from the spawn
+        // gazetteer). When the wcid resolves to a setupId that's in the
+        // sprite atlas, the dispatcher below picks up the SpriteInfo and
+        // draws the textured sprite — otherwise it falls back to the
+        // category glyph. Per-vertex screenshots from the user showed
+        // many spawned objects (apple trees, totems, stones) being drawn
+        // as squares/circles where they should be top-down sprites; this
+        // hooks them into the same sprite path placed objects use.
         if (input.Spawns != null) {
             foreach (var kv in input.Spawns) {
                 foreach (var sp in kv.Value) {
@@ -635,7 +649,13 @@ public static class RenderPreviewRenderer {
                     } * scaleFactor;
                     if (sizePx < 1.5f) sizePx = 1.5f;
                     if (sizePx > 18f)  sizePx = 18f;
-                    glyphs.Add((pxX, pxY, sizePx, shape, fill, 0u, 0u, null, Quaternion.Identity));
+                    SpriteInfo? sprite = null;
+                    if (sp.Wcid > 0 && input.WcidToSetup != null
+                            && input.UseSprites && input.Sprites != null) {
+                        uint setupId = input.WcidToSetup(sp.Wcid);
+                        if (setupId != 0) sprite = input.Sprites(setupId);
+                    }
+                    glyphs.Add((pxX, pxY, sizePx, shape, fill, 0u, 0u, sprite, Quaternion.Identity));
                 }
             }
         }

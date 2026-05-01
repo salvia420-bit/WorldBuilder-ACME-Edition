@@ -714,7 +714,8 @@ public class CommandEngine {
                         glyphs.Add(new RenderPreviewRenderer.SpawnGlyph(
                             X: sp.X, Y: sp.Y,
                             Category: ResolveSpawnCategory(sp),
-                            Scale: ResolveSpawnScale(sp)));
+                            Scale: ResolveSpawnScale(sp),
+                            Wcid: sp.Wcid));
                     }
                     spawnsByCell[(col, row)] = glyphs;
                 } else {
@@ -743,6 +744,7 @@ public class CommandEngine {
             Sprites = atlas == null ? null : id => atlas.TryLookup(id, out var rect)
                 ? new RenderPreviewRenderer.SpriteInfo(atlas.Atlas, rect.X, rect.Y, rect.W, rect.H, rect.WorldWidth, rect.WorldHeight)
                 : null,
+            WcidToSetup = GetWcidToSetupResolver(),
             Layer = layer,
             Spawns = spawnsByCell,
             // Real AC terrain tiles (Region 0x13000000) replace the procedural
@@ -10979,6 +10981,38 @@ public class CommandEngine {
         return _spriteAtlas;
     }
 
+    // wcid → setupId index. Built lazily on first render call from the
+    // ontology's WeenieClassId field; caches across renders for the
+    // current project. Cleared in Project.Clear() side-effects (see
+    // _ontologyService.Clear() callers).
+    //
+    // Why we need it: spawn glyphs come from spawn_gazetteer.json
+    // entries that store a wcid (weenie class id, e.g. 72265 for
+    // "Surface" totem); the sprite atlas is keyed by setupId
+    // (0x01xxxxxx GfxObj or 0x02xxxxxx Setup). The OntologyService
+    // already enriches each entry with its WeenieClassId, so we can
+    // build a reverse index in one pass.
+    private Dictionary<int, uint>? _wcidToSetup;
+
+    private Func<int, uint>? GetWcidToSetupResolver() {
+        if (_wcidToSetup == null) {
+            var map = new Dictionary<int, uint>();
+            foreach (var e in _ontologyService.GetAllEntries()) {
+                if (e.WeenieClassId is int wcid && wcid > 0 && e.ObjectId != 0) {
+                    // First entry per wcid wins. Multiple entries per wcid
+                    // are possible (cultural variants); the first one we
+                    // see is good enough — render quality differences
+                    // between variants are below the visual threshold of
+                    // the static-site tile renderer.
+                    map.TryAdd(wcid, e.ObjectId);
+                }
+            }
+            _wcidToSetup = map;
+        }
+        var idx = _wcidToSetup;
+        return idx.Count == 0 ? null : (int wcid) => idx.TryGetValue(wcid, out var id) ? id : 0u;
+    }
+
     // Cached AC terrain texture tile set, loaded once per project from
     // Region (0x13000000) → TerrainInfo → LandSurfaces → TexMerge.
     private TerrainTextureLoader? _terrainTextures;
@@ -11176,22 +11210,9 @@ public class CommandEngine {
                 probe?.Width ?? 0, probe?.Height ?? 0, spritesDir, atlasPath, manifestPath);
         }
 
-        var allModelIds = CollectPlacedModelIds(p, lbFilter);
-        // Filter to building-class setupIds (0x01xxxxxx). Item/weenie meshes
-        // (0x02xxxxxx) — doors, signs, props — render as front-face slabs
-        // when projected top-down because their geometry is mostly thin
-        // vertical planes; they look better as glyphs. Matches the
-        // SpriteAtlasLoader.OnlyBuildings runtime filter so the saved
-        // atlas only contains things the renderer will actually composite.
-        var modelIds = new HashSet<uint>();
-        int filtered = 0;
-        foreach (var id in allModelIds) {
-            if ((id >> 24) == 0x01) modelIds.Add(id);
-            else filtered++;
-        }
-        Console.Error.WriteLine($"[Sprites] Collected {modelIds.Count} building setupIds " +
-            $"(filtered {filtered} non-building 0x02xx items/weenies)" +
-            (modelIds.Count > 0 ? $" sample=0x{modelIds.First():X8}" : ""));
+        var modelIds = CollectPlacedModelIds(p, lbFilter);
+        Console.Error.WriteLine($"[Sprites] Collected {modelIds.Count} model ids" +
+            (modelIds.Count > 0 ? $" (sample: 0x{modelIds.First():X8})" : ""));
         var (rendered, failed, atlasW, atlasH) = ObjectSpriteGenerator.Run(
             modelIds, spritePx, spritesDir, atlasPath, manifestPath, dats,
             id => _ontologyService.GetEntry(id), throttleMs);
@@ -11274,6 +11295,31 @@ public class CommandEngine {
         if (skippedDungeons > 0) {
             Console.Error.WriteLine($"[Sprites] Skipped {skippedDungeons} unloadable dungeons total");
         }
+
+        // Also collect setupIds reachable from spawn_gazetteer entries via
+        // the wcid → setupId resolver. Without this, spawn-only objects
+        // (NPCs, totems, mobs, props placed by server-side spawners) have
+        // no atlas entry and the renderer's spawn-glyph dispatch has
+        // nothing to look up — they fall to category-color glyphs even
+        // when the wcid resolver works at render time. Adding them here
+        // means a single sprite-gen pass produces top-down renders for
+        // every wcid the world references.
+        var resolver = GetWcidToSetupResolver();
+        if (resolver != null && _spawnGazetteer.Count > 0) {
+            int beforeSpawn = result.Count;
+            var lbSet = lbFilter is { Count: > 0 } ? new HashSet<ushort>(lbFilter) : null;
+            foreach (var kv in _spawnGazetteer) {
+                if (lbSet != null && !lbSet.Contains(kv.Key)) continue;
+                foreach (var sp in kv.Value) {
+                    if (sp.Wcid <= 0) continue;
+                    var setupId = resolver(sp.Wcid);
+                    if (setupId != 0) result.Add(setupId);
+                }
+            }
+            Console.Error.WriteLine($"[Sprites] Added {result.Count - beforeSpawn} spawn-derived setupIds " +
+                $"(from {_spawnGazetteer.Count} LBs of spawn data)");
+        }
+
         return result;
     }
 
