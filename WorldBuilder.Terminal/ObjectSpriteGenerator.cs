@@ -133,21 +133,24 @@ internal static class ObjectSpriteGenerator {
 
         // Pick the visible triangle set. Three regimes:
         //
-        // 1. **Z-dominant** (door / signpost / banner): Z extent is much
-        //    larger than the largest XY extent. Drawing every face with
-        //    no back-face culling renders the front face on top of every
-        //    pixel and the sprite becomes "wood grain filling the frame"
-        //    — the "feet in the ground looking at a door" effect users
-        //    reported. Filter to top-facing triangles (Normal.Z > 0.5)
-        //    so we only see the actual top-down silhouette of the model.
-        //    If that leaves nothing (every face is vertical, e.g. a
-        //    paper-thin sign), fall through to regime 3 so the sprite
-        //    still has visible pixels.
+        // 1. **Z-dominant** (door / signpost / banner / tower / stair):
+        //    Z extent is much larger than the largest XY extent. Drawing
+        //    every face with no back-face culling renders the front face
+        //    on top of every pixel — the sprite becomes "wood grain
+        //    filling the frame" ("feet in the ground looking at a door"
+        //    effect). Filter to triangles with any upward-facing normal
+        //    component (Normal.Z > 0) so we render only the actual top-
+        //    down silhouette. We use > 0 rather than > 0.5 because tower
+        //    cone roofs and stair slopes have normals that point up at
+        //    angles steeper than 60° from vertical — a tighter threshold
+        //    leaves them out and the rendered tower has no visible roof.
+        //    Pure side-walls (Normal.Z == 0) still get filtered out.
+        //    If that leaves nothing (every face is sideways, e.g. a
+        //    paper-thin sign), fall through to regime 3.
         //
         // 2. **Normal** (building / barrel / stone / tree): Z extent is
         //    not dominant. Render all faces, painter-sort by centroid Z
-        //    so the highest faces (roofs, foliage) draw last. This is
-        //    the existing path that produced the good building sprites.
+        //    so the highest faces (roofs, foliage) draw last.
         //
         // 3. **Sign / awning fallback**: Z-dominant model with no
         //    top-facing triangles. Drawing all faces is the only way to
@@ -157,7 +160,7 @@ internal static class ObjectSpriteGenerator {
         List<Tri> visible;
         if (zDominant) {
             var tops = new List<Tri>();
-            foreach (var t in triangles) if (t.Normal.Z > 0.5f) tops.Add(t);
+            foreach (var t in triangles) if (t.Normal.Z > 0f) tops.Add(t);
             visible = tops.Count > 0 ? tops : new List<Tri>(triangles);
         } else {
             visible = new List<Tri>(triangles);
