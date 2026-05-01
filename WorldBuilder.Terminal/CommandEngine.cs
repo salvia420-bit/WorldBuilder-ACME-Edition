@@ -11176,9 +11176,22 @@ public class CommandEngine {
                 probe?.Width ?? 0, probe?.Height ?? 0, spritesDir, atlasPath, manifestPath);
         }
 
-        var modelIds = CollectPlacedModelIds(p, lbFilter);
-        Console.Error.WriteLine($"[Sprites] Collected {modelIds.Count} model ids" +
-            (modelIds.Count > 0 ? $" (sample: 0x{modelIds.First():X8})" : ""));
+        var allModelIds = CollectPlacedModelIds(p, lbFilter);
+        // Filter to building-class setupIds (0x01xxxxxx). Item/weenie meshes
+        // (0x02xxxxxx) — doors, signs, props — render as front-face slabs
+        // when projected top-down because their geometry is mostly thin
+        // vertical planes; they look better as glyphs. Matches the
+        // SpriteAtlasLoader.OnlyBuildings runtime filter so the saved
+        // atlas only contains things the renderer will actually composite.
+        var modelIds = new HashSet<uint>();
+        int filtered = 0;
+        foreach (var id in allModelIds) {
+            if ((id >> 24) == 0x01) modelIds.Add(id);
+            else filtered++;
+        }
+        Console.Error.WriteLine($"[Sprites] Collected {modelIds.Count} building setupIds " +
+            $"(filtered {filtered} non-building 0x02xx items/weenies)" +
+            (modelIds.Count > 0 ? $" sample=0x{modelIds.First():X8}" : ""));
         var (rendered, failed, atlasW, atlasH) = ObjectSpriteGenerator.Run(
             modelIds, spritePx, spritesDir, atlasPath, manifestPath, dats,
             id => _ontologyService.GetEntry(id), throttleMs);
