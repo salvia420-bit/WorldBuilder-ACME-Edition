@@ -11217,23 +11217,49 @@ public class CommandEngine {
             lbKeys = parsed;
         }
 
+        int skippedLbs = 0;
         foreach (var lbKey in lbKeys) {
-            var lbDoc = GetLandblockDoc(lbKey);
+            LandblockDocument lbDoc;
+            try {
+                lbDoc = GetLandblockDoc(lbKey);
+            } catch (Exception ex) {
+                skippedLbs++;
+                if (skippedLbs <= 10) {
+                    Console.Error.WriteLine($"[Sprites] Skip LB 0x{lbKey:X4}: {ex.Message}");
+                }
+                continue;
+            }
             foreach (var obj in lbDoc.GetStaticObjects()) {
                 if (obj.IsParticleEmitter) continue;
                 result.Add(obj.Id);
             }
         }
+        if (skippedLbs > 0) {
+            Console.Error.WriteLine($"[Sprites] Skipped {skippedLbs} unloadable landblocks total");
+        }
 
         var dungeonKeys = lbFilter is { Count: > 0 }
             ? new List<ushort>(lbFilter)
             : ListDungeonDocIds(p, null);
+        int skippedDungeons = 0;
         foreach (var lbKey in dungeonKeys) {
-            var dungeon = GetDungeonDoc(lbKey);
+            DungeonDocument? dungeon;
+            try {
+                dungeon = GetDungeonDoc(lbKey);
+            } catch (Exception ex) {
+                skippedDungeons++;
+                if (skippedDungeons <= 10) {
+                    Console.Error.WriteLine($"[Sprites] Skip dungeon 0x{lbKey:X4}: {ex.Message}");
+                }
+                continue;
+            }
             if (dungeon == null) continue;
             foreach (var cell in dungeon.Cells) {
                 foreach (var stab in cell.StaticObjects) result.Add(stab.Id);
             }
+        }
+        if (skippedDungeons > 0) {
+            Console.Error.WriteLine($"[Sprites] Skipped {skippedDungeons} unloadable dungeons total");
         }
         return result;
     }
@@ -11331,11 +11357,25 @@ public class CommandEngine {
         int lbPx = TilePyramidEmitter.TilePx * (1 << (maxZoom - 8));
 
         int terrainTiles = 0, objectsGlyphTiles = 0, objectTiles = 0, floorTiles = 0, processed = 0;
+        int skippedLbs = 0;
         SpriteAtlasLoader? atlas = emitObjectLayer ? GetOrLoadSpriteAtlas() : null;
 
         foreach (var lbKey in targetLbs) {
             uint lbX = (uint)((lbKey >> 8) & 0xFF);
             uint lbY = (uint)(lbKey & 0xFF);
+
+            // Skip-tolerance: a few project landblock docs throw on load
+            // (e.g. 0x2380, 0x2581 in RetailSmoke). Without this guard, one
+            // bad LB would abort the entire emit. Pre-check by attempting
+            // to load the doc; if it throws, log and skip.
+            try { _ = GetLandblockDoc(lbKey); }
+            catch (Exception ex) {
+                skippedLbs++;
+                if (skippedLbs <= 10) {
+                    Console.Error.WriteLine($"[Emit] Skip LB 0x{lbKey:X4}: {ex.Message}");
+                }
+                continue;
+            }
 
             // Layer 1: terrain (terrain + roads, opaque background).
             var terrainPng = RenderLbForPyramid(lbX, lbY, lbPx,
@@ -11395,6 +11435,9 @@ public class CommandEngine {
             // Inter-LB throttle so the renderer yields the core back to a
             // concurrent ML run. 0 = disabled.
             if (throttleMs > 0) System.Threading.Thread.Sleep(throttleMs);
+        }
+        if (skippedLbs > 0) {
+            Console.Error.WriteLine($"[Emit] Skipped {skippedLbs} unloadable landblocks total");
         }
 
         int downsampled = TilePyramidEmitter.Downsample(terrainDir, maxZoom, minZoom);

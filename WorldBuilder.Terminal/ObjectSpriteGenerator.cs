@@ -31,6 +31,7 @@ internal static class ObjectSpriteGenerator {
             string atlasPath, string manifestPath,
             IDatReaderWriter dats, Func<uint, OntologyEntry?> ontology,
             int throttleMs = 0) {
+        SurfaceDiag.Reset();
         Directory.CreateDirectory(spritesDir);
         var entries = new List<SpriteEntry>(modelIds.Count);
 
@@ -67,6 +68,7 @@ internal static class ObjectSpriteGenerator {
                 $"noVisibleFace={nullNoVisible} threw={threwException}" +
                 (firstError != null ? $" firstError={firstError}" : ""));
         }
+        Console.Error.Write(SurfaceDiag.Report());
 
         var (atlas, layout) = PackAtlas(entries);
         using (var data = atlas.Encode(SKEncodedImageFormat.Png, 100)) {
@@ -378,6 +380,58 @@ internal static class ObjectSpriteGenerator {
     //  back to category color).
     // ────────────────────────────────────────────────────────────────────
 
+    // Diagnostic counters — dumped at end of Run() to identify why textures
+    // fall through to flat fill. Atomic so multi-threaded callers stay safe.
+    internal static class SurfaceDiag {
+        public static long ok;
+        public static long badKind_outer;       // surfaceDid kind != 0x08, 0x06
+        public static long badRead_Surface;     // SafeTryGet<Surface> failed
+        public static long badKind_texRef;      // Surface.OrigTextureId kind not 0x05/0x06
+        public static long badRead_SurfaceTex;  // SafeTryGet<SurfaceTexture> failed
+        public static long emptySurfaceTex;     // SurfaceTexture has no Textures[]
+        public static long badRead_RenderSurf;  // SafeTryGet<RenderSurface> failed
+        public static long emptySource;         // RenderSurface has no SourceData
+        public static readonly System.Collections.Concurrent.ConcurrentDictionary<uint, long> badTexKinds = new();
+        public static readonly System.Collections.Concurrent.ConcurrentDictionary<uint, long> badRenderSurfKinds = new();
+        public static readonly System.Collections.Concurrent.ConcurrentDictionary<int, long> unsupportedFormats = new();
+        public static long decoderThrew;
+
+        public static void Reset() {
+            ok = 0; badKind_outer = 0; badRead_Surface = 0; badKind_texRef = 0;
+            badRead_SurfaceTex = 0; emptySurfaceTex = 0; badRead_RenderSurf = 0;
+            emptySource = 0; decoderThrew = 0;
+            badTexKinds.Clear(); badRenderSurfKinds.Clear(); unsupportedFormats.Clear();
+        }
+        public static string Report() {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"[SurfaceDiag] ok={ok}");
+            sb.AppendLine($"  badKind_outer={badKind_outer} (surfaceDid kind not 0x08/0x06)");
+            sb.AppendLine($"  badRead_Surface={badRead_Surface}");
+            sb.AppendLine($"  badKind_texRef={badKind_texRef} (Surface.OrigTextureId kind not 0x05/0x06)");
+            if (!badTexKinds.IsEmpty) {
+                sb.AppendLine($"    breakdown by kind:");
+                foreach (var kv in badTexKinds.OrderByDescending(k => k.Value))
+                    sb.AppendLine($"      0x{kv.Key:X2}: {kv.Value}");
+            }
+            sb.AppendLine($"  badRead_SurfaceTex={badRead_SurfaceTex}");
+            sb.AppendLine($"  emptySurfaceTex={emptySurfaceTex}");
+            sb.AppendLine($"  badRead_RenderSurf={badRead_RenderSurf}");
+            if (!badRenderSurfKinds.IsEmpty) {
+                sb.AppendLine($"    breakdown by kind of failing DataId:");
+                foreach (var kv in badRenderSurfKinds.OrderByDescending(k => k.Value))
+                    sb.AppendLine($"      0x{kv.Key:X2}: {kv.Value}");
+            }
+            sb.AppendLine($"  emptySource={emptySource}");
+            sb.AppendLine($"  decoderThrew={decoderThrew}");
+            if (!unsupportedFormats.IsEmpty) {
+                sb.AppendLine($"  unsupportedFormats:");
+                foreach (var kv in unsupportedFormats.OrderByDescending(k => k.Value))
+                    sb.AppendLine($"    PFID id={kv.Key}: {kv.Value}");
+            }
+            return sb.ToString();
+        }
+    }
+
     private static SKBitmap? TryLoadSurface(IDatReaderWriter dats, uint surfaceDid) {
         // Why: GfxObj.Surfaces[i] is almost always a Surface (0x08xxxxxx) —
         // the wrapper that holds material params and points at the texture.
@@ -389,25 +443,52 @@ internal static class ObjectSpriteGenerator {
         uint renderSurfaceDid = surfaceDid;
         uint kind = surfaceDid >> 24;
         if (kind == 0x08) {
-            if (!SafeTryGet<Surface>(dats, surfaceDid, out var surface)) return null;
+            if (!SafeTryGet<Surface>(dats, surfaceDid, out var surface)) {
+                System.Threading.Interlocked.Increment(ref SurfaceDiag.badRead_Surface);
+                return null;
+            }
             uint texRef = surface.OrigTextureId.DataId;
             uint texKind = texRef >> 24;
             if (texKind == 0x05) {
-                if (!SafeTryGet<SurfaceTexture>(dats, texRef, out var st)) return null;
-                if (st.Textures == null || st.Textures.Count == 0) return null;
-                renderSurfaceDid = st.Textures[0].DataId;
+                if (!SafeTryGet<SurfaceTexture>(dats, texRef, out var st)) {
+                    System.Threading.Interlocked.Increment(ref SurfaceDiag.badRead_SurfaceTex);
+                    return null;
+                }
+                if (st.Textures == null || st.Textures.Count == 0) {
+                    System.Threading.Interlocked.Increment(ref SurfaceDiag.emptySurfaceTex);
+                    return null;
+                }
+                // Why Textures.Last(): SurfaceTexture.Textures is a mipmap-style
+                // array where Textures[0] is often a thumbnail/placeholder and
+                // Textures[^1] is the main detail texture. Both ACViewer's
+                // Mapper, the painter (LandSurfaceManager.LoadTextures), and
+                // DatIconLoader.LoadSurfaceIcon use the last entry. Using [0]
+                // here was the cause of ~75% of building roofs falling back to
+                // flat color.
+                renderSurfaceDid = st.Textures[st.Textures.Count - 1].DataId;
             } else if (texKind == 0x06) {
                 renderSurfaceDid = texRef;
             } else {
+                System.Threading.Interlocked.Increment(ref SurfaceDiag.badKind_texRef);
+                SurfaceDiag.badTexKinds.AddOrUpdate(texKind, 1, (_, v) => v + 1);
                 return null;
             }
         } else if (kind != 0x06) {
+            System.Threading.Interlocked.Increment(ref SurfaceDiag.badKind_outer);
             return null;
         }
-        if (!SafeTryGet<RenderSurface>(dats, renderSurfaceDid, out var rs)) return null;
-        if (rs.SourceData == null || rs.SourceData.Length == 0) return null;
+        if (!SafeTryGet<RenderSurface>(dats, renderSurfaceDid, out var rs)) {
+            System.Threading.Interlocked.Increment(ref SurfaceDiag.badRead_RenderSurf);
+            uint failedKind = renderSurfaceDid >> 24;
+            SurfaceDiag.badRenderSurfKinds.AddOrUpdate(failedKind, 1, (_, v) => v + 1);
+            return null;
+        }
+        if (rs.SourceData == null || rs.SourceData.Length == 0) {
+            System.Threading.Interlocked.Increment(ref SurfaceDiag.emptySource);
+            return null;
+        }
         try {
-            return rs.Format switch {
+            SKBitmap? result = rs.Format switch {
                 PixelFormat.PFID_CUSTOM_RAW_JPEG => SKBitmap.Decode(rs.SourceData),
                 PixelFormat.PFID_R8G8B8 => DecodeBgr(rs),
                 PixelFormat.PFID_CUSTOM_LSCAPE_R8G8B8 => DecodeRgb(rs),
@@ -417,9 +498,19 @@ internal static class ObjectSpriteGenerator {
                 PixelFormat.PFID_A4R4G4B4 => Decode4444(rs),
                 PixelFormat.PFID_INDEX16 => DecodePaletted16(rs, dats),
                 PixelFormat.PFID_P8 => DecodePaletted8(rs, dats),
+                PixelFormat.PFID_DXT1 => MakeBitmap(rs.Width, rs.Height, DecompressDxt1(rs.SourceData, rs.Width, rs.Height)),
+                PixelFormat.PFID_DXT3 => MakeBitmap(rs.Width, rs.Height, DecompressDxt5(rs.SourceData, rs.Width, rs.Height, isDxt3: true)),
+                PixelFormat.PFID_DXT5 => MakeBitmap(rs.Width, rs.Height, DecompressDxt5(rs.SourceData, rs.Width, rs.Height, isDxt3: false)),
                 _ => null,
             };
+            if (result != null) {
+                System.Threading.Interlocked.Increment(ref SurfaceDiag.ok);
+            } else {
+                SurfaceDiag.unsupportedFormats.AddOrUpdate((int)rs.Format, 1, (_, v) => v + 1);
+            }
+            return result;
         } catch {
+            System.Threading.Interlocked.Increment(ref SurfaceDiag.decoderThrew);
             return null;
         }
     }
@@ -527,6 +618,108 @@ internal static class ObjectSpriteGenerator {
             dst[i * 4 + 0] = c.Red; dst[i * 4 + 1] = c.Green; dst[i * 4 + 2] = c.Blue; dst[i * 4 + 3] = c.Alpha;
         }
         return MakeBitmap(w, h, dst);
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    //  DXT decoders. Ported from WorldBuilder/Lib/DatIconLoader.cs so this
+    //  project doesn't take on a Chorizite/Avalonia dependency. AC building
+    //  surfaces (and many other props) ship as DXT1/3/5; without these
+    //  decoders TryLoadSurface returns null and the renderer falls back to
+    //  category color — flat-shaded sprites for almost all buildings.
+    // ────────────────────────────────────────────────────────────────────
+
+    private static byte[] Color565ToRgba(ushort c) {
+        int r = (c >> 11) & 31, g = (c >> 5) & 63, b = c & 31;
+        return new byte[] { (byte)(r * 255 / 31), (byte)(g * 255 / 63), (byte)(b * 255 / 31), 255 };
+    }
+
+    private static byte[] DecompressDxt1(byte[] data, int width, int height) {
+        var rgba = new byte[width * height * 4];
+        int blocksW = Math.Max(1, (width + 3) / 4);
+        int blocksH = Math.Max(1, (height + 3) / 4);
+        int offset = 0;
+        for (int by = 0; by < blocksH; by++) {
+            for (int bx = 0; bx < blocksW; bx++) {
+                if (offset + 8 > data.Length) break;
+                ushort c0 = (ushort)(data[offset] | (data[offset + 1] << 8));
+                ushort c1 = (ushort)(data[offset + 2] | (data[offset + 3] << 8));
+                uint lt = (uint)(data[offset + 4] | (data[offset + 5] << 8) | (data[offset + 6] << 16) | (data[offset + 7] << 24));
+                offset += 8;
+                var colors = new byte[4][];
+                colors[0] = Color565ToRgba(c0);
+                colors[1] = Color565ToRgba(c1);
+                if (c0 > c1) {
+                    colors[2] = new byte[] { (byte)((2 * colors[0][0] + colors[1][0] + 1) / 3), (byte)((2 * colors[0][1] + colors[1][1] + 1) / 3), (byte)((2 * colors[0][2] + colors[1][2] + 1) / 3), 255 };
+                    colors[3] = new byte[] { (byte)((colors[0][0] + 2 * colors[1][0] + 1) / 3), (byte)((colors[0][1] + 2 * colors[1][1] + 1) / 3), (byte)((colors[0][2] + 2 * colors[1][2] + 1) / 3), 255 };
+                } else {
+                    colors[2] = new byte[] { (byte)((colors[0][0] + colors[1][0]) / 2), (byte)((colors[0][1] + colors[1][1]) / 2), (byte)((colors[0][2] + colors[1][2]) / 2), 255 };
+                    colors[3] = new byte[] { 0, 0, 0, 0 };
+                }
+                for (int row = 0; row < 4; row++)
+                    for (int col = 0; col < 4; col++) {
+                        int px = bx * 4 + col, py = by * 4 + row;
+                        if (px >= width || py >= height) continue;
+                        int idx = (int)((lt >> (2 * (row * 4 + col))) & 0x03);
+                        int di = (py * width + px) * 4;
+                        rgba[di] = colors[idx][0]; rgba[di + 1] = colors[idx][1];
+                        rgba[di + 2] = colors[idx][2]; rgba[di + 3] = colors[idx][3];
+                    }
+            }
+        }
+        return rgba;
+    }
+
+    private static byte[] DecompressDxt5(byte[] data, int width, int height, bool isDxt3) {
+        var rgba = new byte[width * height * 4];
+        int blocksW = Math.Max(1, (width + 3) / 4);
+        int blocksH = Math.Max(1, (height + 3) / 4);
+        int offset = 0;
+        for (int by = 0; by < blocksH; by++) {
+            for (int bx = 0; bx < blocksW; bx++) {
+                if (offset + 16 > data.Length) break;
+                byte[] alphas = new byte[16];
+                if (isDxt3) {
+                    for (int i = 0; i < 4; i++) {
+                        ushort ab = (ushort)(data[offset + i * 2] | (data[offset + i * 2 + 1] << 8));
+                        for (int j = 0; j < 4; j++)
+                            alphas[i * 4 + j] = (byte)(((ab >> (j * 4)) & 0xF) * 17);
+                    }
+                } else {
+                    byte a0 = data[offset], a1 = data[offset + 1];
+                    ulong ab = 0;
+                    for (int i = 2; i < 8; i++) ab |= (ulong)data[offset + i] << ((i - 2) * 8);
+                    for (int i = 0; i < 16; i++) {
+                        int code = (int)((ab >> (3 * i)) & 0x07);
+                        if (code == 0) alphas[i] = a0;
+                        else if (code == 1) alphas[i] = a1;
+                        else if (a0 > a1) alphas[i] = (byte)(((8 - code) * a0 + (code - 1) * a1) / 7);
+                        else if (code == 6) alphas[i] = 0;
+                        else if (code == 7) alphas[i] = 255;
+                        else alphas[i] = (byte)(((6 - code) * a0 + (code - 1) * a1) / 5);
+                    }
+                }
+                offset += 8;
+                ushort c0 = (ushort)(data[offset] | (data[offset + 1] << 8));
+                ushort c1 = (ushort)(data[offset + 2] | (data[offset + 3] << 8));
+                uint lt = (uint)(data[offset + 4] | (data[offset + 5] << 8) | (data[offset + 6] << 16) | (data[offset + 7] << 24));
+                offset += 8;
+                var colors = new byte[4][];
+                colors[0] = Color565ToRgba(c0);
+                colors[1] = Color565ToRgba(c1);
+                colors[2] = new byte[] { (byte)((2 * colors[0][0] + colors[1][0] + 1) / 3), (byte)((2 * colors[0][1] + colors[1][1] + 1) / 3), (byte)((2 * colors[0][2] + colors[1][2] + 1) / 3), 255 };
+                colors[3] = new byte[] { (byte)((colors[0][0] + 2 * colors[1][0] + 1) / 3), (byte)((colors[0][1] + 2 * colors[1][1] + 1) / 3), (byte)((colors[0][2] + 2 * colors[1][2] + 1) / 3), 255 };
+                for (int row = 0; row < 4; row++)
+                    for (int col = 0; col < 4; col++) {
+                        int px = bx * 4 + col, py = by * 4 + row;
+                        if (px >= width || py >= height) continue;
+                        int ci = (int)((lt >> (2 * (row * 4 + col))) & 0x03);
+                        int di = (py * width + px) * 4;
+                        rgba[di] = colors[ci][0]; rgba[di + 1] = colors[ci][1];
+                        rgba[di + 2] = colors[ci][2]; rgba[di + 3] = alphas[row * 4 + col];
+                    }
+            }
+        }
+        return rgba;
     }
 
     // ────────────────────────────────────────────────────────────────────
