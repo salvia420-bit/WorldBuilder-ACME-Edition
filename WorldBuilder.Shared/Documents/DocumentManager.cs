@@ -91,7 +91,30 @@ namespace WorldBuilder.Shared.Documents {
             return null;
         }
 
-        private async Task<BaseDocument?> CreateOrLoadDocumentInternalAsync(string documentId, Type docType) {
+        /// <summary>
+        /// Generic overload that accepts a per-call <see cref="IDatReaderWriter"/> override.
+        /// Used by bulk pipelines (e.g. QuickWorld Phase 3) that maintain per-thread DAT readers
+        /// to bypass the shared reader's coarse global lock — each thread reads through its own
+        /// reader with independent file streams. The override is only used during InitAsync;
+        /// once cached, the document's later interactions go through the manager's <see cref="Dats"/>.
+        /// </summary>
+        public async Task<T?> GetOrCreateDocumentAsync<T>(string documentId, IDatReaderWriter? overrideDats)
+            where T : BaseDocument {
+            var doc = await CreateOrLoadDocumentInternalAsync(documentId, typeof(T), overrideDats);
+            if (doc is T typedDoc) {
+                return typedDoc;
+            }
+
+            if (doc != null) {
+                _logger.LogError("Document {DocumentId}({ActualType}) is not of expected type {ExpectedType}",
+                    documentId, doc.GetType().Name, typeof(T).Name);
+            }
+
+            return null;
+        }
+
+        private async Task<BaseDocument?> CreateOrLoadDocumentInternalAsync(string documentId, Type docType,
+            IDatReaderWriter? overrideDats = null) {
             var docTypeName = docType.Name;
 
             // Try to get from cache first
@@ -133,7 +156,10 @@ namespace WorldBuilder.Shared.Documents {
                     }
                 }
 
-                if (!await docInstance.InitAsync(Dats, this).ConfigureAwait(false)) {
+                // Use the caller-supplied DAT reader for InitAsync when present so per-thread
+                // readers can serve concurrent doc loads without contending on the shared lock.
+                var initDats = overrideDats ?? Dats;
+                if (!await docInstance.InitAsync(initDats, this).ConfigureAwait(false)) {
                     _logger.LogError("Failed to init document {DocumentId} of type {Type}", documentId, docTypeName);
                     return null;
                 }

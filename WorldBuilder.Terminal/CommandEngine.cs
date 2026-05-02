@@ -7316,26 +7316,44 @@ public partial class CommandEngine {
         const float SCENERY_RANGE = LANDBLOCK_SIZE - 2 * SCENERY_EDGE_MARGIN;
         var heightTable = GetHeightTable();
 
-        // Phase 3 used to be single-threaded, and the per-LB GetLandblockDoc call dominated wall time
-        // (~30k synchronous file reads + DAT lookups). FileStorageService.GetDocumentAsync uses
-        // FileShare.Read so concurrent reads of distinct landblock files are safe, and the DAT
-        // reader's coarse global lock only serialises the brief TryGet itself — surrounding work
-        // (deserialization, StaticObject construction) overlaps. Each lbKey maps to a unique
-        // LandblockDocument, so AddStaticObject mutations on different LBs don't share state.
-        // Per-LB PRNG is seeded from (noiseSeed, lbKey), so determinism is independent of which
-        // thread happens to process which LB.
+        // Phase 3 used to be single-threaded, then was parallelized but bottlenecked on the DAT
+        // reader's coarse global lock (one shared instance, ~1ms held per TryGet). To remove that
+        // bottleneck we hand each worker thread its OWN DefaultDatReaderWriter via Parallel.ForEach's
+        // localInit/localFinally — independent file streams, independent internal locks, no
+        // cross-thread serialization at the DAT layer. The override flows into LandblockDocument's
+        // InitAsync(datreader) so the per-thread reader is used during init.
+        //
+        // Storage layer: FileStorageService.GetDocumentAsync uses FileShare.Read; concurrent reads
+        // of distinct landblock files are safe. Each lbKey maps to a unique LandblockDocument, so
+        // AddStaticObject mutations on different LBs touch disjoint state.
+        //
+        // Per-LB PRNG is seeded from (noiseSeed, lbKey) so output is independent of thread ordering.
         var sceneryKeys = newEntriesMap.Keys.ToArray();
         Array.Sort(sceneryKeys);
 
         int objectsPlacedCounter = 0;
         int sceneryFailureCounter = 0;
         int sceneryFailMessages = 0;
+        int datReaderInitFailures = 0;
         var phase3Sw = System.Diagnostics.Stopwatch.StartNew();
+        string baseDatDir = _projectManager.CurrentProject!.BaseDatDirectory;
 
         System.Threading.Tasks.Parallel.ForEach(
             System.Collections.Concurrent.Partitioner.Create(0, sceneryKeys.Length),
             new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = parallelism },
-            range => {
+            // localInit: mint a per-thread read-only DAT reader. If construction fails (e.g.
+            // upstream library can't open the DATs concurrently), fall back to the shared
+            // manager.Dats so Phase 3 still completes — just at the previous lock-bound speed.
+            localInit: () => {
+                try { return (IDatReaderWriter?)new DefaultDatReaderWriter(baseDatDir, DatAccessType.Read); }
+                catch (Exception ex) {
+                    System.Threading.Interlocked.Increment(ref datReaderInitFailures);
+                    if (datReaderInitFailures <= 1)
+                        Console.WriteLine($"[QuickWorld] Warning: per-thread DAT reader unavailable, falling back to shared reader: {ex.Message}");
+                    return null;
+                }
+            },
+            body: (range, _, threadDats) => {
                 for (int i = range.Item1; i < range.Item2; i++) {
                     ushort lbKey = sceneryKeys[i];
                     if (!newEntriesMap.TryGetValue(lbKey, out var entries)) continue;
@@ -7352,7 +7370,8 @@ public partial class CommandEngine {
                         float worldMinX = lbX * LANDBLOCK_SIZE;
                         float worldMinY = lbY * LANDBLOCK_SIZE;
 
-                        var lbDoc = GetLandblockDoc(lbKey);
+                        // overrideDats=null falls back to the shared manager.Dats inside GetLandblockDoc.
+                        var lbDoc = GetLandblockDoc(lbKey, threadDats);
                         for (int s = 0; s < numScenery; s++) {
                             uint modelId = models[lbRng.Next(models.Length)];
                             float ox = worldMinX + SCENERY_EDGE_MARGIN + (float)lbRng.NextDouble() * SCENERY_RANGE;
@@ -7384,6 +7403,12 @@ public partial class CommandEngine {
                             Console.WriteLine($"[QuickWorld] Warning: scenery scatter failed for ({lbX},{lbY}): {ex.Message}");
                     }
                 }
+                return threadDats;
+            },
+            localFinally: threadDats => {
+                if (threadDats is IDisposable d) {
+                    try { d.Dispose(); } catch { /* swallowed — reader already faulted, nothing to do */ }
+                }
             });
 
         phase3Sw.Stop();
@@ -7394,7 +7419,9 @@ public partial class CommandEngine {
             Console.WriteLine($"[QuickWorld] Warning: {sceneryFailures - 3} additional scenery-scatter failures (suppressed).");
         Console.WriteLine($"[QuickWorld] Phase 3 complete: {objectsPlaced} objects placed across " +
                           $"{sceneryKeys.Length} candidate landblocks in {phase3Sw.Elapsed.TotalMilliseconds:F0}ms " +
-                          $"({parallelism} threads).");
+                          $"({parallelism} threads" +
+                          (datReaderInitFailures > 0 ? $", {datReaderInitFailures} per-thread reader init failures (fell back to shared reader)" : ", per-thread DAT readers") +
+                          ").");
 
         sw.Stop();
         double elapsedMs = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
@@ -10000,11 +10027,12 @@ public partial class CommandEngine {
         return (doc, tl, hl);
     }
 
-    private LandblockDocument GetLandblockDocOrCreate(ushort lbKey) {
+    private LandblockDocument GetLandblockDocOrCreate(ushort lbKey, IDatReaderWriter? overrideDats = null) {
         var docId = $"landblock_{lbKey:X4}";
-        var doc = _projectManager.CurrentProject!.DocumentManager
-            .GetOrCreateDocumentAsync<LandblockDocument>(docId)
-            .GetAwaiter().GetResult();
+        var docMgr = _projectManager.CurrentProject!.DocumentManager;
+        var doc = overrideDats is null
+            ? docMgr.GetOrCreateDocumentAsync<LandblockDocument>(docId).GetAwaiter().GetResult()
+            : docMgr.GetOrCreateDocumentAsync<LandblockDocument>(docId, overrideDats).GetAwaiter().GetResult();
         return doc ?? throw new InvalidOperationException($"Could not load landblock 0x{lbKey:X4}.");
     }
 
@@ -10035,7 +10063,10 @@ public partial class CommandEngine {
     // outside the read-only contract: render-preview, validate-all, transact, and the
     // WorldGen apply pipeline). Routes to the create-or-fetch path explicitly so callers
     // grepping for the old name are still wired up.
-    private LandblockDocument GetLandblockDoc(ushort lbKey) => GetLandblockDocOrCreate(lbKey);
+    // The optional <paramref name="overrideDats"/> is used by parallel pipelines (QuickWorld
+    // Phase 3) that own per-thread DAT readers — it bypasses the shared-reader global lock.
+    private LandblockDocument GetLandblockDoc(ushort lbKey, IDatReaderWriter? overrideDats = null) =>
+        GetLandblockDocOrCreate(lbKey, overrideDats);
 
     private DungeonDocument? GetDungeonDoc(ushort lbKey) {
         var docId = $"dungeon_{lbKey:X4}";
