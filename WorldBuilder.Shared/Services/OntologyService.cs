@@ -83,6 +83,19 @@ public class OntologyService : IOntologyService {
         var sceneryIds = ScanSceneryIds(dats);
         Console.Error.WriteLine($"[Ontology] Found {sceneryIds.Count} scenery Setup IDs from Scenes");
 
+        // Phases 2 + 3 fan out across physical cores using forked DefaultDatReaderWriters
+        // (independent file streams + lock per worker), the same pattern QuickWorld Phase 3
+        // and TerrainDocument.InitInternal use. Without the fork, a parallel loop here
+        // serialises on the shared reader's single mutex and ends up slower than serial.
+        // Falls back to serial when the dats handle isn't a DefaultDatReaderWriter — that's
+        // the OntologyServiceTests StubDats path, which we want to keep deterministic anyway.
+        bool forkable = dats is DefaultDatReaderWriter;
+        int parallelism = Math.Max(1, HardwareInfo.PhysicalCoreCount);
+        var failuresLock = new object();
+        void RecordFailure(uint id, string reason) {
+            lock (failuresLock) report.FailedEntries.Add((id, reason));
+        }
+
         // ── Phase 2: Enumerate and classify all Setups ──
         uint[] setupIds;
         try {
@@ -92,28 +105,29 @@ public class OntologyService : IOntologyService {
             setupIds = Array.Empty<uint>();
         }
         report.TotalSetups = setupIds.Length;
-        Console.Error.WriteLine($"[Ontology] Scanning {setupIds.Length} Setup models...");
+        Console.Error.WriteLine($"[Ontology] Scanning {setupIds.Length} Setup models" +
+            (forkable ? $" across {parallelism} threads (per-thread DAT readers)..." : " (serial)..."));
 
         int processed = 0;
-        foreach (var id in setupIds) {
-            try {
-                if (dats.TryGet<Setup>(id, out var setup)) {
-                    var entry = ClassifySetup(id, setup, dats, buildingIds, sceneryIds);
-                    _entries[id] = entry;
-                    if (entry.ClassificationSource == "BoundsFailed")
-                        report.FailedEntries.Add((id, entry.ClassificationReason ?? "bounds-failed"));
-                } else {
-                    report.FailedEntries.Add((id, "tryget-returned-false"));
+        ScanIdsParallel(setupIds, forkable, dats, parallelism,
+            classify: (id, threadDats) => {
+                try {
+                    if (threadDats.TryGet<Setup>(id, out var setup)) {
+                        var entry = ClassifySetup(id, setup, threadDats, buildingIds, sceneryIds);
+                        _entries[id] = entry;
+                        if (entry.ClassificationSource == "BoundsFailed")
+                            RecordFailure(id, entry.ClassificationReason ?? "bounds-failed");
+                    } else {
+                        RecordFailure(id, "tryget-returned-false");
+                    }
+                } catch (Exception ex) {
+                    RecordFailure(id, $"{ex.GetType().Name}:{ex.Message}");
+                    Console.Error.WriteLine($"[Ontology] ERROR id=0x{id:X8}: {ex.GetType().Name}: {ex.Message}");
                 }
-            } catch (Exception ex) {
-                report.FailedEntries.Add((id, $"{ex.GetType().Name}:{ex.Message}"));
-                Console.Error.WriteLine($"[Ontology] ERROR id=0x{id:X8}: {ex.GetType().Name}: {ex.Message}");
-            }
-
-            processed++;
-            if (processed % 1000 == 0)
-                Console.Error.WriteLine($"[Ontology]   ...{processed}/{setupIds.Length} Setups processed");
-        }
+                int p = System.Threading.Interlocked.Increment(ref processed);
+                if (p % 1000 == 0)
+                    Console.Error.WriteLine($"[Ontology]   ...{p}/{setupIds.Length} Setups processed");
+            });
 
         // ── Phase 3: Enumerate and classify standalone GfxObjs ──
         if (scanGfxObjs) {
@@ -125,31 +139,34 @@ public class OntologyService : IOntologyService {
                 gfxObjIds = Array.Empty<uint>();
             }
             report.TotalGfxObjs = gfxObjIds.Length;
-            Console.Error.WriteLine($"[Ontology] Scanning {gfxObjIds.Length} GfxObj models...");
+            Console.Error.WriteLine($"[Ontology] Scanning {gfxObjIds.Length} GfxObj models" +
+                (forkable ? $" across {parallelism} threads (per-thread DAT readers)..." : " (serial)..."));
 
             processed = 0;
-            foreach (var id in gfxObjIds) {
-                // Don't re-classify GfxObjs that are already parts of a Setup
-                if (_entries.ContainsKey(id)) continue;
+            ScanIdsParallel(gfxObjIds, forkable, dats, parallelism,
+                classify: (id, threadDats) => {
+                    // Don't re-classify GfxObjs that are already parts of a Setup. The
+                    // ConcurrentDictionary read is safe; Phase 2 has fully completed before
+                    // Phase 3 starts so no concurrent write is racing the check.
+                    if (_entries.ContainsKey(id)) return;
 
-                try {
-                    if (dats.TryGet<GfxObj>(id, out var gfxObj)) {
-                        var entry = ClassifyGfxObj(id, gfxObj, buildingIds, sceneryIds);
-                        _entries[id] = entry;
-                        if (entry.ClassificationSource == "BoundsFailed")
-                            report.FailedEntries.Add((id, entry.ClassificationReason ?? "bounds-failed"));
-                    } else {
-                        report.FailedEntries.Add((id, "tryget-returned-false"));
+                    try {
+                        if (threadDats.TryGet<GfxObj>(id, out var gfxObj)) {
+                            var entry = ClassifyGfxObj(id, gfxObj, buildingIds, sceneryIds);
+                            _entries[id] = entry;
+                            if (entry.ClassificationSource == "BoundsFailed")
+                                RecordFailure(id, entry.ClassificationReason ?? "bounds-failed");
+                        } else {
+                            RecordFailure(id, "tryget-returned-false");
+                        }
+                    } catch (Exception ex) {
+                        RecordFailure(id, $"{ex.GetType().Name}:{ex.Message}");
+                        Console.Error.WriteLine($"[Ontology] ERROR id=0x{id:X8}: {ex.GetType().Name}: {ex.Message}");
                     }
-                } catch (Exception ex) {
-                    report.FailedEntries.Add((id, $"{ex.GetType().Name}:{ex.Message}"));
-                    Console.Error.WriteLine($"[Ontology] ERROR id=0x{id:X8}: {ex.GetType().Name}: {ex.Message}");
-                }
-
-                processed++;
-                if (processed % 2000 == 0)
-                    Console.Error.WriteLine($"[Ontology]   ...{processed}/{gfxObjIds.Length} GfxObjs processed");
-            }
+                    int p = System.Threading.Interlocked.Increment(ref processed);
+                    if (p % 2000 == 0)
+                        Console.Error.WriteLine($"[Ontology]   ...{p}/{gfxObjIds.Length} GfxObjs processed");
+                });
         }
 
         // ── Phase 4: Build report ──
@@ -177,6 +194,53 @@ public class OntologyService : IOntologyService {
             $"in {report.ScanTimeMs:F0}ms (failed={report.FailedEntries.Count})");
 
         return report;
+    }
+
+    /// <summary>
+    /// Executes <paramref name="classify"/> for each id in <paramref name="ids"/>, optionally
+    /// in parallel with one forked <see cref="DefaultDatReaderWriter"/> per worker thread.
+    /// Fork failures (rare; upstream library refusing concurrent opens) fall back to the
+    /// shared reader for that thread. Non-forkable readers (test stubs) run serially —
+    /// preserves OntologyServiceTests determinism without a special path inside the loop.
+    /// </summary>
+    private static void ScanIdsParallel(
+        uint[] ids,
+        bool forkable,
+        IDatReaderWriter sharedDats,
+        int parallelism,
+        Action<uint, IDatReaderWriter> classify) {
+
+        if (ids.Length == 0) return;
+
+        if (!forkable || parallelism <= 1) {
+            foreach (var id in ids) classify(id, sharedDats);
+            return;
+        }
+
+        var realDats = (DefaultDatReaderWriter)sharedDats;
+        System.Threading.Tasks.Parallel.ForEach(
+            System.Collections.Concurrent.Partitioner.Create(0, ids.Length),
+            new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = parallelism },
+            localInit: () => {
+                try { return (IDatReaderWriter?)realDats.Fork(); }
+                catch (Exception ex) {
+                    Console.Error.WriteLine($"[Ontology] Warning: per-thread DAT reader fork failed, " +
+                                            $"falling back to shared reader: {ex.Message}");
+                    return null;
+                }
+            },
+            body: (range, _, threadDats) => {
+                var reader = threadDats ?? sharedDats;
+                for (int i = range.Item1; i < range.Item2; i++) {
+                    classify(ids[i], reader);
+                }
+                return threadDats;
+            },
+            localFinally: t => {
+                if (t is IDisposable d) {
+                    try { d.Dispose(); } catch { /* tolerate — fork already faulted */ }
+                }
+            });
     }
 
     // ════════════════════════════════════════════════════
