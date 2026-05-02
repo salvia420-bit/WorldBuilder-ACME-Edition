@@ -719,6 +719,15 @@ internal sealed class TransactDiffEngine {
             StrokeCap = SKStrokeCap.Round,
         };
 
+        // Reusable glyph paints. Allocated once outside the per-LB foreach below; the
+        // DrawObjectGlyphInColor helper mutates fillPaint.Color and auxStroke per call,
+        // so the previous "two SKPaints per added/removed/moved object" allocation
+        // pattern collapses to three SKPaints total for the whole transact diff render.
+        using var glyphFill    = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Fill };
+        using var glyphOutline = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke,
+            StrokeWidth = 1f, Color = RenderPreviewRenderer.GlyphOutline };
+        using var glyphAuxStroke = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke };
+
         foreach (var lb in perLb) {
             // LB-cell outline if validation regressed or cleared.
             int cliffsAddedToLb = lb.Validation.Added.Count;
@@ -740,14 +749,16 @@ internal sealed class TransactDiffEngine {
                 var shape = RenderPreviewRenderer.ResolveShapeForObject(entry);
                 float size = RenderPreviewRenderer.ResolveSizePxForObject(entry, input.LbPx);
                 var p = WorldToPixel(rem.Position);
-                RenderPreviewRenderer.DrawObjectGlyphInColor(canvas, p.X, p.Y, size, shape, RemovedColor);
+                RenderPreviewRenderer.DrawObjectGlyphInColor(canvas, p.X, p.Y, size, shape, RemovedColor,
+                    glyphFill, glyphOutline, glyphAuxStroke);
             }
             foreach (var add in lb.Objects.Added) {
                 var entry = LookupOntologyByModel(add.Model);
                 var shape = RenderPreviewRenderer.ResolveShapeForObject(entry);
                 float size = RenderPreviewRenderer.ResolveSizePxForObject(entry, input.LbPx);
                 var p = WorldToPixel(add.Position);
-                RenderPreviewRenderer.DrawObjectGlyphInColor(canvas, p.X, p.Y, size, shape, AddedColor);
+                RenderPreviewRenderer.DrawObjectGlyphInColor(canvas, p.X, p.Y, size, shape, AddedColor,
+                    glyphFill, glyphOutline, glyphAuxStroke);
             }
             foreach (var mv in lb.Moves.Moved) {
                 if (mv.DeltaXY < 0.1) continue;     // hide inert moves per spec
@@ -757,7 +768,8 @@ internal sealed class TransactDiffEngine {
                 var pFrom = WorldToPixel(mv.From);
                 var pTo = WorldToPixel(mv.To);
                 canvas.DrawLine(pFrom, pTo, moveArrow);
-                RenderPreviewRenderer.DrawObjectGlyphInColor(canvas, pTo.X, pTo.Y, size, shape, MovedColor);
+                RenderPreviewRenderer.DrawObjectGlyphInColor(canvas, pTo.X, pTo.Y, size, shape, MovedColor,
+                    glyphFill, glyphOutline, glyphAuxStroke);
             }
         }
 

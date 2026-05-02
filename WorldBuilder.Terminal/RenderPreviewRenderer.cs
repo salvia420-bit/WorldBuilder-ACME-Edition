@@ -181,7 +181,7 @@ public static class RenderPreviewRenderer {
     private static readonly SKColor SignFill        = new(0xE0, 0x9A, 0x3F);
     private static readonly SKColor WaterFill       = new(0x3E, 0x6A, 0x9F);
     private static readonly SKColor UnknownFill = new(0x77, 0x77, 0x77);
-    private static readonly SKColor GlyphOutline = new(0x10, 0x10, 0x10, 0xC0);
+    internal static readonly SKColor GlyphOutline = new(0x10, 0x10, 0x10, 0xC0);
     private static readonly SKColor CliffStroke  = new(0xE0, 0x35, 0x35, 0xD8);
 
     /// <summary>
@@ -279,12 +279,18 @@ public static class RenderPreviewRenderer {
         return sizePx;
     }
 
+    /// <summary>
+    /// Draws one glyph with caller-supplied paints. <paramref name="fillPaint"/>'s Color is
+    /// set to <paramref name="fill"/> before drawing; the caller is responsible for the
+    /// other paint properties. All three paints are mutated and reused — call this from a
+    /// loop with three pre-allocated paints to avoid ~2k SKPaint allocations on a typical
+    /// transact diff render.
+    /// </summary>
     internal static void DrawObjectGlyphInColor(SKCanvas canvas, float pxX, float pxY,
-            float sizePx, GlyphShape shape, SKColor fill) {
-        using var fillPaint = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Fill, Color = fill };
-        using var outlinePaint = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke,
-            StrokeWidth = 1f, Color = GlyphOutline };
-        DrawGlyph(canvas, pxX, pxY, sizePx, shape, fillPaint, outlinePaint);
+            float sizePx, GlyphShape shape, SKColor fill,
+            SKPaint fillPaint, SKPaint outlinePaint, SKPaint auxStroke) {
+        fillPaint.Color = fill;
+        DrawGlyph(canvas, pxX, pxY, sizePx, shape, fillPaint, outlinePaint, auxStroke);
     }
 
     public static Output Render(Input input) {
@@ -550,6 +556,10 @@ public static class RenderPreviewRenderer {
             StrokeWidth = Math.Max(0.5f, input.LbPx / 220f), Color = GlyphOutline };
         using var ringPaint    = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke,
             StrokeWidth = Math.Max(0.7f, input.LbPx / 160f) };
+        // Reusable scratch stroke for DrawGlyph's Interactive/Sign/Unknown shapes.
+        // Mutated per-glyph (StrokeWidth + Color) instead of the previous per-call SKPaint
+        // allocation — eliminates ~25k SKPaint allocs on a dense radius-2 render.
+        using var auxStroke    = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke };
 
         // Glyph base sizes (in pixels) at LbPx = 256, scaled gently by sqrt(LbPx/256).
         float scaleFactor = MathF.Sqrt(Math.Max(64, input.LbPx) / 256f);
@@ -725,7 +735,7 @@ public static class RenderPreviewRenderer {
                     GlyphFallbackDiag.Source.Placed);
             }
             fillPaint.Color = g.fill;
-            DrawGlyph(canvas, g.pxX, g.pxY, g.sizePx, g.shape, fillPaint, outlinePaint);
+            DrawGlyph(canvas, g.pxX, g.pxY, g.sizePx, g.shape, fillPaint, outlinePaint, auxStroke);
             if (g.pairingRoot != 0 && g.pairingRoot != g.objId) {
                 ringPaint.Color = HueRingColor(g.pairingRoot);
                 canvas.DrawCircle(g.pxX, g.pxY, g.sizePx + 2.5f, ringPaint);
@@ -827,8 +837,17 @@ public static class RenderPreviewRenderer {
         return new SKPoint(fx * W, (1f - fy) * H);
     }
 
+    /// <summary>
+    /// Renders one glyph onto <paramref name="canvas"/>. <paramref name="fill"/> and
+    /// <paramref name="outline"/> are owned by the caller and MUST be pre-allocated;
+    /// <paramref name="auxStroke"/> is a scratch stroke paint mutated in place for the
+    /// three shapes that need a secondary stroke (Interactive, Sign, Unknown). Reusing
+    /// auxStroke across calls is what makes a dense Phase-3 render allocation-free per
+    /// glyph — the previous code allocated a fresh SKPaint inside this method per
+    /// Interactive/Sign/Unknown shape, which dominated CPU on dense LBs.
+    /// </summary>
     private static void DrawGlyph(SKCanvas canvas, float cx, float cy, float size,
-                                  GlyphShape shape, SKPaint fill, SKPaint outline) {
+                                  GlyphShape shape, SKPaint fill, SKPaint outline, SKPaint auxStroke) {
         switch (shape) {
             case GlyphShape.Structure:
                 canvas.DrawRect(cx - size, cy - size, size * 2, size * 2, fill);
@@ -875,13 +894,9 @@ public static class RenderPreviewRenderer {
                 // Hollow ring with a filled centre dot — reads as a "thing
                 // you can interact with" without competing visually with the
                 // solid shapes used for static world objects.
-                using var ringStroke = new SKPaint {
-                    Style = SKPaintStyle.Stroke,
-                    StrokeWidth = Math.Max(1f, size * 0.35f),
-                    IsAntialias = true,
-                    Color = fill.Color,
-                };
-                canvas.DrawCircle(cx, cy, size, ringStroke);
+                auxStroke.StrokeWidth = Math.Max(1f, size * 0.35f);
+                auxStroke.Color = fill.Color;
+                canvas.DrawCircle(cx, cy, size, auxStroke);
                 canvas.DrawCircle(cx, cy, Math.Max(1f, size * 0.32f), fill);
                 return;
             }
@@ -896,27 +911,18 @@ public static class RenderPreviewRenderer {
                 path.Close();
                 canvas.DrawPath(path, fill);
                 if (size >= 3f) canvas.DrawPath(path, outline);
-                using var stem = new SKPaint {
-                    Style = SKPaintStyle.Stroke,
-                    StrokeWidth = Math.Max(1f, size * 0.25f),
-                    IsAntialias = true,
-                    Color = fill.Color,
-                };
-                canvas.DrawLine(cx, cy, cx, cy + size * 0.7f, stem);
+                auxStroke.StrokeWidth = Math.Max(1f, size * 0.25f);
+                auxStroke.Color = fill.Color;
+                canvas.DrawLine(cx, cy, cx, cy + size * 0.7f, auxStroke);
                 return;
             }
 
             case GlyphShape.Unknown:
             default:
-                using (var paint = new SKPaint {
-                    IsAntialias = true,
-                    Style = SKPaintStyle.Stroke,
-                    StrokeWidth = Math.Max(1f, size * 0.4f),
-                    Color = UnknownFill,
-                }) {
-                    canvas.DrawLine(cx - size, cy - size, cx + size, cy + size, paint);
-                    canvas.DrawLine(cx - size, cy + size, cx + size, cy - size, paint);
-                }
+                auxStroke.StrokeWidth = Math.Max(1f, size * 0.4f);
+                auxStroke.Color = UnknownFill;
+                canvas.DrawLine(cx - size, cy - size, cx + size, cy + size, auxStroke);
+                canvas.DrawLine(cx - size, cy + size, cx + size, cy - size, auxStroke);
                 return;
         }
     }
