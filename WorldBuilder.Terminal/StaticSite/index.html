@@ -16,6 +16,11 @@
     </label>
     <div id="floor-selector"></div>
     <div id="status-line">loading…</div>
+    <!-- Optional sibling Tailwind gallery emitted by `emit-static-site --gallery`.
+         The link is hidden by default; app.js probes for gallery/index.html on
+         boot and unhides it when present so Leaflet-only emits don't show a
+         dead link. -->
+    <a id="gallery-link" href="gallery/index.html" hidden>Gallery view ↗</a>
   </header>
   <div id="boot-banner" hidden></div>
   <main>

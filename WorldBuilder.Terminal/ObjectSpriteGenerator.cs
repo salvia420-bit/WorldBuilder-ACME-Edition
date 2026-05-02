@@ -35,7 +35,7 @@ internal static class ObjectSpriteGenerator {
         Directory.CreateDirectory(spritesDir);
         var entries = new List<SpriteEntry>(modelIds.Count);
 
-        int nullEmptyTris = 0, nullDegenerate = 0, nullNoVisible = 0, threwException = 0;
+        int nullEmptyTris = 0, nullDegenerate = 0, nullNoVisible = 0, nullFlatPlane = 0, threwException = 0;
         string? firstError = null;
         foreach (var id in modelIds) {
             try {
@@ -45,6 +45,7 @@ internal static class ObjectSpriteGenerator {
                         case NullReason.NoTriangles: nullEmptyTris++; break;
                         case NullReason.Degenerate: nullDegenerate++; break;
                         case NullReason.NoVisible: nullNoVisible++; break;
+                        case NullReason.FlatPlane: nullFlatPlane++; break;
                     }
                     continue;
                 }
@@ -62,10 +63,10 @@ internal static class ObjectSpriteGenerator {
             // Yield to a concurrent ML run between sprites.
             if (throttleMs > 0) System.Threading.Thread.Sleep(throttleMs);
         }
-        if (entries.Count == 0 || nullEmptyTris + nullDegenerate + nullNoVisible + threwException > 0) {
+        if (entries.Count == 0 || nullEmptyTris + nullDegenerate + nullNoVisible + nullFlatPlane + threwException > 0) {
             Console.Error.WriteLine($"[Sprites] rendered={entries.Count} " +
                 $"noTris={nullEmptyTris} degenerate={nullDegenerate} " +
-                $"noVisibleFace={nullNoVisible} threw={threwException}" +
+                $"noVisibleFace={nullNoVisible} flatPlane={nullFlatPlane} threw={threwException}" +
                 (firstError != null ? $" firstError={firstError}" : ""));
         }
         Console.Error.Write(SurfaceDiag.Report());
@@ -97,7 +98,7 @@ internal static class ObjectSpriteGenerator {
     //  Per-model render
     // ────────────────────────────────────────────────────────────────────
 
-    private enum NullReason { NoTriangles, Degenerate, NoVisible }
+    private enum NullReason { NoTriangles, Degenerate, NoVisible, FlatPlane }
 
     private static (SpriteEntry? Entry, NullReason Reason) RenderOneWithReason(
             uint modelId, int spritePx, IDatReaderWriter dats, Func<uint, OntologyEntry?> ontology) {
@@ -126,6 +127,17 @@ internal static class ObjectSpriteGenerator {
         float worldW = maxX - minX, worldH = maxY - minY;
         float worldZ = maxZ - minZ;
         if (worldW <= 1e-3f || worldH <= 1e-3f) return (null, NullReason.Degenerate);
+
+        // Flat-plane skip: catch paper-thin meshes (signs, banners, tapestries,
+        // single-quad decals) by bbox shape rather than setupId range. AC's
+        // 3D creature meshes are full volumes (head/torso/limbs) so they fail
+        // this check easily; doors and signs have one dim ≤5% of the largest,
+        // so they're skipped before the rasterizer sees them. Replaces the
+        // prior 66b80ff "buildings only by 0x01xxxxxx" filter that swept up
+        // creatures by setupId range.
+        float bboxMax = MathF.Max(worldZ, MathF.Max(worldW, worldH));
+        float bboxMin = MathF.Min(worldZ, MathF.Min(worldW, worldH));
+        if (bboxMax > 1e-3f && bboxMin < 0.05f * bboxMax) return (null, NullReason.FlatPlane);
 
         float pxPerUnit = spritePx / Math.Max(worldW, worldH);
         int W = Math.Max(1, (int)MathF.Ceiling(worldW * pxPerUnit));

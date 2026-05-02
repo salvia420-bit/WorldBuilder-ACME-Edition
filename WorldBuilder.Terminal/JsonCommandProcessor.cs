@@ -292,6 +292,8 @@ public class JsonCommandProcessor {
             ["emit-tile-pyramid"] = CmdEmitTilePyramid,
             ["describe-floor"] = CmdDescribeFloor,
             ["emit-static-site"] = CmdEmitStaticSite,
+            ["emit-atlas-gallery"] = CmdEmitAtlasGallery,
+            ["serve-atlas"] = CmdServeAtlas,
             ["help"] = _ => CmdHelp(),
         };
 
@@ -309,10 +311,22 @@ public class JsonCommandProcessor {
         bool emitObject = node["emitObject"]?.GetValue<bool>() ?? false;
         bool emitFloor = node["emitFloor"]?.GetValue<bool>() ?? false;
         int throttleMs = node["throttleMs"]?.GetValue<int>() ?? 0;
+        bool gallery = node["gallery"]?.GetValue<bool>() ?? false;
         var lbFilter = ParseLbFilter(node);
 
         var r = _engine.EmitStaticSite(slug, outDir, lbFilter, maxZoom, minZoom,
             emitObject, emitFloor, throttleMs);
+
+        // Optional gallery sidecar: bundle a curated Tailwind gallery into
+        // <outDir>/gallery/ and let the Leaflet view link across. The
+        // gallery emit reads the same project state, so calling it after
+        // the static site emits keeps both views in sync.
+        AtlasGalleryResult? galleryResult = null;
+        if (gallery) {
+            string galleryDir = Path.Combine(outDir, "gallery");
+            galleryResult = _engine.EmitAtlasGallery(galleryDir);
+        }
+
         return Serialize(new {
             success = true,
             command = "emit-static-site",
@@ -324,6 +338,75 @@ public class JsonCommandProcessor {
             tilesAtMaxZoom = r.TilesAtMaxZoom,
             frontendFilesCopied = r.FrontendFilesCopied,
             manifestProjectCount = r.ManifestProjectCount,
+            gallery = galleryResult is null ? null : new {
+                emitted = galleryResult.Success,
+                picksRendered = galleryResult.PicksRendered,
+                lbsCovered = galleryResult.LbsCovered,
+                indexPath = galleryResult.IndexPath,
+                error = galleryResult.Error,
+            },
+        });
+    }
+
+    private string CmdEmitAtlasGallery(System.Text.Json.Nodes.JsonNode node) {
+        string outDir = node["outDir"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'outDir' field");
+        int autoTowns = node["autoTowns"]?.GetValue<int>() ?? 5;
+        int autoZones = node["autoZones"]?.GetValue<int>() ?? 5;
+        int autoDungeons = node["autoDungeons"]?.GetValue<int>() ?? 5;
+        int autoRegions = node["autoRegions"]?.GetValue<int>() ?? 5;
+        int radius = node["radius"]?.GetValue<int>() ?? 1;
+        int resolution = node["resolution"]?.GetValue<int>() ?? 1536;
+        bool useSprites = node["useSprites"]?.GetValue<bool>() ?? true;
+        bool overlay = node["overlay"]?.GetValue<bool>() ?? true;
+        var lbFilter = ParseLbFilter(node);
+        var r = _engine.EmitAtlasGallery(outDir, lbFilter,
+            autoTowns, autoZones, autoDungeons, autoRegions,
+            radius, resolution, useSprites, overlay);
+        if (!r.Success) {
+            return Serialize(new {
+                success = false,
+                command = "emit-atlas-gallery",
+                error = r.Error,
+                outDir = r.OutDir,
+            });
+        }
+        return Serialize(new {
+            success = true,
+            command = "emit-atlas-gallery",
+            picksRendered = r.PicksRendered,
+            lbsCovered = r.LbsCovered,
+            totalSpawnCount = r.TotalSpawnCount,
+            outDir = r.OutDir,
+            indexPath = r.IndexPath,
+            manifestPath = r.ManifestPath,
+            picks = r.Picks,
+        });
+    }
+
+    private string CmdServeAtlas(System.Text.Json.Nodes.JsonNode node) {
+        string outDir = node["outDir"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'outDir' field");
+        int port = node["port"]?.GetValue<int>() ?? 8090;
+        string bind = node["bind"]?.GetValue<string>() ?? "0.0.0.0";
+        var r = _engine.ServeAtlas(outDir, port, bind);
+        if (!r.Success) {
+            return Serialize(new {
+                success = false,
+                command = "serve-atlas",
+                error = r.Error,
+                outDir = r.OutDir, port = r.Port, bind = r.Bind,
+            });
+        }
+        return Serialize(new {
+            success = true,
+            command = "serve-atlas",
+            url = r.Url,
+            tailscaleUrl = r.TailscaleUrl,
+            pid = r.Pid,
+            port = r.Port,
+            bind = r.Bind,
+            outDir = r.OutDir,
         });
     }
 
@@ -1397,6 +1480,8 @@ public class JsonCommandProcessor {
             new { name = "mark-tiles-clean", args = "",                                      description = "Force-clear all dirty bits without regenerating." },
             new { name = "prune-tiles",      args = "keepNewest?, olderThan?",               description = "LRU-prune the LB-tile layer; region+world tiles are pinned." },
             new { name = "generate-atlas-tiles", args = "mode, lbList?",                     description = "Bulk-generate tiles. mode=lbs|regions|world|all. mode=lbs requires lbList[{lbX,lbY}]; mode=all sweeps every LB and may take many minutes." },
+            new { name = "emit-atlas-gallery", args = "outDir, autoTowns?, autoZones?, autoDungeons?, autoRegions?, radius?, resolution?, useSprites?, overlay?, lbFilter?", description = "Curate N landblocks (5 towns + 5 creature zones + 5 dungeons + 5 region anchors by default), render-preview + describe-landblock per pick, bundle into a Tailwind gallery dir." },
+            new { name = "serve-atlas",       args = "outDir, port?, bind?",                  description = "Serve a gallery (or any) directory over HTTP via a built-in C# HttpListener. Detects Tailscale IPs and reports a tailnet-reachable URL when one is available." },
             new { name = "quit",             args = "",                                      description = "Exit terminal" }
         };
         return Serialize(new { success = true, command = "help", protocol = "json-line", version = "1.5",

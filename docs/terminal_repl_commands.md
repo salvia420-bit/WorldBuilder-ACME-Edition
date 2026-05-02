@@ -206,6 +206,10 @@ The unified ontology pipeline is:
 ## Static Site Diagnostics (sync wave 2026-05-01)
 - `compare-creatures-to-retail` *(Jaccard similarity of project's spawn gazetteer vs. ACE creature/NPC/housing rosters)*
 
+## Visual Atlas Gallery (sync wave 2026-05-XX wirerender)
+- `emit-atlas-gallery <outDir> [--towns N] [--zones N] [--dungeons N] [--regions N] [--radius N] [--res N] [--no-sprites] [--no-overlay]` — auto-curates a 20-pick gallery (5 towns + 5 creature zones + 5 dungeons + 5 region anchors by default) from the project's gazetteer state, renders each pick, and bundles a Tailwind single-file viewer into `<outDir>`.
+- `serve-atlas <outDir> [--port N] [--bind addr]` — serves the gallery directory over HTTP using a built-in `HttpListener`. Prints the local URL plus a Tailscale URL when the host is on a tailnet. Listener runs in the background until the terminal exits.
+
 ## General
 - `help`
 - `quit`

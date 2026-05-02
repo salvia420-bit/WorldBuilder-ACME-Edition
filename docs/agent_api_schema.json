@@ -1322,6 +1322,14 @@
                     "required": false
                 }
             },
+            "parameters_extension_2026_05_xx": {
+                "gallery": {
+                    "type": "bool",
+                    "required": false,
+                    "default": false,
+                    "description": "Also emit a Tailwind atlas gallery into <outDir>/gallery/. Equivalent to running emit-atlas-gallery with default settings after the Leaflet bundle is composed."
+                }
+            },
             "response": {
                 "projectSlug": "string",
                 "outDir": "string",
@@ -1330,7 +1338,66 @@
                 "overlaysEmitted": "int",
                 "tilesAtMaxZoom": "int",
                 "frontendFilesCopied": "int",
-                "manifestProjectCount": "int"
+                "manifestProjectCount": "int",
+                "gallery": "{ emitted: bool, picksRendered: int, lbsCovered: int, indexPath: string, error: string? }? — present only when gallery:true was requested"
+            }
+        },
+        "emit-atlas-gallery": {
+            "category": "dereth-maps-enhanced",
+            "description": "Curate N landblocks (5 towns + 5 creature zones + 5 dungeons + 5 region anchors by default) from gazetteer state, run render-preview + describe-landblock per pick, and bundle into a self-contained Tailwind viewer directory. Companion to emit-static-site: the Leaflet view explores everything; the gallery is the curated showcase.",
+            "parameters": {
+                "outDir": { "type": "string", "required": true },
+                "autoTowns": { "type": "int", "required": false, "default": 5 },
+                "autoZones": { "type": "int", "required": false, "default": 5 },
+                "autoDungeons": { "type": "int", "required": false, "default": 5 },
+                "autoRegions": { "type": "int", "required": false, "default": 5 },
+                "radius": { "type": "int", "required": false, "default": 1, "description": "render-preview radius. 1 = 3×3 LB region (~576wu)." },
+                "resolution": { "type": "int", "required": false, "default": 1536 },
+                "useSprites": { "type": "bool", "required": false, "default": true },
+                "overlay": { "type": "bool", "required": false, "default": true },
+                "lbFilter": {
+                    "type": "string[] | int[]",
+                    "required": false,
+                    "description": "Explicit pick override. When set, the curator is bypassed and the gallery contains exactly these LBs in the supplied order."
+                }
+            },
+            "response": {
+                "picksRendered": "int",
+                "lbsCovered": "int",
+                "totalSpawnCount": "int",
+                "outDir": "string",
+                "indexPath": "string",
+                "manifestPath": "string",
+                "picks": [{
+                    "slug": "string",
+                    "title": "string",
+                    "category": "string (town | creature zone | dungeon | region | explicit)",
+                    "lbHex": "string",
+                    "lbX": "int", "lbY": "int",
+                    "render": "string (relative path to PNG)",
+                    "desc": "string (relative path to JSON)",
+                    "spawnCount": "int?",
+                    "cellCount": "int?",
+                    "renderObjectCount": "int",
+                    "note": "string"
+                }]
+            }
+        },
+        "serve-atlas": {
+            "category": "dereth-maps-enhanced",
+            "description": "Serve a gallery (or any) directory over HTTP using a built-in C# HttpListener. Detects Tailscale IPs (100.64.0.0/10) and reports a tailnet-reachable URL when available. The listener runs in a background thread until the engine exits.",
+            "parameters": {
+                "outDir": { "type": "string", "required": true },
+                "port": { "type": "int", "required": false, "default": 8090 },
+                "bind": { "type": "string", "required": false, "default": "0.0.0.0" }
+            },
+            "response": {
+                "url": "string",
+                "tailscaleUrl": "string?",
+                "pid": "int",
+                "port": "int",
+                "bind": "string",
+                "outDir": "string"
             }
         },
         "import-render-surface": {

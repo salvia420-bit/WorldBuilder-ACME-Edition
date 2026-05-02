@@ -1999,3 +1999,70 @@ Compares the project's loaded `_spawnGazetteer` against the gazetteer JSON files
 
 (none — every new surface is JSON command + REPL subcommand, no new top-level flags.)
 
+---
+
+## Sync Wave 2026-05-XX — Visual Atlas Gallery
+
+The Living Atlas's factual channel (`describe-landblock`) and the visual channel (`render-preview`) finally share a curated viewer surface. `emit-atlas-gallery` auto-curates a small set of landblocks from the gazetteer state the spin wave brought online, runs both channels per pick, and bundles the renders + JSON + a single-file Tailwind viewer into one self-contained directory. Companion brief: `wirerender.md`.
+
+### `emit-atlas-gallery`
+
+**Request:** `{"command":"emit-atlas-gallery","outDir":"/tmp/dereth-gallery","autoTowns":5,"autoZones":5,"autoDungeons":5,"autoRegions":5,"radius":1,"resolution":1536,"useSprites":true,"overlay":true}`
+
+All fields except `outDir` are optional. Defaults match the wirerender spec: 20 picks (5+5+5+5), `radius=1` (3×3 LB region ≈ 576wu), `resolution=1536`, sprites + overlay on. Pass an explicit `lbFilter` to skip auto-curation.
+
+**Response:**
+```json
+{
+  "success": true, "command": "emit-atlas-gallery",
+  "picksRendered": 20, "lbsCovered": 20, "totalSpawnCount": 1247,
+  "outDir": "/tmp/dereth-gallery",
+  "indexPath": "/tmp/dereth-gallery/index.html",
+  "manifestPath": "/tmp/dereth-gallery/manifest.json",
+  "picks": [
+    {"slug":"01_holtburg","title":"Holtburg","category":"town",
+     "lbHex":"0xA9B4","lbX":169,"lbY":180,
+     "render":"renders/01_holtburg.png","desc":"desc/01_holtburg.json",
+     "spawnCount":47,"renderObjectCount":239,
+     "note":"Aluvian — LB 0xA9B4"}
+  ]
+}
+```
+
+Output tree:
+
+```
+<outDir>/
+├── index.html             ← Tailwind single-file viewer (CDN, no build step)
+├── manifest.json          ← gallery picks + metadata
+├── manifest.js            ← JSONP-style mirror so file:// works without fetch()
+├── renders/<slug>.png     ← per-pick render-preview at radius/resolution
+└── desc/<slug>.json       ← per-pick describe-landblock (ObjectIndex stripped if >500)
+```
+
+Curator rules (when `lbFilter` is omitted):
+
+- **Towns** — picked from `town_gazetteer.json` by name fame (Holtburg, Yaraq, Cragstone, Arwic, Sanamar, …) with iteration-order fallback.
+- **Creature zones** — outdoor LBs (cell ≤ 0x40) ranked by Creature spawn count, deduped by Chebyshev distance ≥ 4 LBs so neighbouring tiles of one camp don't claim multiple slots.
+- **Dungeons** — top-N by `cellCount × floorCount`; needs ≥ 4 cells.
+- **Region anchors** — one LB per distinct region from `_regionAnchors`.
+
+### `serve-atlas`
+
+**Request:** `{"command":"serve-atlas","outDir":"/tmp/dereth-gallery","port":8090,"bind":"0.0.0.0"}`
+**Response:** `{success, command, url, tailscaleUrl, pid, port, bind, outDir}`
+
+Wraps a built-in C# `HttpListener` (no Python dependency). When the host has an IP in the carrier-NAT range 100.64.0.0/10, the response includes a Tailscale URL so any tailnet member can reach the gallery without DNS lookup. The listener pumps in a background thread; the engine exiting tears it down.
+
+### Sprite generator: creature-setup filter lifted
+
+`generate-object-sprites` now passes creature/NPC setupIds through to the rasterizer. The post-66b80ff "buildings only" range filter is replaced with a per-mesh bbox flatness check (`min < 0.05 × max` across X/Y/Z). Doors, signs, and banners still skip; full-volume creature meshes (Drudge, Banderling, NPCs, etc.) now render as proper textured sprites instead of red glyphs in the `--use-sprites` path. Reported in the run summary as `flatPlane=N` alongside the other reasons.
+
+### `emit-static-site --gallery`
+
+`emit-static-site` accepts a new optional `gallery:true` field that chains `emit-atlas-gallery` into `<outDir>/gallery/` after the Leaflet bundle is composed. The Leaflet header surfaces a "Gallery view ↗" link when the gallery sibling is detected (HEAD probe at boot). Response gains a nested `gallery` object summarizing the chained emit.
+
+### CLI flags added in this wave
+
+(none — every new surface is JSON command + REPL subcommand, no new top-level flags.)
+

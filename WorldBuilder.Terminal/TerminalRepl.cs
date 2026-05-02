@@ -206,6 +206,8 @@ public class TerminalRepl {
             ["mark-tiles-clean"] = _ => HandleMarkTilesClean(),
             ["prune-tiles"] = HandlePruneTiles,
             ["generate-atlas-tiles"] = HandleGenerateAtlasTiles,
+            ["emit-atlas-gallery"] = HandleEmitAtlasGallery,
+            ["serve-atlas"] = HandleServeAtlas,
             ["help"] = _ => PrintHelp(),
         };
 
@@ -456,6 +458,96 @@ public class TerminalRepl {
     //â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     //  Project management
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+    // ═════════════════════════════════════════════════════════
+    //  Visual Atlas Gallery — wirerender wave (2026-05-XX)
+    // ═════════════════════════════════════════════════════════
+
+    private void HandleEmitAtlasGallery(string[] tokens) {
+        if (!CheckProject()) return;
+        if (tokens.Length < 2) {
+            Console.WriteLine("Usage: emit-atlas-gallery <outDir> [--towns N] [--zones N] [--dungeons N] [--regions N] [--radius N] [--res N] [--no-sprites] [--no-overlay]");
+            Console.WriteLine("  Examples:");
+            Console.WriteLine("    emit-atlas-gallery /tmp/dereth-gallery");
+            Console.WriteLine("    emit-atlas-gallery ./gallery --towns 10 --zones 10 --dungeons 0 --regions 0");
+            Console.WriteLine("    emit-atlas-gallery ./gallery --radius 0 --res 1024 --no-sprites");
+            return;
+        }
+        string outDir = tokens[1];
+        int towns = 5, zones = 5, dungeons = 5, regions = 5;
+        int radius = 1, resolution = 1536;
+        bool useSprites = true, overlay = true;
+        for (int i = 2; i < tokens.Length; i++) {
+            switch (tokens[i]) {
+                case "--towns": if (i + 1 < tokens.Length && int.TryParse(tokens[++i], out var t)) towns = t; break;
+                case "--zones": if (i + 1 < tokens.Length && int.TryParse(tokens[++i], out var z)) zones = z; break;
+                case "--dungeons": if (i + 1 < tokens.Length && int.TryParse(tokens[++i], out var d)) dungeons = d; break;
+                case "--regions": if (i + 1 < tokens.Length && int.TryParse(tokens[++i], out var rg)) regions = rg; break;
+                case "--radius": if (i + 1 < tokens.Length && int.TryParse(tokens[++i], out var r)) radius = r; break;
+                case "--res": if (i + 1 < tokens.Length && int.TryParse(tokens[++i], out var rs)) resolution = rs; break;
+                case "--no-sprites": useSprites = false; break;
+                case "--no-overlay": overlay = false; break;
+                default: Console.WriteLine($"Unknown flag: {tokens[i]}"); return;
+            }
+        }
+        var r2 = _engine.EmitAtlasGallery(outDir, null, towns, zones, dungeons, regions,
+            radius, resolution, useSprites, overlay);
+        Console.WriteLine();
+        if (!r2.Success) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  Failed: {r2.Error}");
+            Console.ResetColor();
+            return;
+        }
+        Console.WriteLine($"  Picks rendered : {r2.PicksRendered}");
+        Console.WriteLine($"  LBs covered    : {r2.LbsCovered}");
+        Console.WriteLine($"  Total spawns   : {r2.TotalSpawnCount}");
+        Console.WriteLine($"  Out dir        : {r2.OutDir}");
+        Console.WriteLine($"  Index          : {r2.IndexPath}");
+        Console.WriteLine($"  Manifest       : {r2.ManifestPath}");
+        Console.WriteLine();
+        Console.WriteLine($"  Open in browser: file://{Path.GetFullPath(r2.IndexPath)}");
+        Console.WriteLine($"  Or serve       : serve-atlas {r2.OutDir}");
+        Console.WriteLine();
+    }
+
+    private void HandleServeAtlas(string[] tokens) {
+        if (tokens.Length < 2) {
+            Console.WriteLine("Usage: serve-atlas <outDir> [--port N] [--bind addr]");
+            Console.WriteLine("  Examples:");
+            Console.WriteLine("    serve-atlas /tmp/dereth-gallery");
+            Console.WriteLine("    serve-atlas ./gallery --port 8091");
+            return;
+        }
+        string outDir = tokens[1];
+        int port = 8090;
+        string bind = "0.0.0.0";
+        for (int i = 2; i < tokens.Length; i++) {
+            switch (tokens[i]) {
+                case "--port": if (i + 1 < tokens.Length && int.TryParse(tokens[++i], out var p)) port = p; break;
+                case "--bind": if (i + 1 < tokens.Length) bind = tokens[++i]; break;
+                default: Console.WriteLine($"Unknown flag: {tokens[i]}"); return;
+            }
+        }
+        var sr = _engine.ServeAtlas(outDir, port, bind);
+        Console.WriteLine();
+        if (!sr.Success) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  Failed: {sr.Error}");
+            Console.ResetColor();
+            return;
+        }
+        Console.WriteLine($"  Serving        : {sr.OutDir}");
+        Console.WriteLine($"  Local          : {sr.Url}");
+        if (sr.TailscaleUrl != null) {
+            Console.WriteLine($"  Tailscale      : {sr.TailscaleUrl}");
+        } else {
+            Console.WriteLine("  Tailscale      : (none — host has no 100.64.0.0/10 IP)");
+        }
+        Console.WriteLine($"  Bind           : {sr.Bind}:{sr.Port}");
+        Console.WriteLine($"  Pid            : {sr.Pid} (server runs in background until terminal exits)");
+        Console.WriteLine();
+    }
 
     private void HandleLoad(string[] tokens) {
         if (tokens.Length < 2) {

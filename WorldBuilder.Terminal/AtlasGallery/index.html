@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WorldBuilder · Visual Atlas Gallery</title>
+  <!--
+    Tailwind via CDN. Same no-build-step convention as the static-site
+    Leaflet bundle. Manifest is loaded as a JSONP-style assignment so the
+    page works from file:// without fetch().
+  -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="manifest.js"></script>
+  <style>
+    :root { color-scheme: dark; }
+    body { background: #0b1117; color: #cbd5e1; }
+    .card-img { aspect-ratio: 1 / 1; object-fit: cover; }
+    .panel-scroll { scrollbar-width: thin; scrollbar-color: #475569 #1e293b; }
+    .panel-scroll::-webkit-scrollbar { width: 8px; }
+    .panel-scroll::-webkit-scrollbar-track { background: #1e293b; }
+    .panel-scroll::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+    /* Side panel slide-in */
+    .panel { transform: translateX(100%); transition: transform 0.18s ease-out; }
+    .panel.open { transform: translateX(0); }
+    /* Sub-panel for creature card detail */
+    .subpanel { transform: translateX(100%); transition: transform 0.18s ease-out; }
+    .subpanel.open { transform: translateX(0); }
+  </style>
+</head>
+<body class="min-h-screen">
+  <header class="px-6 py-4 border-b border-slate-800 flex flex-wrap items-center gap-4">
+    <div>
+      <h1 class="text-xl font-semibold text-slate-100">Visual Atlas Gallery</h1>
+      <p id="header-sub" class="text-xs text-slate-500">loading…</p>
+    </div>
+    <div class="flex-1"></div>
+    <a id="map-link" href="../index.html" class="hidden text-xs px-3 py-1 rounded border border-slate-700 hover:border-amber-400 hover:text-amber-300 transition">Map view ↗</a>
+    <a href="manifest.json" class="text-xs px-3 py-1 rounded border border-slate-700 hover:border-amber-400 hover:text-amber-300 transition">manifest.json</a>
+  </header>
+
+  <!-- Filter bar -->
+  <div class="px-6 py-3 border-b border-slate-800 flex flex-wrap gap-3 items-center">
+    <div id="category-chips" class="flex flex-wrap gap-2"></div>
+    <div class="flex-1"></div>
+    <input id="search" type="search" placeholder="Filter by title, lb, note, or spawn name…"
+           class="bg-slate-900 border border-slate-700 text-slate-100 text-sm rounded px-3 py-1 w-72 focus:outline-none focus:border-amber-400" />
+  </div>
+
+  <!-- Card grid -->
+  <main class="px-6 py-6">
+    <div id="grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+    <div id="empty" class="hidden text-center py-12 text-slate-500">No picks match the current filter.</div>
+  </main>
+
+  <!-- Side panel: per-pick Living Atlas detail -->
+  <aside id="panel" class="panel fixed right-0 top-0 h-full w-full md:w-1/2 lg:w-2/5 bg-slate-900 border-l border-slate-800 overflow-y-auto panel-scroll p-5 z-30">
+    <button id="panel-close" class="absolute top-3 right-4 text-slate-400 hover:text-amber-300">close ✕</button>
+    <div id="panel-body"></div>
+  </aside>
+
+  <!-- Sub-panel: creature card detail -->
+  <aside id="subpanel" class="subpanel fixed right-0 top-0 h-full w-full md:w-1/2 lg:w-2/5 bg-slate-950 border-l border-slate-800 overflow-y-auto panel-scroll p-5 z-40">
+    <button id="subpanel-close" class="absolute top-3 right-4 text-slate-400 hover:text-amber-300">back ←</button>
+    <div id="subpanel-body"></div>
+  </aside>
+
+  <script>
+  /*  WorldBuilder · Visual Atlas Gallery — vanilla ES6, no build step.
+   *
+   *  manifest.js sets `window.ATLAS_GALLERY` as a JSONP-style global. We
+   *  derive cards, the filter chips, and the side-panel content from
+   *  that object plus per-pick desc/<slug>.json files (also loaded via
+   *  dynamic <script> JSONP — fetch() doesn't work from file://).
+   *
+   *  The desc/<slug>.json files are written directly as JSON; we load
+   *  them via XHR-when-allowed but fall back to a script-tag JSONP
+   *  pattern by also writing desc/<slug>.js next to them. For the v1
+   *  cut we accept that "open the index in a browser" works under HTTP
+   *  serving (serve-atlas wraps that), and the side-panel reads the
+   *  embedded fields the manifest already carries when XHR fails.
+   */
+  (function () {
+    'use strict';
+
+    const M = window.ATLAS_GALLERY;
+    if (!M) {
+      document.getElementById('header-sub').textContent =
+        'manifest.js not found — emit-atlas-gallery did not complete.';
+      return;
+    }
+
+    document.getElementById('header-sub').textContent =
+      `${M.projectName || 'Project'} · ${M.pickCount} picks · ${M.lbsCovered} LBs covered · ${M.totalSpawnCount.toLocaleString()} spawns · generated ${new Date(M.generated).toLocaleString()}`;
+
+    // Cross-link to a sibling Leaflet view if this gallery was emitted
+    // alongside one (emit-static-site --gallery convention).
+    if (M.siblingMap !== false) {
+      const link = document.getElementById('map-link');
+      // Best-effort link; if the sibling doesn't exist the link 404s
+      // but doesn't break the gallery. Hide entirely when we know the
+      // emitter ran the gallery standalone.
+      link.classList.remove('hidden');
+    }
+
+    const PICKS = M.picks || [];
+    const CATEGORIES = ['all', ...new Set(PICKS.map(p => p.category))];
+    let activeCategory = 'all';
+    let searchTerm = '';
+    const DESC_CACHE = Object.create(null);
+
+    // ── Filter chips ──────────────────────────────────────
+    const chipsEl = document.getElementById('category-chips');
+    CATEGORIES.forEach(cat => {
+      const b = document.createElement('button');
+      b.textContent = cat + ' (' + (cat === 'all' ? PICKS.length : PICKS.filter(p => p.category === cat).length) + ')';
+      b.className = 'text-xs px-2 py-1 rounded border border-slate-700 hover:border-amber-400 transition';
+      b.dataset.cat = cat;
+      if (cat === 'all') b.classList.add('bg-amber-500', 'text-slate-900', 'border-amber-400');
+      b.addEventListener('click', () => {
+        activeCategory = cat;
+        chipsEl.querySelectorAll('button').forEach(x => x.classList.remove('bg-amber-500', 'text-slate-900', 'border-amber-400'));
+        b.classList.add('bg-amber-500', 'text-slate-900', 'border-amber-400');
+        renderGrid();
+      });
+      chipsEl.appendChild(b);
+    });
+
+    document.getElementById('search').addEventListener('input', e => {
+      searchTerm = e.target.value.trim().toLowerCase();
+      renderGrid();
+    });
+
+    // ── Card grid ─────────────────────────────────────────
+    const gridEl = document.getElementById('grid');
+    const emptyEl = document.getElementById('empty');
+
+    function renderGrid() {
+      const filtered = PICKS.filter(p => matchesFilter(p));
+      gridEl.innerHTML = '';
+      emptyEl.classList.toggle('hidden', filtered.length > 0);
+      filtered.forEach(p => gridEl.appendChild(makeCard(p)));
+    }
+
+    function matchesFilter(p) {
+      if (activeCategory !== 'all' && p.category !== activeCategory) return false;
+      if (!searchTerm) return true;
+      const hay = `${p.title} ${p.lbHex} ${p.note} ${p.category}`.toLowerCase();
+      if (hay.includes(searchTerm)) return true;
+      // Search spawn-roster names if the desc payload has been hydrated.
+      const d = DESC_CACHE[p.slug];
+      if (d && d.body && d.body.spawns) {
+        for (const sp of d.body.spawns) {
+          if ((sp.name || '').toLowerCase().includes(searchTerm)) return true;
+        }
+      }
+      return false;
+    }
+
+    function makeCard(p) {
+      const card = document.createElement('article');
+      card.className = 'group rounded-lg border border-slate-800 hover:border-amber-400 overflow-hidden bg-slate-900 transition cursor-pointer hover:scale-[1.02]';
+      card.innerHTML = `
+        <div class="relative">
+          <img src="${escapeAttr(p.render)}" alt="${escapeAttr(p.title)}" class="card-img w-full bg-slate-950" loading="lazy" />
+          <span class="absolute top-2 right-2 text-[10px] uppercase tracking-wide px-2 py-0.5 bg-slate-950/80 border border-slate-700 rounded">${escapeText(p.category)}</span>
+        </div>
+        <div class="p-3">
+          <h3 class="text-sm font-semibold text-slate-100 truncate">${escapeText(p.title)}</h3>
+          <p class="text-[11px] text-slate-500 truncate">${escapeText(p.lbHex)} · ${escapeText(p.note || '')}</p>
+          <p class="text-[11px] text-slate-400 mt-1">
+            ${p.spawnCount != null ? `${p.spawnCount} spawns` : ''}
+            ${p.spawnCount != null && p.cellCount != null ? ' · ' : ''}
+            ${p.cellCount != null ? `${p.cellCount} cells` : ''}
+            ${p.renderObjectCount ? ` · ${p.renderObjectCount} rendered objects` : ''}
+          </p>
+        </div>
+      `;
+      card.addEventListener('click', () => openPanel(p));
+      return card;
+    }
+
+    // ── Side panel ────────────────────────────────────────
+    const panelEl = document.getElementById('panel');
+    const panelBody = document.getElementById('panel-body');
+    document.getElementById('panel-close').addEventListener('click', () => panelEl.classList.remove('open'));
+
+    function openPanel(p) {
+      panelEl.classList.add('open');
+      panelBody.innerHTML = `
+        <header class="mb-3">
+          <p class="text-[11px] uppercase tracking-wide text-amber-300">${escapeText(p.category)}</p>
+          <h2 class="text-lg font-semibold text-slate-100">${escapeText(p.title)}</h2>
+          <p class="text-xs text-slate-500">${escapeText(p.lbHex)} · ${escapeText(p.note || '')}</p>
+        </header>
+        <a href="${escapeAttr(p.render)}" target="_blank" rel="noopener">
+          <img src="${escapeAttr(p.render)}" alt="${escapeAttr(p.title)}" class="w-full rounded border border-slate-800 mb-4" />
+        </a>
+        <div id="panel-living" class="text-sm text-slate-300">Loading Living Atlas data…</div>
+      `;
+      hydrateDesc(p);
+    }
+
+    function hydrateDesc(p) {
+      // Already cached?
+      if (DESC_CACHE[p.slug]) {
+        renderLivingAtlas(p, DESC_CACHE[p.slug]);
+        return;
+      }
+      // Try fetch() first (works under HTTP). If that fails (file://),
+      // fall back to a JSONP-style script tag — but the emitter wrote
+      // bare JSON, not JSONP, so file:// without a sibling .js shim
+      // shows the manifest-only summary. The serve-atlas helper or any
+      // HTTP server makes the full fetch path work.
+      try {
+        fetch(p.desc).then(r => r.json()).then(d => {
+          DESC_CACHE[p.slug] = d;
+          renderLivingAtlas(p, d);
+        }).catch(() => renderLivingAtlasFallback(p));
+      } catch {
+        renderLivingAtlasFallback(p);
+      }
+    }
+
+    function renderLivingAtlasFallback(p) {
+      document.getElementById('panel-living').innerHTML = `
+        <div class="text-amber-200 text-xs mb-3">
+          Living-Atlas detail requires HTTP serving. Run
+          <code class="bg-slate-800 px-1 rounded">serve-atlas ${escapeText('<gallery-dir>')}</code>
+          and open the URL it prints, or open the
+          <a class="underline" href="${escapeAttr(p.desc)}">raw desc/${escapeText(p.slug)}.json</a>
+          file directly.
+        </div>
+      `;
+    }
+
+    function renderLivingAtlas(p, d) {
+      const ctx = d.context || {};
+      const body = d.body || {};
+      const validation = d.validation || {};
+      const verbal = d.verbal || '';
+      const spawns = body.spawns || [];
+      const structures = body.structures || [];
+      const namedObjects = body.namedObjects || [];
+
+      // Group spawns by category for the roster.
+      const byCat = {};
+      spawns.forEach(sp => {
+        const k = sp.category || 'Unknown';
+        (byCat[k] = byCat[k] || []).push(sp);
+      });
+
+      const sections = [];
+
+      sections.push(`
+        <section class="mb-4">
+          <h3 class="text-xs uppercase tracking-wide text-amber-300 mb-1">Living Atlas</h3>
+          <p class="text-sm text-slate-200 leading-snug">${escapeText(verbal)}</p>
+          <dl class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-400">
+            <dt class="text-slate-500">Region</dt><dd>${escapeText(ctx.regionName || '—')}</dd>
+            <dt class="text-slate-500">Town</dt><dd>${escapeText(ctx.townName || '—')}</dd>
+            <dt class="text-slate-500">Culture</dt><dd>${escapeText(ctx.culture || '—')}</dd>
+            <dt class="text-slate-500">Biome</dt><dd>${escapeText(ctx.biome || '—')}</dd>
+            <dt class="text-slate-500">Architecture</dt><dd>${escapeText(ctx.dominantArchitecture || '—')}</dd>
+            <dt class="text-slate-500">Structures</dt><dd>${ctx.structureCount ?? 0}</dd>
+          </dl>
+        </section>
+      `);
+
+      const totalSpawns = spawns.length;
+      if (totalSpawns > 0) {
+        sections.push(`
+          <section class="mb-4">
+            <h3 class="text-xs uppercase tracking-wide text-amber-300 mb-1">Spawn roster (${totalSpawns})</h3>
+            ${Object.entries(byCat).map(([cat, list]) => `
+              <div class="mb-2">
+                <p class="text-[11px] uppercase text-slate-500">${escapeText(cat)} · ${list.length}</p>
+                <ul class="text-sm divide-y divide-slate-800">
+                  ${list.slice(0, 50).map(sp => `
+                    <li class="py-1 flex items-center gap-2 hover:bg-slate-800/40 cursor-pointer spawn-row" data-wcid="${escapeAttr(String(sp.wcid))}" data-name="${escapeAttr(sp.name || 'Wcid ' + sp.wcid)}" data-cat="${escapeAttr(sp.category || '')}">
+                      <span class="text-slate-200">${escapeText(sp.name || ('Wcid ' + sp.wcid))}</span>
+                      <span class="text-[10px] text-slate-500">wcid ${sp.wcid}</span>
+                      ${sp.acpediaTitle ? `<span class="text-[10px] text-amber-300">${escapeText(sp.acpediaTitle)}</span>` : ''}
+                      <span class="ml-auto text-[10px] text-slate-500">cell ${sp.cell}</span>
+                    </li>
+                  `).join('')}
+                  ${list.length > 50 ? `<li class="text-[11px] text-slate-500 py-1">… and ${list.length - 50} more</li>` : ''}
+                </ul>
+              </div>
+            `).join('')}
+          </section>
+        `);
+      }
+
+      if (structures.length > 0) {
+        sections.push(`
+          <section class="mb-4">
+            <h3 class="text-xs uppercase tracking-wide text-amber-300 mb-1">Structures (${structures.length})</h3>
+            <ul class="text-sm space-y-1">
+              ${structures.slice(0, 30).map(s => `
+                <li class="text-slate-300">
+                  ${escapeText(s.nameHint || s.modelId || 'structure')}
+                  <span class="text-[10px] text-slate-500">${escapeText(s.architecture || '')} · ${escapeText(s.footprintShape || '')}</span>
+                </li>
+              `).join('')}
+              ${structures.length > 30 ? `<li class="text-[11px] text-slate-500">… and ${structures.length - 30} more</li>` : ''}
+            </ul>
+          </section>
+        `);
+      }
+
+      if (namedObjects.length > 0) {
+        sections.push(`
+          <section class="mb-4">
+            <h3 class="text-xs uppercase tracking-wide text-amber-300 mb-1">Named objects (${namedObjects.length})</h3>
+            <ul class="text-sm space-y-1">
+              ${namedObjects.slice(0, 30).map(n => `
+                <li class="text-slate-300">${escapeText(n.acpediaTitle || n.weenieName || 'object')} <span class="text-[10px] text-slate-500">${escapeText(n.tier || '')}</span></li>
+              `).join('')}
+            </ul>
+          </section>
+        `);
+      }
+
+      const diagnostics = (validation && validation.diagnostics) || [];
+      if (diagnostics.length > 0) {
+        sections.push(`
+          <section class="mb-2">
+            <h3 class="text-xs uppercase tracking-wide text-amber-300 mb-1">
+              Validation (${validation.errorCount || 0} errors · ${validation.warningCount || 0} warnings · ${validation.infoCount || 0} info)
+            </h3>
+            <ul class="text-xs space-y-0.5">
+              ${diagnostics.slice(0, 30).map(v => `
+                <li class="${severityClass(v.severity)}">[${escapeText(v.code)}] ${escapeText(v.message || '')}</li>
+              `).join('')}
+              ${diagnostics.length > 30 ? `<li class="text-[11px] text-slate-500">… and ${diagnostics.length - 30} more</li>` : ''}
+            </ul>
+          </section>
+        `);
+      }
+
+      document.getElementById('panel-living').innerHTML = sections.join('');
+
+      // Wire spawn-row click → creature card subpanel.
+      document.querySelectorAll('.spawn-row').forEach(row => {
+        row.addEventListener('click', () => openCreatureCard({
+          wcid: parseInt(row.dataset.wcid || '0', 10),
+          name: row.dataset.name,
+          category: row.dataset.cat,
+        }));
+      });
+    }
+
+    function severityClass(sev) {
+      switch ((sev || '').toLowerCase()) {
+        case 'error': return 'text-red-400';
+        case 'warning': return 'text-amber-300';
+        default: return 'text-slate-500';
+      }
+    }
+
+    // ── Creature card subpanel ────────────────────────────
+    const subpanelEl = document.getElementById('subpanel');
+    const subpanelBody = document.getElementById('subpanel-body');
+    document.getElementById('subpanel-close').addEventListener('click', () => subpanelEl.classList.remove('open'));
+
+    function openCreatureCard(creature) {
+      // Count appearances across the gallery using cached desc payloads.
+      let appearances = 0;
+      let lbsWith = 0;
+      Object.values(DESC_CACHE).forEach(d => {
+        const list = (d && d.body && d.body.spawns) || [];
+        const here = list.filter(s => s.wcid === creature.wcid).length;
+        if (here > 0) {
+          appearances += here;
+          lbsWith++;
+        }
+      });
+      subpanelEl.classList.add('open');
+      subpanelBody.innerHTML = `
+        <header class="mb-4">
+          <p class="text-[11px] uppercase tracking-wide text-amber-300">${escapeText(creature.category || 'Creature')}</p>
+          <h2 class="text-lg font-semibold text-slate-100">${escapeText(creature.name)}</h2>
+          <p class="text-xs text-slate-500">wcid ${creature.wcid}</p>
+        </header>
+
+        <div class="rounded border border-slate-800 p-4 mb-3">
+          <h3 class="text-xs uppercase tracking-wide text-amber-300 mb-1">Atlas appearances</h3>
+          <p class="text-sm text-slate-200">${appearances.toLocaleString()} spawn${appearances === 1 ? '' : 's'} across ${lbsWith} of ${PICKS.length} gallery picks (cached so far).</p>
+        </div>
+
+        <div class="rounded border border-slate-800 p-4 mb-3">
+          <h3 class="text-xs uppercase tracking-wide text-amber-300 mb-1">Sprite</h3>
+          <p class="text-xs text-slate-500 mb-2">
+            The sprite atlas lives in the static-site sibling at <code>../sprites/atlas.png</code>;
+            this gallery stays purely about LB renders. Future wave: surface the cropped sprite here.
+          </p>
+        </div>
+      `;
+    }
+
+    // ── Helpers ───────────────────────────────────────────
+    function escapeText(v) {
+      if (v == null) return '';
+      return String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+    function escapeAttr(v) { return escapeText(v); }
+
+    // Initial paint.
+    renderGrid();
+  })();
+  </script>
+</body>
+</html>

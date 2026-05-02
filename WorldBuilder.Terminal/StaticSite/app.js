@@ -64,6 +64,20 @@
     // Live overlay hook: Phase 4+ may drop a dynamic_players.js next to the
     // dist; we silently no-op when it's absent.
     loadScript('overlays/dynamic_players.js').catch(function () { /* ignore */ });
+
+    // Sibling gallery probe (emit-static-site --gallery). HEAD-or-fail
+    // probe is the cheapest way to detect the gallery without baking a
+    // flag into manifest.js. fetch() works under HTTP serving; from
+    // file:// we leave the link hidden because the network probe can't
+    // resolve and a dead link would be worse than a missing one.
+    if (window.fetch) {
+      fetch('gallery/index.html', { method: 'HEAD' }).then(function (r) {
+        if (r.ok) {
+          var a = document.getElementById('gallery-link');
+          if (a) a.hidden = false;
+        }
+      }).catch(function () { /* gallery not emitted; stay hidden */ });
+    }
   }
 
   // ── Project switcher ──────────────────────────────────────────────────

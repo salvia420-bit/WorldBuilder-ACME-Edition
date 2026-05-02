@@ -2095,6 +2095,164 @@ class TestSpinWave2026_05_01(RuntimeRequiredTestCase):
             self.assertIn(new_cmd, names, f"new command {new_cmd!r} missing from catalog")
 
 
+# ─────────────────────────────────────────────────────────────
+# Test Suite: Sync Wave 2026-05-XX — Visual Atlas Gallery
+# wirerender wave: emit-atlas-gallery + serve-atlas
+# ─────────────────────────────────────────────────────────────
+
+class TestVisualAtlasGallery(RuntimeRequiredTestCase):
+    """Wirerender wave: emit-atlas-gallery + serve-atlas + the
+    catalog visibility check. Most tests run against the loaded
+    TestProject so they don't need RetailSmoke; the full
+    end-to-end emit asserts only that error envelopes are
+    well-formed when the project lacks the gazetteer state the
+    curator wants — which is exactly what TestProject does, so
+    we get a deterministic shape test without needing DATs."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.session = TerminalSession()
+        cls.session.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.session:
+            try:
+                cls.session.quit()
+            except Exception:
+                cls.session.close()
+
+    # ── Catalog ─────────────────────────────────────────────
+
+    def test_01_catalog_lists_new_entries(self):
+        # 'help' is the actual catalog command; 'commands' is unknown.
+        # The catalog response shape is {commands: [{name, args, description}, ...]}.
+        resp = self.session.send({"command": "help"})
+        names = [c.get("name") for c in resp.get("commands", [])]
+        for new_cmd in ("emit-atlas-gallery", "serve-atlas"):
+            self.assertIn(new_cmd, names,
+                          f"new command {new_cmd!r} missing from catalog")
+
+    # ── emit-atlas-gallery shape (no project loaded) ────────
+
+    def test_02_emit_atlas_gallery_without_project_errors(self):
+        """Without a loaded project the engine raises 'No project loaded';
+        the JSON layer surfaces success=false with the message."""
+        resp = self.session.send({
+            "command": "emit-atlas-gallery",
+            "outDir": "/tmp/wirerender-no-project",
+        })
+        self.assertFalse(resp.get("success"))
+        self.assertEqual(resp.get("command"), "emit-atlas-gallery")
+        self.assertIn("error", resp)
+
+    def test_03_emit_atlas_gallery_missing_outdir_errors(self):
+        resp = self.session.send({"command": "emit-atlas-gallery"})
+        self.assertFalse(resp.get("success"))
+        self.assertEqual(resp.get("command"), "emit-atlas-gallery")
+        self.assertIn("error", resp)
+
+    # ── serve-atlas shape ───────────────────────────────────
+
+    def test_04_serve_atlas_missing_outdir_errors(self):
+        resp = self.session.send({"command": "serve-atlas"})
+        self.assertFalse(resp.get("success"))
+        self.assertEqual(resp.get("command"), "serve-atlas")
+        self.assertIn("error", resp)
+
+    def test_05_serve_atlas_nonexistent_outdir_errors(self):
+        resp = self.session.send({
+            "command": "serve-atlas",
+            "outDir": "/tmp/atlas-gallery-does-not-exist-xyz",
+            "port": 0,
+        })
+        self.assertFalse(resp.get("success"))
+        self.assertEqual(resp.get("command"), "serve-atlas")
+        self.assertIn("error", resp)
+
+
+@unittest.skipUnless(Path("/home/wbterminal/projects/RetailSmoke/RetailSmoke.wbproj").exists() or
+                     Path("/home/salvia420/projects/RetailSmoke/RetailSmoke.wbproj").exists(),
+                     "RetailSmoke project not found at known paths; gallery e2e test needs DATs.")
+class TestVisualAtlasGalleryRetail(RuntimeRequiredTestCase):
+    """End-to-end: emit-atlas-gallery against RetailSmoke. Runs with
+    1 town + 0 zones + 0 dungeons + 0 region anchors so the wall-clock
+    stays minimal — the curator picks 1 LB, the renderer writes 1 PNG +
+    1 JSON, and the manifest + viewer template land alongside."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # Resolve whichever RetailSmoke path exists.
+        for p in (Path("/home/wbterminal/projects/RetailSmoke/RetailSmoke.wbproj"),
+                  Path("/home/salvia420/projects/RetailSmoke/RetailSmoke.wbproj")):
+            if p.exists():
+                cls.project = p
+                break
+        else:
+            raise unittest.SkipTest("No RetailSmoke project found")
+
+    def setUp(self):
+        self.session = TerminalSession(project_path=str(self.project))
+        self.session.start()
+        self.dist = Path("/tmp/test_atlas_gallery_dist")
+        if self.dist.exists():
+            for p in sorted(self.dist.rglob("*"), reverse=True):
+                if p.is_file():
+                    p.unlink()
+                elif p.is_dir():
+                    p.rmdir()
+
+    def tearDown(self):
+        self.session.close()
+
+    def test_01_emit_atlas_gallery_produces_dist_contract(self):
+        """emit-atlas-gallery writes the documented tree:
+        manifest.json + manifest.js + index.html + renders/*.png + desc/*.json."""
+        resp = self.session.send({
+            "command": "emit-atlas-gallery",
+            "outDir": str(self.dist),
+            "autoTowns": 1,
+            "autoZones": 0,
+            "autoDungeons": 0,
+            "autoRegions": 0,
+            "radius": 0,
+            "resolution": 512,  # tiny for quick test
+            "useSprites": False,
+        }, timeout=180)
+        assert_success(resp, "emit-atlas-gallery")
+        assert_has_fields(resp, "picksRendered", "lbsCovered",
+                          "totalSpawnCount", "outDir",
+                          "indexPath", "manifestPath", "picks")
+
+        # Dist contract: when the curator finds at least one town,
+        # picks render → manifest + viewer land.
+        self.assertGreaterEqual(resp["picksRendered"], 0)
+        self.assertTrue((self.dist / "manifest.json").exists())
+        self.assertTrue((self.dist / "manifest.js").exists())
+        self.assertTrue((self.dist / "index.html").exists())
+
+        # manifest.json is parseable and aligns with the response.
+        manifest = json.loads((self.dist / "manifest.json").read_text())
+        self.assertEqual(manifest["protocolVersion"], 1)
+        self.assertEqual(manifest["pickCount"], resp["picksRendered"])
+
+        # Each pick has a corresponding render PNG and desc JSON.
+        for pick in resp["picks"]:
+            render_path = self.dist / pick["render"]
+            desc_path = self.dist / pick["desc"]
+            self.assertTrue(render_path.exists(), f"Missing render: {render_path}")
+            self.assertTrue(desc_path.exists(), f"Missing desc: {desc_path}")
+            # PNG sanity: 8-byte header.
+            with open(render_path, "rb") as f:
+                self.assertEqual(f.read(8), b'\x89PNG\r\n\x1a\n',
+                                 f"Not a valid PNG: {render_path}")
+            # Desc JSON parses cleanly.
+            with open(desc_path, "r") as f:
+                json.loads(f.read())
+
+
 if __name__ == "__main__":
     # Support --binary <path> argument
     if "--binary" in sys.argv:

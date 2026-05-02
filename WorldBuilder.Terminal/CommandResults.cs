@@ -1398,6 +1398,41 @@ public record CompareCreaturesResult(
     CompareCategoryDimension Housing,
     string? Error = null);
 
+// ── Visual Atlas Gallery (sync wave 2026-05-XX wirerender) ───
+public record AtlasGalleryPickInfo(
+    string Slug,
+    string Title,
+    string Category,
+    string LbHex,
+    int LbX, int LbY,
+    string Render,
+    string Desc,
+    int? SpawnCount,
+    int? CellCount,
+    int RenderObjectCount,
+    string Note);
+
+public record AtlasGalleryResult(
+    bool Success,
+    int PicksRendered,
+    int LbsCovered,
+    int TotalSpawnCount,
+    string OutDir,
+    string IndexPath,
+    string ManifestPath,
+    List<AtlasGalleryPickInfo> Picks,
+    string? Error = null);
+
+public record ServeAtlasResult(
+    bool Success,
+    string Url,
+    string? TailscaleUrl,
+    int Pid,
+    int Port,
+    string Bind,
+    string OutDir,
+    string? Error = null);
+
 // ── O2: Heightmap import ───────────────────────────────────
 public record ImportHeightmapPerLb(string Landblock, int Vertices);
 
