@@ -7175,8 +7175,16 @@ public partial class CommandEngine {
         var terrainTypesConc = new System.Collections.Concurrent.ConcurrentDictionary<string, int>();
 
         const int LANDBLOCK_VERTEX_COUNT = 81;
-        int parallelism = Math.Max(1, System.Environment.ProcessorCount);
-        Console.WriteLine($"[QuickWorld] Phase 1: Parallelizing across {parallelism} threads (255×255 landblocks)...");
+        // Cap at physical cores. Empirically, Phase 3 with per-thread DAT readers peaks at
+        // parallelism = physical-core-count and degrades past that (cache thrash + scheduling
+        // overhead exceed any IO parallelism gain). Phase 1 is CPU-bound and benefits similarly
+        // from staying within physical cores. Environment.ProcessorCount returns *logical* cores
+        // (2× on hyperthreaded systems), which used to over-subscribe both phases.
+        int physicalCores = WorldBuilder.Shared.Lib.HardwareInfo.PhysicalCoreCount;
+        int parallelism = Math.Max(1, physicalCores);
+        Console.WriteLine($"[QuickWorld] Phase 1: Parallelizing across {parallelism} threads " +
+                          $"(physical cores: {physicalCores}, logical cores: {System.Environment.ProcessorCount}, " +
+                          $"255×255 landblocks)...");
 
         // Counters shared across worker threads; only touched via Interlocked.
         int skippedCounter = 0;
