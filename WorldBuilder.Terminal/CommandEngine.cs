@@ -7036,6 +7036,23 @@ public partial class CommandEngine {
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     /// <summary>
+    /// Fallback scenery table used when the loaded codebook does not declare a
+    /// <c>scenery</c> block. These are the retail Setup IDs the original POC shipped with.
+    /// New codebooks should populate <see cref="QuickWorldHelpers.Codebook.SceneryByType"/>
+    /// instead so scenery is data-driven end-to-end.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<int, uint[]> DefaultSceneryByType = new Dictionary<int, uint[]> {
+        [0x03] = new uint[] { 0x02000B53, 0x02000B57, 0x02000BE0, 0x02000BDE, 0x02000B5B }, // LushGrass
+        [0x01] = new uint[] { 0x02000B53, 0x02000B5B, 0x02000BD7, 0x02000BD8 },              // Grassland
+        [0x0E] = new uint[] { 0x02000B95, 0x02000B97, 0x02000B99 },                           // SemiBarrenRock
+        [0x00] = new uint[] { 0x02000B95, 0x02000B97 },                                       // BarrenRock
+        [0x0A] = new uint[] { 0x02000B95, 0x02000BD7 },                                       // SandYellow
+        [0x0F] = new uint[] { 0x02000BDE, 0x02000B95 },                                       // Snow
+        [0x04] = new uint[] { 0x02000B53, 0x02000BD7 },                                       // MarshSparseSwamp
+        [0x06] = new uint[] { 0x02000B95, 0x02000B97 },                                       // ObsidianPlain
+    };
+
+    /// <summary>
     /// Reverse-engineers terrain from a world map image using a calibration codebook.
     ///
     /// For each pixel/vertex in the new image:
@@ -7060,7 +7077,10 @@ public partial class CommandEngine {
         const float CELL_SIZE = 24f;
         const float SCENERY_EDGE_MARGIN = CELL_SIZE;   // Keep one cell of margin from landblock edges
 
-        var rng = seed.HasValue ? new Random(seed.Value) : new Random();
+        // noiseSeed drives both the coherent height jitter (Phase 1) and the per-landblock
+        // scenery PRNG (Phase 3). Pinned at the top of the method so unseeded runs are still
+        // internally consistent — every vertex and every LB sees the same noise key.
+        int noiseSeed = seed ?? new Random().Next();
 
         // â”€â”€â”€ 1. Load codebook (terrain_codebook.json) â”€â”€â”€
         Console.WriteLine($"[QuickWorld] Loading codebook: {biomeMapPath}");
@@ -7167,15 +7187,12 @@ public partial class CommandEngine {
         System.Threading.Tasks.Parallel.ForEach(
             System.Collections.Concurrent.Partitioner.Create(0, 255),
             new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = parallelism },
-            // localInit: each thread gets its own typeCounts buffer + Random.
-            // For the unseeded case we use one Random per thread (concurrent new Random() can collide
-            // on time-based seeds). For the seeded case we still hand out a per-thread Random as the
-            // fallback path — see RngFor below for the deterministic per-iteration override.
+            // localInit: each thread gets its own typeCounts buffer. Height jitter is now derived
+            // from CoherentJitter(noiseSeed, globalVertexX, globalVertexY) so it's both deterministic
+            // and identical for the seam vertex shared by adjacent landblocks — no per-thread or
+            // per-LB Random needed in Phase 1.
             () => new {
                 TypeCounts = new Dictionary<int, int>(classificationColors.Count),
-                ThreadRng = seed.HasValue
-                    ? new Random(unchecked(seed.Value ^ System.Threading.Thread.CurrentThread.ManagedThreadId))
-                    : new Random(),
             },
             (range, _, threadCtx) => {
                 Span<TerrainEntry> currentData = stackalloc TerrainEntry[LANDBLOCK_VERTEX_COUNT];
@@ -7191,27 +7208,26 @@ public partial class CommandEngine {
 
                             var newEntries = new TerrainEntry[LANDBLOCK_VERTEX_COUNT];
 
-                            // For deterministic seeded mode, derive a per-iteration RNG so output is
-                            // independent of how the partitioner chunks the work across threads.
-                            // Unseeded mode uses the per-thread Random for speed.
-                            Random rngForLb = seed.HasValue
-                                ? new Random(unchecked(seed.Value * 65537 + (lbX << 8) + lbY))
-                                : threadCtx.ThreadRng;
-
-                            int dominantType = -1;
+                            int dominantType = 0;
                             threadCtx.TypeCounts.Clear();
 
                             for (int vx = 0; vx < 9; vx++) {
                                 for (int vy = 0; vy < 9; vy++) {
                                     int vi = vx * 9 + vy;
 
+                                    // Global vertex coordinates: identical for the seam vertex shared
+                                    // between (lbX,*,vx=8) and (lbX+1,*,vx=0), so CoherentJitter below
+                                    // returns the same value on both sides. No more boundary discontinuity.
+                                    int gx = lbX * 8 + vx;
+                                    int gy = lbY * 8 + vy;
+
                                     int pixX, pixY;
                                     if (isExact) {
-                                        pixX = lbX * 8 + vx;
-                                        pixY = VERTEX_GRID - 1 - (lbY * 8 + vy);
+                                        pixX = gx;
+                                        pixY = VERTEX_GRID - 1 - gy;
                                     } else {
-                                        pixX = (int)Math.Round((lbX * 8 + vx) * scaleX);
-                                        pixY = (int)Math.Round((VERTEX_GRID - 1 - (lbY * 8 + vy)) * scaleY);
+                                        pixX = (int)Math.Round(gx * scaleX);
+                                        pixY = (int)Math.Round((VERTEX_GRID - 1 - gy) * scaleY);
                                     }
                                     pixX = Math.Clamp(pixX, 0, imgW - 1);
                                     pixY = Math.Clamp(pixY, 0, imgH - 1);
@@ -7226,10 +7242,9 @@ public partial class CommandEngine {
                                     threadCtx.TypeCounts.TryGetValue(bestType, out var tc);
                                     threadCtx.TypeCounts[bestType] = tc + 1;
 
-                                    // Note: ±2 jitter in EstimateHeight is per-vertex by design — switching
-                                    // to a smoothed/low-frequency noise source is a known follow-up.
                                     double brightness = (pr + pg + pb) / (3.0 * 255.0);
-                                    byte heightIdx = QuickWorldHelpers.EstimateHeight(bestType, brightness, codebook, rngForLb);
+                                    int jitter = QuickWorldHelpers.CoherentJitter(noiseSeed, gx, gy);
+                                    byte heightIdx = QuickWorldHelpers.EstimateHeight(bestType, brightness, codebook, jitter);
 
                                     newEntries[vi] = currentData[vi] with {
                                         Height = heightIdx,
@@ -7251,7 +7266,6 @@ public partial class CommandEngine {
                             System.Threading.Interlocked.Increment(ref stampedCounter);
 
                             int maxCount = 0;
-                            dominantType = 0;
                             foreach (var (tt, cnt) in threadCtx.TypeCounts) {
                                 if (cnt > maxCount) { maxCount = cnt; dominantType = tt; }
                             }
@@ -7287,25 +7301,30 @@ public partial class CommandEngine {
         Console.WriteLine($"[QuickWorld] Phase 2 complete: terrain written.");
 
         // â”€â”€â”€ 5. Scatter scenery objects â”€â”€â”€
-        // FIXME: scenery model IDs are hardcoded retail object IDs. This contradicts the
-        // codebook abstraction; should be loaded from ontology or appended to terrain_codebook.json.
+        // Scenery models come from the codebook's optional `scenery` block when present
+        // (see QuickWorldHelpers.ParseCodebook); the legacy hardcoded retail-ID table is the
+        // fallback so older terrain_codebook.json files still produce sensible scenery.
         Console.WriteLine($"[QuickWorld] Phase 3: Scattering scenery objects...");
-        var sceneryByType = new Dictionary<int, uint[]> {
-            [0x03] = new uint[] { 0x02000B53, 0x02000B57, 0x02000BE0, 0x02000BDE, 0x02000B5B }, // LushGrass
-            [0x01] = new uint[] { 0x02000B53, 0x02000B5B, 0x02000BD7, 0x02000BD8 },              // Grassland
-            [0x0E] = new uint[] { 0x02000B95, 0x02000B97, 0x02000B99 },                           // SemiBarrenRock
-            [0x00] = new uint[] { 0x02000B95, 0x02000B97 },                                       // BarrenRock
-            [0x0A] = new uint[] { 0x02000B95, 0x02000BD7 },                                       // SandYellow
-            [0x0F] = new uint[] { 0x02000BDE, 0x02000B95 },                                       // Snow
-            [0x04] = new uint[] { 0x02000B53, 0x02000BD7 },                                       // MarshSparseSwamp
-            [0x06] = new uint[] { 0x02000B95, 0x02000B97 },                                       // ObsidianPlain
-        };
+        IReadOnlyDictionary<int, uint[]> sceneryByType = codebook.SceneryByType.Count > 0
+            ? codebook.SceneryByType
+            : DefaultSceneryByType;
+        Console.WriteLine($"[QuickWorld] Scenery source: " +
+            (codebook.SceneryByType.Count > 0 ? $"codebook ({codebook.SceneryByType.Count} types)"
+                                              : "built-in retail defaults"));
 
         // [0, LANDBLOCK_SIZE - 2*SCENERY_EDGE_MARGIN) range for the random offset, centered with the margin.
         const float SCENERY_RANGE = LANDBLOCK_SIZE - 2 * SCENERY_EDGE_MARGIN;
         int sceneryFailures = 0;
+        var heightTable = GetHeightTable();
 
-        foreach (var (lbKey, entries) in newEntriesMap) {
+        // Phase 3 must be deterministic for a given seed. ConcurrentDictionary enumeration
+        // order is not stable, so iterate sorted keys; per-LB PRNG is seeded from
+        // (noiseSeed, lbKey) so output is independent of iteration order anyway.
+        var sceneryKeys = newEntriesMap.Keys.ToArray();
+        Array.Sort(sceneryKeys);
+
+        foreach (var lbKey in sceneryKeys) {
+            if (!newEntriesMap.TryGetValue(lbKey, out var entries)) continue;
             if (!dominantTypes.TryGetValue(lbKey, out var domType)) continue;
             if (!sceneryByType.TryGetValue(domType, out var models) || models.Length == 0) continue;
 
@@ -7313,15 +7332,17 @@ public partial class CommandEngine {
             int lbY = lbKey & 0xFF;
 
             try {
-                int numScenery = rng.Next(1, 5);
+                // Per-LB PRNG: stack-only, deterministic in (noiseSeed, lbKey), no allocations.
+                var lbRng = new QuickWorldHelpers.XorShift32(unchecked((uint)(noiseSeed ^ (lbKey * 0x9E3779B1))));
+                int numScenery = lbRng.Next(1, 5);
                 float worldMinX = lbX * LANDBLOCK_SIZE;
                 float worldMinY = lbY * LANDBLOCK_SIZE;
 
                 var lbDoc = GetLandblockDoc(lbKey);
                 for (int s = 0; s < numScenery; s++) {
-                    uint modelId = models[rng.Next(models.Length)];
-                    float ox = worldMinX + SCENERY_EDGE_MARGIN + (float)rng.NextDouble() * SCENERY_RANGE;
-                    float oy = worldMinY + SCENERY_EDGE_MARGIN + (float)rng.NextDouble() * SCENERY_RANGE;
+                    uint modelId = models[lbRng.Next(models.Length)];
+                    float ox = worldMinX + SCENERY_EDGE_MARGIN + (float)lbRng.NextDouble() * SCENERY_RANGE;
+                    float oy = worldMinY + SCENERY_EDGE_MARGIN + (float)lbRng.NextDouble() * SCENERY_RANGE;
 
                     // ox-worldMinX is in [SCENERY_EDGE_MARGIN, LANDBLOCK_SIZE - SCENERY_EDGE_MARGIN);
                     // dividing by CELL_SIZE gives [1, 7) so the resulting vertex index is always
@@ -7329,7 +7350,7 @@ public partial class CommandEngine {
                     int gx = Math.Clamp((int)((ox - worldMinX) / CELL_SIZE), 0, 8);
                     int gy = Math.Clamp((int)((oy - worldMinY) / CELL_SIZE), 0, 8);
                     int vi = gx * 9 + gy;
-                    float z = GetHeightTable()[entries[vi].Height];
+                    float z = heightTable[entries[vi].Height];
 
                     var obj = new StaticObject {
                         Id = modelId,
@@ -7337,7 +7358,7 @@ public partial class CommandEngine {
                         IsSetup = (modelId & 0xFF000000u) == 0x02000000u,
                         Origin = new Vector3(ox, oy, z),
                         Orientation = Quaternion.CreateFromAxisAngle(
-                            Vector3.UnitZ, (float)(rng.NextDouble() * Math.PI * 2)),
+                            Vector3.UnitZ, (float)(lbRng.NextDouble() * Math.PI * 2)),
                         Scale = Vector3.One
                     };
                     lbDoc.AddStaticObject(obj);

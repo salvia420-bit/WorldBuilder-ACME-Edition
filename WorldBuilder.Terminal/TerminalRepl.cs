@@ -3881,7 +3881,7 @@ public class TerminalRepl {
             Console.WriteLine();
             Console.WriteLine("  codebook.json   â€” output of calibrate-world-map (required)");
             Console.WriteLine("  world_map.png   â€” source image (2041Ã—2041 for exact, or any size) (required)");
-            Console.WriteLine("  seed            â€” random seed, 0 = non-deterministic (default: 0)");
+            Console.WriteLine("  seed            â€” deterministic seed (any int incl. 0); omit for non-deterministic");
             Console.WriteLine();
             Console.WriteLine("  Example: quick-world pipeline_data/enrichment/terrain_codebook.json new_world.png");
             Console.WriteLine("  Example: quick-world pipeline_data/enrichment/terrain_codebook.json new_world.png 42");
