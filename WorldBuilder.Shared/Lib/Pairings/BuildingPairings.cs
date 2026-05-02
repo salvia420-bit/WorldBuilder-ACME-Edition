@@ -121,7 +121,7 @@ public class BuildingPairings {
             Pairs = _edges.Select(e => new[] { e.A, e.B }).ToList(),
         };
         File.WriteAllText(path,
-            JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true }),
+            JsonSerializer.Serialize(doc, JsonOpts.Indented),
             new System.Text.UTF8Encoding(false));
     }
 

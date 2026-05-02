@@ -1898,7 +1898,7 @@ public class JsonCommandProcessor {
         var p = paramsNode != null
             ? System.Text.Json.JsonSerializer.Deserialize<WorldBuilder.Shared.Lib.WorldGen.WorldGeneratorParams>(
                 paramsNode.ToJsonString(),
-                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                WorldBuilder.Shared.Lib.JsonOpts.CaseInsensitive)
             : new WorldBuilder.Shared.Lib.WorldGen.WorldGeneratorParams();
         if (p == null) throw new ArgumentException("Could not parse 'params'.");
 

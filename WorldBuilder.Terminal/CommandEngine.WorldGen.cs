@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using DatReaderWriter.DBObjs;
 using WorldBuilder.Shared.Documents;
+using WorldBuilder.Shared.Lib;
 using WorldBuilder.Shared.Lib.WorldGen;
 
 namespace WorldBuilder.Terminal;
@@ -111,7 +112,7 @@ public partial class CommandEngine {
         var json = JsonDocument.Parse(File.ReadAllText(fromResultJson));
         var towns = json.RootElement.TryGetProperty("towns", out var townsEl)
             ? JsonSerializer.Deserialize<List<TownSite>>(townsEl.GetRawText(),
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new()
+                JsonOpts.CaseInsensitive) ?? new()
             : new List<TownSite>();
 
         var placements = new Dictionary<ushort, List<PlannedBuilding>>();
@@ -119,7 +120,7 @@ public partial class CommandEngine {
             foreach (var prop in pbEl.EnumerateObject()) {
                 ushort lbKey = ushort.Parse(prop.Name[2..], System.Globalization.NumberStyles.HexNumber);
                 var list = JsonSerializer.Deserialize<List<PlannedBuilding>>(prop.Value.GetRawText(),
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
+                    JsonOpts.CaseInsensitive) ?? new();
                 placements[lbKey] = list;
             }
         }

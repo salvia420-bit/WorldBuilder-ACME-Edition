@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
+using WorldBuilder.Shared.Lib;
 using WorldBuilder.Shared.Lib.AceDb;
 
 namespace WorldBuilder.Terminal;
@@ -33,8 +34,7 @@ public partial class CommandEngine {
             if (!File.Exists(jsonPath))
                 throw new FileNotFoundException($"JSON file not found: {jsonPath}", jsonPath);
             overrides = JsonSerializer.Deserialize<AceCreatureOverrides>(
-                File.ReadAllText(jsonPath),
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                File.ReadAllText(jsonPath), JsonOpts.CaseInsensitive);
         }
 
         if (overrides == null)

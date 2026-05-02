@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using WorldBuilder.Shared.Lib;
 using WorldBuilder.Shared.Lib.AceDb;
 
 namespace WorldBuilder.Terminal;
@@ -21,8 +22,7 @@ public partial class CommandEngine {
             throw new FileNotFoundException($"JSON file not found: {jsonPath}", jsonPath);
 
         var snap = JsonSerializer.Deserialize<AceWeenieSnapshot>(
-            File.ReadAllText(jsonPath),
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            File.ReadAllText(jsonPath), JsonOpts.CaseInsensitive)
             ?? throw new InvalidOperationException("Failed to deserialize AceWeenieSnapshot.");
         snap.ClassId = classId;
 
@@ -43,8 +43,7 @@ public partial class CommandEngine {
             throw new FileNotFoundException($"JSON file not found: {jsonPath}", jsonPath);
 
         var snap = JsonSerializer.Deserialize<AceWeenieSnapshot>(
-            File.ReadAllText(jsonPath),
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            File.ReadAllText(jsonPath), JsonOpts.CaseInsensitive)
             ?? throw new InvalidOperationException("Failed to deserialize AceWeenieSnapshot.");
 
         using var connector = RequireAceDbConnector();

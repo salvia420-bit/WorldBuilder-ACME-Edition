@@ -351,10 +351,7 @@ public static class DungeonRoomAnalyzer {
         var dir = Path.GetDirectoryName(outputPath);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
-        var json = JsonSerializer.Serialize(report, new JsonSerializerOptions {
-            WriteIndented = true,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-        });
+        var json = JsonSerializer.Serialize(report, JsonOpts.CamelCaseIndented);
         File.WriteAllText(outputPath, json);
     }
 
@@ -400,10 +397,7 @@ public static class DungeonRoomAnalyzer {
 
         var baseName = Path.GetFileNameWithoutExtension(outputPath);
         var jsonPath = string.IsNullOrEmpty(dir) ? baseName + ".json" : Path.Combine(dir, baseName + ".json");
-        var json = JsonSerializer.Serialize(report, new JsonSerializerOptions {
-            WriteIndented = true,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-        });
+        var json = JsonSerializer.Serialize(report, JsonOpts.CamelCaseIndented);
         File.WriteAllText(jsonPath, json);
 
         var txtPath = string.IsNullOrEmpty(dir) ? baseName + ".txt" : Path.Combine(dir, baseName + ".txt");

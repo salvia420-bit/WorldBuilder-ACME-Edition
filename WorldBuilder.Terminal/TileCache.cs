@@ -219,8 +219,8 @@ public class TileCache {
     // ── Persistence ────────────────────────────────────────────
 
     public void SaveManifest() {
-        var opts = new JsonSerializerOptions { WriteIndented = false };
-        File.WriteAllText(_manifestPath, JsonSerializer.Serialize(_manifest, opts));
+        // Default JsonSerializerOptions already has WriteIndented = false; no opts object needed.
+        File.WriteAllText(_manifestPath, JsonSerializer.Serialize(_manifest));
     }
 
     private TileManifest LoadManifest() {

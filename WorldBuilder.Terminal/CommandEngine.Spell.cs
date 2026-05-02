@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using DatReaderWriter.DBObjs;
 using MySqlConnector;
 using WorldBuilder.Shared.Documents;
+using WorldBuilder.Shared.Lib;
 using WorldBuilder.Shared.Lib.AceDb;
 
 namespace WorldBuilder.Terminal;
@@ -103,8 +104,7 @@ public partial class CommandEngine {
             throw new FileNotFoundException($"JSON file not found: {jsonPath}", jsonPath);
 
         var spell = JsonSerializer.Deserialize<SpellRecord>(
-            File.ReadAllText(jsonPath),
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            File.ReadAllText(jsonPath), JsonOpts.CaseInsensitive)
             ?? throw new InvalidOperationException("Failed to deserialize SpellRecord from JSON.");
 
         spell.Id = id;

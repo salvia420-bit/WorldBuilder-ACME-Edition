@@ -282,10 +282,7 @@ public static class DungeonTopologyAnalyzer {
         var dir = Path.GetDirectoryName(outputPath);
     if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
-        var json = JsonSerializer.Serialize(report, new JsonSerializerOptions {
-            WriteIndented = true,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-        });
+        var json = JsonSerializer.Serialize(report, JsonOpts.CamelCaseIndented);
         File.WriteAllText(outputPath, json);
     }
 

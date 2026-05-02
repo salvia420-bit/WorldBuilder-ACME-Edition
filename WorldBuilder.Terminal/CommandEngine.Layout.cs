@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using DatReaderWriter.DBObjs;
 using WorldBuilder.Shared.Documents;
+using WorldBuilder.Shared.Lib;
 
 namespace WorldBuilder.Terminal;
 
@@ -68,8 +69,7 @@ public partial class CommandEngine {
             throw new FileNotFoundException($"JSON file not found: {jsonPath}", jsonPath);
 
         var json = File.ReadAllText(jsonPath);
-        var layout = JsonSerializer.Deserialize<LayoutDesc>(json,
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+        var layout = JsonSerializer.Deserialize<LayoutDesc>(json, JsonOpts.CaseInsensitive)
             ?? throw new InvalidOperationException("Failed to deserialize LayoutDesc from JSON.");
 
         var doc = GetLayoutDoc();

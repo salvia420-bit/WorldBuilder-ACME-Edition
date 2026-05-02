@@ -4471,11 +4471,8 @@ public partial class CommandEngine {
                     categoryCounts
                 };
 
-                var jsonOpts = new System.Text.Json.JsonSerializerOptions {
-                    WriteIndented = true,
-                    PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
-                };
-                var json = System.Text.Json.JsonSerializer.Serialize(outputData, jsonOpts);
+                var json = System.Text.Json.JsonSerializer.Serialize(outputData,
+                    WorldBuilder.Shared.Lib.JsonOpts.CamelCaseIndented);
                 File.WriteAllText(outputPath, json);
                 Console.WriteLine($"[AnalyzeLandblockPatterns] Results saved to: {outputPath}");
             } catch (Exception ex) {
@@ -4670,12 +4667,6 @@ public partial class CommandEngine {
         // â”€â”€â”€ Pass 2: Write one JSON line per object â”€â”€â”€
         int exported = 0;
         int withOntology = 0;
-        var jsonOpts = new System.Text.Json.JsonSerializerOptions {
-            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
-            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-            WriteIndented = false
-        };
-
         var categoryCache = ontologyScanned ? new Dictionary<uint, string?>() : null;
 
         try {
@@ -4827,7 +4818,7 @@ public partial class CommandEngine {
                         tags
                     };
 
-                    writer.WriteLine(System.Text.Json.JsonSerializer.Serialize(line, jsonOpts));
+                    writer.WriteLine(System.Text.Json.JsonSerializer.Serialize(line, WorldBuilder.Shared.Lib.JsonOpts.CamelCaseCompactIgnoreNull));
                     exported++;
                 } catch (Exception ex) {
                     Console.WriteLine($"[ExportTrainingData] Warning: skipped object 0x{objectId:X8}: {ex.Message}");
@@ -5167,12 +5158,6 @@ public partial class CommandEngine {
         int totalExported = 0;
         int landblocksProcessed = 0;
 
-        var jsonOpts = new System.Text.Json.JsonSerializerOptions {
-            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
-            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-            WriteIndented = false
-        };
-
         try {
             using var writer = new StreamWriter(outputPath, false, System.Text.Encoding.UTF8);
             for (uint lbX = minX; lbX <= maxX; lbX++) {
@@ -5221,7 +5206,7 @@ public partial class CommandEngine {
                         ulong componentId = ((ulong)lbKey << 32) | (uint)buildingIndex;
                         writer.WriteLine(System.Text.Json.JsonSerializer.Serialize(
                             BuildEnvCellComponentJson(dats, lbKey, "surface_anchor_component", componentId, envCells, componentCellIds, anchor),
-                            jsonOpts));
+                            WorldBuilder.Shared.Lib.JsonOpts.CamelCaseCompactIgnoreNull));
                         anchoredCount++;
                         totalExported++;
                     }
@@ -5236,7 +5221,7 @@ public partial class CommandEngine {
                         ulong componentId = ((ulong)lbKey << 32) | (uint)startCellId;
                         writer.WriteLine(System.Text.Json.JsonSerializer.Serialize(
                             BuildEnvCellComponentJson(dats, lbKey, "unanchored_envcell_component", componentId, envCells, componentCellIds),
-                            jsonOpts));
+                            WorldBuilder.Shared.Lib.JsonOpts.CamelCaseCompactIgnoreNull));
                         unanchoredCount++;
                         totalExported++;
                     }
@@ -5748,12 +5733,6 @@ public partial class CommandEngine {
             list.Add(i);
         }
 
-        var jsonOpts = new System.Text.Json.JsonSerializerOptions {
-            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
-            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-            WriteIndented = false
-        };
-
         try {
             using var writer = new StreamWriter(outputPath, false, System.Text.Encoding.UTF8);
             for (int idx = 0; idx < objects.Count; idx++) {
@@ -5963,7 +5942,7 @@ public partial class CommandEngine {
                     parentGuids = obj.ParentGuids?.Distinct().OrderBy(v => v).ToArray(),
                     childGuids = obj.ChildGuids?.Distinct().OrderBy(v => v).ToArray(),
                     neighborhoods
-                }, jsonOpts));
+                }, WorldBuilder.Shared.Lib.JsonOpts.CamelCaseCompactIgnoreNull));
             }
         } catch (Exception ex) {
             sw.Stop();
@@ -6517,12 +6496,6 @@ public partial class CommandEngine {
         int totalScanned = 0;
         int populated = 0;
 
-        var jsonOpts = new System.Text.Json.JsonSerializerOptions {
-            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
-            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-            WriteIndented = false
-        };
-
         try {
             var outDir = Path.GetDirectoryName(outputPath);
             if (!string.IsNullOrEmpty(outDir))
@@ -6559,7 +6532,7 @@ public partial class CommandEngine {
                         roadFlags
                     };
 
-                    writer.WriteLine(System.Text.Json.JsonSerializer.Serialize(line, jsonOpts));
+                    writer.WriteLine(System.Text.Json.JsonSerializer.Serialize(line, WorldBuilder.Shared.Lib.JsonOpts.CamelCaseCompactIgnoreNull));
                     populated++;
                 }
 
@@ -6774,11 +6747,8 @@ public partial class CommandEngine {
         };
 
         try {
-            var jsonOpts = new System.Text.Json.JsonSerializerOptions {
-                PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
-                WriteIndented = true
-            };
-            var json = System.Text.Json.JsonSerializer.Serialize(baseline, jsonOpts);
+            var json = System.Text.Json.JsonSerializer.Serialize(baseline,
+                WorldBuilder.Shared.Lib.JsonOpts.CamelCaseIndented);
 
             // Ensure output directory exists for non-simple filenames
             var dir = Path.GetDirectoryName(outputPath);
@@ -7005,16 +6975,12 @@ public partial class CommandEngine {
                 heightTable = ht
             };
 
-            var jsonOpts = new System.Text.Json.JsonSerializerOptions {
-                PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
-                WriteIndented = true
-            };
-
             var dir = Path.GetDirectoryName(outputPath);
             if (!string.IsNullOrEmpty(dir))
                 Directory.CreateDirectory(dir);
 
-            var json = System.Text.Json.JsonSerializer.Serialize(codebook, jsonOpts);
+            var json = System.Text.Json.JsonSerializer.Serialize(codebook,
+                WorldBuilder.Shared.Lib.JsonOpts.CamelCaseIndented);
             File.WriteAllText(outputPath, json, System.Text.Encoding.UTF8);
         } catch (Exception ex) {
             sw.Stop();
@@ -7576,11 +7542,6 @@ public partial class CommandEngine {
         Console.WriteLine($"[AnalyzeMapImage] Classification complete. Building output...");
 
         try {
-            var jsonOpts = new System.Text.Json.JsonSerializerOptions {
-                PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
-                WriteIndented = true
-            };
-
             // Build the biome grid as a 2D array of biome IDs for easy lookup
             var biomeGrid = new string[GRID][];
             for (int x = 0; x < GRID; x++) {
@@ -7647,7 +7608,8 @@ public partial class CommandEngine {
             if (!string.IsNullOrEmpty(dir))
                 Directory.CreateDirectory(dir);
 
-            var json = System.Text.Json.JsonSerializer.Serialize(output, jsonOpts);
+            var json = System.Text.Json.JsonSerializer.Serialize(output,
+                WorldBuilder.Shared.Lib.JsonOpts.CamelCaseIndented);
             File.WriteAllText(outputPath, json, System.Text.Encoding.UTF8);
         } catch (Exception ex) {
             sw.Stop();
@@ -8925,7 +8887,7 @@ public partial class CommandEngine {
             if (oldCellIdMap.Count > 0) {
                 mapPath = Path.Combine(project.ProjectDirectory, "building_old_cells.json");
                 var json = System.Text.Json.JsonSerializer.Serialize(oldCellIdMap,
-                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                    WorldBuilder.Shared.Lib.JsonOpts.Indented);
                 File.WriteAllText(mapPath, json, new System.Text.UTF8Encoding(false));
                 Console.WriteLine($"  Saved old cell ID map -> {mapPath}");
             }
@@ -10200,7 +10162,7 @@ public partial class CommandEngine {
                     totalBuildingsPlaced = result.TotalBuildingsPlaced,
                     totalDecorationsPlaced = result.TotalDecorationsPlaced,
                     totalRoadVertices = result.TotalRoadVertices,
-                }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                }, WorldBuilder.Shared.Lib.JsonOpts.Indented);
                 File.WriteAllText(outputJsonPath, serialized);
             }
             catch (Exception ex) {
@@ -10293,7 +10255,7 @@ public partial class CommandEngine {
                 var dir = Path.GetDirectoryName(outputJsonPath);
                 if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
                 File.WriteAllText(outputJsonPath, System.Text.Json.JsonSerializer.Serialize(
-                    summaries, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+                    summaries, WorldBuilder.Shared.Lib.JsonOpts.Indented));
             }
 
             return new AnalyzeBuildingsResult(true, summaries.Count, withInterior, paired, summaries, outputJsonPath);
@@ -10325,7 +10287,7 @@ public partial class CommandEngine {
                 var dir = Path.GetDirectoryName(outputJsonPath);
                 if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
                 File.WriteAllText(outputJsonPath, System.Text.Json.JsonSerializer.Serialize(
-                    rows, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+                    rows, WorldBuilder.Shared.Lib.JsonOpts.Indented));
             }
 
             return new ScanRetailTownsResult(true, rows.Count, rows, outputJsonPath);

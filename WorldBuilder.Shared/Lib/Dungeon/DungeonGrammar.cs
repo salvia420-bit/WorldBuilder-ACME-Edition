@@ -291,15 +291,24 @@ public static class DungeonGrammar {
         return sb.ToString();
     }
 
+    // Indented/compact variants pre-built so callers don't pay the converter-registration
+    // cost per ToJson() call. Frozen on first use; do NOT mutate.
+    private static readonly JsonSerializerOptions GraphJsonIndented = new() {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+    };
+    private static readonly JsonSerializerOptions GraphJsonCompact = new() {
+        WriteIndented = false,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+    };
+
     /// <summary>
     /// Serialize a dungeon graph to JSON.
     /// </summary>
     public static string ToJson(DungeonGraph graph, bool indented = true) {
-        return JsonSerializer.Serialize(graph, new JsonSerializerOptions {
-            WriteIndented = indented,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
-        });
+        return JsonSerializer.Serialize(graph, indented ? GraphJsonIndented : GraphJsonCompact);
     }
 
     /// <summary>

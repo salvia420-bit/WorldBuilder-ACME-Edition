@@ -2691,7 +2691,7 @@ public class TerminalRepl {
             var p = paramsPath != null
                 ? System.Text.Json.JsonSerializer.Deserialize<WorldBuilder.Shared.Lib.WorldGen.WorldGeneratorParams>(
                     System.IO.File.ReadAllText(paramsPath),
-                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                    WorldBuilder.Shared.Lib.JsonOpts.CaseInsensitive)
                 : new WorldBuilder.Shared.Lib.WorldGen.WorldGeneratorParams();
             if (p == null) { Console.WriteLine("Failed to parse --params JSON."); return; }
 

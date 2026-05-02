@@ -1623,15 +1623,16 @@ public class OntologyService : IOntologyService {
     //  Persistence (cache to / load from JSONL)
     // ════════════════════════════════════════════════════
 
+    private static readonly System.Text.Json.JsonSerializerOptions CacheJsonOpts = new() {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+    };
+
     public int CacheToFile(string outputPath) {
         var dir = Path.GetDirectoryName(outputPath);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
         int count = 0;
         using var w = new StreamWriter(outputPath, false, System.Text.Encoding.UTF8);
-        var jsonOpts = new System.Text.Json.JsonSerializerOptions {
-            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-        };
         foreach (var entry in _entries.Values.OrderBy(e => e.ObjectId)) {
             // Only serialize Confidence/ClassificationReason when they carry
             // information beyond the legacy default. This keeps the cache
@@ -1670,7 +1671,7 @@ public class OntologyService : IOntologyService {
                 behavior = entry.Behavior,
                 creatureFamilyName = entry.CreatureFamilyName,
             };
-            w.WriteLine(System.Text.Json.JsonSerializer.Serialize(dto, jsonOpts));
+            w.WriteLine(System.Text.Json.JsonSerializer.Serialize(dto, CacheJsonOpts));
             count++;
         }
         Console.Error.WriteLine($"[Ontology] Cached {count:N0} entries -> {outputPath}");
