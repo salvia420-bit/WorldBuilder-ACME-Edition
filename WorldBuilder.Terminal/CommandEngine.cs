@@ -7314,65 +7314,87 @@ public partial class CommandEngine {
 
         // [0, LANDBLOCK_SIZE - 2*SCENERY_EDGE_MARGIN) range for the random offset, centered with the margin.
         const float SCENERY_RANGE = LANDBLOCK_SIZE - 2 * SCENERY_EDGE_MARGIN;
-        int sceneryFailures = 0;
         var heightTable = GetHeightTable();
 
-        // Phase 3 must be deterministic for a given seed. ConcurrentDictionary enumeration
-        // order is not stable, so iterate sorted keys; per-LB PRNG is seeded from
-        // (noiseSeed, lbKey) so output is independent of iteration order anyway.
+        // Phase 3 used to be single-threaded, and the per-LB GetLandblockDoc call dominated wall time
+        // (~30k synchronous file reads + DAT lookups). FileStorageService.GetDocumentAsync uses
+        // FileShare.Read so concurrent reads of distinct landblock files are safe, and the DAT
+        // reader's coarse global lock only serialises the brief TryGet itself — surrounding work
+        // (deserialization, StaticObject construction) overlaps. Each lbKey maps to a unique
+        // LandblockDocument, so AddStaticObject mutations on different LBs don't share state.
+        // Per-LB PRNG is seeded from (noiseSeed, lbKey), so determinism is independent of which
+        // thread happens to process which LB.
         var sceneryKeys = newEntriesMap.Keys.ToArray();
         Array.Sort(sceneryKeys);
 
-        foreach (var lbKey in sceneryKeys) {
-            if (!newEntriesMap.TryGetValue(lbKey, out var entries)) continue;
-            if (!dominantTypes.TryGetValue(lbKey, out var domType)) continue;
-            if (!sceneryByType.TryGetValue(domType, out var models) || models.Length == 0) continue;
+        int objectsPlacedCounter = 0;
+        int sceneryFailureCounter = 0;
+        int sceneryFailMessages = 0;
+        var phase3Sw = System.Diagnostics.Stopwatch.StartNew();
 
-            int lbX = (lbKey >> 8) & 0xFF;
-            int lbY = lbKey & 0xFF;
+        System.Threading.Tasks.Parallel.ForEach(
+            System.Collections.Concurrent.Partitioner.Create(0, sceneryKeys.Length),
+            new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = parallelism },
+            range => {
+                for (int i = range.Item1; i < range.Item2; i++) {
+                    ushort lbKey = sceneryKeys[i];
+                    if (!newEntriesMap.TryGetValue(lbKey, out var entries)) continue;
+                    if (!dominantTypes.TryGetValue(lbKey, out var domType)) continue;
+                    if (!sceneryByType.TryGetValue(domType, out var models) || models.Length == 0) continue;
 
-            try {
-                // Per-LB PRNG: stack-only, deterministic in (noiseSeed, lbKey), no allocations.
-                var lbRng = new QuickWorldHelpers.XorShift32(unchecked((uint)(noiseSeed ^ (lbKey * 0x9E3779B1))));
-                int numScenery = lbRng.Next(1, 5);
-                float worldMinX = lbX * LANDBLOCK_SIZE;
-                float worldMinY = lbY * LANDBLOCK_SIZE;
+                    int lbX = (lbKey >> 8) & 0xFF;
+                    int lbY = lbKey & 0xFF;
 
-                var lbDoc = GetLandblockDoc(lbKey);
-                for (int s = 0; s < numScenery; s++) {
-                    uint modelId = models[lbRng.Next(models.Length)];
-                    float ox = worldMinX + SCENERY_EDGE_MARGIN + (float)lbRng.NextDouble() * SCENERY_RANGE;
-                    float oy = worldMinY + SCENERY_EDGE_MARGIN + (float)lbRng.NextDouble() * SCENERY_RANGE;
+                    try {
+                        // Per-LB PRNG: stack-only, deterministic in (noiseSeed, lbKey), no allocations.
+                        var lbRng = new QuickWorldHelpers.XorShift32(unchecked((uint)(noiseSeed ^ (lbKey * 0x9E3779B1))));
+                        int numScenery = lbRng.Next(1, 5);
+                        float worldMinX = lbX * LANDBLOCK_SIZE;
+                        float worldMinY = lbY * LANDBLOCK_SIZE;
 
-                    // ox-worldMinX is in [SCENERY_EDGE_MARGIN, LANDBLOCK_SIZE - SCENERY_EDGE_MARGIN);
-                    // dividing by CELL_SIZE gives [1, 7) so the resulting vertex index is always
-                    // valid â€” the clamp is purely defensive against floating-point rounding at the edges.
-                    int gx = Math.Clamp((int)((ox - worldMinX) / CELL_SIZE), 0, 8);
-                    int gy = Math.Clamp((int)((oy - worldMinY) / CELL_SIZE), 0, 8);
-                    int vi = gx * 9 + gy;
-                    float z = heightTable[entries[vi].Height];
+                        var lbDoc = GetLandblockDoc(lbKey);
+                        for (int s = 0; s < numScenery; s++) {
+                            uint modelId = models[lbRng.Next(models.Length)];
+                            float ox = worldMinX + SCENERY_EDGE_MARGIN + (float)lbRng.NextDouble() * SCENERY_RANGE;
+                            float oy = worldMinY + SCENERY_EDGE_MARGIN + (float)lbRng.NextDouble() * SCENERY_RANGE;
 
-                    var obj = new StaticObject {
-                        Id = modelId,
-                        // AC type prefix is the high byte (0xPPNNNNNN). 0x02 = Setup.
-                        IsSetup = (modelId & 0xFF000000u) == 0x02000000u,
-                        Origin = new Vector3(ox, oy, z),
-                        Orientation = Quaternion.CreateFromAxisAngle(
-                            Vector3.UnitZ, (float)(lbRng.NextDouble() * Math.PI * 2)),
-                        Scale = Vector3.One
-                    };
-                    lbDoc.AddStaticObject(obj);
-                    objectsPlaced++;
+                            // ox-worldMinX is in [SCENERY_EDGE_MARGIN, LANDBLOCK_SIZE - SCENERY_EDGE_MARGIN);
+                            // dividing by CELL_SIZE gives [1, 7) so the resulting vertex index is always
+                            // valid â€” the clamp is purely defensive against floating-point rounding at the edges.
+                            int gx = Math.Clamp((int)((ox - worldMinX) / CELL_SIZE), 0, 8);
+                            int gy = Math.Clamp((int)((oy - worldMinY) / CELL_SIZE), 0, 8);
+                            int vi = gx * 9 + gy;
+                            float z = heightTable[entries[vi].Height];
+
+                            var obj = new StaticObject {
+                                Id = modelId,
+                                // AC type prefix is the high byte (0xPPNNNNNN). 0x02 = Setup.
+                                IsSetup = (modelId & 0xFF000000u) == 0x02000000u,
+                                Origin = new Vector3(ox, oy, z),
+                                Orientation = Quaternion.CreateFromAxisAngle(
+                                    Vector3.UnitZ, (float)(lbRng.NextDouble() * Math.PI * 2)),
+                                Scale = Vector3.One
+                            };
+                            lbDoc.AddStaticObject(obj);
+                            System.Threading.Interlocked.Increment(ref objectsPlacedCounter);
+                        }
+                    } catch (Exception ex) when (ex is not OutOfMemoryException && ex is not StackOverflowException) {
+                        System.Threading.Interlocked.Increment(ref sceneryFailureCounter);
+                        if (System.Threading.Interlocked.Increment(ref sceneryFailMessages) <= 3)
+                            Console.WriteLine($"[QuickWorld] Warning: scenery scatter failed for ({lbX},{lbY}): {ex.Message}");
+                    }
                 }
-            } catch (Exception ex) when (ex is not OutOfMemoryException && ex is not StackOverflowException) {
-                sceneryFailures++;
-                if (sceneryFailures <= 3)
-                    Console.WriteLine($"[QuickWorld] Warning: scenery scatter failed for ({lbX},{lbY}): {ex.Message}");
-            }
-        }
+            });
+
+        phase3Sw.Stop();
+        objectsPlaced = objectsPlacedCounter;
+        int sceneryFailures = sceneryFailureCounter;
 
         if (sceneryFailures > 3)
             Console.WriteLine($"[QuickWorld] Warning: {sceneryFailures - 3} additional scenery-scatter failures (suppressed).");
+        Console.WriteLine($"[QuickWorld] Phase 3 complete: {objectsPlaced} objects placed across " +
+                          $"{sceneryKeys.Length} candidate landblocks in {phase3Sw.Elapsed.TotalMilliseconds:F0}ms " +
+                          $"({parallelism} threads).");
 
         sw.Stop();
         double elapsedMs = Math.Round(sw.Elapsed.TotalMilliseconds, 1);
