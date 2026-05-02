@@ -335,9 +335,18 @@ public class JsonCommandProcessor {
             lbsDescribed = r.LbsDescribed,
             dungeonsEmitted = r.DungeonsEmitted,
             overlaysEmitted = r.OverlaysEmitted,
+            // tilesAtMaxZoom is the terrain+objects-glyph "exterior" count for
+            // wire-compat with earlier emitter responses. The two new fields
+            // surface the object-sprite and floor tiers, which are also
+            // written when the corresponding tier flags are set.
             tilesAtMaxZoom = r.TilesAtMaxZoom,
+            objectTilesAtMaxZoom = r.ObjectTilesAtMaxZoom,
+            floorTilesWritten = r.FloorTilesWritten,
             frontendFilesCopied = r.FrontendFilesCopied,
             manifestProjectCount = r.ManifestProjectCount,
+            // Non-zero means inspect <outDir>/projects/<slug>/overlays/diagnostics.js
+            // for the per-issue list. Stays 0 on a clean emit.
+            diagnosticCount = r.DiagnosticCount,
             gallery = galleryResult is null ? null : new {
                 emitted = galleryResult.Success,
                 picksRendered = galleryResult.PicksRendered,

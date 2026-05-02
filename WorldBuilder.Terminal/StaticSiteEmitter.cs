@@ -30,8 +30,13 @@ public static class StaticSiteEmitter {
         int DungeonsEmitted,
         int OverlaysEmitted,
         int TilesAtMaxZoom,
+        int ObjectTilesAtMaxZoom,
+        int FloorTilesWritten,
         int FrontendFilesCopied,
-        int ManifestProjectCount);
+        int ManifestProjectCount,
+        int DiagnosticCount);
+
+    private sealed record Diagnostic(string Severity, string Source, string Message);
 
     public static EmissionStats Emit(CommandEngine engine, string projectSlug, string outDir,
             IReadOnlyList<ushort>? lbFilter, int maxZoom, int minZoom,
@@ -43,6 +48,11 @@ public static class StaticSiteEmitter {
         var projectDir = Path.Combine(projectsDir, projectSlug);
         Directory.CreateDirectory(projectDir);
 
+        // Diagnostics aggregated across every step. Surfaced via the
+        // diagnostics.js overlay (the frontend reads it on boot) and in the
+        // EmissionStats so a stdin/stdout caller knows whether to look.
+        var diagnostics = new List<Diagnostic>();
+
         // 1. Tile pyramid → projects/<slug>/tiles/
         var tilesDir = Path.Combine(projectDir, "tiles");
         var pyramidResult = engine.EmitTilePyramid(
@@ -51,26 +61,26 @@ public static class StaticSiteEmitter {
             throttleMs: throttleMs);
 
         // 2. Sprite atlas: copy from project sprites/ into dist sprites/.
-        int spriteCopyCount = CopyProjectSpritesIfPresent(p.ProjectDirectory, projectDir);
+        int spriteCopyCount = CopyProjectSpritesIfPresent(p.ProjectDirectory, projectDir, diagnostics);
 
         // 3. Per-LB descriptions and dungeon graphs.
         var (described, dungeonsEmitted, lbList, dungeonLbs) =
-            EmitPerLbAssets(engine, projectDir, lbFilter);
+            EmitPerLbAssets(engine, projectDir, lbFilter, diagnostics);
 
         // 4. Overlays from the project's gazetteer files (if present).
-        int overlayCount = EmitOverlays(p.ProjectDirectory, projectDir);
+        var (overlayCount, overlayNames) = EmitOverlays(p.ProjectDirectory, projectDir, diagnostics);
 
-        // 5. meta.js — index of LB list, dungeon LBs, floor counts.
-        EmitMeta(projectDir, projectSlug, lbList, dungeonLbs, engine);
+        // 5. meta.js — index of LB list, dungeon LBs, floor counts, overlay names.
+        EmitMeta(projectDir, projectSlug, lbList, dungeonLbs, overlayNames, engine);
 
         // 6. Frontend bundle. Copy from the assembly's StaticSite/ resources
         //    (resolved relative to the binary, with a source-tree fallback so
         //    `dotnet run` from the repo also works).
-        int frontendCopied = CopyFrontendBundle(outDir);
+        int frontendCopied = CopyFrontendBundle(outDir, diagnostics);
 
         // 7. manifest.js — merges with existing for multi-project.
         int projectCount = WriteManifest(outDir, projectSlug, p.Name ?? projectSlug,
-            pyramidResult.MaxZoom, pyramidResult.MinZoom);
+            pyramidResult.MaxZoom, pyramidResult.MinZoom, diagnostics);
 
         // 8. README per-project (one paragraph).
         File.WriteAllText(Path.Combine(projectDir, "README.txt"),
@@ -82,8 +92,13 @@ public static class StaticSiteEmitter {
             "into the same parent folder appends to the manifest rather than " +
             "replacing it.\n");
 
+        // 9. diagnostics.js — must be the last thing written so it captures
+        //    issues raised by every preceding step.
+        WriteDiagnosticsOverlay(projectDir, diagnostics);
+
         return new EmissionStats(projectSlug, outDir, described, dungeonsEmitted, overlayCount,
-            pyramidResult.ExteriorTilesAtMaxZoom, frontendCopied, projectCount);
+            pyramidResult.ExteriorTilesAtMaxZoom, pyramidResult.ObjectTilesAtMaxZoom,
+            pyramidResult.FloorTilesWritten, frontendCopied, projectCount, diagnostics.Count);
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -92,7 +107,8 @@ public static class StaticSiteEmitter {
 
     private static (int described, int dungeonsEmitted,
                     List<string> lbList, List<string> dungeonLbs) EmitPerLbAssets(
-            CommandEngine engine, string projectDir, IReadOnlyList<ushort>? lbFilter) {
+            CommandEngine engine, string projectDir, IReadOnlyList<ushort>? lbFilter,
+            List<Diagnostic> diagnostics) {
         var descDir = Path.Combine(projectDir, "desc");
         var dungeonsDir = Path.Combine(projectDir, "dungeons");
         Directory.CreateDirectory(descDir);
@@ -108,14 +124,23 @@ public static class StaticSiteEmitter {
             uint lbY = (uint)(lbKey & 0xFF);
             string hex = $"0x{lbKey:X4}";
 
+            // "Expected" misses: LBs without terrain or document state.
+            // Anything else (IOException, OOM, NRE from a regression) we
+            // surface — silent catch-all hid bugs as a quiet count drop.
             try {
                 var desc = engine.DescribeLandblock(lbX, lbY);
                 File.WriteAllText(Path.Combine(descDir, $"{hex}.js"),
                     BuildLoadCall("LOAD_DESC", hex, JsonSerializer.Serialize(desc, JsonOpts)));
                 described++;
                 lbList.Add(hex);
-            } catch {
-                // LBs without terrain or doc may throw; skip silently.
+            } catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException
+                                            or FileNotFoundException) {
+                // Expected — LB has no doc / no terrain. Don't even add to
+                // diagnostics; this is the steady-state for "describe every
+                // possible LB key" scans.
+            } catch (Exception ex) {
+                diagnostics.Add(new Diagnostic("warning", "describe:" + hex,
+                    $"DescribeLandblock threw {ex.GetType().Name}: {ex.Message}"));
             }
 
             // Dungeon graph: only if the LB has a populated dungeon doc.
@@ -128,7 +153,13 @@ public static class StaticSiteEmitter {
                     dungeonsEmitted++;
                     dungeonLbs.Add(hex);
                 }
-            } catch { /* skip cleanly */ }
+            } catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException
+                                            or FileNotFoundException) {
+                // Expected — no dungeon doc.
+            } catch (Exception ex) {
+                diagnostics.Add(new Diagnostic("warning", "dungeon:" + hex,
+                    $"GetDungeonFloorCount threw {ex.GetType().Name}: {ex.Message}"));
+            }
         }
 
         return (described, dungeonsEmitted, lbList, dungeonLbs);
@@ -163,7 +194,8 @@ public static class StaticSiteEmitter {
     //  Overlays
     // ────────────────────────────────────────────────────────────────────
 
-    private static int EmitOverlays(string projectSrcDir, string projectDistDir) {
+    private static (int count, List<string> names) EmitOverlays(string projectSrcDir,
+            string projectDistDir, List<Diagnostic> diagnostics) {
         var overlaysDir = Path.Combine(projectDistDir, "overlays");
         Directory.CreateDirectory(overlaysDir);
 
@@ -182,10 +214,10 @@ public static class StaticSiteEmitter {
             ("npc_gazetteer.json",      "npcs",      "no npc_gazetteer.json (run ace-db ingest-npcs)"),
             ("housing_gazetteer.json",  "housing",   "no housing_gazetteer.json (run ace-db ingest-housing)"),
         };
-        var diagnostics = new List<object>();
+        var names = new List<string>();
         int count = 0;
         foreach (var (src, overlay, note) in overlaySources) {
-            if (CopyGazetteerAsOverlay(projectSrcDir, overlaysDir, src, overlay)) {
+            if (CopyGazetteerAsOverlay(projectSrcDir, overlaysDir, src, overlay, diagnostics)) {
                 count++;
             } else {
                 // Always emit an empty stub so the frontend's JSONP loader
@@ -193,17 +225,16 @@ public static class StaticSiteEmitter {
                 // failure. The diagnostic captures the 'why missing'.
                 File.WriteAllText(Path.Combine(overlaysDir, $"{overlay}.js"),
                     BuildLoadOverlay(overlay, "[]"));
-                diagnostics.Add(new {
-                    overlay = overlay,
-                    severity = "info",
-                    message = note,
-                });
+                diagnostics.Add(new Diagnostic("info", "overlay:" + overlay, note));
             }
+            names.Add(overlay);
         }
 
-        // Synthetic landblock grid overlay — every LB is a 192×192 wu square
-        // anchored at (lbX*192, lbY*192). The frontend draws grid lines from
-        // this list.
+        // Synthetic landblock grid overlay — config-only payload. The frontend
+        // synthesizes grid lines locally; this payload exists so the frontend
+        // can boot-assert it against its own constants (parallel to the
+        // coordSystem contract). Bumping any value here without updating the
+        // frontend is a load-time error rather than a silent visual drift.
         File.WriteAllText(Path.Combine(overlaysDir, "grid.js"),
             BuildLoadOverlay("grid",
                 JsonSerializer.Serialize(new {
@@ -212,27 +243,49 @@ public static class StaticSiteEmitter {
                     gridSize = 256,
                 }, JsonOpts)));
         count++;
+        names.Add("grid");
 
-        // diagnostics.js — every emit produces one, even when empty, so
-        // the frontend's "Diagnostics: 0 issues" panel always renders. The
-        // boot assertions in app.js append to it on load too.
+        // diagnostics.js is written by Emit() at the very end so it captures
+        // every preceding step's findings. Reserve its name in the overlay
+        // list here so the frontend iterates it like any other overlay.
+        names.Add("diagnostics");
+        count++;
+        return (count, names);
+    }
+
+    private static void WriteDiagnosticsOverlay(string projectDir, List<Diagnostic> diagnostics) {
+        var overlaysDir = Path.Combine(projectDir, "overlays");
+        Directory.CreateDirectory(overlaysDir);
+        // Project the internal record into the wire shape app.js expects.
+        var issues = diagnostics.Select(d => new {
+            overlay = d.Source, severity = d.Severity, message = d.Message,
+        }).ToArray();
         File.WriteAllText(Path.Combine(overlaysDir, "diagnostics.js"),
             BuildLoadOverlay("diagnostics",
                 JsonSerializer.Serialize(new {
                     generated = DateTime.UtcNow.ToString("o"),
-                    issues = diagnostics,
+                    issues,
                 }, JsonOpts)));
-        count++;
-        return count;
     }
 
-    private static bool CopyGazetteerAsOverlay(string srcDir, string overlaysDir, string srcName, string overlayName) {
+    private static bool CopyGazetteerAsOverlay(string srcDir, string overlaysDir,
+            string srcName, string overlayName, List<Diagnostic> diagnostics) {
         var src = Path.Combine(srcDir, srcName);
         if (!File.Exists(src)) return false;
-        var raw = File.ReadAllText(src);
-        // Validate it's parseable JSON; if not, skip.
+        string raw;
+        try { raw = File.ReadAllText(src); }
+        catch (Exception ex) {
+            diagnostics.Add(new Diagnostic("warning", "overlay:" + overlayName,
+                $"read failed: {ex.GetType().Name}: {ex.Message}"));
+            return false;
+        }
+        // Validate it's parseable JSON; if not, surface why.
         try { using var _ = JsonDocument.Parse(raw); }
-        catch { return false; }
+        catch (JsonException ex) {
+            diagnostics.Add(new Diagnostic("warning", "overlay:" + overlayName,
+                $"{srcName} is not valid JSON: {ex.Message}"));
+            return false;
+        }
         File.WriteAllText(Path.Combine(overlaysDir, $"{overlayName}.js"),
             BuildLoadOverlay(overlayName, raw));
         return true;
@@ -242,7 +295,8 @@ public static class StaticSiteEmitter {
     //  Sprite atlas copy
     // ────────────────────────────────────────────────────────────────────
 
-    private static int CopyProjectSpritesIfPresent(string projectSrcDir, string projectDistDir) {
+    private static int CopyProjectSpritesIfPresent(string projectSrcDir, string projectDistDir,
+            List<Diagnostic> diagnostics) {
         var srcSprites = Path.Combine(projectSrcDir, "sprites");
         if (!Directory.Exists(srcSprites)) return 0;
         var dstSprites = Path.Combine(projectDistDir, "sprites");
@@ -259,21 +313,39 @@ public static class StaticSiteEmitter {
         var manifestPath = Path.Combine(srcSprites, "manifest.jsonl");
         if (File.Exists(manifestPath)) {
             var entries = new Dictionary<string, object>();
+            int lineNo = 0, badLines = 0;
             foreach (var line in File.ReadLines(manifestPath)) {
+                lineNo++;
                 if (string.IsNullOrWhiteSpace(line)) continue;
-                using var doc = JsonDocument.Parse(line);
-                var root = doc.RootElement;
-                var modelId = root.GetProperty("modelId").GetString() ?? "";
-                entries[modelId] = new {
-                    x = root.GetProperty("x").GetInt32(),
-                    y = root.GetProperty("y").GetInt32(),
-                    w = root.GetProperty("w").GetInt32(),
-                    h = root.GetProperty("h").GetInt32(),
-                    worldBounds = new[] {
-                        root.GetProperty("worldBounds")[0].GetSingle(),
-                        root.GetProperty("worldBounds")[1].GetSingle(),
-                    },
-                };
+                // Per-line guard: a single malformed JSONL row used to abort
+                // the whole emit. Surface the bad line via diagnostics and
+                // keep going so the dist still ships with a partial atlas.
+                try {
+                    using var doc = JsonDocument.Parse(line);
+                    var root = doc.RootElement;
+                    var modelId = root.GetProperty("modelId").GetString() ?? "";
+                    entries[modelId] = new {
+                        x = root.GetProperty("x").GetInt32(),
+                        y = root.GetProperty("y").GetInt32(),
+                        w = root.GetProperty("w").GetInt32(),
+                        h = root.GetProperty("h").GetInt32(),
+                        worldBounds = new[] {
+                            root.GetProperty("worldBounds")[0].GetSingle(),
+                            root.GetProperty("worldBounds")[1].GetSingle(),
+                        },
+                    };
+                } catch (Exception ex) when (ex is JsonException or KeyNotFoundException
+                                                or InvalidOperationException) {
+                    badLines++;
+                    if (badLines <= 5) {
+                        diagnostics.Add(new Diagnostic("warning", "spriteAtlas",
+                            $"manifest.jsonl line {lineNo} skipped: {ex.GetType().Name}: {ex.Message}"));
+                    }
+                }
+            }
+            if (badLines > 5) {
+                diagnostics.Add(new Diagnostic("warning", "spriteAtlas",
+                    $"manifest.jsonl: {badLines - 5} additional malformed lines suppressed."));
             }
             // Same `var`-not-`const` reasoning as meta.js / manifest.js: a
             // top-level `const` in a classic <script> is script-scoped and
@@ -290,11 +362,30 @@ public static class StaticSiteEmitter {
     //  Frontend bundle copy
     // ────────────────────────────────────────────────────────────────────
 
-    private static int CopyFrontendBundle(string outDir) {
+    private static int CopyFrontendBundle(string outDir, List<Diagnostic> diagnostics) {
         var staticSiteRoot = ResolveStaticSiteRoot();
-        if (staticSiteRoot == null) return 0;
+        if (staticSiteRoot == null) {
+            // Without the bundle the dist is just data — the user opens
+            // index.html and sees a blank page. The diagnostic file *is* in
+            // the dist, so a future user who copies in their own index.html
+            // (or a curl-able mirror) will at least see this on boot.
+            diagnostics.Add(new Diagnostic("error", "frontendBundle",
+                "StaticSite/ resources not found next to the binary or in the source tree; " +
+                "the dist has no leaflet/app.js/app.css. Re-run from a build that copies " +
+                "StaticSite/** into the output directory."));
+            return 0;
+        }
         int copied = 0;
         foreach (var src in Directory.EnumerateFiles(staticSiteRoot, "*", SearchOption.AllDirectories)) {
+            // Filter editor/OS junk that creeps into the source tree.
+            // .DS_Store, *.swp, *.tmp, .git/**: never belongs in a deliverable.
+            var fileName = Path.GetFileName(src);
+            if (fileName.StartsWith('.') ||
+                fileName.EndsWith(".swp", StringComparison.Ordinal) ||
+                fileName.EndsWith(".tmp", StringComparison.Ordinal) ||
+                fileName.EndsWith("~", StringComparison.Ordinal)) {
+                continue;
+            }
             var rel = Path.GetRelativePath(staticSiteRoot, src);
             var dst = Path.Combine(outDir, rel);
             Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
@@ -305,17 +396,29 @@ public static class StaticSiteEmitter {
     }
 
     private static string? ResolveStaticSiteRoot() {
-        // Prefer next to the running assembly (works for `dotnet publish`
-        // outputs and Content<CopyToOutputDirectory>). Fall back to the
-        // source tree relative to the assembly so `dotnet run` from the repo
-        // also works without a build-output copy.
-        var asmDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-        if (asmDir != null) {
-            var beside = Path.Combine(asmDir, "StaticSite");
-            if (Directory.Exists(beside)) return beside;
-            // bin/Debug/net8.0 → ../../../StaticSite when CopyToOutputDirectory hasn't run
-            var sourceTree = Path.GetFullPath(Path.Combine(asmDir, "..", "..", "..", "StaticSite"));
-            if (Directory.Exists(sourceTree)) return sourceTree;
+        // Resolve order:
+        //   1. Next to the running assembly (Content<CopyToOutputDirectory>
+        //      drops StaticSite/ into bin/Debug/net8.0/).
+        //   2. AppContext.BaseDirectory (populated even under single-file
+        //      publish, where Assembly.Location is the empty string).
+        //   3. Source-tree fallback so `dotnet run` works without a copy step.
+        var candidates = new List<string?>();
+        var asmLoc = Assembly.GetExecutingAssembly().Location;
+        if (!string.IsNullOrEmpty(asmLoc)) {
+            var asmDir = Path.GetDirectoryName(asmLoc);
+            if (asmDir != null) {
+                candidates.Add(Path.Combine(asmDir, "StaticSite"));
+                // bin/Debug/net8.0 → ../../../StaticSite when CopyToOutputDirectory hasn't run
+                candidates.Add(Path.GetFullPath(Path.Combine(asmDir, "..", "..", "..", "StaticSite")));
+            }
+        }
+        var baseDir = AppContext.BaseDirectory;
+        if (!string.IsNullOrEmpty(baseDir)) {
+            candidates.Add(Path.Combine(baseDir, "StaticSite"));
+            candidates.Add(Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "StaticSite")));
+        }
+        foreach (var c in candidates) {
+            if (c != null && Directory.Exists(c)) return c;
         }
         return null;
     }
@@ -325,14 +428,19 @@ public static class StaticSiteEmitter {
     // ────────────────────────────────────────────────────────────────────
 
     private static void EmitMeta(string projectDir, string slug,
-            List<string> lbList, List<string> dungeonLbs, CommandEngine engine) {
+            List<string> lbList, List<string> dungeonLbs, List<string> overlayNames,
+            CommandEngine engine) {
         var floorCounts = new Dictionary<string, int>();
         foreach (var hex in dungeonLbs) {
             if (ushort.TryParse(hex.AsSpan(2), System.Globalization.NumberStyles.HexNumber,
                     System.Globalization.CultureInfo.InvariantCulture, out var lbKey)) {
                 try {
                     floorCounts[hex] = engine.GetDungeonFloorCount(lbKey);
-                } catch { }
+                } catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException) {
+                    // Dungeon doc was present at scan time but isn't now;
+                    // benign during a concurrent edit. Leave the LB out of
+                    // floorCounts — the frontend treats missing entries as 0.
+                }
             }
         }
         var meta = new {
@@ -340,6 +448,12 @@ public static class StaticSiteEmitter {
             lbList = lbList.OrderBy(s => s, StringComparer.Ordinal).ToArray(),
             dungeonLbs = dungeonLbs.OrderBy(s => s, StringComparer.Ordinal).ToArray(),
             floorCounts,
+            // Authoritative overlay name list. The frontend iterates this
+            // (with a hardcoded-list fallback for older dists) instead of
+            // baking in a duplicate of the emitter's overlay set, so adding
+            // a new gazetteer in StaticSiteEmitter doesn't silently fail to
+            // render until app.js is also updated.
+            overlayList = overlayNames.ToArray(),
             generated = DateTime.UtcNow.ToString("o"),
             // Pixel-to-world contract. The frontend asserts each value against
             // its own constants on boot — a mismatch is a load-time error
@@ -363,26 +477,60 @@ public static class StaticSiteEmitter {
     }
 
     private static int WriteManifest(string outDir, string slug, string projectName,
-            int maxZoom, int minZoom) {
+            int maxZoom, int minZoom, List<Diagnostic> diagnostics) {
         var manifestPath = Path.Combine(outDir, "manifest.js");
-        // Existing manifest? Parse out the projects array (best-effort) and
-        // merge. Why: re-running emit-static-site against a second project
-        // must show both; nuking the manifest defeats multi-project support.
+        // Existing manifest? Parse out the projects array and the existing
+        // defaultProject and merge. Why: re-running emit-static-site against
+        // a second project must show both; nuking the manifest defeats
+        // multi-project support, and silently overwriting defaultProject on
+        // every emit makes the user's chosen landing project drift.
         var projects = new Dictionary<string, ManifestProject>(StringComparer.Ordinal);
+        string? existingDefault = null;
         if (File.Exists(manifestPath)) {
+            string raw = File.ReadAllText(manifestPath);
             try {
-                var existing = ReadManifestProjects(File.ReadAllText(manifestPath));
-                foreach (var (k, v) in existing) projects[k] = v;
-            } catch { /* corrupt manifest → start fresh */ }
+                var parsed = ParseManifest(raw);
+                foreach (var (k, v) in parsed.Projects) projects[k] = v;
+                existingDefault = parsed.DefaultProject;
+            } catch (Exception ex) {
+                // Don't silently start fresh — that would erase every
+                // previously-emitted project's manifest entry. Save a
+                // timestamped backup and surface the failure.
+                var backup = manifestPath + ".corrupt." +
+                    DateTime.UtcNow.ToString("yyyyMMddTHHmmssZ") + ".bak";
+                try {
+                    File.Copy(manifestPath, backup, overwrite: false);
+                    diagnostics.Add(new Diagnostic("error", "manifest",
+                        $"existing manifest.js failed to parse ({ex.GetType().Name}); " +
+                        $"backed up to {Path.GetFileName(backup)} before overwrite. " +
+                        "Other projects' entries were lost — re-emit them to repopulate."));
+                } catch (Exception copyEx) {
+                    diagnostics.Add(new Diagnostic("error", "manifest",
+                        $"existing manifest.js failed to parse ({ex.GetType().Name}) " +
+                        $"and backup also failed ({copyEx.GetType().Name}: {copyEx.Message}). " +
+                        "Previous manifest contents were lost."));
+                }
+            }
         }
         projects[slug] = new ManifestProject(slug, projectName, maxZoom, minZoom,
             DateTime.UtcNow.ToString("o"));
 
         var ordered = projects.Values.OrderBy(p => p.Slug, StringComparer.Ordinal).ToArray();
+        // defaultProject preference order:
+        //   1. Existing defaultProject if it still resolves to a known slug.
+        //   2. The slug being emitted right now (so a fresh dist's default
+        //      is whatever the user just produced).
+        //   3. Alphabetical first, as a last resort.
+        string defaultProject;
+        if (existingDefault != null && projects.ContainsKey(existingDefault)) {
+            defaultProject = existingDefault;
+        } else {
+            defaultProject = projects.ContainsKey(slug) ? slug : ordered[0].Slug;
+        }
         var manifestObj = new {
             protocolVersion = 1,
             generated = DateTime.UtcNow.ToString("o"),
-            defaultProject = ordered[0].Slug,
+            defaultProject,
             projects = ordered.Select(p => new {
                 slug = p.Slug, name = p.Name,
                 maxZoom = p.MaxZoom, minZoom = p.MinZoom,
@@ -399,9 +547,13 @@ public static class StaticSiteEmitter {
 
     private sealed record ManifestProject(string Slug, string Name, int MaxZoom, int MinZoom, string Generated);
 
-    private static Dictionary<string, ManifestProject> ReadManifestProjects(string manifestJs) {
-        var result = new Dictionary<string, ManifestProject>(StringComparer.Ordinal);
-        // Strip the `const MANIFEST = ` prefix and trailing `;` to recover JSON.
+    private sealed record ParsedManifest(
+        Dictionary<string, ManifestProject> Projects,
+        string? DefaultProject);
+
+    private static ParsedManifest ParseManifest(string manifestJs) {
+        var projects = new Dictionary<string, ManifestProject>(StringComparer.Ordinal);
+        // Strip the `var MANIFEST = ` prefix and trailing `;` to recover JSON.
         var trimmed = manifestJs.TrimStart();
         // Accept both `var` (current emitter) and `const` (legacy dists from
         // the initial Phase 4 emit) so the merge path doesn't break against
@@ -411,21 +563,26 @@ public static class StaticSiteEmitter {
         string prefix;
         if (trimmed.StartsWith(varPrefix, StringComparison.Ordinal)) prefix = varPrefix;
         else if (trimmed.StartsWith(constPrefix, StringComparison.Ordinal)) prefix = constPrefix;
-        else return result;
+        else throw new InvalidDataException("manifest.js missing expected MANIFEST assignment prefix.");
         var json = trimmed.Substring(prefix.Length).TrimEnd().TrimEnd(';');
         using var doc = JsonDocument.Parse(json);
-        if (!doc.RootElement.TryGetProperty("projects", out var arr)) return result;
-        foreach (var p in arr.EnumerateArray()) {
-            string slug = p.GetProperty("slug").GetString() ?? "";
-            if (string.IsNullOrEmpty(slug)) continue;
-            result[slug] = new ManifestProject(
-                slug,
-                p.TryGetProperty("name", out var n) ? n.GetString() ?? slug : slug,
-                p.TryGetProperty("maxZoom", out var mxz) ? mxz.GetInt32() : 12,
-                p.TryGetProperty("minZoom", out var mnz) ? mnz.GetInt32() : 3,
-                p.TryGetProperty("generated", out var g) ? g.GetString() ?? "" : "");
+        var root = doc.RootElement;
+        if (root.TryGetProperty("projects", out var arr)) {
+            foreach (var p in arr.EnumerateArray()) {
+                string slug = p.GetProperty("slug").GetString() ?? "";
+                if (string.IsNullOrEmpty(slug)) continue;
+                projects[slug] = new ManifestProject(
+                    slug,
+                    p.TryGetProperty("name", out var n) ? n.GetString() ?? slug : slug,
+                    p.TryGetProperty("maxZoom", out var mxz) ? mxz.GetInt32() : 12,
+                    p.TryGetProperty("minZoom", out var mnz) ? mnz.GetInt32() : 3,
+                    p.TryGetProperty("generated", out var g) ? g.GetString() ?? "" : "");
+            }
         }
-        return result;
+        string? defaultProject = root.TryGetProperty("defaultProject", out var dp)
+            ? dp.GetString()
+            : null;
+        return new ParsedManifest(projects, defaultProject);
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -439,6 +596,11 @@ public static class StaticSiteEmitter {
         $"LOAD_OVERLAY('{overlayName}', {jsonPayload});\n";
 
     private static string SafeSlugForJs(string slug) {
+        // Sanitize to a valid JS identifier suffix: this string is appended
+        // to "PROJECT_" by EmitMeta, so reserved-word collisions are not a
+        // concern (the resulting identifier is "PROJECT_<x>", never "<x>"
+        // alone). Must stay in sync with app.js's regex:
+        //   slug.replace(/[^a-zA-Z0-9_]/g, '_').replace(/^([0-9])/, '_$1')
         var sb = new StringBuilder(slug.Length);
         foreach (var c in slug) {
             sb.Append(char.IsLetterOrDigit(c) ? c : '_');

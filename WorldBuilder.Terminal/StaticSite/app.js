@@ -61,8 +61,11 @@
     initMap();
     loadProject(projectSlug, initial);
 
-    // Live overlay hook: Phase 4+ may drop a dynamic_players.js next to the
-    // dist; we silently no-op when it's absent.
+    // Live overlay hook: a dist-root `overlays/dynamic_players.js` (NOT
+    // per-project — this overlay applies to whichever project is loaded,
+    // matching the future "live admin viewing all projects" use case) gets
+    // script-loaded if present and silently no-ops when absent. Path stays
+    // at dist-root by design; do not change to projects/<slug>/.
     loadScript('overlays/dynamic_players.js').catch(function () { /* ignore */ });
 
     // Sibling gallery probe (emit-static-site --gallery). HEAD-or-fail
@@ -239,8 +242,17 @@
     if (exteriorLayer) { map.removeLayer(exteriorLayer); exteriorLayer = null; }
 
     const proj = MANIFEST.projects.find(function (p) { return p.slug === slug; });
-    const minZ = (proj && proj.minZoom) || 3;
-    const maxZ = (proj && proj.maxZoom) || 12;
+    // Explicit null-check (instead of `||`) so a legitimate 0 isn't treated
+    // as "missing" and replaced by the default. Older dists may emit no
+    // min/max zoom on the manifest — keep the historical 3..12 default in
+    // that case.
+    const minZ = (proj && proj.minZoom != null) ? proj.minZoom : 3;
+    const maxZ = (proj && proj.maxZoom != null) ? proj.maxZoom : 12;
+    // Apply per-project zoom limits to the map itself, not just the tile
+    // layers. Without this the user could zoom out to 3 on a project that
+    // only ships z=9..12 tiles and see broken/empty raster output.
+    if (typeof map.setMinZoom === 'function') map.setMinZoom(minZ);
+    if (typeof map.setMaxZoom === 'function') map.setMaxZoom(maxZ);
     const worldBounds = L.latLngBounds(L.latLng(0, 0), L.latLng(WORLD_EXTENT, WORLD_EXTENT));
 
     // terrain/  — always visible. Floor mode keeps this so the player has
@@ -283,7 +295,15 @@
   // ── Overlays ──────────────────────────────────────────────────────────
 
   function installOverlays(slug) {
-    const overlayNames = ['towns', 'pois', 'spawns', 'creatures', 'npcs', 'housing', 'grid', 'diagnostics'];
+    // Prefer the authoritative list emitted into meta.js (Phase O+: drives
+    // overlay iteration from a single source so adding a gazetteer in
+    // StaticSiteEmitter doesn't silently fail to render here). Fall back to
+    // the historical hardcoded list for older dists that pre-date the
+    // overlayList field.
+    const overlayNames = (activeProjectMeta && Array.isArray(activeProjectMeta.overlayList) &&
+                          activeProjectMeta.overlayList.length)
+      ? activeProjectMeta.overlayList
+      : ['towns', 'pois', 'spawns', 'creatures', 'npcs', 'housing', 'grid', 'diagnostics'];
     const layers = {};
     let pending = overlayNames.length;
     overlayNames.forEach(function (name) {
@@ -393,12 +413,32 @@
     layerControl.addTo(map);
   }
 
+  // Boot-time grid-config assertion. The emitter writes a config-only
+  // payload into the grid overlay (landblockSize/worldExtent/gridSize); we
+  // verify it matches our constants here so a future drift in either side
+  // surfaces as a diagnostic instead of an off-by-N visual bug. Mirrors the
+  // assertCoordSystem pattern.
+  function assertGridConfig(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+    const expected = { landblockSize: LB_SIZE, worldExtent: WORLD_EXTENT, gridSize: 256 };
+    Object.keys(expected).forEach(function (k) {
+      if (data[k] !== undefined && data[k] !== expected[k]) {
+        recordBootIssue('warning', 'gridConfig',
+          'grid overlay ' + k + ' expected=' + expected[k] + ' got=' + data[k]);
+      }
+    });
+  }
+
   function renderOverlay(name, data) {
     // Each overlay carries a different shape; render conservatively.
-    // Towns: list of { name, x, y, ... }. Grid: a single config object.
+    // Towns: list of { name, x, y, ... }. Grid: a config-only payload that
+    // we assert against frontend constants and then render synthetically.
     const group = L.layerGroup();
     if (name === 'grid') {
-      // Light landblock-grid lines every 192 wu.
+      assertGridConfig(data);
+      // Light landblock-grid lines every 192 wu, drawn from frontend
+      // constants (the emitter's payload is contract-only — we don't
+      // consume its values).
       const gridLayer = L.layerGroup();
       for (let i = 1; i < 256; i++) {
         const x = i * LB_SIZE;
