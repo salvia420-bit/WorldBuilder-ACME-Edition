@@ -421,29 +421,72 @@ namespace WorldBuilder.Shared.Documents {
             _logger.LogInformation("Loading base terrain data...");
             var loadedCount = 0;
 
-            Parallel.For(0, MAP_WIDTH + 1, x => {
-                for (var y = 0; y <= MAP_HEIGHT; y++) {
-                    var lbId = (uint)((y + (x << 8)) << 16) | 0xFFFF;
-                    if (!datreader.TryGet<LandBlock>(lbId, out var lb)) {
-                        _logger.LogWarning("Failed to load landblock 0x{LandBlockId:X8}", lbId);
-                        continue;
-                    }
+            // Project-load hot path: ~65k LandBlock TryGets. The shared reader's coarse global
+            // lock used to serialise these even under Parallel.For, so we hand each worker its own
+            // forked DefaultDatReaderWriter (independent file streams + lock). Same architectural
+            // fix as QuickWorld Phase 3. Caps parallelism at physical cores — empirically that's
+            // where the curve peaks; logical-core count over-subscribes and degrades.
+            //
+            // The cast is the opt-in: production always passes a DefaultDatReaderWriter, but
+            // OntologyServiceTests' StubDats doesn't, so we fall back to the shared-reader
+            // single-thread path for stubs.
+            int parallelism = Math.Max(1, HardwareInfo.PhysicalCoreCount);
+            var parallelOpts = new ParallelOptions { MaxDegreeOfParallelism = parallelism };
 
-                    var lbTerrain = new uint[LANDBLOCK_SIZE];
-                    for (int i = 0; i < LANDBLOCK_SIZE; i++) {
-                        var terrain = lb.Terrain[i];
-                        var height = lb.Height[i];
-                        lbTerrain[i] = (uint)(terrain.Road |
-                                            ((uint)terrain.Scenery << 8) |
-                                            ((uint)terrain.Type << 16) |
-                                            ((uint)height << 24));
+            if (datreader is DefaultDatReaderWriter forkable) {
+                Parallel.For(0, MAP_WIDTH + 1, parallelOpts,
+                    localInit: () => {
+                        try { return (IDatReaderWriter?)forkable.Fork(); }
+                        catch (Exception ex) {
+                            _logger.LogWarning(ex, "Per-thread DAT reader fork failed; falling back to shared reader");
+                            return null;
+                        }
+                    },
+                    body: (x, _, threadDats) => {
+                        var reader = threadDats ?? datreader;
+                        for (var y = 0; y <= MAP_HEIGHT; y++) {
+                            var lbId = (uint)((y + (x << 8)) << 16) | 0xFFFF;
+                            if (!reader.TryGet<LandBlock>(lbId, out var lb)) {
+                                _logger.LogWarning("Failed to load landblock 0x{LandBlockId:X8}", lbId);
+                                continue;
+                            }
+                            EncodeAndStore(lb, lbId, ref loadedCount);
+                        }
+                        return threadDats;
+                    },
+                    localFinally: t => {
+                        if (t is IDisposable d) {
+                            try { d.Dispose(); } catch { /* tolerate — fork already faulted */ }
+                        }
+                    });
+            } else {
+                // Stub / non-forkable reader: serial fallback (same shape as the original loop).
+                for (int x = 0; x <= MAP_WIDTH; x++) {
+                    for (var y = 0; y <= MAP_HEIGHT; y++) {
+                        var lbId = (uint)((y + (x << 8)) << 16) | 0xFFFF;
+                        if (!datreader.TryGet<LandBlock>(lbId, out var lb)) {
+                            _logger.LogWarning("Failed to load landblock 0x{LandBlockId:X8}", lbId);
+                            continue;
+                        }
+                        EncodeAndStore(lb, lbId, ref loadedCount);
                     }
-
-                    var lbKey = (ushort)((lbId >> 16) & 0xFFFF);
-                    _baseTerrainCache.TryAdd(lbKey, lbTerrain);
-                    Interlocked.Increment(ref loadedCount);
                 }
-            });
+            }
+
+            void EncodeAndStore(LandBlock lb, uint lbId, ref int counter) {
+                var lbTerrain = new uint[LANDBLOCK_SIZE];
+                for (int i = 0; i < LANDBLOCK_SIZE; i++) {
+                    var terrain = lb.Terrain[i];
+                    var height = lb.Height[i];
+                    lbTerrain[i] = (uint)(terrain.Road |
+                                        ((uint)terrain.Scenery << 8) |
+                                        ((uint)terrain.Type << 16) |
+                                        ((uint)height << 24));
+                }
+                var lbKey = (ushort)((lbId >> 16) & 0xFFFF);
+                _baseTerrainCache.TryAdd(lbKey, lbTerrain);
+                Interlocked.Increment(ref counter);
+            }
 
             if (!string.IsNullOrWhiteSpace(_cacheDirectory)) {
                 _logger.LogInformation("Saving base terrain data to cache");

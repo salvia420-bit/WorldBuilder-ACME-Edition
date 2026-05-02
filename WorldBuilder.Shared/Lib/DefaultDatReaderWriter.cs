@@ -11,12 +11,30 @@ namespace WorldBuilder.Shared.Lib {
         private object _lock = new object();
         public DatCollection Dats { get; }
 
+        /// <summary>The DAT directory this reader was opened against. Surfaced so callers
+        /// can <see cref="Fork"/> a fresh independent reader (per-thread, etc.).</summary>
+        public string DatPath { get; }
+
+        /// <summary>Access mode this reader was opened in (Read or ReadWrite).
+        /// <see cref="Fork"/> preserves it.</summary>
+        public DatAccessType AccessType { get; }
+
+        /// <summary>Caching strategy passed at construction; <see cref="Fork"/> preserves it.</summary>
+        public FileCachingStrategy FileCaching { get; }
+
+        /// <summary>Index-caching strategy passed at construction; <see cref="Fork"/> preserves it.</summary>
+        public IndexCachingStrategy IndexCaching { get; }
+
         public DefaultDatReaderWriter(string datPath, DatAccessType accessType)
             : this(datPath, accessType, FileCachingStrategy.Never, IndexCachingStrategy.Never) {
         }
 
         public DefaultDatReaderWriter(string datPath, DatAccessType accessType,
             FileCachingStrategy fileCaching, IndexCachingStrategy indexCaching) {
+            DatPath = datPath;
+            AccessType = accessType;
+            FileCaching = fileCaching;
+            IndexCaching = indexCaching;
             Dats = new DatCollection(new DatCollectionOptions() {
                 AccessType = accessType,
                 DatDirectory = datPath,
@@ -24,6 +42,16 @@ namespace WorldBuilder.Shared.Lib {
                 IndexCachingStrategy = indexCaching
             });
         }
+
+        /// <summary>
+        /// Returns a fresh, independent reader pointing at the same DAT directory + access mode.
+        /// Forks have independent file streams and an independent internal lock, so concurrent
+        /// reads through different forks don't serialize on the parent's lock — used by
+        /// per-thread DAT-reader pools (QuickWorld Phase 3, terrain init parallel load, ...).
+        /// Caller owns disposal of the fork.
+        /// </summary>
+        public DefaultDatReaderWriter Fork() =>
+            new DefaultDatReaderWriter(DatPath, AccessType, FileCaching, IndexCaching);
 
         public bool TryGet<T>(uint id, [MaybeNullWhen(false)] out T file) where T : IDBObj, new() {
             lock (_lock) {
