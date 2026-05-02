@@ -6,7 +6,9 @@ using DatReaderWriter;
 using DatReaderWriter.DBObjs;
 using WorldBuilder.Shared.Documents;
 using WorldBuilder.Shared.Lib;
+using WorldBuilder.Shared.Lib.AceDb;
 using WorldBuilder.Shared.Lib.Geometry;
+using WorldBuilder.Shared.Lib.Spawn;
 using WorldBuilder.Shared.Services;
 
 namespace WorldBuilder.Terminal;
@@ -58,14 +60,15 @@ public static class LandblockDescriber {
     // Tier: HIGH (name+category aligned), MED (name match, weak/no cats), LOW (ambiguous), NONE (no match).
     public record AcpediaMatch(string Title, string[] Categories, string? Description, string Tier);
 
-    // Server-spawn record from LSD spawnMaps. These are weenies the AC server
-    // generates dynamically (NPCs, creatures, quest objects), not static DAT
-    // placements. Player-visible only — server-managed weenies (doors, chests,
-    // generators, etc.) are filtered out at gazetteer build time.
-    public record SpawnEntry(
+    // Legacy alias for SpawnRecord — kept one cycle so any external/test
+    // code referencing LandblockDescriber.SpawnEntry by name still compiles.
+    // New call sites should use WorldBuilder.Shared.Lib.AceDb.SpawnRecord
+    // directly. To be removed in the next sync wave.
+    [Obsolete("Use WorldBuilder.Shared.Lib.AceDb.SpawnRecord — this alias will be removed.")]
+    public sealed record SpawnEntry(
         int Wcid,
         string Name,
-        string? Placement,            // "Overworld", "Indoors", "Respawn" — placement system hint
+        string? Placement,
         int? WeenieType,
         string? AcpediaTitle,
         string[]? AcpediaCategories,
@@ -131,7 +134,7 @@ public static class LandblockDescriber {
         List<int> UntaggedIndices,
         InteriorBlock? Interior,
         List<NamedObject> NamedObjects,
-        List<SpawnEntry> Spawns,
+        List<SpawnRecord> Spawns,
         // Flat per-object index used by the static-site frontend to resolve a
         // click on a sprite/glyph to a specific placement (modelId + position +
         // optional NamedObjects cross-ref). Populated from the LB doc's static
@@ -278,7 +281,7 @@ public static class LandblockDescriber {
             TownContext? townContext = null,
             List<NamedPoi>? knownPois = null,
             IReadOnlyDictionary<int, AcpediaMatch>? wcidToAcpedia = null,
-            List<SpawnEntry>? spawns = null,
+            List<SpawnRecord>? spawns = null,
             ValidationOverlay? validation = null,
             RegionContext? regionContext = null) {
 
@@ -538,7 +541,7 @@ public static class LandblockDescriber {
             UntaggedIndices: untagged,
             Interior: interior,
             NamedObjects: namedObjects,
-            Spawns: spawns ?? new List<SpawnEntry>(),
+            Spawns: spawns ?? new List<SpawnRecord>(),
             ObjectIndex: objectIndex);
 
         var relations = SurfaceRelationsWithPois(structureBlocks, looseZBands, untagged, interior, knownPois, namedObjects, spawns);
@@ -700,7 +703,7 @@ public static class LandblockDescriber {
     // or "encounter group" pattern for the relations layer.
     private record SpawnCluster(string Name, int Count, float Radius, float CenterX, float CenterY, string Pattern);
 
-    private static List<SpawnCluster> FindSpawnClusters(List<SpawnEntry> spawns, float radiusM, int minMembers) {
+    private static List<SpawnCluster> FindSpawnClusters(List<SpawnRecord> spawns, float radiusM, int minMembers) {
         var clusters = new List<SpawnCluster>();
         // Group by name first; then within each name group, find dense clusters.
         var byName = spawns.GroupBy(s => s.Name);
@@ -714,7 +717,7 @@ public static class LandblockDescriber {
             for (int i = 0; i < members.Count; i++) {
                 if (assigned.Contains(i)) continue;
                 var seed = members[i];
-                var cluster = new List<SpawnEntry> { seed };
+                var cluster = new List<SpawnRecord> { seed };
                 assigned.Add(i);
                 for (int j = i + 1; j < members.Count; j++) {
                     if (assigned.Contains(j)) continue;
@@ -728,15 +731,13 @@ public static class LandblockDescriber {
                 if (cluster.Count < minMembers) continue;
                 float cx = cluster.Average(c => c.X), cy = cluster.Average(c => c.Y);
                 float maxR = cluster.Max(c => MathF.Sqrt((c.X - cx) * (c.X - cx) + (c.Y - cy) * (c.Y - cy)));
-                // Pattern label by Acpedia primary category if available
-                string pattern = "encounter group";
-                if (seed.AcpediaCategories != null && seed.AcpediaCategories.Length > 0) {
-                    var cat = seed.AcpediaCategories[0].ToLowerInvariant();
-                    pattern = cat.Contains("creature") || cat.Contains("monster") ? "creature pack"
-                            : cat.Contains("npc") || cat.Contains("shopkeeper") ? "NPC group"
-                            : cat.Contains("portal") ? "portal cluster"
-                            : "encounter group";
-                }
+                // Pattern label from the resolved spawn category.
+                string pattern = seed.Category switch {
+                    "Creature" => "creature pack",
+                    "Npc" => "NPC group",
+                    "Object" => "object cluster",
+                    _ => "encounter group",
+                };
                 clusters.Add(new SpawnCluster(grp.Key, cluster.Count, maxR, cx, cy, pattern));
             }
         }
@@ -796,7 +797,7 @@ public static class LandblockDescriber {
     private static List<string> SurfaceRelationsWithPois(List<StructureBlock> structures, List<ZBand> looseBands,
                                                  List<int> untagged, InteriorBlock? interior, List<NamedPoi>? pois,
                                                  List<NamedObject>? namedObjects,
-                                                 List<SpawnEntry>? spawns) {
+                                                 List<SpawnRecord>? spawns) {
         var rels = SurfaceRelations(structures, looseBands, untagged, interior);
         // Named objects (placed weenies resolved to Acpedia pages) — group by primary
         // category so a worker scanning the LB can see what NPC types live here.
@@ -825,13 +826,13 @@ public static class LandblockDescriber {
             }
         }
         // Spawns (server-spawned weenies — NPCs, creatures, quest objects). These
-        // come from LSD spawnMaps and are filtered to player-visible by the
-        // gazetteer; show grouped by Acpedia category, dedup repeated names.
+        // come from LSD spawnMaps or ACE landblock_instance and are filtered
+        // to player-visible by the gazetteer; show grouped by resolved
+        // category, dedup repeated names.
         if (spawns != null && spawns.Count > 0) {
             var byCat = new Dictionary<string, Dictionary<string, int>>();
             foreach (var s in spawns) {
-                string cat = (s.AcpediaCategories != null && s.AcpediaCategories.Length > 0)
-                    ? s.AcpediaCategories[0] : "(uncategorized)";
+                string cat = s.Category;
                 if (!byCat.ContainsKey(cat)) byCat[cat] = new Dictionary<string, int>();
                 byCat[cat].TryGetValue(s.Name, out var c);
                 byCat[cat][s.Name] = c + 1;

@@ -1354,6 +1354,50 @@ public record ImportRenderSurfaceResult(
     string Mode,
     string? Error);
 
+// ── Real Map of Dereth (sync wave 2026-05) ──────────────────
+public record IngestCreatureRosterResult(
+    bool Success,
+    int TotalProcessed,
+    string? OutputPath,
+    string? Error = null);
+
+public record IngestNpcRosterResult(
+    bool Success,
+    int TotalProcessed,
+    int VendorCount,
+    int TalkerCount,
+    string? OutputPath,
+    string? Error = null);
+
+public record IngestHousingRosterResult(
+    bool Success,
+    int HouseCount,
+    int PortalCount,
+    string? OutputPath,
+    string? Error = null);
+
+public record IngestAceSpawnsResult(
+    bool Success,
+    int LandblocksTouched,
+    int RecordsWritten,
+    int SyntheticRecords,
+    string? OutputPath,
+    string? Error = null);
+
+public record CompareCategoryDimension(
+    int GeneratedCount,
+    int RetailCount,
+    double Jaccard,
+    List<int> NovelInLb,
+    List<int> MissingInLb);
+
+public record CompareCreaturesResult(
+    bool Success,
+    CompareCategoryDimension Creatures,
+    CompareCategoryDimension Npcs,
+    CompareCategoryDimension Housing,
+    string? Error = null);
+
 // ── O2: Heightmap import ───────────────────────────────────
 public record ImportHeightmapPerLb(string Landblock, int Vertices);
 

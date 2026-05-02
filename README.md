@@ -140,7 +140,7 @@ Full protocol — every command, parameter, response schema, coordinate conventi
 
 ### Command Catalog
 
-The agent JSON protocol exposes **58 documented commands**; the REPL surface is wider — **135+ commands** including bulk operations, image-driven terrain, ontology export, ACE-database I/O, and dungeon document editing. Sample categories:
+The agent JSON protocol exposes **63 documented commands**; the REPL surface is wider — **140+ commands** including bulk operations, image-driven terrain, ontology export, ACE-database I/O, and dungeon document editing. Sample categories:
 
 | Category | Commands |
 |---|---|
@@ -322,6 +322,26 @@ Hover any landblock and the right-side panel lazy-loads `desc/<lbHex>.js` — th
 The frontend is plain ES6 + vendored Leaflet 1.9.4 — no build step, no npm, no `fetch()` (data files load via JSONP-style `<script>` injection so `file://` works without flags). Multi-project: a second invocation with a different `projectSlug` into the same `outDir` merges into `manifest.js` rather than wiping it, so vanilla AC + custom worlds can ship from one URL.
 
 JSON commands (full schema in `docs/agent_api_reference.md`): `extract-cell-footprints`, `generate-object-sprites`, `render-dungeon`, `emit-tile-pyramid`, `describe-floor`, `emit-static-site`. The orchestrator chains them; each is independently runnable for inspection or partial regeneration.
+
+The 2026-05-01 wave wires the emitter to a real ACE world database: `ace-db ingest-creatures / ingest-npcs / ingest-housing` pull canonical rosters into per-project gazetteer JSON files, the static site renders them as `creatures` / `npcs` / `housing` overlays, and a new `coordSystem` block in `meta.js` is asserted by the frontend on boot — drift between the emitter's pixel-to-world math and the frontend's CRS transform becomes a load-time red banner instead of a silently-misplaced sprite. A `diagnostics` overlay panel surfaces missing-source overlays + boot-time assertion failures so silent 404s don't hide behind an empty layer toggle.
+
+### Local ACE Fixture
+
+Several validation paths (compare-to-retail, the creature/NPC/housing
+ingest commands under `ace-db`) want a real ACE world database to grade
+against. The repository ships a self-contained loader: run
+**[`scripts/spin-up-mariadb.sh`](scripts/spin-up-mariadb.sh)** from the
+project root and it installs `mariadb-server` (if absent), starts the
+daemon, provisions a `baltic`/`baltic` database+user on
+`127.0.0.1:3306`, streams `ace_world_release/ACE-World-Database-v0.9.292.sql`
+into it (rewriting the source database name on the fly), and verifies row
+counts on `weenie`, `landblock_instance`, and `spell`. The companion
+**[`spin-down-mariadb.sh`](scripts/spin-down-mariadb.sh)** drops the
+database+user when you're done. This is a developer fixture — credentials
+are intentionally unguarded; do not point this at the public internet.
+
+After the fixture is up, headless commands connect like any other ACE
+DB target: `ace-db connect host=127.0.0.1 user=baltic password=baltic database=baltic`.
 
 ### Integration Tests
 

@@ -2010,6 +2010,91 @@ class TestSyncWave2026_04_30(RuntimeRequiredTestCase):
         self.assertEqual(resp.get("command"), "transact")
 
 
+class TestSpinWave2026_05_01(RuntimeRequiredTestCase):
+    """Real Map of Dereth wave: ACE-DB ingest commands and the
+    compare-creatures-to-retail dimension. Every test asserts the
+    no-DB error path so the suite stays green even on machines without
+    the local MariaDB fixture; the DB-present happy path is gated on
+    `ACE_DB_HOST` / `ACE_DB_USER` env vars being set."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.session = TerminalSession()
+        cls.session.start()
+        cls.load_response = cls.session.send({
+            "command": "load",
+            "path": str(TEST_PROJECT)
+        })
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.session:
+            try:
+                cls.session.quit()
+            except Exception:
+                cls.session.close()
+
+    def _has_db_env(self):
+        return os.environ.get("ACE_DB_HOST") and os.environ.get("ACE_DB_USER")
+
+    # ── ingest-creatures ────────────────────────────────────
+
+    def test_01_ingest_creatures_without_ace_db_errors(self):
+        resp = self.session.send({"command": "ace-db-ingest-creatures"})
+        # Without an active connection the engine raises
+        # "ACE DB is not configured. Run 'ace-db connect' first." which the
+        # JSON layer catches into success=false.
+        self.assertFalse(resp.get("success"))
+        self.assertEqual(resp.get("command"), "ace-db-ingest-creatures")
+        self.assertIn("error", resp)
+
+    def test_02_ingest_npcs_without_ace_db_errors(self):
+        resp = self.session.send({"command": "ace-db-ingest-npcs"})
+        self.assertFalse(resp.get("success"))
+        self.assertEqual(resp.get("command"), "ace-db-ingest-npcs")
+
+    def test_03_ingest_housing_without_ace_db_errors(self):
+        resp = self.session.send({"command": "ace-db-ingest-housing"})
+        self.assertFalse(resp.get("success"))
+        self.assertEqual(resp.get("command"), "ace-db-ingest-housing")
+
+    def test_04_ingest_spawns_without_ace_db_errors(self):
+        resp = self.session.send({"command": "ace-db-ingest-spawns"})
+        self.assertFalse(resp.get("success"))
+        self.assertEqual(resp.get("command"), "ace-db-ingest-spawns")
+
+    # ── compare-creatures-to-retail ─────────────────────────
+
+    def test_05_compare_creatures_to_retail_returns_envelope(self):
+        # Should always return a structured envelope, even when the
+        # local rosters are absent — caller can read retail:0 and act.
+        resp = self.session.send({"command": "compare-creatures-to-retail"})
+        self.assertEqual(resp.get("command"), "compare-creatures-to-retail")
+        self.assertIn("creatures", resp)
+        self.assertIn("npcs", resp)
+        self.assertIn("housing", resp)
+        for dim in ("creatures", "npcs", "housing"):
+            self.assertIn("generated", resp[dim])
+            self.assertIn("retail", resp[dim])
+            self.assertIn("jaccard", resp[dim])
+
+    # ── catalog visibility ──────────────────────────────────
+
+    def test_06_commands_catalog_lists_new_entries(self):
+        resp = self.session.send({"command": "commands"})
+        self.assertTrue(resp.get("success", False) or "commands" in resp)
+        names = []
+        # Catalog shape: {commands: [{name, args, description}, ...]}
+        if "commands" in resp:
+            names = [c.get("name") for c in resp["commands"]]
+        for new_cmd in (
+            "ace-db-ingest-creatures", "ace-db-ingest-npcs",
+            "ace-db-ingest-housing", "ace-db-ingest-spawns",
+            "compare-creatures-to-retail",
+        ):
+            self.assertIn(new_cmd, names, f"new command {new_cmd!r} missing from catalog")
+
+
 if __name__ == "__main__":
     # Support --binary <path> argument
     if "--binary" in sys.argv:

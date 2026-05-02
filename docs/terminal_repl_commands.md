@@ -145,6 +145,10 @@ The unified ontology pipeline is:
 - `ace-db export-sql <path>`
 - `ace-db stats`
 - `ace-db clear-instances`
+- `ace-db ingest-creatures [out]`  *(sync wave 2026-05-01 — pulls creature roster → JSON)*
+- `ace-db ingest-npcs [out]`        *(sync wave 2026-05-01 — pulls NPC roster → JSON)*
+- `ace-db ingest-housing [out]`     *(sync wave 2026-05-01 — pulls housing portal roster → JSON)*
+- `ace-db ingest-spawns [out]`      *(sync wave 2026-05-01 — pulls every landblock_instance row → JSONL)*
 
 ## Dungeon Document Operations
 - `dungeon add-cell <lbX> <lbY> <envId> <csId> <x> <y> <z>`
@@ -198,6 +202,9 @@ The unified ontology pipeline is:
 - `fresh-start` (interactive confirmation prompt; JSON requires `confirm:true`)
 - `generate-world [--params <json>] [--export-towns-csv <path>] [--apply]`
 - `export-towns-csv --from-result <path> --out <path>`
+
+## Static Site Diagnostics (sync wave 2026-05-01)
+- `compare-creatures-to-retail` *(Jaccard similarity of project's spawn gazetteer vs. ACE creature/NPC/housing rosters)*
 
 ## General
 - `help`

@@ -196,6 +196,7 @@ public class TerminalRepl {
             ["worldgen-scan-retail-towns"] = HandleWorldGenScanRetailTowns,
             ["render-preview"] = HandleRenderPreview,
             ["compare-to-retail"] = HandleCompareToRetail,
+            ["compare-creatures-to-retail"] = _ => HandleCompareCreaturesToRetail(),
             ["transact"] = HandleTransact,
             ["transact-diff"] = HandleTransactDiff,
             ["get-tile"] = HandleGetTile,
@@ -4124,6 +4125,10 @@ public class TerminalRepl {
             Console.WriteLine("  export-sql <path>                          Export reposition SQL only");
             Console.WriteLine("  stats                                      World instance counts");
             Console.WriteLine("  clear-instances                            Delete ALL instances + links");
+            Console.WriteLine("  ingest-creatures [out]                     Pull creature roster → JSON");
+            Console.WriteLine("  ingest-npcs [out]                          Pull NPC roster → JSON");
+            Console.WriteLine("  ingest-housing [out]                       Pull housing portal roster → JSON");
+            Console.WriteLine("  ingest-spawns [out]                        Pull every landblock_instance → JSONL");
             return;
         }
 
@@ -4136,10 +4141,66 @@ public class TerminalRepl {
             case "export-sql":       HandleAceDbExportSql(tokens); break;
             case "stats":            HandleAceDbStats(); break;
             case "clear-instances":  HandleAceDbClearInstances(); break;
+            case "ingest-creatures": HandleAceDbIngestCreatures(tokens); break;
+            case "ingest-npcs":      HandleAceDbIngestNpcs(tokens); break;
+            case "ingest-housing":   HandleAceDbIngestHousing(tokens); break;
+            case "ingest-spawns":    HandleAceDbIngestSpawns(tokens); break;
             default:
                 Console.WriteLine($"Unknown ace-db sub-command: '{sub}'");
-                Console.WriteLine("  Available: connect, status, query-instances, reposition, export-sql, stats, clear-instances");
+                Console.WriteLine("  Available: connect, status, query-instances, reposition, export-sql, stats, clear-instances, ingest-creatures, ingest-npcs, ingest-housing, ingest-spawns");
                 break;
+        }
+    }
+
+    private void HandleAceDbIngestCreatures(string[] tokens) {
+        string? outPath = tokens.Length > 2 ? tokens[2] : null;
+        Console.WriteLine("Pulling creature roster from ACE DB...");
+        var r = _engine.IngestCreatureRosterAsync(outPath).GetAwaiter().GetResult();
+        if (r.Success) {
+            Console.WriteLine($"  ✓ {r.TotalProcessed} creatures → {r.OutputPath}");
+        } else {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  ✗ {r.Error}");
+            Console.ResetColor();
+        }
+    }
+
+    private void HandleAceDbIngestNpcs(string[] tokens) {
+        string? outPath = tokens.Length > 2 ? tokens[2] : null;
+        Console.WriteLine("Pulling NPC roster from ACE DB...");
+        var r = _engine.IngestNpcRosterAsync(outPath).GetAwaiter().GetResult();
+        if (r.Success) {
+            Console.WriteLine($"  ✓ {r.TotalProcessed} NPCs ({r.VendorCount} vendors, {r.TalkerCount} talkers) → {r.OutputPath}");
+        } else {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  ✗ {r.Error}");
+            Console.ResetColor();
+        }
+    }
+
+    private void HandleAceDbIngestHousing(string[] tokens) {
+        string? outPath = tokens.Length > 2 ? tokens[2] : null;
+        Console.WriteLine("Pulling housing roster from ACE DB...");
+        var r = _engine.IngestHousingRosterAsync(outPath).GetAwaiter().GetResult();
+        if (r.Success) {
+            Console.WriteLine($"  ✓ {r.HouseCount} houses, {r.PortalCount} portals → {r.OutputPath}");
+        } else {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  ✗ {r.Error}");
+            Console.ResetColor();
+        }
+    }
+
+    private void HandleAceDbIngestSpawns(string[] tokens) {
+        string? outPath = tokens.Length > 2 ? tokens[2] : null;
+        Console.WriteLine("Pulling landblock_instance rows from ACE DB...");
+        var r = _engine.IngestAceSpawnsAsync(outPath).GetAwaiter().GetResult();
+        if (r.Success) {
+            Console.WriteLine($"  ✓ {r.RecordsWritten} spawns across {r.LandblocksTouched} LBs ({r.SyntheticRecords} synthetic) → {r.OutputPath}");
+        } else {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  ✗ {r.Error}");
+            Console.ResetColor();
         }
     }
 
@@ -5403,6 +5464,26 @@ public class TerminalRepl {
     // ═══════════════════════════════════════════════════════════
     //  compare-to-retail
     // ═══════════════════════════════════════════════════════════
+
+    private void HandleCompareCreaturesToRetail() {
+        var r = _engine.CompareCreaturesToRetail();
+        if (!r.Success) {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"compare-creatures-to-retail: FAILED — {r.Error}");
+            Console.ResetColor();
+            return;
+        }
+        static void PrintDim(string label, CompareCategoryDimension d) {
+            Console.WriteLine($"  {label,-10} generated={d.GeneratedCount,5}  retail={d.RetailCount,5}  jaccard={d.Jaccard:F3}");
+            if (d.NovelInLb.Count > 0)
+                Console.WriteLine($"             novel: {string.Join(",", d.NovelInLb.Take(8))}{(d.NovelInLb.Count > 8 ? "…" : "")}");
+            if (d.MissingInLb.Count > 0)
+                Console.WriteLine($"             missing: {string.Join(",", d.MissingInLb.Take(8))}{(d.MissingInLb.Count > 8 ? "…" : "")}");
+        }
+        PrintDim("creatures", r.Creatures);
+        PrintDim("npcs", r.Npcs);
+        PrintDim("housing", r.Housing);
+    }
 
     private void HandleCompareToRetail(string[] tokens) {
         if (tokens.Length < 2 || tokens[1] == "--help") {

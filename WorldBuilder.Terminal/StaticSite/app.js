@@ -140,6 +140,10 @@
         setStatus('meta.js loaded but PROJECT_' + safe + ' is undefined.');
         return;
       }
+      // Bail out before constructing any tile/CRS layer if the emitter and
+      // frontend disagree on the pixel-to-world contract. A silent drift
+      // here puts the entire world in the wrong place.
+      if (!assertCoordSystem(activeProjectMeta)) return;
       projectLbSet = new Set(activeProjectMeta.lbList);
       installTileLayers(slug);
       installOverlays(slug);
@@ -149,6 +153,69 @@
     }, function (err) {
       setStatus('Failed to load ' + metaPath + ': ' + err);
     });
+  }
+
+  // ── Boot-time assertions ──────────────────────────────────────────────
+
+  // Diagnostics issues collected during boot. Surfaced via the banner and
+  // (in O9) via the diagnostics overlay panel.
+  const BOOT_ISSUES = [];
+
+  function recordBootIssue(severity, source, message) {
+    BOOT_ISSUES.push({ severity: severity, source: source, message: message });
+    if (severity === 'error') console.error('[' + source + '] ' + message);
+    else console.warn('[' + source + '] ' + message);
+  }
+
+  function showBootBanner() {
+    const el = document.getElementById('boot-banner');
+    if (!el) return;
+    const errors = BOOT_ISSUES.filter(function (i) { return i.severity === 'error'; });
+    if (!errors.length) { el.hidden = true; return; }
+    el.hidden = false;
+    el.textContent = errors.map(function (i) {
+      return '[' + i.source + '] ' + i.message;
+    }).join('\n');
+  }
+
+  // Returns true when the emitter's coordSystem matches the frontend's
+  // constants. Returns false (and posts an error banner) on any mismatch
+  // so the caller can skip layer construction.
+  function assertCoordSystem(meta) {
+    const cs = meta && meta.coordSystem;
+    if (!cs) {
+      // Tolerate older dists that pre-date O1 — record as a warning so the
+      // diagnostics panel surfaces it but boot still proceeds.
+      recordBootIssue('warning', 'coordSystem',
+        'meta.js has no coordSystem block (older emitter); skipping assertion.');
+      showBootBanner();
+      return true;
+    }
+    const expected = {
+      worldExtentWu: WORLD_EXTENT,
+      tilePx: TILE_PX,
+      lbWu: LB_SIZE,
+      pxPerWuAtZ0: TILE_PX / WORLD_EXTENT,
+      projectionVersion: 1,
+    };
+    const mismatches = [];
+    Object.keys(expected).forEach(function (k) {
+      const got = cs[k];
+      const want = expected[k];
+      const equal = (typeof want === 'number')
+        ? Math.abs(got - want) <= 1e-12
+        : got === want;
+      if (!equal) mismatches.push(k + ' expected=' + want + ' got=' + got);
+    });
+    if (mismatches.length) {
+      recordBootIssue('error', 'coordSystem',
+        'tile-coordinate contract mismatch — emitter and frontend disagree:\n  ' +
+        mismatches.join('\n  '));
+      showBootBanner();
+      setStatus('Coord-system mismatch — tile rendering aborted.');
+      return false;
+    }
+    return true;
   }
 
   function installTileLayers(slug) {
@@ -202,23 +269,107 @@
   // ── Overlays ──────────────────────────────────────────────────────────
 
   function installOverlays(slug) {
-    const overlayNames = ['towns', 'pois', 'spawns', 'housing', 'grid', 'diagnostics'];
+    const overlayNames = ['towns', 'pois', 'spawns', 'creatures', 'npcs', 'housing', 'grid', 'diagnostics'];
     const layers = {};
+    let pending = overlayNames.length;
     overlayNames.forEach(function (name) {
       const path = 'projects/' + slug + '/overlays/' + name + '.js';
       loadScript(path).then(function () {
         const data = OVERLAY_DATA[name];
-        if (!data) return;
-        const layer = renderOverlay(name, data);
-        if (layer) {
-          layers[name] = layer;
-          // Refresh the layer-control to pick up newly-loaded layers. The
-          // simplest way: rebuild the control each time. Cheap with <10
-          // layers.
-          rebuildLayerControl(layers);
+        if (data === undefined) {
+          recordBootIssue('warning', 'overlay:' + name,
+            'overlay file loaded but LOAD_OVERLAY callback didn\'t fire (corrupt JSONP).');
+        } else if (name === 'diagnostics') {
+          // Don't render diagnostics on the map; surface them in the panel.
+          mergeBackendDiagnostics(data);
+        } else {
+          const layer = renderOverlay(name, data);
+          if (layer) {
+            layers[name] = layer;
+            rebuildLayerControl(layers);
+          }
         }
-      }, function () { /* missing overlay file → silent */ });
+        if (--pending === 0) finishBootDiagnostics();
+      }, function () {
+        // Missing overlay file. With the O6+O7 stub-emit policy, this
+        // shouldn't happen for any of the canonical overlays — flag it
+        // as an error so the diagnostic surface stays factual.
+        recordBootIssue('warning', 'overlay:' + name,
+          'overlay file not found at ' + path + ' (emitter should write a stub).');
+        if (--pending === 0) finishBootDiagnostics();
+      });
     });
+  }
+
+  function mergeBackendDiagnostics(payload) {
+    if (!payload || !Array.isArray(payload.issues)) return;
+    payload.issues.forEach(function (i) {
+      recordBootIssue(i.severity || 'info', 'emitter:' + (i.overlay || 'unknown'),
+        i.message || '(no message)');
+    });
+  }
+
+  // After all overlays have either loaded or failed, run the spawn-index
+  // assertion (which depends on `spawns` data) and render the persistent
+  // diagnostics panel footer.
+  function finishBootDiagnostics() {
+    assertSpawnIndex();
+    showBootBanner();
+    renderDiagnosticsFooter();
+  }
+
+  // Verify every spawn-overlay record's landblockId hex maps back to an
+  // LB the project actually shipped. A drift here means the spawn data
+  // was generated against a different project than the meta — render
+  // would silently put markers in the wrong place.
+  function assertSpawnIndex() {
+    const data = OVERLAY_DATA['spawns'];
+    if (!data || !activeProjectMeta) return;
+    let bad = 0;
+    let total = 0;
+    Object.keys(data).forEach(function (key) {
+      // Spawns overlay schema is { "0xLLLL": [records...] }
+      if (!Array.isArray(data[key])) return;
+      total += data[key].length;
+      if (!projectLbSet || !projectLbSet.has(key)) bad += data[key].length;
+    });
+    if (bad > 0) {
+      recordBootIssue('warning', 'spawnIndex',
+        bad + ' of ' + total + ' spawn records reference LBs not in the project lbList.');
+    }
+  }
+
+  // Persistent footer in the describe panel: always says how many issues
+  // boot found. Even "0 issues" is rendered so the user knows the panel
+  // is alive.
+  function renderDiagnosticsFooter() {
+    const panel = document.getElementById('describe-panel');
+    if (!panel) return;
+    const errors = BOOT_ISSUES.filter(function (i) { return i.severity === 'error'; }).length;
+    const warnings = BOOT_ISSUES.filter(function (i) { return i.severity === 'warning'; }).length;
+    const infos = BOOT_ISSUES.filter(function (i) { return i.severity === 'info'; }).length;
+    const total = BOOT_ISSUES.length;
+    const summary = total === 0 ? '0 issues'
+      : (errors + ' errors · ' + warnings + ' warnings · ' + infos + ' info');
+    let footer = document.getElementById('diagnostics-footer');
+    if (!footer) {
+      footer = document.createElement('div');
+      footer.id = 'diagnostics-footer';
+      panel.appendChild(footer);
+    }
+    let html = '<div class="panel-section diagnostics-section"><h3>Diagnostics</h3>';
+    html += '<p class="diagnostics-summary">' + summary + '</p>';
+    if (total > 0) {
+      html += '<ul class="diagnostics-list">';
+      BOOT_ISSUES.slice(0, 12).forEach(function (i) {
+        html += '<li class="sev-' + i.severity + '"><strong>' + escapeHtml(i.source) +
+          '</strong>: ' + escapeHtml(i.message) + '</li>';
+      });
+      if (total > 12) html += '<li>… +' + (total - 12) + ' more (see console)</li>';
+      html += '</ul>';
+    }
+    html += '</div>';
+    footer.innerHTML = html;
   }
 
   let layerControl = null;
@@ -246,23 +397,77 @@
       }
       return gridLayer;
     }
-    // Generic markerable overlay: try to find an array of records each
-    // with x/y or position fields. Fail silently otherwise.
-    const records = Array.isArray(data) ? data : (data.entries || data.items);
+    // Spawn overlay carries records keyed by hex landblock id. Flatten
+    // for marker rendering.
+    let records;
+    if (name === 'spawns' && data && typeof data === 'object' && !Array.isArray(data)) {
+      records = [];
+      Object.keys(data).forEach(function (lbKey) {
+        if (Array.isArray(data[lbKey])) {
+          data[lbKey].forEach(function (r) {
+            r.__lbHex = lbKey;
+            records.push(r);
+          });
+        }
+      });
+    } else {
+      records = Array.isArray(data) ? data : (data.entries || data.items);
+    }
     if (Array.isArray(records)) {
       records.forEach(function (rec) {
         const x = rec.x != null ? rec.x : (rec.position ? rec.position.x : null);
         const y = rec.y != null ? rec.y : (rec.position ? rec.position.y : null);
         if (x == null || y == null) return;
+        const synthetic = rec.isSynthetic === true || rec.is_synthetic === true;
         const m = L.circleMarker([y, x], {
-          radius: 4, color: overlayColor(name), fillOpacity: 0.85, weight: 1,
+          radius: 4, color: overlayColor(name), fillOpacity: synthetic ? 0.4 : 0.85,
+          weight: 1, dashArray: synthetic ? '2 2' : null,
         });
         const title = rec.name || rec.title || rec.label;
-        if (title) m.bindTooltip(title, { sticky: true });
+        if (title) m.bindTooltip(title + (synthetic ? ' (synthetic)' : ''), { sticky: true });
+        m.on('click', function (e) {
+          openPlacementPanel(name, rec);
+          // Stop propagation so the map's onClick (LB describe) doesn't fire too.
+          if (e.originalEvent && e.originalEvent.stopPropagation) e.originalEvent.stopPropagation();
+        });
         group.addLayer(m);
       });
     }
     return group;
+  }
+
+  // Shared panel render for any clicked overlay record (spawn, town, POI,
+  // creature, NPC, housing). Sprite/glyph click on the tile pyramid keeps
+  // its existing renderObjectPanel path; this is the overlay-marker path.
+  function openPlacementPanel(overlayName, rec) {
+    const panel = document.getElementById('describe-panel');
+    if (!panel) return;
+    const html = [];
+    html.push('<div class="panel-section"><h3>' + overlayName + '</h3>');
+    const title = rec.name || rec.title || rec.label || ('wcid ' + (rec.wcid || '?'));
+    html.push('<p><strong>' + escapeHtml(title) + '</strong></p>');
+    if (rec.acpediaTitle && rec.acpediaTitle !== title)
+      html.push('<p>Acpedia: ' + escapeHtml(rec.acpediaTitle) +
+        (rec.acpediaTier ? ' <em>(' + escapeHtml(rec.acpediaTier) + ')</em>' : '') + '</p>');
+    if (rec.category) html.push('<p>Category: ' + escapeHtml(rec.category) + '</p>');
+    if (rec.generator) html.push('<p>Generator: ' + escapeHtml(rec.generator) + '</p>');
+    if (rec.wcid != null) html.push('<p>Wcid: ' + rec.wcid + '</p>');
+    if (rec.weenieType != null) html.push('<p>WeenieType: ' + rec.weenieType + '</p>');
+    const x = rec.x != null ? rec.x : (rec.position ? rec.position.x : null);
+    const y = rec.y != null ? rec.y : (rec.position ? rec.position.y : null);
+    const z = rec.z != null ? rec.z : (rec.position ? rec.position.z : null);
+    if (x != null && y != null) {
+      html.push('<p>Position: (' + Number(x).toFixed(2) + ', ' + Number(y).toFixed(2) +
+        (z != null ? ', ' + Number(z).toFixed(2) : '') + ')</p>');
+    }
+    if (rec.cell != null) html.push('<p>Cell: ' + rec.cell + '</p>');
+    if (rec.__lbHex) html.push('<p>Landblock: ' + rec.__lbHex + '</p>');
+    if (rec.isSynthetic === true || rec.is_synthetic === true)
+      html.push('<p><em>This record is synthetic — position or category was reconstructed.</em></p>');
+    html.push('</div>');
+    panel.innerHTML = html.join('');
+    // Re-append the diagnostics footer so it stays sticky after a click.
+    renderDiagnosticsFooter();
   }
 
   function overlayColor(name) {
@@ -370,6 +575,7 @@
     html.push('<div class="panel-section"><h3>Landblock</h3>');
     html.push('<p>' + lbHex + ' at (' + data.lbX + ', ' + data.lbY + ')</p></div>');
     panel.innerHTML = html.join('');
+    renderDiagnosticsFooter();
   }
 
   function descPath(lbHex) {
@@ -409,12 +615,14 @@
       html.push('<p>' + escapeHtml(data.verbal) + '</p></div>');
     }
     panel.innerHTML = html.join('');
+    renderDiagnosticsFooter();
   }
 
   function renderDescribePanelFallback(lbHex) {
     document.getElementById('describe-panel').innerHTML =
       '<div class="panel-section"><h3>Landblock</h3>' +
       '<p>' + lbHex + ' (no description available)</p></div>';
+    renderDiagnosticsFooter();
   }
 
   // ── Floor selector ────────────────────────────────────────────────────

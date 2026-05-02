@@ -166,10 +166,41 @@ public static class StaticSiteEmitter {
     private static int EmitOverlays(string projectSrcDir, string projectDistDir) {
         var overlaysDir = Path.Combine(projectDistDir, "overlays");
         Directory.CreateDirectory(overlaysDir);
+
+        // OverlaySources:
+        //   srcName     — gazetteer JSON in the project directory.
+        //   overlayName — final overlays/<overlayName>.js name.
+        //   missingNote — stub message for the diagnostics overlay when
+        //                 the source isn't present (so the frontend can
+        //                 surface "no creatures: source missing" instead
+        //                 of failing the JSONP load silently).
+        var overlaySources = new (string srcName, string overlayName, string missingNote)[] {
+            ("town_gazetteer.json",     "towns",     "no town_gazetteer.json in project"),
+            ("poi_gazetteer.json",      "pois",      "no poi_gazetteer.json in project"),
+            ("spawn_gazetteer.json",    "spawns",    "no spawn_gazetteer.json in project"),
+            ("creature_gazetteer.json", "creatures", "no creature_gazetteer.json (run ace-db ingest-creatures)"),
+            ("npc_gazetteer.json",      "npcs",      "no npc_gazetteer.json (run ace-db ingest-npcs)"),
+            ("housing_gazetteer.json",  "housing",   "no housing_gazetteer.json (run ace-db ingest-housing)"),
+        };
+        var diagnostics = new List<object>();
         int count = 0;
-        count += CopyGazetteerAsOverlay(projectSrcDir, overlaysDir, "town_gazetteer.json", "towns") ? 1 : 0;
-        count += CopyGazetteerAsOverlay(projectSrcDir, overlaysDir, "poi_gazetteer.json", "pois") ? 1 : 0;
-        count += CopyGazetteerAsOverlay(projectSrcDir, overlaysDir, "spawn_gazetteer.json", "spawns") ? 1 : 0;
+        foreach (var (src, overlay, note) in overlaySources) {
+            if (CopyGazetteerAsOverlay(projectSrcDir, overlaysDir, src, overlay)) {
+                count++;
+            } else {
+                // Always emit an empty stub so the frontend's JSONP loader
+                // sees LOAD_OVERLAY('<name>', []) — no 404, no silent
+                // failure. The diagnostic captures the 'why missing'.
+                File.WriteAllText(Path.Combine(overlaysDir, $"{overlay}.js"),
+                    BuildLoadOverlay(overlay, "[]"));
+                diagnostics.Add(new {
+                    overlay = overlay,
+                    severity = "info",
+                    message = note,
+                });
+            }
+        }
+
         // Synthetic landblock grid overlay — every LB is a 192×192 wu square
         // anchored at (lbX*192, lbY*192). The frontend draws grid lines from
         // this list.
@@ -179,6 +210,17 @@ public static class StaticSiteEmitter {
                     landblockSize = 192,
                     worldExtent = 49152,
                     gridSize = 256,
+                }, JsonOpts)));
+        count++;
+
+        // diagnostics.js — every emit produces one, even when empty, so
+        // the frontend's "Diagnostics: 0 issues" panel always renders. The
+        // boot assertions in app.js append to it on load too.
+        File.WriteAllText(Path.Combine(overlaysDir, "diagnostics.js"),
+            BuildLoadOverlay("diagnostics",
+                JsonSerializer.Serialize(new {
+                    generated = DateTime.UtcNow.ToString("o"),
+                    issues = diagnostics,
                 }, JsonOpts)));
         count++;
         return count;
@@ -299,6 +341,18 @@ public static class StaticSiteEmitter {
             dungeonLbs = dungeonLbs.OrderBy(s => s, StringComparer.Ordinal).ToArray(),
             floorCounts,
             generated = DateTime.UtcNow.ToString("o"),
+            // Pixel-to-world contract. The frontend asserts each value against
+            // its own constants on boot — a mismatch is a load-time error
+            // banner instead of a silently-misplaced sprite. Bumping
+            // projectionVersion forces older frontends to refuse to render
+            // dists generated against a newer contract.
+            coordSystem = new {
+                worldExtentWu = 49152,
+                tilePx = 256,
+                lbWu = 192,
+                pxPerWuAtZ0 = 256.0 / 49152.0,
+                projectionVersion = 1,
+            },
         };
         // Why: top-level `const` in a classic <script> is script-scoped — it
         // does NOT create a property on `window`, so `window['PROJECT_<slug>']`

@@ -48,6 +48,32 @@ main { flex: 1 1 auto; display: flex; min-height: 0; }
   font-size: 0.7rem; line-height: 1.4;
 }
 
+#boot-banner {
+  background: #5a1f1f; color: #ffe6e6;
+  border-bottom: 2px solid #c0392b;
+  padding: 0.6rem 1rem;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 0.8rem; line-height: 1.5;
+  white-space: pre-wrap;
+  flex: 0 0 auto;
+}
+#boot-banner[hidden] { display: none; }
+
+.diagnostics-section .diagnostics-summary {
+  font-weight: 600; color: #d8dde6;
+}
+.diagnostics-list {
+  list-style: none; padding: 0; margin: 0.4rem 0 0;
+  font-size: 0.75rem; line-height: 1.4;
+}
+.diagnostics-list li {
+  margin: 0.15rem 0; padding-left: 0.6rem;
+  border-left: 2px solid #444b58;
+}
+.diagnostics-list li.sev-error   { border-left-color: #c0392b; color: #f4b4b0; }
+.diagnostics-list li.sev-warning { border-left-color: #d8a64a; color: #e8d2a0; }
+.diagnostics-list li.sev-info    { border-left-color: #5a8ec0; color: #b8c8d8; }
+
 #floor-selector {
   display: none;
   align-items: center; gap: 0.4rem;

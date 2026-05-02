@@ -1397,6 +1397,41 @@
             },
             "response": { "objectId": "string", "sqlBytes": "int", "sql": "string", "outPath": "string?" }
         },
+        "ace-db-ingest-creatures": {
+            "category": "ace-db",
+            "description": "Pulls every WeenieType=10 row from the connected ACE DB and writes a CreatureRecord array to creature_gazetteer.json.",
+            "parameters": { "out": { "type": "string", "required": false } },
+            "response": { "totalProcessed": "int", "outputPath": "string", "error": "string?" }
+        },
+        "ace-db-ingest-npcs": {
+            "category": "ace-db",
+            "description": "Pulls Vendor (20) + Talker (4) weenies from the connected ACE DB to npc_gazetteer.json.",
+            "parameters": { "out": { "type": "string", "required": false } },
+            "response": { "totalProcessed": "int", "vendorCount": "int", "talkerCount": "int", "outputPath": "string", "error": "string?" }
+        },
+        "ace-db-ingest-housing": {
+            "category": "ace-db",
+            "description": "Reads house_portal rows from the connected ACE DB to housing_gazetteer.json (flat array of portal records).",
+            "parameters": { "out": { "type": "string", "required": false } },
+            "response": { "houseCount": "int", "portalCount": "int", "outputPath": "string", "error": "string?" }
+        },
+        "ace-db-ingest-spawns": {
+            "category": "ace-db",
+            "description": "Bulk-reads landblock_instance and writes per-spawn SpawnRecord JSONL. Records without a roster join are flagged isSynthetic:true.",
+            "parameters": { "out": { "type": "string", "required": false } },
+            "response": { "landblocksTouched": "int", "recordsWritten": "int", "syntheticRecords": "int", "outputPath": "string", "error": "string?" }
+        },
+        "compare-creatures-to-retail": {
+            "category": "ace-db",
+            "description": "Jaccard similarity of project's spawn gazetteer vs. ACE creature/NPC/housing rosters. Cheap to call from the ML loop.",
+            "parameters": {},
+            "response": {
+                "creatures": { "generated": "int", "retail": "int", "jaccard": "double", "novelInLb": ["int"], "missingInLb": ["int"] },
+                "npcs":      { "generated": "int", "retail": "int", "jaccard": "double", "novelInLb": ["int"], "missingInLb": ["int"] },
+                "housing":   { "generated": "int", "retail": "int", "jaccard": "double", "novelInLb": ["int"], "missingInLb": ["int"] },
+                "error": "string?"
+            }
+        },
         "spell-list": {
             "category": "ace-db",
             "description": "Lists newest spell ids by source ('dat' default, 'db' for ace-db); annotates rows that have a project overlay.",

@@ -218,6 +218,11 @@ public class JsonCommandProcessor {
             ["ingest-spawn-maps"] = CmdIngestSpawnMaps,
             ["ingest-spells"] = CmdIngestSpells,
             ["ingest-recipes"] = CmdIngestRecipes,
+            ["ace-db-ingest-creatures"] = CmdAceDbIngestCreatures,
+            ["ace-db-ingest-npcs"] = CmdAceDbIngestNpcs,
+            ["ace-db-ingest-housing"] = CmdAceDbIngestHousing,
+            ["ace-db-ingest-spawns"] = CmdAceDbIngestSpawns,
+            ["compare-creatures-to-retail"] = _ => CmdCompareCreaturesToRetail(),
             ["benchmark"] = _ => CmdBenchmark(),
             ["set-landblock-heightmap"] = CmdSetLandblockHeightmap,
             ["set-landblock-terrain"] = CmdSetLandblockTerrain,
@@ -809,11 +814,13 @@ public class JsonCommandProcessor {
                 }).ToArray(),
                 spawnCount = r.Body.Spawns.Count,
                 spawns = r.Body.Spawns.Select(s => new {
-                    wcid = s.Wcid, name = s.Name, placement = s.Placement,
-                    weenieType = s.WeenieType, acpediaTitle = s.AcpediaTitle,
-                    acpediaCategories = s.AcpediaCategories, acpediaTier = s.AcpediaTier,
+                    wcid = s.Wcid, name = s.Name,
+                    category = s.Category, generator = s.Generator,
+                    landblockId = $"0x{s.LandblockId:X4}", cell = s.Cell,
+                    weenieType = s.WeenieType,
+                    acpediaTitle = s.AcpediaTitle, acpediaTier = s.AcpediaTier,
                     x = Math.Round(s.X, 2), y = Math.Round(s.Y, 2), z = Math.Round(s.Z, 2),
-                    cell = s.Cell
+                    isSynthetic = s.IsSynthetic
                 }).ToArray()
             },
             relations = r.Relations,
@@ -1330,6 +1337,11 @@ public class JsonCommandProcessor {
             new { name = "ingest-spawn-maps", args = "lsdPath, outputPath?",                   description = "Extract spawn placement data" },
             new { name = "ingest-spells",   args = "lsdPath, outputPath?",                     description = "Parse spells.json to summary file" },
             new { name = "ingest-recipes",  args = "lsdPath, outputPath?",                     description = "Batch-extract recipe data to summary file" },
+            new { name = "ace-db-ingest-creatures", args = "out?",                              description = "Pull creature roster from ACE DB → creature_gazetteer.json" },
+            new { name = "ace-db-ingest-npcs",      args = "out?",                              description = "Pull NPC roster from ACE DB → npc_gazetteer.json" },
+            new { name = "ace-db-ingest-housing",   args = "out?",                              description = "Pull housing portal roster from ACE DB → housing_gazetteer.json" },
+            new { name = "ace-db-ingest-spawns",    args = "out?",                              description = "Pull every landblock_instance row → ace_spawn_records.jsonl (SpawnRecord shape)" },
+            new { name = "compare-creatures-to-retail", args = "",                              description = "Jaccard similarity of project's spawn gazetteer vs. ACE creature/NPC/housing rosters" },
             new { name = "benchmark",        args = "",                                         description = "Run speed test suite (terrain, objects, validation, bulk)" },
             new { name = "set-landblock-heightmap", args = "lbX, lbY, heights",                  description = "Set all 81 heights in one call" },
             new { name = "set-landblock-terrain", args = "lbX, lbY, types",                      description = "Set all 81 terrain types in one call" },
@@ -1658,6 +1670,53 @@ public class JsonCommandProcessor {
             schools = r.SchoolCounts.OrderBy(kv => kv.Key)
                 .Select(kv => new { school = kv.Key, count = kv.Value }).ToArray(),
             outputPath = r.OutputPath, error = r.Error });
+    }
+
+    private string CmdAceDbIngestCreatures(System.Text.Json.Nodes.JsonNode node) {
+        var outPath = node["out"]?.GetValue<string>();
+        var r = _engine.IngestCreatureRosterAsync(outPath).GetAwaiter().GetResult();
+        return Serialize(new { success = r.Success, command = "ace-db-ingest-creatures",
+            totalProcessed = r.TotalProcessed, outputPath = r.OutputPath, error = r.Error });
+    }
+
+    private string CmdAceDbIngestNpcs(System.Text.Json.Nodes.JsonNode node) {
+        var outPath = node["out"]?.GetValue<string>();
+        var r = _engine.IngestNpcRosterAsync(outPath).GetAwaiter().GetResult();
+        return Serialize(new { success = r.Success, command = "ace-db-ingest-npcs",
+            totalProcessed = r.TotalProcessed, vendorCount = r.VendorCount, talkerCount = r.TalkerCount,
+            outputPath = r.OutputPath, error = r.Error });
+    }
+
+    private string CmdAceDbIngestHousing(System.Text.Json.Nodes.JsonNode node) {
+        var outPath = node["out"]?.GetValue<string>();
+        var r = _engine.IngestHousingRosterAsync(outPath).GetAwaiter().GetResult();
+        return Serialize(new { success = r.Success, command = "ace-db-ingest-housing",
+            houseCount = r.HouseCount, portalCount = r.PortalCount,
+            outputPath = r.OutputPath, error = r.Error });
+    }
+
+    private string CmdAceDbIngestSpawns(System.Text.Json.Nodes.JsonNode node) {
+        var outPath = node["out"]?.GetValue<string>();
+        var r = _engine.IngestAceSpawnsAsync(outPath).GetAwaiter().GetResult();
+        return Serialize(new { success = r.Success, command = "ace-db-ingest-spawns",
+            landblocksTouched = r.LandblocksTouched, recordsWritten = r.RecordsWritten,
+            syntheticRecords = r.SyntheticRecords,
+            outputPath = r.OutputPath, error = r.Error });
+    }
+
+    private string CmdCompareCreaturesToRetail() {
+        var r = _engine.CompareCreaturesToRetail();
+        static object Dim(CompareCategoryDimension d) => new {
+            generated = d.GeneratedCount, retail = d.RetailCount,
+            jaccard = d.Jaccard, novelInLb = d.NovelInLb, missingInLb = d.MissingInLb,
+        };
+        return Serialize(new {
+            success = r.Success, command = "compare-creatures-to-retail",
+            creatures = Dim(r.Creatures),
+            npcs = Dim(r.Npcs),
+            housing = Dim(r.Housing),
+            error = r.Error,
+        });
     }
 
     private string CmdIngestRecipes(System.Text.Json.Nodes.JsonNode node) {

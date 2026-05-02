@@ -10,6 +10,7 @@ using WorldBuilder.Shared.Lib;
 using WorldBuilder.Shared.Lib.AceDb;
 using WorldBuilder.Shared.Lib.Dungeon;
 using WorldBuilder.Shared.Lib.Noise;
+using WorldBuilder.Shared.Lib.Spawn;
 using WorldBuilder.Shared.Lib.Terrain;
 using WorldBuilder.Shared.Lib.Validation;
 using WorldBuilder.Shared.Lib.WorldGen;
@@ -64,10 +65,13 @@ public partial class CommandEngine {
     // can surface "Buckminster the Barkeeper" instead of just "Creature index 47".
     private Dictionary<int, LandblockDescriber.AcpediaMatch> _wcidToAcpedia = new();
 
-    // Server-spawn gazetteer (from LSD spawnMaps): which weenies the AC server
-    // dynamically spawns at each landblock, filtered to player-visible only.
-    // Distinct from static `_wcidToAcpedia` (which annotates DAT-placed objects).
-    private Dictionary<ushort, List<LandblockDescriber.SpawnEntry>> _spawnGazetteer = new();
+    // Server-spawn gazetteer: per-LB spawn records sourced from either the
+    // LSD-Partial spawnMap dump or the ACE world DB's `landblock_instance`
+    // table (resolved at load time via `SpawnGazetteerBuilder`). Distinct
+    // from `_wcidToAcpedia` (which annotates DAT-placed objects). The
+    // canonical type is now `SpawnRecord` from Shared/Lib/AceDb so the
+    // describer, renderer, and ACE-DB ingest commands all share one schema.
+    private Dictionary<ushort, List<SpawnRecord>> _spawnGazetteer = new();
 
     // Region gazetteer (parent zoom above LB). Maps each LB to a named region
     // via nearest-town assignment using anchor points loaded from JSON.
@@ -712,16 +716,22 @@ public partial class CommandEngine {
                 objectsByCell[(col, row)] = objs;
                 objCount += objs.Count;
 
-                // Spawn-gazetteer entries for this LB. Render-side categorization
-                // by Acpedia hint or weenie type so creatures and NPCs show
-                // distinct glyphs from generic items.
+                // Spawn-gazetteer entries for this LB. Category is now
+                // resolved at gazetteer-build time and stored on the record,
+                // so the renderer just dispatches on it without re-deriving
+                // anything per tile. Indoor spawns (cell ≥ 0x100) are
+                // excluded from the surface tile so dungeon-interior
+                // creatures don't render on top of the outdoor map; they're
+                // surfaced via the per-LB description and (later) the floor
+                // tile when its renderer also accepts spawn glyphs.
                 if (_spawnGazetteer.TryGetValue(lbKey, out var spawns) && spawns is { Count: > 0 }) {
                     var glyphs = new List<RenderPreviewRenderer.SpawnGlyph>(spawns.Count);
                     foreach (var sp in spawns) {
+                        if (sp.Cell >= 0x100) continue;  // indoor / dungeon
                         glyphs.Add(new RenderPreviewRenderer.SpawnGlyph(
                             X: sp.X, Y: sp.Y,
-                            Category: ResolveSpawnCategory(sp),
-                            Scale: ResolveSpawnScale(sp),
+                            Category: MapToRendererCategory(sp.Category),
+                            Scale: ScaleForCategory(sp.Category),
                             Wcid: sp.Wcid));
                     }
                     spawnsByCell[(col, row)] = glyphs;
@@ -1014,87 +1024,31 @@ public partial class CommandEngine {
         return rc;
     }
 
-    // Map a SpawnEntry to the renderer's category palette. Why: the spawn
-    // gazetteer carries Acpedia/weenie-type hints rather than ontology
-    // categories, but the renderer's glyph dispatch keys on ontology-style
-    // strings ("Creature", "NPC", "Interactive_Door", …). This mapping
-    // keeps spawn glyphs visually consistent with static-object glyphs.
-    private static string ResolveSpawnCategory(LandblockDescriber.SpawnEntry sp) {
-        if (sp.AcpediaCategories is { Length: > 0 } cats) {
-            foreach (var c in cats) {
-                if (c == null) continue;
-                var lc = c.ToLowerInvariant();
-                if (lc.Contains("creature") || lc.Contains("monster")) return "Creature";
-                if (lc.Contains("npc") || lc.Contains("vendor") || lc.Contains("merchant") ||
-                    lc.Contains("mage") || lc.Contains("blacksmith")) return "NPC";
-                if (lc.Contains("door")) return "Interactive_Door";
-                if (lc.Contains("portal")) return "Interactive_Portal";
-                if (lc.Contains("sign")) return "Sign_Town";
-            }
-        }
-        // Weenie-type fallback. Magic numbers come from ACE's WeenieType enum
-        // (validated against /home/salvia420/ACE/Source/ACE.Entity/Enum/WeenieType.cs
-        // per memory; small set used here is stable retail).
-        return sp.WeenieType switch {
-            10 => "Creature",   // Creature
-            45 => "NPC",        // Vendor
-             1 => "Prop",       // Generic / Item
-             7 => "Interactive_Portal",
-            19 => "Interactive_Door",
-            _  => "Prop",
-        };
-    }
+    // Map the gazetteer-resolved Category ("Creature"|"Npc"|"Object"|"Surface")
+    // to the renderer's ontology-style category strings ("Creature", "NPC",
+    // "Interactive_Door", "Prop", …). The renderer's glyph dispatch already
+    // keys on those, so we keep the wire shape and just translate.
+    private static string MapToRendererCategory(string spawnCategory) => spawnCategory switch {
+        "Creature" => "Creature",
+        "Npc" => "NPC",
+        "Surface" => "Prop",
+        _ => "Prop",
+    };
 
     // Spawns don't carry an ontology Scale field. Approximate by category so
     // creatures and NPCs render larger than ambient props.
-    private static string ResolveSpawnScale(LandblockDescriber.SpawnEntry sp) {
-        var cat = ResolveSpawnCategory(sp);
-        return cat switch {
-            "Creature" => "Medium",
-            "NPC" => "Medium",
-            "Interactive_Door" => "Small",
-            "Interactive_Portal" => "Medium",
-            _ => "Small",
-        };
-    }
+    private static string ScaleForCategory(string spawnCategory) => spawnCategory switch {
+        "Creature" => "Medium",
+        "Npc" => "Medium",
+        _ => "Small",
+    };
 
-    private static Dictionary<ushort, List<LandblockDescriber.SpawnEntry>> LoadSpawnGazetteer(string path) {
-        var result = new Dictionary<ushort, List<LandblockDescriber.SpawnEntry>>();
-        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
-        foreach (var entry in doc.RootElement.EnumerateObject()) {
-            var keyStr = entry.Name.StartsWith("0x") || entry.Name.StartsWith("0X")
-                ? entry.Name.Substring(2) : entry.Name;
-            if (!ushort.TryParse(keyStr, System.Globalization.NumberStyles.HexNumber, null, out var lbKey)) continue;
-            var spawns = new List<LandblockDescriber.SpawnEntry>();
-            foreach (var item in entry.Value.EnumerateArray()) {
-                // Filter at load time: skip server-managed weenies (Doors, Chests,
-                // Generators) so describer always gets player-visible only.
-                bool serverManaged = item.TryGetProperty("is_server_managed", out var sEl)
-                    && sEl.ValueKind == System.Text.Json.JsonValueKind.True;
-                if (serverManaged) continue;
-                int wcid = item.TryGetProperty("wcid", out var wEl) && wEl.ValueKind == System.Text.Json.JsonValueKind.Number ? wEl.GetInt32() : 0;
-                if (wcid == 0) continue;
-                string name = item.TryGetProperty("name", out var nEl) && nEl.ValueKind == System.Text.Json.JsonValueKind.String ? nEl.GetString()! : "?";
-                // Filter unidentified weenies (wcids absent from the LSD-Partial dump).
-                // These are typically Empyrean traps, magic effects, particle emitters
-                // — not player-narratable entities. Skip them rather than surface as "?".
-                if (string.IsNullOrEmpty(name) || name.Trim() == "?") continue;
-                string? placement = item.TryGetProperty("placement", out var pEl) && pEl.ValueKind == System.Text.Json.JsonValueKind.String ? pEl.GetString() : null;
-                int? wt = item.TryGetProperty("weenie_type", out var wtEl) && wtEl.ValueKind == System.Text.Json.JsonValueKind.Number ? wtEl.GetInt32() : (int?)null;
-                string? acTitle = item.TryGetProperty("acpedia_title", out var atEl) && atEl.ValueKind == System.Text.Json.JsonValueKind.String ? atEl.GetString() : null;
-                string[]? acCats = item.TryGetProperty("acpedia_cats", out var acEl) && acEl.ValueKind == System.Text.Json.JsonValueKind.Array
-                    ? acEl.EnumerateArray().Select(e => e.GetString() ?? "").Where(s => !string.IsNullOrEmpty(s)).ToArray() : null;
-                string? acTier = item.TryGetProperty("acpedia_tier", out var tEl) && tEl.ValueKind == System.Text.Json.JsonValueKind.String ? tEl.GetString() : null;
-                float x = item.TryGetProperty("x", out var xEl) ? xEl.GetSingle() : 0;
-                float y = item.TryGetProperty("y", out var yEl) ? yEl.GetSingle() : 0;
-                float z = item.TryGetProperty("z", out var zEl) ? zEl.GetSingle() : 0;
-                int cell = item.TryGetProperty("cell", out var cEl) && cEl.ValueKind == System.Text.Json.JsonValueKind.Number ? cEl.GetInt32() : 0;
-                spawns.Add(new LandblockDescriber.SpawnEntry(wcid, name, placement, wt, acTitle, acCats, acTier, x, y, z, cell));
-            }
-            if (spawns.Count > 0) result[lbKey] = spawns;
-        }
-        return result;
-    }
+    // Build the in-memory spawn gazetteer from the LSD spawnmap_summary.jsonl
+    // dump. Delegates to the shared SpawnGazetteerBuilder so the same parsing
+    // + filtering rules apply to ACE-DB-sourced spawns (see
+    // SpawnGazetteerBuilder.BuildFromAceLandblockInstances).
+    private static Dictionary<ushort, List<SpawnRecord>> LoadSpawnGazetteer(string path) =>
+        SpawnGazetteerBuilder.BuildFromLsdJson(path);
 
     private static Dictionary<int, LandblockDescriber.AcpediaMatch> LoadWcidAcpedia(string path) {
         var result = new Dictionary<int, LandblockDescriber.AcpediaMatch>();

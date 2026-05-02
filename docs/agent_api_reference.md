@@ -1914,3 +1914,88 @@ Returns the active log path so the agent can ingest the file directly. **No fold
 | Flag | Effect |
 |---|---|
 | `--log-file <path>` | Adds a rotated `FileLoggerProvider` that writes the same format as the GUI's `worldbuilder.log`. Sets `CommandEngine.ActiveLogPath` so `open-log-folder` can surface it. |
+
+---
+
+## Sync Wave 2026-05-01 — Real Map of Dereth
+
+This wave wires the `emit-static-site` pipeline to a real ACE world database and locks down the tile-coordinate contract so silent geographic drift becomes a load-time error. Companion brief: `spin.md`.
+
+### Static-Site Coordinate Assertion
+
+`emit-static-site` now writes a `coordSystem` block into `meta.js`:
+
+```json
+"coordSystem": {
+  "worldExtentWu": 49152,
+  "tilePx": 256,
+  "lbWu": 192,
+  "pxPerWuAtZ0": 0.005208333333333333,
+  "projectionVersion": 1
+}
+```
+
+The frontend's `assertCoordSystem()` runs after meta loads and before any tile layer is constructed; a mismatch surfaces a red boot banner and aborts rendering.
+
+### Local ACE Fixture (developer-only)
+
+`scripts/spin-up-mariadb.sh` provisions a `baltic`/`baltic` MariaDB and loads `ace_world_release/ACE-World-Database-v0.9.292.sql` (rewriting the source database name on the fly). `scripts/spin-down-mariadb.sh` reverts. See README's "Local ACE Fixture" subsection.
+
+### ACE Database Bulk Ingest
+
+#### `ace-db-ingest-creatures`
+
+**Request:** `{"command":"ace-db-ingest-creatures","out":"…/creature_gazetteer.json"}` (out optional; defaults to project dir)
+**Response:** `{success, command, totalProcessed, outputPath, error?}`
+
+Joins `weenie` + `weenie_properties_int`(CreatureType, Level) + `weenie_properties_string`(Name) for every WeenieType=10 row; writes a JSON array of `CreatureRecord`.
+
+#### `ace-db-ingest-npcs`
+
+**Request:** `{"command":"ace-db-ingest-npcs","out":"…/npc_gazetteer.json"}`
+**Response:** `{success, command, totalProcessed, vendorCount, talkerCount, outputPath, error?}`
+
+Same join filtered to WeenieType IN (Vendor=20, Talker=4). Includes Title string when present.
+
+#### `ace-db-ingest-housing`
+
+**Request:** `{"command":"ace-db-ingest-housing","out":"…/housing_gazetteer.json"}`
+**Response:** `{success, command, houseCount, portalCount, outputPath, error?}`
+
+Reads `house_portal` (the only housing-related table in the v0.9.292 dump). Output is a flat array of portal records keyed by parent house id.
+
+#### `ace-db-ingest-spawns`
+
+**Request:** `{"command":"ace-db-ingest-spawns","out":"…/ace_spawn_records.jsonl"}`
+**Response:** `{success, command, landblocksTouched, recordsWritten, syntheticRecords, outputPath, error?}`
+
+Bulk-reads every `landblock_instance` row, joins to the cached creature/NPC roster for names, and writes per-spawn `SpawnRecord` JSONL. Records without a roster join are flagged `isSynthetic:true`.
+
+### Spawn Schema Promotion
+
+`SpawnRecord` (`WorldBuilder.Shared/Lib/AceDb/SpawnRecord.cs`) is the canonical per-spawn schema, sourced from either the LSD JSON dump (`SpawnGazetteerBuilder.BuildFromLsdJson`) or the ACE DB (`BuildFromAceLandblockInstances`). `LandblockBody.Spawns` and the per-LB `desc/<lbHex>.js` JSON now publish `SpawnRecord[]` (with `category`, `generator`, `landblockId`, `cell`, `isSynthetic`). The legacy `LandblockDescriber.SpawnEntry` record is deprecated and slated for removal next wave.
+
+### Static-Site Overlays
+
+`emit-static-site` now copies four additional gazetteer files into `projects/<slug>/overlays/`:
+
+| Source file | Overlay name |
+|---|---|
+| `creature_gazetteer.json` | `creatures` |
+| `npc_gazetteer.json` | `npcs` |
+| `housing_gazetteer.json` | `housing` |
+| (synthetic, always emitted) | `diagnostics` |
+
+Missing source files emit a `LOAD_OVERLAY('<name>', [])` stub plus a `diagnostics.js` entry, so the frontend never silently 404s.
+
+### `compare-creatures-to-retail`
+
+**Request:** `{"command":"compare-creatures-to-retail"}`
+**Response:** `{success, command, creatures:{generated,retail,jaccard,novelInLb[],missingInLb[]}, npcs:{...}, housing:{...}, error?}`
+
+Compares the project's loaded `_spawnGazetteer` against the gazetteer JSON files emitted by the ACE-DB ingest commands. Cheaper to call from the ML loop than full `compare-to-retail`. When the local rosters are absent, all dimensions report `retail:0` so the caller can still parse the response.
+
+### CLI flags added in this wave
+
+(none — every new surface is JSON command + REPL subcommand, no new top-level flags.)
+
