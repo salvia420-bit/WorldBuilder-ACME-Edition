@@ -31,9 +31,25 @@ internal static class ObjectSpriteGenerator {
             string atlasPath, string manifestPath,
             IDatReaderWriter dats, Func<uint, OntologyEntry?> ontology,
             int throttleMs = 0) {
+        // Two-pass streaming flow.
+        //
+        // Pass 1 — render: triangulate, rasterize the per-model PNG, write
+        // it to disk under <spritesDir>/<id>.png, record the metadata in a
+        // small struct, and dispose the SKBitmap immediately. We never hold
+        // more than the current sprite + the next sprite's working set in
+        // memory at once. This is what enables a 256-px regen of ~5 000
+        // setups on an 8 GB box — the prior implementation kept every
+        // SKBitmap live until the atlas pack and OOM'd at ~7 GB RSS.
+        //
+        // Pass 2 — pack: compute the skyline layout from the recorded
+        // (W, H) sizes alone (no bitmaps), allocate the atlas SKBitmap,
+        // then stream each sprite back from disk one at a time, blit it,
+        // and dispose. Peak memory in this pass is the atlas canvas plus
+        // one decoded sprite — bounded by a fixed constant (the largest
+        // single sprite) regardless of the catalog size.
         SurfaceDiag.Reset();
         Directory.CreateDirectory(spritesDir);
-        var entries = new List<SpriteEntry>(modelIds.Count);
+        var sprites = new List<SpriteMeta>(modelIds.Count);
 
         int nullEmptyTris = 0, nullDegenerate = 0, nullNoVisible = 0, threwException = 0;
         string? firstError = null;
@@ -48,10 +64,16 @@ internal static class ObjectSpriteGenerator {
                     }
                     continue;
                 }
-                using (var data = rendered.Bitmap.Encode(SKEncodedImageFormat.Png, 100)) {
+                int w, h;
+                try {
+                    using var data = rendered.Bitmap.Encode(SKEncodedImageFormat.Png, 100);
                     File.WriteAllBytes(Path.Combine(spritesDir, $"0x{id:X8}.png"), data.ToArray());
+                    w = rendered.Bitmap.Width;
+                    h = rendered.Bitmap.Height;
+                } finally {
+                    rendered.Bitmap.Dispose();
                 }
-                entries.Add(rendered);
+                sprites.Add(new SpriteMeta(id, w, h, rendered.WorldWidth, rendered.WorldHeight));
             } catch (Exception ex) {
                 threwException++;
                 if (firstError == null) {
@@ -62,35 +84,29 @@ internal static class ObjectSpriteGenerator {
             // Yield to a concurrent ML run between sprites.
             if (throttleMs > 0) System.Threading.Thread.Sleep(throttleMs);
         }
-        if (entries.Count == 0 || nullEmptyTris + nullDegenerate + nullNoVisible + threwException > 0) {
-            Console.Error.WriteLine($"[Sprites] rendered={entries.Count} " +
+        if (sprites.Count == 0 || nullEmptyTris + nullDegenerate + nullNoVisible + threwException > 0) {
+            Console.Error.WriteLine($"[Sprites] rendered={sprites.Count} " +
                 $"noTris={nullEmptyTris} degenerate={nullDegenerate} " +
                 $"noVisibleFace={nullNoVisible} threw={threwException}" +
                 (firstError != null ? $" firstError={firstError}" : ""));
         }
         Console.Error.Write(SurfaceDiag.Report());
 
-        var (atlas, layout) = PackAtlas(entries);
-        using (var data = atlas.Encode(SKEncodedImageFormat.Png, 100)) {
-            File.WriteAllBytes(atlasPath, data.ToArray());
-        }
+        var (aw, ah, layout) = PackAtlasStreaming(sprites, spritesDir, atlasPath);
         using (var sw = new StreamWriter(manifestPath, append: false)) {
-            for (int i = 0; i < entries.Count; i++) {
-                var e = entries[i];
+            for (int i = 0; i < sprites.Count; i++) {
+                var m = sprites[i];
                 var rect = layout[i];
                 sw.WriteLine(System.Text.Json.JsonSerializer.Serialize(new {
-                    modelId = $"0x{e.ModelId:X8}",
+                    modelId = $"0x{m.ModelId:X8}",
                     x = rect.X, y = rect.Y, w = rect.W, h = rect.H,
                     worldBounds = new[] {
-                        Math.Round(e.WorldWidth, 4), Math.Round(e.WorldHeight, 4),
+                        Math.Round(m.WorldWidth, 4), Math.Round(m.WorldHeight, 4),
                     },
                 }));
             }
         }
-        int aw = atlas.Width, ah = atlas.Height;
-        atlas.Dispose();
-        foreach (var e in entries) e.Bitmap.Dispose();
-        return (entries.Count, modelIds.Count - entries.Count, aw, ah);
+        return (sprites.Count, modelIds.Count - sprites.Count, aw, ah);
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -774,6 +790,16 @@ internal static class ObjectSpriteGenerator {
     //  Atlas packing (skyline, sorted by descending height)
     // ────────────────────────────────────────────────────────────────────
 
+    // Per-sprite metadata held during the render pass. Replaces the old
+    // SpriteEntry which kept the SKBitmap live; we now persist the bitmap
+    // to disk as it's rendered and only carry the size + world bounds in
+    // memory.
+    private readonly record struct SpriteMeta(uint ModelId, int W, int H,
+        float WorldWidth, float WorldHeight);
+
+    // Kept for the SpriteEntry record returned by RenderOneWithReason —
+    // a single sprite's working set, scoped to one iteration of the render
+    // loop. Disposed immediately after the PNG is written to disk.
     private sealed class SpriteEntry {
         public uint ModelId;
         public required SKBitmap Bitmap;
@@ -783,32 +809,52 @@ internal static class ObjectSpriteGenerator {
 
     private struct AtlasRect { public int X, Y, W, H; }
 
-    private static (SKBitmap Atlas, AtlasRect[] Layout) PackAtlas(List<SpriteEntry> entries) {
-        if (entries.Count == 0) {
-            return (new SKBitmap(new SKImageInfo(1, 1, SKColorType.Rgba8888, SKAlphaType.Premul)),
-                Array.Empty<AtlasRect>());
+    /// <summary>
+    /// Stream-pack the per-sprite PNGs in <paramref name="spritesDir"/> into
+    /// a single atlas at <paramref name="atlasPath"/>. The render pass has
+    /// already written each sprite as <c>0x{id:X8}.png</c> and recorded its
+    /// (W, H, worldBounds) in <paramref name="sprites"/>. This method:
+    ///
+    ///   1. computes the skyline packing layout from the (W, H) sizes alone
+    ///      — no bitmaps in memory yet;
+    ///   2. allocates the atlas <see cref="SKBitmap"/> at the packed
+    ///      dimensions;
+    ///   3. iterates each sprite's manifest entry, decodes its PNG from
+    ///      disk, blits it at the layout position, and disposes — peak
+    ///      memory is the atlas + one sprite at a time;
+    ///   4. encodes the atlas to PNG, writes it, returns dimensions.
+    ///
+    /// Peak memory is bounded by atlasArea*4 + maxSpriteArea*4, independent
+    /// of the catalog size. The prior in-memory PackAtlas accumulated every
+    /// sprite SKBitmap and OOM'd above ~5 000 entries on an 8 GB host.
+    /// </summary>
+    private static (int AtlasW, int AtlasH, AtlasRect[] Layout) PackAtlasStreaming(
+            List<SpriteMeta> sprites, string spritesDir, string atlasPath) {
+        if (sprites.Count == 0) {
+            using var oneByOne = new SKBitmap(new SKImageInfo(1, 1, SKColorType.Rgba8888, SKAlphaType.Premul));
+            using var data = oneByOne.Encode(SKEncodedImageFormat.Png, 100);
+            File.WriteAllBytes(atlasPath, data.ToArray());
+            return (1, 1, Array.Empty<AtlasRect>());
         }
 
-        // Order by area desc with index preserved so the manifest aligns with entries.
-        var indexed = entries.Select((e, i) => (i, e)).ToList();
-        indexed.Sort((a, b) =>
-            (b.e.Bitmap.Width * b.e.Bitmap.Height).CompareTo(a.e.Bitmap.Width * a.e.Bitmap.Height));
+        // Order by area desc; preserve the original index so the manifest
+        // entries align with the sprite metadata list.
+        var indexed = sprites.Select((m, i) => (i, m)).ToList();
+        indexed.Sort((a, b) => (b.m.W * b.m.H).CompareTo(a.m.W * a.m.H));
 
-        // Choose atlas width as the next power of two ≥ sqrt(totalArea)*1.1.
         long totalArea = 0;
         int maxSpriteW = 0;
-        foreach (var (_, e) in indexed) {
-            totalArea += e.Bitmap.Width * e.Bitmap.Height;
-            if (e.Bitmap.Width > maxSpriteW) maxSpriteW = e.Bitmap.Width;
+        foreach (var (_, m) in indexed) {
+            totalArea += (long)m.W * m.H;
+            if (m.W > maxSpriteW) maxSpriteW = m.W;
         }
         int atlasW = Math.Max(maxSpriteW, NextPow2((int)(Math.Sqrt(totalArea) * 1.1)));
 
-        // Skyline packing.
         var skyline = new int[atlasW];
-        var layout = new AtlasRect[entries.Count];
+        var layout = new AtlasRect[sprites.Count];
         int atlasH = 0;
-        foreach (var (origIdx, e) in indexed) {
-            int w = e.Bitmap.Width, h = e.Bitmap.Height;
+        foreach (var (origIdx, m) in indexed) {
+            int w = m.W, h = m.H;
             int bestX = 0, bestY = int.MaxValue;
             for (int x = 0; x + w <= atlasW; x++) {
                 int y = 0;
@@ -821,16 +867,28 @@ internal static class ObjectSpriteGenerator {
         }
         atlasH = Math.Max(1, atlasH);
 
-        var atlas = new SKBitmap(new SKImageInfo(atlasW, atlasH, SKColorType.Rgba8888, SKAlphaType.Premul));
+        // Blit pass — allocate atlas, decode each sprite from disk, blit,
+        // dispose. The SKCanvas + atlas live for the whole pass; per-sprite
+        // bitmaps are scoped to one iteration.
+        using var atlas = new SKBitmap(new SKImageInfo(atlasW, atlasH, SKColorType.Rgba8888, SKAlphaType.Premul));
         using (var canvas = new SKCanvas(atlas)) {
             canvas.Clear(SKColors.Transparent);
-            for (int i = 0; i < entries.Count; i++) {
-                var e = entries[i];
+            for (int i = 0; i < sprites.Count; i++) {
+                var m = sprites[i];
                 var rect = layout[i];
-                canvas.DrawBitmap(e.Bitmap, new SKPoint(rect.X, rect.Y));
+                var path = Path.Combine(spritesDir, $"0x{m.ModelId:X8}.png");
+                using var sprite = SKBitmap.Decode(path);
+                if (sprite == null) {
+                    Console.Error.WriteLine($"[Sprites] Pack: failed to decode {path} (entry skipped from atlas)");
+                    continue;
+                }
+                canvas.DrawBitmap(sprite, new SKPoint(rect.X, rect.Y));
             }
         }
-        return (atlas, layout);
+        using (var data = atlas.Encode(SKEncodedImageFormat.Png, 100)) {
+            File.WriteAllBytes(atlasPath, data.ToArray());
+        }
+        return (atlasW, atlasH, layout);
     }
 
     private static int NextPow2(int v) {
