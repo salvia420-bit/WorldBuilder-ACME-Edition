@@ -745,7 +745,7 @@ public partial class CommandEngine {
                         glyphs.Add(new RenderPreviewRenderer.SpawnGlyph(
                             X: sp.X, Y: sp.Y, Z: sp.Z,
                             Category: MapToRendererCategory(sp.Category),
-                            Scale: ScaleForCategory(sp.Category),
+                            Scale: ScaleForSpawn(sp),
                             Wcid: sp.Wcid,
                             Orientation: sp.OrientationOrIdentity));
                     }
@@ -1050,8 +1050,50 @@ public partial class CommandEngine {
         _ => "Prop",
     };
 
-    // Spawns don't carry an ontology Scale field. Approximate by category so
-    // creatures and NPCs render larger than ambient props.
+    // Pick a render scale ("Massive"|"Large"|"Medium"|"Small"|"Tiny") for a
+    // spawn glyph. Order of preference:
+    //   1. Atlas hit on the wcid-resolved setupId — derive from the sprite's
+    //      true world bounds. Statues/towers/portals come out at their actual
+    //      visual size instead of the previous flat "Small" for everything
+    //      that wasn't a Creature/NPC.
+    //   2. Ontology entry on the resolved setupId — use its declared Scale.
+    //   3. Weenie-type heuristic — door=Small, portal=Large, statue=Medium,
+    //      generic generators=Tiny. Stable defaults so an absent atlas
+    //      still gives sensible visuals.
+    //   4. Category-only fallback — Creature/Npc=Medium, anything else=Small.
+    private string ScaleForSpawn(SpawnRecord sp) {
+        SpriteAtlasLoader? atlas = GetOrLoadSpriteAtlas();
+        Func<int, uint>? wcidToSetup = GetWcidToSetupResolver();
+        if (atlas != null && wcidToSetup != null && sp.Wcid > 0) {
+            uint setup = wcidToSetup(sp.Wcid);
+            if (setup != 0 && atlas.TryLookup(setup, out var rect)) {
+                float maxDim = MathF.Max(rect.WorldWidth, rect.WorldHeight);
+                if (maxDim >= 8f)  return "Massive";
+                if (maxDim >= 4f)  return "Large";
+                if (maxDim >= 1.5f) return "Medium";
+                if (maxDim >= 0.5f) return "Small";
+                return "Tiny";
+            }
+            if (setup != 0) {
+                var entry = _ontologyService.GetEntry(setup);
+                if (!string.IsNullOrEmpty(entry?.Scale)) return entry.Scale;
+            }
+        }
+        if (sp.WeenieType is int wt) {
+            return wt switch {
+                19 => "Small",   // Door
+                 7 => "Large",   // Portal
+                10 => "Medium",  // Creature
+                20 => "Medium",  // Vendor
+                 4 => "Medium",  // Talker NPC
+                 1 => "Tiny",    // Generic / item / generator
+                _  => ScaleForCategory(sp.Category),
+            };
+        }
+        return ScaleForCategory(sp.Category);
+    }
+
+    // Category-only fallback when a more specific signal isn't available.
     private static string ScaleForCategory(string spawnCategory) => spawnCategory switch {
         "Creature" => "Medium",
         "Npc" => "Medium",
@@ -1064,6 +1106,55 @@ public partial class CommandEngine {
     // SpawnGazetteerBuilder.BuildFromAceLandblockInstances).
     private static Dictionary<ushort, List<SpawnRecord>> LoadSpawnGazetteer(string path) =>
         SpawnGazetteerBuilder.BuildFromLsdJson(path);
+
+    public sealed record SpawnSpriteCoverage(
+        int TotalSpawns,
+        int ResolvedWithSprite,
+        int ResolvedNoSprite,
+        int UnresolvedWcid,
+        IReadOnlyList<int> TopMissingWcids);
+
+    /// <summary>
+    /// Walks the in-memory spawn gazetteer for the requested LBs and counts
+    /// how many spawns resolve to a sprite atlas hit, how many resolve to
+    /// a setup with no sprite (the renderer will glyph-fallback), and how
+    /// many have a wcid the ontology can't resolve at all. <see cref="StaticSiteEmitter"/>
+    /// surfaces the result through the diagnostics overlay so silent
+    /// drops show up in the frontend.
+    /// </summary>
+    public SpawnSpriteCoverage AnalyzeSpawnSpriteCoverage(IReadOnlyCollection<ushort> lbKeys) {
+        if (_spawnGazetteer.Count == 0)
+            return new SpawnSpriteCoverage(0, 0, 0, 0, Array.Empty<int>());
+        var atlas = GetOrLoadSpriteAtlas();
+        var wcidToSetup = GetWcidToSetupResolver();
+        int total = 0, resolvedSprite = 0, resolvedNoSprite = 0, unresolved = 0;
+        var missingCounts = new Dictionary<int, int>();
+        foreach (var lb in lbKeys) {
+            if (!_spawnGazetteer.TryGetValue(lb, out var spawns)) continue;
+            foreach (var sp in spawns) {
+                if (sp.Cell >= 0x100) continue;  // indoor, not on the surface tile
+                total++;
+                uint setup = wcidToSetup?.Invoke(sp.Wcid) ?? 0u;
+                if (setup == 0) {
+                    unresolved++;
+                    missingCounts[sp.Wcid] = missingCounts.GetValueOrDefault(sp.Wcid) + 1;
+                    continue;
+                }
+                if (atlas != null && atlas.TryLookup(setup, out _)) {
+                    resolvedSprite++;
+                } else {
+                    resolvedNoSprite++;
+                    missingCounts[sp.Wcid] = missingCounts.GetValueOrDefault(sp.Wcid) + 1;
+                }
+            }
+        }
+        var topMissing = missingCounts
+            .OrderByDescending(kv => kv.Value)
+            .Take(10)
+            .Select(kv => kv.Key)
+            .ToList();
+        return new SpawnSpriteCoverage(total, resolvedSprite, resolvedNoSprite, unresolved, topMissing);
+    }
 
     // Read a SpawnRecord JSONL file (one record per line) into the per-LB
     // gazetteer shape. This is the on-disk output of ace-db ingest-spawns

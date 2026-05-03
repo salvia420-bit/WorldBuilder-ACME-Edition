@@ -585,7 +585,7 @@ public static class RenderPreviewRenderer {
         // priority key here pushes Structure last (= drawn on top) so buildings
         // are never visually occluded by adjacent scenery.
         float pxPerWorldUnit = input.LbPx / 192f;
-        var glyphs = new List<(float pxX, float pxY, float sizePx, GlyphShape shape, SKColor fill, uint pairingRoot, uint objId, SpriteInfo? sprite, Quaternion orientation)>();
+        var glyphs = new List<(float pxX, float pxY, float worldZ, float sizePx, GlyphShape shape, SKColor fill, uint pairingRoot, uint objId, SpriteInfo? sprite, Quaternion orientation)>();
         foreach (var kv in input.Objects) {
             foreach (var obj in kv.Value) {
                 float wx = obj.Origin.X - worldOriginX;
@@ -634,7 +634,7 @@ public static class RenderPreviewRenderer {
 
                 uint root = input.PairingsGroupKey != null ? input.PairingsGroupKey(obj.Id) : 0u;
                 SpriteInfo? sprite = (input.UseSprites && input.Sprites != null) ? input.Sprites(obj.Id) : null;
-                glyphs.Add((pxX, pxY, sizePx, shape, fill, root, obj.Id, sprite, obj.Orientation));
+                glyphs.Add((pxX, pxY, obj.Origin.Z, sizePx, shape, fill, root, obj.Id, sprite, obj.Orientation));
             }
         }
 
@@ -684,7 +684,7 @@ public static class RenderPreviewRenderer {
                             input.Ontology?.Invoke(diagId),
                             GlyphFallbackDiag.Source.Spawn);
                     }
-                    glyphs.Add((pxX, pxY, sizePx, shape, fill, 0u, 0u, sprite, sp.Orientation));
+                    glyphs.Add((pxX, pxY, sp.Z, sizePx, shape, fill, 0u, 0u, sprite, sp.Orientation));
                 }
             }
         }
@@ -705,7 +705,28 @@ public static class RenderPreviewRenderer {
             GlyphShape.Structure   => 5,
             _                      => 3,
         };
-        glyphs.Sort((a, b) => ShapeZ(a.shape).CompareTo(ShapeZ(b.shape)));
+
+        // Co-located stacking: when two glyphs share an XY (within ~2 world
+        // units), world Z wins so a statue at z=2 paints after its
+        // pedestal at z=0.5. Outside that radius the original ShapeZ rule
+        // applies, preserving "buildings stay on top of adjacent scenery".
+        // Z is also used as the tiebreaker within a single ShapeZ bucket.
+        // The comparator isn't a strict total order across all triples
+        // (proximity isn't transitive); IntroSort tolerates that and
+        // produces a visually correct result for the cases we care about.
+        float stackThresholdPx = pxPerWorldUnit * 2f;
+        float stackThresholdSqPx = stackThresholdPx * stackThresholdPx;
+        glyphs.Sort((a, b) => {
+            float dx = a.pxX - b.pxX;
+            float dy = a.pxY - b.pxY;
+            if (dx * dx + dy * dy < stackThresholdSqPx) {
+                int zc = a.worldZ.CompareTo(b.worldZ);
+                if (zc != 0) return zc;
+            }
+            int cmp = ShapeZ(a.shape).CompareTo(ShapeZ(b.shape));
+            if (cmp != 0) return cmp;
+            return a.worldZ.CompareTo(b.worldZ);
+        });
 
         foreach (var g in glyphs) {
             // Sprite mode: if the object has a sprite registered AND it would

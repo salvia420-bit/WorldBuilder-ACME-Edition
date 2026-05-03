@@ -35,7 +35,7 @@ internal static class ObjectSpriteGenerator {
         Directory.CreateDirectory(spritesDir);
         var entries = new List<SpriteEntry>(modelIds.Count);
 
-        int nullEmptyTris = 0, nullDegenerate = 0, nullNoVisible = 0, nullFlatPlane = 0, threwException = 0;
+        int nullEmptyTris = 0, nullDegenerate = 0, nullNoVisible = 0, threwException = 0;
         string? firstError = null;
         foreach (var id in modelIds) {
             try {
@@ -45,7 +45,6 @@ internal static class ObjectSpriteGenerator {
                         case NullReason.NoTriangles: nullEmptyTris++; break;
                         case NullReason.Degenerate: nullDegenerate++; break;
                         case NullReason.NoVisible: nullNoVisible++; break;
-                        case NullReason.FlatPlane: nullFlatPlane++; break;
                     }
                     continue;
                 }
@@ -63,10 +62,10 @@ internal static class ObjectSpriteGenerator {
             // Yield to a concurrent ML run between sprites.
             if (throttleMs > 0) System.Threading.Thread.Sleep(throttleMs);
         }
-        if (entries.Count == 0 || nullEmptyTris + nullDegenerate + nullNoVisible + nullFlatPlane + threwException > 0) {
+        if (entries.Count == 0 || nullEmptyTris + nullDegenerate + nullNoVisible + threwException > 0) {
             Console.Error.WriteLine($"[Sprites] rendered={entries.Count} " +
                 $"noTris={nullEmptyTris} degenerate={nullDegenerate} " +
-                $"noVisibleFace={nullNoVisible} flatPlane={nullFlatPlane} threw={threwException}" +
+                $"noVisibleFace={nullNoVisible} threw={threwException}" +
                 (firstError != null ? $" firstError={firstError}" : ""));
         }
         Console.Error.Write(SurfaceDiag.Report());
@@ -98,7 +97,7 @@ internal static class ObjectSpriteGenerator {
     //  Per-model render
     // ────────────────────────────────────────────────────────────────────
 
-    private enum NullReason { NoTriangles, Degenerate, NoVisible, FlatPlane }
+    private enum NullReason { NoTriangles, Degenerate, NoVisible }
 
     private static (SpriteEntry? Entry, NullReason Reason) RenderOneWithReason(
             uint modelId, int spritePx, IDatReaderWriter dats, Func<uint, OntologyEntry?> ontology) {
@@ -128,16 +127,16 @@ internal static class ObjectSpriteGenerator {
         float worldZ = maxZ - minZ;
         if (worldW <= 1e-3f || worldH <= 1e-3f) return (null, NullReason.Degenerate);
 
-        // Flat-plane skip: catch paper-thin meshes (signs, banners, tapestries,
-        // single-quad decals) by bbox shape rather than setupId range. AC's
-        // 3D creature meshes are full volumes (head/torso/limbs) so they fail
-        // this check easily; doors and signs have one dim ≤5% of the largest,
-        // so they're skipped before the rasterizer sees them. Replaces the
-        // prior 66b80ff "buildings only by 0x01xxxxxx" filter that swept up
-        // creatures by setupId range.
+        // Bbox shape classification. The legacy code skipped any model whose
+        // smallest dim was ≤5% of its largest — kicking doors / fences /
+        // signs / banners out of the atlas entirely, where they fell back
+        // to 4px glyph dispatch (the "small dark circles" and tiny strip
+        // clusters in the top-down render). We now keep them and route
+        // through the top-facing-only filter so the top-down silhouette is
+        // a thin strip, not a front-face smear.
         float bboxMax = MathF.Max(worldZ, MathF.Max(worldW, worldH));
         float bboxMin = MathF.Min(worldZ, MathF.Min(worldW, worldH));
-        if (bboxMax > 1e-3f && bboxMin < 0.05f * bboxMax) return (null, NullReason.FlatPlane);
+        bool thinObject = bboxMax > 1e-3f && bboxMin < 0.05f * bboxMax;
 
         float pxPerUnit = spritePx / Math.Max(worldW, worldH);
         int W = Math.Max(1, (int)MathF.Ceiling(worldW * pxPerUnit));
@@ -145,32 +144,34 @@ internal static class ObjectSpriteGenerator {
 
         // Pick the visible triangle set. Three regimes:
         //
-        // 1. **Z-dominant** (door / signpost / banner / tower / stair):
-        //    Z extent is much larger than the largest XY extent. Drawing
-        //    every face with no back-face culling renders the front face
-        //    on top of every pixel — the sprite becomes "wood grain
-        //    filling the frame" ("feet in the ground looking at a door"
-        //    effect). Filter to triangles with any upward-facing normal
-        //    component (Normal.Z > 0) so we render only the actual top-
-        //    down silhouette. We use > 0 rather than > 0.5 because tower
+        // 1. **Top-faces only** (door / signpost / banner / tower / stair /
+        //    fence / thin tapestry): either Z extent dominates the largest
+        //    XY extent (towers, stairs) or the bbox is thin in *any* axis
+        //    (doors, fences, signs). Drawing every face with no back-face
+        //    culling renders the front face on top of every pixel — the
+        //    sprite becomes "wood grain filling the frame". Filter to
+        //    triangles with any upward-facing normal component
+        //    (Normal.Z > 0) so we render only the actual top-down
+        //    silhouette. We use > 0 rather than > 0.5 because tower
         //    cone roofs and stair slopes have normals that point up at
         //    angles steeper than 60° from vertical — a tighter threshold
         //    leaves them out and the rendered tower has no visible roof.
         //    Pure side-walls (Normal.Z == 0) still get filtered out.
-        //    If that leaves nothing (every face is sideways, e.g. a
-        //    paper-thin sign), fall through to regime 3.
+        //    If that leaves nothing (paper-thin decal, every face sideways),
+        //    fall through to regime 3.
         //
         // 2. **Normal** (building / barrel / stone / tree): Z extent is
-        //    not dominant. Render all faces, painter-sort by centroid Z
-        //    so the highest faces (roofs, foliage) draw last.
+        //    not dominant and bbox isn't thin. Render all faces,
+        //    painter-sort by centroid Z so the highest faces (roofs,
+        //    foliage) draw last.
         //
-        // 3. **Sign / awning fallback**: Z-dominant model with no
+        // 3. **Sign / awning fallback**: thin or Z-dominant model with no
         //    top-facing triangles. Drawing all faces is the only way to
         //    get any visible pixels at all.
         float xyMax = MathF.Max(worldW, worldH);
         bool zDominant = worldZ > 1.5f * xyMax;
         List<Tri> visible;
-        if (zDominant) {
+        if (zDominant || thinObject) {
             var tops = new List<Tri>();
             foreach (var t in triangles) if (t.Normal.Z > 0f) tops.Add(t);
             visible = tops.Count > 0 ? tops : new List<Tri>(triangles);

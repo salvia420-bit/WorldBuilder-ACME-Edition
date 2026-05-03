@@ -70,6 +70,14 @@ public static class StaticSiteEmitter {
         // 4. Overlays from the project's gazetteer files (if present).
         var (overlayCount, overlayNames) = EmitOverlays(p.ProjectDirectory, projectDir, diagnostics);
 
+        // 4b. Spawn-sprite coverage: count how many spawn-gazetteer entries
+        //     resolve to a sprite atlas hit vs. fall through to a category
+        //     glyph (often a 4px dot — the "small dark circle" failure
+        //     mode). Surfaced as info-tier diagnostics so a frontend user
+        //     can see how much of the world is rendering as glyphs and
+        //     drill into the top wcids that need atlas coverage.
+        ReportSpawnSpriteCoverage(engine, lbList, diagnostics);
+
         // 5. meta.js — index of LB list, dungeon LBs, floor counts, overlay names.
         EmitMeta(projectDir, projectSlug, lbList, dungeonLbs, overlayNames, engine);
 
@@ -251,6 +259,39 @@ public static class StaticSiteEmitter {
         names.Add("diagnostics");
         count++;
         return (count, names);
+    }
+
+    private static void ReportSpawnSpriteCoverage(CommandEngine engine,
+            IReadOnlyList<string> lbList, List<Diagnostic> diagnostics) {
+        // Convert the lbList (hex strings produced by EmitPerLbAssets) back to
+        // ushort keys for the analyzer. EmitPerLbAssets keeps everything in
+        // sync via the same `0xXXXX` formatter.
+        var lbKeys = new List<ushort>(lbList.Count);
+        foreach (var hex in lbList) {
+            var s = hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                ? hex.Substring(2) : hex;
+            if (ushort.TryParse(s, System.Globalization.NumberStyles.HexNumber,
+                    System.Globalization.CultureInfo.InvariantCulture, out var k)) {
+                lbKeys.Add(k);
+            }
+        }
+        if (lbKeys.Count == 0) return;
+        var coverage = engine.AnalyzeSpawnSpriteCoverage(lbKeys);
+        if (coverage.TotalSpawns == 0) return;
+        int covered = coverage.ResolvedWithSprite;
+        int falling = coverage.ResolvedNoSprite + coverage.UnresolvedWcid;
+        double pct = 100.0 * covered / coverage.TotalSpawns;
+        string severity = pct < 50.0 ? "warning" : "info";
+        diagnostics.Add(new Diagnostic(severity, "spawnSpriteCoverage",
+            $"{covered:N0} of {coverage.TotalSpawns:N0} surface spawns " +
+            $"({pct:F1}%) have a sprite; {falling:N0} fall back to glyph " +
+            $"({coverage.UnresolvedWcid:N0} unresolved wcid, " +
+            $"{coverage.ResolvedNoSprite:N0} resolved-but-no-sprite)."));
+        if (coverage.TopMissingWcids.Count > 0) {
+            diagnostics.Add(new Diagnostic("info", "spawnSpriteCoverage:topMissing",
+                "Top missing wcids: " +
+                string.Join(", ", coverage.TopMissingWcids)));
+        }
     }
 
     private static void WriteDiagnosticsOverlay(string projectDir, List<Diagnostic> diagnostics) {
