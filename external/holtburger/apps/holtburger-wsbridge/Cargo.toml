@@ -1,0 +1,24 @@
+[package]
+name = "holtburger-wsbridge"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WebSocket↔UDP bridge for browser-hosted holtburger clients (Phase 1 of emit-dynamic-site)."
+
+[[bin]]
+name = "holtburger-wsbridge"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+clap = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
