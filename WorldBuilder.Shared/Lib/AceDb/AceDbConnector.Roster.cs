@@ -21,7 +21,12 @@ public partial class AceDbConnector {
     private const int PropStr_Name  = 1;
     private const int PropStr_Title = 5;
 
-    // ACE WeenieType enum subset.
+    // ACE WeenieType enum subset. The Vendor / Talker constants below were
+    // historically wrong (Vendor = 12 and Talker isn't a real type — see
+    // AceWeenieType in AceWeenieTypes.cs). The roster commands now project
+    // from WeenieIndex which uses canonical values; these methods are kept
+    // for one cycle to surface any external callers, then removed in Step 6
+    // of the WeenieIndex migration.
     private const int WeenieType_Creature = 10;
     private const int WeenieType_Vendor   = 20;
     private const int WeenieType_Talker   = 4;
@@ -32,6 +37,7 @@ public partial class AceDbConnector {
     /// type (when present). One round-trip; downstream callers can
     /// serialize to <c>creature_gazetteer.json</c> for the static site.
     /// </summary>
+    [Obsolete("Use CommandEngine.IngestCreatureRosterAsync (projects from WeenieIndex). Removed in Step 6 of the WeenieIndex migration.")]
     public async Task<Dictionary<int, CreatureRecord>> IngestCreatureRosterAsync(
             CancellationToken ct = default) {
         var result = new Dictionary<int, CreatureRecord>();
@@ -73,11 +79,15 @@ public partial class AceDbConnector {
     }
 
     /// <summary>
-    /// Returns a wcid → NpcRecord index for every weenie whose type
-    /// indicates an NPC (Vendor=20 or Talker=4). Pulls a Title string
-    /// when set so frontend tooltips can render "Master Archer Doris"
-    /// instead of just a name.
+    /// Returns a wcid → NpcRecord index for every weenie whose type matches
+    /// the legacy (incorrect) Vendor=20 / Talker=4 constants — those were
+    /// actually Chest and Missile, so this method silently produced a
+    /// roster of chests, coffins, and throwing weapons. Kept here for one
+    /// cycle to surface external callers; the new
+    /// <c>CommandEngine.IngestNpcRosterAsync</c> projects from WeenieIndex
+    /// using canonical type values + the IsTalker flag stamped at ingest.
     /// </summary>
+    [Obsolete("Use CommandEngine.IngestNpcRosterAsync (projects from WeenieIndex). Removed in Step 6 of the WeenieIndex migration.")]
     public async Task<Dictionary<int, NpcRecord>> IngestNpcRosterAsync(
             CancellationToken ct = default) {
         var result = new Dictionary<int, NpcRecord>();

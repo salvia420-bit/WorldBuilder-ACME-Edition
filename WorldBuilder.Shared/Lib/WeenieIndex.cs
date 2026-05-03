@@ -35,6 +35,7 @@ public sealed record WeenieIndexEntry(
     string ClassName,
     int    WeenieType,
     bool   IsServerManaged,
+    bool   IsTalker,
 
     // ── Display (canonical, from property strings) ─────
     string  DisplayName,

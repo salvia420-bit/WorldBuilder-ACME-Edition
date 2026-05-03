@@ -20,15 +20,34 @@ public partial class CommandEngine {
         WriteIndented = false,
     };
 
+    // ACE WeenieType discriminators (canonical values, see AceWeenieType in
+    // WorldBuilder.Shared.Lib.AceDb.AceWeenieTypes). The legacy roster query
+    // had Vendor=20 / Talker=4, which were silently writing chests and
+    // missiles into npc_gazetteer.json. Step 3 of the WeenieIndex migration
+    // pins these to canonical values.
+    private const int WeenieType_Creature = 10;
+    private const int WeenieType_Vendor   = 12;
+
     public async Task<IngestCreatureRosterResult> IngestCreatureRosterAsync(string? outPath = null) {
         RequireProject();
         try {
-            using var connector = RequireAceDbConnector();
-            var roster = await connector.IngestCreatureRosterAsync();
+            await EnsureWeenieIndexLoadedAsync();
             string targetPath = outPath ?? Path.Combine(
                 _projectManager.CurrentProject!.ProjectDirectory, "creature_gazetteer.json");
+
+            var roster = _weenieIndex
+                .WhereType(WeenieType_Creature)
+                .Select(e => new CreatureRecord(
+                    Wcid: e.Wcid,
+                    ClassName: e.ClassName,
+                    DisplayName: e.DisplayName,
+                    CreatureType: e.CreatureType,
+                    Level: e.Level))
+                .OrderBy(c => c.Wcid)
+                .ToList();
+
             File.WriteAllText(targetPath,
-                JsonSerializer.Serialize(roster.Values, GazetteerJsonOpts));
+                JsonSerializer.Serialize(roster, GazetteerJsonOpts));
             return new IngestCreatureRosterResult(true, roster.Count, targetPath);
         } catch (Exception ex) {
             return new IngestCreatureRosterResult(false, 0, null, ex.Message);
@@ -38,17 +57,48 @@ public partial class CommandEngine {
     public async Task<IngestNpcRosterResult> IngestNpcRosterAsync(string? outPath = null) {
         RequireProject();
         try {
-            using var connector = RequireAceDbConnector();
-            var roster = await connector.IngestNpcRosterAsync();
+            await EnsureWeenieIndexLoadedAsync();
             string targetPath = outPath ?? Path.Combine(
                 _projectManager.CurrentProject!.ProjectDirectory, "npc_gazetteer.json");
+
+            // NPCs = every Vendor (Type 12) ∪ every Creature (Type 10) whose
+            // emote table marks it as a talker. The IsTalker flag is stamped
+            // by the WeenieIndex ingest from weenie_properties_emote category
+            // 5 (ReceiveTalkDirect) or 6 (Greeting).
+            var roster = _weenieIndex.Entries
+                .Where(e => e.WeenieType == WeenieType_Vendor
+                         || (e.WeenieType == WeenieType_Creature && e.IsTalker))
+                .Select(e => new NpcRecord(
+                    Wcid: e.Wcid,
+                    ClassName: e.ClassName,
+                    DisplayName: e.DisplayName,
+                    WeenieType: e.WeenieType,
+                    Title: e.Title))
+                .OrderBy(n => n.Wcid)
+                .ToList();
+
             File.WriteAllText(targetPath,
-                JsonSerializer.Serialize(roster.Values, GazetteerJsonOpts));
-            int vendorCount = roster.Values.Count(r => r.WeenieType == 20);
-            int talkerCount = roster.Values.Count(r => r.WeenieType == 4);
+                JsonSerializer.Serialize(roster, GazetteerJsonOpts));
+            int vendorCount = roster.Count(r => r.WeenieType == WeenieType_Vendor);
+            int talkerCount = roster.Count(r => r.WeenieType == WeenieType_Creature);
             return new IngestNpcRosterResult(true, roster.Count, vendorCount, talkerCount, targetPath);
         } catch (Exception ex) {
             return new IngestNpcRosterResult(false, 0, 0, 0, null, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Convenience hook for the roster projections: if the in-memory
+    /// WeenieIndex is empty (project loaded without a prior
+    /// `ace-db ingest-weenie-index` run), pull it now and stamp it on disk
+    /// so the projection has a canonical source to read from.
+    /// </summary>
+    private async Task EnsureWeenieIndexLoadedAsync() {
+        if (_weenieIndex.Count > 0) return;
+        var r = await IngestWeenieIndexAsync();
+        if (!r.Success) {
+            throw new InvalidOperationException(
+                $"Failed to ingest WeenieIndex (required for roster projection): {r.Error}");
         }
     }
 
@@ -183,19 +233,19 @@ public partial class CommandEngine {
             // query rather than the per-LB shaped helpers — this method
             // walks the entire DB.
             var rows = await connector.GetAllInstancesAsync();
-            var weenieIndex = new Dictionary<int, AceWeenieDescriptor>();
-            try {
-                var creatures = await connector.IngestCreatureRosterAsync();
-                foreach (var c in creatures.Values) {
-                    weenieIndex[c.Wcid] = new AceWeenieDescriptor(c.Wcid, c.DisplayName, 10);
-                }
-                var npcs = await connector.IngestNpcRosterAsync();
-                foreach (var n in npcs.Values) {
-                    weenieIndex[n.Wcid] = new AceWeenieDescriptor(n.Wcid, n.DisplayName, n.WeenieType);
-                }
-            } catch { /* roster failure → records flagged synthetic */ }
 
-            var spawnsByLb = SpawnGazetteerBuilder.BuildFromAceLandblockInstances(rows, weenieIndex);
+            // Project the spawn-builder's wcid → descriptor map from the
+            // canonical WeenieIndex. Replaces the prior pair of roster queries
+            // (creature + NPC) which only covered ~7k weenies; the full index
+            // covers all 43k+ weenies so spawn naming is no longer limited to
+            // the NPC/Creature subset.
+            await EnsureWeenieIndexLoadedAsync();
+            var weenieDescriptors = new Dictionary<int, AceWeenieDescriptor>(_weenieIndex.Count);
+            foreach (var e in _weenieIndex.Entries) {
+                weenieDescriptors[e.Wcid] = new AceWeenieDescriptor(e.Wcid, e.DisplayName, e.WeenieType);
+            }
+
+            var spawnsByLb = SpawnGazetteerBuilder.BuildFromAceLandblockInstances(rows, weenieDescriptors);
             int total = spawnsByLb.Values.Sum(v => v.Count);
             int synthetic = spawnsByLb.Values.SelectMany(v => v).Count(s => s.IsSynthetic);
 

@@ -19,6 +19,14 @@ public partial class AceDbConnector {
     private const int PropDid_PaletteBase = 6;
     private const int PropDid_Icon        = 8;
 
+    // EmoteCategory enum values from ACE.Entity.Enum.EmoteCategory. The two
+    // values we read identify "talker" weenies — NPCs the player can converse
+    // with — and disambiguate them from other Type=10 (Creature) weenies which
+    // are monsters. Cat 5 is the canonical "responds to direct speech" marker;
+    // Cat 6 covers greeting-only NPCs (quest givers, ambient townsfolk).
+    private const int EmoteCat_ReceiveTalkDirect = 5;
+    private const int EmoteCat_Greeting          = 6;
+
     /// <summary>
     /// Returns the canonical <see cref="WeenieIndex"/> for the connected
     /// ACE world DB: every row in <c>weenie</c> joined to its display
@@ -44,6 +52,24 @@ public partial class AceDbConnector {
             await using var rd = await cmdPlaced.ExecuteReaderAsync(ct);
             while (await rd.ReadAsync(ct)) {
                 serverManagedWcids.Add((int)rd.GetUInt32(0));
+            }
+        }
+
+        // Side query: the set of wcids whose emote table includes a
+        // ReceiveTalkDirect or Greeting category — the canonical "talker"
+        // marker. Lets the NPC roster project from WeenieIndex without a
+        // second pass over the emote tables.
+        var talkerWcids = new HashSet<int>();
+        const string sqlTalkers = @"
+            SELECT DISTINCT `object_Id` FROM `weenie_properties_emote`
+            WHERE `category` IN (@catTalk, @catGreet)";
+        await using (var cmdTalk = new MySqlCommand(sqlTalkers, conn)) {
+            cmdTalk.Parameters.AddWithValue("@catTalk",  EmoteCat_ReceiveTalkDirect);
+            cmdTalk.Parameters.AddWithValue("@catGreet", EmoteCat_Greeting);
+            cmdTalk.CommandTimeout = 120;
+            await using var rd = await cmdTalk.ExecuteReaderAsync(ct);
+            while (await rd.ReadAsync(ct)) {
+                talkerWcids.Add((int)rd.GetUInt32(0));
             }
         }
 
@@ -104,12 +130,14 @@ public partial class AceDbConnector {
             int?   level      = reader.IsDBNull("level")        ? null : reader.GetInt32("level");
 
             bool serverManaged = serverManagedWcids.Contains(wcid);
+            bool isTalker      = talkerWcids.Contains(wcid);
 
             dict[wcid] = new WeenieIndexEntry(
                 Wcid: wcid,
                 ClassName: className,
                 WeenieType: weenieType,
                 IsServerManaged: serverManaged,
+                IsTalker: isTalker,
                 DisplayName: displayNm,
                 Title: title,
                 SetupDid: setupDid,
