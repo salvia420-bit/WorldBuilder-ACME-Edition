@@ -4,11 +4,13 @@ using MySqlConnector;
 namespace WorldBuilder.Shared.Lib.AceDb;
 
 /// <summary>
-/// Bulk-ingest queries that pull canonical creature / NPC / housing
-/// rosters out of the ACE world DB. Distinct from the per-row
-/// landblock_instance reads — these are wide table scans intended for
-/// the static-site emitter's overlay generation step
-/// (<c>ace-db ingest-creatures / ingest-npcs / ingest-housing</c>).
+/// Bulk-ingest helpers for the ACE world DB. The creature / NPC roster
+/// queries that lived here previously were superseded by the WeenieIndex
+/// projection in Step 3 of the migration; what remains is the
+/// landblock_instance bulk read (consumed by <c>ace-db ingest-spawns</c>)
+/// and the housing portal read (consumed by <c>ace-db ingest-housing</c>).
+/// Shared property-type constants live here so other partials in the
+/// AceDbConnector class group can use them.
 /// </summary>
 public partial class AceDbConnector {
 
@@ -21,110 +23,15 @@ public partial class AceDbConnector {
     private const int PropStr_Name  = 1;
     private const int PropStr_Title = 5;
 
-    // ACE WeenieType enum subset. The Vendor / Talker constants below were
-    // historically wrong (Vendor = 12 and Talker isn't a real type — see
-    // AceWeenieType in AceWeenieTypes.cs). The roster commands now project
-    // from WeenieIndex which uses canonical values; these methods are kept
-    // for one cycle to surface any external callers, then removed in Step 6
-    // of the WeenieIndex migration.
-    private const int WeenieType_Creature = 10;
-    private const int WeenieType_Vendor   = 20;
-    private const int WeenieType_Talker   = 4;
-
-    /// <summary>
-    /// Returns a wcid → CreatureRecord index of every WeenieType=10 row
-    /// in the connected ACE DB, joined to its display name and creature
-    /// type (when present). One round-trip; downstream callers can
-    /// serialize to <c>creature_gazetteer.json</c> for the static site.
-    /// </summary>
-    [Obsolete("Use CommandEngine.IngestCreatureRosterAsync (projects from WeenieIndex). Removed in Step 6 of the WeenieIndex migration.")]
-    public async Task<Dictionary<int, CreatureRecord>> IngestCreatureRosterAsync(
-            CancellationToken ct = default) {
-        var result = new Dictionary<int, CreatureRecord>();
-        await using var conn = new MySqlConnection(_settings.ConnectionString);
-        await conn.OpenAsync(ct);
-
-        const string sql = @"
-            SELECT
-                w.class_Id   AS wcid,
-                w.class_Name AS class_name,
-                COALESCE(s.value, w.class_Name) AS display_name,
-                ct.value     AS creature_type,
-                lvl.value    AS level
-            FROM `weenie` w
-            LEFT JOIN `weenie_properties_string` s
-                ON s.object_Id = w.class_Id AND s.type = @nameType
-            LEFT JOIN `weenie_properties_int` ct
-                ON ct.object_Id = w.class_Id AND ct.type = @creatureTypeProp
-            LEFT JOIN `weenie_properties_int` lvl
-                ON lvl.object_Id = w.class_Id AND lvl.type = @levelProp
-            WHERE w.type = @creatureWeenieType";
-        await using var cmd = new MySqlCommand(sql, conn);
-        cmd.Parameters.AddWithValue("@nameType", PropStr_Name);
-        cmd.Parameters.AddWithValue("@creatureTypeProp", PropInt_CreatureType);
-        cmd.Parameters.AddWithValue("@levelProp", PropInt_Level);
-        cmd.Parameters.AddWithValue("@creatureWeenieType", WeenieType_Creature);
-        cmd.CommandTimeout = 300;
-
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct)) {
-            int wcid = reader.GetInt32("wcid");
-            string className = reader.GetString("class_name");
-            string displayName = reader.IsDBNull("display_name") ? className : reader.GetString("display_name");
-            int? creatureType = reader.IsDBNull("creature_type") ? null : reader.GetInt32("creature_type");
-            int? level = reader.IsDBNull("level") ? null : reader.GetInt32("level");
-            result[wcid] = new CreatureRecord(wcid, className, displayName, creatureType, level);
-        }
-        return result;
-    }
-
-    /// <summary>
-    /// Returns a wcid → NpcRecord index for every weenie whose type matches
-    /// the legacy (incorrect) Vendor=20 / Talker=4 constants — those were
-    /// actually Chest and Missile, so this method silently produced a
-    /// roster of chests, coffins, and throwing weapons. Kept here for one
-    /// cycle to surface external callers; the new
-    /// <c>CommandEngine.IngestNpcRosterAsync</c> projects from WeenieIndex
-    /// using canonical type values + the IsTalker flag stamped at ingest.
-    /// </summary>
-    [Obsolete("Use CommandEngine.IngestNpcRosterAsync (projects from WeenieIndex). Removed in Step 6 of the WeenieIndex migration.")]
-    public async Task<Dictionary<int, NpcRecord>> IngestNpcRosterAsync(
-            CancellationToken ct = default) {
-        var result = new Dictionary<int, NpcRecord>();
-        await using var conn = new MySqlConnection(_settings.ConnectionString);
-        await conn.OpenAsync(ct);
-
-        const string sql = @"
-            SELECT
-                w.class_Id   AS wcid,
-                w.class_Name AS class_name,
-                COALESCE(n.value, w.class_Name) AS display_name,
-                w.type       AS weenie_type,
-                t.value      AS title
-            FROM `weenie` w
-            LEFT JOIN `weenie_properties_string` n
-                ON n.object_Id = w.class_Id AND n.type = @nameType
-            LEFT JOIN `weenie_properties_string` t
-                ON t.object_Id = w.class_Id AND t.type = @titleType
-            WHERE w.type IN (@vendor, @talker)";
-        await using var cmd = new MySqlCommand(sql, conn);
-        cmd.Parameters.AddWithValue("@nameType", PropStr_Name);
-        cmd.Parameters.AddWithValue("@titleType", PropStr_Title);
-        cmd.Parameters.AddWithValue("@vendor", WeenieType_Vendor);
-        cmd.Parameters.AddWithValue("@talker", WeenieType_Talker);
-        cmd.CommandTimeout = 300;
-
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct)) {
-            int wcid = reader.GetInt32("wcid");
-            string className = reader.GetString("class_name");
-            string displayName = reader.IsDBNull("display_name") ? className : reader.GetString("display_name");
-            int weenieType = reader.GetInt32("weenie_type");
-            string? title = reader.IsDBNull("title") ? null : reader.GetString("title");
-            result[wcid] = new NpcRecord(wcid, className, displayName, weenieType, title);
-        }
-        return result;
-    }
+    // The legacy IngestCreatureRosterAsync / IngestNpcRosterAsync methods
+    // that lived here through 2026-04 used wrong WeenieType constants
+    // (Vendor=20 was actually Chest, Talker=4 was actually Missile) and
+    // silently wrote a roster of bowls, chests, and throwing weapons into
+    // npc_gazetteer.json. They were superseded in Step 3 of the WeenieIndex
+    // migration by the projection-based wrappers in
+    // WorldBuilder.Terminal.CommandEngine. See AceDbConnector.WeenieIndex.cs
+    // for the canonical fetch and CommandEngine.SiteIngest.cs for the
+    // roster projections.
 
     /// <summary>
     /// Single-query bulk read of every <c>landblock_instance</c> row

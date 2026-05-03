@@ -11143,17 +11143,19 @@ public partial class CommandEngine {
         return _spriteAtlas;
     }
 
-    // wcid → setupId index. The canonical layer is the per-project
-    // WeenieIndex (sourced from the ACE world DB, see
-    // `ace-db ingest-weenie-index`). The ontology fallback below
-    // remains as a secondary store: it covers the cases where a wcid
-    // appears in DAT data (spell tables, building blueprints) without
-    // having an ACE-DB row, and acts as a safety net for projects that
-    // haven't ingested the WeenieIndex yet.
+    // wcid → setupId fallback index, lazily built from the ontology's
+    // WeenieClassId field. Slated for removal one cycle after the
+    // WeenieIndex migration lands (Step 6 — see weenie_index.md). The
+    // canonical wcid → identity map now lives in WeenieIndex; this map
+    // covers a small remainder where a wcid appears in DAT data (spell
+    // tables, building blueprints) without an ACE-DB row, and is a
+    // safety net for projects that haven't ingested WeenieIndex yet.
     //
-    // Why we need it: spawn glyphs come from spawn records that store a
-    // wcid (weenie class id, e.g. 72265 for "Surface" totem); the sprite
-    // atlas is keyed by setupId (0x01xxxxxx GfxObj or 0x02xxxxxx Setup).
+    // Removal blocker: confirm via spawnSpriteCoverage that the WeenieIndex
+    // hits exclusively across one full release cycle. Once the fallback
+    // contributes 0 hits in steady state, delete this field, the lazy
+    // build inside GetWcidToSetupResolver, and the writes to
+    // OntologyEntry.WeenieClassId in OntologyService.
     private Dictionary<int, uint>? _wcidToSetup;
 
     private Func<int, uint>? GetWcidToSetupResolver() {

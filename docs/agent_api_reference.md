@@ -1943,19 +1943,30 @@ The frontend's `assertCoordSystem()` runs after meta loads and before any tile l
 
 ### ACE Database Bulk Ingest
 
+#### `ace-db-ingest-weenie-index`
+
+**Request:** `{"command":"ace-db-ingest-weenie-index","out":"…/weenie_index.jsonl"}` (out optional; defaults to project dir)
+**Response:** `{success, command, totalEntries, withSetupDid, serverManaged, outputPath, error?}`
+
+Bulk-reads every row in `weenie` joined to its property side-tables (Name, Title, Setup DID, Icon DID, PaletteBase DID, CreatureType, Level) plus side queries that stamp `isServerManaged` (has at least one `landblock_instance` row) and `isTalker` (has emote category 5 or 6). Writes JSONL of `WeenieIndexEntry` keyed by wcid.
+
+This is the canonical wcid → identity map that gates the static-site renderer's setup-DID resolver, the spawn-glyph dispatcher's scale lookup, and the per-roster gazetteer projections (`ingest-creatures`, `ingest-npcs` auto-ingest WeenieIndex on first call). Auto-restored at project load from `weenie_index.jsonl` when present.
+
 #### `ace-db-ingest-creatures`
 
 **Request:** `{"command":"ace-db-ingest-creatures","out":"…/creature_gazetteer.json"}` (out optional; defaults to project dir)
 **Response:** `{success, command, totalProcessed, outputPath, error?}`
 
-Joins `weenie` + `weenie_properties_int`(CreatureType, Level) + `weenie_properties_string`(Name) for every WeenieType=10 row; writes a JSON array of `CreatureRecord`.
+Projects WeenieIndex `WhereType(Creature=10)` into a JSON array of `CreatureRecord` (wcid, className, displayName, creatureType, level). Auto-runs `ace-db-ingest-weenie-index` first if the in-memory index is empty.
 
 #### `ace-db-ingest-npcs`
 
 **Request:** `{"command":"ace-db-ingest-npcs","out":"…/npc_gazetteer.json"}`
 **Response:** `{success, command, totalProcessed, vendorCount, talkerCount, outputPath, error?}`
 
-Same join filtered to WeenieType IN (Vendor=20, Talker=4). Includes Title string when present.
+Projects WeenieIndex `WhereType(Vendor=12) ∪ Where(Type=10 ∧ IsTalker)` into a JSON array of `NpcRecord` (wcid, className, displayName, weenieType, title). Auto-runs `ace-db-ingest-weenie-index` first if the in-memory index is empty.
+
+The legacy implementation (pre-2026-05) used wrong WeenieType constants (Vendor=20 was actually Chest, Talker=4 was actually Missile) and silently wrote a roster of bowls, chests, and throwing weapons. The current projection uses canonical `AceWeenieType` values + the `IsTalker` flag stamped during WeenieIndex ingest.
 
 #### `ace-db-ingest-housing`
 
@@ -1969,7 +1980,7 @@ Reads `house_portal` (the only housing-related table in the v0.9.292 dump). Outp
 **Request:** `{"command":"ace-db-ingest-spawns","out":"…/ace_spawn_records.jsonl"}`
 **Response:** `{success, command, landblocksTouched, recordsWritten, syntheticRecords, outputPath, error?}`
 
-Bulk-reads every `landblock_instance` row, joins to the cached creature/NPC roster for names, and writes per-spawn `SpawnRecord` JSONL. Records without a roster join are flagged `isSynthetic:true`.
+Bulk-reads every `landblock_instance` row and projects `SpawnRecord` JSONL using WeenieIndex for the wcid → name/type lookup. Records without a WeenieIndex hit are flagged `isSynthetic:true` (rare — the index covers ~44k weenies).
 
 ### Spawn Schema Promotion
 
