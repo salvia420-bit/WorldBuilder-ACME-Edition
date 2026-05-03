@@ -141,7 +141,34 @@ internal static class ObjectSpriteGenerator {
         }
         float worldW = maxX - minX, worldH = maxY - minY;
         float worldZ = maxZ - minZ;
-        if (worldW <= 1e-3f || worldH <= 1e-3f) return (null, NullReason.Degenerate);
+
+        // Billboard fallback. Models like portal swirls, signs, banners,
+        // tapestries are stored as a single upright polygon with zero depth
+        // along one axis (e.g. portal setup 0x020001B3 is a 2.82m × 0m × 2.82m
+        // single-poly quad). The standard top-down projection produces an
+        // empty bitmap because there's no XY area to fill. Without this
+        // fallback, all 1,991 portal weenies in retail render as 4px glyphs.
+        //
+        // Approach (per project decision: "people have to be able to see it"):
+        // when worldW or worldH is degenerate but the OTHER XY axis + Z give
+        // a real billboard size, render the polygon's surface texture inside
+        // a circular disk sized to the billboard's largest dimension. The
+        // disk approximates "what would a top-down projection of this swirl
+        // look like" — geometrically it's a vertical billboard, but the
+        // top-down map needs a visible footprint at the placement coord.
+        bool xDegenerate = worldW <= 1e-3f;
+        bool yDegenerate = worldH <= 1e-3f;
+        if (xDegenerate && yDegenerate) return (null, NullReason.Degenerate);
+        if (xDegenerate || yDegenerate) {
+            float discDiameter = MathF.Max(MathF.Max(worldW, worldH), worldZ);
+            if (discDiameter < 0.05f) return (null, NullReason.Degenerate);
+            var discBmp = RenderBillboardAsDisc(triangles, discDiameter, spritePx, dats, ontology(modelId));
+            if (discBmp == null) return (null, NullReason.NoVisible);
+            return (new SpriteEntry {
+                ModelId = modelId, Bitmap = discBmp,
+                WorldWidth = discDiameter, WorldHeight = discDiameter
+            }, NullReason.NoTriangles); // reason unused on success
+        }
 
         // Bbox shape classification. The legacy code skipped any model whose
         // smallest dim was ≤5% of its largest — kicking doors / fences /
@@ -220,6 +247,115 @@ internal static class ObjectSpriteGenerator {
             WorldHeight = worldH,
         };
         return (entry, NullReason.NoTriangles); // unused when entry != null
+    }
+
+    /// <summary>
+    /// Render a billboard model (single upright polygon, zero depth on one
+    /// horizontal axis — portals, signs, tapestries, banners) as a circular
+    /// disc carrying the polygon's surface texture. The disc represents the
+    /// billboard's "footprint" in top-down view: width = the billboard's
+    /// largest dimension. Used as a fallback when the standard top-down
+    /// projection produces an empty bitmap.
+    ///
+    /// Returns null only when neither the texture nor a fallback color can
+    /// be produced — caller treats that as NullReason.NoVisible.
+    /// </summary>
+    private static SKBitmap? RenderBillboardAsDisc(List<Tri> triangles, float discDiameter,
+            int spritePx, IDatReaderWriter dats, OntologyEntry? entry) {
+        // Find the first triangle that carries a surface DID. Most billboards
+        // are 1-poly = 2 triangles sharing one surface; pick whichever is set.
+        uint surfaceDid = 0;
+        foreach (var t in triangles) {
+            if (t.SurfaceDid != 0) { surfaceDid = t.SurfaceDid; break; }
+        }
+
+        SKBitmap? texture = surfaceDid != 0 ? TryLoadSurface(dats, surfaceDid) : null;
+
+        // Pick a base disc colour. When a texture loaded, sample its
+        // average colour over opaque pixels — that's a faithful single-
+        // colour summary of the swirl / sign / banner art, regardless of
+        // whether the texture turned out to be a 8×8 mipmap thumbnail
+        // (no detail) or a real high-res asset. When no texture loaded,
+        // fall back to the ontology category palette.
+        SKColor baseColour = texture != null && texture.Width > 0 && texture.Height > 0
+            ? SampleAverageOpaqueColour(texture, ResolveFallbackFill(entry))
+            : ResolveFallbackFill(entry);
+
+        var info = new SKImageInfo(spritePx, spritePx, SKColorType.Rgba8888, SKAlphaType.Premul);
+        var bmp = new SKBitmap(info);
+        try {
+            using var canvas = new SKCanvas(bmp);
+            canvas.Clear(SKColors.Transparent);
+            float cx = spritePx * 0.5f, cy = spritePx * 0.5f;
+            float r = (spritePx * 0.5f) - 1f;
+
+            // Always paint the category colour as the base disc — guarantees
+            // a visible footprint even when the texture turns out to be
+            // a tiny mipmap thumbnail (some surfaces only ship an 8×8
+            // placeholder; AC's renderer would have generated the real
+            // visual procedurally) or otherwise has near-zero useful detail.
+            using (var basePaint = new SKPaint {
+                Color = baseColour, IsAntialias = true, Style = SKPaintStyle.Fill,
+            }) {
+                canvas.DrawCircle(cx, cy, r, basePaint);
+            }
+
+            // Then overlay the texture on top via a bitmap-shader. A real
+            // detail texture (≥32×32) covers the base colour entirely; a
+            // tiny placeholder lets the base colour remain visible. Either
+            // way the disc reads as the right type at a glance.
+            if (texture != null && texture.Width > 0 && texture.Height > 0) {
+                float scaleX = (2f * r) / texture.Width;
+                float scaleY = (2f * r) / texture.Height;
+                var matrix = SKMatrix.CreateScaleTranslation(scaleX, scaleY,
+                    cx - r, cy - r);
+                using var shader = SKShader.CreateBitmap(texture,
+                    SKShaderTileMode.Clamp, SKShaderTileMode.Clamp, matrix);
+                using var texPaint = new SKPaint {
+                    Shader = shader, IsAntialias = true, Style = SKPaintStyle.Fill,
+                };
+                canvas.DrawCircle(cx, cy, r, texPaint);
+            }
+
+            // Subtle outline reads against busy terrain; matches the
+            // glyph-style outline weight the rest of the renderer uses.
+            using var outline = new SKPaint {
+                Color = new SKColor(0x00, 0x00, 0x00, 0x80),
+                IsAntialias = true,
+                Style = SKPaintStyle.Stroke,
+                StrokeWidth = MathF.Max(1f, spritePx / 64f),
+            };
+            canvas.DrawCircle(cx, cy, r, outline);
+        } catch {
+            bmp.Dispose();
+            return null;
+        } finally {
+            texture?.Dispose();
+        }
+        return bmp;
+    }
+
+    /// <summary>
+    /// Average colour of the opaque (alpha &gt; 32) pixels in <paramref name="bmp"/>.
+    /// Used by the billboard disc renderer to derive a single representative
+    /// colour from a texture — works whether the texture is an 8×8 mipmap
+    /// thumbnail (no useful pattern) or a full-detail asset. Returns
+    /// <paramref name="ifNoOpaque"/> when no opaque pixel exists.
+    /// </summary>
+    private static SKColor SampleAverageOpaqueColour(SKBitmap bmp, SKColor ifNoOpaque) {
+        long rs = 0, gs = 0, bs = 0, n = 0;
+        // Iterate at most ~256 sample points to keep this O(1) for huge
+        // textures. Stride based on side length so coverage is uniform.
+        int stride = Math.Max(1, Math.Min(bmp.Width, bmp.Height) / 16);
+        for (int y = 0; y < bmp.Height; y += stride) {
+            for (int x = 0; x < bmp.Width; x += stride) {
+                var c = bmp.GetPixel(x, y);
+                if (c.Alpha <= 32) continue;
+                rs += c.Red; gs += c.Green; bs += c.Blue; n++;
+            }
+        }
+        if (n == 0) return ifNoOpaque;
+        return new SKColor((byte)(rs / n), (byte)(gs / n), (byte)(bs / n));
     }
 
     private static void DrawDropShadow(SKCanvas canvas, List<Tri> tris,
@@ -312,6 +448,17 @@ internal static class ObjectSpriteGenerator {
     }
 
     private static SKColor ResolveFallbackFill(OntologyEntry? entry) {
+        // WeenieType-aware overrides come first — the ontology's category
+        // classifier sometimes labels billboard portal setups as "Creature"
+        // (1-poly upright quad pattern), but the enrichment pass populates
+        // weenieType from the first weenie that references the setup. For
+        // portals + signs + housing-portals, that gives us a much better
+        // colour than the misclassified category.
+        switch (entry?.WeenieType) {
+            case 7:  return new SKColor(0x6E, 0xC8, 0xE0);  // Portal — cyan
+            case 60: return new SKColor(0xA0, 0x6E, 0xD4);  // HousePortal — purple
+            case 36: return new SKColor(0xE0, 0x9A, 0x3F);  // Channel/sign — orange
+        }
         // Reuse RenderPreviewRenderer's category palette via the public glyph
         // resolver path. Tiny indirection: we don't expose ResolveGlyph as
         // public, but the family-level fills are constants there. Match the
