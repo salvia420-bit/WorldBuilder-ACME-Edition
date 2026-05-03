@@ -27,10 +27,10 @@ internal static class ObjectSpriteGenerator {
     private const float ShadowAlpha = 0.40f;
 
     public static (int Rendered, int Failed, int AtlasWidth, int AtlasHeight) Run(
-            IReadOnlyCollection<uint> modelIds, int spritePx, string spritesDir,
+            IReadOnlyCollection<SpriteKey> modelIds, int spritePx, string spritesDir,
             string atlasPath, string manifestPath,
             IDatReaderWriter dats, Func<uint, OntologyEntry?> ontology,
-            int throttleMs = 0) {
+            int throttleMs = 0, int lodLevel = 0) {
         // Two-pass streaming flow.
         //
         // Pass 1 — render: triangulate, rasterize the per-model PNG, write
@@ -53,9 +53,27 @@ internal static class ObjectSpriteGenerator {
 
         int nullEmptyTris = 0, nullDegenerate = 0, nullNoVisible = 0, threwException = 0;
         string? firstError = null;
-        foreach (var id in modelIds) {
+        // Heartbeat so a hang or native crash points at the offending setupId.
+        // Without this, the render loop is silent for the duration and a SIGSEGV
+        // from SkiaSharp leaves no clue which sprite faulted.
+        const int progressEvery = 200;
+        int processed = 0;
+        var startedAt = DateTime.UtcNow;
+        // Persist last-attempted id to a sidecar before each render; on crash,
+        // tail the file to identify the culprit.
+        var heartbeatPath = Path.Combine(spritesDir, ".heartbeat");
+        foreach (var key in modelIds) {
+            var manifestId = key.ToManifestId();
+            // Variant sprites get a distinct on-disk path so re-runs that
+            // change one variant don't clobber another sharing the same setup.
+            var spriteFileName = key.HasVariant
+                ? $"0x{key.Setup:X8}_c0x{key.ClothingBase:X8}_p{key.PaletteTemplate}.png"
+                : $"0x{key.Setup:X8}.png";
             try {
-                var (rendered, reason) = RenderOneWithReason(id, spritePx, dats, ontology);
+                File.WriteAllText(heartbeatPath, manifestId + "\n");
+            } catch { /* heartbeat is best-effort */ }
+            try {
+                var (rendered, reason) = RenderOneWithReason(key, spritePx, dats, ontology, lodLevel);
                 if (rendered == null) {
                     switch (reason) {
                         case NullReason.NoTriangles: nullEmptyTris++; break;
@@ -67,30 +85,44 @@ internal static class ObjectSpriteGenerator {
                 int w, h;
                 try {
                     using var data = rendered.Bitmap.Encode(SKEncodedImageFormat.Png, 100);
-                    File.WriteAllBytes(Path.Combine(spritesDir, $"0x{id:X8}.png"), data.ToArray());
+                    File.WriteAllBytes(Path.Combine(spritesDir, spriteFileName), data.ToArray());
                     w = rendered.Bitmap.Width;
                     h = rendered.Bitmap.Height;
                 } finally {
                     rendered.Bitmap.Dispose();
                 }
-                sprites.Add(new SpriteMeta(id, w, h, rendered.WorldWidth, rendered.WorldHeight));
+                sprites.Add(new SpriteMeta(key, spriteFileName, w, h, rendered.WorldWidth, rendered.WorldHeight));
             } catch (Exception ex) {
                 threwException++;
                 if (firstError == null) {
                     var stack = ex.StackTrace?.Split('\n').FirstOrDefault()?.Trim() ?? "";
-                    firstError = $"0x{id:X8}: {ex.GetType().Name}: {ex.Message} @ {stack}";
+                    firstError = $"{manifestId}: {ex.GetType().Name}: {ex.Message} @ {stack}";
                 }
+            }
+            processed++;
+            if (processed % progressEvery == 0) {
+                var elapsed = (DateTime.UtcNow - startedAt).TotalSeconds;
+                long rss = 0;
+                try { rss = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64; } catch { }
+                Console.Error.WriteLine($"[Sprites] progress {processed}/{modelIds.Count} " +
+                    $"rendered={sprites.Count} threw={threwException} " +
+                    $"elapsed={elapsed:F0}s rss={rss / 1_000_000}MB");
+                Console.Error.Flush();
+                // Skia pixel buffers live in unmanaged memory; periodic GC cycle
+                // reclaims them before RSS climbs into swap on the 8GB host.
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
             }
             // Yield to a concurrent ML run between sprites.
             if (throttleMs > 0) System.Threading.Thread.Sleep(throttleMs);
         }
-        if (sprites.Count == 0 || nullEmptyTris + nullDegenerate + nullNoVisible + threwException > 0) {
-            Console.Error.WriteLine($"[Sprites] rendered={sprites.Count} " +
-                $"noTris={nullEmptyTris} degenerate={nullDegenerate} " +
-                $"noVisibleFace={nullNoVisible} threw={threwException}" +
-                (firstError != null ? $" firstError={firstError}" : ""));
-        }
+        Console.Error.WriteLine($"[Sprites] rendered={sprites.Count} " +
+            $"noTris={nullEmptyTris} degenerate={nullDegenerate} " +
+            $"noVisibleFace={nullNoVisible} threw={threwException}" +
+            (firstError != null ? $" firstError={firstError}" : ""));
         Console.Error.Write(SurfaceDiag.Report());
+        Console.Error.Flush();
+        try { File.Delete(heartbeatPath); } catch { /* ok */ }
 
         var (aw, ah, layout) = PackAtlasStreaming(sprites, spritesDir, atlasPath);
         using (var sw = new StreamWriter(manifestPath, append: false)) {
@@ -98,7 +130,7 @@ internal static class ObjectSpriteGenerator {
                 var m = sprites[i];
                 var rect = layout[i];
                 sw.WriteLine(System.Text.Json.JsonSerializer.Serialize(new {
-                    modelId = $"0x{m.ModelId:X8}",
+                    modelId = m.Key.ToManifestId(),
                     x = rect.X, y = rect.Y, w = rect.W, h = rect.H,
                     worldBounds = new[] {
                         Math.Round(m.WorldWidth, 4), Math.Round(m.WorldHeight, 4),
@@ -116,9 +148,12 @@ internal static class ObjectSpriteGenerator {
     private enum NullReason { NoTriangles, Degenerate, NoVisible }
 
     private static (SpriteEntry? Entry, NullReason Reason) RenderOneWithReason(
-            uint modelId, int spritePx, IDatReaderWriter dats, Func<uint, OntologyEntry?> ontology) {
-        var triangles = TriangulateModel(modelId, dats);
+            SpriteKey key, int spritePx, IDatReaderWriter dats, Func<uint, OntologyEntry?> ontology,
+            int lodLevel = 0) {
+        var triangles = TriangulateModel(key, dats, lodLevel);
         if (triangles.Count == 0) return (null, NullReason.NoTriangles);
+        var variant = BuildVariantContext(dats, key);
+        uint modelId = key.Setup;
 
         // World XYZ bounds across all triangles. We need Z to detect models
         // that are mostly vertical (doors, signs, fences) where the
@@ -162,10 +197,11 @@ internal static class ObjectSpriteGenerator {
         if (xDegenerate || yDegenerate) {
             float discDiameter = MathF.Max(MathF.Max(worldW, worldH), worldZ);
             if (discDiameter < 0.05f) return (null, NullReason.Degenerate);
-            var discBmp = RenderBillboardAsDisc(triangles, discDiameter, spritePx, dats, ontology(modelId));
+            var discBmp = RenderBillboardAsDisc(triangles, discDiameter, spritePx, dats,
+                ontology(modelId), variant, key.Setup);
             if (discBmp == null) return (null, NullReason.NoVisible);
             return (new SpriteEntry {
-                ModelId = modelId, Bitmap = discBmp,
+                Key = key, Bitmap = discBmp,
                 WorldWidth = discDiameter, WorldHeight = discDiameter
             }, NullReason.NoTriangles); // reason unused on success
         }
@@ -235,13 +271,20 @@ internal static class ObjectSpriteGenerator {
             DrawDropShadow(canvas, visible, minX, maxY, pxPerUnit, W, H);
             foreach (var tri in visible) {
                 DrawTriangle(canvas, tri, minX, maxY, pxPerUnit,
-                    dats, textures, fallbackFill);
+                    dats, textures, fallbackFill, variant);
             }
+            // Particle puff overlay — Setups with DefaultScriptTable carry
+            // a runtime particle effect (portal swirl, brazier flame, glow,
+            // Lifestone shimmer). The mesh-only sprite would miss it; this
+            // overlay is what makes a portal in a town tile read as a
+            // portal rather than as the inert plinth at its base.
+            TryOverlayParticlePuff(canvas, dats, key.Setup, ontology(modelId),
+                minX, maxY, worldW, worldH, pxPerUnit, W, H);
         }
         foreach (var t in textures.Values) t?.Dispose();
 
         var entry = new SpriteEntry {
-            ModelId = modelId,
+            Key = key,
             Bitmap = bmp,
             WorldWidth = worldW,
             WorldHeight = worldH,
@@ -261,7 +304,8 @@ internal static class ObjectSpriteGenerator {
     /// be produced — caller treats that as NullReason.NoVisible.
     /// </summary>
     private static SKBitmap? RenderBillboardAsDisc(List<Tri> triangles, float discDiameter,
-            int spritePx, IDatReaderWriter dats, OntologyEntry? entry) {
+            int spritePx, IDatReaderWriter dats, OntologyEntry? entry, VariantContext? variant,
+            uint setupId) {
         // Find the first triangle that carries a surface DID. Most billboards
         // are 1-poly = 2 triangles sharing one surface; pick whichever is set.
         uint surfaceDid = 0;
@@ -269,17 +313,21 @@ internal static class ObjectSpriteGenerator {
             if (t.SurfaceDid != 0) { surfaceDid = t.SurfaceDid; break; }
         }
 
-        SKBitmap? texture = surfaceDid != 0 ? TryLoadSurface(dats, surfaceDid) : null;
+        SKBitmap? texture = surfaceDid != 0 ? TryLoadSurface(dats, surfaceDid, variant) : null;
 
-        // Pick a base disc colour. When a texture loaded, sample its
-        // average colour over opaque pixels — that's a faithful single-
-        // colour summary of the swirl / sign / banner art, regardless of
-        // whether the texture turned out to be a 8×8 mipmap thumbnail
-        // (no detail) or a real high-res asset. When no texture loaded,
-        // fall back to the ontology category palette.
-        SKColor baseColour = texture != null && texture.Width > 0 && texture.Height > 0
-            ? SampleAverageOpaqueColour(texture, ResolveFallbackFill(entry))
-            : ResolveFallbackFill(entry);
+        // Pick a base disc colour. Order of preference:
+        //   1. PhysicsScript particle colour — when present, this is the
+        //      real "what does the player see when the portal/effect runs"
+        //      and matches the in-game tinted swirl.
+        //   2. Average opaque colour from the surface texture — faithful
+        //      single-colour summary of the static swirl art.
+        //   3. Ontology category palette — fallback when neither resolves.
+        SKColor fallback = ResolveFallbackFill(entry);
+        SKColor? particle = TryResolveParticleColor(dats, setupId);
+        SKColor baseColour =
+            particle ?? (texture != null && texture.Width > 0 && texture.Height > 0
+                ? SampleAverageOpaqueColour(texture, fallback)
+                : fallback);
 
         var info = new SKImageInfo(spritePx, spritePx, SKColorType.Rgba8888, SKAlphaType.Premul);
         var bmp = new SKBitmap(info);
@@ -336,6 +384,89 @@ internal static class ObjectSpriteGenerator {
     }
 
     /// <summary>
+    /// Walk Setup → DefaultScriptTable → PhysicsScriptTable → first script's
+    /// CreateParticleHook → ParticleEmitter → first GfxObj surface, and
+    /// sample the average opaque colour of the resulting texture. That's
+    /// the colour a player sees as the runtime particle effect (portal
+    /// swirl, brazier flame, Lifestone shimmer). Returns null when the
+    /// chain breaks at any point — caller falls back to a static colour.
+    /// </summary>
+    private static SKColor? TryResolveParticleColor(IDatReaderWriter dats, uint setupId) {
+        if ((setupId >> 24) != 0x02) return null;
+        if (!SafeTryGet<Setup>(dats, setupId, out var setup)) return null;
+        if (setup.DefaultScriptTable == null || setup.DefaultScriptTable.DataId == 0) return null;
+        if (!SafeTryGet<PhysicsScriptTable>(dats, setup.DefaultScriptTable.DataId, out var pst)) return null;
+        if (pst.ScriptTable == null || pst.ScriptTable.Count == 0) return null;
+        // Bound the search: the first ScriptAndModData of the first table
+        // entry is what AC's particle system would have picked for the
+        // "default" play. Trying every entry would multiply dat reads
+        // for no visual gain — they're variants of the same effect.
+        foreach (var entry in pst.ScriptTable.Values) {
+            if (entry.Scripts == null) continue;
+            foreach (var sm in entry.Scripts) {
+                uint scriptDid = sm.ScriptId.DataId;
+                if ((scriptDid >> 24) != 0x33) continue;
+                if (!SafeTryGet<PhysicsScript>(dats, scriptDid, out var ps)) continue;
+                if (ps.ScriptData == null) continue;
+                foreach (var sd in ps.ScriptData) {
+                    if (sd.Hook is not CreateParticleHook cph) continue;
+                    uint emitterDid = cph.EmitterInfoId.DataId;
+                    if ((emitterDid >> 24) != 0x32) continue;
+                    if (!SafeTryGet<ParticleEmitter>(dats, emitterDid, out var pe)) continue;
+                    uint gfxDid = pe.GfxObjId.DataId;
+                    if (gfxDid == 0 && pe.HwGfxObjId != null) gfxDid = pe.HwGfxObjId.DataId;
+                    if ((gfxDid >> 24) != 0x01) continue;
+                    if (!SafeTryGet<GfxObj>(dats, gfxDid, out var gfx)) continue;
+                    if (gfx.Surfaces == null || gfx.Surfaces.Count == 0) continue;
+                    using var bmp = TryLoadSurface(dats, gfx.Surfaces[0]);
+                    if (bmp == null || bmp.Width <= 0 || bmp.Height <= 0) continue;
+                    return SampleAverageOpaqueColour(bmp, new SKColor(0xC0, 0xC0, 0xC0));
+                }
+            }
+            break; // honour the "first script-table entry" bound
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// When the Setup carries a particle script, paint a translucent puff
+    /// disc on top of the rendered sprite. Sized from Setup.SortingSphere
+    /// or fallback to a fraction of the sprite. Caller owns the canvas;
+    /// this is a no-op when no script is present.
+    /// </summary>
+    private static void TryOverlayParticlePuff(SKCanvas canvas, IDatReaderWriter dats,
+            uint setupId, OntologyEntry? entry,
+            float originX, float originYTop, float worldW, float worldH,
+            float pxPerUnit, int W, int H) {
+        var color = TryResolveParticleColor(dats, setupId);
+        if (color == null) return;
+        // Puff radius: take the smaller of the sprite halves, clamped to
+        // a sensible visual range so a giant building's puff doesn't
+        // swallow the mesh and a tiny prop's puff stays visible.
+        float r = MathF.Min(W, H) * 0.30f;
+        if (r < 6f) r = 6f;
+        float cx = W * 0.5f;
+        float cy = H * 0.5f;
+        var puffColor = new SKColor(color.Value.Red, color.Value.Green, color.Value.Blue,
+            (byte)180);
+        using var glow = new SKPaint {
+            Color = puffColor,
+            IsAntialias = true,
+            Style = SKPaintStyle.Fill,
+            ImageFilter = SKImageFilter.CreateBlur(r * 0.25f, r * 0.25f),
+        };
+        canvas.DrawCircle(cx, cy, r, glow);
+        // Bright core for legibility against busy terrain — same colour,
+        // smaller radius, fully opaque.
+        using var core = new SKPaint {
+            Color = new SKColor(color.Value.Red, color.Value.Green, color.Value.Blue, 255),
+            IsAntialias = true,
+            Style = SKPaintStyle.Fill,
+        };
+        canvas.DrawCircle(cx, cy, r * 0.45f, core);
+    }
+
+    /// <summary>
     /// Average colour of the opaque (alpha &gt; 32) pixels in <paramref name="bmp"/>.
     /// Used by the billboard disc renderer to derive a single representative
     /// colour from a texture — works whether the texture is an 8×8 mipmap
@@ -383,7 +514,8 @@ internal static class ObjectSpriteGenerator {
 
     private static void DrawTriangle(SKCanvas canvas, Tri tri,
             float originX, float originYTop, float pxPerUnit,
-            IDatReaderWriter dats, Dictionary<uint, SKBitmap?> textures, SKColor fallback) {
+            IDatReaderWriter dats, Dictionary<uint, SKBitmap?> textures, SKColor fallback,
+            VariantContext? variant) {
         var p0 = WorldToPx(tri.Pos[0], originX, originYTop, pxPerUnit);
         var p1 = WorldToPx(tri.Pos[1], originX, originYTop, pxPerUnit);
         var p2 = WorldToPx(tri.Pos[2], originX, originYTop, pxPerUnit);
@@ -404,7 +536,7 @@ internal static class ObjectSpriteGenerator {
         SKBitmap? tex = null;
         if (tri.SurfaceDid != 0) {
             if (!textures.TryGetValue(tri.SurfaceDid, out tex)) {
-                tex = TryLoadSurface(dats, tri.SurfaceDid);
+                tex = TryLoadSurface(dats, tri.SurfaceDid, variant);
                 textures[tri.SurfaceDid] = tex;
             }
         }
@@ -490,14 +622,120 @@ internal static class ObjectSpriteGenerator {
         public uint SurfaceDid;      // 0 if no surface
     }
 
-    private static List<Tri> TriangulateModel(uint modelId, IDatReaderWriter dats) {
+    /// <summary>
+    /// ClothingTable substitutions for a variant (key.HasVariant == true).
+    /// Built from ClothingBaseEffects[setupId] (parts/textures) and consumed
+    /// by TriangulateModel + TryLoadSurface to render the variant's
+    /// substituted shape and skin instead of the bare setup's defaults.
+    /// PaletteSubstitutions is populated by ClothingSubPalEffects only when
+    /// Obj 5's PalSet handler runs — left empty for the parts-only Obj 3 path.
+    /// </summary>
+    private sealed class VariantContext {
+        // Setup part index → replacement GfxObj DID (CloObjectEffect.ModelId).
+        public Dictionary<int, uint> PartSubstitutions { get; } = new();
+        // Old SurfaceTexture (0x05) DID → new SurfaceTexture DID
+        // (CloTextureEffect.OldTexture → NewTexture).
+        public Dictionary<uint, uint> TextureSubstitutions { get; } = new();
+        // Per-range palette overlays from ClothingSubPalEffects[paletteTemplate]
+        // → CloSubPalettes[].PalSet.Palettes[paletteTemplate mod count].
+        // Each entry overlays NumColors palette entries starting at Offset
+        // when DecodePaletted8/16 builds the effective palette.
+        public List<(uint PaletteDid, int Offset, int NumColors)> PaletteOverlays { get; } = new();
+        public bool IsEmpty => PartSubstitutions.Count == 0 && TextureSubstitutions.Count == 0
+            && PaletteOverlays.Count == 0;
+    }
+
+    /// <summary>
+    /// Resolve a SpriteKey's ClothingTable into substitutions. Returns null
+    /// when no variant is requested. Per GDL ClothingTable.cpp:41
+    /// (BuildObjDesc), the lookup falls back to setup 0x02000001 (the human
+    /// base) when the requested setup isn't in ClothingBaseEffects — that's
+    /// how clothing rendered on a base humanoid even when worn by races whose
+    /// setup wasn't directly mapped.
+    /// </summary>
+    private static VariantContext? BuildVariantContext(IDatReaderWriter dats, SpriteKey key) {
+        if (!key.HasVariant || key.ClothingBase == 0) return null;
+        if (!SafeTryGet<ClothingTable>(dats, key.ClothingBase, out var table)) return null;
+        var ctx = new VariantContext();
+        if (!table.ClothingBaseEffects.TryGetValue(key.Setup, out var effect)) {
+            const uint HumanFallbackSetup = 0x02000001u;
+            if (key.Setup == HumanFallbackSetup) return ctx; // no double fallback
+            if (!table.ClothingBaseEffects.TryGetValue(HumanFallbackSetup, out effect)) return ctx;
+        }
+        if (effect.CloObjectEffects != null) {
+            foreach (var obj in effect.CloObjectEffects) {
+                if (obj.ModelId.DataId != 0) ctx.PartSubstitutions[(int)obj.Index] = obj.ModelId.DataId;
+                if (obj.CloTextureEffects == null) continue;
+                foreach (var tex in obj.CloTextureEffects) {
+                    if (tex.OldTexture.DataId != 0 && tex.NewTexture.DataId != 0)
+                        ctx.TextureSubstitutions[tex.OldTexture.DataId] = tex.NewTexture.DataId;
+                }
+            }
+        }
+        // Palette overlays from ClothingSubPalEffects. The dict key is a
+        // raw uint paletteTemplate (PaletteTemplate enum value); a single
+        // entry can carry multiple CloSubPalettes (e.g. skin + hair + cloth
+        // ranges) each pointing at its own PalSet.
+        if (key.PaletteTemplate != 0
+                && table.ClothingSubPalEffects.TryGetValue((uint)key.PaletteTemplate, out var subPalEffect)
+                && subPalEffect.CloSubPalettes != null) {
+            foreach (var sp in subPalEffect.CloSubPalettes) {
+                uint palSetDid = sp.PaletteSet.DataId;
+                if (palSetDid == 0) continue;
+                if (!SafeTryGet<PalSet>(dats, palSetDid, out var palSet)) continue;
+                if (palSet.Palettes == null || palSet.Palettes.Count == 0) continue;
+                // Per the plan + GDL convention: index PalSet.Palettes by
+                // PaletteTemplate, modulo Palettes.Count. Without a Shade
+                // signal we use this directly; Shade 0..1 would multiply
+                // (Count-1) and round.
+                int idx = key.PaletteTemplate % palSet.Palettes.Count;
+                if (idx < 0) idx += palSet.Palettes.Count;
+                uint paletteDid = palSet.Palettes[idx].DataId;
+                if (paletteDid == 0) continue;
+                if (sp.Ranges == null) continue;
+                foreach (var range in sp.Ranges) {
+                    ctx.PaletteOverlays.Add((paletteDid, (int)range.Offset, (int)range.NumColors));
+                }
+            }
+        }
+        return ctx;
+    }
+
+    // Setup carries five Default* fields per dats.xml:3628-3637. Of those,
+    //   DefaultScriptTable — wired by Obj 4 (TryResolveParticleColor /
+    //                        TryOverlayParticlePuff). Drives the particle
+    //                        puff overlay so portals and braziers read.
+    //   DefaultScript       — single-script variant of DefaultScriptTable.
+    //                        Not consulted: DefaultScriptTable is the
+    //                        canonical surface and covers every retail
+    //                        portal/effect we render.
+    //   DefaultAnimation    — per-frame mesh deltas. Top-down rendering
+    //                        captures one pose; animation playback would
+    //                        produce a different sprite per frame, which
+    //                        is out of scope for an atlas. Skipped.
+    //   DefaultMotionTable  — pose-picker driving DefaultAnimation. Same
+    //                        rationale as DefaultAnimation. Skipped.
+    //   DefaultSoundTable   — Wave/Ambient SFX. Not visual; skipped.
+    // If a future viewer wants pose / animation, MotionTable + Animation
+    // are the entry points — they require a frame-aware render pipeline.
+    private static List<Tri> TriangulateModel(SpriteKey key, IDatReaderWriter dats, int lodLevel = 0) {
         var tris = new List<Tri>();
+        uint modelId = key.Setup;
         uint kind = modelId >> 24;
+        var variant = BuildVariantContext(dats, key);
         if (kind == 0x02) {
             if (!SafeTryGet<Setup>(dats, modelId, out var setup)) return tris;
             var placement = GetDefaultPlacementFrame(setup);
             for (int pi = 0; pi < setup.Parts.Count; pi++) {
-                if (!SafeTryGet<GfxObj>(dats, setup.Parts[pi], out var gfx)) continue;
+                // Per GDL ApplyPartAndTextureChanges (ClothingTable.cpp:140):
+                // ClothingBaseEffect overrides specific part slots. The
+                // placement frame for the slot is preserved — only the part
+                // GfxObj swaps.
+                uint partGfxId = setup.Parts[pi];
+                if (variant != null && variant.PartSubstitutions.TryGetValue(pi, out var swap))
+                    partGfxId = swap;
+                if (lodLevel > 0) partGfxId = TryDegradeGfxObj(dats, partGfxId, lodLevel);
+                if (!SafeTryGet<GfxObj>(dats, partGfxId, out var gfx)) continue;
                 Vector3 partOffset = Vector3.Zero;
                 Quaternion partRot = Quaternion.Identity;
                 if (placement?.Frames != null && pi < placement.Frames.Count) {
@@ -508,11 +746,32 @@ internal static class ObjectSpriteGenerator {
                 catch { /* skip malformed part, keep rest of Setup */ }
             }
         } else if (kind == 0x01) {
-            if (!SafeTryGet<GfxObj>(dats, modelId, out var gfx)) return tris;
+            uint targetId = lodLevel > 0 ? TryDegradeGfxObj(dats, modelId, lodLevel) : modelId;
+            if (!SafeTryGet<GfxObj>(dats, targetId, out var gfx)) return tris;
             try { AppendGfxTris(tris, gfx, Vector3.Zero, Quaternion.Identity); }
             catch { /* skip — leave tris empty so caller marks failure */ }
         }
         return tris;
+    }
+
+    /// <summary>
+    /// Substitute a GfxObj DID with a lower-LOD entry from its
+    /// GfxObjDegradeInfo chain (DBObj kind 0x11). The convention in retail
+    /// + EOR is GfxObj 0x01XXXXXX ↔ GfxObjDegradeInfo 0x11XXXXXX (same
+    /// 24-bit suffix). When the degrade record is missing or has no
+    /// entries, returns the input unchanged so the caller renders the
+    /// original. lodLevel is clamped to the chain length: a request for
+    /// lodLevel=3 against a 2-entry chain returns the last entry (max
+    /// degrade) rather than failing.
+    /// </summary>
+    private static uint TryDegradeGfxObj(IDatReaderWriter dats, uint gfxId, int lodLevel) {
+        if (lodLevel <= 0 || (gfxId >> 24) != 0x01) return gfxId;
+        uint degradeId = (0x11u << 24) | (gfxId & 0x00FFFFFFu);
+        if (!SafeTryGet<GfxObjDegradeInfo>(dats, degradeId, out var info)) return gfxId;
+        if (info.Degrades == null || info.Degrades.Count == 0) return gfxId;
+        int idx = Math.Min(lodLevel - 1, info.Degrades.Count - 1);
+        uint substituted = info.Degrades[idx].Id.DataId;
+        return substituted != 0 ? substituted : gfxId;
     }
 
     // Why: DatReaderWriter's TryGet doesn't catch malformed-record IO errors
@@ -616,9 +875,9 @@ internal static class ObjectSpriteGenerator {
         public static string Report() {
             var sb = new System.Text.StringBuilder();
             sb.AppendLine($"[SurfaceDiag] ok={ok}");
-            sb.AppendLine($"  badKind_outer={badKind_outer} (surfaceDid kind not 0x08/0x06)");
+            sb.AppendLine($"  badKind_outer={badKind_outer} (kind not in {{0x05,0x06,0x08,0x15,0x16,0x17,0x18}})");
             sb.AppendLine($"  badRead_Surface={badRead_Surface}");
-            sb.AppendLine($"  badKind_texRef={badKind_texRef} (Surface.OrigTextureId kind not 0x05/0x06)");
+            sb.AppendLine($"  badKind_texRef={badKind_texRef} (Surface.OrigTextureId kind not in {{0x05,0x06,0x15,0x16,0x17,0x18}})");
             if (!badTexKinds.IsEmpty) {
                 sb.AppendLine($"    breakdown by kind:");
                 foreach (var kv in badTexKinds.OrderByDescending(k => k.Value))
@@ -643,51 +902,166 @@ internal static class ObjectSpriteGenerator {
         }
     }
 
-    private static SKBitmap? TryLoadSurface(IDatReaderWriter dats, uint surfaceDid) {
-        // Why: GfxObj.Surfaces[i] is almost always a Surface (0x08xxxxxx) —
-        // the wrapper that holds material params and points at the texture.
-        // Reading it as a RenderSurface (0x06) directly fails silently and
-        // every textured building shows up as a flat fallback color. Walk the
-        // real chain: Surface → OrigTextureId → SurfaceTexture → Textures[0]
-        // → RenderSurface. Some surfaces shortcut to a RenderSurface (0x06)
-        // and a few projects pre-resolve to one; handle both.
-        uint renderSurfaceDid = surfaceDid;
-        uint kind = surfaceDid >> 24;
-        if (kind == 0x08) {
-            if (!SafeTryGet<Surface>(dats, surfaceDid, out var surface)) {
-                System.Threading.Interlocked.Increment(ref SurfaceDiag.badRead_Surface);
-                return null;
-            }
-            uint texRef = surface.OrigTextureId.DataId;
-            uint texKind = texRef >> 24;
-            if (texKind == 0x05) {
-                if (!SafeTryGet<SurfaceTexture>(dats, texRef, out var st)) {
+    // Walk wrapper types until we land on a 0x06 RenderSurface DID. Returns 0
+    // (and increments the appropriate SurfaceDiag counter) when the chain
+    // breaks. The depth limit is a safety net for accidental cycles in
+    // hand-edited dats — none exist in retail or EOR, but a 4-step ceiling
+    // costs nothing and turns a stack overflow into a counted failure.
+    // The optional VariantContext applies CloTextureEffect substitutions at
+    // the 0x05 SurfaceTexture step — those are the OldTexture/NewTexture
+    // swaps emitted by ClothingTable.ClothingBaseEffects.
+    private static uint ResolveToRenderSurfaceDid(IDatReaderWriter dats, uint did,
+            VariantContext? variant = null, int depth = 0) {
+        if (did == 0 || depth > 4) {
+            System.Threading.Interlocked.Increment(ref SurfaceDiag.badKind_outer);
+            return 0;
+        }
+        uint kind = did >> 24;
+        switch (kind) {
+            case 0x06:
+                return did;
+            case 0x05: {
+                // Apply ClothingTable texture swap at the SurfaceTexture
+                // boundary — that's where CloTextureEffect.OldTexture lives
+                // (per dats.xml: <vector name="OldTexture" type=
+                // "QualifiedDataId" genericValue="SurfaceTexture"/>).
+                uint resolved = did;
+                if (variant != null && variant.TextureSubstitutions.TryGetValue(did, out var swap))
+                    resolved = swap;
+                if (!SafeTryGet<SurfaceTexture>(dats, resolved, out var st)) {
                     System.Threading.Interlocked.Increment(ref SurfaceDiag.badRead_SurfaceTex);
-                    return null;
+                    return 0;
                 }
                 if (st.Textures == null || st.Textures.Count == 0) {
                     System.Threading.Interlocked.Increment(ref SurfaceDiag.emptySurfaceTex);
-                    return null;
+                    return 0;
                 }
-                // Why Textures.Last(): SurfaceTexture.Textures is a mipmap-style
-                // array where Textures[0] is often a thumbnail/placeholder and
-                // Textures[^1] is the main detail texture. Both ACViewer's
-                // Mapper, the painter (LandSurfaceManager.LoadTextures), and
-                // DatIconLoader.LoadSurfaceIcon use the last entry. Using [0]
-                // here was the cause of ~75% of building roofs falling back to
-                // flat color.
-                renderSurfaceDid = st.Textures[st.Textures.Count - 1].DataId;
-            } else if (texKind == 0x06) {
-                renderSurfaceDid = texRef;
-            } else {
-                System.Threading.Interlocked.Increment(ref SurfaceDiag.badKind_texRef);
-                SurfaceDiag.badTexKinds.AddOrUpdate(texKind, 1, (_, v) => v + 1);
-                return null;
+                // Textures[^1] is the highest-resolution mip — see the
+                // ACViewer / DatIconLoader convention noted in the original
+                // chain comment. Textures[0] is often a placeholder thumb.
+                return ResolveToRenderSurfaceDid(dats, st.Textures[st.Textures.Count - 1].DataId, variant, depth + 1);
             }
-        } else if (kind != 0x06) {
-            System.Threading.Interlocked.Increment(ref SurfaceDiag.badKind_outer);
-            return null;
+            case 0x08: {
+                if (!SafeTryGet<Surface>(dats, did, out var surface)) {
+                    System.Threading.Interlocked.Increment(ref SurfaceDiag.badRead_Surface);
+                    return 0;
+                }
+                uint texRef = surface.OrigTextureId.DataId;
+                uint texKind = texRef >> 24;
+                if (texKind != 0x05 && texKind != 0x06 && texKind != 0x15
+                        && texKind != 0x18 && texKind != 0x16 && texKind != 0x17) {
+                    System.Threading.Interlocked.Increment(ref SurfaceDiag.badKind_texRef);
+                    SurfaceDiag.badTexKinds.AddOrUpdate(texKind, 1, (_, v) => v + 1);
+                    return 0;
+                }
+                return ResolveToRenderSurfaceDid(dats, texRef, variant, depth + 1);
+            }
+            case 0x15: {
+                // RenderTexture wraps a list of mip-level RenderSurface DIDs.
+                // Schema: dats.xml RenderTexture → SourceLevels list of
+                // QualifiedDataId<RenderSurface>. EOR portal.dat ships
+                // 0x15000000.SourceLevels[0] = 0x06004B91 — verified by
+                // RenderTextureTests.CanReadEOR.
+                if (!SafeTryGet<RenderTexture>(dats, did, out var rt)) {
+                    System.Threading.Interlocked.Increment(ref SurfaceDiag.badRead_SurfaceTex);
+                    return 0;
+                }
+                if (rt.SourceLevels == null || rt.SourceLevels.Count == 0) {
+                    System.Threading.Interlocked.Increment(ref SurfaceDiag.emptySurfaceTex);
+                    return 0;
+                }
+                return ResolveToRenderSurfaceDid(dats, rt.SourceLevels[rt.SourceLevels.Count - 1], variant, depth + 1);
+            }
+            case 0x18: {
+                // MaterialInstance.MaterialId is a 0x16 RenderMaterial which
+                // has no fields (per dats.xml — the type is a marker only).
+                // The actual texture lives inside one of the ModifierRefs[]
+                // (0x17 MaterialModifier) MaterialProperties with DataType
+                // Texture (0xBB8) or TexturePtr (0x2710). Take the first
+                // texture-typed property; top-down rendering only needs the
+                // colour map, not the full PBR set.
+                if (!SafeTryGet<MaterialInstance>(dats, did, out var mi)) {
+                    System.Threading.Interlocked.Increment(ref SurfaceDiag.badRead_Surface);
+                    return 0;
+                }
+                if (mi.ModifierRefs != null) {
+                    foreach (var modRef in mi.ModifierRefs) {
+                        if ((modRef >> 24) != 0x17) continue;
+                        uint hit = ExtractTextureFromMaterialModifier(dats, modRef);
+                        if (hit != 0) return ResolveToRenderSurfaceDid(dats, hit, variant, depth + 1);
+                    }
+                }
+                // No texture-typed property in any modifier — count it so
+                // we can size the long tail of materials that only carry
+                // non-texture properties (colour-only, bool-only, etc).
+                System.Threading.Interlocked.Increment(ref SurfaceDiag.badRead_RenderSurf);
+                SurfaceDiag.badRenderSurfKinds.AddOrUpdate(0x18, 1, (_, v) => v + 1);
+                return 0;
+            }
+            case 0x17: {
+                uint hit = ExtractTextureFromMaterialModifier(dats, did);
+                if (hit == 0) {
+                    System.Threading.Interlocked.Increment(ref SurfaceDiag.badRead_RenderSurf);
+                    SurfaceDiag.badRenderSurfKinds.AddOrUpdate(0x17, 1, (_, v) => v + 1);
+                    return 0;
+                }
+                return ResolveToRenderSurfaceDid(dats, hit, variant, depth + 1);
+            }
+            case 0x16:
+                // RenderMaterial has no texture fields per dats.xml. If a
+                // Surface ever points here directly (we have not seen this
+                // in retail or EOR), there is nothing to decode.
+                System.Threading.Interlocked.Increment(ref SurfaceDiag.badRead_RenderSurf);
+                SurfaceDiag.badRenderSurfKinds.AddOrUpdate(0x16, 1, (_, v) => v + 1);
+                return 0;
+            default:
+                System.Threading.Interlocked.Increment(ref SurfaceDiag.badKind_outer);
+                return 0;
         }
+    }
+
+    // RMDataType values in dats.xml: WaveForm=0x3E8, Color=0x7D0,
+    // Texture=0xBB8, Bool=0xFA0, TexturePtr=0x2710. The texture-bearing
+    // values store the texture DID in the 32-bit DataLength field.
+    private const ushort RMDataType_Texture = 0xBB8;
+    private const ushort RMDataType_TexturePtr = 0x2710;
+
+    private static uint ExtractTextureFromMaterialModifier(IDatReaderWriter dats, uint modifierDid) {
+        if (!SafeTryGet<MaterialModifier>(dats, modifierDid, out var mod)) return 0;
+        if (mod.MaterialProperties == null) return 0;
+        foreach (var prop in mod.MaterialProperties) {
+            ushort t = (ushort)prop.DataType;
+            if (t == RMDataType_Texture || t == RMDataType_TexturePtr) {
+                if (prop.DataLength != 0) return prop.DataLength;
+            }
+        }
+        return 0;
+    }
+
+    private static SKBitmap? TryLoadSurface(IDatReaderWriter dats, uint surfaceDid,
+            VariantContext? variant = null) {
+        // Why: GfxObj.Surfaces[i] points at one of several wrapper types that
+        // ultimately reference a RenderSurface (0x06). We walk every known
+        // wrapper chain and converge on a 0x06 DID before decoding. The
+        // wrappers, with EOR-era additions:
+        //
+        //   0x06 RenderSurface     — terminal, decoded by the format switch
+        //   0x05 SurfaceTexture    — Textures[^1] is the highest-mip 0x06
+        //   0x08 Surface           — OrigTextureId → 0x05 / 0x06 / 0x15
+        //   0x15 RenderTexture     — SourceLevels[^1] is a 0x06 (EOR)
+        //   0x18 MaterialInstance  — MaterialId is 0x16 (empty), so the
+        //                            texture is inside ModifierRefs[]→0x17
+        //   0x17 MaterialModifier  — MaterialProperties[] with DataType
+        //                            Texture (0xBB8) or TexturePtr (0x2710)
+        //                            holds the texture DID in DataLength
+        //   0x16 RenderMaterial    — has no fields per dats.xml; if a Surface
+        //                            ever points here directly, we have no
+        //                            texture to extract → flat fallback.
+        //
+        // Top-down rendering only needs the colour map, not the full PBR set,
+        // so we take the FIRST texture-typed material property and stop.
+        uint renderSurfaceDid = ResolveToRenderSurfaceDid(dats, surfaceDid, variant);
+        if (renderSurfaceDid == 0) return null; // counters incremented in helper
         if (!SafeTryGet<RenderSurface>(dats, renderSurfaceDid, out var rs)) {
             System.Threading.Interlocked.Increment(ref SurfaceDiag.badRead_RenderSurf);
             uint failedKind = renderSurfaceDid >> 24;
@@ -707,11 +1081,24 @@ internal static class ObjectSpriteGenerator {
                 PixelFormat.PFID_A8 or PixelFormat.PFID_CUSTOM_LSCAPE_ALPHA => DecodeGreyscale(rs),
                 PixelFormat.PFID_R5G6B5 => Decode565(rs),
                 PixelFormat.PFID_A4R4G4B4 => Decode4444(rs),
-                PixelFormat.PFID_INDEX16 => DecodePaletted16(rs, dats),
-                PixelFormat.PFID_P8 => DecodePaletted8(rs, dats),
+                // 1-bit alpha + 5-5-5 RGB. PFID_X1R5G5B5 ignores the high bit
+                // (treats it as opaque). PFID_A1R5G5B5 uses it as a binary
+                // alpha mask (0 = transparent, 1 = opaque).
+                PixelFormat.PFID_X1R5G5B5 => Decode1555(rs, alphaIsMask: false),
+                PixelFormat.PFID_A1R5G5B5 => Decode1555(rs, alphaIsMask: true),
+                // 8-bit packed: 3-3-2 RGB with no alpha (PFID_A8R3G3B2 has
+                // an 8-bit alpha byte preceding the 8-bit colour byte).
+                PixelFormat.PFID_A8R3G3B2 => Decode8332(rs),
+                PixelFormat.PFID_INDEX16 => DecodePaletted16(rs, dats, variant),
+                PixelFormat.PFID_P8 => DecodePaletted8(rs, dats, variant),
                 PixelFormat.PFID_DXT1 => MakeBitmap(rs.Width, rs.Height, DecompressDxt1(rs.SourceData, rs.Width, rs.Height)),
-                PixelFormat.PFID_DXT3 => MakeBitmap(rs.Width, rs.Height, DecompressDxt5(rs.SourceData, rs.Width, rs.Height, isDxt3: true)),
-                PixelFormat.PFID_DXT5 => MakeBitmap(rs.Width, rs.Height, DecompressDxt5(rs.SourceData, rs.Width, rs.Height, isDxt3: false)),
+                // DXT2 / DXT3 share the same colour codec as DXT3 (premultiplied
+                // alpha vs straight is a content interpretation, not a decoder
+                // difference for top-down preview). Likewise DXT4 / DXT5.
+                PixelFormat.PFID_DXT2 or PixelFormat.PFID_DXT3
+                    => MakeBitmap(rs.Width, rs.Height, DecompressDxt5(rs.SourceData, rs.Width, rs.Height, isDxt3: true)),
+                PixelFormat.PFID_DXT4 or PixelFormat.PFID_DXT5
+                    => MakeBitmap(rs.Width, rs.Height, DecompressDxt5(rs.SourceData, rs.Width, rs.Height, isDxt3: false)),
                 _ => null,
             };
             if (result != null) {
@@ -805,30 +1192,86 @@ internal static class ObjectSpriteGenerator {
         return MakeBitmap(w, h, dst);
     }
 
-    private static SKBitmap? DecodePaletted8(RenderSurface rs, IDatReaderWriter dats) {
+    private static SKBitmap Decode1555(RenderSurface rs, bool alphaIsMask) {
+        int w = rs.Width, h = rs.Height;
+        var src = rs.SourceData; var dst = new byte[w * h * 4];
+        for (int i = 0; i < w * h; i++) {
+            ushort val = BitConverter.ToUInt16(src, i * 2);
+            dst[i * 4 + 0] = (byte)(((val >> 10) & 0x1F) * 255 / 31);
+            dst[i * 4 + 1] = (byte)(((val >> 5)  & 0x1F) * 255 / 31);
+            dst[i * 4 + 2] = (byte)(( val        & 0x1F) * 255 / 31);
+            dst[i * 4 + 3] = alphaIsMask
+                ? ((val & 0x8000) != 0 ? (byte)255 : (byte)0)
+                : (byte)255;
+        }
+        return MakeBitmap(w, h, dst);
+    }
+
+    // PFID_A8R3G3B2: 16-bit pixel — 8-bit alpha then 8-bit packed RGB
+    // (3 red, 3 green, 2 blue). Source data is 2 bytes/pixel.
+    private static SKBitmap Decode8332(RenderSurface rs) {
+        int w = rs.Width, h = rs.Height;
+        var src = rs.SourceData; var dst = new byte[w * h * 4];
+        for (int i = 0; i < w * h; i++) {
+            byte alpha = src[i * 2 + 0];
+            byte rgb   = src[i * 2 + 1];
+            dst[i * 4 + 0] = (byte)(((rgb >> 5) & 0x07) * 255 / 7);
+            dst[i * 4 + 1] = (byte)(((rgb >> 2) & 0x07) * 255 / 7);
+            dst[i * 4 + 2] = (byte)(( rgb       & 0x03) * 255 / 3);
+            dst[i * 4 + 3] = alpha;
+        }
+        return MakeBitmap(w, h, dst);
+    }
+
+    private static SKBitmap? DecodePaletted8(RenderSurface rs, IDatReaderWriter dats,
+            VariantContext? variant) {
         if (!SafeTryGet<Palette>(dats, rs.DefaultPaletteId, out var palette)) return null;
+        var effective = ResolveEffectivePalette(palette, dats, variant);
         int w = rs.Width, h = rs.Height;
         var src = rs.SourceData; var dst = new byte[w * h * 4];
         for (int i = 0; i < w * h; i++) {
             int palIndex = src[i];
-            if (palIndex >= palette.Colors.Count) palIndex = 0;
-            var c = palette.Colors[palIndex];
+            if (palIndex >= effective.Count) palIndex = 0;
+            var c = effective[palIndex];
             dst[i * 4 + 0] = c.Red; dst[i * 4 + 1] = c.Green; dst[i * 4 + 2] = c.Blue; dst[i * 4 + 3] = c.Alpha;
         }
         return MakeBitmap(w, h, dst);
     }
 
-    private static SKBitmap? DecodePaletted16(RenderSurface rs, IDatReaderWriter dats) {
+    private static SKBitmap? DecodePaletted16(RenderSurface rs, IDatReaderWriter dats,
+            VariantContext? variant) {
         if (!SafeTryGet<Palette>(dats, rs.DefaultPaletteId, out var palette)) return null;
+        var effective = ResolveEffectivePalette(palette, dats, variant);
         int w = rs.Width, h = rs.Height;
         var src = rs.SourceData; var dst = new byte[w * h * 4];
         for (int i = 0; i < w * h; i++) {
             int palIndex = BitConverter.ToInt16(src, i * 2);
-            if (palIndex < 0 || palIndex >= palette.Colors.Count) palIndex = 0;
-            var c = palette.Colors[palIndex];
+            if (palIndex < 0 || palIndex >= effective.Count) palIndex = 0;
+            var c = effective[palIndex];
             dst[i * 4 + 0] = c.Red; dst[i * 4 + 1] = c.Green; dst[i * 4 + 2] = c.Blue; dst[i * 4 + 3] = c.Alpha;
         }
         return MakeBitmap(w, h, dst);
+    }
+
+    /// <summary>
+    /// Apply ClothingTable palette overlays (PalSet → Palette range
+    /// substitution) on top of the surface's base Palette. Returns the
+    /// base list verbatim when no overlays apply, so the bare-render path
+    /// has zero allocations.
+    /// </summary>
+    private static IList<DatReaderWriter.Types.ColorARGB> ResolveEffectivePalette(
+            Palette basePalette, IDatReaderWriter dats, VariantContext? variant) {
+        if (variant == null || variant.PaletteOverlays.Count == 0) return basePalette.Colors;
+        var copy = new List<DatReaderWriter.Types.ColorARGB>(basePalette.Colors);
+        foreach (var (paletteDid, offset, numColors) in variant.PaletteOverlays) {
+            if (!SafeTryGet<Palette>(dats, paletteDid, out var overlay)) continue;
+            for (int i = 0; i < numColors; i++) {
+                int dstIdx = offset + i;
+                if (i >= overlay.Colors.Count || dstIdx >= copy.Count) break;
+                copy[dstIdx] = overlay.Colors[i];
+            }
+        }
+        return copy;
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -940,15 +1383,16 @@ internal static class ObjectSpriteGenerator {
     // Per-sprite metadata held during the render pass. Replaces the old
     // SpriteEntry which kept the SKBitmap live; we now persist the bitmap
     // to disk as it's rendered and only carry the size + world bounds in
-    // memory.
-    private readonly record struct SpriteMeta(uint ModelId, int W, int H,
-        float WorldWidth, float WorldHeight);
+    // memory. The on-disk file path is variant-aware (carried by FileName)
+    // so the pack pass can re-decode without reconstructing it.
+    private readonly record struct SpriteMeta(SpriteKey Key, string FileName,
+        int W, int H, float WorldWidth, float WorldHeight);
 
     // Kept for the SpriteEntry record returned by RenderOneWithReason —
     // a single sprite's working set, scoped to one iteration of the render
     // loop. Disposed immediately after the PNG is written to disk.
     private sealed class SpriteEntry {
-        public uint ModelId;
+        public SpriteKey Key;
         public required SKBitmap Bitmap;
         public float WorldWidth;
         public float WorldHeight;
@@ -1023,7 +1467,7 @@ internal static class ObjectSpriteGenerator {
             for (int i = 0; i < sprites.Count; i++) {
                 var m = sprites[i];
                 var rect = layout[i];
-                var path = Path.Combine(spritesDir, $"0x{m.ModelId:X8}.png");
+                var path = Path.Combine(spritesDir, m.FileName);
                 using var sprite = SKBitmap.Decode(path);
                 if (sprite == null) {
                     Console.Error.WriteLine($"[Sprites] Pack: failed to decode {path} (entry skipped from atlas)");

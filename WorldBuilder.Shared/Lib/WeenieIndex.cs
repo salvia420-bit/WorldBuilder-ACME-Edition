@@ -51,7 +51,18 @@ public sealed record WeenieIndexEntry(
     int?    Level,
 
     // ── Provenance ─────────────────────────────────────
-    WeenieSource SourceMask
+    WeenieSource SourceMask,
+
+    // ── Variant tuple (for sprite-atlas variant keying) ─
+    // Sourced from PropertyDataId.ClothingBase (7) and
+    // PropertyInt.PaletteTemplate (3). Both null for objects
+    // that share their setup's bare appearance (most props,
+    // monsters); set together for clothing/armor/NPC weenies
+    // whose visible appearance is a ClothingTable substitution.
+    // Old JSONLs without these fields deserialize as null and
+    // fall back to bare-setup rendering.
+    uint?   ClothingBaseDid = null,
+    int?    PaletteTemplate = null
 );
 
 /// <summary>

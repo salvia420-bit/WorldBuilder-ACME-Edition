@@ -1090,10 +1090,14 @@ public partial class CommandEngine {
     //   4. Category-only fallback — Creature/Npc=Medium, anything else=Small.
     private string ScaleForSpawn(SpawnRecord sp) {
         SpriteAtlasLoader? atlas = GetOrLoadSpriteAtlas();
-        Func<int, uint>? wcidToSetup = GetWcidToSetupResolver();
-        if (atlas != null && wcidToSetup != null && sp.Wcid > 0) {
-            uint setup = wcidToSetup(sp.Wcid);
-            if (setup != 0 && atlas.TryLookup(setup, out var rect)) {
+        // Variant-aware lookup so NPCs with ClothingTable variants land on
+        // their own atlas entry. Falls back to bare setup when the atlas
+        // wasn't built with variant ingest, courtesy of TryLookup's
+        // bare-fallback path.
+        Func<int, SpriteKey>? wcidToKey = GetWcidToSpriteKeyResolver();
+        if (atlas != null && wcidToKey != null && sp.Wcid > 0) {
+            var key = wcidToKey(sp.Wcid);
+            if (key.Setup != 0 && atlas.TryLookup(key, out var rect)) {
                 float maxDim = MathF.Max(rect.WorldWidth, rect.WorldHeight);
                 if (maxDim >= 8f)  return "Massive";
                 if (maxDim >= 4f)  return "Large";
@@ -1101,8 +1105,8 @@ public partial class CommandEngine {
                 if (maxDim >= 0.5f) return "Small";
                 return "Tiny";
             }
-            if (setup != 0) {
-                var entry = _ontologyService.GetEntry(setup);
+            if (key.Setup != 0) {
+                var entry = _ontologyService.GetEntry(key.Setup);
                 if (!string.IsNullOrEmpty(entry?.Scale)) return entry.Scale;
             }
         }
@@ -11189,6 +11193,31 @@ public partial class CommandEngine {
         };
     }
 
+    /// <summary>
+    /// Variant-aware sprite-key resolver: builds a SpriteKey including
+    /// ClothingBase + PaletteTemplate when the WeenieIndex carries those
+    /// fields. Bare-setup callers can keep using GetWcidToSetupResolver;
+    /// callers that look the key up in a variant-aware atlas should call
+    /// this one. SpriteAtlasLoader.TryLookup falls back to the bare-setup
+    /// entry when the requested variant isn't packed, so an atlas built
+    /// without variant ingest still services these calls correctly.
+    /// </summary>
+    private Func<int, SpriteKey>? GetWcidToSpriteKeyResolver() {
+        var bare = GetWcidToSetupResolver();
+        if (bare == null) return null;
+        var weenieIdx = _weenieIndex;
+        return (int wcid) => {
+            uint setup = bare(wcid);
+            if (setup == 0) return default;
+            var entry = weenieIdx.Get(wcid);
+            if (entry == null) return SpriteKey.Bare(setup);
+            uint cb = entry.ClothingBaseDid ?? 0u;
+            int pt = entry.PaletteTemplate ?? 0;
+            if (cb == 0 && pt == 0) return SpriteKey.Bare(setup);
+            return new SpriteKey(setup, cb, pt);
+        };
+    }
+
     // Cached AC terrain texture tile set, loaded once per project from
     // Region (0x13000000) → TerrainInfo → LandSurfaces → TexMerge.
     private TerrainTextureLoader? _terrainTextures;
@@ -11389,10 +11418,34 @@ public partial class CommandEngine {
         var modelIds = CollectPlacedModelIds(p, lbFilter);
         Console.Error.WriteLine($"[Sprites] Collected {modelIds.Count} model ids" +
             (modelIds.Count > 0 ? $" (sample: 0x{modelIds.First():X8})" : ""));
+
+        // Build the variant tuple set from the WeenieIndex. Each weenie with
+        // both ClothingBase and PaletteTemplate set yields a (setup, cb, pt)
+        // tuple in addition to the bare setup; the atlas packs both so the
+        // renderer can pick the variant sprite for spawn placement and fall
+        // back to bare for objects that don't use ClothingTable.
+        var keys = new HashSet<SpriteKey>();
+        foreach (var setup in modelIds) keys.Add(SpriteKey.Bare(setup));
+        int variantCount = 0;
+        var weenieIdx = _weenieIndex;
+        if (weenieIdx != null && weenieIdx.Count > 0) {
+            foreach (var entry in weenieIdx.Entries) {
+                if (entry.SetupDid is not { } setupDid) continue;
+                if (entry.ClothingBaseDid is not { } cb) continue;
+                if (entry.PaletteTemplate is not { } pt) continue;
+                if (cb == 0) continue;
+                if (keys.Add(new SpriteKey(setupDid, cb, pt))) variantCount++;
+            }
+        }
+        if (variantCount > 0) {
+            Console.Error.WriteLine($"[Sprites] Added {variantCount} ClothingTable variant tuples " +
+                $"(from {weenieIdx?.Count ?? 0} WeenieIndex entries)");
+        }
+
         var (rendered, failed, atlasW, atlasH) = ObjectSpriteGenerator.Run(
-            modelIds, spritePx, spritesDir, atlasPath, manifestPath, dats,
+            keys, spritePx, spritesDir, atlasPath, manifestPath, dats,
             id => _ontologyService.GetEntry(id), throttleMs);
-        return new ObjectSpritesResult(modelIds.Count, rendered, failed, atlasW, atlasH, spritesDir, atlasPath, manifestPath);
+        return new ObjectSpritesResult(keys.Count, rendered, failed, atlasW, atlasH, spritesDir, atlasPath, manifestPath);
     }
 
     private List<ushort> ListDungeonDocIds(WorldBuilder.Shared.Models.Project p, IReadOnlyList<ushort>? lbFilter) {

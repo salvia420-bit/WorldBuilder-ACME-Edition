@@ -15,9 +15,12 @@ public partial class AceDbConnector {
     // PropertyDataId enum values from ACE.Entity.Enum.Properties.PropertyDataId.
     // Mirroring AcePropertyDataId in AceWeenieTypes.cs — pinned here so the
     // SQL stays readable without an enum cast in the parameter binding.
-    private const int PropDid_Setup       = 1;
-    private const int PropDid_PaletteBase = 6;
-    private const int PropDid_Icon        = 8;
+    private const int PropDid_Setup         = 1;
+    private const int PropDid_PaletteBase   = 6;
+    private const int PropDid_ClothingBase  = 7;
+    private const int PropDid_Icon          = 8;
+    // PropertyInt.PaletteTemplate; the variant tuple's palette index.
+    private const int PropInt_PaletteTemplate = 3;
 
     // RadarColor enum value from ACE.Entity.Enum.RadarColor (cross-verified
     // against ACEmulator/ACE master, OptimShi/WeenieViewer, and
@@ -114,8 +117,10 @@ public partial class AceDbConnector {
                 ds.value     AS setup_did,
                 di.value     AS icon_did,
                 dp.value     AS palette_base_did,
+                dc.value     AS clothing_base_did,
                 ict.value    AS creature_type,
-                ilv.value    AS level
+                ilv.value    AS level,
+                ipt.value    AS palette_template
             FROM `weenie` w
             LEFT JOIN `weenie_properties_string` sn
                 ON sn.object_Id = w.class_Id AND sn.type = @propStrName
@@ -127,10 +132,14 @@ public partial class AceDbConnector {
                 ON di.object_Id = w.class_Id AND di.type = @propDidIcon
             LEFT JOIN `weenie_properties_d_i_d` dp
                 ON dp.object_Id = w.class_Id AND dp.type = @propDidPalette
+            LEFT JOIN `weenie_properties_d_i_d` dc
+                ON dc.object_Id = w.class_Id AND dc.type = @propDidClothing
             LEFT JOIN `weenie_properties_int` ict
                 ON ict.object_Id = w.class_Id AND ict.type = @propIntCreatureType
             LEFT JOIN `weenie_properties_int` ilv
-                ON ilv.object_Id = w.class_Id AND ilv.type = @propIntLevel";
+                ON ilv.object_Id = w.class_Id AND ilv.type = @propIntLevel
+            LEFT JOIN `weenie_properties_int` ipt
+                ON ipt.object_Id = w.class_Id AND ipt.type = @propIntPalTemplate";
 
         await using var cmd = new MySqlCommand(sql, conn);
         cmd.Parameters.AddWithValue("@propStrName",          PropStr_Name);
@@ -138,23 +147,27 @@ public partial class AceDbConnector {
         cmd.Parameters.AddWithValue("@propDidSetup",         PropDid_Setup);
         cmd.Parameters.AddWithValue("@propDidIcon",          PropDid_Icon);
         cmd.Parameters.AddWithValue("@propDidPalette",       PropDid_PaletteBase);
+        cmd.Parameters.AddWithValue("@propDidClothing",      PropDid_ClothingBase);
         cmd.Parameters.AddWithValue("@propIntCreatureType",  PropInt_CreatureType);
         cmd.Parameters.AddWithValue("@propIntLevel",         PropInt_Level);
+        cmd.Parameters.AddWithValue("@propIntPalTemplate",   PropInt_PaletteTemplate);
         cmd.CommandTimeout = 600;
 
         var dict = new Dictionary<int, WeenieIndexEntry>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct)) {
-            int    wcid       = reader.GetInt32("wcid");
-            string className  = reader.GetString("class_name");
-            int    weenieType = reader.GetInt32("weenie_type");
-            string displayNm  = reader.IsDBNull("display_name") ? className : reader.GetString("display_name");
-            string? title     = reader.IsDBNull("title")        ? null : reader.GetString("title");
-            uint?  setupDid   = reader.IsDBNull("setup_did")    ? null : reader.GetUInt32("setup_did");
-            uint?  iconDid    = reader.IsDBNull("icon_did")     ? null : reader.GetUInt32("icon_did");
-            uint?  paletteDid = reader.IsDBNull("palette_base_did") ? null : reader.GetUInt32("palette_base_did");
-            int?   creature   = reader.IsDBNull("creature_type") ? null : reader.GetInt32("creature_type");
-            int?   level      = reader.IsDBNull("level")        ? null : reader.GetInt32("level");
+            int    wcid          = reader.GetInt32("wcid");
+            string className     = reader.GetString("class_name");
+            int    weenieType    = reader.GetInt32("weenie_type");
+            string displayNm     = reader.IsDBNull("display_name")     ? className : reader.GetString("display_name");
+            string? title        = reader.IsDBNull("title")            ? null : reader.GetString("title");
+            uint?  setupDid      = reader.IsDBNull("setup_did")        ? null : reader.GetUInt32("setup_did");
+            uint?  iconDid       = reader.IsDBNull("icon_did")         ? null : reader.GetUInt32("icon_did");
+            uint?  paletteDid    = reader.IsDBNull("palette_base_did") ? null : reader.GetUInt32("palette_base_did");
+            uint?  clothingDid   = reader.IsDBNull("clothing_base_did")? null : reader.GetUInt32("clothing_base_did");
+            int?   creature      = reader.IsDBNull("creature_type")    ? null : reader.GetInt32("creature_type");
+            int?   level         = reader.IsDBNull("level")            ? null : reader.GetInt32("level");
+            int?   palTemplate   = reader.IsDBNull("palette_template") ? null : reader.GetInt32("palette_template");
 
             bool serverManaged = serverManagedWcids.Contains(wcid);
             bool isNpc         = weenieType == WeenieType_Vendor_Local || npcWcids.Contains(wcid);
@@ -172,7 +185,9 @@ public partial class AceDbConnector {
                 PaletteBaseDid: paletteDid,
                 CreatureType: creature,
                 Level: level,
-                SourceMask: WeenieSource.AceDb);
+                SourceMask: WeenieSource.AceDb,
+                ClothingBaseDid: clothingDid,
+                PaletteTemplate: palTemplate);
         }
 
         return new WeenieIndex(dict);
