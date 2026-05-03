@@ -717,7 +717,7 @@ public static class RenderPreviewRenderer {
                     canvas.RotateDegrees(-yawDeg, g.pxX, g.pxY);
                     canvas.DrawBitmap(g.sprite.Atlas, src, dest);
                     canvas.Restore();
-                    if (g.pairingRoot != 0 && g.pairingRoot != g.objId) {
+                    if (input.Overlay && g.pairingRoot != 0 && g.pairingRoot != g.objId) {
                         ringPaint.Color = HueRingColor(g.pairingRoot);
                         canvas.DrawCircle(g.pxX, g.pxY, MathF.Max(wPx, hPx) * 0.5f + 2.5f, ringPaint);
                     }
@@ -736,7 +736,7 @@ public static class RenderPreviewRenderer {
             }
             fillPaint.Color = g.fill;
             DrawGlyph(canvas, g.pxX, g.pxY, g.sizePx, g.shape, fillPaint, outlinePaint, auxStroke);
-            if (g.pairingRoot != 0 && g.pairingRoot != g.objId) {
+            if (input.Overlay && g.pairingRoot != 0 && g.pairingRoot != g.objId) {
                 ringPaint.Color = HueRingColor(g.pairingRoot);
                 canvas.DrawCircle(g.pxX, g.pxY, g.sizePx + 2.5f, ringPaint);
             }
