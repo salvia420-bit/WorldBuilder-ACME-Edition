@@ -225,22 +225,34 @@ public static class StaticSiteEmitter {
             names.Add("spawns");
         }
 
+        // Pre-compute the wcid set across the emitted lbList. Used to trim
+        // creature/npc rosters to wcids the project actually uses — the rosters
+        // are world-wide arrays without per-record position, so without this
+        // filter every emit shipped the full ~5MB of creature + NPC templates
+        // even for a 9-LB region.
+        var wcidsInLbList = engine.WcidsInLbs(lbList);
+
         // OverlaySources (everything except spawns):
         //   srcName     — gazetteer JSON in the project directory.
         //   overlayName — final overlays/<overlayName>.js name.
+        //   filterMode  — how to trim to lbList:
+        //                 None         → byte-copy as-is (small, world-wide is fine)
+        //                 LbDictKey    → JSON object keyed by "0xLLLL" → keep matching keys
+        //                 LbFieldArr   → JSON array, each rec has "landblock":"0xLLLL"
+        //                 WcidFieldArr → JSON array, each rec has "wcid":int → keep wcids in spawns
         //   missingNote — stub message for the diagnostics overlay when
         //                 the source isn't present (so the frontend can
         //                 surface "no creatures: source missing" instead
         //                 of failing the JSONP load silently).
-        var overlaySources = new (string srcName, string overlayName, string missingNote)[] {
-            ("town_gazetteer.json",     "towns",     "no town_gazetteer.json in project"),
-            ("poi_gazetteer.json",      "pois",      "no poi_gazetteer.json in project"),
-            ("creature_gazetteer.json", "creatures", "no creature_gazetteer.json (run ace-db ingest-creatures)"),
-            ("npc_gazetteer.json",      "npcs",      "no npc_gazetteer.json (run ace-db ingest-npcs)"),
-            ("housing_gazetteer.json",  "housing",   "no housing_gazetteer.json (run ace-db ingest-housing)"),
+        var overlaySources = new (string srcName, string overlayName, OverlayFilterMode mode, string missingNote)[] {
+            ("town_gazetteer.json",     "towns",     OverlayFilterMode.None,         "no town_gazetteer.json in project"),
+            ("poi_gazetteer.json",      "pois",      OverlayFilterMode.LbDictKey,    "no poi_gazetteer.json in project"),
+            ("creature_gazetteer.json", "creatures", OverlayFilterMode.WcidFieldArr, "no creature_gazetteer.json (run ace-db ingest-creatures)"),
+            ("npc_gazetteer.json",      "npcs",      OverlayFilterMode.WcidFieldArr, "no npc_gazetteer.json (run ace-db ingest-npcs)"),
+            ("housing_gazetteer.json",  "housing",   OverlayFilterMode.LbFieldArr,   "no housing_gazetteer.json (run ace-db ingest-housing)"),
         };
-        foreach (var (src, overlay, note) in overlaySources) {
-            if (CopyGazetteerAsOverlay(projectSrcDir, overlaysDir, src, overlay, diagnostics)) {
+        foreach (var (src, overlay, mode, note) in overlaySources) {
+            if (CopyGazetteerAsOverlay(projectSrcDir, overlaysDir, src, overlay, mode, lbList, wcidsInLbList, diagnostics)) {
                 count++;
             } else {
                 // Always emit an empty stub so the frontend's JSONP loader
@@ -371,8 +383,27 @@ public static class StaticSiteEmitter {
                 }, JsonOpts)));
     }
 
+    /// <summary>
+    /// How to trim a gazetteer overlay to the project's emitted lbList.
+    /// Without filtering, every per-LB emit shipped the full world's
+    /// pois/creatures/npcs/housing payloads (~4MB initial-load overhead
+    /// for a 9-LB region).
+    /// </summary>
+    private enum OverlayFilterMode {
+        /// <summary>Pass through unchanged. For tiny world-wide overlays.</summary>
+        None,
+        /// <summary>JSON object keyed by "0xLLLL"; keep keys in lbList.</summary>
+        LbDictKey,
+        /// <summary>JSON array of records with a "landblock":"0xLLLL" field.</summary>
+        LbFieldArr,
+        /// <summary>JSON array of records with a "wcid":int field; keep wcids in spawns.</summary>
+        WcidFieldArr,
+    }
+
     private static bool CopyGazetteerAsOverlay(string srcDir, string overlaysDir,
-            string srcName, string overlayName, List<Diagnostic> diagnostics) {
+            string srcName, string overlayName, OverlayFilterMode filterMode,
+            IReadOnlyList<string> lbList, IReadOnlySet<int> wcidsInLbs,
+            List<Diagnostic> diagnostics) {
         var src = Path.Combine(srcDir, srcName);
         if (!File.Exists(src)) return false;
         string raw;
@@ -389,9 +420,79 @@ public static class StaticSiteEmitter {
                 $"{srcName} is not valid JSON: {ex.Message}"));
             return false;
         }
+
+        string output = raw;
+        if (filterMode != OverlayFilterMode.None && lbList.Count > 0) {
+            try {
+                output = FilterGazetteer(raw, filterMode, lbList, wcidsInLbs, out int kept, out int total);
+                diagnostics.Add(new Diagnostic("info", "overlay:" + overlayName,
+                    $"filtered to lbList: {kept:N0} of {total:N0} records kept"));
+            } catch (Exception ex) {
+                // Filter failure → fall back to unfiltered emit so nothing is
+                // hidden silently. The diagnostic flags it for follow-up.
+                diagnostics.Add(new Diagnostic("warning", "overlay:" + overlayName,
+                    $"filter failed ({ex.GetType().Name}: {ex.Message}); emitting unfiltered."));
+                output = raw;
+            }
+        }
+
         File.WriteAllText(Path.Combine(overlaysDir, $"{overlayName}.js"),
-            BuildLoadOverlay(overlayName, raw));
+            BuildLoadOverlay(overlayName, output));
         return true;
+    }
+
+    private static string FilterGazetteer(string raw, OverlayFilterMode mode,
+            IReadOnlyList<string> lbList, IReadOnlySet<int> wcidsInLbs,
+            out int kept, out int total) {
+        var keepLbs = new HashSet<string>(lbList, StringComparer.OrdinalIgnoreCase);
+        using var doc = JsonDocument.Parse(raw);
+        var root = doc.RootElement;
+        kept = 0; total = 0;
+
+        switch (mode) {
+            case OverlayFilterMode.LbDictKey: {
+                if (root.ValueKind != JsonValueKind.Object) return raw;
+                var filtered = new Dictionary<string, JsonElement>();
+                foreach (var prop in root.EnumerateObject()) {
+                    total++;
+                    if (keepLbs.Contains(prop.Name)) {
+                        filtered[prop.Name] = prop.Value.Clone();
+                        kept++;
+                    }
+                }
+                return JsonSerializer.Serialize(filtered, JsonOpts);
+            }
+            case OverlayFilterMode.LbFieldArr: {
+                if (root.ValueKind != JsonValueKind.Array) return raw;
+                var keptItems = new List<JsonElement>();
+                foreach (var item in root.EnumerateArray()) {
+                    total++;
+                    if (item.TryGetProperty("landblock", out var lbEl)
+                            && lbEl.ValueKind == JsonValueKind.String
+                            && keepLbs.Contains(lbEl.GetString() ?? "")) {
+                        keptItems.Add(item.Clone());
+                        kept++;
+                    }
+                }
+                return JsonSerializer.Serialize(keptItems, JsonOpts);
+            }
+            case OverlayFilterMode.WcidFieldArr: {
+                if (root.ValueKind != JsonValueKind.Array) return raw;
+                var keptItems = new List<JsonElement>();
+                foreach (var item in root.EnumerateArray()) {
+                    total++;
+                    if (item.TryGetProperty("wcid", out var wEl)
+                            && wEl.ValueKind == JsonValueKind.Number
+                            && wcidsInLbs.Contains(wEl.GetInt32())) {
+                        keptItems.Add(item.Clone());
+                        kept++;
+                    }
+                }
+                return JsonSerializer.Serialize(keptItems, JsonOpts);
+            }
+            default:
+                return raw;
+        }
     }
 
     // ────────────────────────────────────────────────────────────────────

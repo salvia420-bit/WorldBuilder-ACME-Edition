@@ -21,6 +21,27 @@ public partial class CommandEngine {
     public WeenieIndex WeenieIndex => _weenieIndex;
 
     /// <summary>
+    /// Returns the set of wcids that have at least one spawn within the given
+    /// landblock list. Used by <c>StaticSiteEmitter</c> to trim creature/NPC
+    /// roster overlays to wcids the project actually places — without this,
+    /// each per-LB emit shipped the full world's roster (~5MB JSONP) even for
+    /// a 9-LB region. Hex strings ("0xLLLL") match the lbList shape the
+    /// emitter passes around.
+    /// </summary>
+    public IReadOnlySet<int> WcidsInLbs(IReadOnlyList<string> lbHexList) {
+        var result = new HashSet<int>();
+        if (lbHexList.Count == 0) return result;
+        foreach (var hex in lbHexList) {
+            var s = hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? hex.Substring(2) : hex;
+            if (!ushort.TryParse(s, System.Globalization.NumberStyles.HexNumber,
+                    System.Globalization.CultureInfo.InvariantCulture, out var lbKey)) continue;
+            if (!_spawnGazetteer.TryGetValue(lbKey, out var spawns)) continue;
+            foreach (var sp in spawns) result.Add(sp.Wcid);
+        }
+        return result;
+    }
+
+    /// <summary>
     /// Build the per-LB spawn payload that the static-site frontend expects
     /// in <c>overlays/spawns.js</c>. Joins each <see cref="SpawnRecord"/>
     /// against <see cref="WeenieIndex"/> for canonical title and icon DID

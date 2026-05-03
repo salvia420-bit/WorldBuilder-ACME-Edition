@@ -30,7 +30,9 @@ Every one of those wcids has a real `setup_did` in the ACE DB. The mapping just 
 
 | wcid | class_name | setup_did | what it is |
 |---:|---|---:|---|
-| 1125 | `portalholtburgdungeon` | `0x020005F3` | **Holtburg Dungeon entrance — the original "door under the pedestal"** |
+| 1125 | `portalholtburgdungeon` | `0x020001B3` | **Holtburg Dungeon entrance — the original "door under the pedestal"** |
+
+> **Doc correction (2026-05):** an earlier draft of this table listed `0x020005F3` for wcid 1125 — that's a transcription error (decimal `33555955`, an unrelated setup that happens to exist in the atlas with degenerate bounds). The actual setup per the ACE world DB is `0x020001B3` (decimal `33554867`), confirmed by the WeenieIndex ingest. Past validation work briefly chased the wrong setup; the resolver itself was correct.
 
 Confirms the user's intuition from day one: the missing thing is server-side, has a real model, and lives in `landblock_instance`. The render pipeline simply can't see it because:
 
@@ -254,7 +256,7 @@ spawnSpriteCoverage: ≥95% of surface spawns have a sprite;
 ```
 
 Visual smoke test (Holtburg, LB `0xA9B4`): the green statue pedestal area should now show:
-- The Holtburg Dungeon portal (wcid 1125, setup `0x020005F3`) at the position the user originally identified as missing.
+- The Holtburg Dungeon portal (wcid 1125, setup `0x020001B3`) at the position the user originally identified as missing.
 - Royal Guards (wcid 37518) where they spawn in retail.
 - Apple/monster generators rendering as thin glyph-or-sprite at their canonical positions.
 
