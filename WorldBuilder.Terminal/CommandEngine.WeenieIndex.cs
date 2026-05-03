@@ -41,8 +41,11 @@ public partial class CommandEngine {
                     category      = sp.Category,
                     generator     = sp.Generator,
                     cell          = sp.Cell,
-                    x             = sp.X,
-                    y             = sp.Y,
+                    // World coords (frontend's Leaflet uses 0..49152). The
+                    // SpawnRecord stores LB-local in X/Y; WorldX/WorldY
+                    // adds the parent landblock's world origin.
+                    x             = sp.WorldX,
+                    y             = sp.WorldY,
                     z             = sp.Z,
                     weenieType    = sp.WeenieType ?? weenie?.WeenieType,
                     iconDid       = weenie?.IconDid,

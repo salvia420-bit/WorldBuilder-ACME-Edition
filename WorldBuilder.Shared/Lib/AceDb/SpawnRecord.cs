@@ -72,4 +72,19 @@ public sealed record SpawnRecord(
     /// </summary>
     public Quaternion OrientationOrIdentity =>
         Orientation == default ? Quaternion.Identity : Orientation;
+
+    /// <summary>
+    /// World-space X coordinate. <see cref="X"/> stores the LB-local origin
+    /// from <c>landblock_instance.origin_X</c> (or LSD's "x" field), both of
+    /// which are in [0, 192). Render-time and frontend-overlay consumers
+    /// need world coords (0..49152), computed by adding the parent LB's
+    /// world origin. Without this accessor, treating <see cref="X"/> as
+    /// world silently drops every spawn outside the rendered window's
+    /// bounds-check (the bug that hid every NPC from the static-site tile
+    /// pyramid prior to 2026-05).
+    /// </summary>
+    public float WorldX => ((LandblockId >> 8) & 0xFF) * 192f + X;
+
+    /// <summary>World-space Y coordinate; see <see cref="WorldX"/>.</summary>
+    public float WorldY => (LandblockId & 0xFF) * 192f + Y;
 }

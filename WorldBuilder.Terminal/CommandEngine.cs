@@ -764,8 +764,13 @@ public partial class CommandEngine {
                     var glyphs = new List<RenderPreviewRenderer.SpawnGlyph>(spawns.Count);
                     foreach (var sp in spawns) {
                         if (sp.Cell >= 0x100) continue;  // indoor / dungeon
+                        // Pass world coords (not LB-local). The renderer's
+                        // bounds check subtracts worldOriginX, which only
+                        // works on world coords; sp.X / sp.Y are LB-local
+                        // (0..192) so used directly they all fail the
+                        // negative-coord check and silently drop.
                         glyphs.Add(new RenderPreviewRenderer.SpawnGlyph(
-                            X: sp.X, Y: sp.Y, Z: sp.Z,
+                            X: sp.WorldX, Y: sp.WorldY, Z: sp.Z,
                             Category: MapToRendererCategory(sp.Category),
                             Scale: ScaleForSpawn(sp),
                             Wcid: sp.Wcid,
