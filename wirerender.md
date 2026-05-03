@@ -1,14 +1,14 @@
-# wirerender — A Curated Visual Atlas: `render-preview` × Living Atlas
+# wirerender — `render-preview`'s Curated Showcase
 
 > **Format:** Context · Intent · Why · Objectives · Deliverables · Validation
 >
 > **Scope:** A single round of work that turns the manual ten-PNG demo gallery
 > served at `/tmp/dereth-gallery/` into a first-class headless deliverable.
-> Pairs `render-preview` (high-resolution top-down PNGs of any LB region) with
-> `describe-landblock` (the Living Atlas factual channel) into a single
-> Tailwind-served viewer. Closes the loop opened by the 2026-05-01 spin wave
-> (`spin.md`) by making the ACE-grounded data immediately viewable, not just
-> queryable.
+> A curated showcase for `render-preview` (high-resolution top-down PNGs of any
+> LB region) — primarily visual, with `describe-landblock` text loading as the
+> side panel for whichever pick is selected. Closes the loop opened by the
+> 2026-05-01 spin wave (`spin.md`) by making the ACE-grounded data immediately
+> viewable, not just queryable.
 >
 > Scope addendum: creatures + NPCs render as their actual textured 3D meshes,
 > not red glyphs. Lift the post-66b80ff "building setups only" filter for the
@@ -108,7 +108,7 @@ by actual geometry shape.
 
 ## 2. Intent
 
-Produce a **headless, repeatable, in-repo command** — `emit-atlas-gallery`
+Produce a **headless, repeatable, in-repo command** — `emit-render-gallery`
 — that bundles `render-preview` PNGs and `describe-landblock` JSON for a
 curated set of landblocks into a single self-contained Tailwind-served
 viewer, and lift the sprite-atlas building filter for creature/NPC
@@ -135,13 +135,13 @@ Specifically:
      shows a high-res render of the creature's textured mesh in
      isolation (cropped from the sprite atlas) plus the
      `creature_gazetteer.json` row for context.
-5. **Serve over Tailscale**: include a thin `serve-atlas` REPL command
+5. **Serve over Tailscale**: include a thin `serve-render-gallery` REPL command
    that wraps `python3 -m http.server` with the right bind address,
    logs the Tailscale URL.
 
 Intent is **not** to fork the static site or add a new map projection.
 The Leaflet view in `emit-static-site` remains the comprehensive
-"explore the whole world" surface; `emit-atlas-gallery` is the curated
+"explore the whole world" surface; `emit-render-gallery` is the curated
 showcase view — what you'd put on a project README or share with someone
 who wants to see "what does this world look like" without zooming around
 49,152 landblocks.
@@ -201,7 +201,7 @@ for geographical variety = 20 picks default, configurable.
 The proof-of-concept demonstrated that `python3 -m http.server 8090`
 binding `0.0.0.0` on this machine is reachable from any tailnet member
 via `http://100.116.47.66:8090`. That's the entire deployment story for
-internal sharing — no DNS, no TLS, no cloud. A `serve-atlas` REPL
+internal sharing — no DNS, no TLS, no cloud. A `serve-render-gallery` REPL
 helper that wraps the same command + prints the URL is one screenful
 of code.
 
@@ -215,7 +215,7 @@ This wireprompt explicitly **does not** touch:
   the projected scale of ~3000 setups; if it OOMs we'll address then).
 - The static-site emitter (`emit-static-site` and the Leaflet bundle
   remain unchanged; this is a parallel deliverable).
-- The DAT files or any write path (`emit-atlas-gallery` is read-only).
+- The DAT files or any write path (`emit-render-gallery` is read-only).
 - Any creature-render polish like animation frames or pose selection
   (single-frame rest-pose top-down render is enough for the showcase).
 
@@ -251,7 +251,7 @@ when dumped as a 256×256 PNG, not a flat black slab).
 
 **API to expose:**
 
-- `WorldBuilder.Terminal/AtlasCurator.cs` (new) — static class with one
+- `WorldBuilder.Terminal/RenderGalleryCurator.cs` (new) — static class with one
   method:
   ```csharp
   public static List<AtlasPick> Curate(
@@ -284,13 +284,13 @@ when dumped as a 256×256 PNG, not a flat black slab).
 `towns=10, creatureZones=10, dungeons=0, regionAnchors=0` produces 20
 picks all weighted to the populated areas.
 
-### O3. `emit-atlas-gallery` headless command
+### O3. `emit-render-gallery` headless command
 
 **API to expose** on `CommandEngine` (new partial
-`CommandEngine.AtlasGallery.cs`):
+`CommandEngine.RenderGallery.cs`):
 
 ```csharp
-public AtlasGalleryResult EmitAtlasGallery(
+public RenderGalleryResult EmitRenderGallery(
     string outDir,
     IReadOnlyList<ushort>? lbFilter = null,    // explicit override; null → curate
     int autoTowns = 5, int autoZones = 5,
@@ -335,13 +335,13 @@ public AtlasGalleryResult EmitAtlasGallery(
 └── desc/<slug>.json       ← describe-landblock per pick
 ```
 
-**Acceptance:** `emit-atlas-gallery <outDir>` produces a directory that
+**Acceptance:** `emit-render-gallery <outDir>` produces a directory that
 serves cleanly via `python3 -m http.server` and shows N picks where
 N = sum of the auto-N args (default 20).
 
 ### O4. Tailwind viewer template
 
-**Deliverable:** `WorldBuilder.Terminal/AtlasGallery/index.html` (new) —
+**Deliverable:** `WorldBuilder.Terminal/RenderGallery/index.html` (new) —
 copied verbatim into `<outDir>/index.html` by the emitter. Single-file
 Tailwind CDN page, no build step, follows the same
 no-`fetch()`-needed pattern as the static site (loads `manifest.json`
@@ -376,9 +376,9 @@ via a small inline JSON-loading helper so it works from `file://`).
 click all work without page reloads. Desktop and mobile layouts both
 render correctly (Tailwind responsive classes do most of the work).
 
-### O5. `serve-atlas` REPL helper
+### O5. `serve-render-gallery` REPL helper
 
-**Headless command:** `serve-atlas <outDir> [--port 8090] [--bind 0.0.0.0]`
+**Headless command:** `serve-render-gallery <outDir> [--port 8090] [--bind 0.0.0.0]`
 wraps `python3 -m http.server` (or a minimal C# `HttpListener` if we
 want zero Python dependency — pick whichever is shorter and works
 from the dotnet binary).
@@ -387,14 +387,14 @@ from the dotnet binary).
 the Tailscale IP form (`http://100.116.47.66:<port>`) so the URL works
 from any tailnet member without DNS lookup.
 
-**Acceptance:** `serve-atlas /tmp/atlas-gallery` from one machine,
+**Acceptance:** `serve-render-gallery /tmp/render-gallery` from one machine,
 `curl http://<tailscale-ip>:8090/manifest.json` from another tailnet
 member returns the manifest.
 
 ### O6. Integrate with `emit-static-site` (optional but cheap)
 
 Add a `--gallery` flag to `emit-static-site` that, after the Leaflet
-bundle is composed, also runs `emit-atlas-gallery` into
+bundle is composed, also runs `emit-render-gallery` into
 `<outDir>/gallery/`. The Leaflet viewer's header gets a "Gallery view"
 link, and the gallery's header gets a "Map view" link. Single
 deliverable, two complementary surfaces.
@@ -408,16 +408,16 @@ deliverable, two complementary surfaces.
 For O3, O5, O6:
 
 1. Append rows to `docs/agent_api_reference.md` under a new
-   "Sync Wave 2026-05-XX — Visual Atlas Gallery" section.
-2. Update `docs/agent_api_schema.json` so `emit-atlas-gallery` and
-   `serve-atlas` validate.
+   "Sync Wave 2026-05-XX — Render Gallery" section.
+2. Update `docs/agent_api_schema.json` so `emit-render-gallery` and
+   `serve-render-gallery` validate.
 3. Add the human REPL spelling to `docs/terminal_repl_commands.md`
-   under a new "Visual Atlas Gallery" subsection.
-4. Add a Python test class `TestVisualAtlasGallery` to
+   under a new "Render Gallery" subsection.
+4. Add a Python test class `TestVisualRenderGallery` to
    `tests/test_agent_protocol.py`:
-   - `emit-atlas-gallery` to a temp dir produces non-empty
+   - `emit-render-gallery` to a temp dir produces non-empty
      `manifest.json`, `index.html`, ≥ 1 PNG, ≥ 1 desc JSON.
-   - `serve-atlas` smoke: bind, curl, kill — pure shape test.
+   - `serve-render-gallery` smoke: bind, curl, kill — pure shape test.
 5. Bump the README's command count, add a paragraph to the
    "DerethMaps Enhanced" section about the gallery view (with a link
    to a deployed demo if/when one exists).
@@ -429,11 +429,11 @@ For O3, O5, O6:
 | # | Deliverable | Files touched (primary) | LOC est. |
 |---|---|---|---|
 | D1 | Lift building-only sprite filter for creature setups + flat-plane bbox detection | `CommandEngine.cs:11176+`, `SpriteAtlasLoader.cs` | ~80 |
-| D2 | `AtlasCurator` static class | `WorldBuilder.Terminal/AtlasCurator.cs` (new) | ~250 |
-| D3 | `emit-atlas-gallery` engine method + result type + JSON handler + REPL handler | `CommandEngine.AtlasGallery.cs` (new), `CommandResults.cs`, `JsonCommandProcessor.cs`, `TerminalRepl.cs` | ~250 |
-| D4 | Tailwind viewer single-file template + asset copy | `WorldBuilder.Terminal/AtlasGallery/index.html` (new), `CommandEngine.AtlasGallery.cs` (copy step) | ~350 |
-| D5 | `serve-atlas` REPL helper | `CommandEngine.cs` or `TerminalRepl.cs` | ~80 |
-| D6 | `--gallery` flag on `emit-static-site` + cross-links | `CommandEngine.cs:11372+`, `StaticSite/app.js`, `AtlasGallery/index.html` | ~60 |
+| D2 | `RenderGalleryCurator` static class | `WorldBuilder.Terminal/RenderGalleryCurator.cs` (new) | ~250 |
+| D3 | `emit-render-gallery` engine method + result type + JSON handler + REPL handler | `CommandEngine.RenderGallery.cs` (new), `CommandResults.cs`, `JsonCommandProcessor.cs`, `TerminalRepl.cs` | ~250 |
+| D4 | Tailwind viewer single-file template + asset copy | `WorldBuilder.Terminal/RenderGallery/index.html` (new), `CommandEngine.RenderGallery.cs` (copy step) | ~350 |
+| D5 | `serve-render-gallery` REPL helper | `CommandEngine.cs` or `TerminalRepl.cs` | ~80 |
+| D6 | `--gallery` flag on `emit-static-site` + cross-links | `CommandEngine.cs:11372+`, `StaticSite/app.js`, `RenderGallery/index.html` | ~60 |
 | D7 | Docs + tests | `docs/agent_api_reference.md`, `docs/agent_api_schema.json`, `docs/terminal_repl_commands.md`, `tests/test_agent_protocol.py`, `README.md` | ~250 |
 
 **Total:** ~1,320 LOC across roughly 7 new/extended files. About a fifth
@@ -442,10 +442,10 @@ a fifth is docs/tests.
 
 **Result-type pattern:** continue to add records to
 `WorldBuilder.Terminal/CommandResults.cs`. New record:
-`AtlasGalleryResult(bool Success, int PicksRendered, int LbsCovered,
+`RenderGalleryResult(bool Success, int PicksRendered, int LbsCovered,
 int TotalSpawnCount, string OutDir, string IndexPath, string? Error)`.
 
-**Partial-class pattern:** `CommandEngine.AtlasGallery.cs` holds the
+**Partial-class pattern:** `CommandEngine.RenderGallery.cs` holds the
 emit method (matching the `CommandEngine.SiteIngest.cs` precedent
 established in the spin wave).
 
@@ -463,19 +463,19 @@ For each cluster O1..O6:
    `jq` and assert ≥ 500 entries with `(setupId >> 24) != 0x01`.
    Sample-render 5 of them as standalone 256×256 PNGs and eye-verify
    they show recognizable creature silhouettes (not flat slabs).
-3. **Auto-curation distribution:** run `AtlasCurator.Curate(5,5,5,5)`
+3. **Auto-curation distribution:** run `RenderGalleryCurator.Curate(5,5,5,5)`
    and assert the result has 5 town picks, 5 creature-zone picks
    (none within 4 LBs of each other), 5 dungeon picks (≥ 4 cells
    each), 5 region picks (5 distinct region names).
-4. **`emit-atlas-gallery` end-to-end:** emit to a temp dir, assert
+4. **`emit-render-gallery` end-to-end:** emit to a temp dir, assert
    directory layout matches §4 O3, every PNG file is a valid PNG (decode
    header check), every desc JSON parses, manifest.json has the right
    pick count.
 5. **Tailwind viewer:** load the emitted `index.html` in headless
    Chrome (`scripts/qa-static-site.sh` if it exists, else manual
-   checklist in `docs/atlas-gallery-qa.md`); zero red-banner errors,
+   checklist in `docs/render-gallery-qa.md`); zero red-banner errors,
    filter chips work, card click opens panel, search filters cards.
-6. **Tailscale serve:** `serve-atlas /tmp/atlas-gallery --port 8091`
+6. **Tailscale serve:** `serve-render-gallery /tmp/render-gallery --port 8091`
    on this machine, `curl http://100.116.47.66:8091/manifest.json` from
    another tailnet member returns 200 with the manifest body.
 7. **Cross-deliverable link from Leaflet:** if O6 lands, the Leaflet
@@ -502,7 +502,7 @@ For each cluster O1..O6:
   serving covers internal-team review, which is the only audience the
   showcase has.
 - Mobile-app native viewer — the responsive Tailwind layout is enough.
-- DAT writes of any kind — `emit-atlas-gallery` is a read-only
+- DAT writes of any kind — `emit-render-gallery` is a read-only
   observation channel like `emit-static-site`.
 - ML/agent integration: no auto-grading of "did the gallery look
   good"; the human reviews it. (The factual `describe-landblock` data
@@ -515,14 +515,14 @@ For each cluster O1..O6:
 
 ```
 WorldBuilder.Terminal/
-├── AtlasCurator.cs                        (NEW — picker for towns/zones/dungeons/regions)
-├── CommandEngine.AtlasGallery.cs          (NEW partial — emit-atlas-gallery + serve-atlas)
+├── RenderGalleryCurator.cs                        (NEW — picker for towns/zones/dungeons/regions)
+├── CommandEngine.RenderGallery.cs          (NEW partial — emit-render-gallery + serve-render-gallery)
 ├── CommandEngine.cs:11176+                (lift building-only sprite filter)
 ├── CommandEngine.cs:11372+                (--gallery flag on emit-static-site)
-├── CommandResults.cs                      (extend with AtlasGalleryResult)
+├── CommandResults.cs                      (extend with RenderGalleryResult)
 ├── JsonCommandProcessor.cs                (extend BuildCommandHandlers + cmd handlers)
-├── TerminalRepl.cs                        (extend dispatch with emit-atlas-gallery, serve-atlas)
-└── AtlasGallery/
+├── TerminalRepl.cs                        (extend dispatch with emit-render-gallery, serve-render-gallery)
+└── RenderGallery/
     └── index.html                         (NEW — Tailwind single-file viewer template)
 
 WorldBuilder.Shared/Lib/Sprites/
@@ -532,10 +532,10 @@ docs/
 ├── agent_api_reference.md                 (Sync Wave 2026-05-XX section)
 ├── agent_api_schema.json                  (new command entries)
 ├── terminal_repl_commands.md              (visual atlas gallery subsection)
-└── atlas-gallery-qa.md                    (NEW — manual viewer QA checklist)
+└── render-gallery-qa.md                    (NEW — manual viewer QA checklist)
 
 tests/
-└── test_agent_protocol.py                 (TestVisualAtlasGallery class)
+└── test_agent_protocol.py                 (TestVisualRenderGallery class)
 
 README.md                                  (DerethMaps Enhanced subsection updated)
 ```
@@ -554,7 +554,7 @@ README.md                                  (DerethMaps Enhanced subsection updat
   spawn-glyph render path; this wave makes that path land on actual
   textured sprites instead of glyph fallbacks.
 - `/tmp/dereth-gallery/` — the manual proof-of-concept this spec
-  formalizes. Will be deleted once `emit-atlas-gallery` is in.
+  formalizes. Will be deleted once `emit-render-gallery` is in.
 
 ---
 
@@ -563,7 +563,7 @@ README.md                                  (DerethMaps Enhanced subsection updat
 The 2026-05-01 spin wave landed a real ACE DB behind the static-site
 emitter; a manual proof-of-concept gallery served 10 hand-picked LB
 renders to a remote laptop over Tailscale. This spec turns that into a
-first-class headless command — `emit-atlas-gallery` — that auto-curates
+first-class headless command — `emit-render-gallery` — that auto-curates
 N landblocks (5 towns + 5 creature zones + 5 dungeons + 5 region
 anchors by default) from data the spin wave already exposed, runs
 `render-preview` and `describe-landblock` for each, and bundles the
@@ -578,11 +578,11 @@ top-down camera handles AC's full 3D LightWave creature meshes just
 fine; the 66b80ff filter was only needed to keep flat-plane *prop*
 weenies (doors, signs) out, and we replace its setupId-range heuristic
 with a per-setup bbox flatness check that catches actual flat planes
-without sweeping creatures up. A small `serve-atlas` helper wraps
+without sweeping creatures up. A small `serve-render-gallery` helper wraps
 `python3 -m http.server` with the right bind address so the deliverable
 streams over Tailscale by default. Seven objectives, seven deliverables
 (~1,320 LOC, mostly mechanical wiring + ~250 LOC docs/tests). No new
 projection, no DAT writes, no fork of the Leaflet viewer — only data
 plumbing on paths the spin wave already opened, plus one targeted
-filter relaxation that makes the Living Atlas's creature data actually
+filter relaxation that makes the spawn gazetteer's creature data actually
 visible on the showcase.

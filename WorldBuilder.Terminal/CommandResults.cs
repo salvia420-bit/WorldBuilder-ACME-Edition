@@ -1398,8 +1398,8 @@ public record CompareCreaturesResult(
     CompareCategoryDimension Housing,
     string? Error = null);
 
-// ── Visual Atlas Gallery (sync wave 2026-05-XX wirerender) ───
-public record AtlasGalleryPickInfo(
+// ── Render Gallery (sync wave 2026-05-XX wirerender) ─────────
+public record RenderGalleryPickInfo(
     string Slug,
     string Title,
     string Category,
@@ -1412,7 +1412,7 @@ public record AtlasGalleryPickInfo(
     int RenderObjectCount,
     string Note);
 
-public record AtlasGalleryResult(
+public record RenderGalleryResult(
     bool Success,
     int PicksRendered,
     int LbsCovered,
@@ -1420,10 +1420,10 @@ public record AtlasGalleryResult(
     string OutDir,
     string IndexPath,
     string ManifestPath,
-    List<AtlasGalleryPickInfo> Picks,
+    List<RenderGalleryPickInfo> Picks,
     string? Error = null);
 
-public record ServeAtlasResult(
+public record ServeRenderGalleryResult(
     bool Success,
     string Url,
     string? TailscaleUrl,

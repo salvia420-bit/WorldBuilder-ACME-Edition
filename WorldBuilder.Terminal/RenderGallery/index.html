@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>WorldBuilder · Visual Atlas Gallery</title>
+  <title>WorldBuilder · Render Gallery</title>
   <!--
     Tailwind via CDN. Same no-build-step convention as the static-site
     Leaflet bundle. Manifest is loaded as a JSONP-style assignment so the
@@ -30,7 +30,7 @@
 <body class="min-h-screen">
   <header class="px-6 py-4 border-b border-slate-800 flex flex-wrap items-center gap-4">
     <div>
-      <h1 class="text-xl font-semibold text-slate-100">Visual Atlas Gallery</h1>
+      <h1 class="text-xl font-semibold text-slate-100">Render Gallery</h1>
       <p id="header-sub" class="text-xs text-slate-500">loading…</p>
     </div>
     <div class="flex-1"></div>
@@ -65,9 +65,9 @@
   </aside>
 
   <script>
-  /*  WorldBuilder · Visual Atlas Gallery — vanilla ES6, no build step.
+  /*  WorldBuilder · Render Gallery — vanilla ES6, no build step.
    *
-   *  manifest.js sets `window.ATLAS_GALLERY` as a JSONP-style global. We
+   *  manifest.js sets `window.RENDER_GALLERY` as a JSONP-style global. We
    *  derive cards, the filter chips, and the side-panel content from
    *  that object plus per-pick desc/<slug>.json files (also loaded via
    *  dynamic <script> JSONP — fetch() doesn't work from file://).
@@ -76,16 +76,16 @@
    *  them via XHR-when-allowed but fall back to a script-tag JSONP
    *  pattern by also writing desc/<slug>.js next to them. For the v1
    *  cut we accept that "open the index in a browser" works under HTTP
-   *  serving (serve-atlas wraps that), and the side-panel reads the
+   *  serving (serve-render-gallery wraps that), and the side-panel reads the
    *  embedded fields the manifest already carries when XHR fails.
    */
   (function () {
     'use strict';
 
-    const M = window.ATLAS_GALLERY;
+    const M = window.RENDER_GALLERY;
     if (!M) {
       document.getElementById('header-sub').textContent =
-        'manifest.js not found — emit-atlas-gallery did not complete.';
+        'manifest.js not found — emit-render-gallery did not complete.';
       return;
     }
 
@@ -209,7 +209,7 @@
       // Try fetch() first (works under HTTP). If that fails (file://),
       // fall back to a JSONP-style script tag — but the emitter wrote
       // bare JSON, not JSONP, so file:// without a sibling .js shim
-      // shows the manifest-only summary. The serve-atlas helper or any
+      // shows the manifest-only summary. The serve-render-gallery helper or any
       // HTTP server makes the full fetch path work.
       try {
         fetch(p.desc).then(r => r.json()).then(d => {
@@ -225,7 +225,7 @@
       document.getElementById('panel-living').innerHTML = `
         <div class="text-amber-200 text-xs mb-3">
           Living-Atlas detail requires HTTP serving. Run
-          <code class="bg-slate-800 px-1 rounded">serve-atlas ${escapeText('<gallery-dir>')}</code>
+          <code class="bg-slate-800 px-1 rounded">serve-render-gallery ${escapeText('<gallery-dir>')}</code>
           and open the URL it prints, or open the
           <a class="underline" href="${escapeAttr(p.desc)}">raw desc/${escapeText(p.slug)}.json</a>
           file directly.
@@ -384,7 +384,7 @@
         </header>
 
         <div class="rounded border border-slate-800 p-4 mb-3">
-          <h3 class="text-xs uppercase tracking-wide text-amber-300 mb-1">Atlas appearances</h3>
+          <h3 class="text-xs uppercase tracking-wide text-amber-300 mb-1">Gallery appearances</h3>
           <p class="text-sm text-slate-200">${appearances.toLocaleString()} spawn${appearances === 1 ? '' : 's'} across ${lbsWith} of ${PICKS.length} gallery picks (cached so far).</p>
         </div>
 

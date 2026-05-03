@@ -292,8 +292,8 @@ public class JsonCommandProcessor {
             ["emit-tile-pyramid"] = CmdEmitTilePyramid,
             ["describe-floor"] = CmdDescribeFloor,
             ["emit-static-site"] = CmdEmitStaticSite,
-            ["emit-atlas-gallery"] = CmdEmitAtlasGallery,
-            ["serve-atlas"] = CmdServeAtlas,
+            ["emit-render-gallery"] = CmdEmitRenderGallery,
+            ["serve-render-gallery"] = CmdServeRenderGallery,
             ["help"] = _ => CmdHelp(),
         };
 
@@ -321,10 +321,10 @@ public class JsonCommandProcessor {
         // <outDir>/gallery/ and let the Leaflet view link across. The
         // gallery emit reads the same project state, so calling it after
         // the static site emits keeps both views in sync.
-        AtlasGalleryResult? galleryResult = null;
+        RenderGalleryResult? galleryResult = null;
         if (gallery) {
             string galleryDir = Path.Combine(outDir, "gallery");
-            galleryResult = _engine.EmitAtlasGallery(galleryDir);
+            galleryResult = _engine.EmitRenderGallery(galleryDir);
         }
 
         return Serialize(new {
@@ -357,7 +357,7 @@ public class JsonCommandProcessor {
         });
     }
 
-    private string CmdEmitAtlasGallery(System.Text.Json.Nodes.JsonNode node) {
+    private string CmdEmitRenderGallery(System.Text.Json.Nodes.JsonNode node) {
         string outDir = node["outDir"]?.GetValue<string>()
             ?? throw new ArgumentException("Missing 'outDir' field");
         int autoTowns = node["autoTowns"]?.GetValue<int>() ?? 5;
@@ -369,20 +369,20 @@ public class JsonCommandProcessor {
         bool useSprites = node["useSprites"]?.GetValue<bool>() ?? true;
         bool overlay = node["overlay"]?.GetValue<bool>() ?? true;
         var lbFilter = ParseLbFilter(node);
-        var r = _engine.EmitAtlasGallery(outDir, lbFilter,
+        var r = _engine.EmitRenderGallery(outDir, lbFilter,
             autoTowns, autoZones, autoDungeons, autoRegions,
             radius, resolution, useSprites, overlay);
         if (!r.Success) {
             return Serialize(new {
                 success = false,
-                command = "emit-atlas-gallery",
+                command = "emit-render-gallery",
                 error = r.Error,
                 outDir = r.OutDir,
             });
         }
         return Serialize(new {
             success = true,
-            command = "emit-atlas-gallery",
+            command = "emit-render-gallery",
             picksRendered = r.PicksRendered,
             lbsCovered = r.LbsCovered,
             totalSpawnCount = r.TotalSpawnCount,
@@ -393,23 +393,23 @@ public class JsonCommandProcessor {
         });
     }
 
-    private string CmdServeAtlas(System.Text.Json.Nodes.JsonNode node) {
+    private string CmdServeRenderGallery(System.Text.Json.Nodes.JsonNode node) {
         string outDir = node["outDir"]?.GetValue<string>()
             ?? throw new ArgumentException("Missing 'outDir' field");
         int port = node["port"]?.GetValue<int>() ?? 8090;
         string bind = node["bind"]?.GetValue<string>() ?? "0.0.0.0";
-        var r = _engine.ServeAtlas(outDir, port, bind);
+        var r = _engine.ServeRenderGallery(outDir, port, bind);
         if (!r.Success) {
             return Serialize(new {
                 success = false,
-                command = "serve-atlas",
+                command = "serve-render-gallery",
                 error = r.Error,
                 outDir = r.OutDir, port = r.Port, bind = r.Bind,
             });
         }
         return Serialize(new {
             success = true,
-            command = "serve-atlas",
+            command = "serve-render-gallery",
             url = r.Url,
             tailscaleUrl = r.TailscaleUrl,
             pid = r.Pid,
@@ -1489,8 +1489,8 @@ public class JsonCommandProcessor {
             new { name = "mark-tiles-clean", args = "",                                      description = "Force-clear all dirty bits without regenerating." },
             new { name = "prune-tiles",      args = "keepNewest?, olderThan?",               description = "LRU-prune the LB-tile layer; region+world tiles are pinned." },
             new { name = "generate-atlas-tiles", args = "mode, lbList?",                     description = "Bulk-generate tiles. mode=lbs|regions|world|all. mode=lbs requires lbList[{lbX,lbY}]; mode=all sweeps every LB and may take many minutes." },
-            new { name = "emit-atlas-gallery", args = "outDir, autoTowns?, autoZones?, autoDungeons?, autoRegions?, radius?, resolution?, useSprites?, overlay?, lbFilter?", description = "Curate N landblocks (5 towns + 5 creature zones + 5 dungeons + 5 region anchors by default), render-preview + describe-landblock per pick, bundle into a Tailwind gallery dir." },
-            new { name = "serve-atlas",       args = "outDir, port?, bind?",                  description = "Serve a gallery (or any) directory over HTTP via a built-in C# HttpListener. Detects Tailscale IPs and reports a tailnet-reachable URL when one is available." },
+            new { name = "emit-render-gallery", args = "outDir, autoTowns?, autoZones?, autoDungeons?, autoRegions?, radius?, resolution?, useSprites?, overlay?, lbFilter?", description = "Curate N landblocks (5 towns + 5 creature zones + 5 dungeons + 5 region anchors by default), render-preview + describe-landblock per pick, bundle into a Tailwind gallery dir." },
+            new { name = "serve-render-gallery",       args = "outDir, port?, bind?",                  description = "Serve a gallery (or any) directory over HTTP via a built-in C# HttpListener. Detects Tailscale IPs and reports a tailnet-reachable URL when one is available." },
             new { name = "quit",             args = "",                                      description = "Exit terminal" }
         };
         return Serialize(new { success = true, command = "help", protocol = "json-line", version = "1.5",

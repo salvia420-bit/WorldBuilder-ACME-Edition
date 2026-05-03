@@ -10,7 +10,7 @@ namespace WorldBuilder.Terminal;
 
 public partial class CommandEngine {
     // ─────────────────────────────────────────────────────────────────
-    //  Visual Atlas Gallery — wirerender wave (2026-05-XX)
+    //  Render Gallery — wirerender wave (2026-05-XX)
     //
     //  Curates a small set of landblocks from the spin wave's gazetteer
     //  state, runs render-preview + describe-landblock per pick, and
@@ -26,7 +26,7 @@ public partial class CommandEngine {
         WriteIndented = false,
     };
 
-    // ── Snapshot accessors used by AtlasCurator (read-only views) ────
+    // ── Snapshot accessors used by RenderGalleryCurator (read-only views) ────
 
     internal IReadOnlyDictionary<ushort, LandblockDescriber.TownContext> GetTownGazetteerSnapshot()
         => _townGazetteer;
@@ -67,9 +67,9 @@ public partial class CommandEngine {
         } catch { return 0; }
     }
 
-    // ── emit-atlas-gallery ───────────────────────────────────────────
+    // ── emit-render-gallery ───────────────────────────────────────────
 
-    public AtlasGalleryResult EmitAtlasGallery(
+    public RenderGalleryResult EmitRenderGallery(
             string outDir,
             IReadOnlyList<ushort>? lbFilter = null,
             int autoTowns = 5, int autoZones = 5,
@@ -88,19 +88,19 @@ public partial class CommandEngine {
             // and category "explicit"), otherwise call the curator. The
             // curator covers the four pick families per the wirerender
             // spec; explicit is for pinned views.
-            List<AtlasCurator.AtlasPick> picks;
+            List<RenderGalleryCurator.Pick> picks;
             if (lbFilter is { Count: > 0 }) {
-                picks = new List<AtlasCurator.AtlasPick>(lbFilter.Count);
+                picks = new List<RenderGalleryCurator.Pick>(lbFilter.Count);
                 foreach (var lb in lbFilter) {
-                    picks.Add(new AtlasCurator.AtlasPick(
+                    picks.Add(new RenderGalleryCurator.Pick(
                         lb, $"LB 0x{lb:X4}", "explicit",
                         $"Explicit pick — LB 0x{lb:X4}", null, null));
                 }
             } else {
-                picks = AtlasCurator.Curate(this, autoTowns, autoZones, autoDungeons, autoRegions);
+                picks = RenderGalleryCurator.Curate(this, autoTowns, autoZones, autoDungeons, autoRegions);
             }
 
-            var picksInfo = new List<AtlasGalleryPickInfo>();
+            var picksInfo = new List<RenderGalleryPickInfo>();
             int totalSpawnCount = 0;
             var coveredLbs = new HashSet<ushort>();
 
@@ -121,7 +121,7 @@ public partial class CommandEngine {
                         outputPath: renderAbs, useSprites: useSprites);
                     renderedCount = renderResult.ObjectCount;
                 } catch (Exception ex) {
-                    Console.Error.WriteLine($"[AtlasGallery] Render failed for {slug}: {ex.Message}");
+                    Console.Error.WriteLine($"[RenderGallery] Render failed for {slug}: {ex.Message}");
                     // Skip describe too if render fails — the pick is unusable.
                     continue;
                 }
@@ -132,7 +132,7 @@ public partial class CommandEngine {
                     File.WriteAllText(descAbs,
                         SerializeDescriptionForGallery(desc, out spawnsHere));
                 } catch (Exception ex) {
-                    Console.Error.WriteLine($"[AtlasGallery] Describe failed for {slug}: {ex.Message}");
+                    Console.Error.WriteLine($"[RenderGallery] Describe failed for {slug}: {ex.Message}");
                     File.WriteAllText(descAbs,
                         JsonSerializer.Serialize(new {
                             error = ex.Message,
@@ -142,7 +142,7 @@ public partial class CommandEngine {
 
                 coveredLbs.Add(pick.LbKey);
                 totalSpawnCount += spawnsHere;
-                picksInfo.Add(new AtlasGalleryPickInfo(
+                picksInfo.Add(new RenderGalleryPickInfo(
                     slug, pick.Title, pick.Category,
                     $"0x{pick.LbKey:X4}", (int)lbX, (int)lbY,
                     renderRel, descRel,
@@ -173,13 +173,13 @@ public partial class CommandEngine {
             // fetch() (file:// works). Mirrors the static site's JSONP pattern.
             string manifestJsPath = Path.Combine(outDir, "manifest.js");
             File.WriteAllText(manifestJsPath,
-                "var ATLAS_GALLERY = " + JsonSerializer.Serialize(manifestObj, GalleryJsonOpts) + ";\n");
+                "var RENDER_GALLERY = " + JsonSerializer.Serialize(manifestObj, GalleryJsonOpts) + ";\n");
 
             // Copy the Tailwind viewer template + asset(s) verbatim.
             string indexPath = Path.Combine(outDir, "index.html");
-            CopyAtlasGalleryTemplate(outDir);
+            CopyRenderGalleryTemplate(outDir);
 
-            return new AtlasGalleryResult(
+            return new RenderGalleryResult(
                 Success: true,
                 PicksRendered: picksInfo.Count,
                 LbsCovered: coveredLbs.Count,
@@ -189,7 +189,7 @@ public partial class CommandEngine {
                 ManifestPath: manifestPath,
                 Picks: picksInfo);
         } catch (Exception ex) {
-            return new AtlasGalleryResult(false, 0, 0, 0, outDir, "", "", new(), ex.Message);
+            return new RenderGalleryResult(false, 0, 0, 0, outDir, "", "", new(), ex.Message);
         }
     }
 
@@ -227,17 +227,17 @@ public partial class CommandEngine {
         return s;
     }
 
-    private static void CopyAtlasGalleryTemplate(string outDir) {
+    private static void CopyRenderGalleryTemplate(string outDir) {
         // Mirror StaticSiteEmitter.ResolveStaticSiteRoot pattern: prefer the
         // template next to the running assembly (CopyToOutputDirectory) with
         // a source-tree fallback so `dotnet run` from the repo also works.
         var asmDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
         string? templateRoot = null;
         if (asmDir != null) {
-            var beside = Path.Combine(asmDir, "AtlasGallery");
+            var beside = Path.Combine(asmDir, "RenderGallery");
             if (Directory.Exists(beside)) templateRoot = beside;
             else {
-                var sourceTree = Path.GetFullPath(Path.Combine(asmDir, "..", "..", "..", "AtlasGallery"));
+                var sourceTree = Path.GetFullPath(Path.Combine(asmDir, "..", "..", "..", "RenderGallery"));
                 if (Directory.Exists(sourceTree)) templateRoot = sourceTree;
             }
         }
@@ -258,17 +258,17 @@ public partial class CommandEngine {
 
     private static string MinimalFallbackIndex() => """
 <!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Atlas Gallery (fallback)</title></head>
+<html><head><meta charset="utf-8"><title>Render Gallery (fallback)</title></head>
 <body style="font-family:system-ui;max-width:60rem;margin:2rem auto;">
-<h1>Atlas Gallery — fallback view</h1>
+<h1>Render Gallery — fallback view</h1>
 <p>The Tailwind template was not found alongside the binary. Manifest:</p>
 <pre id="m">loading…</pre>
 <script src="manifest.js"></script>
-<script>document.getElementById('m').textContent = JSON.stringify(window.ATLAS_GALLERY, null, 2);</script>
+<script>document.getElementById('m').textContent = JSON.stringify(window.RENDER_GALLERY, null, 2);</script>
 </body></html>
 """;
 
-    // ── serve-atlas ──────────────────────────────────────────────────
+    // ── serve-render-gallery ──────────────────────────────────────────────────
 
     /// <summary>
     /// Serve a directory over HTTP using a minimal C# HttpListener (no
@@ -276,10 +276,10 @@ public partial class CommandEngine {
     /// for the listener thread; the listener runs in the background until
     /// the engine exits.
     /// </summary>
-    public ServeAtlasResult ServeAtlas(string outDir, int port = 8090, string bind = "0.0.0.0") {
+    public ServeRenderGalleryResult ServeRenderGallery(string outDir, int port = 8090, string bind = "0.0.0.0") {
         try {
             if (!Directory.Exists(outDir)) {
-                return new ServeAtlasResult(false, "", null, 0, port, bind, outDir,
+                return new ServeRenderGalleryResult(false, "", null, 0, port, bind, outDir,
                     $"Output directory not found: {outDir}");
             }
             string prefix = $"http://{bind}:{port}/";
@@ -291,7 +291,7 @@ public partial class CommandEngine {
             try {
                 listener.Start();
             } catch (HttpListenerException ex) {
-                return new ServeAtlasResult(false, "", null, 0, port, bind, outDir,
+                return new ServeRenderGalleryResult(false, "", null, 0, port, bind, outDir,
                     $"Failed to bind {safePrefix}: {ex.Message}");
             }
 
@@ -308,11 +308,11 @@ public partial class CommandEngine {
             var rootFull = Path.GetFullPath(outDir);
             var pump = new System.Threading.Thread(() => RunStaticServer(listener, rootFull)) {
                 IsBackground = true,
-                Name = $"atlas-server-{port}",
+                Name = $"render-gallery-server-{port}",
             };
             pump.Start();
 
-            return new ServeAtlasResult(
+            return new ServeRenderGalleryResult(
                 Success: true,
                 Url: baseUrl,
                 TailscaleUrl: tailscaleUrl,
@@ -321,7 +321,7 @@ public partial class CommandEngine {
                 Bind: bind,
                 OutDir: rootFull);
         } catch (Exception ex) {
-            return new ServeAtlasResult(false, "", null, 0, port, bind, outDir, ex.Message);
+            return new ServeRenderGalleryResult(false, "", null, 0, port, bind, outDir, ex.Message);
         }
     }
 

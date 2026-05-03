@@ -48,8 +48,8 @@
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 			<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
 		</Content>
-		<!-- Visual atlas gallery template, used by emit-atlas-gallery. -->
-		<Content Include="AtlasGallery\**\*">
+		<!-- Render gallery template, used by emit-render-gallery. -->
+		<Content Include="RenderGallery\**\*">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 			<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
 		</Content>

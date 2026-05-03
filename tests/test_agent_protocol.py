@@ -2096,12 +2096,12 @@ class TestSpinWave2026_05_01(RuntimeRequiredTestCase):
 
 
 # ─────────────────────────────────────────────────────────────
-# Test Suite: Sync Wave 2026-05-XX — Visual Atlas Gallery
-# wirerender wave: emit-atlas-gallery + serve-atlas
+# Test Suite: Sync Wave 2026-05-XX — Render Gallery
+# wirerender wave: emit-render-gallery + serve-render-gallery
 # ─────────────────────────────────────────────────────────────
 
-class TestVisualAtlasGallery(RuntimeRequiredTestCase):
-    """Wirerender wave: emit-atlas-gallery + serve-atlas + the
+class TestVisualRenderGallery(RuntimeRequiredTestCase):
+    """Wirerender wave: emit-render-gallery + serve-render-gallery + the
     catalog visibility check. Most tests run against the loaded
     TestProject so they don't need RetailSmoke; the full
     end-to-end emit asserts only that error envelopes are
@@ -2130,53 +2130,53 @@ class TestVisualAtlasGallery(RuntimeRequiredTestCase):
         # The catalog response shape is {commands: [{name, args, description}, ...]}.
         resp = self.session.send({"command": "help"})
         names = [c.get("name") for c in resp.get("commands", [])]
-        for new_cmd in ("emit-atlas-gallery", "serve-atlas"):
+        for new_cmd in ("emit-render-gallery", "serve-render-gallery"):
             self.assertIn(new_cmd, names,
                           f"new command {new_cmd!r} missing from catalog")
 
-    # ── emit-atlas-gallery shape (no project loaded) ────────
+    # ── emit-render-gallery shape (no project loaded) ────────
 
-    def test_02_emit_atlas_gallery_without_project_errors(self):
+    def test_02_emit_render_gallery_without_project_errors(self):
         """Without a loaded project the engine raises 'No project loaded';
         the JSON layer surfaces success=false with the message."""
         resp = self.session.send({
-            "command": "emit-atlas-gallery",
+            "command": "emit-render-gallery",
             "outDir": "/tmp/wirerender-no-project",
         })
         self.assertFalse(resp.get("success"))
-        self.assertEqual(resp.get("command"), "emit-atlas-gallery")
+        self.assertEqual(resp.get("command"), "emit-render-gallery")
         self.assertIn("error", resp)
 
-    def test_03_emit_atlas_gallery_missing_outdir_errors(self):
-        resp = self.session.send({"command": "emit-atlas-gallery"})
+    def test_03_emit_render_gallery_missing_outdir_errors(self):
+        resp = self.session.send({"command": "emit-render-gallery"})
         self.assertFalse(resp.get("success"))
-        self.assertEqual(resp.get("command"), "emit-atlas-gallery")
+        self.assertEqual(resp.get("command"), "emit-render-gallery")
         self.assertIn("error", resp)
 
-    # ── serve-atlas shape ───────────────────────────────────
+    # ── serve-render-gallery shape ───────────────────────────────────
 
-    def test_04_serve_atlas_missing_outdir_errors(self):
-        resp = self.session.send({"command": "serve-atlas"})
+    def test_04_serve_render_gallery_missing_outdir_errors(self):
+        resp = self.session.send({"command": "serve-render-gallery"})
         self.assertFalse(resp.get("success"))
-        self.assertEqual(resp.get("command"), "serve-atlas")
+        self.assertEqual(resp.get("command"), "serve-render-gallery")
         self.assertIn("error", resp)
 
-    def test_05_serve_atlas_nonexistent_outdir_errors(self):
+    def test_05_serve_render_gallery_nonexistent_outdir_errors(self):
         resp = self.session.send({
-            "command": "serve-atlas",
-            "outDir": "/tmp/atlas-gallery-does-not-exist-xyz",
+            "command": "serve-render-gallery",
+            "outDir": "/tmp/render-gallery-does-not-exist-xyz",
             "port": 0,
         })
         self.assertFalse(resp.get("success"))
-        self.assertEqual(resp.get("command"), "serve-atlas")
+        self.assertEqual(resp.get("command"), "serve-render-gallery")
         self.assertIn("error", resp)
 
 
 @unittest.skipUnless(Path("/home/wbterminal/projects/RetailSmoke/RetailSmoke.wbproj").exists() or
                      Path("/home/salvia420/projects/RetailSmoke/RetailSmoke.wbproj").exists(),
                      "RetailSmoke project not found at known paths; gallery e2e test needs DATs.")
-class TestVisualAtlasGalleryRetail(RuntimeRequiredTestCase):
-    """End-to-end: emit-atlas-gallery against RetailSmoke. Runs with
+class TestVisualRenderGalleryRetail(RuntimeRequiredTestCase):
+    """End-to-end: emit-render-gallery against RetailSmoke. Runs with
     1 town + 0 zones + 0 dungeons + 0 region anchors so the wall-clock
     stays minimal — the curator picks 1 LB, the renderer writes 1 PNG +
     1 JSON, and the manifest + viewer template land alongside."""
@@ -2196,7 +2196,7 @@ class TestVisualAtlasGalleryRetail(RuntimeRequiredTestCase):
     def setUp(self):
         self.session = TerminalSession(project_path=str(self.project))
         self.session.start()
-        self.dist = Path("/tmp/test_atlas_gallery_dist")
+        self.dist = Path("/tmp/test_render_gallery_dist")
         if self.dist.exists():
             for p in sorted(self.dist.rglob("*"), reverse=True):
                 if p.is_file():
@@ -2207,11 +2207,11 @@ class TestVisualAtlasGalleryRetail(RuntimeRequiredTestCase):
     def tearDown(self):
         self.session.close()
 
-    def test_01_emit_atlas_gallery_produces_dist_contract(self):
-        """emit-atlas-gallery writes the documented tree:
+    def test_01_emit_render_gallery_produces_dist_contract(self):
+        """emit-render-gallery writes the documented tree:
         manifest.json + manifest.js + index.html + renders/*.png + desc/*.json."""
         resp = self.session.send({
-            "command": "emit-atlas-gallery",
+            "command": "emit-render-gallery",
             "outDir": str(self.dist),
             "autoTowns": 1,
             "autoZones": 0,
@@ -2221,7 +2221,7 @@ class TestVisualAtlasGalleryRetail(RuntimeRequiredTestCase):
             "resolution": 512,  # tiny for quick test
             "useSprites": False,
         }, timeout=180)
-        assert_success(resp, "emit-atlas-gallery")
+        assert_success(resp, "emit-render-gallery")
         assert_has_fields(resp, "picksRendered", "lbsCovered",
                           "totalSpawnCount", "outDir",
                           "indexPath", "manifestPath", "picks")

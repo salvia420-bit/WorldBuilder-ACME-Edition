@@ -206,8 +206,8 @@ public class TerminalRepl {
             ["mark-tiles-clean"] = _ => HandleMarkTilesClean(),
             ["prune-tiles"] = HandlePruneTiles,
             ["generate-atlas-tiles"] = HandleGenerateAtlasTiles,
-            ["emit-atlas-gallery"] = HandleEmitAtlasGallery,
-            ["serve-atlas"] = HandleServeAtlas,
+            ["emit-render-gallery"] = HandleEmitRenderGallery,
+            ["serve-render-gallery"] = HandleServeRenderGallery,
             ["help"] = _ => PrintHelp(),
         };
 
@@ -460,17 +460,17 @@ public class TerminalRepl {
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     // ═════════════════════════════════════════════════════════
-    //  Visual Atlas Gallery — wirerender wave (2026-05-XX)
+    //  Render Gallery — wirerender wave (2026-05-XX)
     // ═════════════════════════════════════════════════════════
 
-    private void HandleEmitAtlasGallery(string[] tokens) {
+    private void HandleEmitRenderGallery(string[] tokens) {
         if (!CheckProject()) return;
         if (tokens.Length < 2) {
-            Console.WriteLine("Usage: emit-atlas-gallery <outDir> [--towns N] [--zones N] [--dungeons N] [--regions N] [--radius N] [--res N] [--no-sprites] [--no-overlay]");
+            Console.WriteLine("Usage: emit-render-gallery <outDir> [--towns N] [--zones N] [--dungeons N] [--regions N] [--radius N] [--res N] [--no-sprites] [--no-overlay]");
             Console.WriteLine("  Examples:");
-            Console.WriteLine("    emit-atlas-gallery /tmp/dereth-gallery");
-            Console.WriteLine("    emit-atlas-gallery ./gallery --towns 10 --zones 10 --dungeons 0 --regions 0");
-            Console.WriteLine("    emit-atlas-gallery ./gallery --radius 0 --res 1024 --no-sprites");
+            Console.WriteLine("    emit-render-gallery /tmp/dereth-gallery");
+            Console.WriteLine("    emit-render-gallery ./gallery --towns 10 --zones 10 --dungeons 0 --regions 0");
+            Console.WriteLine("    emit-render-gallery ./gallery --radius 0 --res 1024 --no-sprites");
             return;
         }
         string outDir = tokens[1];
@@ -490,7 +490,7 @@ public class TerminalRepl {
                 default: Console.WriteLine($"Unknown flag: {tokens[i]}"); return;
             }
         }
-        var r2 = _engine.EmitAtlasGallery(outDir, null, towns, zones, dungeons, regions,
+        var r2 = _engine.EmitRenderGallery(outDir, null, towns, zones, dungeons, regions,
             radius, resolution, useSprites, overlay);
         Console.WriteLine();
         if (!r2.Success) {
@@ -507,16 +507,16 @@ public class TerminalRepl {
         Console.WriteLine($"  Manifest       : {r2.ManifestPath}");
         Console.WriteLine();
         Console.WriteLine($"  Open in browser: file://{Path.GetFullPath(r2.IndexPath)}");
-        Console.WriteLine($"  Or serve       : serve-atlas {r2.OutDir}");
+        Console.WriteLine($"  Or serve       : serve-render-gallery {r2.OutDir}");
         Console.WriteLine();
     }
 
-    private void HandleServeAtlas(string[] tokens) {
+    private void HandleServeRenderGallery(string[] tokens) {
         if (tokens.Length < 2) {
-            Console.WriteLine("Usage: serve-atlas <outDir> [--port N] [--bind addr]");
+            Console.WriteLine("Usage: serve-render-gallery <outDir> [--port N] [--bind addr]");
             Console.WriteLine("  Examples:");
-            Console.WriteLine("    serve-atlas /tmp/dereth-gallery");
-            Console.WriteLine("    serve-atlas ./gallery --port 8091");
+            Console.WriteLine("    serve-render-gallery /tmp/dereth-gallery");
+            Console.WriteLine("    serve-render-gallery ./gallery --port 8091");
             return;
         }
         string outDir = tokens[1];
@@ -529,7 +529,7 @@ public class TerminalRepl {
                 default: Console.WriteLine($"Unknown flag: {tokens[i]}"); return;
             }
         }
-        var sr = _engine.ServeAtlas(outDir, port, bind);
+        var sr = _engine.ServeRenderGallery(outDir, port, bind);
         Console.WriteLine();
         if (!sr.Success) {
             Console.ForegroundColor = ConsoleColor.Red;

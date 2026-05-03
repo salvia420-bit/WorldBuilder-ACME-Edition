@@ -1327,7 +1327,7 @@
                     "type": "bool",
                     "required": false,
                     "default": false,
-                    "description": "Also emit a Tailwind atlas gallery into <outDir>/gallery/. Equivalent to running emit-atlas-gallery with default settings after the Leaflet bundle is composed."
+                    "description": "Also emit a Tailwind render gallery into <outDir>/gallery/. Equivalent to running emit-render-gallery with default settings after the Leaflet bundle is composed."
                 }
             },
             "response": {
@@ -1342,9 +1342,9 @@
                 "gallery": "{ emitted: bool, picksRendered: int, lbsCovered: int, indexPath: string, error: string? }? — present only when gallery:true was requested"
             }
         },
-        "emit-atlas-gallery": {
+        "emit-render-gallery": {
             "category": "dereth-maps-enhanced",
-            "description": "Curate N landblocks (5 towns + 5 creature zones + 5 dungeons + 5 region anchors by default) from gazetteer state, run render-preview + describe-landblock per pick, and bundle into a self-contained Tailwind viewer directory. Companion to emit-static-site: the Leaflet view explores everything; the gallery is the curated showcase.",
+            "description": "render-preview's curated showcase. Curate N landblocks (5 towns + 5 creature zones + 5 dungeons + 5 region anchors by default) from gazetteer state, run render-preview per pick, and bundle into a self-contained Tailwind viewer directory; describe-landblock text loads as the side panel. Companion to emit-static-site: the Leaflet view explores everything; the gallery is the curated showcase.",
             "parameters": {
                 "outDir": { "type": "string", "required": true },
                 "autoTowns": { "type": "int", "required": false, "default": 5 },
@@ -1383,7 +1383,7 @@
                 }]
             }
         },
-        "serve-atlas": {
+        "serve-render-gallery": {
             "category": "dereth-maps-enhanced",
             "description": "Serve a gallery (or any) directory over HTTP using a built-in C# HttpListener. Detects Tailscale IPs (100.64.0.0/10) and reports a tailnet-reachable URL when available. The listener runs in a background thread until the engine exits.",
             "parameters": {

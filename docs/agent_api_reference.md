@@ -2001,20 +2001,20 @@ Compares the project's loaded `_spawnGazetteer` against the gazetteer JSON files
 
 ---
 
-## Sync Wave 2026-05-XX — Visual Atlas Gallery
+## Sync Wave 2026-05-XX — Render Gallery
 
-The Living Atlas's factual channel (`describe-landblock`) and the visual channel (`render-preview`) finally share a curated viewer surface. `emit-atlas-gallery` auto-curates a small set of landblocks from the gazetteer state the spin wave brought online, runs both channels per pick, and bundles the renders + JSON + a single-file Tailwind viewer into one self-contained directory. Companion brief: `wirerender.md`.
+`render-preview`'s curated showcase. `emit-render-gallery` auto-curates a small set of landblocks from the gazetteer state the spin wave brought online, runs `render-preview` per pick, and bundles the renders + a single-file Tailwind viewer into one self-contained directory; `describe-landblock` text loads as the side panel for whichever pick is selected. Companion brief: `wirerender.md`.
 
-### `emit-atlas-gallery`
+### `emit-render-gallery`
 
-**Request:** `{"command":"emit-atlas-gallery","outDir":"/tmp/dereth-gallery","autoTowns":5,"autoZones":5,"autoDungeons":5,"autoRegions":5,"radius":1,"resolution":1536,"useSprites":true,"overlay":true}`
+**Request:** `{"command":"emit-render-gallery","outDir":"/tmp/dereth-gallery","autoTowns":5,"autoZones":5,"autoDungeons":5,"autoRegions":5,"radius":1,"resolution":1536,"useSprites":true,"overlay":true}`
 
 All fields except `outDir` are optional. Defaults match the wirerender spec: 20 picks (5+5+5+5), `radius=1` (3×3 LB region ≈ 576wu), `resolution=1536`, sprites + overlay on. Pass an explicit `lbFilter` to skip auto-curation.
 
 **Response:**
 ```json
 {
-  "success": true, "command": "emit-atlas-gallery",
+  "success": true, "command": "emit-render-gallery",
   "picksRendered": 20, "lbsCovered": 20, "totalSpawnCount": 1247,
   "outDir": "/tmp/dereth-gallery",
   "indexPath": "/tmp/dereth-gallery/index.html",
@@ -2047,9 +2047,9 @@ Curator rules (when `lbFilter` is omitted):
 - **Dungeons** — top-N by `cellCount × floorCount`; needs ≥ 4 cells.
 - **Region anchors** — one LB per distinct region from `_regionAnchors`.
 
-### `serve-atlas`
+### `serve-render-gallery`
 
-**Request:** `{"command":"serve-atlas","outDir":"/tmp/dereth-gallery","port":8090,"bind":"0.0.0.0"}`
+**Request:** `{"command":"serve-render-gallery","outDir":"/tmp/dereth-gallery","port":8090,"bind":"0.0.0.0"}`
 **Response:** `{success, command, url, tailscaleUrl, pid, port, bind, outDir}`
 
 Wraps a built-in C# `HttpListener` (no Python dependency). When the host has an IP in the carrier-NAT range 100.64.0.0/10, the response includes a Tailscale URL so any tailnet member can reach the gallery without DNS lookup. The listener pumps in a background thread; the engine exiting tears it down.
@@ -2060,7 +2060,7 @@ Wraps a built-in C# `HttpListener` (no Python dependency). When the host has an 
 
 ### `emit-static-site --gallery`
 
-`emit-static-site` accepts a new optional `gallery:true` field that chains `emit-atlas-gallery` into `<outDir>/gallery/` after the Leaflet bundle is composed. The Leaflet header surfaces a "Gallery view ↗" link when the gallery sibling is detected (HEAD probe at boot). Response gains a nested `gallery` object summarizing the chained emit.
+`emit-static-site` accepts a new optional `gallery:true` field that chains `emit-render-gallery` into `<outDir>/gallery/` after the Leaflet bundle is composed. The Leaflet header surfaces a "Gallery view ↗" link when the gallery sibling is detected (HEAD probe at boot). Response gains a nested `gallery` object summarizing the chained emit.
 
 ### CLI flags added in this wave
 

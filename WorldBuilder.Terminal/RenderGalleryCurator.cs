@@ -3,23 +3,23 @@ using WorldBuilder.Shared.Lib.AceDb;
 namespace WorldBuilder.Terminal;
 
 /// <summary>
-/// Picks a curated set of landblocks to feature in the visual atlas
-/// gallery (<c>emit-atlas-gallery</c>). Composes four pickers — towns,
+/// Picks a curated set of landblocks to feature in the render gallery
+/// (<c>emit-render-gallery</c>). Composes four pickers — towns,
 /// creature zones, dungeons, region anchors — over the in-engine
 /// gazetteer state the spin wave (2026-05-01) brought online so the
 /// gallery is reproducible from data the engine already loads, not from
 /// hand-typed lbX/lbY pairs.
 ///
 /// Pure read-only over <see cref="CommandEngine"/>. Outputs an ordered
-/// list of <see cref="AtlasPick"/> entries; the gallery emitter passes
+/// list of <see cref="Pick"/> entries; the gallery emitter passes
 /// them straight to <c>RenderPreview</c> + <c>DescribeLandblock</c>.
 /// </summary>
-public static class AtlasCurator {
+public static class RenderGalleryCurator {
 
     /// <summary>One curated pick. Title + Note are human-facing; the
     /// gallery emitter slugs the title for filenames and renders the
     /// note as the card subtitle.</summary>
-    public sealed record AtlasPick(
+    public sealed record Pick(
         ushort LbKey,
         string Title,
         string Category,
@@ -27,13 +27,13 @@ public static class AtlasCurator {
         int? SpawnCount,
         int? CellCount);
 
-    public static List<AtlasPick> Curate(
+    public static List<Pick> Curate(
             CommandEngine engine,
             int towns = 5,
             int creatureZones = 5,
             int dungeons = 5,
             int regionAnchors = 5) {
-        var picks = new List<AtlasPick>();
+        var picks = new List<Pick>();
         var seen = new HashSet<ushort>();
 
         foreach (var p in PickTowns(engine, towns)) {
@@ -65,7 +65,7 @@ public static class AtlasCurator {
         "Nanto", "Mayoi", "Zaikhal", "Khayyaban", "Samsur", "Uziz",
     };
 
-    private static IEnumerable<AtlasPick> PickTowns(CommandEngine engine, int n) {
+    private static IEnumerable<Pick> PickTowns(CommandEngine engine, int n) {
         if (n <= 0) yield break;
         var gazetteer = engine.GetTownGazetteerSnapshot();
         if (gazetteer.Count == 0) yield break;
@@ -97,12 +97,12 @@ public static class AtlasCurator {
         }
     }
 
-    private static AtlasPick MakeTownPick(ushort lb, LandblockDescriber.TownContext ctx) {
+    private static Pick MakeTownPick(ushort lb, LandblockDescriber.TownContext ctx) {
         var noteParts = new List<string>();
         if (!string.IsNullOrWhiteSpace(ctx.Culture)) noteParts.Add(ctx.Culture!);
         noteParts.Add($"LB 0x{lb:X4}");
         if (!string.IsNullOrWhiteSpace(ctx.Notes)) noteParts.Add(ctx.Notes!);
-        return new AtlasPick(lb, ctx.Name, "town",
+        return new Pick(lb, ctx.Name, "town",
             string.Join(" — ", noteParts), null, null);
     }
 
@@ -110,7 +110,7 @@ public static class AtlasCurator {
     //  Creature zones: top-N outdoor LBs by Creature spawn count
     // ────────────────────────────────────────────────────────────────────
 
-    private static IEnumerable<AtlasPick> PickCreatureZones(
+    private static IEnumerable<Pick> PickCreatureZones(
             CommandEngine engine, int n, HashSet<ushort> alreadyPicked) {
         if (n <= 0) yield break;
         var gazetteer = engine.GetSpawnGazetteerSnapshot();
@@ -170,7 +170,7 @@ public static class AtlasCurator {
             yielded++;
             string title = $"{s.TopName} Camp";
             string note = $"{s.Count} spawns, {s.DistinctWcids} distinct wcids — LB 0x{s.Lb:X4}";
-            yield return new AtlasPick(s.Lb, title, "creature zone", note, s.Count, null);
+            yield return new Pick(s.Lb, title, "creature zone", note, s.Count, null);
         }
     }
 
@@ -178,7 +178,7 @@ public static class AtlasCurator {
     //  Dungeons: top-N by cell count × floor count
     // ────────────────────────────────────────────────────────────────────
 
-    private static IEnumerable<AtlasPick> PickDungeons(
+    private static IEnumerable<Pick> PickDungeons(
             CommandEngine engine, int n, HashSet<ushort> alreadyPicked) {
         if (n <= 0) yield break;
         var dungeonLbs = engine.ListDungeonLandblockKeys();
@@ -203,7 +203,7 @@ public static class AtlasCurator {
             yielded++;
             string title = $"Dungeon 0x{s.Lb:X4}";
             string note = $"{s.CellCount} cells, {s.FloorCount} floors";
-            yield return new AtlasPick(s.Lb, title, "dungeon", note, null, s.CellCount);
+            yield return new Pick(s.Lb, title, "dungeon", note, null, s.CellCount);
         }
     }
 
@@ -211,7 +211,7 @@ public static class AtlasCurator {
     //  Region anchors: one LB per region by region-name diversity
     // ────────────────────────────────────────────────────────────────────
 
-    private static IEnumerable<AtlasPick> PickRegionAnchors(
+    private static IEnumerable<Pick> PickRegionAnchors(
             CommandEngine engine, int n, HashSet<ushort> alreadyPicked) {
         if (n <= 0) yield break;
         var anchors = engine.GetRegionAnchorsSnapshot();
@@ -224,7 +224,7 @@ public static class AtlasCurator {
             if (alreadyPicked.Contains(lb)) continue;
             if (!seenRegions.Add(region)) continue;
             yielded++;
-            yield return new AtlasPick(lb, $"{region} anchor", "region",
+            yield return new Pick(lb, $"{region} anchor", "region",
                 $"Region anchor — LB 0x{lb:X4}", null, null);
         }
     }
