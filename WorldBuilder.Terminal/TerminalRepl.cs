@@ -569,6 +569,7 @@ public class TerminalRepl {
         PrintAutoRestoreLine("WcidAcpedia",    ar.WcidAcpedia,    countLabel: "wcids");
         PrintAutoRestoreLine("SpawnGazetteer", ar.SpawnGazetteer, countLabel: "landblocks");
         PrintAutoRestoreLine("Regions",        ar.Regions,        countLabel: "regions");
+        PrintAutoRestoreLine("WeenieIndex",    ar.WeenieIndex,    countLabel: "weenies");
     }
 
     private static void PrintAutoRestoreLine(string label, LoadAutoRestoreEntry e, string countLabel) {
@@ -4226,25 +4227,27 @@ public class TerminalRepl {
             Console.WriteLine("  ingest-npcs [out]                          Pull NPC roster → JSON");
             Console.WriteLine("  ingest-housing [out]                       Pull housing portal roster → JSON");
             Console.WriteLine("  ingest-spawns [out]                        Pull every landblock_instance → JSONL");
+            Console.WriteLine("  ingest-weenie-index [out]                  Pull canonical wcid → identity map → JSONL");
             return;
         }
 
         var sub = tokens[1].ToLowerInvariant();
         switch (sub) {
-            case "connect":          HandleAceDbConnect(tokens); break;
-            case "status":           HandleAceDbStatus(); break;
-            case "query-instances":  HandleAceDbQueryInstances(tokens); break;
-            case "reposition":       HandleAceDbReposition(); break;
-            case "export-sql":       HandleAceDbExportSql(tokens); break;
-            case "stats":            HandleAceDbStats(); break;
-            case "clear-instances":  HandleAceDbClearInstances(); break;
-            case "ingest-creatures": HandleAceDbIngestCreatures(tokens); break;
-            case "ingest-npcs":      HandleAceDbIngestNpcs(tokens); break;
-            case "ingest-housing":   HandleAceDbIngestHousing(tokens); break;
-            case "ingest-spawns":    HandleAceDbIngestSpawns(tokens); break;
+            case "connect":             HandleAceDbConnect(tokens); break;
+            case "status":              HandleAceDbStatus(); break;
+            case "query-instances":     HandleAceDbQueryInstances(tokens); break;
+            case "reposition":          HandleAceDbReposition(); break;
+            case "export-sql":          HandleAceDbExportSql(tokens); break;
+            case "stats":               HandleAceDbStats(); break;
+            case "clear-instances":     HandleAceDbClearInstances(); break;
+            case "ingest-creatures":    HandleAceDbIngestCreatures(tokens); break;
+            case "ingest-npcs":         HandleAceDbIngestNpcs(tokens); break;
+            case "ingest-housing":      HandleAceDbIngestHousing(tokens); break;
+            case "ingest-spawns":       HandleAceDbIngestSpawns(tokens); break;
+            case "ingest-weenie-index": HandleAceDbIngestWeenieIndex(tokens); break;
             default:
                 Console.WriteLine($"Unknown ace-db sub-command: '{sub}'");
-                Console.WriteLine("  Available: connect, status, query-instances, reposition, export-sql, stats, clear-instances, ingest-creatures, ingest-npcs, ingest-housing, ingest-spawns");
+                Console.WriteLine("  Available: connect, status, query-instances, reposition, export-sql, stats, clear-instances, ingest-creatures, ingest-npcs, ingest-housing, ingest-spawns, ingest-weenie-index");
                 break;
         }
     }
@@ -4294,6 +4297,19 @@ public class TerminalRepl {
         var r = _engine.IngestAceSpawnsAsync(outPath).GetAwaiter().GetResult();
         if (r.Success) {
             Console.WriteLine($"  ✓ {r.RecordsWritten} spawns across {r.LandblocksTouched} LBs ({r.SyntheticRecords} synthetic) → {r.OutputPath}");
+        } else {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  ✗ {r.Error}");
+            Console.ResetColor();
+        }
+    }
+
+    private void HandleAceDbIngestWeenieIndex(string[] tokens) {
+        string? outPath = tokens.Length > 2 ? tokens[2] : null;
+        Console.WriteLine("Pulling canonical wcid → identity map from ACE DB...");
+        var r = _engine.IngestWeenieIndexAsync(outPath).GetAwaiter().GetResult();
+        if (r.Success) {
+            Console.WriteLine($"  ✓ {r.TotalEntries:N0} weenies ({r.WithSetupDid:N0} with setup, {r.ServerManaged:N0} server-managed) → {r.OutputPath}");
         } else {
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"  ✗ {r.Error}");

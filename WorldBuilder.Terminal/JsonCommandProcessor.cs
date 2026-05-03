@@ -222,6 +222,7 @@ public class JsonCommandProcessor {
             ["ace-db-ingest-npcs"] = CmdAceDbIngestNpcs,
             ["ace-db-ingest-housing"] = CmdAceDbIngestHousing,
             ["ace-db-ingest-spawns"] = CmdAceDbIngestSpawns,
+            ["ace-db-ingest-weenie-index"] = CmdAceDbIngestWeenieIndex,
             ["compare-creatures-to-retail"] = _ => CmdCompareCreaturesToRetail(),
             ["benchmark"] = _ => CmdBenchmark(),
             ["set-landblock-heightmap"] = CmdSetLandblockHeightmap,
@@ -639,6 +640,7 @@ public class JsonCommandProcessor {
         wcidAcpedia    = ToAutoRestoreView(ar.WcidAcpedia),
         spawnGazetteer = ToAutoRestoreView(ar.SpawnGazetteer),
         regions        = ToAutoRestoreView(ar.Regions),
+        weenieIndex    = ToAutoRestoreView(ar.WeenieIndex),
     };
 
     private static object ToAutoRestoreView(LoadAutoRestoreEntry e) => new {
@@ -1433,6 +1435,7 @@ public class JsonCommandProcessor {
             new { name = "ace-db-ingest-npcs",      args = "out?",                              description = "Pull NPC roster from ACE DB → npc_gazetteer.json" },
             new { name = "ace-db-ingest-housing",   args = "out?",                              description = "Pull housing portal roster from ACE DB → housing_gazetteer.json" },
             new { name = "ace-db-ingest-spawns",    args = "out?",                              description = "Pull every landblock_instance row → ace_spawn_records.jsonl (SpawnRecord shape)" },
+            new { name = "ace-db-ingest-weenie-index", args = "out?",                           description = "Pull canonical wcid → identity (setup, name, type) → weenie_index.jsonl" },
             new { name = "compare-creatures-to-retail", args = "",                              description = "Jaccard similarity of project's spawn gazetteer vs. ACE creature/NPC/housing rosters" },
             new { name = "benchmark",        args = "",                                         description = "Run speed test suite (terrain, objects, validation, bulk)" },
             new { name = "set-landblock-heightmap", args = "lbX, lbY, heights",                  description = "Set all 81 heights in one call" },
@@ -1795,6 +1798,15 @@ public class JsonCommandProcessor {
         return Serialize(new { success = r.Success, command = "ace-db-ingest-spawns",
             landblocksTouched = r.LandblocksTouched, recordsWritten = r.RecordsWritten,
             syntheticRecords = r.SyntheticRecords,
+            outputPath = r.OutputPath, error = r.Error });
+    }
+
+    private string CmdAceDbIngestWeenieIndex(System.Text.Json.Nodes.JsonNode node) {
+        var outPath = node["out"]?.GetValue<string>();
+        var r = _engine.IngestWeenieIndexAsync(outPath).GetAwaiter().GetResult();
+        return Serialize(new { success = r.Success, command = "ace-db-ingest-weenie-index",
+            totalEntries = r.TotalEntries, withSetupDid = r.WithSetupDid,
+            serverManaged = r.ServerManaged,
             outputPath = r.OutputPath, error = r.Error });
     }
 

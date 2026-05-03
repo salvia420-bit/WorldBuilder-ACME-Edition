@@ -73,6 +73,12 @@ public partial class CommandEngine {
     // describer, renderer, and ACE-DB ingest commands all share one schema.
     private Dictionary<ushort, List<SpawnRecord>> _spawnGazetteer = new();
 
+    // Canonical wcid → identity index. Populated from the ACE DB via
+    // `ace-db ingest-weenie-index` and persisted as `weenie_index.jsonl`
+    // in the project directory. Step 1 of the WeenieIndex migration —
+    // additive, no consumers wired yet (see Step 2 for the resolver hookup).
+    private WorldBuilder.Shared.Lib.WeenieIndex _weenieIndex = WorldBuilder.Shared.Lib.WeenieIndex.Empty;
+
     // Region gazetteer (parent zoom above LB). Maps each LB to a named region
     // via nearest-town assignment using anchor points loaded from JSON.
     private record RegionAnchor(int LbX, int LbY, string Region);
@@ -126,9 +132,10 @@ public partial class CommandEngine {
         var wcid     = AutoRestoreWcidAcpedia(p.ProjectDirectory);
         var spawns   = AutoRestoreSpawnGazetteer(p.ProjectDirectory);
         var regions  = AutoRestoreRegions(p.ProjectDirectory);
+        var weenieIx = AutoRestoreWeenieIndex(p.ProjectDirectory);
 
         var report = new LoadAutoRestoreReport(
-            ontology, pairings, towns, pois, wcid, spawns, regions);
+            ontology, pairings, towns, pois, wcid, spawns, regions, weenieIx);
         return new LoadResult(p.Name, p.FilePath, p.ProjectDirectory,
             p.BaseDatDirectory, report);
     }
@@ -254,6 +261,21 @@ public partial class CommandEngine {
             LoadRegionGazetteer(path);
             return new LoadAutoRestoreEntry(path, FilePresent: true, Loaded: true, Count: _regions.Count);
         } catch (Exception ex) {
+            return new LoadAutoRestoreEntry(path, FilePresent: true, Loaded: false, Count: 0, Error: ex.Message);
+        }
+    }
+
+    private LoadAutoRestoreEntry AutoRestoreWeenieIndex(string projectDir) {
+        var path = Path.Combine(projectDir, "weenie_index.jsonl");
+        if (!File.Exists(path)) {
+            _weenieIndex = WorldBuilder.Shared.Lib.WeenieIndex.Empty;
+            return new LoadAutoRestoreEntry(path, FilePresent: false, Loaded: false, Count: 0);
+        }
+        try {
+            _weenieIndex = WorldBuilder.Shared.Lib.WeenieIndex.LoadJsonl(path);
+            return new LoadAutoRestoreEntry(path, FilePresent: true, Loaded: true, Count: _weenieIndex.Count);
+        } catch (Exception ex) {
+            _weenieIndex = WorldBuilder.Shared.Lib.WeenieIndex.Empty;
             return new LoadAutoRestoreEntry(path, FilePresent: true, Loaded: false, Count: 0, Error: ex.Message);
         }
     }
@@ -11121,17 +11143,17 @@ public partial class CommandEngine {
         return _spriteAtlas;
     }
 
-    // wcid → setupId index. Built lazily on first render call from the
-    // ontology's WeenieClassId field; caches across renders for the
-    // current project. Cleared in Project.Clear() side-effects (see
-    // _ontologyService.Clear() callers).
+    // wcid → setupId index. The canonical layer is the per-project
+    // WeenieIndex (sourced from the ACE world DB, see
+    // `ace-db ingest-weenie-index`). The ontology fallback below
+    // remains as a secondary store: it covers the cases where a wcid
+    // appears in DAT data (spell tables, building blueprints) without
+    // having an ACE-DB row, and acts as a safety net for projects that
+    // haven't ingested the WeenieIndex yet.
     //
-    // Why we need it: spawn glyphs come from spawn_gazetteer.json
-    // entries that store a wcid (weenie class id, e.g. 72265 for
-    // "Surface" totem); the sprite atlas is keyed by setupId
-    // (0x01xxxxxx GfxObj or 0x02xxxxxx Setup). The OntologyService
-    // already enriches each entry with its WeenieClassId, so we can
-    // build a reverse index in one pass.
+    // Why we need it: spawn glyphs come from spawn records that store a
+    // wcid (weenie class id, e.g. 72265 for "Surface" totem); the sprite
+    // atlas is keyed by setupId (0x01xxxxxx GfxObj or 0x02xxxxxx Setup).
     private Dictionary<int, uint>? _wcidToSetup;
 
     private Func<int, uint>? GetWcidToSetupResolver() {
@@ -11149,8 +11171,15 @@ public partial class CommandEngine {
             }
             _wcidToSetup = map;
         }
-        var idx = _wcidToSetup;
-        return idx.Count == 0 ? null : (int wcid) => idx.TryGetValue(wcid, out var id) ? id : 0u;
+        var ontIdx = _wcidToSetup;
+        var weenieIdx = _weenieIndex;
+        if (ontIdx.Count == 0 && weenieIdx.Count == 0) return null;
+        return (int wcid) => {
+            // WeenieIndex is canonical (ACE DB), consult first.
+            if (weenieIdx.TryGetSetup(wcid, out var setup)) return setup;
+            // Ontology fallback (DAT-derived, partial coverage).
+            return ontIdx.TryGetValue(wcid, out var id) ? id : 0u;
+        };
     }
 
     // Cached AC terrain texture tile set, loaded once per project from

@@ -151,7 +151,8 @@ public record LoadAutoRestoreReport(
     LoadAutoRestoreEntry PoiGazetteer,
     LoadAutoRestoreEntry WcidAcpedia,
     LoadAutoRestoreEntry SpawnGazetteer,
-    LoadAutoRestoreEntry Regions);
+    LoadAutoRestoreEntry Regions,
+    LoadAutoRestoreEntry WeenieIndex);
 
 public record ExportResult(bool Success, string Directory, int? Iteration);
 
@@ -1381,6 +1382,14 @@ public record IngestAceSpawnsResult(
     int LandblocksTouched,
     int RecordsWritten,
     int SyntheticRecords,
+    string? OutputPath,
+    string? Error = null);
+
+public record IngestWeenieIndexResult(
+    bool Success,
+    int TotalEntries,
+    int WithSetupDid,
+    int ServerManaged,
     string? OutputPath,
     string? Error = null);
 
