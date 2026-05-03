@@ -68,7 +68,11 @@ public static class StaticSiteEmitter {
             EmitPerLbAssets(engine, projectDir, lbFilter, diagnostics);
 
         // 4. Overlays from the project's gazetteer files (if present).
-        var (overlayCount, overlayNames) = EmitOverlays(engine, p.ProjectDirectory, projectDir, diagnostics);
+        // The spawns overlay is filtered to the emitted lbList (millions of
+        // spawn records won't fit in a single overlay file the browser can
+        // parse — without the filter the JSONP grew to 80MB+ and stalled the
+        // boot loader at ~4%).
+        var (overlayCount, overlayNames) = EmitOverlays(engine, p.ProjectDirectory, projectDir, lbList, diagnostics);
 
         // 4b. Spawn-sprite coverage: count how many spawn-gazetteer entries
         //     resolve to a sprite atlas hit vs. fall through to a category
@@ -203,7 +207,8 @@ public static class StaticSiteEmitter {
     // ────────────────────────────────────────────────────────────────────
 
     private static (int count, List<string> names) EmitOverlays(CommandEngine engine,
-            string projectSrcDir, string projectDistDir, List<Diagnostic> diagnostics) {
+            string projectSrcDir, string projectDistDir, IReadOnlyList<string> lbList,
+            List<Diagnostic> diagnostics) {
         var overlaysDir = Path.Combine(projectDistDir, "overlays");
         Directory.CreateDirectory(overlaysDir);
 
@@ -215,7 +220,7 @@ public static class StaticSiteEmitter {
         // empty spawns overlay even with thousands of records loaded.
         var names = new List<string>();
         int count = 0;
-        if (EmitSpawnsOverlay(engine, overlaysDir, diagnostics)) {
+        if (EmitSpawnsOverlay(engine, overlaysDir, lbList, diagnostics)) {
             count++;
             names.Add("spawns");
         }
@@ -273,17 +278,32 @@ public static class StaticSiteEmitter {
 
     /// <summary>
     /// Emit overlays/spawns.js from the engine's in-memory spawn gazetteer
-    /// joined against WeenieIndex. Replaces the prior byte-copy of
-    /// spawn_gazetteer.json so projects sourced from
-    /// ace_spawn_records.jsonl (or any future source) emit the same wire
-    /// shape as projects sourced from the LSD JSON dump. Returns true when
-    /// at least one spawn was emitted.
+    /// joined against WeenieIndex. Filtered to the lbList that the per-LB
+    /// emit actually wrote tiles for — without this filter, a small lbFilter
+    /// emit would still produce a world-scale (80MB+) overlay that the
+    /// frontend can't parse. When lbList is empty (full-world emit), all
+    /// spawns are included.
     /// </summary>
     private static bool EmitSpawnsOverlay(CommandEngine engine, string overlaysDir,
-            List<Diagnostic> diagnostics) {
+            IReadOnlyList<string> lbList, List<Diagnostic> diagnostics) {
         var payload = engine.BuildSpawnsOverlayPayload();
+
+        // Filter to the LBs actually emitted in this run. Frontend overlay
+        // markers reference LBs by hex key; ones outside the project's lbList
+        // would render at correct world coords but be invisible (no tiles
+        // beneath them) and bloat the JSONP. The lbList strings already match
+        // the "0xXXXX" key shape BuildSpawnsOverlayPayload uses.
+        if (lbList.Count > 0) {
+            var keep = new HashSet<string>(lbList, StringComparer.OrdinalIgnoreCase);
+            var filtered = new Dictionary<string, IReadOnlyList<object>>(keep.Count);
+            foreach (var (lbHex, recs) in payload) {
+                if (keep.Contains(lbHex)) filtered[lbHex] = recs;
+            }
+            payload = filtered;
+        }
+
         int totalSpawns = 0;
-        foreach (var lbList in payload.Values) totalSpawns += lbList.Count;
+        foreach (var recs in payload.Values) totalSpawns += recs.Count;
 
         if (totalSpawns == 0) {
             // Match the missing-source stub shape so the frontend's loader
