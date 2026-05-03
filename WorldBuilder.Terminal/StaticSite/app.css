@@ -31,6 +31,25 @@ main { flex: 1 1 auto; display: flex; min-height: 0; }
   padding: 0.8rem 1rem;
   overflow-y: auto;
   font-size: 0.85rem; line-height: 1.5;
+  position: relative;
+  transition: flex-basis 120ms ease, padding 120ms ease;
+}
+#describe-panel.collapsed {
+  flex: 0 0 26px; width: 26px; padding: 0.4rem 0.2rem;
+  overflow: hidden;
+}
+#describe-panel.collapsed > *:not(#panel-toggle) { display: none; }
+#panel-toggle {
+  position: absolute; top: 6px; right: 6px;
+  width: 22px; height: 22px; line-height: 18px; text-align: center;
+  background: #2a323d; color: #d8dde6;
+  border: 1px solid #3a4550; border-radius: 4px;
+  cursor: pointer; font-size: 14px; font-family: monospace;
+  user-select: none; z-index: 5;
+}
+#panel-toggle:hover { background: #3a4550; }
+#describe-panel.collapsed #panel-toggle {
+  position: static; margin: 0 auto; display: block;
 }
 .panel-empty { color: #6a7282; font-style: italic; }
 .panel-section { margin-bottom: 1rem; }

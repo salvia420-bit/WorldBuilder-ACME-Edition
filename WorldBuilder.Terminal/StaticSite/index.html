@@ -26,6 +26,8 @@
   <main>
     <div id="map"></div>
     <aside id="describe-panel">
+      <button id="panel-toggle" type="button" title="Hide / show panel"
+              onclick="var p=document.getElementById('describe-panel');p.classList.toggle('collapsed');this.textContent=p.classList.contains('collapsed')?'‹':'›';">›</button>
       <div class="panel-empty">Hover over a landblock to see its description.</div>
     </aside>
   </main>
