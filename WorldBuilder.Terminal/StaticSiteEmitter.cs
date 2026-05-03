@@ -68,7 +68,7 @@ public static class StaticSiteEmitter {
             EmitPerLbAssets(engine, projectDir, lbFilter, diagnostics);
 
         // 4. Overlays from the project's gazetteer files (if present).
-        var (overlayCount, overlayNames) = EmitOverlays(p.ProjectDirectory, projectDir, diagnostics);
+        var (overlayCount, overlayNames) = EmitOverlays(engine, p.ProjectDirectory, projectDir, diagnostics);
 
         // 4b. Spawn-sprite coverage: count how many spawn-gazetteer entries
         //     resolve to a sprite atlas hit vs. fall through to a category
@@ -202,12 +202,25 @@ public static class StaticSiteEmitter {
     //  Overlays
     // ────────────────────────────────────────────────────────────────────
 
-    private static (int count, List<string> names) EmitOverlays(string projectSrcDir,
-            string projectDistDir, List<Diagnostic> diagnostics) {
+    private static (int count, List<string> names) EmitOverlays(CommandEngine engine,
+            string projectSrcDir, string projectDistDir, List<Diagnostic> diagnostics) {
         var overlaysDir = Path.Combine(projectDistDir, "overlays");
         Directory.CreateDirectory(overlaysDir);
 
-        // OverlaySources:
+        // Spawns overlay is always emitted from the in-memory gazetteer (joined
+        // with WeenieIndex for canonical title / icon DID). This unifies the
+        // wire shape across LSD, ACE-DB, and synthetic sources — previously
+        // CopyGazetteerAsOverlay only worked when spawn_gazetteer.json (LSD
+        // shape) was present, so projects using ace_spawn_records.jsonl had an
+        // empty spawns overlay even with thousands of records loaded.
+        var names = new List<string>();
+        int count = 0;
+        if (EmitSpawnsOverlay(engine, overlaysDir, diagnostics)) {
+            count++;
+            names.Add("spawns");
+        }
+
+        // OverlaySources (everything except spawns):
         //   srcName     — gazetteer JSON in the project directory.
         //   overlayName — final overlays/<overlayName>.js name.
         //   missingNote — stub message for the diagnostics overlay when
@@ -217,13 +230,10 @@ public static class StaticSiteEmitter {
         var overlaySources = new (string srcName, string overlayName, string missingNote)[] {
             ("town_gazetteer.json",     "towns",     "no town_gazetteer.json in project"),
             ("poi_gazetteer.json",      "pois",      "no poi_gazetteer.json in project"),
-            ("spawn_gazetteer.json",    "spawns",    "no spawn_gazetteer.json in project"),
             ("creature_gazetteer.json", "creatures", "no creature_gazetteer.json (run ace-db ingest-creatures)"),
             ("npc_gazetteer.json",      "npcs",      "no npc_gazetteer.json (run ace-db ingest-npcs)"),
             ("housing_gazetteer.json",  "housing",   "no housing_gazetteer.json (run ace-db ingest-housing)"),
         };
-        var names = new List<string>();
-        int count = 0;
         foreach (var (src, overlay, note) in overlaySources) {
             if (CopyGazetteerAsOverlay(projectSrcDir, overlaysDir, src, overlay, diagnostics)) {
                 count++;
@@ -259,6 +269,38 @@ public static class StaticSiteEmitter {
         names.Add("diagnostics");
         count++;
         return (count, names);
+    }
+
+    /// <summary>
+    /// Emit overlays/spawns.js from the engine's in-memory spawn gazetteer
+    /// joined against WeenieIndex. Replaces the prior byte-copy of
+    /// spawn_gazetteer.json so projects sourced from
+    /// ace_spawn_records.jsonl (or any future source) emit the same wire
+    /// shape as projects sourced from the LSD JSON dump. Returns true when
+    /// at least one spawn was emitted.
+    /// </summary>
+    private static bool EmitSpawnsOverlay(CommandEngine engine, string overlaysDir,
+            List<Diagnostic> diagnostics) {
+        var payload = engine.BuildSpawnsOverlayPayload();
+        int totalSpawns = 0;
+        foreach (var lbList in payload.Values) totalSpawns += lbList.Count;
+
+        if (totalSpawns == 0) {
+            // Match the missing-source stub shape so the frontend's loader
+            // doesn't see a JSONP 404 — same defensive emit as the legacy
+            // CopyGazetteerAsOverlay fallback.
+            File.WriteAllText(Path.Combine(overlaysDir, "spawns.js"),
+                BuildLoadOverlay("spawns", "{}"));
+            diagnostics.Add(new Diagnostic("info", "overlay:spawns",
+                "no spawns loaded — run ace-db ingest-spawns or ingest-spawn-maps"));
+            return false;
+        }
+
+        File.WriteAllText(Path.Combine(overlaysDir, "spawns.js"),
+            BuildLoadOverlay("spawns", JsonSerializer.Serialize(payload, JsonOpts)));
+        diagnostics.Add(new Diagnostic("info", "overlay:spawns",
+            $"emitted {totalSpawns:N0} spawns across {payload.Count:N0} landblocks"));
+        return true;
     }
 
     private static void ReportSpawnSpriteCoverage(CommandEngine engine,
