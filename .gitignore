@@ -621,7 +621,12 @@ difficulty_gradient.png
 .diskcheck
 *.sql.zip
 ace_world_release/
-external/
+external/*
+# emit-dynamic-site (see docs/emit-dynamic-site.md): holtburger is hard-forked
+# into the tree as owned source — patches will live here, so it must be tracked.
+!external/holtburger/
+external/holtburger/target/
+external/holtburger/dats/*.hba
 overnight_*/
 pipeline_data/models/*.safetensors
 pipeline_data/models/*.pt

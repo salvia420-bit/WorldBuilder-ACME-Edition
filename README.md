@@ -351,6 +351,28 @@ Both **Python** (75+ tests) and **PowerShell** (25 checks) test harnesses valida
 
 ---
 
+## emit-dynamic-site *(in design — preliminary groundwork only)*
+
+`emit-static-site` produces a *snapshot* of a world. **`emit-dynamic-site`** is the planned follow-on: the same Google-Maps-style frontend, but *playable* — the browser becomes a real Asheron's Call client connected to a live ACE world server, with player movement, chat, combat, and creature/NPC behavior visible in real time as a top-down view.
+
+This section is a forward-look. The full architectural design lives in **[`docs/emit-dynamic-site.md`](docs/emit-dynamic-site.md)**; below is a summary of the load-bearing constraints identified during groundwork.
+
+**Stack.** The dynamic site assembles three vendored stacks already in this tree:
+
+- **[`external/holtburger`](external/holtburger/)** — a modern Rust AC client (login, character flow, world-state authority, inventory, vendors, crafting, magic, melee, scripting). Hard-forked from [merklejerk/holtburger](https://github.com/merklejerk/holtburger) (commit `629695a2`, see [`external/holtburger/VENDORED.md`](external/holtburger/VENDORED.md)). Holtburger's own README states *"the network/session stack is modular so it technically can be swapped out for a WS layer if needed"* — this is the seam emit-dynamic-site exploits.
+- **[`external/ACE`](external/ACE/)** — the AGPLv3 Asheron's Call Emulator that the holtburger client connects to. Its game logic talks to a `Session.Network` abstraction, not raw UDP; a UDP↔WS bridge can sit transparently in front without modifying ACE.
+- **`emit-static-site`** — the existing Leaflet frontend, retained for the terrain/glyph tile pyramid. Its forward-compatibility hook (`overlays/dynamic_players.js`, silent-no-op when absent) is the documented seam for live overlays.
+
+**Three constraints we already know we have to solve:**
+
+1. **Asheron's Call clients require a UDP↔WebSocket bridge.** Browsers cannot speak raw UDP. Holtburger's network/session stack is modular and can in principle be swapped for a WS layer; alternately, an external proxy can translate transparently in front of ACE. Both are tractable; the choice is documented in the design doc.
+2. **DAT files must "stream" over HTTP.** Retail AC ships ~2 GB of DATs; the browser cannot pre-download them. Holtburger's `ContentRepository::from_mounts(Vec<Arc<dyn ResourceSource>>)` accepts a trait — an HTTP-range-request `ResourceSource` impl is the path. We need to settle whether to serve raw DATs, pre-bundled HBA shards, or a content-addressed CDN layout.
+3. **Renderer scale.** Leaflet excels at the static site (tile pyramid, pan/zoom, basemap). It is *not* suitable for thousands of moving entities — at z=11–12 the static site bakes objects into tiles; there is no marker layer. The dynamic site swaps to a WebGL renderer (PixiJS or equivalent) for the live entity layer; terrain tiles remain Leaflet's job.
+
+**What this groundwork pass landed:** the AGPLv3 license, the in-tree hard-fork of holtburger, this section, and the design doc. **No application code yet** — the next pass will spike one of the high-risk surfaces (likely the WS↔UDP bridge against ACE).
+
+---
+
 ## ML Models
 
 Pre-trained terrain weights ship in the repo via **Git LFS**. Clone and `git lfs pull` to materialize.
@@ -682,7 +704,14 @@ WorldBuilder-ACME-Edition/
 │   └── train_terrain_unet.py      #   Train V1 U-Net model
 ├── tools/                         # Browser-based utilities (zero-dependency)
 ├── town_kits/                     # Per-town placement kits driving the population pipeline
-├── external/                      # Vendored third-party data (e.g. LSD-Partial)
+├── external/                      # Vendored third-party source and data
+│   ├── ACE/                       #   Asheron's Call Emulator (AGPLv3) — server target
+│   ├── holtburger/                #   Modern Rust AC client (AGPLv3) — emit-dynamic-site stack
+│   ├── DatReaderWriter/           #   DAT format library
+│   ├── DerethMaps/                #   Map reference data
+│   ├── acpedia/                   #   Community wiki XML dump (53k pages)
+│   └── LSD-Partial-2025-02-23.../ #   Spawn map dataset
+├── LICENSE.md                     # AGPL v3 (see "License" below)
 ├── docs/                          # Documentation
 │   ├── HowToMakeNewWorlds.md      #   World generation pipeline guide
 │   ├── agent_api_reference.md     #   Full command reference (1,400+ lines)
@@ -696,6 +725,24 @@ WorldBuilder-ACME-Edition/
 
 ---
 
+## License
+
+WorldBuilder-ACME-Edition is licensed under the **GNU Affero General Public License v3.0**. See [`LICENSE.md`](LICENSE.md) for the full text.
+
+This license is not a fresh choice — it is a structural consequence of the projects this work builds on:
+
+| Component | License | Notes |
+|---|---|---|
+| [`external/ACE`](external/ACE/) | AGPL v3 | Game server we target. |
+| [`external/holtburger`](external/holtburger/) | AGPL v3 | AC client we vendor for `emit-dynamic-site`. |
+| WorldBuilder (this project) | AGPL v3 | Inherited from the above. |
+
+**Practical implication for `emit-dynamic-site`.** AGPL v3 §13 ("Remote Network Interaction") means that when a hosted instance of the browser-playable client lets remote users interact with our modified version, those users must be offered the corresponding source. Operators of an `emit-dynamic-site` deployment will need to publish their source — including any patches to holtburger, the WS bridge, and the frontend — at a URL the running service points to. Plan deployments accordingly.
+
+**Patch boundary.** Anything we add under [`external/holtburger`](external/holtburger/) is a derivative work of holtburger and stays AGPL v3. The same holds for [`external/ACE`](external/ACE/). New top-level WorldBuilder code that *uses* these stacks via process boundaries (e.g., a separate UDP↔WS proxy that does not link AGPL code) has more flexibility, but should still default to AGPL v3 unless we have a specific reason otherwise.
+
+---
+
 ## Thanks
 
 - **Vanquish-6** — this project is forked from [Vanquish-6/WorldBuilder-ACME-Edition](https://github.com/Vanquish-6/WorldBuilder-ACME-Edition)
@@ -704,3 +751,5 @@ WorldBuilder-ACME-Edition/
 - **Advan** — testing and bug reports
 - **Vermino** — PRs and code contributions
 - **The AC community** — everyone who has contributed, tested, reported bugs, or just kept Dereth going. If you helped and aren't listed, you know who you are.
+- **[merklejerk](https://github.com/merklejerk)** and the **holtburger** contributors — for the AGPLv3 Rust AC client stack vendored at [`external/holtburger`](external/holtburger/), without which `emit-dynamic-site` would not be on the table.
+- **[ACEmulator](https://github.com/ACEmulator/ACE)** maintainers — for the AGPLv3 server vendored at [`external/ACE`](external/ACE/).

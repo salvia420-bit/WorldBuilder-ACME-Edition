@@ -1,0 +1,4 @@
+ts/
+.config/
+!README.md
+spells.json

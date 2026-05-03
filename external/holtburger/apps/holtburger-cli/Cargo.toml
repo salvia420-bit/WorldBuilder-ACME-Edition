@@ -1,0 +1,33 @@
+[package]
+name = "holtburger-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+default-run = "tui"
+build = "build.rs"
+
+[dependencies]
+holtburger-content = { workspace = true }
+holtburger-core = { workspace = true }
+holtburger-common = { workspace = true }
+holtburger-dat = { workspace = true }
+holtburger-protocol = { workspace = true }
+holtburger-scripting = { workspace = true }
+tokio.workspace = true
+anyhow.workspace = true
+log.workspace = true
+env_logger.workspace = true
+clap.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+futures.workspace = true
+directories.workspace = true
+unicode-width.workspace = true
+ratatui-textarea.workspace = true
+holtburger-world.workspace = true
+holtburger-session.workspace = true
+bitflags.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true

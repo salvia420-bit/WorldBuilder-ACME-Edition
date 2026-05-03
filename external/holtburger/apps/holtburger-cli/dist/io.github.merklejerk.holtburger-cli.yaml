@@ -1,0 +1,36 @@
+id: io.github.merklejerk.holtburger-cli
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: holtburger-cli
+modules:
+  - name: holtburger-cli
+    buildsystem: simple
+    build-commands:
+      # We build the binary outside the sandbox to avoid internet issues
+      - install -D holtburger-cli /app/bin/holtburger-cli
+      - install -D assets.hba /app/share/holtburger/dats/assets.hba
+      - install -d /app/share/holtburger/scripts
+      - cp scripts/*.js scripts/*.data.json scripts/*.data.bin /app/share/holtburger/scripts/
+      - install -D io.github.merklejerk.holtburger-cli.desktop /app/share/applications/io.github.merklejerk.holtburger-cli.desktop
+      - install -D io.github.merklejerk.holtburger-cli.metainfo.xml /app/share/metainfo/io.github.merklejerk.holtburger-cli.metainfo.xml
+      - install -D io.github.merklejerk.holtburger-cli.svg /app/share/icons/hicolor/scalable/apps/io.github.merklejerk.holtburger-cli.svg
+    sources:
+      - type: file
+        path: ../../../target/release/holtburger-cli
+      - type: file
+        path: ../../../dats/assets.hba
+      - type: dir
+        path: ../../../scripts
+        dest: scripts
+      - type: file
+        path: io.github.merklejerk.holtburger-cli.desktop
+      - type: file
+        path: io.github.merklejerk.holtburger-cli.metainfo.xml
+      - type: file
+        path: io.github.merklejerk.holtburger-cli.svg
+finish-args:
+  - --share=network
+  - --env=HOLTBURGER_DATS=/app/share/holtburger/dats
+  - --env=SCRIPT_DIR=/var/data/holtburger/scripts
+  - --env=SCRIPT_BUNDLE_DIR=/app/share/holtburger/scripts

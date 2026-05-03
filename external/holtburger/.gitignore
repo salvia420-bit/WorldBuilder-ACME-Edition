@@ -1,0 +1,32 @@
+# Rust
+target/
+
+# Dats
+dats/*
+!dats/README.md
+
+# Logs
+logs/
+*.log
+
+# Captures
+caps/
+
+# Docker
+*.env
+!*.example.env
+release-test/data/
+
+# OS
+.DS_Store
+
+# Agent instructions
+.github/*.md
+# Agent skills
+.github/skills
+
+!README.md
+
+dist-manifest.json
+
+.vscode/
