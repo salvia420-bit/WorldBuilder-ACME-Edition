@@ -62,7 +62,15 @@ public sealed record WeenieIndexEntry(
     // Old JSONLs without these fields deserialize as null and
     // fall back to bare-setup rendering.
     uint?   ClothingBaseDid = null,
-    int?    PaletteTemplate = null
+    int?    PaletteTemplate = null,
+
+    // ── In-world text (canonical, from PropertyString) ─
+    // Sourced from PropertyString.Inscription (id 16). Carries
+    // the text painted on signs, plaques, and similar Hook /
+    // Sign weenies (WeenieType 27). Drives the static-site
+    // tooltip + the on-tile sign label at z>=11. Null for any
+    // weenie with no inscription string in the ACE DB.
+    string? Inscription = null
 );
 
 /// <summary>

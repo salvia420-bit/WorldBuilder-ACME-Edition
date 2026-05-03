@@ -109,3 +109,119 @@ main { flex: 1 1 auto; display: flex; min-height: 0; }
   background: #4a90c8; color: #fff; border-color: #4a90c8;
 }
 #floor-selector .floor-btn:hover { background: #3a4550; }
+
+/* Zones overlay (Voronoi region labels). The DivIcon wraps a span so
+   the label can carry a halo + text-shadow to read against either the
+   bright terrain raster or the darker tile background. pointer-events
+   off so the label never steals clicks from the tiles beneath. */
+.zone-label {
+  pointer-events: none;
+  text-align: center;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.zone-label span {
+  color: #f0e8d8;
+  text-shadow:
+    -1px -1px 0 rgba(0,0,0,0.85),
+     1px -1px 0 rgba(0,0,0,0.85),
+    -1px  1px 0 rgba(0,0,0,0.85),
+     1px  1px 0 rgba(0,0,0,0.85),
+     0    0   6px rgba(0,0,0,0.65);
+}
+
+/* Day/night toggle. The button itself sits in the header. CSS filter on
+   the map root applies a dim + cool-blue tint to every tile layer so a
+   user toggling night gets an immediate visual change without waiting
+   for a parallel night-mode tile pyramid emit. When the night sprite
+   atlas is rendered with nightMode=true (lit windows + glow discs),
+   regenerated tiles supersede the CSS approximation in-place. */
+#night-toggle {
+  background: #2a323d; color: #f0d878;
+  border: 1px solid #3a4550; border-radius: 4px;
+  padding: 0.25rem 0.6rem; font-size: 1rem;
+  cursor: pointer;
+}
+#night-toggle:hover { background: #3a4550; }
+body.night-mode #map {
+  filter: brightness(0.55) saturate(0.7) hue-rotate(-25deg);
+}
+body.night-mode #night-toggle {
+  color: #c8d8f0;
+}
+
+/* View tabs (Map / NPCs / Towns / Dungeons). Sit in the header next to the
+   project picker. Active tab is bolder + underlined. */
+#view-tabs { display: flex; gap: 0.4rem; }
+#view-tabs .view-tab {
+  color: #aab2c0; text-decoration: none;
+  padding: 0.25rem 0.7rem; border-radius: 4px;
+  font-size: 0.9rem;
+}
+#view-tabs .view-tab:hover { background: #2a323d; color: #d8dde6; }
+#view-tabs .view-tab.active {
+  color: #f0e8d8; background: #3a4550; font-weight: 600;
+}
+
+#search-bar {
+  background: #2a323d; color: #d8dde6;
+  border: 1px solid #3a4550; border-radius: 4px;
+  padding: 0.3rem 0.6rem;
+  font-family: inherit; font-size: 0.85rem;
+  width: 220px;
+}
+#search-bar:focus {
+  outline: none; border-color: #4a90c8;
+}
+
+/* List view (NPCs / Towns / Dungeons table mode). Full-width table inside
+   the main area, replacing the map when active. */
+#list-view {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 1rem 1.5rem;
+  background: #1a1f26;
+}
+.list-table {
+  width: 100%; border-collapse: collapse;
+  font-size: 0.88rem;
+}
+.list-table thead th {
+  text-align: left; padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid #3a4550;
+  color: #aab2c0; font-weight: 600;
+  position: sticky; top: 0; background: #1a1f26;
+}
+.list-table tbody td {
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid #232a32;
+  color: #d8dde6;
+}
+.list-table tbody tr:hover td { background: #232a32; cursor: pointer; }
+.list-table tbody tr:hover td:first-child { color: #4a90c8; }
+.list-empty {
+  padding: 1rem; color: #aab2c0; font-style: italic;
+}
+
+/* Sign-tooltip wrapping. Leaflet's default tooltip is single-line; signs
+   carry full inscription text that needs to wrap to a comfortable width. */
+.leaflet-tooltip.wb-tooltip-multiline {
+  max-width: 240px;
+  white-space: normal;
+  line-height: 1.35;
+}
+
+/* Placement-panel inscription block. Indented italic, dim italic colour to
+   visually mark the painted-in-world text against the structured fields. */
+blockquote.inscription {
+  margin: 0.5rem 0;
+  padding: 0.4rem 0.75rem;
+  border-left: 3px solid #d8b66a;
+  background: rgba(216, 182, 106, 0.08);
+  font-style: italic;
+  color: #e0d4b0;
+  white-space: pre-wrap;
+}

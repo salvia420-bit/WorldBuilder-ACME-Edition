@@ -75,11 +75,119 @@ public partial class CommandEngine {
                     isSynthetic   = sp.IsSynthetic,
                     acpediaTitle  = sp.AcpediaTitle,
                     acpediaTier   = sp.AcpediaTier,
+                    // PropertyString.Inscription, painted onto signs and
+                    // plaques. Drives the frontend tooltip for sign-bearing
+                    // spawns + the on-tile label in RenderPreviewRenderer.
+                    inscription   = weenie?.Inscription,
                 });
             }
             result[hex] = wire;
         }
         return result;
+    }
+
+    /// <summary>
+    /// Build the static-site search index — a single flat array of
+    /// {kind, name, lbHex, ...} items spanning NPCs (from the spawn
+    /// gazetteer joined to WeenieIndex), towns (from the town gazetteer),
+    /// and dungeons (from the supplied dungeonLbs list with floor counts).
+    /// Filtered to <paramref name="lbList"/>; an empty filter returns
+    /// every entry. Caller writes the result as JSONP.
+    /// </summary>
+    public IReadOnlyList<object> BuildSearchIndex(IReadOnlyList<string> lbList,
+            IReadOnlyList<string> dungeonLbs) {
+        var lbSet = new HashSet<string>(lbList, StringComparer.OrdinalIgnoreCase);
+        bool filterByLb = lbSet.Count > 0;
+        var results = new List<object>();
+
+        // NPCs — spawn records whose wcid resolves to an IsNpc weenie.
+        // Bound to 5000 entries to stay under the plan's 5MB-after-gzip
+        // search-index target on dense-world projects; we sort by name
+        // first so the cap removes the long tail of duplicate templates
+        // rather than the unique top-of-list entries.
+        const int npcCap = 5000;
+        var npcCandidates = new List<(string name, int wcid, string hex, int? level, float x, float y)>();
+        foreach (var (lbKey, records) in _spawnGazetteer) {
+            string hex = $"0x{lbKey:X4}";
+            if (filterByLb && !lbSet.Contains(hex)) continue;
+            foreach (var sp in records) {
+                var weenie = _weenieIndex.Get(sp.Wcid);
+                if (weenie == null || !weenie.IsNpc) continue;
+                npcCandidates.Add((sp.Name, sp.Wcid, hex, weenie.Level, sp.WorldX, sp.WorldY));
+            }
+        }
+        npcCandidates.Sort((a, b) => string.Compare(a.name, b.name, StringComparison.Ordinal));
+        if (npcCandidates.Count > npcCap) npcCandidates.RemoveRange(npcCap,
+            npcCandidates.Count - npcCap);
+        foreach (var n in npcCandidates) {
+            // Region resolved at item-build time so the search row carries
+            // the named-zone label (Direlands, Aerlinthe, etc.) without a
+            // second lookup at click time.
+            ushort lbKeyU = ushort.Parse(n.hex.AsSpan(2),
+                System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture);
+            uint lx = (uint)((lbKeyU >> 8) & 0xFF), ly = (uint)(lbKeyU & 0xFF);
+            var region = ResolveRegionForLb(lbKeyU, lx, ly);
+            results.Add(new {
+                kind = "npc",
+                name = n.name,
+                lbHex = n.hex,
+                wcid = n.wcid,
+                level = n.level,
+                region = region?.Name,
+                x = n.x,
+                y = n.y,
+            });
+        }
+
+        // Towns — TownContext from town_gazetteer.json. Coordinates are
+        // synthesized from the LB centre because TownContext doesn't
+        // carry x/y; the deep-link still drops the user on the correct
+        // landblock.
+        foreach (var (lbKey, town) in _townGazetteer) {
+            string hex = $"0x{lbKey:X4}";
+            if (filterByLb && !lbSet.Contains(hex)) continue;
+            uint lx = (uint)((lbKey >> 8) & 0xFF), ly = (uint)(lbKey & 0xFF);
+            var region = ResolveRegionForLb(lbKey, lx, ly);
+            results.Add(new {
+                kind = "town",
+                name = town.Name,
+                lbHex = hex,
+                culture = town.Culture,
+                region = region?.Name,
+                x = lx * 192f + 96f,
+                y = ly * 192f + 96f,
+            });
+        }
+
+        // Dungeons — caller-supplied dungeonLbs (already in the emit
+        // scope). Floor count enriches the row label without a second
+        // lookup pass.
+        foreach (var hex in dungeonLbs) {
+            if (filterByLb && !lbSet.Contains(hex)) continue;
+            if (!ushort.TryParse(hex.AsSpan(2),
+                    System.Globalization.NumberStyles.HexNumber,
+                    System.Globalization.CultureInfo.InvariantCulture, out var lbKey)) continue;
+            int floorCount;
+            try { floorCount = GetDungeonFloorCount(lbKey); }
+            catch { continue; }
+            uint lx = (uint)((lbKey >> 8) & 0xFF), ly = (uint)(lbKey & 0xFF);
+            var region = ResolveRegionForLb(lbKey, lx, ly);
+            // Best-effort name — TownContext often doubles as the dungeon
+            // entrance label (when the gazetteer has it). Otherwise the
+            // hex stands in.
+            string name = _townGazetteer.TryGetValue(lbKey, out var t) ? t.Name : hex;
+            results.Add(new {
+                kind = "dungeon",
+                name,
+                lbHex = hex,
+                floorCount,
+                region = region?.Name,
+                x = lx * 192f + 96f,
+                y = ly * 192f + 96f,
+            });
+        }
+        return results;
     }
 
     public async Task<IngestWeenieIndexResult> IngestWeenieIndexAsync(string? outPath = null) {

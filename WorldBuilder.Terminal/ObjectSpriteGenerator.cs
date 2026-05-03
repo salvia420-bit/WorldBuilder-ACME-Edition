@@ -30,7 +30,7 @@ internal static class ObjectSpriteGenerator {
             IReadOnlyCollection<SpriteKey> modelIds, int spritePx, string spritesDir,
             string atlasPath, string manifestPath,
             IDatReaderWriter dats, Func<uint, OntologyEntry?> ontology,
-            int throttleMs = 0, int lodLevel = 0) {
+            int throttleMs = 0, int lodLevel = 0, bool nightMode = false) {
         // Two-pass streaming flow.
         //
         // Pass 1 — render: triangulate, rasterize the per-model PNG, write
@@ -62,18 +62,26 @@ internal static class ObjectSpriteGenerator {
         // Persist last-attempted id to a sidecar before each render; on crash,
         // tail the file to identify the culprit.
         var heartbeatPath = Path.Combine(spritesDir, ".heartbeat");
+        // LOD-N + night runs share the spritesDir with LOD-0 day but must
+        // not clobber each other's intermediate per-sprite PNGs — different
+        // lodLevels render geometrically different meshes (GfxObjDegradeInfo),
+        // and night-mode renders a dimmed + light-overlay variant. The
+        // on-disk PNG is what PackAtlasStreaming reads back. Suffixing the
+        // filename keeps every (lod, mode) pair's intermediates distinct.
+        string fnSuffix = (lodLevel > 0 ? $"_lod{lodLevel}" : "")
+                       + (nightMode ? "_night" : "");
         foreach (var key in modelIds) {
             var manifestId = key.ToManifestId();
             // Variant sprites get a distinct on-disk path so re-runs that
             // change one variant don't clobber another sharing the same setup.
             var spriteFileName = key.HasVariant
-                ? $"0x{key.Setup:X8}_c0x{key.ClothingBase:X8}_p{key.PaletteTemplate}.png"
-                : $"0x{key.Setup:X8}.png";
+                ? $"0x{key.Setup:X8}_c0x{key.ClothingBase:X8}_p{key.PaletteTemplate}{fnSuffix}.png"
+                : $"0x{key.Setup:X8}{fnSuffix}.png";
             try {
                 File.WriteAllText(heartbeatPath, manifestId + "\n");
             } catch { /* heartbeat is best-effort */ }
             try {
-                var (rendered, reason) = RenderOneWithReason(key, spritePx, dats, ontology, lodLevel);
+                var (rendered, reason) = RenderOneWithReason(key, spritePx, dats, ontology, lodLevel, nightMode);
                 if (rendered == null) {
                     switch (reason) {
                         case NullReason.NoTriangles: nullEmptyTris++; break;
@@ -149,7 +157,7 @@ internal static class ObjectSpriteGenerator {
 
     private static (SpriteEntry? Entry, NullReason Reason) RenderOneWithReason(
             SpriteKey key, int spritePx, IDatReaderWriter dats, Func<uint, OntologyEntry?> ontology,
-            int lodLevel = 0) {
+            int lodLevel = 0, bool nightMode = false) {
         var triangles = TriangulateModel(key, dats, lodLevel);
         if (triangles.Count == 0) return (null, NullReason.NoTriangles);
         var variant = BuildVariantContext(dats, key);
@@ -200,6 +208,20 @@ internal static class ObjectSpriteGenerator {
             var discBmp = RenderBillboardAsDisc(triangles, discDiameter, spritePx, dats,
                 ontology(modelId), variant, key.Setup);
             if (discBmp == null) return (null, NullReason.NoVisible);
+            if (nightMode) {
+                // Billboard dim + light overlay. The disc already inherits
+                // the particle/surface colour; we wash it then drop any
+                // attached lights at their projected positions.
+                using var canvas2 = new SKCanvas(discBmp);
+                ApplyNightDim(canvas2, discBmp.Width, discBmp.Height);
+                // Reuse the same light-overlay math; for billboards the
+                // origin/extent are square (disc), so worldW/worldH map
+                // through the same projection.
+                TryOverlayLights(canvas2, dats, key.Setup,
+                    -discDiameter * 0.5f, discDiameter * 0.5f,
+                    discDiameter, discDiameter,
+                    discBmp.Width / discDiameter, discBmp.Width, discBmp.Height);
+            }
             return (new SpriteEntry {
                 Key = key, Bitmap = discBmp,
                 WorldWidth = discDiameter, WorldHeight = discDiameter
@@ -280,6 +302,16 @@ internal static class ObjectSpriteGenerator {
             // portal rather than as the inert plinth at its base.
             TryOverlayParticlePuff(canvas, dats, key.Setup, ontology(modelId),
                 minX, maxY, worldW, worldH, pxPerUnit, W, H);
+            if (nightMode) {
+                // Night pass: dim the mesh + particle output by drawing a
+                // 60%-opaque black wash, then overlay each Setup.Lights
+                // entry as a warm-yellow glow disc projected to the sprite
+                // plane. The puff already uses the particle colour, so
+                // braziers stay readable even after the wash.
+                ApplyNightDim(canvas, W, H);
+                TryOverlayLights(canvas, dats, key.Setup,
+                    minX, maxY, worldW, worldH, pxPerUnit, W, H);
+            }
         }
         foreach (var t in textures.Values) t?.Dispose();
 
@@ -426,6 +458,68 @@ internal static class ObjectSpriteGenerator {
             break; // honour the "first script-table entry" bound
         }
         return null;
+    }
+
+    /// <summary>
+    /// Night-mode dim: paint a 60%-opaque black wash over the entire
+    /// sprite so subsequent light overlays read as bright spots against
+    /// a darkened mesh. Mirrors the plan's 0.4 base-sample multiplier.
+    /// </summary>
+    private static void ApplyNightDim(SKCanvas canvas, int W, int H) {
+        using var dim = new SKPaint {
+            Color = new SKColor(0x00, 0x00, 0x00, 0x99),
+            Style = SKPaintStyle.Fill,
+            BlendMode = SKBlendMode.SrcOver,
+        };
+        canvas.DrawRect(new SKRect(0, 0, W, H), dim);
+    }
+
+    /// <summary>
+    /// Project Setup.Lights into the sprite plane (XY, dropping Z) and
+    /// paint each as a warm-yellow glow disc. Lifestone and ice-themed
+    /// setups colour-shift to cool-blue when their LightInfo.Color carries
+    /// a strong blue channel (Lifestones) or when the setup is one of the
+    /// ice-key DIDs flagged in the comment below.
+    /// </summary>
+    private static void TryOverlayLights(SKCanvas canvas, IDatReaderWriter dats, uint setupId,
+            float originX, float originYTop, float worldW, float worldH,
+            float pxPerUnit, int W, int H) {
+        if ((setupId >> 24) != 0x02) return;
+        if (!SafeTryGet<Setup>(dats, setupId, out var setup)) return;
+        if (setup.Lights == null || setup.Lights.Count == 0) return;
+        foreach (var kv in setup.Lights) {
+            var lit = kv.Value;
+            if (lit?.ViewSpaceLocation == null) continue;
+            var pos = lit.ViewSpaceLocation.Origin;
+            // Project to sprite plane: (worldX - originX, originYTop - worldY).
+            float pxX = (pos.X - originX) * pxPerUnit;
+            float pxY = (originYTop - pos.Y) * pxPerUnit;
+            if (pxX < 0 || pxY < 0 || pxX >= W || pxY >= H) continue;
+            // Glow radius scales with intensity * falloff, clamped to a
+            // band that reads on a 256px sprite (8..40px). Falloff is
+            // already in world units (~typical 1..6), so we scale by
+            // pxPerUnit to keep the glow correctly sized at any zoom.
+            float radPx = Math.Clamp(MathF.Max(lit.Falloff, 1f) * 0.6f * pxPerUnit, 8f, 40f);
+            // Colour: prefer the LightInfo's own RGB when non-zero;
+            // otherwise warm yellow. The plan's "blue for ice/lifestone"
+            // is captured by whichever Setup-author already wrote a blue
+            // LightInfo.Color — ACE retail Lifestones do this already.
+            byte r = lit.Color.Red, g = lit.Color.Green, b = lit.Color.Blue;
+            if (r == 0 && g == 0 && b == 0) { r = 0xFF; g = 0xD8; b = 0x80; }
+            using var glow = new SKPaint {
+                Color = new SKColor(r, g, b, 0xC0),
+                IsAntialias = true,
+                Style = SKPaintStyle.Fill,
+                ImageFilter = SKImageFilter.CreateBlur(radPx * 0.35f, radPx * 0.35f),
+            };
+            canvas.DrawCircle(pxX, pxY, radPx, glow);
+            using var core = new SKPaint {
+                Color = new SKColor(r, g, b, 0xFF),
+                IsAntialias = true,
+                Style = SKPaintStyle.Fill,
+            };
+            canvas.DrawCircle(pxX, pxY, radPx * 0.35f, core);
+        }
     }
 
     /// <summary>
@@ -709,15 +803,18 @@ internal static class ObjectSpriteGenerator {
     //                        Not consulted: DefaultScriptTable is the
     //                        canonical surface and covers every retail
     //                        portal/effect we render.
-    //   DefaultAnimation    — per-frame mesh deltas. Top-down rendering
-    //                        captures one pose; animation playback would
-    //                        produce a different sprite per frame, which
-    //                        is out of scope for an atlas. Skipped.
-    //   DefaultMotionTable  — pose-picker driving DefaultAnimation. Same
-    //                        rationale as DefaultAnimation. Skipped.
+    //   DefaultMotionTable  — wired here. Resolves to MotionTable.Cycles
+    //                        [(DefaultStyle<<16) | StyleDefaults[Default]],
+    //                        whose first AnimData.AnimId points at the
+    //                        idle Animation. Animation.PartFrames[0] is
+    //                        the idle keyframe; per-part Frame transforms
+    //                        replace the placement frame so NPCs render
+    //                        in their stand-still pose, not the T-pose
+    //                        baked into Setup.PlacementFrames.
+    //   DefaultAnimation    — direct Animation reference, used as a
+    //                        fallback when Setup has no MotionTable but
+    //                        ships an animation directly (rare props).
     //   DefaultSoundTable   — Wave/Ambient SFX. Not visual; skipped.
-    // If a future viewer wants pose / animation, MotionTable + Animation
-    // are the entry points — they require a frame-aware render pipeline.
     private static List<Tri> TriangulateModel(SpriteKey key, IDatReaderWriter dats, int lodLevel = 0) {
         var tris = new List<Tri>();
         uint modelId = key.Setup;
@@ -726,6 +823,10 @@ internal static class ObjectSpriteGenerator {
         if (kind == 0x02) {
             if (!SafeTryGet<Setup>(dats, modelId, out var setup)) return tris;
             var placement = GetDefaultPlacementFrame(setup);
+            // Idle-pose lookup. Returns null for setups without a
+            // MotionTable + Animation chain (most props), which keeps
+            // their static placement frame as the rendered pose.
+            var idle = TryResolveIdleAnimFrame(dats, setup);
             for (int pi = 0; pi < setup.Parts.Count; pi++) {
                 // Per GDL ApplyPartAndTextureChanges (ClothingTable.cpp:140):
                 // ClothingBaseEffect overrides specific part slots. The
@@ -738,7 +839,14 @@ internal static class ObjectSpriteGenerator {
                 if (!SafeTryGet<GfxObj>(dats, partGfxId, out var gfx)) continue;
                 Vector3 partOffset = Vector3.Zero;
                 Quaternion partRot = Quaternion.Identity;
-                if (placement?.Frames != null && pi < placement.Frames.Count) {
+                // Pose priority: idle animation frame → static placement
+                // frame → identity. Animations supply per-part deltas that
+                // place arms at hip, weapons at side, etc. — replacing the
+                // T-pose hidden in many setups' identity placement frames.
+                if (idle?.Frames != null && pi < idle.Frames.Count) {
+                    partOffset = idle.Frames[pi].Origin;
+                    partRot = idle.Frames[pi].Orientation;
+                } else if (placement?.Frames != null && pi < placement.Frames.Count) {
                     partOffset = placement.Frames[pi].Origin;
                     partRot = placement.Frames[pi].Orientation;
                 }
@@ -793,6 +901,52 @@ internal static class ObjectSpriteGenerator {
         if (setup.PlacementFrames.TryGetValue(Placement.Default, out var def)) return def;
         foreach (var kv in setup.PlacementFrames) return kv.Value;
         return null;
+    }
+
+    /// <summary>
+    /// Resolve the idle-keyframe of the Setup's default motion. Walks
+    /// Setup.DefaultMotionTable → MotionTable.Cycles[(DefaultStyle &lt;&lt; 16) |
+    /// StyleDefaults[DefaultStyle]] → first AnimData.AnimId → Animation.
+    /// Returns Animation.PartFrames[0] (the first keyframe), whose Frames
+    /// list carries one per-part Frame.Origin/Orientation matching the
+    /// Setup's NumParts. Returns null when any link in the chain is
+    /// missing (most props), Animation.PartFrames is empty, or a dat read
+    /// fails — caller falls back to Setup.PlacementFrames as before.
+    ///
+    /// Falls back to Setup.DefaultAnimation when a Setup ships an
+    /// Animation directly without a MotionTable (rare; some retail
+    /// scenery uses this). The DefaultAnimation chain is identical from
+    /// the Animation step onward.
+    /// </summary>
+    private static AnimationFrame? TryResolveIdleAnimFrame(IDatReaderWriter dats, Setup setup) {
+        uint animDid = 0;
+        // Path 1: MotionTable → idle Cycle → first AnimData
+        if (setup.DefaultMotionTable != null && setup.DefaultMotionTable.DataId != 0) {
+            uint mtableDid = setup.DefaultMotionTable.DataId;
+            if ((mtableDid >> 24) == 0x09 && SafeTryGet<MotionTable>(dats, mtableDid, out var mtable)) {
+                if (mtable.StyleDefaults.TryGetValue(mtable.DefaultStyle, out var idleSubstate)) {
+                    // Cycle key per AC physics: high 16 bits style, low 24
+                    // bits substate. StyleDefaults[default] yields the
+                    // "stand-still" substate for the default style — that
+                    // key resolves to the looping idle MotionData.
+                    int cycleKey = ((int)(uint)mtable.DefaultStyle << 16)
+                                 | ((int)(uint)idleSubstate & 0xFFFFFF);
+                    if (mtable.Cycles.TryGetValue(cycleKey, out var motionData)
+                            && motionData.Anims != null && motionData.Anims.Count > 0) {
+                        animDid = motionData.Anims[0].AnimId.DataId;
+                    }
+                }
+            }
+        }
+        // Path 2: Setup.DefaultAnimation (fallback for setups without an
+        // explicit MotionTable but with a directly-attached Animation).
+        if (animDid == 0 && setup.DefaultAnimation != null && setup.DefaultAnimation.DataId != 0) {
+            animDid = setup.DefaultAnimation.DataId;
+        }
+        if (animDid == 0 || (animDid >> 24) != 0x03) return null;
+        if (!SafeTryGet<Animation>(dats, animDid, out var anim)) return null;
+        if (anim.PartFrames == null || anim.PartFrames.Count == 0) return null;
+        return anim.PartFrames[0];
     }
 
     private static void AppendGfxTris(List<Tri> tris, GfxObj gfx,

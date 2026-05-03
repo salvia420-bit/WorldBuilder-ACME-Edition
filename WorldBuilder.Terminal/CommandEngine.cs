@@ -804,6 +804,9 @@ public partial class CommandEngine {
                 ? new RenderPreviewRenderer.SpriteInfo(atlas.Atlas, rect.X, rect.Y, rect.W, rect.H, rect.WorldWidth, rect.WorldHeight)
                 : null,
             WcidToSetup = GetWcidToSetupResolver(),
+            WcidToInscription = _weenieIndex.Count > 0
+                ? wcid => _weenieIndex.Get(wcid)?.Inscription
+                : null,
             Layer = layer,
             Spawns = spawnsByCell,
             // Real AC terrain tiles (Region 0x13000000) replace the procedural
@@ -812,6 +815,12 @@ public partial class CommandEngine {
             TerrainTextures = (layer == RenderPreviewRenderer.LayerMode.Objects)
                 ? null  // Objects layer doesn't run the terrain raster
                 : GetOrLoadTerrainTextures(),
+            // Scene decorations ride alongside the terrain raster — both
+            // are skipped on Objects-only renders so the layer composites
+            // cleanly over the separate terrain layer.
+            Scenes = (layer == RenderPreviewRenderer.LayerMode.Objects)
+                ? null
+                : GetOrLoadSceneDecorations(),
         };
 
         var renderOut = RenderPreviewRenderer.Render(input);
@@ -1046,6 +1055,37 @@ public partial class CommandEngine {
         }
         if (terrainTouched) _tileCache.MarkAllLbTilesDirty();
         _tileCache.SaveManifest();
+    }
+
+    /// <summary>
+    /// Per-region centroids in world coordinates, computed by averaging the
+    /// town anchors loaded from <c>region_gazetteer.json</c>. One centroid
+    /// per region — multiple anchors aggregate. Used by the static-site
+    /// emitter to seed a Voronoi tessellation of named zones.
+    /// </summary>
+    public IReadOnlyList<(string Region, float WorldX, float WorldY)> GetRegionCentroids() {
+        if (_regionAnchors.Count == 0)
+            return Array.Empty<(string, float, float)>();
+        var sums = new Dictionary<string, (double X, double Y, int Count)>();
+        foreach (var a in _regionAnchors) {
+            sums.TryGetValue(a.Region, out var acc);
+            // Town anchors are stored at LB precision; +96 (=192/2) lifts to
+            // the LB centre so each anchor contributes its centre, not its
+            // SW corner. Without this, regions cluster slightly toward the
+            // SW which warps the Voronoi cells.
+            acc.X += a.LbX * 192.0 + 96.0;
+            acc.Y += a.LbY * 192.0 + 96.0;
+            acc.Count++;
+            sums[a.Region] = acc;
+        }
+        var result = new List<(string, float, float)>(sums.Count);
+        foreach (var kv in sums) {
+            if (kv.Value.Count == 0) continue;
+            result.Add((kv.Key,
+                (float)(kv.Value.X / kv.Value.Count),
+                (float)(kv.Value.Y / kv.Value.Count)));
+        }
+        return result;
     }
 
     private LandblockDescriber.RegionContext? ResolveRegionForLb(ushort lbKey, uint lbX, uint lbY) {
@@ -11138,18 +11178,38 @@ public partial class CommandEngine {
         int DownsampledTiles,
         string OutDir);
 
-    private SpriteAtlasLoader? _spriteAtlas;
+    // Sprite-atlas cache keyed by LOD level. Each project pins one entry
+    // per LOD so the per-zoom selector in TilePyramidEmitter can switch
+    // between LOD-0 (deep zoom, full detail) and LOD-2 (low zoom, low
+    // detail) without rebuilding the loader on each tile.
+    private readonly Dictionary<int, SpriteAtlasLoader> _spriteAtlasByLod = new();
     private string? _spriteAtlasDir;
 
-    private SpriteAtlasLoader? GetOrLoadSpriteAtlas() {
+    /// <summary>
+    /// Load the project's sprite atlas for the requested LOD. Falls back
+    /// to the bare LOD-0 atlas (atlas.png + manifest.jsonl) when the
+    /// requested LOD-N pair isn't on disk so callers can blindly request
+    /// the LOD their zoom prefers without first checking the file system.
+    /// </summary>
+    private SpriteAtlasLoader? GetOrLoadSpriteAtlas(int lodLevel = 0) {
         var p = _projectManager.CurrentProject!;
         var dir = Path.Combine(p.ProjectDirectory, "sprites");
-        if (_spriteAtlas != null && string.Equals(_spriteAtlasDir, dir, StringComparison.Ordinal))
-            return _spriteAtlas;
-        _spriteAtlas?.Dispose();
-        _spriteAtlas = SpriteAtlasLoader.TryLoad(dir);
+        // Project switch invalidates every cached LOD — clean them up first.
+        if (_spriteAtlasDir != null
+                && !string.Equals(_spriteAtlasDir, dir, StringComparison.Ordinal)) {
+            foreach (var l in _spriteAtlasByLod.Values) l.Dispose();
+            _spriteAtlasByLod.Clear();
+        }
         _spriteAtlasDir = dir;
-        return _spriteAtlas;
+        if (_spriteAtlasByLod.TryGetValue(lodLevel, out var hit)) return hit;
+        var loader = SpriteAtlasLoader.TryLoad(dir, lodLevel);
+        if (loader == null && lodLevel > 0) {
+            // Fall back to LOD-0 when the requested LOD pair is missing —
+            // a partial sprite-gen run shouldn't break the renderer.
+            loader = SpriteAtlasLoader.TryLoad(dir, 0);
+        }
+        if (loader != null) _spriteAtlasByLod[lodLevel] = loader;
+        return loader;
     }
 
     // wcid → setupId fallback index, lazily built from the ontology's
@@ -11235,6 +11295,26 @@ public partial class CommandEngine {
             _terrainTextures = null;
         }
         return _terrainTextures;
+    }
+
+    // Cached scene-decoration loader, paired with the terrain textures.
+    // Resolves Region.SceneInfo per terrain type; the renderer uses it to
+    // drop deterministic foliage / clutter sprites on each cell.
+    private SceneDecorationLoader? _sceneDecorations;
+    private string? _sceneDecorationsProjectDir;
+
+    private SceneDecorationLoader? GetOrLoadSceneDecorations() {
+        var p = _projectManager.CurrentProject!;
+        if (_sceneDecorations != null &&
+            string.Equals(_sceneDecorationsProjectDir, p.ProjectDirectory, StringComparison.Ordinal))
+            return _sceneDecorations;
+        try {
+            _sceneDecorations = SceneDecorationLoader.Load(p.DocumentManager.Dats);
+            _sceneDecorationsProjectDir = p.ProjectDirectory;
+        } catch {
+            _sceneDecorations = null;
+        }
+        return _sceneDecorations;
     }
 
     public DungeonRenderResult RenderDungeon(uint lbX, uint lbY, int? floor, int resolution,
@@ -11394,7 +11474,7 @@ public partial class CommandEngine {
     }
 
     public ObjectSpritesResult GenerateObjectSprites(IReadOnlyList<ushort>? lbFilter, int spritePx, bool force,
-            int throttleMs = 0) {
+            int throttleMs = 0, int lodLevel = 0, bool nightMode = false) {
         RequireProject();
         // Co-exist with concurrent ML training.
         try {
@@ -11405,8 +11485,17 @@ public partial class CommandEngine {
         var dats = p.DocumentManager.Dats;
         var spritesDir = Path.Combine(p.ProjectDirectory, "sprites");
         Directory.CreateDirectory(spritesDir);
-        var manifestPath = Path.Combine(spritesDir, "manifest.jsonl");
-        var atlasPath = Path.Combine(spritesDir, "atlas.png");
+        // LOD-N atlases sit beside the LOD-0 atlas under the same sprites/
+        // dir so the loader can pick a file pair by suffix without changing
+        // the per-LB sprite PNG layout. lodLevel == 0 keeps the historical
+        // unsuffixed paths so existing tooling and the bare-setup
+        // SpriteAtlasLoader.TryLoad(spritesDir) path still work.
+        // nightMode atlases live in parallel under a "_night" suffix so a
+        // day + night render coexists in one sprites/ dir.
+        string suffix = (lodLevel > 0 ? $"_lod{lodLevel}" : "")
+                      + (nightMode ? "_night" : "");
+        var manifestPath = Path.Combine(spritesDir, $"manifest{suffix}.jsonl");
+        var atlasPath = Path.Combine(spritesDir, $"atlas{suffix}.png");
 
         if (!force && File.Exists(manifestPath) && File.Exists(atlasPath)) {
             int existing = File.ReadAllLines(manifestPath).Length;
@@ -11418,6 +11507,24 @@ public partial class CommandEngine {
         var modelIds = CollectPlacedModelIds(p, lbFilter);
         Console.Error.WriteLine($"[Sprites] Collected {modelIds.Count} model ids" +
             (modelIds.Count > 0 ? $" (sample: 0x{modelIds.First():X8})" : ""));
+
+        // Seed the atlas with every model id referenced by a Region.SceneInfo
+        // Scene. Without this, the renderer's scene-decoration pass picks
+        // foliage / rocks whose sprites never made it into the atlas, so the
+        // pass falls through silently. Cheap to ingest — Scene records are
+        // shared across every cell of a given terrain type.
+        var sceneLoader = GetOrLoadSceneDecorations();
+        if (sceneLoader != null) {
+            int beforeScene = modelIds.Count;
+            foreach (var sceneObjId in sceneLoader.CollectAllSceneObjectIds()) {
+                modelIds.Add(sceneObjId);
+            }
+            int added = modelIds.Count - beforeScene;
+            if (added > 0) {
+                Console.Error.WriteLine($"[Sprites] Added {added} scene-decoration model ids " +
+                    "(Region.SceneInfo).");
+            }
+        }
 
         // Build the variant tuple set from the WeenieIndex. Each weenie with
         // both ClothingBase and PaletteTemplate set yields a (setup, cb, pt)
@@ -11444,7 +11551,7 @@ public partial class CommandEngine {
 
         var (rendered, failed, atlasW, atlasH) = ObjectSpriteGenerator.Run(
             keys, spritePx, spritesDir, atlasPath, manifestPath, dats,
-            id => _ontologyService.GetEntry(id), throttleMs);
+            id => _ontologyService.GetEntry(id), throttleMs, lodLevel, nightMode);
         return new ObjectSpritesResult(keys.Count, rendered, failed, atlasW, atlasH, spritesDir, atlasPath, manifestPath);
     }
 
@@ -11591,12 +11698,34 @@ public partial class CommandEngine {
         return LandblockDescriber.ClusterByCellZ(dungeon.Cells.Select(c => c.Origin.Z)).Count;
     }
 
+    /// <summary>
+    /// Per-floor cell counts for an indoor LB. Index 0 is the top floor —
+    /// matches LandblockDescriber.ClusterByCellZ's z-descending order and
+    /// the floor-selector convention in the frontend ("top" / "bot"). Empty
+    /// array when the LB has no dungeon document or no cells.
+    /// </summary>
+    public IReadOnlyList<int> GetDungeonFloorCellCounts(ushort lbKey) {
+        RequireProject();
+        var dungeon = GetDungeonDoc(lbKey);
+        if (dungeon == null || dungeon.Cells.Count == 0) return Array.Empty<int>();
+        // ZBand.Count is already the number of cells in the band; ClusterByCellZ
+        // returns ascending order. The frontend treats index 0 as "top floor"
+        // (z descending), so reverse to match its convention.
+        var bandsAsc = LandblockDescriber.ClusterByCellZ(dungeon.Cells.Select(c => c.Origin.Z));
+        var counts = new int[bandsAsc.Count];
+        for (int i = 0; i < bandsAsc.Count; i++) {
+            counts[bandsAsc.Count - 1 - i] = bandsAsc[i].Count;
+        }
+        return counts;
+    }
+
     public StaticSiteEmitter.EmissionStats EmitStaticSite(string projectSlug, string outDir,
             IReadOnlyList<ushort>? lbFilter, int maxZoom, int minZoom,
-            bool emitObjectTier, bool emitFloorTier, int throttleMs = 0) {
+            bool emitObjectTier, bool emitFloorTier, int throttleMs = 0,
+            string tileFormat = "png") {
         RequireProject();
         return StaticSiteEmitter.Emit(this, projectSlug, outDir, lbFilter, maxZoom, minZoom,
-            emitObjectTier, emitFloorTier, throttleMs);
+            emitObjectTier, emitFloorTier, throttleMs, tileFormat);
     }
 
     public LandblockDescriber.FloorDescriptionResult DescribeFloor(uint lbX, uint lbY, int floorIndex) {
@@ -11610,7 +11739,11 @@ public partial class CommandEngine {
 
     public TilePyramidResult EmitTilePyramid(IReadOnlyList<ushort>? lbFilter, string outDir,
             int maxZoom, int minZoom, bool dirtyOnly, bool emitObjectLayer, bool emitFloorLayer,
-            int throttleMs = 0) {
+            int throttleMs = 0, bool multiLodEmit = false, string tileFormat = "png") {
+        TilePyramidEmitter.TileFormat fmt = string.Equals(tileFormat, "webp",
+            StringComparison.OrdinalIgnoreCase)
+            ? TilePyramidEmitter.TileFormat.Webp
+            : TilePyramidEmitter.TileFormat.Png;
         RequireProject();
         if (maxZoom < 8 || maxZoom > 12) throw new ArgumentException("maxZoom must be in [8, 12]");
         if (minZoom < 1 || minZoom > maxZoom) throw new ArgumentException("minZoom must be in [1, maxZoom]");
@@ -11676,7 +11809,7 @@ public partial class CommandEngine {
             if (terrainPng != null) {
                 using var bmp = SKBitmap.Decode(terrainPng);
                 if (bmp != null && bmp.Width == lbPx && bmp.Height == lbPx) {
-                    terrainTiles += TilePyramidEmitter.SliceLbRender(bmp, lbKey, maxZoom, terrainDir);
+                    terrainTiles += TilePyramidEmitter.SliceLbRender(bmp, lbKey, maxZoom, terrainDir, fmt);
                 }
             }
 
@@ -11688,17 +11821,40 @@ public partial class CommandEngine {
             if (glyphPng != null) {
                 using var bmp = SKBitmap.Decode(glyphPng);
                 if (bmp != null && bmp.Width == lbPx && bmp.Height == lbPx) {
-                    objectsGlyphTiles += TilePyramidEmitter.SliceLbRender(bmp, lbKey, maxZoom, objectsGlyphDir);
+                    objectsGlyphTiles += TilePyramidEmitter.SliceLbRender(bmp, lbKey, maxZoom, objectsGlyphDir, fmt);
                 }
             }
 
             if (emitObjectLayer && atlas != null) {
-                var spritePng = RenderLbForPyramid(lbX, lbY, lbPx,
-                    useSprites: true, layer: RenderPreviewRenderer.LayerMode.Objects);
-                if (spritePng != null) {
-                    using var bmp = SKBitmap.Decode(spritePng);
-                    if (bmp != null && bmp.Width == lbPx && bmp.Height == lbPx) {
-                        objectTiles += TilePyramidEmitter.SliceLbRender(bmp, lbKey, maxZoom, objectDir);
+                if (multiLodEmit) {
+                    // Render the sprite layer once per LOD bucket so each
+                    // zoom uses an atlas tuned to its pixel density. Each
+                    // bucket's "topZoom" is the deepest zoom that bucket
+                    // serves; the LB is rendered at the lbPx for that
+                    // zoom, sliced, and downsampled within the bucket
+                    // after the LB loop completes.
+                    foreach (var bucket in EnumerateLodBuckets(maxZoom, minZoom)) {
+                        var lodAtlas = GetOrLoadSpriteAtlas(bucket.Lod);
+                        if (lodAtlas == null) continue;
+                        int bucketLbPx = TilePyramidEmitter.TilePx * (1 << (bucket.TopZoom - 8));
+                        var spritePng = RenderLbForPyramid(lbX, lbY, bucketLbPx,
+                            useSprites: true, layer: RenderPreviewRenderer.LayerMode.Objects,
+                            lodLevel: bucket.Lod);
+                        if (spritePng == null) continue;
+                        using var bmp = SKBitmap.Decode(spritePng);
+                        if (bmp != null && bmp.Width == bucketLbPx && bmp.Height == bucketLbPx) {
+                            objectTiles += TilePyramidEmitter.SliceLbRender(bmp, lbKey,
+                                bucket.TopZoom, objectDir, fmt);
+                        }
+                    }
+                } else {
+                    var spritePng = RenderLbForPyramid(lbX, lbY, lbPx,
+                        useSprites: true, layer: RenderPreviewRenderer.LayerMode.Objects);
+                    if (spritePng != null) {
+                        using var bmp = SKBitmap.Decode(spritePng);
+                        if (bmp != null && bmp.Width == lbPx && bmp.Height == lbPx) {
+                            objectTiles += TilePyramidEmitter.SliceLbRender(bmp, lbKey, maxZoom, objectDir, fmt);
+                        }
                     }
                 }
             }
@@ -11718,7 +11874,7 @@ public partial class CommandEngine {
                             outputPath: null, useLbExtent: true);
                         using var dbmp = SKBitmap.Decode(dungeonResult.PngBytes);
                         if (dbmp != null) {
-                            TilePyramidEmitter.WriteFloorTile(dbmp, lbKey, f, floorDir, maxZoom);
+                            TilePyramidEmitter.WriteFloorTile(dbmp, lbKey, f, floorDir, maxZoom, fmt);
                             floorTiles++;
                         }
                     }
@@ -11733,16 +11889,29 @@ public partial class CommandEngine {
             Console.Error.WriteLine($"[Emit] Skipped {skippedLbs} unloadable landblocks total");
         }
 
-        int downsampled = TilePyramidEmitter.Downsample(terrainDir, maxZoom, minZoom);
-        downsampled += TilePyramidEmitter.Downsample(objectsGlyphDir, maxZoom, minZoom);
+        int downsampled = TilePyramidEmitter.Downsample(terrainDir, maxZoom, minZoom, fmt);
+        downsampled += TilePyramidEmitter.Downsample(objectsGlyphDir, maxZoom, minZoom, fmt);
         if (emitObjectLayer && atlas != null) {
-            // Pyramid the sprite tier down to minZoom too (was z=11 floor).
-            // Why: the user reported building textures missing at moderate
-            // zooms — that's because the sprite layer simply wasn't being
-            // emitted below z=11. Downsampling preserves the textured
-            // appearance into the low-zoom view; sub-pixel sprites already
-            // gracefully fall back to glyphs inside RenderPreviewRenderer.
-            downsampled += TilePyramidEmitter.Downsample(objectDir, maxZoom, minZoom);
+            if (multiLodEmit) {
+                // Per-bucket downsample so each LOD's tiles cover only the
+                // zooms its render targeted. Without this, the LOD-0
+                // tiles at maxZoom would downsample over the LOD-1/2
+                // bucket tiles at lower zooms and overwrite them.
+                foreach (var bucket in EnumerateLodBuckets(maxZoom, minZoom)) {
+                    if (bucket.TopZoom > bucket.BottomZoom) {
+                        downsampled += TilePyramidEmitter.Downsample(objectDir,
+                            bucket.TopZoom, bucket.BottomZoom, fmt);
+                    }
+                }
+            } else {
+                // Pyramid the sprite tier down to minZoom too (was z=11 floor).
+                // Why: the user reported building textures missing at moderate
+                // zooms — that's because the sprite layer simply wasn't being
+                // emitted below z=11. Downsampling preserves the textured
+                // appearance into the low-zoom view; sub-pixel sprites already
+                // gracefully fall back to glyphs inside RenderPreviewRenderer.
+                downsampled += TilePyramidEmitter.Downsample(objectDir, maxZoom, minZoom, fmt);
+            }
         }
 
         // Glyph-fallback diagnostic: write the per-bucket report to
@@ -11769,13 +11938,52 @@ public partial class CommandEngine {
     }
 
     private byte[]? RenderLbForPyramid(uint lbX, uint lbY, int lbPx, bool useSprites,
-            RenderPreviewRenderer.LayerMode layer = RenderPreviewRenderer.LayerMode.Combined) {
+            RenderPreviewRenderer.LayerMode layer = RenderPreviewRenderer.LayerMode.Combined,
+            int lodLevel = 0) {
         try {
+            // RenderPreview consumes whichever atlas the cache currently
+            // holds. For LOD-bucketed emit we pre-warm the cache for the
+            // requested LOD before each render — cheap because the cache
+            // is keyed on LOD and reused across LBs.
+            if (useSprites && lodLevel > 0) GetOrLoadSpriteAtlas(lodLevel);
             var r = RenderPreview(lbX, lbY, radius: 0, resolution: lbPx, overlay: false,
                 outputPath: null, useSprites: useSprites, layer: layer);
             return r.PngBytes;
         } catch {
             return null;
+        }
+    }
+
+    /// <summary>
+    /// LOD bucket for the per-zoom render schedule. <c>TopZoom</c> is the
+    /// deepest zoom rendered at this LOD (the LB is rendered at its lbPx);
+    /// <c>BottomZoom</c> is the shallowest zoom served (downsample fills
+    /// in between). Buckets that fall outside the requested [minZoom,
+    /// maxZoom] are skipped by EnumerateLodBuckets.
+    /// </summary>
+    private readonly record struct LodBucket(int Lod, int TopZoom, int BottomZoom);
+
+    /// <summary>
+    /// Per-LOD render buckets clipped to [minZoom, maxZoom]. Yielded
+    /// deepest-first so the renderer naturally layers detail at the most
+    /// important zooms before degrading.
+    /// </summary>
+    private static IEnumerable<LodBucket> EnumerateLodBuckets(int maxZoom, int minZoom) {
+        // Bucket schedule mirrors TilePyramidEmitter.LodForZoom:
+        //   z >= 11 → LOD 0,  z == 10 → LOD 1,  z <= 9 → LOD 2.
+        // Each bucket renders at its TopZoom and downsamples to BottomZoom.
+        var schedule = new (int Lod, int Top, int Bottom)[] {
+            (0, maxZoom, Math.Max(11, minZoom)),
+            (1, 10,      10),
+            (2, 9,       minZoom),
+        };
+        foreach (var (lod, top, bottom) in schedule) {
+            int t = Math.Min(top, maxZoom);
+            int b = Math.Max(bottom, minZoom);
+            if (t < b) continue;       // bucket entirely above maxZoom or below minZoom
+            if (b > maxZoom) continue; // bucket bottom outside range
+            if (t < minZoom) continue;
+            yield return new LodBucket(lod, t, b);
         }
     }
 

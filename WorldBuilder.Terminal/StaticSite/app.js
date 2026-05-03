@@ -22,6 +22,24 @@
   window.LOAD_DESC = function (lbHex, payload) { DESC[lbHex] = payload; };
   window.LOAD_DUNGEON = function (lbHex, payload) { DUNGEON[lbHex] = payload; };
   window.LOAD_OVERLAY = function (name, payload) { OVERLAY_DATA[name] = payload; };
+  // Dungeons-manifest payload: { "<lbHex>": { floorCount, cellsPerFloor: [..] } }
+  // Loaded once per project from projects/<slug>/dungeons.js. Used by the
+  // floor-selector to surface per-floor cell counts in the button tooltip.
+  let DUNGEONS_MANIFEST = Object.create(null);
+  window.LOAD_DUNGEONS = function (payload) { DUNGEONS_MANIFEST = payload || Object.create(null); };
+
+  // Search-index payload: flat array of {kind, name, lbHex, x, y, ...}.
+  // Loaded once per project from projects/<slug>/search_index.js. Drives
+  // the npc/town/dungeon list views and the unified search bar.
+  let SEARCH_INDEX = [];
+  window.LOAD_SEARCH_INDEX = function (payload) {
+    SEARCH_INDEX = Array.isArray(payload) ? payload : [];
+    // If a list view is already active, refresh it now that data is in.
+    if (currentView !== 'map') renderListView();
+  };
+  // Active view: 'map' | 'npcs' | 'towns' | 'dungeons'.
+  let currentView = 'map';
+  let searchQuery = '';
 
   const WORLD_EXTENT = 49152;
   const LB_SIZE = 192;
@@ -50,6 +68,9 @@
       return;
     }
     populateProjectPicker();
+    installViewTabs();
+    installSearchBar();
+    installNightToggle();
     const initial = parseUrlParams();
     const projectSlug = initial.project || MANIFEST.defaultProject ||
       (MANIFEST.projects[0] && MANIFEST.projects[0].slug);
@@ -81,6 +102,153 @@
         }
       }).catch(function () { /* gallery not emitted; stay hidden */ });
     }
+  }
+
+  // ── View tabs / search ────────────────────────────────────────────────
+
+  function installViewTabs() {
+    const tabs = document.querySelectorAll('#view-tabs .view-tab');
+    tabs.forEach(function (tab) {
+      tab.addEventListener('click', function (e) {
+        e.preventDefault();
+        setView(tab.dataset.view);
+      });
+    });
+  }
+
+  function installSearchBar() {
+    const input = document.getElementById('search-bar');
+    if (!input) return;
+    input.addEventListener('input', function () {
+      searchQuery = input.value.trim().toLowerCase();
+      if (currentView !== 'map') renderListView();
+    });
+  }
+
+  function installNightToggle() {
+    const btn = document.getElementById('night-toggle');
+    if (!btn) return;
+    // Restore from localStorage so a user's preferred mode persists.
+    if (window.localStorage && localStorage.getItem('wb_night') === '1') {
+      document.body.classList.add('night-mode');
+      btn.textContent = '☾';
+    }
+    btn.addEventListener('click', function () {
+      const on = !document.body.classList.contains('night-mode');
+      document.body.classList.toggle('night-mode', on);
+      btn.textContent = on ? '☾' : '☀';
+      if (window.localStorage) localStorage.setItem('wb_night', on ? '1' : '0');
+    });
+  }
+
+  function setView(view) {
+    if (view !== 'map' && view !== 'npcs' && view !== 'towns' && view !== 'dungeons') {
+      view = 'map';
+    }
+    currentView = view;
+    // Mirror to URL so the user can share the link.
+    const params = new URLSearchParams(window.location.search);
+    if (view === 'map') params.delete('view'); else params.set('view', view);
+    const query = params.toString();
+    history.replaceState(null, '',
+      window.location.pathname + (query ? '?' + query : '') + window.location.hash);
+
+    document.querySelectorAll('#view-tabs .view-tab').forEach(function (t) {
+      t.classList.toggle('active', t.dataset.view === view);
+    });
+    const mapEl = document.getElementById('map');
+    const listEl = document.getElementById('list-view');
+    if (view === 'map') {
+      mapEl.style.display = '';
+      listEl.hidden = true;
+      // Trigger a Leaflet resize so the map redraws into its container.
+      if (map && typeof map.invalidateSize === 'function') {
+        setTimeout(function () { map.invalidateSize(); }, 0);
+      }
+    } else {
+      mapEl.style.display = 'none';
+      listEl.hidden = false;
+      renderListView();
+    }
+  }
+
+  function renderListView() {
+    const listEl = document.getElementById('list-view');
+    if (!listEl) return;
+    const thead = listEl.querySelector('thead');
+    const tbody = listEl.querySelector('tbody');
+    const empty = listEl.querySelector('.list-empty');
+
+    const kindFilter = currentView === 'npcs' ? 'npc'
+                     : currentView === 'towns' ? 'town'
+                     : currentView === 'dungeons' ? 'dungeon'
+                     : null;
+    if (!kindFilter) return;
+
+    // Column schema per kind.
+    const cols = currentView === 'npcs'
+      ? [['Name','name'],['Region','region'],['Level','level'],['Wcid','wcid'],['Landblock','lbHex']]
+      : currentView === 'towns'
+      ? [['Name','name'],['Region','region'],['Culture','culture'],['Landblock','lbHex']]
+      : [['Name','name'],['Region','region'],['Floors','floorCount'],['Landblock','lbHex']];
+
+    thead.innerHTML = '<tr>' + cols.map(function (c) {
+      return '<th>' + escapeHtml(c[0]) + '</th>';
+    }).join('') + '</tr>';
+
+    const rows = SEARCH_INDEX.filter(function (it) {
+      if (it.kind !== kindFilter) return false;
+      if (searchQuery === '') return true;
+      // Match against name, region, lbHex — covers the obvious "find me X"
+      // queries without per-kind config.
+      const hay = (String(it.name || '') + ' ' + String(it.region || '') + ' ' +
+                   String(it.lbHex || '')).toLowerCase();
+      return hay.indexOf(searchQuery) !== -1;
+    });
+
+    if (rows.length === 0) {
+      tbody.innerHTML = '';
+      empty.hidden = false;
+      return;
+    }
+    empty.hidden = true;
+
+    // Cap visible rows at 1000 to keep DOM size bounded; the search bar
+    // is the user's pagination knob. Show a footer when the cap kicks in
+    // so the user knows to refine.
+    const cap = 1000;
+    const trimmed = rows.slice(0, cap);
+    const html = trimmed.map(function (it) {
+      const cells = cols.map(function (c) {
+        var v = it[c[1]];
+        if (v == null) v = '';
+        return '<td>' + escapeHtml(String(v)) + '</td>';
+      }).join('');
+      // data-deep-link encodes (lbHex, x, y) so the click handler can
+      // navigate to the map at the right zoom + position.
+      return '<tr data-lb="' + escapeHtml(it.lbHex || '') +
+             '" data-x="' + Number(it.x || 0) +
+             '" data-y="' + Number(it.y || 0) + '">' +
+             cells + '</tr>';
+    }).join('');
+    tbody.innerHTML = html
+      + (rows.length > cap
+         ? '<tr><td colspan="' + cols.length + '"><em>+ ' +
+           (rows.length - cap) + ' more — refine search</em></td></tr>'
+         : '');
+    // Wire row click → deep link.
+    tbody.querySelectorAll('tr[data-lb]').forEach(function (tr) {
+      tr.addEventListener('click', function () {
+        const lb = tr.dataset.lb;
+        const x = parseFloat(tr.dataset.x);
+        const y = parseFloat(tr.dataset.y);
+        if (lb && Number.isFinite(x) && Number.isFinite(y)) {
+          // Switch to map view + drop the pin via URL hash.
+          window.location.hash = '11/' + y.toFixed(1) + '/' + x.toFixed(1);
+          setView('map');
+        }
+      });
+    });
   }
 
   // ── Project switcher ──────────────────────────────────────────────────
@@ -162,9 +330,26 @@
       // here puts the entire world in the wrong place.
       if (!assertCoordSystem(activeProjectMeta)) return;
       projectLbSet = new Set(activeProjectMeta.lbList);
+      // Load the dungeons manifest in parallel with the tile layers so the
+      // floor selector has cellsPerFloor data when the user opens an
+      // indoor LB. Missing manifest is non-fatal — the selector falls
+      // back to floorCounts from meta.js.
+      loadScript('projects/' + slug + '/dungeons.js').catch(function () {
+        DUNGEONS_MANIFEST = Object.create(null);
+      });
+      loadScript('projects/' + slug + '/search_index.js').catch(function () {
+        SEARCH_INDEX = [];
+      });
       installTileLayers(slug);
       installOverlays(slug);
       restoreOrInitView(initial);
+      // Honor ?view=npcs|towns|dungeons by switching after the map is
+      // wired up. Default 'map' view leaves the existing map mode active.
+      if (initial.view && initial.view !== 'map') {
+        setView(initial.view);
+      } else {
+        setView('map');
+      }
       setStatus('Project: ' + slug + ' · ' + activeProjectMeta.lbList.length +
         ' LBs · ' + activeProjectMeta.dungeonLbs.length + ' dungeons');
     }, function (err) {
@@ -255,9 +440,14 @@
     if (typeof map.setMaxZoom === 'function') map.setMaxZoom(maxZ);
     const worldBounds = L.latLngBounds(L.latLng(0, 0), L.latLng(WORLD_EXTENT, WORLD_EXTENT));
 
+    // Tile-image extension. Older dists without meta.tileFormat default
+    // to png so existing emits keep working unchanged.
+    const tileExt = (activeProjectMeta && activeProjectMeta.tileFormat === 'webp')
+      ? 'webp' : 'png';
+
     // terrain/  — always visible. Floor mode keeps this so the player has
     // surface context (rivers, hills, roads) while inspecting an interior.
-    terrainLayer = L.tileLayer('projects/' + slug + '/tiles/terrain/{z}/{x}/{y}.png', {
+    terrainLayer = L.tileLayer('projects/' + slug + '/tiles/terrain/{z}/{x}/{y}.' + tileExt, {
       tileSize: TILE_PX, minZoom: minZ, maxZoom: maxZ, noWrap: true,
       bounds: worldBounds, errorTileUrl: '', zIndex: 100,
     });
@@ -266,7 +456,7 @@
     // objects/ — glyph-mode object overlay, transparent terrain. Hidden in
     // floor mode so building rectangles (the "roofs" the user was seeing
     // through the floor plan) disappear cleanly.
-    objectsGlyphLayer = L.tileLayer('projects/' + slug + '/tiles/objects/{z}/{x}/{y}.png', {
+    objectsGlyphLayer = L.tileLayer('projects/' + slug + '/tiles/objects/{z}/{x}/{y}.' + tileExt, {
       tileSize: TILE_PX, minZoom: minZ, maxZoom: maxZ, noWrap: true,
       bounds: worldBounds, errorTileUrl: '', zIndex: 200,
     });
@@ -276,7 +466,7 @@
     // just z>=11) so building textures appear at moderate zoom too.
     // Loaded eagerly; if the project lacks a sprite atlas the tile dir
     // simply 404s and the underlying objects-glyph layer remains visible.
-    objectLayer = L.tileLayer('projects/' + slug + '/tiles/object/{z}/{x}/{y}.png', {
+    objectLayer = L.tileLayer('projects/' + slug + '/tiles/object/{z}/{x}/{y}.' + tileExt, {
       tileSize: TILE_PX, minZoom: minZ, maxZoom: maxZ, noWrap: true,
       bounds: worldBounds, errorTileUrl: '', opacity: 1.0, zIndex: 250,
     });
@@ -434,6 +624,60 @@
     // Towns: list of { name, x, y, ... }. Grid: a config-only payload that
     // we assert against frontend constants and then render synthetically.
     const group = L.layerGroup();
+    if (name === 'zones') {
+      // Named-zone overlay (Voronoi tessellation of region centroids).
+      // GeoJSON FeatureCollection, one polygon + label per region. Visible
+      // at z=6..9 only — at deeper zooms the polygons cover the sprite
+      // layer, and at shallower zooms the world-extent labels overlap.
+      const stylePoly = function () {
+        return {
+          color: '#aab', weight: 1.0, opacity: 0.55,
+          fillColor: '#778', fillOpacity: 0.18,
+          interactive: false,
+        };
+      };
+      const polyLayer = L.geoJSON(data, { style: stylePoly });
+      const labelLayer = L.layerGroup();
+      if (data && Array.isArray(data.features)) {
+        data.features.forEach(function (f) {
+          const c = f && f.properties && f.properties.centroid;
+          const n = f && f.properties && f.properties.name;
+          if (!c || !n) return;
+          // Centroid is [worldX, worldY]; latLng = (worldY, worldX).
+          const label = L.marker([c[1], c[0]], {
+            icon: L.divIcon({
+              className: 'zone-label',
+              html: '<span>' + escapeHtml(n) + '</span>',
+              iconSize: [140, 22],
+              iconAnchor: [70, 11],
+            }),
+            interactive: false,
+          });
+          labelLayer.addLayer(label);
+        });
+      }
+      const zonesGroup = L.layerGroup([polyLayer, labelLayer]);
+      // Zoom-bounded visibility via opacity restyle. The layer remains
+      // logically "added" so the layer-control toggle works; we just
+      // hide it at zooms where it'd add visual noise.
+      const updateZoneVisibility = function () {
+        const z = map.getZoom();
+        const visible = z >= 6 && z <= 9;
+        polyLayer.setStyle({
+          color: '#aab', weight: 1.0,
+          opacity: visible ? 0.55 : 0,
+          fillColor: '#778',
+          fillOpacity: visible ? 0.18 : 0,
+        });
+        labelLayer.eachLayer(function (m) {
+          const el = m.getElement && m.getElement();
+          if (el) el.style.display = visible ? '' : 'none';
+        });
+      };
+      map.on('zoomend', updateZoneVisibility);
+      map.whenReady(updateZoneVisibility);
+      return zonesGroup;
+    }
     if (name === 'grid') {
       assertGridConfig(data);
       // Light landblock-grid lines every 192 wu, drawn from frontend
@@ -478,7 +722,19 @@
           weight: 1, dashArray: synthetic ? '2 2' : null,
         });
         const title = rec.name || rec.title || rec.label;
-        if (title) m.bindTooltip(title + (synthetic ? ' (synthetic)' : ''), { sticky: true });
+        if (title || rec.inscription) {
+          // Tooltip: the canonical title on the first line, the
+          // PropertyString.Inscription painted text on the second.
+          // Inscription dominates for sign-only weenies (no display name);
+          // synthetic suffix sticks on the title line so the user can see
+          // when a record was reconstructed.
+          const lines = [];
+          if (title) lines.push(escapeHtml(title) + (synthetic ? ' (synthetic)' : ''));
+          if (rec.inscription) {
+            lines.push('<em>' + escapeHtml(String(rec.inscription)) + '</em>');
+          }
+          m.bindTooltip(lines.join('<br/>'), { sticky: true, className: 'wb-tooltip-multiline' });
+        }
         m.on('click', function (e) {
           openPlacementPanel(name, rec);
           // Stop propagation so the map's onClick (LB describe) doesn't fire too.
@@ -516,6 +772,12 @@
     }
     if (rec.cell != null) html.push('<p>Cell: ' + rec.cell + '</p>');
     if (rec.__lbHex) html.push('<p>Landblock: ' + rec.__lbHex + '</p>');
+    if (rec.inscription) {
+      // Painted in-world text from PropertyString.Inscription. Wrapped in
+      // a blockquote so multi-line plaque text reads as the sign content.
+      html.push('<blockquote class="inscription">' +
+        escapeHtml(String(rec.inscription)) + '</blockquote>');
+    }
     if (rec.isSynthetic === true || rec.is_synthetic === true)
       html.push('<p><em>This record is synthetic — position or category was reconstructed.</em></p>');
     html.push('</div>');
@@ -705,12 +967,22 @@
     const floors = activeProjectMeta.floorCounts[centerLbHex] || 0;
     if (!floors) { selector.classList.remove('active'); return; }
     selector.classList.add('active');
+    // Per-floor cell counts from dungeons.js (when emitted). Falls back
+    // to undefined → no count badge / no tooltip.
+    const dgEntry = DUNGEONS_MANIFEST && DUNGEONS_MANIFEST[centerLbHex];
+    const cellsPerFloor = (dgEntry && Array.isArray(dgEntry.cellsPerFloor))
+      ? dgEntry.cellsPerFloor : null;
     const html = ['<span>Floor:</span>'];
     for (let i = floors - 1; i >= 0; i--) {
       // Top floor (index 0) goes at the top of the strip — matches how
       // players think of floor 1 = ground.
-      html.unshift('<button class="floor-btn" data-floor="' + i + '" data-lb="' + centerLbHex + '">' +
-        (i === 0 ? 'top' : i === floors - 1 ? 'bot' : (i + 1)) + '</button>');
+      const cells = cellsPerFloor ? cellsPerFloor[i] : null;
+      const label = (i === 0 ? 'top' : i === floors - 1 ? 'bot' : (i + 1));
+      const titleAttr = cells != null
+        ? ' title="' + cells + ' cells"'
+        : '';
+      html.unshift('<button class="floor-btn" data-floor="' + i + '" data-lb="' +
+        centerLbHex + '"' + titleAttr + '>' + label + '</button>');
     }
     selector.innerHTML = html.join('');
     Array.prototype.forEach.call(selector.querySelectorAll('.floor-btn'), function (btn) {
@@ -729,10 +1001,11 @@
     if (floorImageOverlay) { map.removeLayer(floorImageOverlay); floorImageOverlay = null; }
     const proj = MANIFEST.projects.find(function (p) { return p.slug === activeProject; });
     const projMaxZoom = (proj && proj.maxZoom) || 12;
+    const tileExt = (activeProjectMeta && activeProjectMeta.tileFormat === 'webp') ? 'webp' : 'png';
     const url = 'projects/' + activeProject + '/tiles/floor/' + lbHex + '/' +
       projMaxZoom +
       '/' + lbBaseTileX(lbHex, projMaxZoom) + '/' + lbBaseTileY(lbHex, projMaxZoom) +
-      '/' + floorIndex + '.png';
+      '/' + floorIndex + '.' + tileExt;
     const lbX = parseInt(lbHex.slice(2, 4), 16);
     const lbY = parseInt(lbHex.slice(4, 6), 16);
     const sw = L.latLng(lbY * LB_SIZE, lbX * LB_SIZE);
@@ -785,6 +1058,7 @@
       x: parseFloat(params.get('x')),
       y: parseFloat(params.get('y')),
       floor: parseInt(params.get('floor'), 10),
+      view: params.get('view') || 'map',
     };
   }
 

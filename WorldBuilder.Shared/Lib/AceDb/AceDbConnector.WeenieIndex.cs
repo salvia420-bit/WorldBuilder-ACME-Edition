@@ -21,6 +21,10 @@ public partial class AceDbConnector {
     private const int PropDid_Icon          = 8;
     // PropertyInt.PaletteTemplate; the variant tuple's palette index.
     private const int PropInt_PaletteTemplate = 3;
+    // PropertyString.Inscription — the painted text on signs / plaques /
+    // hooks. Drives the static-site sign label + tooltip path. Matches
+    // ACE.Entity.Enum.Properties.PropertyString.Inscription = 16.
+    private const int PropStr_Inscription = 16;
 
     // RadarColor enum value from ACE.Entity.Enum.RadarColor (cross-verified
     // against ACEmulator/ACE master, OptimShi/WeenieViewer, and
@@ -120,12 +124,15 @@ public partial class AceDbConnector {
                 dc.value     AS clothing_base_did,
                 ict.value    AS creature_type,
                 ilv.value    AS level,
-                ipt.value    AS palette_template
+                ipt.value    AS palette_template,
+                si.value     AS inscription
             FROM `weenie` w
             LEFT JOIN `weenie_properties_string` sn
                 ON sn.object_Id = w.class_Id AND sn.type = @propStrName
             LEFT JOIN `weenie_properties_string` st
                 ON st.object_Id = w.class_Id AND st.type = @propStrTitle
+            LEFT JOIN `weenie_properties_string` si
+                ON si.object_Id = w.class_Id AND si.type = @propStrInscription
             LEFT JOIN `weenie_properties_d_i_d` ds
                 ON ds.object_Id = w.class_Id AND ds.type = @propDidSetup
             LEFT JOIN `weenie_properties_d_i_d` di
@@ -151,6 +158,7 @@ public partial class AceDbConnector {
         cmd.Parameters.AddWithValue("@propIntCreatureType",  PropInt_CreatureType);
         cmd.Parameters.AddWithValue("@propIntLevel",         PropInt_Level);
         cmd.Parameters.AddWithValue("@propIntPalTemplate",   PropInt_PaletteTemplate);
+        cmd.Parameters.AddWithValue("@propStrInscription",   PropStr_Inscription);
         cmd.CommandTimeout = 600;
 
         var dict = new Dictionary<int, WeenieIndexEntry>();
@@ -168,6 +176,7 @@ public partial class AceDbConnector {
             int?   creature      = reader.IsDBNull("creature_type")    ? null : reader.GetInt32("creature_type");
             int?   level         = reader.IsDBNull("level")            ? null : reader.GetInt32("level");
             int?   palTemplate   = reader.IsDBNull("palette_template") ? null : reader.GetInt32("palette_template");
+            string? inscription  = reader.IsDBNull("inscription")      ? null : reader.GetString("inscription");
 
             bool serverManaged = serverManagedWcids.Contains(wcid);
             bool isNpc         = weenieType == WeenieType_Vendor_Local || npcWcids.Contains(wcid);
@@ -187,7 +196,8 @@ public partial class AceDbConnector {
                 Level: level,
                 SourceMask: WeenieSource.AceDb,
                 ClothingBaseDid: clothingDid,
-                PaletteTemplate: palTemplate);
+                PaletteTemplate: palTemplate,
+                Inscription: inscription);
         }
 
         return new WeenieIndex(dict);

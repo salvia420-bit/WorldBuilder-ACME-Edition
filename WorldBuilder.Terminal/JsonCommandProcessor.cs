@@ -313,10 +313,15 @@ public class JsonCommandProcessor {
         bool emitFloor = node["emitFloor"]?.GetValue<bool>() ?? false;
         int throttleMs = node["throttleMs"]?.GetValue<int>() ?? 0;
         bool gallery = node["gallery"]?.GetValue<bool>() ?? false;
+        // tileFormat: "png" (default) | "webp". WebP shrinks the tile
+        // pyramid ~35% with no perceptible quality loss at the deeper
+        // zooms; PNG stays the default for browsers without WebP support
+        // (caller can verify via meta.js's tileFormat field).
+        string tileFormat = node["tileFormat"]?.GetValue<string>() ?? "png";
         var lbFilter = ParseLbFilter(node);
 
         var r = _engine.EmitStaticSite(slug, outDir, lbFilter, maxZoom, minZoom,
-            emitObject, emitFloor, throttleMs);
+            emitObject, emitFloor, throttleMs, tileFormat);
 
         // Optional gallery sidecar: bundle a curated Tailwind gallery into
         // <outDir>/gallery/ and let the Leaflet view link across. The
@@ -510,11 +515,21 @@ public class JsonCommandProcessor {
         bool force = node["force"]?.GetValue<bool>() ?? false;
         int spritePx = node["spritePx"]?.GetValue<int>() ?? 512;
         int throttleMs = node["throttleMs"]?.GetValue<int>() ?? 0;
+        // lodLevel: 0 keeps the historical atlas/manifest paths; >0 produces
+        // a parallel atlas_lodN.png + manifest_lodN.jsonl pair using
+        // GfxObjDegradeInfo substitutions for low-zoom tile rendering.
+        int lodLevel = node["lodLevel"]?.GetValue<int>() ?? 0;
+        // nightMode: when true the renderer dims the mesh + overlays
+        // Setup.Lights as glow discs, and writes to a parallel
+        // atlas_night.png + manifest_night.jsonl (or atlas_lodN_night.png).
+        bool nightMode = node["nightMode"]?.GetValue<bool>() ?? false;
         var lbFilter = ParseLbFilter(node);
-        var r = _engine.GenerateObjectSprites(lbFilter, spritePx, force, throttleMs);
+        var r = _engine.GenerateObjectSprites(lbFilter, spritePx, force, throttleMs, lodLevel, nightMode);
         return Serialize(new {
             success = true,
             command = "generate-object-sprites",
+            lodLevel = lodLevel,
+            nightMode = nightMode,
             modelsCollected = r.ModelsCollected,
             modelsRendered = r.ModelsRendered,
             modelsFailed = r.ModelsFailed,

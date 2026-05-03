@@ -83,9 +83,19 @@ internal sealed class SpriteAtlasLoader : IDisposable {
         return false;
     }
 
-    public static SpriteAtlasLoader? TryLoad(string spritesDir) {
-        var atlasPath = Path.Combine(spritesDir, "atlas.png");
-        var manifestPath = Path.Combine(spritesDir, "manifest.jsonl");
+    /// <summary>
+    /// Load the (atlas, manifest) pair for the requested LOD + mode.
+    /// Suffix convention: "" (LOD-0 day), "_lodN" (LOD-N day), "_night"
+    /// (LOD-0 night), "_lodN_night" (LOD-N night). Returns null when
+    /// either file is missing — caller falls back to a different
+    /// (LOD, mode) pair or to glyph rendering.
+    /// </summary>
+    public static SpriteAtlasLoader? TryLoad(string spritesDir, int lodLevel = 0,
+            bool nightMode = false) {
+        string suffix = (lodLevel > 0 ? $"_lod{lodLevel}" : "")
+                      + (nightMode ? "_night" : "");
+        var atlasPath = Path.Combine(spritesDir, $"atlas{suffix}.png");
+        var manifestPath = Path.Combine(spritesDir, $"manifest{suffix}.jsonl");
         if (!File.Exists(atlasPath) || !File.Exists(manifestPath)) return null;
         var atlas = SKBitmap.Decode(atlasPath);
         if (atlas == null) return null;

@@ -98,6 +98,19 @@ public static class RenderPreviewRenderer {
         /// </summary>
         public Func<int, uint>? WcidToSetup;
 
+        /// <summary>
+        /// Optional wcid → inscription resolver. When non-null, sign-bearing
+        /// spawns (any wcid whose WeenieIndex entry has a non-null
+        /// PropertyString.Inscription) get a small italic label drawn next
+        /// to the sprite at deep zooms. Resolver returns null when the
+        /// wcid is unknown or has no inscription.
+        /// </summary>
+        public Func<int, string?>? WcidToInscription;
+        // Minimum LbPx to enable on-tile sign labels. The labels are several
+        // characters tall; below LbPx 256 (z<=10) they overlap their own
+        // sprite and become unreadable. The plan calls for "z >= 11".
+        public int InscriptionMinLbPx = 256;
+
         // Optional AC terrain texture loader. When non-null the per-pixel
         // raster pass samples real DAT tiles for each terrain type instead
         // of the procedural palette. Falls back to the palette per-type
@@ -108,6 +121,20 @@ public static class RenderPreviewRenderer {
         // the AC terrain tiles. AC's outdoor cell size is 24wu; the in-game
         // tiles repeat once per cell, so 24f matches the client's look.
         public float TerrainTileWu = 24f;
+
+        // Optional scene-decoration loader. When non-null, the renderer
+        // runs a pass after roads + before object glyphs that drops a small
+        // sprite blit on each cell whose terrain type has a Scene mapping.
+        // Spawned by Region.SceneInfo; deterministic per cellId so re-runs
+        // produce identical decorations. Sprites the loader picks need to
+        // be in the atlas (CollectPlacedModelIds seeds them).
+        public SceneDecorationLoader? Scenes;
+
+        // Minimum LbPx to enable scene decorations. At LbPx <= 64 (z<=8)
+        // a per-cell sprite is sub-pixel and just adds noise to the
+        // rendered tile — gate on the deeper zooms where the decoration
+        // becomes legible. The plan calls for "z >= 9".
+        public int ScenesMinLbPx = 128;
     }
 
     public sealed class Output {
@@ -554,6 +581,90 @@ public static class RenderPreviewRenderer {
 
         }   // end if (drawTerrain) — phase 2 roads
 
+        // ════════════════════════════════════════════════════════════════
+        //  Phase 2.5: scene decoration (foliage / rocks / clutter from
+        //  Region.SceneInfo). Runs as part of the terrain layer so the
+        //  decorations live under the object glyphs in z-order, but is
+        //  gated behind a scene loader + a minimum zoom so it doesn't
+        //  add noise at low-LbPx renders where the per-cell sprite is
+        //  smaller than a pixel.
+        // ════════════════════════════════════════════════════════════════
+
+        if (drawTerrain && input.Scenes != null && input.Scenes.HasAnyScenes
+                && input.Sprites != null && input.LbPx >= input.ScenesMinLbPx) {
+            // Per AC convention: 8x8 cells per LB, each cell 24wu. Cell
+            // origin is the south-west corner; we draw at cell-centre +
+            // ObjectDesc-supplied displacement so the per-cell hash maps
+            // 1:1 to a stable world position.
+            float lbWorldOriginX = (float)((long)input.CenterLbX - input.Radius) * 192f;
+            float lbWorldOriginY = (float)((long)input.CenterLbY - input.Radius) * 192f;
+            float decoSpanX = gridSize * 192f;
+            float decoSpanY = gridSize * 192f;
+            using var decoPaint = new SKPaint { IsAntialias = true, FilterQuality = SKFilterQuality.Medium };
+
+            for (int lbRow = 0; lbRow < gridSize; lbRow++) {
+                for (int lbCol = 0; lbCol < gridSize; lbCol++) {
+                    if (!input.Terrain.TryGetValue((lbCol, lbRow), out var lbTerrain) || lbTerrain == null)
+                        continue;
+                    // Resolve the LB-relative coordinates back to absolute
+                    // (lbX, lbY) so the per-cell hash uses a stable cellId.
+                    long absLbX = (long)input.CenterLbX - input.Radius + lbCol;
+                    long absLbY = (long)input.CenterLbY - input.Radius + lbRow;
+                    if (absLbX < 0 || absLbY < 0 || absLbX > 255 || absLbY > 255) continue;
+                    for (int cy = 0; cy < 8; cy++) {
+                        for (int cx = 0; cx < 8; cx++) {
+                            // Cell terrain byte = SW vertex (gx=cx, gy=cy).
+                            // AC's painter samples the SW corner of each
+                            // cell as the cell's terrain type for scene
+                            // selection — 1:1 with TerrainEntry layout.
+                            var swEntry = lbTerrain[cx * 9 + cy];
+                            byte t = swEntry.Type;
+                            // Pack (lbX, lbY, cx, cy) into a stable cellId.
+                            uint cellId = ((uint)absLbX << 24) | ((uint)absLbY << 16)
+                                        | ((uint)cx << 8) | (uint)cy;
+                            uint hash = SceneDecorationLoader.HashCellId(cellId);
+                            var deco = input.Scenes.PickForCell(t, hash);
+                            if (deco == null) continue;
+                            var sprite = input.Sprites(deco.ObjectId);
+                            if (sprite == null) continue;
+                            // World position: LB SW corner + cell offset
+                            // (in 24wu cells) + decoration offset (which
+                            // already includes BaseLoc + scatter).
+                            float worldX = (float)(absLbX * 192f) + cx * 24f + deco.Offset.X;
+                            float worldY = (float)(absLbY * 192f) + cy * 24f + deco.Offset.Y;
+                            float fracX = (worldX - lbWorldOriginX) / decoSpanX;
+                            float fracY = (worldY - lbWorldOriginY) / decoSpanY;
+                            if (fracX < 0f || fracX > 1f || fracY < 0f || fracY > 1f) continue;
+                            float pxX = fracX * W;
+                            float pxY = (1f - fracY) * H;
+                            float pxPerWu = W / decoSpanX;
+                            // Decorations are smaller than placed buildings;
+                            // cap at half the cell size so they don't bleed
+                            // into the next cell's decoration when stacked.
+                            float wPx = Math.Min(sprite.WorldWidth * pxPerWu * deco.Scale, 12f * pxPerWu);
+                            float hPx = Math.Min(sprite.WorldHeight * pxPerWu * deco.Scale, 12f * pxPerWu);
+                            if (wPx < 1.5f || hPx < 1.5f) continue;
+                            var src = new SKRect(sprite.X, sprite.Y,
+                                                 sprite.X + sprite.W, sprite.Y + sprite.H);
+                            var dest = new SKRect(pxX - wPx * 0.5f, pxY - hPx * 0.5f,
+                                                  pxX + wPx * 0.5f, pxY + hPx * 0.5f);
+                            // Yaw: the renderer-wide convention rotates
+                            // around the sprite centre. Apply as a Skia
+                            // canvas rotate then restore.
+                            if (Math.Abs(deco.YawRadians) > 0.01f) {
+                                canvas.Save();
+                                canvas.RotateRadians(deco.YawRadians, pxX, pxY);
+                                canvas.DrawBitmap(sprite.Atlas, src, dest, decoPaint);
+                                canvas.Restore();
+                            } else {
+                                canvas.DrawBitmap(sprite.Atlas, src, dest, decoPaint);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
         //  Phase 3: object glyphs (category â†’ shape, scale â†’ size). Objects-side.
         // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -646,6 +757,13 @@ public static class RenderPreviewRenderer {
         // many spawned objects (apple trees, totems, stones) being drawn
         // as squares/circles where they should be top-down sprites; this
         // hooks them into the same sprite path placed objects use.
+        // Sign-label collection. Populated alongside spawn glyphs when
+        // (a) the wcid resolves to a non-null PropertyString.Inscription
+        // and (b) the render's LbPx is deep enough that the label will be
+        // legible. Drawn in a separate pass after every glyph so the
+        // labels float above sprites without re-sorting the glyph list.
+        var signLabels = new List<(float pxX, float pxY, float sizePx, string text)>();
+        bool labelsEnabled = input.WcidToInscription != null && input.LbPx >= input.InscriptionMinLbPx;
         if (input.Spawns != null) {
             foreach (var kv in input.Spawns) {
                 foreach (var sp in kv.Value) {
@@ -685,6 +803,20 @@ public static class RenderPreviewRenderer {
                             GlyphFallbackDiag.Source.Spawn);
                     }
                     glyphs.Add((pxX, pxY, sp.Z, sizePx, shape, fill, 0u, 0u, sprite, sp.Orientation));
+                    if (labelsEnabled && sp.Wcid > 0) {
+                        var ins = input.WcidToInscription!(sp.Wcid);
+                        if (!string.IsNullOrWhiteSpace(ins)) {
+                            // Anchor the label one sprite-radius below the
+                            // glyph centre so the painted text doesn't
+                            // overlap the sign artwork. Cap text length so
+                            // a verbose plaque inscription doesn't bleed
+                            // across half a tile — the full text remains
+                            // discoverable through the frontend tooltip.
+                            string text = ins.Trim();
+                            if (text.Length > 80) text = text.Substring(0, 80) + "…";
+                            signLabels.Add((pxX, pxY + sizePx + 4f, sizePx, text));
+                        }
+                    }
                 }
             }
         }
@@ -771,6 +903,39 @@ public static class RenderPreviewRenderer {
             }
         }
         output.RenderedObjectCount = glyphs.Count;
+
+        // Sign-label pass — draws PropertyString.Inscription text below
+        // each sign-bearing spawn. Italic + outlined for legibility over
+        // textured terrain. Gated behind labelsEnabled so it short-circuits
+        // when the resolver is absent or the LbPx is too low.
+        if (labelsEnabled && signLabels.Count > 0) {
+            float fontPx = Math.Max(11f, input.LbPx / 22f);
+            using var typeface = SKTypeface.FromFamilyName(null,
+                SKFontStyleWeight.Normal, SKFontStyleWidth.Normal, SKFontStyleSlant.Italic);
+            using var labelFill = new SKPaint {
+                IsAntialias = true,
+                Color = new SKColor(0xF0, 0xE8, 0xD0),
+                TextSize = fontPx,
+                TextAlign = SKTextAlign.Center,
+                Typeface = typeface,
+                Style = SKPaintStyle.Fill,
+            };
+            using var labelStroke = new SKPaint {
+                IsAntialias = true,
+                Color = new SKColor(0x00, 0x00, 0x00, 0xCC),
+                TextSize = fontPx,
+                TextAlign = SKTextAlign.Center,
+                Typeface = typeface,
+                Style = SKPaintStyle.Stroke,
+                StrokeWidth = Math.Max(1.5f, fontPx * 0.16f),
+            };
+            foreach (var lbl in signLabels) {
+                // Outline first (stroke) so the fill paints over it,
+                // producing a halo without doubling the stroke width.
+                canvas.DrawText(lbl.text, lbl.pxX, lbl.pxY + fontPx, labelStroke);
+                canvas.DrawText(lbl.text, lbl.pxX, lbl.pxY + fontPx, labelFill);
+            }
+        }
         }   // end if (drawObjects) — phase 3 glyphs
 
         // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•

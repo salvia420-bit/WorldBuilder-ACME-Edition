@@ -40,7 +40,8 @@ public static class StaticSiteEmitter {
 
     public static EmissionStats Emit(CommandEngine engine, string projectSlug, string outDir,
             IReadOnlyList<ushort>? lbFilter, int maxZoom, int minZoom,
-            bool emitObjectTier, bool emitFloorTier, int throttleMs = 0) {
+            bool emitObjectTier, bool emitFloorTier, int throttleMs = 0,
+            string tileFormat = "png") {
         Directory.CreateDirectory(outDir);
 
         var p = engine.ProjectManager.CurrentProject!;
@@ -58,7 +59,7 @@ public static class StaticSiteEmitter {
         var pyramidResult = engine.EmitTilePyramid(
             lbFilter, tilesDir, maxZoom, minZoom,
             dirtyOnly: false, emitObjectLayer: emitObjectTier, emitFloorLayer: emitFloorTier,
-            throttleMs: throttleMs);
+            throttleMs: throttleMs, tileFormat: tileFormat);
 
         // 2. Sprite atlas: copy from project sprites/ into dist sprites/.
         int spriteCopyCount = CopyProjectSpritesIfPresent(p.ProjectDirectory, projectDir, diagnostics);
@@ -83,7 +84,20 @@ public static class StaticSiteEmitter {
         ReportSpawnSpriteCoverage(engine, lbList, diagnostics);
 
         // 5. meta.js — index of LB list, dungeon LBs, floor counts, overlay names.
-        EmitMeta(projectDir, projectSlug, lbList, dungeonLbs, overlayNames, engine);
+        EmitMeta(projectDir, projectSlug, lbList, dungeonLbs, overlayNames, engine, tileFormat);
+
+        // 5b. dungeons.js — per-LB floor count + per-floor cell count map.
+        // Exposed as JSONP (LOAD_DUNGEONS) so the frontend can surface the
+        // per-floor density in floor-selector tooltips without a second
+        // round-trip per dungeon LB. Independent of meta.js so a frontend
+        // can opt into the richer view without breaking older dists.
+        EmitDungeonsManifest(projectDir, dungeonLbs, engine);
+
+        // 5c. search_index.js — flat list of NPCs/towns/dungeons for the
+        // index/list views. Frontend filters client-side; no server search
+        // round-trip. Capped at 5MB-after-gzip; CommandEngine bounds NPCs
+        // to 5000 entries.
+        EmitSearchIndex(projectDir, lbList, dungeonLbs, engine);
 
         // 6. Frontend bundle. Copy from the assembly's StaticSite/ resources
         //    (resolved relative to the binary, with a source-tree fallback so
@@ -279,6 +293,24 @@ public static class StaticSiteEmitter {
                 }, JsonOpts)));
         count++;
         names.Add("grid");
+
+        // Named-zone overlay — Voronoi tessellation of region centroids,
+        // clipped to the world bounding rectangle. One feature per region;
+        // properties carry the region name and the centroid for the label
+        // anchor. Emitted as GeoJSON wrapped in the same JSONP loader as
+        // every other overlay so file:// loading still works.
+        if (EmitZonesOverlay(engine, overlaysDir, diagnostics)) {
+            count++;
+            names.Add("zones");
+        } else {
+            File.WriteAllText(Path.Combine(overlaysDir, "zones.js"),
+                BuildLoadOverlay("zones",
+                    JsonSerializer.Serialize(new { type = "FeatureCollection", features = Array.Empty<object>() }, JsonOpts)));
+            diagnostics.Add(new Diagnostic("info", "overlay:zones",
+                "no region anchors loaded — zones layer will be empty"));
+            names.Add("zones");
+            count++;
+        }
 
         // diagnostics.js is written by Emit() at the very end so it captures
         // every preceding step's findings. Reserve its name in the overlay
@@ -631,9 +663,51 @@ public static class StaticSiteEmitter {
     //  Manifest + meta
     // ────────────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Write projects/&lt;slug&gt;/search_index.js as JSONP wrapping a flat
+    /// item array. Frontend script-loads it and groups by item.kind for
+    /// the npc/town/dungeon view modes. Items carry x/y so a row click
+    /// can deep-link to the map at the right LB.
+    /// </summary>
+    private static void EmitSearchIndex(string projectDir, IReadOnlyList<string> lbList,
+            List<string> dungeonLbs, CommandEngine engine) {
+        var items = engine.BuildSearchIndex(lbList, dungeonLbs);
+        var js = "LOAD_SEARCH_INDEX(" + JsonSerializer.Serialize(items, JsonOpts) + ");\n";
+        File.WriteAllText(Path.Combine(projectDir, "search_index.js"), js);
+    }
+
+    /// <summary>
+    /// Write projects/&lt;slug&gt;/dungeons.js — JSONP wrapping a
+    /// {lbHex: {floorCount, cellsPerFloor}} dict. Mirrors the dungeons.json
+    /// shape called out in the static-site-scene-quality plan, served as
+    /// JSONP for parity with every other overlay/dataset on the dist.
+    /// </summary>
+    private static void EmitDungeonsManifest(string projectDir, List<string> dungeonLbs,
+            CommandEngine engine) {
+        var dict = new Dictionary<string, object>(dungeonLbs.Count);
+        foreach (var hex in dungeonLbs) {
+            if (!ushort.TryParse(hex.AsSpan(2), System.Globalization.NumberStyles.HexNumber,
+                    System.Globalization.CultureInfo.InvariantCulture, out var lbKey)) continue;
+            try {
+                int fc = engine.GetDungeonFloorCount(lbKey);
+                if (fc == 0) continue;
+                var cellsPerFloor = engine.GetDungeonFloorCellCounts(lbKey);
+                dict[hex] = new {
+                    floorCount = fc,
+                    cellsPerFloor = cellsPerFloor.ToArray(),
+                };
+            } catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException) {
+                // Same benign-on-concurrent-edit story as EmitMeta — skip
+                // and let the frontend fall back to floorCounts in meta.js.
+            }
+        }
+        var js = "LOAD_DUNGEONS(" + JsonSerializer.Serialize(dict, JsonOpts) + ");\n";
+        File.WriteAllText(Path.Combine(projectDir, "dungeons.js"), js);
+    }
+
     private static void EmitMeta(string projectDir, string slug,
             List<string> lbList, List<string> dungeonLbs, List<string> overlayNames,
-            CommandEngine engine) {
+            CommandEngine engine, string tileFormat = "png") {
         var floorCounts = new Dictionary<string, int>();
         foreach (var hex in dungeonLbs) {
             if (ushort.TryParse(hex.AsSpan(2), System.Globalization.NumberStyles.HexNumber,
@@ -671,6 +745,11 @@ public static class StaticSiteEmitter {
                 pxPerWuAtZ0 = 256.0 / 49152.0,
                 projectionVersion = 1,
             },
+            // Tile-image extension (png|webp). The frontend reads this and
+            // builds Leaflet URL templates with the matching extension.
+            // Defaults to "png" — older dists without this field decode
+            // as undefined → frontend falls back to png URLs.
+            tileFormat = string.Equals(tileFormat, "webp", StringComparison.OrdinalIgnoreCase) ? "webp" : "png",
         };
         // Why: top-level `const` in a classic <script> is script-scoped — it
         // does NOT create a property on `window`, so `window['PROJECT_<slug>']`
@@ -828,5 +907,122 @@ public static class StaticSiteEmitter {
                 keys.Add(k);
         }
         return keys.OrderBy(k => k).ToList();
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    //  Zones overlay — Voronoi tessellation of region centroids
+    // ────────────────────────────────────────────────────────────────────
+
+    private const float WorldExtent = 49152f;
+
+    /// <summary>
+    /// Emit a GeoJSON FeatureCollection of named zones, one polygon per
+    /// region, computed as the Voronoi cell of each region's centroid
+    /// clipped to the world bounding rectangle. Returns false (no overlay
+    /// written) when the engine has no region centroids.
+    /// </summary>
+    private static bool EmitZonesOverlay(CommandEngine engine, string overlaysDir,
+            List<Diagnostic> diagnostics) {
+        var centroids = engine.GetRegionCentroids();
+        if (centroids.Count == 0) {
+            diagnostics.Add(new Diagnostic("info", "overlay:zones",
+                "no region centroids — region_gazetteer.json absent or empty"));
+            return false;
+        }
+        // World bounding rectangle in CCW order. (0, 0) is the SW corner of
+        // the AC overland; the Voronoi clipper preserves CCW orientation
+        // through every half-plane clip.
+        var worldRect = new List<(double X, double Y)> {
+            (0, 0), (WorldExtent, 0), (WorldExtent, WorldExtent), (0, WorldExtent),
+        };
+        var features = new List<object>();
+        for (int i = 0; i < centroids.Count; i++) {
+            var (region, cx, cy) = centroids[i];
+            // Clip a fresh world rectangle by the perpendicular bisector of
+            // (centroid_i, centroid_j) for every j != i. The result is the
+            // Voronoi cell of i, clipped to the world bounds. O(N^2) for
+            // N = number of regions — fine at AC's ~13 regions.
+            var poly = new List<(double X, double Y)>(worldRect);
+            for (int j = 0; j < centroids.Count; j++) {
+                if (i == j) continue;
+                var (_, ox, oy) = centroids[j];
+                poly = HalfPlaneClip(poly, cx, cy, ox, oy);
+                if (poly.Count == 0) break; // degenerate — skip
+            }
+            if (poly.Count < 3) continue;
+            // GeoJSON polygons are arrays-of-rings; we have the outer ring.
+            // Coordinates are [lng, lat] = [worldX, worldY] to match the
+            // app.js CRS convention (latLng = (worldY, worldX)).
+            var ring = new List<double[]>(poly.Count + 1);
+            foreach (var (px, py) in poly) ring.Add(new double[] { px, py });
+            // Close the ring per the GeoJSON spec — first and last
+            // coordinate pair must be identical.
+            ring.Add(new double[] { poly[0].X, poly[0].Y });
+            features.Add(new {
+                type = "Feature",
+                properties = new {
+                    name = region,
+                    centroid = new double[] { cx, cy },
+                },
+                geometry = new {
+                    type = "Polygon",
+                    coordinates = new[] { ring.ToArray() },
+                },
+            });
+        }
+        var geoJson = new {
+            type = "FeatureCollection",
+            features = features.ToArray(),
+        };
+        File.WriteAllText(Path.Combine(overlaysDir, "zones.js"),
+            BuildLoadOverlay("zones", JsonSerializer.Serialize(geoJson, JsonOpts)));
+        return true;
+    }
+
+    /// <summary>
+    /// Sutherland-Hodgman polygon clip against the half-plane "closer to
+    /// (ax, ay) than to (bx, by)". Returns a new polygon (CCW, possibly
+    /// empty when the input lies wholly on the far side). The clip line
+    /// is the perpendicular bisector of segment AB; "inside" is defined
+    /// as the dot product of (P - midpoint) with (A - B) being &gt; 0,
+    /// i.e. P is closer to A than to B.
+    /// </summary>
+    private static List<(double X, double Y)> HalfPlaneClip(
+            List<(double X, double Y)> input, double ax, double ay, double bx, double by) {
+        if (input.Count == 0) return input;
+        // Plane equation: n · (P - M) >= 0 where n = (A - B), M = (A + B)/2.
+        // Expand to: n.x * P.x + n.y * P.y >= n · M = (|A|² - |B|²) / 2.
+        double nx = ax - bx;
+        double ny = ay - by;
+        double rhs = (ax * ax + ay * ay - bx * bx - by * by) * 0.5;
+
+        var output = new List<(double X, double Y)>(input.Count + 1);
+        for (int i = 0; i < input.Count; i++) {
+            var p1 = input[i];
+            var p2 = input[(i + 1) % input.Count];
+            double s1 = nx * p1.X + ny * p1.Y - rhs;
+            double s2 = nx * p2.X + ny * p2.Y - rhs;
+            bool in1 = s1 >= 0;
+            bool in2 = s2 >= 0;
+            if (in1 && in2) {
+                output.Add(p2);
+            } else if (in1 && !in2) {
+                output.Add(Intersect(p1, p2, s1, s2));
+            } else if (!in1 && in2) {
+                output.Add(Intersect(p1, p2, s1, s2));
+                output.Add(p2);
+            }
+            // both out → emit nothing
+        }
+        return output;
+    }
+
+    private static (double X, double Y) Intersect((double X, double Y) p1, (double X, double Y) p2,
+            double s1, double s2) {
+        // Linear interpolation along the segment for the zero crossing.
+        // s1, s2 are the signed distances from the half-plane boundary;
+        // s1 - s2 cannot be zero here because in1 != in2.
+        double t = s1 / (s1 - s2);
+        return (p1.X + t * (p2.X - p1.X), p1.Y + t * (p2.Y - p1.Y));
     }
 }

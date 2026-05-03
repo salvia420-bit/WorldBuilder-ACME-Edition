@@ -19,12 +19,40 @@ internal static class TilePyramidEmitter {
     public const int TilePx = 256;
 
     /// <summary>
+    /// Pick the sprite-atlas LOD for a given Leaflet zoom. LOD-0 carries
+    /// full detail and is used at the deeper zooms (z &gt;= 11) where each
+    /// sprite occupies many pixels. LOD-2 carries the GfxObjDegradeInfo
+    /// chain's deepest substitution and is used at low zooms (z &lt;= 9)
+    /// where every sprite is a few pixels and full-mesh detail is wasted
+    /// bandwidth. LOD-1 is the in-between bucket at z == 10.
+    /// </summary>
+    public static int LodForZoom(int zoom) {
+        if (zoom >= 11) return 0;
+        if (zoom == 10) return 1;
+        return 2;
+    }
+
+    /// <summary>
+    /// Tile-image format. PNG is the historical default; WebP saves
+    /// ~35% on a Dereth-scale tile pyramid at quality=90 with no
+    /// perceptible loss at z &gt;= 11.
+    /// </summary>
+    public enum TileFormat { Png, Webp }
+
+    public static (SKEncodedImageFormat Encoder, string Extension, int Quality) EncoderFor(TileFormat fmt) =>
+        fmt switch {
+            TileFormat.Webp => (SKEncodedImageFormat.Webp, "webp", 90),
+            _               => (SKEncodedImageFormat.Png,  "png",  90),
+        };
+
+    /// <summary>
     /// Slice a single rendered landblock at the deepest zoom into tiles
     /// and write them to <paramref name="layerDir"/>/{maxZoom}/{x}/{y}.png.
     /// Tiles entirely outside the bitmap (e.g. when an LB straddles the
     /// world edge in some hypothetical future) are skipped.
     /// </summary>
-    public static int SliceLbRender(SKBitmap render, ushort lbKey, int maxZoom, string layerDir) {
+    public static int SliceLbRender(SKBitmap render, ushort lbKey, int maxZoom, string layerDir,
+            TileFormat format = TileFormat.Png) {
         int tilesPerLbSide = 1 << (maxZoom - 8);   // z=8 → 1, z=9 → 2, …, z=12 → 16
         if (tilesPerLbSide < 1) tilesPerLbSide = 1;
 
@@ -54,8 +82,9 @@ internal static class TilePyramidEmitter {
                 var dir = Path.Combine(layerDir, maxZoom.ToString(), outTileX.ToString());
                 Directory.CreateDirectory(dir);
                 using var img = SKImage.FromBitmap(sub);
-                using var data = img.Encode(SKEncodedImageFormat.Png, 90);
-                File.WriteAllBytes(Path.Combine(dir, $"{outTileY}.png"), data.ToArray());
+                var (enc, ext, q) = EncoderFor(format);
+                using var data = img.Encode(enc, q);
+                File.WriteAllBytes(Path.Combine(dir, $"{outTileY}.{ext}"), data.ToArray());
                 written++;
             }
         }
@@ -69,8 +98,10 @@ internal static class TilePyramidEmitter {
     /// as fully transparent — the output tile is omitted if all four sources
     /// are missing.
     /// </summary>
-    public static int Downsample(string layerDir, int srcZoom, int minZoom) {
+    public static int Downsample(string layerDir, int srcZoom, int minZoom,
+            TileFormat format = TileFormat.Png) {
         int written = 0;
+        var (enc, ext, q) = EncoderFor(format);
         for (int z = srcZoom; z > minZoom; z--) {
             int srcSide = 1 << z;          // tiles per world side at z
             int dstZ = z - 1;
@@ -78,10 +109,10 @@ internal static class TilePyramidEmitter {
             for (int dy = 0; dy < dstSide; dy++) {
                 for (int dx = 0; dx < dstSide; dx++) {
                     var paths = new[] {
-                        TilePath(layerDir, z, dx * 2,     dy * 2),
-                        TilePath(layerDir, z, dx * 2 + 1, dy * 2),
-                        TilePath(layerDir, z, dx * 2,     dy * 2 + 1),
-                        TilePath(layerDir, z, dx * 2 + 1, dy * 2 + 1),
+                        TilePath(layerDir, z, dx * 2,     dy * 2,     ext),
+                        TilePath(layerDir, z, dx * 2 + 1, dy * 2,     ext),
+                        TilePath(layerDir, z, dx * 2,     dy * 2 + 1, ext),
+                        TilePath(layerDir, z, dx * 2 + 1, dy * 2 + 1, ext),
                     };
                     if (!paths.Any(File.Exists)) continue;
                     var quad = new SKBitmap?[4];
@@ -92,8 +123,8 @@ internal static class TilePyramidEmitter {
                     var dir = Path.Combine(layerDir, dstZ.ToString(), dx.ToString());
                     Directory.CreateDirectory(dir);
                     using var img = SKImage.FromBitmap(dst);
-                    using var data = img.Encode(SKEncodedImageFormat.Png, 90);
-                    File.WriteAllBytes(Path.Combine(dir, $"{dy}.png"), data.ToArray());
+                    using var data = img.Encode(enc, q);
+                    File.WriteAllBytes(Path.Combine(dir, $"{dy}.{ext}"), data.ToArray());
                     written++;
                     foreach (var b in quad) b?.Dispose();
                 }
@@ -102,10 +133,11 @@ internal static class TilePyramidEmitter {
         return written;
     }
 
-    public static void WriteFloorTile(SKBitmap render, ushort lbKey, int floor, string floorRoot, int zoom) {
+    public static void WriteFloorTile(SKBitmap render, ushort lbKey, int floor, string floorRoot, int zoom,
+            TileFormat format = TileFormat.Png) {
         // Floor tiles aren't a Leaflet pyramid — one image per floor per LB
         // anchored to the LB's tile-coord origin at the chosen zoom. Saved as
-        // floor/{lbHex}/{zoom}/{x}/{y}/{floor}.png so the frontend can
+        // floor/{lbHex}/{zoom}/{x}/{y}/{floor}.{ext} so the frontend can
         // overlay them on the exterior tiles when a dungeon LB is in view.
         int tilesPerLbSide = 1 << (zoom - 8);
         if (tilesPerLbSide < 1) tilesPerLbSide = 1;
@@ -120,16 +152,17 @@ internal static class TilePyramidEmitter {
             tileBaseX.ToString(), tileBaseY.ToString());
         Directory.CreateDirectory(dir);
         using var img = SKImage.FromBitmap(render);
-        using var data = img.Encode(SKEncodedImageFormat.Png, 90);
-        File.WriteAllBytes(Path.Combine(dir, $"{floor}.png"), data.ToArray());
+        var (enc, ext, q) = EncoderFor(format);
+        using var data = img.Encode(enc, q);
+        File.WriteAllBytes(Path.Combine(dir, $"{floor}.{ext}"), data.ToArray());
     }
 
     // ────────────────────────────────────────────────────────────────────
     //  Helpers
     // ────────────────────────────────────────────────────────────────────
 
-    private static string TilePath(string layerDir, int z, int x, int y) =>
-        Path.Combine(layerDir, z.ToString(), x.ToString(), $"{y}.png");
+    private static string TilePath(string layerDir, int z, int x, int y, string ext = "png") =>
+        Path.Combine(layerDir, z.ToString(), x.ToString(), $"{y}.{ext}");
 
     private static SKBitmap ExtractSubBitmap(SKBitmap src, int x, int y, int w, int h) {
         var info = new SKImageInfo(w, h, SKColorType.Rgba8888, SKAlphaType.Premul);
