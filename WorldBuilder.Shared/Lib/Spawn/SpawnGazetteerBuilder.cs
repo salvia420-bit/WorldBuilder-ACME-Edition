@@ -194,12 +194,37 @@ public static class SpawnGazetteerBuilder {
     }
 
     /// <summary>
-    /// Resolve a render-time category from an Acpedia category list and/or
-    /// ACE WeenieType. Returns one of: "Creature" | "Npc" | "Object" |
-    /// "Surface". Order matters — Acpedia categories are more accurate
-    /// than weenie type when both are available.
+    /// Resolve a render-time category from an ACE WeenieType (canonical) and
+    /// an Acpedia category list (community-curated, used only to refine
+    /// ambiguous types). Returns one of: "Creature" | "Npc" | "Object" |
+    /// "Surface".
+    ///
+    /// Type-first ordering replaces the prior Acpedia-first behaviour. The
+    /// previous switch also used wrong WeenieType constants (Vendor=45 was
+    /// LScoreKeeper, "Talker=4" was Missile, "20=Npc" was Chest); those are
+    /// pinned to canonical values here. See AceWeenieType in
+    /// WorldBuilder.Shared.Lib.AceDb.AceWeenieTypes for the full enum.
     /// </summary>
     public static string ResolveCategory(string[]? acpediaCategories, int? weenieType) {
+        // Canonical AceWeenieType → category. Unambiguous for every type
+        // listed; the spawn gazetteer doesn't differentiate talker NPCs from
+        // monsters within Type=10 (the WeenieIndex's IsTalker flag does that).
+        switch (weenieType) {
+            case 10: return "Creature";     // Creature (monsters and talkers)
+            case 12: return "Npc";          // Vendor
+            case  7: return "Object";       // Portal
+            case 19: return "Object";       // Door
+            case 20: return "Object";       // Chest
+            case 21: return "Object";       // Container
+            case 25: return "Object";       // LifeStone
+            case 26: return "Object";       // Switch
+            case 29: return "Object";       // LightSource
+            case 36: return "Object";       // Channel (signs, shrines)
+            case 60: return "Object";       // HousePortal
+        }
+
+        // Type=1 (Generic), Type=18 (Food), and unmapped types are ambiguous
+        // — fall back to Acpedia as a refinement hint.
         if (acpediaCategories is { Length: > 0 }) {
             foreach (var c in acpediaCategories) {
                 if (c == null) continue;
@@ -212,17 +237,7 @@ public static class SpawnGazetteerBuilder {
                 if (lc.Contains("surface") || lc.Contains("scenery")) return "Surface";
             }
         }
-        // ACE WeenieType enum (small stable subset used here).
-        return weenieType switch {
-            10 => "Creature",   // Creature
-            45 => "Npc",        // Vendor
-            20 => "Npc",        // Some NPC types
-             4 => "Npc",        // Creature with talk-interaction
-             7 => "Object",     // Portal
-            19 => "Object",     // Door
-             1 => "Object",     // Generic / Item
-             _ => "Object",
-        };
+        return "Object";
     }
 
     /// <summary>
