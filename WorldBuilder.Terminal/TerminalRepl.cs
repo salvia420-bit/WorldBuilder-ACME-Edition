@@ -1948,6 +1948,11 @@ public class TerminalRepl {
         Console.WriteLine("=== Living Atlas ===");
         Console.ResetColor();
         Console.WriteLine("  describe-landblock <lbX> <lbY>                               Verbal + structured description (terrain, structures, spawns, POIs, validation)");
+        Console.WriteLine();
+
+        Console.ForegroundColor = ConsoleColor.White;
+        Console.WriteLine("=== Tile Pyramid (visual, sourced from render-preview) ===");
+        Console.ResetColor();
         Console.WriteLine("  get-tile lb <lbX> <lbY> [--out path]                         Cached LB tile (PNG); generates on miss, JPEG q85 ~20 KB");
         Console.WriteLine("  get-tile region <region-name> [--out path]                   Region tile, e.g. \"Aluvian Heartlands\"");
         Console.WriteLine("  get-tile world [--out path]                                  Composite world tile (~150 KB JPEG)");
