@@ -23,13 +23,13 @@ public class WeenieIndexTests {
 
     private static WeenieIndexEntry MakeEntry(int wcid, int weenieType,
             string className = "stub", uint? setup = 0x02000001u,
-            bool isTalker = false, bool isServerManaged = false) =>
+            bool isNpc = false, bool isServerManaged = false) =>
         new WeenieIndexEntry(
             Wcid: wcid,
             ClassName: className,
             WeenieType: weenieType,
             IsServerManaged: isServerManaged,
-            IsTalker: isTalker,
+            IsNpc: isNpc,
             DisplayName: className,
             Title: null,
             SetupDid: setup,
@@ -117,7 +117,7 @@ public class WeenieIndexTests {
             ClassName: "ace37518-royalguard",
             WeenieType: 10,
             IsServerManaged: true,
-            IsTalker: true,
+            IsNpc: true,
             DisplayName: "Royal Guard",
             Title: "Soldier",
             SetupDid: 0x02000441u,

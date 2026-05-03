@@ -61,13 +61,18 @@ public partial class CommandEngine {
             string targetPath = outPath ?? Path.Combine(
                 _projectManager.CurrentProject!.ProjectDirectory, "npc_gazetteer.json");
 
-            // NPCs = every Vendor (Type 12) ∪ every Creature (Type 10) whose
-            // emote table marks it as a talker. The IsTalker flag is stamped
-            // by the WeenieIndex ingest from weenie_properties_emote category
-            // 5 (ReceiveTalkDirect) or 6 (Greeting).
+            // NPCs = every weenie the IsNpc flag identifies. IsNpc is computed
+            // at WeenieIndex ingest from a union of canonical signals
+            // (RadarBlipColor=Yellow, NpcLooksLikeObject, NpcInteractsSilently,
+            // WeenieType=Vendor) — see AceDbConnector.WeenieIndex.cs for the
+            // cross-source verification (ACEmulator/ACE, WeenieViewer, GDL).
+            //
+            // The earlier IsTalker emote-category filter was based on a
+            // mislabeling of EmoteCategory; HeartBeat/Give don't identify
+            // talker NPCs and the real ReceiveTalkDirect category has only
+            // ~10 weenies in retail.
             var roster = _weenieIndex.Entries
-                .Where(e => e.WeenieType == WeenieType_Vendor
-                         || (e.WeenieType == WeenieType_Creature && e.IsTalker))
+                .Where(e => e.IsNpc)
                 .Select(e => new NpcRecord(
                     Wcid: e.Wcid,
                     ClassName: e.ClassName,
@@ -80,8 +85,8 @@ public partial class CommandEngine {
             File.WriteAllText(targetPath,
                 JsonSerializer.Serialize(roster, GazetteerJsonOpts));
             int vendorCount = roster.Count(r => r.WeenieType == WeenieType_Vendor);
-            int talkerCount = roster.Count(r => r.WeenieType == WeenieType_Creature);
-            return new IngestNpcRosterResult(true, roster.Count, vendorCount, talkerCount, targetPath);
+            int otherCount  = roster.Count - vendorCount;
+            return new IngestNpcRosterResult(true, roster.Count, vendorCount, otherCount, targetPath);
         } catch (Exception ex) {
             return new IngestNpcRosterResult(false, 0, 0, 0, null, ex.Message);
         }

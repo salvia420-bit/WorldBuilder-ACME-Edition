@@ -19,13 +19,25 @@ public partial class AceDbConnector {
     private const int PropDid_PaletteBase = 6;
     private const int PropDid_Icon        = 8;
 
-    // EmoteCategory enum values from ACE.Entity.Enum.EmoteCategory. The two
-    // values we read identify "talker" weenies — NPCs the player can converse
-    // with — and disambiguate them from other Type=10 (Creature) weenies which
-    // are monsters. Cat 5 is the canonical "responds to direct speech" marker;
-    // Cat 6 covers greeting-only NPCs (quest givers, ambient townsfolk).
-    private const int EmoteCat_ReceiveTalkDirect = 5;
-    private const int EmoteCat_Greeting          = 6;
+    // RadarColor enum value from ACE.Entity.Enum.RadarColor (cross-verified
+    // against ACEmulator/ACE master, OptimShi/WeenieViewer, and
+    // GamesDeadLol/GDL — all three agree). Yellow (8) is shared by NPC and
+    // Vendor — the canonical "this radar blip is an interactable person"
+    // marker. Other values include Default=0, Creature=2 (Gold), White=3,
+    // Portal=4 (Purple), PlayerKiller=5 (Red), etc.; only Yellow=8 indicates
+    // an NPC for our purposes.
+    private const int PropInt_RadarBlipColor = 95;
+    private const int RadarColor_Npc         = 8;
+
+    // PropertyBool flags that explicitly mark a weenie as an NPC, even when
+    // its WeenieType says otherwise (Type=1 Generic NPCs hidden as objects
+    // — banners, signs, ambient props that respond to /tell or right-click).
+    private const int PropBool_NpcLooksLikeObject   = 83;
+    private const int PropBool_NpcInteractsSilently = 90;
+
+    // ACE WeenieType.Vendor — pinned here so the IsNpc roll-up can include
+    // every Vendor row regardless of property-side signals.
+    private const int WeenieType_Vendor_Local = 12;
 
     /// <summary>
     /// Returns the canonical <see cref="WeenieIndex"/> for the connected
@@ -55,21 +67,36 @@ public partial class AceDbConnector {
             }
         }
 
-        // Side query: the set of wcids whose emote table includes a
-        // ReceiveTalkDirect or Greeting category — the canonical "talker"
-        // marker. Lets the NPC roster project from WeenieIndex without a
-        // second pass over the emote tables.
-        var talkerWcids = new HashSet<int>();
-        const string sqlTalkers = @"
-            SELECT DISTINCT `object_Id` FROM `weenie_properties_emote`
-            WHERE `category` IN (@catTalk, @catGreet)";
-        await using (var cmdTalk = new MySqlCommand(sqlTalkers, conn)) {
-            cmdTalk.Parameters.AddWithValue("@catTalk",  EmoteCat_ReceiveTalkDirect);
-            cmdTalk.Parameters.AddWithValue("@catGreet", EmoteCat_Greeting);
-            cmdTalk.CommandTimeout = 120;
-            await using var rd = await cmdTalk.ExecuteReaderAsync(ct);
+        // Side query: the set of wcids that carry an NPC marker via any of
+        // three independent signals — RadarBlipColor=Yellow (NPC/Vendor blip),
+        // NpcLooksLikeObject=true, or NpcInteractsSilently=true. Cross-
+        // referenced against ACEmulator/ACE Source/ACE.Entity/Enum/RadarColor
+        // (canonical), OptimShi/WeenieViewer/Enums/PropertyInt, and
+        // GamesDeadLol/GDL/PhatSDK/GameEnums.h (PhatAC) — all three agree on
+        // these values.
+        //
+        // The earlier emote-category filter (Cat 5 + Cat 6) was based on a
+        // mislabeling in this file — Cat 5 is HeartBeat (every monster's
+        // idle chatter) and Cat 6 is Give, not the "talker" categories I
+        // assumed. The real ReceiveTalkDirect is Cat 38 with only ~10
+        // entries in retail; not a useful signal. RadarColor + the NPC
+        // bools cover the real NPC population.
+        var npcWcids = new HashSet<int>();
+        const string sqlNpc = @"
+            SELECT `object_Id` FROM `weenie_properties_int`
+                WHERE `type` = @propRadar AND `value` = @radarNpc
+            UNION
+            SELECT `object_Id` FROM `weenie_properties_bool`
+                WHERE `type` IN (@boolLooksLike, @boolInteracts) AND `value` = 1";
+        await using (var cmdNpc = new MySqlCommand(sqlNpc, conn)) {
+            cmdNpc.Parameters.AddWithValue("@propRadar",     PropInt_RadarBlipColor);
+            cmdNpc.Parameters.AddWithValue("@radarNpc",      RadarColor_Npc);
+            cmdNpc.Parameters.AddWithValue("@boolLooksLike", PropBool_NpcLooksLikeObject);
+            cmdNpc.Parameters.AddWithValue("@boolInteracts", PropBool_NpcInteractsSilently);
+            cmdNpc.CommandTimeout = 120;
+            await using var rd = await cmdNpc.ExecuteReaderAsync(ct);
             while (await rd.ReadAsync(ct)) {
-                talkerWcids.Add((int)rd.GetUInt32(0));
+                npcWcids.Add((int)rd.GetUInt32(0));
             }
         }
 
@@ -130,14 +157,14 @@ public partial class AceDbConnector {
             int?   level      = reader.IsDBNull("level")        ? null : reader.GetInt32("level");
 
             bool serverManaged = serverManagedWcids.Contains(wcid);
-            bool isTalker      = talkerWcids.Contains(wcid);
+            bool isNpc         = weenieType == WeenieType_Vendor_Local || npcWcids.Contains(wcid);
 
             dict[wcid] = new WeenieIndexEntry(
                 Wcid: wcid,
                 ClassName: className,
                 WeenieType: weenieType,
                 IsServerManaged: serverManaged,
-                IsTalker: isTalker,
+                IsNpc: isNpc,
                 DisplayName: displayNm,
                 Title: title,
                 SetupDid: setupDid,
