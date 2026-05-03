@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using System.Text.Json;
 using WorldBuilder.Shared.Lib.AceDb;
 
@@ -19,10 +20,12 @@ public static class SpawnGazetteerBuilder {
 
     /// <summary>
     /// Read an LSD spawnmap_summary.jsonl-style JSON file (object keyed by
-    /// hex landblock ID, values are arrays of spawn entries). Filters out
-    /// server-managed weenies (doors / chests / generators) and unidentified
-    /// entries (wcid=0 or name="?") so downstream consumers always get
-    /// player-visible records.
+    /// hex landblock ID, values are arrays of spawn entries). Drops only
+    /// unidentified entries (wcid=0 or name="?"). Server-managed weenies
+    /// (doors / chests / generators / statues) are kept and tagged via
+    /// <see cref="SpawnRecord.IsServerManaged"/> so the renderer can stack
+    /// them on top of their DAT-side pedestals; consumers that want the
+    /// old "player-visible only" view can filter on the flag.
     /// </summary>
     public static Dictionary<ushort, List<SpawnRecord>> BuildFromLsdJson(string path) {
         var raw = File.ReadAllText(path);
@@ -41,13 +44,18 @@ public static class SpawnGazetteerBuilder {
             foreach (var item in entry.Value.EnumerateArray()) {
                 bool serverManaged = item.TryGetProperty("is_server_managed", out var sEl)
                     && sEl.ValueKind == JsonValueKind.True;
-                if (serverManaged) continue;
                 int wcid = item.TryGetProperty("wcid", out var wEl)
                     && wEl.ValueKind == JsonValueKind.Number ? wEl.GetInt32() : 0;
                 if (wcid == 0) continue;
                 string name = item.TryGetProperty("name", out var nEl)
                     && nEl.ValueKind == JsonValueKind.String ? nEl.GetString()! : "?";
-                if (string.IsNullOrEmpty(name) || name.Trim() == "?") continue;
+                if (string.IsNullOrEmpty(name) || name.Trim() == "?") {
+                    // Server-managed rows often arrive nameless (a door
+                    // weenie's wcid is the identifier). Keep them with a
+                    // synthesised name; reject only when the wcid itself
+                    // is missing.
+                    name = $"Weenie {wcid}";
+                }
                 string? placement = item.TryGetProperty("placement", out var pEl)
                     && pEl.ValueKind == JsonValueKind.String ? pEl.GetString() : null;
                 int? wt = item.TryGetProperty("weenie_type", out var wtEl)
@@ -66,6 +74,7 @@ public static class SpawnGazetteerBuilder {
                 float z = item.TryGetProperty("z", out var zEl) ? zEl.GetSingle() : 0;
                 int cell = item.TryGetProperty("cell", out var cEl)
                     && cEl.ValueKind == JsonValueKind.Number ? cEl.GetInt32() : 0;
+                Quaternion orientation = ReadOrientation(item);
 
                 spawns.Add(new SpawnRecord(
                     Wcid: wcid,
@@ -78,11 +87,37 @@ public static class SpawnGazetteerBuilder {
                     WeenieType: wt,
                     AcpediaTitle: acTitle,
                     AcpediaTier: acTier,
-                    IsSynthetic: false));
+                    IsSynthetic: false,
+                    IsServerManaged: serverManaged,
+                    Orientation: orientation));
             }
             if (spawns.Count > 0) result[lbKey] = spawns;
         }
         return result;
+    }
+
+    /// <summary>
+    /// Parse an LSD JSON entry's optional orientation. Recognises both the
+    /// flat <c>angles_w/x/y/z</c> shape (matches ACE column casing) and a
+    /// nested <c>orientation: {w,x,y,z}</c> object. Defaults to identity
+    /// when neither is present, so dumps without orientation just render
+    /// upright.
+    /// </summary>
+    private static Quaternion ReadOrientation(JsonElement item) {
+        if (item.TryGetProperty("angles_w", out var aw) && aw.ValueKind == JsonValueKind.Number
+                && item.TryGetProperty("angles_x", out var ax) && ax.ValueKind == JsonValueKind.Number
+                && item.TryGetProperty("angles_y", out var ay) && ay.ValueKind == JsonValueKind.Number
+                && item.TryGetProperty("angles_z", out var az) && az.ValueKind == JsonValueKind.Number) {
+            return new Quaternion(ax.GetSingle(), ay.GetSingle(), az.GetSingle(), aw.GetSingle());
+        }
+        if (item.TryGetProperty("orientation", out var oEl) && oEl.ValueKind == JsonValueKind.Object
+                && oEl.TryGetProperty("w", out var ow) && ow.ValueKind == JsonValueKind.Number
+                && oEl.TryGetProperty("x", out var ox) && ox.ValueKind == JsonValueKind.Number
+                && oEl.TryGetProperty("y", out var oy) && oy.ValueKind == JsonValueKind.Number
+                && oEl.TryGetProperty("z", out var oz) && oz.ValueKind == JsonValueKind.Number) {
+            return new Quaternion(ox.GetSingle(), oy.GetSingle(), oz.GetSingle(), ow.GetSingle());
+        }
+        return Quaternion.Identity;
     }
 
     /// <summary>
@@ -122,6 +157,24 @@ public static class SpawnGazetteerBuilder {
                 list = new List<SpawnRecord>();
                 result[lbId] = list;
             }
+
+            // Orientation is optional on LandblockInstanceRecord (the row
+            // reader only fills it when angles columns were SELECTed). When
+            // absent, default to identity — the renderer's
+            // OrientationOrIdentity accessor folds (0,0,0,0) into a valid
+            // upright sprite.
+            Quaternion orientation = Quaternion.Identity;
+            if (row.AnglesW.HasValue && row.AnglesX.HasValue
+                    && row.AnglesY.HasValue && row.AnglesZ.HasValue) {
+                orientation = new Quaternion(
+                    row.AnglesX.Value, row.AnglesY.Value, row.AnglesZ.Value, row.AnglesW.Value);
+            }
+
+            // Every landblock_instance row is a server-managed weenie by
+            // definition — that's literally what the table is for. The
+            // renderer uses this flag the same way it uses the LSD flag:
+            // to optionally hide noise (chests, generators) without
+            // dropping them from the underlying gazetteer.
             list.Add(new SpawnRecord(
                 Wcid: wcid,
                 Name: name,
@@ -133,7 +186,9 @@ public static class SpawnGazetteerBuilder {
                 WeenieType: weenieType,
                 AcpediaTitle: null,
                 AcpediaTier: null,
-                IsSynthetic: synthetic));
+                IsSynthetic: synthetic,
+                IsServerManaged: true,
+                Orientation: orientation));
         }
         return result;
     }

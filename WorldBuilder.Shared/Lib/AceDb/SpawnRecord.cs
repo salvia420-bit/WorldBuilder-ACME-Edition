@@ -1,12 +1,13 @@
+using System.Numerics;
+
 namespace WorldBuilder.Shared.Lib.AceDb;
 
 /// <summary>
-/// Canonical record for a player-visible weenie spawn. Sourced from either
-/// the LSD-Partial spawnMap dump or the ACE world DB's
-/// <c>landblock_instance</c> table. Distinct from
-/// <see cref="LandblockInstanceRecord"/> (which mirrors the raw DB row);
-/// SpawnRecord is the higher-level, ontology-aware view the static-site
-/// emitter, render pipeline, and per-LB describer all share.
+/// Canonical record for a weenie spawn. Sourced from either the LSD-Partial
+/// spawnMap dump or the ACE world DB's <c>landblock_instance</c> table.
+/// Distinct from <see cref="LandblockInstanceRecord"/> (which mirrors the raw
+/// DB row); SpawnRecord is the higher-level, ontology-aware view the
+/// static-site emitter, render pipeline, and per-LB describer all share.
 /// </summary>
 /// <param name="Wcid">Weenie class ID (DAT or ACE custom; custom ≥ 100 000).</param>
 /// <param name="Name">Weenie display name (best-effort from source).</param>
@@ -33,6 +34,19 @@ namespace WorldBuilder.Shared.Lib.AceDb;
 /// weenie join, or position guessed from cell center). The frontend renders
 /// synthetic records with a "?" overlay so guesses don't masquerade as facts.
 /// </param>
+/// <param name="IsServerManaged">
+/// True for weenies the ACE server manages directly (doors, chests,
+/// generators, statues spawned by generators). Previously these were
+/// filtered out at gazetteer-build time, but the renderer needs them to
+/// stack server-spawned doors/statues over their DAT-side pedestals — so
+/// we keep them here and let the consumer decide whether to draw or hide.
+/// </param>
+/// <param name="Orientation">
+/// World-space rotation. Carried from <c>landblock_instance.angles_*</c>
+/// (ACE source) or the LSD JSON when present. Defaults to identity when
+/// the source doesn't supply orientation. The renderer uses this to draw
+/// directional placements (doors, statues, signs) facing the right way.
+/// </param>
 public sealed record SpawnRecord(
     int Wcid,
     string Name,
@@ -46,4 +60,16 @@ public sealed record SpawnRecord(
     int? WeenieType,
     string? AcpediaTitle,
     string? AcpediaTier,
-    bool IsSynthetic);
+    bool IsSynthetic,
+    bool IsServerManaged = false,
+    Quaternion Orientation = default) {
+
+    /// <summary>
+    /// <see cref="Orientation"/> falls back to identity when the source
+    /// didn't supply one — the record's <c>default</c> Quaternion is
+    /// (0,0,0,0), which isn't a valid rotation. Use this accessor on any
+    /// render path so a missing source always produces an upright sprite.
+    /// </summary>
+    public Quaternion OrientationOrIdentity =>
+        Orientation == default ? Quaternion.Identity : Orientation;
+}

@@ -129,20 +129,31 @@ public partial class AceDbConnector {
         await conn.OpenAsync(ct);
         const string sql = @"
             SELECT `guid`, `weenie_Class_Id`, `obj_Cell_Id`,
-                   `origin_X`, `origin_Y`, `origin_Z`
+                   `origin_X`, `origin_Y`, `origin_Z`,
+                   `angles_w`, `angles_x`, `angles_y`, `angles_z`
             FROM `landblock_instance`";
         await using var cmd = new MySqlCommand(sql, conn);
         cmd.CommandTimeout = 600;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct)) {
-            results.Add(new LandblockInstanceRecord {
+            var rec = new LandblockInstanceRecord {
                 Guid = reader.GetUInt32("guid"),
                 WeenieClassId = reader.GetUInt32("weenie_Class_Id"),
                 ObjCellId = reader.GetUInt32("obj_Cell_Id"),
                 OriginX = reader.GetFloat("origin_X"),
                 OriginY = reader.GetFloat("origin_Y"),
                 OriginZ = reader.GetFloat("origin_Z"),
-            });
+            };
+            // ACE schema makes angles nullable; door/statue/etc. rows
+            // typically populate them. Read only when present so the
+            // ingest still works against pre-angles dumps.
+            if (reader["angles_w"] != System.DBNull.Value) {
+                rec.AnglesW = reader.GetFloat("angles_w");
+                rec.AnglesX = reader.GetFloat("angles_x");
+                rec.AnglesY = reader.GetFloat("angles_y");
+                rec.AnglesZ = reader.GetFloat("angles_z");
+            }
+            results.Add(rec);
         }
         return results;
     }

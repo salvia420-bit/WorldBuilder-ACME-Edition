@@ -31,8 +31,16 @@ public static class RenderPreviewRenderer {
     /// the renderer draws the sprite instead of the category glyph.
     /// Wcid==0 means "no resolution available, use glyph" — matches the
     /// pre-resolve behaviour for backward compatibility.
+    /// <para>
+    /// <see cref="Orientation"/> is the world-space rotation; the sprite
+    /// blit path applies the yaw component the same way it does for
+    /// placed objects, so server-spawned doors/statues/signs face the
+    /// correct way. Default identity is fine for sources that don't
+    /// supply angles.
+    /// </para>
     /// </summary>
-    public readonly record struct SpawnGlyph(float X, float Y, string Category, string Scale, int Wcid);
+    public readonly record struct SpawnGlyph(float X, float Y, float Z,
+        string Category, string Scale, int Wcid, Quaternion Orientation);
 
     /// <summary>
     /// Which compositional layers the renderer should produce. Floor-mode
@@ -676,7 +684,7 @@ public static class RenderPreviewRenderer {
                             input.Ontology?.Invoke(diagId),
                             GlyphFallbackDiag.Source.Spawn);
                     }
-                    glyphs.Add((pxX, pxY, sizePx, shape, fill, 0u, 0u, sprite, Quaternion.Identity));
+                    glyphs.Add((pxX, pxY, sizePx, shape, fill, 0u, 0u, sprite, sp.Orientation));
                 }
             }
         }

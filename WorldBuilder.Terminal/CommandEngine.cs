@@ -212,6 +212,20 @@ public partial class CommandEngine {
     }
 
     private LoadAutoRestoreEntry AutoRestoreSpawnGazetteer(string projectDir) {
+        // Prefer the ACE-DB-sourced JSONL when present: it includes the
+        // server-managed weenies (doors, statues, generators, fences) that
+        // the LSD JSON dump filters out, plus orientation. Fall back to
+        // spawn_gazetteer.json (LSD format) when only that exists.
+        var acePath = Path.Combine(projectDir, "ace_spawn_records.jsonl");
+        if (File.Exists(acePath)) {
+            try {
+                _spawnGazetteer = LoadSpawnGazetteerJsonl(acePath);
+                return new LoadAutoRestoreEntry(acePath, FilePresent: true, Loaded: true, Count: _spawnGazetteer.Count);
+            } catch (Exception ex) {
+                _spawnGazetteer = new();
+                return new LoadAutoRestoreEntry(acePath, FilePresent: true, Loaded: false, Count: 0, Error: ex.Message);
+            }
+        }
         var path = Path.Combine(projectDir, "spawn_gazetteer.json");
         if (!File.Exists(path)) {
             _spawnGazetteer = new();
@@ -729,10 +743,11 @@ public partial class CommandEngine {
                     foreach (var sp in spawns) {
                         if (sp.Cell >= 0x100) continue;  // indoor / dungeon
                         glyphs.Add(new RenderPreviewRenderer.SpawnGlyph(
-                            X: sp.X, Y: sp.Y,
+                            X: sp.X, Y: sp.Y, Z: sp.Z,
                             Category: MapToRendererCategory(sp.Category),
                             Scale: ScaleForCategory(sp.Category),
-                            Wcid: sp.Wcid));
+                            Wcid: sp.Wcid,
+                            Orientation: sp.OrientationOrIdentity));
                     }
                     spawnsByCell[(col, row)] = glyphs;
                 } else {
@@ -1049,6 +1064,35 @@ public partial class CommandEngine {
     // SpawnGazetteerBuilder.BuildFromAceLandblockInstances).
     private static Dictionary<ushort, List<SpawnRecord>> LoadSpawnGazetteer(string path) =>
         SpawnGazetteerBuilder.BuildFromLsdJson(path);
+
+    // Read a SpawnRecord JSONL file (one record per line) into the per-LB
+    // gazetteer shape. This is the on-disk output of ace-db ingest-spawns
+    // — already in the canonical SpawnRecord shape with orientation and
+    // the IsServerManaged flag, so we deserialize directly without going
+    // through SpawnGazetteerBuilder.
+    private static Dictionary<ushort, List<SpawnRecord>> LoadSpawnGazetteerJsonl(string path) {
+        var result = new Dictionary<ushort, List<SpawnRecord>>();
+        var opts = new System.Text.Json.JsonSerializerOptions {
+            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+            PropertyNameCaseInsensitive = true,
+        };
+        foreach (var line in File.ReadLines(path)) {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            SpawnRecord? rec;
+            try {
+                rec = System.Text.Json.JsonSerializer.Deserialize<SpawnRecord>(line, opts);
+            } catch {
+                continue;  // skip malformed lines; the loader is best-effort
+            }
+            if (rec == null) continue;
+            if (!result.TryGetValue(rec.LandblockId, out var list)) {
+                list = new List<SpawnRecord>();
+                result[rec.LandblockId] = list;
+            }
+            list.Add(rec);
+        }
+        return result;
+    }
 
     private static Dictionary<int, LandblockDescriber.AcpediaMatch> LoadWcidAcpedia(string path) {
         var result = new Dictionary<int, LandblockDescriber.AcpediaMatch>();
