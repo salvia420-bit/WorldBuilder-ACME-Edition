@@ -11,6 +11,7 @@ members = [
     "crates/holtburger-world",
     "apps/holtburger-cli",
     "apps/holtburger-tools",
+    "apps/holtburger-web",
     "apps/holtburger-wsbridge",
 ]
 default-members = ["apps/holtburger-cli"]

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>holtburger-web — Phase 2 wasm32 floor smoke test</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 48rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+      h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
+      h1 + p { color: #555; margin-top: 0; }
+      pre { background: #f4f4f4; padding: 0.75rem; border-radius: 4px; overflow-x: auto; }
+      .check { margin: 0.25rem 0; }
+      .ok { color: #1a7f1a; font-weight: bold; }
+      .fail { color: #b30000; font-weight: bold; }
+    </style>
+  </head>
+  <body>
+    <h1>holtburger-web smoke test</h1>
+    <p>
+      Phase 2 of <code>emit-dynamic-site</code>: minimal browser-loadable
+      bundle that proves the wasm32 cross-compile floor consumes from a
+      <code>cdylib</code> via <code>wasm-pack</code>, not just from
+      <code>cargo check</code>. See <code>docs/phase-2-wasm-spike.md</code>
+      §8 step 1.
+    </p>
+    <div id="results">Loading wasm bundle…</div>
+
+    <script type="module">
+      import init, { build_info, hash32 } from "./pkg/holtburger_web.js";
+
+      const root = document.getElementById("results");
+      const lines = [];
+
+      function check(name, ok, detail) {
+        const cls = ok ? "ok" : "fail";
+        const status = ok ? "OK" : "FAIL";
+        lines.push(
+          `<div class="check"><span class="${cls}">[${status}]</span> ${name}` +
+            (detail ? ` &mdash; <code>${detail}</code>` : "") +
+            `</div>`
+        );
+      }
+
+      try {
+        await init();
+
+        const info = build_info();
+        check(
+          "build_info() returns identification string",
+          typeof info === "string" && info.startsWith("holtburger-web v"),
+          info
+        );
+
+        const empty = hash32(new Uint8Array([]));
+        check(
+          "hash32(empty) returns 0",
+          empty === 0,
+          `got 0x${empty.toString(16).padStart(8, "0")}`
+        );
+
+        const hello = hash32(new TextEncoder().encode("hello"));
+        check(
+          "hash32('hello') matches Rust's deterministic value",
+          hello === 0xdb716568,
+          `got 0x${hello.toString(16).padStart(8, "0")}, expected 0xdb716568`
+        );
+
+        const allOk = lines.every((l) => l.includes("[OK]"));
+        const summary = allOk
+          ? `<p class="ok">PASS &mdash; the wasm32 cross-compile floor loads and executes in the browser.</p>`
+          : `<p class="fail">FAIL &mdash; one or more checks did not pass.</p>`;
+        root.innerHTML = lines.join("\n") + summary;
+      } catch (err) {
+        root.innerHTML = `<p class="fail">FAIL &mdash; bundle did not initialize.</p><pre>${err.stack || err}</pre>`;
+      }
+    </script>
+  </body>
+</html>

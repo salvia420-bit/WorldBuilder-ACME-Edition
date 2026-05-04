@@ -1,0 +1,25 @@
+[package]
+name = "holtburger-web"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Browser-loadable WASM smoke test for Phase 2 of emit-dynamic-site — verifies the wasm32 cross-compile floor by exposing a few wasm-bindgen functions over holtburger-protocol + holtburger-session."
+
+[lib]
+# `cdylib` is what `wasm-pack build` strips into the bundled `.wasm`;
+# `rlib` keeps the crate available to other native consumers (none yet,
+# but cheap insurance and required so workspace `cargo check` is sane).
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+holtburger-protocol = { workspace = true }
+holtburger-session = { workspace = true }
+wasm-bindgen = "0.2"
+
+# Wasm32-only: surface Rust panics in the browser console instead of the
+# default `unreachable` trap. Drop-in standard for wasm-bindgen smoke
+# tests; zero cost on native (the dep is target-gated).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1"
