@@ -1,14 +1,13 @@
-//! WebSocket↔UDP bridge for the holtburger AC client.
+//! Entry point for the `holtburger-wsbridge` binary — the server-side WS↔UDP
+//! bridge that sits in front of an ACE server.
 //!
 //! See `ARCHITECTURE.md` next to this file for the design and frame protocol.
-
-mod bridge;
-mod config;
-mod frame;
-mod smoke_test;
+//! The shared library that backs both this binary and `holtburger-wsshim`
+//! lives in `src/lib.rs`.
 
 use anyhow::Result;
 use clap::Parser;
+use holtburger_wsbridge::{bridge, config};
 
 #[tokio::main]
 async fn main() -> Result<()> {

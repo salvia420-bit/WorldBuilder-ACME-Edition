@@ -11,6 +11,10 @@ description = "WebSocket↔UDP bridge for browser-hosted holtburger clients (Pha
 name = "holtburger-wsbridge"
 path = "src/main.rs"
 
+[[bin]]
+name = "holtburger-wsshim"
+path = "src/bin/wsshim.rs"
+
 [dependencies]
 tokio = { workspace = true }
 tokio-tungstenite = "0.24"

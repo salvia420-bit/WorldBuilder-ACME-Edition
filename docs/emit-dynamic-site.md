@@ -1,7 +1,9 @@
 # emit-dynamic-site — Design
 
-> **Status:** Phase 1 partial — WS↔UDP bridge crate landed (2026-05-03). Live
-> ACE round-trip pending the client-side shim. See §8 for the phase ledger.
+> **Status:** Phase 1 local-loop complete — WS↔UDP bridge **and** client-side
+> UDP↔WS shim both landed (2026-05-03), with end-to-end smoke tests proving
+> the round-trip. Live-ACE validation is the only remaining Phase 1 follow-on.
+> See §8 for the phase ledger.
 >
 > **Audience:** anyone picking up the next phase. Read this end-to-end before
 > writing a line of code; several of the seams below are not what they appear to
@@ -138,17 +140,23 @@ The static-site tile pyramid (z=3..12, four layer sets `terrain/`, `objects/`,
 re-emit it. We point Leaflet (or whatever 2D tile renderer survives §4.2) at
 the same `dist/projects/<slug>/tiles/` URL.
 
-### 3.4 The new layer — UDP↔WS bridge
+### 3.4 The new layer — UDP↔WS bridge (and shim)
 
-There is no code for this yet. Recommended shape:
+This layer landed in Phase 1 (see §8). Two binaries in
+`external/holtburger/apps/holtburger-wsbridge/`:
 
-- One process, listens on a WebSocket port (e.g. `:8080/ws`).
-- Per WS connection, opens a UDP socket toward ACE on `:9000`, listens on a
-  ephemeral port for `:9001` replies.
-- One WS binary frame == one AC packet, both directions.
-- No knowledge of AC encryption — bytes are passed through. Holtburger's
-  session layer does crypto on whichever side it ends up running.
-- Stateless w.r.t. game logic; stateful only for the WS↔UDP socket pairing.
+- **`holtburger-wsbridge`** — server-side. One process, listens on a WebSocket
+  port (default `:8080`). Per WS connection, opens an ephemeral UDP socket
+  toward the configured ACE host (login + world ports). One WS binary frame
+  == one AC packet, both directions. Stateless w.r.t. game logic; stateful
+  only for the WS↔UDP socket pairing.
+- **`holtburger-wsshim`** — client-side mirror, optional. Binds the UDP ports
+  an unmodified `holtburger-cli` already dials and tunnels them to a remote
+  bridge. Only needed for the native cli; the WASM client (Phase 2) skips
+  this binary and speaks WS to the bridge directly.
+
+Neither knows AC encryption — bytes are passed through. Holtburger's session
+layer does crypto on whichever side it ends up running.
 
 **Why an external proxy** rather than patching ACE: the Explore agent verified
 the network layer is fully abstracted (`Session.Network.EnqueueSend`, no
@@ -416,31 +424,38 @@ Phase 0 — **Groundwork (DONE in this pass).**
 - README License + emit-dynamic-site sections.
 - This design doc.
 
-Phase 1 — **WS↔UDP bridge spike.** ~1–2 weeks.
-- Standalone Rust binary in `external/holtburger/apps/holtburger-wsbridge/`
-  (or a new top-level if cleaner). Listens on WS, pairs each connection to
-  a UDP socket toward ACE.
-- Proves the proxy is transparent: a *native* holtburger TUI client routed
-  through the bridge can log in, walk around, and chat against a real ACE.
+Phase 1 — **WS↔UDP loop spike.** ~1–2 weeks.
+- Two standalone Rust binaries in `external/holtburger/apps/holtburger-wsbridge/`:
+  the **bridge** (WS-side, in front of ACE) and the **shim** (UDP-side, in
+  front of an unmodified cli). Together they let an existing
+  `holtburger-cli` reach a real ACE entirely over WebSocket.
+- Proves the proxy is transparent: the cli can log in, walk around, and
+  chat against ACE without modification.
 - No browser involvement yet. This is the "is the architecture even right"
-  test.
+  test, validated in software before the WASM port is attempted.
 
 **Phase 1 status (2026-05-03):**
-- ✅ Bridge crate at `external/holtburger/apps/holtburger-wsbridge/` (registered
-  in workspace; AGPL).
+- ✅ Bridge binary `holtburger-wsbridge` at
+  `external/holtburger/apps/holtburger-wsbridge/` (registered in workspace; AGPL).
+- ✅ Client-side shim binary `holtburger-wsshim` in the same crate
+  (`src/bin/wsshim.rs`). Mirror of the bridge: binds the UDP ports an
+  unmodified `holtburger-cli` already dials and tunnels them over WS.
+- ✅ Shared library (`src/lib.rs`) exposes the frame codec to both binaries
+  so the wire-format contract changes in lockstep.
 - ✅ WS frame protocol: `[port:u16 BE][ac_packet]` — see the crate's
   [`ARCHITECTURE.md`](../external/holtburger/apps/holtburger-wsbridge/ARCHITECTURE.md)
   for the rationale (login + world multiplex on one WS connection).
-- ✅ End-to-end smoke tests with paired UDP echo servers prove WS↔UDP
-  forwarding in both directions, with login + world ports.
-- ✅ Allowlist guards: only the configured login / world ports are forwarded;
-  datagrams from other source IPs/ports are dropped.
-- ⏳ Client-side UDP→WS shim (so unmodified `holtburger-cli` can route through
-  the bridge) — not landed; documented as a follow-on in the crate's
-  ARCHITECTURE.md.
+- ✅ End-to-end smoke tests cover both halves on their own *and* the full
+  loop: `cli ↔ shim ↔ bridge ↔ echo` with login and world traffic
+  interleaved. 21 tests total; all green.
+- ✅ Allowlist guards on both binaries: only the configured login / world
+  ports are forwarded; datagrams from other source IPs/ports are dropped.
+- ✅ Listen-vs-ACE port split on the shim, so ACE-on-non-standard-ports
+  works without retraining `holtburger-cli`.
 - ⏳ Live-ACE round-trip — blocked on standing up ACE locally (requires three
   MySQL DBs + AC client DAT files; see Explore-agent notes from the
-  groundwork pass).
+  groundwork pass). Once this clears, Phase 1 closes and Phase 2 (WASM
+  port) opens.
 
 Phase 2 — **WASM port spike.** ~3–4 weeks.
 - `holtburger-session` cfg-gates UDP-native code; adds `Session::new_with_transport`.

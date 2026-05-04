@@ -36,6 +36,12 @@ x86/
 [Aa][Rr][Mm]64/
 bld/
 [Bb]in/
+# The vendored Rust workspace under external/holtburger/ uses Cargo's
+# conventional `src/bin/` layout for additional binaries. Carve those out of
+# the .NET-style `[Bb]in/` rule above so the source files (e.g. tui.rs,
+# wsshim.rs) stay tracked.
+!external/holtburger/**/src/bin/
+!external/holtburger/**/src/bin/**
 [Oo]bj/
 [Ll]og/
 [Ll]ogs/

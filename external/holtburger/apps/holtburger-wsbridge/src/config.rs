@@ -4,12 +4,13 @@ use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use std::net::{IpAddr, SocketAddr};
 
-/// WebSocket↔UDP bridge for the holtburger AC client.
-///
-/// Listens on a TCP port for WebSocket connections and proxies binary
-/// frames to/from a configured ACE server's UDP login + world ports.
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(
+    author,
+    version,
+    about = "WebSocket→UDP bridge in front of an ACE server. Accepts WS connections and proxies binary frames to/from ACE's UDP login + world ports.",
+    long_about = None,
+)]
 pub struct Cli {
     /// WS listen address (host:port).
     #[arg(long, default_value = "0.0.0.0:8080")]
