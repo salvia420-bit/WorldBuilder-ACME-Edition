@@ -132,6 +132,15 @@ check(
     `typeof ${typeof wasm.fetch_landblock_objects}`
 );
 
+// Phase 3 step 4.5: fetch_object_colours must be present. End-to-end
+// round-trip + diversity check below, gated on the same fixture as the
+// step 4 round-trip.
+check(
+    "fetch_object_colours() is exported (Phase 3 step 4.5 real colours)",
+    typeof wasm.fetch_object_colours === "function",
+    `typeof ${typeof wasm.fetch_object_colours}`
+);
+
 (async () => {
     // §8 step 4 round-trip: serve `dats/assets.hba` over HTTP from this
     // process, then have the wasm bundle's HttpResourceSource fetch +
@@ -549,6 +558,60 @@ check(
                 "fetch_landblock_objects: Holtburg centre has ≥50 objects (real town density)",
                 centreObjs.length >= 50,
                 `${centreObjs.length} at 0x${centreId.toString(16).toUpperCase()}`
+            );
+
+            // Phase 3 step 4.5 round-trip: feed the unique placement
+            // model_ids into fetch_object_colours; expect one ARGB per
+            // input, and a non-trivial fraction resolved (= non-zero).
+            // The Surface walk only resolves the SOLID-colour path, so
+            // the resolved fraction depends on how many of Holtburg's
+            // models ship a `Base1Solid` Surface vs a `Base1Image` /
+            // `Base1ClipMap` one. Empirically the threshold here is
+            // conservative — a green run proves the walk works at
+            // all. A future step 4.5b (textured-pixel-mean path) would
+            // raise this materially.
+            const uniqueModels = [...new Set(objects.map((o) => o.modelId))];
+            const t0 = Date.now();
+            const colours = await wasm.fetch_object_colours(
+                url,
+                new Uint32Array(uniqueModels)
+            );
+            const elapsedMs = Date.now() - t0;
+
+            check(
+                "fetch_object_colours: returns one ARGB per unique model_id (Phase 3 step 4.5)",
+                Array.isArray(colours) || colours instanceof Uint32Array
+                    ? colours.length === uniqueModels.length
+                    : false,
+                `len=${colours?.length}, uniqueModels=${uniqueModels.length}, ${elapsedMs} ms`
+            );
+
+            // Resolve ratio + colour-variety. "Resolved" means the walk
+            // returned a non-zero ARGB. The variety check counts
+            // distinct ARGB values among resolved models — pins that
+            // we have meaningful per-model colour, not the 2-bucket
+            // wash from step 4 (which would resolve to at most two
+            // unique values).
+            let resolved = 0;
+            const distinctColours = new Set();
+            for (let i = 0; i < colours.length; i += 1) {
+                const argb = colours[i];
+                if (argb === 0) continue;
+                resolved += 1;
+                distinctColours.add(argb);
+            }
+            const resolveRatio = resolved / uniqueModels.length;
+
+            check(
+                "fetch_object_colours: ≥10% of Holtburg unique models resolve to a non-zero colour",
+                resolveRatio >= 0.10,
+                `${resolved} / ${uniqueModels.length} resolved (${(resolveRatio * 100).toFixed(1)}%)`
+            );
+
+            check(
+                "fetch_object_colours: resolved palette has ≥5 distinct ARGB values (no uniform-tint regression)",
+                distinctColours.size >= 5,
+                `${distinctColours.size} distinct of ${resolved} resolved`
             );
 
             for (const o of objects) o.free();
