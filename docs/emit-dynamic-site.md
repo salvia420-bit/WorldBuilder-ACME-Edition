@@ -9,15 +9,18 @@
 > per-poly UV-mapped textures** (Phase 3 step 6 — same pipeline as
 > the static-site emitter's `ObjectSpriteGenerator.cs::DrawTriangle`
 > but live, so user-imported custom models render with no re-bake
-> step). **Phase 4 step 1 landed (2026-05-04)** — the wasm bundle
-> now drives the AC login → CharacterList handshake from the
-> browser through `holtburger-wsbridge` to a live ACE; open
-> `apps/holtburger-web/index.html`, fill the login form, click
-> Connect, and the page transitions to a Selection screen showing
-> the account's characters before the renderer boots as a backdrop.
-> See [`docs/phase-4-renderer.md`](phase-4-renderer.md) for the as-built
+> step). **Phase 4 steps 1 + 2a landed (2026-05-04)** — the wasm
+> bundle now drives the AC login → CharacterList → spawn handshake
+> from the browser through `holtburger-wsbridge` to a live ACE.
+> Open `apps/holtburger-web/index.html`, fill the login form, click
+> Connect, then click Spawn on a character; the recv loop walks
+> `CharacterEnterWorldRequest` → `CharacterEnterWorldServerReady`
+> → `CharacterEnterWorld` → `PlayerCreate` and surfaces a
+> `kind=1 PlayerSpawned` event so the status line flips to
+> "Spawned". The renderer boots as a backdrop. See
+> [`docs/phase-4-renderer.md`](phase-4-renderer.md) for the as-built
 > and [`docs/phase-3-renderer.md`](phase-3-renderer.md) for the
-> renderer reference. Step 2 (`ClientViewEvent` → PIXI entity buffer)
+> renderer reference. Step 2b (position rendering + entity buffer)
 > is the next active rail.
 >
 > **Phase 1 closed (2026-05-04).** The live-ACE round-trip ran:
@@ -843,6 +846,28 @@ Step ledger:
   against `~/ace-server/` per `docs/ace-local-setup.md`; Playwright
   capture at `apps/holtburger-web/capture_phase4_step1.cjs`,
   deliverable at `docs/images/phase-4-step-1-character-list.png`.
+- ✅ **Step 2a — spawn handshake → "Spawned" status.** Landed
+  2026-05-04 (see [`docs/phase-4-renderer.md`](phase-4-renderer.md)
+  step 2a section). Refactors `SessionHandle` to spawn a persistent
+  recv loop via `wasm_bindgen_futures::spawn_local`; the loop
+  `tokio::select!`s between `session.recv_message()` and an
+  `mpsc::UnboundedReceiver<SessionCommand>` driven by JS. Adds
+  `SessionHandle.selectCharacter(guid)` which sends
+  `CharacterEnterWorldRequest`, auto-chains `CharacterEnterWorld`
+  on receiving `CharacterEnterWorldServerReady`, and surfaces
+  `PlayerCreate(guid)` as a `kind=1 PlayerSpawned` event. JS-side
+  Spawn button click → `requestAnimationFrame` event drain → status
+  flips to "Spawned <name> (GUID 0xN)". `kind=4 Disconnected` lands
+  on session error. Smoke 44 → 45 (selectCharacter symbol).
+  Playwright capture at
+  `apps/holtburger-web/capture_phase4_step2a.cjs`, deliverable at
+  `docs/images/phase-4-step-2a-spawned.png`. Position rendering of
+  the local player + multi-entity buffer is step 2b.
+- ⏳ **Step 2b — `ClientViewEvent` → PIXI entity buffer.**
+  Position-driven rendering for the local player + NPCs / monsters
+  via `ObjectCreate` + `UpdatePosition` / `VectorUpdate`. Reuses
+  Phase 3 step 6's per-model render cache. Allows switching
+  characters mid-session.
 - ⏳ **Step 2 — `ClientViewEvent` → PIXI entity buffer.** Once a
   character is selected in step 1 and spawned, AC's server starts
   pushing world state (entity positions, animations, chat). Wire

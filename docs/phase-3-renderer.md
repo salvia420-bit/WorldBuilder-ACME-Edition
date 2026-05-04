@@ -12,10 +12,11 @@
 > `ObjectSpriteGenerator.cs::DrawTriangle` but at runtime, so
 > user-imported custom models render without a re-bake step.
 > Mouse-wheel zooms around the cursor; click-and-drag pans. **Phase
-> 4 step 1 (wasm-driven AC login) landed (2026-05-04)** — the
-> renderer now boots as a backdrop after the wasm bundle's
-> `start_session` reaches `GameMessage::CharacterList` against a
-> live ACE; see [`phase-4-renderer.md`](phase-4-renderer.md). See
+> 4 steps 1 + 2a (wasm-driven AC login + spawn handshake) landed
+> (2026-05-04)** — the renderer boots as a backdrop after
+> `start_session` reaches `CharacterList`; clicking Spawn on the
+> Selection screen drives the AC enter-world handshake to
+> `PlayerCreate`. See [`phase-4-renderer.md`](phase-4-renderer.md). See
 > [`phase-3-step-1-handoff.md`](phase-3-step-1-handoff.md),
 > [`phase-3-step-2-handoff.md`](phase-3-step-2-handoff.md),
 > [`phase-3-step-3-handoff.md`](phase-3-step-3-handoff.md), and

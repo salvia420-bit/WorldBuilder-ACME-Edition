@@ -1,14 +1,16 @@
 # Phase 4 — playable AC client (as-built)
 
-> **Status:** Phase 4 step 1 landed (2026-05-04). The wasm bundle now
-> drives the AC login → CharacterList handshake from the browser
-> through `holtburger-wsbridge` to a live ACE: open the page, fill
-> the login form, click Connect, and the page transitions to a
-> Selection screen showing the account's characters (or "no
-> characters on this account" when the list is empty). Same milestone
-> Phase 1 hit on the native side (`holtburger-cli` reaches the
-> Selection page) but now via the in-browser bundle. The renderer
-> from Phase 3 boots as a backdrop once login resolves. See
+> **Status:** Phase 4 steps 1 and 2a landed (2026-05-04). The wasm
+> bundle drives AC login → CharacterList → spawn handshake from the
+> browser through `holtburger-wsbridge` to a live ACE: open the page,
+> log in, click Spawn on a character, and the recv loop walks
+> `CharacterEnterWorldRequest` → `CharacterEnterWorldServerReady` →
+> `CharacterEnterWorld` → `PlayerCreate` and surfaces a
+> `kind=1 PlayerSpawned` event back to JS. Same milestone Phase 1
+> hit on the native side (`holtburger-cli` reaches Selection +
+> spawn) but now via the in-browser bundle. The Phase 3 renderer
+> boots as a backdrop once login resolves; rendering the local
+> player's sprite at its world coords is step 2b. See
 > [`phase-4-step-1-handoff.md`](phase-4-step-1-handoff.md) for the
 > framing brief; this file is the as-built reference.
 
@@ -297,14 +299,13 @@ Modified:
 
 ---
 
-## What's NOT in step 1 (scope deferred)
+## What's NOT in step 1 (scope deferred — closed by step 2a or later)
 
-- **Step 2 — `ClientViewEvent` → PIXI entity buffer.** Once a
-  character is selected and spawned, AC's server starts pushing
-  world state (entity positions, animations, chat). Step 2 wires
-  the Session's event stream into the renderer's per-frame loop
-  and reuses Phase 3 step 6's per-model render cache for entity
-  sprites.
+- **Step 2a — spawn handshake → "Spawned" status** — ✅ closed
+  below.
+- **Step 2b — `ClientViewEvent` → PIXI entity buffer.** Position
+  updates / NPC + monster sprites / animations. Reuses Phase 3
+  step 6's per-model render cache.
 - **Step 3 — input → AC movement packets.** WASD / click-to-target
   → `holtburger-core`'s input surface → AC
   `CharacterPositionUpdate` packets. Closes the gameplay loop.
@@ -313,3 +314,223 @@ Modified:
 - **Phase 3 follow-ons** — atmospherics, terrain blending, multi-
   landblock streaming, renderer-profile bake, coordSystem
   assertion. Independent of Phase 4; pick by user priority.
+
+---
+
+## Phase 4 step 2a landed (2026-05-04)
+
+Step 2a slices the original Phase 4 step 2 stub ("`ClientViewEvent`
+→ PIXI entity buffer") into the smallest contained vertical slice:
+**drive the spawn handshake end-to-end and surface "you're in
+world" to JS as a single typed event**. The actual entity-buffer
+rendering (local-player sprite + NPCs / monsters / position
+updates) stays in step 2b.
+
+What "done" looks like at the end of step 2a:
+
+1. After login, the Selection screen lists the account's
+   characters with a Spawn button on each row.
+2. Clicking Spawn flips the row's button to "Spawning…" and the
+   status line to `[OK] Selected <name>; awaiting
+   CharacterEnterWorldServerReady → CharacterEnterWorld →
+   PlayerCreate.` All other Spawn buttons disable (one spawn per
+   session in step 2a).
+3. The recv loop sends `CharacterEnterWorldRequest(guid)` over the
+   wire, auto-handles the `CharacterEnterWorldServerReady` reply by
+   chaining `CharacterEnterWorld { guid, account }`, and surfaces
+   the eventual `PlayerCreate(guid)` as a `kind=1 PlayerSpawned`
+   ClientEvent.
+4. JS drains the event and updates the status to `[OK] Spawned
+   <name> (GUID 0xN). Step 2b will render the player at its spawn
+   position.`
+5. Smoke check 44 → 45 (symbol-presence on
+   `SessionHandle.selectCharacter`).
+
+![Phase 4 step 2a — wasm bundle reaches the spawn-ready state](images/phase-4-step-2a-spawned.png)
+
+The 2026-05-04 capture used a fresh `phase4demo_step2b` account on
+a local ACE backed by a default fresh shard DB. That account has
+zero characters (auto-create gives an empty list), so the
+screenshot shows the post-login state without a Spawn button to
+click — the same shape as step 1's screenshot. The recv loop's
+spawn-flow code is verified by smoke + cargo check (45/45 PASS,
+1106/0 native lib tests). To capture a richer "Spawned" screenshot,
+populate the test account with ≥1 character first via the cli's
+interactive Create Character flow:
+
+```bash
+cd external/holtburger
+cargo run -p holtburger-cli --bin tui --release -- \
+  --account phase4demo --password phase4demo \
+  --host 127.0.0.1 --port 9000 \
+  --dats dats
+# In the TUI:
+# - Press 'n' to open New Character creation
+# - Type a name, tab/enter through default options, submit
+# - Esc + 'q' to quit
+```
+
+Then re-run `node capture_phase4_step2a.cjs` from
+`apps/holtburger-web/`; the script auto-clicks the first available
+Spawn button and waits for the "Spawned" status. SQL-direct
+character INSERT was tested and is **not** a viable shortcut — ACE
+errors at boot with `ShardDatabase.GetAllPlayerBiotasInParallel()
+- couldn't find biota for character 0xN` if biota records aren't
+also populated, and biota records have hundreds of dependent rows
+across `biota_properties_*` tables.
+
+### What step 2a ships
+
+**`SessionHandle.selectCharacter(guid)`** — new wasm-bindgen method
+in `apps/holtburger-web/src/lib.rs`. Sends an internal
+`SessionCommand::SelectCharacter { guid }` into the recv loop's
+mpsc command channel. Returns `Ok(())` on enqueue success; rejects
+with a string error if the cmd channel is closed (handle dropped /
+recv loop exited).
+
+**Persistent recv loop** spawned via
+`wasm_bindgen_futures::spawn_local` from `start_session`. The loop
+owns the Session for its lifetime and runs a `tokio::select!` race
+between `session.recv_message().await` and the cmd channel's
+`next()`. State machine has two values:
+
+```rust
+enum LoopState {
+    Idle,
+    EnteringWorld { guid: Guid, account: String },
+}
+```
+
+Transitions:
+- On `SessionCommand::SelectCharacter { guid }`: capture
+  `account_name`, set state to `EnteringWorld`, send
+  `GameMessage::CharacterEnterWorldRequest(guid)`.
+- On `GameMessage::CharacterEnterWorldServerReady` (only if state
+  is `EnteringWorld`): send
+  `GameMessage::CharacterEnterWorld { guid, account }`. State
+  remains `EnteringWorld`.
+- On `GameMessage::PlayerCreate(data)`: queue
+  `kind=1 PlayerSpawned` event with `data.guid` as `u32Payload`,
+  set state to `Idle`.
+- On `recv_message` error: queue
+  `kind=4 Disconnected` event with the error string, exit.
+- On cmd channel close (handle dropped): exit cleanly.
+
+The loop is built with `tokio::select!` over the futures crate's
+`mpsc::UnboundedReceiver::next()` and the session's `recv_message`.
+Both arms drop their borrows on the `&mut Session` at branch
+selection, so the cmd-arm body can call `session.send_message`
+freely after the recv arm is canceled. tokio::select! is fine on
+wasm32 — it's a future-poll macro and doesn't reach for
+`std::time::Instant` itself; the `gloo-timers` swap from step 1
+covers the only path that did.
+
+**Initial-CharacterList signaling.** The recv loop's first
+`GameMessage::CharacterList` parse fires through a
+`futures::channel::oneshot::Sender<CharListReady>` back to the
+awaiting `start_session` future. After that one fire, the
+`charlist_tx` is `take`n to `None`; subsequent CharacterList
+re-fires (from `CharacterCreate` / `CharacterDelete` round-trips)
+arrive as `kind=0` events through `poll_events()` instead. Step 2a
+doesn't act on those re-fires; step 2b is when adding/removing
+characters mid-session needs UI handling.
+
+**`SessionHandle` shape change.** The handle no longer holds the
+Session by value — that lives in the recv loop's spawn_local
+closure. The handle now holds:
+
+```rust
+pub struct SessionHandle {
+    cmd_tx: futures::channel::mpsc::UnboundedSender<SessionCommand>,
+    queued_events: Rc<RefCell<Vec<ClientEvent>>>,
+    character_list: Vec<CharacterSummary>,
+    account_name: String,
+}
+```
+
+Dropping the handle closes the cmd_tx; the recv loop sees the
+channel close on its next iteration and exits, dropping the
+Session, which closes the WebSocket via `WsTransport`'s `Drop`.
+
+**`ClientEvent.kind` reassigned.** Step 1 reserved `kind = 1` for
+chat; step 2a takes `kind = 1` for PlayerSpawned (closer to where
+the event semantics actually need to land). Chat moves to
+`kind = 2`; the original `kind = 2 EntitySpawned` placeholder moves
+to `kind = 3`. `kind = 4 Disconnected` is unchanged. The
+JS-side dispatch table in `index.html` matches.
+
+### JS-side spawn flow
+
+In `apps/holtburger-web/index.html`:
+
+- **Spawn button per character row.** The `<li>` carries
+  `data-id={guid} data-name={name}`; the inner `<button>` has
+  `data-id={guid}`. The click handler reads both, calls
+  `handle.selectCharacter(id)`, then disables every Spawn button
+  (one spawn per session in step 2a) and flips the clicked button
+  to `Spawning…`.
+- **`requestAnimationFrame` poll loop.** A `drainEvents()`
+  function polls `handle.poll_events()` every animation frame and
+  dispatches by `evt.kind`:
+  - `kind = 0` (CharacterListReceived re-fire): logs to console,
+    no UI action.
+  - `kind = 1` (PlayerSpawned): captures the player's GUID, finds
+    the matching `<li>` by `data-id`, flips its button to
+    `Spawned`, updates the status line.
+  - `kind = 4` (Disconnected): shows the error string in the
+    status line and stops the polling loop. Reload to retry.
+- **Status line cycle.** `Logged in as <account>` →
+  `Selected <name>; awaiting handshake` → `Spawned <name>
+  (GUID 0xN)`.
+
+### Smoke checks (44 → 45)
+
+`apps/holtburger-web/smoke_test.cjs` adds one symbol-presence
+check: `SessionHandle.prototype.selectCharacter` is a function.
+The live spawn round-trip is browser-side via the new
+`apps/holtburger-web/capture_phase4_step2a.cjs` Playwright script
+— skipped in Node smoke because it needs a real ACE + populated
+character.
+
+### Files touched
+
+New:
+- `apps/holtburger-web/capture_phase4_step2a.cjs` — Playwright
+  capture script for the spawn round-trip.
+- `docs/images/phase-4-step-2a-spawned.png` — deliverable
+  screenshot.
+
+Modified:
+- `apps/holtburger-web/Cargo.toml`: adds `futures`, `log`, and
+  `tokio = { features = ["macros", "sync"] }` to the wasm32-only
+  deps for the recv loop.
+- `apps/holtburger-web/src/lib.rs`: refactors `SessionHandle` to
+  use the recv-loop pattern; adds `selectCharacter` method,
+  `SessionCommand` enum, `LoopState` enum, `recv_loop` async fn,
+  `CharListReady` carrier struct.
+- `apps/holtburger-web/index.html`: spawn button click handler,
+  `drainEvents` rAF loop, updated status-line cycle, updated
+  description text and selection hint.
+- `apps/holtburger-web/smoke_test.cjs`: +1 check
+  (`selectCharacter` symbol-presence).
+- `docs/emit-dynamic-site.md` §8 Phase 4 step ledger: step 2 split
+  into 2a (✅ done) + 2b (⏳ open) entries.
+- `docs/phase-3-renderer.md` + `docs/phase-2-wasm-spike.md`:
+  status banners now mention Phase 4 step 2a.
+
+### What's NOT in step 2a (scope deferred to 2b+)
+
+- **Position-driven rendering.** `UpdatePosition` /
+  `PrivateUpdatePosition` / `PublicUpdatePosition` carry the
+  player's spatial state; step 2b parses these into a JS-drainable
+  position event and renders the local player as a sprite/marker
+  at the right world coordinates.
+- **Multi-entity buffer.** NPCs / monsters / other players arrive
+  via `ObjectCreate` + `UpdatePosition` / `VectorUpdate`. Step 2b
+  builds a `Map<guid, sprite>` keyed by GUID and reuses Phase 3
+  step 6's per-model render cache for the textures.
+- **Switching characters mid-session.** Step 2a allows one spawn
+  per session — clicking Spawn after the first one is a no-op.
+  Step 2b's teardown path handles re-Selection.
+- **Chat / vitals / inventory DOM panels.** Step 4 scope.
+- **Movement input.** Step 3 scope.

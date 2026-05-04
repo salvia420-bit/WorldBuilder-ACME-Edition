@@ -7,13 +7,16 @@
 > batch call and PixiJS draws AC terrain with real retail textures,
 > stone-road network, and 239 placed object/building sprites with
 > per-poly UV-mapped textures rendered in-browser at runtime.
-> **Phase 4 step 1 (wasm-driven AC login) landed (2026-05-04)** —
-> `apps/holtburger-web/index.html` now boots a login form, drives
-> `start_session` through the WS bridge to a live ACE, and shows the
-> Selection screen with the account's characters before the renderer
-> boots as a backdrop. See [`phase-4-renderer.md`](phase-4-renderer.md)
-> for the Phase 4 as-built and `docs/images/phase-4-step-1-character-list.png`
-> for the deliverable. Phase 3 as-built remains at
+> **Phase 4 steps 1 + 2a (wasm-driven AC login + spawn handshake)
+> landed (2026-05-04)** — `apps/holtburger-web/index.html` boots a
+> login form, drives `start_session` through the WS bridge to a
+> live ACE, shows the Selection screen, and on Spawn click walks
+> `CharacterEnterWorldRequest` → `ServerReady` → `CharacterEnterWorld`
+> → `PlayerCreate` and surfaces a kind=1 PlayerSpawned event so the
+> status flips to Spawned. See
+> [`phase-4-renderer.md`](phase-4-renderer.md) for the Phase 4
+> as-built and `docs/images/phase-4-step-2a-spawned.png` for the
+> latest deliverable. Phase 3 as-built remains at
 > [`phase-3-renderer.md`](phase-3-renderer.md); the step 6 deliverable
 > is `docs/images/phase-3-step-6-live-render.png`.
 >

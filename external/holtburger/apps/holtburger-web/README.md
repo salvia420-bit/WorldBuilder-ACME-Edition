@@ -49,19 +49,30 @@ and executes in a browser:
   `heightMin` / `heightMax` (metres). Browser-side
   `index.html` feeds this into PixiJS to draw the Holtburg terrain.
 - `start_session(bridge_url, server_ip, server_port, username, password)
-  -> Promise<SessionHandle>` (wasm32-only, Phase 4 step 1) — drives
-  the AC login → CharacterList handshake from the wasm bundle through
-  `holtburger-wsbridge` to a live ACE. Internally opens a
+  -> Promise<SessionHandle>` (wasm32-only, Phase 4 step 1 + 2a) —
+  drives the AC login → CharacterList handshake from the wasm bundle
+  through `holtburger-wsbridge` to a live ACE. Internally opens a
   `WsTransport`, builds `Session::new_with_transport`, sends
-  `LoginRequest`, and pumps `session.recv_message` until
-  `GameMessage::CharacterList` lands. The returned `SessionHandle` is
-  a wasm-bindgen class with `.poll_events()` (drains a `ClientEvent[]`
-  — kind=0 = CharacterListReceived in step 1), `.characterList()`
-  (returns `CharacterSummary[]` with `id` / `name` / `deleteTime`
-  fields), and `.accountName` (server-echoed). Errors surface as a
-  rejected Promise with the AC error string. See
+  `LoginRequest`, and `wasm_bindgen_futures::spawn_local`s a
+  persistent recv loop that owns the Session for the rest of the
+  page's lifetime. Returns once the loop signals the initial
+  `CharacterList`. The recv loop's `tokio::select!` races
+  `session.recv_message().await` against an internal command
+  channel driven by JS (currently `selectCharacter`).
+- `SessionHandle` (wasm-bindgen class) is the JS-facing surface over
+  the recv loop. Methods: `.poll_events()` drains a `ClientEvent[]`
+  (kinds: 0 CharacterListReceived re-fire, 1 PlayerSpawned, 4
+  Disconnected); `.characterList()` returns `CharacterSummary[]`
+  (`id` / `name` / `deleteTime`); `.accountName` getter; and
+  `.selectCharacter(guid)` (Phase 4 step 2a) which drives the
+  spawn handshake — wasm sends `CharacterEnterWorldRequest`,
+  auto-chains `CharacterEnterWorld` on
+  `CharacterEnterWorldServerReady`, and surfaces `PlayerCreate(guid)`
+  as a `kind=1 PlayerSpawned` event with `u32Payload =
+  spawned_guid`. See
   [`docs/phase-4-renderer.md`](../../../docs/phase-4-renderer.md) for
-  the as-built; step-2 wires the actual SelectCharacter / spawn flow.
+  the as-built; step 2b adds position-driven rendering + multi-entity
+  buffer + character switching mid-session.
 
 ## Frontend dependencies
 
