@@ -178,6 +178,19 @@ check(
     `class=${typeof wasm.SessionHandle}, poll_events=${typeof sessionHandleProto?.poll_events}, characterList=${typeof sessionHandleProto?.characterList}`
 );
 
+// Phase 4 step 2a: SessionHandle.selectCharacter(guid) drives the
+// CharacterEnterWorldRequest → CharacterEnterWorldServerReady →
+// CharacterEnterWorld → PlayerCreate spawn handshake. The recv loop
+// owns the Session and auto-chains the middle two messages; JS sees
+// a kind=1 PlayerSpawned event at the end. Symbol-presence is the
+// Node-side check; live spawn round-trip runs through the Playwright
+// capture against ACE.
+check(
+    "SessionHandle.selectCharacter() exposed (Phase 4 step 2a spawn driver)",
+    typeof sessionHandleProto?.selectCharacter === "function",
+    `selectCharacter=${typeof sessionHandleProto?.selectCharacter}`
+);
+
 (async () => {
     // §8 step 4 round-trip: serve `dats/assets.hba` over HTTP from this
     // process, then have the wasm bundle's HttpResourceSource fetch +
