@@ -43,18 +43,28 @@ struct WriteContext<'a> {
     output_path: &'a Path,
 }
 
+/// Default boot landblock for `--profile boot` — Holtburg
+/// (`0xA9B4`), the spawn area used by Phase 4 step 2a.6's
+/// in-browser teleport.
+pub const DEFAULT_BOOT_LANDBLOCK: u32 = 0xA9B4;
+
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArchiveProfile {
     Pruned,
     Full,
     Micro,
+    /// Phase 5.0 obj 8 — bootstrap pack for the browser's
+    /// manifest-mode resource source. See
+    /// `StripperManifest::boot` for inclusion rules.
+    Boot,
 }
 
 impl ArchiveProfile {
-    fn manifest(self) -> Option<StripperManifest> {
+    fn manifest(self, boot_landblock: u32) -> Option<StripperManifest> {
         match self {
             ArchiveProfile::Pruned => Some(StripperManifest::logic_only()),
             ArchiveProfile::Micro => Some(StripperManifest::micro()),
+            ArchiveProfile::Boot => Some(StripperManifest::boot(boot_landblock)),
             ArchiveProfile::Full => None,
         }
     }
@@ -77,6 +87,9 @@ pub struct Dat2HbaOptions {
     pub inputs: Vec<DatInputSpec>,
     pub output: PathBuf,
     pub profile: ArchiveProfile,
+    /// Boot landblock when `profile == Boot`. Hex (e.g. `0xA9B4`).
+    /// Defaults to [`DEFAULT_BOOT_LANDBLOCK`].
+    pub boot_landblock: u32,
 }
 
 pub fn process_dat(input_path: &Path, output_path: &Path, profile: ArchiveProfile) -> Result<()> {
@@ -103,13 +116,22 @@ pub fn process_inputs(
     output_path: &Path,
     profile: ArchiveProfile,
 ) -> Result<()> {
+    process_inputs_with_boot_landblock(inputs, output_path, profile, DEFAULT_BOOT_LANDBLOCK)
+}
+
+pub fn process_inputs_with_boot_landblock(
+    inputs: &[DatInputSpec],
+    output_path: &Path,
+    profile: ArchiveProfile,
+    boot_landblock: u32,
+) -> Result<()> {
     if inputs.is_empty() {
         return Err(ToolError::Validation(
             "dat2hba requires at least one DAT input".to_string(),
         ));
     }
 
-    let manifest = profile.manifest();
+    let manifest = profile.manifest(boot_landblock);
     let should_prune_records = !matches!(profile, ArchiveProfile::Full);
 
     let mut loaded_inputs = Vec::with_capacity(inputs.len());
@@ -613,7 +635,12 @@ pub fn run(options: Dat2HbaOptions) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
 
-    process_inputs(&options.inputs, &options.output, options.profile)
+    process_inputs_with_boot_landblock(
+        &options.inputs,
+        &options.output,
+        options.profile,
+        options.boot_landblock,
+    )
 }
 
 #[cfg(test)]
@@ -631,7 +658,7 @@ mod tests {
     #[test]
     fn pruned_profile_preserves_logic_only_type_filtering() {
         let manifest = ArchiveProfile::Pruned
-            .manifest()
+            .manifest(DEFAULT_BOOT_LANDBLOCK)
             .expect("pruned mode should have a manifest");
 
         assert!(manifest.should_keep_entry(EOR_PORTAL_NAMESPACE, 0x01000001, DatFileType::Model));
@@ -642,7 +669,7 @@ mod tests {
     #[test]
     fn micro_profile_keeps_required_table_ids_and_excludes_raw_motion_assets() {
         let manifest = ArchiveProfile::Micro
-            .manifest()
+            .manifest(DEFAULT_BOOT_LANDBLOCK)
             .expect("micro mode should have a manifest");
 
         assert!(manifest.should_keep_entry(

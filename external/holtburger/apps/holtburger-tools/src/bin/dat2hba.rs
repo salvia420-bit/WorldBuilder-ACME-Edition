@@ -1,7 +1,16 @@
 use clap::Parser;
+use holtburger_tools::dat2hba::DEFAULT_BOOT_LANDBLOCK;
 use holtburger_tools::{ArchiveProfile, Dat2HbaOptions, DatInputSpec, ToolError, run};
 use std::path::PathBuf;
 use std::str::FromStr;
+
+fn parse_hex_u32(value: &str) -> std::result::Result<u32, String> {
+    let stripped = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .unwrap_or(value);
+    u32::from_str_radix(stripped, 16).map_err(|e| format!("invalid hex u32 {value:?}: {e}"))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct InputArg {
@@ -42,9 +51,15 @@ struct Args {
     #[arg(required = true, num_args = 2.., value_name = "[NAMESPACE=]DAT ... HBA")]
     paths: Vec<String>,
 
-    /// Archive profile to emit: pruned, full, or micro. Defaults to full.
+    /// Archive profile to emit: pruned, full, micro, or boot.
+    /// Defaults to full.
     #[arg(long, value_enum, default_value_t = ArchiveProfile::Full)]
     profile: ArchiveProfile,
+
+    /// Boot landblock when `--profile boot`. Hex (`0xA9B4`,
+    /// default Holtburg). Ignored for other profiles.
+    #[arg(long, value_parser = parse_hex_u32, default_value_t = DEFAULT_BOOT_LANDBLOCK)]
+    boot_landblock: u32,
 }
 
 impl Args {
@@ -71,6 +86,7 @@ impl Args {
             inputs,
             output,
             profile: self.profile,
+            boot_landblock: self.boot_landblock,
         })
     }
 }
@@ -147,6 +163,16 @@ mod tests {
 
         assert!(help.contains("The last positional argument is always the output path"));
         assert!(help.contains("namespace=path"));
-        assert!(help.contains("[possible values: pruned, full, micro]"));
+        // Long-form help output. clap renders the doc comment on the
+        // `boot` variant as a multi-line list; older variants stay
+        // bare. Either format is acceptable — match the prefix that
+        // tells us all four variants are exposed.
+        assert!(
+            help.contains("- pruned"),
+            "help should list `pruned` as a possible profile value, got:\n{help}"
+        );
+        assert!(help.contains("- full"));
+        assert!(help.contains("- micro"));
+        assert!(help.contains("- boot"));
     }
 }

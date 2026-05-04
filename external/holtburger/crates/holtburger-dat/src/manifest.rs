@@ -1,5 +1,5 @@
-use crate::EOR_PORTAL_NAMESPACE;
 use crate::file_type::{CharGen, ChatPoseTable, DatFileType, SkillTable, SpellTable, XpTable};
+use crate::{EOR_CELL_NAMESPACE, EOR_PORTAL_NAMESPACE};
 
 /// A manifest that defines which file IDs and file types should be kept when stripping archives.
 pub struct StripperManifest {
@@ -54,6 +54,55 @@ impl StripperManifest {
             manifest.keep_namespaced_file(EOR_PORTAL_NAMESPACE, file_id);
         }
 
+        manifest
+    }
+
+    /// Phase 5.0 obj 8 — bootstrap pack for the browser's manifest-
+    /// mode resource source.
+    ///
+    /// Includes: the catalog tables every login needs (CharGen,
+    /// SkillTable, SpellTable, XpTable, ChatPoseTable) plus the
+    /// CellLandblock + LandblockInfo records for the 9-cell
+    /// neighborhood around `boot_landblock`. Landblock IDs are
+    /// `0xXXYY` where `XX/YY` are the world-grid coords; the
+    /// terrain record is `0xXXYYFFFF` and LandblockInfo is
+    /// `0xXXYYFFFE`.
+    ///
+    /// This is the same minimum-viable boot policy as
+    /// `holtburger_tools::dat_shard::is_boot_essential`. The
+    /// transitive Surface/SurfaceTexture/Texture/Palette/GfxObj/
+    /// SetupModel/MotionTable walk through the boot landblock's
+    /// object placements is out of scope for this commit; both
+    /// `dat-shard` and `dat2hba --profile boot` will gain it
+    /// together in a follow-up commit (Phase 5.1) that factors
+    /// the walk helpers out of `apps/holtburger-web` private code
+    /// into shared `holtburger-dat` utilities.
+    pub fn boot(boot_landblock: u32) -> Self {
+        let mut manifest = Self::new();
+        for file_id in [
+            CharGen::FILE_ID,
+            ChatPoseTable::FILE_ID,
+            SkillTable::FILE_ID,
+            SpellTable::FILE_ID,
+            XpTable::FILE_ID,
+        ] {
+            manifest.keep_namespaced_file(EOR_PORTAL_NAMESPACE, file_id);
+        }
+        // 9-cell neighborhood (boot landblock + 8 grid neighbors).
+        let bx = (boot_landblock >> 8) & 0xFF;
+        let by = boot_landblock & 0xFF;
+        for dx in -1i32..=1 {
+            for dy in -1i32..=1 {
+                let nx = bx as i32 + dx;
+                let ny = by as i32 + dy;
+                if !(0..=255).contains(&nx) || !(0..=255).contains(&ny) {
+                    continue;
+                }
+                let cell_id = ((nx as u32) << 8) | (ny as u32);
+                manifest.keep_namespaced_file(EOR_CELL_NAMESPACE, (cell_id << 16) | 0xFFFF);
+                manifest.keep_namespaced_file(EOR_CELL_NAMESPACE, (cell_id << 16) | 0xFFFE);
+            }
+        }
         manifest
     }
 
@@ -177,6 +226,73 @@ mod tests {
         assert!(!manifest.should_keep_entry("eor/cell", 0x09000001, DatFileType::MotionTable));
         assert!(!manifest.should_keep_entry(EOR_PORTAL_NAMESPACE, 0x0E000099, DatFileType::Table));
         assert!(!manifest.should_keep_entry(EOR_PORTAL_NAMESPACE, 0x01000001, DatFileType::Model));
+    }
+
+    #[test]
+    fn boot_manifest_keeps_essentials_and_spawn_neighborhood() {
+        let manifest = StripperManifest::boot(0xA9B4);
+        // Catalog tables: included.
+        assert!(manifest.should_keep_entry(
+            EOR_PORTAL_NAMESPACE,
+            CharGen::FILE_ID,
+            DatFileType::Table
+        ));
+        assert!(manifest.should_keep_entry(
+            EOR_PORTAL_NAMESPACE,
+            SkillTable::FILE_ID,
+            DatFileType::Table
+        ));
+        // Spawn landblock + LandblockInfo: included.
+        assert!(manifest.should_keep_entry(
+            EOR_CELL_NAMESPACE,
+            0xA9B4_FFFF,
+            DatFileType::Landblock
+        ));
+        assert!(manifest.should_keep_entry(
+            EOR_CELL_NAMESPACE,
+            0xA9B4_FFFE,
+            DatFileType::LandblockInfo
+        ));
+        // Adjacent landblock terrain (NW neighbor 0xA8B3): included.
+        assert!(manifest.should_keep_entry(
+            EOR_CELL_NAMESPACE,
+            0xA8B3_FFFF,
+            DatFileType::Landblock
+        ));
+        // Far-away landblock: NOT included.
+        assert!(!manifest.should_keep_entry(
+            EOR_CELL_NAMESPACE,
+            0x0000_FFFF,
+            DatFileType::Landblock
+        ));
+        // Random portal record: NOT included.
+        assert!(!manifest.should_keep_entry(
+            EOR_PORTAL_NAMESPACE,
+            0x0100_0827,
+            DatFileType::Model
+        ));
+    }
+
+    #[test]
+    fn boot_manifest_clamps_at_world_edge() {
+        // Top-left corner has only 4 in-bounds neighbors.
+        let manifest = StripperManifest::boot(0x0000);
+        assert!(manifest.should_keep_entry(
+            EOR_CELL_NAMESPACE,
+            0x0000_FFFF,
+            DatFileType::Landblock
+        ));
+        assert!(manifest.should_keep_entry(
+            EOR_CELL_NAMESPACE,
+            0x0101_FFFF,
+            DatFileType::Landblock
+        ));
+        // No (-1, -1) neighbor exists.
+        assert!(!manifest.should_keep_entry(
+            EOR_CELL_NAMESPACE,
+            0xFFFF_FFFF,
+            DatFileType::Landblock
+        ));
     }
 
     #[test]
