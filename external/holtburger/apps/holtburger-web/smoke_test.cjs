@@ -238,6 +238,45 @@ check(
                 `maxIdx=${maxIdx}`
             );
 
+            // Phase 3 step 3: per-vertex terrain code stream is exposed
+            // as `terrainCodes` (Uint8Array(81)). Each byte is one of
+            // AC's 32 base terrain types — see TERRAIN_TYPES in
+            // index.html or the upstream `TerrainTextureType` enum.
+            const codes = mesh.terrainCodes;
+            const codesShapeOk =
+                codes instanceof Uint8Array && codes.length === 81;
+            check(
+                "fetch_landblock_heightmap: terrainCodes is Uint8Array of 81 (Phase 3 step 3)",
+                codesShapeOk,
+                `len=${codes?.length}, ctor=${codes?.constructor?.name}`
+            );
+
+            // All values must be in [0, 31] — terrain type bits are
+            // 5 wide, so anything ≥ 32 means the bit-decode is leaking
+            // road or scenery bits into the type field.
+            let minCode = 255, maxCode = 0;
+            for (let i = 0; i < codes.length; i += 1) {
+                if (codes[i] < minCode) minCode = codes[i];
+                if (codes[i] > maxCode) maxCode = codes[i];
+            }
+            check(
+                "fetch_landblock_heightmap: terrainCodes values all in [0, 31]",
+                minCode >= 0 && maxCode <= 31,
+                `min=${minCode}, max=${maxCode}`
+            );
+
+            // Holtburg town centre is known empirically to mix at
+            // least 3 distinct terrain types (LushGrass + Grassland +
+            // SemiBarrenRock at minimum; PatchyGrassland and others
+            // also appear). A single-type result would mean the bit-
+            // decode collapsed everything to BarrenRock (= 0).
+            const distinct = new Set(codes).size;
+            check(
+                "fetch_landblock_heightmap: Holtburg centre has ≥3 distinct terrain types",
+                distinct >= 3,
+                `${distinct} distinct: [${[...new Set(codes)].sort((a, b) => a - b).join(", ")}]`
+            );
+
             mesh.free();
         } catch (e) {
             // Missing `eor/cell` namespace (micro-profile fixture) is
