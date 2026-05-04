@@ -1,34 +1,40 @@
 # Phase 2 — WASM port spike (inventory)
 
-> **Status:** Phase 2 §8 in-scope work closed (2026-05-04). All seven
-> library crates needed by the browser client cross-compile to
-> `wasm32-unknown-unknown`: `holtburger-common`, `holtburger-protocol`,
-> `holtburger-session`, `holtburger-dat`, `holtburger-world`,
-> `holtburger-content`, `holtburger-core`. Native invariant held — the
-> 1086 existing lib tests stay green at every commit. `holtburger-scripting`
-> remains wasm32-incompatible (deno_core / V8) and is reclassified from
-> "port" to "exclude from WASM build" — see §8.
+> **Status:** Phase 2 §8 in-scope work closed (2026-05-04). **Phase 3
+> step 1 landed (2026-05-04)** — the wasm bundle now fetches a real AC
+> landblock heightmap and PixiJS draws it on a `<canvas>`. See
+> [`phase-3-renderer.md`](phase-3-renderer.md) for the as-built notes
+> and the deliverable screenshot at
+> `docs/images/phase-3-step-1-landblock.png`.
+>
+> All seven library crates needed by the browser client cross-compile
+> to `wasm32-unknown-unknown`: `holtburger-common`,
+> `holtburger-protocol`, `holtburger-session`, `holtburger-dat`,
+> `holtburger-world`, `holtburger-content`, `holtburger-core`. Native
+> invariant held — the 1086 existing lib tests stay green at every
+> commit. `holtburger-scripting` remains wasm32-incompatible
+> (deno_core / V8) and is reclassified from "port" to "exclude from
+> WASM build" — see §8.
 >
 > §8 steps 1 (build pipeline, `3025834`), 3 (`web_time::Instant`
-> swap, `d23f5d3`), 2 (WsTransport, `e151003`), and **4 (HttpResourceSource,
-> `ac7f92d`)** are all done. The `holtburger-web` bundle now has 8/8
-> smoke-test checks green, including:
-> - `Session::new_test()` construction at runtime in the wasm bundle.
-> - `try_ws_handshake_smoke` symbol present (live-bridge round-trip
->   deferred to browser-side validation).
-> - **End-to-end HTTP round-trip**: `try_http_resource_source_smoke`
->   fetches `dats/assets.hba` from an in-process `http.createServer`,
->   parses it through `HbaReader::<Vec<u8>>::from_bytes`, and looks up
->   `eor/portal:0x0E000004` returning the decompressed length (5876
->   bytes — pinned to the canonical `ac_base_dats/client_portal.dat`).
+> swap, `d23f5d3`), 2 (WsTransport, `e151003`), and 4 (HttpResourceSource,
+> `ac7f92d`) are all done. **Step 6 (renderer wiring) is now in flight
+> via Phase 3 step 1** — `fetch_landblock_heightmap` parses the
+> Holtburg `CellLandblock` and hands the 9×9 height grid to PixiJS as
+> a 128-triangle mesh. The Node smoke test grew from 8 to 14 checks
+> (geometry shape + height bounds + corner vertices + max-index
+> guard); the browser deliverable is the rendered terrain screenshot.
 >
 > Step 5 (scripting JS interop) remains open but doesn't block
-> character-login → world-entry. Phase 3 (PixiJS rendering) can now
-> consume both `WsTransport` (live AC packets) and `HttpResourceSource`
-> (DAT-backed assets) end-to-end in the browser bundle.
+> character-login → world-entry. Phase 3 step 2 picks up where step 1
+> stopped: texture-atlas terrain (replacing the height-ramp), pan/zoom,
+> and either multi-landblock streaming or `ClientViewEvent` → entity
+> sprites depending on user priority.
 >
-> **Audience:** anyone picking up Phase 2 implementation. Read §8 (what's
-> left) first; §3 (the per-crate matrix) is the as-built reference.
+> **Audience:** anyone picking up Phase 2/3 implementation. Read §8
+> (what's left) first; §3 (the per-crate matrix) is the as-built
+> reference. For Phase 3 specifics, jump to
+> [`phase-3-renderer.md`](phase-3-renderer.md).
 
 ---
 
@@ -379,11 +385,23 @@ demonstrable artifact and keeps blast radius small.
    handler implementation, which can be deferred until a script-driven
    feature actually needs the browser.
 
-6. **PixiJS / WebGL rendering wiring.** Out of scope for Phase 2's
-   protocol port; this is Phase 3 by the design doc. Mentioned here only
-   so the priority list is complete: do not start before steps 1–4 are
-   solid, because the renderer's data feed depends on `WsTransport` +
-   `HttpResourceSource` working end-to-end against ACE.
+6. **PixiJS / WebGL rendering wiring.** Phase 3 territory; the spike
+   doc tracks it here for completeness. **Phase 3 step 1 landed
+   (2026-05-04)** — see [`phase-3-renderer.md`](phase-3-renderer.md)
+   for as-built notes. The first slice fetches a real Holtburg
+   `CellLandblock` (`eor/cell:0xA9B4FFFF`) over the §8-step-4
+   `HttpResourceSource`, parses it into the 9×9 height grid, and hands
+   the mesh to PixiJS as a 128-triangle textured + wireframed render
+   on a `<canvas>`. The wasm bundle gained one new export,
+   `fetch_landblock_heightmap(asset_url, cell_id) -> Promise<LandblockMesh>`
+   (and the `LandblockMesh` struct with `positions` /
+   `indices` / `heightMin` / `heightMax` getters); PixiJS 8.18.1 is
+   pulled from jsdelivr via an import map — no JS bundler. Smoke test
+   grew to 14 checks (geometry shape + height bounds + corner
+   vertices + max-index guard). Live ACE session feed is still
+   blocked on the ACE backend, so step 1 stays static-asset-only.
+   Phase 3 step 2 picks up texture-atlas terrain or pan/zoom or
+   entity sprites, by user priority.
 
 Two things to *not* re-litigate (committed in groundwork — see project
 memory):
