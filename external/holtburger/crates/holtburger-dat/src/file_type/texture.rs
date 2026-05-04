@@ -236,6 +236,21 @@ impl Texture {
                 Ok(out)
             }
 
+            // S3TC / BCn block-compressed formats. Decode-only port of
+            // upstream ACE `DxtUtil.cs` (Ms-PL, see file header). Used
+            // by Phase 3 step 4.5b's per-model colour walk against the
+            // ~50 DXT1 + ~10 DXT5 textures referenced by Holtburg's
+            // Surface chains.
+            SurfacePixelFormat::Dxt1 => {
+                Ok(super::dxt::decompress_dxt1(&self.source_data, self.width as u32, self.height as u32))
+            }
+            SurfacePixelFormat::Dxt3 => {
+                Ok(super::dxt::decompress_dxt3(&self.source_data, self.width as u32, self.height as u32))
+            }
+            SurfacePixelFormat::Dxt5 => {
+                Ok(super::dxt::decompress_dxt5(&self.source_data, self.width as u32, self.height as u32))
+            }
+
             other => Err(TextureDecodeError::UnsupportedFormat(other)),
         }
     }
@@ -341,10 +356,32 @@ mod tests {
     #[test]
     fn unsupported_format_errors() {
         let pixels = vec![0u8; 16];
-        // Pick a format we don't decode (DXT1).
-        let buf = make_texture_header(827611204, 2, 2, &pixels, None);
+        // Pick a format we don't decode. R5G6B5 (23) was added to the
+        // enum as a curated value but to_rgba8 doesn't have a branch
+        // for it (no terrain or model surface uses it in retail).
+        let buf = make_texture_header(23, 2, 2, &pixels, None);
         let tex = Texture::unpack(&buf).unwrap();
         let err = tex.to_rgba8(|_| panic!("no palette")).unwrap_err();
         assert!(matches!(err, TextureDecodeError::UnsupportedFormat(_)));
+    }
+
+    #[test]
+    fn dxt1_decodes_through_to_rgba8() {
+        // 4×4 DXT1 block: c0=red, c1=blue, all-zero indices.
+        let block: Vec<u8> = vec![
+            0x00, 0xF8, // c0 = 0xF800 (red)
+            0x1F, 0x00, // c1 = 0x001F (blue)
+            0x00, 0x00, 0x00, 0x00, // 16 indices, all 0
+        ];
+        let buf = make_texture_header(827611204, 4, 4, &block, None);
+        let tex = Texture::unpack(&buf).unwrap();
+        assert_eq!(tex.format(), SurfacePixelFormat::Dxt1);
+        let rgba = tex.to_rgba8(|_| panic!("no palette")).unwrap();
+        assert_eq!(rgba.len(), 4 * 4 * 4);
+        // First pixel should be red-ish.
+        assert!(rgba[0] > 0xF0);
+        assert_eq!(rgba[1], 0x00);
+        assert_eq!(rgba[2], 0x00);
+        assert_eq!(rgba[3], 0xFF);
     }
 }

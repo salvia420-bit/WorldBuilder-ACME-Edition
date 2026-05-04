@@ -1,6 +1,7 @@
 pub mod animation;
 pub mod char_gen;
 pub mod chat_pose_table;
+pub mod dxt;
 pub mod env_cell;
 pub mod gfx_obj;
 pub mod motion_kinematics;
