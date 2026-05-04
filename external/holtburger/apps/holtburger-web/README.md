@@ -1,9 +1,12 @@
 # holtburger-web
 
-Browser-loadable WASM bundle for Phase 2 of `emit-dynamic-site` — the
-smallest possible consumer of the wasm32 cross-compile floor. See
+Browser-loadable WASM bundle for `emit-dynamic-site`. Started as the
+smallest possible consumer of the wasm32 cross-compile floor; now hosts
+the Phase 3 step 1 renderer entry point too. See
 [`docs/phase-2-wasm-spike.md`](../../../../docs/phase-2-wasm-spike.md)
-§8 step 1 for context.
+§8 step 1 and
+[`docs/phase-3-renderer.md`](../../../../docs/phase-3-renderer.md)
+for context.
 
 ## What it does
 
@@ -35,6 +38,32 @@ and executes in a browser:
   looks up the named entry, and returns the decompressed byte length.
   The Node smoke test runs this end-to-end against an in-process
   `http.createServer` serving `dats/assets.hba`.
+- `fetch_landblock_heightmap(asset_url, cell_id) -> Promise<LandblockMesh>`
+  (wasm32-only, Phase 3 step 1) — fetches an HBA, looks up
+  `eor/cell:cell_id` (typically `XXYYFFFF` for landblock terrain),
+  parses it as a `CellLandblock`, and hands the 9×9 height grid back
+  as a triangle mesh: `positions` (`Float32Array`, 243 floats — 81
+  verts × 3D), `indices` (`Uint16Array`, 384 — 64 quads × 6),
+  `heightMin` / `heightMax` (metres). Browser-side
+  `index.html` feeds this into PixiJS to draw the Holtburg terrain.
+
+## Frontend dependencies
+
+[PixiJS 8](https://pixijs.com/) is loaded as an ESM module from
+jsdelivr in `index.html`:
+
+```html
+<script type="importmap">
+  { "imports": {
+    "pixi.js": "https://cdn.jsdelivr.net/npm/pixi.js@8.18.1/dist/pixi.min.mjs"
+  } }
+</script>
+```
+
+The pin is `8.18.1` — bump that and the URL together. No npm/bundler
+in this crate; the import map keeps the tree dependency-free. If a
+future renderer step grows enough JS to want a bundler, that's the
+right time to introduce one.
 
 ## Build
 
@@ -64,35 +93,47 @@ works and the protocol crate's output matches between native and wasm32.
 
 **Browser** — verifies the actual `--target web` bundle loads via
 `fetch`/streaming compile, which is the path the production site will
-take:
+take. Run the dev server from `external/holtburger/` (one level up
+from this crate) so the `dats/assets.hba` fixture is reachable at
+`../../dats/assets.hba` from the bundle's URL:
 
 ```sh
+cd external/holtburger
 python3 -m http.server 0 --bind 127.0.0.1
-# Note the port from the server's startup line, then open
-# http://127.0.0.1:<port>/index.html
+# Note the port; open
+# http://127.0.0.1:<port>/apps/holtburger-web/index.html
 ```
 
-`index.html` runs the same three checks as the Node smoke test and
-reports OK/FAIL inline. Browser verification is manual — there's no
-headless-browser harness wired up here.
+`index.html` runs the wasm symbol-presence checks and then renders
+the Holtburg landblock terrain (Phase 3 step 1) into the on-page
+`<canvas>`. Browser verification is manual — there's no
+headless-browser harness wired up here. The deliverable artefact for
+Phase 3 step 1 is a screenshot of the rendered landblock at
+`docs/images/phase-3-step-1-landblock.png`.
 
-## HTTP-source fixture (§8 step 4)
+## HTTP-source fixture (§8 step 4 / Phase 3 step 1)
 
-The HTTP-source round-trip in `smoke_test.cjs` requires a fixture at
-`../../dats/assets.hba` (i.e. `external/holtburger/dats/assets.hba`).
-It's generated from the canonical retail dats with `dat2hba`:
+Both the §8-step-4 round-trip and the Phase 3 step 1 render need a
+fixture at `../../dats/assets.hba` (i.e.
+`external/holtburger/dats/assets.hba`). Generated from the canonical
+retail dats with `dat2hba`:
 
 ```sh
 cd ../..  # back to external/holtburger/
 cargo run --release -p holtburger-tools --bin dat2hba -- \
-    --profile micro \
+    --profile pruned \
     eor/portal=$HOME/ac_base_dats/client_portal.dat \
     eor/cell=$HOME/ac_base_dats/client_cell_1.dat \
     dats/assets.hba
 ```
 
-The micro profile is ~353 KB (6 entries across `eor/portal` and
-`holtburger/core`) and is the right baseline for the smoke test. The
-fixture is git-ignored — never commit retail-derived bytes. If the
-fixture is absent the smoke test SKIPs (not FAILs) the round-trip and
-falls back to the symbol-presence check.
+`--profile pruned` is the right baseline for Phase 3 — it includes the
+`eor/cell` namespace, so landblock terrain (`XXYYFFFF`) and
+`LandblockInfo` (`XXYYFFFE`) records are reachable. Output is ~230 MB
+with both retail dats. The smaller `--profile micro` (~353 KB,
+`eor/portal`-only) keeps the §8-step-4 fetch round-trip green but
+excludes everything the renderer needs. The fixture is git-ignored —
+never commit retail-derived bytes. If the fixture is absent the smoke
+test SKIPs (not FAILs) the round-trip and falls back to symbol-presence
+checks; the browser render shows an inline error linking back to this
+section.

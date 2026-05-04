@@ -3,34 +3,79 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>holtburger-web — Phase 2 wasm32 floor smoke test</title>
+    <title>holtburger-web — Phase 2 floor + Phase 3 step 1 render</title>
     <style>
-      body { font-family: system-ui, sans-serif; max-width: 48rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+      body { font-family: system-ui, sans-serif; max-width: 56rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
       h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
       h1 + p { color: #555; margin-top: 0; }
+      h2 { font-size: 1.1rem; margin-top: 1.5rem; }
       pre { background: #f4f4f4; padding: 0.75rem; border-radius: 4px; overflow-x: auto; }
       .check { margin: 0.25rem 0; }
       .ok { color: #1a7f1a; font-weight: bold; }
       .fail { color: #b30000; font-weight: bold; }
+      .skip { color: #888; }
+      #stage { display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-start; margin-top: 0.5rem; }
+      #stage canvas { border: 1px solid #ccc; background: #101010; image-rendering: pixelated; }
+      #stage-info { font-size: 0.9rem; min-width: 14rem; }
+      #stage-info dt { font-weight: bold; }
+      #stage-info dd { margin: 0 0 0.4rem 0; color: #444; font-family: ui-monospace, monospace; }
+      .hint { font-size: 0.85rem; color: #666; }
     </style>
   </head>
   <body>
-    <h1>holtburger-web smoke test</h1>
+    <h1>holtburger-web</h1>
     <p>
-      Phase 2 of <code>emit-dynamic-site</code>: minimal browser-loadable
-      bundle that proves the wasm32 cross-compile floor consumes from a
-      <code>cdylib</code> via <code>wasm-pack</code>, not just from
-      <code>cargo check</code>. See <code>docs/phase-2-wasm-spike.md</code>
-      §8 step 1.
+      Browser-side validation of the wasm bundle. Phase 2 §8 floor checks
+      run inline; Phase 3 step 1 fetches a real Asheron's Call landblock
+      and draws it via PixiJS.
     </p>
+
+    <h2>Phase 2 floor — wasm bundle smoke checks</h2>
     <div id="results">Loading wasm bundle…</div>
+
+    <h2>Phase 3 step 1 — Holtburg landblock render</h2>
+    <p class="hint">
+      Fetches <code>../../dats/assets.hba</code> via the §8 step 4
+      <code>HttpResourceSource</code>, parses
+      <code>eor/cell:0xA9B4FFFF</code> into a <code>CellLandblock</code>,
+      and hands the 9×9 height grid to PixiJS as a 128-triangle mesh.
+      Colour ramps blue→green→brown→white by elevation.
+      Requires the fixture to have been built with
+      <code>dat2hba --profile pruned</code> (the <code>micro</code>
+      profile excludes <code>eor/cell</code>).
+    </p>
+    <div id="stage">
+      <canvas id="canvas" width="512" height="512"></canvas>
+      <dl id="stage-info"></dl>
+    </div>
+    <div id="render-status" class="hint">Render pending bundle init.</div>
+
+    <!--
+      PixiJS 8 ESM build pinned via jsdelivr. We import * as PIXI rather
+      than relying on a window global so the `<script type="module">`
+      works without a separate UMD path.
+
+      Pin: 8.18.1 (npm `pixi.js@8.18.1`). Update both this URL and the
+      version note in `apps/holtburger-web/README.md` together when
+      bumping.
+    -->
+    <script type="importmap">
+      {
+        "imports": {
+          "pixi.js": "https://cdn.jsdelivr.net/npm/pixi.js@8.18.1/dist/pixi.min.mjs"
+        }
+      }
+    </script>
 
     <script type="module">
       import init, {
         build_info,
         hash32,
         session_smoke_test_packet_sequence,
+        fetch_landblock_heightmap,
       } from "./pkg/holtburger_web.js";
+
+      import * as PIXI from "pixi.js";
 
       const root = document.getElementById("results");
       const lines = [];
@@ -76,13 +121,140 @@
           `got ${seq}`
         );
 
+        check(
+          "fetch_landblock_heightmap() is exported (Phase 3 step 1)",
+          typeof fetch_landblock_heightmap === "function",
+          `typeof ${typeof fetch_landblock_heightmap}`
+        );
+
         const allOk = lines.every((l) => l.includes("[OK]"));
         const summary = allOk
-          ? `<p class="ok">PASS &mdash; the wasm32 cross-compile floor loads and executes in the browser.</p>`
+          ? `<p class="ok">PASS &mdash; the wasm32 floor + Phase 3 step 1 export all loaded.</p>`
           : `<p class="fail">FAIL &mdash; one or more checks did not pass.</p>`;
         root.innerHTML = lines.join("\n") + summary;
       } catch (err) {
         root.innerHTML = `<p class="fail">FAIL &mdash; bundle did not initialize.</p><pre>${err.stack || err}</pre>`;
+        document.getElementById("render-status").textContent =
+          "Render skipped — bundle init failed.";
+        throw err;
+      }
+
+      // Phase 3 step 1: fetch + parse + render the Holtburg landblock.
+      const renderStatus = document.getElementById("render-status");
+      const canvas = document.getElementById("canvas");
+      const stageInfo = document.getElementById("stage-info");
+      const ASSET_URL = "../../dats/assets.hba";
+      const HOLTBURG_LANDBLOCK_TERRAIN = 0xa9b4ffff;
+
+      try {
+        renderStatus.textContent = "Fetching assets.hba…";
+        const mesh = await fetch_landblock_heightmap(
+          ASSET_URL,
+          HOLTBURG_LANDBLOCK_TERRAIN
+        );
+        await renderLandblock(canvas, mesh);
+        stageInfo.innerHTML = `
+          <dt>Cell ID</dt><dd>0x${HOLTBURG_LANDBLOCK_TERRAIN.toString(16).toUpperCase()}</dd>
+          <dt>Vertices</dt><dd>${mesh.positions.length / 3}</dd>
+          <dt>Triangles</dt><dd>${mesh.indices.length / 3}</dd>
+          <dt>Height min</dt><dd>${mesh.heightMin.toFixed(1)} m</dd>
+          <dt>Height max</dt><dd>${mesh.heightMax.toFixed(1)} m</dd>
+          <dt>Span</dt><dd>${(mesh.heightMax - mesh.heightMin).toFixed(1)} m</dd>
+        `;
+        renderStatus.innerHTML =
+          `<span class="ok">[OK]</span> Rendered Holtburg landblock terrain.`;
+        mesh.free();
+      } catch (err) {
+        const msg = String(err?.message ?? err);
+        const missingFixture =
+          msg.includes("HTTP 404") ||
+          msg.includes("not found") ||
+          msg.includes("missing namespace");
+        const hint = missingFixture
+          ? "Regenerate the fixture with <code>cargo run -p holtburger-tools --bin dat2hba -- --profile pruned eor/portal=$HOME/ac_base_dats/client_portal.dat eor/cell=$HOME/ac_base_dats/client_cell_1.dat dats/assets.hba</code> from <code>external/holtburger/</code>."
+          : "Open devtools console for the full stack.";
+        renderStatus.innerHTML =
+          `<span class="fail">[FAIL]</span> Render failed: <code>${msg}</code><br/><span class="hint">${hint}</span>`;
+        // eslint-disable-next-line no-console
+        console.error("fetch_landblock_heightmap failed:", err);
+      }
+
+      async function renderLandblock(canvasElem, mesh) {
+        const app = new PIXI.Application();
+        await app.init({
+          canvas: canvasElem,
+          width: canvasElem.width,
+          height: canvasElem.height,
+          background: 0x101010,
+          antialias: true,
+        });
+
+        // Encode height as the u-coordinate of a 256×1 colour ramp.
+        // The default Mesh shader is a TextureShader, so this gives
+        // smooth per-fragment colour without a custom GLSL pass.
+        const range = Math.max(mesh.heightMax - mesh.heightMin, 1);
+        const positions2D = new Float32Array(81 * 2);
+        const uvs = new Float32Array(81 * 2);
+        for (let i = 0; i < 81; i += 1) {
+          positions2D[i * 2] = mesh.positions[i * 3];
+          positions2D[i * 2 + 1] = mesh.positions[i * 3 + 1];
+          const t = (mesh.positions[i * 3 + 2] - mesh.heightMin) / range;
+          uvs[i * 2] = Math.max(0, Math.min(1, t));
+          uvs[i * 2 + 1] = 0.5;
+        }
+
+        // 256-wide gradient drawn into an offscreen canvas, then wrapped
+        // as a PIXI.Texture. Stops chosen to read as recognisable terrain
+        // (water → grass → soil → rock → snow).
+        const ramp = document.createElement("canvas");
+        ramp.width = 256;
+        ramp.height = 1;
+        const rctx = ramp.getContext("2d");
+        const grd = rctx.createLinearGradient(0, 0, 256, 0);
+        grd.addColorStop(0.00, "#1f3a5e");
+        grd.addColorStop(0.25, "#3a7a3a");
+        grd.addColorStop(0.55, "#7a6432");
+        grd.addColorStop(0.85, "#bdb18f");
+        grd.addColorStop(1.00, "#ffffff");
+        rctx.fillStyle = grd;
+        rctx.fillRect(0, 0, 256, 1);
+        const rampTexture = PIXI.Texture.from(ramp);
+
+        const indicesU32 = Uint32Array.from(mesh.indices);
+        const geometry = new PIXI.MeshGeometry({
+          positions: positions2D,
+          uvs,
+          indices: indicesU32,
+        });
+        const pixiMesh = new PIXI.Mesh({ geometry, texture: rampTexture });
+
+        // World-units → pixels: the 24 m landblock fits the canvas with
+        // a small margin. Flip y so AC's +y (north) points up on screen.
+        const margin = 16;
+        const drawSize = canvasElem.width - margin * 2;
+        const scale = drawSize / 24.0;
+        const container = new PIXI.Container();
+        container.position.set(margin, canvasElem.height - margin);
+        container.scale.set(scale, -scale);
+        container.addChild(pixiMesh);
+
+        // Thin black wireframe overlaid on the heightmap. Diagnostic
+        // only — makes the 9×9 tessellation visible at a glance, which
+        // is the point of step 1's "prove the geometry" framing.
+        const wire = new PIXI.Graphics();
+        for (let i = 0; i < indicesU32.length; i += 3) {
+          const a = indicesU32[i];
+          const b = indicesU32[i + 1];
+          const c = indicesU32[i + 2];
+          wire.poly([
+            positions2D[a * 2], positions2D[a * 2 + 1],
+            positions2D[b * 2], positions2D[b * 2 + 1],
+            positions2D[c * 2], positions2D[c * 2 + 1],
+          ]).stroke({ width: 0.06, color: 0x000000, alpha: 0.45 });
+        }
+        container.addChild(wire);
+
+        app.stage.addChild(container);
       }
     </script>
   </body>
