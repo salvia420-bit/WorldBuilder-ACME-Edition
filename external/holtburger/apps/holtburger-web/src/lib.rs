@@ -610,3 +610,133 @@ pub async fn fetch_terrain_textures(
     }
     Ok(out)
 }
+
+/// Phase 3 step 4.5: walk one model's GfxObj/SetupModel surface chain
+/// and return the first resolvable solid ARGB. `0` means "no colour
+/// resolved" — the JS caller falls back to the existing 2-bucket
+/// category tint for that model.
+///
+/// Walk shape:
+/// - `0x01XXXXXX` (Model / GfxObj) → read GfxObj, iterate
+///   `surfaces: Vec<u32>`, return the first surface whose `color_value`
+///   is set.
+/// - `0x02XXXXXX` (SetupModel) → read SetupModel, iterate `parts`
+///   (each part is a GfxObj id), recurse via the GfxObj path, return
+///   the first GfxObj's first solid surface.
+/// - Any other top byte → `None` (unhandled type).
+///
+/// Step 4.5 ships only the solid path; textured surfaces (`Base1Image`
+/// / `Base1ClipMap`) skip in the walk and the caller hits the next
+/// surface on the GfxObj or the next part on the SetupModel. This is a
+/// scope-reduction — the textured-pixel-mean path is the obvious
+/// step-4.5b extension if the ratio of resolved colours turns out to
+/// be too low to ship.
+#[cfg(target_arch = "wasm32")]
+fn resolve_model_color<S: holtburger_dat::ResourceSource>(
+    source: &S,
+    model_id: u32,
+) -> Option<u32> {
+    match (model_id >> 24) as u8 {
+        0x01 => walk_gfx_obj(source, model_id),
+        0x02 => walk_setup_model(source, model_id, 0),
+        _ => None,
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn lookup_surface_color<S: holtburger_dat::ResourceSource>(
+    source: &S,
+    surface_id: u32,
+) -> Option<u32> {
+    use holtburger_dat::file_type::Surface;
+    use holtburger_dat::ResourceKey;
+    let bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", surface_id))
+        .ok()?;
+    let surface = Surface::unpack(&bytes).ok()?;
+    surface.solid_color()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn walk_gfx_obj<S: holtburger_dat::ResourceSource>(
+    source: &S,
+    gfx_obj_id: u32,
+) -> Option<u32> {
+    use holtburger_dat::file_type::GfxObj;
+    use holtburger_dat::ResourceKey;
+    let bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", gfx_obj_id))
+        .ok()?;
+    let gfx = GfxObj::unpack(&mut std::io::Cursor::new(bytes)).ok()?;
+    for surface_id in gfx.surfaces {
+        if let Some(c) = lookup_surface_color(source, surface_id) {
+            return Some(c);
+        }
+    }
+    None
+}
+
+#[cfg(target_arch = "wasm32")]
+fn walk_setup_model<S: holtburger_dat::ResourceSource>(
+    source: &S,
+    setup_id: u32,
+    depth: usize,
+) -> Option<u32> {
+    use holtburger_dat::file_type::SetupModel;
+    use holtburger_dat::ResourceKey;
+    // Recursion guard: AC SetupModel parts are GfxObj ids
+    // (`0x01XXXXXX`), not SetupModels, so depth never exceeds 1 in
+    // practice. The bound here is a defensive cap against a malformed
+    // record that points back at a SetupModel id.
+    if depth > 4 {
+        return None;
+    }
+    let bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", setup_id))
+        .ok()?;
+    let setup = SetupModel::unpack(&mut std::io::Cursor::new(bytes)).ok()?;
+    for part_id in setup.parts {
+        let candidate = match (part_id >> 24) as u8 {
+            0x01 => walk_gfx_obj(source, part_id),
+            0x02 => walk_setup_model(source, part_id, depth + 1),
+            _ => None,
+        };
+        if let Some(c) = candidate {
+            return Some(c);
+        }
+    }
+    None
+}
+
+/// Phase 3 step 4.5: resolve a per-model ARGB colour for each `model_id`
+/// in the input list. Output length matches input length. `0` means the
+/// walk did not resolve a colour for that model — the JS caller treats
+/// `0` as a miss and falls back to the existing 2-bucket category tint.
+///
+/// One `HttpResourceSource::connect` open per call; per-id walks are
+/// in-memory after that. Cost is bounded by the number of UNIQUE model
+/// IDs in the visible neighbourhood (67 for Holtburg's 3×3); JS dedupes
+/// the input list before calling.
+///
+/// Failure modes: a connect error rejects the whole Promise. Per-id
+/// walk failures (missing GfxObj, malformed Surface bytes) are silent
+/// — the walk just returns `None` for that id. This matches the
+/// graceful-degradation shape from step 4: a partially-resolved batch
+/// still renders, just with category-tint fallbacks for the unresolved
+/// ids.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_object_colours(
+    asset_url: String,
+    model_ids: Vec<u32>,
+) -> Result<Vec<u32>, JsValue> {
+    let source = holtburger_resource_http::HttpResourceSource::connect(&asset_url)
+        .await
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+    let mut out = Vec::with_capacity(model_ids.len());
+    for &id in &model_ids {
+        out.push(resolve_model_color(&source, id).unwrap_or(0));
+    }
+    Ok(out)
+}
