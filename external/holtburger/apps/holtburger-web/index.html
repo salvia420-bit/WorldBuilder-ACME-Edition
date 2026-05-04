@@ -34,7 +34,7 @@
     <h2>Phase 2 floor — wasm bundle smoke checks</h2>
     <div id="results">Loading wasm bundle…</div>
 
-    <h2>Phase 3 step 2 — 3×3 Holtburg neighbourhood render</h2>
+    <h2>Phase 3 step 3 — 3×3 Holtburg neighbourhood, terrain atlas</h2>
     <p class="hint">
       Fetches <code>../../dats/assets.hba</code> once via the §8 step 4
       <code>HttpResourceSource</code>, then reads the 9 surface terrain
@@ -43,7 +43,11 @@
       out at its world offset (<code>XX&nbsp;×&nbsp;192&nbsp;m</code>,
       <code>YY&nbsp;×&nbsp;192&nbsp;m</code>) inside a camera container.
       Mouse-wheel zooms around the cursor; click-and-drag pans.
-      Colour ramps blue→green→brown→white by elevation.
+      Colour comes from the per-vertex AC terrain code (<code>terrainCodes</code>
+      threaded through the wasm boundary), sampled per-cell from a
+      32-entry placeholder atlas via a custom GLSL ES 3.00 Mesh shader
+      using <code>flat</code> interpolation on the SW corner. Real AC
+      textures replace the swatches in step 3.5.
       Requires the fixture to have been built with
       <code>dat2hba --profile pruned</code> (the <code>micro</code>
       profile excludes <code>eor/cell</code>).
@@ -151,7 +155,10 @@
       }
 
       // Phase 3 step 2: fetch + parse + render the 3×3 Holtburg
-      // neighbourhood, with mouse-wheel zoom + drag-to-pan.
+      // neighbourhood, with mouse-wheel zoom + drag-to-pan. Step 3
+      // (this commit) replaces the height-ramp colour with the AC
+      // 32-terrain-type atlas, sampled per-cell by a custom Mesh
+      // shader using `flat` interpolation on the SW corner.
       //
       // METERS_PER_LANDBLOCK is the canonical AC constant — see
       // crates/holtburger-common/src/position.rs:5. AC's id encoding
@@ -160,6 +167,57 @@
       // +XX is east, +YY is north (verified empirically by the
       // static-site emitter work).
       const METERS_PER_LANDBLOCK = 192.0;
+
+      // 32-entry placeholder palette mirroring AC's TerrainTextureType
+      // enum (DatReaderWriter `dats.xml` lines 183-217; equivalent
+      // upstream class is `ACE.DatLoader.Entity.TerrainType`).
+      //
+      // Per the handoff brief's scope-reducer guidance: the AC Texture
+      // (0x06) parser is non-trivial graphics-format reverse-engineering
+      // and would consume the whole step 3 budget. Solid colours stand
+      // in until step 3.5; the shader pipeline (atlas + fragment lookup)
+      // is the load-bearing piece, and that lands here. Step 3.5 swaps
+      // the 1×1 swatches for real 64×64+ texture tiles without changing
+      // the shader or the wasm-bindgen contract.
+      //
+      // Colour choices read top-down (see docs/images/
+      // DerethMapsEnhanced_zoom.png as the visual target). Index ==
+      // terrain code; entry 32 (RoadType) lives in the road bits, not
+      // the type bits, so it never appears in the per-vertex stream.
+      const TERRAIN_TYPES = [
+        { code: 0x00, name: "BarrenRock",          color: 0xb4ad9a },
+        { code: 0x01, name: "Grassland",           color: 0x5d8740 },
+        { code: 0x02, name: "Ice",                 color: 0xd8e9f0 },
+        { code: 0x03, name: "LushGrass",           color: 0x4f8a31 },
+        { code: 0x04, name: "MarshSparseSwamp",    color: 0x6b6a3e },
+        { code: 0x05, name: "MudRichDirt",         color: 0x6e4f30 },
+        { code: 0x06, name: "ObsidianPlain",       color: 0x3a3530 },
+        { code: 0x07, name: "PackedDirt",          color: 0x9d7c4f },
+        { code: 0x08, name: "PatchyDirt",          color: 0xb0936c },
+        { code: 0x09, name: "PatchyGrassland",     color: 0x82934a },
+        { code: 0x0a, name: "SandYellow",          color: 0xd4c082 },
+        { code: 0x0b, name: "SandGrey",            color: 0xb0a98e },
+        { code: 0x0c, name: "SandRockStrewn",      color: 0xaa9a78 },
+        { code: 0x0d, name: "SedimentaryRock",     color: 0xa37050 },
+        { code: 0x0e, name: "SemiBarrenRock",      color: 0x948872 },
+        { code: 0x0f, name: "Snow",                color: 0xf5f4f1 },
+        { code: 0x10, name: "WaterRunning",        color: 0x3a6480 },
+        { code: 0x11, name: "WaterStandingFresh",  color: 0x46708a },
+        { code: 0x12, name: "WaterShallowSea",     color: 0x5a8398 },
+        { code: 0x13, name: "WaterShallowStillSea",color: 0x6a93a4 },
+        { code: 0x14, name: "WaterDeepSea",        color: 0x233e58 },
+        { code: 0x15, name: "ForestFloor",         color: 0x4a5630 },
+        { code: 0x16, name: "FauxWaterRunning",    color: 0x4f7e88 },
+        { code: 0x17, name: "SeaSlime",            color: 0x5c7d3f },
+        { code: 0x18, name: "Argila",              color: 0x8a5a44 },
+        { code: 0x19, name: "Volcano1",            color: 0xb45638 },
+        { code: 0x1a, name: "Volcano2",            color: 0x7a3326 },
+        { code: 0x1b, name: "BlueIce",             color: 0xb8d4e2 },
+        { code: 0x1c, name: "Moss",                color: 0x5a7340 },
+        { code: 0x1d, name: "DarkMoss",            color: 0x3e5128 },
+        { code: 0x1e, name: "Olthoi",              color: 0x98a356 },
+        { code: 0x1f, name: "DesolateLands",       color: 0x8c7b5e },
+      ];
       const renderStatus = document.getElementById("render-status");
       const canvas = document.getElementById("canvas");
       const stageInfo = document.getElementById("stage-info");
@@ -179,110 +237,155 @@
         }
       }
 
-      try {
-        renderStatus.textContent = "Fetching assets.hba (9 landblocks)…";
-        const ids = new Uint32Array(NEIGHBOURHOOD.map((n) => n.id >>> 0));
-        const meshes = await fetch_landblock_heightmaps(ASSET_URL, ids);
-        if (meshes.length !== NEIGHBOURHOOD.length) {
-          throw new Error(
-            `expected ${NEIGHBOURHOOD.length} meshes, got ${meshes.length}`
-          );
-        }
-        await renderNeighbourhood(canvas, NEIGHBOURHOOD, meshes);
-
-        // Aggregate height range across the 9 landblocks for the panel.
-        let aggMin = Infinity;
-        let aggMax = -Infinity;
-        for (const m of meshes) {
-          if (m.heightMin < aggMin) aggMin = m.heightMin;
-          if (m.heightMax > aggMax) aggMax = m.heightMax;
-        }
-        const centre = meshes[4];
-        stageInfo.innerHTML = `
-          <dt>Centre cell</dt><dd>0x${(NEIGHBOURHOOD[4].id >>> 0)
-            .toString(16)
-            .toUpperCase()
-            .padStart(8, "0")} (Holtburg)</dd>
-          <dt>Landblocks</dt><dd>${meshes.length} (3×3)</dd>
-          <dt>Centre min/max</dt><dd>${centre.heightMin.toFixed(1)} / ${centre.heightMax.toFixed(1)} m</dd>
-          <dt>Aggregate min/max</dt><dd>${aggMin.toFixed(1)} / ${aggMax.toFixed(1)} m</dd>
-          <dt>Vertex spacing</dt><dd>${(METERS_PER_LANDBLOCK / 8).toFixed(0)} m</dd>
-          <dt>Controls</dt><dd>wheel = zoom, drag = pan</dd>
-        `;
-        renderStatus.innerHTML =
-          `<span class="ok">[OK]</span> Rendered Holtburg + 8 neighbours. Mouse-wheel to zoom, click-and-drag to pan.`;
-        for (const m of meshes) m.free();
-      } catch (err) {
-        const msg = String(err?.message ?? err);
-        const missingFixture =
-          msg.includes("HTTP 404") ||
-          msg.includes("not found") ||
-          msg.includes("missing namespace");
-        const hint = missingFixture
-          ? "Regenerate the fixture with <code>cargo run -p holtburger-tools --bin dat2hba -- --profile pruned eor/portal=$HOME/ac_base_dats/client_portal.dat eor/cell=$HOME/ac_base_dats/client_cell_1.dat dats/assets.hba</code> from <code>external/holtburger/</code>."
-          : "Open devtools console for the full stack.";
-        renderStatus.innerHTML =
-          `<span class="fail">[FAIL]</span> Render failed: <code>${msg}</code><br/><span class="hint">${hint}</span>`;
-        // eslint-disable-next-line no-console
-        console.error("fetch_landblock_heightmaps failed:", err);
-      }
-
       // ----- rendering primitives ----------------------------------
+      // (Defined ahead of the render trigger below so the module-level
+      // GLSL const declarations are out of TDZ before `buildTerrainShader`
+      // touches them.)
 
-      function buildHeightRampTexture() {
-        // 256-wide gradient drawn into an offscreen canvas, then wrapped
-        // as a PIXI.Texture. Stops chosen to read as recognisable terrain
-        // (water → grass → soil → rock → snow). Built once and shared
-        // across all 9 landblocks — single texture, no per-tile cost.
-        const ramp = document.createElement("canvas");
-        ramp.width = 256;
-        ramp.height = 1;
-        const rctx = ramp.getContext("2d");
-        const grd = rctx.createLinearGradient(0, 0, 256, 0);
-        grd.addColorStop(0.00, "#1f3a5e");
-        grd.addColorStop(0.25, "#3a7a3a");
-        grd.addColorStop(0.55, "#7a6432");
-        grd.addColorStop(0.85, "#bdb18f");
-        grd.addColorStop(1.00, "#ffffff");
-        rctx.fillStyle = grd;
-        rctx.fillRect(0, 0, 256, 1);
-        return PIXI.Texture.from(ramp);
+      function buildTerrainAtlas() {
+        // 32-pixel-wide RGBA texture, one column per terrain code. The
+        // shader samples at uv = ((code + 0.5) / 32, 0.5) so each
+        // fragment reads the centre of its column. Step 3.5's real-
+        // texture replacement scales this up to e.g. 8×4 tiles of
+        // 64×64 pixels = 512×256 atlas — the shader's region lookup
+        // changes only in the (u, v, w, h) per-region math; the
+        // per-vertex contract stays the same.
+        const canvas = document.createElement("canvas");
+        canvas.width = 32;
+        canvas.height = 1;
+        const ctx = canvas.getContext("2d");
+        const data = ctx.createImageData(32, 1);
+        for (let i = 0; i < TERRAIN_TYPES.length; i += 1) {
+          const c = TERRAIN_TYPES[i].color;
+          data.data[i * 4 + 0] = (c >> 16) & 0xff;
+          data.data[i * 4 + 1] = (c >> 8) & 0xff;
+          data.data[i * 4 + 2] = c & 0xff;
+          data.data[i * 4 + 3] = 0xff;
+        }
+        ctx.putImageData(data, 0, 0);
+        const texture = PIXI.Texture.from(canvas);
+        // NEAREST so adjacent codes don't blur into each other; with
+        // `flat` interpolation in the shader this is sharp anyway, but
+        // belt-and-braces.
+        if (texture.source) texture.source.scaleMode = "nearest";
+        return texture;
       }
 
-      function buildLandblockChildren(mesh, rampTexture, heightMin, heightMax) {
+      // Custom Mesh shader for the per-cell atlas sample. GLSL ES 3.00
+      // (WebGL2) for `flat in int`. Uniforms mirror PixiJS 8's WebGL
+      // mesh shader template (`local-uniform-bit` + `global-uniforms-bit`
+      // in the bundle source) — **individual uniforms**, not UBO blocks.
+      // The MeshPipe's UniformGroups in `groups[100]` (global) and
+      // `groups[101]` (local) drive `glUniform*` calls by name, so the
+      // GLSL just declares each uniform on its own line.
+      const TERRAIN_VERTEX_GLSL = `#version 300 es
+precision highp float;
+
+uniform mat3 uProjectionMatrix;
+uniform mat3 uWorldTransformMatrix;
+uniform vec4 uWorldColorAlpha;
+uniform vec2 uResolution;
+
+uniform mat3 uTransformMatrix;
+uniform vec4 uColor;
+uniform float uRound;
+
+in vec2 aPosition;
+in float aTerrainCode;
+
+flat out int vTerrainCode;
+out vec4 vColor;
+
+void main() {
+    mat3 mvp = uProjectionMatrix * uWorldTransformMatrix * uTransformMatrix;
+    vec2 pos = (mvp * vec3(aPosition, 1.0)).xy;
+    gl_Position = vec4(pos, 0.0, 1.0);
+    vTerrainCode = int(aTerrainCode + 0.5);
+    vColor = uColor * uWorldColorAlpha;
+}
+`;
+
+      const TERRAIN_FRAGMENT_GLSL = `#version 300 es
+precision highp float;
+precision highp int;
+
+uniform sampler2D uAtlas;
+
+flat in int vTerrainCode;
+in vec4 vColor;
+
+out vec4 fragColor;
+
+void main() {
+    // 32-pixel-wide atlas; sample at the column centre for the cell's
+    // terrain code. Clamped to [0, 31] so out-of-range values (e.g.
+    // bit-decode bugs) don't read past the texture edge.
+    int code = clamp(vTerrainCode, 0, 31);
+    vec2 uv = vec2((float(code) + 0.5) / 32.0, 0.5);
+    fragColor = texture(uAtlas, uv) * vColor;
+}
+`;
+
+      function buildTerrainShader(atlasTexture) {
+        const glProgram = PIXI.GlProgram.from({
+          vertex: TERRAIN_VERTEX_GLSL,
+          fragment: TERRAIN_FRAGMENT_GLSL,
+          name: "terrain-atlas-step3",
+        });
+        // The MeshPipe sets `shader.groups[100]` and `[101]` to its own
+        // global / local UniformGroups every frame; PixiJS's GlShaderSystem
+        // binds the individual `uTransformMatrix` / `uColor` / `uRound` /
+        // matrix uniforms by name from those groups. We only need to
+        // register the atlas texture here.
+        return new PIXI.Shader({
+          glProgram,
+          resources: {
+            uAtlas: atlasTexture.source,
+          },
+        });
+      }
+
+      function buildLandblockChildren(mesh, terrainShader) {
         // Build the per-landblock mesh + wireframe pair. Heights are
-        // normalised against the *aggregate* min/max so neighbouring
-        // landblocks share a single colour ramp — otherwise each tile
-        // self-normalises and the seams jump in colour.
+        // *not* used for shading any more (step 3); the colour comes
+        // from the per-vertex terrain code via the custom shader.
+        // Aggregate min/max is still computed by the caller for the
+        // stage-info readout.
         //
-        // Snapshot the positions/indices once — each `mesh.positions`
-        // access is a getter call into wasm-bindgen that allocates a
-        // fresh Float32Array; reading 81×3 floats by repeated index
-        // would re-allocate per access.
+        // Snapshot positions/indices/terrainCodes once — each getter
+        // is a wasm-bindgen call that allocates a fresh typed-array.
         const positions3D = mesh.positions;
-        const range = Math.max(heightMax - heightMin, 1);
+        const terrainCodes = mesh.terrainCodes;
         const positions2D = new Float32Array(81 * 2);
-        const uvs = new Float32Array(81 * 2);
+        // The shader reads `aTerrainCode` as float and rounds; pack
+        // the u8 codes into a Float32Array for the GPU buffer.
+        const terrainFloats = new Float32Array(81);
         for (let i = 0; i < 81; i += 1) {
           positions2D[i * 2] = positions3D[i * 3];
           positions2D[i * 2 + 1] = positions3D[i * 3 + 1];
-          const t = (positions3D[i * 3 + 2] - heightMin) / range;
-          uvs[i * 2] = Math.max(0, Math.min(1, t));
-          uvs[i * 2 + 1] = 0.5;
+          terrainFloats[i] = terrainCodes[i];
         }
 
         const indicesU32 = Uint32Array.from(mesh.indices);
-        const geometry = new PIXI.MeshGeometry({
-          positions: positions2D,
-          uvs,
-          indices: indicesU32,
+        const geometry = new PIXI.Geometry({
+          attributes: {
+            aPosition: {
+              buffer: positions2D,
+              format: "float32x2",
+            },
+            aTerrainCode: {
+              buffer: terrainFloats,
+              format: "float32",
+            },
+          },
+          indexBuffer: indicesU32,
+          topology: "triangle-list",
         });
-        const pixiMesh = new PIXI.Mesh({ geometry, texture: rampTexture });
+        const pixiMesh = new PIXI.Mesh({ geometry, shader: terrainShader });
 
-        // Thin black wireframe overlaid on the heightmap. Diagnostic
-        // only — makes the 9×9 tessellation visible at zoom-in. Stroke
-        // width is in world metres, so the line stays a constant pixel
-        // width relative to the landblock as the camera zooms.
+        // Thin black wireframe overlaid on the textured mesh. Stroke
+        // alpha bumped from 0.35 to 0.5 because textured terrain is
+        // busier than the height ramp and the lower alpha got lost.
         const wire = new PIXI.Graphics();
         for (let i = 0; i < indicesU32.length; i += 3) {
           const a = indicesU32[i];
@@ -292,13 +395,13 @@
             positions2D[a * 2], positions2D[a * 2 + 1],
             positions2D[b * 2], positions2D[b * 2 + 1],
             positions2D[c * 2], positions2D[c * 2 + 1],
-          ]).stroke({ width: 0.4, color: 0x000000, alpha: 0.35 });
+          ]).stroke({ width: 0.4, color: 0x000000, alpha: 0.5 });
         }
 
         return [pixiMesh, wire];
       }
 
-      function addLandblockToScene(parentContainer, mesh, lbX, lbY, ramp, heightMin, heightMax) {
+      function addLandblockToScene(parentContainer, mesh, lbX, lbY, terrainShader) {
         const lbContainer = new PIXI.Container();
         // Landblock (XX, YY) occupies the world-metre square
         // [XX*192, (XX+1)*192] × [YY*192, (YY+1)*192].
@@ -306,7 +409,7 @@
           lbX * METERS_PER_LANDBLOCK,
           lbY * METERS_PER_LANDBLOCK
         );
-        const children = buildLandblockChildren(mesh, ramp, heightMin, heightMax);
+        const children = buildLandblockChildren(mesh, terrainShader);
         for (const child of children) lbContainer.addChild(child);
         parentContainer.addChild(lbContainer);
         return lbContainer;
@@ -322,18 +425,17 @@
           height: canvasElem.height,
           background: 0x101010,
           antialias: true,
+          // Force WebGL backend; the custom shader is GLSL ES 3.00 and
+          // would need a separate WGSL pair for WebGPU. Step 3 ships
+          // WebGL2 only; WebGPU + WGSL is a future polish step.
+          preference: "webgl",
         });
 
-        // Aggregate height range across the 9 landblocks so colour
-        // matches at the seams.
-        let heightMin = Infinity;
-        let heightMax = -Infinity;
-        for (const m of meshes) {
-          if (m.heightMin < heightMin) heightMin = m.heightMin;
-          if (m.heightMax > heightMax) heightMax = m.heightMax;
-        }
-
-        const ramp = buildHeightRampTexture();
+        // Step 3's atlas + custom shader are shared across all 9
+        // landblocks — single texture upload, single shader compile,
+        // 9 draw calls (one per Mesh).
+        const atlasTexture = buildTerrainAtlas();
+        const terrainShader = buildTerrainShader(atlasTexture);
 
         // Scene graph:
         //   stage
@@ -354,9 +456,7 @@
             meshes[i],
             n.x,
             n.y,
-            ramp,
-            heightMin,
-            heightMax
+            terrainShader
           );
         }
 
@@ -427,6 +527,58 @@
           cameraContainer.position.y += e.global.y - lastPointer.y;
           lastPointer = { x: e.global.x, y: e.global.y };
         });
+      }
+
+      // ----- render trigger ----------------------------------------
+
+      try {
+        renderStatus.textContent = "Fetching assets.hba (9 landblocks)…";
+        const ids = new Uint32Array(NEIGHBOURHOOD.map((n) => n.id >>> 0));
+        const meshes = await fetch_landblock_heightmaps(ASSET_URL, ids);
+        if (meshes.length !== NEIGHBOURHOOD.length) {
+          throw new Error(
+            `expected ${NEIGHBOURHOOD.length} meshes, got ${meshes.length}`
+          );
+        }
+        await renderNeighbourhood(canvas, NEIGHBOURHOOD, meshes);
+
+        // Aggregate height range across the 9 landblocks for the panel.
+        let aggMin = Infinity;
+        let aggMax = -Infinity;
+        for (const m of meshes) {
+          if (m.heightMin < aggMin) aggMin = m.heightMin;
+          if (m.heightMax > aggMax) aggMax = m.heightMax;
+        }
+        const centre = meshes[4];
+        const distinctTypes = new Set(centre.terrainCodes).size;
+        stageInfo.innerHTML = `
+          <dt>Centre cell</dt><dd>0x${(NEIGHBOURHOOD[4].id >>> 0)
+            .toString(16)
+            .toUpperCase()
+            .padStart(8, "0")} (Holtburg)</dd>
+          <dt>Landblocks</dt><dd>${meshes.length} (3×3)</dd>
+          <dt>Centre min/max</dt><dd>${centre.heightMin.toFixed(1)} / ${centre.heightMax.toFixed(1)} m</dd>
+          <dt>Aggregate min/max</dt><dd>${aggMin.toFixed(1)} / ${aggMax.toFixed(1)} m</dd>
+          <dt>Centre terrain types</dt><dd>${distinctTypes} distinct</dd>
+          <dt>Vertex spacing</dt><dd>${(METERS_PER_LANDBLOCK / 8).toFixed(0)} m</dd>
+          <dt>Controls</dt><dd>wheel = zoom, drag = pan</dd>
+        `;
+        renderStatus.innerHTML =
+          `<span class="ok">[OK]</span> Rendered Holtburg + 8 neighbours with terrain atlas. Mouse-wheel to zoom, click-and-drag to pan.`;
+        for (const m of meshes) m.free();
+      } catch (err) {
+        const msg = String(err?.message ?? err);
+        const missingFixture =
+          msg.includes("HTTP 404") ||
+          msg.includes("not found") ||
+          msg.includes("missing namespace");
+        const hint = missingFixture
+          ? "Regenerate the fixture with <code>cargo run -p holtburger-tools --bin dat2hba -- --profile pruned eor/portal=$HOME/ac_base_dats/client_portal.dat eor/cell=$HOME/ac_base_dats/client_cell_1.dat dats/assets.hba</code> from <code>external/holtburger/</code>."
+          : "Open devtools console for the full stack.";
+        renderStatus.innerHTML =
+          `<span class="fail">[FAIL]</span> Render failed: <code>${msg}</code><br/><span class="hint">${hint}</span>`;
+        // eslint-disable-next-line no-console
+        console.error("fetch_landblock_heightmaps failed:", err);
       }
     </script>
   </body>
