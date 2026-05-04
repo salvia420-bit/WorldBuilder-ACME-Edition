@@ -15,16 +15,23 @@
 > [`phase-3-step-4.5-handoff.md`](phase-3-step-4.5-handoff.md) for the
 > framing briefs; this file is the as-built reference.
 
-![Holtburg + 8 neighbours with per-model real colours](images/phase-3-step-4.5-real-colours.png)
+![Holtburg town centre at 3× zoom — per-poly real colours from the production atlas](images/phase-3-step-4.5-real-colours-zoomed.png)
+
+![Full page view with stage-info panel](images/phase-3-step-4.5-real-colours.png)
 
 The step 4.5 screenshot is the current deliverable: same 3×3 grid as
-step 4 (real terrain + roads + 239 sprites), now with **per-model
-real ARGB colours** resolved from each model's Surface chain in
-Rust and applied as PIXI sprite tints. With DXT1/3/5 decode landed,
-the stage-info panel shows **81 of 81 unique Holtburg models resolved
-(100%) with 54 distinct ARGB values** — the legacy 2-bucket category
-palette is now a strict fallback that never fires for the test
-fixture. Compare to the static-site z=12 reference at
+step 4 (real terrain + roads + 239 sprites), now with **per-poly real
+colours** baked into each sprite tile by the static-site emitter
+(`WorldBuilder.Terminal/ObjectSpriteGenerator.cs`). The atlas was
+swapped from the older 4096×1296 greyscale-silhouette build to the
+production **8192×4088 full-color atlas with 169 model entries** —
+stone walls, wood beams, roof tiles all rendered in their real AC
+colours per pixel. The runtime per-model tint (`fetch_object_colours`
+walk, 81 of 81 Holtburg models resolved with 54 distinct ARGB values)
+is now reserved for the **fallback dot** path when a placement has no
+atlas tile; sprites that hit the atlas render at PIXI tint = white
+(identity) so per-poly colours pass through unchanged. Compare to the
+static-site z=12 reference at
 [`images/DerethMapsEnhanced_zoom.png`](images/DerethMapsEnhanced_zoom.png) —
 same place, same general layout. Visual gap remaining: the larger
 custom-coloured landmarks (the green pyramid / lifestone). Step 5's

@@ -501,18 +501,20 @@ void main() {
         // are in world metres and the parent scale handles the AC
         // +north-up convention.
         //
-        // Tint reasoning: the atlas tiles are pure greyscale silhouettes
-        // (R == G == B for every pixel). PIXI.Sprite.tint multiplies
-        // the texture per channel, so the resolved tint paints the
-        // silhouette directly.
+        // Tint reasoning: the atlas tiles ship **per-poly real colours**
+        // baked at static-site emit time (stone walls, wood beams, roof
+        // tiles, etc — see `WorldBuilder.Terminal/ObjectSpriteGenerator.cs`
+        // `DrawTriangle` which UV-maps each face's RenderSurface texture
+        // into the sprite via `SKShader.CreateBitmap` + `DrawVertices`).
+        // PIXI.Sprite.tint defaults to white = identity, so the atlas
+        // colours come through unchanged — re-tinting with a single ARGB
+        // would multiply per-pixel and destroy the per-poly variety.
         //
-        // Step 4.5: `colourMap` carries per-model real ARGB derived from
-        // each model's GfxObj/SetupModel → Surface chain (resolved in
-        // Rust, returned by `fetch_object_colours`). When present, drop
-        // the alpha byte (PIXI tint is RGB) and use it. Models the walk
-        // couldn't resolve fall back to the legacy 2-bucket category
-        // palette (0x01 → warm brown, 0x02 → tan-green) so the worst
-        // case after step 4.5 is still "looks like step 4".
+        // `colourMap` carries the per-model representative ARGB resolved
+        // from each model's Surface chain in Rust (step 4.5). It's only
+        // applied to the **fallback dot** path (when the atlas has no
+        // tile for the model) — there it gives the dot a real per-model
+        // colour rather than the legacy 2-bucket category palette.
         const container = new PIXI.Container();
         // NEIGHBOURHOOD entries carry the CellLandblock id (XXYYFFFF)
         // because that's what the heightmap fetch uses. Object
@@ -534,19 +536,19 @@ void main() {
           const wy = n.y * METERS_PER_LANDBLOCK + obj.y;
           const prefix = (obj.modelId >>> 24) & 0xff;
 
-          // Step 4.5: prefer the per-model real ARGB if the Surface
-          // walk resolved one. PIXI tint is 0xRRGGBB, AC ColorValue is
-          // 0xAARRGGBB — drop the alpha byte. `realColour ?? fallback`
-          // handles undefined (model not in colourMap) cleanly; a
-          // resolved 0x00000000 is treated as a real (transparent)
-          // colour even though the Rust side filters those out.
+          // Atlas tile carries per-poly real colours baked at static-
+          // site emit time (stone walls, wood beams, roof tiles —
+          // ObjectSpriteGenerator.cs's DrawTriangle UV-maps each face's
+          // RenderSurface texture into the sprite). PIXI.Sprite.tint
+          // defaults to white = identity, so atlas pixels come through
+          // unchanged. Re-tinting with one ARGB would multiply per-
+          // pixel and destroy the per-poly variety.
+          //
+          // Fallback dot (atlas miss) gets the resolved per-model ARGB
+          // from `fetch_object_colours` (step 4.5 walk); models the
+          // walk couldn't resolve fall back to the legacy 2-bucket
+          // category palette so the dot is still visible.
           const realColour = colourMap?.get(obj.modelId);
-          const spriteTint =
-            realColour !== undefined
-              ? realColour & 0x00ffffff
-              : prefix === 0x01
-                ? 0x8b6442
-                : 0x6f7a4a;
           const fallbackTint =
             realColour !== undefined
               ? realColour & 0x00ffffff
@@ -565,7 +567,6 @@ void main() {
             // the scene; AC's CCW-from-above yaw reads as CW after
             // the flip.
             sprite.rotation = -obj.rotationZ;
-            sprite.tint = spriteTint;
             container.addChild(sprite);
             withSprite += 1;
           } else {
