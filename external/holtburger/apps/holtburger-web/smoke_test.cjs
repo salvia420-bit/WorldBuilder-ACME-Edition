@@ -123,6 +123,15 @@ check(
     `typeof ${typeof wasm.fetch_terrain_textures}`
 );
 
+// Phase 3 step 4: fetch_landblock_objects must be present. End-to-end
+// round-trip below against the Holtburg neighbourhood; degrades to a
+// SKIP if the fixture lacks LandblockInfo records.
+check(
+    "fetch_landblock_objects() is exported (Phase 3 step 4 sprites)",
+    typeof wasm.fetch_landblock_objects === "function",
+    `typeof ${typeof wasm.fetch_landblock_objects}`
+);
+
 (async () => {
     // §8 step 4 round-trip: serve `dats/assets.hba` over HTTP from this
     // process, then have the wasm bundle's HttpResourceSource fetch +
@@ -480,6 +489,83 @@ check(
             } else {
                 check(
                     "fetch_terrain_textures round-trip succeeds",
+                    false,
+                    `threw: ${msg}`
+                );
+            }
+        }
+
+        // Phase 3 step 4 round-trip: fetch object placements for the
+        // Holtburg LandblockInfo neighbourhood (XXYYFFFE suffix, not
+        // XXYYFFFF which is the terrain CellLandblock). Each object
+        // placement has model_id + (x, y, z) + rotation_z. Pin against
+        // empirical Holtburg counts: the 3×3 neighbourhood holds ~239
+        // placed objects total (inc. buildings) with ~120 at the centre
+        // landblock. Loose threshold so future asset re-bakes don't
+        // false-fail on minor variance.
+        try {
+            const HOLTBURG_LBI = [
+                0xa8b5fffe, 0xa9b5fffe, 0xaab5fffe,
+                0xa8b4fffe, 0xa9b4fffe, 0xaab4fffe,
+                0xa8b3fffe, 0xa9b3fffe, 0xaab3fffe,
+            ];
+            const objects = await wasm.fetch_landblock_objects(
+                url,
+                new Uint32Array(HOLTBURG_LBI)
+            );
+
+            check(
+                "fetch_landblock_objects: returns ≥100 placements for Holtburg 3×3 (Phase 3 step 4)",
+                Array.isArray(objects) && objects.length >= 100,
+                `len=${objects?.length}`
+            );
+
+            // Every placement must have a non-zero model_id and a
+            // sane position (within the 192 m landblock bounds, plus
+            // some slack for objects placed near edges).
+            let allOk = true;
+            let firstFail = null;
+            for (let i = 0; i < objects.length; i += 1) {
+                const o = objects[i];
+                const ok =
+                    o.modelId > 0 &&
+                    o.x >= -10 && o.x <= 202 &&
+                    o.y >= -10 && o.y <= 202 &&
+                    Number.isFinite(o.rotationZ);
+                if (!ok) { allOk = false; firstFail = { i, o }; break; }
+            }
+            check(
+                "fetch_landblock_objects: every placement has valid modelId/position/rotation",
+                allOk,
+                allOk
+                    ? `${objects.length} OK; sample modelId=0x${objects[0].modelId.toString(16).toUpperCase().padStart(8, "0")}`
+                    : `failed at i=${firstFail?.i}: model=${firstFail?.o?.modelId}, pos=(${firstFail?.o?.x},${firstFail?.o?.y})`
+            );
+
+            // The Holtburg town centre landblock has the most density.
+            const centreId = 0xa9b4fffe;
+            const centreObjs = objects.filter((o) => o.landblockId === centreId);
+            check(
+                "fetch_landblock_objects: Holtburg centre has ≥50 objects (real town density)",
+                centreObjs.length >= 50,
+                `${centreObjs.length} at 0x${centreId.toString(16).toUpperCase()}`
+            );
+
+            for (const o of objects) o.free();
+        } catch (e) {
+            const msg = String(e?.message ?? e);
+            const missingLbi =
+                msg.includes("LandblockInfo") &&
+                (msg.includes("not found") || msg.includes("missing namespace"));
+            if (missingLbi) {
+                console.log(
+                    "  [SKIP] fetch_landblock_objects round-trip — fixture has " +
+                    "no LandblockInfo records.\n         Re-run dat2hba with " +
+                    "--profile pruned (or fuller) to include cell content."
+                );
+            } else {
+                check(
+                    "fetch_landblock_objects round-trip succeeds",
                     false,
                     `threw: ${msg}`
                 );
