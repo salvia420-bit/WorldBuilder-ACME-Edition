@@ -1,11 +1,19 @@
 # emit-dynamic-site — Design
 
-> **Status (2026-05-04):** Phases 0, 1, and 2 are DONE. Phase 3 is in
-> flight on a **direct-DAT rendering rail** (not the original
-> "Leaflet basemap + PixiJS entity overlay" rail described in earlier
-> drafts of this doc) — Phase 3 step 1 (single Holtburg landblock
-> render via PixiJS) and Phase 3 step 2 (3×3 neighbourhood + pan/zoom
-> camera) have landed. See `docs/phase-3-renderer.md` for the
+> **Status (2026-05-04):** Phases 0, 1, and 2 are DONE. **Phase 3
+> closed enough to start Phase 4** — every renderer step the design
+> doc anticipated has shipped, plus several quality follow-ons that
+> emerged in flight. The wasm bundle now fetches a 3×3 Holtburg
+> neighbourhood, draws real retail terrain + roads + 239 placed
+> objects, and **renders each unique model in-browser at runtime via
+> per-poly UV-mapped textures** (Phase 3 step 6 — same pipeline as
+> the static-site emitter's `ObjectSpriteGenerator.cs::DrawTriangle`
+> but live, so user-imported custom models render with no re-bake
+> step). Phase 4 — Wiring (the *playable* part) is now the active
+> rail; the next step is Phase 4 step 1, **wasm-driven AC login →
+> CharacterList in the browser**, briefed at
+> [`docs/phase-4-step-1-handoff.md`](phase-4-step-1-handoff.md). See
+> [`docs/phase-3-renderer.md`](phase-3-renderer.md) for the renderer's
 > as-built reference.
 >
 > **Phase 1 closed (2026-05-04).** The live-ACE round-trip ran:
@@ -323,7 +331,8 @@ static-site visual fidelity, in order of impact:
 |---|---|---|
 | Heightmap render | topographic relief, recognisable shapes | ✅ landed (step 1+2) |
 | Texture atlas + surface table | recognisable AC terrain — biggest delta | ✅ landed (step 3 placeholder, step 3.5 real retail tiles) |
-| Sprite atlas consumption | buildings/trees/decorations in the right spots | ✅ landed (step 4: silhouettes; step 4.5: real per-model colours from Surface chain) |
+| Sprite atlas consumption | buildings/trees/decorations in the right spots | ✅ landed (step 4 silhouettes → step 4.5 per-model real colours from Surface chain → step 4.5c production atlas swap) |
+| Live runtime per-poly rendering | stone walls + wood beams + roof tiles per pixel; custom-model-import-ready | ✅ landed (step 6) — every unique placed model triangulates + UV-maps in the browser at runtime |
 | Road overlays + atmospheric polish | matches the README static screenshot | ✅ landed partial (step 5: roads only; atmospherics still open) |
 
 Step 3 first shipped 32 placeholder solid colours per the brief's
@@ -334,6 +343,26 @@ parsers from upstream ACE and signature-scanning the Region binary
 to extract the canonical 33-entry terrain → SurfaceTexture mapping
 (skipping a runtime Region parser as multi-week scope). Each cell
 now tiles a 256×256 sample of its real AC tile across its 24m face.
+
+**Step 6 — live runtime per-model rendering** is the most recent
+shift in the rail. The original assumption (recorded earlier in
+this section) was "reuse the static-site sprite atlas at runtime."
+That works for shipped retail content where the atlas already
+covers the model, but fails the project's whole purpose for *custom*
+models — users importing new content would need to re-bake the
+atlas every change. Step 6 walks the same chain the static-site
+emitter walks (`GfxObj/SetupModel → polygons → Surface →
+SurfaceTexture → RenderSurface → RGBA8`), triangulates the model in
+Rust, and rasterizes top-down via a per-poly UV-mapped fragment
+shader in PIXI — at runtime, in the browser. Output goes to a
+PIXI.RenderTexture cached by model_id. The static atlas remains as
+a warm-start fallback for models the live walk fails on (rare —
+Phase 3 step 6 reports 80 of 81 unique Holtburg models live-render;
+the 1 outlier is an engine-internal light-source anchor with
+NoPos-stippled geometry, correctly invisible). Custom models now
+render immediately on the next page load with no rebake step,
+which unblocks the WorldBuilder edit-and-reload loop §4.5 was
+designed around.
 
 **What's deliberately NOT in this rail:**
 
@@ -671,17 +700,114 @@ Step ledger:
   landblock is 192 m, not 24 m — see the correction note in
   `docs/phase-3-renderer.md`). Smoke test 14 → 17 checks. Deliverable:
   [`docs/images/phase-3-step-2-multi-landblock.png`](images/phase-3-step-2-multi-landblock.png).
-- ⏳ **Step 3** — texture-atlas terrain palette (the AC 32-tile-type
-  surface table + textures). Biggest single visual jump toward
-  static-site fidelity; needs a custom GLSL fragment shader and a
-  per-vertex tile-type buffer. Independent of live ACE.
-- ⏳ **Step 4** — sprite-atlas consumption + `LandblockInfo` (object
-  placement) rendering. Reuses `projects/<slug>/sprites/atlas.{png,js}`
-  from the static-site pipeline. Visual continuity with the static
-  gallery; depends on step 3 only loosely.
-- ⏳ **Step 5** — road overlays + atmospheric polish. Surface-table
-  road tiles + lighting passes. The "looks like the README screenshot"
-  step.
+- ✅ **Step 3** (`06597eb`..`471d02a`) — per-vertex `terrainCodes` +
+  custom GLSL ES 3.00 Mesh shader + 32-colour placeholder atlas.
+  `flat in int vTerrainCode` from the SW provoking vertex so each
+  cell shades as one terrain type. Shipped placeholder colours per
+  the brief's scope-reducer; real retail tiles followed in step 3.5.
+  Smoke test 17 → 20 checks. Deliverable:
+  [`docs/images/phase-3-step-3-textured.png`](images/phase-3-step-3-textured.png).
+- ✅ **Step 5 (partial — roads)** (`0a2e0a3`..`166bc2c`) — per-vertex
+  `roadCodes` + road-overlay layer. Holtburg's stone-road network
+  now renders as light-grey paths through the centre, matching the
+  static-site z=12 reference. Atmospherics (fog, day/night) still
+  open. Smoke 20 → 24 checks. Deliverable:
+  [`docs/images/phase-3-step-5-roads.png`](images/phase-3-step-5-roads.png).
+- ✅ **Step 3.5** (`0e47306`..`6fbc15f`) — Palette (0x04),
+  SurfaceTexture (0x05), Texture (0x06) parsers landed in
+  `holtburger-dat`. New `fetch_terrain_textures` wasm export decodes
+  all 33 retail terrain tiles (signature-scanned from the
+  `eor/portal:0x13000000` Region binary at bake time, not parsed at
+  runtime — multi-week scope deferred). JS atlas builder downscales
+  512×512 source → 256×256 atlas, custom shader switches from a
+  32-column lookup to per-region UV math. Bumped fixture profile
+  from `pruned` to `full` (605 MB) since pruned excludes the texture
+  pipeline. Smoke 24 → 28 checks. Deliverable:
+  [`docs/images/phase-3-step-3.5-real-textures.png`](images/phase-3-step-3.5-real-textures.png).
+- ✅ **Step 4** (`5eb5736`..`19c4727`) — `fetch_landblock_objects`
+  wasm export reads `LandblockInfo` Stab + BuildInfo lists, returns
+  239 placements for Holtburg's 3×3. Static-site sprite atlas reused
+  via PIXI sprite-tinting (atlas tiles were greyscale silhouettes at
+  this point — see step 4.5c for the production-atlas correction).
+  Drive-by fix: `BuildInfo.num_portals` was `u16` but ACE writes
+  `u32`; mismatch only triggered when buildings had any portals
+  (Holtburg's first interior building hits it). Smoke 28 → 32 checks.
+  Deliverable:
+  [`docs/images/phase-3-step-4-objects.png`](images/phase-3-step-4-objects.png).
+- ✅ **Step 4.5** (`6d1b9e8`..`bcf4d2f`) — Surface (0x08) parser +
+  `fetch_object_colours` wasm export. Walks each placed model's
+  GfxObj/SetupModel surface chain in Rust, returns one ARGB per
+  unique model_id. Two key footguns surfaced: Surface (0x08)
+  records have **no leading `id` field** (unlike Texture / Palette /
+  SurfaceTexture); `Surface.OrigTextureId` actually holds a
+  **SurfaceTexture (0x05) ID**, not a Texture (0x06) ID — the walk
+  needs an extra `SurfaceTexture::highest_res()` hop, mirroring the
+  chain `WorldBuilder.Shared/Lib/Texture/RenderSurfaceImporter.cs`'s
+  `CreateSurface` builder uses. Smoke 32 → 36 checks. After step
+  4.5b's DXT decoder + step 4.5c's atlas swap, the resolve rate is
+  **81/81 Holtburg unique models with 54 distinct ARGB values**.
+- ✅ **Step 4.5b** (`5842d5a`..`9afb1d7`) — DXT1/DXT3/DXT5 decoder
+  ported from upstream ACE `DxtUtil.cs` (Ms-PL, notice retained).
+  Closes the last 27 of 81 Holtburg models that bottomed out at
+  `Texture::to_rgba8: UnsupportedFormat(Dxt1|Dxt5)` in step 4.5.
+  6 new unit tests (workspace lib total 1100 → 1106).
+- ✅ **Step 4.5c** (`197369a`) — production atlas swap. The atlas
+  step 4 copied from `docs/sample-dist/projects/vanilla/sprites/`
+  was a 4096×1296 greyscale-silhouette build (R=G=B for every
+  pixel verified across 3.7M opaque samples). Swapped in the
+  fresh production atlas from `~/dist-regen/projects/vanilla/sprites/`:
+  8192×4088 with 169 model entries and full per-pixel chroma
+  (stone, wood, roof tiles in real AC colours). Removed the
+  runtime sprite tint (it was destroying per-poly variety on a
+  greyscale silhouette but multiplied destructively against
+  colour-baked atlas tiles); fallback dot still uses the resolved
+  per-model ARGB.
+- ✅ **Step 6** (`8c41045`..`bce626a`) — **live runtime per-model
+  rendering**. `fetch_model_meshes` + `fetch_surfaces_pixels` wasm
+  exports (port of the static-site emitter's `TriangulateModel` +
+  `AppendGfxTris` to Rust). JS-side rasterizer
+  (`buildLiveSpriteMap` + `renderModelTile` + custom textured GLSL
+  fragment shader) renders each unique model to a
+  PIXI.RenderTexture cached by model_id. Mirrors
+  `ObjectSpriteGenerator.cs::DrawTriangle` (per-poly UV-mapped
+  texture sampling × per-vertex Lambert shade) at runtime —
+  **custom models now render without a re-bake step**, which is
+  the design's whole point per §4.5. Prereq fix: GfxObj polygon
+  parser stipple/cull bit-mask bug (`0x01`/`0x02` should have been
+  `0x04`/`0x08`; CullMode `1`/`None` should have been `2`/Clockwise)
+  — was silently failing on ~50% of retail records, causing
+  `failed to fill whole buffer` deeper in the parse. After the fix:
+  15,318 / 15,318 retail GfxObjs parse successfully across the
+  full bundle. **80 of 81 unique Holtburg models live-render**;
+  the 1 outlier is `0x02000364`, an engine-internal light-source
+  anchor (single 8cm × 6cm vertical triangle with NoPos stippling,
+  no weenie binding across 43,911 retail weenies, correctly
+  invisible — fallback dot suppressed via `bce626a`). Smoke 36 →
+  41 checks. Deliverable:
+  [`docs/images/phase-3-step-6-live-render-zoomed.png`](images/phase-3-step-6-live-render-zoomed.png)
+  (3× zoom on Holtburg town centre showing wooden doors, reddish
+  roof tile, plank-textured cart, stone walls + paths).
+- ⏳ **Atmospherics (rest of step 5)** — fog of war, day/night
+  gradient, post-process bloom on water tiles. Independent polish;
+  not gating Phase 4.
+- ⏳ **Per-cell terrain blending (CornerTerrainMaps)** — AC's
+  actual surface table uses corner/side blend maps for proper
+  transitions across cell boundaries. Currently each cell renders
+  one terrain type uniformly; with corner blends, a grass-to-water
+  boundary fades smoothly. Multi-pass rendering, ~150 lines of
+  additional shader work. Step 5+ scope.
+- ⏳ **Multi-landblock streaming** — extend beyond the 3×3
+  hardcode to N×N visible landblocks driven by the camera. Needs
+  a landblock-id → `LandblockMesh` cache, camera-driven prefetch,
+  eviction, LOD/culling. Step 5+ scope.
+- ⏳ **Renderer-profile bake (asset-bundle size)** — step 3.5
+  forced `dat2hba --profile full` because the existing `pruned`
+  profile excludes Texture / SurfaceTexture / Palette types via
+  `is_essential()`. Bundle grew 233 MB → 605 MB. A new `renderer`
+  profile that's `pruned` + the texture-pipeline types would land
+  in the ~280 MB range. Mechanical change in
+  `crates/holtburger-dat/src/file_type/mod.rs` (extend
+  `is_essential` or add a parallel filter). Step 5+ scope.
 - ⏳ **`coordSystem` assertion** — the live bundle should assert
   `worldExtentWu = 49152, tilePx = 256, lbWu = 192, pxPerWuAtZ0 =
   256/49152` against the project's coord block at boot, mirroring
@@ -691,13 +817,32 @@ Step ledger:
   load-time check before Phase 4 wiring depends on it.
 
 Phase 4 — **Wiring.** ~2 weeks. Gated on the live ACE backend unblock.
-- Connect WASM holtburger's `ClientViewEvent` stream to the PixiJS entity
-  buffer (Phase 3 step 4-or-later, with sprite-atlas consumption already
-  in place).
-- DOM panels for chat, vitals, inventory — surfaces holtburger already
-  drives.
-- Input: WASD + click-to-target, fed back as movement commands through
-  holtburger-core's existing input surface.
+
+Step ledger:
+- ⏳ **Step 1 — wasm-driven AC login → CharacterList in browser.**
+  Briefed at
+  [`docs/phase-4-step-1-handoff.md`](phase-4-step-1-handoff.md).
+  The smallest possible "the browser is talking to ACE for real"
+  deliverable: drive the AC login handshake from the wasm bundle
+  through the WS bridge to a live ACE, surface `CharacterList` to
+  JS so the browser shows a Selection screen. Same milestone Phase
+  1 hit on the native side (`holtburger-cli` reaches Selection)
+  but now via the in-browser bundle. Adds `start_session` +
+  `SessionHandle.poll_events()` exports + a JS login form +
+  Selection display. Smoke 41 → 44 checks. Manual live-ACE
+  validation against `~/ace-server/` per `docs/ace-local-setup.md`.
+- ⏳ **Step 2 — `ClientViewEvent` → PIXI entity buffer.** Once a
+  character is selected in step 1 and spawned, AC's server starts
+  pushing world state (entity positions, animations, chat). Wire
+  the Session's event stream into the renderer's per-frame loop.
+  Reuses step 6's per-model render cache for entity sprites.
+- ⏳ **Step 3 — input (WASD / click-to-target) → AC movement
+  packets.** Translate browser input events through
+  `holtburger-core`'s existing input surface to AC
+  `CharacterPositionUpdate` packets. Closes the gameplay loop.
+- ⏳ **Step 4 — DOM panels (chat, vitals, inventory).** Render
+  the retail UI surfaces holtburger already drives, in DOM panels
+  next to the PIXI canvas. Parallel to step 2/3.
 
 Phase 5 — **Hardening.** Indefinite.
 - DAT-over-HTTP shard layout if single-bundle pre-load becomes a UX
@@ -754,27 +899,43 @@ re-discovering them.
 | Doc | Covers |
 |---|---|
 | [`phase-2-wasm-spike.md`](phase-2-wasm-spike.md) | Phase 2 §3 per-crate cross-compile matrix, §8 step ledger, status banner |
-| [`phase-3-renderer.md`](phase-3-renderer.md) | Phase 3 step 1 + step 2 as-built reference, step 3 candidates |
+| [`phase-3-renderer.md`](phase-3-renderer.md) | Phase 3 steps 1, 2, 3, 3.5, 4, 4.5, 5 partial, 6 as-built reference + screenshots |
 | [`phase-3-step-1-handoff.md`](phase-3-step-1-handoff.md) | Brief that framed step 1 (single-landblock render) |
 | [`phase-3-step-2-handoff.md`](phase-3-step-2-handoff.md) | Brief that framed step 2 (3×3 + camera + unit fix) |
+| [`phase-3-step-3-handoff.md`](phase-3-step-3-handoff.md) | Brief that framed step 3 (per-vertex terrain code + custom shader) |
+| [`phase-3-step-4.5-handoff.md`](phase-3-step-4.5-handoff.md) | Brief that framed step 4.5 (Surface chain + per-model real colours) |
+| [`phase-4-step-1-handoff.md`](phase-4-step-1-handoff.md) | Brief framing the next step (wasm-driven AC login → CharacterList) |
 
 ### Live-client wasm-bindgen surface (`apps/holtburger-web`)
 
-| Export | Purpose |
-|---|---|
-| `build_info() -> String` | Bundle identification |
-| `hash32(&[u8]) -> u32` | Deterministic AC packet checksum (smoke) |
-| `session_smoke_test_packet_sequence() -> u32` | `Session::new_test` runs on wasm32 |
-| `try_ws_handshake_smoke(bridge_url, ip, port) -> Promise<u32>` | WsTransport ↔ Session wiring (browser-only validation needs live bridge) |
-| `try_http_resource_source_smoke(url, ns, id) -> Promise<u32>` | HttpResourceSource end-to-end (smoke) |
-| `fetch_landblock_heightmap(url, cell_id) -> Promise<LandblockMesh>` | Single-landblock terrain mesh (Phase 3 step 1 path; one-line wrapper around the plural form) |
-| `fetch_landblock_heightmaps(url, cell_ids) -> Promise<Vec<LandblockMesh>>` | Batch terrain meshes — one HBA open per call (Phase 3 step 2 path) |
+| Export | Phase | Purpose |
+|---|---|---|
+| `build_info() -> String` | 2 | Bundle identification |
+| `hash32(&[u8]) -> u32` | 2 | Deterministic AC packet checksum (smoke) |
+| `session_smoke_test_packet_sequence() -> u32` | 2 | `Session::new_test` runs on wasm32 |
+| `try_ws_handshake_smoke(bridge_url, ip, port) -> Promise<u32>` | 2 §8.2 | WsTransport ↔ Session wiring (browser-only validation needs live bridge) |
+| `try_http_resource_source_smoke(url, ns, id) -> Promise<u32>` | 2 §8.4 | HttpResourceSource end-to-end (smoke) |
+| `fetch_landblock_heightmap(url, cell_id) -> Promise<LandblockMesh>` | 3 step 1 | Single-landblock terrain mesh (one-line wrapper around the plural form) |
+| `fetch_landblock_heightmaps(url, cell_ids) -> Promise<Vec<LandblockMesh>>` | 3 step 2 | Batch terrain meshes + per-vertex `terrainCodes` + `roadCodes` — one HBA open per call |
+| `fetch_terrain_textures(url) -> Promise<Vec<TerrainTexture>>` | 3 step 3.5 | All 33 retail terrain textures decoded to RGBA8 (Palette + SurfaceTexture + Texture chain) |
+| `fetch_landblock_objects(url, cell_ids) -> Promise<Vec<ObjectPlacement>>` | 3 step 4 | LandblockInfo Stab + BuildInfo lists — `(model_id, x, y, z, rotation_z)` per placement |
+| `fetch_object_colours(url, model_ids) -> Promise<Vec<u32>>` | 3 step 4.5 | Per-model representative ARGB from each model's GfxObj/SetupModel → Surface chain (textured-mean walk + DXT decode) |
+| `fetch_model_mesh(url, model_id) -> Promise<ModelMesh>` | 3 step 6 | Single-model triangulation (positions, uvs, normals, surfaceIndices, surfaces, bbox, worldBounds) |
+| `fetch_model_meshes(url, model_ids) -> Promise<Vec<ModelMesh>>` | 3 step 6 | Batch model triangulation — one HBA open per call |
+| `fetch_surface_pixels(url, surface_did) -> Promise<SurfacePixels>` | 3 step 6 | Single surface decoded to RGBA8 (Surface → SurfaceTexture → Texture chain). Solid-colour surfaces synthesize a 1×1 ARGB tile. |
+| `fetch_surfaces_pixels(url, surface_dids) -> Promise<Vec<SurfacePixels>>` | 3 step 6 | Batch surface decode — feeds the in-browser per-poly rasterizer |
+| `start_session(bridge_url, ip, port, username, password) -> Promise<SessionHandle>` | 4 step 1 (planned) | Drive AC login → CharacterList through wasm + WS bridge |
+| `SessionHandle.poll_events() -> Vec<ClientEvent>` | 4 step 1 (planned) | Pull-style event drain — JS calls per animation frame |
+| `SessionHandle.character_list() -> Vec<CharacterSummary>` | 4 step 1 (planned) | Account's characters once login resolves |
 
 ---
 
 *Maintainers: when you change one of the decisions in §4, update §8 and §9 in
 the same change. The as-built status of §5.2 and §7.1-7.4 lives inline in
-those sections; the step-by-step record for Phase 2/3 lives in
-`phase-2-wasm-spike.md` and `phase-3-renderer.md` respectively. This file is
-the long-lived design intent; the spike + renderer docs are the short-lived
-as-built records.*
+those sections; the step-by-step record for Phase 2 lives in
+`phase-2-wasm-spike.md`, Phase 3 in `phase-3-renderer.md`, Phase 4 will
+land its own `phase-4.md` once step 1 lands. This file is the long-lived
+design intent; the spike + renderer docs are the short-lived as-built
+records, and the per-step handoff briefs at `phase-{N}-step-{M}-handoff.md`
+are the per-step framing briefs (deletable once their step is closed and
+captured in the as-built doc).*
