@@ -194,6 +194,22 @@
       try {
         await init();
 
+        // Phase 5.0 obj 7 — register the service worker that does
+        // IndexedDB-backed shard caching. Fail-soft: if SW is
+        // unsupported (old browser) the page works in network-only
+        // mode through the legacy HTTP cache.
+        if ("serviceWorker" in navigator) {
+          try {
+            await navigator.serviceWorker.register("./service-worker.js");
+            console.log("[Phase 5.0] service-worker registered");
+          } catch (e) {
+            console.warn(
+              "[Phase 5.0] service-worker registration failed:",
+              String(e).slice(0, 120)
+            );
+          }
+        }
+
         // Phase 5.0 obj 6 — initialize the manifest-mode resource
         // source if a pre-baked `dist/manifest.json` exists. This is
         // opt-in for now: fetch_* exports still take an `asset_url`
