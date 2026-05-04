@@ -42,6 +42,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
+mod manifest_source;
 mod source;
 
 pub use source::{ConnectError, HttpResourceSource};
