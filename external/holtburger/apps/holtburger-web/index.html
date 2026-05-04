@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>holtburger-web — Phase 2 floor + Phase 3 step 1 render</title>
+    <title>holtburger-web — Phase 2 floor + Phase 3 step 2 render</title>
     <style>
       body { font-family: system-ui, sans-serif; max-width: 56rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
       h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
@@ -15,7 +15,8 @@
       .fail { color: #b30000; font-weight: bold; }
       .skip { color: #888; }
       #stage { display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-start; margin-top: 0.5rem; }
-      #stage canvas { border: 1px solid #ccc; background: #101010; image-rendering: pixelated; }
+      #stage canvas { border: 1px solid #ccc; background: #101010; image-rendering: pixelated; cursor: grab; touch-action: none; }
+      #stage canvas.dragging { cursor: grabbing; }
       #stage-info { font-size: 0.9rem; min-width: 14rem; }
       #stage-info dt { font-weight: bold; }
       #stage-info dd { margin: 0 0 0.4rem 0; color: #444; font-family: ui-monospace, monospace; }
@@ -33,12 +34,15 @@
     <h2>Phase 2 floor — wasm bundle smoke checks</h2>
     <div id="results">Loading wasm bundle…</div>
 
-    <h2>Phase 3 step 1 — Holtburg landblock render</h2>
+    <h2>Phase 3 step 2 — 3×3 Holtburg neighbourhood render</h2>
     <p class="hint">
-      Fetches <code>../../dats/assets.hba</code> via the §8 step 4
-      <code>HttpResourceSource</code>, parses
-      <code>eor/cell:0xA9B4FFFF</code> into a <code>CellLandblock</code>,
-      and hands the 9×9 height grid to PixiJS as a 128-triangle mesh.
+      Fetches <code>../../dats/assets.hba</code> once via the §8 step 4
+      <code>HttpResourceSource</code>, then reads the 9 surface terrain
+      records (<code>eor/cell:0xA8B3FFFF</code>..<code>0xAAB5FFFF</code>)
+      around Holtburg in a single batch call. Each landblock is laid
+      out at its world offset (<code>XX&nbsp;×&nbsp;192&nbsp;m</code>,
+      <code>YY&nbsp;×&nbsp;192&nbsp;m</code>) inside a camera container.
+      Mouse-wheel zooms around the cursor; click-and-drag pans.
       Colour ramps blue→green→brown→white by elevation.
       Requires the fixture to have been built with
       <code>dat2hba --profile pruned</code> (the <code>micro</code>
@@ -73,6 +77,7 @@
         hash32,
         session_smoke_test_packet_sequence,
         fetch_landblock_heightmap,
+        fetch_landblock_heightmaps,
       } from "./pkg/holtburger_web.js";
 
       import * as PIXI from "pixi.js";
@@ -127,9 +132,15 @@
           `typeof ${typeof fetch_landblock_heightmap}`
         );
 
+        check(
+          "fetch_landblock_heightmaps() is exported (Phase 3 step 2)",
+          typeof fetch_landblock_heightmaps === "function",
+          `typeof ${typeof fetch_landblock_heightmaps}`
+        );
+
         const allOk = lines.every((l) => l.includes("[OK]"));
         const summary = allOk
-          ? `<p class="ok">PASS &mdash; the wasm32 floor + Phase 3 step 1 export all loaded.</p>`
+          ? `<p class="ok">PASS &mdash; the wasm32 floor + Phase 3 step 1/2 exports all loaded.</p>`
           : `<p class="fail">FAIL &mdash; one or more checks did not pass.</p>`;
         root.innerHTML = lines.join("\n") + summary;
       } catch (err) {
@@ -139,31 +150,68 @@
         throw err;
       }
 
-      // Phase 3 step 1: fetch + parse + render the Holtburg landblock.
+      // Phase 3 step 2: fetch + parse + render the 3×3 Holtburg
+      // neighbourhood, with mouse-wheel zoom + drag-to-pan.
+      //
+      // METERS_PER_LANDBLOCK is the canonical AC constant — see
+      // crates/holtburger-common/src/position.rs:5. AC's id encoding
+      // is XXYYNNNN where XX is east-west, YY is north-south, and
+      // NNNN = FFFF selects the surface terrain (CellLandblock) record.
+      // +XX is east, +YY is north (verified empirically by the
+      // static-site emitter work).
+      const METERS_PER_LANDBLOCK = 192.0;
       const renderStatus = document.getElementById("render-status");
       const canvas = document.getElementById("canvas");
       const stageInfo = document.getElementById("stage-info");
       const ASSET_URL = "../../dats/assets.hba";
-      const HOLTBURG_LANDBLOCK_TERRAIN = 0xa9b4ffff;
+
+      // Holtburg = (0xA9, 0xB4). Row-major NW→SE neighbourhood.
+      const HOLTBURG_X = 0xa9;
+      const HOLTBURG_Y = 0xb4;
+      const NEIGHBOURHOOD = [];
+      for (let dy = 1; dy >= -1; dy -= 1) {
+        for (let dx = -1; dx <= 1; dx += 1) {
+          NEIGHBOURHOOD.push({
+            x: HOLTBURG_X + dx,
+            y: HOLTBURG_Y + dy,
+            id: ((HOLTBURG_X + dx) << 24) | ((HOLTBURG_Y + dy) << 16) | 0xffff,
+          });
+        }
+      }
 
       try {
-        renderStatus.textContent = "Fetching assets.hba…";
-        const mesh = await fetch_landblock_heightmap(
-          ASSET_URL,
-          HOLTBURG_LANDBLOCK_TERRAIN
-        );
-        await renderLandblock(canvas, mesh);
+        renderStatus.textContent = "Fetching assets.hba (9 landblocks)…";
+        const ids = new Uint32Array(NEIGHBOURHOOD.map((n) => n.id >>> 0));
+        const meshes = await fetch_landblock_heightmaps(ASSET_URL, ids);
+        if (meshes.length !== NEIGHBOURHOOD.length) {
+          throw new Error(
+            `expected ${NEIGHBOURHOOD.length} meshes, got ${meshes.length}`
+          );
+        }
+        await renderNeighbourhood(canvas, NEIGHBOURHOOD, meshes);
+
+        // Aggregate height range across the 9 landblocks for the panel.
+        let aggMin = Infinity;
+        let aggMax = -Infinity;
+        for (const m of meshes) {
+          if (m.heightMin < aggMin) aggMin = m.heightMin;
+          if (m.heightMax > aggMax) aggMax = m.heightMax;
+        }
+        const centre = meshes[4];
         stageInfo.innerHTML = `
-          <dt>Cell ID</dt><dd>0x${HOLTBURG_LANDBLOCK_TERRAIN.toString(16).toUpperCase()}</dd>
-          <dt>Vertices</dt><dd>${mesh.positions.length / 3}</dd>
-          <dt>Triangles</dt><dd>${mesh.indices.length / 3}</dd>
-          <dt>Height min</dt><dd>${mesh.heightMin.toFixed(1)} m</dd>
-          <dt>Height max</dt><dd>${mesh.heightMax.toFixed(1)} m</dd>
-          <dt>Span</dt><dd>${(mesh.heightMax - mesh.heightMin).toFixed(1)} m</dd>
+          <dt>Centre cell</dt><dd>0x${(NEIGHBOURHOOD[4].id >>> 0)
+            .toString(16)
+            .toUpperCase()
+            .padStart(8, "0")} (Holtburg)</dd>
+          <dt>Landblocks</dt><dd>${meshes.length} (3×3)</dd>
+          <dt>Centre min/max</dt><dd>${centre.heightMin.toFixed(1)} / ${centre.heightMax.toFixed(1)} m</dd>
+          <dt>Aggregate min/max</dt><dd>${aggMin.toFixed(1)} / ${aggMax.toFixed(1)} m</dd>
+          <dt>Vertex spacing</dt><dd>${(METERS_PER_LANDBLOCK / 8).toFixed(0)} m</dd>
+          <dt>Controls</dt><dd>wheel = zoom, drag = pan</dd>
         `;
         renderStatus.innerHTML =
-          `<span class="ok">[OK]</span> Rendered Holtburg landblock terrain.`;
-        mesh.free();
+          `<span class="ok">[OK]</span> Rendered Holtburg + 8 neighbours. Mouse-wheel to zoom, click-and-drag to pan.`;
+        for (const m of meshes) m.free();
       } catch (err) {
         const msg = String(err?.message ?? err);
         const missingFixture =
@@ -176,36 +224,16 @@
         renderStatus.innerHTML =
           `<span class="fail">[FAIL]</span> Render failed: <code>${msg}</code><br/><span class="hint">${hint}</span>`;
         // eslint-disable-next-line no-console
-        console.error("fetch_landblock_heightmap failed:", err);
+        console.error("fetch_landblock_heightmaps failed:", err);
       }
 
-      async function renderLandblock(canvasElem, mesh) {
-        const app = new PIXI.Application();
-        await app.init({
-          canvas: canvasElem,
-          width: canvasElem.width,
-          height: canvasElem.height,
-          background: 0x101010,
-          antialias: true,
-        });
+      // ----- rendering primitives ----------------------------------
 
-        // Encode height as the u-coordinate of a 256×1 colour ramp.
-        // The default Mesh shader is a TextureShader, so this gives
-        // smooth per-fragment colour without a custom GLSL pass.
-        const range = Math.max(mesh.heightMax - mesh.heightMin, 1);
-        const positions2D = new Float32Array(81 * 2);
-        const uvs = new Float32Array(81 * 2);
-        for (let i = 0; i < 81; i += 1) {
-          positions2D[i * 2] = mesh.positions[i * 3];
-          positions2D[i * 2 + 1] = mesh.positions[i * 3 + 1];
-          const t = (mesh.positions[i * 3 + 2] - mesh.heightMin) / range;
-          uvs[i * 2] = Math.max(0, Math.min(1, t));
-          uvs[i * 2 + 1] = 0.5;
-        }
-
+      function buildHeightRampTexture() {
         // 256-wide gradient drawn into an offscreen canvas, then wrapped
         // as a PIXI.Texture. Stops chosen to read as recognisable terrain
-        // (water → grass → soil → rock → snow).
+        // (water → grass → soil → rock → snow). Built once and shared
+        // across all 9 landblocks — single texture, no per-tile cost.
         const ramp = document.createElement("canvas");
         ramp.width = 256;
         ramp.height = 1;
@@ -218,7 +246,30 @@
         grd.addColorStop(1.00, "#ffffff");
         rctx.fillStyle = grd;
         rctx.fillRect(0, 0, 256, 1);
-        const rampTexture = PIXI.Texture.from(ramp);
+        return PIXI.Texture.from(ramp);
+      }
+
+      function buildLandblockChildren(mesh, rampTexture, heightMin, heightMax) {
+        // Build the per-landblock mesh + wireframe pair. Heights are
+        // normalised against the *aggregate* min/max so neighbouring
+        // landblocks share a single colour ramp — otherwise each tile
+        // self-normalises and the seams jump in colour.
+        //
+        // Snapshot the positions/indices once — each `mesh.positions`
+        // access is a getter call into wasm-bindgen that allocates a
+        // fresh Float32Array; reading 81×3 floats by repeated index
+        // would re-allocate per access.
+        const positions3D = mesh.positions;
+        const range = Math.max(heightMax - heightMin, 1);
+        const positions2D = new Float32Array(81 * 2);
+        const uvs = new Float32Array(81 * 2);
+        for (let i = 0; i < 81; i += 1) {
+          positions2D[i * 2] = positions3D[i * 3];
+          positions2D[i * 2 + 1] = positions3D[i * 3 + 1];
+          const t = (positions3D[i * 3 + 2] - heightMin) / range;
+          uvs[i * 2] = Math.max(0, Math.min(1, t));
+          uvs[i * 2 + 1] = 0.5;
+        }
 
         const indicesU32 = Uint32Array.from(mesh.indices);
         const geometry = new PIXI.MeshGeometry({
@@ -228,22 +279,10 @@
         });
         const pixiMesh = new PIXI.Mesh({ geometry, texture: rampTexture });
 
-        // World-units → pixels: the 192 m landblock fits the canvas with
-        // a small margin. Flip y so AC's +y (north) points up on screen.
-        // METERS_PER_LANDBLOCK is the canonical AC constant — see
-        // crates/holtburger-common/src/position.rs:5.
-        const METERS_PER_LANDBLOCK = 192.0;
-        const margin = 16;
-        const drawSize = canvasElem.width - margin * 2;
-        const scale = drawSize / METERS_PER_LANDBLOCK;
-        const container = new PIXI.Container();
-        container.position.set(margin, canvasElem.height - margin);
-        container.scale.set(scale, -scale);
-        container.addChild(pixiMesh);
-
         // Thin black wireframe overlaid on the heightmap. Diagnostic
-        // only — makes the 9×9 tessellation visible at a glance, which
-        // is the point of step 1's "prove the geometry" framing.
+        // only — makes the 9×9 tessellation visible at zoom-in. Stroke
+        // width is in world metres, so the line stays a constant pixel
+        // width relative to the landblock as the camera zooms.
         const wire = new PIXI.Graphics();
         for (let i = 0; i < indicesU32.length; i += 3) {
           const a = indicesU32[i];
@@ -253,11 +292,141 @@
             positions2D[a * 2], positions2D[a * 2 + 1],
             positions2D[b * 2], positions2D[b * 2 + 1],
             positions2D[c * 2], positions2D[c * 2 + 1],
-          ]).stroke({ width: 0.06, color: 0x000000, alpha: 0.45 });
+          ]).stroke({ width: 0.4, color: 0x000000, alpha: 0.35 });
         }
-        container.addChild(wire);
 
-        app.stage.addChild(container);
+        return [pixiMesh, wire];
+      }
+
+      function addLandblockToScene(parentContainer, mesh, lbX, lbY, ramp, heightMin, heightMax) {
+        const lbContainer = new PIXI.Container();
+        // Landblock (XX, YY) occupies the world-metre square
+        // [XX*192, (XX+1)*192] × [YY*192, (YY+1)*192].
+        lbContainer.position.set(
+          lbX * METERS_PER_LANDBLOCK,
+          lbY * METERS_PER_LANDBLOCK
+        );
+        const children = buildLandblockChildren(mesh, ramp, heightMin, heightMax);
+        for (const child of children) lbContainer.addChild(child);
+        parentContainer.addChild(lbContainer);
+        return lbContainer;
+      }
+
+      // ----- scene + camera ----------------------------------------
+
+      async function renderNeighbourhood(canvasElem, neighbourhood, meshes) {
+        const app = new PIXI.Application();
+        await app.init({
+          canvas: canvasElem,
+          width: canvasElem.width,
+          height: canvasElem.height,
+          background: 0x101010,
+          antialias: true,
+        });
+
+        // Aggregate height range across the 9 landblocks so colour
+        // matches at the seams.
+        let heightMin = Infinity;
+        let heightMax = -Infinity;
+        for (const m of meshes) {
+          if (m.heightMin < heightMin) heightMin = m.heightMin;
+          if (m.heightMax > heightMax) heightMax = m.heightMax;
+        }
+
+        const ramp = buildHeightRampTexture();
+
+        // Scene graph:
+        //   stage
+        //   └── cameraContainer  (world metres → canvas pixels)
+        //       └── worldContainer  (one-time AC y-flip)
+        //           └── landblockContainer × 9
+        const cameraContainer = new PIXI.Container();
+        app.stage.addChild(cameraContainer);
+
+        const worldContainer = new PIXI.Container();
+        worldContainer.scale.set(1, -1); // AC +north → canvas-up
+        cameraContainer.addChild(worldContainer);
+
+        for (let i = 0; i < neighbourhood.length; i += 1) {
+          const n = neighbourhood[i];
+          addLandblockToScene(
+            worldContainer,
+            meshes[i],
+            n.x,
+            n.y,
+            ramp,
+            heightMin,
+            heightMax
+          );
+        }
+
+        // Initial camera: centre on Holtburg's geometric centre at a
+        // scale that fits the 3×3 grid in the canvas with a margin.
+        const centreWorld = {
+          x: HOLTBURG_X * METERS_PER_LANDBLOCK + METERS_PER_LANDBLOCK / 2,
+          y: HOLTBURG_Y * METERS_PER_LANDBLOCK + METERS_PER_LANDBLOCK / 2,
+        };
+        const margin = 16;
+        const fitMetres = 3 * METERS_PER_LANDBLOCK;
+        const initialScale = (Math.min(canvasElem.width, canvasElem.height) - margin * 2) / fitMetres;
+        cameraContainer.scale.set(initialScale, initialScale);
+        // Place world (centreWorld) at canvas centre. The y-flip is in
+        // worldContainer, so cameraContainer.position uses canvas y
+        // increasing downward.
+        cameraContainer.position.set(
+          canvasElem.width / 2 - centreWorld.x * initialScale,
+          canvasElem.height / 2 + centreWorld.y * initialScale
+        );
+
+        // ----- input: wheel zoom + pointer drag --------------------
+        const SCALE_MIN = 0.05;
+        const SCALE_MAX = 5.0;
+
+        app.stage.eventMode = "static";
+        app.stage.hitArea = app.screen;
+
+        app.stage.on("wheel", (e) => {
+          // Zoom around the cursor: keep the world point under the
+          // cursor stationary across the scale change.
+          const factor = e.deltaY > 0 ? 1 / 1.1 : 1.1;
+          const next = cameraContainer.scale.x * factor;
+          if (next < SCALE_MIN || next > SCALE_MAX) return;
+
+          const cursorScreen = { x: e.global.x, y: e.global.y };
+          const cursorWorldPre = {
+            x: (cursorScreen.x - cameraContainer.position.x) / cameraContainer.scale.x,
+            y: (cursorScreen.y - cameraContainer.position.y) / cameraContainer.scale.y,
+          };
+          cameraContainer.scale.set(next, next);
+          const cursorWorldPost = {
+            x: (cursorScreen.x - cameraContainer.position.x) / next,
+            y: (cursorScreen.y - cameraContainer.position.y) / next,
+          };
+          cameraContainer.position.x += (cursorWorldPost.x - cursorWorldPre.x) * next;
+          cameraContainer.position.y += (cursorWorldPost.y - cursorWorldPre.y) * next;
+        });
+
+        let dragging = false;
+        let lastPointer = null;
+        const onDragEnd = () => {
+          dragging = false;
+          lastPointer = null;
+          canvasElem.classList.remove("dragging");
+        };
+        app.stage.on("pointerdown", (e) => {
+          dragging = true;
+          lastPointer = { x: e.global.x, y: e.global.y };
+          canvasElem.classList.add("dragging");
+        });
+        app.stage.on("pointerup", onDragEnd);
+        app.stage.on("pointerupoutside", onDragEnd);
+        app.stage.on("pointerleave", onDragEnd);
+        app.stage.on("pointermove", (e) => {
+          if (!dragging) return;
+          cameraContainer.position.x += e.global.x - lastPointer.x;
+          cameraContainer.position.y += e.global.y - lastPointer.y;
+          lastPointer = { x: e.global.x, y: e.global.y };
+        });
       }
     </script>
   </body>
