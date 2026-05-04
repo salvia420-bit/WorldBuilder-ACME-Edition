@@ -1,23 +1,28 @@
 # Phase 4 — playable AC client (as-built)
 
-> **Status:** Phase 4 steps 1, 2a, and **2a.5** landed (2026-05-04).
-> The wasm bundle drives AC login → CharacterList → CharacterCreate
-> → spawn handshake from the browser through `holtburger-wsbridge`
-> to a live ACE end-to-end. Open the page, log in, the Selection
+> **Status:** Phase 4 steps 1, 2a, 2a.5, and **2a.6** landed
+> (2026-05-04). The wasm bundle drives AC login → CharacterList
+> → CharacterCreate → spawn handshake → in-world chat / admin
+> commands from the browser through `holtburger-wsbridge` to a
+> live ACE end-to-end. Open the page, log in, the Selection
 > screen appears with a Create-test-character form when the account
 > is empty; populate one (Aluvian / Male / Adventurer / Holtburg
-> defaults, name from JS, request built in the wasm bundle via
+> defaults built in the wasm bundle via
 > `holtburger_core::CharacterGenBuilder` against the `CharGen` table
-> parsed out of `0x0E000002` at login time), click Spawn, and the
-> recv loop walks `CharacterEnterWorldRequest` →
+> parsed out of `0x0E000002` at login time), click Spawn — the recv
+> loop walks `CharacterEnterWorldRequest` →
 > `CharacterEnterWorldServerReady` → `CharacterEnterWorld` →
-> `PlayerCreate` and surfaces a `kind=1 PlayerSpawned` event back to
-> JS. Same milestone Phase 1 hit on the native side
-> (`holtburger-cli` reaches Selection + spawn — and creates
-> characters interactively via the TUI) but now through the
-> in-browser bundle and one-click. The Phase 3 renderer boots as a
-> backdrop once login resolves; rendering the local player's sprite
-> at its world coords is step 2b. See
+> `PlayerCreate` → `LoginComplete`, queues
+> `kind=1 PlayerSpawned` + `kind=7 EnteredWorld` events, JS unhides
+> a "Teleport to Holtburg" button. The button sends
+> `@telepoi Holtburg` via `GameAction::Talk` to bypass the Training
+> Academy tutorial — handy for dev workflows that want to skip
+> straight to outdoor Holtburg without the indoor-cell renderer.
+> Same milestone Phase 1 hit on the native side (`holtburger-cli`
+> reaches Selection + spawn) but now through the in-browser bundle
+> and one-click. The Phase 3 renderer boots as a backdrop once
+> login resolves; rendering the local player's sprite at its world
+> coords is step 2b. See
 > [`phase-4-step-1-handoff.md`](phase-4-step-1-handoff.md) for the
 > framing brief; this file is the as-built reference.
 
@@ -753,3 +758,232 @@ Modified:
   of CharGen + SkillTable is wasteful; the renderer already pays
   this cost so we don't double it, but a HEAD-then-Range path
   would be ~50 LOC and cut the cold-start time.
+
+---
+
+## Phase 4 step 2a.6 landed (2026-05-04)
+
+Step 2a.5 closed the empty-list gap, but spawned characters land
+inside the Training Academy tutorial dungeon — an indoor cell the
+renderer can't draw and a UX dead-end for dev workflows. Step 2a.6
+adds chat-channel dispatch from the wasm bundle so the dev can
+send ACE admin commands like `@telepoi Holtburg` to skip the
+tutorial and land directly outdoors at the existing 3×3 renderer.
+
+What "done" looks like:
+
+1. Login + create character (or use existing) + click Spawn.
+2. Recv loop receives `GameMessage::PlayerCreate(guid)` and:
+   - queues `kind=1 PlayerSpawned`
+   - sends `GameAction::LoginComplete` back to ACE (mirrors the
+     cli's `crates/holtburger-core/src/client/messages.rs:464`
+     path — ACE expects this acknowledgement before processing
+     in-world commands)
+   - transitions to `LoopState::InWorld`
+   - queues `kind=7 EnteredWorld`
+3. JS rAF poller drains kind=7, unhides the "Teleport to Holtburg"
+   button, updates the status to `[OK] InWorld as GUID 0xN`.
+4. Click Teleport → `handle.sendChat("@telepoi Holtburg")` →
+   recv loop dispatches `GameAction::Talk(TalkActionData { message:
+   "@telepoi Holtburg" })` → ACE's command parser intercepts the
+   `@`-prefixed message and runs the Developer-level
+   `HandleTeleportPoi` admin command → player teleports to
+   Holtburg's plaza coords.
+5. Status flips to `[OK] Sent @telepoi Holtburg. If the account
+   has Developer accessLevel, the player is now at Holtburg's
+   plaza...`.
+
+![Phase 4 step 2a.6 — wasm-driven Teleport to Holtburg](images/phase-4-step-2a-spawned.png)
+
+The screenshot shows the post-Teleport state: login form
+(collapsed), green status `[OK] Sent @telepoi Holtburg ...`,
+populated Selection list with `+PhaseyTwoSix` (the `+` prefix is
+ACE's convention for Plussed/Developer-promoted characters), the
+"Teleport to Holtburg" button alongside the
+`accessLevel ≥ 4 (Developer)` requirement hint, the Phase 4 step
+2a.5 Create form, and the deferred Phase 3 renderer.
+
+### What step 2a.6 ships
+
+**`SessionHandle.sendChat(message: String)`** — wasm-bindgen method.
+Validates non-empty, dispatches `SessionCommand::SendChat
+{ message }` to the recv loop. The loop's cmd-arm wraps the string
+in `GameAction::Talk(Box<TalkActionData>)` and calls
+`session.send_action(action)`. ACE's command parser intercepts
+`@`-prefixed and `/`-prefixed messages as admin / developer /
+advocate commands; plain text routes to local-area chat.
+Access-level enforcement is server-side — non-Developer accounts
+silently drop `@telepoi` etc.
+
+**`GameAction::LoginComplete` ack on PlayerCreate.** Earlier
+versions of the recv loop tried to wait for
+`GameEvent::PlayerDescription` or `GameEvent::StartGame` to
+transition to `LoopState::InWorld`. Empirically ACE's spawn flow
+sends a flurry of `ObjectCreate` / `ServerName` / `ServerMessage`
+/ `PrivateUpdatePropertyInt` instead — no parseable
+`GameMessage::GameEvent` ever arrives. Reading the cli's
+`messages.rs:464` revealed the actual contract:
+
+```rust
+GameMessage::PlayerCreate(data) => {
+    // ...
+    self.send_login_complete().await?;
+    self.enter_world().await?;
+    Ok(())
+}
+```
+
+`PlayerCreate` IS the InWorld signal, and the client must send
+`LoginComplete` back to ACE for the gate to open. The wasm recv
+loop now mirrors this exactly. No more waiting on an event that
+never lands.
+
+**`ClientEvent.kind = 7 EnteredWorld`.** Fired alongside
+`kind=1 PlayerSpawned` in the same recv-loop iteration. The two
+events arrive in the same JS rAF drain; the JS handler for kind=7
+overwrites the Spawned status to "InWorld as GUID 0xN" and unhides
+the post-spawn block (Teleport button).
+
+**JS-side post-spawn block**, gated on kind=7:
+
+```html
+<div id="post-spawn" hidden>
+  <button type="button" id="teleport-button" disabled>Teleport to Holtburg</button>
+  <span id="post-spawn-hint" class="hint">
+    Available after InWorld. Requires the test account to have
+    accessLevel ≥ 4 (Developer) — see docs/phase-4-renderer.md
+    step 2a.6 for the SQL one-liner.
+  </span>
+</div>
+```
+
+Click handler calls `handle.sendChat("@telepoi Holtburg")`,
+disables the button for 3s (so the user can re-click after running
+the SQL promote if it failed silently), and updates the status
+line.
+
+### Dev recipe — promote a test account to Developer
+
+ACE's auto-create promotes only the FIRST account on a fresh DB
+to Admin (`accessLevel = 5`). Every subsequent auto-created account
+is a regular Player (`accessLevel = 0`), and Player-level can't
+run `@telepoi` (Developer = 4) or even `/tele` (Advocate = 1; also
+checks `AdvocateLevel < 5`). To unlock admin commands on a test
+account:
+
+```bash
+mariadb -uace -pace -e "
+  UPDATE ace_auth.account
+  SET accessLevel = 4
+  WHERE accountName LIKE 'phase4demo%';
+"
+```
+
+Re-login is required because ACE caches accessLevel on session
+open. The character will show `+` prefix in ACE logs once
+promoted (e.g. `Player: +PhaseyTwoSix`), confirming Plussed status.
+
+If a test session got "Network Timeout"-dropped while in-world,
+ACE may still think the account is logged in. Wait ~60s for the
+ghost session to clean up, or use a fresh account name.
+
+### What step 2a.6 ships in `recv_loop`
+
+State machine simplified:
+
+```rust
+enum LoopState {
+    Idle,
+    EnteringWorld { guid: Guid, account: String },
+    InWorld { player_guid: Guid },
+    // (LoopState::Spawned was tried + dropped — InWorld lands
+    // straight from PlayerCreate, no intermediate step.)
+}
+```
+
+Recv-arm additions:
+- `GameMessage::PlayerCreate(data)` now sends
+  `GameAction::LoginComplete` and queues both `kind=1` and
+  `kind=7` in a single batch. Transitions to `InWorld`.
+- `GameMessage::GameAction(action_msg)` matches
+  `GameAction::LoginComplete(_)` for the server-echoed ack
+  (already InWorld at that point, just logs for visibility).
+
+Cmd-arm additions:
+- `SessionCommand::SendChat { message }` → `session.send_action(
+  GameAction::Talk(Box::new(TalkActionData { message })))`.
+
+### Smoke checks (47 → 48)
+
+`apps/holtburger-web/smoke_test.cjs` adds one symbol-presence
+check: `SessionHandle.prototype.sendChat` is a function. Live
+chat round-trip is browser-side via the extended
+`apps/holtburger-web/capture_phase4_step2a.cjs` Playwright script.
+
+### Live-ACE manual validation
+
+Captured against `phase4demo_2a6` (SQL-promoted to `accessLevel
+= 4`) on a local ACE: login → Spawn `+PhaseyTwoSix` → InWorld
+status → click Teleport → status flips to "Sent @telepoi
+Holtburg".
+
+ACE's `/tmp/ace.log` doesn't log `@telepoi` execution at INFO
+level (it's a DEBUG-tier command), so verifying the actual
+teleport server-side requires either:
+- Position rendering in the browser (step 2b — `UpdatePosition`
+  events flow back after teleport).
+- Chat-response rendering (step 4 — ACE replies via
+  `GameEvent::CommunicationTransientString` or similar; would
+  surface as `kind=2 ChatReceived`).
+- Cli inspection (`holtburger-cli` against the same account —
+  TUI shows the player's current landblock).
+- DB inspection of `biota_properties_position` after a graceful
+  logout (Network Timeout disconnects don't always persist
+  position).
+
+For step 2a.6's deliverable, the demonstration is the **wasm-side
+flow**: chat command leaves the bundle correctly. The recv loop
+verifies WS connectivity stays healthy through the dispatch.
+
+### Files touched
+
+Modified:
+- `apps/holtburger-web/src/lib.rs` (~+90 lines): adds
+  `SessionCommand::SendChat`, `CLIENT_EVENT_KIND_ENTERED_WORLD`
+  constant, `LoopState::InWorld`, `SessionHandle.sendChat()`,
+  recv-loop branches for the new message + cmd, simplified
+  PlayerCreate path.
+- `apps/holtburger-web/index.html`: post-spawn block + Teleport
+  button, kind=7 dispatch in rAF poller, click handler that
+  sends `@telepoi Holtburg`.
+- `apps/holtburger-web/smoke_test.cjs`: +1 check (sendChat
+  symbol-presence).
+- `apps/holtburger-web/capture_phase4_step2a.cjs`: waits for
+  InWorld + clicks Teleport before screenshot.
+- `docs/phase-4-renderer.md`: this section + status banner update.
+- `docs/images/phase-4-step-2a-spawned.png`: re-captured with the
+  populated Selection + Teleport button + post-teleport status.
+
+### What's NOT in step 2a.6 (scope deferred)
+
+- **Position rendering.** Step 2b parses `UpdatePosition` /
+  `PrivateUpdatePosition` for the player's spatial state and
+  renders a marker on the existing 3×3 Holtburg renderer. Without
+  this, the wasm-side teleport is invisible — the user just has
+  to trust ACE moved them.
+- **Chat-response rendering.** ACE replies to `@telepoi` with
+  flavor text via `GameEvent::CommunicationTransientString` or
+  similar. Step 4 (DOM panels) wires these up as
+  `kind=2 ChatReceived` events.
+- **Multi-arg admin commands.** `@teleloc 0xA9B40019 84 7.1 94`
+  works today via `handle.sendChat("@teleloc ...")`, but JS
+  doesn't have a fluent API for arbitrary admin commands. Future
+  surface like `handle.sendAdminCommand(name, args)` would build
+  the string properly.
+- **Auto-promote new accounts.** The SQL recipe is one-line per
+  account; a future ACE patch could add a
+  `dev_auto_promote_accounts` PropertyManager bool to do this
+  server-side at auto-create time. Out of scope here.
+- **Full chat panel.** Sending plain text to local-area chat
+  works (just call `sendChat("hello")` without `@`/`/` prefix),
+  but no DOM panel renders incoming chat yet — step 4.

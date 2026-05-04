@@ -152,12 +152,17 @@ const path = require("node:path");
     await spawnButtons.first().click();
     console.log("clicked first Spawn button");
 
+    // Phase 4 step 2a.6 — wait for the InWorld status; kind=1
+    // PlayerSpawned fires immediately on PlayerCreate, kind=7
+    // EnteredWorld fires right after as the recv loop sends
+    // LoginComplete back to ACE, and the JS handler overwrites the
+    // status line to "InWorld as GUID 0xN". Use that as the gate.
     try {
         await page.waitForFunction(() => {
             const s = document.getElementById("login-status");
-            return s && /Spawned/.test(s.innerText);
+            return s && /InWorld|Spawned/.test(s.innerText);
         }, { timeout: SPAWN_TIMEOUT_MS });
-        console.log("Spawned status reached");
+        console.log("Spawned/InWorld status reached");
     } catch (e) {
         const status = await page.locator("#login-status").innerText();
         console.error(`spawn timeout — status was: ${status}`);
@@ -166,6 +171,34 @@ const path = require("node:path");
     await page.screenshot({ path: OUT_PATH, fullPage: false });
         await browser.close();
         throw e;
+    }
+
+    // Wait for the post-spawn Teleport block to unhide (kind=7 might
+    // arrive a tick after kind=1).
+    const TELEPORT_TIMEOUT_MS = Number(process.env.PHASE4_TELEPORT_TIMEOUT_MS || 5_000);
+    try {
+        await page.waitForSelector("#post-spawn:not([hidden])", { timeout: TELEPORT_TIMEOUT_MS });
+        console.log("Teleport block unhid");
+    } catch (e) {
+        console.warn("Teleport block never unhid — skipping teleport.");
+    }
+
+    const teleportVisible = await page.locator("#post-spawn:not([hidden])").count() > 0;
+    if (teleportVisible) {
+        console.log("clicking Teleport to Holtburg button");
+        await page.click("#teleport-button");
+        // The send is one-way — there's no synchronous "teleport
+        // succeeded" response; the player's position just updates
+        // (which we don't render in step 2a.6). We just wait for
+        // the button text to flip to "Teleporting…" and capture
+        // the final state.
+        await page.waitForFunction(() => {
+            const b = document.getElementById("teleport-button");
+            return b && /Teleporting|Teleport to Holtburg/.test(b.textContent);
+        }, { timeout: 5_000 });
+        await page.waitForTimeout(1500);
+    } else {
+        console.warn("Teleport button never unhid — capturing post-spawn state without teleport.");
     }
 
     await page.waitForTimeout(500);

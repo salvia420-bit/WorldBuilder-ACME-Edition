@@ -9,21 +9,21 @@
 > per-poly UV-mapped textures** (Phase 3 step 6 — same pipeline as
 > the static-site emitter's `ObjectSpriteGenerator.cs::DrawTriangle`
 > but live, so user-imported custom models render with no re-bake
-> step). **Phase 4 steps 1 + 2a + 2a.5 landed (2026-05-04)** — the
-> wasm bundle now drives the full AC login → CharacterList →
-> CharacterCreate → spawn handshake from the browser through
-> `holtburger-wsbridge` to a live ACE end-to-end. Open
-> `apps/holtburger-web/index.html`, log in (the bundle eagerly
-> fetches `CharGen` (`0x0E000002`) + `SkillTable` (`0x0E000004`)
-> and builds a CharacterGenCatalog for offline validation), use
-> the in-browser Create-test-character form on a fresh account
-> (Aluvian / Male / Adventurer / Holtburg defaults built in the
-> wasm bundle via `holtburger_core::CharacterGenBuilder`), then
-> click Spawn — the recv loop walks
-> `CharacterEnterWorldRequest` → `CharacterEnterWorldServerReady`
-> → `CharacterEnterWorld` → `PlayerCreate` and surfaces a
-> `kind=1 PlayerSpawned` event so the status line flips to
-> "Spawned". The renderer boots as a backdrop. See
+> step). **Phase 4 steps 1 + 2a + 2a.5 + 2a.6 landed (2026-05-04)**
+> — the wasm bundle now drives the full AC login → CharacterList
+> → CharacterCreate → spawn handshake → in-world chat / admin
+> commands from the browser through `holtburger-wsbridge` to a
+> live ACE end-to-end. Open `apps/holtburger-web/index.html`, log
+> in (the bundle eagerly fetches `CharGen` (`0x0E000002`) +
+> `SkillTable` (`0x0E000004`) and builds a CharacterGenCatalog
+> for offline validation), use the in-browser
+> Create-test-character form, click Spawn → recv loop walks the
+> spawn handshake + sends `LoginComplete`, kind=7 EnteredWorld
+> unhides the "Teleport to Holtburg" button which sends
+> `@telepoi Holtburg` via `GameAction::Talk` to bypass the
+> Training Academy tutorial (account needs `accessLevel ≥ 4`
+> server-side; one-line SQL recipe in step 2a.6). The renderer
+> boots as a backdrop. See
 > [`docs/phase-4-renderer.md`](phase-4-renderer.md) for the as-built
 > and [`docs/phase-3-renderer.md`](phase-3-renderer.md) for the
 > renderer reference. Step 2b (position rendering + entity buffer)
@@ -889,9 +889,26 @@ Step ledger:
   CharacterCreated` event. JS-side Create form auto-shows when
   the catalog loaded; submit → `kind=5` drain → list re-render
   with Spawn button. Smoke 45 → 47 (createTestCharacter +
-  canCreateCharacter symbols). Deliverable at
-  `docs/images/phase-4-step-2a-spawned.png` re-captured against
-  the full create + spawn flow.
+  canCreateCharacter symbols).
+- ✅ **Step 2a.6 — chat / admin commands + Teleport-to-Holtburg.**
+  Landed 2026-05-04 (see
+  [`docs/phase-4-renderer.md`](phase-4-renderer.md) step 2a.6
+  section). Adds `SessionHandle.sendChat(message)` which dispatches
+  `GameAction::Talk` to the server. `@`/`/`-prefixed messages
+  route to ACE's command parser; access-level enforcement is
+  server-side (Developer = 4 needed for `@telepoi`, Advocate = 1
+  for `/tele`). Recv loop's `PlayerCreate` handler now also sends
+  `GameAction::LoginComplete` back (mirrors cli's
+  `messages.rs:464` path — empirically `GameEvent::PlayerDescription`
+  / `StartGame` never arrive in our flow; PlayerCreate IS the
+  InWorld signal) and queues `kind=7 EnteredWorld`. JS-side
+  Teleport-to-Holtburg button unhides on kind=7; click sends
+  `@telepoi Holtburg` to skip the Training Academy tutorial. Dev
+  recipe documented: `UPDATE ace_auth.account SET accessLevel = 4
+  WHERE accountName LIKE 'phase4demo%'` to promote test accounts.
+  Smoke 47 → 48 (sendChat symbol). Deliverable at
+  `docs/images/phase-4-step-2a-spawned.png` re-captured with
+  Teleport button + post-teleport status.
 - ⏳ **Step 2b — `ClientViewEvent` → PIXI entity buffer.**
   Position-driven rendering for the local player + NPCs / monsters
   via `ObjectCreate` + `UpdatePosition` / `VectorUpdate`. Reuses

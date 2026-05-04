@@ -12,14 +12,17 @@
 > `ObjectSpriteGenerator.cs::DrawTriangle` but at runtime, so
 > user-imported custom models render without a re-bake step.
 > Mouse-wheel zooms around the cursor; click-and-drag pans. **Phase
-> 4 steps 1 + 2a + 2a.5 (wasm-driven AC login + spawn handshake +
-> in-browser character creation via `0x0E000002 CharGen`) landed
-> (2026-05-04)** — the renderer boots as a backdrop after
-> `start_session` reaches `CharacterList`; if the account is
-> empty, the in-browser Create-test-character form populates one
-> via `holtburger_core::CharacterGenBuilder` against the parsed
+> 4 steps 1 + 2a + 2a.5 + 2a.6 (wasm-driven AC login + spawn
+> handshake + in-browser character creation via `0x0E000002
+> CharGen` + chat-channel admin commands like `@telepoi Holtburg`
+> for Training-Academy bypass) landed (2026-05-04)** — the
+> renderer boots as a backdrop after `start_session` reaches
+> `CharacterList`; if the account is empty, the in-browser
+> Create-test-character form populates one via
+> `holtburger_core::CharacterGenBuilder` against the parsed
 > CharGen + SkillTable; clicking Spawn drives the AC enter-world
-> handshake to `PlayerCreate`. See
+> handshake to `PlayerCreate` + `LoginComplete`; clicking
+> Teleport-to-Holtburg sends `@telepoi Holtburg`. See
 > [`phase-4-renderer.md`](phase-4-renderer.md). See
 > [`phase-3-step-1-handoff.md`](phase-3-step-1-handoff.md),
 > [`phase-3-step-2-handoff.md`](phase-3-step-2-handoff.md),

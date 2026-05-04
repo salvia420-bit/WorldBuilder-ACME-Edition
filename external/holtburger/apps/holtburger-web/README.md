@@ -68,23 +68,29 @@ and executes in a browser:
 - `SessionHandle` (wasm-bindgen class) is the JS-facing surface over
   the recv loop. Methods: `.poll_events()` drains a `ClientEvent[]`
   (active kinds: 0 CharacterListReceived re-fire, 1 PlayerSpawned,
-  4 Disconnected, 5 CharacterCreated, 6 CharacterCreateFailed);
-  `.characterList()` returns `CharacterSummary[]` (`id` / `name` /
-  `deleteTime`); `.accountName` getter; `.canCreateCharacter`
-  getter (true if catalog loaded);
+  4 Disconnected, 5 CharacterCreated, 6 CharacterCreateFailed,
+  7 EnteredWorld); `.characterList()` returns `CharacterSummary[]`
+  (`id` / `name` / `deleteTime`); `.accountName` getter;
+  `.canCreateCharacter` getter (true if catalog loaded);
   `.selectCharacter(guid)` (Phase 4 step 2a) which drives the
   spawn handshake — wasm sends `CharacterEnterWorldRequest`,
   auto-chains `CharacterEnterWorld` on
   `CharacterEnterWorldServerReady`, and surfaces `PlayerCreate(guid)`
-  as a `kind=1 PlayerSpawned` event with `u32Payload =
-  spawned_guid`; and `.createTestCharacter(name)` (Phase 4 step
-  2a.5) which builds an Aluvian / Male / Adventurer / Holtburg
+  as a `kind=1 PlayerSpawned` event + sends `LoginComplete` back
+  to ACE + transitions to InWorld surfacing `kind=7 EnteredWorld`;
+  `.createTestCharacter(name)` (Phase 4 step 2a.5) which builds
+  an Aluvian / Male / Adventurer / Holtburg
   `CharacterCreateRequestData` via
   `holtburger_core::CharacterGenBuilder::build_request` (validating
   attribute budget + skill slots client-side) and dispatches
   `GameMessage::CharacterCreate`; result lands as a
   `kind=5 CharacterCreated` (success) or `kind=6
-  CharacterCreateFailed` event. See
+  CharacterCreateFailed` event; and `.sendChat(message)`
+  (Phase 4 step 2a.6) which dispatches
+  `GameAction::Talk(TalkActionData { message })` to ACE — used
+  by the JS Teleport-to-Holtburg button to send `@telepoi
+  Holtburg`, requires the test account to have `accessLevel ≥ 4
+  (Developer)`. See
   [`docs/phase-4-renderer.md`](../../../docs/phase-4-renderer.md) for
   the as-built; step 2b adds position-driven rendering + multi-entity
   buffer + character switching mid-session.

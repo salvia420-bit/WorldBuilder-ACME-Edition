@@ -7,16 +7,18 @@
 > batch call and PixiJS draws AC terrain with real retail textures,
 > stone-road network, and 239 placed object/building sprites with
 > per-poly UV-mapped textures rendered in-browser at runtime.
-> **Phase 4 steps 1 + 2a + 2a.5 (wasm-driven AC login + spawn
-> handshake + in-browser character creation) landed (2026-05-04)**
-> — `apps/holtburger-web/index.html` boots a login form, drives
-> `start_session` (which now also loads CharGen `0x0E000002` +
-> SkillTable `0x0E000004` for offline character-creation
-> validation), shows the Selection screen with a Create-test-
-> character form on empty accounts, and on Spawn click walks
-> `CharacterEnterWorldRequest` → `ServerReady` →
-> `CharacterEnterWorld` → `PlayerCreate` and surfaces a kind=1
-> PlayerSpawned event so the status flips to Spawned. See
+> **Phase 4 steps 1 + 2a + 2a.5 + 2a.6 (wasm-driven AC login +
+> spawn handshake + in-browser character creation + chat / admin
+> commands for Training-Academy bypass) landed (2026-05-04)** —
+> `apps/holtburger-web/index.html` boots a login form, drives
+> `start_session` (which loads CharGen `0x0E000002` + SkillTable
+> `0x0E000004` for offline character-creation validation), shows
+> the Selection screen with a Create-test-character form on empty
+> accounts, on Spawn click walks the AC enter-world handshake +
+> sends `LoginComplete`, surfaces kind=1 PlayerSpawned + kind=7
+> EnteredWorld, and the post-spawn Teleport button sends
+> `@telepoi Holtburg` via `SessionHandle.sendChat()` to bypass
+> the Training Academy. See
 > [`phase-4-renderer.md`](phase-4-renderer.md) for the Phase 4
 > as-built and `docs/images/phase-4-step-2a-spawned.png` for the
 > deliverable. Phase 3 as-built remains at
