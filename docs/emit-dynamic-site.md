@@ -1,9 +1,26 @@
 # emit-dynamic-site — Design
 
-> **Status:** Phase 1 local-loop complete — WS↔UDP bridge **and** client-side
-> UDP↔WS shim both landed (2026-05-03), with end-to-end smoke tests proving
-> the round-trip. Live-ACE validation is the only remaining Phase 1 follow-on.
-> See §8 for the phase ledger.
+> **Status (2026-05-04):** Phases 0, 1, and 2 are DONE. Phase 3 is in
+> flight on a **direct-DAT rendering rail** (not the original
+> "Leaflet basemap + PixiJS entity overlay" rail described in earlier
+> drafts of this doc) — Phase 3 step 1 (single Holtburg landblock
+> render via PixiJS) and Phase 3 step 2 (3×3 neighbourhood + pan/zoom
+> camera) have landed. See `docs/phase-3-renderer.md` for the
+> as-built reference.
+>
+> **Open follow-on from Phase 1:** live-ACE round-trip — bridge +
+> shim + cli are smoke-tested locally, but a real ACE server is still
+> blocked on three MySQL DBs + the AC client DAT files for ACE.
+>
+> **Decisions answered since the original draft (do not re-litigate):**
+> §7.1 external proxy, §7.2 single namespaced HBA-of-HBAs, §7.3
+> Leaflet replaced by PixiJS-only, §7.4 wasm-pack picked. Recorded
+> inline in §7. The direct-DAT rendering decision in Phase 3 is new
+> and is recorded in §4.5 below; it walks away from the static-site
+> tile pyramid (the part that's cumbersome to re-bake every time
+> WorldBuilder edits a world) while keeping the static-site sprite
+> atlas as the visual-continuity bridge between the static gallery
+> and the live client.
 >
 > **Audience:** anyone picking up the next phase. Read this end-to-end before
 > writing a line of code; several of the seams below are not what they appear to
@@ -130,15 +147,24 @@ README. Two facts that matter for `emit-dynamic-site`:
    silently no-ops if the file is missing. This is the documented seam we
    *would* use if we kept Leaflet for entities. We are not (see §4.2), but it
    confirms the static-site author considered this future.
-2. **`coordSystem` is asserted at boot** (`app.js:387-412`). Our renderer
-   inherits the same constants — `worldExtentWu = 49152`, `tilePx = 256`,
-   `lbWu = 192`, `pxPerWuAtZ0 = 256/49152` — and asserts them too. Drift
-   becomes a red banner, not a silently-misplaced sprite.
+2. **`coordSystem` is asserted at boot** (`app.js:387-412`). The dynamic
+   client inherits the same constants — `worldExtentWu = 49152`,
+   `tilePx = 256`, `lbWu = 192`, `pxPerWuAtZ0 = 256/49152`. The current
+   live-client bundle does NOT yet assert them programmatically (TODO; see
+   §4.5). The constant `METERS_PER_LANDBLOCK = 192.0` lives in
+   `holtburger-common::position` and is the load-bearing source for the
+   wasm side; both the live and static stacks have to agree on the 49152 m
+   world extent (256 landblocks × 192 m).
 
-The static-site tile pyramid (z=3..12, four layer sets `terrain/`, `objects/`,
-`object/`, `floor/`) becomes the *basemap* for the dynamic site. We do not
-re-emit it. We point Leaflet (or whatever 2D tile renderer survives §4.2) at
-the same `dist/projects/<slug>/tiles/` URL.
+**Sprite atlas — yes; tile pyramid — no.** The original draft of this doc
+treated the static-site tile pyramid (`projects/<slug>/tiles/{terrain,
+objects,object,floor}/z{N}/...`) as the live-client basemap. Phase 3
+walks away from that — see §4.5 for the rationale. What we DO reuse is
+the static-site **sprite atlas** at `projects/<slug>/sprites/atlas.{png,
+js}`: hand-tuned, top-down-baked object art with world-bounds metadata,
+already in PixiJS-ready shape. That gives visual continuity between the
+static gallery and the live client without re-baking pyramids on every
+WorldBuilder world change.
 
 ### 3.4 The new layer — UDP↔WS bridge (and shim)
 
@@ -248,6 +274,67 @@ Both Explore agents converged. The patch path is open if a specific need
 forces it (e.g., we end up needing ACE-side awareness of WS clients for tick
 batching). Default: external proxy.
 
+### 4.5 Direct-DAT rendering — terrain live, sprite atlas reused (NEW, 2026-05-04)
+
+The original draft framed Phase 3 as "Leaflet basemap built from the
+emit-static-site tile pyramid + PixiJS entity overlay on top". Phase 3
+step 1 walked away from that and rendered terrain *directly* from the
+AC `eor/cell:XXYYFFFF` `CellLandblock` records via WASM. Phase 3 step 2
+extended that to a 3×3 neighbourhood with PixiJS-owned pan/zoom — no
+Leaflet anywhere in the live client.
+
+**Why direct-DAT for terrain:**
+
+- **WorldBuilder workflow.** Re-baking the tile pyramid every time
+  WorldBuilder edits a world is the cumbersome part of the static
+  pipeline. Direct-DAT means: change the world in WorldBuilder →
+  HBA regenerates → reload the browser → terrain re-renders. Zero
+  bake step in the inner loop.
+- **One source of truth.** AC's DATs already contain heightmap +
+  surface-tile-types + textures + object placements. The static
+  site's tile pyramid is itself a pre-bake of the same data via the
+  WorldBuilder pipeline. Reading the DATs directly removes a layer
+  of indirection.
+- **Live-only wins are reachable.** Time-of-day, dynamic lighting,
+  entity animation — things the pre-baked tile pyramid structurally
+  cannot do — become natural extensions of a live render path. They
+  are awkward bolt-ons to a Leaflet basemap.
+
+**Why we keep the sprite atlas:**
+
+- The static-site `projects/<slug>/sprites/atlas.{png,js}` is
+  hand-tuned, top-down-baked object art with world-bounds metadata,
+  already in PixiJS-ready shape. Re-baking it from 3D models at
+  runtime in WASM is theoretically possible but slow + complex.
+- Visual continuity. The live client and the static gallery should
+  read as the same game; sharing the sprite atlas is the cheapest
+  way to guarantee that.
+- WorldBuilder regenerates the sprite atlas in the same pipeline
+  step as the rest of the project's assets, so the "edit world →
+  reload browser" loop covers it without extra bake work.
+
+**Practical quality ladder** for the live client to reach
+static-site visual fidelity, in order of impact:
+
+| Step | Visual jump | Status |
+|---|---|---|
+| Heightmap render | topographic relief, recognisable shapes | ✅ landed (step 1+2) |
+| Texture atlas + surface table | recognisable AC terrain — biggest delta | open (step 3) |
+| Sprite atlas consumption | buildings/trees/decorations in the right spots | open (step 4) |
+| Road overlays + atmospheric polish | matches the README static screenshot | open (step 5) |
+
+**What's deliberately NOT in this rail:**
+
+- Leaflet, MapLibre, or any 2D tile renderer (§7.3 answered:
+  PixiJS-only).
+- The `dist/projects/<slug>/tiles/` pyramid as live-client input
+  (the bake-once cost is the cumbersome part being avoided).
+- A separate "basemap vs. entity layer" architecture; everything is
+  PixiJS scene-graph children, separable but unified.
+
+This decision is recorded here so future readers don't re-litigate
+"shouldn't we just use Leaflet" without an explicit reason.
+
 ## 5. Critical assessment
 
 ### 5.1 Leaflet at scale — what we're not using it for
@@ -281,34 +368,57 @@ authoritative starting point. Read that first. Highlights:
   Backwards-compatible with all existing call sites.
 - The RC4 doc lie called out in §5.5 has been corrected.
 
-The original speculative checklist, kept here for traceability:
+The original speculative checklist, all closed:
 
 - [x] `holtburger-session::Session::new`: split into `new(addr)` (native) and
       `new_with_transport(transport, addr)` (any-transport). Done as
-      `new` + `new_with_transport`; backwards-compatible.
+      `new` + `new_with_transport`; backwards-compatible. (`f3d9a1c`)
 - [x] Audit RC4 vs ISAAC (§5.5). Code was always ISAAC; the two stale doc
       references at `external/holtburger/ARCHITECTURE.md:75` and
       `crates/holtburger-session/ARCHITECTURE.md:19` are corrected.
-- [ ] `Cargo.toml`: workspace `tokio = { default-features = false }`, with
+      (`f3d9a1c`)
+- [x] `Cargo.toml`: workspace `tokio = { default-features = false }`, with
       per-crate feature opt-ins. Native-only crates pick `["full"]`;
-      WASM-target crates pick `["rt", "sync", "macros", "time"]`. See
-      [phase-2-wasm-spike §4.1](phase-2-wasm-spike.md#41-tokio--full--mio--wasm32-incompatible).
-- [ ] Cfg-gate the UDP path in `holtburger-session` to
+      WASM-target crates pick `["rt", "sync", "macros", "time"]`. Landed
+      in the Phase 2 floor commits `50003ae`..`868c3ac`.
+- [x] Cfg-gate the UDP path in `holtburger-session` to
       `cfg(not(target_arch = "wasm32"))`; cfg-gate `socket2` likewise.
-- [ ] `holtburger-dat`: replace `zstd-sys` with `ruzstd` (decompression-only
-      pure-Rust) for the wasm32 target, *or* install `clang` and cross-compile
-      the C bundled source. See [phase-2-wasm-spike §4.2](phase-2-wasm-spike.md#42-zstd-sys-needs-c-compiler-for-wasm32).
-- [ ] Make `holtburger-dat::ResourceSource` async; prove it's the only path
-      to bytes (audit `File::open` references).
-- [ ] Implement `WsTransport: Transport` for browsers in a new crate
-      `holtburger-transport-ws` so native consumers don't pull `web-sys` deps.
-- [ ] Implement `HttpResourceSource: ResourceSource` for browsers — uses
-      `web-sys::fetch` with `Range:` headers.
-- [ ] Audit every `tokio::spawn` for `Send` requirements; WASM has only
-      `LocalSet`-style execution. Surfaces only at runtime — wait for the
-      cross-compile floor before this.
-- [ ] Build pipeline: `wasm-pack` or `trunk` (open question §7.4). Static
-      bundle plus a small JS shim that wires `ClientViewEvent` → PixiJS state.
+      Landed in the same Phase 2 floor range.
+- [x] `holtburger-dat`: replace `zstd-sys` with `ruzstd` for wasm32 (kept
+      `zstd` natively for the dat2hba tool). `decompress_zstd(buffer,
+      expected_size)` cfg-split helper in `archive.rs`. Phase 2 floor.
+- [x] **Reversed:** `ResourceSource` stays sync. `HttpResourceSource::connect`
+      `await`s the bytes once at construction time and serves them sync from
+      in-memory state. The async-trait refactor would have propagated `.await`
+      through ~6 call sites in 4 crates plus a `#[async_trait(?Send)]`
+      cfg-split mirroring `Transport`; not worth the spike cost. `Vec<u8>`-
+      backed `HbaReader` is `Send + Sync`, so `LayeredResourceResolver`'s
+      `Vec<Arc<dyn ResourceSource>>` storage accepts `HttpResourceSource`
+      without trait-level changes. Reconsider only if memory pressure forces
+      streaming. (`b4da651`, `ac7f92d`)
+- [x] `WsTransport: Transport` for browsers — landed in
+      `crates/holtburger-transport-ws`, wasm32-gated so native graphs don't
+      pull `web-sys`. (`e151003`, `2364277`)
+- [x] `HttpResourceSource: ResourceSource` — landed in
+      `crates/holtburger-resource-http`. Three cascaded fetch paths
+      (`Window`, `WorkerGlobalScope`, `Reflect::get(globalThis, "fetch")`)
+      so the same bundle works in browser tabs, workers, and Node ≥ 18.
+      (`ac7f92d`)
+- [x] `tokio::spawn` Send audit — handled implicitly by the `Transport`
+      trait cfg-split: native trait keeps `Send + Sync` + `#[async_trait]`,
+      wasm32 trait drops them + uses `#[async_trait(?Send)]`. Survey of
+      session/core call sites confirmed nothing actually spawns a `Session`
+      across threads today. (`e151003`)
+- [x] Build pipeline: `wasm-pack` picked over `trunk` (we're "Rust crate
+      consumed by JS"). New crate `apps/holtburger-web` is the cdylib bundle.
+      Two verification paths: `node smoke_test.cjs` against the
+      `--target nodejs` build and a real browser against `--target web`.
+      (`3025834`)
+
+The empirical record is in `docs/phase-2-wasm-spike.md` and the as-built
+crate matrix at §3 of that file. The auto-memory entry
+`project_emit_dynamic_site.md` carries the same information for future
+sessions.
 
 ### 5.3 DAT-over-HTTP — feasible, but thoughtful
 
@@ -346,21 +456,15 @@ a problem for some downstream operators who may not realize they have a
 publication obligation. We document it in the README's License section and
 in the deployment docs (when those exist).
 
-### 5.5 Encryption: a discrepancy worth chasing
+### 5.5 Encryption: a discrepancy worth chasing — RESOLVED
 
-Holtburger's `ARCHITECTURE.md` line 75 says the session crate provides "RC4
-stream encryption/decryption". ACE's protocol is documented to use ISAAC, not
-RC4. Possible causes:
-
-- Documentation drift: holtburger's docs are stale; the actual code uses
-  ISAAC.
-- Holtburger has historically targeted retail or a different emulator and
-  retains an unused RC4 path.
-- AC's wire protocol uses RC4 for one phase (e.g., login) and ISAAC for
-  another, and `ARCHITECTURE.md` is naming one of them.
-
-This is a 30-minute investigation in `holtburger-session/src/`. It does not
-block design but it absolutely blocks the first time bytes flow.
+> Resolved in the Phase 2 opener (commit `f3d9a1c`). The Explore-agent
+> verdict during the groundwork pass was: holtburger crypto is **ISAAC
+> only**, used as a per-packet keyed checksum (not a stream cipher over
+> the body — see `session/receive.rs` and `session/reliability.rs`).
+> The two stale "RC4" doc references were corrected. No RSA either —
+> the substring `*ServerSave*` was the only `RSA` grep hit and it is
+> coincidental.
 
 ## 6. Holtburger's modular network/session stack — a closer look
 
@@ -385,42 +489,68 @@ neither is this a "one-line change."
 
 ## 7. Open questions
 
-Each is a real fork in the road. Listed in the order they need answers.
+Each is a real fork in the road. Items 7.1-7.4 have been answered as
+of 2026-05-04 and are kept here annotated; items 7.5-7.6 are still
+genuinely open.
 
-### 7.1 WS bridge: external proxy or ACE patch?
+### 7.1 WS bridge: external proxy or ACE patch? — ANSWERED: external proxy
 
-**Lean: external proxy.** Validate by writing a 200-line Rust proxy that
-echoes UDP↔WS for one ACE session. If it works end-to-end without ISAAC
-state confusion, we are done. If session state turns out to be sockaddr-coupled
-in some surprising way (Explore agent says not, but the source isn't fully
-visible), revisit.
+> Resolved by Phase 1 (2026-05-03 + 2026-05-04). The
+> `holtburger-wsbridge` + `holtburger-wsshim` pair landed; 21 tests
+> green including a full `cli ↔ shim ↔ bridge ↔ echo` loop with login
+> + world traffic interleaved (`d00770a`, `0945b7f`). Validates the
+> proxy is transparent: an unmodified `holtburger-cli` reaches the
+> echo server entirely over WebSocket. Live-ACE round-trip is the
+> only Phase 1 follow-on, blocked on three MySQL DBs + ACE DAT files.
+>
+> The patch path stays open if ACE-side awareness of WS clients ever
+> becomes load-bearing, but no force has appeared yet.
 
-### 7.2 DAT delivery format: per-asset, or pre-sharded HBA?
+### 7.2 DAT delivery format: per-asset, or pre-sharded HBA? — ANSWERED: single namespaced HBA-of-HBAs
 
-**Lean: pre-sharded HBA per region/landblock-cluster.** AC's data has natural
-spatial locality; serving per-asset means thousands of HTTP requests per
-zone. Pre-sharded means a manifest + bundle-per-region. Use holtburger's
-`dat2hba` as the build tool; emit one bundle per landblock-region (probably
-~100 regions) plus a bootstrap bundle.
+> Resolved by Phase 2 §8 step 4 (commit `ac7f92d`). The existing
+> `dat2hba` tool produces a "namespaced HBA v2 bundle" — already
+> shardable by namespace. We ship a single bundle (`dats/assets.hba`,
+> ~230 MB at `--profile pruned`) with `eor/portal`, `eor/cell`, and
+> `holtburger/core` namespaces inside; the wasm bundle's
+> `HttpResourceSource::connect(url)` fetches it once at session start
+> and serves entries sync from in-memory state.
+>
+> The "one bundle per landblock-region (~100 regions)" sharding was
+> rejected for the spike — the simpler shape ships first; revisit if
+> the single-bundle's pre-load cost becomes a UX problem (it does
+> not today). The brief at §8 lays out the migration path if needed.
+>
+> See `docs/phase-2-wasm-spike.md` §8.4 for the full rationale.
 
-### 7.3 Tile basemap: keep Leaflet, or replace?
+### 7.3 Tile basemap: keep Leaflet, or replace? — ANSWERED: replaced (PixiJS-only)
 
-**Genuinely open.** Leaflet brings pan/zoom/tile-cache/CRS for free; the
-static site already uses it well. PixiJS-only buys us one rendering pipeline
-but we re-implement pan/zoom and tile loading. There's a third option: replace
-Leaflet with `MapLibre GL` (vector tiles, GPU-accelerated, integrates with
-WebGL overlays). MapLibre might be the right answer if we ever want tilt or
-true 3D — but we explicitly said no 3D in §2.
+> Resolved by Phase 3 step 2 (commit `f04b1f5`). The current bundle
+> has no Leaflet — PixiJS owns pan, zoom, and the camera container.
+> The third option (MapLibre GL) was not pursued; we are not doing
+> tilt or 3D, so MapLibre's strengths don't apply.
+>
+> The deeper rationale lives in §4.5 — direct-DAT terrain rendering
+> walks away from the static-site tile pyramid (the "cumbersome to
+> re-bake on every WorldBuilder world change" part) while keeping
+> the sprite atlas as visual continuity. PixiJS-only is the simplest
+> way to express that: one rendering pipeline, one scene graph, one
+> set of input handlers.
+>
+> The "spike Leaflet first, fall back to WebGL if event coordination
+> becomes painful" plan from the original draft was overtaken by
+> the Phase 3 step 1 work, where the simplest path turned out to be
+> "just use PixiJS for everything from the start".
 
-Spike: try Leaflet basemap + PixiJS overlay first. If pan/zoom event
-coordination becomes painful, swap to a unified WebGL approach.
+### 7.4 WASM build pipeline: `wasm-pack` or `trunk`? — ANSWERED: wasm-pack
 
-### 7.4 WASM build pipeline: `wasm-pack` or `trunk`?
-
-`trunk` is friendlier for "the whole app is Rust"; `wasm-pack` is friendlier
-for "Rust crate consumed by JS". We are the latter (PixiJS is JS). Lean:
-`wasm-pack` + a small JS/TS layer that owns the renderer and instantiates
-the WASM module. Decide when scaffolding starts.
+> Resolved by Phase 2 §8 step 1 (commit `3025834`). `wasm-pack 0.14.0`
+> picked over `trunk` because we are "Rust crate consumed by JS"
+> rather than "the whole app is Rust" (PixiJS owns the renderer
+> JS-side). Two verification paths land alongside the bundle: `node
+> smoke_test.cjs` against the `--target nodejs` build (currently 17
+> checks) and a real browser against the `--target web` build via
+> Playwright + Chromium with `--use-gl=swiftshader`.
 
 ### 7.5 Login flow: real ACE accounts, or a transient guest path?
 
@@ -477,37 +607,84 @@ Phase 1 — **WS↔UDP loop spike.** ~1–2 weeks.
   groundwork pass). Once this clears, Phase 1 closes and Phase 2 (WASM
   port) opens.
 
-Phase 2 — **WASM port spike.** ~3–4 weeks.
-- `holtburger-session` cfg-gates UDP-native code; adds `Session::new_with_transport`.
-- New crate `holtburger-transport-ws` with `WsTransport: Transport`,
-  WASM-only.
-- `holtburger-dat::ResourceSource` becomes async.
-- New `HttpResourceSource` impl, browser-only.
-- `wasm-pack`-built bundle that, headlessly, can complete the AC handshake
-  against ACE through the bridge from §Phase 1, surfacing a `ClientViewEvent`
-  stream into JS console logs.
-- This is the deepest-risk phase. If WASM porting unblocks at acceptable
-  cost, the rest is product work.
+Phase 2 — **WASM port spike (DONE, 2026-05-04).** ~3–4 weeks budgeted; landed
+inside that window.
+- ✅ `holtburger-session` cfg-gates UDP-native code; adds
+  `Session::new_with_transport` (`f3d9a1c`).
+- ✅ All seven library crates cross-compile to `wasm32-unknown-unknown`
+  (`50003ae`..`868c3ac`). Native invariant held: 1086 lib tests across 13
+  crates pass at every commit boundary.
+- ✅ New crate `holtburger-transport-ws` with `WsTransport: Transport`,
+  wasm32-only (`e151003`, `2364277`).
+- ✅ `holtburger-dat::ResourceSource` stays sync (the async refactor was
+  deliberately rejected — see §5.2). `HttpResourceSource::connect` does
+  one async fetch at construction time and serves entries sync from
+  in-memory state.
+- ✅ New `HttpResourceSource` impl in `holtburger-resource-http`,
+  wasm32-only, with three cascaded fetch resolution paths covering
+  browser tabs, Web Workers, and Node ≥ 18 (`ac7f92d`, `5b6fefd`).
+- ✅ `wasm-pack`-built bundle (`apps/holtburger-web`) loads in browser +
+  Node smoke test; deterministic checks 17/17 PASS.
+- ⏳ End-to-end bundle handshake against ACE through the bridge —
+  blocked on the same Phase 1 follow-on (live ACE backend). The bundle
+  has all the wiring (`try_ws_handshake_smoke`); the round-trip waits on
+  the ACE backend unblock.
 
-Phase 3 — **Renderer scaffold.** ~2–3 weeks, parallelizable with late Phase 2.
-- PixiJS scene graph: tile basemap (Leaflet for now, see §7.3), entity
-  overlay layer, sprite-atlas reuse from emit-static-site.
-- Coordinate-system assertion against `coordSystem` block, mirrored from
-  emit-static-site's pattern.
-- Deck-out the existing emit-static-site `dist/` so it can be served as
-  *either* the static site (no `?live=1`) or the dynamic site (with
-  `?live=1`); reuse 95% of the existing assets.
+The "deepest-risk phase" framing held — Phase 2 was where the cross-
+compile floor decisions could have caved. They didn't; the rest is now
+product work.
 
-Phase 4 — **Wiring.** ~2 weeks.
+Phase 3 — **Renderer scaffold (in flight, on direct-DAT rail; see §4.5).**
+The original "Leaflet basemap + PixiJS entity overlay + reuse 95% of
+emit-static-site's tile pyramid" framing was replaced in Phase 3 step 1.
+The current rail is: render terrain directly from `eor/cell` HBA records
+in WASM, keep the static-site **sprite atlas** for object art, walk away
+from the tile pyramid. See §4.5 for the rationale and quality ladder.
+
+Step ledger:
+- ✅ **Step 1** (`a5e0a91`..`590fc95`) — `fetch_landblock_heightmap`
+  wasm-bindgen export + PixiJS Mesh render of one Holtburg landblock.
+  256×1 height-ramp gradient texture, wireframe overlay, single static
+  view. Smoke test 8 → 14 checks. Deliverable:
+  [`docs/images/phase-3-step-1-landblock.png`](images/phase-3-step-1-landblock.png).
+- ✅ **Step 2** (`38afb1c`..`79818ac`) — 3×3 Holtburg neighbourhood,
+  batch-fetched via `fetch_landblock_heightmaps`. PixiJS-only camera
+  (mouse-wheel zoom around the cursor, drag-to-pan). Coordinate-unit
+  fix landed on the way in (vertices are 24 m apart, not 3 m;
+  landblock is 192 m, not 24 m — see the correction note in
+  `docs/phase-3-renderer.md`). Smoke test 14 → 17 checks. Deliverable:
+  [`docs/images/phase-3-step-2-multi-landblock.png`](images/phase-3-step-2-multi-landblock.png).
+- ⏳ **Step 3** — texture-atlas terrain palette (the AC 32-tile-type
+  surface table + textures). Biggest single visual jump toward
+  static-site fidelity; needs a custom GLSL fragment shader and a
+  per-vertex tile-type buffer. Independent of live ACE.
+- ⏳ **Step 4** — sprite-atlas consumption + `LandblockInfo` (object
+  placement) rendering. Reuses `projects/<slug>/sprites/atlas.{png,js}`
+  from the static-site pipeline. Visual continuity with the static
+  gallery; depends on step 3 only loosely.
+- ⏳ **Step 5** — road overlays + atmospheric polish. Surface-table
+  road tiles + lighting passes. The "looks like the README screenshot"
+  step.
+- ⏳ **`coordSystem` assertion** — the live bundle should assert
+  `worldExtentWu = 49152, tilePx = 256, lbWu = 192, pxPerWuAtZ0 =
+  256/49152` against the project's coord block at boot, mirroring
+  `app.js:387-412`. Currently the wasm side reads
+  `holtburger-common::position::METERS_PER_LANDBLOCK = 192.0` directly;
+  the JS side hard-codes the same constant. Lift this to an explicit
+  load-time check before Phase 4 wiring depends on it.
+
+Phase 4 — **Wiring.** ~2 weeks. Gated on the live ACE backend unblock.
 - Connect WASM holtburger's `ClientViewEvent` stream to the PixiJS entity
-  buffer.
+  buffer (Phase 3 step 4-or-later, with sprite-atlas consumption already
+  in place).
 - DOM panels for chat, vitals, inventory — surfaces holtburger already
   drives.
 - Input: WASD + click-to-target, fed back as movement commands through
   holtburger-core's existing input surface.
 
 Phase 5 — **Hardening.** Indefinite.
-- DAT-over-HTTP shard layout (§7.2).
+- DAT-over-HTTP shard layout if single-bundle pre-load becomes a UX
+  problem (§7.2 currently answered: single bundle, OK for the spike).
 - IndexedDB asset caching.
 - Login flow UX (§7.5).
 - Performance: 100 concurrent entities, 1000, 5000.
@@ -518,28 +695,69 @@ the current one demonstrably works against ACE.
 
 ## 9. Reference index
 
-File:line citations from the groundwork exploration, kept here so future work
-can jump directly without re-discovering them.
+File:line citations from the groundwork exploration + as-built docs from
+later phases, kept here so future work can jump directly without
+re-discovering them.
+
+### Holtburger source seams (groundwork-pass citations)
 
 | What | Where |
 |---|---|
 | `Transport` trait definition | `external/holtburger/crates/holtburger-session/src/session/types.rs:17-21` |
 | `Session.transport` field | `external/holtburger/crates/holtburger-session/src/session/types.rs:90` |
 | Hardcoded `UdpSocket::bind` (the patch site) | `external/holtburger/crates/holtburger-session/src/session/api.rs:9-11` |
+| `Session::new_with_transport` (the seam that landed) | `external/holtburger/crates/holtburger-session/src/session/api.rs` |
 | Fragment reassembly (assumes whole-packet recv) | `external/holtburger/crates/holtburger-session/src/session/receive.rs:405-423` |
 | `ResourceSource` trait | `external/holtburger/crates/holtburger-dat/src/lib.rs:138-148` |
 | `ContentRepository::from_mounts` | `external/holtburger/crates/holtburger-content/src/repository.rs:75-80` |
 | ClientRuntime asset loading | `external/holtburger/crates/holtburger-core/src/client/builder.rs:54-80` |
+| `METERS_PER_LANDBLOCK = 192.0` (canonical AC constant) | `external/holtburger/crates/holtburger-common/src/position.rs:5` |
+
+### emit-static-site seams
+
+| What | Where |
+|---|---|
 | `emit-static-site` orchestrator | `WorldBuilder.Terminal/StaticSiteEmitter.cs:41-128` |
 | `coordSystem` emission | `WorldBuilder.Terminal/StaticSiteEmitter.cs:741-746` |
 | `coordSystem` boot assertion | (emitted) `app.js:387-412` |
-| Forward-compat live overlay hook | (emitted) `app.js:85-90` |
-| Tile pyramid emitter | `WorldBuilder.Terminal/TilePyramidEmitter.cs:54-91, 101-134` |
+| Forward-compat live overlay hook (unused on current rail) | (emitted) `app.js:85-90` |
+| Tile pyramid emitter (NOT consumed by the live client; see §4.5) | `WorldBuilder.Terminal/TilePyramidEmitter.cs:54-91, 101-134` |
+| Sprite atlas (consumed by the live client at Phase 3 step 4) | `projects/<slug>/sprites/atlas.{png,js}` |
+
+### ACE seams
+
+| What | Where |
+|---|---|
 | ACE network port config | `external/ACE/Source/ACE.Server/Config.js.example:5-26` |
 | ACE socket initialization | `external/ACE/Source/ACE.Server/Program.cs:311-312` |
 | ACE game-logic seam (`Session.Network.EnqueueSend`) | `external/ACE/Source/ACE.Server/WorldObjects/Player.cs:43, 114-117` |
 
+### As-built docs from later phases
+
+| Doc | Covers |
+|---|---|
+| [`phase-2-wasm-spike.md`](phase-2-wasm-spike.md) | Phase 2 §3 per-crate cross-compile matrix, §8 step ledger, status banner |
+| [`phase-3-renderer.md`](phase-3-renderer.md) | Phase 3 step 1 + step 2 as-built reference, step 3 candidates |
+| [`phase-3-step-1-handoff.md`](phase-3-step-1-handoff.md) | Brief that framed step 1 (single-landblock render) |
+| [`phase-3-step-2-handoff.md`](phase-3-step-2-handoff.md) | Brief that framed step 2 (3×3 + camera + unit fix) |
+
+### Live-client wasm-bindgen surface (`apps/holtburger-web`)
+
+| Export | Purpose |
+|---|---|
+| `build_info() -> String` | Bundle identification |
+| `hash32(&[u8]) -> u32` | Deterministic AC packet checksum (smoke) |
+| `session_smoke_test_packet_sequence() -> u32` | `Session::new_test` runs on wasm32 |
+| `try_ws_handshake_smoke(bridge_url, ip, port) -> Promise<u32>` | WsTransport ↔ Session wiring (browser-only validation needs live bridge) |
+| `try_http_resource_source_smoke(url, ns, id) -> Promise<u32>` | HttpResourceSource end-to-end (smoke) |
+| `fetch_landblock_heightmap(url, cell_id) -> Promise<LandblockMesh>` | Single-landblock terrain mesh (Phase 3 step 1 path; one-line wrapper around the plural form) |
+| `fetch_landblock_heightmaps(url, cell_ids) -> Promise<Vec<LandblockMesh>>` | Batch terrain meshes — one HBA open per call (Phase 3 step 2 path) |
+
 ---
 
 *Maintainers: when you change one of the decisions in §4, update §8 and §9 in
-the same change.*
+the same change. The as-built status of §5.2 and §7.1-7.4 lives inline in
+those sections; the step-by-step record for Phase 2/3 lives in
+`phase-2-wasm-spike.md` and `phase-3-renderer.md` respectively. This file is
+the long-lived design intent; the spike + renderer docs are the short-lived
+as-built records.*
