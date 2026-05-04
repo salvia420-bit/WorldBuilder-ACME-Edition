@@ -878,3 +878,403 @@ pub async fn fetch_object_colours(
     }
     Ok(out)
 }
+
+// ────────────────────────────────────────────────────────────────────
+//  Phase 3 step 6 — model triangulation for runtime per-poly rendering
+// ────────────────────────────────────────────────────────────────────
+//
+// Ports `WorldBuilder.Terminal/ObjectSpriteGenerator.cs::TriangulateModel`
+// + `AppendGfxTris` to Rust. Returns a flat triangle list per model so
+// JS can render each (model, surface) sub-mesh via PIXI.Mesh + a
+// custom GLSL fragment shader, then RenderTexture-cache the result.
+//
+// Format choice: per-triangle vertex duplication (no index buffer).
+// Mirrors the C# reference and lets PIXI.Geometry consume the buffers
+// directly without a pre-pass to dedupe vertices. Memory is bounded
+// (one tile per visible model, dropped on cache eviction) so the
+// extra bytes don't matter; the simplicity at the JS boundary does.
+//
+// SetupModel (multi-part) walks `parts` and applies each part's idle
+// or default-placement frame transform — matching the static-site
+// emitter's pose resolution. For step 6 v1 we only apply the default
+// placement frame (no animation lookup); idle-pose support is
+// step 6 follow-on.
+
+/// Per-triangle output of [`triangulate_model`]. Three vertex tuples
+/// per triangle (no shared indexing), each carrying position, UV, and
+/// the surface index.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct ModelMesh {
+    /// 9 floats per triangle (3 vertices × xyz). Length = `tri_count * 9`.
+    positions: Vec<f32>,
+    /// 6 floats per triangle (3 vertices × uv). Length = `tri_count * 6`.
+    uvs: Vec<f32>,
+    /// 3 floats per triangle (one face normal, broadcast to all 3 verts
+    /// at draw time). Length = `tri_count * 3`.
+    normals: Vec<f32>,
+    /// One byte per triangle, indexing into `surfaces`. Length = `tri_count`.
+    /// `0xFF` means "no surface" (caller paints flat fallback).
+    surface_indices: Vec<u8>,
+    /// Unique surface DIDs referenced by the model's polygons, in
+    /// first-seen order. JS resolves each to RGBA8 via the existing
+    /// surface chain (Surface → SurfaceTexture → Texture → to_rgba8).
+    surfaces: Vec<u32>,
+    /// World-space bbox over all vertices. JS uses (max - min) to size
+    /// the destination RenderTexture.
+    bbox_min: [f32; 3],
+    bbox_max: [f32; 3],
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl ModelMesh {
+    #[wasm_bindgen(getter)]
+    pub fn positions(&self) -> Vec<f32> { self.positions.clone() }
+    #[wasm_bindgen(getter)]
+    pub fn uvs(&self) -> Vec<f32> { self.uvs.clone() }
+    #[wasm_bindgen(getter)]
+    pub fn normals(&self) -> Vec<f32> { self.normals.clone() }
+    #[wasm_bindgen(getter, js_name = surfaceIndices)]
+    pub fn surface_indices(&self) -> Vec<u8> { self.surface_indices.clone() }
+    #[wasm_bindgen(getter)]
+    pub fn surfaces(&self) -> Vec<u32> { self.surfaces.clone() }
+    #[wasm_bindgen(getter, js_name = triCount)]
+    pub fn tri_count(&self) -> u32 {
+        (self.positions.len() / 9) as u32
+    }
+    /// `[minX, minY, minZ, maxX, maxY, maxZ]` — flat for typed-array
+    /// transit. JS reads pairs (idx 0..3 = min, 3..6 = max).
+    #[wasm_bindgen(getter)]
+    pub fn bbox(&self) -> Vec<f32> {
+        let mut v = Vec::with_capacity(6);
+        v.extend_from_slice(&self.bbox_min);
+        v.extend_from_slice(&self.bbox_max);
+        v
+    }
+    /// World metres on (X, Y) — what JS uses as the sprite footprint
+    /// when blitting the rendered tile back into the scene.
+    #[wasm_bindgen(getter, js_name = worldBounds)]
+    pub fn world_bounds(&self) -> Vec<f32> {
+        vec![
+            self.bbox_max[0] - self.bbox_min[0],
+            self.bbox_max[1] - self.bbox_min[1],
+        ]
+    }
+}
+
+/// Internal triangle accumulator. Mirrors `ObjectSpriteGenerator.Tri`
+/// in the C# reference, minus the centroid-Z (we sort painter-style
+/// in JS instead of in Rust — simpler boundary).
+#[cfg(target_arch = "wasm32")]
+struct Tri {
+    pos: [[f32; 3]; 3],
+    uv: [[f32; 2]; 3],
+    normal: [f32; 3],
+    surface_did: u32,
+}
+
+/// Walk a [`GfxObj`]'s polygons, fan-triangulate each, transform by
+/// `(part_rot, part_offset)`, and append to `tris`. Mirrors the C#
+/// `AppendGfxTris` line-for-line.
+///
+/// `surface_did = 0` for any polygon whose `pos_surface` is out of
+/// range — caller falls back to a flat colour.
+#[cfg(target_arch = "wasm32")]
+fn append_gfx_tris(
+    tris: &mut Vec<Tri>,
+    gfx: &holtburger_dat::file_type::GfxObj,
+    part_offset: holtburger_common::Vector3,
+    part_rot: holtburger_common::Quaternion,
+) {
+    use holtburger_dat::graphics::Polygon;
+    if gfx.vertex_array.vertices.is_empty() || gfx.polygons.is_empty() {
+        return;
+    }
+
+    // Sort polygon ids for deterministic output (HashMap iteration is
+    // not stable; PIXI.Mesh draw order matches whatever order we feed
+    // in).
+    let mut poly_ids: Vec<u16> = gfx.polygons.keys().copied().collect();
+    poly_ids.sort_unstable();
+    for pid in poly_ids {
+        let poly: &Polygon = &gfx.polygons[&pid];
+        if poly.vertex_ids.len() < 3 { continue; }
+        // Skip "no positive surface" polygons — same as C# `NoPos` skip.
+        const NO_POS: u8 = 0x04;
+        if (poly.stippling & NO_POS) != 0 { continue; }
+
+        let surface_did = if poly.pos_surface >= 0
+            && (poly.pos_surface as usize) < gfx.surfaces.len()
+        {
+            gfx.surfaces[poly.pos_surface as usize]
+        } else {
+            0
+        };
+
+        // Resolve ring of (position, uv) per vertex.
+        let mut ring_pos: Vec<[f32; 3]> = Vec::with_capacity(poly.vertex_ids.len());
+        let mut ring_uv: Vec<[f32; 2]> = Vec::with_capacity(poly.vertex_ids.len());
+        let mut ok = true;
+        for (i, &raw) in poly.vertex_ids.iter().enumerate() {
+            if raw < 0 { ok = false; break; }
+            let Some(vert) = gfx.vertex_array.vertices.get(&(raw as u16)) else { ok = false; break; };
+            let mut uv_idx: usize = 0;
+            if i < poly.pos_uv_indices.len() {
+                uv_idx = poly.pos_uv_indices[i] as usize;
+            }
+            if uv_idx >= vert.uvs.len() {
+                uv_idx = 0;
+            }
+            let uv = if vert.uvs.is_empty() {
+                [0.0, 0.0]
+            } else {
+                [vert.uvs[uv_idx].u, vert.uvs[uv_idx].v]
+            };
+            // Apply the per-part transform: `part_rot * vert.origin + part_offset`.
+            let p = quat_rotate(part_rot, vert.origin);
+            ring_pos.push([p.x + part_offset.x, p.y + part_offset.y, p.z + part_offset.z]);
+            ring_uv.push(uv);
+        }
+        if !ok || ring_pos.len() < 3 { continue; }
+
+        // Fan-triangulate around vertex 0.
+        for i in 2..ring_pos.len() {
+            let a = ring_pos[0]; let b = ring_pos[i - 1]; let c = ring_pos[i];
+            let n = tri_normal(a, b, c);
+            let len2 = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
+            if len2 < 1e-12 { continue; }
+            let inv_len = 1.0 / len2.sqrt();
+            tris.push(Tri {
+                pos: [a, b, c],
+                uv: [ring_uv[0], ring_uv[i - 1], ring_uv[i]],
+                normal: [n[0] * inv_len, n[1] * inv_len, n[2] * inv_len],
+                surface_did,
+            });
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn quat_rotate(q: holtburger_common::Quaternion, v: holtburger_common::Vector3) -> holtburger_common::Vector3 {
+    // Standard quaternion vector rotation: v' = q * v * q^-1, expanded
+    // to 16 mults / 12 adds. Same math as System.Numerics.Vector3.Transform.
+    let xx = q.x * q.x;
+    let yy = q.y * q.y;
+    let zz = q.z * q.z;
+    let xy = q.x * q.y;
+    let xz = q.x * q.z;
+    let yz = q.y * q.z;
+    let wx = q.w * q.x;
+    let wy = q.w * q.y;
+    let wz = q.w * q.z;
+    holtburger_common::Vector3 {
+        x: v.x * (1.0 - 2.0 * (yy + zz)) + v.y * (2.0 * (xy - wz)) + v.z * (2.0 * (xz + wy)),
+        y: v.x * (2.0 * (xy + wz)) + v.y * (1.0 - 2.0 * (xx + zz)) + v.z * (2.0 * (yz - wx)),
+        z: v.x * (2.0 * (xz - wy)) + v.y * (2.0 * (yz + wx)) + v.z * (1.0 - 2.0 * (xx + yy)),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn tri_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
+    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    [
+        ab[1] * ac[2] - ab[2] * ac[1],
+        ab[2] * ac[0] - ab[0] * ac[2],
+        ab[0] * ac[1] - ab[1] * ac[0],
+    ]
+}
+
+/// Walk a SetupModel: for each part, fetch its GfxObj, transform by
+/// the part's placement frame, and append triangles. Step 6 v1 only
+/// uses `placement_frames` (Resting → Default → first); idle-pose
+/// animation lookup is step-6 follow-on, matching the C# reference's
+/// `TryResolveIdleAnimFrame` fallback chain.
+#[cfg(target_arch = "wasm32")]
+fn triangulate_setup_model<S: holtburger_dat::ResourceSource>(
+    source: &S,
+    setup_id: u32,
+    tris: &mut Vec<Tri>,
+) -> Option<()> {
+    use holtburger_dat::file_type::{GfxObj, SetupModel};
+    use holtburger_dat::ResourceKey;
+
+    let bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", setup_id))
+        .ok()?;
+    let setup = SetupModel::unpack(&mut std::io::Cursor::new(&bytes)).ok()?;
+
+    // Pick the placement frame to apply: Resting (0) → Default → first.
+    // Per holtburger-common::Placement enum which mirrors AC's.
+    let placement = setup
+        .placement_frames
+        .get(&0)
+        .or_else(|| setup.placement_frames.get(&1))
+        .or_else(|| setup.placement_frames.values().next());
+
+    for (pi, &part_id) in setup.parts.iter().enumerate() {
+        if (part_id >> 24) as u8 != 0x01 { continue; }
+        let Ok(part_bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", part_id))
+            else { continue };
+        let Ok(gfx) = GfxObj::unpack(&mut std::io::Cursor::new(&part_bytes))
+            else { continue };
+
+        let (offset, rot) = if let Some(p) = placement {
+            if pi < p.anim_frame.frames.len() {
+                let f = &p.anim_frame.frames[pi];
+                (f.origin, f.orientation)
+            } else {
+                (
+                    holtburger_common::Vector3::zero(),
+                    holtburger_common::Quaternion::identity(),
+                )
+            }
+        } else {
+            (
+                holtburger_common::Vector3::zero(),
+                holtburger_common::Quaternion::identity(),
+            )
+        };
+
+        append_gfx_tris(tris, &gfx, offset, rot);
+    }
+    Some(())
+}
+
+/// Top-level model triangulation: dispatch on `model_id >> 24`.
+/// `0x01` → single GfxObj at identity transform; `0x02` → SetupModel
+/// walk through parts. Returns `None` if the model record can't be
+/// loaded; an empty Vec means "loaded but had no drawable polygons"
+/// (legitimate — some retail models are physics-only).
+#[cfg(target_arch = "wasm32")]
+fn triangulate_model<S: holtburger_dat::ResourceSource>(
+    source: &S,
+    model_id: u32,
+) -> Option<Vec<Tri>> {
+    use holtburger_dat::file_type::GfxObj;
+    use holtburger_dat::ResourceKey;
+    let mut tris = Vec::new();
+    match (model_id >> 24) as u8 {
+        0x01 => {
+            let bytes = source
+                .get_file_by_key(ResourceKey::new("eor/portal", model_id))
+                .ok()?;
+            let gfx = GfxObj::unpack(&mut std::io::Cursor::new(&bytes)).ok()?;
+            append_gfx_tris(
+                &mut tris,
+                &gfx,
+                holtburger_common::Vector3::zero(),
+                holtburger_common::Quaternion::identity(),
+            );
+        }
+        0x02 => { triangulate_setup_model(source, model_id, &mut tris)?; }
+        _ => return None,
+    }
+    Some(tris)
+}
+
+/// Pack a `Vec<Tri>` into the wasm-bindgen-friendly [`ModelMesh`]
+/// shape: dedupe surface_dids into the `surfaces` array, replace each
+/// triangle's `surface_did` with a u8 index, flatten per-triangle
+/// vertex data into typed-array buffers, compute the world bbox.
+#[cfg(target_arch = "wasm32")]
+fn pack_model_mesh(tris: Vec<Tri>) -> ModelMesh {
+    // Surface dedupe + index map (insertion-order preserved for
+    // determinism). u8 cap = 255 unique surfaces per model — fine
+    // for AC (most models use ≤8).
+    let mut surfaces: Vec<u32> = Vec::new();
+    let mut sidx_lookup: std::collections::HashMap<u32, u8> = std::collections::HashMap::new();
+    let mut positions = Vec::with_capacity(tris.len() * 9);
+    let mut uvs = Vec::with_capacity(tris.len() * 6);
+    let mut normals = Vec::with_capacity(tris.len() * 3);
+    let mut surface_indices = Vec::with_capacity(tris.len());
+
+    let mut bbox_min = [f32::INFINITY; 3];
+    let mut bbox_max = [f32::NEG_INFINITY; 3];
+
+    for tri in &tris {
+        let sidx: u8 = if tri.surface_did == 0 {
+            0xFF // sentinel "no surface"
+        } else if let Some(&idx) = sidx_lookup.get(&tri.surface_did) {
+            idx
+        } else if surfaces.len() >= 255 {
+            0xFF // too many surfaces; cap at 255
+        } else {
+            let idx = surfaces.len() as u8;
+            surfaces.push(tri.surface_did);
+            sidx_lookup.insert(tri.surface_did, idx);
+            idx
+        };
+        surface_indices.push(sidx);
+
+        for v in 0..3 {
+            let p = tri.pos[v];
+            positions.extend_from_slice(&p);
+            uvs.extend_from_slice(&tri.uv[v]);
+            for k in 0..3 {
+                if p[k] < bbox_min[k] { bbox_min[k] = p[k]; }
+                if p[k] > bbox_max[k] { bbox_max[k] = p[k]; }
+            }
+        }
+        normals.extend_from_slice(&tri.normal);
+    }
+
+    if !bbox_min[0].is_finite() {
+        bbox_min = [0.0, 0.0, 0.0];
+        bbox_max = [0.0, 0.0, 0.0];
+    }
+
+    ModelMesh {
+        positions,
+        uvs,
+        normals,
+        surface_indices,
+        surfaces,
+        bbox_min,
+        bbox_max,
+    }
+}
+
+/// Phase 3 step 6: walk a model's GfxObj/SetupModel chain, triangulate,
+/// and return a flat-buffer mesh ready for in-browser rasterization.
+/// One HTTP fetch (the HBA bundle); per-id walks are in-memory.
+///
+/// On any failure the rejected Promise carries a tagged error string
+/// — caller treats unknown models the same way the existing atlas
+/// path does (fall back to the dot).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_model_mesh(
+    asset_url: String,
+    model_id: u32,
+) -> Result<ModelMesh, JsValue> {
+    let source = holtburger_resource_http::HttpResourceSource::connect(&asset_url)
+        .await
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let tris = triangulate_model(&source, model_id)
+        .ok_or_else(|| JsValue::from_str(&format!("triangulate_model 0x{model_id:08X}: failed")))?;
+    Ok(pack_model_mesh(tris))
+}
+
+/// Batch form: triangulate many models in one call. Returns a vector
+/// of [`ModelMesh`] in input order. On any per-id failure we push an
+/// empty mesh (tri_count == 0) rather than failing the whole batch —
+/// the JS caller checks for empty and falls back to atlas / dot for
+/// those.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_model_meshes(
+    asset_url: String,
+    model_ids: Vec<u32>,
+) -> Result<Vec<ModelMesh>, JsValue> {
+    let source = holtburger_resource_http::HttpResourceSource::connect(&asset_url)
+        .await
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let mut out = Vec::with_capacity(model_ids.len());
+    for &id in &model_ids {
+        let tris = triangulate_model(&source, id).unwrap_or_default();
+        out.push(pack_model_mesh(tris));
+    }
+    Ok(out)
+}

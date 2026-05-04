@@ -141,6 +141,19 @@ check(
     `typeof ${typeof wasm.fetch_object_colours}`
 );
 
+// Phase 3 step 6: fetch_model_mesh / fetch_model_meshes must be
+// present. End-to-end round-trip below.
+check(
+    "fetch_model_mesh() is exported (Phase 3 step 6 runtime mesh)",
+    typeof wasm.fetch_model_mesh === "function",
+    `typeof ${typeof wasm.fetch_model_mesh}`
+);
+check(
+    "fetch_model_meshes() is exported (Phase 3 step 6 batch)",
+    typeof wasm.fetch_model_meshes === "function",
+    `typeof ${typeof wasm.fetch_model_meshes}`
+);
+
 (async () => {
     // §8 step 4 round-trip: serve `dats/assets.hba` over HTTP from this
     // process, then have the wasm bundle's HttpResourceSource fetch +
@@ -613,6 +626,34 @@ check(
                 distinctColours.size >= 5,
                 `${distinctColours.size} distinct of ${resolved} resolved`
             );
+
+            // Phase 3 step 6: fetch_model_mesh round-trip on a known
+            // Holtburg house. Pin: tris > 0 (mesh has drawable
+            // polygons), surfaces ≥ 1 (texture refs found), worldBounds
+            // matches the atlas's pre-baked worldBounds for the same
+            // model_id (sanity-check the bbox computation against the
+            // static-site emitter's footprint).
+            const HOUSE_ID = 0x01000827;
+            const houseMesh = await wasm.fetch_model_mesh(url, HOUSE_ID);
+            check(
+                "fetch_model_mesh: Holtburg house 0x01000827 yields >0 triangles",
+                houseMesh.triCount > 0,
+                `${houseMesh.triCount} triangles, ${houseMesh.surfaces.length} surfaces`
+            );
+            const wb = houseMesh.worldBounds;
+            check(
+                "fetch_model_mesh: house world bounds ≈ [12, 13.6] (matches atlas)",
+                Math.abs(wb[0] - 12.0) < 0.1 && Math.abs(wb[1] - 13.6) < 0.1,
+                `worldBounds=[${wb[0].toFixed(2)}, ${wb[1].toFixed(2)}]`
+            );
+            check(
+                "fetch_model_mesh: positions/uvs/surface_indices buffer lengths consistent",
+                houseMesh.positions.length === houseMesh.triCount * 9
+                    && houseMesh.uvs.length === houseMesh.triCount * 6
+                    && houseMesh.surfaceIndices.length === houseMesh.triCount,
+                `pos=${houseMesh.positions.length}, uv=${houseMesh.uvs.length}, sidx=${houseMesh.surfaceIndices.length}`
+            );
+            houseMesh.free();
 
             for (const o of objects) o.free();
         } catch (e) {
