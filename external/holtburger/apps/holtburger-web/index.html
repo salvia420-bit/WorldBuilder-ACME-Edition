@@ -172,6 +172,8 @@
         fetch_model_meshes,
         fetch_surfaces_pixels,
         start_session,
+        init_resource_source,
+        has_resource_source,
       } from "./pkg/holtburger_web.js";
 
       import * as PIXI from "pixi.js";
@@ -191,6 +193,28 @@
 
       try {
         await init();
+
+        // Phase 5.0 obj 6 — initialize the manifest-mode resource
+        // source if a pre-baked `dist/manifest.json` exists. This is
+        // opt-in for now: fetch_* exports still take an `asset_url`
+        // (the legacy HBA path); per-export refactor lands in obj 9
+        // alongside the smoke-test rewrite. When dist/ is baked via
+        // `cargo run -p holtburger-tools --bin dat-shard -- --input
+        // dats/assets.hba --output dist/`, the page logs a
+        // confirmation and `has_resource_source()` flips true.
+        const MANIFEST_URL = "../../dist/manifest.json";
+        try {
+          await init_resource_source(MANIFEST_URL);
+          console.log(
+            "[Phase 5.0] manifest-mode source initialized from",
+            MANIFEST_URL
+          );
+        } catch (e) {
+          console.log(
+            "[Phase 5.0] manifest-mode unavailable (legacy HBA mode):",
+            String(e).slice(0, 120)
+          );
+        }
 
         const info = build_info();
         check(
@@ -218,6 +242,12 @@
           "Session::new_test() runs on wasm and returns packet_sequence=1",
           seq === 1,
           `got ${seq}`
+        );
+
+        check(
+          "init_resource_source() is exported (Phase 5.0 obj 5)",
+          typeof init_resource_source === "function",
+          `typeof ${typeof init_resource_source}, manifestMode=${has_resource_source()}`
         );
 
         check(
