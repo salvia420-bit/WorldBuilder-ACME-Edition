@@ -4,27 +4,18 @@
 //! This crate is the smallest possible consumer of the floor laid in
 //! commits `50003ae`..`868c3ac`. It pulls in `holtburger-protocol` and
 //! `holtburger-session` as dependencies (verifying both still compile
-//! when bundled into a `cdylib`) and exposes three wasm-bindgen
+//! when bundled into a `cdylib`) and exposes a few wasm-bindgen
 //! functions so a plain `index.html` can prove the bundle loads and
 //! executes.
 //!
-//! What it does **not** do, intentionally:
-//!
-//! - Construct a `Session`. `Session::new_with_transport` initializes
-//!   `last_recv_time`/`last_send_time` from `std::time::Instant::now()`,
-//!   which panics on `wasm32-unknown-unknown` (see `phase-2-wasm-spike.md`
-//!   §6 / §8 step 3). The `WsTransport` work in §8 step 2 lives behind
-//!   that fix.
-//! - Use the WS or HTTP transports. `WsTransport` is §8 step 2;
-//!   `HttpResourceSource` is §8 step 4.
-//!
-//! The compile-time `_assert_transport_reachable` stub below makes
-//! `holtburger_session::Transport` show up in this crate's dependency
-//! graph so the bundle proves the session crate cross-compiles in a
-//! cdylib context, not just in a standalone `cargo check`.
+//! Constructing a `Session` is exercised here as of the
+//! `web_time::Instant` swap (spike doc §8 step 3). The remaining
+//! deliberate omission is a real transport — wasm32 will plug in
+//! `WsTransport` (§8 step 2) over the `Session::new_with_transport`
+//! seam.
 
 use holtburger_protocol::crypto::Hash32;
-use holtburger_session::Transport;
+use holtburger_session::Session;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(start)]
@@ -52,10 +43,12 @@ pub fn hash32(data: &[u8]) -> u32 {
     Hash32::compute(data)
 }
 
-// `holtburger-session::Transport` is the seam `WsTransport` will plug
-// into (see §8 step 2). Force it into the bundle's symbol graph so the
-// floor is verified end-to-end, not just at the dependency-graph level.
-#[allow(dead_code)]
-fn _assert_transport_reachable() {
-    fn _check(_: &dyn Transport) {}
+/// Constructs a `Session::new_test` and returns its initial
+/// `packet_sequence` (always 1). End-to-end smoke test that the
+/// `web_time::Instant` swap (§8 step 3) lets `Session::new_with_transport`
+/// run on wasm32 without panicking — every previous attempt at this
+/// function would have tripped `std::time::Instant::now()`.
+#[wasm_bindgen]
+pub fn session_smoke_test_packet_sequence() -> u32 {
+    Session::new_test().packet_sequence
 }

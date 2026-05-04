@@ -65,8 +65,8 @@ impl Session {
             game_action_sequence: 0,
             bytes_in: 0,
             bytes_out: 0,
-            last_recv_time: std::time::Instant::now(),
-            last_send_time: std::time::Instant::now(),
+            last_recv_time: web_time::Instant::now(),
+            last_send_time: web_time::Instant::now(),
         }
     }
 

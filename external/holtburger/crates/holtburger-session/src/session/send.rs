@@ -6,7 +6,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use holtburger_protocol::messages::transport::{self, packet_flags, queues};
 use holtburger_protocol::messages::*;
 use holtburger_protocol::traits::{ProtocolPack, ProtocolUnpack};
-use std::time::Instant;
+use web_time::Instant;
 
 impl Session {
     fn unpack_packet_header(packet: &[u8]) -> Result<PacketHeader> {
@@ -282,7 +282,7 @@ impl Session {
         }
 
         self.bytes_out = self.bytes_out.wrapping_add(packet.len() as u64);
-        self.last_send_time = std::time::Instant::now();
+        self.last_send_time = Instant::now();
         self.transport.send_to(packet, addr).await?;
         Ok(())
     }

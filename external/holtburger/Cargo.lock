@@ -1549,6 +1549,7 @@ dependencies = [
  "socket2",
  "thiserror 2.0.18",
  "tokio",
+ "web-time",
 ]
 
 [[package]]

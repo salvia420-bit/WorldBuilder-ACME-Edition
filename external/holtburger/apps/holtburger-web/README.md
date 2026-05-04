@@ -7,7 +7,7 @@ smallest possible consumer of the wasm32 cross-compile floor. See
 
 ## What it does
 
-Exposes three `wasm-bindgen` functions over `holtburger-protocol` +
+Exposes a small `wasm-bindgen` surface over `holtburger-protocol` +
 `holtburger-session` so a plain `index.html` can prove the bundle loads
 and executes in a browser:
 
@@ -18,10 +18,14 @@ and executes in a browser:
 - `hash32(data: Uint8Array) -> u32` — runs AC's stateless 32-bit packet
   header checksum (`holtburger_protocol::crypto::Hash32::compute`),
   proving the packet codec works in a `cdylib` bundle.
+- `session_smoke_test_packet_sequence() -> u32` — constructs
+  `Session::new_test()` and returns its initial `packet_sequence`.
+  Verifies the `web_time::Instant` swap (spike doc §8 step 3) lets
+  `Session::new_with_transport` run on wasm32 without tripping
+  `std::time::Instant::now()`'s panic.
 
-What it deliberately does **not** do: construct a `Session` (its
-`std::time::Instant::now()` panics on `wasm32-unknown-unknown`; spike
-doc §8 step 3) or wire any transport (steps 2 / 4).
+What it deliberately does **not** do: wire a real transport (`WsTransport`
+is §8 step 2; `HttpResourceSource` is §8 step 4).
 
 ## Build
 

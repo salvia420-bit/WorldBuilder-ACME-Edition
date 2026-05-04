@@ -4,7 +4,8 @@ use holtburger_protocol::crypto::Isaac;
 use holtburger_protocol::messages::transport::{self, packet_flags};
 use holtburger_protocol::messages::utils::build_login_payload;
 use holtburger_protocol::messages::*;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 impl Session {
     pub async fn send_login_request(&mut self, account_name: &str, password: &str) -> Result<()> {

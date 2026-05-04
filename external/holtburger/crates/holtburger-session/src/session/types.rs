@@ -5,7 +5,11 @@ use holtburger_protocol::crypto::Isaac;
 use holtburger_protocol::messages::*;
 use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+// `web_time::Instant` is `std::time::Instant` on native and a
+// `performance.now()`-backed shim on wasm32 — needed because
+// `std::time::Instant::now()` panics on `wasm32-unknown-unknown`.
+use web_time::Instant;
 
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::net::UdpSocket;

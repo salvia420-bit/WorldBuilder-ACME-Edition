@@ -9,7 +9,7 @@ use holtburger_common::sequence::is_newer_u32;
 use holtburger_protocol::messages::transport::{self, packet_flags};
 use holtburger_protocol::messages::*;
 use holtburger_protocol::traits::{ProtocolPack, ProtocolUnpack};
-use std::time::Instant;
+use web_time::Instant;
 
 impl Session {
     pub(crate) fn maybe_cache_packet(

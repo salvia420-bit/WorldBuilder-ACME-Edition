@@ -15,6 +15,7 @@ serde = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 byteorder = { workspace = true }
+web-time = { workspace = true }
 
 # Native-only: UDP socket support for the production `Session::new` path.
 # Wasm32 builds use `Session::new_with_transport` with a non-UDP transport

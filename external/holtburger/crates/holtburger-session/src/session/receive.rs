@@ -7,7 +7,7 @@ use holtburger_common::sequence::is_newer_u32;
 use holtburger_protocol::messages::transport::{self, packet_flags};
 use holtburger_protocol::messages::*;
 use holtburger_protocol::traits::ProtocolUnpack;
-use std::time::Instant;
+use web_time::Instant;
 
 impl Session {
     async fn recv_raw_packet_with_addr(
@@ -55,7 +55,7 @@ impl Session {
             }
 
             self.bytes_in = self.bytes_in.wrapping_add(len as u64);
-            self.last_recv_time = std::time::Instant::now();
+            self.last_recv_time = Instant::now();
 
             if let Some(ref mut capture) = self.capture {
                 let _ = capture.write_entry(Direction::Inbound, addr, &buf[..len]);
@@ -249,8 +249,20 @@ impl Session {
             }
 
             if let Some(deadline) = self.next_pending_control_deadline() {
+                // On native, `web_time::Instant` re-exports `std::time::Instant`,
+                // so `from_std` accepts the deadline directly. On wasm32 the
+                // two are distinct types — convert via the elapsed duration
+                // and sleep relative; tokio's wasm32 time driver uses
+                // `setTimeout` underneath so duration-based sleeping is the
+                // natural shape there anyway.
+                #[cfg(not(target_arch = "wasm32"))]
+                let timer = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline));
+                #[cfg(target_arch = "wasm32")]
+                let timer =
+                    tokio::time::sleep(deadline.saturating_duration_since(Instant::now()));
+
                 tokio::select! {
-                    _ = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => {
+                    _ = timer => {
                         continue;
                     }
                     result = async {

@@ -59,6 +59,16 @@ check(
     `${hello.toString(16)} == ${hello2.toString(16)}`
 );
 
+// End-to-end check that `Session::new_test` runs on wasm without
+// panicking — exercises the `web_time::Instant` swap from spike doc
+// §8 step 3. `new_test` initializes `packet_sequence = 1`.
+const seq = wasm.session_smoke_test_packet_sequence();
+check(
+    "Session::new_test() runs on wasm and returns packet_sequence=1",
+    seq === 1,
+    `got ${seq}`
+);
+
 console.log("=========================");
 if (failed === 0) {
     console.log("PASS: all smoke checks green.");

@@ -26,7 +26,11 @@
     <div id="results">Loading wasm bundle…</div>
 
     <script type="module">
-      import init, { build_info, hash32 } from "./pkg/holtburger_web.js";
+      import init, {
+        build_info,
+        hash32,
+        session_smoke_test_packet_sequence,
+      } from "./pkg/holtburger_web.js";
 
       const root = document.getElementById("results");
       const lines = [];
@@ -63,6 +67,13 @@
           "hash32('hello') matches Rust's deterministic value",
           hello === 0xdb716568,
           `got 0x${hello.toString(16).padStart(8, "0")}, expected 0xdb716568`
+        );
+
+        const seq = session_smoke_test_packet_sequence();
+        check(
+          "Session::new_test() runs on wasm and returns packet_sequence=1",
+          seq === 1,
+          `got ${seq}`
         );
 
         const allOk = lines.every((l) => l.includes("[OK]"));
