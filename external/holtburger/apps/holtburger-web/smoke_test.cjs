@@ -105,6 +105,14 @@ check(
     `typeof ${typeof wasm.fetch_landblock_heightmap}`
 );
 
+// Phase 3 step 2 wiring: fetch_landblock_heightmaps (plural) must be
+// present. End-to-end round-trip below alongside the singular form.
+check(
+    "fetch_landblock_heightmaps() is exported (Phase 3 step 2 batch fetch)",
+    typeof wasm.fetch_landblock_heightmaps === "function",
+    `typeof ${typeof wasm.fetch_landblock_heightmaps}`
+);
+
 (async () => {
     // §8 step 4 round-trip: serve `dats/assets.hba` over HTTP from this
     // process, then have the wasm bundle's HttpResourceSource fetch +
@@ -251,9 +259,78 @@ check(
                     `threw: ${msg}`
                 );
             }
-        } finally {
-            await new Promise((resolve) => server.close(resolve));
         }
+
+        // Phase 3 step 2 round-trip: the batch export reads the
+        // 3×3 Holtburg-neighbourhood (0xA8B3FFFF..0xAAB5FFFF) in one
+        // HBA open, returns 9 mesh entries in the same order as the
+        // input id list. Same fixture-profile gating as the singular
+        // path — a `--profile micro` fixture lacks `eor/cell` and
+        // degrades to a SKIP.
+        try {
+            const HOLTBURG_NEIGHBOURHOOD = [
+                0xa8b5ffff, 0xa9b5ffff, 0xaab5ffff,
+                0xa8b4ffff, 0xa9b4ffff, 0xaab4ffff,
+                0xa8b3ffff, 0xa9b3ffff, 0xaab3ffff,
+            ];
+            const meshes = await wasm.fetch_landblock_heightmaps(
+                url,
+                new Uint32Array(HOLTBURG_NEIGHBOURHOOD)
+            );
+            check(
+                "fetch_landblock_heightmaps: returns 9 entries for 9 input ids",
+                Array.isArray(meshes) && meshes.length === 9,
+                `len=${meshes?.length}, isArray=${Array.isArray(meshes)}`
+            );
+
+            // Spot-check the first neighbour (NW = 0xA8B5FFFF). Sane
+            // height range = finite, in [0, 510], min <= max.
+            const nw = meshes[0];
+            const sane =
+                Number.isFinite(nw.heightMin) &&
+                Number.isFinite(nw.heightMax) &&
+                nw.heightMin >= 0 &&
+                nw.heightMax <= 510 &&
+                nw.heightMax >= nw.heightMin;
+            check(
+                "fetch_landblock_heightmaps: NW neighbour height bounds in [0, 510]",
+                sane,
+                `min=${nw.heightMin}, max=${nw.heightMax}`
+            );
+
+            // Centre (index 4) must be Holtburg's terrain — same height
+            // range as the singular round-trip established (30..96 m).
+            const centre = meshes[4];
+            const centreHoltburg =
+                centre.heightMin === 30 && centre.heightMax === 96;
+            check(
+                "fetch_landblock_heightmaps: centre id (0xA9B4FFFF) matches Holtburg singular round-trip",
+                centreHoltburg,
+                `min=${centre.heightMin}, max=${centre.heightMax}`
+            );
+
+            for (const m of meshes) m.free();
+        } catch (e) {
+            const msg = String(e?.message ?? e);
+            const missingCell =
+                msg.includes("eor/cell") &&
+                (msg.includes("not found") || msg.includes("missing namespace"));
+            if (missingCell) {
+                console.log(
+                    "  [SKIP] fetch_landblock_heightmaps round-trip — fixture " +
+                    "has no eor/cell namespace.\n         Re-run dat2hba with " +
+                    "--profile pruned to include cell content."
+                );
+            } else {
+                check(
+                    "fetch_landblock_heightmaps round-trip succeeds",
+                    false,
+                    `threw: ${msg}`
+                );
+            }
+        }
+
+        await new Promise((resolve) => server.close(resolve));
     }
 
     console.log("=========================");
