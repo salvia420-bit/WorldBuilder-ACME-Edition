@@ -132,14 +132,24 @@ pub async fn try_http_resource_source_smoke(
 ///   **24 m apart** on each axis. The canonical constant is
 ///   `holtburger_common::position::METERS_PER_LANDBLOCK = 192.0`.
 /// - `indices` is a `Uint16Array` of 64 quads × 2 triangles ×
-///   3 indices = 384 indices, addressing into `positions`.
+///   3 indices = 384 indices, addressing into `positions`. Each
+///   triangle is wound so the cell's SW corner is the **last**
+///   (provoking) vertex — WebGL2 `flat` interpolation reads the
+///   provoking vertex, so the shader can colour both triangles of a
+///   cell with a single SW-corner terrain code.
 /// - `height_min` / `height_max` bound the elevation range over the
 ///   81 vertices so JS can normalise per-fragment colour.
+/// - `terrain_codes` is a `Uint8Array(81)` of base terrain types (one
+///   byte per vertex, range 0..31), decoded from the
+///   `CellLandblock.terrain[]` u16 field (bits 2-6). Road and scenery
+///   bits are dropped — step 3 only renders the base terrain layer;
+///   road overlays are step 5 polish.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub struct LandblockMesh {
     positions: Vec<f32>,
     indices: Vec<u16>,
+    terrain_codes: Vec<u8>,
     height_min: f32,
     height_max: f32,
 }
@@ -157,6 +167,15 @@ impl LandblockMesh {
     #[wasm_bindgen(getter)]
     pub fn indices(&self) -> Vec<u16> {
         self.indices.clone()
+    }
+
+    /// `Uint8Array` of per-vertex base terrain types, length 81. Each
+    /// byte is in the range 0..31 — index into the region's 32-entry
+    /// surface table. The shader uses the SW corner's value (last
+    /// index of each triangle, see `indices`) for cell colour.
+    #[wasm_bindgen(getter, js_name = terrainCodes)]
+    pub fn terrain_codes(&self) -> Vec<u8> {
+        self.terrain_codes.clone()
     }
 
     /// Lowest elevation among the 81 vertices, in metres.
@@ -184,6 +203,7 @@ fn build_mesh(cell: &holtburger_dat::landblock::CellLandblock) -> LandblockMesh 
     const VERTEX_SPACING_M: f32 = holtburger_common::position::METERS_PER_LANDBLOCK / 8.0;
 
     let mut positions = Vec::with_capacity(81 * 3);
+    let mut terrain_codes = Vec::with_capacity(81);
     let mut height_min = f32::INFINITY;
     let mut height_max = f32::NEG_INFINITY;
     for x in 0..9usize {
@@ -192,6 +212,7 @@ fn build_mesh(cell: &holtburger_dat::landblock::CellLandblock) -> LandblockMesh 
             positions.push(x as f32 * VERTEX_SPACING_M);
             positions.push(y as f32 * VERTEX_SPACING_M);
             positions.push(h);
+            terrain_codes.push(cell.terrain_type(x, y));
             if h < height_min {
                 height_min = h;
             }
@@ -201,6 +222,11 @@ fn build_mesh(cell: &holtburger_dat::landblock::CellLandblock) -> LandblockMesh 
         }
     }
 
+    // Each cell is two triangles. Per the doc on `LandblockMesh`, the
+    // SW corner (`v00`) must be the **last** vertex of each triangle so
+    // WebGL2's `flat` interpolation feeds the SW terrain code to every
+    // fragment of both triangles — i.e. the whole cell shades as one
+    // type, no smear across the diagonal.
     let mut indices = Vec::with_capacity(64 * 6);
     for x in 0..8u16 {
         for y in 0..8u16 {
@@ -208,13 +234,15 @@ fn build_mesh(cell: &holtburger_dat::landblock::CellLandblock) -> LandblockMesh 
             let v10 = x * 9 + y + 1;
             let v01 = (x + 1) * 9 + y;
             let v11 = (x + 1) * 9 + y + 1;
-            indices.extend_from_slice(&[v00, v10, v11, v00, v11, v01]);
+            // T1: NW → NE → SW (CCW; SW last). T2: NE → SE → SW.
+            indices.extend_from_slice(&[v10, v11, v00, v11, v01, v00]);
         }
     }
 
     LandblockMesh {
         positions,
         indices,
+        terrain_codes,
         height_min,
         height_max,
     }
