@@ -323,7 +323,7 @@ static-site visual fidelity, in order of impact:
 |---|---|---|
 | Heightmap render | topographic relief, recognisable shapes | ✅ landed (step 1+2) |
 | Texture atlas + surface table | recognisable AC terrain — biggest delta | ✅ landed (step 3 placeholder, step 3.5 real retail tiles) |
-| Sprite atlas consumption | buildings/trees/decorations in the right spots | open (step 4) |
+| Sprite atlas consumption | buildings/trees/decorations in the right spots | ✅ landed (step 4: silhouettes + category tint; step 4.5 = real per-model colours) |
 | Road overlays + atmospheric polish | matches the README static screenshot | ✅ landed partial (step 5: roads only; atmospherics still open) |
 
 Step 3 first shipped 32 placeholder solid colours per the brief's

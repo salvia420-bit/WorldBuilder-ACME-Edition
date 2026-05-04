@@ -1,33 +1,32 @@
 # Phase 3 — PixiJS renderer (as-built)
 
-> **Status:** Steps 1, 2, 3, 3.5, and step 5 partial (road overlays)
-> landed (2026-05-04). The browser bundle fetches a 3×3 neighbourhood
-> of real Asheron's Call landblocks around Holtburg in one batch
-> call, lays them out at correct world offsets, and PixiJS draws
-> them on a `<canvas>` as **AC terrain with real retail textures
-> and the stone-road network overlaid**: grass tiles with internal
-> mottling, water tiles with wave detail, real stone-tile road,
-> sampled per-cell from a 6×6 atlas of decoded retail RGBA8 textures
-> via a custom GLSL ES 3.00 Mesh shader. Mouse-wheel zooms around
-> the cursor; click-and-drag pans. See
-> [`phase-3-step-1-handoff.md`](phase-3-step-1-handoff.md),
+> **Status:** Steps 1, 2, 3, 3.5, 4, and step 5 partial (road
+> overlays) landed (2026-05-04). The browser bundle fetches a 3×3
+> neighbourhood of real Asheron's Call landblocks around Holtburg in
+> one batch call, lays them out at correct world offsets, and PixiJS
+> draws them on a `<canvas>` as **AC terrain with real retail
+> textures, stone-road network, and 239 placed object/building
+> sprites**. Mouse-wheel zooms around the cursor; click-and-drag
+> pans. See [`phase-3-step-1-handoff.md`](phase-3-step-1-handoff.md),
 > [`phase-3-step-2-handoff.md`](phase-3-step-2-handoff.md), and
 > [`phase-3-step-3-handoff.md`](phase-3-step-3-handoff.md) for the
 > framing briefs; this file is the as-built reference.
 
-![Holtburg + 8 neighbours with real AC terrain textures + road network](images/phase-3-step-3.5-real-textures.png)
+![Holtburg + 8 neighbours with terrain, roads, and object sprites](images/phase-3-step-4-objects.png)
 
-The step 3.5 screenshot is the current deliverable: same 3×3 grid
-as step 5, with the placeholder palette swapped for real retail AC
-terrain textures. Each cell tiles a 256×256 sample of its
-SurfaceTexture across its 24 m face — grass with internal mottling,
-water with wave detail, stone road tiles. Compare to the static-site
-z=12 reference at
+The step 4 screenshot is the current deliverable: same 3×3 grid as
+step 3.5 (real terrain + roads), with **239 placed object and
+building sprites** drawn on top — brown building silhouettes
+clustered at Holtburg's road junction, smaller props scattered
+through the grass. Compare to the static-site z=12 reference at
 [`images/DerethMapsEnhanced_zoom.png`](images/DerethMapsEnhanced_zoom.png) —
-same place, same palette signature. Remaining gap: object/sprite
-overlays (buildings, trees, NPCs), which step 4 lands. Step 5's
-atmospheric polish (fog, day/night) is also still open. Earlier
+same place, same general layout. Visual gap remaining: real per-
+model textures (the static-site atlas ships only greyscale
+silhouettes; we category-tint them brown/green) and the larger
+custom-coloured landmarks (the green pyramid / lifestone). Step 5's
+atmospheric polish (fog, day/night) is still open. Earlier
 deliverables archived at
+[`images/phase-3-step-3.5-real-textures.png`](images/phase-3-step-3.5-real-textures.png) (terrain + roads, no objects),
 [`images/phase-3-step-5-roads.png`](images/phase-3-step-5-roads.png) (placeholder + roads),
 [`images/phase-3-step-3-textured.png`](images/phase-3-step-3-textured.png) (placeholder, hard-edges),
 [`images/phase-3-step-2-multi-landblock.png`](images/phase-3-step-2-multi-landblock.png) (height-ramp),
@@ -535,23 +534,104 @@ follow-up.
 
 ---
 
-## What's next (Phase 3 step 4 candidates)
+## Phase 3 step 4 landed (2026-05-04)
+
+Step 4 is "sprite-atlas reuse for object art" in the design doc's
+quality ladder. Holtburg now reads as a town: 239 placed object
+and building sprites drawn on top of the existing terrain atlas,
+brown silhouettes clustered at the road junction matching the
+static-site reference's visible buildings.
+
+What step 4 ships, on top of step 3.5:
+
+| Surface | After step 3.5 | After step 4 |
+|---|---|---|
+| Wasm exports | `+ fetch_terrain_textures` | `+ fetch_landblock_objects` |
+| LandblockInfo parser | bug latent (BuildInfo.num_portals as u16) | fixed (u32 — matches ACE `List<T>.Unpack`) |
+| Object placement source | n/a | `LandblockInfo.objects` (Stab) + `.buildings` (BuildInfo) |
+| Sprite atlas | n/a | static-site `sprites/atlas.{png,js}` reused (4096×1296 RGBA, 108 entries) |
+| Atlas coverage at Holtburg | n/a | 44% (rest fall back to coloured dots) |
+| Tinting strategy | n/a | model-id top-byte: 0x01→brown, 0x02→tan-green |
+| Smoke checks | 28 | 32 (+4 step-4) |
+| Native lib tests | 1096 | 1096 (unchanged) |
+
+**LandblockInfo + sprite pipeline** (Rust + JS):
+
+1. **`fetch_landblock_objects(asset_url, cell_ids)`** in
+   `apps/holtburger-web/src/lib.rs`. For each requested
+   `XXYYFFFE` cell, reads the LandblockInfo record and emits one
+   `ObjectPlacement` per `Stab` (loose objects) and per `BuildInfo`
+   (buildings). Quaternion → yaw via standard `atan2(2(qw·qz +
+   qx·qy), 1 - 2(qy² + qz²))`. Per-cell missing → silent skip.
+2. **`loadSpriteAtlas()`** in `index.html`. Fetches `./sprites/
+   atlas.png` via `PIXI.Assets.load`, fetches `./sprites/atlas.js`
+   via `fetch + new Function()` (the file is a DOM-style script
+   with `const SPRITE_ATLAS = {...}`). Builds a `Map<modelId, {
+   texture: Texture, worldBounds: [w_m, h_m] }>` keyed by AC model
+   id.
+3. **`buildObjectsContainer(neighbourhood, objects, spriteMap)`**
+   creates one PIXI.Sprite per object where the model_id has an
+   atlas tile, falling back to a 1.5 m coloured circle otherwise.
+   Sprite size = atlas entry's `worldBounds` (real-world metres);
+   anchor (0.5, 0.5); rotation = -obj.rotationZ (negate because
+   `worldContainer.scale.y = -1` mirrors the scene). Tint by model
+   prefix: 0x01 → #8b6442, 0x02 → #6f7a4a.
+
+**LandblockInfo parser bug fix.** `BuildInfo.num_portals` was
+`u16` in `crates/holtburger-dat/src/landblock.rs`; ACE's
+`List<T>.Unpack(reader)` reads a `u32` count. The mismatch only
+triggered when a building had any portals — Holtburg's first
+interior building hits it immediately and the parser panicked at
+"failed to fill whole buffer while parsing stab_list". Pinned by
+the new round-trip smoke check; native unit tests already passed
+because synthetic LandblockInfo fixtures had zero portals.
+
+**Two implementation footguns documented.**
+
+(a) **`LandblockInfo.id` ≠ neighbourhood id.** The LandblockInfo's
+`id` field carries the `XXYYFFFE` file id, not the `XXYYFFFF`
+CellLandblock id that the heightmap layer keys on. First lookup
+pass mapped `NEIGHBOURHOOD.id` directly — every object got
+`continue`-skipped silently. Fix: index the neighbourhood by
+`(lbX << 16 | lbY)` and decompose `obj.landblockId` to match.
+
+(b) **Sub-pixel debug markers.** PIXI.Graphics circles drawn at
+world-metre size — 1.0 m radius is sub-pixel at the 3×3-fits-
+canvas zoom and renders invisibly. Bumped fallback dot radius to
+1.5 m; used 5 m during debugging.
+
+### Files touched in step 4
+
+| File | What |
+|---|---|
+| [`crates/holtburger-dat/src/landblock.rs`](../external/holtburger/crates/holtburger-dat/src/landblock.rs) | Bug fix: `BuildInfo.num_portals: u16` → `u32` (matches ACE) |
+| [`apps/holtburger-web/src/lib.rs`](../external/holtburger/apps/holtburger-web/src/lib.rs) | `ObjectPlacement` struct + `fetch_landblock_objects` async export |
+| [`apps/holtburger-web/index.html`](../external/holtburger/apps/holtburger-web/index.html) | `loadSpriteAtlas`, `buildObjectsContainer`, sprite-layer wiring in `renderNeighbourhood` |
+| [`apps/holtburger-web/sprites/atlas.{png,js}`](../external/holtburger/apps/holtburger-web/sprites/) | Static-site sprite atlas copied in (4096×1296 RGBA, 108 model IDs) |
+| [`apps/holtburger-web/smoke_test.cjs`](../external/holtburger/apps/holtburger-web/smoke_test.cjs) | 4 new checks: symbol presence + 100+ placement round-trip + per-record invariants + Holtburg town-density pin |
+| [`docs/phase-3-renderer.md`](phase-3-renderer.md) | This section |
+| [`docs/phase-2-wasm-spike.md`](phase-2-wasm-spike.md) | Status now reads "steps 1, 2, 3, 3.5, 4 + step 5 (roads) landed" |
+| [`docs/emit-dynamic-site.md`](emit-dynamic-site.md) | §4.5 quality-ladder row 3 (sprite atlas) flips from `open` to `✅ landed (placeholder tint)` |
+| [`docs/images/phase-3-step-4-objects.png`](images/phase-3-step-4-objects.png) | Browser screenshot — 3×3 grid with terrain + roads + 239 object/building sprites |
+
+---
+
+## What's next (Phase 3 step 5 / step 4.5 candidates)
 
 These are independent — pick by user priority. Step 3's shader
-pipeline is the load-bearing foundation that step 4-or-later builds on.
+pipeline + step 4's sprite layer together form the rendering
+foundation; subsequent steps polish and extend.
 
-### a) Sprite-atlas reuse for object art (step 4 in the design doc) — biggest remaining visual delta
+### a) Real per-model sprite colours (step 4.5)
 
-Layer object sprites + LandblockInfo on top of the textured terrain
-by reusing the static-site sprite atlas at
-`dist/projects/<slug>/sprites/atlas.{png,js}`. The visual gap to the
-static-site reference is now mostly buildings/trees/NPCs. Needs:
-- A wasm export reading `LandblockInfo` records (`XXYYFFFE`) for
-  each landblock and emitting placement records (object ID, x, y,
-  rotation). The parser already exists in `holtburger-dat` (see
-  `landblock.rs` `LandblockInfo` struct); just needs an export.
-- JS-side sprite pool keyed by object ID, looked up against the
-  static-site atlas.
+The static-site atlas ships greyscale silhouettes; we category-tint
+brown/green by model_id top byte. AC has per-model material
+colours (the GfxObj's surface table — separate from the terrain
+surface table) that would give the actual brown-with-grey-roof
+houses, the green pyramid lifestone, etc. Needs a SetupModel /
+GfxObj parser that walks the model's surface references and
+extracts per-vertex / per-poly colours. Substantial parser work
+(~weeks) like step 3.5's texture parser.
 
 ### b) Per-cell terrain blending (step 5 polish, AC-faithful)
 
