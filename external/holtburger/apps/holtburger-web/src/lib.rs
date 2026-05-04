@@ -172,34 +172,13 @@ impl LandblockMesh {
     }
 }
 
-/// Fetch an HBA from `asset_url`, look up `eor/cell:cell_id` (typically
-/// `XXYYFFFF` for a landblock terrain record), parse it as a
-/// `CellLandblock`, and hand the 9×9 height grid back as a
-/// triangle-mesh [`LandblockMesh`].
+/// Tessellate a parsed `CellLandblock` into a [`LandblockMesh`].
 ///
-/// This is the Phase 3 step 1 render path. The caller hands the mesh
-/// to PixiJS to draw a coloured triangle patch on a `<canvas>`. The
-/// expensive byte-pushing (HTTP fetch, HBA parse, mesh tessellation)
-/// happens once on the wasm side; subsequent per-frame work is pure
-/// JS/WebGL inside PixiJS.
+/// Pure CPU work — no I/O, no JS interop. Shared by
+/// [`fetch_landblock_heightmap`] and [`fetch_landblock_heightmaps`] so
+/// the two exports stay in lockstep without code duplication.
 #[cfg(target_arch = "wasm32")]
-#[wasm_bindgen]
-pub async fn fetch_landblock_heightmap(
-    asset_url: String,
-    cell_id: u32,
-) -> Result<LandblockMesh, JsValue> {
-    use holtburger_dat::landblock::CellLandblock;
-    use holtburger_dat::{ResourceKey, ResourceSource};
-
-    let source = holtburger_resource_http::HttpResourceSource::connect(&asset_url)
-        .await
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let bytes = source
-        .get_file_by_key(ResourceKey::new("eor/cell", cell_id))
-        .map_err(|e| JsValue::from_str(&format!("get_file_by_key: {e}")))?;
-    let cell = CellLandblock::unpack(&bytes)
-        .map_err(|e| JsValue::from_str(&format!("CellLandblock::unpack: {e}")))?;
-
+fn build_mesh(cell: &holtburger_dat::landblock::CellLandblock) -> LandblockMesh {
     // Vertex spacing = METERS_PER_LANDBLOCK / 8 = 24 m. The 9×9 grid
     // spans the full 192 m landblock, NOT a single 24 m cell.
     const VERTEX_SPACING_M: f32 = holtburger_common::position::METERS_PER_LANDBLOCK / 8.0;
@@ -233,10 +212,73 @@ pub async fn fetch_landblock_heightmap(
         }
     }
 
-    Ok(LandblockMesh {
+    LandblockMesh {
         positions,
         indices,
         height_min,
         height_max,
-    })
+    }
+}
+
+/// Fetch an HBA from `asset_url`, look up `eor/cell:cell_id` (typically
+/// `XXYYFFFF` for a landblock terrain record), parse it as a
+/// `CellLandblock`, and hand the 9×9 height grid back as a
+/// triangle-mesh [`LandblockMesh`].
+///
+/// This is the Phase 3 step 1 render path, kept as the single-landblock
+/// shorthand. Internally it just wraps [`fetch_landblock_heightmaps`]
+/// with a one-element id list and indexes `[0]`. Callers rendering more
+/// than one landblock should call the plural form directly to amortise
+/// the HBA open + parse cost.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_landblock_heightmap(
+    asset_url: String,
+    cell_id: u32,
+) -> Result<LandblockMesh, JsValue> {
+    let mut meshes = fetch_landblock_heightmaps(asset_url, vec![cell_id]).await?;
+    Ok(meshes.remove(0))
+}
+
+/// Fetch an HBA from `asset_url` once, look up `eor/cell:id` for each
+/// `id` in `cell_ids`, parse each into a `CellLandblock`, and return
+/// the matching [`LandblockMesh`] vector in input order.
+///
+/// This is the Phase 3 step 2 render path. One `HttpResourceSource`
+/// open + parse, then N cheap lookups inside the parsed HBA. The
+/// resulting JS value is a `Promise<LandblockMesh[]>` — wasm-bindgen
+/// lifts a `Vec<LandblockMesh>` to a JS array of the same `LandblockMesh`
+/// proxy objects each consumer already knows how to read.
+///
+/// On any per-id failure (missing namespace, missing key, malformed
+/// `CellLandblock` bytes), the whole batch fails: the rejected Promise
+/// carries the error message tagged with the offending id. This is the
+/// simpler shape — Holtburg's 9-neighbour fixture has all 9 entries
+/// present, so per-id error surfacing is not yet needed. If a future
+/// caller (e.g. a 5×5 streaming view that includes ocean cells) needs
+/// per-id outcomes, switch this to `Vec<Result<LandblockMesh, String>>`
+/// or push a sentinel empty mesh on miss.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_landblock_heightmaps(
+    asset_url: String,
+    cell_ids: Vec<u32>,
+) -> Result<Vec<LandblockMesh>, JsValue> {
+    use holtburger_dat::landblock::CellLandblock;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+
+    let source = holtburger_resource_http::HttpResourceSource::connect(&asset_url)
+        .await
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+    let mut out = Vec::with_capacity(cell_ids.len());
+    for id in &cell_ids {
+        let bytes = source
+            .get_file_by_key(ResourceKey::new("eor/cell", *id))
+            .map_err(|e| JsValue::from_str(&format!("get_file_by_key {id:#010X}: {e}")))?;
+        let cell = CellLandblock::unpack(&bytes)
+            .map_err(|e| JsValue::from_str(&format!("CellLandblock::unpack {id:#010X}: {e}")))?;
+        out.push(build_mesh(&cell));
+    }
+    Ok(out)
 }
