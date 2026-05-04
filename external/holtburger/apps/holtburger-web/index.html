@@ -250,6 +250,14 @@
         // 64×64 pixels = 512×256 atlas — the shader's region lookup
         // changes only in the (u, v, w, h) per-region math; the
         // per-vertex contract stays the same.
+        //
+        // NEAREST filtering: with the placeholder palette, soft-blend
+        // (smooth interpolated terrain code + LINEAR atlas) creates
+        // unnatural rainbow bands at terrain transitions because the
+        // atlas-column ordering (which is also the AC enum order)
+        // doesn't match terrain adjacency. Real AC textures in step
+        // 3.5 will have per-pixel detail that blends naturally; flip
+        // back to LINEAR when that lands.
         const canvas = document.createElement("canvas");
         canvas.width = 32;
         canvas.height = 1;
@@ -264,20 +272,34 @@
         }
         ctx.putImageData(data, 0, 0);
         const texture = PIXI.Texture.from(canvas);
-        // NEAREST so adjacent codes don't blur into each other; with
-        // `flat` interpolation in the shader this is sharp anyway, but
-        // belt-and-braces.
         if (texture.source) texture.source.scaleMode = "nearest";
         return texture;
       }
 
       // Custom Mesh shader for the per-cell atlas sample. GLSL ES 3.00
-      // (WebGL2) for `flat in int`. Uniforms mirror PixiJS 8's WebGL
-      // mesh shader template (`local-uniform-bit` + `global-uniforms-bit`
-      // in the bundle source) — **individual uniforms**, not UBO blocks.
-      // The MeshPipe's UniformGroups in `groups[100]` (global) and
-      // `groups[101]` (local) drive `glUniform*` calls by name, so the
-      // GLSL just declares each uniform on its own line.
+      // (WebGL2). Uniforms mirror PixiJS 8's WebGL mesh shader template
+      // (local-uniform-bit + global-uniforms-bit in the bundle source)
+      // — **individual uniforms**, not UBO blocks. The MeshPipe's
+      // UniformGroups in groups[100] (global) and groups[101] (local)
+      // drive glUniform* calls by name, so the GLSL just declares
+      // each uniform on its own line.
+      //
+      // Both vTerrainCode and vRoadCode use `flat` interpolation from
+      // the SW-corner provoking vertex (last index of each triangle
+      // per lib.rs build_mesh). Hard edges on cell boundaries.
+      //
+      // Why hard edges with placeholder colours: step 5 first tried
+      // smooth interpolation + LINEAR atlas — the bilinear sampler
+      // blends between adjacent atlas columns as the per-fragment
+      // code crosses code boundaries. With real textures (step 3.5)
+      // this looks great — each tile has internal detail and atlas-
+      // adjacent codes blend naturally. With placeholder solid colours
+      // the blend creates unnatural "rainbow bands" because the atlas
+      // ordering (AC enum order: Grassland=1, Ice=2, LushGrass=3,
+      // MarshSparseSwamp=4, ...) doesn't match terrain adjacency in
+      // world space. A water-grass interface ends up traversing
+      // Marsh→Mud→Obsidian→Dirt visually. Hard edges tell the truth
+      // about what the data says.
       const TERRAIN_VERTEX_GLSL = `#version 300 es
 precision highp float;
 
@@ -292,8 +314,10 @@ uniform float uRound;
 
 in vec2 aPosition;
 in float aTerrainCode;
+in float aRoadCode;
 
 flat out int vTerrainCode;
+flat out int vRoadCode;
 out vec4 vColor;
 
 void main() {
@@ -301,6 +325,7 @@ void main() {
     vec2 pos = (mvp * vec3(aPosition, 1.0)).xy;
     gl_Position = vec4(pos, 0.0, 1.0);
     vTerrainCode = int(aTerrainCode + 0.5);
+    vRoadCode = int(aRoadCode + 0.5);
     vColor = uColor * uWorldColorAlpha;
 }
 `;
@@ -310,37 +335,63 @@ precision highp float;
 precision highp int;
 
 uniform sampler2D uAtlas;
+uniform vec3 uRoadColor;
 
 flat in int vTerrainCode;
+flat in int vRoadCode;
 in vec4 vColor;
 
 out vec4 fragColor;
 
 void main() {
-    // 32-pixel-wide atlas; sample at the column centre for the cell's
-    // terrain code. Clamped to [0, 31] so out-of-range values (e.g.
-    // bit-decode bugs) don't read past the texture edge.
-    int code = clamp(vTerrainCode, 0, 31);
-    vec2 uv = vec2((float(code) + 0.5) / 32.0, 0.5);
-    fragColor = texture(uAtlas, uv) * vColor;
+    // Terrain: 32-pixel-wide atlas, sampled at the column centre for
+    // the cell's SW-corner terrain code. Clamped to [0, 31] so
+    // out-of-range values (bit-decode bugs) don't read past the edge.
+    int tCode = clamp(vTerrainCode, 0, 31);
+    vec2 uv = vec2((float(tCode) + 0.5) / 32.0, 0.5);
+    vec4 terrainSample = texture(uAtlas, uv);
+
+    // Road overlay: if the cell's SW corner has road_type >= 1, draw
+    // stone-grey on top of the terrain. Hard-edged on cell boundaries
+    // (matches the SW-last "flat" contract); mixed at 0.85 not 1.0 so
+    // terrain still tints the road slightly (e.g. dirt roads through
+    // grass read warmer than stone roads through snow).
+    float roadMask = step(1.0, float(vRoadCode));
+    vec3 base = mix(terrainSample.rgb, uRoadColor, roadMask * 0.85);
+
+    fragColor = vec4(base, terrainSample.a) * vColor;
 }
 `;
+
+      // Road colour reference (#a8a4a0): light stone-grey, tuned against
+      // the static-site z=12 reference at docs/images/DerethMapsEnhanced_zoom.png
+      // where Holtburg's road network reads as cool light grey against
+      // green grass. Step 3.5 / step 5 follow-up: replace with a real
+      // road tile from `eor/portal:` when the texture parser lands.
+      const ROAD_COLOR_RGB = new Float32Array([0xa8 / 255, 0xa4 / 255, 0xa0 / 255]);
 
       function buildTerrainShader(atlasTexture) {
         const glProgram = PIXI.GlProgram.from({
           vertex: TERRAIN_VERTEX_GLSL,
           fragment: TERRAIN_FRAGMENT_GLSL,
-          name: "terrain-atlas-step3",
+          name: "terrain-atlas-step5",
         });
         // The MeshPipe sets `shader.groups[100]` and `[101]` to its own
         // global / local UniformGroups every frame; PixiJS's GlShaderSystem
         // binds the individual `uTransformMatrix` / `uColor` / `uRound` /
-        // matrix uniforms by name from those groups. We only need to
-        // register the atlas texture here.
+        // matrix uniforms by name from those groups. The atlas texture
+        // and road-colour uniform live on the user shader.
+        //
+        // `uRoadColor` is a top-level uniform (not in a UniformGroup) so
+        // it's straightforward to bind via `glUniform3fv` — PixiJS auto-
+        // detects scalar uniforms from the GLSL.
         return new PIXI.Shader({
           glProgram,
           resources: {
             uAtlas: atlasTexture.source,
+            terrainUniforms: {
+              uRoadColor: { value: ROAD_COLOR_RGB, type: "vec3<f32>" },
+            },
           },
         });
       }
@@ -349,21 +400,26 @@ void main() {
         // Build the per-landblock mesh + wireframe pair. Heights are
         // *not* used for shading any more (step 3); the colour comes
         // from the per-vertex terrain code via the custom shader.
-        // Aggregate min/max is still computed by the caller for the
-        // stage-info readout.
+        // Step 5 adds road codes alongside terrain codes for the road
+        // overlay. Aggregate min/max is still computed by the caller
+        // for the stage-info readout.
         //
-        // Snapshot positions/indices/terrainCodes once — each getter
-        // is a wasm-bindgen call that allocates a fresh typed-array.
+        // Snapshot positions/indices/terrainCodes/roadCodes once — each
+        // getter is a wasm-bindgen call that allocates a fresh typed
+        // array.
         const positions3D = mesh.positions;
         const terrainCodes = mesh.terrainCodes;
+        const roadCodes = mesh.roadCodes;
         const positions2D = new Float32Array(81 * 2);
-        // The shader reads `aTerrainCode` as float and rounds; pack
-        // the u8 codes into a Float32Array for the GPU buffer.
+        // The shader reads codes as floats; pack the u8 codes into
+        // Float32Arrays for the GPU buffers.
         const terrainFloats = new Float32Array(81);
+        const roadFloats = new Float32Array(81);
         for (let i = 0; i < 81; i += 1) {
           positions2D[i * 2] = positions3D[i * 3];
           positions2D[i * 2 + 1] = positions3D[i * 3 + 1];
           terrainFloats[i] = terrainCodes[i];
+          roadFloats[i] = roadCodes[i];
         }
 
         const indicesU32 = Uint32Array.from(mesh.indices);
@@ -375,6 +431,10 @@ void main() {
             },
             aTerrainCode: {
               buffer: terrainFloats,
+              format: "float32",
+            },
+            aRoadCode: {
+              buffer: roadFloats,
               format: "float32",
             },
           },

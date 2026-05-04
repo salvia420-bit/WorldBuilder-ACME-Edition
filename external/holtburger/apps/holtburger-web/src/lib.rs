@@ -136,20 +136,24 @@ pub async fn try_http_resource_source_smoke(
 ///   triangle is wound so the cell's SW corner is the **last**
 ///   (provoking) vertex — WebGL2 `flat` interpolation reads the
 ///   provoking vertex, so the shader can colour both triangles of a
-///   cell with a single SW-corner terrain code.
+///   cell with a single SW-corner code (used for the road overlay
+///   in step 5; the terrain layer interpolates smoothly across).
 /// - `height_min` / `height_max` bound the elevation range over the
 ///   81 vertices so JS can normalise per-fragment colour.
 /// - `terrain_codes` is a `Uint8Array(81)` of base terrain types (one
 ///   byte per vertex, range 0..31), decoded from the
-///   `CellLandblock.terrain[]` u16 field (bits 2-6). Road and scenery
-///   bits are dropped — step 3 only renders the base terrain layer;
-///   road overlays are step 5 polish.
+///   `CellLandblock.terrain[]` u16 field (bits 2-6).
+/// - `road_codes` is a `Uint8Array(81)` of per-vertex road overlay
+///   types (range 0..3; 0 = no road), decoded from bits 0-1 of the
+///   same `terrain[]` u16. Step 5 reads this to shade road tiles
+///   in stone-grey on top of the terrain layer.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub struct LandblockMesh {
     positions: Vec<f32>,
     indices: Vec<u16>,
     terrain_codes: Vec<u8>,
+    road_codes: Vec<u8>,
     height_min: f32,
     height_max: f32,
 }
@@ -171,11 +175,20 @@ impl LandblockMesh {
 
     /// `Uint8Array` of per-vertex base terrain types, length 81. Each
     /// byte is in the range 0..31 — index into the region's 32-entry
-    /// surface table. The shader uses the SW corner's value (last
-    /// index of each triangle, see `indices`) for cell colour.
+    /// surface table. Soft-blended across triangles in the step-5
+    /// shader; cells whose 4 corners share one type render uniformly.
     #[wasm_bindgen(getter, js_name = terrainCodes)]
     pub fn terrain_codes(&self) -> Vec<u8> {
         self.terrain_codes.clone()
+    }
+
+    /// `Uint8Array` of per-vertex road overlay codes, length 81.
+    /// Range 0..3 (0 = no road). The step-5 shader reads the SW
+    /// corner's value via `flat` interpolation and overlays a
+    /// stone-grey colour where ≥ 1.
+    #[wasm_bindgen(getter, js_name = roadCodes)]
+    pub fn road_codes(&self) -> Vec<u8> {
+        self.road_codes.clone()
     }
 
     /// Lowest elevation among the 81 vertices, in metres.
@@ -204,6 +217,7 @@ fn build_mesh(cell: &holtburger_dat::landblock::CellLandblock) -> LandblockMesh 
 
     let mut positions = Vec::with_capacity(81 * 3);
     let mut terrain_codes = Vec::with_capacity(81);
+    let mut road_codes = Vec::with_capacity(81);
     let mut height_min = f32::INFINITY;
     let mut height_max = f32::NEG_INFINITY;
     for x in 0..9usize {
@@ -213,6 +227,7 @@ fn build_mesh(cell: &holtburger_dat::landblock::CellLandblock) -> LandblockMesh 
             positions.push(y as f32 * VERTEX_SPACING_M);
             positions.push(h);
             terrain_codes.push(cell.terrain_type(x, y));
+            road_codes.push(cell.road_type(x, y));
             if h < height_min {
                 height_min = h;
             }
@@ -243,6 +258,7 @@ fn build_mesh(cell: &holtburger_dat::landblock::CellLandblock) -> LandblockMesh 
         positions,
         indices,
         terrain_codes,
+        road_codes,
         height_min,
         height_max,
     }

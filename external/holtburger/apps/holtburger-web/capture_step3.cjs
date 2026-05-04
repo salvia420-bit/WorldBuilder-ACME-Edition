@@ -27,6 +27,7 @@ const url = process.argv[3] || "http://127.0.0.1:8989/apps/holtburger-web/index.
     });
     page.on("pageerror", (err) => {
         console.error("[page error]", err.message);
+        if (err.stack) console.error("[page stack]", err.stack);
     });
 
     await page.goto(url, { waitUntil: "networkidle" });
