@@ -13,9 +13,19 @@ serde.workspace = true
 thiserror.workspace = true
 bitflags.workspace = true
 encoding_rs.workspace = true
-zstd.workspace = true
 log.workspace = true
 rayon.workspace = true
+
+# Native uses the C-backed `zstd` crate (decompress + compress, the latter
+# needed by the dat2hba tool). Wasm32 uses pure-Rust `ruzstd` for
+# decompression only — DAT/HBA files are decompress-only at client
+# runtime, and `zstd-sys` requires a C cross-compiler that's out of scope
+# for the Phase 2 floor (see docs/phase-2-wasm-spike.md §4.2).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+zstd.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ruzstd.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

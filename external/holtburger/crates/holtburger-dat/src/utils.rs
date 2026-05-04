@@ -234,6 +234,20 @@ impl FileExtPolyfill for std::fs::File {
         }
         Ok(())
     }
+
+    // Wasm32 has no positional file APIs (and `wasm32-unknown-unknown` has
+    // no real filesystem). The HBA-from-`File` reader is unreachable on
+    // wasm32 — the browser client uses an HTTP-backed `ResourceSource`
+    // (Phase 2 of emit-dynamic-site) — but the trait impl must exist for
+    // the crate to cross-compile.
+    #[cfg(all(not(unix), not(windows)))]
+    fn read_exact_at_compat(&self, _buf: &mut [u8], _offset: u64) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "positional file reads are unavailable on this target; \
+             use a non-File `ResourceSource` (e.g. HttpResourceSource)",
+        ))
+    }
 }
 
 /// Helper to find a portal.dat for testing/benchmarking purposes.

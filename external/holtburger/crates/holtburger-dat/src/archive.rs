@@ -295,7 +295,7 @@ impl HbaReader {
         self.file.read_exact_at_compat(&mut buffer, entry.offset)?;
 
         if entry.is_compressed() {
-            let decompressed = zstd::bulk::decompress(&buffer, entry.size as usize)
+            let decompressed = decompress_zstd(&buffer, entry.size as usize)
                 .map_err(|_| DatError::DecompressionFailed(entry.file_id))?;
 
             if decompressed.len() != entry.size as usize {
@@ -639,10 +639,17 @@ impl HbaStreamWriter {
         }
 
         let original_size = data.len() as u32;
+        // `mut` is exercised only by the wasm32-gated compression block below.
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let mut flags = if is_pruned { HbaEntry::FLAG_PRUNED } else { 0 };
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let mut final_data = data;
 
         if self.compress {
+            // HBA write paths are reachable only natively (the `dat2hba`
+            // tool); wasm32 builds never construct a `HbaStreamWriter`
+            // because the runtime ResourceSource is decompress-only.
+            #[cfg(not(target_arch = "wasm32"))]
             match zstd::encode_all(Cursor::new(&final_data), 3) {
                 Ok(compressed) if compressed.len() < final_data.len() => {
                     final_data = compressed;
@@ -710,6 +717,25 @@ fn build_namespace_index(entries: &[HbaEntry]) -> Vec<HbaNamespaceIndexEntry> {
     });
 
     metadata
+}
+
+/// Decompress a zstd-compressed buffer. Native uses the C-backed `zstd`
+/// crate's `bulk::decompress` (matches the original implementation
+/// byte-for-byte); wasm32 uses pure-Rust `ruzstd::StreamingDecoder` via
+/// `Read::read_to_end`. Both return the decompressed bytes; both use
+/// `expected_size` as a capacity hint.
+#[cfg(not(target_arch = "wasm32"))]
+fn decompress_zstd(buffer: &[u8], expected_size: usize) -> std::result::Result<Vec<u8>, ()> {
+    zstd::bulk::decompress(buffer, expected_size).map_err(|_| ())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn decompress_zstd(buffer: &[u8], expected_size: usize) -> std::result::Result<Vec<u8>, ()> {
+    use std::io::Read;
+    let mut decoder = ruzstd::decoding::StreamingDecoder::new(buffer).map_err(|_| ())?;
+    let mut decoded = Vec::with_capacity(expected_size);
+    decoder.read_to_end(&mut decoded).map_err(|_| ())?;
+    Ok(decoded)
 }
 
 #[cfg(test)]
