@@ -1636,12 +1636,20 @@ pub struct SessionHandle {
     queued_events: std::rc::Rc<std::cell::RefCell<Vec<ClientEvent>>>,
     character_list: std::rc::Rc<std::cell::RefCell<Vec<CharacterSummary>>>,
     account_name: String,
-    /// Phase 4 step 2a.5: present when `start_session` was given an
-    /// `asset_url` and successfully loaded the CharGen + SkillTable
-    /// records. `None` means character creation isn't available
-    /// (asset URL was empty or fetch/parse failed); `create_test_character`
-    /// rejects in that case.
-    catalog: Option<std::sync::Arc<holtburger_content::CharacterGenCatalog>>,
+    /// Phase 4 step 2a.5: shared catalog slot, populated asynchronously
+    /// in the background. `None` until the catalog HBA fetch completes
+    /// (or never if `asset_url` was empty or the fetch failed).
+    /// `create_test_character` rejects when this is still empty —
+    /// JS can poll `canCreateCharacter` until it flips true.
+    ///
+    /// The fetch runs in a `spawn_local` task that started alongside
+    /// `recv_loop` from `start_session`; on a desktop browser it
+    /// completes in a few hundred ms, but on a phone over tailscale
+    /// it can take minutes (the HBA is ~605MB at full profile). Step
+    /// 2a.5 originally awaited it inline before returning the handle,
+    /// which left mobile users stuck at "sending login request" while
+    /// the protocol had long since completed; step 2a.6 detaches it.
+    catalog: std::rc::Rc<std::cell::RefCell<Option<std::sync::Arc<holtburger_content::CharacterGenCatalog>>>>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1734,9 +1742,10 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = createTestCharacter)]
     pub fn create_test_character(&self, name: String) -> Result<(), JsValue> {
         use futures::channel::mpsc::TrySendError;
-        let catalog = self.catalog.as_ref().ok_or_else(|| {
+        let catalog_borrow = self.catalog.borrow();
+        let catalog = catalog_borrow.as_ref().ok_or_else(|| {
             JsValue::from_str(
-                "create_test_character: catalog not loaded. Did you pass an asset_url to start_session?",
+                "create_test_character: catalog not loaded yet. Either start_session was given an empty asset_url, the fetch is still in flight, or the fetch failed. Poll handle.canCreateCharacter to wait.",
             )
         })?;
         let occupied_slots: Vec<u32> = (0..self.character_list.borrow().len() as u32).collect();
@@ -1761,7 +1770,7 @@ impl SessionHandle {
     /// surface the Create-character UI.
     #[wasm_bindgen(getter, js_name = canCreateCharacter)]
     pub fn can_create_character(&self) -> bool {
-        self.catalog.is_some()
+        self.catalog.borrow().is_some()
     }
 
     /// Phase 4 step 2a.6: dispatch a chat-channel string to the
@@ -2035,23 +2044,15 @@ pub async fn start_session(
         .await
         .map_err(|e| JsValue::from_str(&format!("send_login_request: {e}")))?;
 
-    // Phase 4 step 2a.5: kick off the catalog fetch concurrently with
-    // the login handshake so the asset HTTP fetch overlaps with the
-    // recv-loop's CharacterList wait. Failures are non-fatal — the
-    // session still works for spawn, just without create_test_character.
-    let catalog_future = async move {
-        if asset_url.is_empty() {
-            return Ok::<_, anyhow::Error>(None);
-        }
-        load_character_gen_catalog(&asset_url).await.map(Some)
-    };
-
     let (cmd_tx, cmd_rx) = mpsc::unbounded::<SessionCommand>();
     let (charlist_tx, charlist_rx) = oneshot::channel::<CharListReady>();
     let queued_events: std::rc::Rc<std::cell::RefCell<Vec<ClientEvent>>> =
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let character_list: std::rc::Rc<std::cell::RefCell<Vec<CharacterSummary>>> =
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let catalog: std::rc::Rc<
+        std::cell::RefCell<Option<std::sync::Arc<holtburger_content::CharacterGenCatalog>>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(None));
 
     {
         let queued_events = queued_events.clone();
@@ -2068,17 +2069,30 @@ pub async fn start_session(
         });
     }
 
+    // Phase 4 step 2a.6: kick off the catalog fetch in the background
+    // — don't block start_session on it. On a phone over tailscale,
+    // pulling the 605MB HBA bundle can take minutes, leaving the user
+    // stuck at "sending login request" long after the protocol
+    // succeeded. JS now polls `handle.canCreateCharacter` until the
+    // background fetch completes.
+    if !asset_url.is_empty() {
+        let catalog = catalog.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            match load_character_gen_catalog(&asset_url).await {
+                Ok(loaded) => {
+                    *catalog.borrow_mut() = Some(loaded);
+                    log::info!("character generator catalog loaded");
+                }
+                Err(e) => {
+                    log::warn!("character generator catalog load failed: {e}");
+                }
+            }
+        });
+    }
+
     let CharListReady { account_name } = charlist_rx
         .await
         .map_err(|_| JsValue::from_str("recv loop exited before CharacterList arrived"))?;
-
-    let catalog = match catalog_future.await {
-        Ok(catalog) => catalog,
-        Err(e) => {
-            log::warn!("character generator catalog load failed: {e}");
-            None
-        }
-    };
 
     Ok(SessionHandle {
         cmd_tx,
