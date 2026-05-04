@@ -1,11 +1,16 @@
 # Phase 2 — WASM port spike (inventory)
 
 > **Status:** Phase 2 §8 in-scope work closed (2026-05-04). **Phase 3
-> step 1 landed (2026-05-04)** — the wasm bundle now fetches a real AC
-> landblock heightmap and PixiJS draws it on a `<canvas>`. See
-> [`phase-3-renderer.md`](phase-3-renderer.md) for the as-built notes
-> and the deliverable screenshot at
-> `docs/images/phase-3-step-1-landblock.png`.
+> step 1 + step 2 landed (2026-05-04)** — the wasm bundle now fetches
+> a 3×3 neighbourhood of real AC landblocks around Holtburg in one
+> batch call, lays them out at correct world offsets, and PixiJS
+> draws them on a `<canvas>` with mouse-wheel zoom and drag-to-pan.
+> See [`phase-3-renderer.md`](phase-3-renderer.md) for the as-built
+> notes and the deliverable screenshot at
+> `docs/images/phase-3-step-2-multi-landblock.png` (step 1's
+> single-landblock screenshot at
+> `docs/images/phase-3-step-1-landblock.png` is still the best
+> reference for the height-ramp colour mapping in isolation).
 >
 > All seven library crates needed by the browser client cross-compile
 > to `wasm32-unknown-unknown`: `holtburger-common`,
@@ -18,18 +23,17 @@
 >
 > §8 steps 1 (build pipeline, `3025834`), 3 (`web_time::Instant`
 > swap, `d23f5d3`), 2 (WsTransport, `e151003`), and 4 (HttpResourceSource,
-> `ac7f92d`) are all done. **Step 6 (renderer wiring) is now in flight
-> via Phase 3 step 1** — `fetch_landblock_heightmap` parses the
-> Holtburg `CellLandblock` and hands the 9×9 height grid to PixiJS as
-> a 128-triangle mesh. The Node smoke test grew from 8 to 14 checks
-> (geometry shape + height bounds + corner vertices + max-index
-> guard); the browser deliverable is the rendered terrain screenshot.
+> `ac7f92d`) are all done. **Step 6 (renderer wiring) is closed via
+> Phase 3 step 1 + step 2.** Step 1 added `fetch_landblock_heightmap`
+> for one landblock; step 2 added `fetch_landblock_heightmaps` (batch)
+> plus the multi-landblock scene graph and pan/zoom camera. The Node
+> smoke test grew from 8 → 14 (step 1) → 17 (step 2) checks.
 >
 > Step 5 (scripting JS interop) remains open but doesn't block
-> character-login → world-entry. Phase 3 step 2 picks up where step 1
-> stopped: texture-atlas terrain (replacing the height-ramp), pan/zoom,
-> and either multi-landblock streaming or `ClientViewEvent` → entity
-> sprites depending on user priority.
+> character-login → world-entry. Phase 3 step 3 picks up where step 2
+> stopped: replacing the height-ramp colour with the AC terrain
+> texture atlas. Multi-landblock streaming with prefetch / eviction,
+> and `ClientViewEvent` → entity sprites, are step 4-or-later.
 >
 > **Audience:** anyone picking up Phase 2/3 implementation. Read §8
 > (what's left) first; §3 (the per-crate matrix) is the as-built

@@ -1,16 +1,22 @@
 # Phase 3 — PixiJS renderer (as-built)
 
-> **Status:** Step 1 landed (2026-05-04). The browser bundle fetches
-> a real Asheron's Call landblock and PixiJS draws it on a `<canvas>`.
-> See [`phase-3-step-1-handoff.md`](phase-3-step-1-handoff.md) for the
-> framing brief; this file is the as-built reference.
+> **Status:** Step 1 + step 2 landed (2026-05-04). The browser bundle
+> fetches a 3×3 neighbourhood of real Asheron's Call landblocks around
+> Holtburg in one batch call, lays them out at correct world offsets,
+> and PixiJS draws them on a `<canvas>` with mouse-wheel zoom + drag
+> pan. See [`phase-3-step-1-handoff.md`](phase-3-step-1-handoff.md)
+> and [`phase-3-step-2-handoff.md`](phase-3-step-2-handoff.md) for the
+> framing briefs; this file is the as-built reference.
 
-![Holtburg landblock terrain rendered in the browser](images/phase-3-step-1-landblock.png)
+![Holtburg + 8 neighbours rendered as a 3×3 grid](images/phase-3-step-2-multi-landblock.png)
 
-The screenshot is the deliverable artefact. The 9×9 wireframe shows
-the 128-triangle tessellation; the colour ramp (deep blue → green →
-brown → tan → white) maps to elevation in the 30 m – 96 m range that
-the Holtburg heightmap actually contains.
+The step 2 screenshot is the current deliverable artefact: the
+contiguous 3×3 grid of landblocks, water-blue to the north and a
+white peak in the south, with the wireframe showing the 24×24 cell
+grid (3 landblocks × 8 cells) joining flush at the seams. The step 1
+single-landblock deliverable is still archived at
+[`images/phase-3-step-1-landblock.png`](images/phase-3-step-1-landblock.png)
+as the cleanest reference for the colour-ramp mapping in isolation.
 
 ---
 
@@ -221,9 +227,72 @@ path.
 
 ---
 
-## What's next (Phase 3 step 2 candidates)
+## Phase 3 step 2 landed (2026-05-04)
 
-These are independent — pick by user priority.
+Step 2 turns the renderer from "one static landblock" into "an
+explorable terrain neighbourhood". On a fresh page load, the bundle:
+
+1. Builds the 9 cell IDs for the 3×3 around Holtburg
+   (`0xA8B3FFFF`..`0xAAB5FFFF`) inline from `(HOLTBURG_X +
+   dx, HOLTBURG_Y + dy)`.
+2. Calls `fetch_landblock_heightmaps(asset_url, ids)` once. The
+   plural export opens `HttpResourceSource` once and returns 9
+   `LandblockMesh` entries in input order, so the ~230 MB HBA fetch
+   + parse cost lands once instead of nine times.
+3. Lays each mesh into its own `landblockContainer` positioned at
+   `(XX * 192, YY * 192)` world metres inside a `worldContainer`
+   that owns the AC y-flip (`scale.set(1, -1)`), inside a
+   `cameraContainer` that owns zoom + pan.
+4. Wires `app.stage` event handlers for mouse-wheel zoom (around
+   the cursor, scale clamped to `[0.05, 5.0]`) and pointer
+   drag-to-pan (`pointerdown/move/up/upoutside/leave`). CSS toggles
+   the canvas cursor between `grab` and `grabbing` for affordance.
+
+What step 2 ships, on top of step 1:
+
+| Surface | Before step 2 | After step 2 |
+|---|---|---|
+| Wasm exports | `fetch_landblock_heightmap` | + `fetch_landblock_heightmaps` (batch) |
+| Tessellation | inline in `fetch_landblock_heightmap` | factored to `fn build_mesh(&CellLandblock)` |
+| Vertex spacing | 3.0 m (wrong) | 24.0 m (correct, via `METERS_PER_LANDBLOCK / 8.0`) |
+| Landblock side | 24 m (wrong) | 192 m (correct, the canonical AC constant) |
+| Scene graph | `app.stage → container` | `stage → cameraContainer → worldContainer → 9 × landblockContainer` |
+| Camera | none — fixed view | mouse-wheel zoom around cursor, drag-to-pan |
+| Smoke checks | 14 | 17 |
+
+The colour ramp normalises against the *aggregate* min/max across
+all 9 landblocks so neighbours share a single gradient — otherwise
+each tile self-normalises and seams jump in colour. The wireframe
+stroke widens from 0.06 m to 0.4 m so the 9×9 tessellation stays
+legible at the 3×3-fits-canvas zoom level (stroke is in world units
+and scales naturally with the camera).
+
+The unit error step 1 shipped (`x as f32 * 3.0` framing landblocks
+as 24 m × 24 m) was fixed on the way into step 2 — see the
+"Correction note" in the coordinate-convention section above. The
+container scale absorbed the error in step 1 because there was only
+one landblock; step 2's offsets at multiples of 192 m would have
+left an `8 × (24 - 3) = 168 m` gap between neighbours otherwise.
+
+### Files touched in step 2
+
+| File | What |
+|---|---|
+| [`apps/holtburger-web/Cargo.toml`](../external/holtburger/apps/holtburger-web/Cargo.toml) | Promoted `holtburger-common` from transitive to direct dep — `METERS_PER_LANDBLOCK` is now read from the canonical source |
+| [`apps/holtburger-web/src/lib.rs`](../external/holtburger/apps/holtburger-web/src/lib.rs) | Factored `build_mesh`, fixed vertex spacing, added `fetch_landblock_heightmaps` |
+| [`apps/holtburger-web/index.html`](../external/holtburger/apps/holtburger-web/index.html) | Multi-landblock scene graph, batch fetch loop, mouse-wheel + pointer handlers, shared height-ramp texture |
+| [`apps/holtburger-web/smoke_test.cjs`](../external/holtburger/apps/holtburger-web/smoke_test.cjs) | Corner-vertex assertion bumped (24, 24) → (192, 192); 3 new checks for the batch round-trip |
+| [`docs/phase-3-renderer.md`](phase-3-renderer.md) | This file |
+| [`docs/phase-2-wasm-spike.md`](phase-2-wasm-spike.md) | Status banner now reads "step 1 + step 2 landed"; §8 step 6 closed |
+| [`docs/images/phase-3-step-2-multi-landblock.png`](images/phase-3-step-2-multi-landblock.png) | Browser screenshot of the 3×3 grid |
+
+---
+
+## What's next (Phase 3 step 3 candidates)
+
+These are independent — pick by user priority. Step 2 deliberately
+did not pre-decide the shape of step 3; the multi-landblock + camera
+foundation supports any of them.
 
 ### a) Texture-atlas terrain palette
 
@@ -238,22 +307,18 @@ through the 256-entry surface table. Needs:
 
 This is the obvious next step from a "look like AC" perspective.
 
-### b) Pan / zoom camera
+### b) Multi-landblock streaming
 
-Wire mouse-wheel + drag to `container.scale` and `container.position`.
-Trivial in PixiJS — `app.stage.eventMode = "static"` plus a couple of
-event handlers. Unblocks "look at any landblock" UX without
-multi-landblock streaming.
-
-### c) Multi-landblock streaming
-
-Render N×N adjacent landblocks. Needs:
+Extend beyond the 3×3 hardcode to N×N visible landblocks driven by
+the camera. Step 2 establishes the camera UX that this step's cache
+strategy depends on. Needs:
 - A landblock-id → `LandblockMesh` cache in JS.
 - Camera-driven prefetch (which neighbours to load when the camera
   moves).
+- Eviction strategy when the cache exceeds a budget.
 - LOD / culling once the visible area exceeds a few landblocks.
 
-### d) `ClientViewEvent` → entity sprites
+### c) `ClientViewEvent` → entity sprites
 
 Wire the live ACE feed (when the backend unblocks) through to PixiJS
 sprite updates. Needs:
@@ -266,6 +331,13 @@ sprite updates. Needs:
 The design doc puts ClientViewEvent → entity wiring in **Phase 4**, so
 this candidate is technically out of Phase 3 scope. Listed here for
 completeness.
+
+### d) LandblockInfo (object placement) rendering
+
+Each `XXYYFFFE` `LandblockInfo` references the populated cells
+(`XXYYNNNN` for `NNNN < FFFE`) — interior buildings, dungeon
+entrances, and town objects. Adds a separate rendering pass on top
+of the surface terrain step 1/2 already render.
 
 ### Tangentially: Live ACE session
 
