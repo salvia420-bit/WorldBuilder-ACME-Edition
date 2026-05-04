@@ -1,28 +1,31 @@
 # Phase 3 — PixiJS renderer (as-built)
 
-> **Status:** Steps 1, 2, 3, 3.5, 4, and step 5 partial (road
+> **Status:** Steps 1, 2, 3, 3.5, 4, 4.5, and step 5 partial (road
 > overlays) landed (2026-05-04). The browser bundle fetches a 3×3
 > neighbourhood of real Asheron's Call landblocks around Holtburg in
 > one batch call, lays them out at correct world offsets, and PixiJS
 > draws them on a `<canvas>` as **AC terrain with real retail
 > textures, stone-road network, and 239 placed object/building
-> sprites**. Mouse-wheel zooms around the cursor; click-and-drag
-> pans. See [`phase-3-step-1-handoff.md`](phase-3-step-1-handoff.md),
-> [`phase-3-step-2-handoff.md`](phase-3-step-2-handoff.md), and
-> [`phase-3-step-3-handoff.md`](phase-3-step-3-handoff.md) for the
+> sprites tinted with per-model real colours** derived from each
+> model's GfxObj/SetupModel → Surface chain. Mouse-wheel zooms around
+> the cursor; click-and-drag pans. See
+> [`phase-3-step-1-handoff.md`](phase-3-step-1-handoff.md),
+> [`phase-3-step-2-handoff.md`](phase-3-step-2-handoff.md),
+> [`phase-3-step-3-handoff.md`](phase-3-step-3-handoff.md), and
+> [`phase-3-step-4.5-handoff.md`](phase-3-step-4.5-handoff.md) for the
 > framing briefs; this file is the as-built reference.
 
-![Holtburg + 8 neighbours with terrain, roads, and object sprites](images/phase-3-step-4-objects.png)
+![Holtburg + 8 neighbours with per-model real colours](images/phase-3-step-4.5-real-colours.png)
 
-The step 4 screenshot is the current deliverable: same 3×3 grid as
-step 3.5 (real terrain + roads), with **239 placed object and
-building sprites** drawn on top — brown building silhouettes
-clustered at Holtburg's road junction, smaller props scattered
-through the grass. Compare to the static-site z=12 reference at
+The step 4.5 screenshot is the current deliverable: same 3×3 grid as
+step 4 (real terrain + roads + 239 sprites), now with **per-model
+real ARGB colours** resolved from each model's Surface chain in
+Rust and applied as PIXI sprite tints. The stage-info panel shows
+the resolved/total ratio (currently 16 of 81 unique models in
+Holtburg; the rest fall back to the legacy 2-bucket category
+palette). Compare to the static-site z=12 reference at
 [`images/DerethMapsEnhanced_zoom.png`](images/DerethMapsEnhanced_zoom.png) —
-same place, same general layout. Visual gap remaining: real per-
-model textures (the static-site atlas ships only greyscale
-silhouettes; we category-tint them brown/green) and the larger
+same place, same general layout. Visual gap remaining: the larger
 custom-coloured landmarks (the green pyramid / lifestone). Step 5's
 atmospheric polish (fog, day/night) is still open. Earlier
 deliverables archived at
@@ -616,22 +619,90 @@ canvas zoom and renders invisibly. Bumped fallback dot radius to
 
 ---
 
-## What's next (Phase 3 step 5 / step 4.5 candidates)
+## Phase 3 step 4.5 landed (2026-05-04)
+
+**Per-model real colours.** The 2-bucket category palette from step 4
+(every `0x01` model brown, every `0x02` model tan-green) is replaced
+with per-model real ARGB colours derived from each model's Surface
+record. The brown-house cluster at Holtburg's town centre now shows
+distinguishable per-model tints; models the walk can't resolve fall
+back to the legacy 2-bucket palette so the worst case is "looks like
+step 4." See [`phase-3-step-4.5-handoff.md`](phase-3-step-4.5-handoff.md)
+for the framing.
+
+What step 4.5 ships, on top of step 4:
+
+| Surface | After step 4 | After step 4.5 |
+|---|---|---|
+| Object/building sprite tint | one of two browns by model_id top byte | per-model ARGB from Surface chain (16 of 81 Holtburg models resolve in our test bundle; rest fall back to the 2-bucket palette) |
+| Surface (0x08) parser | absent | `Surface::unpack` + `solid_color()` / `textured()` accessors |
+| Model→colour walk | n/a | `resolve_model_color` in Rust, exposed as `fetch_object_colours(asset_url, model_ids)` returning one ARGB per id |
+| Stage-info readout | "Sprite coverage" only | + "Real colours: N of M unique models resolved" |
+
+### Pipeline shape
+
+The walk dispatches on `model_id >> 24`:
+
+- `0x01XXXXXX` (Model / GfxObj) — fetch the GfxObj record, read its
+  `surfaces: Vec<u32>` header, iterate.
+- `0x02XXXXXX` (SetupModel) — fetch the SetupModel record, iterate
+  `parts: Vec<u32>` (each a GfxObj id), recurse via the GfxObj path.
+  Depth-4 recursion guard for malformed records.
+- Anything else — `None`.
+
+For each surface ID, `lookup_surface_color` tries the **solid path
+first** (`Surface::color_value` ARGB if `Base1Solid`, no fetches), then
+falls back to the **textured path** — fetch the referenced Texture,
+decode via `Texture::to_rgba8` (lazily fetching a Palette only for
+`P8`/`Index16` formats), and return the **alpha-weighted mean ARGB**
+over every pixel. A retail sweep showed only 2.5% of surfaces are
+solid-coloured; the textured-mean path is doing the load-bearing
+work for ~97% of resolutions.
+
+A minimal `read_gfx_obj_surfaces` byte-parser sits in
+`apps/holtburger-web/src/lib.rs` and reads only the
+`[u32 id][u32 flags][smart_vec u32 surfaces]` header — the full
+`GfxObj::unpack` parser fails on roughly half of retail's records on
+deeper subfields (vertex/polygon/BSP), and step 4.5 doesn't depend
+on a fix.
+
+JS-side, the render trigger dedupes the placement model IDs to a
+unique-id set (~67-81 for Holtburg's 3×3 vs the 239 placements),
+calls `fetch_object_colours` once, and builds a `Map<modelId, argb>`
+for `buildObjectsContainer` to consult. PIXI tint is RGB so we drop
+the alpha byte before applying.
+
+### Files touched in step 4.5
+
+| File | Role |
+|---|---|
+| [`crates/holtburger-dat/src/file_type/surface.rs`](../external/holtburger/crates/holtburger-dat/src/file_type/surface.rs) | New `Surface` parser. 20-byte solid / 24-byte textured. No leading `id` field (unlike Texture / Palette / SurfaceTexture). |
+| [`crates/holtburger-dat/src/file_type/mod.rs`](../external/holtburger/crates/holtburger-dat/src/file_type/mod.rs) | Register `surface` module + re-export `Surface`. |
+| [`apps/holtburger-web/src/lib.rs`](../external/holtburger/apps/holtburger-web/src/lib.rs) | `fetch_object_colours` wasm export + `resolve_model_color` / `walk_gfx_obj` / `walk_setup_model` / `lookup_surface_color` / `rgba_pixel_mean` / `read_gfx_obj_surfaces` helpers. |
+| [`apps/holtburger-web/index.html`](../external/holtburger/apps/holtburger-web/index.html) | Dedupe model IDs, call `fetch_object_colours`, build `colourMap`, thread through `renderNeighbourhood` → `buildObjectsContainer`. PIXI tint = `argb & 0x00FFFFFF`. New stage-info row. |
+| [`apps/holtburger-web/smoke_test.cjs`](../external/holtburger/apps/holtburger-web/smoke_test.cjs) | 32 → 36 PASS — symbol presence + round-trip shape + resolve ratio + distinct ARGB count. |
+| [`docs/phase-3-renderer.md`](phase-3-renderer.md) | This section |
+| [`docs/phase-2-wasm-spike.md`](phase-2-wasm-spike.md) | Status now reads "steps 1, 2, 3, 3.5, 4, 4.5 + step 5 (roads) landed" |
+| [`docs/emit-dynamic-site.md`](emit-dynamic-site.md) | §4.5 quality-ladder row 3 annotation flips from "step 4 silhouettes + category tint" to "step 4.5 real per-model colours" |
+| [`docs/images/phase-3-step-4.5-real-colours.png`](images/phase-3-step-4.5-real-colours.png) | Browser screenshot — 3×3 grid with per-model real colours |
+
+---
+
+## What's next (Phase 3 step 5 candidates)
 
 These are independent — pick by user priority. Step 3's shader
-pipeline + step 4's sprite layer together form the rendering
-foundation; subsequent steps polish and extend.
+pipeline + step 4's sprite layer + step 4.5's real colours together
+form the rendering foundation; subsequent steps polish and extend.
 
-### a) Real per-model sprite colours (step 4.5)
+### a) Multi-surface-per-model rendering (step 5+ scope)
 
-The static-site atlas ships greyscale silhouettes; we category-tint
-brown/green by model_id top byte. AC has per-model material
-colours (the GfxObj's surface table — separate from the terrain
-surface table) that would give the actual brown-with-grey-roof
-houses, the green pyramid lifestone, etc. Needs a SetupModel /
-GfxObj parser that walks the model's surface references and
-extracts per-vertex / per-poly colours. Substantial parser work
-(~weeks) like step 3.5's texture parser.
+Step 4.5 picks ONE representative ARGB per model — typically the
+mean of the first surface's pixels. Real AC models have multiple
+surfaces (walls, roof, floor, signs, doors). Distinguishing them
+needs either (a) per-poly meshes (rendering the 3D model top-down,
+substantial work, ~weeks) or (b) multi-layer atlas tiles (a roof
+layer over a wall layer, requires regenerating the static-site
+atlas with semantic regions). Both step 5+ scope.
 
 ### b) Per-cell terrain blending (step 5 polish, AC-faithful)
 

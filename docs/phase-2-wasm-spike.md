@@ -1,13 +1,14 @@
 # Phase 2 — WASM port spike (inventory)
 
 > **Status:** Phase 2 §8 in-scope work closed (2026-05-04). **Phase 3
-> steps 1, 2, 3, 3.5, 4, and step 5 (partial — roads) landed
+> steps 1, 2, 3, 3.5, 4, 4.5, and step 5 (partial — roads) landed
 > (2026-05-04)** — the wasm bundle now fetches a 3×3 neighbourhood
 > of real AC landblocks around Holtburg in one batch call, lays them
 > out at correct world offsets, and PixiJS draws them as **AC terrain
 > with real retail textures, stone-road network, and 239 placed
-> object/building sprites**: grass tiles with internal mottling,
-> water tiles with wave detail, stone road tile, plus brown-tinted
+> object/building sprites tinted with per-model real colours**: grass
+> tiles with internal mottling, water tiles with wave detail, stone
+> road tile, plus brown-tinted
 > building silhouettes clustered at Holtburg's road junction. Mouse-
 > wheel zoom and drag-to-pan still work. See
 > [`phase-3-renderer.md`](phase-3-renderer.md) for the as-built
