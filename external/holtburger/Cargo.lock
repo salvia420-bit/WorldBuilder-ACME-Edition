@@ -1619,9 +1619,12 @@ dependencies = [
 name = "holtburger-web"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "console_error_panic_hook",
  "futures",
  "holtburger-common",
+ "holtburger-content",
+ "holtburger-core",
  "holtburger-dat",
  "holtburger-protocol",
  "holtburger-resource-http",

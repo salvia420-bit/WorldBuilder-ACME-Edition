@@ -1386,20 +1386,24 @@ pub async fn fetch_model_meshes(
 }
 
 // ============================================================
-// Phase 4 step 1 + 2a — wasm-driven AC login → spawn handshake
+// Phase 4 step 1 + 2a + 2a.5 — wasm-driven AC login → spawn → create
 // ============================================================
 //
 // Audit reference (`apps/holtburger-cli/src/bin/tui.rs::bootstrap_once`
-// + `crates/holtburger-core/src/client/character_selection.rs`,
-// commit `b082cc9`): the cli builds
-// `ClientRuntimeBuilder::new(account).server(host, port).connect()` —
-// which constructs `Session::new(addr)` over a UDP socket — spawns
-// `client.run()` on a tokio task, and dispatches commands over an
-// mpsc channel:
+// + `crates/holtburger-core/src/client/character_selection.rs` +
+// `apps/holtburger-cli/src/pages/selection/creation.rs`): the cli
+// builds `ClientRuntimeBuilder::new(account).server(host, port)
+// .connect()` — which constructs `Session::new(addr)` over a UDP
+// socket — spawns `client.run()` on a tokio task, and dispatches
+// commands over an mpsc channel:
 //   - `ClientCommand::Login(password)` → `session.send_login_request`
 //   - `ClientCommand::SelectCharacter(id)` (or `EnterWorld`) →
 //     `character_selection.select_character(id)` which sends
 //     `GameMessage::CharacterEnterWorldRequest(guid)`
+//   - `ClientCommand::CreateCharacter(request)` →
+//     `character_selection.create_character(request)` which sends
+//     `GameMessage::CharacterCreate(request)` after stamping the
+//     account name from the session.
 // The runtime's `handle_message` reacts to inbound messages:
 //   - `GameMessage::CharacterList(data)` →
 //     `ClientViewEvent::CharacterList(characters)`
@@ -1409,6 +1413,11 @@ pub async fn fetch_model_meshes(
 //   - `GameMessage::PlayerCreate(data)` → `data.guid` is the spawned
 //     player's GUID; runtime transitions to `EnteringWorld` then
 //     `InWorld`.
+//   - `GameMessage::CharacterCreateResponse(data)` → response.code
+//     `Ok` carries `(guid, name, seconds_disabled)`; non-Ok variants
+//     carry only the error code (NameInUse, NameNotAllowed, ...).
+//     Server follows up with a fresh `CharacterList` reflecting the
+//     updated roster.
 //
 // The wasm path skips `ClientRuntime` entirely — its `run()` uses
 // `std::time::Instant` and `tokio::time::interval` per tick, neither
@@ -1419,9 +1428,22 @@ pub async fn fetch_model_meshes(
 // mpsc command channel, and queues `ClientEvent`s into a
 // `Rc<RefCell<Vec<ClientEvent>>>` shared with the SessionHandle. JS
 // drains via `handle.poll_events()` per animation-frame tick; commands
-// (e.g. `select_character`) flow the other way via the cmd channel.
-// ACE's CONNECT_REQUEST → CONNECT_RESPONSE handshake is still handled
-// inside `recv_ordered_packet` automatically.
+// (e.g. `select_character`, `create_test_character`) flow the other
+// way via the cmd channel. ACE's CONNECT_REQUEST → CONNECT_RESPONSE
+// handshake is still handled inside `recv_ordered_packet`
+// automatically.
+//
+// Phase 4 step 2a.5 (character creation in the browser): if
+// `start_session` was given an `asset_url`, the SessionHandle eagerly
+// loads `CharGen` (DAT 0x0E000002) + `SkillTable` (DAT 0x0E000004)
+// and builds a `CharacterGenCatalog` for offline validation of new
+// character requests. `SessionHandle.create_test_character(name)`
+// then builds an Aluvian / Male / Adventurer / Holtburg
+// `CharacterGenBuild` via `CharacterGenBuilder` and dispatches the
+// resulting `CharacterCreateRequestData` to the recv loop. ACE
+// validates server-side; success flips through CharacterCreateResponse
+// + a CharacterList re-fire, and the SessionHandle's
+// `character_list` shared state updates to include the new entry.
 
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_CHARACTER_LIST_RECEIVED: u32 = 0;
@@ -1429,6 +1451,10 @@ const CLIENT_EVENT_KIND_CHARACTER_LIST_RECEIVED: u32 = 0;
 const CLIENT_EVENT_KIND_PLAYER_SPAWNED: u32 = 1;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_DISCONNECTED: u32 = 4;
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_CHARACTER_CREATED: u32 = 5;
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_CHARACTER_CREATE_FAILED: u32 = 6;
 
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
@@ -1442,6 +1468,18 @@ enum SessionCommand {
     /// reply and chains `CharacterEnterWorld(guid, account)` without
     /// JS round-tripping.
     SelectCharacter { guid: u32 },
+    /// `SessionHandle.create_test_character(name)` — sends
+    /// `GameMessage::CharacterCreate(request)`. The recv loop
+    /// stamps the session's account name onto the request and waits
+    /// for `CharacterCreateResponse(...)` + the follow-up
+    /// `CharacterList` re-fire. On Ok the loop queues a kind=5
+    /// CharacterCreated event with the new GUID + name; on
+    /// non-Ok it queues a kind=6 CharacterCreateFailed event with
+    /// the response code in `u32_payload` and the variant name in
+    /// `string_payload`.
+    CreateCharacter {
+        request: Box<holtburger_protocol::messages::CharacterCreateRequestData>,
+    },
 }
 
 /// Tagged-payload envelope for events the wasm bundle drains to JS via
@@ -1453,12 +1491,21 @@ enum SessionCommand {
 /// dispatches to the right payload getters.
 ///
 /// Active values (mirror the JS-side dispatch table):
-/// - `kind = 0` — CharacterListReceived. `stringPayload` = account
-///   name; `u32Payload` = character count.
+/// - `kind = 0` — CharacterListReceived (re-fire after Create /
+///   Delete). `stringPayload` = account name;
+///   `u32Payload` = character count.
 /// - `kind = 1` — PlayerSpawned. `u32Payload` = the spawned player's
 ///   GUID. Fired when the recv loop receives `GameMessage::PlayerCreate`.
 /// - `kind = 4` — Disconnected. `stringPayload` = the error message
 ///   from `recv_message` (transport error, server hangup, etc.).
+/// - `kind = 5` — CharacterCreated (Phase 4 step 2a.5).
+///   `stringPayload` = new character's name; `u32Payload` = new
+///   GUID. Fired when ACE returns
+///   `CharacterCreateResponse{ Ok, guid, name, .. }`.
+/// - `kind = 6` — CharacterCreateFailed (Phase 4 step 2a.5).
+///   `stringPayload` = the `CharacterGenerationVerificationResponse`
+///   variant name (`NameInUse`, `NameNotAllowed`, ...);
+///   `u32Payload` = the numeric variant code.
 ///
 /// Reserved for later steps:
 /// - `kind = 2` — chat / Talk events (step 4).
@@ -1544,17 +1591,33 @@ impl CharacterSummary {
 /// Constructed by [`start_session`] once the handshake reaches
 /// `CharacterList`. The Session itself lives inside the `spawn_local`
 /// recv loop; the handle holds the JS-facing surface — a command
-/// channel sender + a shared queued-events buffer + the captured
-/// CharacterList. Dropping the handle closes the cmd channel; the
-/// recv loop sees the channel close, drops the Session (which closes
-/// the WebSocket via `WsTransport`'s `Drop`), and exits.
+/// channel sender + shared queued-events buffer + the most recent
+/// CharacterList snapshot (mutated by the recv loop on every
+/// CharacterList re-fire). Dropping the handle closes the cmd
+/// channel; the recv loop sees the channel close, drops the Session
+/// (which closes the WebSocket via `WsTransport`'s `Drop`), and
+/// exits.
+///
+/// `character_list` is `Rc<RefCell<...>>` because both sides update
+/// it: the recv loop overwrites on `CharacterList` re-fire (new chars
+/// after Create / pruned chars after Delete), and JS reads via
+/// [`SessionHandle::character_list`] which clones the current
+/// snapshot. Single-threaded wasm32 makes `Rc` + `RefCell` sound;
+/// borrow conflicts are impossible because reads from JS are
+/// synchronous and the recv loop yields between mutations.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub struct SessionHandle {
     cmd_tx: futures::channel::mpsc::UnboundedSender<SessionCommand>,
     queued_events: std::rc::Rc<std::cell::RefCell<Vec<ClientEvent>>>,
-    character_list: Vec<CharacterSummary>,
+    character_list: std::rc::Rc<std::cell::RefCell<Vec<CharacterSummary>>>,
     account_name: String,
+    /// Phase 4 step 2a.5: present when `start_session` was given an
+    /// `asset_url` and successfully loaded the CharGen + SkillTable
+    /// records. `None` means character creation isn't available
+    /// (asset URL was empty or fetch/parse failed); `create_test_character`
+    /// rejects in that case.
+    catalog: Option<std::sync::Arc<holtburger_content::CharacterGenCatalog>>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1571,19 +1634,14 @@ impl SessionHandle {
         std::mem::take(&mut *self.queued_events.borrow_mut())
     }
 
-    /// Snapshot of the CharacterList received during login. Returns a
-    /// fresh `Vec` each call — JS keeps its own copy after the first
-    /// read.
+    /// Snapshot of the most recent CharacterList. The recv loop updates
+    /// the inner state on every `CharacterList` re-fire (e.g. after a
+    /// successful `CharacterCreate` or `CharacterDelete`); JS calls
+    /// this method to get a fresh `Vec` and re-render the Selection
+    /// UI.
     #[wasm_bindgen(js_name = characterList)]
     pub fn character_list(&self) -> Vec<CharacterSummary> {
-        self.character_list
-            .iter()
-            .map(|c| CharacterSummary {
-                id: c.id,
-                name: c.name.clone(),
-                delete_time: c.delete_time,
-            })
-            .collect()
+        self.character_list.borrow().clone()
     }
 
     /// Account name the session is logged in as. Echoed back by ACE
@@ -1620,6 +1678,229 @@ impl SessionHandle {
                 JsValue::from_str(&format!("select_character: cmd channel closed ({e})"))
             })
     }
+
+    /// Phase 4 step 2a.5: create a hardcoded-defaults test character
+    /// on the logged-in account.
+    ///
+    /// Picks Aluvian heritage / Male / Adventurer template / Holtburg
+    /// starter area / template-default attributes / template-minimum
+    /// skills / randomised appearance. The character_slot is
+    /// `current_character_list.len()` so each call lands in the next
+    /// free slot. Builds a `CharacterCreateRequestData` via
+    /// [`holtburger_core::CharacterGenBuilder::build_request`] (so
+    /// every constraint ACE validates server-side has already been
+    /// validated client-side), and dispatches to the recv loop via
+    /// `SessionCommand::CreateCharacter`.
+    ///
+    /// Errors:
+    /// - `JsValue::from_str("create_test_character: catalog not loaded …")`
+    ///   if `start_session` wasn't given an `asset_url`.
+    /// - `JsValue::from_str("create_test_character: validation: [...]")`
+    ///   if the catalog rejects the build (heritage missing, skill
+    ///   slot count off, etc. — would only fire on a malformed
+    ///   fixture).
+    /// - `JsValue::from_str("create_test_character: cmd channel closed …")`
+    ///   if the recv loop has already exited.
+    ///
+    /// Returns immediately on enqueue success. The actual
+    /// CharacterCreate outcome arrives via `poll_events` as a
+    /// `kind=5 CharacterCreated` (success) or `kind=6
+    /// CharacterCreateFailed` (server-side rejection — duplicate
+    /// name, etc.) event.
+    #[wasm_bindgen(js_name = createTestCharacter)]
+    pub fn create_test_character(&self, name: String) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        let catalog = self.catalog.as_ref().ok_or_else(|| {
+            JsValue::from_str(
+                "create_test_character: catalog not loaded. Did you pass an asset_url to start_session?",
+            )
+        })?;
+        let occupied_slots: Vec<u32> = (0..self.character_list.borrow().len() as u32).collect();
+        let request = build_test_character_request(catalog.clone(), name, &occupied_slots)
+            .map_err(|errors| {
+                JsValue::from_str(&format!(
+                    "create_test_character: validation: {errors:?}"
+                ))
+            })?;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::CreateCharacter {
+                request: Box::new(request),
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("create_test_character: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Phase 4 step 2a.5: returns whether character creation is
+    /// available (i.e. CharGen + SkillTable were successfully loaded
+    /// at start_session time). JS reads this to decide whether to
+    /// surface the Create-character UI.
+    #[wasm_bindgen(getter, js_name = canCreateCharacter)]
+    pub fn can_create_character(&self) -> bool {
+        self.catalog.is_some()
+    }
+}
+
+/// Phase 4 step 2a.5: construct an Aluvian / Male / Adventurer /
+/// Holtburg `CharacterCreateRequestData`. Mirrors the cli's
+/// `CharacterCreationFormState::build_request` (see
+/// `apps/holtburger-cli/src/pages/selection/creation.rs`) but with
+/// hardcoded defaults instead of form-driven values.
+///
+/// Fixed picks:
+/// - heritage = first heritage id with name "Aluvian" (typically
+///   `0x00000001`); falls back to the first heritage available if
+///   Aluvian is absent (custom asset packs).
+/// - gender = first key in `heritage.genders` (typically Male).
+/// - template = template_option of the heritage's first template
+///   (typically Adventurer = 0; Olthoi heritages have only "Ripper").
+/// - start_area = first id in `heritage.primary_start_area_ids`
+///   (typically Holtburg for Aluvian).
+/// - attribute values = template defaults from
+///   `template.attribute_values()`.
+/// - skill_advancement_classes = `Inactive` everywhere except the
+///   slots `catalog.skill_definitions` lists, which get
+///   `minimum_skill_advancement_for_heritage` (template's normal /
+///   primary skills set Trained / Specialized; otherwise Untrained).
+/// - appearance = `CharacterGenBuilder::randomize_appearance` (random
+///   indices into the heritage's hair / eye / mouth / clothing
+///   lists; random hue floats).
+/// - is_admin / is_sentinel = false (server policy default rejects
+///   non-zero anyway).
+///
+/// `account_name` is left empty here — the recv loop stamps the
+/// session's account name onto the request just before sending,
+/// matching the cli's `character_selection.create_character` path.
+#[cfg(target_arch = "wasm32")]
+fn build_test_character_request(
+    catalog: std::sync::Arc<holtburger_content::CharacterGenCatalog>,
+    name: String,
+    occupied_slots: &[u32],
+) -> Result<
+    holtburger_protocol::messages::CharacterCreateRequestData,
+    Vec<holtburger_core::CharacterGenValidationError>,
+> {
+    use holtburger_core::character_gen::minimum_skill_advancement_for_heritage;
+    use holtburger_core::{CharacterGenBuild, CharacterGenBuilder};
+    use holtburger_protocol::messages::SkillAdvancementClass;
+
+    // Pick Aluvian if present (key=1 by AC convention); fall back to
+    // the first heritage in the catalog.
+    let heritage = catalog
+        .heritage_groups
+        .values()
+        .find(|h| h.name.eq_ignore_ascii_case("Aluvian"))
+        .or_else(|| catalog.heritage_groups.values().next())
+        .cloned();
+    let Some(heritage) = heritage else {
+        return Err(vec![
+            holtburger_core::CharacterGenValidationError::UnknownHeritage { heritage_id: 0 },
+        ]);
+    };
+
+    let gender_id = heritage.genders.keys().next().copied().unwrap_or(0);
+
+    // Pick the first template whose attribute spread already sums to
+    // the heritage's full `attribute_credits` budget. Skip the
+    // "Custom" / Adventurer template (index 0 by AC convention) — its
+    // attributes are 10/10/10/10/10/10 = 60, designed to be edited by
+    // the user. Pre-spread templates (Bow Hunter, Soldier, etc.) are
+    // already at the full budget so the build validates without
+    // user-driven point spending. Falls back to the first template
+    // (and the validation would fail with AttributeBudgetIncomplete)
+    // if no pre-spread template exists — caller surfaces that as the
+    // CharacterGenValidationError it is.
+    let template = heritage
+        .templates
+        .iter()
+        .find(|t| {
+            let total = t.strength
+                + t.endurance
+                + t.coordination
+                + t.quickness
+                + t.focus
+                + t.self_stat;
+            total == heritage.attribute_credits
+        })
+        .or_else(|| heritage.templates.first())
+        .cloned()
+        .unwrap_or_else(|| holtburger_content::character_gen::CharacterGenTemplate {
+            template_option: 0,
+            name: String::new(),
+            icon_image: 0,
+            title_id: 0,
+            strength: 50,
+            endurance: 50,
+            coordination: 50,
+            quickness: 50,
+            focus: 50,
+            self_stat: 50,
+            normal_skills: Vec::new(),
+            primary_skills: Vec::new(),
+        });
+
+    let start_area = heritage
+        .primary_start_area_ids
+        .iter()
+        .chain(heritage.secondary_start_area_ids.iter())
+        .filter_map(|id| u32::try_from(*id).ok())
+        .next()
+        .unwrap_or(0);
+
+    let mut skill_advancement_classes =
+        vec![SkillAdvancementClass::Inactive; catalog.expected_skill_slots];
+    for definition in catalog.skill_definitions.values() {
+        let min = minimum_skill_advancement_for_heritage(
+            catalog.as_ref(),
+            heritage.heritage_id,
+            definition.skill_id,
+        );
+        if let Some(slot) = skill_advancement_classes.get_mut(definition.skill_id as usize) {
+            *slot = min;
+        }
+    }
+
+    let character_slot = first_available_character_slot(occupied_slots);
+
+    let builder = CharacterGenBuilder::new(catalog.clone());
+    let appearance = builder.randomize_appearance(heritage.heritage_id, gender_id);
+
+    let attribute_values = template.attribute_values();
+    let build = CharacterGenBuild {
+        heritage: heritage.heritage_id,
+        gender: gender_id,
+        appearance,
+        template_option: template.template_option,
+        strength_ability: attribute_values[0].1,
+        endurance_ability: attribute_values[1].1,
+        coordination_ability: attribute_values[2].1,
+        quickness_ability: attribute_values[3].1,
+        focus_ability: attribute_values[4].1,
+        self_ability: attribute_values[5].1,
+        character_slot,
+        skill_advancement_classes,
+        name,
+        start_area,
+        is_admin: false,
+        is_sentinel: false,
+    };
+
+    builder.build_request(build)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn first_available_character_slot(occupied: &[u32]) -> u32 {
+    let mut sorted: Vec<u32> = occupied.iter().copied().collect();
+    sorted.sort_unstable();
+    let mut slot = 0u32;
+    for taken in sorted {
+        if taken == slot {
+            slot += 1;
+        } else if taken > slot {
+            break;
+        }
+    }
+    slot
 }
 
 /// Drive the AC login → CharacterList handshake, then spawn a recv
@@ -1632,22 +1913,30 @@ impl SessionHandle {
 /// 2. Build `Session::new_with_transport(transport, server_addr)`.
 /// 3. Send `LoginRequest(username, password)` via
 ///    `session.send_login_request`.
-/// 4. `wasm_bindgen_futures::spawn_local` the recv loop, handing it
-///    the Session, the cmd channel receiver, and a oneshot sender
-///    for the initial CharacterList. Earlier control packets
-///    (CONNECT_REQUEST → CONNECT_RESPONSE) are handled inside the
-///    session's receive loop automatically.
-/// 5. Await the oneshot — the recv loop signals as soon as it parses
+/// 4. If `asset_url` is non-empty, fetch the HBA via
+///    `HttpResourceSource`, parse `CharGen` (`0x0E000002`) +
+///    `SkillTable` (`0x0E000004`), and build a
+///    `CharacterGenCatalog` for offline character-creation
+///    validation. Failures here log a warning and proceed — the
+///    session is still usable, just without `create_test_character`.
+/// 5. `wasm_bindgen_futures::spawn_local` the recv loop, handing it
+///    the Session, the cmd channel receiver, the shared event queue,
+///    the shared character-list slot, and a oneshot sender for the
+///    initial CharacterList. Earlier control packets (CONNECT_REQUEST
+///    → CONNECT_RESPONSE) are handled inside the session's receive
+///    loop automatically.
+/// 6. Await the oneshot — the recv loop signals as soon as it parses
 ///    the first `GameMessage::CharacterList`. Returns a
 ///    [`SessionHandle`] holding the cmd sender + shared event queue +
-///    captured CharacterList.
+///    shared character-list snapshot + optional CharacterGenCatalog.
 ///
 /// **Errors.** Any failure at transport open, login send, or initial
 /// CharacterList wait rejects the returned Promise with a tagged
 /// error string. After `start_session` resolves, transient errors
 /// inside the recv loop (e.g. server hangup) surface as
 /// `kind=4 Disconnected` events through `poll_events()` — they do not
-/// reject anything.
+/// reject anything. Catalog load failures log + proceed (returns
+/// `canCreateCharacter = false`).
 ///
 /// **No retry / timeout** — if ACE never responds the Promise stays
 /// pending. A page reload bails the user out.
@@ -1659,6 +1948,7 @@ pub async fn start_session(
     server_port: u16,
     username: String,
     password: String,
+    asset_url: String,
 ) -> Result<SessionHandle, JsValue> {
     use futures::channel::{mpsc, oneshot};
 
@@ -1680,39 +1970,92 @@ pub async fn start_session(
         .await
         .map_err(|e| JsValue::from_str(&format!("send_login_request: {e}")))?;
 
+    // Phase 4 step 2a.5: kick off the catalog fetch concurrently with
+    // the login handshake so the asset HTTP fetch overlaps with the
+    // recv-loop's CharacterList wait. Failures are non-fatal — the
+    // session still works for spawn, just without create_test_character.
+    let catalog_future = async move {
+        if asset_url.is_empty() {
+            return Ok::<_, anyhow::Error>(None);
+        }
+        load_character_gen_catalog(&asset_url).await.map(Some)
+    };
+
     let (cmd_tx, cmd_rx) = mpsc::unbounded::<SessionCommand>();
     let (charlist_tx, charlist_rx) = oneshot::channel::<CharListReady>();
     let queued_events: std::rc::Rc<std::cell::RefCell<Vec<ClientEvent>>> =
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let character_list: std::rc::Rc<std::cell::RefCell<Vec<CharacterSummary>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
 
     {
         let queued_events = queued_events.clone();
+        let character_list = character_list.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            recv_loop(session, cmd_rx, queued_events, Some(charlist_tx)).await;
+            recv_loop(
+                session,
+                cmd_rx,
+                queued_events,
+                character_list,
+                Some(charlist_tx),
+            )
+            .await;
         });
     }
 
-    let CharListReady {
-        account_name,
-        characters,
-    } = charlist_rx
+    let CharListReady { account_name } = charlist_rx
         .await
         .map_err(|_| JsValue::from_str("recv loop exited before CharacterList arrived"))?;
+
+    let catalog = match catalog_future.await {
+        Ok(catalog) => catalog,
+        Err(e) => {
+            log::warn!("character generator catalog load failed: {e}");
+            None
+        }
+    };
 
     Ok(SessionHandle {
         cmd_tx,
         queued_events,
-        character_list: characters,
+        character_list,
         account_name,
+        catalog,
     })
 }
 
+/// Phase 4 step 2a.5: fetch + parse the CharGen + SkillTable records
+/// out of the asset HBA and build a `CharacterGenCatalog`. Used by
+/// `start_session` (during login) for client-side character-creation
+/// validation. Returns `Err` if the HTTP fetch fails, the HBA is
+/// missing the records, or the parse trips.
+#[cfg(target_arch = "wasm32")]
+async fn load_character_gen_catalog(
+    asset_url: &str,
+) -> anyhow::Result<std::sync::Arc<holtburger_content::CharacterGenCatalog>> {
+    let source = holtburger_resource_http::HttpResourceSource::connect(asset_url)
+        .await
+        .map_err(|e| anyhow::anyhow!("HttpResourceSource::connect: {e}"))?;
+    let mounts: Vec<std::sync::Arc<dyn holtburger_dat::ResourceSource>> =
+        vec![std::sync::Arc::new(source)];
+    let repo = holtburger_content::ContentRepository::from_mounts(mounts);
+    let char_gen = repo
+        .read_asset::<holtburger_dat::file_type::CharGen>("character generator table")?;
+    let skill_table = repo
+        .read_asset::<holtburger_dat::file_type::SkillTable>("skill table")?;
+    Ok(std::sync::Arc::new(
+        holtburger_content::CharacterGenCatalog::from_assets(&char_gen, &skill_table),
+    ))
+}
+
 /// Payload the recv loop sends through the initial-CharacterList
-/// oneshot back to the awaiting `start_session` future.
+/// oneshot back to the awaiting `start_session` future. The
+/// character list itself is mutated in-place via the shared
+/// `Rc<RefCell<Vec<CharacterSummary>>>` so subsequent re-fires
+/// (after Create / Delete) update the same buffer.
 #[cfg(target_arch = "wasm32")]
 struct CharListReady {
     account_name: String,
-    characters: Vec<CharacterSummary>,
 }
 
 /// State the recv loop tracks across iterations.
@@ -1747,10 +2090,13 @@ async fn recv_loop(
     mut session: holtburger_session::Session,
     mut cmd_rx: futures::channel::mpsc::UnboundedReceiver<SessionCommand>,
     queued_events: std::rc::Rc<std::cell::RefCell<Vec<ClientEvent>>>,
+    character_list: std::rc::Rc<std::cell::RefCell<Vec<CharacterSummary>>>,
     mut charlist_tx: Option<futures::channel::oneshot::Sender<CharListReady>>,
 ) {
     use futures::StreamExt;
-    use holtburger_protocol::messages::{CharacterEnterWorldData, GameMessage};
+    use holtburger_protocol::messages::{
+        CharacterEnterWorldData, CharacterGenerationVerificationResponse, GameMessage,
+    };
     use holtburger_protocol::traits::ProtocolUnpack;
     use holtburger_session::SessionEvent;
 
@@ -1782,7 +2128,7 @@ async fn recv_loop(
                     match message {
                         GameMessage::CharacterList(data) => {
                             account_name = data.account_name.clone();
-                            let characters: Vec<CharacterSummary> = data
+                            let new_list: Vec<CharacterSummary> = data
                                 .characters
                                 .iter()
                                 .map(|entry| CharacterSummary {
@@ -1791,20 +2137,59 @@ async fn recv_loop(
                                     delete_time: entry.delete_time,
                                 })
                                 .collect();
+                            let count = new_list.len() as u32;
+                            *character_list.borrow_mut() = new_list;
                             if let Some(tx) = charlist_tx.take() {
                                 let _ = tx.send(CharListReady {
                                     account_name: account_name.clone(),
-                                    characters: characters.clone(),
                                 });
                             } else {
-                                // Subsequent CharacterList packets arrive
-                                // after CharacterCreate / CharacterDelete
-                                // round-trips; surfacing them via the
-                                // event queue is step-2b polish.
+                                // Re-fire after CharacterCreate /
+                                // CharacterDelete: surface as a kind=0
+                                // event so JS can call
+                                // `handle.characterList()` for the
+                                // updated snapshot.
                                 queued_events.borrow_mut().push(ClientEvent {
                                     kind: CLIENT_EVENT_KIND_CHARACTER_LIST_RECEIVED,
                                     string_payload: Some(account_name.clone()),
-                                    u32_payload: Some(characters.len() as u32),
+                                    u32_payload: Some(count),
+                                });
+                            }
+                        }
+                        GameMessage::CharacterCreateResponse(data) => {
+                            // Phase 4 step 2a.5: surface the response
+                            // to JS, and on success append the new
+                            // character to `character_list` locally.
+                            // ACE does NOT auto-send a CharacterList
+                            // re-fire after CharacterCreate — the cli
+                            // (apps/holtburger-cli/src/pages/selection
+                            // /state.rs::handle_create_response, line
+                            // 307) pushes a CharacterEntry locally;
+                            // we mirror that here so JS sees the new
+                            // entry on the next handle.characterList()
+                            // call.
+                            if data.response == CharacterGenerationVerificationResponse::Ok {
+                                let guid = data.guid.map(u32::from).unwrap_or(0);
+                                let name = data.name.clone().unwrap_or_default();
+                                if guid != 0 {
+                                    character_list.borrow_mut().push(CharacterSummary {
+                                        id: guid,
+                                        name: name.clone(),
+                                        delete_time: 0,
+                                    });
+                                }
+                                queued_events.borrow_mut().push(ClientEvent {
+                                    kind: CLIENT_EVENT_KIND_CHARACTER_CREATED,
+                                    string_payload: Some(name),
+                                    u32_payload: Some(guid),
+                                });
+                            } else {
+                                let code = data.response as u32;
+                                let label = format!("{:?}", data.response);
+                                queued_events.borrow_mut().push(ClientEvent {
+                                    kind: CLIENT_EVENT_KIND_CHARACTER_CREATE_FAILED,
+                                    string_payload: Some(label),
+                                    u32_payload: Some(code),
                                 });
                             }
                         }
@@ -1875,6 +2260,24 @@ async fn recv_loop(
                                 string_payload: Some(format!(
                                     "CharacterEnterWorldRequest: {e}"
                                 )),
+                                u32_payload: None,
+                            });
+                            return;
+                        }
+                    }
+                    Some(SessionCommand::CreateCharacter { mut request }) => {
+                        // Stamp the session's account name onto the
+                        // request just before sending — mirrors the
+                        // cli's `character_selection.create_character`
+                        // pattern, so the wasm boundary doesn't need
+                        // to know about account names.
+                        request.account_name = account_name.clone();
+                        let msg = GameMessage::CharacterCreate(request);
+                        if let Err(e) = session.send_message(&msg).await {
+                            log::warn!("recv_loop: send CharacterCreate: {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("CharacterCreate: {e}")),
                                 u32_payload: None,
                             });
                             return;

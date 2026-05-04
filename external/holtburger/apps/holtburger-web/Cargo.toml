@@ -28,11 +28,21 @@ wasm-bindgen = "0.2"
 # - `wasm-bindgen-futures`: lets us return a JS Promise from an `async
 #   fn` `wasm_bindgen` export so the smoke test can `await` it.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+anyhow = { workspace = true }
 console_error_panic_hook = "0.1"
 # `futures` for the Phase 4 step 2a recv loop — `mpsc::unbounded`
 # command channel + `oneshot` for the initial-CharacterList signal,
 # `StreamExt`/`SinkExt` extension traits.
 futures = { workspace = true }
+# Phase 4 step 2a.5 — character creation in the browser:
+# `holtburger-content::CharacterGenCatalog` cross-references CharGen
+# (0x0E000002) + SkillTable; `holtburger-core::CharacterGenBuilder`
+# validates a `CharacterGenBuild` against heritage / template /
+# attribute-budget / skill-budget rules and produces the wire-shaped
+# `CharacterCreateRequestData`. Both crates already cross-compile to
+# wasm32 (Phase 2 floor).
+holtburger-content = { workspace = true }
+holtburger-core = { workspace = true }
 holtburger-dat = { workspace = true }
 holtburger-resource-http = { workspace = true }
 holtburger-transport-ws = { workspace = true }

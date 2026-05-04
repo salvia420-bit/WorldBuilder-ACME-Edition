@@ -88,6 +88,27 @@
         player is step 2b scope.
       </p>
       <ul id="character-ul"></ul>
+
+      <form id="create-form" hidden>
+        <fieldset>
+          <legend>Create test character (Phase 4 step 2a.5)</legend>
+          <p class="hint">
+            Spawns an Aluvian / Male / Adventurer / Holtburg character
+            with template-default attributes, template-minimum skills,
+            and a randomised appearance. The
+            <code>CharacterCreateRequestData</code> is built in the
+            wasm bundle by
+            <code>holtburger_core::CharacterGenBuilder::build_request</code>
+            against the <code>CharGen</code> table parsed out of
+            <code>0x0E000002</code> at login time, then dispatched
+            through the recv loop as a
+            <code>GameMessage::CharacterCreate</code>.
+          </p>
+          <div class="row"><label><span>Name</span><input type="text" name="char_name" placeholder="e.g. PhaseyTwoAFive" required minlength="1" maxlength="32" /></label></div>
+          <button type="submit" id="create-button">Create character</button>
+        </fieldset>
+      </form>
+      <div id="create-status" class="hint"></div>
     </div>
 
     <h2>Phase 3 step 6 — 3×3 Holtburg neighbourhood, live runtime sprites</h2>
@@ -1316,6 +1337,10 @@ void main() {
       const loginStatus = document.getElementById("login-status");
       const selection = document.getElementById("selection");
       const characterUl = document.getElementById("character-ul");
+      const createForm = document.getElementById("create-form");
+      const createNameInput = createForm.querySelector('input[name="char_name"]');
+      const createBtn = document.getElementById("create-button");
+      const createStatus = document.getElementById("create-status");
       let activeHandle = null;
 
       loginForm.addEventListener("submit", async (e) => {
@@ -1337,7 +1362,7 @@ void main() {
         loginStatus.innerHTML = `Connecting to <code>${bridgeUrl}</code> (server <code>${serverIp}:${serverPort}</code>) and sending LoginRequest…`;
 
         try {
-          const handle = await start_session(bridgeUrl, serverIp, serverPort, account, password);
+          const handle = await start_session(bridgeUrl, serverIp, serverPort, account, password, ASSET_URL);
           activeHandle = handle;
 
           // Step 2a: the recv loop signals the initial CharacterList
@@ -1354,18 +1379,33 @@ void main() {
             `<span class="ok">[OK]</span> Logged in as <code>${handle.accountName || account}</code>. ` +
             `${chars.length} character${chars.length === 1 ? "" : "s"} on this account.`;
 
-          if (chars.length === 0) {
-            characterUl.innerHTML =
-              `<li class="hint">No characters on this account. Step 2b will add a "Create character" button — for now, log in to a different account or use the in-game CLI to create one.</li>`;
+          // Phase 4 step 2a.5 — render character list (or empty-state
+          // fallback). Always-rendered: a "Create test character" form
+          // when handle.canCreateCharacter is true, so users on a
+          // fresh account can populate the list before clicking Spawn.
+          function renderCharacterList() {
+            const list = handle.characterList();
+            if (list.length === 0) {
+              characterUl.innerHTML =
+                `<li class="hint">No characters on this account yet. Use the form below to create one.</li>`;
+            } else {
+              characterUl.innerHTML = list.map((c) => {
+                const idHex = `0x${c.id.toString(16).toUpperCase().padStart(8, "0")}`;
+                const pendingDelete = c.deleteTime !== 0
+                  ? ` <span class="hint">[pending delete @ ${new Date(c.deleteTime * 1000).toISOString()}]</span>`
+                  : "";
+                return `<li data-name="${c.name}" data-id="${c.id}"><strong>${c.name}</strong> &nbsp;<span class="hint">${idHex}</span>${pendingDelete}` +
+                  ` <button type="button" data-id="${c.id}">Spawn</button></li>`;
+              }).join("");
+            }
+          }
+          renderCharacterList();
+          if (handle.canCreateCharacter) {
+            createForm.hidden = false;
           } else {
-            characterUl.innerHTML = chars.map((c) => {
-              const idHex = `0x${c.id.toString(16).toUpperCase().padStart(8, "0")}`;
-              const pendingDelete = c.deleteTime !== 0
-                ? ` <span class="hint">[pending delete @ ${new Date(c.deleteTime * 1000).toISOString()}]</span>`
-                : "";
-              return `<li data-name="${c.name}" data-id="${c.id}"><strong>${c.name}</strong> &nbsp;<span class="hint">${idHex}</span>${pendingDelete}` +
-                ` <button type="button" data-id="${c.id}">Spawn</button></li>`;
-            }).join("");
+            createForm.hidden = true;
+            createStatus.innerHTML =
+              `<span class="hint">Character creation unavailable — CharGen / SkillTable not loaded. Verify <code>${ASSET_URL}</code> is reachable + has <code>--profile pruned</code> or fuller content.</span>`;
           }
           selection.hidden = false;
 
@@ -1407,6 +1447,31 @@ void main() {
               `awaiting CharacterEnterWorldServerReady → CharacterEnterWorld → PlayerCreate.`;
           });
 
+          // Phase 4 step 2a.5 — create-character form. Constructs the
+          // CharacterCreateRequestData in the wasm bundle (Aluvian /
+          // Male / Adventurer / Holtburg defaults) and dispatches it
+          // through the recv loop. Result lands as kind=5 (success)
+          // or kind=6 (failure) in the next poll_events drain.
+          createForm.addEventListener("submit", (ev) => {
+            ev.preventDefault();
+            const name = createNameInput.value.trim();
+            if (!name) {
+              createStatus.innerHTML =
+                `<span class="fail">[FAIL]</span> Character name is required.`;
+              return;
+            }
+            try {
+              handle.createTestCharacter(name);
+            } catch (err) {
+              createStatus.innerHTML =
+                `<span class="fail">[FAIL]</span> createTestCharacter rejected: <code>${String(err?.message ?? err)}</code>`;
+              return;
+            }
+            createBtn.disabled = true;
+            createStatus.innerHTML =
+              `<span class="ok">[…]</span> Sending CharacterCreate(<strong>${name}</strong>); awaiting CharacterCreateResponse + CharacterList re-fire.`;
+          });
+
           // Phase 4 step 2a — drain the SessionHandle's queued events
           // each animation frame. The recv loop in Rust pushes events
           // as they arrive; this is the JS-side receiver that wires
@@ -1430,6 +1495,36 @@ void main() {
                   `<span class="ok">[OK]</span> Spawned <strong>${name}</strong> ` +
                   `<span class="hint">(GUID ${guidHex})</span>. ` +
                   `<span class="hint">Step 2b will render the player at its spawn position.</span>`;
+              } else if (evt.kind === 0) {
+                // CharacterListReceived re-fire (after CharacterCreate /
+                // CharacterDelete). The recv loop has already updated
+                // `character_list` shared state — re-render so the UI
+                // reflects the new roster.
+                renderCharacterList();
+              } else if (evt.kind === 5) {
+                // CharacterCreated — refresh the list (recv loop has
+                // already mutated the shared character_list state via
+                // the companion CharacterList re-fire) and flash the
+                // status line.
+                const newGuid = evt.u32Payload >>> 0;
+                const newName = evt.stringPayload || "<unknown>";
+                renderCharacterList();
+                createStatus.innerHTML =
+                  `<span class="ok">[OK]</span> Created <strong>${newName}</strong> ` +
+                  `<span class="hint">(GUID 0x${newGuid.toString(16).toUpperCase().padStart(8, "0")})</span>. ` +
+                  `Click Spawn on the new row to enter world.`;
+                createBtn.disabled = false;
+                createNameInput.value = "";
+              } else if (evt.kind === 6) {
+                // CharacterCreateFailed — surface the response code
+                // (NameInUse, NameNotAllowed, etc.) and re-enable the
+                // form so the user can retry with a different name.
+                const code = evt.u32Payload >>> 0;
+                const label = evt.stringPayload || "<unknown>";
+                createStatus.innerHTML =
+                  `<span class="fail">[FAIL]</span> CharacterCreate rejected: ` +
+                  `<code>${label}</code> (code ${code}).`;
+                createBtn.disabled = false;
               } else if (evt.kind === 4) {
                 // Disconnected — recv loop terminated. The UI stays
                 // up but commands won't go anywhere.
