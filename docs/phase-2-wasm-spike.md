@@ -1,39 +1,46 @@
 # Phase 2 — WASM port spike (inventory)
 
 > **Status:** Phase 2 §8 in-scope work closed (2026-05-04). **Phase 3
-> step 1 + step 2 landed (2026-05-04)** — the wasm bundle now fetches
-> a 3×3 neighbourhood of real AC landblocks around Holtburg in one
-> batch call, lays them out at correct world offsets, and PixiJS
-> draws them on a `<canvas>` with mouse-wheel zoom and drag-to-pan.
-> See [`phase-3-renderer.md`](phase-3-renderer.md) for the as-built
-> notes and the deliverable screenshot at
-> `docs/images/phase-3-step-2-multi-landblock.png` (step 1's
-> single-landblock screenshot at
-> `docs/images/phase-3-step-1-landblock.png` is still the best
-> reference for the height-ramp colour mapping in isolation).
+> steps 1, 2, and 3 landed (2026-05-04)** — the wasm bundle now
+> fetches a 3×3 neighbourhood of real AC landblocks around Holtburg
+> in one batch call, lays them out at correct world offsets, and
+> PixiJS draws them as **AC terrain** (not a height ramp): grass,
+> water, sand, dirt sampled per-cell from a 32-entry placeholder
+> atlas via a custom GLSL ES 3.00 Mesh shader. Mouse-wheel zoom and
+> drag-to-pan still work. See [`phase-3-renderer.md`](phase-3-renderer.md)
+> for the as-built notes and the deliverable screenshot at
+> `docs/images/phase-3-step-3-textured.png` (step 2's height-ramp
+> screenshot at `docs/images/phase-3-step-2-multi-landblock.png` and
+> step 1's single-landblock at `docs/images/phase-3-step-1-landblock.png`
+> are archived as references for the geometry-only renders in
+> isolation).
 >
 > All seven library crates needed by the browser client cross-compile
 > to `wasm32-unknown-unknown`: `holtburger-common`,
 > `holtburger-protocol`, `holtburger-session`, `holtburger-dat`,
 > `holtburger-world`, `holtburger-content`, `holtburger-core`. Native
-> invariant held — the 1086 existing lib tests stay green at every
-> commit. `holtburger-scripting` remains wasm32-incompatible
-> (deno_core / V8) and is reclassified from "port" to "exclude from
-> WASM build" — see §8.
+> invariant held — the 1090 existing lib tests stay green at every
+> commit (1086 + 4 from the step-3 bit-decode tests).
+> `holtburger-scripting` remains wasm32-incompatible (deno_core / V8)
+> and is reclassified from "port" to "exclude from WASM build" —
+> see §8.
 >
 > §8 steps 1 (build pipeline, `3025834`), 3 (`web_time::Instant`
 > swap, `d23f5d3`), 2 (WsTransport, `e151003`), and 4 (HttpResourceSource,
 > `ac7f92d`) are all done. **Step 6 (renderer wiring) is closed via
-> Phase 3 step 1 + step 2.** Step 1 added `fetch_landblock_heightmap`
+> Phase 3 steps 1, 2, and 3.** Step 1 added `fetch_landblock_heightmap`
 > for one landblock; step 2 added `fetch_landblock_heightmaps` (batch)
-> plus the multi-landblock scene graph and pan/zoom camera. The Node
-> smoke test grew from 8 → 14 (step 1) → 17 (step 2) checks.
+> plus the multi-landblock scene graph and pan/zoom camera; step 3
+> added the per-vertex `terrainCodes` stream + custom Mesh shader
+> for AC terrain rendering. The Node smoke test grew from 8 → 14
+> (step 1) → 17 (step 2) → 20 (step 3) checks.
 >
 > Step 5 (scripting JS interop) remains open but doesn't block
-> character-login → world-entry. Phase 3 step 3 picks up where step 2
-> stopped: replacing the height-ramp colour with the AC terrain
-> texture atlas. Multi-landblock streaming with prefetch / eviction,
-> and `ClientViewEvent` → entity sprites, are step 4-or-later.
+> character-login → world-entry. Phase 3 step 4 (or 3.5) picks up
+> where step 3 stopped: real AC textures (replacing the placeholder
+> palette) and/or sprite-atlas reuse for object art. Multi-landblock
+> streaming with prefetch / eviction, road overlays, and
+> `ClientViewEvent` → entity sprites are also independent candidates.
 >
 > **Audience:** anyone picking up Phase 2/3 implementation. Read §8
 > (what's left) first; §3 (the per-crate matrix) is the as-built

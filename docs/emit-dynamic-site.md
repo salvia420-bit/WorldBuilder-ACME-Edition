@@ -322,9 +322,16 @@ static-site visual fidelity, in order of impact:
 | Step | Visual jump | Status |
 |---|---|---|
 | Heightmap render | topographic relief, recognisable shapes | ✅ landed (step 1+2) |
-| Texture atlas + surface table | recognisable AC terrain — biggest delta | open (step 3) |
+| Texture atlas + surface table | recognisable AC terrain — biggest delta | ✅ landed (step 3, placeholder atlas) |
 | Sprite atlas consumption | buildings/trees/decorations in the right spots | open (step 4) |
 | Road overlays + atmospheric polish | matches the README static screenshot | open (step 5) |
+
+Step 3's texture atlas ships as 32 placeholder solid-colour swatches
+per the handoff brief's scope-reducer guidance — the AC Texture
+(`0x06`) parser is a multi-week reverse-engineering job and was
+deferred to step 3.5 to keep the shader pipeline (the load-bearing
+piece) shipping first. The shader's per-region `(u, v, w, h)`
+contract generalises to real textures without changes elsewhere.
 
 **What's deliberately NOT in this rail:**
 

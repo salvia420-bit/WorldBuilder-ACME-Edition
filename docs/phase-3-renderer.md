@@ -1,22 +1,32 @@
 # Phase 3 — PixiJS renderer (as-built)
 
-> **Status:** Step 1 + step 2 landed (2026-05-04). The browser bundle
+> **Status:** Steps 1, 2, and 3 landed (2026-05-04). The browser bundle
 > fetches a 3×3 neighbourhood of real Asheron's Call landblocks around
 > Holtburg in one batch call, lays them out at correct world offsets,
-> and PixiJS draws them on a `<canvas>` with mouse-wheel zoom + drag
-> pan. See [`phase-3-step-1-handoff.md`](phase-3-step-1-handoff.md)
-> and [`phase-3-step-2-handoff.md`](phase-3-step-2-handoff.md) for the
+> and PixiJS draws them on a `<canvas>` as **AC terrain** (not a height
+> ramp): grass, water, sand, dirt sampled per-cell from a 32-entry
+> placeholder atlas via a custom GLSL ES 3.00 Mesh shader. Mouse-wheel
+> zooms around the cursor; click-and-drag pans. See
+> [`phase-3-step-1-handoff.md`](phase-3-step-1-handoff.md),
+> [`phase-3-step-2-handoff.md`](phase-3-step-2-handoff.md), and
+> [`phase-3-step-3-handoff.md`](phase-3-step-3-handoff.md) for the
 > framing briefs; this file is the as-built reference.
 
-![Holtburg + 8 neighbours rendered as a 3×3 grid](images/phase-3-step-2-multi-landblock.png)
+![Holtburg + 8 neighbours rendered with the AC terrain atlas](images/phase-3-step-3-textured.png)
 
-The step 2 screenshot is the current deliverable artefact: the
-contiguous 3×3 grid of landblocks, water-blue to the north and a
-white peak in the south, with the wireframe showing the 24×24 cell
-grid (3 landblocks × 8 cells) joining flush at the seams. The step 1
-single-landblock deliverable is still archived at
-[`images/phase-3-step-1-landblock.png`](images/phase-3-step-1-landblock.png)
-as the cleanest reference for the colour-ramp mapping in isolation.
+The step 3 screenshot is the current deliverable artefact: the same
+contiguous 3×3 grid as step 2, but now reading as recognisable AC
+terrain — blue water in the north, green grasslands at the Holtburg
+town centre, scattered patchy and dirt textures across the southern
+cells. Compare to the static-site z=12 PNG at
+[`images/DerethMapsEnhanced_zoom.png`](images/DerethMapsEnhanced_zoom.png) —
+same place, same palette signature, even though our render lacks
+the pre-baked sprite-atlas objects (those land in step 4). The step 2
+height-ramp deliverable is archived at
+[`images/phase-3-step-2-multi-landblock.png`](images/phase-3-step-2-multi-landblock.png),
+and the step 1 single-landblock at
+[`images/phase-3-step-1-landblock.png`](images/phase-3-step-1-landblock.png),
+as the cleanest references for the geometry-only renders in isolation.
 
 ---
 
@@ -288,60 +298,149 @@ left an `8 × (24 - 3) = 168 m` gap between neighbours otherwise.
 
 ---
 
-## What's next (Phase 3 step 3 candidates)
+## Phase 3 step 3 landed (2026-05-04)
 
-These are independent — pick by user priority. Step 2 deliberately
-did not pre-decide the shape of step 3; the multi-landblock + camera
-foundation supports any of them.
+Step 3 turns the renderer from "topographic-map heightmap" into
+"recognisable AC terrain". On a fresh page load, the bundle:
 
-### a) Texture-atlas terrain palette
+1. Decodes each vertex's `terrain[]` u16 (per the ACE bit packing —
+   road=bits 0-1, type=bits 2-6, scenery=bits 11-15) and threads the
+   5-bit terrain-type field through the wasm boundary as a
+   `Uint8Array(81)` per landblock.
+2. Builds a 32-pixel-wide RGBA atlas in JS, one column per terrain
+   type. Colours are placeholder swatches (per the handoff brief's
+   scope-reducer guidance — the AC Texture (`0x06`) parser is a
+   multi-week reverse-engineering job, deferred to step 3.5).
+3. Attaches a custom GLSL ES 3.00 Mesh shader to each landblock that
+   reads the SW corner's terrain code via `flat in int` and samples
+   the atlas at the column centre. The SW corner is the WebGL2
+   provoking vertex (last index of each triangle), so both triangles
+   of a cell shade as one type — hard-edges, no diagonal smear.
 
-Replace the height-ramp colour with the 32 textured tile types resolved
-through the 256-entry surface table. Needs:
-- A new wasm-bindgen export returning the per-vertex tile-type-id
-  alongside positions/indices.
-- A texture atlas built from the AC terrain textures (likely loaded
-  from `eor/portal:` records and stitched in JS).
-- A custom GLSL fragment shader that samples the atlas with per-vertex
-  tile coordinates, blending across triangle edges.
+What step 3 ships, on top of step 2:
 
-This is the obvious next step from a "look like AC" perspective.
+| Surface | Before step 3 | After step 3 |
+|---|---|---|
+| Wasm boundary | `positions, indices, heightMin, heightMax` | + `terrainCodes: Uint8Array(81)` |
+| `CellLandblock` API | `get_height(x, y)` | + `terrain_type/road_type/scenery(x, y)` + `terrain_at(x, y)` |
+| Triangle index winding | SW vertex first | SW vertex **last** (provoking-vertex contract for `flat`) |
+| Mesh attribute | `aPosition (vec2) + aUV (vec2 height-encoded)` | `aPosition (vec2) + aTerrainCode (float)` |
+| Mesh shader | default `MeshShader` (height-ramp texture) | custom GLSL ES 3.00 with per-cell `flat` atlas sample |
+| Colour source | `(height - hmin) / range → 1D gradient` | `terrain_code → 32-entry placeholder atlas` |
+| Smoke checks | 17 | 20 |
+| Native lib tests | 1086 | 1090 (+4 bit-decode tests) |
 
-### b) Multi-landblock streaming
+The placeholder palette mirrors AC's `TerrainTextureType` enum
+(DatReaderWriter `dats.xml` lines 183-217 / `ACE.DatLoader.Entity.
+TerrainType` in the cloned upstream): 32 base types from `BarrenRock`
+(0x00) through `DesolateLands` (0x1F). Entry 0x20 (`RoadType`) lives
+in the road-bit field, not the type-bit field, and never appears in
+the per-vertex stream — road overlays are step 5 polish.
+
+**The PixiJS-8 footguns hit during implementation, captured here so
+step 3.5 doesn't relive them:**
+
+- **WebGL path uses individual uniforms, not UBO blocks.** First
+  shader attempt declared `layout(std140) uniform globalUniforms {
+  ... }` and `layout(std140) uniform localUniforms { ... }` — the
+  WebGPU-style layout. WebGL flagged "used but unbound uniform
+  buffer" because PixiJS's `local-uniform-bit` template emits
+  `uniform mat3 uTransformMatrix; uniform vec4 uColor; uniform float
+  uRound;` and binds them by name through `glUniform*` from the
+  MeshPipe's UniformGroups (set on `shader.groups[100]` and
+  `shader.groups[101]` per frame by the WebGL mesh adaptor). Fix:
+  declare individual uniforms matching that template — `uTransformMatrix`,
+  `uColor`, `uRound`, `uProjectionMatrix`, `uWorldTransformMatrix`,
+  `uWorldColorAlpha`, `uResolution`. The WGSL/WebGPU branch (a
+  future polish step) flips back to UBO blocks.
+- **Provoking-vertex ordering matters.** The default 9×9 → 384 index
+  vector put `v00` (cell SW corner) **first** in each triangle.
+  WebGL2's `flat` interpolation samples from the **last** vertex of a
+  triangle, so under the original winding, both triangles of a cell
+  drew with two different terrain codes (whichever vertex happened to
+  be last in each triangle). Reordering to put `v00` last in both
+  triangles makes the cell shade uniformly. Winding stays CCW so
+  consumers depending on triangle orientation aren't affected (PixiJS
+  Mesh doesn't backface-cull anyway).
+- **Module-level `const` declarations are TDZ-blocked.** Hoisted
+  function declarations work above their declaration line, but
+  module-level GLSL string literals as `const` don't — the first
+  arrangement put the GLSL constants below the `try { … render(…) }`
+  block at the bottom of the module and crashed with `Cannot access
+  'TERRAIN_VERTEX_GLSL' before initialization`. Fix: put all
+  rendering primitives + their `const` literals above the render
+  trigger, with the trigger itself moved to the bottom of the script.
+
+### Files touched in step 3
+
+| File | What |
+|---|---|
+| [`crates/holtburger-dat/src/landblock.rs`](../external/holtburger/crates/holtburger-dat/src/landblock.rs) | `terrain_at` / `terrain_type` / `road_type` / `scenery` helpers + 4 unit tests pinning the bit layout |
+| [`apps/holtburger-web/src/lib.rs`](../external/holtburger/apps/holtburger-web/src/lib.rs) | `LandblockMesh.terrain_codes: Vec<u8>` field + `terrainCodes` getter; SW-last index reordering in `build_mesh` |
+| [`apps/holtburger-web/index.html`](../external/holtburger/apps/holtburger-web/index.html) | `TERRAIN_TYPES` (32 placeholder colours), `buildTerrainAtlas`, custom GLSL shader, `buildTerrainShader`, `buildLandblockChildren` rewrite to use the new geometry + shader |
+| [`apps/holtburger-web/smoke_test.cjs`](../external/holtburger/apps/holtburger-web/smoke_test.cjs) | 3 new checks: `terrainCodes` shape, range, and ≥3 distinct types at Holtburg centre |
+| [`apps/holtburger-web/capture_step3.cjs`](../external/holtburger/apps/holtburger-web/capture_step3.cjs) | Playwright + Chromium harness for re-capturing the docs/images screenshot |
+| [`docs/phase-3-renderer.md`](phase-3-renderer.md) | This file |
+| [`docs/phase-2-wasm-spike.md`](phase-2-wasm-spike.md) | Status banner now reads "steps 1, 2, 3 landed" |
+| [`docs/emit-dynamic-site.md`](emit-dynamic-site.md) | §4.5 quality-ladder row 2 (texture atlas + surface table) flips from `open` to `✅ landed` |
+| [`docs/images/phase-3-step-3-textured.png`](images/phase-3-step-3-textured.png) | Browser screenshot — 3×3 grid with terrain atlas |
+
+---
+
+## What's next (Phase 3 step 4 candidates)
+
+These are independent — pick by user priority. Step 3's shader
+pipeline is the load-bearing foundation that step 4-or-later builds on.
+
+### a) Real texture parser (step 3.5)
+
+Replace the placeholder palette with the actual AC terrain textures:
+- New `crates/holtburger-dat/src/file_type/texture.rs` parser for the
+  Texture (`0x06`) record format — palette-based with header (width,
+  height, pixel-format, palette-id pointing to a Palette `0x04` record).
+- New `fetch_terrain_textures(asset_url, texture_ids)` wasm export
+  returning RGBA8 blobs.
+- JS-side packs the 32-or-fewer real tiles into a 1024×1024-or-larger
+  atlas. The shader's `(code + 0.5) / 32` lookup generalises to per-
+  region `(u, v, w, h)` math passed as `uniform vec4 uAtlasRegions[32]`.
+
+### b) Sprite-atlas reuse for object art (step 4 in the design doc)
+
+Layer object sprites + LandblockInfo on top of the textured terrain
+by reusing the static-site sprite atlas at
+`dist/projects/<slug>/sprites/atlas.{png,js}`. This is the core
+§4.5 quality-ladder progression. Needs:
+- A wasm export reading `LandblockInfo` records (`XXYYFFFE`) for
+  each landblock and emitting placement records (object ID, x, y,
+  rotation).
+- JS-side sprite pool keyed by object ID, looked up against the
+  static-site atlas.
+
+### c) Road overlays + atmospherics (step 5 polish)
+
+Use the `road_type` bits the step 3 helpers expose to draw a second
+texture layer for road tiles. The static-site approach is a separate
+pass; alternatively a dual-texture-per-fragment shader. Atmospherics
+(fog of war, day/night gradient) sit alongside.
+
+### d) Multi-landblock streaming
 
 Extend beyond the 3×3 hardcode to N×N visible landblocks driven by
-the camera. Step 2 establishes the camera UX that this step's cache
-strategy depends on. Needs:
-- A landblock-id → `LandblockMesh` cache in JS.
-- Camera-driven prefetch (which neighbours to load when the camera
-  moves).
-- Eviction strategy when the cache exceeds a budget.
-- LOD / culling once the visible area exceeds a few landblocks.
+the camera. Needs a landblock-id → `LandblockMesh` cache, camera-
+driven prefetch, eviction, and LOD/culling.
 
-### c) `ClientViewEvent` → entity sprites
+### e) Soft-blend cell boundaries
 
-Wire the live ACE feed (when the backend unblocks) through to PixiJS
-sprite updates. Needs:
-- A new wasm-bindgen export reading from `holtburger-core::client::view`
-  and producing an entity buffer per frame.
-- A JS-side sprite pool keyed by entity id.
-- Sprite assets (likely from `eor/portal:` ICON_DESC + pre-rendered
-  facing animations).
+Replace `flat` interpolation with a triangle-barycentric blend so
+adjacent cells with different terrain types fade smoothly instead of
+showing hard edges. About 50 lines of GLSL plus possibly per-vertex
+duplication; ship hard-edges first (this commit) and decide if
+quality demands the extra work.
 
-The design doc puts ClientViewEvent → entity wiring in **Phase 4**, so
-this candidate is technically out of Phase 3 scope. Listed here for
-completeness.
+### Tangentially: Live ACE session (Phase 4)
 
-### d) LandblockInfo (object placement) rendering
-
-Each `XXYYFFFE` `LandblockInfo` references the populated cells
-(`XXYYNNNN` for `NNNN < FFFE`) — interior buildings, dungeon
-entrances, and town objects. Adds a separate rendering pass on top
-of the surface terrain step 1/2 already render.
-
-### Tangentially: Live ACE session
-
-Still blocked on three MySQL DBs + DAT files for ACE. When that
-unblocks, `try_ws_handshake_smoke` becomes the entry point and the
-renderer's data feed grows a "from session" path alongside the
-"from static HBA" path step 1 took.
+Still gated on a wasm-side AC handshake export; the wasm bundle's
+existing `try_ws_handshake_smoke` constructs a Session but doesn't
+drive login. When that lands, `ClientViewEvent` → entity sprites
+becomes the data path and the renderer grows a "from live session"
+feed alongside the "from static HBA" feed step 1 took.
