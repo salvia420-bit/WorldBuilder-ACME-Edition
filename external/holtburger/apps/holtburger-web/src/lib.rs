@@ -1236,6 +1236,112 @@ fn pack_model_mesh(tris: Vec<Tri>) -> ModelMesh {
     }
 }
 
+/// One surface's decoded pixels — output of [`fetch_surface_pixels`]
+/// / [`fetch_surfaces_pixels`]. Used by Phase 3 step 6's in-browser
+/// rasterizer to UV-map per-poly textures into the model's tile.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct SurfacePixels {
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>, // RGBA8, length = width * height * 4
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SurfacePixels {
+    #[wasm_bindgen(getter)]
+    pub fn width(&self) -> u32 { self.width }
+    #[wasm_bindgen(getter)]
+    pub fn height(&self) -> u32 { self.height }
+    /// `Uint8Array(width * height * 4)` of straight-RGBA pixels.
+    #[wasm_bindgen(getter)]
+    pub fn pixels(&self) -> Vec<u8> { self.pixels.clone() }
+}
+
+/// Walk Surface → SurfaceTexture → Texture → RGBA8 for one surface
+/// DID. Returns an empty 0x0 SurfacePixels (width=height=0,
+/// pixels.len()=0) when any step of the chain fails — JS treats that
+/// as "no texture, fall back to flat colour".
+#[cfg(target_arch = "wasm32")]
+fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource>(
+    source: &S,
+    surface_did: u32,
+) -> SurfacePixels {
+    use holtburger_dat::file_type::{Palette, Surface, SurfaceTexture, Texture, TextureDecodeError};
+    use holtburger_dat::ResourceKey;
+    let empty = SurfacePixels { width: 0, height: 0, pixels: Vec::new() };
+
+    let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else { return empty; };
+    let Ok(surface) = Surface::unpack(&bytes) else { return empty; };
+    if let Some(argb) = surface.solid_color() {
+        // Solid surfaces have no pixel data — synthesize a 1×1 ARGB
+        // texture so the shader can sample-and-modulate uniformly.
+        let a = ((argb >> 24) & 0xFF) as u8;
+        let r = ((argb >> 16) & 0xFF) as u8;
+        let g = ((argb >> 8) & 0xFF) as u8;
+        let b = (argb & 0xFF) as u8;
+        return SurfacePixels { width: 1, height: 1, pixels: vec![r, g, b, a] };
+    }
+    let Some((surf_tex_id, _)) = surface.textured() else { return empty; };
+    let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else { return empty; };
+    let Ok(surf_tex) = SurfaceTexture::unpack(&stb) else { return empty; };
+    let Some(rs_id) = surf_tex.highest_res() else { return empty; };
+    let Ok(tb) = source.get_file_by_key(ResourceKey::new("eor/portal", rs_id)) else { return empty; };
+    let Ok(tex) = Texture::unpack(&tb) else { return empty; };
+    let rgba = tex
+        .to_rgba8(|pal_id| {
+            let pb = source
+                .get_file_by_key(ResourceKey::new("eor/portal", pal_id))
+                .map_err(|e| TextureDecodeError::PaletteFetch(format!("{pal_id:#010X}: {e}")))?;
+            Palette::unpack(&pb).map_err(|e| {
+                TextureDecodeError::PaletteFetch(format!("Palette::unpack {pal_id:#010X}: {e}"))
+            })
+        });
+    match rgba {
+        Ok(pixels) => SurfacePixels {
+            width: tex.width as u32,
+            height: tex.height as u32,
+            pixels,
+        },
+        Err(_) => empty,
+    }
+}
+
+/// Phase 3 step 6: fetch decoded RGBA8 pixels for one surface DID.
+/// Empty result means the walk failed at some step — JS falls back
+/// to a flat fill for that triangle group.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_surface_pixels(
+    asset_url: String,
+    surface_did: u32,
+) -> Result<SurfacePixels, JsValue> {
+    let source = holtburger_resource_http::HttpResourceSource::connect(&asset_url)
+        .await
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    Ok(fetch_surface_pixels_impl(&source, surface_did))
+}
+
+/// Batch form: fetch decoded pixels for many surfaces in one HTTP
+/// fetch. Returns `Vec<SurfacePixels>` in input order; per-id
+/// failures yield empty entries (no batch fail).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_surfaces_pixels(
+    asset_url: String,
+    surface_dids: Vec<u32>,
+) -> Result<Vec<SurfacePixels>, JsValue> {
+    let source = holtburger_resource_http::HttpResourceSource::connect(&asset_url)
+        .await
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let mut out = Vec::with_capacity(surface_dids.len());
+    for &id in &surface_dids {
+        out.push(fetch_surface_pixels_impl(&source, id));
+    }
+    Ok(out)
+}
+
 /// Phase 3 step 6: walk a model's GfxObj/SetupModel chain, triangulate,
 /// and return a flat-buffer mesh ready for in-browser rasterization.
 /// One HTTP fetch (the HBA bundle); per-id walks are in-memory.

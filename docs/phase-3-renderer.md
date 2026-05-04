@@ -1,23 +1,25 @@
 # Phase 3 — PixiJS renderer (as-built)
 
-> **Status:** Steps 1, 2, 3, 3.5, 4, 4.5, and step 5 partial (road
-> overlays) landed (2026-05-04). The browser bundle fetches a 3×3
-> neighbourhood of real Asheron's Call landblocks around Holtburg in
-> one batch call, lays them out at correct world offsets, and PixiJS
-> draws them on a `<canvas>` as **AC terrain with real retail
-> textures, stone-road network, and 239 placed object/building
-> sprites tinted with per-model real colours** derived from each
-> model's GfxObj/SetupModel → Surface chain. Mouse-wheel zooms around
-> the cursor; click-and-drag pans. See
+> **Status:** Steps 1, 2, 3, 3.5, 4, 4.5, 5 (partial — roads), and
+> **6 (live runtime per-model rendering)** landed (2026-05-04). The
+> browser bundle fetches a 3×3 neighbourhood of real Asheron's Call
+> landblocks around Holtburg in one batch call, lays them out at
+> correct world offsets, and PixiJS draws them on a `<canvas>` as
+> **AC terrain with real retail textures, stone-road network, and 239
+> placed object/building sprites rendered in-browser at runtime via
+> per-poly UV-mapped textures** — same pipeline as the static-site
+> emitter's `ObjectSpriteGenerator.cs::DrawTriangle` but at runtime,
+> so user-imported custom models render without a re-bake step.
+> Mouse-wheel zooms around the cursor; click-and-drag pans. See
 > [`phase-3-step-1-handoff.md`](phase-3-step-1-handoff.md),
 > [`phase-3-step-2-handoff.md`](phase-3-step-2-handoff.md),
 > [`phase-3-step-3-handoff.md`](phase-3-step-3-handoff.md), and
 > [`phase-3-step-4.5-handoff.md`](phase-3-step-4.5-handoff.md) for the
 > framing briefs; this file is the as-built reference.
 
-![Holtburg town centre at 3× zoom — per-poly real colours from the production atlas](images/phase-3-step-4.5-real-colours-zoomed.png)
+![Holtburg town centre at 3× zoom — live-rendered per-poly textures (step 6)](images/phase-3-step-6-live-render-zoomed.png)
 
-![Full page view with stage-info panel](images/phase-3-step-4.5-real-colours.png)
+![Full page view with stage-info panel](images/phase-3-step-6-live-render.png)
 
 The step 4.5 screenshot is the current deliverable: same 3×3 grid as
 step 4 (real terrain + roads + 239 sprites), now with **per-poly real

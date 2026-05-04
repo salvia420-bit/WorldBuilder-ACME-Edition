@@ -20,8 +20,11 @@ const url = process.argv[3] || "http://127.0.0.1:8989/apps/holtburger-web/index.
     const page = await ctx.newPage();
 
     page.on("console", (msg) => {
+        const txt = msg.text();
         if (msg.type() === "error" || msg.type() === "warning") {
-            console.error(`[browser ${msg.type()}]`, msg.text());
+            console.error(`[browser ${msg.type()}]`, txt);
+        } else if (txt.includes("[step6]") || txt.includes("[step")) {
+            console.log(`[browser]`, txt);
         }
     });
     page.on("pageerror", (err) => {
