@@ -8,9 +8,12 @@
 > camera) have landed. See `docs/phase-3-renderer.md` for the
 > as-built reference.
 >
-> **Open follow-on from Phase 1:** live-ACE round-trip — bridge +
-> shim + cli are smoke-tested locally, but a real ACE server is still
-> blocked on three MySQL DBs + the AC client DAT files for ACE.
+> **Phase 1 closed (2026-05-04).** The live-ACE round-trip ran:
+> `holtburger-cli ↔ wsshim ↔ wsbridge ↔ ACE` reached the character
+> Selection page with full handshake. ACE was brought up locally per
+> `docs/ace-local-setup.md` (MariaDB + 3 DBs + .NET 10 SDK + upstream
+> ACE clone). The vendored `external/ACE/Source/` is partial — the
+> upstream clone at `~/ace-server/` is the build root.
 >
 > **Decisions answered since the original draft (do not re-litigate):**
 > §7.1 external proxy, §7.2 single namespaced HBA-of-HBAs, §7.3
@@ -602,10 +605,15 @@ Phase 1 — **WS↔UDP loop spike.** ~1–2 weeks.
   ports are forwarded; datagrams from other source IPs/ports are dropped.
 - ✅ Listen-vs-ACE port split on the shim, so ACE-on-non-standard-ports
   works without retraining `holtburger-cli`.
-- ⏳ Live-ACE round-trip — blocked on standing up ACE locally (requires three
-  MySQL DBs + AC client DAT files; see Explore-agent notes from the
-  groundwork pass). Once this clears, Phase 1 closes and Phase 2 (WASM
-  port) opens.
+- ✅ **Live-ACE round-trip — DONE (2026-05-04).** ACE brought up locally
+  (`~/ace-server/` clone of upstream `ACEmulator/ACE`, MariaDB +
+  three-DB provisioning, .NET 10.0.203 SDK, `Config.js` drop-in,
+  `ACE_NONINTERACTIVE_CONSOLE=true` headless launch). Two validation
+  paths both reached the cli's Selection page on a real ACE instance:
+  (a) `holtburger-cli → UDP 9000 → ACE` direct, (b) full Phase 1 loop
+  `cli → wsshim → wsbridge → ACE`. Login + handshake + DddInterrogation
+  response + CharacterList + ServerName "ACEmulator-local" all received.
+  See `docs/ace-local-setup.md` for the recipe + lessons learned.
 
 Phase 2 — **WASM port spike (DONE, 2026-05-04).** ~3–4 weeks budgeted; landed
 inside that window.
