@@ -419,6 +419,121 @@ impl TerrainTexture {
     }
 }
 
+/// One placed object inside a landblock — output of
+/// [`fetch_landblock_objects`]. Object positions are in world-metre
+/// coordinates relative to the landblock's NW corner (so JS adds
+/// `lbX * 192, lbY * 192` to get global world coords).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct ObjectPlacement {
+    landblock_id: u32,
+    /// AC model id — `0x01XXXXXX` = Model/GfxObj, `0x02XXXXXX` = SetupModel.
+    model_id: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+    /// Yaw rotation around the z-axis (vertical), radians. Extracted
+    /// from the AC quaternion via `atan2(2(qw*qz + qx*qy), 1 - 2(qy² + qz²))`.
+    rotation_z: f32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl ObjectPlacement {
+    #[wasm_bindgen(getter, js_name = landblockId)]
+    pub fn landblock_id(&self) -> u32 {
+        self.landblock_id
+    }
+    #[wasm_bindgen(getter, js_name = modelId)]
+    pub fn model_id(&self) -> u32 {
+        self.model_id
+    }
+    #[wasm_bindgen(getter)]
+    pub fn x(&self) -> f32 {
+        self.x
+    }
+    #[wasm_bindgen(getter)]
+    pub fn y(&self) -> f32 {
+        self.y
+    }
+    #[wasm_bindgen(getter)]
+    pub fn z(&self) -> f32 {
+        self.z
+    }
+    #[wasm_bindgen(getter, js_name = rotationZ)]
+    pub fn rotation_z(&self) -> f32 {
+        self.rotation_z
+    }
+}
+
+/// Fetch per-landblock object placement records for a list of
+/// `XXYYFFFE` cell IDs. Each `LandblockInfo` holds two parallel
+/// placement lists, both emitted as [`ObjectPlacement`] entries:
+///
+/// - `LandblockInfo.objects` (the `Stab` list) — props, signs, small
+///   loose objects.
+/// - `LandblockInfo.buildings` (the `BuildInfo` list) — buildings
+///   and other structures with interior cells. Their portals
+///   (doors/windows) and leaf meshes are dropped here; step 4 only
+///   needs the building's outer placement (model_id + frame) to
+///   render the silhouette.
+///
+/// Both lists use the same `(model_id, Frame)` shape, so the
+/// boundary doesn't distinguish them. The renderer can tell objects
+/// from buildings by the model-id top byte (`0x01` = GfxObj/Model,
+/// `0x02` = SetupModel — usually buildings).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_landblock_objects(
+    asset_url: String,
+    cell_ids: Vec<u32>,
+) -> Result<Vec<ObjectPlacement>, JsValue> {
+    use holtburger_dat::landblock::LandblockInfo;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+
+    let source = holtburger_resource_http::HttpResourceSource::connect(&asset_url)
+        .await
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+    fn frame_to_placement(landblock_id: u32, model_id: u32, frame: &holtburger_dat::landblock::Frame) -> ObjectPlacement {
+        let q = &frame.orientation;
+        // Quaternion → yaw (rotation around z). Standard aircraft-
+        // style yaw extraction.
+        let siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
+        let cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
+        let yaw = siny_cosp.atan2(cosy_cosp);
+        ObjectPlacement {
+            landblock_id,
+            model_id,
+            x: frame.origin.x,
+            y: frame.origin.y,
+            z: frame.origin.z,
+            rotation_z: yaw,
+        }
+    }
+
+    let mut out = Vec::new();
+    for &id in &cell_ids {
+        // Some landblocks have no LandblockInfo record (ocean cells,
+        // sparse wilderness). Treat "not found" as zero objects rather
+        // than failing the whole batch.
+        let bytes = match source.get_file_by_key(ResourceKey::new("eor/cell", id)) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let info = LandblockInfo::unpack(&bytes)
+            .map_err(|e| JsValue::from_str(&format!("LandblockInfo::unpack {id:#010X}: {e}")))?;
+
+        for stab in &info.objects {
+            out.push(frame_to_placement(info.id, stab.id, &stab.frame));
+        }
+        for building in &info.buildings {
+            out.push(frame_to_placement(info.id, building.model_id, &building.frame));
+        }
+    }
+    Ok(out)
+}
+
 /// Fetch all 33 retail terrain textures from `asset_url`, decoded to
 /// RGBA8. Returns one [`TerrainTexture`] per `TerrainTextureType`
 /// entry, in enum order (index = terrain code).

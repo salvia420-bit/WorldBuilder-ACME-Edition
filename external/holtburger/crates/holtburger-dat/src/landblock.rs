@@ -24,8 +24,12 @@ pub struct BuildInfo {
     pub model_id: u32,
     pub frame: Frame,
     pub num_leaves: u32,
+    // u32 count, matching ACE's `List<T>.Unpack(reader)` extension
+    // (`UnpackableExtensions.cs:174`). Earlier u16 here desync'd the
+    // parser when a building had no portals (read 0 then misaligned
+    // for the next building's model_id).
     #[br(temp)]
-    pub num_portals: u16,
+    pub num_portals: u32,
     #[br(count = num_portals)]
     pub portals: Vec<PortalInternal>,
 }
