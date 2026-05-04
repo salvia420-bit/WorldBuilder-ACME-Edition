@@ -97,21 +97,38 @@ hex constant. Multi-cell rendering is a step 2 or 3 problem.
 
 The Rust side speaks **metres**, **(x = east, y = north, z = elevation)**:
 
-- A landblock cell is **24 m × 24 m**. The 9×9 vertex grid puts
-  vertices **3 m apart** on each axis.
+- A **landblock** is **192 m × 192 m**. It contains 8×8 = 64 *cells*,
+  each 24 m × 24 m. The canonical constant is
+  `holtburger_common::position::METERS_PER_LANDBLOCK = 192.0` (see
+  [`crates/holtburger-common/src/position.rs:5`](../external/holtburger/crates/holtburger-common/src/position.rs)).
+- The 9×9 vertex grid covers the **whole landblock**, so vertices are
+  `192 / 8 = 24 m apart` on each axis. The `CellLandblock` record name
+  is misleading — despite the "Cell" prefix, it is the *landblock*-level
+  surface terrain record, not a single cell.
 - Heights are `u8 × 2.0` per `CellLandblock::get_height` (see
   [`crates/holtburger-dat/src/landblock.rs`](../external/holtburger/crates/holtburger-dat/src/landblock.rs)),
   so the elevation range is `[0, 510]` metres — that's the AC vertical
   range.
 
+> **Correction note (Phase 3 step 2):** Step 1 originally documented
+> "vertices 3 m apart, cell 24 m wide" here and used `x as f32 * 3.0`
+> in the tessellation loop. That framing was wrong — the constant
+> source is 192 m / 8 = 24 m, and a `CellLandblock` covers a whole
+> landblock, not a single cell. The render still looked correct in
+> step 1 because the container scale `drawSize / 24.0` absorbed the
+> unit error. Step 2 fixed the tessellation (`x * 24.0`), the JS
+> scale (`drawSize / 192.0`), and the smoke test corner-vertex
+> assertion ((24, 24) → (192, 192)).
+
 The JS side **flips y** at the container level
 (`container.scale.set(scale, -scale)`) so AC's +y (north) maps to
-canvas-up. The 24 m landblock width is mapped to roughly `canvas.width
-- 32 px` of margin (≈ 20 px / m). The current implementation throws
-away the z component on the JS side and encodes it as a `u`-coordinate
-(0..1) into a 256×1 gradient texture; the default `Mesh` shader then
-reads per-fragment colour from the ramp. Smooth interpolation across
-vertices comes for free from GL's barycentric blend.
+canvas-up. The 192 m landblock width is mapped to `canvas.width - 32 px`
+of margin (≈ 2.5 px / m at a 512 px canvas). The current implementation
+throws away the z component on the JS side and encodes it as a
+`u`-coordinate (0..1) into a 256×1 gradient texture; the default `Mesh`
+shader then reads per-fragment colour from the ramp. Smooth
+interpolation across vertices comes for free from GL's barycentric
+blend.
 
 ---
 

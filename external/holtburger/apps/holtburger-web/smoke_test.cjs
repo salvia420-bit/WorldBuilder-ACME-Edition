@@ -192,14 +192,16 @@ check(
             );
 
             // Vertex (0,0) is at metric origin; vertex (8,8) is at
-            // (24, 24). These are the corners of the 9×9 grid.
+            // (192, 192). These are the corners of the 9×9 grid that
+            // covers the full 192 m × 192 m landblock (vertex spacing
+            // = METERS_PER_LANDBLOCK / 8 = 24 m).
             const cornerOk =
                 mesh.positions[0] === 0 &&
                 mesh.positions[1] === 0 &&
-                mesh.positions[80 * 3] === 24 &&
-                mesh.positions[80 * 3 + 1] === 24;
+                mesh.positions[80 * 3] === 192 &&
+                mesh.positions[80 * 3 + 1] === 192;
             check(
-                "fetch_landblock_heightmap: corner vertices at (0,0) and (24,24)",
+                "fetch_landblock_heightmap: corner vertices at (0,0) and (192,192)",
                 cornerOk,
                 `(${mesh.positions[0]},${mesh.positions[1]}) (${mesh.positions[80 * 3]},${mesh.positions[80 * 3 + 1]})`
             );

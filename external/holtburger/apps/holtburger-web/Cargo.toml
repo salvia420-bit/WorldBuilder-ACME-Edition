@@ -14,6 +14,7 @@ description = "Browser-loadable WASM smoke test for Phase 2 of emit-dynamic-site
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+holtburger-common = { workspace = true }
 holtburger-protocol = { workspace = true }
 holtburger-session = { workspace = true }
 wasm-bindgen = "0.2"

@@ -228,11 +228,14 @@
         });
         const pixiMesh = new PIXI.Mesh({ geometry, texture: rampTexture });
 
-        // World-units → pixels: the 24 m landblock fits the canvas with
+        // World-units → pixels: the 192 m landblock fits the canvas with
         // a small margin. Flip y so AC's +y (north) points up on screen.
+        // METERS_PER_LANDBLOCK is the canonical AC constant — see
+        // crates/holtburger-common/src/position.rs:5.
+        const METERS_PER_LANDBLOCK = 192.0;
         const margin = 16;
         const drawSize = canvasElem.width - margin * 2;
-        const scale = drawSize / 24.0;
+        const scale = drawSize / METERS_PER_LANDBLOCK;
         const container = new PIXI.Container();
         container.position.set(margin, canvasElem.height - margin);
         container.scale.set(scale, -scale);

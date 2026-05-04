@@ -120,16 +120,17 @@ pub async fn try_http_resource_source_smoke(
     Ok(bytes.len() as u32)
 }
 
-/// Heightmap geometry for one landblock terrain cell, ready to feed
-/// into a PixiJS `MeshGeometry`. Returned by
-/// [`fetch_landblock_heightmap`].
+/// Heightmap geometry for one landblock, ready to feed into a PixiJS
+/// `MeshGeometry`. Returned by [`fetch_landblock_heightmap`].
 ///
 /// Coordinate convention:
 /// - `positions` is a flat `Float32Array` of 81 vertices (9×9 grid),
 ///   3 floats per vertex: `[x0, y0, z0, x1, y1, z1, ...]`. Units are
 ///   metres. `x` increases east, `y` increases north, `z` is
-///   elevation. Vertices are 3 m apart on each axis (a cell spans
-///   24 m × 24 m).
+///   elevation. The 9×9 grid covers the full 192 m × 192 m landblock
+///   (one landblock = 8×8 = 64 cells of 24 m each), so vertices are
+///   **24 m apart** on each axis. The canonical constant is
+///   `holtburger_common::position::METERS_PER_LANDBLOCK = 192.0`.
 /// - `indices` is a `Uint16Array` of 64 quads × 2 triangles ×
 ///   3 indices = 384 indices, addressing into `positions`.
 /// - `height_min` / `height_max` bound the elevation range over the
@@ -199,14 +200,18 @@ pub async fn fetch_landblock_heightmap(
     let cell = CellLandblock::unpack(&bytes)
         .map_err(|e| JsValue::from_str(&format!("CellLandblock::unpack: {e}")))?;
 
+    // Vertex spacing = METERS_PER_LANDBLOCK / 8 = 24 m. The 9×9 grid
+    // spans the full 192 m landblock, NOT a single 24 m cell.
+    const VERTEX_SPACING_M: f32 = holtburger_common::position::METERS_PER_LANDBLOCK / 8.0;
+
     let mut positions = Vec::with_capacity(81 * 3);
     let mut height_min = f32::INFINITY;
     let mut height_max = f32::NEG_INFINITY;
     for x in 0..9usize {
         for y in 0..9usize {
             let h = cell.get_height(x, y);
-            positions.push(x as f32 * 3.0);
-            positions.push(y as f32 * 3.0);
+            positions.push(x as f32 * VERTEX_SPACING_M);
+            positions.push(y as f32 * VERTEX_SPACING_M);
             positions.push(h);
             if h < height_min {
                 height_min = h;
