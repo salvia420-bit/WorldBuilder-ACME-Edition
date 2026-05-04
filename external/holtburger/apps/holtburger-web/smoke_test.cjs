@@ -1,15 +1,23 @@
 // Node-side smoke test for the holtburger-web wasm bundle.
 //
 // Loads the `--target nodejs` build (pkg-node/) and verifies that the
-// three wasm-bindgen exports (`start`, `build_info`, `hash32`) work
-// end-to-end. Used to functionally validate the bundle without needing
-// a headless browser; the `--target web` build at pkg/ has the same
-// rust-compiled core, so a green run here is a strong signal that the
-// browser bundle is also live.
+// wasm-bindgen exports work end-to-end. Used to functionally validate
+// the bundle without needing a headless browser; the `--target web`
+// build at pkg/ has the same rust-compiled core, so a green run here
+// is a strong signal that the browser bundle is also live.
+//
+// The HTTP-source check (§8 step 4) requires a fixture at
+// ../../dats/assets.hba — generate it with `dat2hba` per
+// `dats/README.md`. If the fixture is missing the round-trip portion
+// degrades to a symbol-presence check and the run still passes, so
+// this script works in environments without retail dat access.
 //
 // Run: `node smoke_test.cjs` from `apps/holtburger-web/`.
 
 const wasm = require("./pkg-node/holtburger_web.js");
+const fs = require("node:fs");
+const http = require("node:http");
+const path = require("node:path");
 
 let failed = 0;
 
@@ -80,11 +88,80 @@ check(
     `typeof ${typeof wasm.try_ws_handshake_smoke}`
 );
 
-console.log("=========================");
-if (failed === 0) {
-    console.log("PASS: all smoke checks green.");
-    process.exit(0);
-} else {
-    console.log(`FAIL: ${failed} check(s) failed.`);
-    process.exit(1);
-}
+// §8 step 4 wiring: HttpResourceSource must be present. End-to-end
+// round-trip below if the fixture exists.
+check(
+    "try_http_resource_source_smoke() is exported (HttpResourceSource wired into bundle)",
+    typeof wasm.try_http_resource_source_smoke === "function",
+    `typeof ${typeof wasm.try_http_resource_source_smoke}`
+);
+
+(async () => {
+    // §8 step 4 round-trip: serve `dats/assets.hba` over HTTP from this
+    // process, then have the wasm bundle's HttpResourceSource fetch +
+    // parse it and return the byte length of one known entry. The
+    // fixture is git-ignored (retail-derived asset bytes) so we degrade
+    // gracefully if it's absent — the symbol-presence check above is
+    // the floor.
+    const fixturePath = path.resolve(__dirname, "../..", "dats", "assets.hba");
+    if (!fs.existsSync(fixturePath)) {
+        console.log(
+            "  [SKIP] HttpResourceSource round-trip — dats/assets.hba missing.\n" +
+            "         Generate it with `cargo run -p holtburger-tools --bin dat2hba` " +
+            "(see dats/README.md)."
+        );
+    } else if (typeof fetch !== "function") {
+        console.log(
+            "  [SKIP] HttpResourceSource round-trip — Node ≥18 fetch() not " +
+            "available."
+        );
+    } else {
+        const fixtureBytes = fs.readFileSync(fixturePath);
+        const server = http.createServer((req, res) => {
+            // Single-purpose server: any path returns the fixture.
+            res.writeHead(200, {
+                "content-type": "application/octet-stream",
+                "content-length": fixtureBytes.length,
+            });
+            res.end(fixtureBytes);
+        });
+        await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+        const port = server.address().port;
+        const url = `http://127.0.0.1:${port}/assets.hba`;
+        try {
+            // Pinned by `dat2hba --profile micro` against the canonical
+            // ac_base_dats portal.dat — see the corresponding entry in
+            // `dat-tool list dats/assets.hba`.
+            const expectedNamespace = "eor/portal";
+            const expectedFileId = 0x0E000004;
+            const expectedSize = 5876;
+            const got = await wasm.try_http_resource_source_smoke(
+                url,
+                expectedNamespace,
+                expectedFileId
+            );
+            check(
+                `HttpResourceSource fetches & parses assets.hba; ${expectedNamespace}:0x${expectedFileId.toString(16).padStart(8, "0")} length is ${expectedSize}`,
+                got === expectedSize,
+                `got ${got}, expected ${expectedSize}`
+            );
+        } catch (e) {
+            check(
+                "HttpResourceSource round-trip succeeds",
+                false,
+                `threw: ${e?.message ?? e}`
+            );
+        } finally {
+            await new Promise((resolve) => server.close(resolve));
+        }
+    }
+
+    console.log("=========================");
+    if (failed === 0) {
+        console.log("PASS: all smoke checks green.");
+        process.exit(0);
+    } else {
+        console.log(`FAIL: ${failed} check(s) failed.`);
+        process.exit(1);
+    }
+})();

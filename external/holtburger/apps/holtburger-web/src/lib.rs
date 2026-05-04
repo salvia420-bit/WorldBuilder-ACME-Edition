@@ -84,3 +84,32 @@ pub async fn try_ws_handshake_smoke(
     let session = Session::new_with_transport(Box::new(transport), SocketAddr::new(ip, server_port));
     Ok(session.packet_sequence)
 }
+
+/// Fetch an HBA bundle from `asset_url`, parse it, and return the
+/// length of the named entry. End-to-end smoke for the §8-step-4
+/// `HttpResourceSource` wiring: a green run proves
+/// `fetch()` → `Vec<u8>` → `HbaReader::<Vec<u8>>::from_bytes` →
+/// `ResourceSource::get_file_by_key` works inside the wasm bundle.
+///
+/// Returns the length (in decompressed bytes) of the named entry. The
+/// caller checks that against the known fixture content (e.g.
+/// `dats/assets.hba`'s `eor/portal:0x0E000004` is 5876 bytes when
+/// produced by `dat2hba --profile micro` from the canonical
+/// portal.dat). Any failure path — fetch, HTTP status, parse, missing
+/// key — surfaces as a rejected Promise with the error string.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn try_http_resource_source_smoke(
+    asset_url: String,
+    namespace: String,
+    file_id: u32,
+) -> Result<u32, JsValue> {
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    let source = holtburger_resource_http::HttpResourceSource::connect(&asset_url)
+        .await
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let bytes = source
+        .get_file_by_key(ResourceKey::new(&namespace, file_id))
+        .map_err(|e| JsValue::from_str(&format!("get_file_by_key: {e}")))?;
+    Ok(bytes.len() as u32)
+}

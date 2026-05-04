@@ -1520,6 +1520,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "holtburger-resource-http"
+version = "0.1.0"
+dependencies = [
+ "holtburger-dat",
+ "js-sys",
+ "log",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "holtburger-scripting"
 version = "0.1.0"
 dependencies = [
@@ -1595,7 +1607,9 @@ name = "holtburger-web"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
+ "holtburger-dat",
  "holtburger-protocol",
+ "holtburger-resource-http",
  "holtburger-session",
  "holtburger-transport-ws",
  "wasm-bindgen",

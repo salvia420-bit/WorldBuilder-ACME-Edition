@@ -1,0 +1,35 @@
+[package]
+name = "holtburger-resource-http"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "HTTP-backed ResourceSource for holtburger-dat — wasm32-only. Fetches an HBA bundle once at construction time, then serves the existing sync ResourceSource trait from in-memory state. Empty crate on native targets."
+
+# Wasm32-only crate. The lib.rs body is gated to `target_arch = "wasm32"`
+# so `cargo check` / `cargo test` on native still walk the workspace
+# without dragging in `web-sys` or wasm-bindgen-futures; the
+# browser-only deps are likewise target-gated below. Mirrors the layout
+# of `crates/holtburger-transport-ws`.
+
+[dependencies]
+holtburger-dat = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+log = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
+version = "0.3"
+features = [
+    "Headers",
+    "Request",
+    "RequestInit",
+    "RequestMode",
+    "Response",
+    "Window",
+    "WorkerGlobalScope",
+]
