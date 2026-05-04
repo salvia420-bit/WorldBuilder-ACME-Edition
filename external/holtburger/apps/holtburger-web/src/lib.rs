@@ -326,3 +326,172 @@ pub async fn fetch_landblock_heightmaps(
     }
     Ok(out)
 }
+
+/// Retail Dereth terrain_type → SurfaceTexture ID (bottom mip-level
+/// index). Extracted by signature-scanning `eor/portal:0x13000000`
+/// (Region) for the `[count=33][type=0]...[type=32]` pattern of
+/// `TexMerge.TerrainDesc[]`. Stable for retail; if a project ships
+/// a custom region in the future, swap this for a runtime
+/// Region-parser walk (see step 3.5 docs in phase-3-renderer.md).
+///
+/// Indices match `TerrainTextureType` from
+/// `external/DatReaderWriter/DatReaderWriter/dats.xml:183`.
+/// Index 32 (RoadType) is included for the road-overlay layer; the
+/// shader uses it instead of the placeholder grey when present.
+///
+/// Some terrain types map to the same SurfaceTexture ID — e.g. type
+/// 22 (FauxWaterRunning) shares `0x0500146A` with type 16
+/// (WaterRunning); type 24 (Argila) and 31 (DesolateLands) both
+/// reuse `0x0500145C` (BarrenRock). That's authentic to retail AC
+/// and the atlas builder dedupes if memory becomes a concern.
+#[cfg(target_arch = "wasm32")]
+const RETAIL_TERRAIN_SURFACE_TEXTURES: [u32; 33] = [
+    0x0500145C, // 0  BarrenRock
+    0x05001459, // 1  Grassland
+    0x05001468, // 2  Ice
+    0x05002F6F, // 3  LushGrass
+    0x05001467, // 4  MarshSparseSwamp
+    0x05001462, // 5  MudRichDirt
+    0x05001463, // 6  ObsidianPlain
+    0x05001465, // 7  PackedDirt
+    0x0500145B, // 8  PatchyDirt
+    0x05001457, // 9  PatchyGrassland
+    0x0500145D, // 10 SandYellow
+    0x0500145F, // 11 SandGrey
+    0x0500145E, // 12 SandRockStrewn
+    0x050014A7, // 13 SedimentaryRock
+    0x0500145A, // 14 SemiBarrenRock
+    0x05001464, // 15 Snow
+    0x0500146A, // 16 WaterRunning
+    0x05001461, // 17 WaterStandingFresh
+    0x0500146C, // 18 WaterShallowSea
+    0x05001469, // 19 WaterShallowStillSea
+    0x0500146B, // 20 WaterDeepSea
+    0x05001466, // 21 ForestFloor
+    0x0500146A, // 22 FauxWaterRunning (shares with 16)
+    0x05001827, // 23 SeaSlime
+    0x0500145C, // 24 Argila (shares with 0)
+    0x0500181F, // 25 Volcano1
+    0x05001924, // 26 Volcano2
+    0x05001900, // 27 BlueIce
+    0x05001C3A, // 28 Moss
+    0x05001C3B, // 29 DarkMoss
+    0x05001C3C, // 30 Olthoi
+    0x0500145C, // 31 DesolateLands (shares with 0)
+    0x05001458, // 32 RoadType (used by the road-overlay layer)
+];
+
+/// One decoded terrain tile, ready for the JS atlas builder. Each
+/// instance is a 32-row block in the wasm-bindgen output of
+/// [`fetch_terrain_textures`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct TerrainTexture {
+    terrain_type: u32,
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>, // RGBA8, length = width * height * 4
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl TerrainTexture {
+    /// Index into AC's `TerrainTextureType` enum (0..32). 32 is `RoadType`.
+    #[wasm_bindgen(getter, js_name = terrainType)]
+    pub fn terrain_type(&self) -> u32 {
+        self.terrain_type
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// `Uint8Array` of RGBA8 pixels, length = `width * height * 4`.
+    #[wasm_bindgen(getter)]
+    pub fn pixels(&self) -> Vec<u8> {
+        self.pixels.clone()
+    }
+}
+
+/// Fetch all 33 retail terrain textures from `asset_url`, decoded to
+/// RGBA8. Returns one [`TerrainTexture`] per `TerrainTextureType`
+/// entry, in enum order (index = terrain code).
+///
+/// Pipeline per terrain type:
+/// 1. Look up the canonical SurfaceTexture ID from
+///    [`RETAIL_TERRAIN_SURFACE_TEXTURES`].
+/// 2. Fetch + parse `eor/portal:<surface_texture_id>` into a
+///    [`SurfaceTexture`].
+/// 3. Take the highest-resolution mip-level
+///    (`surface_texture.highest_res()`).
+/// 4. Fetch + parse that `eor/portal:<texture_id>` into a [`Texture`].
+/// 5. Decode pixels via [`Texture::to_rgba8`], lazily fetching a
+///    [`Palette`] only if the format is palettized (P8 / Index16).
+///
+/// On any per-id failure the whole batch fails with a tagged error.
+/// One HTTP fetch resolves the entire bundle; per-asset lookups are
+/// in-memory after that.
+///
+/// Cost: AC's terrain mip-stacks top out around 256×256, so the
+/// decompressed RGBA8 payload returned is roughly
+/// `33 × 256 × 256 × 4 = ~8.6 MB` worst case. JS atlas-packs into a
+/// single GPU texture and we drop the originals.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_terrain_textures(
+    asset_url: String,
+) -> Result<Vec<TerrainTexture>, JsValue> {
+    use holtburger_dat::file_type::{Palette, SurfaceTexture, Texture, TextureDecodeError};
+    use holtburger_dat::{ResourceKey, ResourceSource};
+
+    let source = holtburger_resource_http::HttpResourceSource::connect(&asset_url)
+        .await
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+    let mut out = Vec::with_capacity(RETAIL_TERRAIN_SURFACE_TEXTURES.len());
+    for (terrain_type, surf_id) in RETAIL_TERRAIN_SURFACE_TEXTURES.iter().copied().enumerate() {
+        // SurfaceTexture (mip stack).
+        let surf_bytes = source
+            .get_file_by_key(ResourceKey::new("eor/portal", surf_id))
+            .map_err(|e| JsValue::from_str(&format!("SurfaceTexture {surf_id:#010X}: {e}")))?;
+        let surf = SurfaceTexture::unpack(&surf_bytes).map_err(|e| {
+            JsValue::from_str(&format!("SurfaceTexture::unpack {surf_id:#010X}: {e}"))
+        })?;
+        let tex_id = surf.highest_res().ok_or_else(|| {
+            JsValue::from_str(&format!("SurfaceTexture {surf_id:#010X}: empty mip list"))
+        })?;
+
+        // Texture (top mip-level).
+        let tex_bytes = source
+            .get_file_by_key(ResourceKey::new("eor/portal", tex_id))
+            .map_err(|e| JsValue::from_str(&format!("Texture {tex_id:#010X}: {e}")))?;
+        let tex = Texture::unpack(&tex_bytes)
+            .map_err(|e| JsValue::from_str(&format!("Texture::unpack {tex_id:#010X}: {e}")))?;
+
+        // Decode to RGBA8, lazily fetching a palette if needed.
+        let rgba = tex
+            .to_rgba8(|pal_id| {
+                let pal_bytes = source
+                    .get_file_by_key(ResourceKey::new("eor/portal", pal_id))
+                    .map_err(|e| TextureDecodeError::PaletteFetch(format!("{pal_id:#010X}: {e}")))?;
+                Palette::unpack(&pal_bytes).map_err(|e| {
+                    TextureDecodeError::PaletteFetch(format!("Palette::unpack {pal_id:#010X}: {e}"))
+                })
+            })
+            .map_err(|e| JsValue::from_str(&format!("Texture::to_rgba8 {tex_id:#010X}: {e}")))?;
+
+        out.push(TerrainTexture {
+            terrain_type: terrain_type as u32,
+            width: tex.width as u32,
+            height: tex.height as u32,
+            pixels: rgba,
+        });
+    }
+    Ok(out)
+}

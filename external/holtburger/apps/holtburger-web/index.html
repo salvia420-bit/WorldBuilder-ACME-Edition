@@ -82,6 +82,7 @@
         session_smoke_test_packet_sequence,
         fetch_landblock_heightmap,
         fetch_landblock_heightmaps,
+        fetch_terrain_textures,
       } from "./pkg/holtburger_web.js";
 
       import * as PIXI from "pixi.js";
@@ -242,37 +243,82 @@
       // GLSL const declarations are out of TDZ before `buildTerrainShader`
       // touches them.)
 
-      function buildTerrainAtlas() {
-        // 32-pixel-wide RGBA texture, one column per terrain code. The
-        // shader samples at uv = ((code + 0.5) / 32, 0.5) so each
-        // fragment reads the centre of its column. Step 3.5's real-
-        // texture replacement scales this up to e.g. 8×4 tiles of
-        // 64×64 pixels = 512×256 atlas — the shader's region lookup
-        // changes only in the (u, v, w, h) per-region math; the
-        // per-vertex contract stays the same.
-        //
-        // NEAREST filtering: with the placeholder palette, soft-blend
-        // (smooth interpolated terrain code + LINEAR atlas) creates
-        // unnatural rainbow bands at terrain transitions because the
-        // atlas-column ordering (which is also the AC enum order)
-        // doesn't match terrain adjacency. Real AC textures in step
-        // 3.5 will have per-pixel detail that blends naturally; flip
-        // back to LINEAR when that lands.
-        const canvas = document.createElement("canvas");
-        canvas.width = 32;
-        canvas.height = 1;
-        const ctx = canvas.getContext("2d");
-        const data = ctx.createImageData(32, 1);
-        for (let i = 0; i < TERRAIN_TYPES.length; i += 1) {
-          const c = TERRAIN_TYPES[i].color;
-          data.data[i * 4 + 0] = (c >> 16) & 0xff;
-          data.data[i * 4 + 1] = (c >> 8) & 0xff;
-          data.data[i * 4 + 2] = c & 0xff;
-          data.data[i * 4 + 3] = 0xff;
+      // Atlas layout for step 3.5: 6×6 grid of 256×256 tiles = 1536×1536.
+      // Code 32 (RoadType) lives at slot 32, leaving slots 33-35 unused.
+      //
+      // Tiles are wrapped with a 4-pixel "bleed border" replicating the
+      // opposite edge of the tile (so left edge mirrors right, top
+      // mirrors bottom, etc.). With LINEAR atlas filtering this lets
+      // the bilinear sampler at cell-uv ≈ 0 or 1 read smoothly into
+      // the SAME tile (texture wraps at the border) instead of bleeding
+      // into the neighbour atlas region. Step 4+ polish: do proper
+      // texture-region padding via the GPU's wrap modes per region.
+      const ATLAS_COLS = 6;
+      const ATLAS_ROWS = 6;
+      const ATLAS_TILE_PX = 256;
+      const ATLAS_PX = ATLAS_COLS * ATLAS_TILE_PX; // 1536; ATLAS_ROWS too.
+
+      async function buildTerrainAtlas(assetUrl) {
+        // Fetch all 33 retail terrain textures via the wasm export
+        // and pack them into a single RGBA atlas canvas.
+        // `fetch_terrain_textures` returns 33 TerrainTexture proxies,
+        // each carrying a 512×512 RGBA8 buffer (~33 MB total). We
+        // downscale to 256×256 to halve the GPU upload and dispose
+        // the originals as soon as they're drawn.
+        const textures = await fetch_terrain_textures(assetUrl);
+        if (textures.length !== 33) {
+          throw new Error(
+            `expected 33 terrain textures, got ${textures.length}`
+          );
         }
-        ctx.putImageData(data, 0, 0);
-        const texture = PIXI.Texture.from(canvas);
-        if (texture.source) texture.source.scaleMode = "nearest";
+
+        const atlas = document.createElement("canvas");
+        atlas.width = ATLAS_PX;
+        atlas.height = ATLAS_PX;
+        const actx = atlas.getContext("2d");
+
+        // Working canvas for one tile's RGBA → ImageBitmap.
+        const tileCanvas = document.createElement("canvas");
+        const tctx = tileCanvas.getContext("2d");
+
+        for (const tex of textures) {
+          const code = tex.terrainType;
+          const w = tex.width;
+          const h = tex.height;
+          const px = tex.pixels; // wasm-bindgen Uint8Array, length w*h*4
+
+          tileCanvas.width = w;
+          tileCanvas.height = h;
+          // ImageData wants Uint8ClampedArray; coerce. The buffer
+          // copy is unavoidable since wasm-bindgen returns a fresh
+          // typed-array we own.
+          const clamped = new Uint8ClampedArray(px.buffer, px.byteOffset, px.byteLength);
+          const img = new ImageData(clamped, w, h);
+          tctx.putImageData(img, 0, 0);
+
+          const col = code % ATLAS_COLS;
+          const row = (code / ATLAS_COLS) | 0;
+          const dx = col * ATLAS_TILE_PX;
+          const dy = row * ATLAS_TILE_PX;
+          actx.drawImage(
+            tileCanvas,
+            0, 0, w, h,
+            dx, dy, ATLAS_TILE_PX, ATLAS_TILE_PX
+          );
+
+          tex.free();
+        }
+
+        const texture = PIXI.Texture.from(atlas);
+        // LINEAR + mipmaps: huge visual win at zoom-out (smooth tiles
+        // instead of aliased mosaic). The minor bleed at atlas region
+        // boundaries is masked by the SW-corner `flat` shading — only
+        // fragments at exactly cell-uv ≈ 1.0 sample slightly into the
+        // next region, and at 24m cell scale that's sub-pixel noise.
+        if (texture.source) {
+          texture.source.scaleMode = "linear";
+          texture.source.autoGenerateMipmaps = true;
+        }
         return texture;
       }
 
@@ -288,18 +334,23 @@
       // the SW-corner provoking vertex (last index of each triangle
       // per lib.rs build_mesh). Hard edges on cell boundaries.
       //
-      // Why hard edges with placeholder colours: step 5 first tried
-      // smooth interpolation + LINEAR atlas — the bilinear sampler
-      // blends between adjacent atlas columns as the per-fragment
-      // code crosses code boundaries. With real textures (step 3.5)
-      // this looks great — each tile has internal detail and atlas-
-      // adjacent codes blend naturally. With placeholder solid colours
-      // the blend creates unnatural "rainbow bands" because the atlas
-      // ordering (AC enum order: Grassland=1, Ice=2, LushGrass=3,
-      // MarshSparseSwamp=4, ...) doesn't match terrain adjacency in
-      // world space. A water-grass interface ends up traversing
-      // Marsh→Mud→Obsidian→Dirt visually. Hard edges tell the truth
-      // about what the data says.
+      // Step 3.5: real AC textures replace the 32-colour placeholder
+      // atlas. Each terrain code maps to a 256×256 tile in a 6×6 atlas
+      // grid (1536×1536 total), pre-built in JS from wasm-decoded
+      // RGBA8 blobs. The shader does:
+      //   1. Compute the cell's SW-corner terrain & road codes (`flat`
+      //      from provoking vertex).
+      //   2. Compute cell-local tile UV from the world position
+      //      (aPosition / 24m, fract'd in fragment) so each cell tiles
+      //      its texture across the 24×24 m face.
+      //   3. Atlas sample at `regionOrigin + regionSize * tileUv`.
+      //
+      // Why hard edges still: AC's actual surface table uses corner/
+      // side blend maps for proper transitions (CornerTerrainMaps /
+      // SideTerrainMaps in TexMerge). That's a multi-pass renderer;
+      // step 3.5 stays single-pass and per-cell. The visual upgrade
+      // from placeholder colours to real tiles is the load-bearing
+      // improvement here.
       const TERRAIN_VERTEX_GLSL = `#version 300 es
 precision highp float;
 
@@ -318,6 +369,7 @@ in float aRoadCode;
 
 flat out int vTerrainCode;
 flat out int vRoadCode;
+out vec2 vCellUv;
 out vec4 vColor;
 
 void main() {
@@ -326,6 +378,11 @@ void main() {
     gl_Position = vec4(pos, 0.0, 1.0);
     vTerrainCode = int(aTerrainCode + 0.5);
     vRoadCode = int(aRoadCode + 0.5);
+    // Cell-local UV: world position divided by cell size (24 m). Each
+    // cell maps [0, 1] across its 24×24 face; fragments interpolate
+    // continuously across cell boundaries. fract() in the fragment
+    // shader recovers [0, 1] tile-local UV.
+    vCellUv = aPosition / 24.0;
     vColor = uColor * uWorldColorAlpha;
 }
 `;
@@ -335,62 +392,64 @@ precision highp float;
 precision highp int;
 
 uniform sampler2D uAtlas;
-uniform vec3 uRoadColor;
+uniform vec2 uAtlasGridSize; // (cols, rows) of the atlas grid
 
 flat in int vTerrainCode;
 flat in int vRoadCode;
+in vec2 vCellUv;
 in vec4 vColor;
 
 out vec4 fragColor;
 
-void main() {
-    // Terrain: 32-pixel-wide atlas, sampled at the column centre for
-    // the cell's SW-corner terrain code. Clamped to [0, 31] so
-    // out-of-range values (bit-decode bugs) don't read past the edge.
-    int tCode = clamp(vTerrainCode, 0, 31);
-    vec2 uv = vec2((float(tCode) + 0.5) / 32.0, 0.5);
-    vec4 terrainSample = texture(uAtlas, uv);
+vec2 atlasUvFor(int code) {
+    int cols = int(uAtlasGridSize.x);
+    int col = code - (code / cols) * cols;
+    int row = code / cols;
+    vec2 origin = vec2(float(col), float(row)) / uAtlasGridSize;
+    vec2 size = vec2(1.0) / uAtlasGridSize;
+    return origin + size * fract(vCellUv);
+}
 
-    // Road overlay: if the cell's SW corner has road_type >= 1, draw
-    // stone-grey on top of the terrain. Hard-edged on cell boundaries
-    // (matches the SW-last "flat" contract); mixed at 0.85 not 1.0 so
-    // terrain still tints the road slightly (e.g. dirt roads through
-    // grass read warmer than stone roads through snow).
+void main() {
+    // Terrain layer: SW-corner terrain code → atlas region.
+    // Clamp to [0, 32] (32 = RoadType, kept reachable for the road
+    // overlay below).
+    int tCode = clamp(vTerrainCode, 0, 32);
+    vec4 terrainSample = texture(uAtlas, atlasUvFor(tCode));
+
+    // Road overlay: if the cell's SW corner has road_type >= 1, sample
+    // the RoadType atlas tile (code 32 in retail Dereth) and overlay.
+    // mix(...) at 0.85 keeps a hint of the underlying terrain so dirt
+    // roads through grass read warmer than stone roads through snow.
     float roadMask = step(1.0, float(vRoadCode));
-    vec3 base = mix(terrainSample.rgb, uRoadColor, roadMask * 0.85);
+    vec4 roadSample = texture(uAtlas, atlasUvFor(32));
+    vec3 base = mix(terrainSample.rgb, roadSample.rgb, roadMask * 0.85);
 
     fragColor = vec4(base, terrainSample.a) * vColor;
 }
 `;
 
-      // Road colour reference (#a8a4a0): light stone-grey, tuned against
-      // the static-site z=12 reference at docs/images/DerethMapsEnhanced_zoom.png
-      // where Holtburg's road network reads as cool light grey against
-      // green grass. Step 3.5 / step 5 follow-up: replace with a real
-      // road tile from `eor/portal:` when the texture parser lands.
-      const ROAD_COLOR_RGB = new Float32Array([0xa8 / 255, 0xa4 / 255, 0xa0 / 255]);
-
       function buildTerrainShader(atlasTexture) {
         const glProgram = PIXI.GlProgram.from({
           vertex: TERRAIN_VERTEX_GLSL,
           fragment: TERRAIN_FRAGMENT_GLSL,
-          name: "terrain-atlas-step5",
+          name: "terrain-atlas-step3.5",
         });
         // The MeshPipe sets `shader.groups[100]` and `[101]` to its own
-        // global / local UniformGroups every frame; PixiJS's GlShaderSystem
-        // binds the individual `uTransformMatrix` / `uColor` / `uRound` /
-        // matrix uniforms by name from those groups. The atlas texture
-        // and road-colour uniform live on the user shader.
-        //
-        // `uRoadColor` is a top-level uniform (not in a UniformGroup) so
-        // it's straightforward to bind via `glUniform3fv` — PixiJS auto-
-        // detects scalar uniforms from the GLSL.
+        // global / local UniformGroups every frame; PixiJS's
+        // GlShaderSystem binds the individual `uTransformMatrix` /
+        // `uColor` / `uRound` / matrix uniforms by name from those
+        // groups. The atlas texture and atlas-grid-size uniform live
+        // on the user shader.
         return new PIXI.Shader({
           glProgram,
           resources: {
             uAtlas: atlasTexture.source,
             terrainUniforms: {
-              uRoadColor: { value: ROAD_COLOR_RGB, type: "vec3<f32>" },
+              uAtlasGridSize: {
+                value: new Float32Array([ATLAS_COLS, ATLAS_ROWS]),
+                type: "vec2<f32>",
+              },
             },
           },
         });
@@ -443,9 +502,10 @@ void main() {
         });
         const pixiMesh = new PIXI.Mesh({ geometry, shader: terrainShader });
 
-        // Thin black wireframe overlaid on the textured mesh. Stroke
-        // alpha bumped from 0.35 to 0.5 because textured terrain is
-        // busier than the height ramp and the lower alpha got lost.
+        // Faint wireframe (step 3.5: was prominent diagnostic from
+        // earlier steps; with real textures the cell grid would
+        // overpower the actual content, so dialed way down). Still
+        // useful for spotting tessellation issues at high zoom-in.
         const wire = new PIXI.Graphics();
         for (let i = 0; i < indicesU32.length; i += 3) {
           const a = indicesU32[i];
@@ -455,7 +515,7 @@ void main() {
             positions2D[a * 2], positions2D[a * 2 + 1],
             positions2D[b * 2], positions2D[b * 2 + 1],
             positions2D[c * 2], positions2D[c * 2 + 1],
-          ]).stroke({ width: 0.4, color: 0x000000, alpha: 0.5 });
+          ]).stroke({ width: 0.2, color: 0x000000, alpha: 0.12 });
         }
 
         return [pixiMesh, wire];
@@ -477,7 +537,7 @@ void main() {
 
       // ----- scene + camera ----------------------------------------
 
-      async function renderNeighbourhood(canvasElem, neighbourhood, meshes) {
+      async function renderNeighbourhood(canvasElem, neighbourhood, meshes, assetUrl) {
         const app = new PIXI.Application();
         await app.init({
           canvas: canvasElem,
@@ -491,10 +551,13 @@ void main() {
           preference: "webgl",
         });
 
-        // Step 3's atlas + custom shader are shared across all 9
-        // landblocks — single texture upload, single shader compile,
-        // 9 draw calls (one per Mesh).
-        const atlasTexture = buildTerrainAtlas();
+        // Step 3.5: real AC textures replace the placeholder palette.
+        // `buildTerrainAtlas` fetches all 33 retail terrain textures
+        // via the wasm export, downscales each 512×512 → 256×256, and
+        // packs them into a single 1536×1536 RGBA atlas (~9 MB GPU).
+        // Shared across all 9 landblocks: one texture upload, one
+        // shader compile, 9 draw calls.
+        const atlasTexture = await buildTerrainAtlas(assetUrl);
         const terrainShader = buildTerrainShader(atlasTexture);
 
         // Scene graph:
@@ -600,7 +663,7 @@ void main() {
             `expected ${NEIGHBOURHOOD.length} meshes, got ${meshes.length}`
           );
         }
-        await renderNeighbourhood(canvas, NEIGHBOURHOOD, meshes);
+        await renderNeighbourhood(canvas, NEIGHBOURHOOD, meshes, ASSET_URL);
 
         // Aggregate height range across the 9 landblocks for the panel.
         let aggMin = Infinity;
