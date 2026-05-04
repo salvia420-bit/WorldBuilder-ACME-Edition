@@ -1,16 +1,23 @@
 # Phase 4 — playable AC client (as-built)
 
-> **Status:** Phase 4 steps 1 and 2a landed (2026-05-04). The wasm
-> bundle drives AC login → CharacterList → spawn handshake from the
-> browser through `holtburger-wsbridge` to a live ACE: open the page,
-> log in, click Spawn on a character, and the recv loop walks
-> `CharacterEnterWorldRequest` → `CharacterEnterWorldServerReady` →
-> `CharacterEnterWorld` → `PlayerCreate` and surfaces a
-> `kind=1 PlayerSpawned` event back to JS. Same milestone Phase 1
-> hit on the native side (`holtburger-cli` reaches Selection +
-> spawn) but now via the in-browser bundle. The Phase 3 renderer
-> boots as a backdrop once login resolves; rendering the local
-> player's sprite at its world coords is step 2b. See
+> **Status:** Phase 4 steps 1, 2a, and **2a.5** landed (2026-05-04).
+> The wasm bundle drives AC login → CharacterList → CharacterCreate
+> → spawn handshake from the browser through `holtburger-wsbridge`
+> to a live ACE end-to-end. Open the page, log in, the Selection
+> screen appears with a Create-test-character form when the account
+> is empty; populate one (Aluvian / Male / Adventurer / Holtburg
+> defaults, name from JS, request built in the wasm bundle via
+> `holtburger_core::CharacterGenBuilder` against the `CharGen` table
+> parsed out of `0x0E000002` at login time), click Spawn, and the
+> recv loop walks `CharacterEnterWorldRequest` →
+> `CharacterEnterWorldServerReady` → `CharacterEnterWorld` →
+> `PlayerCreate` and surfaces a `kind=1 PlayerSpawned` event back to
+> JS. Same milestone Phase 1 hit on the native side
+> (`holtburger-cli` reaches Selection + spawn — and creates
+> characters interactively via the TUI) but now through the
+> in-browser bundle and one-click. The Phase 3 renderer boots as a
+> backdrop once login resolves; rendering the local player's sprite
+> at its world coords is step 2b. See
 > [`phase-4-step-1-handoff.md`](phase-4-step-1-handoff.md) for the
 > framing brief; this file is the as-built reference.
 
@@ -518,7 +525,7 @@ Modified:
 - `docs/phase-3-renderer.md` + `docs/phase-2-wasm-spike.md`:
   status banners now mention Phase 4 step 2a.
 
-### What's NOT in step 2a (scope deferred to 2b+)
+### What's NOT in step 2a (scope deferred to 2b+ or 2a.5 below)
 
 - **Position-driven rendering.** `UpdatePosition` /
   `PrivateUpdatePosition` / `PublicUpdatePosition` carry the
@@ -534,3 +541,215 @@ Modified:
   Step 2b's teardown path handles re-Selection.
 - **Chat / vitals / inventory DOM panels.** Step 4 scope.
 - **Movement input.** Step 3 scope.
+
+---
+
+## Phase 4 step 2a.5 landed (2026-05-04)
+
+Step 2a's screenshot stuck on an empty CharacterList because
+populating the test account needed either the cli's interactive
+Create Character TUI flow (failed to drive headlessly via tmux) or
+SQL-direct INSERTs (rejected by ACE because biota records have
+hundreds of dependent rows). Step 2a.5 closes the gap by exposing
+character creation through the wasm bundle: load the AC `CharGen`
+record (`0x0E000002`) + `SkillTable` (`0x0E000004`) at login time,
+build a `CharacterGenCatalog`, expose `SessionHandle.createTestCharacter(name)`
+that constructs an Aluvian / Male / Adventurer / Holtburg
+`CharacterCreateRequestData` via
+`holtburger_core::CharacterGenBuilder::build_request`, and round-trip
+through the recv loop's `SessionCommand::CreateCharacter` →
+`GameMessage::CharacterCreate` → `CharacterCreateResponse(Ok)`.
+
+What "done" looks like at the end of step 2a.5:
+
+1. After login, an empty CharacterList unhides a "Create test
+   character" form alongside the (empty) Selection list.
+2. Type a name, click Create. The wasm bundle constructs a valid
+   `CharacterCreateRequestData` against the catalog (so attribute
+   budget and skill slots match the heritage's invariants before
+   the packet leaves the browser).
+3. The recv loop sends `GameMessage::CharacterCreate(request)`,
+   ACE replies with `CharacterCreateResponse{ Ok, guid, name, .. }`,
+   the recv loop pushes the new entry into the shared
+   `character_list` state (mirroring the cli's local-push behavior
+   — ACE does NOT auto-resend a CharacterList after Create), and
+   queues a `kind=5 CharacterCreated` event.
+4. The JS rAF poller drains the event, calls
+   `handle.characterList()`, re-renders the `<ul>` with the new
+   row + Spawn button.
+5. Click Spawn — the existing step 2a flow drives
+   `CharacterEnterWorldRequest` → ServerReady → CharacterEnterWorld
+   → PlayerCreate, status flips to "Spawned <name>".
+
+![Phase 4 step 2a.5 — wasm bundle creates + spawns a character end-to-end](images/phase-4-step-2a-spawned.png)
+
+Captured against a live ACE on a fresh `phase4demo_2a5f` account.
+The screenshot shows the full create + spawn flow in one shot:
+Spawned status line at top, populated Selection list with
+PhaseyTwoFiveF (Spawned button greyed out), Create form below
+with the as-built description (`CharacterCreateRequestData built
+in the wasm bundle by holtburger_core::CharacterGenBuilder::build_request
+against the CharGen table parsed out of 0x0E000002 at login time`),
+and the post-create [OK] line.
+
+### What step 2a.5 ships
+
+**`SessionHandle.createTestCharacter(name)`** — wasm-bindgen method.
+Picks Aluvian heritage (or first available), Male gender (first
+key in `heritage.genders`), the first template whose attribute
+spread already sums to `heritage.attribute_credits` (Adventurer is
+10/10/10/10/10/10=60 designed for user-driven point spending; Bow
+Hunter / Soldier / Wayfarer / etc. are pre-spread to 330), Holtburg
+starter area (first id in `heritage.primary_start_area_ids`),
+template-default attributes, template-minimum skill advancements
+via `minimum_skill_advancement_for_heritage`, and a randomised
+appearance via `CharacterGenBuilder::randomize_appearance`. The
+character_slot is `current_character_list.len()` so successive
+calls fill consecutive slots.
+
+**`SessionHandle.canCreateCharacter`** — wasm-bindgen getter.
+`true` if the catalog loaded successfully at login time. JS reads
+this to decide whether to surface the Create form.
+
+**Catalog loading in `start_session`.** The function now takes a
+6th `asset_url` parameter. If non-empty,
+`load_character_gen_catalog(&asset_url).await` runs concurrently
+with the login handshake (browser cache deduplicates with the
+renderer's own HBA fetch). On success the SessionHandle holds an
+`Arc<CharacterGenCatalog>`; on failure the catalog is `None` and
+character creation reports unavailable. Failures don't reject
+`start_session` — the session is still usable for spawn.
+
+**`character_list` becomes `Rc<RefCell<Vec<CharacterSummary>>>`**
+(was `Vec<CharacterSummary>` in step 2a). The recv loop mutates
+in-place on every update — both `CharacterList` re-fires AND the
+synthetic local-push on `CharacterCreateResponse{ Ok }`. JS reads
+via `handle.characterList()` which clones a fresh snapshot.
+
+**Recv loop additions.** Two new branches:
+- `SessionCommand::CreateCharacter { request }` (cmd arm) — stamps
+  the session's account name onto the request (mirrors the cli's
+  `character_selection.create_character`) and sends
+  `GameMessage::CharacterCreate(request)`.
+- `GameMessage::CharacterCreateResponse(data)` (recv arm) — on Ok,
+  appends a `CharacterSummary` to `character_list` and queues a
+  `kind=5 CharacterCreated` event with `(name, guid)`. On non-Ok,
+  queues a `kind=6 CharacterCreateFailed` event with the response
+  variant name + numeric code.
+
+**ACE doesn't re-fire CharacterList after Create.** Cli's
+`apps/holtburger-cli/src/pages/selection/state.rs::handle_create_response`
+(line 307) pushes a `CharacterEntry` locally; the wasm recv loop
+mirrors this. Step 2a's earlier capture attempts hit this exact
+bug — clicking Spawn after Create showed `spawn buttons after
+create: 0` because `character_list` hadn't been updated.
+
+**`ClientEvent` kind table extended.** New active values:
+- `kind = 5` — CharacterCreated. `stringPayload` = new character's
+  name; `u32Payload` = new GUID. Fired on
+  `CharacterCreateResponse{ Ok, .. }`.
+- `kind = 6` — CharacterCreateFailed.
+  `stringPayload` = `CharacterGenerationVerificationResponse`
+  variant name (`NameInUse`, `NameNotAllowed`, ...);
+  `u32Payload` = numeric code.
+
+JS-side dispatch table in `index.html` matches.
+
+### JS-side Create form
+
+In `apps/holtburger-web/index.html` (within the existing
+`<div id="selection">`):
+
+- New `<form id="create-form">` with one field (`char_name`) and a
+  Create button. Hidden by default (`<form ... hidden>`); JS
+  unhides it when `handle.canCreateCharacter` is true. Available
+  after login regardless of whether the list is empty — clicking
+  Create on a non-empty list works too.
+- New `<div id="create-status">` carries the per-create status
+  ("Sending CharacterCreate(...)…" → "[OK] Created NAME (GUID
+  0xN). Click Spawn …" or "[FAIL] CharacterCreate rejected:
+  CODE").
+- Submit handler calls `handle.createTestCharacter(name)`, disables
+  the Create button, awaits the rAF poller's kind=5 / kind=6
+  event.
+- The rAF poller now also handles `kind=0` (CharacterListReceived
+  re-fire — kept for forward compat even though Create doesn't
+  trigger one in current ACE) by calling `renderCharacterList()`.
+
+### Smoke checks (45 → 47)
+
+`apps/holtburger-web/smoke_test.cjs` adds two checks:
+
+- `SessionHandle.prototype.createTestCharacter` is a function.
+- `SessionHandle.prototype` has a `canCreateCharacter` getter
+  (verified via `Object.getOwnPropertyDescriptor`).
+
+The `start_session` error-path check now passes `""` as the 6th
+asset_url (skip catalog load).
+
+### Live-ACE manual validation
+
+The `apps/holtburger-web/capture_phase4_step2a.cjs` script now
+covers the full flow: launches Chromium, logs in to a fresh
+account, detects empty CharacterList, fills the Create form,
+waits for the kind=5 + kind=0 events to land, clicks Spawn, waits
+for "Spawned" status, screenshots. Default character name is
+`WasmDemo<base36-time-suffix>` — override via `PHASE4_CHAR_NAME`.
+
+Empirically: full handshake takes ~2s end-to-end against a local
+ACE (login + catalog fetch + character create + spawn). The
+catalog-fetch dominates because it pulls the whole HBA bundle
+(`--profile pruned` ≈ 230 MB, `--profile full` ≈ 605 MB) — a
+future optimisation would byte-range fetch only `0x0E000002` +
+`0x0E000004` (~80 KB total) instead.
+
+### Files touched
+
+New:
+- *(no new files; the existing
+  `apps/holtburger-web/capture_phase4_step2a.cjs` was extended
+  in-place to cover the create flow)*.
+
+Modified:
+- `apps/holtburger-web/Cargo.toml`: adds `anyhow`, `holtburger-content`,
+  `holtburger-core` to wasm32 deps.
+- `apps/holtburger-web/src/lib.rs`: adds `SessionCommand::CreateCharacter`,
+  `CLIENT_EVENT_KIND_CHARACTER_CREATED` / `_FAILED` constants,
+  `SessionHandle.{createTestCharacter, canCreateCharacter, character_list
+  as Rc<RefCell>}`, `start_session(asset_url)` 6th param,
+  `load_character_gen_catalog`, `build_test_character_request`,
+  `first_available_character_slot`, recv-loop branches for the
+  new command + response.
+- `apps/holtburger-web/index.html`: Create form HTML, submit
+  handler, rAF poller's kind=0 / kind=5 / kind=6 dispatch,
+  `renderCharacterList()` helper, `start_session` call passes
+  `ASSET_URL` 6th arg.
+- `apps/holtburger-web/smoke_test.cjs`: +2 checks
+  (`createTestCharacter`, `canCreateCharacter` getter).
+- `apps/holtburger-web/capture_phase4_step2a.cjs`: full create +
+  spawn flow with framing scroll for the screenshot.
+- `docs/phase-4-renderer.md`: this section + status banner update.
+- `docs/images/phase-4-step-2a-spawned.png`: re-captured with the
+  populated Selection + Create form visible.
+
+### What's NOT in step 2a.5 (scope deferred)
+
+- **Full character-creation form.** Step 2a.5 ships only
+  hardcoded-defaults Aluvian/Male/Adventurer; exposing the full
+  cli-style form (race / gender / template / starter area picker
+  + attribute / skill point spending) is a step-4 follow-on or a
+  WorldBuilder-side editor surface. The catalog data needed for
+  that UI is already loaded — just not wired to JS.
+- **CharacterDelete.** The complementary inverse (drop a character
+  from the list) lives behind `GameMessage::CharacterDeleteRequest`;
+  a `SessionHandle.deleteCharacter(guid)` mirroring the create
+  shape would be ~30 LOC. Skipped because step 2a.5's scope is
+  populating, not pruning.
+- **Multi-character per session.** Calling `createTestCharacter`
+  multiple times now works (each call lands a new character at
+  the next slot), but spawn is still one-per-session — switching
+  characters mid-session is step 2b scope.
+- **Byte-range HBA fetch.** Loading the whole bundle to read 80 KB
+  of CharGen + SkillTable is wasteful; the renderer already pays
+  this cost so we don't double it, but a HEAD-then-Range path
+  would be ~50 LOC and cut the cold-start time.

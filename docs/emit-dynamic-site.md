@@ -9,11 +9,17 @@
 > per-poly UV-mapped textures** (Phase 3 step 6 — same pipeline as
 > the static-site emitter's `ObjectSpriteGenerator.cs::DrawTriangle`
 > but live, so user-imported custom models render with no re-bake
-> step). **Phase 4 steps 1 + 2a landed (2026-05-04)** — the wasm
-> bundle now drives the AC login → CharacterList → spawn handshake
-> from the browser through `holtburger-wsbridge` to a live ACE.
-> Open `apps/holtburger-web/index.html`, fill the login form, click
-> Connect, then click Spawn on a character; the recv loop walks
+> step). **Phase 4 steps 1 + 2a + 2a.5 landed (2026-05-04)** — the
+> wasm bundle now drives the full AC login → CharacterList →
+> CharacterCreate → spawn handshake from the browser through
+> `holtburger-wsbridge` to a live ACE end-to-end. Open
+> `apps/holtburger-web/index.html`, log in (the bundle eagerly
+> fetches `CharGen` (`0x0E000002`) + `SkillTable` (`0x0E000004`)
+> and builds a CharacterGenCatalog for offline validation), use
+> the in-browser Create-test-character form on a fresh account
+> (Aluvian / Male / Adventurer / Holtburg defaults built in the
+> wasm bundle via `holtburger_core::CharacterGenBuilder`), then
+> click Spawn — the recv loop walks
 > `CharacterEnterWorldRequest` → `CharacterEnterWorldServerReady`
 > → `CharacterEnterWorld` → `PlayerCreate` and surfaces a
 > `kind=1 PlayerSpawned` event so the status line flips to
@@ -860,9 +866,32 @@ Step ledger:
   flips to "Spawned <name> (GUID 0xN)". `kind=4 Disconnected` lands
   on session error. Smoke 44 → 45 (selectCharacter symbol).
   Playwright capture at
-  `apps/holtburger-web/capture_phase4_step2a.cjs`, deliverable at
-  `docs/images/phase-4-step-2a-spawned.png`. Position rendering of
-  the local player + multi-entity buffer is step 2b.
+  `apps/holtburger-web/capture_phase4_step2a.cjs`. Position
+  rendering of the local player + multi-entity buffer is step 2b.
+- ✅ **Step 2a.5 — character creation in the browser.** Landed
+  2026-05-04 (see [`docs/phase-4-renderer.md`](phase-4-renderer.md)
+  step 2a.5 section). Closes the empty-list gap that step 2a's
+  screenshot demo hit by exposing character creation through the
+  wasm bundle. `start_session` now takes an `asset_url` 6th param,
+  fetches the HBA via `HttpResourceSource`, parses `CharGen`
+  (`0x0E000002`) + `SkillTable` (`0x0E000004`), and builds a
+  `holtburger_content::CharacterGenCatalog` for offline validation.
+  Adds `SessionHandle.createTestCharacter(name)` which constructs
+  an Aluvian / Male / Adventurer / Holtburg
+  `CharacterCreateRequestData` via
+  `holtburger_core::CharacterGenBuilder::build_request`, and
+  `SessionHandle.canCreateCharacter` getter for JS feature
+  detection. Recv loop handles `SessionCommand::CreateCharacter`
+  outbound + `GameMessage::CharacterCreateResponse` inbound;
+  on Ok, locally pushes the new entry into `character_list`
+  (mirrors cli's `handle_create_response` since ACE doesn't
+  re-fire CharacterList after Create) and queues a `kind=5
+  CharacterCreated` event. JS-side Create form auto-shows when
+  the catalog loaded; submit → `kind=5` drain → list re-render
+  with Spawn button. Smoke 45 → 47 (createTestCharacter +
+  canCreateCharacter symbols). Deliverable at
+  `docs/images/phase-4-step-2a-spawned.png` re-captured against
+  the full create + spawn flow.
 - ⏳ **Step 2b — `ClientViewEvent` → PIXI entity buffer.**
   Position-driven rendering for the local player + NPCs / monsters
   via `ObjectCreate` + `UpdatePosition` / `VectorUpdate`. Reuses

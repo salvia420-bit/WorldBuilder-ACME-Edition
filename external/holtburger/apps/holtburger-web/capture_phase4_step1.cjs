@@ -76,7 +76,11 @@ const path = require("node:path");
     await page.fill('input[name="server_port"]', SERVER_PORT);
     console.log(`submitting login as ${ACCOUNT}`);
 
-    // Submit and wait for the Selection block to unhide.
+    // Submit and wait for the Selection block to unhide. (Phase 4 step
+    // 2a.5 added an asset_url 6th arg to start_session; the form's
+    // existing five fields populate the first five, and JS hardcodes
+    // ASSET_URL = "../../dats/assets.hba" for the 6th, so no change
+    // needed here.)
     await page.click('#login-form button[type=submit]');
     await page.waitForSelector("#selection:not([hidden])", { timeout: 30_000 });
     console.log("Selection visible");

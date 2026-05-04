@@ -48,28 +48,43 @@ and executes in a browser:
   verts × 3D), `indices` (`Uint16Array`, 384 — 64 quads × 6),
   `heightMin` / `heightMax` (metres). Browser-side
   `index.html` feeds this into PixiJS to draw the Holtburg terrain.
-- `start_session(bridge_url, server_ip, server_port, username, password)
-  -> Promise<SessionHandle>` (wasm32-only, Phase 4 step 1 + 2a) —
-  drives the AC login → CharacterList handshake from the wasm bundle
-  through `holtburger-wsbridge` to a live ACE. Internally opens a
+- `start_session(bridge_url, server_ip, server_port, username,
+  password, asset_url) -> Promise<SessionHandle>` (wasm32-only,
+  Phase 4 steps 1 + 2a + 2a.5) — drives the AC login →
+  CharacterList handshake from the wasm bundle through
+  `holtburger-wsbridge` to a live ACE. Internally opens a
   `WsTransport`, builds `Session::new_with_transport`, sends
   `LoginRequest`, and `wasm_bindgen_futures::spawn_local`s a
   persistent recv loop that owns the Session for the rest of the
   page's lifetime. Returns once the loop signals the initial
-  `CharacterList`. The recv loop's `tokio::select!` races
-  `session.recv_message().await` against an internal command
-  channel driven by JS (currently `selectCharacter`).
+  `CharacterList`. If `asset_url` is non-empty, also fetches the
+  HBA bundle, parses `CharGen` (`0x0E000002`) + `SkillTable`
+  (`0x0E000004`), and builds a `CharacterGenCatalog` for offline
+  character-creation validation (failures here are non-fatal —
+  `canCreateCharacter` reports false). The recv loop's
+  `tokio::select!` races `session.recv_message().await` against
+  an internal command channel driven by JS (currently
+  `selectCharacter` and `createTestCharacter`).
 - `SessionHandle` (wasm-bindgen class) is the JS-facing surface over
   the recv loop. Methods: `.poll_events()` drains a `ClientEvent[]`
-  (kinds: 0 CharacterListReceived re-fire, 1 PlayerSpawned, 4
-  Disconnected); `.characterList()` returns `CharacterSummary[]`
-  (`id` / `name` / `deleteTime`); `.accountName` getter; and
+  (active kinds: 0 CharacterListReceived re-fire, 1 PlayerSpawned,
+  4 Disconnected, 5 CharacterCreated, 6 CharacterCreateFailed);
+  `.characterList()` returns `CharacterSummary[]` (`id` / `name` /
+  `deleteTime`); `.accountName` getter; `.canCreateCharacter`
+  getter (true if catalog loaded);
   `.selectCharacter(guid)` (Phase 4 step 2a) which drives the
   spawn handshake — wasm sends `CharacterEnterWorldRequest`,
   auto-chains `CharacterEnterWorld` on
   `CharacterEnterWorldServerReady`, and surfaces `PlayerCreate(guid)`
   as a `kind=1 PlayerSpawned` event with `u32Payload =
-  spawned_guid`. See
+  spawned_guid`; and `.createTestCharacter(name)` (Phase 4 step
+  2a.5) which builds an Aluvian / Male / Adventurer / Holtburg
+  `CharacterCreateRequestData` via
+  `holtburger_core::CharacterGenBuilder::build_request` (validating
+  attribute budget + skill slots client-side) and dispatches
+  `GameMessage::CharacterCreate`; result lands as a
+  `kind=5 CharacterCreated` (success) or `kind=6
+  CharacterCreateFailed` event. See
   [`docs/phase-4-renderer.md`](../../../docs/phase-4-renderer.md) for
   the as-built; step 2b adds position-driven rendering + multi-entity
   buffer + character switching mid-session.
