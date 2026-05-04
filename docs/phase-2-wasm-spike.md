@@ -1,14 +1,20 @@
 # Phase 2 — WASM port spike (inventory)
 
-> **Status:** Spike opened 2026-05-04. The contained, non-WASM-specific work
-> has landed (`Session::new_with_transport`, RC4 → ISAAC doc fix). The
-> empirical wasm32 cross-compile inventory below replaces the design doc's
-> §5.2 hand-rolled checklist with what `cargo check --target
-> wasm32-unknown-unknown` actually says today, so the next session can pick
-> the smallest unblocking step.
+> **Status:** Cross-compile floor laid (2026-05-04). All seven library
+> crates needed by the browser client cross-compile to
+> `wasm32-unknown-unknown`: `holtburger-common`, `holtburger-protocol`,
+> `holtburger-session`, `holtburger-dat`, `holtburger-world`,
+> `holtburger-content`, `holtburger-core`. Native invariant held — the
+> 200+ existing tests stay green at every commit. `holtburger-scripting`
+> remains wasm32-incompatible (deno_core / V8) and is reclassified from
+> "port" to "exclude from WASM build" — see §8.
 >
-> **Audience:** anyone picking up Phase 2 implementation. Read §3 (the
-> per-crate matrix) first.
+> Phase 2's actual implementation work — WS transport, HTTP resource
+> source, build pipeline, JS shim, PixiJS wiring — has not started. §8 is
+> the priority list for whoever picks up next.
+>
+> **Audience:** anyone picking up Phase 2 implementation. Read §8 (what's
+> left) first; §3 (the per-crate matrix) is the as-built reference.
 
 ---
 
@@ -58,18 +64,22 @@ crates.
 ## 3. The per-crate cross-compile matrix
 
 `cargo check --target wasm32-unknown-unknown -p <crate>` from
-`external/holtburger/`, run 2026-05-04 against the working tree:
+`external/holtburger/`. **Original** column was the inventory taken at
+spike open (2026-05-04, working tree before any fixes). **As-built**
+reflects the state after commits `50003ae`..`868c3ac` (workspace tokio
+split, session UDP gating, dat zstd→ruzstd, core connect() gating +
+getrandom):
 
-| Crate                  | Builds? | Blocker                                                                         | Fix difficulty |
-|------------------------|---------|---------------------------------------------------------------------------------|----------------|
-| `holtburger-common`    | ✅      | —                                                                               | —              |
-| `holtburger-protocol`  | ✅      | —                                                                               | —              |
-| `holtburger-session`   | ❌      | `tokio = ["full"]` pulls in `mio`, which fails on wasm32 with *"This wasm target is unsupported by mio. If using Tokio, disable the net feature."* `socket2` is also unix-only. | Low–medium. Trim Tokio features; cfg-gate the UDP-native code path that already lives in `Session::new`. |
-| `holtburger-dat`       | ❌      | `zstd-sys` (transitive C dep, via `zstd = "0.13"` in workspace deps line 47) needs `clang` to cross-compile its bundled C source. Plus `std::fs` usage that needs to route through `ResourceSource`. | Medium. Either (a) install clang + set `CC_wasm32` env, (b) drop the `default` feature on `zstd` and pull only its pure-Rust components, or (c) swap to `ruzstd` (decompression only). DAT files are decompress-only at runtime so (c) is realistic. |
-| `holtburger-world`     | ❌      | Cascades from `holtburger-dat` (zstd-sys).                                      | Resolves with `dat`. |
-| `holtburger-content`   | ❌      | Cascades from `holtburger-dat` (zstd-sys); also `std::fs::File::open` for HBA.  | Resolves with `dat` + needs the async `ResourceSource` work the design doc §5.2 calls out. |
-| `holtburger-scripting` | ❌      | Cascades from `holtburger-dat`; also depends on `reqwest` (almost certainly fails its own wasm32 check, untested here because the cascade fired first). | Medium. `reqwest` has a wasm32 path via `wasm-bindgen` but its features need re-selecting; `holtburger-scripting`'s own surface needs cfg-gating. |
-| `holtburger-core`      | ❌      | Cascades from session + content + world.                                        | Last to fall. |
+| Crate                  | Original | As-built | Notes                                                                                       |
+|------------------------|----------|----------|---------------------------------------------------------------------------------------------|
+| `holtburger-common`    | ✅       | ✅       | Pure data types — no work needed.                                                           |
+| `holtburger-protocol`  | ✅       | ✅       | AC packet codec, opcode tables, ISAAC, wire format — WASM-portable as-is.                   |
+| `holtburger-session`   | ❌       | ✅       | Step 1 (workspace tokio split) + step 2 (cfg-gate `Session::new` UDP path & `socket2`).     |
+| `holtburger-dat`       | ❌       | ✅       | Step 3 (zstd → ruzstd for wasm32 decompress-only; native keeps zstd for dat2hba compress).  |
+| `holtburger-world`     | ❌       | ✅       | Cascaded clean once `dat` was unblocked. No source changes.                                 |
+| `holtburger-content`   | ❌       | ✅       | Cascaded clean. The async `ResourceSource` swap the design doc §5.2 calls out is still TBD — runtime use of `std::fs::File` will panic on wasm, but it compiles. |
+| `holtburger-core`      | ❌       | ⚠️ (warns) | Step 4: cfg-gated `ClientRuntimeBuilder::connect` (DNS + UDP `Session::new`); split `tokio = ["net"]` to a native-only target table; added wasm32-only `getrandom = { features = ["wasm_js"] }`. Compiles with 6 dead-code warnings on wasm32 — `connect()` is the only currently-defined chain into the runtime/builder subgraph. They lift when Phase 2 lands a wasm32-specific builder entry point. |
+| `holtburger-scripting` | ❌       | ❌       | Reclassified — see §8. `deno_core` is V8 (C++) and not portable; `reqwest` with `blocking` pulls tokio-net (mio). Path forward is "exclude from WASM build", not "make compile". |
 
 ## 4. The two real blockers (everything else cascades from these)
 
@@ -148,45 +158,48 @@ target, and `ruzstd` is mature. Path (1) is a fine intermediate if path
 
 Given §4, the order of operations that minimizes wasted work:
 
-1. **Land the workspace Tokio split** (workspace `default-features = false`,
-   per-crate feature opt-in). Verify *native* builds + tests still all
-   green — the bridge, shim, cli, tools, tests must be untouched. ~½ day.
-2. **Cfg-gate `Session::new` (UDP path) and `socket2` import** to
-   `cfg(not(target_arch = "wasm32"))`, so `holtburger-session` cross-compiles
-   to wasm32 successfully. With the Tokio split done, this should be the
-   only remaining `holtburger-session` blocker. ~½ day.
-3. **Spike `holtburger-dat` on the `ruzstd` swap.** Read what `zstd::Decoder`
-   API surface holtburger-dat actually uses; map to `ruzstd`'s API; either
-   adapter-shim or feature-flag the decoder choice. ~1 day.
-4. **Cascade-recheck** `holtburger-world`, `holtburger-content`,
-   `holtburger-core`, `holtburger-scripting` for wasm32. New blockers
-   surfaced here are the next backlog (and likely smaller than 4.1 / 4.2).
+1. ~~**Land the workspace Tokio split**~~ — **Done** in `50003ae`.
+2. ~~**Cfg-gate `Session::new` (UDP path) and `socket2` import**~~ —
+   **Done** in `3583f2c`. Session cross-compiles cleanly.
+3. ~~**Spike `holtburger-dat` on the `ruzstd` swap.**~~ — **Done** in
+   `3a4259a`. Native keeps `zstd` (decompress + compress for dat2hba);
+   wasm32 uses `ruzstd::decoding::StreamingDecoder` for decompress only,
+   via a `decompress_zstd(buffer, expected_size)` cfg-split helper in
+   `archive.rs`.
+4. ~~**Cascade-recheck**~~ — **Done** in `868c3ac`. `world` and
+   `content` were free riders; `core` needed `connect()` gated and a
+   `getrandom = ["wasm_js"]` opt-in; `scripting` reclassified (§8).
 5. **Now** start the actual WASM build pipeline: pick `wasm-pack` or `trunk`
    (design doc §7.4 leans `wasm-pack`); write the `WsTransport` impl in a
    new `holtburger-transport-ws` crate (so non-WASM consumers don't pull
    `web-sys`); write `HttpResourceSource` for DAT-over-HTTP.
 
-Steps 1–4 establish the *cross-compile floor*. They should land before any
-of the design doc §5.2's "WS transport impl" / "HTTP resource source"
-content is attempted, because those depend on the ported crates being
-WASM-compilable in the first place.
+Steps 1–4 are the *cross-compile floor* and have landed. Step 5 is the
+priority list for whoever picks up next — see §8 for the ordered backlog.
 
 ## 6. Open questions the spike does **not** resolve
 
 These remain exactly as the design doc framed them; the spike just narrowed
 the surface.
 
-- **`getrandom` `js` feature.** Untested here because the spike never
-  reached the layer that pulls `getrandom` (ISAAC doesn't need entropy at
-  init — seeds come from the server's `ConnectRequest`, see
-  `session/auth.rs:33-66`). The login flow's password-handling path may.
-  Re-check after step 2 succeeds.
+- ~~**`getrandom` `js` feature.**~~ **Resolved** in `868c3ac`: added
+  `getrandom = { version = "0.4", features = ["wasm_js"] }` under
+  `holtburger-core`'s wasm32 target table. The transitive chain is
+  `rand v0.10 → getrandom v0.4`; the `wasm_js` feature opts in to the
+  `crypto.getRandomValues` JS shim.
 - **`tokio::spawn` Send/Sync audit (§5.2).** WASM has only `LocalSet`-style
   execution. None of the cross-compile errors above would surface this —
   it's a runtime-shape concern that bites only when actual async work runs.
   Audit when the WASM runtime is wired up.
 - **`wasm-pack` vs `trunk`** (§7.4 in the design doc). Decide when step 5
   starts.
+- **`tokio::time::Instant` / `std::time::Instant` on wasm32.** Compiles
+  fine (tokio's `time` feature is wasm32-supported), but `std::time::
+  Instant::now()` panics on `wasm32-unknown-unknown` — and `Session::
+  new_with_transport` initializes `last_recv_time` / `last_send_time`
+  with it. A runtime fix is needed when WS transport actually runs;
+  options include cfg-gating those fields to a wasm32 alternative or
+  using `web_time::Instant` (drop-in replacement).
 
 ## 7. References
 
@@ -194,5 +207,88 @@ the surface.
 - Bridge / shim ARCHITECTURE: [`external/holtburger/apps/holtburger-wsbridge/ARCHITECTURE.md`](../external/holtburger/apps/holtburger-wsbridge/ARCHITECTURE.md)
 - Transport trait: [`external/holtburger/crates/holtburger-session/src/session/types.rs:17-21`](../external/holtburger/crates/holtburger-session/src/session/types.rs)
 - Session constructors (post-refactor): [`external/holtburger/crates/holtburger-session/src/session/api.rs`](../external/holtburger/crates/holtburger-session/src/session/api.rs)
-- Workspace deps with the `tokio["full"]` pin: [`external/holtburger/Cargo.toml:34`](../external/holtburger/Cargo.toml)
-- Workspace deps with the `zstd` pin: [`external/holtburger/Cargo.toml:47`](../external/holtburger/Cargo.toml)
+- Workspace deps (post-floor) — `tokio = default-features = false` plus `ruzstd` workspace pin: [`external/holtburger/Cargo.toml`](../external/holtburger/Cargo.toml)
+
+## 8. What's left, in priority order
+
+The cross-compile floor (§5 steps 1–4) is laid. The next session picks
+up Phase 2 implementation. Order is chosen so each step produces a
+demonstrable artifact and keeps blast radius small.
+
+1. **Pick `wasm-pack` vs `trunk` and stand up a minimal browser-loadable
+   crate.** Design doc §7.4 leans `wasm-pack` — confirm or override after
+   a small spike. The artifact is the smallest possible consumer of the
+   floor: a new crate (suggested: `apps/holtburger-wasm` or
+   `apps/holtburger-web`) that builds `holtburger-protocol` +
+   `holtburger-session` into a `wasm32-unknown-unknown` bundle, exports
+   a few `wasm-bindgen` functions, and confirms the bundle loads in a
+   plain `index.html`. Don't wire WS or DAT yet — the goal is verifying
+   the build pipeline, not the runtime. ~½–1 day. **This is the
+   smallest unblocking step from where we are.**
+
+2. **Implement `WsTransport`.** New crate `crates/holtburger-transport-ws`
+   that depends on `web-sys` and `wasm-bindgen-futures`, and implements
+   `holtburger_session::Transport`. Plugs into the seam introduced in
+   commit `f3d9a1c` (`Session::new_with_transport`). Lives in its own
+   crate so the rest of the workspace (native bridge / cli / tools)
+   doesn't pull `web-sys`. Wire format is the existing
+   `[port:u16 BE][ac_packet_bytes]` framing already used by the bridge —
+   `apps/holtburger-wsbridge/ARCHITECTURE.md` is the spec; the shim is
+   the reference impl. ~1–2 days.
+
+3. **Address the runtime-only `std::time::Instant` issue.**
+   `Session::new_with_transport` calls `std::time::Instant::now()` for
+   `last_recv_time` / `last_send_time`. On `wasm32-unknown-unknown` that
+   panics. Easiest fix: replace those with `web_time::Instant` (a
+   drop-in compatible API that uses `performance.now()` on wasm32 and
+   `std::time::Instant` elsewhere) and audit `holtburger-session` for
+   other `std::time::Instant::now()` call sites. Compiles fine today —
+   this is only a runtime concern and only blocks once step 2's
+   `WsTransport` is actually exercised in a browser. Cheap fix when you
+   get to it. ~½ day.
+
+4. **Implement `HttpResourceSource` and decide DAT shard format.** The
+   browser can't read a 4 GB monolithic `portal.dat` — content needs to
+   be split and fetched on demand. Open question per design doc §7
+   (basemap renderer + DAT shard format). Two sub-tasks:
+   - Trait surface: a wasm32-friendly async `ResourceSource` that
+     replaces the `File`-backed reader in `holtburger-dat` /
+     `holtburger-content`. The current `FileExtPolyfill` impl on
+     wasm32 returns `io::Unsupported` as a stub; replace its callers.
+   - Shard format: byte-range HTTP requests against a single big DAT
+     vs an index of pre-split files vs an HBA-of-HBAs. Pick one, write
+     a one-time tool to materialize it from the existing portal.dat,
+     and host the output statically. ~3–5 days, biggest unknown.
+
+5. **Decide what to do about `holtburger-scripting`.** `deno_core`/V8 is
+   C++ and won't run inside a `wasm32-unknown-unknown` bundle. The right
+   move is to *exclude scripting from the WASM build entirely* — the
+   browser already has a JS engine (the host page's), so scripts that
+   today run in deno_core can run in the host page directly via
+   `wasm-bindgen` interop. Concretely: don't include
+   `holtburger-scripting` in the WASM crate's deps; expose the
+   script-effects API surface (whatever `holtburger-core` calls into
+   scripting for) as a `wasm-bindgen`-imported JS callback that the host
+   page implements. Don't try to make `holtburger-scripting` cross-compile
+   — that's a much harder problem (V8 port) for no clear gain. ~½ day
+   for the decision + interface sketch; longer for actual JS-side
+   handler implementation, which can be deferred until a script-driven
+   feature actually needs the browser.
+
+6. **PixiJS / WebGL rendering wiring.** Out of scope for Phase 2's
+   protocol port; this is Phase 3 by the design doc. Mentioned here only
+   so the priority list is complete: do not start before steps 1–4 are
+   solid, because the renderer's data feed depends on `WsTransport` +
+   `HttpResourceSource` working end-to-end against ACE.
+
+Two things to *not* re-litigate (committed in groundwork — see project
+memory):
+
+- **WASM-port vs server-side per-player.** WASM-port is committed.
+- **PixiJS / WebGL vs Leaflet hybrid.** PixiJS is committed.
+
+If your work surfaces evidence that bears on either, flag it in this doc
+but don't decide unilaterally. The other open architectural questions
+(login UX, basemap renderer specifics, `wasm-pack` vs `trunk`, DAT shard
+format) are genuinely open and step 1 / step 4 are where they should be
+decided.
