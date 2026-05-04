@@ -9,9 +9,14 @@
 > remains wasm32-incompatible (deno_core / V8) and is reclassified from
 > "port" to "exclude from WASM build" — see §8.
 >
-> Phase 2's actual implementation work — WS transport, HTTP resource
-> source, build pipeline, JS shim, PixiJS wiring — has not started. §8 is
-> the priority list for whoever picks up next.
+> §8 step 1 (build pipeline) is also done as of `3025834` — wasm-pack
+> picked over trunk; new `apps/holtburger-web` crate consumes
+> `holtburger-protocol` + `holtburger-session` and produces a
+> browser-loadable bundle that's been verified via Node-side smoke test
+> (4/4 deterministic checks green) and serves correctly under
+> `python3 -m http.server` with the right MIMEs. WS transport, HTTP
+> resource source, and the runtime `Instant` swap have not started; §8
+> is the remaining priority list.
 >
 > **Audience:** anyone picking up Phase 2 implementation. Read §8 (what's
 > left) first; §3 (the per-crate matrix) is the as-built reference.
@@ -215,16 +220,18 @@ The cross-compile floor (§5 steps 1–4) is laid. The next session picks
 up Phase 2 implementation. Order is chosen so each step produces a
 demonstrable artifact and keeps blast radius small.
 
-1. **Pick `wasm-pack` vs `trunk` and stand up a minimal browser-loadable
-   crate.** Design doc §7.4 leans `wasm-pack` — confirm or override after
-   a small spike. The artifact is the smallest possible consumer of the
-   floor: a new crate (suggested: `apps/holtburger-wasm` or
-   `apps/holtburger-web`) that builds `holtburger-protocol` +
-   `holtburger-session` into a `wasm32-unknown-unknown` bundle, exports
-   a few `wasm-bindgen` functions, and confirms the bundle loads in a
-   plain `index.html`. Don't wire WS or DAT yet — the goal is verifying
-   the build pipeline, not the runtime. ~½–1 day. **This is the
-   smallest unblocking step from where we are.**
+1. ~~**Pick `wasm-pack` vs `trunk` and stand up a minimal
+   browser-loadable crate.**~~ — **Done** in `3025834`. wasm-pack picked
+   over trunk; reasoning logged in that commit. New crate at
+   `apps/holtburger-web` exposes three `wasm-bindgen` functions
+   (`start`, `build_info`, `hash32`) over `holtburger-protocol` +
+   `holtburger-session`, builds with `wasm-pack build --target web` to
+   `pkg/` (18 KB `.wasm`, 8 KB JS glue), and verifies via two paths:
+   `node smoke_test.cjs` runs four deterministic assertions against
+   `pkg-node/` (Node-target build); `python3 -m http.server` plus
+   `index.html` serves the `pkg/` bundle with `application/wasm` MIME
+   correctly set (final browser-side execution is manual). See
+   `apps/holtburger-web/README.md` for the dev-loop commands.
 
 2. **Implement `WsTransport`.** New crate `crates/holtburger-transport-ws`
    that depends on `web-sys` and `wasm-bindgen-futures`, and implements
