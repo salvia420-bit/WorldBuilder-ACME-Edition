@@ -30,7 +30,7 @@
 | AC client `client_portal.dat` | ✅ present (884 MB) | `/home/wbterminal/ac_base_dats/client_portal.dat` |
 | AC client `client_cell_1.dat` | ✅ present (332 MB) | `/home/wbterminal/ac_base_dats/client_cell_1.dat` |
 | AC client `client_local_English.dat` | ✅ present (1.0 MB) | `/home/wbterminal/ac_base_dats/client_local_English.dat` |
-| AC client `client_highres.dat` | ⚠️ in project mirrors only | `/home/wbterminal/projects/{EnvCellMoveExport,EnvCellMoveTest,RetailSmoke}/dats/base/client_highres.dat` — copy or symlink into `~/ac_base_dats/` |
+| AC client `client_highres.dat` | ⚠️ NOT present in `~/ac_base_dats/` | Other copies under `/home/wbterminal/projects/*/dats/base/` exist but **must not be reused** — those project DATs are world-specific WorldBuilder outputs and may have diverged from ACE-master compatibility. If ACE rejects startup without highres, source a clean retail-build copy and drop it in `~/ac_base_dats/`. |
 | `acclient.exe` (reference build) | ✅ present (4.7 MB) | `/home/wbterminal/ac_base_dats/acclient.exe` |
 | World DB seed (decompressed) | ✅ present (149 MB) | `ace_world_release/ACE-World-Database-v0.9.292.sql` |
 | World DB seed (zip) | ✅ present (19 MB) | `ACE-World-Database-v0.9.292.sql.zip` |
@@ -145,19 +145,24 @@ mysql -u ace -pace -e "
 The dump's first lines target `ace_world` directly (no rewrite needed —
 unlike `spin-up-mariadb.sh`'s `baltic` remap).
 
-### A.4 Symlink (or copy) the missing `client_highres.dat`
+### A.4 (Conditional) Source `client_highres.dat` if ACE rejects startup
 
-`client_highres.dat` is in the project mirrors but not at the canonical
-`~/ac_base_dats/` directory. ACE expects all four DATs in one folder:
+`~/ac_base_dats/` is the canonical ACE-master-compatible DAT set, but
+it is missing `client_highres.dat`. The other `client_highres.dat`
+copies under `/home/wbterminal/projects/*/dats/base/` are NOT
+appropriate substitutes — those project DATs are WorldBuilder outputs
+for custom worlds and may have diverged from retail in
+ACE-incompatible ways.
 
-```bash
-ln -sf /home/wbterminal/projects/RetailSmoke/dats/base/client_highres.dat \
-       /home/wbterminal/ac_base_dats/client_highres.dat
-ls -lh /home/wbterminal/ac_base_dats/client_highres.dat   # should resolve, ~1.1 MB
-```
-
-(Pick any of the three project mirrors; they're all identical retail
-copies.)
+**Try without it first.** ACE may run with three of four DATs (highres
+holds high-resolution UI textures; without it, certain UI assets may
+fall back or some features may be unavailable, but the network /
+session / world layers don't depend on it). If ACE refuses to start
+or DatManager throws "missing file", source a clean retail
+`client_highres.dat` from a known-good location (the original AC
+retail install, the ACEmulator wiki's DAT list, or by extracting from
+`acclient.exe` if it bundles the file) and drop it directly in
+`~/ac_base_dats/`. Do NOT symlink from the project mirrors.
 
 ### A.5 Build ACE
 
@@ -297,12 +302,16 @@ returns "command not found"), upstream ACE ships a fully-wired
 
 cd /home/wbterminal/WorldBuilder-ACME-Edition/external/ACE
 
-# Drop the four DATs into ./Dats/ (the volume mount target).
+# Drop the DATs into ./Dats/ (the volume mount target).
+# Only ~/ac_base_dats/ is ACE-master-compatible — do NOT pull DATs from
+# /home/wbterminal/projects/*/dats/base/ (those are world-specific
+# WorldBuilder outputs, see §A.4).
 mkdir -p Dats Config Content Logs Mods
-ln -sf /home/wbterminal/ac_base_dats/client_portal.dat       Dats/
-ln -sf /home/wbterminal/ac_base_dats/client_cell_1.dat       Dats/
+ln -sf /home/wbterminal/ac_base_dats/client_portal.dat        Dats/
+ln -sf /home/wbterminal/ac_base_dats/client_cell_1.dat        Dats/
 ln -sf /home/wbterminal/ac_base_dats/client_local_English.dat Dats/
-ln -sf /home/wbterminal/projects/RetailSmoke/dats/base/client_highres.dat Dats/
+# client_highres.dat: see §A.4 — try without first; source a clean
+# retail copy if ACE rejects startup.
 
 # Build + run.
 docker compose up --build
@@ -515,8 +524,13 @@ the same way, just with the WASM bundle replacing the cli.
 ## Reference index
 
 ### Local assets (verified 2026-05-04)
-- `~/ac_base_dats/` — three of four AC client DATs, plus `acclient.exe`
-- `/home/wbterminal/projects/{EnvCellMoveExport,EnvCellMoveTest,RetailSmoke}/dats/base/client_highres.dat` — the missing fourth, all three copies are identical
+- `~/ac_base_dats/` — **the canonical ACE-master-compatible DAT set**.
+  Currently three of four (`client_portal.dat`, `client_cell_1.dat`,
+  `client_local_English.dat`) plus `acclient.exe`. `client_highres.dat`
+  is not present; see §A.4 for the conditional sourcing path. The
+  `client_highres.dat` copies elsewhere on disk under
+  `/home/wbterminal/projects/*/dats/base/` are world-specific
+  WorldBuilder outputs and **must not be reused** for ACE.
 - `ace_world_release/ACE-World-Database-v0.9.292.sql` — 149 MB world dump
 - `ACE-World-Database-v0.9.292.sql.zip` — 19 MB zipped backup
 
