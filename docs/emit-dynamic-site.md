@@ -9,12 +9,16 @@
 > per-poly UV-mapped textures** (Phase 3 step 6 — same pipeline as
 > the static-site emitter's `ObjectSpriteGenerator.cs::DrawTriangle`
 > but live, so user-imported custom models render with no re-bake
-> step). Phase 4 — Wiring (the *playable* part) is now the active
-> rail; the next step is Phase 4 step 1, **wasm-driven AC login →
-> CharacterList in the browser**, briefed at
-> [`docs/phase-4-step-1-handoff.md`](phase-4-step-1-handoff.md). See
-> [`docs/phase-3-renderer.md`](phase-3-renderer.md) for the renderer's
-> as-built reference.
+> step). **Phase 4 step 1 landed (2026-05-04)** — the wasm bundle
+> now drives the AC login → CharacterList handshake from the
+> browser through `holtburger-wsbridge` to a live ACE; open
+> `apps/holtburger-web/index.html`, fill the login form, click
+> Connect, and the page transitions to a Selection screen showing
+> the account's characters before the renderer boots as a backdrop.
+> See [`docs/phase-4-renderer.md`](phase-4-renderer.md) for the as-built
+> and [`docs/phase-3-renderer.md`](phase-3-renderer.md) for the
+> renderer reference. Step 2 (`ClientViewEvent` → PIXI entity buffer)
+> is the next active rail.
 >
 > **Phase 1 closed (2026-05-04).** The live-ACE round-trip ran:
 > `holtburger-cli ↔ wsshim ↔ wsbridge ↔ ACE` reached the character
@@ -819,18 +823,26 @@ Step ledger:
 Phase 4 — **Wiring.** ~2 weeks. Gated on the live ACE backend unblock.
 
 Step ledger:
-- ⏳ **Step 1 — wasm-driven AC login → CharacterList in browser.**
-  Briefed at
-  [`docs/phase-4-step-1-handoff.md`](phase-4-step-1-handoff.md).
-  The smallest possible "the browser is talking to ACE for real"
-  deliverable: drive the AC login handshake from the wasm bundle
-  through the WS bridge to a live ACE, surface `CharacterList` to
-  JS so the browser shows a Selection screen. Same milestone Phase
-  1 hit on the native side (`holtburger-cli` reaches Selection)
-  but now via the in-browser bundle. Adds `start_session` +
-  `SessionHandle.poll_events()` exports + a JS login form +
-  Selection display. Smoke 41 → 44 checks. Manual live-ACE
-  validation against `~/ace-server/` per `docs/ace-local-setup.md`.
+- ✅ **Step 1 — wasm-driven AC login → CharacterList in browser.**
+  Landed 2026-05-04 (see
+  [`docs/phase-4-renderer.md`](phase-4-renderer.md) for the as-built;
+  briefing at [`docs/phase-4-step-1-handoff.md`](phase-4-step-1-handoff.md)).
+  Adds `start_session` + `SessionHandle` (with `poll_events()` /
+  `characterList()` / `accountName`) + `ClientEvent` (kind=0
+  CharacterListReceived) + `CharacterSummary` exports to
+  `apps/holtburger-web/src/lib.rs`. JS-side login form gates the
+  renderer; Selection screen renders the account's characters as a
+  `<ul>` with a placeholder Spawn button (logs to console — step 2
+  wires the actual `ClientCommand::SelectCharacter` flow). Side
+  fix: `tokio::time::sleep` on wasm32 swapped for
+  `gloo_timers::future::TimeoutFuture` in
+  `crates/holtburger-session/src/session/receive.rs` — without it,
+  the receive loop's CONNECT_RESPONSE deadline panics on
+  `wasm32-unknown-unknown` ("time not implemented on this
+  platform"). Smoke 41 → 44 checks. Manual live-ACE validation
+  against `~/ace-server/` per `docs/ace-local-setup.md`; Playwright
+  capture at `apps/holtburger-web/capture_phase4_step1.cjs`,
+  deliverable at `docs/images/phase-4-step-1-character-list.png`.
 - ⏳ **Step 2 — `ClientViewEvent` → PIXI entity buffer.** Once a
   character is selected in step 1 and spawned, AC's server starts
   pushing world state (entity positions, animations, chat). Wire

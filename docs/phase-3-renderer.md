@@ -1,16 +1,21 @@
 # Phase 3 — PixiJS renderer (as-built)
 
-> **Status:** Steps 1, 2, 3, 3.5, 4, 4.5, 5 (partial — roads), and
-> **6 (live runtime per-model rendering)** landed (2026-05-04). The
-> browser bundle fetches a 3×3 neighbourhood of real Asheron's Call
-> landblocks around Holtburg in one batch call, lays them out at
-> correct world offsets, and PixiJS draws them on a `<canvas>` as
-> **AC terrain with real retail textures, stone-road network, and 239
-> placed object/building sprites rendered in-browser at runtime via
-> per-poly UV-mapped textures** — same pipeline as the static-site
-> emitter's `ObjectSpriteGenerator.cs::DrawTriangle` but at runtime,
-> so user-imported custom models render without a re-bake step.
-> Mouse-wheel zooms around the cursor; click-and-drag pans. See
+> **Status:** Phase 3 closed enough to start Phase 4. Steps 1, 2, 3,
+> 3.5, 4, 4.5, 5 (partial — roads), and **6 (live runtime per-model
+> rendering)** landed (2026-05-04). The browser bundle fetches a 3×3
+> neighbourhood of real Asheron's Call landblocks around Holtburg in
+> one batch call, lays them out at correct world offsets, and PixiJS
+> draws them on a `<canvas>` as **AC terrain with real retail
+> textures, stone-road network, and 239 placed object/building
+> sprites rendered in-browser at runtime via per-poly UV-mapped
+> textures** — same pipeline as the static-site emitter's
+> `ObjectSpriteGenerator.cs::DrawTriangle` but at runtime, so
+> user-imported custom models render without a re-bake step.
+> Mouse-wheel zooms around the cursor; click-and-drag pans. **Phase
+> 4 step 1 (wasm-driven AC login) landed (2026-05-04)** — the
+> renderer now boots as a backdrop after the wasm bundle's
+> `start_session` reaches `GameMessage::CharacterList` against a
+> live ACE; see [`phase-4-renderer.md`](phase-4-renderer.md). See
 > [`phase-3-step-1-handoff.md`](phase-3-step-1-handoff.md),
 > [`phase-3-step-2-handoff.md`](phase-3-step-2-handoff.md),
 > [`phase-3-step-3-handoff.md`](phase-3-step-3-handoff.md), and

@@ -1,24 +1,21 @@
 # Phase 2 — WASM port spike (inventory)
 
 > **Status:** Phase 2 §8 in-scope work closed (2026-05-04). **Phase 3
-> steps 1, 2, 3, 3.5, 4, 4.5, and step 5 (partial — roads) landed
-> (2026-05-04)** — the wasm bundle now fetches a 3×3 neighbourhood
-> of real AC landblocks around Holtburg in one batch call, lays them
-> out at correct world offsets, and PixiJS draws them as **AC terrain
-> with real retail textures, stone-road network, and 239 placed
-> object/building sprites tinted with per-model real colours**: grass
-> tiles with internal mottling, water tiles with wave detail, stone
-> road tile, plus brown-tinted
-> building silhouettes clustered at Holtburg's road junction. Mouse-
-> wheel zoom and drag-to-pan still work. See
-> [`phase-3-renderer.md`](phase-3-renderer.md) for the as-built
-> notes and the deliverable screenshot at
-> `docs/images/phase-3-step-4-objects.png` (earlier-state
-> screenshots at `docs/images/phase-3-step-3.5-real-textures.png`,
-> `docs/images/phase-3-step-5-roads.png`,
-> `docs/images/phase-3-step-3-textured.png`,
-> `docs/images/phase-3-step-2-multi-landblock.png`,
-> `docs/images/phase-3-step-1-landblock.png` are archived).
+> steps 1, 2, 3, 3.5, 4, 4.5, 5 (partial — roads), and 6 (live runtime
+> per-model rendering) landed (2026-05-04)** — the wasm bundle fetches
+> a 3×3 neighbourhood of real AC landblocks around Holtburg in one
+> batch call and PixiJS draws AC terrain with real retail textures,
+> stone-road network, and 239 placed object/building sprites with
+> per-poly UV-mapped textures rendered in-browser at runtime.
+> **Phase 4 step 1 (wasm-driven AC login) landed (2026-05-04)** —
+> `apps/holtburger-web/index.html` now boots a login form, drives
+> `start_session` through the WS bridge to a live ACE, and shows the
+> Selection screen with the account's characters before the renderer
+> boots as a backdrop. See [`phase-4-renderer.md`](phase-4-renderer.md)
+> for the Phase 4 as-built and `docs/images/phase-4-step-1-character-list.png`
+> for the deliverable. Phase 3 as-built remains at
+> [`phase-3-renderer.md`](phase-3-renderer.md); the step 6 deliverable
+> is `docs/images/phase-3-step-6-live-render.png`.
 >
 > All seven library crates needed by the browser client cross-compile
 > to `wasm32-unknown-unknown`: `holtburger-common`,

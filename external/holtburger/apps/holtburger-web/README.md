@@ -2,11 +2,13 @@
 
 Browser-loadable WASM bundle for `emit-dynamic-site`. Started as the
 smallest possible consumer of the wasm32 cross-compile floor; now hosts
-the Phase 3 step 1 renderer entry point too. See
+the Phase 3 renderer entry points and the Phase 4 step 1
+wasm-driven AC login driver. See
 [`docs/phase-2-wasm-spike.md`](../../../../docs/phase-2-wasm-spike.md)
-§8 step 1 and
-[`docs/phase-3-renderer.md`](../../../../docs/phase-3-renderer.md)
-for context.
+§8 step 1,
+[`docs/phase-3-renderer.md`](../../../../docs/phase-3-renderer.md), and
+[`docs/phase-4-renderer.md`](../../../../docs/phase-4-renderer.md) for
+context.
 
 ## What it does
 
@@ -46,6 +48,20 @@ and executes in a browser:
   verts × 3D), `indices` (`Uint16Array`, 384 — 64 quads × 6),
   `heightMin` / `heightMax` (metres). Browser-side
   `index.html` feeds this into PixiJS to draw the Holtburg terrain.
+- `start_session(bridge_url, server_ip, server_port, username, password)
+  -> Promise<SessionHandle>` (wasm32-only, Phase 4 step 1) — drives
+  the AC login → CharacterList handshake from the wasm bundle through
+  `holtburger-wsbridge` to a live ACE. Internally opens a
+  `WsTransport`, builds `Session::new_with_transport`, sends
+  `LoginRequest`, and pumps `session.recv_message` until
+  `GameMessage::CharacterList` lands. The returned `SessionHandle` is
+  a wasm-bindgen class with `.poll_events()` (drains a `ClientEvent[]`
+  — kind=0 = CharacterListReceived in step 1), `.characterList()`
+  (returns `CharacterSummary[]` with `id` / `name` / `deleteTime`
+  fields), and `.accountName` (server-echoed). Errors surface as a
+  rejected Promise with the AC error string. See
+  [`docs/phase-4-renderer.md`](../../../docs/phase-4-renderer.md) for
+  the as-built; step-2 wires the actual SelectCharacter / spawn flow.
 
 ## Frontend dependencies
 
