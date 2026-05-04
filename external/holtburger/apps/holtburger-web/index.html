@@ -84,6 +84,7 @@
         fetch_landblock_heightmaps,
         fetch_terrain_textures,
         fetch_landblock_objects,
+        fetch_object_colours,
       } from "./pkg/holtburger_web.js";
 
       import * as PIXI from "pixi.js";
@@ -494,7 +495,7 @@ void main() {
         return spriteMap;
       }
 
-      function buildObjectsContainer(neighbourhood, objects, spriteMap) {
+      function buildObjectsContainer(neighbourhood, objects, spriteMap, colourMap) {
         // One PIXI.Container holding all objects across all 9 landblocks.
         // Sits inside worldContainer (after the y-flip), so positions
         // are in world metres and the parent scale handles the AC
@@ -502,12 +503,16 @@ void main() {
         //
         // Tint reasoning: the atlas tiles are pure greyscale silhouettes
         // (R == G == B for every pixel). PIXI.Sprite.tint multiplies
-        // the texture per channel, so a brown tint turns the silhouette
-        // into a brown building shape. Two-bucket palette by model_id
-        // top-byte: 0x01 (Model/GfxObj — usually structures) gets a
-        // warm brown; 0x02 (SetupModel — usually props/foliage) gets
-        // a desaturated tan-green. This is a placeholder mapping; AC's
-        // real per-model material isn't in the static-site atlas.
+        // the texture per channel, so the resolved tint paints the
+        // silhouette directly.
+        //
+        // Step 4.5: `colourMap` carries per-model real ARGB derived from
+        // each model's GfxObj/SetupModel → Surface chain (resolved in
+        // Rust, returned by `fetch_object_colours`). When present, drop
+        // the alpha byte (PIXI tint is RGB) and use it. Models the walk
+        // couldn't resolve fall back to the legacy 2-bucket category
+        // palette (0x01 → warm brown, 0x02 → tan-green) so the worst
+        // case after step 4.5 is still "looks like step 4".
         const container = new PIXI.Container();
         // NEIGHBOURHOOD entries carry the CellLandblock id (XXYYFFFF)
         // because that's what the heightmap fetch uses. Object
@@ -529,6 +534,26 @@ void main() {
           const wy = n.y * METERS_PER_LANDBLOCK + obj.y;
           const prefix = (obj.modelId >>> 24) & 0xff;
 
+          // Step 4.5: prefer the per-model real ARGB if the Surface
+          // walk resolved one. PIXI tint is 0xRRGGBB, AC ColorValue is
+          // 0xAARRGGBB — drop the alpha byte. `realColour ?? fallback`
+          // handles undefined (model not in colourMap) cleanly; a
+          // resolved 0x00000000 is treated as a real (transparent)
+          // colour even though the Rust side filters those out.
+          const realColour = colourMap?.get(obj.modelId);
+          const spriteTint =
+            realColour !== undefined
+              ? realColour & 0x00ffffff
+              : prefix === 0x01
+                ? 0x8b6442
+                : 0x6f7a4a;
+          const fallbackTint =
+            realColour !== undefined
+              ? realColour & 0x00ffffff
+              : prefix === 0x01
+                ? 0xa07c52
+                : 0x7a8c5e;
+
           const entry = spriteMap.get(obj.modelId);
           if (entry) {
             const sprite = new PIXI.Sprite(entry.texture);
@@ -540,15 +565,14 @@ void main() {
             // the scene; AC's CCW-from-above yaw reads as CW after
             // the flip.
             sprite.rotation = -obj.rotationZ;
-            sprite.tint = prefix === 0x01 ? 0x8b6442 : 0x6f7a4a;
+            sprite.tint = spriteTint;
             container.addChild(sprite);
             withSprite += 1;
           } else {
             // Fallback: small coloured dot. 1.5 m radius reads at
             // default zoom, scales naturally with the camera.
             const g = new PIXI.Graphics();
-            const fillColor = prefix === 0x01 ? 0xa07c52 : 0x7a8c5e;
-            g.circle(wx, wy, 1.5).fill({ color: fillColor, alpha: 0.85 });
+            g.circle(wx, wy, 1.5).fill({ color: fallbackTint, alpha: 0.85 });
             container.addChild(g);
             fallback += 1;
           }
@@ -638,7 +662,7 @@ void main() {
 
       // ----- scene + camera ----------------------------------------
 
-      async function renderNeighbourhood(canvasElem, neighbourhood, meshes, assetUrl, objects, spriteMap) {
+      async function renderNeighbourhood(canvasElem, neighbourhood, meshes, assetUrl, objects, spriteMap, colourMap) {
         const app = new PIXI.Application();
         await app.init({
           canvas: canvasElem,
@@ -686,8 +710,11 @@ void main() {
         }
 
         // Step 4: object sprites on top of the textured terrain.
+        // Step 4.5: tinted with the per-model real ARGB resolved from
+        // each model's Surface chain (`colourMap`); models without a
+        // resolved colour fall back to the legacy 2-bucket palette.
         const { container: objectsContainer, withSprite, fallback } =
-          buildObjectsContainer(neighbourhood, objects, spriteMap);
+          buildObjectsContainer(neighbourhood, objects, spriteMap, colourMap);
         worldContainer.addChild(objectsContainer);
         // Stash the counts on the app for the stage-info panel.
         app._stepFourCounts = { withSprite, fallback };
@@ -785,8 +812,24 @@ void main() {
           loadSpriteAtlas(),
         ]);
 
+        // Step 4.5: per-model real colours from each model's GfxObj/
+        // SetupModel → Surface chain. Dedupe model ids first; the wasm
+        // boundary cost is bounded by unique-id count, not placement
+        // count. ARGB result is 0 for "could not resolve" — JS treats
+        // those as misses and falls back to the 2-bucket category tint.
+        renderStatus.textContent = "Resolving per-model real colours…";
+        const uniqueModels = [...new Set(objects.map((o) => o.modelId))];
+        const colours = await fetch_object_colours(
+          ASSET_URL,
+          new Uint32Array(uniqueModels)
+        );
+        const colourMap = new Map();
+        for (let i = 0; i < uniqueModels.length; i += 1) {
+          if (colours[i] !== 0) colourMap.set(uniqueModels[i], colours[i]);
+        }
+
         renderStatus.textContent = "Rendering…";
-        await renderNeighbourhood(canvas, NEIGHBOURHOOD, meshes, ASSET_URL, objects, spriteMap);
+        await renderNeighbourhood(canvas, NEIGHBOURHOOD, meshes, ASSET_URL, objects, spriteMap, colourMap);
 
         // Aggregate height range across the 9 landblocks for the panel.
         let aggMin = Infinity;
@@ -810,6 +853,7 @@ void main() {
           <dt>Centre terrain types</dt><dd>${distinctTypes} distinct</dd>
           <dt>Objects</dt><dd>${totalObjects} placed (${centreObjects} at Holtburg)</dd>
           <dt>Sprite coverage</dt><dd>${spriteMap.size} atlas entries available</dd>
+          <dt>Real colours</dt><dd>${colourMap.size} of ${uniqueModels.length} unique models resolved</dd>
           <dt>Vertex spacing</dt><dd>${(METERS_PER_LANDBLOCK / 8).toFixed(0)} m</dd>
           <dt>Controls</dt><dd>wheel = zoom, drag = pan</dd>
         `;
