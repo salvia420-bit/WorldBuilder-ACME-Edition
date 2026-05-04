@@ -152,15 +152,31 @@ impl BinRead for Polygon {
             vertex_ids.push(i16::read_le(reader)?);
         }
 
+        // StipplingType flag values (per ACE.Entity.Enum.StipplingType):
+        //   None=0x0, Positive=0x1, Negative=0x2, Both=0x3,
+        //   NoPos=0x4, NoNeg=0x8, NoUVS=0x14.
+        // CullMode (per ACE.Entity.Enum.CullMode):
+        //   Landblock=0x0, None=0x1, Clockwise=0x2, CounterClockwise=0x3.
+        // Pos UV indices read iff NoPos (0x4) is NOT set; Neg UV indices
+        // read iff sides_type == Clockwise (0x2) AND NoNeg (0x8) NOT set.
+        // Earlier port confused these with `Positive`/`Negative` (0x1/0x2)
+        // and `CullMode::None` (0x1) respectively, which silently
+        // mis-read every retail polygon whose Stippling bit 0x01 was set
+        // (Positive flag) — falling through to a buffer-overrun later in
+        // the GfxObj record.
+        const NO_POS: u8 = 0x04;
+        const NO_NEG: u8 = 0x08;
+        const CULL_CLOCKWISE: i32 = 0x2;
+
         let mut pos_uv_indices = Vec::new();
-        if (stippling & 0x01) == 0 {
+        if (stippling & NO_POS) == 0 {
             for _ in 0..num_pts {
                 pos_uv_indices.push(u8::read(reader)?);
             }
         }
 
         let mut neg_uv_indices = Vec::new();
-        if sides_type == 1 && (stippling & 0x02) == 0 {
+        if sides_type == CULL_CLOCKWISE && (stippling & NO_NEG) == 0 {
             for _ in 0..num_pts {
                 neg_uv_indices.push(u8::read(reader)?);
             }
@@ -198,13 +214,19 @@ impl BinWrite for Polygon {
             id.write_le(writer)?;
         }
 
-        if (self.stippling & 0x01) == 0 {
+        // Mirror the read-side flag interpretation: NoPos=0x4, NoNeg=0x8,
+        // CullMode::Clockwise=0x2.
+        const NO_POS: u8 = 0x04;
+        const NO_NEG: u8 = 0x08;
+        const CULL_CLOCKWISE: i32 = 0x2;
+
+        if (self.stippling & NO_POS) == 0 {
             for &idx in &self.pos_uv_indices {
                 idx.write(writer)?;
             }
         }
 
-        if self.sides_type == 1 && (self.stippling & 0x02) == 0 {
+        if self.sides_type == CULL_CLOCKWISE && (self.stippling & NO_NEG) == 0 {
             for &idx in &self.neg_uv_indices {
                 idx.write(writer)?;
             }

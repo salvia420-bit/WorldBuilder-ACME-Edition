@@ -25,16 +25,23 @@ const url = process.argv[3] || "http://127.0.0.1:8989/apps/holtburger-web/index.
     );
     await page.waitForTimeout(750);
 
-    // Zoom in 3× by dispatching wheel events centred on the canvas.
+    // Zoom in centred on the canvas. Wheel factor in app is 1.1 per
+    // event, so 25 events ≈ 9.8× zoom — enough to read individual
+    // building tiles at the Holtburg town-centre cluster.
     const canvas = await page.locator("#canvas");
     const box = await canvas.boundingBox();
     const cx = box.x + box.width / 2;
     const cy = box.y + box.height / 2;
-    for (let i = 0; i < 12; i += 1) {
+    // Move mouse onto canvas so wheel events go to the right element
+    // and zoom centres on the cursor (the page handler reads mouse
+    // position to anchor the zoom).
+    await page.mouse.move(cx, cy);
+    const zoomEvents = parseInt(process.env.ZOOM_EVENTS || "20", 10);
+    for (let i = 0; i < zoomEvents; i += 1) {
         await page.mouse.wheel(0, -100); // Negative deltaY = zoom in
-        await page.waitForTimeout(40);
+        await page.waitForTimeout(30);
     }
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(500);
 
     // Crop screenshot to just the canvas.
     await canvas.screenshot({ path: out });
