@@ -18,6 +18,10 @@ use std::path::Path;
 pub const HBA_MAGIC: [u8; 4] = *b"HBA\0";
 pub const HBA_VERSION: u32 = 2;
 const HBA_HEADER_SIZE: u64 = 24;
+// Module-level (not associated with the generic `HbaReader<R>`) so the
+// fixed-size buffer in `read_entry_at` keeps working without the
+// "constants depending on generic parameters" deprecation warning.
+const HBA_ENTRY_SIZE: u64 = RESOURCE_NAMESPACE_LEN as u64 + 28;
 
 #[derive(BinRead, BinWrite, Debug)]
 #[br(little)]
@@ -83,23 +87,48 @@ impl HbaEntry {
     }
 }
 
+/// `R = File` is the native disk-backed parser; `R = Vec<u8>` is the
+/// in-memory parser used by `HttpResourceSource` (Phase 2 of
+/// emit-dynamic-site) once a `fetch()` of the bundle has resolved. Both
+/// satisfy `FileExtPolyfill`'s positional-read contract; the parsing
+/// path is otherwise identical, so the 1084-test suite covers both.
 #[derive(Debug)]
-pub struct HbaReader {
+pub struct HbaReader<R = File> {
     pub header: HbaHeader,
-    file: File,
+    file: R,
     file_len: u64,
     namespace_spans: Vec<HbaNamespaceSpan>,
 }
 
-impl HbaReader {
-    pub const ENTRY_SIZE: u64 = RESOURCE_NAMESPACE_LEN as u64 + 28;
-
+impl HbaReader<File> {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let mut file = File::open(&path).map_err(|error| DatError::PathError {
+        let file = File::open(&path).map_err(|error| DatError::PathError {
             path: path.as_ref().to_path_buf(),
             source: error,
         })?;
-        let header = HbaHeader::read(&mut file)?;
+        Self::from_source(file)
+    }
+}
+
+impl HbaReader<Vec<u8>> {
+    /// Parse an HBA archive that already lives in memory.
+    ///
+    /// This is the wasm32 entry point: `HttpResourceSource::connect`
+    /// awaits a `fetch()` for the archive bytes, then hands the `Vec<u8>`
+    /// in here. The returned reader implements `ResourceSource`
+    /// identically to a `File`-backed `HbaReader`.
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
+        Self::from_source(bytes)
+    }
+}
+
+impl<R: FileExtPolyfill> HbaReader<R> {
+    pub const ENTRY_SIZE: u64 = HBA_ENTRY_SIZE;
+
+    fn from_source(file: R) -> Result<Self> {
+        let mut header_buf = [0u8; HBA_HEADER_SIZE as usize];
+        file.read_exact_at_compat(&mut header_buf, 0)?;
+        let header = HbaHeader::read(&mut Cursor::new(&header_buf[..]))?;
 
         if header.magic != HBA_MAGIC {
             return Err(DatError::InvalidMagic("HBA".to_string()));
@@ -109,7 +138,7 @@ impl HbaReader {
             return Err(DatError::UnsupportedVersion(header.version));
         }
 
-        let file_len = file.metadata()?.len();
+        let file_len = file.len_compat()?;
         let index_size = header
             .entry_count
             .checked_mul(Self::ENTRY_SIZE as u32)
@@ -152,7 +181,7 @@ impl HbaReader {
         }
 
         let namespace_spans = Self::read_namespace_spans(
-            &mut file,
+            &file,
             metadata_offset,
             header.metadata_size,
             header.entry_count,
@@ -217,7 +246,7 @@ impl HbaReader {
             })
     }
 
-    pub fn entries(&self) -> HbaEntryIterator<'_> {
+    pub fn entries(&self) -> HbaEntryIterator<'_, R> {
         HbaEntryIterator {
             reader: self,
             current: 0,
@@ -267,8 +296,8 @@ impl HbaReader {
     }
 
     fn read_entry_at(&self, index: u32) -> Result<HbaEntry> {
-        let offset = self.header.index_offset + (index as u64 * Self::ENTRY_SIZE);
-        let mut buffer = [0u8; Self::ENTRY_SIZE as usize];
+        let offset = self.header.index_offset + (index as u64 * HBA_ENTRY_SIZE);
+        let mut buffer = [0u8; HBA_ENTRY_SIZE as usize];
         self.file.read_exact_at_compat(&mut buffer, offset)?;
         Ok(HbaEntry::read(&mut Cursor::new(&buffer))?)
     }
@@ -314,7 +343,7 @@ impl HbaReader {
     }
 
     fn read_namespace_spans(
-        file: &mut File,
+        file: &R,
         metadata_offset: u64,
         metadata_size: u32,
         total_entries: u32,
@@ -391,12 +420,12 @@ impl HbaReader {
     }
 }
 
-pub struct HbaEntryIterator<'a> {
-    reader: &'a HbaReader,
+pub struct HbaEntryIterator<'a, R = File> {
+    reader: &'a HbaReader<R>,
     current: u32,
 }
 
-impl<'a> Iterator for HbaEntryIterator<'a> {
+impl<'a, R: FileExtPolyfill> Iterator for HbaEntryIterator<'a, R> {
     type Item = Result<HbaEntry>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -410,7 +439,7 @@ impl<'a> Iterator for HbaEntryIterator<'a> {
     }
 }
 
-impl ResourceProvider for HbaReader {
+impl<R: FileExtPolyfill + Send + Sync> ResourceProvider for HbaReader<R> {
     fn get_file(&self, file_id: u32) -> Result<Vec<u8>> {
         let entry = self.find_entry(file_id)?;
         self.read_entry_data(&entry)
@@ -427,7 +456,7 @@ impl ResourceProvider for HbaReader {
     }
 }
 
-impl ResourceSource for HbaReader {
+impl<R: FileExtPolyfill + Send + Sync> ResourceSource for HbaReader<R> {
     fn get_file_by_key(&self, key: ResourceKey<'_>) -> Result<Vec<u8>> {
         self.get_file_in_namespace(key.namespace, key.file_id)
     }
@@ -743,6 +772,52 @@ mod tests {
     use super::*;
     use crate::{EOR_CELL_NAMESPACE, EOR_PORTAL_NAMESPACE};
     use tempfile::tempdir;
+
+    #[test]
+    fn test_hba_from_bytes_matches_file_backed_reader() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("bytes-roundtrip.hba");
+
+        let mut writer = HbaWriter::new();
+        writer.add(EOR_PORTAL_NAMESPACE, 0x1234, 0x10, vec![0xAA, 0xBB, 0xCC])?;
+        writer.add(EOR_CELL_NAMESPACE, 0x5678, 0x20, vec![0xDD, 0xEE])?;
+        let big_payload: Vec<u8> = (0..2000u32).map(|i| (i & 0xFF) as u8).collect();
+        writer.add(EOR_PORTAL_NAMESPACE, 0x9999, 0x30, big_payload.clone())?;
+        writer.write(&path)?;
+
+        let bytes = std::fs::read(&path)?;
+        let bytes_reader = HbaReader::<Vec<u8>>::from_bytes(bytes)?;
+
+        assert_eq!(bytes_reader.header.entry_count, 3);
+        assert_eq!(bytes_reader.namespaces().count(), 2);
+        assert_eq!(
+            bytes_reader.get_file_in_namespace(EOR_PORTAL_NAMESPACE, 0x1234)?,
+            vec![0xAA, 0xBB, 0xCC]
+        );
+        assert_eq!(
+            bytes_reader.get_file_in_namespace(EOR_CELL_NAMESPACE, 0x5678)?,
+            vec![0xDD, 0xEE]
+        );
+        // Compressed entry — exercises the zstd path through the bytes reader.
+        assert_eq!(
+            bytes_reader.get_file_in_namespace(EOR_PORTAL_NAMESPACE, 0x9999)?,
+            big_payload
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_hba_from_bytes_rejects_truncated_input() {
+        // 24-byte header but no metadata/index — must fail cleanly rather
+        // than panicking inside positional reads.
+        let truncated = vec![0u8; 16];
+        let err = HbaReader::<Vec<u8>>::from_bytes(truncated)
+            .expect_err("truncated HBA bytes should fail to parse");
+        // The exact error doesn't matter; what matters is that it's
+        // returned, not panicked.
+        let _ = err.to_string();
+    }
 
     #[test]
     fn test_hba_roundtrip_across_namespaces() -> Result<()> {

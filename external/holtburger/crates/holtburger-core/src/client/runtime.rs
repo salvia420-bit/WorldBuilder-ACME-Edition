@@ -5,9 +5,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 impl ClientRuntime {
-    fn should_send_keepalive_ping(&self, now: Instant) -> bool {
+    // `_now` is taken for symmetry with `poll_busy_timeout` and the test
+    // signatures, but the time comparison uses
+    // `Session::last_send_time.elapsed()` directly because that field is
+    // `web_time::Instant` (post §8 step 3) and `now: std::time::Instant`
+    // can't be `duration_since`d against it on wasm32. `.elapsed()` works
+    // on both targets and returns the same `Duration` semantics.
+    fn should_send_keepalive_ping(&self, _now: Instant) -> bool {
         matches!(self.state, ClientState::InWorld)
-            && now.duration_since(self.session.last_send_time) > Duration::from_secs(5)
+            && self.session.last_send_time.elapsed() > Duration::from_secs(5)
     }
 
     fn sync_remote_body_tracking(&mut self, body_id: SpatialBodyId) {
@@ -109,7 +115,10 @@ impl ClientRuntime {
                         bytes_out: self.session.bytes_out,
                     });
 
-                    if now.duration_since(self.session.last_recv_time) > Duration::from_secs(15) {
+                    // `self.session.last_recv_time` is `web_time::Instant`
+                    // (§8 step 3); `.elapsed()` works on both targets while
+                    // `now.duration_since(...)` would be a wasm32 type mismatch.
+                    if self.session.last_recv_time.elapsed() > Duration::from_secs(15) {
                         log::warn!("Connection timed out (no data for 15s)");
                         self.state = ClientState::Disconnected;
                         let _ = self.client_view_event_tx.send(ClientViewEvent::Disconnected);

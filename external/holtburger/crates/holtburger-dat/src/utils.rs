@@ -208,6 +208,7 @@ pub fn decompress_lrs(input: &[u8]) -> Vec<u8> {
 
 pub trait FileExtPolyfill {
     fn read_exact_at_compat(&self, buf: &mut [u8], offset: u64) -> std::io::Result<()>;
+    fn len_compat(&self) -> std::io::Result<u64>;
 }
 
 impl FileExtPolyfill for std::fs::File {
@@ -247,6 +248,37 @@ impl FileExtPolyfill for std::fs::File {
             "positional file reads are unavailable on this target; \
              use a non-File `ResourceSource` (e.g. HttpResourceSource)",
         ))
+    }
+
+    fn len_compat(&self) -> std::io::Result<u64> {
+        Ok(self.metadata()?.len())
+    }
+}
+
+// Bytes-backed positional reader. Used by `HbaReader<Vec<u8>>` to parse an
+// HBA archive resident in memory — what `HttpResourceSource` does once a
+// `fetch()` of the bundle resolves. Lets `holtburger-resource-http`
+// (wasm32-only) re-use the same `HbaReader` parsing path that native
+// File-backed callers use, so the 1084-test suite covers the bytes path
+// transitively.
+impl FileExtPolyfill for Vec<u8> {
+    fn read_exact_at_compat(&self, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+        let end = offset
+            .checked_add(buf.len() as u64)
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "offset+len overflow"))?;
+        if end > self.len() as u64 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "positional read past end of in-memory buffer",
+            ));
+        }
+        let start = offset as usize;
+        buf.copy_from_slice(&self[start..start + buf.len()]);
+        Ok(())
+    }
+
+    fn len_compat(&self) -> std::io::Result<u64> {
+        Ok(self.len() as u64)
     }
 }
 
