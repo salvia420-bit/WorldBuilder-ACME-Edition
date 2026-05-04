@@ -1,23 +1,31 @@
 # Phase 2 — WASM port spike (inventory)
 
-> **Status:** Cross-compile floor laid (2026-05-04). All seven library
-> crates needed by the browser client cross-compile to
+> **Status:** Phase 2 §8 in-scope work closed (2026-05-04). All seven
+> library crates needed by the browser client cross-compile to
 > `wasm32-unknown-unknown`: `holtburger-common`, `holtburger-protocol`,
 > `holtburger-session`, `holtburger-dat`, `holtburger-world`,
 > `holtburger-content`, `holtburger-core`. Native invariant held — the
-> 200+ existing tests stay green at every commit. `holtburger-scripting`
+> 1086 existing lib tests stay green at every commit. `holtburger-scripting`
 > remains wasm32-incompatible (deno_core / V8) and is reclassified from
 > "port" to "exclude from WASM build" — see §8.
 >
 > §8 steps 1 (build pipeline, `3025834`), 3 (`web_time::Instant`
-> swap, `d23f5d3`), and 2 (WsTransport) are done. The `holtburger-web`
-> bundle now has 6/6 smoke-test checks green, including
-> end-to-end-verified `Session::new_test()` construction at runtime in
-> the wasm bundle and the WsTransport-backed
-> `try_ws_handshake_smoke` export — the Phase 2 opener's
-> `Session::new_with_transport` seam is now actually callable on
-> wasm32 with a real WS transport plugged in. HTTP resource source
-> (§8 step 4) has not started.
+> swap, `d23f5d3`), 2 (WsTransport, `e151003`), and **4 (HttpResourceSource,
+> `ac7f92d`)** are all done. The `holtburger-web` bundle now has 8/8
+> smoke-test checks green, including:
+> - `Session::new_test()` construction at runtime in the wasm bundle.
+> - `try_ws_handshake_smoke` symbol present (live-bridge round-trip
+>   deferred to browser-side validation).
+> - **End-to-end HTTP round-trip**: `try_http_resource_source_smoke`
+>   fetches `dats/assets.hba` from an in-process `http.createServer`,
+>   parses it through `HbaReader::<Vec<u8>>::from_bytes`, and looks up
+>   `eor/portal:0x0E000004` returning the decompressed length (5876
+>   bytes — pinned to the canonical `ac_base_dats/client_portal.dat`).
+>
+> Step 5 (scripting JS interop) remains open but doesn't block
+> character-login → world-entry. Phase 3 (PixiJS rendering) can now
+> consume both `WsTransport` (live AC packets) and `HttpResourceSource`
+> (DAT-backed assets) end-to-end in the browser bundle.
 >
 > **Audience:** anyone picking up Phase 2 implementation. Read §8 (what's
 > left) first; §3 (the per-crate matrix) is the as-built reference.
@@ -292,18 +300,69 @@ demonstrable artifact and keeps blast radius small.
    `Session::new_test()` and returns 1 — proves the fix works at
    runtime, not just compile time.
 
-4. **Implement `HttpResourceSource` and decide DAT shard format.** The
-   browser can't read a 4 GB monolithic `portal.dat` — content needs to
-   be split and fetched on demand. Open question per design doc §7
-   (basemap renderer + DAT shard format). Two sub-tasks:
-   - Trait surface: a wasm32-friendly async `ResourceSource` that
-     replaces the `File`-backed reader in `holtburger-dat` /
-     `holtburger-content`. The current `FileExtPolyfill` impl on
-     wasm32 returns `io::Unsupported` as a stub; replace its callers.
-   - Shard format: byte-range HTTP requests against a single big DAT
-     vs an index of pre-split files vs an HBA-of-HBAs. Pick one, write
-     a one-time tool to materialize it from the existing portal.dat,
-     and host the output statically. ~3–5 days, biggest unknown.
+4. ~~**Implement `HttpResourceSource` and decide DAT shard format.**~~
+   — **Done** in `ac7f92d` (with the `HbaReader<R = File>` generic
+   refactor in `b4da651` as the prerequisite). Two design decisions
+   landed:
+   - **Trait shape: sync pre-load (option b).** `ResourceSource` stays
+     synchronous; `HttpResourceSource::connect(url)` `await`s the bytes
+     once at construction time and serves them sync from in-memory
+     state. The other two viable shapes — async trait (refactors ~6
+     call sites in 4 crates) or hybrid — were rejected for the spike
+     because sync pre-load ships fastest and the refactor to async is
+     mechanical once the rest of the loop exists. `Vec<u8>`-backed
+     `HbaReader` is `Send + Sync`, so `LayeredResourceResolver`'s
+     `Vec<Arc<dyn ResourceSource>>` storage accepts the new source
+     without any trait-level changes.
+   - **Shard format: HBA-of-HBAs (single file).** The existing `dat2hba`
+     tool already produces exactly the right artefact — a namespaced
+     HBA with `eor/portal`, `eor/cell`, `holtburger/core` content. The
+     parsing path is identical to native `HbaReader<File>` (so the
+     1084-test suite covers it transitively, plus 2 new direct
+     bytes-reader tests bringing the count to 1086), and a single
+     fetch maps perfectly to "pre-load everything once" without
+     needing any shard manifest. Byte-range over a monolithic DAT and
+     manifest-of-pre-split-files were rejected because they each need
+     new infrastructure (random-access-over-HTTP reader / new manifest
+     format). Larger-asset shapes can revisit either in a future step
+     once the spike loop closes.
+   - **Wire-up.** New crate `crates/holtburger-resource-http/`
+     (wasm32-only, `cfg(target_arch = "wasm32")`-gated; mirrors
+     `holtburger-transport-ws`'s layout so `web-sys` and
+     `wasm-bindgen-futures` stay out of native graphs).
+     `HttpResourceSource::connect(url)` resolves `fetch` from
+     `Window`, `WorkerGlobalScope`, or `Reflect::get(globalThis,
+     "fetch")` — the third path is the Node 18+ fallback, without
+     which the smoke test could only do symbol-presence checks.
+   - **`HbaReader<R = File>` refactor.** `R` defaults to `File` so all
+     existing native call sites compile unchanged; new
+     `HbaReader::<Vec<u8>>::from_bytes(bytes)` is the wasm32 entry
+     point. `FileExtPolyfill` gained `len_compat() -> io::Result<u64>`
+     and an `impl FileExtPolyfill for Vec<u8>` (bounds-checked
+     positional read). The header parse swapped from sequential
+     `HbaHeader::read(&mut file)` to a positional read of the first
+     24 bytes followed by `HbaHeader::read(&mut Cursor::new(...))`,
+     matching how the namespace metadata block was already read.
+   - **Drive-by §8 step 3 leftover.** `holtburger-core::client::runtime`
+     still used `std::time::Instant` for the keepalive /
+     connection-timeout comparisons against `Session::last_*_time`,
+     which became `web_time::Instant` in `d23f5d3`. Native compiled
+     because `web_time` re-exports `std::time` there; wasm32 failed
+     with a type mismatch. Fixed by switching to
+     `Session::last_*_time.elapsed()`, which works on both targets.
+   - **Smoke test.** `apps/holtburger-web` got a wasm32-only
+     `try_http_resource_source_smoke(asset_url, namespace, file_id)
+     -> Promise<u32>` export (returns the decompressed byte length).
+     `smoke_test.cjs` grew to 8/8 checks, the last of which serves
+     `dats/assets.hba` from an in-process `http.createServer` and
+     verifies the wasm bundle resolves `eor/portal:0x0E000004` to
+     5876 bytes. The check degrades to SKIP (not FAIL) if the fixture
+     is absent — `dats/assets.hba` is git-ignored (retail-derived
+     bytes), so the smoke test stays green in environments without
+     dat access. Generation: `dat2hba --profile micro
+     eor/portal=client_portal.dat eor/cell=client_cell_1.dat
+     dats/assets.hba`.
+   - **Native invariant.** All 1086 workspace lib tests still green.
 
 5. **Decide what to do about `holtburger-scripting`.** `deno_core`/V8 is
    C++ and won't run inside a `wasm32-unknown-unknown` bundle. The right
