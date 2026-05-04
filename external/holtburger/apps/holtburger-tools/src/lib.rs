@@ -1,4 +1,5 @@
 pub mod dat2hba;
+pub mod dat_shard;
 pub mod error;
 pub mod spell_export;
 
