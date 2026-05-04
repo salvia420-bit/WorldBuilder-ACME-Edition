@@ -277,6 +277,38 @@ check(
                 `${distinct} distinct: [${[...new Set(codes)].sort((a, b) => a - b).join(", ")}]`
             );
 
+            // Phase 3 step 5: per-vertex road code stream is exposed
+            // alongside terrainCodes. Road bits are 2 wide (range 0..3)
+            // and live at bits 0-1 of the same `terrain[]` u16. Holtburg
+            // town centre is on AC's main east-west road network and
+            // empirically has ≥10 vertices with road_code > 0.
+            const roads = mesh.roadCodes;
+            const roadShapeOk =
+                roads instanceof Uint8Array && roads.length === 81;
+            check(
+                "fetch_landblock_heightmap: roadCodes is Uint8Array of 81 (Phase 3 step 5)",
+                roadShapeOk,
+                `len=${roads?.length}, ctor=${roads?.constructor?.name}`
+            );
+
+            let roadMin = 255, roadMax = 0, roadCount = 0;
+            for (let i = 0; i < roads.length; i += 1) {
+                if (roads[i] < roadMin) roadMin = roads[i];
+                if (roads[i] > roadMax) roadMax = roads[i];
+                if (roads[i] > 0) roadCount += 1;
+            }
+            check(
+                "fetch_landblock_heightmap: roadCodes values all in [0, 3]",
+                roadMin >= 0 && roadMax <= 3,
+                `min=${roadMin}, max=${roadMax}`
+            );
+
+            check(
+                "fetch_landblock_heightmap: Holtburg centre has road network (≥10 road verts)",
+                roadCount >= 10,
+                `${roadCount} road verts of 81`
+            );
+
             mesh.free();
         } catch (e) {
             // Missing `eor/cell` namespace (micro-profile fixture) is
