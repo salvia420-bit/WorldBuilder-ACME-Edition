@@ -1,36 +1,37 @@
 # Phase 3 — PixiJS renderer (as-built)
 
-> **Status:** Steps 1, 2, 3 landed and step 5 partial (road overlays)
+> **Status:** Steps 1, 2, 3, 3.5, and step 5 partial (road overlays)
 > landed (2026-05-04). The browser bundle fetches a 3×3 neighbourhood
 > of real Asheron's Call landblocks around Holtburg in one batch
 > call, lays them out at correct world offsets, and PixiJS draws
-> them on a `<canvas>` as **AC terrain with the stone-road network
-> overlaid**: grass, water, sand, dirt sampled per-cell from a 32-
-> entry placeholder atlas via a custom GLSL ES 3.00 Mesh shader,
-> plus a stone-grey road tile wherever `road_type ≥ 1` in the cell's
-> SW corner. Mouse-wheel zooms around the cursor; click-and-drag
-> pans. See [`phase-3-step-1-handoff.md`](phase-3-step-1-handoff.md),
+> them on a `<canvas>` as **AC terrain with real retail textures
+> and the stone-road network overlaid**: grass tiles with internal
+> mottling, water tiles with wave detail, real stone-tile road,
+> sampled per-cell from a 6×6 atlas of decoded retail RGBA8 textures
+> via a custom GLSL ES 3.00 Mesh shader. Mouse-wheel zooms around
+> the cursor; click-and-drag pans. See
+> [`phase-3-step-1-handoff.md`](phase-3-step-1-handoff.md),
 > [`phase-3-step-2-handoff.md`](phase-3-step-2-handoff.md), and
 > [`phase-3-step-3-handoff.md`](phase-3-step-3-handoff.md) for the
 > framing briefs; this file is the as-built reference.
 
-![Holtburg + 8 neighbours with terrain + road network](images/phase-3-step-5-roads.png)
+![Holtburg + 8 neighbours with real AC terrain textures + road network](images/phase-3-step-3.5-real-textures.png)
 
-The step 5 screenshot is the current deliverable: same 3×3 grid as
-step 3, with Holtburg's stone-road network now visibly traced
-through the centre — east-west spine with branches going south,
-matching the static-site z=12 reference at
-[`images/DerethMapsEnhanced_zoom.png`](images/DerethMapsEnhanced_zoom.png).
-The road overlay is one shader pass on top of the existing terrain
-atlas; no per-tile draw-call cost. Step 5's atmospheric polish (fog,
-day/night) is still open, and step 4's object/sprite atlas
-(buildings, trees, NPCs) is the next major visual delta. The step 3
-hard-edges-only screenshot is archived at
-[`images/phase-3-step-3-textured.png`](images/phase-3-step-3-textured.png);
-step 2 height-ramp at
-[`images/phase-3-step-2-multi-landblock.png`](images/phase-3-step-2-multi-landblock.png);
-step 1 single-landblock at
-[`images/phase-3-step-1-landblock.png`](images/phase-3-step-1-landblock.png).
+The step 3.5 screenshot is the current deliverable: same 3×3 grid
+as step 5, with the placeholder palette swapped for real retail AC
+terrain textures. Each cell tiles a 256×256 sample of its
+SurfaceTexture across its 24 m face — grass with internal mottling,
+water with wave detail, stone road tiles. Compare to the static-site
+z=12 reference at
+[`images/DerethMapsEnhanced_zoom.png`](images/DerethMapsEnhanced_zoom.png) —
+same place, same palette signature. Remaining gap: object/sprite
+overlays (buildings, trees, NPCs), which step 4 lands. Step 5's
+atmospheric polish (fog, day/night) is also still open. Earlier
+deliverables archived at
+[`images/phase-3-step-5-roads.png`](images/phase-3-step-5-roads.png) (placeholder + roads),
+[`images/phase-3-step-3-textured.png`](images/phase-3-step-3-textured.png) (placeholder, hard-edges),
+[`images/phase-3-step-2-multi-landblock.png`](images/phase-3-step-2-multi-landblock.png) (height-ramp),
+[`images/phase-3-step-1-landblock.png`](images/phase-3-step-1-landblock.png) (single landblock).
 
 ---
 
@@ -437,38 +438,130 @@ shader change + texture filter swap, both documented inline in
 
 ---
 
+## Phase 3 step 3.5 landed (2026-05-04)
+
+Step 3.5 closes the loop on step 3's "shader pipeline first, real
+assets second" decision: the 32-colour placeholder palette is
+swapped for **real retail AC terrain textures**. Each cell now
+tiles a 256×256 sample of its SurfaceTexture across its 24 m face —
+grass with mottling, water with waves, stone road. The visual jump
+is what step 3 had been promising; placeholder colours were the
+load-bearing scaffolding that this step replaces with content.
+
+What step 3.5 ships, on top of step 5 (partial):
+
+| Surface | After step 5 partial | After step 3.5 |
+|---|---|---|
+| Atlas content | 32 placeholder swatches | 33 real retail tiles (256×256 each, 1536×1536 atlas) |
+| Atlas filtering | NEAREST | LINEAR + auto-mipmaps |
+| Wasm boundary | `terrainCodes`, `roadCodes` | + `fetch_terrain_textures(asset_url) → Vec<TerrainTexture>` |
+| Dat-format parsers | (none for textures) | new `Palette` (0x04), `SurfaceTexture` (0x05), `Texture` (0x06) |
+| Pixel formats decoded | n/a | CustomLscapeR8G8B8, R8G8B8, A8R8G8B8, P8, Index16, A8 |
+| Road overlay | flat `uRoadColor` (#a8a4a0) | real `RoadType` atlas tile |
+| Wireframe alpha | 0.5 (visible diagnostic) | 0.12 (faint; texture content reads first) |
+| Smoke checks | 24 | 28 (+4 for texture export) |
+| Native lib tests | 1090 | 1096 (+6 parser tests) |
+| Bundle profile | `dat2hba --profile pruned` (233 MB) | `--profile full` (605 MB; pruned excludes Texture/Palette/SurfaceTexture types) |
+
+**Texture-format pipeline** (Rust side):
+
+1. **`Palette` (0x04).** `[id][i32 count][u32 ARGB]*count`.
+2. **`SurfaceTexture` (0x05).** `[id][unknown_int][unknown_byte][i32 count][u32 mip_id]*count`. `highest_res()` returns the last entry.
+3. **`Texture` (0x06).** Header + raw `source_data` + optional `default_palette_id` for palettized formats. `to_rgba8()` decodes to a flat width × height × 4 RGBA8 buffer; closure-based palette lookup keeps the cost lazy (most terrain textures don't need a palette).
+
+The parsers cover the pixel formats AC terrain actually uses:
+`CustomLscapeR8G8B8` (the common case — terrain heightmap textures),
+`R8G8B8` (BGR despite the name; AC quirk), `A8R8G8B8`, `P8`,
+`Index16`, `A8`. DXT / 565 / 4444 return a structured error so the
+caller learns which format to add when an unsupported texture
+surfaces. Cribbed from upstream ACE
+`Source/ACE.DatLoader/FileTypes/{Palette,SurfaceTexture,Texture}.cs`.
+
+**`fetch_terrain_textures(asset_url)` wasm export.** Returns 33
+`TerrainTexture` blobs in `TerrainTextureType` enum order. Pipeline
+per terrain type: SurfaceTexture lookup → highest mip-level Texture
+lookup → RGBA8 decode (with lazy palette fetch). One HTTP fetch
+resolves the whole asset bundle; per-asset lookups are in-memory.
+
+**Region-parser shortcut.** The `terrain_type → SurfaceTexture ID`
+mapping comes from a hardcoded `RETAIL_TERRAIN_SURFACE_TEXTURES`
+constant rather than a runtime Region (`0x13000000`) parser. The
+mapping was extracted offline by **signature-scanning** the actual
+Region binary (via `dat-tool export ... | python` for the
+`[count=33][type=0]...[type=32]` pattern of `TexMerge.TerrainDesc[]`).
+Writing a full Region parser would have required ~300 lines of
+binrw to handle the `LandDefs / GameTime / SkyDesc / SoundDesc /
+SceneDesc` nested-struct chain; the mapping is stable for retail
+Dereth and re-extracting if a custom region appears is a step-4-or-
+later concern. Documented inline.
+
+**JS atlas builder + per-region shader.** `buildTerrainAtlas`
+awaits the wasm export, downscales each 512×512 source to 256×256
+via an offscreen canvas, and packs into a 1536×1536 atlas
+(6×6 grid). Shader replaces the 32-column `(code + 0.5) / 32`
+lookup with a proper per-region `regionOrigin + regionSize *
+fract(cellUv)` formula. New `vCellUv = aPosition / 24m` varying
+gives cell-local tile UV (each cell tiles its texture across its
+24m face). `uAtlasGridSize` uniform parametrises (cols, rows). Road
+overlay samples atlas slot 32 (real RoadType tile) instead of the
+placeholder uniform.
+
+**Wireframe stroke alpha bumped DOWN from 0.5 to 0.12** — with real
+textures the cell grid would overpower the actual content. Still
+visible enough at high zoom-in to spot tessellation issues.
+
+**Fixture profile change:** `dat2hba`'s pruned profile excludes
+Texture / SurfaceTexture / Palette record types via
+`is_essential()`. Step 3.5 needs `--profile full`. Bundle grows
+from 233 MB → 605 MB. Reasonable for development; production needs
+a per-content "renderer" profile or proper streaming, tracked as a
+follow-up.
+
+### Files touched in step 3.5
+
+| File | What |
+|---|---|
+| [`crates/holtburger-dat/src/file_type/palette.rs`](../external/holtburger/crates/holtburger-dat/src/file_type/palette.rs) | New: parses Palette (0x04) records into `id` + `colors: Vec<u32>` |
+| [`crates/holtburger-dat/src/file_type/surface_texture.rs`](../external/holtburger/crates/holtburger-dat/src/file_type/surface_texture.rs) | New: parses SurfaceTexture (0x05) mip-stack |
+| [`crates/holtburger-dat/src/file_type/texture.rs`](../external/holtburger/crates/holtburger-dat/src/file_type/texture.rs) | New: Texture (0x06) parser + RGBA8 decoder for the 5 formats AC terrain uses |
+| [`crates/holtburger-dat/src/file_type/mod.rs`](../external/holtburger/crates/holtburger-dat/src/file_type/mod.rs) | Module declarations + re-exports |
+| [`apps/holtburger-web/src/lib.rs`](../external/holtburger/apps/holtburger-web/src/lib.rs) | `RETAIL_TERRAIN_SURFACE_TEXTURES` constant (33 entries, signature-scanned), `TerrainTexture` struct, `fetch_terrain_textures` async export |
+| [`apps/holtburger-web/index.html`](../external/holtburger/apps/holtburger-web/index.html) | Atlas builder rewritten to fetch real textures; per-region shader (`vCellUv`, `uAtlasGridSize`); wireframe dimmed |
+| [`apps/holtburger-web/smoke_test.cjs`](../external/holtburger/apps/holtburger-web/smoke_test.cjs) | 4 new checks: symbol presence + 33-entry round-trip + RGBA8 invariants + retail mip pin |
+| [`docs/phase-3-renderer.md`](phase-3-renderer.md) | This section |
+| [`docs/phase-2-wasm-spike.md`](phase-2-wasm-spike.md) | Status now reads "steps 1, 2, 3, 3.5 + step 5 (roads) landed" |
+| [`docs/emit-dynamic-site.md`](emit-dynamic-site.md) | §4.5 quality-ladder row 2 annotation: now real textures, not placeholder |
+| [`docs/images/phase-3-step-3.5-real-textures.png`](images/phase-3-step-3.5-real-textures.png) | Browser screenshot — 3×3 grid with real AC retail terrain textures |
+
+---
+
 ## What's next (Phase 3 step 4 candidates)
 
 These are independent — pick by user priority. Step 3's shader
 pipeline is the load-bearing foundation that step 4-or-later builds on.
 
-### a) Real texture parser (step 3.5) — biggest visual delta
-
-Replace the placeholder palette with the actual AC terrain textures.
-This unlocks the soft-blend path that step 5 had to revert:
-- New `crates/holtburger-dat/src/file_type/texture.rs` parser for the
-  Texture (`0x06`) record format — palette-based with header (width,
-  height, pixel-format, palette-id pointing to a Palette `0x04` record).
-- New `fetch_terrain_textures(asset_url, texture_ids)` wasm export
-  returning RGBA8 blobs.
-- JS-side packs the 32-or-fewer real tiles into a 1024×1024-or-larger
-  atlas. The shader's `(code + 0.5) / 32` lookup generalises to per-
-  region `(u, v, w, h)` math passed as `uniform vec4 uAtlasRegions[32]`.
-- Real road tile from `eor/portal:` replaces the placeholder
-  `uRoadColor` uniform.
-
-### b) Sprite-atlas reuse for object art (step 4 in the design doc)
+### a) Sprite-atlas reuse for object art (step 4 in the design doc) — biggest remaining visual delta
 
 Layer object sprites + LandblockInfo on top of the textured terrain
 by reusing the static-site sprite atlas at
-`dist/projects/<slug>/sprites/atlas.{png,js}`. This is the core
-§4.5 quality-ladder progression. Needs:
+`dist/projects/<slug>/sprites/atlas.{png,js}`. The visual gap to the
+static-site reference is now mostly buildings/trees/NPCs. Needs:
 - A wasm export reading `LandblockInfo` records (`XXYYFFFE`) for
   each landblock and emitting placement records (object ID, x, y,
   rotation). The parser already exists in `holtburger-dat` (see
   `landblock.rs` `LandblockInfo` struct); just needs an export.
 - JS-side sprite pool keyed by object ID, looked up against the
   static-site atlas.
+
+### b) Per-cell terrain blending (step 5 polish, AC-faithful)
+
+AC's actual surface table uses corner/side blend maps (the
+`CornerTerrainMaps` / `SideTerrainMaps` lists in TexMerge that step
+3.5 didn't read) for proper transitions across cell boundaries.
+Currently each cell renders one terrain type uniformly; with corner
+blends, a grass-to-water boundary fades smoothly. This is the
+"static site looks more polished" delta. Multi-pass rendering, ~150
+lines of additional shader work.
 
 ### c) Atmospheric polish (step 5 follow-on)
 
@@ -482,13 +575,15 @@ Extend beyond the 3×3 hardcode to N×N visible landblocks driven by
 the camera. Needs a landblock-id → `LandblockMesh` cache, camera-
 driven prefetch, eviction, and LOD/culling.
 
-### e) Soft-blend cell boundaries (revisit after step 3.5)
+### e) Renderer-profile bake (asset-bundle size)
 
-Step 5 tried this and reverted; the placeholder palette doesn't
-support good blending. Once real textures land in step 3.5, flip
-`vTerrainCode` from `flat in int` back to `out float` + smooth, and
-flip the atlas filter from NEAREST to LINEAR. Mechanical change —
-both lines are commented inline.
+Step 3.5 forced `dat2hba --profile full` because the existing
+`pruned` profile excludes Texture / SurfaceTexture / Palette types
+via `is_essential()`. Bundle grew from 233 MB → 605 MB. A new
+`renderer` profile that's `pruned` + the texture-pipeline types
+would land in the ~280 MB range. Mechanical change in
+`crates/holtburger-dat/src/file_type/mod.rs` (extend
+`is_essential` or add a parallel filter).
 
 ### Tangentially: Live ACE session (Phase 4)
 

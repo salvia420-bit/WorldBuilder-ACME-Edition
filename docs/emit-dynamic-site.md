@@ -322,16 +322,18 @@ static-site visual fidelity, in order of impact:
 | Step | Visual jump | Status |
 |---|---|---|
 | Heightmap render | topographic relief, recognisable shapes | ✅ landed (step 1+2) |
-| Texture atlas + surface table | recognisable AC terrain — biggest delta | ✅ landed (step 3, placeholder atlas) |
+| Texture atlas + surface table | recognisable AC terrain — biggest delta | ✅ landed (step 3 placeholder, step 3.5 real retail tiles) |
 | Sprite atlas consumption | buildings/trees/decorations in the right spots | open (step 4) |
 | Road overlays + atmospheric polish | matches the README static screenshot | ✅ landed partial (step 5: roads only; atmospherics still open) |
 
-Step 3's texture atlas ships as 32 placeholder solid-colour swatches
-per the handoff brief's scope-reducer guidance — the AC Texture
-(`0x06`) parser is a multi-week reverse-engineering job and was
-deferred to step 3.5 to keep the shader pipeline (the load-bearing
-piece) shipping first. The shader's per-region `(u, v, w, h)`
-contract generalises to real textures without changes elsewhere.
+Step 3 first shipped 32 placeholder solid colours per the brief's
+scope-reducer guidance, getting the shader pipeline in place. Step
+3.5 followed up with **real retail AC textures** by porting the
+Palette (`0x04`), SurfaceTexture (`0x05`), and Texture (`0x06`)
+parsers from upstream ACE and signature-scanning the Region binary
+to extract the canonical 33-entry terrain → SurfaceTexture mapping
+(skipping a runtime Region parser as multi-week scope). Each cell
+now tiles a 256×256 sample of its real AC tile across its 24m face.
 
 **What's deliberately NOT in this rail:**
 

@@ -1,29 +1,31 @@
 # Phase 2 — WASM port spike (inventory)
 
 > **Status:** Phase 2 §8 in-scope work closed (2026-05-04). **Phase 3
-> steps 1, 2, 3, and step 5 (partial — roads) landed (2026-05-04)** —
-> the wasm bundle now fetches a 3×3 neighbourhood of real AC
-> landblocks around Holtburg in one batch call, lays them out at
-> correct world offsets, and PixiJS draws them as **AC terrain with
-> the stone-road network overlaid**: grass, water, sand, dirt
-> sampled per-cell from a 32-entry placeholder atlas via a custom
-> GLSL ES 3.00 Mesh shader, plus a stone-grey road tile wherever
-> `road_type ≥ 1`. Mouse-wheel zoom and drag-to-pan still work. See
+> steps 1, 2, 3, 3.5, and step 5 (partial — roads) landed
+> (2026-05-04)** — the wasm bundle now fetches a 3×3 neighbourhood
+> of real AC landblocks around Holtburg in one batch call, lays them
+> out at correct world offsets, and PixiJS draws them as **AC terrain
+> with real retail textures and the stone-road network overlaid**:
+> grass tiles with internal mottling, water tiles with wave detail,
+> stone road tile, all sampled per-cell from a 6×6 atlas of decoded
+> retail RGBA8 textures via a custom GLSL ES 3.00 Mesh shader.
+> Mouse-wheel zoom and drag-to-pan still work. See
 > [`phase-3-renderer.md`](phase-3-renderer.md) for the as-built
 > notes and the deliverable screenshot at
-> `docs/images/phase-3-step-5-roads.png` (step 3's terrain-only
-> screenshot at `docs/images/phase-3-step-3-textured.png`, step 2's
-> height-ramp at `docs/images/phase-3-step-2-multi-landblock.png`,
-> and step 1's single-landblock at
+> `docs/images/phase-3-step-3.5-real-textures.png` (placeholder-era
+> screenshots at `docs/images/phase-3-step-5-roads.png`,
+> `docs/images/phase-3-step-3-textured.png`,
+> `docs/images/phase-3-step-2-multi-landblock.png`,
 > `docs/images/phase-3-step-1-landblock.png` are archived as
-> references for the geometry-only renders in isolation).
+> references for earlier states).
 >
 > All seven library crates needed by the browser client cross-compile
 > to `wasm32-unknown-unknown`: `holtburger-common`,
 > `holtburger-protocol`, `holtburger-session`, `holtburger-dat`,
 > `holtburger-world`, `holtburger-content`, `holtburger-core`. Native
-> invariant held — the 1090 existing lib tests stay green at every
-> commit (1086 + 4 from the step-3 bit-decode tests).
+> invariant held — the 1096 existing lib tests stay green at every
+> commit (1086 + 4 from step-3 bit-decode tests + 6 from step-3.5
+> Palette/SurfaceTexture/Texture parser tests).
 > `holtburger-scripting` remains wasm32-incompatible (deno_core / V8)
 > and is reclassified from "port" to "exclude from WASM build" —
 > see §8.
@@ -31,23 +33,26 @@
 > §8 steps 1 (build pipeline, `3025834`), 3 (`web_time::Instant`
 > swap, `d23f5d3`), 2 (WsTransport, `e151003`), and 4 (HttpResourceSource,
 > `ac7f92d`) are all done. **Step 6 (renderer wiring) is closed via
-> Phase 3 steps 1, 2, 3, and step 5 (partial).** Step 1 added
+> Phase 3 steps 1, 2, 3, 3.5, and step 5 (partial).** Step 1 added
 > `fetch_landblock_heightmap` for one landblock; step 2 added
-> `fetch_landblock_heightmaps` (batch) plus the multi-landblock
-> scene graph and pan/zoom camera; step 3 added the per-vertex
+> `fetch_landblock_heightmaps` (batch) + multi-landblock scene
+> graph + pan/zoom camera; step 3 added the per-vertex
 > `terrainCodes` stream + custom Mesh shader for AC terrain
-> rendering; step 5 (partial) added per-vertex `roadCodes` + road
-> overlay in the same shader pass. The Node smoke test grew from
-> 8 → 14 (step 1) → 17 (step 2) → 20 (step 3) → 24 (step 5 partial)
-> checks.
+> rendering; step 5 partial added `roadCodes` + road overlay; step
+> 3.5 added Palette / SurfaceTexture / Texture parsers +
+> `fetch_terrain_textures` export, replacing the 32-colour
+> placeholder atlas with **real retail AC tiles**. Smoke checks
+> grew 8 → 14 (step 1) → 17 (step 2) → 20 (step 3) → 24 (step 5
+> partial) → 28 (step 3.5).
 >
 > Step 5 of *§8* (scripting JS interop) remains open but doesn't
-> block character-login → world-entry. Phase 3 step 3.5 picks up
-> next: real AC textures replacing the 32-colour placeholder palette
-> (Texture / Surface / Palette parsers + atlas builder). Step 4
-> (sprite-atlas reuse for object art), step 5 atmospheric polish
-> (fog, day/night), multi-landblock streaming, and Phase 4
-> (`ClientViewEvent` → entity sprites) remain independent candidates.
+> block character-login → world-entry. Phase 3 step 4 picks up
+> next: sprite-atlas reuse for object art (buildings/trees/NPCs),
+> the biggest remaining visual delta vs the static-site reference.
+> Per-cell terrain blending (AC's CornerTerrainMaps), atmospheric
+> polish (fog, day/night), multi-landblock streaming, and Phase 4
+> (`ClientViewEvent` → entity sprites) remain independent
+> candidates.
 >
 > **Audience:** anyone picking up Phase 2/3 implementation. Read §8
 > (what's left) first; §3 (the per-crate matrix) is the as-built
