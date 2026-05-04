@@ -96,6 +96,15 @@ check(
     `typeof ${typeof wasm.try_http_resource_source_smoke}`
 );
 
+// Phase 3 step 1 wiring: fetch_landblock_heightmap must be present.
+// End-to-end round-trip below if the fixture has the eor/cell namespace
+// (i.e. dat2hba was run with --profile pruned, not --profile micro).
+check(
+    "fetch_landblock_heightmap() is exported (Phase 3 step 1 render path)",
+    typeof wasm.fetch_landblock_heightmap === "function",
+    `typeof ${typeof wasm.fetch_landblock_heightmap}`
+);
+
 (async () => {
     // §8 step 4 round-trip: serve `dats/assets.hba` over HTTP from this
     // process, then have the wasm bundle's HttpResourceSource fetch +
@@ -151,6 +160,95 @@ check(
                 false,
                 `threw: ${e?.message ?? e}`
             );
+        }
+
+        // Phase 3 step 1 round-trip: fetch the Holtburg-town-centre
+        // CellLandblock (`eor/cell:0xA9B4FFFF`) and verify the mesh
+        // shape. Requires `--profile pruned` (or fuller); `--profile
+        // micro` excludes `eor/cell` and so this round-trip degrades to
+        // a SKIP without failing the run. Visual rendering is
+        // browser-only — Node has no canvas — so we check geometry
+        // invariants here.
+        try {
+            const cellId = 0xa9b4ffff;
+            const mesh = await wasm.fetch_landblock_heightmap(url, cellId);
+
+            const positionsOk =
+                mesh.positions instanceof Float32Array &&
+                mesh.positions.length === 243;
+            check(
+                "fetch_landblock_heightmap: positions is Float32Array of 243",
+                positionsOk,
+                `len=${mesh.positions?.length}, ctor=${mesh.positions?.constructor?.name}`
+            );
+
+            const indicesOk =
+                mesh.indices instanceof Uint16Array &&
+                mesh.indices.length === 384;
+            check(
+                "fetch_landblock_heightmap: indices is Uint16Array of 384",
+                indicesOk,
+                `len=${mesh.indices?.length}, ctor=${mesh.indices?.constructor?.name}`
+            );
+
+            // Vertex (0,0) is at metric origin; vertex (8,8) is at
+            // (24, 24). These are the corners of the 9×9 grid.
+            const cornerOk =
+                mesh.positions[0] === 0 &&
+                mesh.positions[1] === 0 &&
+                mesh.positions[80 * 3] === 24 &&
+                mesh.positions[80 * 3 + 1] === 24;
+            check(
+                "fetch_landblock_heightmap: corner vertices at (0,0) and (24,24)",
+                cornerOk,
+                `(${mesh.positions[0]},${mesh.positions[1]}) (${mesh.positions[80 * 3]},${mesh.positions[80 * 3 + 1]})`
+            );
+
+            // Heights are u8 × 2.0, so range is [0, 510] metres.
+            const rangeOk =
+                Number.isFinite(mesh.heightMin) &&
+                Number.isFinite(mesh.heightMax) &&
+                mesh.heightMin >= 0 &&
+                mesh.heightMax <= 510 &&
+                mesh.heightMax >= mesh.heightMin;
+            check(
+                "fetch_landblock_heightmap: height bounds in [0, 510]",
+                rangeOk,
+                `min=${mesh.heightMin}, max=${mesh.heightMax}`
+            );
+
+            // Every triangle index must point at a real vertex.
+            let maxIdx = 0;
+            for (let i = 0; i < mesh.indices.length; i += 1) {
+                if (mesh.indices[i] > maxIdx) maxIdx = mesh.indices[i];
+            }
+            check(
+                "fetch_landblock_heightmap: max index < 81 (within 9×9 grid)",
+                maxIdx === 80,
+                `maxIdx=${maxIdx}`
+            );
+
+            mesh.free();
+        } catch (e) {
+            // Missing `eor/cell` namespace (micro-profile fixture) is
+            // an environment skip, not a failure. Anything else is.
+            const msg = String(e?.message ?? e);
+            const missingCell =
+                msg.includes("eor/cell") &&
+                (msg.includes("not found") || msg.includes("missing namespace"));
+            if (missingCell) {
+                console.log(
+                    "  [SKIP] fetch_landblock_heightmap round-trip — fixture has " +
+                    "no eor/cell namespace.\n         Re-run dat2hba with " +
+                    "--profile pruned to include cell content."
+                );
+            } else {
+                check(
+                    "fetch_landblock_heightmap round-trip succeeds",
+                    false,
+                    `threw: ${msg}`
+                );
+            }
         } finally {
             await new Promise((resolve) => server.close(resolve));
         }

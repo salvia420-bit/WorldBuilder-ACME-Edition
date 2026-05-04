@@ -1,5 +1,5 @@
 //! Browser-loadable WASM bundle — Phase 2 smoke test for the wasm32
-//! cross-compile floor.
+//! cross-compile floor and Phase 3 step 1 renderer entry point.
 //!
 //! This crate is the smallest possible consumer of the floor laid in
 //! commits `50003ae`..`868c3ac`. It pulls in `holtburger-protocol` and
@@ -15,6 +15,12 @@
 //! `Session::new_with_transport` so the dependency graph is exercised
 //! at build time; a real round-trip against a live `holtburger-wsbridge`
 //! is the next browser-side validation.
+//!
+//! `fetch_landblock_heightmap` (Phase 3 step 1) reads a `CellLandblock`
+//! out of a fetched HBA and hands a triangle-mesh `LandblockMesh` back
+//! to JS. PixiJS turns it into a height-ramped terrain patch on a
+//! `<canvas>`; the parsing-vs-drawing split keeps the per-frame
+//! `wasm-bindgen` boundary cost to one typed-array crossing.
 
 use holtburger_protocol::crypto::Hash32;
 use holtburger_session::Session;
@@ -112,4 +118,120 @@ pub async fn try_http_resource_source_smoke(
         .get_file_by_key(ResourceKey::new(&namespace, file_id))
         .map_err(|e| JsValue::from_str(&format!("get_file_by_key: {e}")))?;
     Ok(bytes.len() as u32)
+}
+
+/// Heightmap geometry for one landblock terrain cell, ready to feed
+/// into a PixiJS `MeshGeometry`. Returned by
+/// [`fetch_landblock_heightmap`].
+///
+/// Coordinate convention:
+/// - `positions` is a flat `Float32Array` of 81 vertices (9×9 grid),
+///   3 floats per vertex: `[x0, y0, z0, x1, y1, z1, ...]`. Units are
+///   metres. `x` increases east, `y` increases north, `z` is
+///   elevation. Vertices are 3 m apart on each axis (a cell spans
+///   24 m × 24 m).
+/// - `indices` is a `Uint16Array` of 64 quads × 2 triangles ×
+///   3 indices = 384 indices, addressing into `positions`.
+/// - `height_min` / `height_max` bound the elevation range over the
+///   81 vertices so JS can normalise per-fragment colour.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct LandblockMesh {
+    positions: Vec<f32>,
+    indices: Vec<u16>,
+    height_min: f32,
+    height_max: f32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl LandblockMesh {
+    /// `Float32Array` of 3D vertex positions, length 243 (81 × 3).
+    #[wasm_bindgen(getter)]
+    pub fn positions(&self) -> Vec<f32> {
+        self.positions.clone()
+    }
+
+    /// `Uint16Array` of triangle vertex indices, length 384 (64 × 6).
+    #[wasm_bindgen(getter)]
+    pub fn indices(&self) -> Vec<u16> {
+        self.indices.clone()
+    }
+
+    /// Lowest elevation among the 81 vertices, in metres.
+    #[wasm_bindgen(getter, js_name = heightMin)]
+    pub fn height_min(&self) -> f32 {
+        self.height_min
+    }
+
+    /// Highest elevation among the 81 vertices, in metres.
+    #[wasm_bindgen(getter, js_name = heightMax)]
+    pub fn height_max(&self) -> f32 {
+        self.height_max
+    }
+}
+
+/// Fetch an HBA from `asset_url`, look up `eor/cell:cell_id` (typically
+/// `XXYYFFFF` for a landblock terrain record), parse it as a
+/// `CellLandblock`, and hand the 9×9 height grid back as a
+/// triangle-mesh [`LandblockMesh`].
+///
+/// This is the Phase 3 step 1 render path. The caller hands the mesh
+/// to PixiJS to draw a coloured triangle patch on a `<canvas>`. The
+/// expensive byte-pushing (HTTP fetch, HBA parse, mesh tessellation)
+/// happens once on the wasm side; subsequent per-frame work is pure
+/// JS/WebGL inside PixiJS.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_landblock_heightmap(
+    asset_url: String,
+    cell_id: u32,
+) -> Result<LandblockMesh, JsValue> {
+    use holtburger_dat::landblock::CellLandblock;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+
+    let source = holtburger_resource_http::HttpResourceSource::connect(&asset_url)
+        .await
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let bytes = source
+        .get_file_by_key(ResourceKey::new("eor/cell", cell_id))
+        .map_err(|e| JsValue::from_str(&format!("get_file_by_key: {e}")))?;
+    let cell = CellLandblock::unpack(&bytes)
+        .map_err(|e| JsValue::from_str(&format!("CellLandblock::unpack: {e}")))?;
+
+    let mut positions = Vec::with_capacity(81 * 3);
+    let mut height_min = f32::INFINITY;
+    let mut height_max = f32::NEG_INFINITY;
+    for x in 0..9usize {
+        for y in 0..9usize {
+            let h = cell.get_height(x, y);
+            positions.push(x as f32 * 3.0);
+            positions.push(y as f32 * 3.0);
+            positions.push(h);
+            if h < height_min {
+                height_min = h;
+            }
+            if h > height_max {
+                height_max = h;
+            }
+        }
+    }
+
+    let mut indices = Vec::with_capacity(64 * 6);
+    for x in 0..8u16 {
+        for y in 0..8u16 {
+            let v00 = x * 9 + y;
+            let v10 = x * 9 + y + 1;
+            let v01 = (x + 1) * 9 + y;
+            let v11 = (x + 1) * 9 + y + 1;
+            indices.extend_from_slice(&[v00, v10, v11, v00, v11, v01]);
+        }
+    }
+
+    Ok(LandblockMesh {
+        positions,
+        indices,
+        height_min,
+        height_max,
+    })
 }
