@@ -1455,6 +1455,14 @@ const CLIENT_EVENT_KIND_DISCONNECTED: u32 = 4;
 const CLIENT_EVENT_KIND_CHARACTER_CREATED: u32 = 5;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_CHARACTER_CREATE_FAILED: u32 = 6;
+/// Phase 4 step 2a.6: fired the first time the recv loop sees
+/// `GameEvent::PlayerDescription` (or `GameEvent::StartGame`) after
+/// `PlayerCreate`. Mirrors the cli's `enter_world()` transition —
+/// before this event lands, ACE silently ignores chat / movement /
+/// other in-world commands. JS shows the "Teleport to Holtburg"
+/// button (and any future in-world UI) gated on this.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_ENTERED_WORLD: u32 = 7;
 
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
@@ -1480,6 +1488,16 @@ enum SessionCommand {
     CreateCharacter {
         request: Box<holtburger_protocol::messages::CharacterCreateRequestData>,
     },
+    /// `SessionHandle.send_chat(text)` — sends a `GameAction::Talk`
+    /// over the wire. Used today by the JS-side "Teleport to
+    /// Holtburg" button to dispatch `@telepoi Holtburg`. ACE's
+    /// `@`/`/` chat-prefix commands route through the same Talk
+    /// path as in-game chat; access-level enforcement happens
+    /// server-side, so a non-Developer account silently drops
+    /// admin commands. See the dev-setup recipe in
+    /// `docs/phase-4-renderer.md` step 2a.6 for the SQL one-liner
+    /// that promotes test accounts to `accessLevel = 4`.
+    SendChat { message: String },
 }
 
 /// Tagged-payload envelope for events the wasm bundle drains to JS via
@@ -1506,9 +1524,15 @@ enum SessionCommand {
 ///   `stringPayload` = the `CharacterGenerationVerificationResponse`
 ///   variant name (`NameInUse`, `NameNotAllowed`, ...);
 ///   `u32Payload` = the numeric variant code.
+/// - `kind = 7` — EnteredWorld (Phase 4 step 2a.6). Fired the
+///   first time the recv loop sees `GameEvent::PlayerDescription`
+///   or `GameEvent::StartGame` after spawn. No payload — the
+///   transition itself is the signal that in-world commands
+///   (chat, movement, etc.) are now valid.
 ///
 /// Reserved for later steps:
-/// - `kind = 2` — chat / Talk events (step 4).
+/// - `kind = 2` — chat-received / Tell / ChannelBroadcast events
+///   (step 4 — DOM chat panel).
 /// - `kind = 3` — `ClientViewEvent::EntitySpawned` for non-player
 ///   entities (step 2b — needs the entity buffer).
 #[cfg(target_arch = "wasm32")]
@@ -1738,6 +1762,47 @@ impl SessionHandle {
     #[wasm_bindgen(getter, js_name = canCreateCharacter)]
     pub fn can_create_character(&self) -> bool {
         self.catalog.is_some()
+    }
+
+    /// Phase 4 step 2a.6: dispatch a chat-channel string to the
+    /// server. Strings starting with `@` or `/` route to ACE's
+    /// admin / advocate / developer command parser — useful for
+    /// dev-time conveniences like `@telepoi Holtburg` to bypass
+    /// the Training Academy tutorial. Plain strings (no leading
+    /// `@`/`/`) hit the local-area chat channel.
+    ///
+    /// **Access-level enforcement is server-side.** A regular
+    /// player account silently drops admin commands. Dev recipe:
+    /// `mariadb -uace -pace -e "UPDATE ace_auth.account SET
+    /// accessLevel = 4 WHERE accountName LIKE 'phase4demo%'"`
+    /// (Developer level = 4) lets `@telepoi` / `@teleloc` /
+    /// `@telexyz` work. See `docs/phase-4-renderer.md` step 2a.6.
+    ///
+    /// **Timing.** Strictly speaking, ACE wants the player in
+    /// `InWorld` state before processing chat (the cli's
+    /// `handle_chat_command` gates on this — see
+    /// `crates/holtburger-core/src/client/commands.rs:273`). JS
+    /// should wait for `kind=7 EnteredWorld` before calling this;
+    /// pre-EnteredWorld chats are silently dropped by ACE rather
+    /// than rejected.
+    ///
+    /// Returns `Ok(())` on cmd-channel enqueue. The send itself
+    /// happens asynchronously inside the recv loop; chat replies
+    /// (e.g. `@telepoi`'s teleport completion) arrive as
+    /// `GameEvent::CommunicationTransientString` or position
+    /// updates — not surfaced to JS in step 2a.6, but reachable
+    /// via future kind=2 chat events.
+    #[wasm_bindgen(js_name = sendChat)]
+    pub fn send_chat(&self, message: String) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        if message.is_empty() {
+            return Err(JsValue::from_str("send_chat: empty message"));
+        }
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SendChat { message })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("send_chat: cmd channel closed ({e})"))
+            })
     }
 }
 
@@ -2061,7 +2126,7 @@ struct CharListReady {
 /// State the recv loop tracks across iterations.
 #[cfg(target_arch = "wasm32")]
 enum LoopState {
-    /// Pre-character-selection (first phase) or post-spawn (idle).
+    /// Pre-character-selection (first phase). Pre-spawn idle.
     Idle,
     /// Between `CharacterEnterWorldRequest` and the eventual
     /// `PlayerCreate`. The `account_name` is captured here so the
@@ -2070,6 +2135,13 @@ enum LoopState {
     EnteringWorld {
         guid: holtburger_common::Guid,
         account: String,
+    },
+    /// Player is fully in-world after `PlayerCreate(guid)` arrived
+    /// and the recv loop sent `GameAction::LoginComplete` back to
+    /// ACE. Chat commands work, position updates flow, etc.
+    InWorld {
+        #[allow(dead_code)]
+        player_guid: holtburger_common::Guid,
     },
 }
 
@@ -2095,7 +2167,8 @@ async fn recv_loop(
 ) {
     use futures::StreamExt;
     use holtburger_protocol::messages::{
-        CharacterEnterWorldData, CharacterGenerationVerificationResponse, GameMessage,
+        CharacterEnterWorldData, CharacterGenerationVerificationResponse, GameAction, GameMessage,
+        TalkActionData,
     };
     use holtburger_protocol::traits::ProtocolUnpack;
     use holtburger_session::SessionEvent;
@@ -2219,18 +2292,78 @@ async fn recv_loop(
                             }
                         }
                         GameMessage::PlayerCreate(data) => {
-                            let player_guid = u32::from(data.guid);
+                            // Phase 4 step 2a/2a.6: PlayerCreate is the
+                            // server's "you're in the world" signal.
+                            // Mirrors the cli's
+                            // `crates/holtburger-core/src/client/messages.rs:433-466`
+                            // path: queue PlayerSpawned for JS, send
+                            // LoginComplete back to the server (ACE
+                            // expects this acknowledgement before
+                            // accepting in-world commands like @telepoi),
+                            // then transition to InWorld + queue
+                            // EnteredWorld so JS unhides the Teleport
+                            // button.
+                            //
+                            // The earlier "wait for GameEvent::
+                            // PlayerDescription / StartGame" gate was
+                            // wrong — empirically ACE sends a flurry of
+                            // ObjectCreate / ServerName / etc. and never
+                            // a parseable GameEvent for our flow, but
+                            // PlayerCreate ALWAYS arrives, and the cli's
+                            // path through line 464 makes it the
+                            // canonical InWorld trigger anyway.
+                            let player_guid_raw = u32::from(data.guid);
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_PLAYER_SPAWNED,
                                 string_payload: None,
-                                u32_payload: Some(player_guid),
+                                u32_payload: Some(player_guid_raw),
                             });
-                            state = LoopState::Idle;
+
+                            let login_complete = GameAction::LoginComplete(Box::new(
+                                holtburger_protocol::messages::LoginCompleteActionData,
+                            ));
+                            if let Err(e) = session.send_action(login_complete).await {
+                                log::warn!("recv_loop: send LoginComplete: {e}");
+                                queued_events.borrow_mut().push(ClientEvent {
+                                    kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                    string_payload: Some(format!("LoginComplete: {e}")),
+                                    u32_payload: None,
+                                });
+                                return;
+                            }
+
+                            state = LoopState::InWorld {
+                                player_guid: data.guid,
+                            };
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_ENTERED_WORLD,
+                                string_payload: None,
+                                u32_payload: Some(player_guid_raw),
+                            });
+                        }
+                        GameMessage::GameAction(action_msg) => {
+                            // Server can echo a GameAction::LoginComplete
+                            // back as confirmation — already InWorld at
+                            // that point, so just log for visibility.
+                            // Future steps (chat, equipment, etc.) will
+                            // dispatch on action_msg.action variants.
+                            if matches!(
+                                action_msg.action,
+                                GameAction::LoginComplete(_)
+                            ) {
+                                log::debug!(
+                                    "recv_loop: server-echoed LoginComplete"
+                                );
+                            }
                         }
                         _ => {
                             // Other GameMessages are dropped silently in
-                            // step 2a — chat, position updates, equipment,
-                            // etc. land in step 2b/3/4.
+                            // step 2a.6 — chat (kind=2), position
+                            // updates / VectorUpdate / UpdateMotion (step
+                            // 2b's PIXI entity buffer), equipment / chat
+                            // panel (step 4) all live downstream. The
+                            // recv loop's job here is to stay alive +
+                            // deliver the InWorld signal.
                         }
                     }
                 }
@@ -2278,6 +2411,28 @@ async fn recv_loop(
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
                                 string_payload: Some(format!("CharacterCreate: {e}")),
+                                u32_payload: None,
+                            });
+                            return;
+                        }
+                    }
+                    Some(SessionCommand::SendChat { message }) => {
+                        // Phase 4 step 2a.6: the cli routes chat
+                        // through `session.send_action(GameAction::Talk(...))`
+                        // (see `apps/holtburger-cli/src/.../commands.rs`
+                        // ClientCommand::Talk arm). ACE's command
+                        // parser treats any incoming Talk that starts
+                        // with `@` or `/` as a command — including
+                        // `@telepoi Holtburg` for the Training-Academy
+                        // bypass. Access-level enforcement happens
+                        // server-side; non-Developer accounts silently
+                        // drop admin commands.
+                        let action = GameAction::Talk(Box::new(TalkActionData { message }));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(Talk): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("send_chat: {e}")),
                                 u32_payload: None,
                             });
                             return;

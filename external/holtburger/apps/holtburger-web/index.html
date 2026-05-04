@@ -81,13 +81,24 @@
       <p class="hint">
         Click <em>Spawn</em> on any character to drive the AC enter-world
         handshake. The status line above updates from
-        <em>Selected</em> → <em>Spawned</em> as
-        <code>PlayerCreate(guid)</code> lands. One spawn per session
-        (step 2b will allow switching characters mid-session); reload
-        to pick a different character. Position rendering of the local
-        player is step 2b scope.
+        <em>Selected</em> → <em>Spawned</em> →
+        <em>InWorld</em> as <code>PlayerCreate(guid)</code> and then
+        <code>GameEvent::PlayerDescription</code> land. One spawn per
+        session (step 2b will allow switching mid-session); reload to
+        pick a different character. New characters spawn inside the
+        Training Academy tutorial dungeon — use the Teleport button
+        below (after InWorld) to bypass via <code>@telepoi Holtburg</code>.
       </p>
       <ul id="character-ul"></ul>
+      <div id="post-spawn" hidden>
+        <button type="button" id="teleport-button" disabled>Teleport to Holtburg</button>
+        <span id="post-spawn-hint" class="hint">
+          Available after <em>InWorld</em>. Requires the test account
+          to have <code>accessLevel ≥ 4 (Developer)</code> — see
+          <code>docs/phase-4-renderer.md</code> step 2a.6 for the SQL
+          one-liner.
+        </span>
+      </div>
 
       <form id="create-form" hidden>
         <fieldset>
@@ -1341,6 +1352,8 @@ void main() {
       const createNameInput = createForm.querySelector('input[name="char_name"]');
       const createBtn = document.getElementById("create-button");
       const createStatus = document.getElementById("create-status");
+      const postSpawn = document.getElementById("post-spawn");
+      const teleportBtn = document.getElementById("teleport-button");
       let activeHandle = null;
 
       loginForm.addEventListener("submit", async (e) => {
@@ -1447,6 +1460,33 @@ void main() {
               `awaiting CharacterEnterWorldServerReady → CharacterEnterWorld → PlayerCreate.`;
           });
 
+          // Phase 4 step 2a.6 — Teleport to Holtburg. Sends the
+          // ACE Developer command `@telepoi Holtburg` over the
+          // session's chat channel (GameAction::Talk). Requires
+          // the account to have accessLevel ≥ 4 server-side; see
+          // the SQL recipe in docs/phase-4-renderer.md step 2a.6.
+          teleportBtn.addEventListener("click", () => {
+            try {
+              handle.sendChat("@telepoi Holtburg");
+            } catch (err) {
+              loginStatus.innerHTML =
+                `<span class="fail">[FAIL]</span> sendChat rejected: <code>${String(err?.message ?? err)}</code>`;
+              return;
+            }
+            teleportBtn.disabled = true;
+            teleportBtn.textContent = "Teleporting…";
+            loginStatus.innerHTML =
+              `<span class="ok">[OK]</span> Sent <code>@telepoi Holtburg</code>. ` +
+              `<span class="hint">If the account has Developer accessLevel, the player is now at Holtburg's plaza. ` +
+              `Otherwise ACE silently dropped the command (check ACE's log; SQL-promote the account).</span>`;
+            // Re-enable after a short delay so the user can resend
+            // (e.g. after running the SQL promote).
+            setTimeout(() => {
+              teleportBtn.disabled = false;
+              teleportBtn.textContent = "Teleport to Holtburg";
+            }, 3000);
+          });
+
           // Phase 4 step 2a.5 — create-character form. Constructs the
           // CharacterCreateRequestData in the wasm bundle (Aluvian /
           // Male / Adventurer / Holtburg defaults) and dispatches it
@@ -1501,6 +1541,18 @@ void main() {
                 // `character_list` shared state — re-render so the UI
                 // reflects the new roster.
                 renderCharacterList();
+              } else if (evt.kind === 7) {
+                // EnteredWorld — server has fully spawned the
+                // player (PlayerDescription / StartGame fired). The
+                // wasm bundle's chat / movement commands now take
+                // effect server-side. Unhide the post-spawn block
+                // and enable the Teleport button.
+                const playerGuid = (evt.u32Payload >>> 0).toString(16).toUpperCase().padStart(8, "0");
+                postSpawn.hidden = false;
+                teleportBtn.disabled = false;
+                loginStatus.innerHTML =
+                  `<span class="ok">[OK]</span> InWorld as GUID 0x${playerGuid}. ` +
+                  `<span class="hint">Click <em>Teleport to Holtburg</em> to bypass the Training Academy.</span>`;
               } else if (evt.kind === 5) {
                 // CharacterCreated — refresh the list (recv loop has
                 // already mutated the shared character_list state via
