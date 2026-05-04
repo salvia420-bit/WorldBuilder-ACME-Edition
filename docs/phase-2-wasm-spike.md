@@ -9,14 +9,15 @@
 > remains wasm32-incompatible (deno_core / V8) and is reclassified from
 > "port" to "exclude from WASM build" — see §8.
 >
-> §8 steps 1 (build pipeline, `3025834`) and 3 (`web_time::Instant`
-> swap, `d23f5d3`) are also done. The `holtburger-web` bundle now has
-> 5/5 smoke-test checks green, including end-to-end-verified
-> `Session::new_test()` construction at runtime in the wasm bundle —
-> the Phase 2 opener's `Session::new_with_transport` seam is now
-> actually callable on wasm32, not just compile-time-clean. WS
-> transport (§8 step 2) and HTTP resource source (§8 step 4) have not
-> started.
+> §8 steps 1 (build pipeline, `3025834`), 3 (`web_time::Instant`
+> swap, `d23f5d3`), and 2 (WsTransport) are done. The `holtburger-web`
+> bundle now has 6/6 smoke-test checks green, including
+> end-to-end-verified `Session::new_test()` construction at runtime in
+> the wasm bundle and the WsTransport-backed
+> `try_ws_handshake_smoke` export — the Phase 2 opener's
+> `Session::new_with_transport` seam is now actually callable on
+> wasm32 with a real WS transport plugged in. HTTP resource source
+> (§8 step 4) has not started.
 >
 > **Audience:** anyone picking up Phase 2 implementation. Read §8 (what's
 > left) first; §3 (the per-crate matrix) is the as-built reference.
@@ -192,10 +193,15 @@ the surface.
   `holtburger-core`'s wasm32 target table. The transitive chain is
   `rand v0.10 → getrandom v0.4`; the `wasm_js` feature opts in to the
   `crypto.getRandomValues` JS shim.
-- **`tokio::spawn` Send/Sync audit (§5.2).** WASM has only `LocalSet`-style
-  execution. None of the cross-compile errors above would surface this —
-  it's a runtime-shape concern that bites only when actual async work runs.
-  Audit when the WASM runtime is wired up.
+- ~~**`tokio::spawn` Send/Sync audit (§5.2).**~~ **Partially resolved**
+  in §8 step 2. `holtburger-session::Transport` is now cfg-split:
+  native is `: Send + Sync` + `#[async_trait]`; wasm32 is bound-free +
+  `#[async_trait(?Send)]`. Survey of session/core call sites confirms
+  no `tokio::spawn` holding a Session across threads — the bound was
+  structural, not load-bearing. Native callers keep the contract; the
+  WS path no longer hits unimplementable bounds. A broader audit is
+  still due if the WASM runtime grows beyond a single-task receive
+  loop.
 - **`wasm-pack` vs `trunk`** (§7.4 in the design doc). Decide when step 5
   starts.
 - ~~**`tokio::time::Instant` / `std::time::Instant` on wasm32.**~~
@@ -236,15 +242,43 @@ demonstrable artifact and keeps blast radius small.
    correctly set (final browser-side execution is manual). See
    `apps/holtburger-web/README.md` for the dev-loop commands.
 
-2. **Implement `WsTransport`.** New crate `crates/holtburger-transport-ws`
-   that depends on `web-sys` and `wasm-bindgen-futures`, and implements
-   `holtburger_session::Transport`. Plugs into the seam introduced in
-   commit `f3d9a1c` (`Session::new_with_transport`). Lives in its own
-   crate so the rest of the workspace (native bridge / cli / tools)
-   doesn't pull `web-sys`. Wire format is the existing
-   `[port:u16 BE][ac_packet_bytes]` framing already used by the bridge —
-   `apps/holtburger-wsbridge/ARCHITECTURE.md` is the spec; the shim is
-   the reference impl. ~1–2 days.
+2. ~~**Implement `WsTransport`.**~~ — **Done.** New crate
+   `crates/holtburger-transport-ws/` (lib body `cfg(target_arch =
+   "wasm32")`-gated, browser-only deps target-gated) implements
+   `holtburger_session::Transport` over `web_sys::WebSocket`.
+   `WsTransport::connect(url, server_ip)` opens the WS, awaits the
+   OPEN event, and wires `onmessage` to push decoded
+   `(port, payload)` pairs into a `futures::channel::mpsc::unbounded`
+   queue; `send_to` encodes `[port:u16 BE][bytes]` and ships via
+   `ws.send_with_u8_array`; `recv_from` `.await`s the next queue
+   entry and synthesizes `SocketAddr` from the configured server_ip
+   plus the per-frame port tag, so the session's
+   `server_source_addr` / `pending_server_source_addr` allowlist in
+   `receive.rs` accepts the packet exactly as it would a UDP
+   datagram.
+   - **Send + Sync friction (resolved).** The native `Transport`
+     trait is `: Send + Sync` with `#[async_trait]`; wasm-bindgen
+     futures are `!Send`, so the trait is now cfg-split — wasm32
+     gets `pub trait Transport` with `#[async_trait(?Send)]` and a
+     matching `MockTransport` impl. Native sessions retain the full
+     bound (no caller spawns Session today, but keeping the contract
+     avoids quietly weakening it). Session/`Box<dyn Transport>`
+     storage works under both halves.
+   - **Wire-up.** `apps/holtburger-web` got a wasm32-only
+     `try_ws_handshake_smoke(bridge_url, server_ip, server_port) ->
+     Promise<u32>` export that constructs a real WsTransport, plugs
+     it into `Session::new_with_transport`, and returns the
+     session's initial `packet_sequence`. The bundle's Node smoke
+     test grew a 6th check verifying the symbol is present (the
+     handshake itself isn't invoked — that needs a live bridge plus
+     a `WebSocket` global, deferred to browser-side validation).
+   - **Reference frame.** Wire format matches
+     `apps/holtburger-wsbridge/src/frame.rs`; the codec is duplicated
+     into `holtburger-transport-ws/src/frame.rs` rather than depended
+     on, because the bridge crate is native-only (pulls tokio with
+     the `net` feature) and dragging it into wasm32 would re-introduce
+     the `mio` blocker that step 1 of this spike split out.
+   - **Native invariant.** All 1084 workspace lib tests still green.
 
 3. ~~**Address the runtime-only `std::time::Instant` issue.**~~ —
    **Done** in `d23f5d3`. Reordered ahead of step 2 because the smoke
