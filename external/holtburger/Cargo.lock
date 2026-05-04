@@ -1514,6 +1514,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "holtburger-manifest"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "holtburger-dat",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "holtburger-protocol"
 version = "0.1.0"
 dependencies = [

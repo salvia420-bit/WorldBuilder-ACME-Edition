@@ -1,0 +1,16 @@
+[package]
+name = "holtburger-manifest"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Asset-delivery manifest schema for emit-dynamic-site Phase 5.0. Defines the JSON shape produced by `dat-shard` and consumed by `ManifestResourceSource`. Pure data + sha256 helpers; compiles native + wasm32."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+thiserror = { workspace = true }
+holtburger-dat = { workspace = true }

@@ -6,6 +6,7 @@ members = [
     "crates/holtburger-common",
     "crates/holtburger-dat",
     "crates/holtburger-protocol",
+    "crates/holtburger-manifest",
     "crates/holtburger-resource-http",
     "crates/holtburger-scripting",
     "crates/holtburger-session",
@@ -33,6 +34,7 @@ holtburger-session = { path = "crates/holtburger-session" }
 holtburger-common = { path = "crates/holtburger-common" }
 holtburger-dat = { path = "crates/holtburger-dat" }
 holtburger-protocol = { path = "crates/holtburger-protocol" }
+holtburger-manifest = { path = "crates/holtburger-manifest" }
 holtburger-resource-http = { path = "crates/holtburger-resource-http" }
 holtburger-scripting = { path = "crates/holtburger-scripting" }
 holtburger-transport-ws = { path = "crates/holtburger-transport-ws" }
@@ -70,6 +72,7 @@ indicatif = "0.18"
 directories = "6.0"
 unicode-width = "0.2"
 hex = "0.4.3"
+sha2 = "0.10"
 reqwest = { version = "0.13", features = ["blocking", "json"] }
 zip = "8.5"
 regex = "1.12"
