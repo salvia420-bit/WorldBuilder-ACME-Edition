@@ -287,9 +287,25 @@ demonstrable artifact and keeps blast radius small.
      Promise<u32>` export that constructs a real WsTransport, plugs
      it into `Session::new_with_transport`, and returns the
      session's initial `packet_sequence`. The bundle's Node smoke
-     test grew a 6th check verifying the symbol is present (the
-     handshake itself isn't invoked — that needs a live bridge plus
-     a `WebSocket` global, deferred to browser-side validation).
+     test grew a 6th check verifying the symbol is present.
+   - **Browser-side validation closed (2026-05-04).** Once Phase 1's
+     live-ACE bring-up landed (see `docs/ace-local-setup.md`), the
+     handshake smoke ran for real:
+     `apps/holtburger-web/handshake_smoke.html` is a small harness
+     that imports the wasm bundle and exposes `runHandshake(...)` on
+     `window`. Driven via Playwright + Chromium with
+     `--use-gl=swiftshader`, the call
+     `try_ws_handshake_smoke('ws://127.0.0.1:8080/', '127.0.0.1', 9000)`
+     returned `packet_sequence=0` (the expected initial value for a
+     fresh `Session::new_with_transport`). The bridge log
+     corroborated the path: `accepted; upgrading to ws` →
+     `udp socket bound to Some(0.0.0.0:40559)` →
+     `connection closed` (clean shutdown when the Session was
+     dropped). This proves Chromium → WS → bridge → UDP → ACE is
+     functional end-to-end through the wasm bundle. The session's
+     AC handshake itself isn't exercised yet — that's a separate
+     export not yet wired in (the smoke confirms WsTransport
+     plumbing, not protocol negotiation).
    - **Reference frame.** Wire format matches
      `apps/holtburger-wsbridge/src/frame.rs`; the codec is duplicated
      into `holtburger-transport-ws/src/frame.rs` rather than depended

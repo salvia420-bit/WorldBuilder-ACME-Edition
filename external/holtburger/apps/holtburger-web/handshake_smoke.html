@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>holtburger-web — try_ws_handshake_smoke harness</title>
+  </head>
+  <body>
+    <h1>WsTransport handshake smoke (Phase 2 §8 step 2 live validation)</h1>
+    <p>
+      Calls <code>try_ws_handshake_smoke(bridge_url, server_ip, server_port)</code>
+      against a live <code>holtburger-wsbridge</code> in front of a live ACE.
+      Confirms the wasm bundle's <code>WsTransport</code> can open a
+      WebSocket through the bridge end-to-end.
+    </p>
+    <pre id="status">Loading wasm bundle...</pre>
+
+    <script type="module">
+      import init, {
+        build_info,
+        try_ws_handshake_smoke,
+      } from "./pkg/holtburger_web.js";
+
+      const status = document.getElementById("status");
+
+      function log(msg) {
+        status.textContent += "\n" + msg;
+        // eslint-disable-next-line no-console
+        console.log(msg);
+      }
+
+      try {
+        await init();
+        log("init() OK; build_info: " + build_info());
+      } catch (err) {
+        log("init() FAILED: " + (err?.stack || err));
+        window.__handshakeResult = { ok: false, stage: "init", err: String(err) };
+        throw err;
+      }
+
+      // Expose a runner on window so Playwright can drive it after init.
+      window.runHandshake = async function (bridgeUrl, serverIp, serverPort) {
+        log(
+          `runHandshake(bridge=${bridgeUrl}, ip=${serverIp}, port=${serverPort}) starting…`
+        );
+        try {
+          const seq = await try_ws_handshake_smoke(
+            bridgeUrl,
+            serverIp,
+            serverPort
+          );
+          log(`OK — packet_sequence=${seq}`);
+          window.__handshakeResult = { ok: true, packet_sequence: seq };
+          return seq;
+        } catch (err) {
+          const msg = err?.message || String(err);
+          log("FAILED: " + msg);
+          window.__handshakeResult = { ok: false, stage: "handshake", err: msg };
+          throw err;
+        }
+      };
+
+      window.__bundleReady = true;
+    </script>
+  </body>
+</html>
