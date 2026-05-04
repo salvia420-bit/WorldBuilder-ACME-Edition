@@ -1453,6 +1453,7 @@ dependencies = [
  "bitflags 2.11.0",
  "byteorder",
  "encoding_rs",
+ "getrandom 0.4.2",
  "glam",
  "hex",
  "holtburger-common",

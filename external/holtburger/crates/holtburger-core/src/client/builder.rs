@@ -102,6 +102,13 @@ impl ClientRuntimeBuilder {
         Ok(())
     }
 
+    /// Native-only: builds a `ClientRuntime` over a fresh UDP-bound
+    /// `Session::new`, resolving `host:port` via `tokio::net::lookup_host`.
+    /// Wasm32 builds (Phase 2 of emit-dynamic-site) construct the runtime
+    /// from a caller-provided `Session::new_with_transport(WsTransport,
+    /// resolved_addr)` instead, since the browser has no DNS or UDP socket
+    /// of its own.
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn connect(self) -> Result<ClientRuntime> {
         self.ensure_message_dump_dir()?;
 
