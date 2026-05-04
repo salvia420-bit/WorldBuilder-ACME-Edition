@@ -1,122 +1,363 @@
-//! Phase 5.0 — `ManifestResourceSource` contract (audit-first stub).
+//! `ManifestResourceSource` — Phase 5.0 obj 4 implementation.
 //!
-//! This file lands in advance of the implementation (Phase 5.0
-//! objective 4). Objective 1 of the Phase 5.0 brief
-//! (`docs/thorough.md`) is to audit the existing
-//! `HttpResourceSource` + every wasm-bindgen `fetch_*` export and
-//! pin down the contract a manifest-backed source has to honour.
-//! Those findings live here, at the top of the new module, so the
-//! implementation can be checked against them.
+//! Reads a `holtburger_manifest::Manifest` over HTTP, fetches the
+//! boot pack at `connect()` time, and lazily fetches individual
+//! shards on demand via the new explicit `prefetch()` method.
 //!
 //! # Audit findings (commit boundary 1 of Phase 5.0)
 //!
 //! ## (a) The `ResourceSource` trait surface is sync
 //!
-//! `holtburger_dat::ResourceSource` is defined at
-//! `crates/holtburger-dat/src/lib.rs:138` as:
-//!
-//! ```ignore
-//! pub trait ResourceSource: Send + Sync {
-//!     fn get_file_by_key(&self, key: ResourceKey<'_>) -> Result<Vec<u8>>;
-//!     fn get_metadata_by_key(&self, key: ResourceKey<'_>) -> Option<FileMetadata>;
-//!     fn has_namespace(&self, namespace: &str) -> bool;
-//!     fn exists_by_key(&self, key: ResourceKey<'_>) -> bool { ... }
-//! }
-//! ```
-//!
-//! No `.await`. Used from `&dyn ResourceSource` slots in
-//! `holtburger-content` (`ContentRepository::read_asset`),
-//! `holtburger-world`, `holtburger-core`. Async-trait-ifying the
-//! trait would propagate `.await` through ~6 call sites in 4 crates
-//! plus a `?Send` cfg-split mirror of the `Transport` work in
-//! Phase 2 §8 step 2. Phase 5.0 keeps the trait sync; all *fetching*
-//! moves to a new explicit `prefetch(&[ResourceKey]) -> impl Future`
-//! method called from each wasm-bindgen export before any
+//! `holtburger_dat::ResourceSource` is sync. No `.await` in
+//! `get_file_by_key`. Phase 5.0 keeps the trait sync; all
+//! *fetching* moves to a new explicit `prefetch(&[ResourceKey])`
+//! async surface called from each wasm-bindgen export before any
 //! `get_file_by_key`.
 //!
-//! ## (b) Per-call construction pattern
+//! ## (b) Per-call construction pattern (legacy)
 //!
-//! Every wasm-bindgen export in `apps/holtburger-web/src/lib.rs`
-//! creates its own `HttpResourceSource::connect(&asset_url)` per
-//! invocation:
-//!
-//! - `try_http_resource_source_smoke` (single record by
-//!   `(namespace, file_id)`) — `:108`
-//! - `fetch_landblock_heightmaps` + singular alias — N ×
-//!   `eor/cell:cell_id` — `:307`, `:279`
-//! - `fetch_landblock_objects` — N × `eor/cell:id` — `:487`
-//! - `fetch_terrain_textures` — 33 × the `eor/portal:surf_id` →
-//!   SurfaceTexture → Texture → Palette chain — `:562`
-//! - `fetch_object_colours` — per-id GfxObj / SetupModel / Surface
-//!   walk against `eor/portal` — `:867`
-//! - `fetch_surface_pixels` (+ plural) — `eor/portal:surface_did`
-//!   → `surf_tex_id` → render-surface-id → palette — `:1316`,
-//!   `:1331`
-//! - `fetch_model_mesh` (+ plural) — `eor/portal:setup_id` →
-//!   per-part Model records — `:1354`, `:1373`
-//! - `start_session` (when `asset_url` non-empty, runs as a
-//!   `wasm_bindgen_futures::spawn_local` background task) →
-//!   `load_character_gen_catalog` (`:2112`) → CharGen
-//!   (`0x0E000002`) + SkillTable
-//!
-//! That's ≥10 distinct `connect(asset_url)` callsites. With the
-//! existing 605 MB HBA bundle this works only because the browser
-//! HTTP cache deduplicates the body across sibling fetches; on a
-//! cold cache each one would re-pull the bundle. Phase 5.0
-//! objective 5 hoists the resource source to a thread-local
-//! `Rc`/`RefCell` so all callsites share a single instance and a
-//! single in-memory shard cache.
+//! Pre-Phase-5.0, every wasm-bindgen export in
+//! `apps/holtburger-web/src/lib.rs` constructed its own
+//! `HttpResourceSource::connect(asset_url)` per invocation. With
+//! `ManifestResourceSource`, a single instance is constructed
+//! once at page-init time (objective 5 hoist) and shared across
+//! all callsites via a thread-local; `prefetch()` populates the
+//! shared shard cache before each `fetch_*` body runs.
 //!
 //! ## (c) Records are addressed by `(namespace, file_id)`
 //!
-//! Every callsite constructs a `ResourceKey::new(namespace,
-//! file_id)` (lib.rs:128) where `namespace` is one of the
-//! constants from `holtburger-dat`:
+//! Manifest shard map is keyed by
+//! `<namespace>:0x{file_id:08X}` strings (see
+//! `holtburger_manifest::format_shard_key`); the resource source
+//! composes the lookup key straight from a
+//! `holtburger_dat::ResourceKey` via
+//! `holtburger_manifest::key_for_resource`.
 //!
-//! - `eor/portal` — `holtburger_dat::EOR_PORTAL_NAMESPACE` —
-//!   covers Texture, SurfaceTexture, Surface, Palette, GfxObj,
-//!   SetupModel, MotionTable, CharGen, SkillTable, SpellTable,
-//!   XpTable, MotionKinematics, ChatPoseTable, SoulEmoteCatalog,
-//!   …
-//! - `eor/cell` — covers CellLandblock and LandblockInfo (the
-//!   high-bytes-of-id-hex `XXYYFFFF` and `XXYYFFFE` records
-//!   respectively).
-//! - (`eor/local` exists in retail dat output but is not currently
-//!   read by any wasm-bindgen export.)
+//! # Pipeline
 //!
-//! `(namespace, file_id)` is the manifest key. Hashing scheme is
-//! `sha256(record_bytes)`; two records with byte-identical contents
-//! collapse to one shard URL. The manifest's `shards` map is keyed
-//! by the `(namespace, file_id)` tuple (rendered as
-//! `"<namespace>:0x{file_id:08X}"` in JSON for human readability),
-//! not by hash, so the resource source can look up a record's URL
-//! straight from the `ResourceKey` without walking the manifest.
-//!
-//! ## Implications for the implementation (objective 4)
-//!
-//! 1. `connect(manifest_url)` is the new construction surface.
-//!    Fetches `manifest.json` + the boot pack referenced from
-//!    it. Holds the boot pack's HBA in memory plus an empty
-//!    `Rc<RefCell<HashMap<OwnedKey, Vec<u8>>>>` shard cache.
-//! 2. `prefetch(&[ResourceKey<'_>]) -> impl Future<Output = Result<()>>`
-//!    walks the keys, skips those served from the boot pack or
-//!    already cached, looks up shard URLs in the manifest, fetches
-//!    in parallel via `futures::future::try_join_all`, verifies
-//!    sha256, and inserts into the cache.
-//! 3. `get_file_by_key(&self, key)` (sync) tries (a) the boot
-//!    pack, (b) the shard cache, (c) errors `RecordNotPrefetched`.
-//!    No HTTP I/O on this path.
-//! 4. The per-call construction pattern in `apps/holtburger-web`
-//!    becomes an `init_resource_source(manifest_url)` call once
-//!    at page-init time (objective 5 hoist) plus a `prefetch`
-//!    call at the top of each `fetch_*` for the records that
-//!    function will read. Each `fetch_*` becomes a thin wrapper
-//!    around an unchanged-shape inner function that takes
-//!    `&dyn ResourceSource`.
+//! ```text
+//!   index.html
+//!     │
+//!     ├─→ init_resource_source(manifest_url)
+//!     │     │
+//!     │     ├─→ fetch manifest.json
+//!     │     ├─→ parse Manifest
+//!     │     ├─→ fetch boot_pack.url (HBA bytes)
+//!     │     ├─→ verify boot_pack.sha256
+//!     │     └─→ HbaReader::from_bytes(boot_bytes)
+//!     │
+//!     └─→ fetch_landblock_heightmaps(cell_ids)
+//!           │
+//!           ├─→ source.prefetch(keys) ─async─→ futures::try_join_all
+//!           │                                    │
+//!           │                                    ├─→ fetch shard URL N
+//!           │                                    └─→ fetch shard URL M
+//!           ├─→ for each key: source.get_file_by_key(key) ─sync─→ ...
+//!           └─→ existing parse + tessellate logic
+//! ```
 
-#![cfg(target_arch = "wasm32")]
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
-// Implementation lands in objective 4. The struct, its `connect`
-// constructor, the `prefetch` method, and the `ResourceSource` impl
-// are all defined there. This stub holds the audit-derived contract
-// the implementation has to honour.
+use holtburger_dat::{
+    DatError, FileMetadata, HbaReader, ResourceKey, ResourceSource, Result as DatResult,
+};
+use holtburger_manifest::{Manifest, key_for_resource, sha256_hex};
+
+use crate::http::{HttpError, fetch_bytes, join_url};
+
+/// Failure surfaces for [`ManifestResourceSource::connect`].
+#[derive(Debug)]
+pub enum ManifestConnectError {
+    /// Couldn't reach `fetch()` / network error / non-2xx response /
+    /// body read error.
+    Http(HttpError),
+    /// `manifest.json` didn't parse as a [`Manifest`].
+    ManifestParse(String),
+    /// `boot.hba` bytes didn't parse as a valid HBA archive.
+    BootParse(String),
+    /// Boot pack sha256 didn't match the manifest.
+    BootHashMismatch { expected: String, got: String },
+}
+
+impl std::fmt::Display for ManifestConnectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ManifestConnectError::Http(e) => write!(f, "{e}"),
+            ManifestConnectError::ManifestParse(s) => write!(f, "manifest.json parse: {s}"),
+            ManifestConnectError::BootParse(s) => write!(f, "boot.hba parse: {s}"),
+            ManifestConnectError::BootHashMismatch { expected, got } => write!(
+                f,
+                "boot.hba hash mismatch: manifest expected {expected}, got {got}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ManifestConnectError {}
+
+impl From<HttpError> for ManifestConnectError {
+    fn from(value: HttpError) -> Self {
+        ManifestConnectError::Http(value)
+    }
+}
+
+/// Failure surfaces for [`ManifestResourceSource::prefetch`].
+#[derive(Debug)]
+pub enum PrefetchError {
+    /// Network / HTTP / body failure on a shard fetch.
+    Http(HttpError),
+    /// A requested key isn't in the manifest's shard map and isn't
+    /// covered by the boot pack.
+    UnknownKey { namespace: String, file_id: u32 },
+    /// Shard sha256 didn't match the manifest.
+    HashMismatch {
+        namespace: String,
+        file_id: u32,
+        expected: String,
+        got: String,
+    },
+}
+
+impl std::fmt::Display for PrefetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PrefetchError::Http(e) => write!(f, "{e}"),
+            PrefetchError::UnknownKey { namespace, file_id } => {
+                write!(f, "unknown shard {namespace}:0x{file_id:08X}")
+            }
+            PrefetchError::HashMismatch {
+                namespace,
+                file_id,
+                expected,
+                got,
+            } => write!(
+                f,
+                "shard {namespace}:0x{file_id:08X} hash mismatch: expected {expected}, got {got}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PrefetchError {}
+
+impl From<HttpError> for PrefetchError {
+    fn from(value: HttpError) -> Self {
+        PrefetchError::Http(value)
+    }
+}
+
+/// Owned `(namespace, file_id)` cache key — `ResourceKey<'a>` is
+/// borrowing, but the shard cache outlives any single call.
+type OwnedKey = (String, u32);
+
+fn owned(key: ResourceKey<'_>) -> OwnedKey {
+    (key.namespace.to_owned(), key.file_id)
+}
+
+/// HTTP+manifest-backed `ResourceSource`. Holds the parsed
+/// [`Manifest`] + the boot pack's [`HbaReader`] in memory plus an
+/// `Arc<Mutex<HashMap>>` shard cache populated lazily via
+/// [`prefetch`].
+///
+/// `Arc<Mutex<...>>` (rather than `Rc<RefCell<...>>`) is what the
+/// `ResourceSource: Send + Sync` trait bound demands. wasm32 is
+/// single-threaded so the mutex never actually contends, but the
+/// trait requires the bound for native callers; the same pattern
+/// is used by the existing `HttpResourceSource` (which holds a
+/// `Send + Sync` `HbaReader<Vec<u8>>` directly).
+pub struct ManifestResourceSource {
+    manifest: Manifest,
+    boot: HbaReader<Vec<u8>>,
+    shards: Arc<Mutex<HashMap<OwnedKey, Vec<u8>>>>,
+    base_url: String,
+}
+
+impl ManifestResourceSource {
+    /// Fetch `manifest_url`, parse it, fetch the referenced boot
+    /// pack, verify its sha256, and return a ready resource source.
+    /// All subsequent record fetches go through [`prefetch`] +
+    /// [`get_file_by_key`].
+    pub async fn connect(manifest_url: &str) -> Result<Self, ManifestConnectError> {
+        let manifest_bytes = fetch_bytes(manifest_url).await?;
+        let manifest: Manifest = serde_json::from_slice(&manifest_bytes)
+            .map_err(|e| ManifestConnectError::ManifestParse(e.to_string()))?;
+
+        let base_url = url_dirname(manifest_url);
+        let boot_url = join_url(manifest_url, &manifest.boot_pack.url);
+        let boot_bytes = fetch_bytes(&boot_url).await?;
+
+        let got_hash = sha256_hex(&boot_bytes);
+        if got_hash != manifest.boot_pack.sha256 {
+            return Err(ManifestConnectError::BootHashMismatch {
+                expected: manifest.boot_pack.sha256.clone(),
+                got: got_hash,
+            });
+        }
+
+        let boot = HbaReader::<Vec<u8>>::from_bytes(boot_bytes)
+            .map_err(|e| ManifestConnectError::BootParse(e.to_string()))?;
+
+        Ok(Self {
+            manifest,
+            boot,
+            shards: Arc::new(Mutex::new(HashMap::new())),
+            base_url,
+        })
+    }
+
+    /// Walk `keys`, skip those served from the boot pack or already
+    /// cached, look up shard URLs in the manifest, fetch in
+    /// parallel, verify sha256, and insert into the shard cache.
+    ///
+    /// Errors: [`PrefetchError::UnknownKey`] if any key is missing
+    /// from the manifest *and* the boot pack;
+    /// [`PrefetchError::HashMismatch`] if a shard fetch returns
+    /// wrong bytes; otherwise an HTTP-layer failure on at least
+    /// one shard fetch.
+    pub async fn prefetch(&self, keys: &[ResourceKey<'_>]) -> Result<(), PrefetchError> {
+        // Plan: collect (key, ShardEntry, full_url) for every key
+        // not already served by boot or the cache. Bail with
+        // UnknownKey if any are missing from the manifest entirely.
+        let mut to_fetch: Vec<(OwnedKey, holtburger_manifest::ShardEntry, String)> =
+            Vec::new();
+        {
+            let cached = self.shards.lock().expect("shard cache mutex poisoned");
+            for key in keys {
+                if self.boot_serves(*key) {
+                    continue;
+                }
+                if cached.contains_key(&owned(*key)) {
+                    continue;
+                }
+                let shard = self.manifest.shards.get(&key_for_resource(*key)).cloned();
+                match shard {
+                    Some(entry) => {
+                        let url = join_url(&self.base_url_with_slash(), &entry.url);
+                        to_fetch.push((owned(*key), entry, url));
+                    }
+                    None => {
+                        return Err(PrefetchError::UnknownKey {
+                            namespace: key.namespace.to_owned(),
+                            file_id: key.file_id,
+                        });
+                    }
+                }
+            }
+        }
+
+        if to_fetch.is_empty() {
+            return Ok(());
+        }
+
+        let fetches = to_fetch.iter().map(|(_, _, url)| {
+            let url = url.clone();
+            async move { fetch_bytes(&url).await }
+        });
+        let bytes_vec = futures::future::try_join_all(fetches)
+            .await
+            .map_err(PrefetchError::Http)?;
+
+        let mut cache = self.shards.lock().expect("shard cache mutex poisoned");
+        for ((key, entry, _), bytes) in to_fetch.into_iter().zip(bytes_vec) {
+            let got = sha256_hex(&bytes);
+            if got != entry.sha256 {
+                return Err(PrefetchError::HashMismatch {
+                    namespace: key.0,
+                    file_id: key.1,
+                    expected: entry.sha256,
+                    got,
+                });
+            }
+            cache.insert(key, bytes);
+        }
+        Ok(())
+    }
+
+    /// True if the boot pack reader has the record for `key` —
+    /// either via the manifest's `covers` list or via a fallback
+    /// direct lookup against the parsed HBA.
+    fn boot_serves(&self, key: ResourceKey<'_>) -> bool {
+        if self.manifest.boot_covers(key) {
+            return true;
+        }
+        // The covers list is the authoritative + fast path; this
+        // fallback handles the case where a producer omitted a
+        // record from `covers` but the boot HBA still contains it.
+        self.boot.exists_by_key(key)
+    }
+
+    /// Manifest the source was constructed with. Smoke tests use
+    /// this for round-trip checks.
+    pub fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    /// Number of records currently in the shard cache (excludes
+    /// the boot pack). Smoke tests use this as a
+    /// "did prefetch land?" probe.
+    pub fn cached_shard_count(&self) -> usize {
+        self.shards.lock().expect("shard cache mutex poisoned").len()
+    }
+
+    fn base_url_with_slash(&self) -> String {
+        if self.base_url.is_empty() {
+            String::new()
+        } else if self.base_url.ends_with('/') {
+            self.base_url.clone()
+        } else {
+            format!("{}/", self.base_url)
+        }
+    }
+}
+
+impl ResourceSource for ManifestResourceSource {
+    fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+        if let Ok(bytes) = self.boot.get_file_by_key(key) {
+            return Ok(bytes);
+        }
+        if let Some(bytes) = self
+            .shards
+            .lock()
+            .expect("shard cache mutex poisoned")
+            .get(&owned(key))
+        {
+            return Ok(bytes.clone());
+        }
+        Err(DatError::Other(format!(
+            "ManifestResourceSource: record not prefetched: {}:0x{:08X}; call prefetch() first",
+            key.namespace, key.file_id
+        )))
+    }
+
+    fn get_metadata_by_key(&self, key: ResourceKey<'_>) -> Option<FileMetadata> {
+        if let Some(meta) = self.boot.get_metadata_by_key(key) {
+            return Some(meta);
+        }
+        let cache = self.shards.lock().expect("shard cache mutex poisoned");
+        cache.get(&owned(key)).map(|bytes| FileMetadata {
+            id: key.file_id,
+            size: bytes.len() as u32,
+            is_pruned: false,
+        })
+    }
+
+    fn has_namespace(&self, namespace: &str) -> bool {
+        if self.boot.has_namespace(namespace) {
+            return true;
+        }
+        let prefix = format!("{namespace}:");
+        self.manifest
+            .shards
+            .keys()
+            .any(|k| k.starts_with(&prefix))
+    }
+}
+
+/// Strip the last path component from a URL. `https://x/y/m.json`
+/// → `https://x/y`. Used to anchor relative shard URLs.
+fn url_dirname(url: &str) -> String {
+    url.rsplit_once('/')
+        .map(|(d, _)| d.to_owned())
+        .unwrap_or_default()
+}

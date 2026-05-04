@@ -1547,9 +1547,12 @@ dependencies = [
 name = "holtburger-resource-http"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "holtburger-dat",
+ "holtburger-manifest",
  "js-sys",
  "log",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

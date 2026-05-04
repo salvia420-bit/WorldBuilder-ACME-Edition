@@ -1,48 +1,38 @@
 //! HTTP-backed `ResourceSource` for `holtburger-dat` — wasm32-only.
 //!
-//! Plugs into [`holtburger_dat::LayeredResourceResolver`] (or any
-//! `Arc<dyn ResourceSource>` slot) so a browser-hosted client can read
-//! AC asset bytes that were originally packed by `dat2hba` and are now
-//! served as a static HBA file from any HTTP origin.
+//! Two implementations live here:
 //!
-//! # Why pre-load instead of an async trait
+//! - [`HttpResourceSource`] — Phase 2 spike path. Pre-fetches an
+//!   entire HBA bundle into memory at construction time and serves
+//!   the existing sync `ResourceSource` trait from it. Still used
+//!   by native callers / smoke fixtures.
+//! - [`ManifestResourceSource`] — Phase 5.0 obj 4 path. Reads a
+//!   [`holtburger_manifest::Manifest`] over HTTP, fetches a small
+//!   pre-compiled boot pack at construction time, and lazily
+//!   fetches individual shards on demand via an explicit
+//!   `prefetch()` async surface. The browser's bandwidth cliff
+//!   (605 MB → ≈5 MB on first paint) is closed by switching the
+//!   page to this source.
 //!
-//! `holtburger_dat::ResourceSource` is synchronous (`fn get_file_by_key
-//! -> Result<Vec<u8>>`) and `: Send + Sync`. Browsers can't
-//! synchronously block on `fetch()` from the main thread, so the two
-//! viable shapes for a wasm32 implementation are: (a) make the trait
-//! async (refactors ~6 call sites across `holtburger-content`,
-//! `holtburger-world`, `holtburger-core`); or (b) `await` the bytes
-//! once at construction time and serve them sync from in-memory state.
+//! # Why pre-fetch then sync rather than async-trait
 //!
-//! This crate picks (b) — same reasoning as the spike doc §8 step 4
-//! "default to (b) for the spike if the choice isn't obvious." The
-//! HTTP fetch happens in [`HttpResourceSource::connect`]; once the
-//! `Vec<u8>` is in hand, the file is parsed by
-//! `HbaReader::<Vec<u8>>::from_bytes` (the generic bytes-backed
-//! reader landed in the previous commit) and served by a thin wrapper
-//! that forwards every `ResourceSource` call to the inner reader.
-//!
-//! # Format
-//!
-//! HBA-of-HBAs (single file). The browser fetches one HBA bundle
-//! produced by `dat2hba` from a real `portal.dat` (and optional
-//! `cell_1.dat`) — the same format the native client already consumes.
-//! Multi-file shard formats are a future optimization once the spike
-//! proves the pre-load approach hits its memory limit.
-//!
-//! # Threading
-//!
-//! Wasm32 is single-threaded; `HttpResourceSource` wraps an
-//! `HbaReader<Vec<u8>>` which is `Send + Sync`, so the wrapper
-//! satisfies `ResourceSource: Send + Sync` cleanly without splitting
-//! the trait. The whole crate is `cfg(target_arch = "wasm32")`-gated
-//! so it's an empty rlib on native — adding it to the workspace
-//! doesn't pull `web-sys` into native builds.
+//! `holtburger_dat::ResourceSource` is sync (`fn get_file_by_key
+//! -> Result<Vec<u8>>`). Async-trait-ifying the trait would
+//! propagate `.await` through ~6 call sites in 4 crates plus a
+//! `?Send` cfg-split mirror of the `Transport` work in Phase 2 §8
+//! step 2. Both implementations here keep the trait sync and move
+//! all *fetching* to async constructors / new explicit `prefetch`
+//! methods — same approach as the spike doc §8 step 4 "default to
+//! (b) for the spike if the choice isn't obvious."
 
 #![cfg(target_arch = "wasm32")]
 
+pub(crate) mod http;
 mod manifest_source;
 mod source;
 
+pub use http::{HttpError, fetch_bytes, join_url};
+pub use manifest_source::{
+    ManifestConnectError, ManifestResourceSource, PrefetchError,
+};
 pub use source::{ConnectError, HttpResourceSource};
