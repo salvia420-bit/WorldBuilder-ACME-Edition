@@ -154,6 +154,30 @@ check(
     `typeof ${typeof wasm.fetch_model_meshes}`
 );
 
+// Phase 4 step 1: start_session + SessionHandle (with .poll_events()
+// and .characterList()) must be present. The `start_session` round-trip
+// itself is browser-only — ACE login synthesis in Node would require
+// porting the AC packet codec to JS, well outside step 1's scope. The
+// error-path check below is the closest deterministic Node coverage:
+// invoking `start_session` against a closed port should reject with a
+// stringified error rather than panic.
+check(
+    "start_session() is exported (Phase 4 step 1 login driver)",
+    typeof wasm.start_session === "function",
+    `typeof ${typeof wasm.start_session}`
+);
+
+const sessionHandleProto = wasm.SessionHandle?.prototype;
+const handleSurfaceOk =
+    typeof wasm.SessionHandle === "function"
+    && typeof sessionHandleProto?.poll_events === "function"
+    && typeof sessionHandleProto?.characterList === "function";
+check(
+    "SessionHandle class + .poll_events() + .characterList() exposed",
+    handleSurfaceOk,
+    `class=${typeof wasm.SessionHandle}, poll_events=${typeof sessionHandleProto?.poll_events}, characterList=${typeof sessionHandleProto?.characterList}`
+);
+
 (async () => {
     // §8 step 4 round-trip: serve `dats/assets.hba` over HTTP from this
     // process, then have the wasm bundle's HttpResourceSource fetch +
@@ -678,6 +702,49 @@ check(
 
         await new Promise((resolve) => server.close(resolve));
     }
+
+    // Phase 4 step 1 error-path: start_session against a clearly-dead
+    // bridge URL should reject with a stringified error rather than
+    // panic. This pins the failure-mode contract regardless of whether
+    // a `WebSocket` global is available in the host Node — without one
+    // the rejection comes from the inner `web_sys::WebSocket::new` call
+    // failing; with one (Node 21+ or a `ws` polyfill) it comes from the
+    // OS-level connection refused. Either way the wasm boundary
+    // surfaces a JsValue error string, not a panic.
+    let didReject = false;
+    let rejectMsg = "";
+    try {
+        await wasm.start_session(
+            "ws://127.0.0.1:1/",
+            "127.0.0.1",
+            9000,
+            "smoke-test-account",
+            "smoke-test-password"
+        );
+    } catch (e) {
+        didReject = true;
+        rejectMsg = String(e?.message ?? e);
+    }
+    check(
+        "start_session against a closed port rejects with an error string",
+        didReject && rejectMsg.length > 0,
+        didReject
+            ? `rejected: ${rejectMsg.length > 80 ? rejectMsg.slice(0, 80) + "…" : rejectMsg}`
+            : "expected rejection but Promise resolved"
+    );
+
+    // Phase 4 step 1 round-trip is browser-only. A JS mock bridge that
+    // can answer the AC LoginRequest with a synthetic CONNECT_REQUEST
+    // → CharacterList sequence would need to re-implement chunks of
+    // `holtburger-protocol` (PacketHeader, fragment encoding, ISAAC
+    // checksum, GameMessage::CharacterList serialization) in JS — well
+    // outside step 1's scope. Live-ACE coverage runs manually via
+    // `docs/ace-local-setup.md` per the existing pattern.
+    console.log(
+        "  [SKIP] start_session live round-trip — needs a real ACE.\n" +
+        "         Open `apps/holtburger-web/index.html` in a browser " +
+        "with a running\n         holtburger-wsbridge + ACE for end-to-end coverage."
+    );
 
     console.log("=========================");
     if (failed === 0) {
