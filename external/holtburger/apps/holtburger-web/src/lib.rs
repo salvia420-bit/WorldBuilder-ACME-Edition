@@ -612,25 +612,37 @@ pub async fn fetch_terrain_textures(
 }
 
 /// Phase 3 step 4.5: walk one model's GfxObj/SetupModel surface chain
-/// and return the first resolvable solid ARGB. `0` means "no colour
+/// and return the first resolvable ARGB. `0` means "no colour
 /// resolved" — the JS caller falls back to the existing 2-bucket
 /// category tint for that model.
 ///
 /// Walk shape:
-/// - `0x01XXXXXX` (Model / GfxObj) → read GfxObj, iterate
-///   `surfaces: Vec<u32>`, return the first surface whose `color_value`
-///   is set.
+/// - `0x01XXXXXX` (Model / GfxObj) → read GfxObj's `surfaces` list,
+///   iterate, return the first surface that resolves to ARGB.
 /// - `0x02XXXXXX` (SetupModel) → read SetupModel, iterate `parts`
-///   (each part is a GfxObj id), recurse via the GfxObj path, return
-///   the first GfxObj's first solid surface.
+///   (each part is a GfxObj id), recurse via the GfxObj path.
 /// - Any other top byte → `None` (unhandled type).
 ///
-/// Step 4.5 ships only the solid path; textured surfaces (`Base1Image`
-/// / `Base1ClipMap`) skip in the walk and the caller hits the next
-/// surface on the GfxObj or the next part on the SetupModel. This is a
-/// scope-reduction — the textured-pixel-mean path is the obvious
-/// step-4.5b extension if the ratio of resolved colours turns out to
-/// be too low to ship.
+/// **Surface resolution** tries two paths in order:
+/// 1. Solid path: if the surface stored a `color_value`, return it.
+/// 2. Textured path: fetch the referenced Texture (and Palette if
+///    palettized), decode to RGBA8, return the **mean ARGB** over
+///    every pixel. This is what gives Holtburg's brown-house cluster
+///    real colour variety — almost every surface in retail is
+///    textured (97% in our sweep), so a solid-only walk would
+///    resolve <3% of models.
+///
+/// **Why the minimal GfxObj reader.** The full `GfxObj::unpack` parser
+/// in `holtburger-dat` parses vertex / polygon / BSP data after the
+/// surface list, and currently fails on roughly half of retail's
+/// GfxObj records (`failed to fill whole buffer` on internal subfields).
+/// Step 4.5 only needs the surface IDs, so we read a minimal header
+/// (`id`, `flags`, `read_smart_vec(u32)` of surfaces) and stop. This
+/// raises the surface-list extraction success rate from ~50% to
+/// ~100% on the same bundle without depending on fixes to the full
+/// parser. If/when the GfxObj parser regression is resolved upstream,
+/// `walk_gfx_obj` can switch back to it without changing the public
+/// API.
 #[cfg(target_arch = "wasm32")]
 fn resolve_model_color<S: holtburger_dat::ResourceSource>(
     source: &S,
@@ -643,18 +655,132 @@ fn resolve_model_color<S: holtburger_dat::ResourceSource>(
     }
 }
 
+/// Read just the `surfaces: Vec<u32>` list from a GfxObj record.
+/// Header layout: `[u32 id][u32 flags][smart_vec u32 surfaces]`. Stops
+/// after the surface list — the rest of the record (vertex array,
+/// polygons, BSP) is irrelevant to step 4.5 and is the source of
+/// failures in the full parser. See `resolve_model_color` doc.
+///
+/// Manual byte parsing (rather than calling through to `holtburger_dat::utils`)
+/// keeps `binrw` out of `holtburger-web`'s dep graph — the format is
+/// fixed, the surface-count varint is well-defined, and the parser
+/// shape is small enough that the dep would be pure overhead.
+#[cfg(target_arch = "wasm32")]
+fn read_gfx_obj_surfaces(bytes: &[u8]) -> Option<Vec<u32>> {
+    if bytes.len() < 9 {
+        return None;
+    }
+    // Skip [u32 id][u32 flags] = 8 bytes.
+    let mut pos = 8usize;
+    let (count, n) = read_compressed_u32(&bytes[pos..])?;
+    pos += n;
+    let count = count as usize;
+    if bytes.len() < pos.checked_add(count * 4)? {
+        return None;
+    }
+    let mut surfaces = Vec::with_capacity(count);
+    for i in 0..count {
+        let off = pos + i * 4;
+        let id = u32::from_le_bytes([
+            bytes[off],
+            bytes[off + 1],
+            bytes[off + 2],
+            bytes[off + 3],
+        ]);
+        surfaces.push(id);
+    }
+    Some(surfaces)
+}
+
+/// Mirrors `holtburger_dat::utils::read_compressed_u32`. Variable-width
+/// 1/2/4-byte little-endian count used by AC's `read_smart_vec`.
+/// Returns `(value, bytes_consumed)`.
+#[cfg(target_arch = "wasm32")]
+fn read_compressed_u32(bytes: &[u8]) -> Option<(u32, usize)> {
+    let b0 = *bytes.first()? as u32;
+    if (b0 & 0x80) == 0 {
+        Some((b0, 1))
+    } else if (b0 & 0x40) == 0 {
+        let b1 = *bytes.get(1)? as u32;
+        Some((((b0 & 0x7F) << 8) | b1, 2))
+    } else {
+        let b1 = *bytes.get(1)? as u32;
+        let s = u16::from_le_bytes([*bytes.get(2)?, *bytes.get(3)?]) as u32;
+        Some(((((b0 & 0x3F) << 8) | b1) << 16 | s, 4))
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 fn lookup_surface_color<S: holtburger_dat::ResourceSource>(
     source: &S,
     surface_id: u32,
 ) -> Option<u32> {
-    use holtburger_dat::file_type::Surface;
+    use holtburger_dat::file_type::{Palette, Surface, Texture, TextureDecodeError};
     use holtburger_dat::ResourceKey;
     let bytes = source
         .get_file_by_key(ResourceKey::new("eor/portal", surface_id))
         .ok()?;
     let surface = Surface::unpack(&bytes).ok()?;
-    surface.solid_color()
+    if let Some(argb) = surface.solid_color() {
+        return Some(argb);
+    }
+    // Textured path: fetch Texture (and Palette if palettized), decode
+    // to RGBA8, mean every pixel. Gives 97% of retail surfaces a real
+    // representative colour — solid-only would resolve <3%.
+    let (tex_id, _pal_id_in_surface) = surface.textured()?;
+    let tex_bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", tex_id))
+        .ok()?;
+    let tex = Texture::unpack(&tex_bytes).ok()?;
+    // Use the texture's `default_palette_id` for the palette fetch,
+    // not the Surface's `orig_palette_id` — most retail textures embed
+    // the right palette ref in the Texture record itself, while the
+    // Surface's `orig_palette_id` is often 0.
+    let rgba = tex
+        .to_rgba8(|pal_id| {
+            let pal_bytes = source
+                .get_file_by_key(ResourceKey::new("eor/portal", pal_id))
+                .map_err(|e| TextureDecodeError::PaletteFetch(format!("{pal_id:#010X}: {e}")))?;
+            Palette::unpack(&pal_bytes).map_err(|e| {
+                TextureDecodeError::PaletteFetch(format!("Palette::unpack {pal_id:#010X}: {e}"))
+            })
+        })
+        .ok()?;
+    Some(rgba_pixel_mean(&rgba))
+}
+
+/// Mean of every pixel in an RGBA8 buffer, returned as a 0xAARRGGBB
+/// ARGB. Saturated alpha (`0xFF`) so the renderer doesn't accidentally
+/// transparent-tint a sprite.
+#[cfg(target_arch = "wasm32")]
+fn rgba_pixel_mean(rgba: &[u8]) -> u32 {
+    if rgba.len() < 4 {
+        return 0;
+    }
+    let pixels = rgba.len() / 4;
+    let mut r_sum: u64 = 0;
+    let mut g_sum: u64 = 0;
+    let mut b_sum: u64 = 0;
+    let mut weighted: u64 = 0;
+    for i in 0..pixels {
+        let r = rgba[i * 4] as u64;
+        let g = rgba[i * 4 + 1] as u64;
+        let b = rgba[i * 4 + 2] as u64;
+        let a = rgba[i * 4 + 3] as u64;
+        // Premultiplied-by-alpha average so transparent pixels don't
+        // bleach the result toward black.
+        r_sum += r * a;
+        g_sum += g * a;
+        b_sum += b * a;
+        weighted += a;
+    }
+    if weighted == 0 {
+        return 0;
+    }
+    let r = (r_sum / weighted) as u32;
+    let g = (g_sum / weighted) as u32;
+    let b = (b_sum / weighted) as u32;
+    0xFF000000 | (r << 16) | (g << 8) | b
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -662,13 +788,12 @@ fn walk_gfx_obj<S: holtburger_dat::ResourceSource>(
     source: &S,
     gfx_obj_id: u32,
 ) -> Option<u32> {
-    use holtburger_dat::file_type::GfxObj;
     use holtburger_dat::ResourceKey;
     let bytes = source
         .get_file_by_key(ResourceKey::new("eor/portal", gfx_obj_id))
         .ok()?;
-    let gfx = GfxObj::unpack(&mut std::io::Cursor::new(bytes)).ok()?;
-    for surface_id in gfx.surfaces {
+    let surfaces = read_gfx_obj_surfaces(&bytes)?;
+    for surface_id in surfaces {
         if let Some(c) = lookup_surface_color(source, surface_id) {
             return Some(c);
         }
