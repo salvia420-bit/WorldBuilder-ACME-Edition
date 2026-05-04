@@ -191,6 +191,26 @@ check(
     `selectCharacter=${typeof sessionHandleProto?.selectCharacter}`
 );
 
+// Phase 4 step 2a.5: SessionHandle.createTestCharacter(name) constructs
+// an Aluvian/Male/Adventurer/Holtburg CharacterCreateRequestData in the
+// wasm bundle (via holtburger_core::CharacterGenBuilder) and dispatches
+// to the recv loop. .canCreateCharacter is a getter that reports
+// whether the CharGen + SkillTable were loaded at start_session time.
+check(
+    "SessionHandle.createTestCharacter() exposed (Phase 4 step 2a.5)",
+    typeof sessionHandleProto?.createTestCharacter === "function",
+    `createTestCharacter=${typeof sessionHandleProto?.createTestCharacter}`
+);
+const canCreateDescriptor = Object.getOwnPropertyDescriptor(
+    sessionHandleProto || {},
+    "canCreateCharacter"
+);
+check(
+    "SessionHandle.canCreateCharacter getter exposed (Phase 4 step 2a.5)",
+    typeof canCreateDescriptor?.get === "function",
+    `canCreateCharacter getter=${typeof canCreateDescriptor?.get}`
+);
+
 (async () => {
     // §8 step 4 round-trip: serve `dats/assets.hba` over HTTP from this
     // process, then have the wasm bundle's HttpResourceSource fetch +
@@ -732,7 +752,8 @@ check(
             "127.0.0.1",
             9000,
             "smoke-test-account",
-            "smoke-test-password"
+            "smoke-test-password",
+            "" // asset_url empty → catalog skipped, fast-fail on transport
         );
     } catch (e) {
         didReject = true;
