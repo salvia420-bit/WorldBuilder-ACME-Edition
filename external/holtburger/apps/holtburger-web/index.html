@@ -3,12 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>holtburger-web — Phase 2 floor + Phase 3 step 2 render</title>
+    <title>holtburger-web — Phase 4 step 1 wasm-driven AC login</title>
     <style>
       body { font-family: system-ui, sans-serif; max-width: 56rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
       h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
       h1 + p { color: #555; margin-top: 0; }
       h2 { font-size: 1.1rem; margin-top: 1.5rem; }
+      h3 { font-size: 1.0rem; margin-top: 1rem; }
       pre { background: #f4f4f4; padding: 0.75rem; border-radius: 4px; overflow-x: auto; }
       .check { margin: 0.25rem 0; }
       .ok { color: #1a7f1a; font-weight: bold; }
@@ -21,6 +22,18 @@
       #stage-info dt { font-weight: bold; }
       #stage-info dd { margin: 0 0 0.4rem 0; color: #444; font-family: ui-monospace, monospace; }
       .hint { font-size: 0.85rem; color: #666; }
+      #login-form fieldset { padding: 0.75rem 1rem; border: 1px solid #ccc; border-radius: 4px; max-width: 26rem; margin: 0.5rem 0; }
+      #login-form legend { padding: 0 0.4rem; font-weight: bold; }
+      #login-form .row { margin: 0.45rem 0; }
+      #login-form label { display: flex; gap: 0.6rem; align-items: center; font-size: 0.95rem; }
+      #login-form label > span { flex: 0 0 7rem; }
+      #login-form input { flex: 1; padding: 0.25rem 0.4rem; font-family: ui-monospace, monospace; font-size: 0.95rem; }
+      #login-form button { margin-top: 0.6rem; padding: 0.45rem 1rem; font-size: 0.95rem; cursor: pointer; }
+      #login-form button[disabled] { cursor: progress; opacity: 0.7; }
+      #login-status { margin: 0.4rem 0 0.4rem; }
+      #selection ul { padding-left: 1.25rem; }
+      #selection li { margin: 0.45rem 0; font-family: ui-monospace, monospace; font-size: 0.92rem; }
+      #selection li button { margin-left: 0.6rem; padding: 0.2rem 0.6rem; cursor: pointer; }
     </style>
   </head>
   <body>
@@ -34,7 +47,43 @@
     <h2>Phase 2 floor — wasm bundle smoke checks</h2>
     <div id="results">Loading wasm bundle…</div>
 
-    <h2>Phase 3 step 3 — 3×3 Holtburg neighbourhood, terrain atlas</h2>
+    <h2>Phase 4 step 1 — wasm-driven AC login</h2>
+    <p class="hint">
+      Drives <code>start_session</code> through
+      <code>holtburger-wsbridge</code> against a live ACE: opens a
+      <code>WsTransport</code>, sends <code>LoginRequest</code>, pumps
+      <code>session.recv_message</code> until the
+      <code>CharacterList</code> arrives. Bring up a local ACE per
+      <code>docs/ace-local-setup.md</code> and a bridge with
+      <code>cargo run -p holtburger-wsbridge</code>, then enter the
+      account credentials below. The Holtburg world preview boots once
+      Selection lands.
+    </p>
+    <form id="login-form">
+      <fieldset>
+        <legend>Connect to ACE</legend>
+        <div class="row"><label><span>Account</span><input type="text" name="account" required autocomplete="username" /></label></div>
+        <div class="row"><label><span>Password</span><input type="password" name="password" required autocomplete="current-password" /></label></div>
+        <div class="row"><label><span>Bridge URL</span><input type="text" name="bridge_url" value="ws://127.0.0.1:8080/" required /></label></div>
+        <div class="row"><label><span>Server IP</span><input type="text" name="server_ip" value="127.0.0.1" required /></label></div>
+        <div class="row"><label><span>Server port</span><input type="number" name="server_port" value="9000" min="1" max="65535" required /></label></div>
+        <button type="submit">Connect</button>
+      </fieldset>
+    </form>
+    <div id="login-status" class="hint">Awaiting credentials.</div>
+
+    <div id="selection" hidden>
+      <h3>Select a character</h3>
+      <p class="hint">
+        Step 1 ends here — clicking <em>Spawn</em> currently logs to the
+        devtools console. Step 2 wires the actual world enter
+        (<code>ClientCommand::SelectCharacter</code> →
+        <code>EnterWorldRequest</code>).
+      </p>
+      <ul id="character-ul"></ul>
+    </div>
+
+    <h2>Phase 3 step 6 — 3×3 Holtburg neighbourhood, live runtime sprites</h2>
     <p class="hint">
       Fetches <code>../../dats/assets.hba</code> once via the §8 step 4
       <code>HttpResourceSource</code>, then reads the 9 surface terrain
@@ -42,21 +91,17 @@
       around Holtburg in a single batch call. Each landblock is laid
       out at its world offset (<code>XX&nbsp;×&nbsp;192&nbsp;m</code>,
       <code>YY&nbsp;×&nbsp;192&nbsp;m</code>) inside a camera container.
-      Mouse-wheel zooms around the cursor; click-and-drag pans.
-      Colour comes from the per-vertex AC terrain code (<code>terrainCodes</code>
-      threaded through the wasm boundary), sampled per-cell from a
-      32-entry placeholder atlas via a custom GLSL ES 3.00 Mesh shader
-      using <code>flat</code> interpolation on the SW corner. Real AC
-      textures replace the swatches in step 3.5.
-      Requires the fixture to have been built with
-      <code>dat2hba --profile pruned</code> (the <code>micro</code>
-      profile excludes <code>eor/cell</code>).
+      Mouse-wheel zooms around the cursor; click-and-drag pans. Per-poly
+      live runtime rendering walks each model's GfxObj/SetupModel chain
+      and rasterizes top-down via a custom Mesh shader. The renderer
+      below boots after the AC login above resolves; until then it
+      waits.
     </p>
     <div id="stage">
       <canvas id="canvas" width="512" height="512"></canvas>
       <dl id="stage-info"></dl>
     </div>
-    <div id="render-status" class="hint">Render pending bundle init.</div>
+    <div id="render-status" class="hint">Render pending login.</div>
 
     <!--
       PixiJS 8 ESM build pinned via jsdelivr. We import * as PIXI rather
@@ -87,6 +132,7 @@
         fetch_object_colours,
         fetch_model_meshes,
         fetch_surfaces_pixels,
+        start_session,
       } from "./pkg/holtburger_web.js";
 
       import * as PIXI from "pixi.js";
@@ -147,9 +193,15 @@
           `typeof ${typeof fetch_landblock_heightmaps}`
         );
 
+        check(
+          "start_session() is exported (Phase 4 step 1 login driver)",
+          typeof start_session === "function",
+          `typeof ${typeof start_session}`
+        );
+
         const allOk = lines.every((l) => l.includes("[OK]"));
         const summary = allOk
-          ? `<p class="ok">PASS &mdash; the wasm32 floor + Phase 3 step 1/2 exports all loaded.</p>`
+          ? `<p class="ok">PASS &mdash; the wasm32 floor + Phase 3 + Phase 4 step 1 exports all loaded.</p>`
           : `<p class="fail">FAIL &mdash; one or more checks did not pass.</p>`;
         root.innerHTML = lines.join("\n") + summary;
       } catch (err) {
@@ -1150,9 +1202,13 @@ void main() {
         return { withLive, withSprite, fallback, invisible, liveSpriteMap };
       }
 
-      // ----- render trigger ----------------------------------------
+      // ----- renderer entry point ----------------------------------
+      // Wrapped in a function so the Phase 4 step 1 login flow can gate
+      // rendering on a successful AC handshake. Until login resolves
+      // the canvas stays at its placeholder background.
 
-      try {
+      async function renderHoltburg() {
+       try {
         renderStatus.textContent = "Fetching assets.hba (9 landblocks)…";
         const ids = new Uint32Array(NEIGHBOURHOOD.map((n) => n.id >>> 0));
         const meshes = await fetch_landblock_heightmaps(ASSET_URL, ids);
@@ -1225,7 +1281,7 @@ void main() {
           `<span class="ok">[OK]</span> Rendered Holtburg + 8 neighbours with terrain atlas + ${totalObjects} object sprites. Mouse-wheel to zoom, click-and-drag to pan.`;
         for (const m of meshes) m.free();
         for (const o of objects) o.free();
-      } catch (err) {
+       } catch (err) {
         const msg = String(err?.message ?? err);
         const missingFixture =
           msg.includes("HTTP 404") ||
@@ -1238,7 +1294,96 @@ void main() {
           `<span class="fail">[FAIL]</span> Render failed: <code>${msg}</code><br/><span class="hint">${hint}</span>`;
         // eslint-disable-next-line no-console
         console.error("fetch_landblock_heightmaps failed:", err);
+       }
       }
+
+      // ----- Phase 4 step 1 login flow -----------------------------
+      // The login form gates the renderer. On submit we drive the
+      // wasm `start_session` (which opens a `WsTransport`, sends the
+      // AC LoginRequest, pumps `recv_message` until the server emits
+      // `GameMessage::CharacterList`). On resolve we display the
+      // character list and boot the renderer as a backdrop. On reject
+      // we surface the AC error string to the status line.
+
+      const loginForm = document.getElementById("login-form");
+      const loginStatus = document.getElementById("login-status");
+      const selection = document.getElementById("selection");
+      const characterUl = document.getElementById("character-ul");
+      let activeHandle = null;
+
+      loginForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if (activeHandle) return;
+        const fd = new FormData(loginForm);
+        const account = String(fd.get("account") ?? "").trim();
+        const password = String(fd.get("password") ?? "");
+        const bridgeUrl = String(fd.get("bridge_url") ?? "").trim();
+        const serverIp = String(fd.get("server_ip") ?? "").trim();
+        const serverPort = Number(fd.get("server_port") ?? 0);
+        if (!account || !password || !bridgeUrl || !serverIp || !serverPort) {
+          loginStatus.innerHTML = `<span class="fail">[FAIL]</span> All fields are required.`;
+          return;
+        }
+
+        const submitBtn = loginForm.querySelector("button[type=submit]");
+        submitBtn.disabled = true;
+        loginStatus.innerHTML = `Connecting to <code>${bridgeUrl}</code> (server <code>${serverIp}:${serverPort}</code>) and sending LoginRequest…`;
+
+        try {
+          const handle = await start_session(bridgeUrl, serverIp, serverPort, account, password);
+          activeHandle = handle;
+
+          // Step 1 expects exactly one queued event (kind=0 =
+          // CharacterListReceived) when start_session resolves; drain
+          // it so step 2's recv loop starts from a clean slate.
+          const initialEvents = handle.poll_events();
+          const charsReceived = initialEvents.find((evt) => evt.kind === 0);
+
+          const chars = handle.characterList();
+          loginStatus.innerHTML =
+            `<span class="ok">[OK]</span> Logged in as <code>${handle.accountName || account}</code>. ` +
+            `${chars.length} character${chars.length === 1 ? "" : "s"} on this account` +
+            (charsReceived ? `; CharacterListReceived event drained.` : `; (CharacterListReceived event missing — investigate).`);
+
+          if (chars.length === 0) {
+            characterUl.innerHTML =
+              `<li class="hint">No characters on this account. Step 2 will add a "Create character" button — for now, log in to a different account or use the in-game CLI to create one.</li>`;
+          } else {
+            characterUl.innerHTML = chars.map((c) => {
+              const idHex = `0x${c.id.toString(16).toUpperCase().padStart(8, "0")}`;
+              const pendingDelete = c.deleteTime !== 0
+                ? ` <span class="hint">[pending delete @ ${new Date(c.deleteTime * 1000).toISOString()}]</span>`
+                : "";
+              return `<li><strong>${c.name}</strong> &nbsp;<span class="hint">${idHex}</span>${pendingDelete}` +
+                ` <button type="button" data-id="${c.id}">Spawn (placeholder)</button></li>`;
+            }).join("");
+          }
+          selection.hidden = false;
+          characterUl.addEventListener("click", (ev) => {
+            const btn = ev.target.closest("button[data-id]");
+            if (!btn) return;
+            const id = Number(btn.dataset.id);
+            // eslint-disable-next-line no-console
+            console.log(`[step 1] Spawn requested for character 0x${id.toString(16).toUpperCase()}; step 2 will wire ClientCommand::SelectCharacter → EnterWorldRequest.`);
+            btn.disabled = true;
+            btn.textContent = "Selected (placeholder)";
+          });
+
+          // Boot the renderer as a backdrop. Login is the gate;
+          // rendering is best-effort — a renderer failure does not
+          // kick the user back to the login form.
+          renderStatus.textContent = "Booting Holtburg renderer…";
+          await renderHoltburg();
+        } catch (err) {
+          const msg = String(err?.message ?? err);
+          loginStatus.innerHTML =
+            `<span class="fail">[FAIL]</span> Login failed: <code>${msg}</code>` +
+            ` <span class="hint">Check that holtburger-wsbridge is listening at the configured URL and ACE is up.</span>`;
+          submitBtn.disabled = false;
+          // eslint-disable-next-line no-console
+          console.error("start_session failed:", err);
+        }
+      });
     </script>
   </body>
 </html>

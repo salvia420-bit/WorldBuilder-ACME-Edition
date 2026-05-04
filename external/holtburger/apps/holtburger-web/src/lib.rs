@@ -1384,3 +1384,276 @@ pub async fn fetch_model_meshes(
     }
     Ok(out)
 }
+
+// ============================================================
+// Phase 4 step 1 — wasm-driven AC login
+// ============================================================
+//
+// Audit reference (`apps/holtburger-cli/src/bin/tui.rs::bootstrap_once`,
+// commit `b082cc9`): the cli builds
+// `ClientRuntimeBuilder::new(account).server(host, port).connect()` —
+// which constructs `Session::new(addr)` over a UDP socket — spawns
+// `client.run()` on a tokio task, and dispatches
+// `ClientCommand::Login(password)` over a command channel.
+// `handle_auth_command` calls `session.send_login_request`,
+// `client.run()` polls `session.recv_message`, and
+// `handle_message` parses each `SessionEvent::Message(bytes)` via
+// `<GameMessage as ProtocolUnpack>::unpack` and routes
+// `GameMessage::CharacterList(data)` to the broadcast as
+// `ClientViewEvent::CharacterList(characters)`. The cli's bootstrap
+// loop awaits that event on `server_event_rx` and returns Ready.
+//
+// The wasm path skips `ClientRuntime` entirely — its `run()` uses
+// `std::time::Instant` and `tokio::time::interval` per tick, neither
+// portable to wasm32 in their current shape — and drives `Session`
+// directly. The handshake / character-list semantics are identical:
+// both flow through the same `session.send_login_request` /
+// `session.recv_message` / `GameMessage::CharacterList` path. ACE's
+// CONNECT_REQUEST → CONNECT_RESPONSE handshake is handled inside
+// `recv_ordered_packet` automatically, so the wasm caller only sees
+// the eventual `SessionEvent::Message` carrying the CharacterList.
+
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_CHARACTER_LIST_RECEIVED: u32 = 0;
+
+/// Tagged-payload envelope for events the wasm bundle drains to JS via
+/// [`SessionHandle::poll_events`].
+///
+/// wasm-bindgen does not directly serialize Rust enum variants with
+/// data, so the shape is a tag byte plus optional payload fields. The
+/// `kind` constants pin the wire contract; JS reads `event.kind` and
+/// dispatches to the right payload getters.
+///
+/// Step 1 emits only `kind = 0` (CharacterListReceived). Reserved for
+/// later steps:
+/// - `kind = 1` — chat / Talk events (step 4)
+/// - `kind = 2` — `ClientViewEvent::EntitySpawned` (step 2)
+/// - `kind = 3` — `ClientViewEvent::EntityDespawned` (step 2)
+/// - `kind = 4` — `ClientViewEvent::Disconnected`
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct ClientEvent {
+    kind: u32,
+    string_payload: Option<String>,
+    u32_payload: Option<u32>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl ClientEvent {
+    /// The numeric tag identifying which payload fields are populated.
+    /// See the `ClientEvent` doc comment for the active value table.
+    #[wasm_bindgen(getter)]
+    pub fn kind(&self) -> u32 {
+        self.kind
+    }
+
+    /// Optional string payload. For `kind = 0` (CharacterListReceived)
+    /// holds the server-echoed account name.
+    #[wasm_bindgen(getter, js_name = stringPayload)]
+    pub fn string_payload(&self) -> Option<String> {
+        self.string_payload.clone()
+    }
+
+    /// Optional u32 payload. For `kind = 0` (CharacterListReceived)
+    /// holds the count of characters in the list.
+    #[wasm_bindgen(getter, js_name = u32Payload)]
+    pub fn u32_payload(&self) -> Option<u32> {
+        self.u32_payload
+    }
+}
+
+/// One row from the AC CharacterList packet, projected to the fields
+/// the Selection UI displays.
+///
+/// AC's `CharacterEntry` carries only `guid`, `name`, and `delete_time`
+/// — level / class / equipment are not in the CharacterList packet
+/// itself. They arrive once the player picks a character and the
+/// spawn flow runs (step 2 scope).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct CharacterSummary {
+    id: u32,
+    name: String,
+    delete_time: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl CharacterSummary {
+    /// Character GUID — the AC-side primary key. Step 2 uses this in
+    /// `ClientCommand::SelectCharacter`.
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+
+    /// Display name of the character.
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    /// Non-zero = character is in the deletion-pending grace window
+    /// (the value is the unix timestamp at which the delete completes).
+    /// Zero = active.
+    #[wasm_bindgen(getter, js_name = deleteTime)]
+    pub fn delete_time(&self) -> u32 {
+        self.delete_time
+    }
+}
+
+/// Live wasm-side proxy for an AC session connected via WS to ACE.
+/// Constructed by [`start_session`] once the handshake reaches
+/// CharacterList. JS holds the handle for the session lifetime;
+/// dropping it on the Rust side closes the WebSocket via
+/// `WsTransport`'s `Drop` impl.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct SessionHandle {
+    session: holtburger_session::Session,
+    queued_events: Vec<ClientEvent>,
+    character_list: Vec<CharacterSummary>,
+    account_name: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SessionHandle {
+    /// Drain queued [`ClientEvent`]s. JS calls this once per
+    /// `requestAnimationFrame` tick (mirrors the cli's
+    /// `tokio::select!` poll). Empty Vec is the steady state.
+    ///
+    /// Step 1 only ever queues one event (kind=0) at construction
+    /// time, so JS sees the CharacterList signal exactly once. Step 2
+    /// will keep the recv loop running and queue further events.
+    pub fn poll_events(&mut self) -> Vec<ClientEvent> {
+        std::mem::take(&mut self.queued_events)
+    }
+
+    /// Snapshot of the CharacterList received during login. Returns a
+    /// fresh `Vec` each call — JS keeps its own copy after the first
+    /// read.
+    #[wasm_bindgen(js_name = characterList)]
+    pub fn character_list(&self) -> Vec<CharacterSummary> {
+        self.character_list
+            .iter()
+            .map(|c| CharacterSummary {
+                id: c.id,
+                name: c.name.clone(),
+                delete_time: c.delete_time,
+            })
+            .collect()
+    }
+
+    /// Account name the session is logged in as. Echoed back by ACE
+    /// in the CharacterList packet body — useful for a Selection-page
+    /// header line.
+    #[wasm_bindgen(getter, js_name = accountName)]
+    pub fn account_name(&self) -> String {
+        self.account_name.clone()
+    }
+}
+
+/// Drive the AC login → CharacterList handshake from the wasm bundle.
+///
+/// Steps:
+/// 1. Open a `WsTransport` against `bridge_url` for the `server_ip`
+///    literal (the IP ACE answers on; the bridge tags inbound frames
+///    with it so the session's source-address allowlist matches).
+/// 2. Build `Session::new_with_transport(transport, server_addr)`.
+/// 3. Send `LoginRequest(username, password)` via
+///    `session.send_login_request`.
+/// 4. Pump `session.recv_message()` until the server emits a
+///    `GameMessage::CharacterList`. Earlier control packets
+///    (CONNECT_REQUEST → CONNECT_RESPONSE) are handled inside the
+///    session's receive loop automatically.
+/// 5. Return a [`SessionHandle`] proxy holding the live session, the
+///    parsed character list, and one queued `kind=0` event so the JS
+///    side's first `poll_events()` call surfaces the
+///    CharacterListReceived signal.
+///
+/// **Errors.** Any failure at transport open, login send, recv, or
+/// GameMessage parse rejects the returned Promise with a tagged error
+/// string. JS displays this verbatim in the status line.
+///
+/// **No retry / timeout** — if ACE never responds the Promise stays
+/// pending. A page reload bails the user out. Adding a deadline gate
+/// is a step-2 polish item.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn start_session(
+    bridge_url: String,
+    server_ip: String,
+    server_port: u16,
+    username: String,
+    password: String,
+) -> Result<SessionHandle, JsValue> {
+    use holtburger_protocol::messages::GameMessage;
+    use holtburger_protocol::traits::ProtocolUnpack;
+    use holtburger_session::SessionEvent;
+
+    let ip: IpAddr = server_ip
+        .parse()
+        .map_err(|e| JsValue::from_str(&format!("server_ip: {e}")))?;
+
+    let transport = holtburger_transport_ws::WsTransport::connect(&bridge_url, ip)
+        .await
+        .map_err(|e| JsValue::from_str(&format!("WsTransport::connect: {e}")))?;
+
+    let mut session = holtburger_session::Session::new_with_transport(
+        Box::new(transport),
+        SocketAddr::new(ip, server_port),
+    );
+
+    session
+        .send_login_request(&username, &password)
+        .await
+        .map_err(|e| JsValue::from_str(&format!("send_login_request: {e}")))?;
+
+    let mut handle = SessionHandle {
+        session,
+        queued_events: Vec::new(),
+        character_list: Vec::new(),
+        account_name: String::new(),
+    };
+
+    'outer: loop {
+        let events = handle
+            .session
+            .recv_message()
+            .await
+            .map_err(|e| JsValue::from_str(&format!("recv_message: {e}")))?;
+        for event in events {
+            match event {
+                SessionEvent::Message(bytes) => {
+                    let mut offset = 0;
+                    let Some(message) = GameMessage::unpack(&bytes, &mut offset) else {
+                        continue;
+                    };
+                    if let GameMessage::CharacterList(data) = message {
+                        handle.account_name = data.account_name.clone();
+                        for entry in &data.characters {
+                            handle.character_list.push(CharacterSummary {
+                                id: u32::from(entry.guid),
+                                name: entry.name.clone(),
+                                delete_time: entry.delete_time,
+                            });
+                        }
+                        handle.queued_events.push(ClientEvent {
+                            kind: CLIENT_EVENT_KIND_CHARACTER_LIST_RECEIVED,
+                            string_payload: Some(handle.account_name.clone()),
+                            u32_payload: Some(handle.character_list.len() as u32),
+                        });
+                        break 'outer;
+                    }
+                }
+                SessionEvent::TimeSync(_) => {
+                    // ServerTime updates aren't surfaced to JS in step 1.
+                }
+            }
+        }
+    }
+
+    Ok(handle)
+}

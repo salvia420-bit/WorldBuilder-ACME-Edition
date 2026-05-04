@@ -249,17 +249,28 @@ impl Session {
             }
 
             if let Some(deadline) = self.next_pending_control_deadline() {
-                // On native, `web_time::Instant` re-exports `std::time::Instant`,
-                // so `from_std` accepts the deadline directly. On wasm32 the
-                // two are distinct types — convert via the elapsed duration
-                // and sleep relative; tokio's wasm32 time driver uses
-                // `setTimeout` underneath so duration-based sleeping is the
-                // natural shape there anyway.
+                // Native: `web_time::Instant` re-exports `std::time::Instant`,
+                // so `from_std` accepts the deadline directly.
+                //
+                // Wasm32: `tokio::time::sleep` is unusable here — its time
+                // driver internally calls `std::time::Instant::now()`, which
+                // is a panic stub on `wasm32-unknown-unknown`
+                // ("time not implemented on this platform"). `gloo-timers`'s
+                // `TimeoutFuture` is the equivalent setTimeout-backed
+                // future that actually works in a browser. We compute the
+                // wait in milliseconds via `web_time::Instant`'s `.elapsed`
+                // / `.saturating_duration_since` (`web_time` is the JS
+                // `performance.now()`-backed shim on wasm32) so the deadline
+                // remains relative-time sound across both targets.
                 #[cfg(not(target_arch = "wasm32"))]
                 let timer = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline));
                 #[cfg(target_arch = "wasm32")]
-                let timer =
-                    tokio::time::sleep(deadline.saturating_duration_since(Instant::now()));
+                let timer = gloo_timers::future::TimeoutFuture::new(
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .as_millis()
+                        .min(u32::MAX as u128) as u32,
+                );
 
                 tokio::select! {
                     _ = timer => {

@@ -25,6 +25,18 @@ web-time = { workspace = true }
 tokio = { workspace = true, features = ["net"] }
 socket2 = { workspace = true }
 
+# Wasm32-only: `gloo-timers` provides a `setTimeout`-backed Future for
+# the receive loop's deadline-driven control-packet flush. `tokio::time::
+# sleep` won't work on wasm32-unknown-unknown — its time driver wakes
+# via `std::time::Instant::now()`, which is a hard-panic stub on this
+# target ("time not implemented on this platform"). The handshake's
+# CONNECT_RESPONSE wait (`ACE_HANDSHAKE_RACE_DELAY_MS = 200ms`) is the
+# concrete codepath that needs this; without the swap, Phase 4 step 1's
+# `start_session` panics inside the wasm bundle the moment the session
+# tries to honour any pending control packet's deadline.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+gloo-timers = { version = "0.3", features = ["futures"] }
+
 [dev-dependencies]
 hex.workspace = true
 tokio = { workspace = true, features = ["full", "macros"] }
