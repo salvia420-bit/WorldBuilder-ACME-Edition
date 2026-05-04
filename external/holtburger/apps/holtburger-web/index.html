@@ -47,17 +47,21 @@
     <h2>Phase 2 floor — wasm bundle smoke checks</h2>
     <div id="results">Loading wasm bundle…</div>
 
-    <h2>Phase 4 step 1 — wasm-driven AC login</h2>
+    <h2>Phase 4 step 1 + 2a — wasm-driven AC login + spawn</h2>
     <p class="hint">
       Drives <code>start_session</code> through
       <code>holtburger-wsbridge</code> against a live ACE: opens a
       <code>WsTransport</code>, sends <code>LoginRequest</code>, pumps
       <code>session.recv_message</code> until the
-      <code>CharacterList</code> arrives. Bring up a local ACE per
-      <code>docs/ace-local-setup.md</code> and a bridge with
-      <code>cargo run -p holtburger-wsbridge</code>, then enter the
-      account credentials below. The Holtburg world preview boots once
-      Selection lands.
+      <code>CharacterList</code> arrives. After login, clicking
+      <em>Spawn</em> on a character drives the
+      <code>CharacterEnterWorldRequest</code> → <code>ServerReady</code>
+      → <code>CharacterEnterWorld</code> → <code>PlayerCreate</code>
+      handshake (the recv loop auto-chains the middle two; JS sees
+      one <code>PlayerSpawned</code> event at the end). Bring up a
+      local ACE per <code>docs/ace-local-setup.md</code> and a bridge
+      with <code>cargo run -p holtburger-wsbridge</code>, then enter
+      the account credentials below.
     </p>
     <form id="login-form">
       <fieldset>
@@ -75,10 +79,13 @@
     <div id="selection" hidden>
       <h3>Select a character</h3>
       <p class="hint">
-        Step 1 ends here — clicking <em>Spawn</em> currently logs to the
-        devtools console. Step 2 wires the actual world enter
-        (<code>ClientCommand::SelectCharacter</code> →
-        <code>EnterWorldRequest</code>).
+        Click <em>Spawn</em> on any character to drive the AC enter-world
+        handshake. The status line above updates from
+        <em>Selected</em> → <em>Spawned</em> as
+        <code>PlayerCreate(guid)</code> lands. One spawn per session
+        (step 2b will allow switching characters mid-session); reload
+        to pick a different character. Position rendering of the local
+        player is step 2b scope.
       </p>
       <ul id="character-ul"></ul>
     </div>
@@ -1333,41 +1340,114 @@ void main() {
           const handle = await start_session(bridgeUrl, serverIp, serverPort, account, password);
           activeHandle = handle;
 
-          // Step 1 expects exactly one queued event (kind=0 =
-          // CharacterListReceived) when start_session resolves; drain
-          // it so step 2's recv loop starts from a clean slate.
-          const initialEvents = handle.poll_events();
-          const charsReceived = initialEvents.find((evt) => evt.kind === 0);
+          // Step 2a: the recv loop signals the initial CharacterList
+          // back via the oneshot inside start_session, so it arrives as
+          // pre-populated `handle.characterList()` rather than as a
+          // queued event. Subsequent CharacterList re-fires (after a
+          // CharacterCreate / CharacterDelete round-trip) DO arrive as
+          // kind=0 events through poll_events. Drain anything queued in
+          // the post-login pre-pump window for completeness.
+          handle.poll_events();
 
           const chars = handle.characterList();
           loginStatus.innerHTML =
             `<span class="ok">[OK]</span> Logged in as <code>${handle.accountName || account}</code>. ` +
-            `${chars.length} character${chars.length === 1 ? "" : "s"} on this account` +
-            (charsReceived ? `; CharacterListReceived event drained.` : `; (CharacterListReceived event missing — investigate).`);
+            `${chars.length} character${chars.length === 1 ? "" : "s"} on this account.`;
 
           if (chars.length === 0) {
             characterUl.innerHTML =
-              `<li class="hint">No characters on this account. Step 2 will add a "Create character" button — for now, log in to a different account or use the in-game CLI to create one.</li>`;
+              `<li class="hint">No characters on this account. Step 2b will add a "Create character" button — for now, log in to a different account or use the in-game CLI to create one.</li>`;
           } else {
             characterUl.innerHTML = chars.map((c) => {
               const idHex = `0x${c.id.toString(16).toUpperCase().padStart(8, "0")}`;
               const pendingDelete = c.deleteTime !== 0
                 ? ` <span class="hint">[pending delete @ ${new Date(c.deleteTime * 1000).toISOString()}]</span>`
                 : "";
-              return `<li><strong>${c.name}</strong> &nbsp;<span class="hint">${idHex}</span>${pendingDelete}` +
-                ` <button type="button" data-id="${c.id}">Spawn (placeholder)</button></li>`;
+              return `<li data-name="${c.name}" data-id="${c.id}"><strong>${c.name}</strong> &nbsp;<span class="hint">${idHex}</span>${pendingDelete}` +
+                ` <button type="button" data-id="${c.id}">Spawn</button></li>`;
             }).join("");
           }
           selection.hidden = false;
+
+          // Phase 4 step 2a — spawn flow. Click Spawn → wasm sends
+          // CharacterEnterWorldRequest. The recv loop auto-handles the
+          // CharacterEnterWorldServerReady reply (chains
+          // CharacterEnterWorld), and surfaces PlayerCreate as a kind=1
+          // PlayerSpawned event. Position rendering + entity spawns
+          // (other players, NPCs) are step 2b.
+          let spawningCharId = null;
+          let spawnedPlayerGuid = null;
           characterUl.addEventListener("click", (ev) => {
             const btn = ev.target.closest("button[data-id]");
             if (!btn) return;
+            if (spawningCharId !== null || spawnedPlayerGuid !== null) {
+              // Step 2a allows only one spawn per session — switching
+              // characters mid-session is step 2b scope (needs a teardown
+              // path). Reload the page to pick a different character.
+              return;
+            }
             const id = Number(btn.dataset.id);
-            // eslint-disable-next-line no-console
-            console.log(`[step 1] Spawn requested for character 0x${id.toString(16).toUpperCase()}; step 2 will wire ClientCommand::SelectCharacter → EnterWorldRequest.`);
-            btn.disabled = true;
-            btn.textContent = "Selected (placeholder)";
+            const name = btn.parentElement?.dataset?.name || "<unknown>";
+            spawningCharId = id;
+            try {
+              handle.selectCharacter(id);
+            } catch (err) {
+              spawningCharId = null;
+              loginStatus.innerHTML =
+                `<span class="fail">[FAIL]</span> selectCharacter rejected: <code>${String(err?.message ?? err)}</code>`;
+              return;
+            }
+            // Disable every Spawn button — only one spawn per session.
+            for (const b of characterUl.querySelectorAll("button[data-id]")) {
+              b.disabled = true;
+            }
+            btn.textContent = "Spawning…";
+            loginStatus.innerHTML =
+              `<span class="ok">[OK]</span> Selected <strong>${name}</strong>; ` +
+              `awaiting CharacterEnterWorldServerReady → CharacterEnterWorld → PlayerCreate.`;
           });
+
+          // Phase 4 step 2a — drain the SessionHandle's queued events
+          // each animation frame. The recv loop in Rust pushes events
+          // as they arrive; this is the JS-side receiver that wires
+          // them to UI updates.
+          function drainEvents() {
+            const events = handle.poll_events();
+            for (const evt of events) {
+              if (evt.kind === 1) {
+                // PlayerSpawned — u32Payload = spawned player GUID.
+                spawnedPlayerGuid = evt.u32Payload >>> 0;
+                spawningCharId = null;
+                const guidHex = `0x${spawnedPlayerGuid.toString(16).toUpperCase().padStart(8, "0")}`;
+                // Find the Li that triggered this spawn (matches by guid).
+                const li = characterUl.querySelector(`li[data-id="${spawnedPlayerGuid}"]`);
+                const name = li?.dataset?.name || "<unknown>";
+                if (li) {
+                  const btn = li.querySelector("button[data-id]");
+                  if (btn) btn.textContent = "Spawned";
+                }
+                loginStatus.innerHTML =
+                  `<span class="ok">[OK]</span> Spawned <strong>${name}</strong> ` +
+                  `<span class="hint">(GUID ${guidHex})</span>. ` +
+                  `<span class="hint">Step 2b will render the player at its spawn position.</span>`;
+              } else if (evt.kind === 4) {
+                // Disconnected — recv loop terminated. The UI stays
+                // up but commands won't go anywhere.
+                loginStatus.innerHTML =
+                  `<span class="fail">[FAIL]</span> Disconnected: <code>${evt.stringPayload || ""}</code>` +
+                  ` <span class="hint">Reload the page to retry.</span>`;
+                return; // Stop polling.
+              } else if (evt.kind === 0) {
+                // Re-fired CharacterListReceived (e.g. after CharacterCreate
+                // / CharacterDelete round-trip). Step 2a doesn't act on
+                // these; logging keeps the contract observable.
+                // eslint-disable-next-line no-console
+                console.log(`[step 2a] CharacterListReceived re-fire — count=${evt.u32Payload}`);
+              }
+            }
+            requestAnimationFrame(drainEvents);
+          }
+          requestAnimationFrame(drainEvents);
 
           // Boot the renderer as a backdrop. Login is the gate;
           // rendering is best-effort — a renderer failure does not

@@ -1386,35 +1386,63 @@ pub async fn fetch_model_meshes(
 }
 
 // ============================================================
-// Phase 4 step 1 — wasm-driven AC login
+// Phase 4 step 1 + 2a — wasm-driven AC login → spawn handshake
 // ============================================================
 //
-// Audit reference (`apps/holtburger-cli/src/bin/tui.rs::bootstrap_once`,
+// Audit reference (`apps/holtburger-cli/src/bin/tui.rs::bootstrap_once`
+// + `crates/holtburger-core/src/client/character_selection.rs`,
 // commit `b082cc9`): the cli builds
 // `ClientRuntimeBuilder::new(account).server(host, port).connect()` —
 // which constructs `Session::new(addr)` over a UDP socket — spawns
-// `client.run()` on a tokio task, and dispatches
-// `ClientCommand::Login(password)` over a command channel.
-// `handle_auth_command` calls `session.send_login_request`,
-// `client.run()` polls `session.recv_message`, and
-// `handle_message` parses each `SessionEvent::Message(bytes)` via
-// `<GameMessage as ProtocolUnpack>::unpack` and routes
-// `GameMessage::CharacterList(data)` to the broadcast as
-// `ClientViewEvent::CharacterList(characters)`. The cli's bootstrap
-// loop awaits that event on `server_event_rx` and returns Ready.
+// `client.run()` on a tokio task, and dispatches commands over an
+// mpsc channel:
+//   - `ClientCommand::Login(password)` → `session.send_login_request`
+//   - `ClientCommand::SelectCharacter(id)` (or `EnterWorld`) →
+//     `character_selection.select_character(id)` which sends
+//     `GameMessage::CharacterEnterWorldRequest(guid)`
+// The runtime's `handle_message` reacts to inbound messages:
+//   - `GameMessage::CharacterList(data)` →
+//     `ClientViewEvent::CharacterList(characters)`
+//   - `GameMessage::CharacterEnterWorldServerReady` → triggers
+//     `send_character_enter_world(guid, account_name)` which sends
+//     `GameMessage::CharacterEnterWorld { guid, account }`
+//   - `GameMessage::PlayerCreate(data)` → `data.guid` is the spawned
+//     player's GUID; runtime transitions to `EnteringWorld` then
+//     `InWorld`.
 //
 // The wasm path skips `ClientRuntime` entirely — its `run()` uses
 // `std::time::Instant` and `tokio::time::interval` per tick, neither
 // portable to wasm32 in their current shape — and drives `Session`
-// directly. The handshake / character-list semantics are identical:
-// both flow through the same `session.send_login_request` /
-// `session.recv_message` / `GameMessage::CharacterList` path. ACE's
-// CONNECT_REQUEST → CONNECT_RESPONSE handshake is handled inside
-// `recv_ordered_packet` automatically, so the wasm caller only sees
-// the eventual `SessionEvent::Message` carrying the CharacterList.
+// directly via a tokio::select!-based recv loop spawned from
+// `wasm_bindgen_futures::spawn_local`. The recv loop owns the Session
+// for its lifetime, races `session.recv_message()` against an
+// mpsc command channel, and queues `ClientEvent`s into a
+// `Rc<RefCell<Vec<ClientEvent>>>` shared with the SessionHandle. JS
+// drains via `handle.poll_events()` per animation-frame tick; commands
+// (e.g. `select_character`) flow the other way via the cmd channel.
+// ACE's CONNECT_REQUEST → CONNECT_RESPONSE handshake is still handled
+// inside `recv_ordered_packet` automatically.
 
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_CHARACTER_LIST_RECEIVED: u32 = 0;
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_PLAYER_SPAWNED: u32 = 1;
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_DISCONNECTED: u32 = 4;
+
+/// Internal command channel payload — the recv loop's only writeable
+/// surface. JS-facing methods on [`SessionHandle`] turn into
+/// `SessionCommand` values that the loop applies between
+/// `recv_message` polls.
+#[cfg(target_arch = "wasm32")]
+enum SessionCommand {
+    /// `SessionHandle.select_character(id)` — sends
+    /// `CharacterEnterWorldRequest(guid)` to the server. The loop
+    /// auto-handles the subsequent `CharacterEnterWorldServerReady`
+    /// reply and chains `CharacterEnterWorld(guid, account)` without
+    /// JS round-tripping.
+    SelectCharacter { guid: u32 },
+}
 
 /// Tagged-payload envelope for events the wasm bundle drains to JS via
 /// [`SessionHandle::poll_events`].
@@ -1424,12 +1452,18 @@ const CLIENT_EVENT_KIND_CHARACTER_LIST_RECEIVED: u32 = 0;
 /// `kind` constants pin the wire contract; JS reads `event.kind` and
 /// dispatches to the right payload getters.
 ///
-/// Step 1 emits only `kind = 0` (CharacterListReceived). Reserved for
-/// later steps:
-/// - `kind = 1` — chat / Talk events (step 4)
-/// - `kind = 2` — `ClientViewEvent::EntitySpawned` (step 2)
-/// - `kind = 3` — `ClientViewEvent::EntityDespawned` (step 2)
-/// - `kind = 4` — `ClientViewEvent::Disconnected`
+/// Active values (mirror the JS-side dispatch table):
+/// - `kind = 0` — CharacterListReceived. `stringPayload` = account
+///   name; `u32Payload` = character count.
+/// - `kind = 1` — PlayerSpawned. `u32Payload` = the spawned player's
+///   GUID. Fired when the recv loop receives `GameMessage::PlayerCreate`.
+/// - `kind = 4` — Disconnected. `stringPayload` = the error message
+///   from `recv_message` (transport error, server hangup, etc.).
+///
+/// Reserved for later steps:
+/// - `kind = 2` — chat / Talk events (step 4).
+/// - `kind = 3` — `ClientViewEvent::EntitySpawned` for non-player
+///   entities (step 2b — needs the entity buffer).
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub struct ClientEvent {
@@ -1449,14 +1483,16 @@ impl ClientEvent {
     }
 
     /// Optional string payload. For `kind = 0` (CharacterListReceived)
-    /// holds the server-echoed account name.
+    /// holds the server-echoed account name; for `kind = 4`
+    /// (Disconnected) holds the error message.
     #[wasm_bindgen(getter, js_name = stringPayload)]
     pub fn string_payload(&self) -> Option<String> {
         self.string_payload.clone()
     }
 
     /// Optional u32 payload. For `kind = 0` (CharacterListReceived)
-    /// holds the count of characters in the list.
+    /// holds the count of characters in the list; for `kind = 1`
+    /// (PlayerSpawned) holds the spawned player's GUID.
     #[wasm_bindgen(getter, js_name = u32Payload)]
     pub fn u32_payload(&self) -> Option<u32> {
         self.u32_payload
@@ -1469,9 +1505,10 @@ impl ClientEvent {
 /// AC's `CharacterEntry` carries only `guid`, `name`, and `delete_time`
 /// — level / class / equipment are not in the CharacterList packet
 /// itself. They arrive once the player picks a character and the
-/// spawn flow runs (step 2 scope).
+/// spawn flow runs (step 2b — full `Character` projection).
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
+#[derive(Clone)]
 pub struct CharacterSummary {
     id: u32,
     name: String,
@@ -1481,8 +1518,8 @@ pub struct CharacterSummary {
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 impl CharacterSummary {
-    /// Character GUID — the AC-side primary key. Step 2 uses this in
-    /// `ClientCommand::SelectCharacter`.
+    /// Character GUID — the AC-side primary key. Step 2a uses this in
+    /// `SessionHandle.select_character(id)` to pick the spawn target.
     #[wasm_bindgen(getter)]
     pub fn id(&self) -> u32 {
         self.id
@@ -1505,14 +1542,17 @@ impl CharacterSummary {
 
 /// Live wasm-side proxy for an AC session connected via WS to ACE.
 /// Constructed by [`start_session`] once the handshake reaches
-/// CharacterList. JS holds the handle for the session lifetime;
-/// dropping it on the Rust side closes the WebSocket via
-/// `WsTransport`'s `Drop` impl.
+/// `CharacterList`. The Session itself lives inside the `spawn_local`
+/// recv loop; the handle holds the JS-facing surface — a command
+/// channel sender + a shared queued-events buffer + the captured
+/// CharacterList. Dropping the handle closes the cmd channel; the
+/// recv loop sees the channel close, drops the Session (which closes
+/// the WebSocket via `WsTransport`'s `Drop`), and exits.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub struct SessionHandle {
-    session: holtburger_session::Session,
-    queued_events: Vec<ClientEvent>,
+    cmd_tx: futures::channel::mpsc::UnboundedSender<SessionCommand>,
+    queued_events: std::rc::Rc<std::cell::RefCell<Vec<ClientEvent>>>,
     character_list: Vec<CharacterSummary>,
     account_name: String,
 }
@@ -1524,11 +1564,11 @@ impl SessionHandle {
     /// `requestAnimationFrame` tick (mirrors the cli's
     /// `tokio::select!` poll). Empty Vec is the steady state.
     ///
-    /// Step 1 only ever queues one event (kind=0) at construction
-    /// time, so JS sees the CharacterList signal exactly once. Step 2
-    /// will keep the recv loop running and queue further events.
+    /// The recv loop pushes events as they arrive; this method swaps
+    /// the inner buffer out and returns it to JS in one wasm-boundary
+    /// crossing.
     pub fn poll_events(&mut self) -> Vec<ClientEvent> {
-        std::mem::take(&mut self.queued_events)
+        std::mem::take(&mut *self.queued_events.borrow_mut())
     }
 
     /// Snapshot of the CharacterList received during login. Returns a
@@ -1553,9 +1593,37 @@ impl SessionHandle {
     pub fn account_name(&self) -> String {
         self.account_name.clone()
     }
+
+    /// Phase 4 step 2a: pick a character from the Selection list and
+    /// drive the spawn handshake.
+    ///
+    /// Sends a `SessionCommand::SelectCharacter` into the recv loop's
+    /// command channel. The loop then sends
+    /// `GameMessage::CharacterEnterWorldRequest(guid)` over the wire
+    /// and auto-chains the `CharacterEnterWorldServerReady` →
+    /// `CharacterEnterWorld { guid, account }` follow-up without JS
+    /// having to drive each step. When ACE replies with
+    /// `GameMessage::PlayerCreate(guid)`, a `kind=1` PlayerSpawned
+    /// event lands in the queue; JS sees it on the next `poll_events`
+    /// call.
+    ///
+    /// Returns `Ok(())` on enqueue success. The actual spawn outcome
+    /// arrives asynchronously via the event queue, not as the return
+    /// value. If the cmd channel is closed (handle dropped or recv
+    /// loop exited) the call rejects with a string error.
+    #[wasm_bindgen(js_name = selectCharacter)]
+    pub fn select_character(&self, guid: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SelectCharacter { guid })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("select_character: cmd channel closed ({e})"))
+            })
+    }
 }
 
-/// Drive the AC login → CharacterList handshake from the wasm bundle.
+/// Drive the AC login → CharacterList handshake, then spawn a recv
+/// loop that pumps `recv_message` for the lifetime of the handle.
 ///
 /// Steps:
 /// 1. Open a `WsTransport` against `bridge_url` for the `server_ip`
@@ -1564,22 +1632,25 @@ impl SessionHandle {
 /// 2. Build `Session::new_with_transport(transport, server_addr)`.
 /// 3. Send `LoginRequest(username, password)` via
 ///    `session.send_login_request`.
-/// 4. Pump `session.recv_message()` until the server emits a
-///    `GameMessage::CharacterList`. Earlier control packets
+/// 4. `wasm_bindgen_futures::spawn_local` the recv loop, handing it
+///    the Session, the cmd channel receiver, and a oneshot sender
+///    for the initial CharacterList. Earlier control packets
 ///    (CONNECT_REQUEST → CONNECT_RESPONSE) are handled inside the
 ///    session's receive loop automatically.
-/// 5. Return a [`SessionHandle`] proxy holding the live session, the
-///    parsed character list, and one queued `kind=0` event so the JS
-///    side's first `poll_events()` call surfaces the
-///    CharacterListReceived signal.
+/// 5. Await the oneshot — the recv loop signals as soon as it parses
+///    the first `GameMessage::CharacterList`. Returns a
+///    [`SessionHandle`] holding the cmd sender + shared event queue +
+///    captured CharacterList.
 ///
-/// **Errors.** Any failure at transport open, login send, recv, or
-/// GameMessage parse rejects the returned Promise with a tagged error
-/// string. JS displays this verbatim in the status line.
+/// **Errors.** Any failure at transport open, login send, or initial
+/// CharacterList wait rejects the returned Promise with a tagged
+/// error string. After `start_session` resolves, transient errors
+/// inside the recv loop (e.g. server hangup) surface as
+/// `kind=4 Disconnected` events through `poll_events()` — they do not
+/// reject anything.
 ///
 /// **No retry / timeout** — if ACE never responds the Promise stays
-/// pending. A page reload bails the user out. Adding a deadline gate
-/// is a step-2 polish item.
+/// pending. A page reload bails the user out.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn start_session(
@@ -1589,9 +1660,7 @@ pub async fn start_session(
     username: String,
     password: String,
 ) -> Result<SessionHandle, JsValue> {
-    use holtburger_protocol::messages::GameMessage;
-    use holtburger_protocol::traits::ProtocolUnpack;
-    use holtburger_session::SessionEvent;
+    use futures::channel::{mpsc, oneshot};
 
     let ip: IpAddr = server_ip
         .parse()
@@ -1611,49 +1680,208 @@ pub async fn start_session(
         .await
         .map_err(|e| JsValue::from_str(&format!("send_login_request: {e}")))?;
 
-    let mut handle = SessionHandle {
-        session,
-        queued_events: Vec::new(),
-        character_list: Vec::new(),
-        account_name: String::new(),
-    };
+    let (cmd_tx, cmd_rx) = mpsc::unbounded::<SessionCommand>();
+    let (charlist_tx, charlist_rx) = oneshot::channel::<CharListReady>();
+    let queued_events: std::rc::Rc<std::cell::RefCell<Vec<ClientEvent>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
 
-    'outer: loop {
-        let events = handle
-            .session
-            .recv_message()
-            .await
-            .map_err(|e| JsValue::from_str(&format!("recv_message: {e}")))?;
-        for event in events {
-            match event {
-                SessionEvent::Message(bytes) => {
+    {
+        let queued_events = queued_events.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            recv_loop(session, cmd_rx, queued_events, Some(charlist_tx)).await;
+        });
+    }
+
+    let CharListReady {
+        account_name,
+        characters,
+    } = charlist_rx
+        .await
+        .map_err(|_| JsValue::from_str("recv loop exited before CharacterList arrived"))?;
+
+    Ok(SessionHandle {
+        cmd_tx,
+        queued_events,
+        character_list: characters,
+        account_name,
+    })
+}
+
+/// Payload the recv loop sends through the initial-CharacterList
+/// oneshot back to the awaiting `start_session` future.
+#[cfg(target_arch = "wasm32")]
+struct CharListReady {
+    account_name: String,
+    characters: Vec<CharacterSummary>,
+}
+
+/// State the recv loop tracks across iterations.
+#[cfg(target_arch = "wasm32")]
+enum LoopState {
+    /// Pre-character-selection (first phase) or post-spawn (idle).
+    Idle,
+    /// Between `CharacterEnterWorldRequest` and the eventual
+    /// `PlayerCreate`. The `account_name` is captured here so the
+    /// `CharacterEnterWorld` reply (sent in response to
+    /// `CharacterEnterWorldServerReady`) carries the right account.
+    EnteringWorld {
+        guid: holtburger_common::Guid,
+        account: String,
+    },
+}
+
+/// The recv loop that owns the Session and races
+/// `session.recv_message()` against the JS-driven command channel.
+/// Runs for the lifetime of the SessionHandle (until the cmd channel
+/// closes — i.e. the handle is dropped — or until a fatal session
+/// error arrives).
+///
+/// `charlist_tx` is set to `None` once the first `CharacterList`
+/// arrives and is signalled; subsequent CharacterLists (e.g. after a
+/// `CharacterDelete` or `CharacterCreate` round-trip) are surfaced as
+/// queued events instead, NOT as a re-fire of the oneshot. Step 2a
+/// doesn't re-fire CharacterList; if a future step needs to, lift
+/// the queue events to also carry an updated character list.
+#[cfg(target_arch = "wasm32")]
+async fn recv_loop(
+    mut session: holtburger_session::Session,
+    mut cmd_rx: futures::channel::mpsc::UnboundedReceiver<SessionCommand>,
+    queued_events: std::rc::Rc<std::cell::RefCell<Vec<ClientEvent>>>,
+    mut charlist_tx: Option<futures::channel::oneshot::Sender<CharListReady>>,
+) {
+    use futures::StreamExt;
+    use holtburger_protocol::messages::{CharacterEnterWorldData, GameMessage};
+    use holtburger_protocol::traits::ProtocolUnpack;
+    use holtburger_session::SessionEvent;
+
+    let mut state = LoopState::Idle;
+    let mut account_name = String::new();
+
+    loop {
+        tokio::select! {
+            recv = session.recv_message() => {
+                let events = match recv {
+                    Ok(events) => events,
+                    Err(e) => {
+                        let msg = format!("recv_message: {e}");
+                        log::warn!("recv_loop terminating: {msg}");
+                        queued_events.borrow_mut().push(ClientEvent {
+                            kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                            string_payload: Some(msg),
+                            u32_payload: None,
+                        });
+                        return;
+                    }
+                };
+                for event in events {
+                    let SessionEvent::Message(bytes) = event else { continue };
                     let mut offset = 0;
                     let Some(message) = GameMessage::unpack(&bytes, &mut offset) else {
                         continue;
                     };
-                    if let GameMessage::CharacterList(data) = message {
-                        handle.account_name = data.account_name.clone();
-                        for entry in &data.characters {
-                            handle.character_list.push(CharacterSummary {
-                                id: u32::from(entry.guid),
-                                name: entry.name.clone(),
-                                delete_time: entry.delete_time,
-                            });
+                    match message {
+                        GameMessage::CharacterList(data) => {
+                            account_name = data.account_name.clone();
+                            let characters: Vec<CharacterSummary> = data
+                                .characters
+                                .iter()
+                                .map(|entry| CharacterSummary {
+                                    id: u32::from(entry.guid),
+                                    name: entry.name.clone(),
+                                    delete_time: entry.delete_time,
+                                })
+                                .collect();
+                            if let Some(tx) = charlist_tx.take() {
+                                let _ = tx.send(CharListReady {
+                                    account_name: account_name.clone(),
+                                    characters: characters.clone(),
+                                });
+                            } else {
+                                // Subsequent CharacterList packets arrive
+                                // after CharacterCreate / CharacterDelete
+                                // round-trips; surfacing them via the
+                                // event queue is step-2b polish.
+                                queued_events.borrow_mut().push(ClientEvent {
+                                    kind: CLIENT_EVENT_KIND_CHARACTER_LIST_RECEIVED,
+                                    string_payload: Some(account_name.clone()),
+                                    u32_payload: Some(characters.len() as u32),
+                                });
+                            }
                         }
-                        handle.queued_events.push(ClientEvent {
-                            kind: CLIENT_EVENT_KIND_CHARACTER_LIST_RECEIVED,
-                            string_payload: Some(handle.account_name.clone()),
-                            u32_payload: Some(handle.character_list.len() as u32),
-                        });
-                        break 'outer;
+                        GameMessage::CharacterEnterWorldServerReady => {
+                            // Server is acknowledging our CharacterEnterWorldRequest;
+                            // chain the CharacterEnterWorld reply automatically so
+                            // JS doesn't have to round-trip through poll_events to
+                            // drive each step of the spawn handshake.
+                            if let LoopState::EnteringWorld { guid, account } = &state {
+                                let msg = GameMessage::CharacterEnterWorld(Box::new(
+                                    CharacterEnterWorldData {
+                                        guid: *guid,
+                                        account: account.clone(),
+                                    },
+                                ));
+                                if let Err(e) = session.send_message(&msg).await {
+                                    log::warn!("recv_loop: send CharacterEnterWorld: {e}");
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                        string_payload: Some(format!(
+                                            "CharacterEnterWorld: {e}"
+                                        )),
+                                        u32_payload: None,
+                                    });
+                                    return;
+                                }
+                            }
+                        }
+                        GameMessage::PlayerCreate(data) => {
+                            let player_guid = u32::from(data.guid);
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_PLAYER_SPAWNED,
+                                string_payload: None,
+                                u32_payload: Some(player_guid),
+                            });
+                            state = LoopState::Idle;
+                        }
+                        _ => {
+                            // Other GameMessages are dropped silently in
+                            // step 2a — chat, position updates, equipment,
+                            // etc. land in step 2b/3/4.
+                        }
                     }
                 }
-                SessionEvent::TimeSync(_) => {
-                    // ServerTime updates aren't surfaced to JS in step 1.
+            }
+            cmd = cmd_rx.next() => {
+                match cmd {
+                    None => {
+                        // Handle was dropped → JS side is gone → exit.
+                        log::info!("recv_loop: cmd channel closed, exiting");
+                        return;
+                    }
+                    Some(SessionCommand::SelectCharacter { guid }) => {
+                        let guid = holtburger_common::Guid::from(guid);
+                        state = LoopState::EnteringWorld {
+                            guid,
+                            account: account_name.clone(),
+                        };
+                        let msg = GameMessage::CharacterEnterWorldRequest(Box::new(
+                            holtburger_protocol::messages::CharacterEnterWorldRequestData {
+                                guid,
+                            },
+                        ));
+                        if let Err(e) = session.send_message(&msg).await {
+                            log::warn!("recv_loop: send CharacterEnterWorldRequest: {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "CharacterEnterWorldRequest: {e}"
+                                )),
+                                u32_payload: None,
+                            });
+                            return;
+                        }
+                    }
                 }
             }
         }
     }
-
-    Ok(handle)
 }
