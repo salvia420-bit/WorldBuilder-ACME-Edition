@@ -715,7 +715,7 @@ fn lookup_surface_color<S: holtburger_dat::ResourceSource>(
     source: &S,
     surface_id: u32,
 ) -> Option<u32> {
-    use holtburger_dat::file_type::{Palette, Surface, Texture, TextureDecodeError};
+    use holtburger_dat::file_type::{Palette, Surface, SurfaceTexture, Texture, TextureDecodeError};
     use holtburger_dat::ResourceKey;
     let bytes = source
         .get_file_by_key(ResourceKey::new("eor/portal", surface_id))
@@ -724,12 +724,25 @@ fn lookup_surface_color<S: holtburger_dat::ResourceSource>(
     if let Some(argb) = surface.solid_color() {
         return Some(argb);
     }
-    // Textured path: fetch Texture (and Palette if palettized), decode
-    // to RGBA8, mean every pixel. Gives 97% of retail surfaces a real
-    // representative colour — solid-only would resolve <3%.
-    let (tex_id, _pal_id_in_surface) = surface.textured()?;
+    // Textured path: Surface → SurfaceTexture → Texture (RenderSurface)
+    // → RGBA8 → mean every pixel. Field-naming footgun: the field is
+    // called `OrigTextureId` upstream and our `textured()` returns it
+    // as the first tuple element, but it's actually a **SurfaceTexture
+    // (0x05) ID** — not a Texture/RenderSurface (0x06) ID. Confirmed
+    // by `WorldBuilder.Shared/Lib/Texture/RenderSurfaceImporter.cs`'s
+    // `CreateSurface(gid, surfaceTextureGid)` builder, and by sampling
+    // real Holtburg surfaces (`OrigTextureId = 0x0500…`). The walk
+    // mirrors `fetch_terrain_textures` from step 3.5 (which already
+    // got this chain right): SurfaceTexture.highest_res() is the
+    // top-mip RenderSurface ID we feed to `Texture::unpack`.
+    let (surf_tex_id, _pal_id_in_surface) = surface.textured()?;
+    let surf_tex_bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id))
+        .ok()?;
+    let surf_tex = SurfaceTexture::unpack(&surf_tex_bytes).ok()?;
+    let render_surface_id = surf_tex.highest_res()?;
     let tex_bytes = source
-        .get_file_by_key(ResourceKey::new("eor/portal", tex_id))
+        .get_file_by_key(ResourceKey::new("eor/portal", render_surface_id))
         .ok()?;
     let tex = Texture::unpack(&tex_bytes).ok()?;
     // Use the texture's `default_palette_id` for the palette fetch,

@@ -24,6 +24,15 @@
 //! for solid surfaces, 24 bytes for textured (`Base1Image` /
 //! `Base1ClipMap`).
 //!
+//! **Field-naming gotcha:** `OrigTextureId` is misleading — it actually
+//! holds a **SurfaceTexture (0x05) ID**, not a Texture / RenderSurface
+//! (0x06) ID. To get pixel data, callers walk
+//! `Surface.OrigTextureId → SurfaceTexture → highest_res() → Texture`,
+//! the same chain `fetch_terrain_textures` uses for the terrain-tile
+//! pipeline. This is also the chain documented in
+//! `WorldBuilder.Shared/Lib/Texture/RenderSurfaceImporter.cs`
+//! (`CreateSurface(gid, surfaceTextureGid)`).
+//!
 //! `SurfaceType` flag bits (from `ACE.Entity/Enum/SurfaceType.cs`):
 //! `Base1Solid = 0x1`, `Base1Image = 0x2`, `Base1ClipMap = 0x4`,
 //! `Translucent = 0x10`, etc. The image/clipmap branch fires when

@@ -21,7 +21,7 @@ The step 4.5 screenshot is the current deliverable: same 3×3 grid as
 step 4 (real terrain + roads + 239 sprites), now with **per-model
 real ARGB colours** resolved from each model's Surface chain in
 Rust and applied as PIXI sprite tints. The stage-info panel shows
-the resolved/total ratio (currently 16 of 81 unique models in
+the resolved/total ratio (currently 54 of 81 unique models in
 Holtburg; the rest fall back to the legacy 2-bucket category
 palette). Compare to the static-site z=12 reference at
 [`images/DerethMapsEnhanced_zoom.png`](images/DerethMapsEnhanced_zoom.png) —
@@ -634,7 +634,7 @@ What step 4.5 ships, on top of step 4:
 
 | Surface | After step 4 | After step 4.5 |
 |---|---|---|
-| Object/building sprite tint | one of two browns by model_id top byte | per-model ARGB from Surface chain (16 of 81 Holtburg models resolve in our test bundle; rest fall back to the 2-bucket palette) |
+| Object/building sprite tint | one of two browns by model_id top byte | per-model ARGB from Surface chain (54 of 81 Holtburg models resolve in our test bundle, with 37 distinct ARGB values among them; rest fall back to the 2-bucket palette) |
 | Surface (0x08) parser | absent | `Surface::unpack` + `solid_color()` / `textured()` accessors |
 | Model→colour walk | n/a | `resolve_model_color` in Rust, exposed as `fetch_object_colours(asset_url, model_ids)` returning one ARGB per id |
 | Stage-info readout | "Sprite coverage" only | + "Real colours: N of M unique models resolved" |
@@ -652,12 +652,16 @@ The walk dispatches on `model_id >> 24`:
 
 For each surface ID, `lookup_surface_color` tries the **solid path
 first** (`Surface::color_value` ARGB if `Base1Solid`, no fetches), then
-falls back to the **textured path** — fetch the referenced Texture,
-decode via `Texture::to_rgba8` (lazily fetching a Palette only for
-`P8`/`Index16` formats), and return the **alpha-weighted mean ARGB**
-over every pixel. A retail sweep showed only 2.5% of surfaces are
-solid-coloured; the textured-mean path is doing the load-bearing
-work for ~97% of resolutions.
+falls back to the **textured path**:
+`Surface.OrigTextureId → SurfaceTexture → highest_res() → Texture →
+to_rgba8 → α-weighted mean ARGB`. Same chain `fetch_terrain_textures`
+uses for the terrain-tile pipeline (step 3.5). The
+`OrigTextureId` field is named misleadingly — it's a **SurfaceTexture
+(0x05) ID**, not a Texture / RenderSurface (0x06) ID. Confirmed by
+`WorldBuilder.Shared/Lib/Texture/RenderSurfaceImporter.cs`'s
+`CreateSurface(gid, surfaceTextureGid)` builder. A retail sweep showed
+only 2.5% of surfaces are solid-coloured; the textured-mean path is
+doing the load-bearing work for ~97% of resolutions.
 
 A minimal `read_gfx_obj_surfaces` byte-parser sits in
 `apps/holtburger-web/src/lib.rs` and reads only the
