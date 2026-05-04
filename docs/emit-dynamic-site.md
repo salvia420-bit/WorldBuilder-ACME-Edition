@@ -266,29 +266,49 @@ PixiJS, or replace Leaflet entirely. Open question §7.3.
 ### 5.2 WASM-porting holtburger — eyes-open
 
 The user picked the WASM path knowing it is harder than the server-side
-alternative. To be concrete about the cost — a non-exhaustive checklist:
+alternative. The original cost-of-the-port checklist below was speculative;
+**the empirical inventory now lives at
+[`phase-2-wasm-spike.md`](phase-2-wasm-spike.md)** and replaces it as the
+authoritative starting point. Read that first. Highlights:
 
-- [ ] `Cargo.toml`: add a `wasm` feature that disables `tokio = "full"`,
-      enables `getrandom = { version = "0.2", features = ["js"] }`, and gates
-      the `socket2` dependency.
-- [ ] `holtburger-session::Session::new`: split into `new_native(addr)` and
-      `new_with_transport(transport)`. `new_native` stays UDP-only.
-- [ ] Implement `WsTransport: Transport` for browsers — WASM-only target.
-      Probably lives in a new crate `holtburger-transport-ws` so native
-      consumers don't pull `web-sys` deps.
-- [ ] `holtburger-dat`: prove `ResourceSource` is the only path to bytes;
-      audit `File::open` references. Make `ResourceSource` async.
+- `holtburger-protocol` and `holtburger-common` already cross-compile to
+  `wasm32-unknown-unknown` clean. The AC packet codec, opcode tables, and
+  ISAAC crypto are WASM-portable as-is.
+- The two real blockers are `tokio = ["full"]` (pulls in `mio`) and
+  `zstd-sys` (pulls in a C compiler). Everything else cascades from these.
+- The `Session::new_with_transport` constructor that the WS transport will
+  plug into has landed (`crates/holtburger-session/src/session/api.rs`).
+  Backwards-compatible with all existing call sites.
+- The RC4 doc lie called out in §5.5 has been corrected.
+
+The original speculative checklist, kept here for traceability:
+
+- [x] `holtburger-session::Session::new`: split into `new(addr)` (native) and
+      `new_with_transport(transport, addr)` (any-transport). Done as
+      `new` + `new_with_transport`; backwards-compatible.
+- [x] Audit RC4 vs ISAAC (§5.5). Code was always ISAAC; the two stale doc
+      references at `external/holtburger/ARCHITECTURE.md:75` and
+      `crates/holtburger-session/ARCHITECTURE.md:19` are corrected.
+- [ ] `Cargo.toml`: workspace `tokio = { default-features = false }`, with
+      per-crate feature opt-ins. Native-only crates pick `["full"]`;
+      WASM-target crates pick `["rt", "sync", "macros", "time"]`. See
+      [phase-2-wasm-spike §4.1](phase-2-wasm-spike.md#41-tokio--full--mio--wasm32-incompatible).
+- [ ] Cfg-gate the UDP path in `holtburger-session` to
+      `cfg(not(target_arch = "wasm32"))`; cfg-gate `socket2` likewise.
+- [ ] `holtburger-dat`: replace `zstd-sys` with `ruzstd` (decompression-only
+      pure-Rust) for the wasm32 target, *or* install `clang` and cross-compile
+      the C bundled source. See [phase-2-wasm-spike §4.2](phase-2-wasm-spike.md#42-zstd-sys-needs-c-compiler-for-wasm32).
+- [ ] Make `holtburger-dat::ResourceSource` async; prove it's the only path
+      to bytes (audit `File::open` references).
+- [ ] Implement `WsTransport: Transport` for browsers in a new crate
+      `holtburger-transport-ws` so native consumers don't pull `web-sys` deps.
 - [ ] Implement `HttpResourceSource: ResourceSource` for browsers — uses
       `web-sys::fetch` with `Range:` headers.
 - [ ] Audit every `tokio::spawn` for `Send` requirements; WASM has only
-      `LocalSet`-style execution.
-- [ ] Audit RC4 vs ISAAC (§5.5).
-- [ ] Build pipeline: `wasm-pack` or `trunk`. Static bundle plus a small
-      JS shim that wires `ClientViewEvent` -> PixiJS state.
-
-Treat the first ten items as an exploratory spike before committing to the
-schedule. Several will surface non-obvious dependencies (proc-macros on the
-"right" side of compilation, etc.).
+      `LocalSet`-style execution. Surfaces only at runtime — wait for the
+      cross-compile floor before this.
+- [ ] Build pipeline: `wasm-pack` or `trunk` (open question §7.4). Static
+      bundle plus a small JS shim that wires `ClientViewEvent` → PixiJS state.
 
 ### 5.3 DAT-over-HTTP — feasible, but thoughtful
 

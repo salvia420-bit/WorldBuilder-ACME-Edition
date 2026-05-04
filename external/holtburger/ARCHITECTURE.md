@@ -72,7 +72,7 @@ Owns runtime content discovery and typed asset access over mounted HBA sources.
 
 ### 5. The Transport: [`holtburger-session`](crates/holtburger-session/ARCHITECTURE.md)
 Encapsulates pure networking logic. It handles the lowest levels of transport without knowing anything about the game world.
-- **Provides**: UDP fragment reassembly, packet sequencing, RC4 stream encryption/decryption, and socket loops.
+- **Provides**: UDP fragment reassembly, packet sequencing, ISAAC-keyed packet checksums (initialized from a `ConnectRequest` handshake), and socket loops.
 
 ### 6. The Authority: [`holtburger-world`](crates/holtburger-world/ARCHITECTURE.md)
 The authoritative in-memory world model for the client. It tracks hydrated entities, player state, spatial placement, retention/liveness rules, trade or vendor state, and world-domain helpers that other crates can query without re-deriving gameplay semantics. It also owns the canonical runtime `SpatialBody` sidecars and their sampling policy; projected samples are derived from world-owned runtime state rather than advanced in parallel elsewhere.

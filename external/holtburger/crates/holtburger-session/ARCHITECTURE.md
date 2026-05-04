@@ -16,8 +16,8 @@ Handles the multi-stage networking requirements for the AC protocol:
 - **Flow Control & Acknowledgments**: Handles the specific ACK/NAK (Acknowledgment / Negative Acknowledgment) responses exactly as the AC server expects.
 
 ### 2. Encryption
-The connection begins plaintext, securely executes an RSA handshake, and transitions to an RC4-encrypted stream.
-- Note: Cryptography integration points are managed here to decrypt payloads right off the wire before handing them to the protocol parser.
+The connection begins plaintext (`LOGIN_REQUEST`), the server replies with a `CONNECT_REQUEST` carrying per-direction ISAAC seeds, and subsequent encrypted packets use those streams as keyed checksums (one ISAAC key consumed per `ENCRYPTED_CHECKSUM` packet — see `session/auth.rs` and `session/receive.rs`).
+- Note: ISAAC integration points are managed here so the checksum can be validated right off the wire before handing the (plaintext) payload to the protocol parser.
 
 ## Internal Data Flow
 
