@@ -9,14 +9,14 @@
 > remains wasm32-incompatible (deno_core / V8) and is reclassified from
 > "port" to "exclude from WASM build" — see §8.
 >
-> §8 step 1 (build pipeline) is also done as of `3025834` — wasm-pack
-> picked over trunk; new `apps/holtburger-web` crate consumes
-> `holtburger-protocol` + `holtburger-session` and produces a
-> browser-loadable bundle that's been verified via Node-side smoke test
-> (4/4 deterministic checks green) and serves correctly under
-> `python3 -m http.server` with the right MIMEs. WS transport, HTTP
-> resource source, and the runtime `Instant` swap have not started; §8
-> is the remaining priority list.
+> §8 steps 1 (build pipeline, `3025834`) and 3 (`web_time::Instant`
+> swap, `d23f5d3`) are also done. The `holtburger-web` bundle now has
+> 5/5 smoke-test checks green, including end-to-end-verified
+> `Session::new_test()` construction at runtime in the wasm bundle —
+> the Phase 2 opener's `Session::new_with_transport` seam is now
+> actually callable on wasm32, not just compile-time-clean. WS
+> transport (§8 step 2) and HTTP resource source (§8 step 4) have not
+> started.
 >
 > **Audience:** anyone picking up Phase 2 implementation. Read §8 (what's
 > left) first; §3 (the per-crate matrix) is the as-built reference.
@@ -198,13 +198,16 @@ the surface.
   Audit when the WASM runtime is wired up.
 - **`wasm-pack` vs `trunk`** (§7.4 in the design doc). Decide when step 5
   starts.
-- **`tokio::time::Instant` / `std::time::Instant` on wasm32.** Compiles
-  fine (tokio's `time` feature is wasm32-supported), but `std::time::
-  Instant::now()` panics on `wasm32-unknown-unknown` — and `Session::
-  new_with_transport` initializes `last_recv_time` / `last_send_time`
-  with it. A runtime fix is needed when WS transport actually runs;
-  options include cfg-gating those fields to a wasm32 alternative or
-  using `web_time::Instant` (drop-in replacement).
+- ~~**`tokio::time::Instant` / `std::time::Instant` on wasm32.**~~
+  **Resolved** in `d23f5d3` (§8 step 3). Swapped
+  `std::time::Instant` → `web_time::Instant` across `holtburger-session`
+  (drop-in on native, `performance.now()`-backed shim on wasm32). The
+  one `tokio::time::Instant::from_std(deadline)` call in
+  `receive.rs:253` is cfg-split: native still uses `from_std`; wasm32
+  uses duration-based `tokio::time::sleep`. End-to-end-verified by
+  `Session::new_test()` running successfully inside the
+  `holtburger-web` bundle (`session_smoke_test_packet_sequence()`
+  returns 1 instead of panicking).
 
 ## 7. References
 
@@ -243,16 +246,17 @@ demonstrable artifact and keeps blast radius small.
    `apps/holtburger-wsbridge/ARCHITECTURE.md` is the spec; the shim is
    the reference impl. ~1–2 days.
 
-3. **Address the runtime-only `std::time::Instant` issue.**
-   `Session::new_with_transport` calls `std::time::Instant::now()` for
-   `last_recv_time` / `last_send_time`. On `wasm32-unknown-unknown` that
-   panics. Easiest fix: replace those with `web_time::Instant` (a
-   drop-in compatible API that uses `performance.now()` on wasm32 and
-   `std::time::Instant` elsewhere) and audit `holtburger-session` for
-   other `std::time::Instant::now()` call sites. Compiles fine today —
-   this is only a runtime concern and only blocks once step 2's
-   `WsTransport` is actually exercised in a browser. Cheap fix when you
-   get to it. ~½ day.
+3. ~~**Address the runtime-only `std::time::Instant` issue.**~~ —
+   **Done** in `d23f5d3`. Reordered ahead of step 2 because the smoke
+   test could exercise the fix without needing WS plumbing — making
+   `Session::new_test()` callable from wasm-bindgen is enough.
+   `holtburger-session` now uses `web_time::Instant` everywhere; the
+   one `tokio::time::sleep_until` call site in `receive.rs` is
+   cfg-split (native: `Instant::from_std(deadline)`; wasm32:
+   duration-based `sleep`). The `holtburger-web` bundle now exposes
+   `session_smoke_test_packet_sequence()`, which constructs a real
+   `Session::new_test()` and returns 1 — proves the fix works at
+   runtime, not just compile time.
 
 4. **Implement `HttpResourceSource` and decide DAT shard format.** The
    browser can't read a 4 GB monolithic `portal.dat` — content needs to
