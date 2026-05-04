@@ -113,6 +113,16 @@ check(
     `typeof ${typeof wasm.fetch_landblock_heightmaps}`
 );
 
+// Phase 3 step 3.5: fetch_terrain_textures must be present. End-to-end
+// round-trip below if the fixture has the eor/portal namespace with
+// SurfaceTexture / Texture / Palette records (i.e. dat2hba was run with
+// --profile full, since pruned excludes them).
+check(
+    "fetch_terrain_textures() is exported (Phase 3 step 3.5 real textures)",
+    typeof wasm.fetch_terrain_textures === "function",
+    `typeof ${typeof wasm.fetch_terrain_textures}`
+);
+
 (async () => {
     // §8 step 4 round-trip: serve `dats/assets.hba` over HTTP from this
     // process, then have the wasm bundle's HttpResourceSource fetch +
@@ -395,6 +405,81 @@ check(
             } else {
                 check(
                     "fetch_landblock_heightmaps round-trip succeeds",
+                    false,
+                    `threw: ${msg}`
+                );
+            }
+        }
+
+        // Phase 3 step 3.5 round-trip: fetch all 33 retail terrain
+        // textures (BarrenRock..RoadType) and verify shape + RGBA8
+        // length consistency. Requires `--profile full` (or any profile
+        // that includes SurfaceTexture / Texture / Palette records);
+        // `--profile pruned` excludes them and degrades to a SKIP.
+        try {
+            const t0 = Date.now();
+            const textures = await wasm.fetch_terrain_textures(url);
+            const elapsed = Date.now() - t0;
+
+            check(
+                `fetch_terrain_textures: returns 33 entries (Phase 3 step 3.5)`,
+                Array.isArray(textures) && textures.length === 33,
+                `len=${textures?.length}, ${elapsed} ms`
+            );
+
+            // Spot-check shape on every entry.
+            let allOk = true;
+            let firstFail = null;
+            for (let i = 0; i < textures.length; i += 1) {
+                const t = textures[i];
+                const ok =
+                    t.terrainType === i &&
+                    t.width > 0 &&
+                    t.height > 0 &&
+                    t.pixels instanceof Uint8Array &&
+                    t.pixels.length === t.width * t.height * 4;
+                if (!ok) {
+                    allOk = false;
+                    firstFail = { i, t };
+                    break;
+                }
+            }
+            check(
+                "fetch_terrain_textures: every blob is RGBA8 with width*height*4 pixels",
+                allOk,
+                allOk
+                    ? `all 33 OK; first ${textures[0].width}x${textures[0].height}`
+                    : `failed at index ${firstFail?.i}: type=${firstFail?.t?.terrainType}, ${firstFail?.t?.width}x${firstFail?.t?.height}, px=${firstFail?.t?.pixels?.length}`
+            );
+
+            // The retail terrain textures are 512×512 in the source
+            // mip-stack. Pin this so a future profile re-bake or atlas
+            // resizer doesn't silently change the contract.
+            check(
+                "fetch_terrain_textures: BarrenRock (type 0) is 512x512",
+                textures[0].terrainType === 0 &&
+                    textures[0].width === 512 &&
+                    textures[0].height === 512,
+                `${textures[0].width}x${textures[0].height} type=${textures[0].terrainType}`
+            );
+
+            for (const t of textures) t.free();
+        } catch (e) {
+            const msg = String(e?.message ?? e);
+            const missingTextures =
+                msg.includes("SurfaceTexture") ||
+                msg.includes("Texture") ||
+                msg.includes("Palette") ||
+                msg.includes("not found");
+            if (missingTextures && msg.includes("not found")) {
+                console.log(
+                    "  [SKIP] fetch_terrain_textures round-trip — fixture lacks " +
+                    "SurfaceTexture/Texture records.\n         Re-run dat2hba with " +
+                    "--profile full to include the texture pipeline."
+                );
+            } else {
+                check(
+                    "fetch_terrain_textures round-trip succeeds",
                     false,
                     `threw: ${msg}`
                 );
