@@ -20,10 +20,11 @@
 The step 4.5 screenshot is the current deliverable: same 3×3 grid as
 step 4 (real terrain + roads + 239 sprites), now with **per-model
 real ARGB colours** resolved from each model's Surface chain in
-Rust and applied as PIXI sprite tints. The stage-info panel shows
-the resolved/total ratio (currently 54 of 81 unique models in
-Holtburg; the rest fall back to the legacy 2-bucket category
-palette). Compare to the static-site z=12 reference at
+Rust and applied as PIXI sprite tints. With DXT1/3/5 decode landed,
+the stage-info panel shows **81 of 81 unique Holtburg models resolved
+(100%) with 54 distinct ARGB values** — the legacy 2-bucket category
+palette is now a strict fallback that never fires for the test
+fixture. Compare to the static-site z=12 reference at
 [`images/DerethMapsEnhanced_zoom.png`](images/DerethMapsEnhanced_zoom.png) —
 same place, same general layout. Visual gap remaining: the larger
 custom-coloured landmarks (the green pyramid / lifestone). Step 5's
@@ -474,9 +475,12 @@ What step 3.5 ships, on top of step 5 (partial):
 The parsers cover the pixel formats AC terrain actually uses:
 `CustomLscapeR8G8B8` (the common case — terrain heightmap textures),
 `R8G8B8` (BGR despite the name; AC quirk), `A8R8G8B8`, `P8`,
-`Index16`, `A8`. DXT / 565 / 4444 return a structured error so the
-caller learns which format to add when an unsupported texture
-surfaces. Cribbed from upstream ACE
+`Index16`, `A8`. **DXT1 / DXT3 / DXT5** were added in step 4.5b for
+the per-model colour walk (most retail Surface chains end at a DXT
+texture); decoder ported from upstream ACE `DxtUtil.cs` (Ms-PL,
+notice retained in `crates/holtburger-dat/src/file_type/dxt.rs`).
+`R5G6B5` / `A4R4G4B4` still return a structured error since no
+shipped path uses them. Other parsers cribbed from upstream ACE
 `Source/ACE.DatLoader/FileTypes/{Palette,SurfaceTexture,Texture}.cs`.
 
 **`fetch_terrain_textures(asset_url)` wasm export.** Returns 33
@@ -634,7 +638,7 @@ What step 4.5 ships, on top of step 4:
 
 | Surface | After step 4 | After step 4.5 |
 |---|---|---|
-| Object/building sprite tint | one of two browns by model_id top byte | per-model ARGB from Surface chain (54 of 81 Holtburg models resolve in our test bundle, with 37 distinct ARGB values among them; rest fall back to the 2-bucket palette) |
+| Object/building sprite tint | one of two browns by model_id top byte | per-model ARGB from Surface chain (81 of 81 Holtburg models resolve, with 54 distinct ARGB values among them; the 2-bucket palette is a fallback that never fires for the test fixture) |
 | Surface (0x08) parser | absent | `Surface::unpack` + `solid_color()` / `textured()` accessors |
 | Model→colour walk | n/a | `resolve_model_color` in Rust, exposed as `fetch_object_colours(asset_url, model_ids)` returning one ARGB per id |
 | Stage-info readout | "Sprite coverage" only | + "Real colours: N of M unique models resolved" |
