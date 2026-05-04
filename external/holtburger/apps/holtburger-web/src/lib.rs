@@ -27,6 +27,14 @@ use holtburger_session::Session;
 use wasm_bindgen::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
+mod global_source;
+
+#[cfg(target_arch = "wasm32")]
+pub use global_source::{
+    cached_shard_count, has_resource_source, init_resource_source,
+};
+
+#[cfg(target_arch = "wasm32")]
 use std::net::{IpAddr, SocketAddr};
 
 #[wasm_bindgen(start)]
