@@ -324,7 +324,7 @@ static-site visual fidelity, in order of impact:
 | Heightmap render | topographic relief, recognisable shapes | ✅ landed (step 1+2) |
 | Texture atlas + surface table | recognisable AC terrain — biggest delta | ✅ landed (step 3, placeholder atlas) |
 | Sprite atlas consumption | buildings/trees/decorations in the right spots | open (step 4) |
-| Road overlays + atmospheric polish | matches the README static screenshot | open (step 5) |
+| Road overlays + atmospheric polish | matches the README static screenshot | ✅ landed partial (step 5: roads only; atmospherics still open) |
 
 Step 3's texture atlas ships as 32 placeholder solid-colour swatches
 per the handoff brief's scope-reducer guidance — the AC Texture

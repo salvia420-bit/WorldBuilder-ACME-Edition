@@ -1,32 +1,36 @@
 # Phase 3 — PixiJS renderer (as-built)
 
-> **Status:** Steps 1, 2, and 3 landed (2026-05-04). The browser bundle
-> fetches a 3×3 neighbourhood of real Asheron's Call landblocks around
-> Holtburg in one batch call, lays them out at correct world offsets,
-> and PixiJS draws them on a `<canvas>` as **AC terrain** (not a height
-> ramp): grass, water, sand, dirt sampled per-cell from a 32-entry
-> placeholder atlas via a custom GLSL ES 3.00 Mesh shader. Mouse-wheel
-> zooms around the cursor; click-and-drag pans. See
-> [`phase-3-step-1-handoff.md`](phase-3-step-1-handoff.md),
+> **Status:** Steps 1, 2, 3 landed and step 5 partial (road overlays)
+> landed (2026-05-04). The browser bundle fetches a 3×3 neighbourhood
+> of real Asheron's Call landblocks around Holtburg in one batch
+> call, lays them out at correct world offsets, and PixiJS draws
+> them on a `<canvas>` as **AC terrain with the stone-road network
+> overlaid**: grass, water, sand, dirt sampled per-cell from a 32-
+> entry placeholder atlas via a custom GLSL ES 3.00 Mesh shader,
+> plus a stone-grey road tile wherever `road_type ≥ 1` in the cell's
+> SW corner. Mouse-wheel zooms around the cursor; click-and-drag
+> pans. See [`phase-3-step-1-handoff.md`](phase-3-step-1-handoff.md),
 > [`phase-3-step-2-handoff.md`](phase-3-step-2-handoff.md), and
 > [`phase-3-step-3-handoff.md`](phase-3-step-3-handoff.md) for the
 > framing briefs; this file is the as-built reference.
 
-![Holtburg + 8 neighbours rendered with the AC terrain atlas](images/phase-3-step-3-textured.png)
+![Holtburg + 8 neighbours with terrain + road network](images/phase-3-step-5-roads.png)
 
-The step 3 screenshot is the current deliverable artefact: the same
-contiguous 3×3 grid as step 2, but now reading as recognisable AC
-terrain — blue water in the north, green grasslands at the Holtburg
-town centre, scattered patchy and dirt textures across the southern
-cells. Compare to the static-site z=12 PNG at
-[`images/DerethMapsEnhanced_zoom.png`](images/DerethMapsEnhanced_zoom.png) —
-same place, same palette signature, even though our render lacks
-the pre-baked sprite-atlas objects (those land in step 4). The step 2
-height-ramp deliverable is archived at
-[`images/phase-3-step-2-multi-landblock.png`](images/phase-3-step-2-multi-landblock.png),
-and the step 1 single-landblock at
-[`images/phase-3-step-1-landblock.png`](images/phase-3-step-1-landblock.png),
-as the cleanest references for the geometry-only renders in isolation.
+The step 5 screenshot is the current deliverable: same 3×3 grid as
+step 3, with Holtburg's stone-road network now visibly traced
+through the centre — east-west spine with branches going south,
+matching the static-site z=12 reference at
+[`images/DerethMapsEnhanced_zoom.png`](images/DerethMapsEnhanced_zoom.png).
+The road overlay is one shader pass on top of the existing terrain
+atlas; no per-tile draw-call cost. Step 5's atmospheric polish (fog,
+day/night) is still open, and step 4's object/sprite atlas
+(buildings, trees, NPCs) is the next major visual delta. The step 3
+hard-edges-only screenshot is archived at
+[`images/phase-3-step-3-textured.png`](images/phase-3-step-3-textured.png);
+step 2 height-ramp at
+[`images/phase-3-step-2-multi-landblock.png`](images/phase-3-step-2-multi-landblock.png);
+step 1 single-landblock at
+[`images/phase-3-step-1-landblock.png`](images/phase-3-step-1-landblock.png).
 
 ---
 
@@ -387,14 +391,61 @@ step 3.5 doesn't relive them:**
 
 ---
 
+## Phase 3 step 5 (partial) landed (2026-05-04)
+
+Step 5 is "road overlays + atmospheric polish" in the design doc's
+quality ladder. **Roads landed**; atmospherics (fog, day/night) are
+still open. The road overlay surfaces AC's stone-path network on
+top of the existing terrain atlas — Holtburg's main east-west
+spine + branches now read as light-grey paths through the green
+grasslands, matching the static-site z=12 reference.
+
+What step 5 (partial) ships, on top of step 3:
+
+| Surface | After step 3 | After step 5 (partial) |
+|---|---|---|
+| Wasm boundary | `terrainCodes: Uint8Array(81)` | + `roadCodes: Uint8Array(81)` |
+| Mesh attributes | `aPosition (vec2) + aTerrainCode (float)` | + `aRoadCode (float)` |
+| Mesh shader | one `flat` varying (`vTerrainCode`) | two `flat` varyings (`vTerrainCode`, `vRoadCode`); `uRoadColor` uniform; per-fragment mix |
+| Smoke checks | 21 | 24 (+3 road-code shape/range/density) |
+| Native lib tests | 1090 | 1090 (unchanged — JS + Rust mesh-export only) |
+
+**Soft-blend was attempted then deferred.** Step 5's first iteration
+tried smooth-interpolated terrain code + LINEAR atlas filtering
+(textbook "soft-blend"). Result: unnatural rainbow bands at terrain
+transitions, because the placeholder palette's atlas-column ordering
+(AC enum order) doesn't match perceptual adjacency — a water-grass
+interface visually traverses Marsh → Mud → Obsidian → Dirt. Reverted
+to hard edges (`flat` from SW corner) for both terrain and road.
+With real AC textures (step 3.5) each tile has internal detail and
+atlas-adjacent codes blend naturally; the soft-blend code path
+becomes correct and is mechanical to flip back on (single-line
+shader change + texture filter swap, both documented inline in
+`buildTerrainAtlas` and `TERRAIN_VERTEX_GLSL`).
+
+### Files touched in step 5 (partial)
+
+| File | What |
+|---|---|
+| [`apps/holtburger-web/src/lib.rs`](../external/holtburger/apps/holtburger-web/src/lib.rs) | `LandblockMesh.road_codes: Vec<u8>` field + `roadCodes` getter; `build_mesh` populates from `cell.road_type(x, y)` |
+| [`apps/holtburger-web/index.html`](../external/holtburger/apps/holtburger-web/index.html) | `aRoadCode` mesh attribute, `flat in int vRoadCode` varying, `uRoadColor` uniform (#a8a4a0 stone-grey), per-fragment `mix(terrain, road, mask*0.85)` |
+| [`apps/holtburger-web/smoke_test.cjs`](../external/holtburger/apps/holtburger-web/smoke_test.cjs) | 3 new road checks: `roadCodes` shape, range `[0, 3]`, ≥10 road verts at Holtburg centre (empirically 17) |
+| [`docs/phase-3-renderer.md`](phase-3-renderer.md) | This file |
+| [`docs/phase-2-wasm-spike.md`](phase-2-wasm-spike.md) | Status now reads "steps 1, 2, 3 + step 5 (roads) landed" |
+| [`docs/emit-dynamic-site.md`](emit-dynamic-site.md) | §4.5 quality-ladder row 4 (road overlays) flips to `✅ landed (partial — roads only)` |
+| [`docs/images/phase-3-step-5-roads.png`](images/phase-3-step-5-roads.png) | Browser screenshot — 3×3 grid with terrain atlas + road overlay |
+
+---
+
 ## What's next (Phase 3 step 4 candidates)
 
 These are independent — pick by user priority. Step 3's shader
 pipeline is the load-bearing foundation that step 4-or-later builds on.
 
-### a) Real texture parser (step 3.5)
+### a) Real texture parser (step 3.5) — biggest visual delta
 
-Replace the placeholder palette with the actual AC terrain textures:
+Replace the placeholder palette with the actual AC terrain textures.
+This unlocks the soft-blend path that step 5 had to revert:
 - New `crates/holtburger-dat/src/file_type/texture.rs` parser for the
   Texture (`0x06`) record format — palette-based with header (width,
   height, pixel-format, palette-id pointing to a Palette `0x04` record).
@@ -403,6 +454,8 @@ Replace the placeholder palette with the actual AC terrain textures:
 - JS-side packs the 32-or-fewer real tiles into a 1024×1024-or-larger
   atlas. The shader's `(code + 0.5) / 32` lookup generalises to per-
   region `(u, v, w, h)` math passed as `uniform vec4 uAtlasRegions[32]`.
+- Real road tile from `eor/portal:` replaces the placeholder
+  `uRoadColor` uniform.
 
 ### b) Sprite-atlas reuse for object art (step 4 in the design doc)
 
@@ -412,16 +465,16 @@ by reusing the static-site sprite atlas at
 §4.5 quality-ladder progression. Needs:
 - A wasm export reading `LandblockInfo` records (`XXYYFFFE`) for
   each landblock and emitting placement records (object ID, x, y,
-  rotation).
+  rotation). The parser already exists in `holtburger-dat` (see
+  `landblock.rs` `LandblockInfo` struct); just needs an export.
 - JS-side sprite pool keyed by object ID, looked up against the
   static-site atlas.
 
-### c) Road overlays + atmospherics (step 5 polish)
+### c) Atmospheric polish (step 5 follow-on)
 
-Use the `road_type` bits the step 3 helpers expose to draw a second
-texture layer for road tiles. The static-site approach is a separate
-pass; alternatively a dual-texture-per-fragment shader. Atmospherics
-(fog of war, day/night gradient) sit alongside.
+Fog of war (visible vs unseen distinction), day/night gradient,
+post-process bloom on water tiles. The road overlay landed already;
+this is the rest of step 5.
 
 ### d) Multi-landblock streaming
 
@@ -429,13 +482,13 @@ Extend beyond the 3×3 hardcode to N×N visible landblocks driven by
 the camera. Needs a landblock-id → `LandblockMesh` cache, camera-
 driven prefetch, eviction, and LOD/culling.
 
-### e) Soft-blend cell boundaries
+### e) Soft-blend cell boundaries (revisit after step 3.5)
 
-Replace `flat` interpolation with a triangle-barycentric blend so
-adjacent cells with different terrain types fade smoothly instead of
-showing hard edges. About 50 lines of GLSL plus possibly per-vertex
-duplication; ship hard-edges first (this commit) and decide if
-quality demands the extra work.
+Step 5 tried this and reverted; the placeholder palette doesn't
+support good blending. Once real textures land in step 3.5, flip
+`vTerrainCode` from `flat in int` back to `out float` + smooth, and
+flip the atlas filter from NEAREST to LINEAR. Mechanical change —
+both lines are commented inline.
 
 ### Tangentially: Live ACE session (Phase 4)
 
