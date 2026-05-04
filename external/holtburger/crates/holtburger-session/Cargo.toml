@@ -8,13 +8,20 @@ license.workspace = true
 [dependencies]
 holtburger-common = { workspace = true }
 holtburger-protocol = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "macros", "time"] }
 log = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 byteorder = { workspace = true }
+
+# Native-only: UDP socket support for the production `Session::new` path.
+# Wasm32 builds use `Session::new_with_transport` with a non-UDP transport
+# (e.g. `WsTransport` in Phase 2 of emit-dynamic-site), so neither tokio's
+# `net` feature nor `socket2` is reachable there.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["net"] }
 socket2 = { workspace = true }
 
 [dev-dependencies]

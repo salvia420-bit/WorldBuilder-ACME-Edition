@@ -13,7 +13,7 @@ holtburger-dat.workspace = true
 holtburger-protocol.workspace = true
 holtburger-session.workspace = true
 holtburger-world.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "macros", "time", "net"] }
 byteorder.workspace = true
 anyhow.workspace = true
 rand.workspace = true

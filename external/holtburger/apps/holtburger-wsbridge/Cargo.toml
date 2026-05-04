@@ -16,7 +16,7 @@ name = "holtburger-wsshim"
 path = "src/bin/wsshim.rs"
 
 [dependencies]
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
 clap = { workspace = true }
@@ -25,4 +25,4 @@ log = { workspace = true }
 env_logger = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
