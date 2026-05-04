@@ -9,14 +9,19 @@
 //! executes.
 //!
 //! Constructing a `Session` is exercised here as of the
-//! `web_time::Instant` swap (spike doc §8 step 3). The remaining
-//! deliberate omission is a real transport — wasm32 will plug in
-//! `WsTransport` (§8 step 2) over the `Session::new_with_transport`
-//! seam.
+//! `web_time::Instant` swap (spike doc §8 step 3). The
+//! `try_ws_handshake_smoke` export added with §8 step 2 wires
+//! `holtburger-transport-ws::WsTransport` into
+//! `Session::new_with_transport` so the dependency graph is exercised
+//! at build time; a real round-trip against a live `holtburger-wsbridge`
+//! is the next browser-side validation.
 
 use holtburger_protocol::crypto::Hash32;
 use holtburger_session::Session;
 use wasm_bindgen::prelude::*;
+
+#[cfg(target_arch = "wasm32")]
+use std::net::{IpAddr, SocketAddr};
 
 #[wasm_bindgen(start)]
 pub fn start() {
@@ -51,4 +56,31 @@ pub fn hash32(data: &[u8]) -> u32 {
 #[wasm_bindgen]
 pub fn session_smoke_test_packet_sequence() -> u32 {
     Session::new_test().packet_sequence
+}
+
+/// Open a `WsTransport` against `bridge_url`, plug it into a fresh
+/// `Session::new_with_transport`, and return the session's initial
+/// `packet_sequence` (always 0). On the success path this proves the
+/// §8-step-2 wiring works end-to-end; on any failure path the JS
+/// caller gets the error string back via the rejected Promise.
+///
+/// Used by browser-side validation against a live `holtburger-wsbridge`.
+/// `server_ip` should be the IP literal that ACE answers on (e.g.
+/// `"127.0.0.1"`), so the resulting session's source-address allowlist
+/// matches what the bridge will tag inbound frames with.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn try_ws_handshake_smoke(
+    bridge_url: String,
+    server_ip: String,
+    server_port: u16,
+) -> Result<u32, JsValue> {
+    let ip: IpAddr = server_ip
+        .parse()
+        .map_err(|e| JsValue::from_str(&format!("server_ip: {e}")))?;
+    let transport = holtburger_transport_ws::WsTransport::connect(&bridge_url, ip)
+        .await
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let session = Session::new_with_transport(Box::new(transport), SocketAddr::new(ip, server_port));
+    Ok(session.packet_sequence)
 }

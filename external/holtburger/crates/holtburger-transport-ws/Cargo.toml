@@ -1,0 +1,37 @@
+[package]
+name = "holtburger-transport-ws"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WebSocket Transport for holtburger-session — wasm32-only. Plugs into Session::new_with_transport so a browser-hosted client can talk to the holtburger-wsbridge over WS instead of UDP. Empty crate on native targets."
+
+# Wasm32-only crate. The lib.rs body is gated to `target_arch = "wasm32"`
+# so `cargo check` / `cargo test` on native still walk the workspace
+# without dragging in `web-sys` or trying to satisfy unimplementable
+# Send + Sync bounds; the browser-only deps are likewise target-gated
+# below.
+
+[dependencies]
+holtburger-session = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+futures = { workspace = true }
+log = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
+version = "0.3"
+features = [
+    "BinaryType",
+    "CloseEvent",
+    "ErrorEvent",
+    "Event",
+    "MessageEvent",
+    "WebSocket",
+]

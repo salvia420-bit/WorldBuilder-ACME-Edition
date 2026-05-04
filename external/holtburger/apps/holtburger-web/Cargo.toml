@@ -18,8 +18,15 @@ holtburger-protocol = { workspace = true }
 holtburger-session = { workspace = true }
 wasm-bindgen = "0.2"
 
-# Wasm32-only: surface Rust panics in the browser console instead of the
-# default `unreachable` trap. Drop-in standard for wasm-bindgen smoke
-# tests; zero cost on native (the dep is target-gated).
+# Wasm32-only deps:
+# - `console_error_panic_hook`: surfaces Rust panics in the browser
+#   console instead of the default `unreachable` trap.
+# - `holtburger-transport-ws`: the §8-step-2 WS transport. Its body is
+#   itself wasm32-gated, so the dep is too — keeping it out of native
+#   graphs avoids dragging `web-sys` along.
+# - `wasm-bindgen-futures`: lets us return a JS Promise from an `async
+#   fn` `wasm_bindgen` export so the smoke test can `await` it.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
+holtburger-transport-ws = { workspace = true }
+wasm-bindgen-futures = "0.4"

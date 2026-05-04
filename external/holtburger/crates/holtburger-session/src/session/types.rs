@@ -20,8 +20,25 @@ pub(crate) const MAX_RETRANSMIT_SEQUENCE_WINDOW: u32 = 256;
 pub(crate) const REQUEST_RETRANSMIT_INTERVAL: Duration = Duration::from_secs(1);
 pub(crate) const DEFAULT_LOGIN_PROTOCOL_VERSION: &str = "1802";
 
+// `Transport` is cfg-split between native (Send + Sync, async-trait Send
+// futures) and wasm32 (no thread bounds, async-trait `?Send` futures).
+// The browser is single-threaded and `wasm-bindgen-futures` returns
+// `!Send` futures from JS-interop calls (`web_sys::WebSocket` callbacks,
+// Closure-bridged event handlers), so requiring Send on the wasm path
+// would make `WsTransport` (Phase 2 of emit-dynamic-site) unimplementable.
+// Native sessions retain the Send + Sync bound — nothing in the codebase
+// spawns a Session across threads today, but keeping the contract avoids
+// quietly weakening it for native callers.
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 pub trait Transport: Send + Sync {
+    async fn send_to(&self, buf: &[u8], addr: SocketAddr) -> Result<usize>;
+    async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)>;
+}
+
+#[cfg(target_arch = "wasm32")]
+#[async_trait(?Send)]
+pub trait Transport {
     async fn send_to(&self, buf: &[u8], addr: SocketAddr) -> Result<usize>;
     async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)>;
 }
@@ -43,7 +60,20 @@ impl Transport for UdpSocket {
 
 pub struct MockTransport;
 
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
+impl Transport for MockTransport {
+    async fn send_to(&self, _buf: &[u8], _addr: SocketAddr) -> Result<usize> {
+        Ok(0)
+    }
+
+    async fn recv_from(&self, _buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
+        Err(anyhow!("Mock transport"))
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[async_trait(?Send)]
 impl Transport for MockTransport {
     async fn send_to(&self, _buf: &[u8], _addr: SocketAddr) -> Result<usize> {
         Ok(0)

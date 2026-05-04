@@ -69,6 +69,17 @@ check(
     `got ${seq}`
 );
 
+// §8 step 2 wiring: the WsTransport-backed handshake export must be
+// present in the bundle. We don't invoke it here — calling it would
+// require a live bridge plus a `WebSocket` global (Node ≥ 21), which
+// is out of scope for this deterministic smoke test. Browser-side
+// validation against `holtburger-wsbridge` is the next step.
+check(
+    "try_ws_handshake_smoke() is exported (WsTransport wired into bundle)",
+    typeof wasm.try_ws_handshake_smoke === "function",
+    `typeof ${typeof wasm.try_ws_handshake_smoke}`
+);
+
 console.log("=========================");
 if (failed === 0) {
     console.log("PASS: all smoke checks green.");
