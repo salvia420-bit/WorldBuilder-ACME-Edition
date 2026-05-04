@@ -211,6 +211,17 @@ check(
     `canCreateCharacter getter=${typeof canCreateDescriptor?.get}`
 );
 
+// Phase 4 step 2a.6: SessionHandle.sendChat(message) dispatches a
+// GameAction::Talk over the session. Used by the JS-side Teleport
+// button to send `@telepoi Holtburg` after kind=7 EnteredWorld.
+// Live coverage runs through the Playwright capture against a
+// running ACE; here we just verify the export.
+check(
+    "SessionHandle.sendChat() exposed (Phase 4 step 2a.6 chat / admin commands)",
+    typeof sessionHandleProto?.sendChat === "function",
+    `sendChat=${typeof sessionHandleProto?.sendChat}`
+);
+
 (async () => {
     // §8 step 4 round-trip: serve `dats/assets.hba` over HTTP from this
     // process, then have the wasm bundle's HttpResourceSource fetch +
