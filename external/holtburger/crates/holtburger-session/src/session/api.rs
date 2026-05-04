@@ -1,10 +1,18 @@
 use super::types::{MockTransport, Session, Transport};
 use anyhow::Result;
-use socket2::SockRef;
 use std::collections::{BTreeMap, HashMap};
 
+#[cfg(not(target_arch = "wasm32"))]
+use socket2::SockRef;
+
+#[cfg(not(target_arch = "wasm32"))]
 const UDP_RECV_BUFFER_SIZE_BYTES: usize = 2 * 1024 * 1024;
 
+// The UDP-backed `Session::new` is native-only. Wasm32 callers construct a
+// session via `Session::new_with_transport` with a non-UDP transport
+// (Phase 2 of emit-dynamic-site uses `WsTransport`). Splitting it into its
+// own impl block lets the rest of the constructors compile unconditionally.
+#[cfg(not(target_arch = "wasm32"))]
 impl Session {
     /// Build a Session that owns a fresh UDP socket bound to `0.0.0.0:0`.
     /// This is the production path for the native `holtburger-cli` and any
@@ -20,7 +28,9 @@ impl Session {
         }
         Ok(Self::new_with_transport(Box::new(socket), server_addr))
     }
+}
 
+impl Session {
     /// Build a Session over a caller-provided transport. Initial state is
     /// identical to [`Self::new`]; only the transport differs.
     ///

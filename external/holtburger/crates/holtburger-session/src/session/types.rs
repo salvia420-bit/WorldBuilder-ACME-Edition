@@ -6,6 +6,8 @@ use holtburger_protocol::messages::*;
 use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
+
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::net::UdpSocket;
 
 pub(crate) const MAX_CACHED_PACKETS: usize = 512;
@@ -20,6 +22,10 @@ pub trait Transport: Send + Sync {
     async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)>;
 }
 
+// UDP-backed Transport is native-only — wasm32 builds plug in their own
+// (e.g. `WsTransport` in Phase 2 of emit-dynamic-site) via
+// `Session::new_with_transport`.
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 impl Transport for UdpSocket {
     async fn send_to(&self, buf: &[u8], addr: SocketAddr) -> Result<usize> {
