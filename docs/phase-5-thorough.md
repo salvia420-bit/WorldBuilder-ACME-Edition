@@ -12,14 +12,17 @@
 | 5.0 obj 2 — `holtburger-manifest` crate | ✅ landed | `9521109` |
 | 5.0 obj 3 — `dat-shard` tool | ✅ landed (minimum-viable boot policy) | `0d81554` |
 | 5.0 obj 4 — `ManifestResourceSource` | ✅ landed | `f760981` |
-| 5.0 obj 5 — Thread-local + `init_resource_source` | ✅ infrastructure landed; per-export refactor deferred to 5.0b | `5dc6551` |
-| 5.0 obj 6 — `index.html` manifest-mode wiring | ✅ opt-in (legacy ASSET_URL preserved) | `4f4c806` |
+| 5.0 obj 5 — Thread-local + `init_resource_source` | ✅ infrastructure | `5dc6551` |
+| 5.0 obj 6 — `index.html` manifest-mode wiring | ✅ opt-in initial; manifest-only after 5.0b | `4f4c806` |
 | 5.0 obj 7 — Service worker shard cache | ✅ landed | `78c6924` |
-| 5.0 obj 8 — `dat2hba --profile boot` | ✅ landed (minimum-viable; transitive walk deferred to 5.1) | `2a23a74` |
-| 5.0 obj 9 — Smoke 48 → 55 | ✅ landed | `688550d` |
-| 5.0 obj 10 — Native + wasm gate green | ✅ verified (1116/0 native, 8/8 wasm32, 55/55 smoke) | (verification pass — no commit) |
+| 5.0 obj 8 — `dat2hba --profile boot` | ✅ landed (minimum-viable + transitive walk in 5.1) | `2a23a74` |
+| 5.0 obj 9 — Smoke 48 → 55 | ✅ landed (→ 56 after 5.0b) | `688550d` |
+| 5.0 obj 10 — Native + wasm gate green | ✅ verified | (verification pass — no commit) |
 | 5.0 obj 11 — Live-ACE manual validation | ⚠️ pending — needs the 600 kbps phone over Tailscale | (user-driven) |
-| 5.0 obj 12 — Documentation | ✅ this file | (current commit) |
+| 5.0 obj 12 — Documentation | ✅ this file | `4c9d9fa` |
+| **5.0b — per-export refactor** | ✅ landed (drops `asset_url` from every fetch_*; smoke fixture rewrite; manifest mode is now the only path) | `8afb423` |
+| **5.1a — `holtburger-dat::walk` extraction** | ✅ landed (`collect_model_dependencies` + `read_gfx_obj_surfaces` public) | `7224359` |
+| **5.1b — Transitive boot pack walk** | ✅ landed (635 covers / 1.86 MB on real `dats/assets.hba` from Holtburg) | `5fb0919` |
 
 ## What landed
 
@@ -196,36 +199,6 @@ fixture.
 
 ## What didn't land (deferred)
 
-### 5.0b — per-export refactor
-
-The brief's obj 5 also calls for refactoring every wasm-bindgen
-`fetch_*` export to drop its `asset_url` parameter and route
-through the global source + `prefetch()`. That refactor was
-deferred for one reason: the existing smoke test's 605 MB
-`assets.hba` fixture is what every fetch_* round-trip is
-calibrated against. Dropping `asset_url` from each export forces
-the smoke fixture to a manifest+shards tree before the per-
-export rewrite can be verified. The per-export rewrite + smoke
-recalibration is properly one commit; it lands as Phase 5.0b.
-
-Until then: `fetch_*` keep working in the legacy HBA mode
-(`HttpResourceSource::connect(asset_url)`), and the global
-source is initialized but unused.
-
-### 5.1 — transitive boot pack
-
-The brief's obj 8 calls for the boot pack to include every
-record reachable from the boot landblock's object placements
-(GfxObj/SetupModel → Surface → SurfaceTexture → Texture →
-Palette transitive walk). The walk helpers live as private
-functions in `apps/holtburger-web/src/lib.rs`; factoring them
-into shared `holtburger-dat` utilities (where both `dat-shard`
-and `dat2hba --profile boot` can use them) is the substantive
-work. Without it, the current boot pack is "essentials + spawn
-cells only" — texture/model records fetch as shards on demand,
-which is correct but trades first-paint latency for boot-pack
-size.
-
 ### Phase 6 — CDN deployment
 
 The brief explicitly leaves CDN choice (CloudFront vs.
@@ -238,10 +211,12 @@ client code; ops chooses the hosting.
 Deferred until someone runs `dat-shard` against the canonical
 retail DATs to bake `dist/`, opens `index.html` over Tailscale
 on a 600 kbps phone, and screenshots the DevTools Network tab
-proving the shard fetches are <100 KB each. The per-export
-refactor (5.0b) is a soft prerequisite — without it the page
-still pulls the full HBA bundle on first paint, just with the
-manifest sitting unused alongside.
+proving the shard fetches are <100 KB each. With 5.0b + 5.1b
+landed, the bandwidth cliff is fully closed at the code level:
+first paint fetches `manifest.json` (~few KB) + `boot.hba`
+(~1.86 MB on Holtburg-baked dist) plus protocol round-trip;
+panning to non-boot landblocks adds shard fetches at 5-100 KB
+per record.
 
 ## Files this work touches
 
