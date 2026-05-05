@@ -255,73 +255,131 @@ check(
     `sendChat=${typeof sessionHandleProto?.sendChat}`
 );
 
+
 (async () => {
-    // §8 step 4 round-trip: serve `dats/assets.hba` over HTTP from this
-    // process, then have the wasm bundle's HttpResourceSource fetch +
-    // parse it and return the byte length of one known entry. The
-    // fixture is git-ignored (retail-derived asset bytes) so we degrade
-    // gracefully if it's absent — the symbol-presence check above is
-    // the floor.
+    // Phase 5.0b — pre-bake a manifest+shards+boot tree from the
+    // git-ignored `dats/assets.hba` fixture, serve it over a local
+    // http.Server, and call wasm.init_resource_source() once.
+    // Every fetch_* round-trip below reads from the manifest source
+    // (no asset_url parameter — the fetch_* signatures changed in
+    // 5.0b's refactor).
+    //
+    // If `dats/assets.hba` is missing or the dat-shard release
+    // binary hasn't been built, every round-trip degrades to a SKIP
+    // and the symbol-presence checks above remain the floor.
+
+    const cp = require("node:child_process");
+    const os = require("node:os");
     const fixturePath = path.resolve(__dirname, "../..", "dats", "assets.hba");
-    if (!fs.existsSync(fixturePath)) {
+    const datShardBin = path.resolve(
+        __dirname, "..", "..", "target", "release", "dat-shard"
+    );
+
+    const haveFixture = fs.existsSync(fixturePath);
+    const haveBin = fs.existsSync(datShardBin);
+
+    let distDir = null;
+    let distServer = null;
+    let manifestUrl = null;
+
+    if (!haveFixture) {
         console.log(
-            "  [SKIP] HttpResourceSource round-trip — dats/assets.hba missing.\n" +
-            "         Generate it with `cargo run -p holtburger-tools --bin dat2hba` " +
-            "(see dats/README.md)."
+            "  [SKIP] manifest fixture setup — dats/assets.hba missing.\n" +
+            "         Generate via `cargo run -p holtburger-tools --bin dat2hba` (see dats/README.md)."
+        );
+    } else if (!haveBin) {
+        console.log(
+            "  [SKIP] manifest fixture setup — target/release/dat-shard missing.\n" +
+            "         Build via `cargo build -p holtburger-tools --bin dat-shard --release`."
         );
     } else if (typeof fetch !== "function") {
-        console.log(
-            "  [SKIP] HttpResourceSource round-trip — Node ≥18 fetch() not " +
-            "available."
-        );
+        console.log("  [SKIP] manifest fixture setup — Node ≥18 fetch() not available.");
     } else {
-        const fixtureBytes = fs.readFileSync(fixturePath);
-        const server = http.createServer((req, res) => {
-            // Single-purpose server: any path returns the fixture.
-            res.writeHead(200, {
-                "content-type": "application/octet-stream",
-                "content-length": fixtureBytes.length,
+        distDir = fs.mkdtempSync(path.join(os.tmpdir(), "holtburger-smoke-dist-"));
+        cp.execFileSync(
+            datShardBin,
+            ["--input", fixturePath, "--output", distDir],
+            { stdio: "ignore" }
+        );
+        distServer = http.createServer((req, res) => {
+            const rel = decodeURIComponent(req.url.replace(/^\/+/, ""));
+            const filePath = path.join(distDir, rel);
+            if (!filePath.startsWith(distDir)) {
+                res.writeHead(403);
+                res.end();
+                return;
+            }
+            fs.readFile(filePath, (err, data) => {
+                if (err) {
+                    res.writeHead(404);
+                    res.end();
+                    return;
+                }
+                res.writeHead(200, {
+                    "content-type": "application/octet-stream",
+                    "content-length": data.length,
+                });
+                res.end(data);
             });
-            res.end(fixtureBytes);
         });
-        await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-        const port = server.address().port;
-        const url = `http://127.0.0.1:${port}/assets.hba`;
+        await new Promise((resolve) => distServer.listen(0, "127.0.0.1", resolve));
+        const distPort = distServer.address().port;
+        manifestUrl = `http://127.0.0.1:${distPort}/manifest.json`;
+
         try {
-            // Pinned by `dat2hba --profile micro` against the canonical
-            // ac_base_dats portal.dat — see the corresponding entry in
-            // `dat-tool list dats/assets.hba`.
-            const expectedNamespace = "eor/portal";
-            const expectedFileId = 0x0E000004;
-            const expectedSize = 5876;
+            await wasm.init_resource_source(manifestUrl);
+            check(
+                "ManifestResourceSource.connect() resolves against pre-baked dist/",
+                wasm.has_resource_source() === true,
+                `manifestUrl=${manifestUrl}, has_resource_source()=${wasm.has_resource_source()}`
+            );
+            check(
+                "ManifestResourceSource starts with empty shard cache (boot serves directly)",
+                wasm.cached_shard_count() === 0,
+                `cached_shard_count()=${wasm.cached_shard_count()}`
+            );
+        } catch (e) {
+            check(
+                "ManifestResourceSource.connect() resolves against pre-baked dist/",
+                false,
+                `init_resource_source threw: ${e?.message ?? e}`
+            );
+        }
+    }
+
+    // The fetch_* round-trips below all require the manifest source
+    // to be live. Skip the whole block if init failed / fixture
+    // missing.
+    if (manifestUrl && wasm.has_resource_source()) {
+        // Phase 2 §8 step 4 round-trip (manifest mode): pull a known
+        // record by (namespace, file_id). 0xA9B4FFFF is the Holtburg
+        // CellLandblock — present in the boot pack since it's in the
+        // 9-cell spawn neighborhood (Phase 5.0 obj 8 boot policy).
+        try {
+            const expectedNamespace = "eor/cell";
+            const expectedFileId = 0xA9B4FFFF;
             const got = await wasm.try_http_resource_source_smoke(
-                url,
                 expectedNamespace,
                 expectedFileId
             );
             check(
-                `HttpResourceSource fetches & parses assets.hba; ${expectedNamespace}:0x${expectedFileId.toString(16).padStart(8, "0")} length is ${expectedSize}`,
-                got === expectedSize,
-                `got ${got}, expected ${expectedSize}`
+                `try_resource_source_smoke fetches via manifest source; ${expectedNamespace}:0x${expectedFileId.toString(16).toUpperCase().padStart(8, "0")} length>0`,
+                got > 0,
+                `got ${got} bytes`
             );
         } catch (e) {
             check(
-                "HttpResourceSource round-trip succeeds",
+                "try_resource_source_smoke round-trip succeeds",
                 false,
                 `threw: ${e?.message ?? e}`
             );
         }
 
         // Phase 3 step 1 round-trip: fetch the Holtburg-town-centre
-        // CellLandblock (`eor/cell:0xA9B4FFFF`) and verify the mesh
-        // shape. Requires `--profile pruned` (or fuller); `--profile
-        // micro` excludes `eor/cell` and so this round-trip degrades to
-        // a SKIP without failing the run. Visual rendering is
-        // browser-only — Node has no canvas — so we check geometry
-        // invariants here.
+        // CellLandblock. Boot-pack-served (no shard fetch needed).
         try {
             const cellId = 0xa9b4ffff;
-            const mesh = await wasm.fetch_landblock_heightmap(url, cellId);
+            const mesh = await wasm.fetch_landblock_heightmap(cellId);
 
             const positionsOk =
                 mesh.positions instanceof Float32Array &&
@@ -341,10 +399,6 @@ check(
                 `len=${mesh.indices?.length}, ctor=${mesh.indices?.constructor?.name}`
             );
 
-            // Vertex (0,0) is at metric origin; vertex (8,8) is at
-            // (192, 192). These are the corners of the 9×9 grid that
-            // covers the full 192 m × 192 m landblock (vertex spacing
-            // = METERS_PER_LANDBLOCK / 8 = 24 m).
             const cornerOk =
                 mesh.positions[0] === 0 &&
                 mesh.positions[1] === 0 &&
@@ -356,7 +410,6 @@ check(
                 `(${mesh.positions[0]},${mesh.positions[1]}) (${mesh.positions[80 * 3]},${mesh.positions[80 * 3 + 1]})`
             );
 
-            // Heights are u8 × 2.0, so range is [0, 510] metres.
             const rangeOk =
                 Number.isFinite(mesh.heightMin) &&
                 Number.isFinite(mesh.heightMax) &&
@@ -369,7 +422,6 @@ check(
                 `min=${mesh.heightMin}, max=${mesh.heightMax}`
             );
 
-            // Every triangle index must point at a real vertex.
             let maxIdx = 0;
             for (let i = 0; i < mesh.indices.length; i += 1) {
                 if (mesh.indices[i] > maxIdx) maxIdx = mesh.indices[i];
@@ -380,22 +432,14 @@ check(
                 `maxIdx=${maxIdx}`
             );
 
-            // Phase 3 step 3: per-vertex terrain code stream is exposed
-            // as `terrainCodes` (Uint8Array(81)). Each byte is one of
-            // AC's 32 base terrain types — see TERRAIN_TYPES in
-            // index.html or the upstream `TerrainTextureType` enum.
             const codes = mesh.terrainCodes;
-            const codesShapeOk =
-                codes instanceof Uint8Array && codes.length === 81;
+            const codesShapeOk = codes instanceof Uint8Array && codes.length === 81;
             check(
                 "fetch_landblock_heightmap: terrainCodes is Uint8Array of 81 (Phase 3 step 3)",
                 codesShapeOk,
-                `len=${codes?.length}, ctor=${codes?.constructor?.name}`
+                `len=${codes?.length}`
             );
 
-            // All values must be in [0, 31] — terrain type bits are
-            // 5 wide, so anything ≥ 32 means the bit-decode is leaking
-            // road or scenery bits into the type field.
             let minCode = 255, maxCode = 0;
             for (let i = 0; i < codes.length; i += 1) {
                 if (codes[i] < minCode) minCode = codes[i];
@@ -407,11 +451,6 @@ check(
                 `min=${minCode}, max=${maxCode}`
             );
 
-            // Holtburg town centre is known empirically to mix at
-            // least 3 distinct terrain types (LushGrass + Grassland +
-            // SemiBarrenRock at minimum; PatchyGrassland and others
-            // also appear). A single-type result would mean the bit-
-            // decode collapsed everything to BarrenRock (= 0).
             const distinct = new Set(codes).size;
             check(
                 "fetch_landblock_heightmap: Holtburg centre has ≥3 distinct terrain types",
@@ -419,18 +458,12 @@ check(
                 `${distinct} distinct: [${[...new Set(codes)].sort((a, b) => a - b).join(", ")}]`
             );
 
-            // Phase 3 step 5: per-vertex road code stream is exposed
-            // alongside terrainCodes. Road bits are 2 wide (range 0..3)
-            // and live at bits 0-1 of the same `terrain[]` u16. Holtburg
-            // town centre is on AC's main east-west road network and
-            // empirically has ≥10 vertices with road_code > 0.
             const roads = mesh.roadCodes;
-            const roadShapeOk =
-                roads instanceof Uint8Array && roads.length === 81;
+            const roadShapeOk = roads instanceof Uint8Array && roads.length === 81;
             check(
                 "fetch_landblock_heightmap: roadCodes is Uint8Array of 81 (Phase 3 step 5)",
                 roadShapeOk,
-                `len=${roads?.length}, ctor=${roads?.constructor?.name}`
+                `len=${roads?.length}`
             );
 
             let roadMin = 255, roadMax = 0, roadCount = 0;
@@ -453,33 +486,15 @@ check(
 
             mesh.free();
         } catch (e) {
-            // Missing `eor/cell` namespace (micro-profile fixture) is
-            // an environment skip, not a failure. Anything else is.
-            const msg = String(e?.message ?? e);
-            const missingCell =
-                msg.includes("eor/cell") &&
-                (msg.includes("not found") || msg.includes("missing namespace"));
-            if (missingCell) {
-                console.log(
-                    "  [SKIP] fetch_landblock_heightmap round-trip — fixture has " +
-                    "no eor/cell namespace.\n         Re-run dat2hba with " +
-                    "--profile pruned to include cell content."
-                );
-            } else {
-                check(
-                    "fetch_landblock_heightmap round-trip succeeds",
-                    false,
-                    `threw: ${msg}`
-                );
-            }
+            check(
+                "fetch_landblock_heightmap round-trip succeeds",
+                false,
+                `threw: ${e?.message ?? e}`
+            );
         }
 
-        // Phase 3 step 2 round-trip: the batch export reads the
-        // 3×3 Holtburg-neighbourhood (0xA8B3FFFF..0xAAB5FFFF) in one
-        // HBA open, returns 9 mesh entries in the same order as the
-        // input id list. Same fixture-profile gating as the singular
-        // path — a `--profile micro` fixture lacks `eor/cell` and
-        // degrades to a SKIP.
+        // Phase 3 step 2 batch round-trip: 3×3 Holtburg neighbourhood.
+        // Boot-pack-served for all 9 cells.
         try {
             const HOLTBURG_NEIGHBOURHOOD = [
                 0xa8b5ffff, 0xa9b5ffff, 0xaab5ffff,
@@ -487,7 +502,6 @@ check(
                 0xa8b3ffff, 0xa9b3ffff, 0xaab3ffff,
             ];
             const meshes = await wasm.fetch_landblock_heightmaps(
-                url,
                 new Uint32Array(HOLTBURG_NEIGHBOURHOOD)
             );
             check(
@@ -496,8 +510,6 @@ check(
                 `len=${meshes?.length}, isArray=${Array.isArray(meshes)}`
             );
 
-            // Spot-check the first neighbour (NW = 0xA8B5FFFF). Sane
-            // height range = finite, in [0, 510], min <= max.
             const nw = meshes[0];
             const sane =
                 Number.isFinite(nw.heightMin) &&
@@ -511,8 +523,6 @@ check(
                 `min=${nw.heightMin}, max=${nw.heightMax}`
             );
 
-            // Centre (index 4) must be Holtburg's terrain — same height
-            // range as the singular round-trip established (30..96 m).
             const centre = meshes[4];
             const centreHoltburg =
                 centre.heightMin === 30 && centre.heightMax === 96;
@@ -524,34 +534,24 @@ check(
 
             for (const m of meshes) m.free();
         } catch (e) {
-            const msg = String(e?.message ?? e);
-            const missingCell =
-                msg.includes("eor/cell") &&
-                (msg.includes("not found") || msg.includes("missing namespace"));
-            if (missingCell) {
-                console.log(
-                    "  [SKIP] fetch_landblock_heightmaps round-trip — fixture " +
-                    "has no eor/cell namespace.\n         Re-run dat2hba with " +
-                    "--profile pruned to include cell content."
-                );
-            } else {
-                check(
-                    "fetch_landblock_heightmaps round-trip succeeds",
-                    false,
-                    `threw: ${msg}`
-                );
-            }
+            check(
+                "fetch_landblock_heightmaps round-trip succeeds",
+                false,
+                `threw: ${e?.message ?? e}`
+            );
         }
 
-        // Phase 3 step 3.5 round-trip: fetch all 33 retail terrain
-        // textures (BarrenRock..RoadType) and verify shape + RGBA8
-        // length consistency. Requires `--profile full` (or any profile
-        // that includes SurfaceTexture / Texture / Palette records);
-        // `--profile pruned` excludes them and degrades to a SKIP.
+        // Phase 3 step 3.5 round-trip: 33 retail terrain textures.
+        // The 33 SurfaceTexture IDs aren't in the obj-3 minimum-viable
+        // boot pack — they fetch as shards on demand via the 3-level
+        // explicit prefetch in fetch_terrain_textures. Cached_shard_count
+        // climbs as a result.
         try {
+            const cacheBefore = wasm.cached_shard_count();
             const t0 = Date.now();
-            const textures = await wasm.fetch_terrain_textures(url);
+            const textures = await wasm.fetch_terrain_textures();
             const elapsed = Date.now() - t0;
+            const cacheAfter = wasm.cached_shard_count();
 
             check(
                 `fetch_terrain_textures: returns 33 entries (Phase 3 step 3.5)`,
@@ -559,7 +559,12 @@ check(
                 `len=${textures?.length}, ${elapsed} ms`
             );
 
-            // Spot-check shape on every entry.
+            check(
+                "fetch_terrain_textures: shard cache grew (Phase 5.0b prefetch path)",
+                cacheAfter > cacheBefore,
+                `cache: ${cacheBefore} → ${cacheAfter}`
+            );
+
             let allOk = true;
             let firstFail = null;
             for (let i = 0; i < textures.length; i += 1) {
@@ -570,23 +575,16 @@ check(
                     t.height > 0 &&
                     t.pixels instanceof Uint8Array &&
                     t.pixels.length === t.width * t.height * 4;
-                if (!ok) {
-                    allOk = false;
-                    firstFail = { i, t };
-                    break;
-                }
+                if (!ok) { allOk = false; firstFail = { i, t }; break; }
             }
             check(
                 "fetch_terrain_textures: every blob is RGBA8 with width*height*4 pixels",
                 allOk,
                 allOk
                     ? `all 33 OK; first ${textures[0].width}x${textures[0].height}`
-                    : `failed at index ${firstFail?.i}: type=${firstFail?.t?.terrainType}, ${firstFail?.t?.width}x${firstFail?.t?.height}, px=${firstFail?.t?.pixels?.length}`
+                    : `failed at index ${firstFail?.i}`
             );
 
-            // The retail terrain textures are 512×512 in the source
-            // mip-stack. Pin this so a future profile re-bake or atlas
-            // resizer doesn't silently change the contract.
             check(
                 "fetch_terrain_textures: BarrenRock (type 0) is 512x512",
                 textures[0].terrainType === 0 &&
@@ -597,35 +595,15 @@ check(
 
             for (const t of textures) t.free();
         } catch (e) {
-            const msg = String(e?.message ?? e);
-            const missingTextures =
-                msg.includes("SurfaceTexture") ||
-                msg.includes("Texture") ||
-                msg.includes("Palette") ||
-                msg.includes("not found");
-            if (missingTextures && msg.includes("not found")) {
-                console.log(
-                    "  [SKIP] fetch_terrain_textures round-trip — fixture lacks " +
-                    "SurfaceTexture/Texture records.\n         Re-run dat2hba with " +
-                    "--profile full to include the texture pipeline."
-                );
-            } else {
-                check(
-                    "fetch_terrain_textures round-trip succeeds",
-                    false,
-                    `threw: ${msg}`
-                );
-            }
+            check(
+                "fetch_terrain_textures round-trip succeeds",
+                false,
+                `threw: ${e?.message ?? e}`
+            );
         }
 
-        // Phase 3 step 4 round-trip: fetch object placements for the
-        // Holtburg LandblockInfo neighbourhood (XXYYFFFE suffix, not
-        // XXYYFFFF which is the terrain CellLandblock). Each object
-        // placement has model_id + (x, y, z) + rotation_z. Pin against
-        // empirical Holtburg counts: the 3×3 neighbourhood holds ~239
-        // placed objects total (inc. buildings) with ~120 at the centre
-        // landblock. Loose threshold so future asset re-bakes don't
-        // false-fail on minor variance.
+        // Phase 3 step 4 round-trip: object placements for 9-cell
+        // LandblockInfo neighbourhood. Boot-pack-served.
         try {
             const HOLTBURG_LBI = [
                 0xa8b5fffe, 0xa9b5fffe, 0xaab5fffe,
@@ -633,7 +611,6 @@ check(
                 0xa8b3fffe, 0xa9b3fffe, 0xaab3fffe,
             ];
             const objects = await wasm.fetch_landblock_objects(
-                url,
                 new Uint32Array(HOLTBURG_LBI)
             );
 
@@ -643,9 +620,6 @@ check(
                 `len=${objects?.length}`
             );
 
-            // Every placement must have a non-zero model_id and a
-            // sane position (within the 192 m landblock bounds, plus
-            // some slack for objects placed near edges).
             let allOk = true;
             let firstFail = null;
             for (let i = 0; i < objects.length; i += 1) {
@@ -662,10 +636,9 @@ check(
                 allOk,
                 allOk
                     ? `${objects.length} OK; sample modelId=0x${objects[0].modelId.toString(16).toUpperCase().padStart(8, "0")}`
-                    : `failed at i=${firstFail?.i}: model=${firstFail?.o?.modelId}, pos=(${firstFail?.o?.x},${firstFail?.o?.y})`
+                    : `failed at i=${firstFail?.i}`
             );
 
-            // The Holtburg town centre landblock has the most density.
             const centreId = 0xa9b4fffe;
             const centreObjs = objects.filter((o) => o.landblockId === centreId);
             check(
@@ -674,38 +647,24 @@ check(
                 `${centreObjs.length} at 0x${centreId.toString(16).toUpperCase()}`
             );
 
-            // Phase 3 step 4.5 round-trip: feed the unique placement
-            // model_ids into fetch_object_colours; expect one ARGB per
-            // input, and a non-trivial fraction resolved (= non-zero).
-            // The Surface walk only resolves the SOLID-colour path, so
-            // the resolved fraction depends on how many of Holtburg's
-            // models ship a `Base1Solid` Surface vs a `Base1Image` /
-            // `Base1ClipMap` one. Empirically the threshold here is
-            // conservative — a green run proves the walk works at
-            // all. A future step 4.5b (textured-pixel-mean path) would
-            // raise this materially.
+            // Phase 3 step 4.5 round-trip via the manifest-mode iterative
+            // discovery (RecordingSource pattern in `prefetch.rs`). Walks
+            // ~81 unique Holtburg models through GfxObj/SetupModel →
+            // Surface chains; multiple prefetch rounds expected.
             const uniqueModels = [...new Set(objects.map((o) => o.modelId))];
             const t0 = Date.now();
             const colours = await wasm.fetch_object_colours(
-                url,
                 new Uint32Array(uniqueModels)
             );
             const elapsedMs = Date.now() - t0;
 
+            const lengthOk = (Array.isArray(colours) || colours instanceof Uint32Array) && colours.length === uniqueModels.length;
             check(
                 "fetch_object_colours: returns one ARGB per unique model_id (Phase 3 step 4.5)",
-                Array.isArray(colours) || colours instanceof Uint32Array
-                    ? colours.length === uniqueModels.length
-                    : false,
+                lengthOk,
                 `len=${colours?.length}, uniqueModels=${uniqueModels.length}, ${elapsedMs} ms`
             );
 
-            // Resolve ratio + colour-variety. "Resolved" means the walk
-            // returned a non-zero ARGB. The variety check counts
-            // distinct ARGB values among resolved models — pins that
-            // we have meaningful per-model colour, not the 2-bucket
-            // wash from step 4 (which would resolve to at most two
-            // unique values).
             let resolved = 0;
             const distinctColours = new Set();
             for (let i = 0; i < colours.length; i += 1) {
@@ -714,28 +673,23 @@ check(
                 resolved += 1;
                 distinctColours.add(argb);
             }
-            const resolveRatio = resolved / uniqueModels.length;
-
+            const resolveRatio = uniqueModels.length > 0 ? resolved / uniqueModels.length : 0;
             check(
                 "fetch_object_colours: ≥10% of Holtburg unique models resolve to a non-zero colour",
                 resolveRatio >= 0.10,
                 `${resolved} / ${uniqueModels.length} resolved (${(resolveRatio * 100).toFixed(1)}%)`
             );
-
             check(
                 "fetch_object_colours: resolved palette has ≥5 distinct ARGB values (no uniform-tint regression)",
                 distinctColours.size >= 5,
                 `${distinctColours.size} distinct of ${resolved} resolved`
             );
 
-            // Phase 3 step 6: fetch_model_mesh round-trip on a known
-            // Holtburg house. Pin: tris > 0 (mesh has drawable
-            // polygons), surfaces ≥ 1 (texture refs found), worldBounds
-            // matches the atlas's pre-baked worldBounds for the same
-            // model_id (sanity-check the bbox computation against the
-            // static-site emitter's footprint).
+            // Phase 3 step 6 round-trip: triangulate one Holtburg
+            // house. Drives the full GfxObj → polygon → surface walk
+            // through manifest-mode prefetch.
             const HOUSE_ID = 0x01000827;
-            const houseMesh = await wasm.fetch_model_mesh(url, HOUSE_ID);
+            const houseMesh = await wasm.fetch_model_mesh(HOUSE_ID);
             check(
                 "fetch_model_mesh: Holtburg house 0x01000827 yields >0 triangles",
                 houseMesh.triCount > 0,
@@ -758,126 +712,32 @@ check(
 
             for (const o of objects) o.free();
         } catch (e) {
-            const msg = String(e?.message ?? e);
-            const missingLbi =
-                msg.includes("LandblockInfo") &&
-                (msg.includes("not found") || msg.includes("missing namespace"));
-            if (missingLbi) {
-                console.log(
-                    "  [SKIP] fetch_landblock_objects round-trip — fixture has " +
-                    "no LandblockInfo records.\n         Re-run dat2hba with " +
-                    "--profile pruned (or fuller) to include cell content."
-                );
-            } else {
-                check(
-                    "fetch_landblock_objects round-trip succeeds",
-                    false,
-                    `threw: ${msg}`
-                );
-            }
+            check(
+                "fetch_landblock_objects round-trip succeeds",
+                false,
+                `threw: ${e?.message ?? e}`
+            );
         }
-
-        await new Promise((resolve) => server.close(resolve));
+    } else if (haveFixture && haveBin) {
+        // Fixture present but init_resource_source failed — surfaces
+        // as the init check above; skip the round-trips.
+        console.log(
+            "  [SKIP] fetch_* round-trips — init_resource_source failed (see earlier failure)."
+        );
     }
 
-    // Phase 5.0 obj 4/9 — ManifestResourceSource end-to-end round-trip.
-    // Build a tiny manifest+shard+boot tree under a tempdir, serve
-    // it over a local http.Server, call wasm.init_resource_source,
-    // and assert (a) has_resource_source flips true, (b) the source
-    // is reading the boot pack (cached_shard_count stays 0; boot
-    // records are served from the in-memory HBA, not the shard
-    // cache), and (c) re-init against a corrupt manifest fails
-    // with a descriptive error.
-    try {
-        const cp = require("node:child_process");
-        const os = require("node:os");
-        const distDir = fs.mkdtempSync(
-            path.join(os.tmpdir(), "holtburger-smoke-dist-")
-        );
-        const datShardBin = path.resolve(
-            __dirname,
-            "..", "..", "target", "release", "dat-shard"
-        );
-        const fixturePathManifest = path.resolve(
-            __dirname, "..", "..", "dats", "assets.hba"
-        );
-        if (!fs.existsSync(fixturePathManifest) || !fs.existsSync(datShardBin)) {
-            console.log(
-                "  [SKIP] ManifestResourceSource round-trip — needs " +
-                "`cargo build -p holtburger-tools --bin dat-shard --release` " +
-                "and dats/assets.hba fixture."
-            );
-        } else {
-            cp.execFileSync(
-                datShardBin,
-                ["--input", fixturePathManifest, "--output", distDir],
-                { stdio: "ignore" }
-            );
-            // Serve dist/ root.
-            const distServer = http.createServer((req, res) => {
-                const rel = decodeURIComponent(req.url.replace(/^\/+/, ""));
-                const filePath = path.join(distDir, rel);
-                if (!filePath.startsWith(distDir)) {
-                    res.writeHead(403);
-                    res.end();
-                    return;
-                }
-                fs.readFile(filePath, (err, data) => {
-                    if (err) {
-                        res.writeHead(404);
-                        res.end();
-                        return;
-                    }
-                    res.writeHead(200, {
-                        "content-type": "application/octet-stream",
-                        "content-length": data.length,
-                    });
-                    res.end(data);
-                });
-            });
-            await new Promise((resolve) =>
-                distServer.listen(0, "127.0.0.1", resolve)
-            );
-            const distPort = distServer.address().port;
-            const manifestUrl = `http://127.0.0.1:${distPort}/manifest.json`;
-            try {
-                await wasm.init_resource_source(manifestUrl);
-                check(
-                    "ManifestResourceSource.connect() resolves against pre-baked dist/",
-                    wasm.has_resource_source() === true,
-                    `has_resource_source()=${wasm.has_resource_source()}`
-                );
-                check(
-                    "ManifestResourceSource starts with empty shard cache (boot serves directly)",
-                    wasm.cached_shard_count() === 0,
-                    `cached_shard_count()=${wasm.cached_shard_count()}`
-                );
-            } catch (e) {
-                check(
-                    "ManifestResourceSource.connect() resolves against pre-baked dist/",
-                    false,
-                    `init_resource_source threw: ${e?.message ?? e}`
-                );
-            }
-            await new Promise((resolve) => distServer.close(resolve));
-            fs.rmSync(distDir, { recursive: true, force: true });
-        }
-    } catch (e) {
-        check(
-            "ManifestResourceSource round-trip harness completed",
-            false,
-            `harness threw: ${e?.message ?? e}`
-        );
+    // Tear down dist server.
+    if (distServer) {
+        await new Promise((resolve) => distServer.close(resolve));
+    }
+    if (distDir) {
+        fs.rmSync(distDir, { recursive: true, force: true });
     }
 
     // Phase 4 step 1 error-path: start_session against a clearly-dead
     // bridge URL should reject with a stringified error rather than
-    // panic. This pins the failure-mode contract regardless of whether
-    // a `WebSocket` global is available in the host Node — without one
-    // the rejection comes from the inner `web_sys::WebSocket::new` call
-    // failing; with one (Node 21+ or a `ws` polyfill) it comes from the
-    // OS-level connection refused. Either way the wasm boundary
-    // surfaces a JsValue error string, not a panic.
+    // panic. Phase 5.0b dropped the asset_url 6th param — catalog
+    // load now reads from the global manifest source.
     let didReject = false;
     let rejectMsg = "";
     try {
@@ -886,8 +746,7 @@ check(
             "127.0.0.1",
             9000,
             "smoke-test-account",
-            "smoke-test-password",
-            "" // asset_url empty → catalog skipped, fast-fail on transport
+            "smoke-test-password"
         );
     } catch (e) {
         didReject = true;
@@ -901,13 +760,6 @@ check(
             : "expected rejection but Promise resolved"
     );
 
-    // Phase 4 step 1 round-trip is browser-only. A JS mock bridge that
-    // can answer the AC LoginRequest with a synthetic CONNECT_REQUEST
-    // → CharacterList sequence would need to re-implement chunks of
-    // `holtburger-protocol` (PacketHeader, fragment encoding, ISAAC
-    // checksum, GameMessage::CharacterList serialization) in JS — well
-    // outside step 1's scope. Live-ACE coverage runs manually via
-    // `docs/ace-local-setup.md` per the existing pattern.
     console.log(
         "  [SKIP] start_session live round-trip — needs a real ACE.\n" +
         "         Open `apps/holtburger-web/index.html` in a browser " +

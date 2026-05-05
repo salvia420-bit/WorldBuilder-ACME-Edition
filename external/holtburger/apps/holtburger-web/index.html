@@ -210,14 +210,13 @@
           }
         }
 
-        // Phase 5.0 obj 6 — initialize the manifest-mode resource
-        // source if a pre-baked `dist/manifest.json` exists. This is
-        // opt-in for now: fetch_* exports still take an `asset_url`
-        // (the legacy HBA path); per-export refactor lands in obj 9
-        // alongside the smoke-test rewrite. When dist/ is baked via
-        // `cargo run -p holtburger-tools --bin dat-shard -- --input
-        // dats/assets.hba --output dist/`, the page logs a
-        // confirmation and `has_resource_source()` flips true.
+        // Phase 5.0b — manifest-mode is now the only path. Every
+        // fetch_* export reads from the global ManifestResourceSource
+        // populated here. dist/ must be pre-baked via:
+        //   `cargo run -p holtburger-tools --bin dat-shard --release \
+        //       -- --input dats/assets.hba --output dist/`
+        // (or the `--eor-portal/--eor-cell/--eor-local` form for raw
+        // canonical retail DATs).
         const MANIFEST_URL = "../../dist/manifest.json";
         try {
           await init_resource_source(MANIFEST_URL);
@@ -226,9 +225,12 @@
             MANIFEST_URL
           );
         } catch (e) {
-          console.log(
-            "[Phase 5.0] manifest-mode unavailable (legacy HBA mode):",
-            String(e).slice(0, 120)
+          console.error(
+            "[Phase 5.0] manifest-mode init failed; rendering will fail until dist/ is baked.\n" +
+              "  Run `cargo run -p holtburger-tools --bin dat-shard --release -- " +
+              "--input dats/assets.hba --output dist/` from external/holtburger/.\n" +
+              "  Original error:",
+            e
           );
         }
 
@@ -363,7 +365,12 @@
       const renderStatus = document.getElementById("render-status");
       const canvas = document.getElementById("canvas");
       const stageInfo = document.getElementById("stage-info");
-      const ASSET_URL = "../../dats/assets.hba";
+      // Phase 5.0b — ASSET_URL was the legacy single-bundle path,
+      // replaced by the manifest+shards delivery initialized above
+      // via init_resource_source(MANIFEST_URL). Every fetch_* export
+      // now reads from the global resource source — no URL param
+      // needed. The MANIFEST_URL constant lives in the init block
+      // higher in this file.
 
       // Holtburg = (0xA9, 0xB4). Row-major NW→SE neighbourhood.
       const HOLTBURG_X = 0xa9;
@@ -399,14 +406,11 @@
       const ATLAS_TILE_PX = 256;
       const ATLAS_PX = ATLAS_COLS * ATLAS_TILE_PX; // 1536; ATLAS_ROWS too.
 
-      async function buildTerrainAtlas(assetUrl) {
+      async function buildTerrainAtlas() {
         // Fetch all 33 retail terrain textures via the wasm export
-        // and pack them into a single RGBA atlas canvas.
-        // `fetch_terrain_textures` returns 33 TerrainTexture proxies,
-        // each carrying a 512×512 RGBA8 buffer (~33 MB total). We
-        // downscale to 256×256 to halve the GPU upload and dispose
-        // the originals as soon as they're drawn.
-        const textures = await fetch_terrain_textures(assetUrl);
+        // and pack them into a single RGBA atlas canvas. Phase 5.0b:
+        // reads from the global manifest source (no URL arg).
+        const textures = await fetch_terrain_textures();
         if (textures.length !== 33) {
           throw new Error(
             `expected 33 terrain textures, got ${textures.length}`
@@ -891,11 +895,11 @@ void main() {
       //     Holtburg's 0x02000364) with NoPos-stippled geometry and no
       //     weenie binding; the renderer suppresses fallback dots for
       //     these so they read as invisible (matching in-game).
-      async function buildLiveSpriteMap(app, assetUrl, objects) {
+      async function buildLiveSpriteMap(app, objects) {
         const uniqueIds = [...new Set(objects.map((o) => o.modelId))];
         if (uniqueIds.length === 0) return { liveMap: new Map(), invisible: new Set() };
         // One round-trip: all meshes.
-        const meshes = await fetch_model_meshes(assetUrl, new Uint32Array(uniqueIds));
+        const meshes = await fetch_model_meshes(new Uint32Array(uniqueIds));
 
         // Collect every distinct surface DID across all meshes for one
         // batched fetch. JS dedupes; Rust just returns one entry per
@@ -907,7 +911,6 @@ void main() {
         }
         const surfaceList = [...allSurfaces];
         const surfacePixels = await fetch_surfaces_pixels(
-          assetUrl,
           new Uint32Array(surfaceList)
         );
         const surfaceTexBySid = new Map();
@@ -1134,7 +1137,7 @@ void main() {
 
       // ----- scene + camera ----------------------------------------
 
-      async function renderNeighbourhood(canvasElem, neighbourhood, meshes, assetUrl, objects, spriteMap, colourMap) {
+      async function renderNeighbourhood(canvasElem, neighbourhood, meshes, objects, spriteMap, colourMap) {
         const app = new PIXI.Application();
         await app.init({
           canvas: canvasElem,
@@ -1154,7 +1157,7 @@ void main() {
         // packs them into a single 1536×1536 RGBA atlas (~9 MB GPU).
         // Shared across all 9 landblocks: one texture upload, one
         // shader compile, 9 draw calls.
-        const atlasTexture = await buildTerrainAtlas(assetUrl);
+        const atlasTexture = await buildTerrainAtlas();
         const terrainShader = buildTerrainShader(atlasTexture);
 
         // Scene graph:
@@ -1193,7 +1196,7 @@ void main() {
         let liveSpriteMap = new Map();
         let invisibleModels = new Set();
         try {
-          const result = await buildLiveSpriteMap(app, assetUrl, objects);
+          const result = await buildLiveSpriteMap(app, objects);
           liveSpriteMap = result.liveMap;
           invisibleModels = result.invisible;
           const uniqueCount = new Set(objects.map((o) => o.modelId)).size;
@@ -1294,9 +1297,9 @@ void main() {
 
       async function renderHoltburg() {
        try {
-        renderStatus.textContent = "Fetching assets.hba (9 landblocks)…";
+        renderStatus.textContent = "Fetching landblock heightmaps (9 cells)…";
         const ids = new Uint32Array(NEIGHBOURHOOD.map((n) => n.id >>> 0));
-        const meshes = await fetch_landblock_heightmaps(ASSET_URL, ids);
+        const meshes = await fetch_landblock_heightmaps(ids);
         if (meshes.length !== NEIGHBOURHOOD.length) {
           throw new Error(
             `expected ${NEIGHBOURHOOD.length} meshes, got ${meshes.length}`
@@ -1311,7 +1314,7 @@ void main() {
           NEIGHBOURHOOD.map((n) => ((n.x << 24) | (n.y << 16) | 0xfffe) >>> 0)
         );
         const [objects, spriteMap] = await Promise.all([
-          fetch_landblock_objects(ASSET_URL, objectIds),
+          fetch_landblock_objects(objectIds),
           loadSpriteAtlas(),
         ]);
 
@@ -1322,17 +1325,14 @@ void main() {
         // those as misses and falls back to the 2-bucket category tint.
         renderStatus.textContent = "Resolving per-model real colours…";
         const uniqueModels = [...new Set(objects.map((o) => o.modelId))];
-        const colours = await fetch_object_colours(
-          ASSET_URL,
-          new Uint32Array(uniqueModels)
-        );
+        const colours = await fetch_object_colours(new Uint32Array(uniqueModels));
         const colourMap = new Map();
         for (let i = 0; i < uniqueModels.length; i += 1) {
           if (colours[i] !== 0) colourMap.set(uniqueModels[i], colours[i]);
         }
 
         renderStatus.textContent = "Rendering…";
-        const renderCounts = await renderNeighbourhood(canvas, NEIGHBOURHOOD, meshes, ASSET_URL, objects, spriteMap, colourMap);
+        const renderCounts = await renderNeighbourhood(canvas, NEIGHBOURHOOD, meshes, objects, spriteMap, colourMap);
 
         // Aggregate height range across the 9 landblocks for the panel.
         let aggMin = Infinity;
@@ -1421,7 +1421,7 @@ void main() {
         loginStatus.innerHTML = `Connecting to <code>${bridgeUrl}</code> (server <code>${serverIp}:${serverPort}</code>) and sending LoginRequest…`;
 
         try {
-          const handle = await start_session(bridgeUrl, serverIp, serverPort, account, password, ASSET_URL);
+          const handle = await start_session(bridgeUrl, serverIp, serverPort, account, password);
           activeHandle = handle;
 
           // Step 2a: the recv loop signals the initial CharacterList
@@ -1464,7 +1464,7 @@ void main() {
           } else {
             createForm.hidden = true;
             createStatus.innerHTML =
-              `<span class="hint">Character creation unavailable — CharGen / SkillTable not loaded. Verify <code>${ASSET_URL}</code> is reachable + has <code>--profile pruned</code> or fuller content.</span>`;
+              `<span class="hint">Character creation unavailable — CharGen / SkillTable not loaded. Verify <code>${MANIFEST_URL}</code> is reachable + that init_resource_source resolved (check console).</span>`;
           }
           selection.hidden = false;
 

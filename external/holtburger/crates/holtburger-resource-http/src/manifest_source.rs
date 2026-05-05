@@ -56,7 +56,7 @@
 //!           └─→ existing parse + tessellate logic
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use holtburger_dat::{
@@ -230,18 +230,16 @@ impl ManifestResourceSource {
                 if cached.contains_key(&owned(*key)) {
                     continue;
                 }
+                // Tolerate unknown keys: the existing wasm-bindgen
+                // fetch_* exports treat "record not in source" as a
+                // skip (e.g. ocean cells with no LandblockInfo),
+                // not a fatal error. A miss here just means the
+                // walk's eventual `get_file_by_key` will return
+                // Err and the walk's per-id error handler decides.
                 let shard = self.manifest.shards.get(&key_for_resource(*key)).cloned();
-                match shard {
-                    Some(entry) => {
-                        let url = join_url(&self.base_url_with_slash(), &entry.url);
-                        to_fetch.push((owned(*key), entry, url));
-                    }
-                    None => {
-                        return Err(PrefetchError::UnknownKey {
-                            namespace: key.namespace.to_owned(),
-                            file_id: key.file_id,
-                        });
-                    }
+                if let Some(entry) = shard {
+                    let url = join_url(&self.base_url_with_slash(), &entry.url);
+                    to_fetch.push((owned(*key), entry, url));
                 }
             }
         }
@@ -360,4 +358,61 @@ fn url_dirname(url: &str) -> String {
     url.rsplit_once('/')
         .map(|(d, _)| d.to_owned())
         .unwrap_or_default()
+}
+
+/// `ResourceSource` wrapper that records every key whose
+/// `get_file_by_key` call returns `Err`. Lets a caller run a
+/// best-effort sync walk against an under-hydrated source, collect
+/// every key the walk asked for and missed, prefetch them, and
+/// re-run the walk. Repeat until the miss set is empty.
+///
+/// Used by Phase 5.0b's `fetch_*` exports to drive iterative
+/// shard discovery without async-ifying every helper function in
+/// `apps/holtburger-web`. Phase 5.1's `dat-shard` boot-pack
+/// transitive walk uses the same pattern against `HbaReader`-backed
+/// sources where misses are permanent (then the recorded set tells
+/// the caller which records to skip rather than prefetch).
+pub struct RecordingSource<'a> {
+    inner: &'a (dyn ResourceSource + 'a),
+    misses: Mutex<HashSet<(String, u32)>>,
+}
+
+impl<'a> RecordingSource<'a> {
+    pub fn new(inner: &'a (dyn ResourceSource + 'a)) -> Self {
+        Self {
+            inner,
+            misses: Mutex::new(HashSet::new()),
+        }
+    }
+
+    /// Drain the recorded miss set, returning each
+    /// `(namespace, file_id)` pair the wrapped source returned
+    /// `Err` for since the last `take_misses` call.
+    pub fn take_misses(&self) -> Vec<(String, u32)> {
+        let mut guard = self.misses.lock().expect("recording-source mutex poisoned");
+        std::mem::take(&mut *guard).into_iter().collect()
+    }
+}
+
+impl<'a> ResourceSource for RecordingSource<'a> {
+    fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+        match self.inner.get_file_by_key(key) {
+            Ok(b) => Ok(b),
+            Err(e) => {
+                self.misses
+                    .lock()
+                    .expect("recording-source mutex poisoned")
+                    .insert((key.namespace.to_owned(), key.file_id));
+                Err(e)
+            }
+        }
+    }
+
+    fn get_metadata_by_key(&self, key: ResourceKey<'_>) -> Option<FileMetadata> {
+        self.inner.get_metadata_by_key(key)
+    }
+
+    fn has_namespace(&self, namespace: &str) -> bool {
+        self.inner.has_namespace(namespace)
+    }
 }

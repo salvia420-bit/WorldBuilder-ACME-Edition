@@ -33,6 +33,6 @@ mod source;
 
 pub use http::{HttpError, fetch_bytes, join_url};
 pub use manifest_source::{
-    ManifestConnectError, ManifestResourceSource, PrefetchError,
+    ManifestConnectError, ManifestResourceSource, PrefetchError, RecordingSource,
 };
 pub use source::{ConnectError, HttpResourceSource};

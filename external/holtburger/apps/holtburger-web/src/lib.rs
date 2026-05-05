@@ -30,6 +30,9 @@ use wasm_bindgen::prelude::*;
 mod global_source;
 
 #[cfg(target_arch = "wasm32")]
+mod prefetch;
+
+#[cfg(target_arch = "wasm32")]
 pub use global_source::{
     cached_shard_count, has_resource_source, init_resource_source,
 };
@@ -114,16 +117,18 @@ pub async fn try_ws_handshake_smoke(
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn try_http_resource_source_smoke(
-    asset_url: String,
     namespace: String,
     file_id: u32,
 ) -> Result<u32, JsValue> {
     use holtburger_dat::{ResourceKey, ResourceSource};
-    let source = holtburger_resource_http::HttpResourceSource::connect(&asset_url)
+    let source = global_source::global_source();
+    let key = ResourceKey::new(&namespace, file_id);
+    source
+        .prefetch(&[key])
         .await
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
     let bytes = source
-        .get_file_by_key(ResourceKey::new(&namespace, file_id))
+        .get_file_by_key(key)
         .map_err(|e| JsValue::from_str(&format!("get_file_by_key: {e}")))?;
     Ok(bytes.len() as u32)
 }
@@ -284,11 +289,8 @@ fn build_mesh(cell: &holtburger_dat::landblock::CellLandblock) -> LandblockMesh 
 /// the HBA open + parse cost.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-pub async fn fetch_landblock_heightmap(
-    asset_url: String,
-    cell_id: u32,
-) -> Result<LandblockMesh, JsValue> {
-    let mut meshes = fetch_landblock_heightmaps(asset_url, vec![cell_id]).await?;
+pub async fn fetch_landblock_heightmap(cell_id: u32) -> Result<LandblockMesh, JsValue> {
+    let mut meshes = fetch_landblock_heightmaps(vec![cell_id]).await?;
     Ok(meshes.remove(0))
 }
 
@@ -313,15 +315,20 @@ pub async fn fetch_landblock_heightmap(
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn fetch_landblock_heightmaps(
-    asset_url: String,
     cell_ids: Vec<u32>,
 ) -> Result<Vec<LandblockMesh>, JsValue> {
     use holtburger_dat::landblock::CellLandblock;
     use holtburger_dat::{ResourceKey, ResourceSource};
 
-    let source = holtburger_resource_http::HttpResourceSource::connect(&asset_url)
+    let source = global_source::global_source();
+    let keys: Vec<ResourceKey<'_>> = cell_ids
+        .iter()
+        .map(|id| ResourceKey::new("eor/cell", *id))
+        .collect();
+    source
+        .prefetch(&keys)
         .await
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
 
     let mut out = Vec::with_capacity(cell_ids.len());
     for id in &cell_ids {
@@ -493,15 +500,20 @@ impl ObjectPlacement {
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn fetch_landblock_objects(
-    asset_url: String,
     cell_ids: Vec<u32>,
 ) -> Result<Vec<ObjectPlacement>, JsValue> {
     use holtburger_dat::landblock::LandblockInfo;
     use holtburger_dat::{ResourceKey, ResourceSource};
 
-    let source = holtburger_resource_http::HttpResourceSource::connect(&asset_url)
+    let source = global_source::global_source();
+    let keys: Vec<ResourceKey<'_>> = cell_ids
+        .iter()
+        .map(|id| ResourceKey::new("eor/cell", *id))
+        .collect();
+    source
+        .prefetch(&keys)
         .await
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
 
     fn frame_to_placement(landblock_id: u32, model_id: u32, frame: &holtburger_dat::landblock::Frame) -> ObjectPlacement {
         let q = &frame.orientation;
@@ -567,15 +579,62 @@ pub async fn fetch_landblock_objects(
 /// single GPU texture and we drop the originals.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-pub async fn fetch_terrain_textures(
-    asset_url: String,
-) -> Result<Vec<TerrainTexture>, JsValue> {
+pub async fn fetch_terrain_textures() -> Result<Vec<TerrainTexture>, JsValue> {
     use holtburger_dat::file_type::{Palette, SurfaceTexture, Texture, TextureDecodeError};
     use holtburger_dat::{ResourceKey, ResourceSource};
 
-    let source = holtburger_resource_http::HttpResourceSource::connect(&asset_url)
+    let source = global_source::global_source();
+
+    // Phase 5.0b — explicit per-level prefetch. The dependency
+    // graph here is well-known: 33 SurfaceTextures → 33
+    // Textures → up to 33 Palettes. Hand-rolled rather than
+    // RecordingSource-driven because the levels are predictable.
+    let surf_keys: Vec<ResourceKey<'_>> = RETAIL_TERRAIN_SURFACE_TEXTURES
+        .iter()
+        .map(|id| ResourceKey::new("eor/portal", *id))
+        .collect();
+    source
+        .prefetch(&surf_keys)
         .await
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        .map_err(|e| JsValue::from_str(&format!("prefetch SurfaceTextures: {e}")))?;
+
+    let mut tex_ids: Vec<u32> = Vec::with_capacity(RETAIL_TERRAIN_SURFACE_TEXTURES.len());
+    for &surf_id in RETAIL_TERRAIN_SURFACE_TEXTURES.iter() {
+        if let Ok(b) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_id))
+            && let Ok(s) = SurfaceTexture::unpack(&b)
+            && let Some(t) = s.highest_res()
+        {
+            tex_ids.push(t);
+        }
+    }
+    let tex_keys: Vec<ResourceKey<'_>> = tex_ids
+        .iter()
+        .map(|id| ResourceKey::new("eor/portal", *id))
+        .collect();
+    source
+        .prefetch(&tex_keys)
+        .await
+        .map_err(|e| JsValue::from_str(&format!("prefetch Textures: {e}")))?;
+
+    let mut pal_ids: Vec<u32> = Vec::new();
+    for &tex_id in &tex_ids {
+        if let Ok(b) = source.get_file_by_key(ResourceKey::new("eor/portal", tex_id))
+            && let Ok(t) = Texture::unpack(&b)
+            && let Some(pid) = t.default_palette_id
+        {
+            pal_ids.push(pid);
+        }
+    }
+    if !pal_ids.is_empty() {
+        let pal_keys: Vec<ResourceKey<'_>> = pal_ids
+            .iter()
+            .map(|id| ResourceKey::new("eor/portal", *id))
+            .collect();
+        source
+            .prefetch(&pal_keys)
+            .await
+            .map_err(|e| JsValue::from_str(&format!("prefetch Palettes: {e}")))?;
+    }
 
     let mut out = Vec::with_capacity(RETAIL_TERRAIN_SURFACE_TEXTURES.len());
     for (terrain_type, surf_id) in RETAIL_TERRAIN_SURFACE_TEXTURES.iter().copied().enumerate() {
@@ -652,7 +711,7 @@ pub async fn fetch_terrain_textures(
 /// `walk_gfx_obj` can switch back to it without changing the public
 /// API.
 #[cfg(target_arch = "wasm32")]
-fn resolve_model_color<S: holtburger_dat::ResourceSource>(
+fn resolve_model_color<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     model_id: u32,
 ) -> Option<u32> {
@@ -719,7 +778,7 @@ fn read_compressed_u32(bytes: &[u8]) -> Option<(u32, usize)> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn lookup_surface_color<S: holtburger_dat::ResourceSource>(
+fn lookup_surface_color<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     surface_id: u32,
 ) -> Option<u32> {
@@ -805,7 +864,7 @@ fn rgba_pixel_mean(rgba: &[u8]) -> u32 {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn walk_gfx_obj<S: holtburger_dat::ResourceSource>(
+fn walk_gfx_obj<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     gfx_obj_id: u32,
 ) -> Option<u32> {
@@ -823,7 +882,7 @@ fn walk_gfx_obj<S: holtburger_dat::ResourceSource>(
 }
 
 #[cfg(target_arch = "wasm32")]
-fn walk_setup_model<S: holtburger_dat::ResourceSource>(
+fn walk_setup_model<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     setup_id: u32,
     depth: usize,
@@ -872,17 +931,28 @@ fn walk_setup_model<S: holtburger_dat::ResourceSource>(
 /// ids.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-pub async fn fetch_object_colours(
-    asset_url: String,
-    model_ids: Vec<u32>,
-) -> Result<Vec<u32>, JsValue> {
-    let source = holtburger_resource_http::HttpResourceSource::connect(&asset_url)
-        .await
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+pub async fn fetch_object_colours(model_ids: Vec<u32>) -> Result<Vec<u32>, JsValue> {
+    use holtburger_dat::ResourceKey;
+    let source = global_source::global_source();
+
+    // Iterative discovery: walk against a RecordingSource, prefetch
+    // recorded misses, repeat until cache hot. The walk depth here
+    // is unbounded (SetupModel → parts → GfxObj → surfaces → ...).
+    let initial: Vec<ResourceKey<'_>> = model_ids
+        .iter()
+        .map(|id| ResourceKey::new("eor/portal", *id))
+        .collect();
+    let model_ids_for_walk = model_ids.clone();
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        for &id in &model_ids_for_walk {
+            let _ = resolve_model_color(s, id);
+        }
+    })
+    .await?;
 
     let mut out = Vec::with_capacity(model_ids.len());
     for &id in &model_ids {
-        out.push(resolve_model_color(&source, id).unwrap_or(0));
+        out.push(resolve_model_color(source.as_ref(), id).unwrap_or(0));
     }
     Ok(out)
 }
@@ -1100,7 +1170,7 @@ fn tri_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
 /// animation lookup is step-6 follow-on, matching the C# reference's
 /// `TryResolveIdleAnimFrame` fallback chain.
 #[cfg(target_arch = "wasm32")]
-fn triangulate_setup_model<S: holtburger_dat::ResourceSource>(
+fn triangulate_setup_model<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     setup_id: u32,
     tris: &mut Vec<Tri>,
@@ -1156,7 +1226,7 @@ fn triangulate_setup_model<S: holtburger_dat::ResourceSource>(
 /// loaded; an empty Vec means "loaded but had no drawable polygons"
 /// (legitimate — some retail models are physics-only).
 #[cfg(target_arch = "wasm32")]
-fn triangulate_model<S: holtburger_dat::ResourceSource>(
+fn triangulate_model<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     model_id: u32,
 ) -> Option<Vec<Tri>> {
@@ -1272,7 +1342,7 @@ impl SurfacePixels {
 /// pixels.len()=0) when any step of the chain fails — JS treats that
 /// as "no texture, fall back to flat colour".
 #[cfg(target_arch = "wasm32")]
-fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource>(
+fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     surface_did: u32,
 ) -> SurfacePixels {
@@ -1321,14 +1391,15 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource>(
 /// to a flat fill for that triangle group.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-pub async fn fetch_surface_pixels(
-    asset_url: String,
-    surface_did: u32,
-) -> Result<SurfacePixels, JsValue> {
-    let source = holtburger_resource_http::HttpResourceSource::connect(&asset_url)
-        .await
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    Ok(fetch_surface_pixels_impl(&source, surface_did))
+pub async fn fetch_surface_pixels(surface_did: u32) -> Result<SurfacePixels, JsValue> {
+    use holtburger_dat::ResourceKey;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", surface_did)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        let _ = fetch_surface_pixels_impl(s, surface_did);
+    })
+    .await?;
+    Ok(fetch_surface_pixels_impl(source.as_ref(), surface_did))
 }
 
 /// Batch form: fetch decoded pixels for many surfaces in one HTTP
@@ -1337,15 +1408,24 @@ pub async fn fetch_surface_pixels(
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn fetch_surfaces_pixels(
-    asset_url: String,
     surface_dids: Vec<u32>,
 ) -> Result<Vec<SurfacePixels>, JsValue> {
-    let source = holtburger_resource_http::HttpResourceSource::connect(&asset_url)
-        .await
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    use holtburger_dat::ResourceKey;
+    let source = global_source::global_source();
+    let initial: Vec<ResourceKey<'_>> = surface_dids
+        .iter()
+        .map(|id| ResourceKey::new("eor/portal", *id))
+        .collect();
+    let dids_for_walk = surface_dids.clone();
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        for &id in &dids_for_walk {
+            let _ = fetch_surface_pixels_impl(s, id);
+        }
+    })
+    .await?;
     let mut out = Vec::with_capacity(surface_dids.len());
     for &id in &surface_dids {
-        out.push(fetch_surface_pixels_impl(&source, id));
+        out.push(fetch_surface_pixels_impl(source.as_ref(), id));
     }
     Ok(out)
 }
@@ -1359,14 +1439,15 @@ pub async fn fetch_surfaces_pixels(
 /// path does (fall back to the dot).
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-pub async fn fetch_model_mesh(
-    asset_url: String,
-    model_id: u32,
-) -> Result<ModelMesh, JsValue> {
-    let source = holtburger_resource_http::HttpResourceSource::connect(&asset_url)
-        .await
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let tris = triangulate_model(&source, model_id)
+pub async fn fetch_model_mesh(model_id: u32) -> Result<ModelMesh, JsValue> {
+    use holtburger_dat::ResourceKey;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", model_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        let _ = triangulate_model(s, model_id);
+    })
+    .await?;
+    let tris = triangulate_model(source.as_ref(), model_id)
         .ok_or_else(|| JsValue::from_str(&format!("triangulate_model 0x{model_id:08X}: failed")))?;
     Ok(pack_model_mesh(tris))
 }
@@ -1378,16 +1459,23 @@ pub async fn fetch_model_mesh(
 /// those.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-pub async fn fetch_model_meshes(
-    asset_url: String,
-    model_ids: Vec<u32>,
-) -> Result<Vec<ModelMesh>, JsValue> {
-    let source = holtburger_resource_http::HttpResourceSource::connect(&asset_url)
-        .await
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+pub async fn fetch_model_meshes(model_ids: Vec<u32>) -> Result<Vec<ModelMesh>, JsValue> {
+    use holtburger_dat::ResourceKey;
+    let source = global_source::global_source();
+    let initial: Vec<ResourceKey<'_>> = model_ids
+        .iter()
+        .map(|id| ResourceKey::new("eor/portal", *id))
+        .collect();
+    let ids_for_walk = model_ids.clone();
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        for &id in &ids_for_walk {
+            let _ = triangulate_model(s, id);
+        }
+    })
+    .await?;
     let mut out = Vec::with_capacity(model_ids.len());
     for &id in &model_ids {
-        let tris = triangulate_model(&source, id).unwrap_or_default();
+        let tris = triangulate_model(source.as_ref(), id).unwrap_or_default();
         out.push(pack_model_mesh(tris));
     }
     Ok(out)
@@ -2030,7 +2118,6 @@ pub async fn start_session(
     server_port: u16,
     username: String,
     password: String,
-    asset_url: String,
 ) -> Result<SessionHandle, JsValue> {
     use futures::channel::{mpsc, oneshot};
 
@@ -2077,16 +2164,19 @@ pub async fn start_session(
         });
     }
 
-    // Phase 4 step 2a.6: kick off the catalog fetch in the background
-    // — don't block start_session on it. On a phone over tailscale,
-    // pulling the 605MB HBA bundle can take minutes, leaving the user
-    // stuck at "sending login request" long after the protocol
-    // succeeded. JS now polls `handle.canCreateCharacter` until the
-    // background fetch completes.
-    if !asset_url.is_empty() {
+    // Phase 4 step 2a.6 + Phase 5.0b: kick off the catalog fetch
+    // in the background — don't block start_session on it. On a
+    // phone over tailscale, pulling records ad-hoc can still take
+    // a few hundred ms each (CharGen is ~70 KB, SkillTable a few
+    // KB), leaving the user stuck briefly. JS polls
+    // `handle.canCreateCharacter` until the background fetch
+    // completes. Phase 5.0b changes this from "fetch the 605 MB
+    // HBA" to "prefetch the 2 catalog records via the manifest
+    // source" — orders of magnitude faster.
+    if global_source::has_resource_source() {
         let catalog = catalog.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            match load_character_gen_catalog(&asset_url).await {
+            match load_character_gen_catalog().await {
                 Ok(loaded) => {
                     *catalog.borrow_mut() = Some(loaded);
                     log::info!("character generator catalog loaded");
@@ -2111,20 +2201,31 @@ pub async fn start_session(
     })
 }
 
-/// Phase 4 step 2a.5: fetch + parse the CharGen + SkillTable records
-/// out of the asset HBA and build a `CharacterGenCatalog`. Used by
-/// `start_session` (during login) for client-side character-creation
-/// validation. Returns `Err` if the HTTP fetch fails, the HBA is
-/// missing the records, or the parse trips.
+/// Phase 4 step 2a.5 + Phase 5.0b: prefetch + parse the CharGen +
+/// SkillTable records via the global manifest source and build a
+/// `CharacterGenCatalog`. Used by `start_session` (during login)
+/// for client-side character-creation validation. Returns `Err`
+/// if init_resource_source hasn't been called, the prefetch
+/// fails, the records are missing from the manifest, or parse
+/// trips.
 #[cfg(target_arch = "wasm32")]
-async fn load_character_gen_catalog(
-    asset_url: &str,
-) -> anyhow::Result<std::sync::Arc<holtburger_content::CharacterGenCatalog>> {
-    let source = holtburger_resource_http::HttpResourceSource::connect(asset_url)
+async fn load_character_gen_catalog()
+-> anyhow::Result<std::sync::Arc<holtburger_content::CharacterGenCatalog>> {
+    use holtburger_dat::ResourceKey;
+    use holtburger_dat::file_type::{CharGen, SkillTable};
+    let source = global_source::try_global_source().ok_or_else(|| {
+        anyhow::anyhow!("init_resource_source must be called before start_session catalog fetch")
+    })?;
+    let keys = [
+        ResourceKey::new("eor/portal", CharGen::FILE_ID),
+        ResourceKey::new("eor/portal", SkillTable::FILE_ID),
+    ];
+    source
+        .prefetch(&keys)
         .await
-        .map_err(|e| anyhow::anyhow!("HttpResourceSource::connect: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("prefetch catalog: {e}"))?;
     let mounts: Vec<std::sync::Arc<dyn holtburger_dat::ResourceSource>> =
-        vec![std::sync::Arc::new(source)];
+        vec![std::sync::Arc::new(GlobalSourceMount(source))];
     let repo = holtburger_content::ContentRepository::from_mounts(mounts);
     let char_gen = repo
         .read_asset::<holtburger_dat::file_type::CharGen>("character generator table")?;
@@ -2133,6 +2234,42 @@ async fn load_character_gen_catalog(
     Ok(std::sync::Arc::new(
         holtburger_content::CharacterGenCatalog::from_assets(&char_gen, &skill_table),
     ))
+}
+
+/// Adapter: the catalog loader takes
+/// `Arc<dyn ResourceSource + Send + Sync>` mounts. The global
+/// source is `Rc<ManifestResourceSource>`; wrap it in a Send+Sync
+/// holder. wasm32 is single-threaded so the Send+Sync claim is
+/// vacuously true; the trait bound is the only thing demanding
+/// it.
+#[cfg(target_arch = "wasm32")]
+struct GlobalSourceMount(std::rc::Rc<holtburger_resource_http::ManifestResourceSource>);
+
+// SAFETY: wasm32 is single-threaded; no actual cross-thread
+// access is possible. The Send+Sync claim is required by the
+// trait bound on `ContentRepository::from_mounts` mounts.
+#[cfg(target_arch = "wasm32")]
+unsafe impl Send for GlobalSourceMount {}
+#[cfg(target_arch = "wasm32")]
+unsafe impl Sync for GlobalSourceMount {}
+
+#[cfg(target_arch = "wasm32")]
+impl holtburger_dat::ResourceSource for GlobalSourceMount {
+    fn get_file_by_key(
+        &self,
+        key: holtburger_dat::ResourceKey<'_>,
+    ) -> holtburger_dat::Result<Vec<u8>> {
+        self.0.get_file_by_key(key)
+    }
+    fn get_metadata_by_key(
+        &self,
+        key: holtburger_dat::ResourceKey<'_>,
+    ) -> Option<holtburger_dat::FileMetadata> {
+        self.0.get_metadata_by_key(key)
+    }
+    fn has_namespace(&self, namespace: &str) -> bool {
+        self.0.has_namespace(namespace)
+    }
 }
 
 /// Payload the recv loop sends through the initial-CharacterList
