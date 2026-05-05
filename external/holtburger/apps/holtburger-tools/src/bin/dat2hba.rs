@@ -1,5 +1,4 @@
 use clap::Parser;
-use holtburger_tools::dat2hba::DEFAULT_BOOT_LANDBLOCK;
 use holtburger_tools::{ArchiveProfile, Dat2HbaOptions, DatInputSpec, ToolError, run};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -58,7 +57,7 @@ struct Args {
 
     /// Boot landblock when `--profile boot`. Hex (`0xA9B4`,
     /// default Holtburg). Ignored for other profiles.
-    #[arg(long, value_parser = parse_hex_u32, default_value_t = DEFAULT_BOOT_LANDBLOCK)]
+    #[arg(long, value_parser = parse_hex_u32, default_value = "0xA9B4")]
     boot_landblock: u32,
 }
 

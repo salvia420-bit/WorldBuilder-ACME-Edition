@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use holtburger_tools::dat_shard::{DEFAULT_BOOT_LANDBLOCK, DatShardOptions, parse_hex_u32, shard_bundle};
+use holtburger_tools::dat_shard::{DatShardOptions, parse_hex_u32, shard_bundle};
 use holtburger_tools::error::Result;
 
 #[derive(Parser, Debug)]
@@ -35,8 +35,11 @@ struct Args {
     eor_local: Option<PathBuf>,
 
     /// Spawn-area landblock for boot-pack inclusion. Hex
-    /// (`0xA9B4`, default Holtburg).
-    #[arg(long, value_parser = parse_hex_u32, default_value_t = DEFAULT_BOOT_LANDBLOCK)]
+    /// (`0xA9B4`, default Holtburg). String-default rather than
+    /// typed-default so the value flows through `parse_hex_u32`
+    /// once — clap's `default_value_t` would display the u32 as
+    /// decimal then re-parse that as hex, scrambling the value.
+    #[arg(long, value_parser = parse_hex_u32, default_value = "0xA9B4")]
     boot_landblock: u32,
 
     /// Output directory. Created if missing. Will contain

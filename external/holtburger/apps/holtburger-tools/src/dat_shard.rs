@@ -38,8 +38,11 @@ use std::path::{Path, PathBuf};
 use holtburger_dat::file_type::{
     CharGen, ChatPoseTable, MotionKinematics, SkillTable, SpellTable, XpTable,
 };
+use holtburger_dat::landblock::LandblockInfo;
+use holtburger_dat::walk::collect_model_dependencies;
 use holtburger_dat::{
-    DatDatabase, EOR_CELL_NAMESPACE, EOR_PORTAL_NAMESPACE, HbaReader, HbaStreamWriter,
+    DatDatabase, DatError, EOR_CELL_NAMESPACE, EOR_PORTAL_NAMESPACE, FileMetadata, HbaReader,
+    HbaStreamWriter, ResourceKey, ResourceSource, Result as DatResult,
 };
 use holtburger_manifest::{
     BootPack, MANIFEST_VERSION, Manifest, ShardEntry, SourceMeta, format_shard_key, sha256_hex,
@@ -190,10 +193,11 @@ fn ingest_dat_into(
     Ok(())
 }
 
-/// Boot-pack inclusion test. This is the obj-3 minimum-viable
-/// policy. Obj 8 supersedes it with `is_boot_essential` in
-/// `holtburger-dat::file_type` covering the transitive
-/// GfxObj/SetupModel/Surface/SurfaceTexture/Texture/Palette walk.
+/// Boot-pack inclusion test. The obj-3 minimum-viable policy.
+/// Phase 5.1's [`compute_boot_keep_set`] supersedes this with the
+/// transitive walk through LandblockInfo placements. This helper
+/// stays exposed for unit tests and as the "fast" answer when the
+/// caller doesn't need walk-discovered records.
 pub fn is_boot_essential(namespace: &str, file_id: u32, boot_landblock: u32) -> bool {
     if namespace == EOR_PORTAL_NAMESPACE && BOOT_ESSENTIAL_PORTAL_IDS.contains(&file_id) {
         return true;
@@ -206,6 +210,99 @@ pub fn is_boot_essential(namespace: &str, file_id: u32, boot_landblock: u32) -> 
         }
     }
     false
+}
+
+/// Phase 5.1 — compute the full boot-pack keep set, including the
+/// transitive walk through the spawn neighborhood's LandblockInfo
+/// placements. Returns every `(namespace, file_id)` pair the boot
+/// pack should include.
+///
+/// Inclusion rules:
+/// 1. Catalog essentials ([`BOOT_ESSENTIAL_PORTAL_IDS`]).
+/// 2. 9-cell spawn neighborhood — each cell's CellLandblock
+///    (`0xXXYYFFFF`) and LandblockInfo (`0xXXYYFFFE`).
+/// 3. For each in-bundle LandblockInfo from (2): parse the
+///    placements and walk every model id transitively via
+///    [`holtburger_dat::walk::collect_model_dependencies`]. Adds
+///    GfxObj/SetupModel/Surface/SurfaceTexture/Texture/Palette
+///    records reachable from each placement.
+///
+/// Walks accept missing records as terminal-leaf events: a
+/// reference into a record not present in the input bundle just
+/// stops the descent at that branch (no error). LandblockInfo
+/// records that fail to parse are skipped; their placements
+/// don't contribute to the keep set.
+pub fn compute_boot_keep_set(
+    bundle: &LoadedBundle,
+    boot_landblock: u32,
+) -> HashSet<(String, u32)> {
+    let mut keep: HashSet<(String, u32)> = HashSet::new();
+
+    for &id in BOOT_ESSENTIAL_PORTAL_IDS {
+        keep.insert((EOR_PORTAL_NAMESPACE.to_string(), id));
+    }
+
+    for cell_id in spawn_neighborhood_cells(boot_landblock) {
+        let terrain = (cell_id << 16) | 0xFFFF;
+        let info = (cell_id << 16) | 0xFFFE;
+        keep.insert((EOR_CELL_NAMESPACE.to_string(), terrain));
+        keep.insert((EOR_CELL_NAMESPACE.to_string(), info));
+    }
+
+    let bundle_source = BundleSource {
+        records: &bundle.records,
+    };
+    for cell_id in spawn_neighborhood_cells(boot_landblock) {
+        let info_id = (cell_id << 16) | 0xFFFE;
+        let key = (EOR_CELL_NAMESPACE.to_string(), info_id);
+        let Some(bytes) = bundle.records.get(&key) else {
+            continue;
+        };
+        let Ok(info) = LandblockInfo::unpack(bytes) else {
+            continue;
+        };
+        for stab in &info.objects {
+            collect_model_dependencies(&bundle_source, stab.id, &mut keep);
+        }
+        for building in &info.buildings {
+            collect_model_dependencies(&bundle_source, building.model_id, &mut keep);
+        }
+    }
+
+    keep
+}
+
+/// `ResourceSource` adapter for the in-memory `LoadedBundle`.
+/// Lets `holtburger_dat::walk` consume bundle records by
+/// `(namespace, file_id)` without any additional plumbing.
+struct BundleSource<'a> {
+    records: &'a BTreeMap<(String, u32), Vec<u8>>,
+}
+
+impl<'a> ResourceSource for BundleSource<'a> {
+    fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+        self.records
+            .get(&(key.namespace.to_owned(), key.file_id))
+            .cloned()
+            .ok_or_else(|| {
+                DatError::Other(format!(
+                    "BundleSource: missing {}:{:#010X}",
+                    key.namespace, key.file_id
+                ))
+            })
+    }
+    fn get_metadata_by_key(&self, key: ResourceKey<'_>) -> Option<FileMetadata> {
+        self.records
+            .get(&(key.namespace.to_owned(), key.file_id))
+            .map(|b| FileMetadata {
+                id: key.file_id,
+                size: b.len() as u32,
+                is_pruned: false,
+            })
+    }
+    fn has_namespace(&self, namespace: &str) -> bool {
+        self.records.keys().any(|(ns, _)| ns == namespace)
+    }
 }
 
 /// Spawn-area 9-cell neighborhood. AC landblock IDs are encoded
@@ -273,9 +370,17 @@ pub fn write_boot_pack(
         .map_err(|e| ToolError::HbaWrite(boot_path.clone(), e.to_string()))?;
     writer.set_compression(true);
 
+    // Phase 5.1 — compute the full boot keep set including the
+    // transitive walk through LandblockInfo placements. The walk
+    // adds every GfxObj/SetupModel/Surface/SurfaceTexture/Texture/
+    // Palette record reachable from the boot-landblock 9-cell
+    // neighborhood, so the page can render the spawn area without
+    // any shard fetches.
+    let keep = compute_boot_keep_set(bundle, boot_landblock);
+
     let mut covers = Vec::new();
     for ((namespace, file_id), bytes) in &bundle.records {
-        if !is_boot_essential(namespace, *file_id, boot_landblock) {
+        if !keep.contains(&(namespace.clone(), *file_id)) {
             continue;
         }
         // Type id is not preserved by the LoadedBundle (the bytes
@@ -413,6 +518,35 @@ mod tests {
         assert!(cells.contains(&0x0001));
         assert!(cells.contains(&0x0100));
         assert!(cells.contains(&0x0101));
+    }
+
+    #[test]
+    fn compute_boot_keep_set_includes_essentials_and_spawn_cells() {
+        // The walk is a no-op on an empty bundle (no LandblockInfo
+        // records to chase placements out of), so the keep set
+        // should match the obj-3 minimum-viable: catalog
+        // essentials + 9-cell terrain + LandblockInfo records.
+        let bundle = LoadedBundle {
+            records: BTreeMap::new(),
+            source_meta: SourceMeta {
+                portal_dat_iteration: 0,
+                cell_dat_iteration: 0,
+                local_dat_iteration: 0,
+            },
+        };
+        let keep = compute_boot_keep_set(&bundle, 0xA9B4);
+        // Catalog tables: 6 portal records.
+        assert!(keep.contains(&(EOR_PORTAL_NAMESPACE.to_string(), CharGen::FILE_ID)));
+        assert!(keep.contains(&(EOR_PORTAL_NAMESPACE.to_string(), SkillTable::FILE_ID)));
+        // Spawn 9-cell × 2 (terrain + LBI) = 18 cell records.
+        assert!(keep.contains(&(EOR_CELL_NAMESPACE.to_string(), 0xA9B4_FFFF)));
+        assert!(keep.contains(&(EOR_CELL_NAMESPACE.to_string(), 0xA9B4_FFFE)));
+        assert!(keep.contains(&(EOR_CELL_NAMESPACE.to_string(), 0xA8B3_FFFF)));
+        // 6 catalog + 18 cell = 24 entries (no walk-discovered
+        // records for an empty bundle).
+        assert_eq!(keep.len(), 6 + 18);
+        // Far-away cells are not in the keep set.
+        assert!(!keep.contains(&(EOR_CELL_NAMESPACE.to_string(), 0x0000_FFFF)));
     }
 
     #[test]
