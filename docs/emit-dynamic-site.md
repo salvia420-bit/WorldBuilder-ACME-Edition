@@ -927,10 +927,27 @@ Step ledger:
   the retail UI surfaces holtburger already drives, in DOM panels
   next to the PIXI canvas. Parallel to step 2/3.
 
-Phase 5 — **Hardening.** Indefinite.
-- DAT-over-HTTP shard layout if single-bundle pre-load becomes a UX
-  problem (§7.2 currently answered: single bundle, OK for the spike).
-- IndexedDB asset caching.
+Phase 5 — **Hardening.** In flight.
+
+Step ledger:
+- ✅ **Phase 5.0 — production-grade asset delivery (2026-05-04,
+  commits `0578cb7..688550d`).** Single-bundle pre-load (605 MB
+  HBA) was a UX cliff for cellular / corporate-firewall users.
+  Closed by a content-addressable manifest + per-record shard
+  model with a precompiled bootstrap pack and a service-worker
+  cache. Brief: [`thorough.md`](thorough.md). As-built:
+  [`phase-5-thorough.md`](phase-5-thorough.md). Landed:
+  `holtburger-manifest` schema crate, `dat-shard` tool,
+  `ManifestResourceSource` (wasm32 consumer), thread-local
+  `init_resource_source` page-init export, `index.html`
+  manifest-mode wiring, `service-worker.js` IndexedDB cache,
+  `dat2hba --profile boot`. Smoke 48 → 55, native lib 1106 →
+  1116. Open: per-export refactor (Phase 5.0b) couples to the
+  smoke-fixture rewrite; transitive boot-pack walk
+  (Phase 5.1) couples to factoring the GfxObj/SetupModel
+  walks out of `apps/holtburger-web` private code.
+
+Open follow-ons (no specific brief yet):
 - Login flow UX (§7.5).
 - Performance: 100 concurrent entities, 1000, 5000.
 - Multi-project / multi-world picker.

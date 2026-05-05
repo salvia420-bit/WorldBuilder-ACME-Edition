@@ -987,3 +987,45 @@ Modified:
 - **Full chat panel.** Sending plain text to local-area chat
   works (just call `sendChat("hello")` without `@`/`/` prefix),
   but no DOM panel renders incoming chat yet — step 4.
+
+---
+
+## Phase 5.0 — production-grade asset delivery
+
+After Phase 4 step 2a.6 closed, manual validation against a
+600 kbps Brave Android client over Tailscale surfaced an
+accessibility cliff: the wasm bundle's boot path was pulling the
+full 605 MB asset HBA before any rendering could happen
+(~2.2 hours on cellular). Phase 5.0 (`docs/thorough.md` brief +
+`docs/phase-5-thorough.md` as-built) reworks this into a
+content-addressable manifest + per-record shard model with a
+small precompiled bootstrap pack and an IndexedDB-backed service
+worker cache.
+
+What landed at Phase 5.0 close (commits `0578cb7..688550d`):
+
+- `holtburger-manifest` crate (v1 schema, sha256 dedupe).
+- `dat-shard` tool (canonical DATs / HBA → manifest + shards +
+  boot.hba).
+- `ManifestResourceSource` (wasm32 consumer) + `prefetch()`
+  async surface.
+- `init_resource_source` + thread-local global on the wasm side.
+- `index.html` opt-in manifest mode + service worker
+  registration.
+- `service-worker.js` IndexedDB-backed shard cache.
+- `dat2hba --profile boot --boot-landblock 0xA9B4`.
+- Node smoke 48 → 55, native lib 1106 → 1116.
+
+What's still open (5.0b + 5.1):
+
+- Per-export refactor of every `fetch_*` to drop `asset_url`
+  and route through the global source + `prefetch()`. Coupled
+  to a smoke-fixture rewrite; tracked as Phase 5.0b.
+- Transitive boot pack walk (GfxObj/SetupModel/Surface/
+  SurfaceTexture/Texture/Palette through the boot landblock's
+  placements). Tracked as Phase 5.1; needs the walk helpers
+  factored from `apps/holtburger-web` private code into
+  `holtburger-dat` utilities.
+
+See [`phase-5-thorough.md`](phase-5-thorough.md) for the full
+as-built reference.
