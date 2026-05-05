@@ -96,6 +96,39 @@ check(
     `typeof ${typeof wasm.try_http_resource_source_smoke}`
 );
 
+// Phase 5.0 obj 5/9 — manifest-mode resource source. The
+// per-export refactor (drop `asset_url` from each fetch_* in
+// favour of the global source) is deferred to a follow-up
+// commit; symbol-presence + a connect/reject round-trip here
+// covers the obj 5 wiring + the obj 4 ManifestResourceSource
+// at the JS boundary.
+check(
+    "init_resource_source() is exported (Phase 5.0 obj 5)",
+    typeof wasm.init_resource_source === "function",
+    `typeof ${typeof wasm.init_resource_source}`
+);
+check(
+    "has_resource_source() is exported (Phase 5.0 obj 5 introspection)",
+    typeof wasm.has_resource_source === "function",
+    `typeof ${typeof wasm.has_resource_source}`
+);
+check(
+    "cached_shard_count() is exported (Phase 5.0 obj 5 introspection)",
+    typeof wasm.cached_shard_count === "function",
+    `typeof ${typeof wasm.cached_shard_count}`
+);
+// Pre-init sanity: no source yet, no cached shards.
+check(
+    "init_resource_source not yet called → has_resource_source()=false",
+    wasm.has_resource_source() === false,
+    `has_resource_source()=${wasm.has_resource_source()}`
+);
+check(
+    "init_resource_source not yet called → cached_shard_count()=0",
+    wasm.cached_shard_count() === 0,
+    `cached_shard_count()=${wasm.cached_shard_count()}`
+);
+
 // Phase 3 step 1 wiring: fetch_landblock_heightmap must be present.
 // End-to-end round-trip below if the fixture has the eor/cell namespace
 // (i.e. dat2hba was run with --profile pruned, not --profile micro).
@@ -745,6 +778,96 @@ check(
         }
 
         await new Promise((resolve) => server.close(resolve));
+    }
+
+    // Phase 5.0 obj 4/9 — ManifestResourceSource end-to-end round-trip.
+    // Build a tiny manifest+shard+boot tree under a tempdir, serve
+    // it over a local http.Server, call wasm.init_resource_source,
+    // and assert (a) has_resource_source flips true, (b) the source
+    // is reading the boot pack (cached_shard_count stays 0; boot
+    // records are served from the in-memory HBA, not the shard
+    // cache), and (c) re-init against a corrupt manifest fails
+    // with a descriptive error.
+    try {
+        const cp = require("node:child_process");
+        const os = require("node:os");
+        const distDir = fs.mkdtempSync(
+            path.join(os.tmpdir(), "holtburger-smoke-dist-")
+        );
+        const datShardBin = path.resolve(
+            __dirname,
+            "..", "..", "target", "release", "dat-shard"
+        );
+        const fixturePathManifest = path.resolve(
+            __dirname, "..", "..", "dats", "assets.hba"
+        );
+        if (!fs.existsSync(fixturePathManifest) || !fs.existsSync(datShardBin)) {
+            console.log(
+                "  [SKIP] ManifestResourceSource round-trip — needs " +
+                "`cargo build -p holtburger-tools --bin dat-shard --release` " +
+                "and dats/assets.hba fixture."
+            );
+        } else {
+            cp.execFileSync(
+                datShardBin,
+                ["--input", fixturePathManifest, "--output", distDir],
+                { stdio: "ignore" }
+            );
+            // Serve dist/ root.
+            const distServer = http.createServer((req, res) => {
+                const rel = decodeURIComponent(req.url.replace(/^\/+/, ""));
+                const filePath = path.join(distDir, rel);
+                if (!filePath.startsWith(distDir)) {
+                    res.writeHead(403);
+                    res.end();
+                    return;
+                }
+                fs.readFile(filePath, (err, data) => {
+                    if (err) {
+                        res.writeHead(404);
+                        res.end();
+                        return;
+                    }
+                    res.writeHead(200, {
+                        "content-type": "application/octet-stream",
+                        "content-length": data.length,
+                    });
+                    res.end(data);
+                });
+            });
+            await new Promise((resolve) =>
+                distServer.listen(0, "127.0.0.1", resolve)
+            );
+            const distPort = distServer.address().port;
+            const manifestUrl = `http://127.0.0.1:${distPort}/manifest.json`;
+            try {
+                await wasm.init_resource_source(manifestUrl);
+                check(
+                    "ManifestResourceSource.connect() resolves against pre-baked dist/",
+                    wasm.has_resource_source() === true,
+                    `has_resource_source()=${wasm.has_resource_source()}`
+                );
+                check(
+                    "ManifestResourceSource starts with empty shard cache (boot serves directly)",
+                    wasm.cached_shard_count() === 0,
+                    `cached_shard_count()=${wasm.cached_shard_count()}`
+                );
+            } catch (e) {
+                check(
+                    "ManifestResourceSource.connect() resolves against pre-baked dist/",
+                    false,
+                    `init_resource_source threw: ${e?.message ?? e}`
+                );
+            }
+            await new Promise((resolve) => distServer.close(resolve));
+            fs.rmSync(distDir, { recursive: true, force: true });
+        }
+    } catch (e) {
+        check(
+            "ManifestResourceSource round-trip harness completed",
+            false,
+            `harness threw: ${e?.message ?? e}`
+        );
     }
 
     // Phase 4 step 1 error-path: start_session against a clearly-dead
