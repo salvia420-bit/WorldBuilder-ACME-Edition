@@ -1,54 +1,155 @@
 # emit-dynamic-site — Design
 
-> **Status (2026-05-04):** Phases 0, 1, and 2 are DONE. **Phase 3
-> closed enough to start Phase 4** — every renderer step the design
-> doc anticipated has shipped, plus several quality follow-ons that
-> emerged in flight. The wasm bundle now fetches a 3×3 Holtburg
-> neighbourhood, draws real retail terrain + roads + 239 placed
-> objects, and **renders each unique model in-browser at runtime via
-> per-poly UV-mapped textures** (Phase 3 step 6 — same pipeline as
-> the static-site emitter's `ObjectSpriteGenerator.cs::DrawTriangle`
-> but live, so user-imported custom models render with no re-bake
-> step). **Phase 4 steps 1 + 2a + 2a.5 + 2a.6 landed (2026-05-04)**
-> — the wasm bundle now drives the full AC login → CharacterList
-> → CharacterCreate → spawn handshake → in-world chat / admin
-> commands from the browser through `holtburger-wsbridge` to a
-> live ACE end-to-end. Open `apps/holtburger-web/index.html`, log
-> in (the bundle eagerly fetches `CharGen` (`0x0E000002`) +
-> `SkillTable` (`0x0E000004`) and builds a CharacterGenCatalog
-> for offline validation), use the in-browser
-> Create-test-character form, click Spawn → recv loop walks the
-> spawn handshake + sends `LoginComplete`, kind=7 EnteredWorld
-> unhides the "Teleport to Holtburg" button which sends
-> `@telepoi Holtburg` via `GameAction::Talk` to bypass the
-> Training Academy tutorial (account needs `accessLevel ≥ 4`
-> server-side; one-line SQL recipe in step 2a.6). The renderer
-> boots as a backdrop. See
-> [`docs/phase-4-renderer.md`](phase-4-renderer.md) for the as-built
-> and [`docs/phase-3-renderer.md`](phase-3-renderer.md) for the
-> renderer reference. Step 2b (position rendering + entity buffer)
-> is the next active rail.
->
-> **Phase 1 closed (2026-05-04).** The live-ACE round-trip ran:
-> `holtburger-cli ↔ wsshim ↔ wsbridge ↔ ACE` reached the character
-> Selection page with full handshake. ACE was brought up locally per
-> `docs/ace-local-setup.md` (MariaDB + 3 DBs + .NET 10 SDK + upstream
-> ACE clone). The vendored `external/ACE/Source/` is partial — the
-> upstream clone at `~/ace-server/` is the build root.
->
-> **Decisions answered since the original draft (do not re-litigate):**
-> §7.1 external proxy, §7.2 single namespaced HBA-of-HBAs, §7.3
-> Leaflet replaced by PixiJS-only, §7.4 wasm-pack picked. Recorded
-> inline in §7. The direct-DAT rendering decision in Phase 3 is new
-> and is recorded in §4.5 below; it walks away from the static-site
-> tile pyramid (the part that's cumbersome to re-bake every time
-> WorldBuilder edits a world) while keeping the static-site sprite
-> atlas as the visual-continuity bridge between the static gallery
-> and the live client.
->
-> **Audience:** anyone picking up the next phase. Read this end-to-end before
-> writing a line of code; several of the seams below are not what they appear to
-> be at a glance.
+## How to pick up this work
+
+> Read this section first. The rest of this document is the
+> long-lived design intent + decision history; this header is
+> the snapshot of where we actually are and what's blocking
+> what. Last refreshed **2026-05-05**.
+
+### Where the project is
+
+**Phases done:** 0, 1, 2, 3 (steps 1-6 + step 5 partial), 4 (step
+1 + 2a + 2a.5 + 2a.6), 5.0, 5.0b, 5.1a, 5.1b. Native lib gate
+**1121 / 0** across 14 workspace crates. `cargo check
+--target wasm32-unknown-unknown` clean for
+`holtburger-{dat,session,transport-ws,resource-http,web,content,
+core,manifest}`. `wasm-pack build --target {nodejs,web}` both
+green. `node smoke_test.cjs` **56 / 56 PASS**.
+
+**What works end-to-end today.** Open
+`apps/holtburger-web/index.html` in any browser. The page calls
+`init_resource_source("../../dist/manifest.json")` on startup;
+every `fetch_*` then reads through the global
+`ManifestResourceSource` (no `asset_url` parameter — Phase 5.0b
+dropped it). Holtburg renders with real retail textures + roads
++ 239 placed objects, every unique model triangulates and
+UV-maps in the browser at runtime via Phase 3 step 6's
+per-poly rasterizer. The login form drives the full AC handshake
+through `holtburger-wsbridge` to a live ACE: login →
+CharacterList → in-browser CharacterCreate → spawn handshake →
+`LoginComplete` → `kind=7 EnteredWorld` → "Teleport to
+Holtburg" button sends `@telepoi Holtburg` via
+`GameAction::Talk`.
+
+**Bake recipe (run once after the first clone, again whenever
+`dats/assets.hba` changes):**
+
+```bash
+cd external/holtburger
+cargo build -p holtburger-tools --bin dat-shard --release
+./target/release/dat-shard --input dats/assets.hba --output dist/
+# Produces: dist/manifest.json (203 MB; this is what manifest.md fixes),
+#           dist/boot.hba (1.86 MB, Holtburg's transitive closure),
+#           dist/shards/{sha256}.bin × 885k.
+```
+
+**Live-server stack** (the user keeps this running for
+on-device validation; recipe in
+[`phase-5-thorough.md`](phase-5-thorough.md) §"Live test info"):
+
+- Python `http.server` on `:8765` from `external/holtburger/`.
+- `holtburger-wsbridge` on `:8080` fronting ACE.
+- ACE on UDP `127.0.0.1:9000` / `:9001` (built from
+  `~/ace-server/`; recipe in
+  [`ace-local-setup.md`](ace-local-setup.md)).
+- Tailscale at `100.116.47.66`. Phone hits
+  `http://100.116.47.66:8765/apps/holtburger-web/index.html`,
+  logs in as `tailnet1` / `tailnet1` (Developer-promoted).
+
+### What's open — two parallel rails
+
+Pick one to pull on. The choice is real, not arbitrary.
+
+- **Content rail** — Phase 4 step 2b (position rendering +
+  multi-entity sprite buffer) → step 3 (input → AC movement
+  packets) → step 4 (DOM panels: chat, vitals, inventory).
+  Unblocks the actual gameplay loop. NPCs / monsters / doors /
+  portals all sit on this rail — ACE already pushes them via
+  `ObjectCreate` / `UpdatePosition` / `RemoveObject`, but the
+  page has no `Map<guid, sprite>` and no `UpdatePosition`
+  handler in the recv loop yet. Visible features land here.
+- **Bandwidth rail** — Phase 5.2 (manifest scale fix) at
+  [`manifest.md`](manifest.md). Real-world bake produces a
+  **203 MB** `manifest.json` (885,043 entries × ~230 bytes
+  verbose JSON; `eor/cell` envcells dominate). Closes the
+  manifest itself as the new bandwidth cliff (Phase 5.0 closed
+  the original 605 MB single-bundle cliff). Required before
+  public CDN deployment or 600 kbps cellular validation
+  (Phase 5 obj 11). NOT required for dev iteration over
+  Tailscale WiFi.
+
+**Recommended order: content rail first.** The v1 → v2 manifest
+swap proposed in `manifest.md` is contained entirely inside
+`ManifestResourceSource::connect`/`prefetch` and the bake-time
+emission in `dat-shard`. Every `fetch_*` export keeps the same
+shape across both versions (`global_source().prefetch(&keys)
+.await + get_file_by_key`), so new exports content work adds
+cost effectively zero lines to migrate when 5.2 lands. The
+reverse ordering (5.2 first) also works fine; it's just more
+infrastructure-before-features. Skip 5.2 entirely until you
+need obj-11 phone validation or public CDN deploy.
+
+### What to read next
+
+In order:
+
+1. **This document.** Long-lived design intent, decisions
+   (§4 + §5), open questions (§7), phase status (§8),
+   reference index (§9).
+2. [`phase-4-renderer.md`](phase-4-renderer.md) — Phase 4 step
+   1 + 2a + 2a.5 + 2a.6 as-built. Read before adding any
+   wasm-bindgen export or recv-loop branch.
+3. [`phase-3-renderer.md`](phase-3-renderer.md) — Phase 3
+   step 1-6 as-built. Read before touching the renderer
+   pipeline (heightmap, terrain shader, sprite atlas, runtime
+   per-model render).
+4. [`phase-5-thorough.md`](phase-5-thorough.md) — Phase 5.0 /
+   5.0b / 5.1a / 5.1b as-built. Read before changing the
+   manifest, `ManifestResourceSource`, `dat-shard`,
+   `holtburger_dat::walk`, or the smoke harness.
+5. [`thorough.md`](thorough.md) — Phase 5.0 framing brief
+   (already executed; stays as historical context for the
+   delivery-architecture decisions).
+6. [`manifest.md`](manifest.md) — Phase 5.2 framing brief
+   (**not yet executed**; the next agent on the bandwidth
+   rail picks this up).
+7. [`ace-local-setup.md`](ace-local-setup.md) — recipe for
+   bringing up ACE locally for live-ACE work.
+8. [`phase-2-wasm-spike.md`](phase-2-wasm-spike.md) — Phase 2
+   wasm32 cross-compile spike record. Read only if rebooting
+   the wasm cross-compile floor.
+9. `~/.claude/projects/-home-wbterminal/memory/project_emit_dynamic_site.md`
+   — auto-loaded into Claude's context. Verify it matches
+   this document's status section before relying on it.
+
+### Decisions settled (do not re-litigate)
+
+§7.1 external WS proxy over ACE patch, §7.2 single namespaced
+HBA-of-HBAs **superseded by Phase 5.0 manifest+shards
+delivery** (§7.2 below has the supersedence note), §7.3
+Leaflet replaced by PixiJS-only, §7.4 wasm-pack over trunk.
+The §4.5 direct-DAT rendering rail (replaced the static-site
+tile pyramid as live-client basemap) is settled. §5.2 records
+the wasm cross-compile sweep; §5.5 records the RC4 vs ISAAC
+audit. The Phase 5.0 architecture (sync `ResourceSource` +
+async `prefetch`, content-addressable shards, transitive boot
+walk) is settled — see [`phase-5-thorough.md`](phase-5-thorough.md)
+"Decisions to NOT re-litigate" for the full list.
+
+### Audience
+
+Anyone picking up the next phase. Read this header end-to-end,
+then descend to the section that matches the rail you're
+pulling. Several seams below the abstract pretty-doc layer are
+not what they appear at a glance — §3.1 in particular still
+lists "two patches needed" against `ResourceSource` (the
+async-trait refactor) that were *deliberately rejected* in
+Phase 5.0 in favor of explicit `prefetch()`. Read §5.2 + the
+Phase 5 ledger before drawing conclusions from §3.1's
+groundwork-pass language.
+
+---
 
 ---
 
@@ -140,9 +241,16 @@ The README's architectural claim is real, not aspirational:
   transport. **Patch needed:** add `Session::new_with_transport(...)`.
 - **`ResourceSource` trait** at `external/holtburger/crates/holtburger-dat/src/lib.rs:138-148`.
   Three methods (`get_file_by_key`, `get_metadata_by_key`, `has_namespace`),
-  return type `Vec<u8>`. **Two patches needed:** make it `async`, and add a
-  streaming variant for large assets. (Today it's blocking-`Vec<u8>` — workable
-  for small DAT chunks, painful for the 200MB+ landscape blob.)
+  return type `Vec<u8>`. The original groundwork pass said "two
+  patches needed: make it async + add a streaming variant"; **both
+  were deliberately rejected** in Phase 5.0 (see §5.2 for the
+  reasoning). The trait stays sync; `ManifestResourceSource`
+  serves cached records sync from `Arc<Mutex<HashMap>>` and exposes
+  a separate explicit `prefetch(&[ResourceKey<'_>]) -> impl Future`
+  async method that each `fetch_*` export calls before any sync
+  read. The "200MB+ landscape blob" framing was answered by the
+  shift to per-record sha256-keyed shards (Phase 5.0); records
+  are now ≤ a few KB each, fetched lazily on demand.
 - **Fragment reassembly** at `external/holtburger/crates/holtburger-session/src/session/receive.rs:405-423`
   assumes one transport-layer message == one complete AC packet (with N fragments
   embedded). This is fine over WebSocket as long as the bridge sends one WS
@@ -474,24 +582,42 @@ crate matrix at §3 of that file. The auto-memory entry
 `project_emit_dynamic_site.md` carries the same information for future
 sessions.
 
-### 5.3 DAT-over-HTTP — feasible, but thoughtful
+### 5.3 DAT-over-HTTP — feasible, but thoughtful — RESOLVED
 
 The `ResourceSource` trait makes this trivial *to wire up* and non-trivial *to
-do well*. Three things to settle:
+do well*. The three open questions below all landed in Phase 5.0 (see
+[`phase-5-thorough.md`](phase-5-thorough.md) for the as-built reference):
 
-1. **Granularity.** Holtburger's `dat2hba` tool produces "namespaced HBA v2
-   bundles" — already a step toward shardable assets. But an HBA bundle today
-   is one big file. The browser cannot afford to download the full bundle
-   before starting; we need either per-asset HTTP fetches (high request count)
-   or pre-sharded bundles by zone/region (better cache locality, more
-   tooling). Pick a pattern early; it's easier than retrofitting.
-2. **Caching.** Once an asset is fetched it should sit in IndexedDB (or the
-   browser's HTTP cache, if we set headers correctly), not re-fetched per
-   session. Adds a `CachedResourceSource` wrapper around the HTTP one.
-3. **Security/integrity.** AGPL §13 doesn't require us to keep the DATs
-   private — but if we serve them publicly we are arguably distributing AC
-   client assets, which has its own legal posture independent of AGPL.
-   Operator concern, not architectural; flag it loudly in deployment docs.
+1. **Granularity. — RESOLVED:** content-addressable per-record
+   shards. `dat-shard` (commit `0d81554`) slices the source HBA
+   into one file per unique sha256, plus a small precompiled
+   `boot.hba` (Phase 5.1's transitive walk; commit `5fb0919`)
+   covering everything reachable from the spawn-area landblock.
+   `ManifestResourceSource` (commit `f760981`) fetches the boot
+   pack at construction time and lazy-fetches individual shards
+   via the explicit `prefetch(&[ResourceKey<'_>])` async surface.
+   The original Phase 2 single-bundle answer (§7.2) was
+   superseded by this shift — see §7.2 supersedence note. The
+   *manifest itself* is now the size cliff (203 MB on a real
+   bake); Phase 5.2 closes that — see
+   [`manifest.md`](manifest.md).
+2. **Caching. — RESOLVED:** service-worker-backed Cache Storage.
+   `apps/holtburger-web/service-worker.js` (commit `78c6924`)
+   intercepts `/shards/*.bin` requests, serves from the
+   persistent Cache Storage if present, falls through to network
+   on miss, stashes successful responses for next visit. Cache
+   Storage gets the IndexedDB durability guarantee with
+   `Request`-keyed lookup. The wasm bundle's in-memory shard
+   cache (`Arc<Mutex<HashMap>>` in `ManifestResourceSource`)
+   layers on top for per-session warm hits.
+3. **Security/integrity. — RESOLVED at the architecture layer;
+   operator-driven at deployment.** Sha256-keyed shards mean
+   tampered shards fail to verify against the manifest's hash;
+   `ManifestResourceSource::prefetch` rejects mismatched bytes
+   with `PrefetchError::HashMismatch` (commit `f760981`). The
+   AGPL §13 / AC asset distribution concern is operator-side;
+   flag it in deployment docs (Phase 6 hosting brief, still
+   open).
 
 ### 5.4 AGPL v3 §13 — a real obligation, not a footnote
 
@@ -560,22 +686,46 @@ genuinely open.
 > The patch path stays open if ACE-side awareness of WS clients ever
 > becomes load-bearing, but no force has appeared yet.
 
-### 7.2 DAT delivery format: per-asset, or pre-sharded HBA? — ANSWERED: single namespaced HBA-of-HBAs
+### 7.2 DAT delivery format: per-asset, or pre-sharded HBA? — ANSWERED twice: Phase 2 single-bundle, then Phase 5.0 manifest+shards
 
-> Resolved by Phase 2 §8 step 4 (commit `ac7f92d`). The existing
-> `dat2hba` tool produces a "namespaced HBA v2 bundle" — already
-> shardable by namespace. We ship a single bundle (`dats/assets.hba`,
-> ~230 MB at `--profile pruned`) with `eor/portal`, `eor/cell`, and
-> `holtburger/core` namespaces inside; the wasm bundle's
-> `HttpResourceSource::connect(url)` fetches it once at session start
-> and serves entries sync from in-memory state.
+> **Phase 2 answer (commit `ac7f92d`):** ship a single
+> namespaced HBA-of-HBAs bundle. `dats/assets.hba` (~230 MB at
+> `--profile pruned`, 605 MB at `--profile full`); the wasm
+> bundle's `HttpResourceSource::connect(url)` fetches it once
+> at session start and serves entries sync. Worked for desktop
+> + LAN; failed for cellular and corporate firewalls (the
+> bundle's pre-load cost became the UX problem the answer
+> deferred).
 >
-> The "one bundle per landblock-region (~100 regions)" sharding was
-> rejected for the spike — the simpler shape ships first; revisit if
-> the single-bundle's pre-load cost becomes a UX problem (it does
-> not today). The brief at §8 lays out the migration path if needed.
+> **Phase 5.0 supersedence (commits `0578cb7..688550d`):**
+> content-addressable manifest + per-record shards.
+> `dat-shard` (separate from `dat2hba`) slices the source HBA
+> into one file per unique sha256, plus a precompiled
+> `boot.hba` covering the spawn-area transitive closure
+> (Phase 5.1, commit `5fb0919`). `ManifestResourceSource`
+> replaces `HttpResourceSource` as the browser's resource
+> source. First-paint cost for Holtburg drops from 605 MB →
+> 1.86 MB (boot pack) + a few hundred KB of catalog records;
+> per-landblock cost becomes a few KB per record fetched
+> lazily as the camera pans. Brief:
+> [`thorough.md`](thorough.md). As-built:
+> [`phase-5-thorough.md`](phase-5-thorough.md).
 >
-> See `docs/phase-2-wasm-spike.md` §8.4 for the full rationale.
+> **Phase 5.2 follow-on (NOT YET EXECUTED, brief at
+> [`manifest.md`](manifest.md)):** the *manifest itself* is
+> the new size cliff. A real-world bake produces a 203 MB
+> `manifest.json` because every shard listing costs ~230 bytes
+> of verbose JSON × 885k records. Phase 5.2 introduces a v2
+> manifest format: tiny top-level (~2 KB) + lazy-fetched
+> per-namespace binary catalogs (~6-8 MB gzipped each) +
+> convention-derived shard URLs. Pulls the architecture out
+> of "linear-with-world-content" into "constant-with-world-
+> content" at the top level.
+>
+> See [`phase-2-wasm-spike.md`](phase-2-wasm-spike.md) §8.4
+> for the original Phase 2 single-bundle rationale, and
+> [`thorough.md`](thorough.md) §Context for why Phase 5.0
+> superseded it.
 
 ### 7.3 Tile basemap: keep Leaflet, or replace? — ANSWERED: replaced (PixiJS-only)
 
@@ -910,22 +1060,42 @@ Step ledger:
   `docs/images/phase-4-step-2a-spawned.png` re-captured with
   Teleport button + post-teleport status.
 - ⏳ **Step 2b — `ClientViewEvent` → PIXI entity buffer.**
-  Position-driven rendering for the local player + NPCs / monsters
-  via `ObjectCreate` + `UpdatePosition` / `VectorUpdate`. Reuses
-  Phase 3 step 6's per-model render cache. Allows switching
-  characters mid-session.
-- ⏳ **Step 2 — `ClientViewEvent` → PIXI entity buffer.** Once a
-  character is selected in step 1 and spawned, AC's server starts
-  pushing world state (entity positions, animations, chat). Wire
-  the Session's event stream into the renderer's per-frame loop.
-  Reuses step 6's per-model render cache for entity sprites.
+  *(Active rail as of 2026-05-05. The brief framing this is
+  not yet written — see the "How to pick up this work" header
+  at the top of this doc + the §"What's NOT in step 2a.6" list
+  in [`phase-4-renderer.md`](phase-4-renderer.md).)* Adds an
+  `UpdatePosition` / `PrivateUpdatePosition` /
+  `PublicUpdatePosition` handler to the recv loop in
+  `apps/holtburger-web/src/lib.rs::recv_loop`; surfaces a new
+  `kind=8 PlayerPositionUpdate` event with packed `(landblock_id,
+  x, y, z, qw, qx, qy, qz)`. Adds JS-side `Map<guid, sprite>` so
+  the local player and other entities render at world coords.
+  `ObjectCreate` events with `data.public_weenie_desc.guid`
+  + `data.pos` surface as `kind=9 EntitySpawned`; `RemoveObject`
+  surfaces as `kind=10 EntityRemoved`. Reuses Phase 3 step 6's
+  per-model render cache (`fetch_model_meshes` +
+  `fetch_surfaces_pixels`) for entity sprites — the texture
+  pipeline is already live, the missing piece is just the
+  position-driven update path. Reference for the cli's existing
+  `UpdatePosition` handler:
+  `external/holtburger/crates/holtburger-world/src/handlers/player.rs:33+`.
 - ⏳ **Step 3 — input (WASD / click-to-target) → AC movement
   packets.** Translate browser input events through
   `holtburger-core`'s existing input surface to AC
   `CharacterPositionUpdate` packets. Closes the gameplay loop.
 - ⏳ **Step 4 — DOM panels (chat, vitals, inventory).** Render
-  the retail UI surfaces holtburger already drives, in DOM panels
-  next to the PIXI canvas. Parallel to step 2/3.
+  the retail UI surfaces holtburger already drives, in DOM
+  panels next to the PIXI canvas. Parallel to step 2/3.
+  `GameMessage::ServerMessage` and
+  `GameEvent::CommunicationTransientString` surface as
+  `kind=2 ChatReceived` events here.
+- ⏳ **Step 5 — interactive entities (doors, portals, vendors).**
+  Adds `SessionHandle.useObject(guid)` wasm export →
+  `GameAction::UseObject(guid)` outbound. Server-side ACE
+  handles the rest (door open/close animation, portal teleport
+  via `PrivateUpdatePosition`, vendor inventory via
+  `GameMessage::OpenContainer`). The page just dispatches the
+  click + handles the response events. Parallel to step 4.
 
 Phase 5 — **Hardening.** In flight.
 
@@ -940,17 +1110,83 @@ Step ledger:
   `holtburger-manifest` schema crate, `dat-shard` tool,
   `ManifestResourceSource` (wasm32 consumer), thread-local
   `init_resource_source` page-init export, `index.html`
-  manifest-mode wiring, `service-worker.js` IndexedDB cache,
-  `dat2hba --profile boot`. Smoke 48 → 55, native lib 1106 →
-  1116. Open: per-export refactor (Phase 5.0b) couples to the
-  smoke-fixture rewrite; transitive boot-pack walk
-  (Phase 5.1) couples to factoring the GfxObj/SetupModel
-  walks out of `apps/holtburger-web` private code.
+  manifest-mode wiring (opt-in), `service-worker.js`
+  IndexedDB cache, `dat2hba --profile boot` (minimum-viable;
+  catalog tables + 9-cell spawn neighborhood). Smoke 48 → 55,
+  native lib 1106 → 1116.
+- ✅ **Phase 5.0b — per-export refactor (2026-05-04, commit
+  `8afb423`).** Drops `asset_url: String` from every
+  wasm-bindgen `fetch_*` export; routes them all through the
+  global `ManifestResourceSource` + explicit `prefetch()` async
+  surface. Smoke harness pre-bakes a manifest+shard fixture
+  via the dat-shard binary. Manifest mode is now the only path
+  on the live page; legacy `HttpResourceSource::connect(url)`
+  stays available for native callers / fixtures only. New
+  `RecordingSource` wrapper in
+  `holtburger-resource-http` drives iterative shard discovery
+  for unbounded-depth walks (`fetch_object_colours`,
+  `fetch_model_mesh`, `fetch_surface_pixels`). Smoke 55 → 56,
+  native lib 1116 / 0.
+- ✅ **Phase 5.1a — `holtburger_dat::walk` extraction
+  (2026-05-04, commit `7224359`).** New
+  `crates/holtburger-dat/src/walk.rs` module. Public
+  `collect_model_dependencies(source, model_id, out)` walks the
+  GfxObj/SetupModel → Surface → SurfaceTexture → Texture →
+  Palette chain and accumulates every reachable record's
+  `(namespace, file_id)` into a `HashSet`. Public
+  `read_gfx_obj_surfaces(bytes) -> Option<Vec<u32>>` minimal
+  GfxObj header parser (avoids the BSP / vertex-array
+  regressions that crashed the full parser on ~50% of retail
+  records). 4 unit tests; native lib 1116 → 1120.
+- ✅ **Phase 5.1b — transitive boot pack walk (2026-05-04,
+  commit `5fb0919`).** New `compute_boot_keep_set(bundle,
+  boot_landblock)` in `holtburger_tools::dat_shard` calls
+  `collect_model_dependencies` for every placement in each
+  spawn-area LandblockInfo's `objects` Stab + `buildings`
+  BuildInfo lists. Boot pack expands from "essentials + 9
+  cells" (14 covers, 346 KB on Holtburg) to
+  "essentials + 9 cells + everything visible at spawn"
+  (635 covers, 1.86 MB). Bug fix folded in: `--boot-landblock`
+  default was scrambling 0xA9B4 → 0x43444 because clap's
+  `default_value_t` Display'd the u32 as decimal then
+  re-parsed via `parse_hex_u32` as hex. Switched to
+  `default_value = "0xA9B4"` so the default flows through the
+  parser once. Same fix in `dat2hba --profile boot`.
+  1 new unit test; native lib 1120 → 1121.
+- ⏳ **Phase 5.2 — manifest scale fix (BRIEF AT
+  [`manifest.md`](manifest.md), NOT YET EXECUTED).** Real-world
+  bake produces a 203 MB `manifest.json` (885,043 entries ×
+  ~230 bytes verbose JSON; `eor/cell` envcells dominate). The
+  manifest is the new cliff. Phase 5.2 introduces a v2 format:
+  tiny top-level (~2 KB; just version, source provenance,
+  boot pack metadata, namespaces, URL templates) + lazy-fetched
+  per-namespace binary catalogs (`manifest/<namespace>.bin`,
+  ~19 bytes/entry × namespace size, gzipped at HTTP layer) +
+  convention shard URLs derived from `(namespace, file_id)` or
+  sha256. v1 stays one release cycle for in-flight CDN deploy
+  drain, then removed. Required before public CDN deployment
+  or 600 kbps cellular validation (Phase 5 obj 11); not
+  required for dev iteration over Tailscale WiFi.
+- ⏳ **Phase 5.3 — boot pack adaptive sizing (no brief yet).**
+  5.1b's transitive walk is "include everything reachable from
+  spawn placements" — for Holtburg that's 1.86 MB. For dense
+  areas (Mountain Sea, Yaraq, capital cities) the boot pack
+  may exceed the bandwidth target. 5.3 would add an adaptive
+  policy: smaller surround radius for high-density areas, or
+  an "essential rendering" heuristic that drops some surface
+  chains in favor of category-tint fallback. Cell-density
+  histogram per landblock could drive the policy. Not blocking
+  current dev; surfaces if/when validation against dense areas
+  on real cellular shows the pack is too big.
 
 Open follow-ons (no specific brief yet):
 - Login flow UX (§7.5).
 - Performance: 100 concurrent entities, 1000, 5000.
 - Multi-project / multi-world picker.
+- Phase 6 — CDN deployment (CloudFront / Cloudflare R2 /
+  Fastly / self-hosted nginx; Brotli vs gzip vs zstd;
+  `X-Content-SHA256` integrity headers; AGPL §13 source
+  publication URL).
 
 Each phase ends with a working artifact. We do not start the next phase until
 the current one demonstrably works against ACE.
@@ -999,14 +1235,24 @@ re-discovering them.
 | Doc | Covers |
 |---|---|
 | [`phase-2-wasm-spike.md`](phase-2-wasm-spike.md) | Phase 2 §3 per-crate cross-compile matrix, §8 step ledger, status banner |
-| [`phase-3-renderer.md`](phase-3-renderer.md) | Phase 3 steps 1, 2, 3, 3.5, 4, 4.5, 5 partial, 6 as-built reference + screenshots |
-| [`phase-3-step-1-handoff.md`](phase-3-step-1-handoff.md) | Brief that framed step 1 (single-landblock render) |
-| [`phase-3-step-2-handoff.md`](phase-3-step-2-handoff.md) | Brief that framed step 2 (3×3 + camera + unit fix) |
-| [`phase-3-step-3-handoff.md`](phase-3-step-3-handoff.md) | Brief that framed step 3 (per-vertex terrain code + custom shader) |
-| [`phase-3-step-4.5-handoff.md`](phase-3-step-4.5-handoff.md) | Brief that framed step 4.5 (Surface chain + per-model real colours) |
-| [`phase-4-step-1-handoff.md`](phase-4-step-1-handoff.md) | Brief framing the next step (wasm-driven AC login → CharacterList) |
+| [`phase-3-renderer.md`](phase-3-renderer.md) | Phase 3 steps 1, 2, 3, 3.5, 4, 4.5, 4.5b, 4.5c, 5 partial, 6 as-built reference + screenshots |
+| [`phase-4-renderer.md`](phase-4-renderer.md) | Phase 4 step 1 + 2a + 2a.5 + 2a.6 as-built (login → CharacterList → CharacterCreate → spawn handshake → chat / `@telepoi`) |
+| [`phase-5-thorough.md`](phase-5-thorough.md) | Phase 5.0 + 5.0b + 5.1a + 5.1b as-built (manifest+shards delivery, per-export refactor, transitive boot walk) |
+| [`thorough.md`](thorough.md) | Phase 5.0 framing brief (already executed; historical reference for the delivery-architecture decisions) |
+| [`manifest.md`](manifest.md) | Phase 5.2 framing brief (NOT YET EXECUTED; the manifest scale fix at the v2 schema layer) |
+| [`ace-local-setup.md`](ace-local-setup.md) | Recipe for bringing up ACE locally (MariaDB + 3 DBs + .NET 10 SDK + upstream ACE clone) |
+| Per-step handoff briefs (`phase-3-step-{1,2,3,4.5}-handoff.md`, `phase-4-step-1-handoff.md`) | Original framing briefs for individual steps. Deletable once the as-built docs above subsume their content. |
 
 ### Live-client wasm-bindgen surface (`apps/holtburger-web`)
+
+> Signatures shown reflect the post-Phase-5.0b API: every
+> `fetch_*` reads through the global `ManifestResourceSource`
+> populated by `init_resource_source()` at page-init time, so
+> none of them carry the `asset_url` parameter the original
+> Phase 2 / 3 versions had. The internal flow is
+> `global_source().prefetch(&keys).await` → sync
+> `get_file_by_key(key)` per record → existing parse + tessellate
+> logic.
 
 | Export | Phase | Purpose |
 |---|---|---|
@@ -1014,28 +1260,39 @@ re-discovering them.
 | `hash32(&[u8]) -> u32` | 2 | Deterministic AC packet checksum (smoke) |
 | `session_smoke_test_packet_sequence() -> u32` | 2 | `Session::new_test` runs on wasm32 |
 | `try_ws_handshake_smoke(bridge_url, ip, port) -> Promise<u32>` | 2 §8.2 | WsTransport ↔ Session wiring (browser-only validation needs live bridge) |
-| `try_http_resource_source_smoke(url, ns, id) -> Promise<u32>` | 2 §8.4 | HttpResourceSource end-to-end (smoke) |
-| `fetch_landblock_heightmap(url, cell_id) -> Promise<LandblockMesh>` | 3 step 1 | Single-landblock terrain mesh (one-line wrapper around the plural form) |
-| `fetch_landblock_heightmaps(url, cell_ids) -> Promise<Vec<LandblockMesh>>` | 3 step 2 | Batch terrain meshes + per-vertex `terrainCodes` + `roadCodes` — one HBA open per call |
-| `fetch_terrain_textures(url) -> Promise<Vec<TerrainTexture>>` | 3 step 3.5 | All 33 retail terrain textures decoded to RGBA8 (Palette + SurfaceTexture + Texture chain) |
-| `fetch_landblock_objects(url, cell_ids) -> Promise<Vec<ObjectPlacement>>` | 3 step 4 | LandblockInfo Stab + BuildInfo lists — `(model_id, x, y, z, rotation_z)` per placement |
-| `fetch_object_colours(url, model_ids) -> Promise<Vec<u32>>` | 3 step 4.5 | Per-model representative ARGB from each model's GfxObj/SetupModel → Surface chain (textured-mean walk + DXT decode) |
-| `fetch_model_mesh(url, model_id) -> Promise<ModelMesh>` | 3 step 6 | Single-model triangulation (positions, uvs, normals, surfaceIndices, surfaces, bbox, worldBounds) |
-| `fetch_model_meshes(url, model_ids) -> Promise<Vec<ModelMesh>>` | 3 step 6 | Batch model triangulation — one HBA open per call |
-| `fetch_surface_pixels(url, surface_did) -> Promise<SurfacePixels>` | 3 step 6 | Single surface decoded to RGBA8 (Surface → SurfaceTexture → Texture chain). Solid-colour surfaces synthesize a 1×1 ARGB tile. |
-| `fetch_surfaces_pixels(url, surface_dids) -> Promise<Vec<SurfacePixels>>` | 3 step 6 | Batch surface decode — feeds the in-browser per-poly rasterizer |
-| `start_session(bridge_url, ip, port, username, password) -> Promise<SessionHandle>` | 4 step 1 (planned) | Drive AC login → CharacterList through wasm + WS bridge |
-| `SessionHandle.poll_events() -> Vec<ClientEvent>` | 4 step 1 (planned) | Pull-style event drain — JS calls per animation frame |
-| `SessionHandle.character_list() -> Vec<CharacterSummary>` | 4 step 1 (planned) | Account's characters once login resolves |
+| `init_resource_source(manifest_url) -> Promise<()>` | 5.0 obj 5 | Page-init hook. Fetches `manifest.json` + boot pack, verifies sha256, populates the thread-local `ManifestResourceSource` every `fetch_*` reads from. Must be called once before any `fetch_*` or `start_session`. |
+| `has_resource_source() -> bool` | 5.0 obj 5 | Introspection: did `init_resource_source` resolve? |
+| `cached_shard_count() -> usize` | 5.0 obj 5 | Introspection: how many records are in the per-session shard cache (excludes boot pack). Smoke tests pin this as a "did `prefetch` populate the cache" probe. |
+| `try_http_resource_source_smoke(namespace, file_id) -> Promise<u32>` | 2 §8.4 + 5.0b | Smoke-only round-trip through the global manifest source. Returns byte length of the named entry. |
+| `fetch_landblock_heightmap(cell_id) -> Promise<LandblockMesh>` | 3 step 1 | Single-landblock terrain mesh (one-line wrapper around the plural form). |
+| `fetch_landblock_heightmaps(cell_ids) -> Promise<Vec<LandblockMesh>>` | 3 step 2 | Batch terrain meshes + per-vertex `terrainCodes` + `roadCodes`. Pre-fetches the `eor/cell:XXYYFFFF` keys via the global source. |
+| `fetch_terrain_textures() -> Promise<Vec<TerrainTexture>>` | 3 step 3.5 | All 33 retail terrain textures decoded to RGBA8. Explicit per-level prefetch (33 SurfaceTextures → up to 33 Textures → up to 33 Palettes). |
+| `fetch_landblock_objects(cell_ids) -> Promise<Vec<ObjectPlacement>>` | 3 step 4 | LandblockInfo Stab + BuildInfo lists — `(model_id, x, y, z, rotation_z)` per placement. Tolerant of missing LBI records (ocean cells silently skipped). |
+| `fetch_object_colours(model_ids) -> Promise<Vec<u32>>` | 3 step 4.5 | Per-model representative ARGB from each model's GfxObj/SetupModel → Surface chain. Iterative discovery via `RecordingSource` (Phase 5.0b). |
+| `fetch_model_mesh(model_id) -> Promise<ModelMesh>` | 3 step 6 | Single-model triangulation (positions, uvs, normals, surfaceIndices, surfaces, bbox, worldBounds). Iterative discovery via `RecordingSource`. |
+| `fetch_model_meshes(model_ids) -> Promise<Vec<ModelMesh>>` | 3 step 6 | Batch model triangulation. |
+| `fetch_surface_pixels(surface_did) -> Promise<SurfacePixels>` | 3 step 6 | Single surface decoded to RGBA8 (Surface → SurfaceTexture → Texture chain). Solid-colour surfaces synthesize a 1×1 ARGB tile. |
+| `fetch_surfaces_pixels(surface_dids) -> Promise<Vec<SurfacePixels>>` | 3 step 6 | Batch surface decode — feeds the in-browser per-poly rasterizer. |
+| `start_session(bridge_url, ip, port, username, password) -> Promise<SessionHandle>` | 4 step 1 + 2a.5 + 5.0b | Drive AC login → CharacterList. Background-loads `CharGen` + `SkillTable` via the global source if `has_resource_source()` is true (Phase 5.0b dropped the legacy `asset_url` 6th param). |
+| `SessionHandle.poll_events() -> Vec<ClientEvent>` | 4 step 1 | Pull-style event drain — JS calls per animation frame. Event kinds: 0 CharacterList, 1 PlayerSpawned, 2 ChatReceived (planned step 4), 4 Disconnected, 5 CharacterCreated, 6 CharacterCreateFailed, 7 EnteredWorld. |
+| `SessionHandle.characterList() -> Vec<CharacterSummary>` | 4 step 1 | Account's characters once login resolves. |
+| `SessionHandle.accountName() -> String` | 4 step 1 | Account name carried in the `CharacterList` packet. |
+| `SessionHandle.canCreateCharacter() -> bool` | 4 step 2a.5 | Getter: did the catalog (`CharGen` + `SkillTable`) load? |
+| `SessionHandle.selectCharacter(guid) -> Result<()>` | 4 step 2a | Drive `CharacterEnterWorldRequest` → spawn handshake. |
+| `SessionHandle.createTestCharacter(name) -> Result<()>` | 4 step 2a.5 | Build an Aluvian / Male / Adventurer / Holtburg `CharacterCreateRequestData` via `holtburger_core::CharacterGenBuilder` and dispatch. |
+| `SessionHandle.sendChat(message) -> Result<()>` | 4 step 2a.6 | Dispatch `GameAction::Talk(message)`. `@`/`/`-prefixed messages route to ACE's command parser; access-level enforced server-side. |
 
 ---
 
 *Maintainers: when you change one of the decisions in §4, update §8 and §9 in
 the same change. The as-built status of §5.2 and §7.1-7.4 lives inline in
 those sections; the step-by-step record for Phase 2 lives in
-`phase-2-wasm-spike.md`, Phase 3 in `phase-3-renderer.md`, Phase 4 will
-land its own `phase-4.md` once step 1 lands. This file is the long-lived
-design intent; the spike + renderer docs are the short-lived as-built
+`phase-2-wasm-spike.md`, Phase 3 in `phase-3-renderer.md`, Phase 4 in
+`phase-4-renderer.md`, Phase 5 in `phase-5-thorough.md`. The framing
+briefs for not-yet-executed phases (Phase 5.2 at `manifest.md`) sit
+alongside; once executed, an as-built doc spawns next to them. This
+file is the long-lived design intent; the spike + renderer docs are
+the short-lived as-built
 records, and the per-step handoff briefs at `phase-{N}-step-{M}-handoff.md`
 are the per-step framing briefs (deletable once their step is closed and
 captured in the as-built doc).*
