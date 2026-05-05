@@ -6,6 +6,7 @@ pub mod landblock;
 pub mod manifest;
 pub mod physics;
 pub mod utils;
+pub mod walk;
 pub mod weenie;
 
 use crate::utils::FileExtPolyfill;
