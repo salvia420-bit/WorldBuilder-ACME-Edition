@@ -26,6 +26,17 @@ use holtburger_protocol::crypto::Hash32;
 use holtburger_session::Session;
 use wasm_bindgen::prelude::*;
 
+// Phase 4 step 3 diagnostics — surface recv_loop trace messages to
+// the browser console without pulling in `web_sys` (the Cargo.toml
+// comment notes "avoids dragging `web-sys` along"). One #[wasm_bindgen]
+// extern is cheaper than the full `web_sys::console` module.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console, js_name = log)]
+    fn console_log_str(s: &str);
+}
+
 #[cfg(target_arch = "wasm32")]
 mod global_source;
 
@@ -3074,15 +3085,32 @@ async fn recv_loop(
                                 qz: 0.0,
                             });
                         }
+                        GameMessage::UpdateMotion(data) => {
+                            // Phase 4 step 3 wire validation: ACE
+                            // broadcasts UpdateMotion in response to
+                            // our outbound MoveToState (see
+                            // `Player_Networking.cs::BroadcastMovement`
+                            // line 365 — `EnqueueBroadcast(true, ...)`
+                            // includes the originator). Receiving this
+                            // confirms ACE accepted our packet and is
+                            // simulating motion. The local player's
+                            // sprite still won't slide — retail AC
+                            // expects the client to predict locally —
+                            // but the round-trip is observable here.
+                            console_log_str(&format!(
+                                "[step3-trace] UpdateMotion guid=0x{:08X} (ACE accepted MoveToState)",
+                                u32::from(data.guid),
+                            ));
+                        }
                         _ => {
                             // Other GameMessages are dropped silently in
-                            // step 2b — chat (kind=2), VectorUpdate /
-                            // UpdateMotion (step 2b extension — not
-                            // strictly needed for position rendering),
-                            // equipment / chat panel (step 4) all live
-                            // downstream. The recv loop's job here is
-                            // to stay alive + deliver the InWorld signal
-                            // + relay position-bearing messages.
+                            // step 2b — chat (kind=2), VectorUpdate
+                            // (step 2b extension — not strictly needed
+                            // for position rendering), equipment / chat
+                            // panel (step 4) all live downstream. The
+                            // recv loop's job here is to stay alive +
+                            // deliver the InWorld signal + relay
+                            // position-bearing messages.
                         }
                     }
                 }
@@ -3163,6 +3191,10 @@ async fn recv_loop(
                         turn,
                         run,
                     }) => {
+                        console_log_str(&format!(
+                            "[step3-trace] SetMovementInput cmd: forward={forward} strafe={strafe} turn={turn} run={run} pos_known={}",
+                            local_player.position.is_some(),
+                        ));
                         // Phase 4 step 3: the cli routes WASD-style
                         // input through `ClientCommand::DriveSelf(
                         // PlayerDriveIntent::ManualHeld(MotionState))`
@@ -3214,6 +3246,7 @@ async fn recv_loop(
                             });
                             return;
                         }
+                        console_log_str("[step3-trace] MoveToState send_action OK");
                     }
                 }
             }

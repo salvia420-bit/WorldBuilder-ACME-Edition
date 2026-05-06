@@ -1552,6 +1552,12 @@ void main() {
         try {
           const handle = await start_session(bridgeUrl, serverIp, serverPort, account, password);
           activeHandle = handle;
+          // Phase 4 step 3 capture-script debug hook (alongside
+          // `window.entityMap` / `window.liveScene`). Lets the
+          // Playwright capture dispatch admin commands like `@pk pk`
+          // without going through the per-button click flow. Strictly
+          // debug-only; not relied on by any production code path.
+          window.__sessionHandle = handle;
 
           // Step 2a: the recv loop signals the initial CharacterList
           // back via the oneshot inside start_session, so it arrives as
@@ -1745,7 +1751,11 @@ void main() {
           // each animation frame. The recv loop in Rust pushes events
           // as they arrive; this is the JS-side receiver that wires
           // them to UI updates.
+          window.__rafTickCount = 0;
+          window.__lastInputSig = "0,0,0,false";
+          window.__smiCallCount = 0;
           function drainEvents() {
+            window.__rafTickCount++;
             const events = handle.poll_events();
             for (const evt of events) {
               if (evt.kind === 1) {
@@ -1851,9 +1861,13 @@ void main() {
               const turn = (keyState.e ? 1 : 0) + (keyState.q ? -1 : 0);
               const run = !!keyState.shift;
               const sig = `${forward},${strafe},${turn},${run}`;
+              window.__lastInputSig = sig;
               if (sig !== lastInputSig) {
                 try {
                   handle.setMovementInput(forward, strafe, turn, run);
+                  window.__smiCallCount++;
+                  // eslint-disable-next-line no-console
+                  console.log(`[step 3] setMovementInput(${forward},${strafe},${turn},${run})`);
                   lastInputSig = sig;
                 } catch (err) {
                   // eslint-disable-next-line no-console
