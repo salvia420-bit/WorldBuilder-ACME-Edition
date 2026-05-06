@@ -5,24 +5,27 @@
 > Read this section first. The rest of this document is the
 > long-lived design intent + decision history; this header is
 > the snapshot of where we actually are and what's blocking
-> what. Last refreshed **2026-05-06**.
+> what. Last refreshed **2026-05-06** (afternoon session).
 
 ### Where the project is
 
-**Phases done:** 0, 1, 2, 3 (steps 1-6 + **step 3.6 = bilinear
-4-corner terrain blend + vector road lines, mirroring
-emit-static-site's `RenderPreviewRenderer.cs:467-485 + 551-580`,
-landed 2026-05-06**; step 5 partial), 4 (step 1 + 2a + 2a.5 +
-2a.6 + 2b + 3 + 3.5 — client-side prediction landed 2026-05-06),
-5.0, 5.0b, 5.1a, 5.1b. Native lib gate
+**Phases done:** 0, 1, 2, 3 (steps 1-6 + **step 3.6 — landed
+2026-05-06 after a TexMerge detour: bilinear 4-corner terrain
+blend, vector road lines, transpose fix for column-major
+terrain data, and on-demand entity model fetching for ACE-
+streamed NPCs**; step 5 partial), 4 (step 1 + 2a + 2a.5 +
+2a.6 + 2b + 3 + **3.5 — client-side prediction, also landed
+2026-05-06**), 5.0, 5.0b, 5.1a, 5.1b. Native lib gate
 **1121 / 0** across 14 workspace crates. `cargo check
 --target wasm32-unknown-unknown` clean for
 `holtburger-{dat,session,transport-ws,resource-http,web,content,
 core,manifest}`. `wasm-pack build --target {nodejs,web}` both
 green. `node smoke_test.cjs` **60 / 60 PASS** (59 OK + 1 SKIP
 for live-ACE round-trip; the SKIP is the symbol-only check —
-the actual wire-effect validation runs through the new
-`capture_phase4_step3.cjs` Playwright harness).
+the wire-effect validation runs through `capture_phase4_step3
+.cjs`, terrain quality validation runs through
+`capture_terrain_eval.cjs`, both Playwright-driven against the
+live stack).
 
 **What works end-to-end today.** Open
 `apps/holtburger-web/index.html` in any browser. The page calls
@@ -37,50 +40,78 @@ through `holtburger-wsbridge` to a live ACE: login →
 CharacterList → in-browser CharacterCreate → spawn handshake →
 `LoginComplete` → `kind=7 EnteredWorld` → "Teleport to
 Holtburg" button sends `@telepoi Holtburg` via
-`GameAction::Talk`. **Phase 4 step 2b (2026-05-05):** the local
-player + every other live entity ACE pushes (NPCs, monsters,
-vendors, town guards) renders on a third PIXI `entityContainer`
-layer above the static placements. Position updates land via
+`GameAction::Talk`.
+
+**Phase 4 step 2b (2026-05-05):** the local player + every
+other live entity ACE pushes (NPCs, monsters, vendors, town
+guards) renders on a third PIXI `entityContainer` layer above
+the static placements. Position updates land via
 `SessionHandle.pollEntityUpdates()` and slide sprites between
-world coords as ACE streams `PublicUpdatePosition`. Pushed to
-`origin/master` 2026-05-06 in `fe85008..d01fa73` (work was held
-in the working tree on 2026-05-05 by a `/tmp` disk-fill from
-the `dat-shard` bake — symlinked `dist/` rehydrates from a fresh
-bake; see the bake recipe below). **Phase 4 step 3
-(2026-05-06):** WASD / Q / E / Shift keyboard input now drives
-outbound `GameAction::MoveToState` packets via the new
-`SessionHandle.setMovementInput(forward, strafe, turn, run)`
-export. Wire format matches retail AC's `RawMotionState`
-exactly (the user raised this concern up front; investigation
-confirmed holtburger's higher-level `PlayerDriveIntent` enum
-is a *superset* of retail, but the `ManualHeld(MotionState)`
-path it uses for keyboard input lowers to the same
-`0xF61C MoveToState` packet a retail client sends, so we
-replicate that path inline in the wasm bundle's recv loop
-without standing up a full `ClientRuntime`). JS gates input
-on `kind=7 EnteredWorld`, sends one packet per change in
-keystate (one per key down/up), the recv loop populates the
-position + sequence numbers from the latest inbound
-`UpdatePosition` / `PrivateUpdatePosition` and dispatches via
-`session.send_action`. **Wire round-trip validated against a
-live ACE 2026-05-06**: `capture_phase4_step3.cjs` Playwright
-harness drives login → CharacterCreate → spawn →
-`@telepoi Holtburg` → press W; recv_loop traces `SetMovementInput
-cmd` → `MoveToState send_action OK` → ACE echoes `UpdateMotion`
-for the local player's guid (proving ACE's `BroadcastMovement`
-accepted the packet). PASS: 2 packets sent, 3 echoes received.
-The local sprite stays still during the W press because retail
-AC doesn't echo position back to the originator — the retail
-client predicts locally. Client-side prediction is deferred
-follow-on (step 3.5 candidate); other observers connecting to
-the same ACE would see the walking sprite via
-`PublicUpdatePosition`. Critical gotcha discovered: ACE's
+world coords as ACE streams `PublicUpdatePosition`. Pushed
+2026-05-06 in `fe85008..d01fa73`.
+
+**Phase 4 step 3 + 3.5 (2026-05-06):** WASD / Q / E / Shift
+drives outbound `GameAction::MoveToState` packets via
+`SessionHandle.setMovementInput`. Wire round-trip validated
+against live ACE — `MoveToState send_action OK` → ACE echoes
+`UpdateMotion`. JS-side per-rAF prediction integrates the
+keystate into the local sprite's world coords (mirrors cli's
+`local_velocity_for_state` + `local_omega_for_state`), so the
+press-W → sprite-slides loop closes visually. Capture
+validates 3 m of in-frame drift over a 3-second W-hold at
+the canonical 1.0 m/s walk speed. Critical ACE gotcha:
 `OnMoveToState` short-circuits unless `IsPKType`
-(`Player_Tick.cs:154` — `FastTick => IsPKType`), so the capture
-sends `@pk pk` before pressing W to flip PlayerKillerStatus and
-engage server-side physics. See
-[`phase-4-renderer.md`](phase-4-renderer.md) step 3 for
-the as-built reference and the validation recipe.
+(`Player_Tick.cs:154` — `FastTick => IsPKType`); the capture
+sends `@pk pk` before pressing W to flip PlayerKillerStatus
+and engage server-side physics.
+
+**Phase 3 step 3.6 (2026-05-06).** The terrain rendering now
+matches `emit-static-site`'s output (the canonical reference).
+Algorithm shipped:
+- **Bilinear 4-corner blend** in the fragment shader: each
+  fragment samples the 4 surrounding vertices' terrain types
+  from a 9×9 RGBA8 vertex-types texture per LB and weighted-
+  blends 4 atlas tile samples. No more 24m square cell
+  artefacts. Mirror of `RenderPreviewRenderer.cs:467-485`.
+- **Vector road lines** drawn via `PIXI.Graphics` per LB:
+  walks the 9×9 vertex grid, strokes between adjacent
+  road=1 vertices in E/N/NE/NW directions. Diagonal road
+  runs render as actual diagonal lines, not 24m blocks.
+  Mirror of `RenderPreviewRenderer.cs:551-580`.
+- **Transpose fix for column-major terrain data**: the wasm
+  `terrainCodes` array is laid out `[gridX * 9 + gridY]`
+  (column-major, vertex i has gridX = i/9, gridY = i%9 —
+  verified empirically by comparing against
+  `WorldBuilder.Terminal`'s `get-terrain-data` ground truth
+  for Holtburg 0xA9B4). Canvas/GL textures are row-major; the
+  data-build transposes on upload so the shader's
+  `texelFetch(ivec2(iu, iv))` returns the type at the actual
+  physical vertex (gridX=iu, gridY=iv).
+- **On-demand entity model fetching**: the static placement
+  cache (Phase 3 step 6) covers 80/81 unique Holtburg model
+  IDs, but ACE-streamed NPCs use *creature* csetup_ids that
+  almost never overlap. New `fetchEntityModelOnDemand(modelId)`
+  fires a `fetch_model_meshes` + `fetch_surfaces_pixels` +
+  `renderModelTile` round-trip on cache miss; the placeholder
+  dot is swapped for the real textured sprite when the fetch
+  resolves. At Holtburg town centre, **53/53 entities now
+  render as textured sprites** (was 53/53 placeholder dots);
+  cache grows from 80 → 98 (18 unique on-demand fetches).
+- **TexMerge alpha-mask scaffolding kept in Rust** for any
+  future authentic-AC mode (`fetch_terrain_alpha_masks`
+  export + 3 retail mask SurfaceTexture ID constants). Not
+  used by the bilinear path; available for re-wiring if
+  someone wants per-cell hand-tuned patches.
+
+The ground-truth comparison screenshot
+[`docs/images/wb-terminal-holtburg-ground-truth.png`](images/
+wb-terminal-holtburg-ground-truth.png) was produced by running
+`render-preview` on the same 3×3 region through
+`WorldBuilder.Terminal`'s stdin agent protocol. Side-by-side
+with [`docs/images/phase-3-step-3.6-bilinear-roads.png`](images/
+phase-3-step-3.6-bilinear-roads.png) the layouts match: water at
+the north LB row, grass dominates the south, stone roads run
+through Holtburg's center as diagonal lines.
 
 **Bake recipe (run once after the first clone, again whenever
 `dats/assets.hba` changes):**
@@ -131,28 +162,33 @@ on-device validation; recipe in
 - ACE on UDP `127.0.0.1:9000` / `:9001` (built from
   `~/ace-server/`; recipe in
   [`ace-local-setup.md`](ace-local-setup.md)).
-- Tailscale at `100.116.47.66`. Phone hits
-  `http://100.116.47.66:8765/apps/holtburger-web/index.html`,
-  logs in as `tailnet1` / `tailnet1` (Developer-promoted).
+- Tailscale at `100.116.47.66`. Phone or laptop hits
+  `http://100.116.47.66:8765/apps/holtburger-web/index.html`.
+  ACE's `Config.js` ships with `DefaultAccessLevel: 4`, so any
+  fresh account gets Developer access on first login — no SQL
+  promotion needed for `@telepoi` / `@pk pk` etc.
+- **Bind wsbridge externally for tailnet access**: the live
+  default is `--listen 0.0.0.0:8080` (NOT `127.0.0.1:8080`),
+  otherwise the laptop's browser can't reach it. Login form's
+  Bridge URL field is `ws://100.116.47.66:8080/`, Server IP is
+  `127.0.0.1` (the bridge resolves ACE locally on this host),
+  Server port is `9000`.
 
 ### What's open — two parallel rails
 
 Pick one to pull on. The choice is real, not arbitrary.
 
-- **Content rail** — Phase 4 step 3 + 3.5 **landed
-  2026-05-06**. Step 3: `SessionHandle.setMovementInput` →
+- **Content rail** — Phase 4 step 3 + 3.5 **landed 2026-05-06**.
+  Step 3: `SessionHandle.setMovementInput` →
   `GameAction::MoveToState` → ACE accepts + broadcasts
   `UpdateMotion`. Step 3.5: per-rAF JS prediction integrates
   the keystate into the local sprite's world coords (mirrors
-  cli's `local_velocity_for_state` /
-  `local_omega_for_state`), so the press-W → sprite-slides
-  loop closes visually. Capture validates 3 m of in-frame
-  drift over a 3-second W-hold at the canonical 1.0 m/s walk
-  speed. Next on the rail: step 4 (DOM panels: chat, vitals,
-  inventory — surfaces `kind=2 ChatReceived` events through
-  the existing `poll_events()` channel) → step 5
-  (interactive entities: doors, portals, vendors via
-  `UseObject`).
+  cli's `local_velocity_for_state` / `local_omega_for_state`),
+  so the press-W → sprite-slides loop closes visually. **Next
+  on the rail: step 4** (DOM panels: chat, vitals, inventory —
+  surfaces `kind=2 ChatReceived` events through the existing
+  `poll_events()` channel) → step 5 (interactive entities:
+  doors, portals, vendors via `UseObject`).
 - **Bandwidth rail** — Phase 5.2 (manifest scale fix) at
   [`manifest.md`](manifest.md). Real-world bake produces a
   **203 MB** `manifest.json` (885,043 entries × ~230 bytes
@@ -174,12 +210,81 @@ reverse ordering (5.2 first) also works fine; it's just more
 infrastructure-before-features. Skip 5.2 entirely until you
 need obj-11 phone validation or public CDN deploy.
 
-**Polish backlog from step 2b** (none gating, all listed in
-`phase-4-renderer.md` step 2b "What's NOT" section): camera-
-follow toggle, position interpolation, VectorUpdate handling
-for velocity-driven motion, cache-miss model upgrades via
-on-demand `fetch_model_meshes`, entity culling for dense
-zones, local-player highlight, mid-session character switching.
+**Polish backlog** (none gating; what was deferred at each
+step's landing, plus what got closed since):
+
+- ✅ ~~Cache-miss entity model upgrades via on-demand
+  `fetch_model_meshes`~~ — **closed 2026-05-06**, see step
+  3.6 above.
+- ⏳ **Camera-follow toggle.** Camera centred on Holtburg
+  geometric centre with mouse-wheel zoom + drag-to-pan; a
+  "follow the local player sprite" mode would conflict with
+  manual pan, so it needs a UI affordance.
+- ⏳ **Position interpolation between PublicUpdatePosition
+  echoes.** Local player slides smoothly via step 3.5
+  prediction, but other entities snap-render to each ACE
+  position update (~100-300ms cadence — visible jumps in
+  crowded zones). ~10 lines of rAF lerp.
+- ⏳ **VectorUpdate / UpdateMotion velocity handling.**
+  ACE sends these for animation-hint extrapolation; recv loop
+  drops them in the catch-all `_` arm. A future step could add
+  velocity to `EntityUpdate` and let JS extrapolate position
+  for smoother motion at the cost of one frame of lag.
+- ⏳ **Entity culling for dense zones.** Every entity ACE
+  pushes gets a sprite. Frustum-culling against the camera's
+  visible-world rect would matter for mobile and for high-
+  population zones beyond Holtburg.
+- ⏳ **Local-player visual highlight.** No outline-ring or
+  arrow indicator distinguishing the local player from other
+  entities yet. Small future polish.
+- ⏳ **Mid-session character switching.** `LoopState::InWorld
+  { player_guid }` is set once on PlayerCreate and never
+  cleared. Switching characters means tearing down the session
+  and starting a new one, OR extending the LoopState machine.
+- ⏳ **Click-to-move.** Server-initiated pathfinding via
+  `MoveToObject` / `MoveToPosition`. Independent path from
+  WASD; nice-to-have for the gameplay loop, not blocking.
+- ⏳ **Jump (Spacebar).** Needs `MovementParameters` extension
+  and resolution of the keymap collision with the chat-window
+  toggle most clients use.
+- ⏳ **Combat-stance switch / weapon hotkey.** `CURRENT_STYLE`
+  flag (`MotionStance::HandCombat` etc.). Step 3 omits the
+  bit; ACE preserves whatever stance it last set.
+- ⏳ **Snap-smooth reconciliation** for `PrivateUpdatePosition`
+  authoritative corrections — currently a hard set; ~100ms
+  lerp would feel softer.
+- ⏳ **Outbound `AutonomousPosition` heartbeat to ACE.** The
+  retail client reports its predicted position back ~1 Hz so
+  ACE can validate. We don't, so ACE may correct us more
+  aggressively. Step 3.6 candidate (one Rust arm + 1 Hz JS
+  tick).
+- ⏳ **Lambert hillshade in the terrain shader.**
+  `RenderPreviewRenderer.cs:487-503` adds it on top of the
+  bilinear blend (9×9 height texture per LB + finite-difference
+  slope in the shader). ~2 hours; deferred at step 3.6 landing.
+- ⏳ **Detail textures / road texture fill.**
+  `TMTerrainDesc::DetailTexGID` carries small-scale noise; the
+  static site uses `RoadType` as a repeating shader fill on
+  the road stroke. We use flat stone-grey for roads; switching
+  to a textured stroke is a PIXI line-style tweak.
+- ⏳ **Server-validated walk speed.** Step 3.5 hardcodes 1.0
+  m/s (walk) / 4.5 m/s (run); cli reads
+  `world.player_run_rate()` from biota properties. Speed
+  buffs/debuffs/stamina effects don't apply yet.
+- ⏳ **Authentic TexMerge mode.** `fetch_terrain_alpha_masks`
+  Rust export + 3 retail-mask constant tables stay in the
+  bundle as scaffolding; JS-side `decodeCellPalette` +
+  per-cell data textures + sequential alpha-blend shader was
+  removed but recoverable from git (commit `b78cd56` before
+  the revert at `057762e`). Per-cell hand-tuned patches —
+  authentic to retail but blockier than the bilinear bake.
+- ⏳ **Runtime Region (`0x13000000`) parser.**
+  `holtburger-dat::file_type::Region` doesn't exist yet; the
+  retail TexMerge data is hard-coded as constants in lib.rs.
+  Custom regions (e.g. WorldBuilder-emitted .dat files) would
+  need a Rust parser; deferred but not gating.
+- ⏳ **Animation state.** Sprites slide as rigid textures; no
+  walk-cycle anims. Step 4+ scope.
 
 ### What to read next
 
@@ -214,6 +319,100 @@ In order:
    — auto-loaded into Claude's context. Verify it matches
    this document's status section before relying on it.
 
+### Process notes for the next agent (worth reading before renderer work)
+
+These are footguns + workflow patterns the 2026-05-06 session
+hit and resolved. Pay the 5 minutes of reading time; each saved
+30+ minutes of debugging on first encounter.
+
+1. **`emit-static-site` is the authoritative reference for the
+   live client's renderer**, NOT `ACE.Server.Physics.Common.
+   TexMerge.cs`. Retail AC's actual client used TexMerge
+   (per-cell alpha-mask overlays); the static site uses
+   bilinear 4-corner blend + vector roads instead. The first
+   pass of step 3.6 ported TexMerge faithfully and produced
+   *more* visible blockiness than the previous flat-cell
+   shader because the alpha masks fit one 24m cell each. Only
+   the static-site approach matches the user's reference
+   tile pyramid. **If you're touching terrain rendering, read
+   `WorldBuilder.Terminal/RenderPreviewRenderer.cs:349-516`
+   first**, not the C# `TexMerge.cs`.
+
+2. **Always ground rendering work in `WorldBuilder.Terminal`'s
+   diagnostic commands.** The README's "three observation
+   channels" are exactly what you need:
+   ```
+   $ echo '{"command":"render-preview","lbX":169,"lbY":180,
+            "radius":1,"resolution":1024,
+            "outputPath":"/tmp/holtburg.png"}' | \
+     ~/.dotnet/dotnet WorldBuilder.Terminal.dll --stdin \
+       --project ~/projects/RetailSmoke/RetailSmoke.wbproj
+   $ echo '{"command":"get-terrain-data","lbX":169,"lbY":180}' | \
+     ~/.dotnet/dotnet WorldBuilder.Terminal.dll --stdin --project ...
+   ```
+   `render-preview` is the visual ground truth (the static
+   site's own output for any LB region). `get-terrain-data`
+   returns the per-vertex terrain types as JSON. With both
+   you can triangulate "wrong shader" vs "wrong data". The
+   2026-05-06 transpose bug was found only after diffing the
+   wasm `terrainCodes` against `get-terrain-data`'s grid — it
+   would have been invisible without the comparison. The WB
+   ground truth screenshot is committed at
+   `docs/images/wb-terminal-holtburg-ground-truth.png`.
+
+3. **Wasm terrain data is column-major.** `mesh.terrainCodes`
+   from `fetch_landblock_heightmaps` is laid out
+   `[gridX * 9 + gridY]`, NOT row-major. Vertex `i` has
+   `gridX = i/9, gridY = i%9` — verifiable from
+   `mesh.positions[i*3..]`. Canvas/GL textures are row-major.
+   Any new code that uploads vertex data to a 9×9 texture
+   must transpose: `bytes[(row*9+col)*4] = terrainCodes[col*9+row]`.
+   Same applies to `roadCodes`. The shader's `texelFetch
+   (ivec2(iu, iv))` then returns the value at the physical
+   vertex (gridX=iu, gridY=iv) — which is what
+   `vGridUv = aPosition / 24` computes from world coords.
+
+4. **Canvas → PIXI texture upload premultiplies alpha.** Any
+   data texture (cell-data, vertex-types, masks) must have
+   A=255 on every byte. A=0 silently zeroes the RGB on upload
+   and the shader reads (0, 0, 0) for that texel. The 2026-
+   05-06 cellBase texture had `A=0` for non-allRoad cells and
+   every cell read primary=0 (BarrenRock) — fixed by encoding
+   the allRoad flag as a `primary == 255` sentinel instead.
+   Encode flags in the channels you're already using or use
+   sentinel values; never depend on the alpha channel for
+   non-rendering data.
+
+5. **PIXI 8 minifies class names.** `entry.sprite.constructor
+   .name` returns `"me"` for `PIXI.Sprite` after the bundle
+   ships. Don't probe rendering type via `constructor.name`;
+   tag entries with explicit string fields instead (e.g.
+   `entry.kind = "sprite" | "placeholder" | "invisible"`).
+
+6. **Backticks inside GLSL template literals terminate the JS
+   parser.** `const TERRAIN_FRAGMENT_GLSL = \`...comment with
+   \`backticked\` reference...\`` breaks at the inner
+   backtick. Use single-quotes or no quotes inside GLSL
+   comments. `node --check <module.mjs>` catches this; pre-
+   reload syntax-check after editing GLSL strings.
+
+7. **The wsbridge needs `--listen 0.0.0.0:8080`** for
+   tailnet-laptop browsers to reach it. The default is
+   localhost-only. The user's flow is: laptop on Tailscale →
+   `http://100.116.47.66:8765/...` → page → `ws://100.116.47.66
+   :8080/` → wsbridge (running on the dev box) → ACE on UDP
+   `127.0.0.1:9000`. Bind external on the WS hop or the page
+   gets stuck at "connecting…".
+
+8. **ACE's `OnMoveToState` short-circuits unless `IsPKType`.**
+   `Player_Tick.cs:154` — `FastTick => IsPKType`. For
+   client-driven movement to invoke server-side physics
+   simulation, the player must be PK. The capture sends
+   `@pk pk` after teleport; manual testing on a fresh dev
+   account works the same way. ACE's `Config.js:
+   DefaultAccessLevel: 4` ensures auto-created accounts have
+   Developer access for the `@pk` command.
+
 ### Decisions settled (do not re-litigate)
 
 §7.1 external WS proxy over ACE patch, §7.2 single namespaced
@@ -227,6 +426,22 @@ audit. The Phase 5.0 architecture (sync `ResourceSource` +
 async `prefetch`, content-addressable shards, transitive boot
 walk) is settled — see [`phase-5-thorough.md`](phase-5-thorough.md)
 "Decisions to NOT re-litigate" for the full list.
+
+**Step 3.6 settled (2026-05-06):** terrain rendering is
+**bilinear 4-corner blend + vector road lines**, NOT TexMerge
+alpha-masked overlays. The TexMerge port was tried and rolled
+back — see "Process notes" #1 above. The bilinear path matches
+the `emit-static-site` tile pyramid exactly; the user's
+reference output is `docs/sample-dist/projects/vanilla/tiles/
+exterior/8/*` and the live client renders to that look. Don't
+re-litigate per-cell alpha-mask compositing without a
+specific authentic-AC-mode use case. **Cache-miss entity
+models are fetched on-demand**, NOT batched at neighbourhood-
+load time; the pendingModelFetches dedup keeps multiple-spawn
+storms cheap. **The wasm `terrainCodes` layout is column-
+major**; any data-texture upload code transposes on the way
+in. **Canvas → PIXI alpha is premultiplied**; data textures
+force A=255 always.
 
 ### Audience
 
@@ -1041,15 +1256,45 @@ Step ledger:
   [`docs/images/phase-3-step-6-live-render-zoomed.png`](images/phase-3-step-6-live-render-zoomed.png)
   (3× zoom on Holtburg town centre showing wooden doors, reddish
   roof tile, plank-textured cart, stone walls + paths).
+- ✅ **Step 3.6 — bilinear blend + vector roads + on-demand
+  entity model fetching** (landed 2026-05-06; multi-commit
+  range `b78cd56..29a358e` including a TexMerge detour at
+  `b78cd56` reverted at `057762e`, the bilinear ship at
+  `057762e`, the `38095b0` transpose fix, and the on-demand
+  entity fetch at `29a358e`). Replaces step 3's per-cell flat
+  shader with bilinear 4-corner blend reading from a 9×9
+  vertex-types texture per LB (mirrors `RenderPreviewRenderer
+  .cs:467-485`). Roads draw as vector PIXI.Graphics lines
+  between adjacent road=1 vertices in E/N/NE/NW directions
+  (mirrors `RenderPreviewRenderer.cs:551-580`), so diagonal
+  road runs render as actual diagonal lines, not 24m blocks.
+  On-demand entity model fetch closes the Phase 4 step 2b
+  cache-miss-dot regression: ACE-streamed NPC csetup_ids
+  that aren't in the static-placement cache trigger a one-
+  off `fetch_model_meshes` + `fetch_surfaces_pixels` round-
+  trip, with `pendingModelFetches` deduping concurrent
+  requests, and the placeholder dot upgrades to a real
+  textured sprite when the fetch resolves. At Holtburg
+  53/53 entities textured (was 53/53 placeholder); cache
+  grows from 80 → 98. Validated against
+  `WorldBuilder.Terminal`'s `render-preview` ground truth at
+  `docs/images/wb-terminal-holtburg-ground-truth.png`. The
+  TexMerge alpha-mask Rust scaffolding stays exported in the
+  bundle for any future authentic-AC mode (see "Process
+  notes" #1). See
+  [`phase-3-renderer.md`](phase-3-renderer.md) step 3.6 for
+  the as-built reference. Step 5+ scope items in this section
+  remain open below.
 - ⏳ **Atmospherics (rest of step 5)** — fog of war, day/night
   gradient, post-process bloom on water tiles. Independent polish;
   not gating Phase 4.
-- ⏳ **Per-cell terrain blending (CornerTerrainMaps)** — AC's
-  actual surface table uses corner/side blend maps for proper
-  transitions across cell boundaries. Currently each cell renders
-  one terrain type uniformly; with corner blends, a grass-to-water
-  boundary fades smoothly. Multi-pass rendering, ~150 lines of
-  additional shader work. Step 5+ scope.
+- ⏳ **TexMerge alpha-masked overlays (authentic-AC mode)** —
+  step 3.6 chose bilinear over TexMerge per the
+  emit-static-site reference; the Rust
+  `fetch_terrain_alpha_masks` + retail mask constants stay
+  available for any future per-cell hand-tuned look. Recover
+  the JS palette decoder + cell-data textures + sequential
+  alpha-blend shader from commit `b78cd56` if rewiring.
 - ⏳ **Multi-landblock streaming** — extend beyond the 3×3
   hardcode to N×N visible landblocks driven by the camera. Needs
   a landblock-id → `LandblockMesh` cache, camera-driven prefetch,
@@ -1199,9 +1444,28 @@ Step ledger:
   modifier mitigation), and per-rAF `setMovementInput` dispatch
   on keystate change. Click-to-move and the
   `UpdateMotion`/`server_control_sequence` tracking are scope
-  deferred. Smoke 58 → 60 (setMovementInput symbol). Wire
-  round-trip against live ACE pending the user's live stack;
-  validation recipe in `phase-4-renderer.md` step 3.
+  deferred. Smoke 58 → 60 (setMovementInput symbol).
+  **Wire round-trip validated against live ACE 2026-05-06**:
+  `capture_phase4_step3.cjs` Playwright harness drives login
+  → spawn → `@telepoi Holtburg` → `@pk pk` (engage server-
+  side physics) → press W; recv_loop traces `MoveToState
+  send_action OK` → ACE echoes `UpdateMotion` for the local
+  player's guid. PASS, 2 packets sent / 4-9 echoes received
+  per run. Critical ACE gotcha discovered: `OnMoveToState`
+  short-circuits unless `IsPKType` (see "Process notes" #8).
+- ✅ **Step 3.5 — client-side prediction.** Landed
+  2026-05-06 (commits `e77e7e6..d65ea6e`). Per-rAF JS
+  integration of the keystate into the local sprite's world
+  coords; mirrors cli's `local_velocity_for_state` +
+  `local_omega_for_state`. Press-W now slides the local
+  sprite at 1.0 m/s walk / 4.5 m/s run; Q/E rotates; A/D
+  strafes; S backsteps. Capture validates 3.0 m of in-frame
+  drift over a 3-second W-hold. JS-only, no Rust changes; no
+  new wasm-bindgen exports. Authoritative `PrivateUpdatePosition`
+  events still snap-rubber-band the local sprite via the
+  existing handlePositionUpdate path. See
+  [`phase-4-renderer.md`](phase-4-renderer.md) step 3.5
+  section for the as-built reference.
 - ⏳ **Step 4 — DOM panels (chat, vitals, inventory).** Render
   the retail UI surfaces holtburger already drives, in DOM
   panels next to the PIXI canvas. Parallel to step 2/3.
@@ -1386,6 +1650,7 @@ re-discovering them.
 | `fetch_landblock_heightmap(cell_id) -> Promise<LandblockMesh>` | 3 step 1 | Single-landblock terrain mesh (one-line wrapper around the plural form). |
 | `fetch_landblock_heightmaps(cell_ids) -> Promise<Vec<LandblockMesh>>` | 3 step 2 | Batch terrain meshes + per-vertex `terrainCodes` + `roadCodes`. Pre-fetches the `eor/cell:XXYYFFFF` keys via the global source. |
 | `fetch_terrain_textures() -> Promise<Vec<TerrainTexture>>` | 3 step 3.5 | All 33 retail terrain textures decoded to RGBA8. Explicit per-level prefetch (33 SurfaceTextures → up to 33 Textures → up to 33 Palettes). |
+| `fetch_terrain_alpha_masks() -> Promise<TerrainAlphaMasks>` | 3 step 3.6 | Retail TexMerge alpha-mask scaffolding (4 corner + 1 side + 3 road masks decoded as PFID_A8 → RGBA8 with R=alpha). Available for any future authentic-TexMerge mode; the bilinear-blend path in step 3.6 doesn't use it. Container exposes `takeCorner` / `takeSide` / `takeRoad` getters for one-round-trip batched fetch. |
 | `fetch_landblock_objects(cell_ids) -> Promise<Vec<ObjectPlacement>>` | 3 step 4 | LandblockInfo Stab + BuildInfo lists — `(model_id, x, y, z, rotation_z)` per placement. Tolerant of missing LBI records (ocean cells silently skipped). |
 | `fetch_object_colours(model_ids) -> Promise<Vec<u32>>` | 3 step 4.5 | Per-model representative ARGB from each model's GfxObj/SetupModel → Surface chain. Iterative discovery via `RecordingSource` (Phase 5.0b). |
 | `fetch_model_mesh(model_id) -> Promise<ModelMesh>` | 3 step 6 | Single-model triangulation (positions, uvs, normals, surfaceIndices, surfaces, bbox, worldBounds). Iterative discovery via `RecordingSource`. |
