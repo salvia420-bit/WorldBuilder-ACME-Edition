@@ -306,6 +306,18 @@ const path = require("node:path");
         };
     });
     console.log(`raf ticks: ${diag.rafTicks}, lastInputSig: ${diag.lastInputSig}, setMovementInput calls: ${diag.smiCallCount}`);
+    const pred = await page.evaluate(() => ({
+        ticks: window.__predTickCount || 0,
+        first: window.__predFirstPos,
+        last: window.__predLastPos,
+    }));
+    if (pred.first && pred.last) {
+        const dx = pred.last.x - pred.first.x;
+        const dy = pred.last.y - pred.first.y;
+        console.log(`prediction integrations: ${pred.ticks}, drift while held: dx=${dx.toFixed(2)} dy=${dy.toFixed(2)} (m)`);
+    } else {
+        console.log(`prediction integrations: ${pred.ticks} (no first/last pos captured — keystate may have been zero)`);
+    }
     console.log(`post-W: keyEvents=${JSON.stringify(diag.keyEvents)} entityCount=${diag.entityCount}`);
     console.log(`local player position log (${diag.playerPosLog.length} samples):`);
     for (const s of diag.playerPosLog.slice(0, 8)) {
@@ -406,21 +418,37 @@ const path = require("node:path");
     console.log(`MoveToState send_action OK: ${sentMoveToState}`);
     console.log(`UpdateMotion echoes (any guid): ${updateMotionEchoes}`);
     console.log(`UpdateMotion echoes for local player ${ourGuid ?? "(unknown)"}: ${ourEchoes}`);
-    if (sentMoveToState >= 1 && updateMotionEchoes >= 1) {
+
+    const wireOk = sentMoveToState >= 1 && updateMotionEchoes >= 1;
+    const motionOk = maxDelta >= MOVE_THRESHOLD_M;
+
+    if (wireOk && motionOk) {
         console.log(
-            `PASS: wire round-trip confirmed. ` +
+            `PASS: end-to-end loop closed. ` +
             `Sent ${sentMoveToState} MoveToState packet${sentMoveToState === 1 ? "" : "s"} → ` +
             `received ${updateMotionEchoes} UpdateMotion echo${updateMotionEchoes === 1 ? "" : "es"} ` +
-            `from ACE (BroadcastMovement). ` +
-            `Local sprite did not slide (max delta ${maxDelta.toFixed(2)} m) — retail AC ` +
-            `expects client-side prediction for the originator's view; that's deferred ` +
-            `scope per step 3 doc "What's NOT in scope" section.`
+            `from ACE (step 3 wire round-trip), AND local sprite slid ${maxDelta.toFixed(2)} m ` +
+            `under client-side prediction (step 3.5). ` +
+            `Moving guid 0x${Number(movedGuid).toString(16).toUpperCase().padStart(8, "0")}: ` +
+            `(${movedFrom.x.toFixed(2)}, ${movedFrom.y.toFixed(2)}) → ` +
+            `(${movedTo.x.toFixed(2)}, ${movedTo.y.toFixed(2)}).`
         );
         await browser.close();
         process.exit(0);
+    } else if (wireOk && !motionOk) {
+        console.error(
+            `PARTIAL: wire OK but no local sprite motion. ` +
+            `Sent ${sentMoveToState} MoveToState → ${updateMotionEchoes} UpdateMotion echoes (step 3 wire works), ` +
+            `but max delta was only ${maxDelta.toFixed(2)} m (< ${MOVE_THRESHOLD_M} m). ` +
+            `Step 3.5 (client-side prediction) didn't integrate motion — ` +
+            `check window.__predTickCount > 0 and that the local-player guid ` +
+            `is in entityMap.`
+        );
+        await browser.close();
+        process.exit(1);
     } else {
         console.error(
-            `FAIL: sentMoveToState=${sentMoveToState}, updateMotionEchoes=${updateMotionEchoes}. ` +
+            `FAIL: sentMoveToState=${sentMoveToState}, updateMotionEchoes=${updateMotionEchoes}, maxDelta=${maxDelta.toFixed(2)} m. ` +
             `Either the input path didn't reach setMovementInput (check ` +
             `[step 3] log lines above), or ACE silently dropped the packet ` +
             `(check ACE log for parse errors).`
