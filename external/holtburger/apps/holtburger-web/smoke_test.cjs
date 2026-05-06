@@ -327,7 +327,50 @@ check(
     } else if (typeof fetch !== "function") {
         console.log("  [SKIP] manifest fixture setup — Node ≥18 fetch() not available.");
     } else {
-        distDir = fs.mkdtempSync(path.join(os.tmpdir(), "holtburger-smoke-dist-"));
+        // Pick a bake-parent directory big enough to hold ~4 GB on
+        // disk (885k shards × 4 KB block rounding + 1.86 MB boot pack +
+        // 200+ MB v1 manifest.json). Each smoke run creates a fresh
+        // mkdtemp under this base. Resolution order:
+        //   1. HOLTBURGER_SMOKE_DIST_DIR env var (full path, takes
+        //      precedence — point this at /mnt/wbterminal{1,2} on dev
+        //      hosts to keep the bake off the root partition).
+        //   2. Node's os.tmpdir(), which honours TMPDIR / TMP / TEMP.
+        //   3. Falls through to /tmp on Linux otherwise.
+        // See `docs/emit-dynamic-site.md` "Bake recipe — disk-space
+        // trap" for the equivalent guidance for `dist/`.
+        const bakeBase = process.env.HOLTBURGER_SMOKE_DIST_DIR || os.tmpdir();
+        if (!fs.existsSync(bakeBase)) {
+            fs.mkdirSync(bakeBase, { recursive: true });
+        }
+        distDir = fs.mkdtempSync(path.join(bakeBase, "holtburger-smoke-dist-"));
+        console.log(`  [info] smoke bake → ${distDir}`);
+
+        // Register cleanup hooks the moment the directory exists, so a
+        // crash / unhandled rejection / Ctrl-C between here and the
+        // explicit teardown below still rms the bake. Without this the
+        // ~4 GB pile accumulates per failed run; on this host's 117 GB
+        // root that's 5-6 runs to fill the disk and break SSH.
+        let cleanedUp = false;
+        const cleanup = () => {
+            if (cleanedUp) return;
+            cleanedUp = true;
+            try { if (distServer) distServer.close(); } catch (_) {}
+            try { if (distDir) fs.rmSync(distDir, { recursive: true, force: true }); } catch (_) {}
+        };
+        process.on("exit", cleanup);
+        process.on("SIGINT", () => { cleanup(); process.exit(130); });
+        process.on("SIGTERM", () => { cleanup(); process.exit(143); });
+        process.on("uncaughtException", (e) => {
+            console.error("[smoke] uncaughtException:", e?.message ?? e);
+            cleanup();
+            process.exit(1);
+        });
+        process.on("unhandledRejection", (e) => {
+            console.error("[smoke] unhandledRejection:", e?.message ?? e);
+            cleanup();
+            process.exit(1);
+        });
+
         cp.execFileSync(
             datShardBin,
             ["--input", fixturePath, "--output", distDir],
