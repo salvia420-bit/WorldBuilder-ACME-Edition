@@ -563,23 +563,38 @@ follow-up.
 
 ---
 
-## Phase 3 step 3.6 landed (2026-05-06) — authentic AC TexMerge terrain
+## Phase 3 step 3.6 landed (2026-05-06) — bilinear blend + vector roads
 
 Step 3 + step 3.5 + step 5-roads gave real retail textures, but
 each cell still rendered as a single flat tile sampled per-pixel
 with the cell's SW-corner terrain code. Cell boundaries showed
-hard 24m seams and grass-to-water transitions had a stair-step
-look that didn't match retail AC.
+hard 24m seams that didn't match the static-site preview.
 
-The fix isn't bilinear blending (a tempting shortcut WB.Terminal's
-own `RenderPreviewRenderer.cs:467-485` takes — produces smooth
-gradients but loses the iconic AC patches). The authentic
-algorithm is **alpha-masked sequential overlays**: per cell,
-pick a primary terrain texture, then composite up to 3 hand-
-tuned alpha-mask overlays + up to 2 road overlays on top via
-`mix(base, overlay, alpha_mask.r / 255)`. The masks are PFID_A8
-textures with sharp irregular shapes — that's what gives AC its
-hand-drawn patchy character.
+**The path here had a U-turn.** First pass implemented retail
+AC's authentic TexMerge algorithm — alpha-masked sequential
+overlays mirroring `ACE.Server.Physics.Common.TexMerge::
+BuildTexture`. Authentic, but still per-cell — it produces
+visible 24m hand-tuned patches that the user (and the static
+site) explicitly don't want at our zoom levels. Reverted.
+
+**What actually shipped: emit-static-site's algorithm.** The
+static site uses a different (and simpler) approach in
+`WorldBuilder.Terminal/RenderPreviewRenderer.cs`:
+
+1. **Bilinear 4-corner terrain blend** (lines 467-485). Each
+   fragment samples the 4 surrounding vertices' terrain types,
+   samples each type's atlas tile at the same cell-local UV
+   (so the tiles wrap identically), and weighted-blends by
+   bilinear weights `(1-fu)(1-fv) / fu(1-fv) / (1-fu)fv / fufv`.
+   Smooth gradients across cells; no 24m artefacts.
+2. **Roads as vector lines** (lines 551-580). For each vertex
+   with `road != 0`, draw a stroked line to its E / N / NE /
+   NW neighbours that are also `road != 0`. Diagonal road runs
+   render as diagonal lines, not 24m cell-aligned blocks.
+
+The visual matches the static-site sample tiles in
+`docs/sample-dist/projects/vanilla/tiles/exterior/8/*` — that's
+the user's reference and the target.
 
 Mirrors `ACE.Server.Physics.Common.TexMerge::BuildTexture:81-142`
 and `WorldBuilder/Editors/Landscape/LandSurfaceManager.cs:425-477`
@@ -588,116 +603,108 @@ same PRNG-based alpha mask selection seeded by pcode, same 90°
 rotation cycle (TCode 8 → 1 → 2 → 4 for corners; 9 → 3 → 6 → 12
 for sides).
 
-### What step 3.6 ships
-
-**Rust** (`apps/holtburger-web/src/lib.rs`):
-
-- 3 hard-coded constant tables — `RETAIL_CORNER_TERRAIN_MASKS`
-  (4 entries), `RETAIL_SIDE_TERRAIN_MASKS` (1), `RETAIL_ROAD_MASKS`
-  (3). Each is `(TCode, SurfaceTexture ID)`. Extracted by
-  signature-scanning `eor/portal:0x13000000` for the
-  TerrainDesc-count=33 anchor and walking back through TexMerge's
-  nested lists. Same pattern as Phase 3 step 3.5's
-  `RETAIL_TERRAIN_SURFACE_TEXTURES`.
-- `TerrainAlphaMask` + `TerrainAlphaMasks` wasm-bindgen structs.
-  Single mask = `(index, code, width, height, RGBA8 pixels)`;
-  the container takeCorner/takeSide/takeRoad batches all 8 in
-  one round-trip.
-- `fetch_terrain_alpha_masks()` async export. One prefetch +
-  decode pass through the global `ManifestResourceSource`.
-  Decoded pixels: PFID_A8 → RGBA8 with R=G=B=alpha-byte, A=255
-  (existing `Texture::to_rgba8` greyscale-replicate path). JS
-  reads the R channel for the per-pixel blend weight.
+### What ships in the final step 3.6
 
 **JS + GLSL** (`apps/holtburger-web/index.html`):
 
-- `buildAlphaAtlas()` packs the 8 masks into a 4×2 grid of
-  256×256 tiles → 1024×512 RGBA8 (slot indices: corner 0..3,
-  side 4, road 5..7).
-- `texMergePrng(pcode, n)` + `findRotation(baseCode, target)`
-  mirror the retail PRNG and rotation walk exactly. PRNG is
-  seeded by the cell's palette code so the mask choice is
-  *deterministic per cell* (regenerating the same world produces
-  the same look — important for screenshot stability + future
-  caching).
-- `decodeCellPalette(tNW, tNE, tSE, tSW, roadBits)` — full
-  per-cell render program. Bit-packs the pcode, runs
-  `GetTerrain` (find first equal-corner pair → primary, build
-  up to 3 overlay tcodes), runs `GetRoadCode` for the road
-  pattern, picks alpha masks + rotations for each. Returns
-  `{primary, allRoad, overlays[], roads[]}`.
-- `buildCellDataTextures(terrainCodes, roadCodes)` packs the
-  64 cells' programs into 6 small (8×8 RGBA8) textures per LB:
-    `cellBase`: R=primary (255 = allRoad sentinel),
-                G=overlayCount, B=roadCount, A=255 always
-    `cellOverlay0..2`: R=type, G=alphaIdx, B=rotation, A=255
-    `cellRoad0..1`: R=alphaIdx, G=rotation, B=0, A=255
-- New fragment shader does the sequential blend per pixel:
-  `texelFetch(uCellBase, cellIdx, 0)` reads the cell's program;
-  primary → atlas sample; loop overlays sampling rotated
-  alpha mask + overlay terrain texture; loop roads. The 6
-  cell-data textures + 1 atlas + 1 alpha atlas = 8 sampler
-  units, comfortably under WebGL2's 16-unit floor.
+- `buildVertexTypesTexture(terrainCodes)` packs the LB's
+  81-entry terrain code array into a 9×9 RGBA8 texture. R = type
+  byte; A = 255 always (canvas → PIXI texture upload
+  premultiplies alpha — A=0 silently zeroes RGB; lesson learned
+  during the TexMerge detour).
+- New fragment shader (TERRAIN_FRAGMENT_GLSL): per fragment
+  computes (iu, iv, fu, fv) from the [0,8] grid coord, looks up
+  the 4 surrounding vertices' terrain types via `texelFetch`,
+  samples 4 atlas tiles at the same `(fu, fv)` cell-local UV,
+  weighted-blends. ~30 lines total. No alpha masks, no per-cell
+  decoder, no rotation logic.
+- New per-LB road overlay (`PIXI.Graphics`): walks the 9×9
+  vertex grid, strokes a line between adjacent vertices that
+  are both `road != 0` in the E / N / NE / NW directions.
+  Stone-grey fill, 1.5m world-unit stroke width, round caps.
+  Mirror line-for-line of `RenderPreviewRenderer.cs:551-580`.
+- Z-order in each LB container: terrain mesh → road overlay →
+  faint wireframe.
 
-### Critical alpha=255 footgun (worth the inline note)
+**Rust** (`apps/holtburger-web/src/lib.rs`):
 
-Canvas2D → PIXI texture upload **premultiplies alpha**. The
-first pass encoded `allRoad` as cellBase.a (0 or 255); cells
-without allRoad ended up with A=0, and the upload silently
-zeroed RGB → every cell read back as
-`(primary=0, overlayCount=0, roadCount=0)` → uniform
-BarrenRock everywhere. The debug shader output (R=primary/32,
-G=oc/3, B=rc/2) flagged the bug — entirely black canvas.
-
-Fix: encode `allRoad` as the sentinel value `primary == 255`
-(terrain codes only go up to 32). Force A=255 on every byte
-of every cell-data texture. Footgun documented inline in
-both the JS data-build and the GLSL shader.
+The Phase 3 step 3.6 first pass added `fetch_terrain_alpha_masks`
++ retail alpha-mask constant tables. Those stay exported in the
+wasm bundle as scaffolding for any future authentic-TexMerge
+mode. The bilinear path doesn't use them; `index.html` drops
+the import.
 
 ### What step 3.6 deliberately DOES NOT do
 
-- **Full Region binary parser.** The 8 alpha-mask SurfaceTexture
-  IDs are hard-coded constants, same pattern Phase 3 step 3.5
-  established. Stable for retail Dereth; for custom regions
-  (emit-static-site / WorldBuilder-emitted .dat files) a
-  runtime parser of `0x13000000`'s TexMerge sub-tree is the
-  right answer. Doc-comment over `RETAIL_CORNER_TERRAIN_MASKS`
-  in lib.rs flags this as the right follow-on.
-- **Lambert hillshade.** WB.Terminal applies it on top of the
-  blend using bilinear-interpolated heights. Adding it requires
-  uploading the 9×9 height grid as a per-LB texture and doing
-  finite-difference slope in the shader. ~2 hours work, won't
-  break anything; deferred.
-- **Detail textures.** `TMTerrainDesc::DetailTexGID` references
-  small-scale noise textures retail layered under the main
-  terrain. Step 3.6 ignores them — DetailTexGID is read by the
-  Region parser but not exported.
+- **TexMerge alpha-mask compositing.** Authentic to retail's
+  algorithm but produces the per-cell hand-tuned patches the
+  static site explicitly avoids. Available as scaffolding in
+  the wasm bundle if a future "authentic-AC mode" wants it.
+- **Lambert hillshade.** `RenderPreviewRenderer.cs:487-503`
+  applies it on top of the bilinear blend. Adds a 9×9 height
+  texture per LB + finite-difference slope in the shader.
+  ~2 hours; deferred.
+- **Road texture fill.** Static site uses the RoadType atlas
+  tile as a repeating shader fill on the road stroke
+  (`RenderPreviewRenderer.cs:529-540`). We use a flat stone-
+  grey for the first cut. Switching to a textured stroke is a
+  PIXI line-style tweak; deferred.
 - **Neighbor-LB seam dedup.** WB.Terminal builds a unified
   vertex grid across multiple LBs; we keep per-LB independence,
-  so seam vertices duplicate. Visually no diff because both
-  sides read the same retail data.
+  so seam vertices duplicate. The bilinear blend reads the
+  same data on both sides so the result is visually
+  continuous.
+
+### The TexMerge detour (what was tried and rolled back)
+
+The first pass took the user's "authentic AC" framing too
+literally and ported `ACE.Server.Physics.Common.TexMerge`'s
+algorithm to wasm + GLSL: per-cell palette code computed from
+the 4 corners, primary terrain detection, up to 3 alpha-mask
+overlays each PRNG-selected and rotated to match its tcode,
+sequential `mix(base, overlay, alpha_mask.r / 255)` blend.
+~400 lines of JS + 80 lines of GLSL + a Rust
+`fetch_terrain_alpha_masks` export hardcoding the 8 retail
+alpha mask SurfaceTexture IDs.
+
+The result was technically authentic to retail but visibly
+*more* blocky than the bilinear version — the alpha masks are
+designed to fit one 24m cell each, so the iconic AC patches
+were visible 24m squares at our zoom level. The user
+correctly pointed at emit-static-site as the reference, which
+exclusively uses bilinear + vector roads.
+
+The TexMerge detour cost ~1 hour but the lessons stick:
+- canvas → PIXI texture upload premultiplies alpha; force
+  A=255 on every byte of any cell-data texture
+- emit-static-site's `RenderPreviewRenderer.cs` is the
+  authoritative reference for the live client's rendering
+  approach (NOT `TexMerge.cs`)
+- "authentic to retail" and "matches the static site" are
+  different goals that produce different output
 
 ### Validation
 
 - `cargo check --target wasm32-unknown-unknown` clean.
-- `cargo test --workspace --lib` 1121 / 0 (no native code touched).
+- `cargo test --workspace --lib` 1121 / 0.
 - `wasm-pack build --target {nodejs, web}` both green.
-- `node smoke_test.cjs` 60 / 60 — symbol surface unchanged.
+- `node smoke_test.cjs` 60 / 60.
 - `node capture_phase4_step3.cjs` PASS — Phase 4 step 3 wire
   round-trip + step 3.5 client-side prediction still work
-  through the new shader (3.03 m of sprite slide on press-W).
-- `apps/holtburger-web/capture_terrain_eval.cjs` produces the
-  zoomed deliverable at
-  [`docs/images/phase-3-step-3.6-tex-merge.png`](images/phase-3-step-3.6-tex-merge.png).
+  end-to-end through the new bilinear shader (3.00 m sprite
+  slide on press-W, 4 UpdateMotion echoes from ACE).
+- `apps/holtburger-web/capture_terrain_eval.cjs` produces
+  [`docs/images/phase-3-step-3.6-bilinear-roads.png`](images/phase-3-step-3.6-bilinear-roads.png),
+  matching `docs/sample-dist/projects/vanilla/tiles/exterior/8/*`.
 
 ### Files touched in step 3.6
 
 | File | Change |
 |---|---|
-| `apps/holtburger-web/src/lib.rs` | +145 lines: 3 alpha-mask constant tables, 2 wasm-bindgen structs, `fetch_terrain_alpha_masks()` export |
-| `apps/holtburger-web/index.html` | +400 / -65 lines: alpha atlas builder, palette decoder, per-cell data builder, sequential alpha-blend fragment shader, per-LB shader instances |
+| `apps/holtburger-web/src/lib.rs` | retains the alpha-mask constants + `fetch_terrain_alpha_masks` export (scaffolding for future authentic mode); not used by the bilinear path |
+| `apps/holtburger-web/index.html` | new bilinear fragment shader, `buildVertexTypesTexture` helper, vector road overlay in `buildLandblockChildren`. ~400 lines of TexMerge detour code removed (alpha atlas builder, palette decoder, cell-data texture builder, the 6-texture shader binding) |
 | `apps/holtburger-web/capture_terrain_eval.cjs` | new: zoomed canvas-only capture script for terrain quality evaluation |
-| `docs/images/phase-3-step-3.6-tex-merge.png` | new: zoomed Holtburg screenshot with the authentic AC TexMerge look |
+| `docs/images/phase-3-step-3.6-bilinear-roads.png` | new: zoomed Holtburg screenshot showing smooth bilinear blends + vector roads |
 
 ---
 

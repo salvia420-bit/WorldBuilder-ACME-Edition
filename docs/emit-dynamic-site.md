@@ -9,12 +9,12 @@
 
 ### Where the project is
 
-**Phases done:** 0, 1, 2, 3 (steps 1-6 + step 3.6 + step 5
-partial; **3.6 = authentic AC TexMerge terrain landed 2026-05-06,
-alpha-masked overlays mirror retail's `BuildTexture` exactly**),
-4 (step 1 + 2a + 2a.5 + 2a.6 + 2b + 3 + 3.5 — client-side
-prediction landed 2026-05-06), 5.0, 5.0b, 5.1a, 5.1b. Native lib
-gate
+**Phases done:** 0, 1, 2, 3 (steps 1-6 + **step 3.6 = bilinear
+4-corner terrain blend + vector road lines, mirroring
+emit-static-site's `RenderPreviewRenderer.cs:467-485 + 551-580`,
+landed 2026-05-06**; step 5 partial), 4 (step 1 + 2a + 2a.5 +
+2a.6 + 2b + 3 + 3.5 — client-side prediction landed 2026-05-06),
+5.0, 5.0b, 5.1a, 5.1b. Native lib gate
 **1121 / 0** across 14 workspace crates. `cargo check
 --target wasm32-unknown-unknown` clean for
 `holtburger-{dat,session,transport-ws,resource-http,web,content,
