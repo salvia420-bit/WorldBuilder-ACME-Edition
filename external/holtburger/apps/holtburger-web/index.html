@@ -1164,8 +1164,9 @@ void main() {
         //   stage
         //   └── cameraContainer  (world metres → canvas pixels)
         //       └── worldContainer  (one-time AC y-flip)
-        //           ├── landblockContainer × 9   (terrain, beneath)
-        //           └── objectsContainer        (sprites, on top)
+        //           ├── landblockContainer × 9    (terrain, beneath)
+        //           ├── objectsContainer          (static sprites, middle)
+        //           └── entityContainer           (live entities, on top — Phase 4 step 2b)
         const cameraContainer = new PIXI.Container();
         app.stage.addChild(cameraContainer);
 
@@ -1218,6 +1219,26 @@ void main() {
         worldContainer.addChild(objectsContainer);
         // Stash the counts on the app for the stage-info panel.
         app._stepFourCounts = { withSprite, fallback, withLive, invisible };
+
+        // Phase 4 step 2b: live-entity layer. Sits on top of the
+        // static objectsContainer so dynamic NPCs / monsters / players
+        // draw above placed buildings. The recv loop's
+        // `pollEntityUpdates()` events drive this layer; static
+        // landblock objects are not affected.
+        const entityContainer = new PIXI.Container();
+        worldContainer.addChild(entityContainer);
+        liveScene = {
+            cameraContainer,
+            worldContainer,
+            entityContainer,
+            liveSpriteMap,
+            spriteMap,
+        };
+        // Expose for capture-script telemetry (Phase 4 step 2b
+        // capture probes `window.liveScene.entityContainer.children.length`).
+        // Strictly debug-only; not relied on by production code paths.
+        window.liveScene = liveScene;
+        window.entityMap = entityMap;
 
         // Initial camera: centre on Holtburg's geometric centre at a
         // scale that fits the 3×3 grid in the canvas with a margin.
@@ -1288,6 +1309,114 @@ void main() {
         });
 
         return { withLive, withSprite, fallback, invisible, liveSpriteMap };
+      }
+
+      // ----- Phase 4 step 2b: live-entity buffer --------------------
+      // The recv loop pushes EntityUpdate events into a shared buffer
+      // every time ACE sends UpdatePosition / PrivateUpdatePosition /
+      // PublicUpdatePosition / ObjectCreate / ObjectDelete. JS drains
+      // them on each requestAnimationFrame tick (see drainEvents below)
+      // and applies the updates to a Map<guid, sprite> living on the
+      // PIXI scene graph's `entityContainer` layer.
+      //
+      // `liveScene` is null until renderNeighbourhood completes —
+      // entity events that arrive earlier are dropped (the recv loop
+      // is gated by login + spawn, and rendering boots in parallel,
+      // so the gap is small in practice).
+
+      let liveScene = null;
+      const entityMap = new Map();   // guid → { sprite, modelId }
+
+      // Quaternion → yaw extraction. AC is Z-up; top-down view rotates
+      // around the Z axis. Standard formula, identical to the static
+      // `frame_to_placement` logic in lib.rs:518-525.
+      function quaternionToYaw(qw, qx, qy, qz) {
+        return Math.atan2(
+          2 * (qw * qz + qx * qy),
+          1 - 2 * (qy * qy + qz * qz)
+        );
+      }
+
+      // Landblock-id + landblock-local (x, y) → world (wx, wy) in metres.
+      // Matches the existing static-placement conversion at line 994
+      // (`n.x * METERS_PER_LANDBLOCK + obj.x`). The wasm side forwards
+      // on-wire AC coords unchanged; this is the one place JS turns them
+      // into the world-metres coordinate space the scene graph uses.
+      function landblockToWorldXY(lbid, x, y) {
+        const lbX = (lbid >>> 24) & 0xff;
+        const lbY = (lbid >>> 16) & 0xff;
+        return {
+          wx: lbX * METERS_PER_LANDBLOCK + x,
+          wy: lbY * METERS_PER_LANDBLOCK + y,
+        };
+      }
+
+      // Get-or-create the sprite for a given GUID. Spawn / position
+      // updates both call this; only Spawn passes a real modelId, so
+      // a position update arriving before its ObjectCreate puts a
+      // placeholder dot on the scene that the later Spawn upgrades to
+      // a real model sprite. After upgrade, subsequent position updates
+      // (which always pass modelId=0 because the wire message doesn't
+      // carry it) keep the existing real sprite — that's the
+      // `entry.modelId === 0 && modelId !== 0` swap condition.
+      function ensureEntitySprite(guid, modelId) {
+        if (!liveScene) return null;
+        let entry = entityMap.get(guid);
+        if (entry) {
+          if (entry.modelId === 0 && modelId !== 0) {
+            // Upgrade placeholder → real model sprite.
+            entry.sprite.destroy();
+            entityMap.delete(guid);
+            entry = null;
+          } else {
+            return entry;
+          }
+        }
+        // Look up the model in the live render cache (Phase 3 step 6;
+        // populated by buildLiveSpriteMap during renderNeighbourhood)
+        // first, then fall back to the static atlas, then to a small
+        // coloured dot. Models the cache doesn't know about render as
+        // dots until the cache is rebuilt — for runtime entities this
+        // is the steady-state fallback (the cache is built from
+        // landblock placements; any newly-arriving modelId would need
+        // a live `fetch_model_meshes` round-trip to upgrade).
+        const renderEntry =
+          liveScene.liveSpriteMap?.get(modelId) ??
+          liveScene.spriteMap?.get(modelId);
+        let sprite;
+        if (renderEntry) {
+          sprite = new PIXI.Sprite(renderEntry.texture);
+          sprite.anchor.set(0.5, 0.5);
+        } else {
+          sprite = new PIXI.Graphics().circle(0, 0, 0.6).fill({ color: 0xff4488 });
+        }
+        liveScene.entityContainer.addChild(sprite);
+        entry = { sprite, modelId };
+        entityMap.set(guid, entry);
+        return entry;
+      }
+
+      function handleEntitySpawn(upd) {
+        const entry = ensureEntitySprite(upd.guid, upd.modelId);
+        if (!entry) return;
+        const { wx, wy } = landblockToWorldXY(upd.landblockId, upd.x, upd.y);
+        entry.sprite.position.set(wx, wy);
+        entry.sprite.rotation = -quaternionToYaw(upd.qw, upd.qx, upd.qy, upd.qz);
+      }
+
+      function handlePositionUpdate(upd) {
+        const entry = ensureEntitySprite(upd.guid, 0);
+        if (!entry) return;
+        const { wx, wy } = landblockToWorldXY(upd.landblockId, upd.x, upd.y);
+        entry.sprite.position.set(wx, wy);
+        entry.sprite.rotation = -quaternionToYaw(upd.qw, upd.qx, upd.qy, upd.qz);
+      }
+
+      function handleEntityRemove(upd) {
+        const entry = entityMap.get(upd.guid);
+        if (!entry) return;
+        entry.sprite.destroy();
+        entityMap.delete(upd.guid);
       }
 
       // ----- renderer entry point ----------------------------------
@@ -1580,7 +1709,7 @@ void main() {
                 loginStatus.innerHTML =
                   `<span class="ok">[OK]</span> Spawned <strong>${name}</strong> ` +
                   `<span class="hint">(GUID ${guidHex})</span>. ` +
-                  `<span class="hint">Step 2b will render the player at its spawn position.</span>`;
+                  `<span class="hint">Player + entities render via the live entity layer.</span>`;
               } else if (evt.kind === 0) {
                 // CharacterListReceived re-fire (after CharacterCreate /
                 // CharacterDelete). The recv loop has already updated
@@ -1637,6 +1766,21 @@ void main() {
                 // eslint-disable-next-line no-console
                 console.log(`[step 2a] CharacterListReceived re-fire — count=${evt.u32Payload}`);
               }
+            }
+            // Phase 4 step 2b: drain the parallel entity-update channel
+            // and apply each update to the scene graph by GUID. The
+            // channel runs at the same cadence as poll_events but
+            // typically carries 100s/sec in a populated zone, so it's
+            // kept separate to avoid string-allocation overhead on
+            // ClientEvent. Free each EntityUpdate after we're done —
+            // wasm-bindgen-allocated structs leak across the boundary
+            // until JS releases them.
+            const entityUpdates = handle.pollEntityUpdates();
+            for (const upd of entityUpdates) {
+              if (upd.kind === 0) handlePositionUpdate(upd);
+              else if (upd.kind === 1) handleEntitySpawn(upd);
+              else if (upd.kind === 2) handleEntityRemove(upd);
+              upd.free();
             }
             requestAnimationFrame(drainEvents);
           }

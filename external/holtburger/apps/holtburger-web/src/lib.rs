@@ -1629,8 +1629,13 @@ enum SessionCommand {
 /// Reserved for later steps:
 /// - `kind = 2` — chat-received / Tell / ChannelBroadcast events
 ///   (step 4 — DOM chat panel).
-/// - `kind = 3` — `ClientViewEvent::EntitySpawned` for non-player
-///   entities (step 2b — needs the entity buffer).
+///
+/// Entity spawn / position / remove events do NOT flow through
+/// this stream — they live on the parallel high-frequency channel
+/// drained by [`SessionHandle::poll_entity_updates`] (Phase 4 step
+/// 2b). Position updates can fire 100s/sec in a crowded zone; the
+/// dedicated [`EntityUpdate`] struct exposes typed fields per
+/// update (no string allocation, no payload-shape ambiguity).
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub struct ClientEvent {
@@ -1663,6 +1668,136 @@ impl ClientEvent {
     #[wasm_bindgen(getter, js_name = u32Payload)]
     pub fn u32_payload(&self) -> Option<u32> {
         self.u32_payload
+    }
+}
+
+/// Phase 4 step 2b: tag values for [`EntityUpdate::kind`]. JS reads
+/// `update.kind` and dispatches to a spawn / position-update / remove
+/// handler. Position-bearing kinds (Position, Spawn) carry valid
+/// coordinates + rotation; Remove carries only `guid`.
+#[cfg(target_arch = "wasm32")]
+const ENTITY_UPDATE_KIND_POSITION: u32 = 0;
+#[cfg(target_arch = "wasm32")]
+const ENTITY_UPDATE_KIND_SPAWN: u32 = 1;
+#[cfg(target_arch = "wasm32")]
+const ENTITY_UPDATE_KIND_REMOVE: u32 = 2;
+
+/// Phase 4 step 2b: a single position / spawn / remove event for a
+/// live entity. Drained by [`SessionHandle::poll_entity_updates`] on
+/// every requestAnimationFrame tick; JS keeps a `Map<guid, sprite>`
+/// and applies updates by GUID.
+///
+/// Why this is separate from [`ClientEvent`]: position updates fire
+/// 100s/sec in a crowded zone (every entity ACE simulates pushes a
+/// `PublicUpdatePosition` on movement). [`ClientEvent`]'s tagged
+/// `(string, u32)` payload shape can't carry a 7-float position +
+/// guid without ambiguous packing, and string-allocations in the
+/// hot path would compound. Two parallel channels give each side
+/// the right ergonomics: typed fields for the high-frequency stream,
+/// flexible tagged payload for the low-frequency lifecycle stream.
+///
+/// Source messages (recv loop maps these to `EntityUpdate`):
+/// - `GameMessage::UpdatePosition` — local player explicitly addressed
+///   by guid + a [`PositionPack`] envelope (cli's
+///   `handlers/player.rs:33-46`).
+/// - `GameMessage::PublicUpdatePosition` — any other entity by guid +
+///   bare [`WorldPosition`] (cli's `handlers/movement.rs:45-46`).
+/// - `GameMessage::PrivateUpdatePosition` — local player, **no guid in
+///   payload**. The recv loop substitutes `LoopState::InWorld { player_guid }`'s
+///   guid (cli's `handlers/movement.rs:41-43`).
+/// - `GameMessage::ObjectCreate` — entity arrival; carries
+///   `ObjectDescriptionData.public_weenie_desc.guid`,
+///   `csetup_id` (the model_id Phase 3 step 6's render cache uses),
+///   and an optional [`WorldPosition`] (cli's
+///   `handlers/inventory.rs:19-51`).
+/// - `GameMessage::ObjectDelete` — entity removal; just a guid
+///   (cli's `handlers/inventory.rs:53-56`).
+///
+/// **Coordinate frame:** `landblock_id` + landblock-local `x, y, z`,
+/// matching the on-wire [`WorldPosition`] shape exactly. JS converts
+/// to world coords via `(landblock_x_byte * 192) + local_x`. The wasm
+/// side forwards the on-wire numbers unchanged; the conversion lives
+/// JS-side (matching the [`ObjectPlacement`] pattern). AC is Z-up;
+/// JS extracts yaw from the quaternion via the same
+/// `atan2(2(qw*qz + qx*qy), 1 - 2(qy² + qz²))` formula
+/// `frame_to_placement` uses for static placements.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct EntityUpdate {
+    /// One of `ENTITY_UPDATE_KIND_*` — 0 = Position, 1 = Spawn, 2 = Remove.
+    kind: u32,
+    /// Entity GUID. For PrivateUpdatePosition this is the recv loop's
+    /// substituted local-player guid (no guid in the wire message).
+    guid: u32,
+    /// SetupModel ID (`csetup_id` from `ObjectDescriptionData`). Only
+    /// meaningful for kind = Spawn; `0` for Position and Remove.
+    model_id: u32,
+    /// AC landblock id (`(x_byte << 24) | (y_byte << 16) | cell_in_lb`).
+    /// `0` for kind = Remove.
+    landblock_id: u32,
+    /// Landblock-local position, range 0..192 m on x/y. `0` for Remove.
+    x: f32,
+    y: f32,
+    z: f32,
+    /// Orientation quaternion. Identity (`qw=1`) for Remove and
+    /// missing-pos Spawn fallbacks.
+    qw: f32,
+    qx: f32,
+    qy: f32,
+    qz: f32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl EntityUpdate {
+    /// Update tag — see `ENTITY_UPDATE_KIND_*` constants.
+    #[wasm_bindgen(getter)]
+    pub fn kind(&self) -> u32 {
+        self.kind
+    }
+    /// Entity GUID (substituted local-player guid for
+    /// PrivateUpdatePosition).
+    #[wasm_bindgen(getter)]
+    pub fn guid(&self) -> u32 {
+        self.guid
+    }
+    /// SetupModel id; meaningful only for Spawn.
+    #[wasm_bindgen(getter, js_name = modelId)]
+    pub fn model_id(&self) -> u32 {
+        self.model_id
+    }
+    /// AC landblock id (`(x_byte << 24) | (y_byte << 16) | cell`).
+    #[wasm_bindgen(getter, js_name = landblockId)]
+    pub fn landblock_id(&self) -> u32 {
+        self.landblock_id
+    }
+    #[wasm_bindgen(getter)]
+    pub fn x(&self) -> f32 {
+        self.x
+    }
+    #[wasm_bindgen(getter)]
+    pub fn y(&self) -> f32 {
+        self.y
+    }
+    #[wasm_bindgen(getter)]
+    pub fn z(&self) -> f32 {
+        self.z
+    }
+    #[wasm_bindgen(getter)]
+    pub fn qw(&self) -> f32 {
+        self.qw
+    }
+    #[wasm_bindgen(getter)]
+    pub fn qx(&self) -> f32 {
+        self.qx
+    }
+    #[wasm_bindgen(getter)]
+    pub fn qy(&self) -> f32 {
+        self.qy
+    }
+    #[wasm_bindgen(getter)]
+    pub fn qz(&self) -> f32 {
+        self.qz
     }
 }
 
@@ -1746,6 +1881,15 @@ pub struct SessionHandle {
     /// which left mobile users stuck at "sending login request" while
     /// the protocol had long since completed; step 2a.6 detaches it.
     catalog: std::rc::Rc<std::cell::RefCell<Option<std::sync::Arc<holtburger_content::CharacterGenCatalog>>>>,
+    /// Phase 4 step 2b: shared buffer of [`EntityUpdate`] events the
+    /// recv loop pushes when ACE sends `UpdatePosition` /
+    /// `PrivateUpdatePosition` / `PublicUpdatePosition` /
+    /// `ObjectCreate` / `ObjectDelete`. JS drains via
+    /// [`SessionHandle::poll_entity_updates`] each animation frame
+    /// and applies each update by GUID against its `Map<guid, sprite>`.
+    /// Separate from `queued_events` (the lifecycle stream) — see
+    /// [`EntityUpdate`]'s doc comment for the rationale.
+    entity_updates: std::rc::Rc<std::cell::RefCell<Vec<EntityUpdate>>>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1760,6 +1904,23 @@ impl SessionHandle {
     /// crossing.
     pub fn poll_events(&mut self) -> Vec<ClientEvent> {
         std::mem::take(&mut *self.queued_events.borrow_mut())
+    }
+
+    /// Phase 4 step 2b: drain queued [`EntityUpdate`]s — position
+    /// updates, entity spawns (`ObjectCreate`), and entity removals
+    /// (`ObjectDelete`). JS calls this on the same rAF tick as
+    /// [`Self::poll_events`] but applies the updates against a
+    /// separate `Map<guid, sprite>`. Empty Vec is the steady state
+    /// when the player is in-world but stationary.
+    ///
+    /// Lives on a separate channel from `poll_events` because position
+    /// updates can fire 100s/sec in a crowded zone — bundling them
+    /// into [`ClientEvent`] would force per-event string allocation
+    /// and an awkward payload-shape branch JS-side. See
+    /// [`EntityUpdate`]'s doc comment for the full rationale.
+    #[wasm_bindgen(js_name = pollEntityUpdates)]
+    pub fn poll_entity_updates(&mut self) -> Vec<EntityUpdate> {
+        std::mem::take(&mut *self.entity_updates.borrow_mut())
     }
 
     /// Snapshot of the most recent CharacterList. The recv loop updates
@@ -2148,16 +2309,20 @@ pub async fn start_session(
     let catalog: std::rc::Rc<
         std::cell::RefCell<Option<std::sync::Arc<holtburger_content::CharacterGenCatalog>>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let entity_updates: std::rc::Rc<std::cell::RefCell<Vec<EntityUpdate>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
 
     {
         let queued_events = queued_events.clone();
         let character_list = character_list.clone();
+        let entity_updates = entity_updates.clone();
         wasm_bindgen_futures::spawn_local(async move {
             recv_loop(
                 session,
                 cmd_rx,
                 queued_events,
                 character_list,
+                entity_updates,
                 Some(charlist_tx),
             )
             .await;
@@ -2198,6 +2363,7 @@ pub async fn start_session(
         character_list,
         account_name,
         catalog,
+        entity_updates,
     })
 }
 
@@ -2322,6 +2488,7 @@ async fn recv_loop(
     mut cmd_rx: futures::channel::mpsc::UnboundedReceiver<SessionCommand>,
     queued_events: std::rc::Rc<std::cell::RefCell<Vec<ClientEvent>>>,
     character_list: std::rc::Rc<std::cell::RefCell<Vec<CharacterSummary>>>,
+    entity_updates: std::rc::Rc<std::cell::RefCell<Vec<EntityUpdate>>>,
     mut charlist_tx: Option<futures::channel::oneshot::Sender<CharListReady>>,
 ) {
     use futures::StreamExt;
@@ -2515,14 +2682,138 @@ async fn recv_loop(
                                 );
                             }
                         }
+                        // Phase 4 step 2b: position-bearing messages.
+                        // Each pushes an EntityUpdate into the entity
+                        // channel; JS drains via pollEntityUpdates() and
+                        // applies updates to its `Map<guid, sprite>`.
+                        // Reference handlers in the cli:
+                        //   - UpdatePosition:        crates/holtburger-world/src/handlers/player.rs:33-46
+                        //   - PrivateUpdatePosition: crates/holtburger-world/src/handlers/movement.rs:41-43
+                        //   - PublicUpdatePosition:  crates/holtburger-world/src/handlers/movement.rs:45-46
+                        //   - ObjectCreate:          crates/holtburger-world/src/handlers/inventory.rs:19-51
+                        //   - ObjectDelete:          crates/holtburger-world/src/handlers/inventory.rs:53-56
+                        GameMessage::UpdatePosition(data) => {
+                            let pos = &data.pos.pos;
+                            entity_updates.borrow_mut().push(EntityUpdate {
+                                kind: ENTITY_UPDATE_KIND_POSITION,
+                                guid: u32::from(data.guid),
+                                model_id: 0,
+                                landblock_id: u32::from(pos.landblock_id),
+                                x: pos.coords.x,
+                                y: pos.coords.y,
+                                z: pos.coords.z,
+                                qw: pos.rotation.w,
+                                qx: pos.rotation.x,
+                                qy: pos.rotation.y,
+                                qz: pos.rotation.z,
+                            });
+                        }
+                        GameMessage::PrivateUpdatePosition(data) => {
+                            // PrivateUpdatePosition has no guid in the
+                            // payload (the wire message implies "the
+                            // local player"). Substitute the
+                            // LoopState::InWorld player_guid; if we
+                            // somehow get a Private update before
+                            // PlayerCreate landed, the message has no
+                            // owner — drop it.
+                            let local_guid = match &state {
+                                LoopState::InWorld { player_guid } => Some(*player_guid),
+                                _ => None,
+                            };
+                            if let Some(guid) = local_guid {
+                                let pos = &data.pos;
+                                entity_updates.borrow_mut().push(EntityUpdate {
+                                    kind: ENTITY_UPDATE_KIND_POSITION,
+                                    guid: u32::from(guid),
+                                    model_id: 0,
+                                    landblock_id: u32::from(pos.landblock_id),
+                                    x: pos.coords.x,
+                                    y: pos.coords.y,
+                                    z: pos.coords.z,
+                                    qw: pos.rotation.w,
+                                    qx: pos.rotation.x,
+                                    qy: pos.rotation.y,
+                                    qz: pos.rotation.z,
+                                });
+                            }
+                        }
+                        GameMessage::PublicUpdatePosition(data) => {
+                            let pos = &data.pos;
+                            entity_updates.borrow_mut().push(EntityUpdate {
+                                kind: ENTITY_UPDATE_KIND_POSITION,
+                                guid: u32::from(data.guid),
+                                model_id: 0,
+                                landblock_id: u32::from(pos.landblock_id),
+                                x: pos.coords.x,
+                                y: pos.coords.y,
+                                z: pos.coords.z,
+                                qw: pos.rotation.w,
+                                qx: pos.rotation.x,
+                                qy: pos.rotation.y,
+                                qz: pos.rotation.z,
+                            });
+                        }
+                        GameMessage::ObjectCreate(data) => {
+                            // csetup_id is the SetupModel id Phase 3
+                            // step 6's render cache uses; absent for
+                            // movement-only or invisible-helper objects
+                            // (we surface 0, JS falls back to a
+                            // placeholder sprite). pos is also
+                            // optional — child objects (held items,
+                            // armour, mounts) inherit position from
+                            // their parent and don't carry their own.
+                            let model_id = data.csetup_id.unwrap_or(0);
+                            let (lb, x, y, z, qw, qx, qy, qz) = match &data.pos {
+                                Some(p) => (
+                                    u32::from(p.landblock_id),
+                                    p.coords.x,
+                                    p.coords.y,
+                                    p.coords.z,
+                                    p.rotation.w,
+                                    p.rotation.x,
+                                    p.rotation.y,
+                                    p.rotation.z,
+                                ),
+                                None => (0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0),
+                            };
+                            entity_updates.borrow_mut().push(EntityUpdate {
+                                kind: ENTITY_UPDATE_KIND_SPAWN,
+                                guid: u32::from(data.public_weenie_desc.guid),
+                                model_id,
+                                landblock_id: lb,
+                                x,
+                                y,
+                                z,
+                                qw,
+                                qx,
+                                qy,
+                                qz,
+                            });
+                        }
+                        GameMessage::ObjectDelete(data) => {
+                            entity_updates.borrow_mut().push(EntityUpdate {
+                                kind: ENTITY_UPDATE_KIND_REMOVE,
+                                guid: u32::from(data.guid),
+                                model_id: 0,
+                                landblock_id: 0,
+                                x: 0.0,
+                                y: 0.0,
+                                z: 0.0,
+                                qw: 1.0,
+                                qx: 0.0,
+                                qy: 0.0,
+                                qz: 0.0,
+                            });
+                        }
                         _ => {
                             // Other GameMessages are dropped silently in
-                            // step 2a.6 — chat (kind=2), position
-                            // updates / VectorUpdate / UpdateMotion (step
-                            // 2b's PIXI entity buffer), equipment / chat
-                            // panel (step 4) all live downstream. The
-                            // recv loop's job here is to stay alive +
-                            // deliver the InWorld signal.
+                            // step 2b — chat (kind=2), VectorUpdate /
+                            // UpdateMotion (step 2b extension — not
+                            // strictly needed for position rendering),
+                            // equipment / chat panel (step 4) all live
+                            // downstream. The recv loop's job here is
+                            // to stay alive + deliver the InWorld signal
+                            // + relay position-bearing messages.
                         }
                     }
                 }
