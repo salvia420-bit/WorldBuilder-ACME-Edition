@@ -1,7 +1,17 @@
 # Phase 4 — playable AC client (as-built)
 
-> **Status:** Phase 4 steps 1, 2a, 2a.5, and **2a.6** landed
-> (2026-05-04). The wasm bundle drives AC login → CharacterList
+> **Status:** Phase 4 steps 1, 2a, 2a.5, 2a.6, 2b, and
+> **3** all landed (last refreshed 2026-05-06; step 3
+> implemented + smoke green, live-ACE wire round-trip pending
+> the user's live stack). The wasm bundle drives AC login →
+> CharacterList → CharacterCreate → spawn handshake → in-world
+> chat / admin commands → live entity rendering → outbound
+> WASD/Q/E movement, all from the browser through
+> `holtburger-wsbridge` to a live ACE.
+>
+> **Original step-1 status (preserved for context):** Phase 4
+> steps 1, 2a, 2a.5, and **2a.6** landed (2026-05-04). The wasm
+> bundle drives AC login → CharacterList
 > → CharacterCreate → spawn handshake → in-world chat / admin
 > commands from the browser through `holtburger-wsbridge` to a
 > live ACE end-to-end. Open the page, log in, the Selection
@@ -1207,6 +1217,236 @@ between positions in real time as ACE streams `PublicUpdatePosition`.
   session and starting a new one (or extending the LoopState
   machine). Step 2b keeps the one-spawn-per-session contract
   inherited from step 2a.
+
+---
+
+## Phase 4 step 3 landed (2026-05-06)
+
+Closes the outbound side of the gameplay loop: keyboard input
+(WASD for locomotion, Q/E for turning, Shift for run) drives AC
+`MoveToState` packets to ACE. The server simulates the move and
+echoes `PublicUpdatePosition` back through the now-working step
+2b pipeline; the local player sprite slides on the canvas in
+real time. Same wire format the retail AC client emits.
+
+The user's framing question for this step was "holtburger
+implemented a certain movement system which is not the
+traditional movement system." Investigation confirmed that
+holtburger's wire format **is** standard AC — the retail client
+sends `GameAction::MoveToState (0xF61C)` with a `RawMotionState`
+payload, and so does holtburger. What's "non-traditional" is
+purely internal: holtburger's `PlayerDriveIntent` enum is a
+*superset* of retail (it adds `Autonomous` server-driven
+pathing + `ManualPulse` one-shot moves on top of the retail-
+equivalent `ManualHeld(MotionState)` mode). For step 3 we plug
+into the `ManualHeld` semantics — that *is* the traditional
+keypress-to-wire-packet path, just hand-built in the wasm
+bundle's recv loop instead of routed through `ClientRuntime`.
+
+### What step 3 ships
+
+**One new SessionCommand** + **one new wasm-bindgen export** at
+`apps/holtburger-web/src/lib.rs`:
+
+- `SessionCommand::SetMovementInput { forward: i8, strafe: i8,
+  turn: i8, run: bool }` — tristate-axis keystate snapshot. JS
+  enqueues one per change in keystate (key down / up transition or
+  modifier flip), not on every animation frame, matching AC's
+  "set state once, server simulates" wire semantics.
+- `SessionHandle.setMovementInput(forward, strafe, turn, run)` —
+  the JS-facing method that pushes a SessionCommand through the
+  cmd channel.
+
+**Architecture: build packets directly in the recv loop, skip
+`ClientRuntime`.** The cli routes input through
+`ClientCommand::DriveSelf(PlayerDriveIntent)` →
+`ClientRuntime::handle_movement_command` →
+`MovementSystem::enqueue_drive_intent` → tick → packet emission
+via `Session::send_action`. The wasm bundle's recv loop only has
+a `Session` (deliberately — see step 2b's "What's NOT" section);
+standing up a full `ClientRuntime` would mean importing world
+simulation, motion-table interpolation, and a tick driver.
+Instead step 3 mirrors `holtburger-core::client::movement::common::
+build_motion_state_raw_motion_state` (the cli's private helper)
+inline at the top of `lib.rs`, building a `RawMotionState` from
+the tristate axes and wrapping it in `MoveToStateActionData`
+with the player's last-known position + sequence numbers.
+
+This matches the same pattern steps 2a / 2a.5 / 2a.6 use for
+`SelectCharacter` / `CreateCharacter` / `Talk`: SessionCommand →
+recv loop builds the wire packet → `session.send_action`. The
+wasm bundle remains a Session-only client; world simulation
+stays server-side.
+
+### What step 3 ships in `recv_loop`
+
+The recv loop adds local-player position + sequence tracking,
+populated from inbound position messages:
+
+```rust
+struct LocalPlayerSnapshot {
+    position: Option<WorldPosition>,
+    instance_sequence: u16,
+    server_control_sequence: u16,
+    teleport_sequence: u16,
+    force_position_sequence: u16,
+}
+```
+
+- Position is updated from all three position messages
+  (`PrivateUpdatePosition` → always local; `Public`/`Update` →
+  guid-matched against `LoopState::InWorld.player_guid`).
+- Sequence numbers come exclusively from `UpdatePosition` —
+  it's the only inbound message that carries a `PositionPack`
+  with all four `u16` sequences. `Private` and `Public` only
+  carry a single `u8` housekeeping `sequence` field.
+- `server_control_sequence` is a known wart: the cli updates
+  it from `UpdateMotion`-style messages, not position packets
+  (`crates/holtburger-world/src/entity.rs:344`). Step 3 leaves
+  it at 0 — ACE accepts client-driven motion with stale
+  `server_control_sequence` (the field gates server-controlled
+  motion, not client motion). If this turns out to be wrong,
+  follow-on work tracks `UpdateMotion`.
+
+The `SetMovementInput` cmd handler builds a `RawMotionState`
+mirroring the cli's logic:
+
+- `current_hold_key` = `HoldKey::Run` (2) if `run` else `HoldKey::None` (1)
+- forward axis: `WALK_FORWARD_MOTION_COMMAND` (0x45000005) at
+  `run_rate_scalar` (4.5 m/s) when held with shift, walk speed
+  (1.0 m/s) otherwise; backstep (0x45000006) is always 1.0 m/s
+  in retail
+- strafe axis: `SIDESTEP_RIGHT/LEFT_MOTION_COMMAND` (0x6500000F /
+  0x65000010) at 1.0 m/s — only emitted if forward axis is
+  zero (the wire format carries one of {forward, strafe} per
+  packet; matches the cli's single-axis `Locomotion` enum)
+- turn axis: `TURN_RIGHT/LEFT_MOTION_COMMAND` (0x6500000D /
+  0x6500000E) at 1.5 rad/s when running, 1.0 rad/s when walking
+  — independent of locomotion, rides on its own flag bits
+
+All-zero axes is the canonical "stop": the wire packet carries
+an empty `RawMotionState` (just `CURRENT_HOLD_KEY`) and ACE
+clears the active drive. JS sends one of these on every key-up
+that drains the held axes.
+
+### JS-side keyboard input
+
+`apps/holtburger-web/index.html` adds:
+
+- `enteredWorld: bool` — flipped to `true` in the `kind=7
+  EnteredWorld` handler. Movement input gates on this; the
+  cmd is dropped server-side (or by the recv loop with a
+  `log::warn!`) before the first `PrivateUpdatePosition` lands
+  anyway.
+- `keyState = { w, a, s, d, q, e, shift }` — tracked at closure
+  scope.
+- `document` `keydown` / `keyup` listeners that update the
+  keystate. Skips updates when focus is on an `INPUT` /
+  `TEXTAREA` / `contenteditable` element so login + chat
+  forms keep their normal text-input behavior.
+- A `window` `blur` handler that clears the keystate. Chrome
+  suppresses keyup for some modifier combos when the window
+  loses focus, which would otherwise leave the player walking
+  forever.
+- A per-rAF tick block (inside the existing `drainEvents` loop
+  that already drains `poll_events()` + `pollEntityUpdates()`)
+  that derives `(forward, strafe, turn, run)` from the keystate
+  and calls `handle.setMovementInput(...)` only when the axes
+  changed since the previous frame. One packet per state
+  transition, not 60 per second.
+
+### Smoke checks (58 → 60)
+
+- `SessionHandle.setMovementInput()` is a function (Phase 4
+  step 3 movement input)
+
+The live ACE round-trip remains a SKIP — verifying the *wire-
+level effect* of the packet (ACE actually moves the player and
+echoes `PublicUpdatePosition`) requires a running ACE. The
+deterministic-symbol check confirms the export landed and the
+wasm bundle compiles.
+
+### Files touched
+
+- `apps/holtburger-web/src/lib.rs` — `SessionCommand::SetMovementInput`
+  variant, `LocalPlayerSnapshot` struct, motion-command constants,
+  `build_raw_motion_state_for_input` helper, `recv_loop`
+  modifications (Update/Private/PublicUpdatePosition handlers
+  capture position + sequences; new cmd-match arm builds and
+  sends `MoveToState`), `SessionHandle::set_movement_input`
+  wasm-bindgen export
+- `apps/holtburger-web/index.html` — `enteredWorld` flag,
+  `keyState` object + listeners, blur handler, per-rAF
+  setMovementInput dispatch in `drainEvents`
+- `apps/holtburger-web/smoke_test.cjs` — symbol check for
+  `setMovementInput`
+
+### What's NOT in step 3 (scope deferred)
+
+- **Click-to-move.** Retail AC also supports clicking the ground
+  for path-finding. That's `MoveToObject` / `MoveToPosition` —
+  server-initiated, no client-side packet beyond the original
+  click. Adding it means JS computes a target world position
+  from the canvas click, dispatches a server-side movement
+  request (or sends an autonomous-position-driven `MoveToState`
+  with the desired heading), and lets ACE simulate the path.
+  Step 3 keeps it WASD-only.
+- **`UpdateMotion` tracking → `server_control_sequence`.** As
+  noted above, the cli sources `server_control_sequence` from
+  motion-control messages, not position packets. Step 3 leaves
+  it at 0 and bets ACE is lenient on stale values for client-
+  driven motion. If live testing surfaces dropped packets,
+  add an `UpdateMotion` recv arm and update the snapshot.
+- **Jump (Spacebar).** AC's jump is a separate
+  `MovementParameters` extension (impulse + grounded-state
+  flip). Spacebar is also commonly captured for chat-window
+  toggling, so deciding the keymap is a UX call deferred to
+  step 4 (DOM panels).
+- **Combat-stance switch / weapon hotkey.** Stance affects
+  `current_style` (e.g. `MotionStance::HandCombat`) which
+  changes the run/turn animation speed and combat eligibility.
+  Step 3 omits the `CURRENT_STYLE` flag entirely — the cli
+  reads `world.player.last_server_motion_style` from
+  `WorldState`, which we don't track; ACE preserves whatever
+  stance it last set.
+- **Position interpolation.** Continued from step 2b — the
+  local player still snap-renders to each `PublicUpdatePosition`
+  echo. Smooth motion needs a lerp between the last-known
+  position and the target.
+- **Velocity / momentum.** ACE accepts a `velocity` field in
+  `PositionPack` flagged by `HAS_VELOCITY`; the wasm bundle
+  reads positions from `WorldPosition` directly and ignores
+  velocity. For step 3's "press W → walk forward" loop this
+  doesn't matter; for momentum-preserving combat moves it
+  would.
+
+### Live-ACE validation — pending
+
+Step 3 was implemented and unit-validated (smoke 58 → 60,
+native lib 1121 / 0, wasm32 cross-compile clean, both
+`--target nodejs` and `--target web` bundles built). The
+live-ACE round-trip — confirming ACE accepts the packet,
+simulates the move, and echoes `PublicUpdatePosition` — needs
+the user's live stack (Tailscale 100.116.47.66, login
+tailnet1/tailnet1 Developer-promoted). Recipe:
+
+1. `git pull` on the dev host, run the bake recipe if
+   `dats/assets.hba` changed.
+2. `wasm-pack build --target web` for the page bundle (already
+   done; pkg/holtburger_web.js exposes `setMovementInput`).
+3. Reload `http://100.116.47.66:8765/apps/holtburger-web/index.html`
+   in a phone or browser; log in, spawn a character, click
+   Teleport to Holtburg.
+4. Press W — the local player sprite should walk forward in
+   the direction it's facing. Q/E rotate, A/D strafe, S
+   backsteps, Shift+W runs.
+
+If the move doesn't take effect:
+- Check ACE's log for `MoveToState` rejection (`server_control_
+  sequence` mismatch is the most likely culprit).
+- Check the browser console for `setMovementInput rejected:` or
+  `recv_loop: SetMovementInput before local position known`
+  warnings.
 
 ---
 

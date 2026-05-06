@@ -10,12 +10,14 @@
 ### Where the project is
 
 **Phases done:** 0, 1, 2, 3 (steps 1-6 + step 5 partial), 4 (step
-1 + 2a + 2a.5 + 2a.6 + 2b), 5.0, 5.0b, 5.1a, 5.1b. Native lib gate
-**1121 / 0** across 14 workspace crates. `cargo check
+1 + 2a + 2a.5 + 2a.6 + 2b + **3 — code-complete, live-ACE
+wire round-trip pending**), 5.0, 5.0b, 5.1a, 5.1b. Native lib
+gate **1121 / 0** across 14 workspace crates. `cargo check
 --target wasm32-unknown-unknown` clean for
 `holtburger-{dat,session,transport-ws,resource-http,web,content,
 core,manifest}`. `wasm-pack build --target {nodejs,web}` both
-green. `node smoke_test.cjs` **58 / 58 PASS**.
+green. `node smoke_test.cjs` **60 / 60 PASS** (59 OK + 1 SKIP
+for live-ACE round-trip).
 
 **What works end-to-end today.** Open
 `apps/holtburger-web/index.html` in any browser. The page calls
@@ -39,7 +41,31 @@ world coords as ACE streams `PublicUpdatePosition`. Pushed to
 `origin/master` 2026-05-06 in `fe85008..d01fa73` (work was held
 in the working tree on 2026-05-05 by a `/tmp` disk-fill from
 the `dat-shard` bake — symlinked `dist/` rehydrates from a fresh
-bake; see the bake recipe below).
+bake; see the bake recipe below). **Phase 4 step 3
+(2026-05-06):** WASD / Q / E / Shift keyboard input now drives
+outbound `GameAction::MoveToState` packets via the new
+`SessionHandle.setMovementInput(forward, strafe, turn, run)`
+export. Wire format matches retail AC's `RawMotionState`
+exactly (the user raised this concern up front; investigation
+confirmed holtburger's higher-level `PlayerDriveIntent` enum
+is a *superset* of retail, but the `ManualHeld(MotionState)`
+path it uses for keyboard input lowers to the same
+`0xF61C MoveToState` packet a retail client sends, so we
+replicate that path inline in the wasm bundle's recv loop
+without standing up a full `ClientRuntime`). JS gates input
+on `kind=7 EnteredWorld`, sends one packet per change in
+keystate (one per key down/up), the recv loop populates the
+position + sequence numbers from the latest inbound
+`UpdatePosition` / `PrivateUpdatePosition` and dispatches via
+`session.send_action`. ACE simulates the move; Phase 4 step
+2b's now-working position pipeline echoes
+`PublicUpdatePosition` back, sliding the local player sprite.
+**Live-ACE wire round-trip pending the user's live stack** —
+the implementation passes smoke (60/60 with the new
+`setMovementInput` symbol check) but the wire-effect of the
+packet against ACE has not been physically verified yet.
+See [`phase-4-renderer.md`](phase-4-renderer.md) step 3 for
+the as-built reference and the validation recipe.
 
 **Bake recipe (run once after the first clone, again whenever
 `dats/assets.hba` changes):**
@@ -99,15 +125,14 @@ on-device validation; recipe in
 Pick one to pull on. The choice is real, not arbitrary.
 
 - **Content rail** — Phase 4 step 3 (input → AC movement packets)
-  → step 4 (DOM panels: chat, vitals, inventory) → step 5
-  (interactive entities: doors, portals, vendors). Unblocks the
-  actual gameplay loop. With step 2b closed, the page renders
-  every entity ACE pushes; what's missing is the *outbound*
-  side — the user clicks the canvas, JS turns that into an AC
-  `CharacterPositionUpdate`, ACE simulates the move, and
-  `PublicUpdatePosition` flows back through the now-working
-  pipeline. Reference: cli's input handling at
-  `external/holtburger/crates/holtburger-core/src/client/input.rs`.
+  **landed 2026-05-06; live-ACE wire round-trip pending** → step 4
+  (DOM panels: chat, vitals, inventory) → step 5 (interactive
+  entities: doors, portals, vendors). With step 3 implemented,
+  the gameplay loop now closes end-to-end on the wire: WASD/Q/E
+  keyboard input → `SessionHandle.setMovementInput` →
+  `GameAction::MoveToState` → ACE simulates → step 2b's
+  `PublicUpdatePosition` echo slides the local sprite. Step 4 is
+  the next pull on this rail.
 - **Bandwidth rail** — Phase 5.2 (manifest scale fix) at
   [`manifest.md`](manifest.md). Real-world bake produces a
   **203 MB** `manifest.json` (885,043 entries × ~230 bytes
@@ -1138,10 +1163,25 @@ Step ledger:
   the `EntityUpdate` doc comment). Reference cli handlers:
   `external/holtburger/crates/holtburger-world/src/handlers/player.rs:33-46`
   + `handlers/movement.rs:41-46` + `handlers/inventory.rs:19-56`.
-- ⏳ **Step 3 — input (WASD / click-to-target) → AC movement
-  packets.** Translate browser input events through
-  `holtburger-core`'s existing input surface to AC
-  `CharacterPositionUpdate` packets. Closes the gameplay loop.
+- ✅ **Step 3 — input (WASD / Q / E / Shift) → AC movement
+  packets.** Landed 2026-05-06 (see
+  [`docs/phase-4-renderer.md`](phase-4-renderer.md) step 3
+  section). Adds `SessionCommand::SetMovementInput` variant +
+  `LocalPlayerSnapshot` recv-loop state (position + 4
+  sequences from inbound `UpdatePosition`) + motion-command
+  constants + `build_raw_motion_state_for_input` helper +
+  `SessionHandle.setMovementInput(forward, strafe, turn, run)`
+  wasm-bindgen export. Recv-loop arm wraps the
+  `RawMotionState` in `MoveToStateActionData` and dispatches
+  via `session.send_action`. JS-side adds keystate tracking,
+  document keydown/keyup listeners (gated on `enteredWorld`
+  + form-input awareness), window blur handler (Chrome stuck-
+  modifier mitigation), and per-rAF `setMovementInput` dispatch
+  on keystate change. Click-to-move and the
+  `UpdateMotion`/`server_control_sequence` tracking are scope
+  deferred. Smoke 58 → 60 (setMovementInput symbol). Wire
+  round-trip against live ACE pending the user's live stack;
+  validation recipe in `phase-4-renderer.md` step 3.
 - ⏳ **Step 4 — DOM panels (chat, vitals, inventory).** Render
   the retail UI surfaces holtburger already drives, in DOM
   panels next to the PIXI canvas. Parallel to step 2/3.
@@ -1341,6 +1381,7 @@ re-discovering them.
 | `SessionHandle.createTestCharacter(name) -> Result<()>` | 4 step 2a.5 | Build an Aluvian / Male / Adventurer / Holtburg `CharacterCreateRequestData` via `holtburger_core::CharacterGenBuilder` and dispatch. |
 | `SessionHandle.sendChat(message) -> Result<()>` | 4 step 2a.6 | Dispatch `GameAction::Talk(message)`. `@`/`/`-prefixed messages route to ACE's command parser; access-level enforced server-side. |
 | `SessionHandle.pollEntityUpdates() -> Vec<EntityUpdate>` | 4 step 2b | Drain the high-frequency entity stream. Separate from `poll_events` — see the `EntityUpdate` doc comment for the rationale (position updates fire 100s/sec, dedicated typed-getter struct beats string-allocation in the hot path). Drained on every rAF tick alongside `poll_events`. |
+| `SessionHandle.setMovementInput(forward, strafe, turn, run) -> Result<()>` | 4 step 3 | Forward a tristate-axis keystate snapshot (-1/0/+1 axes + run-modifier) to the recv loop, which builds and dispatches a `GameAction::MoveToState` packet. JS calls this on every change in keystate (one packet per key down/up transition or modifier flip), not on every animation frame — matches the cli's `PlayerDriveIntent::ManualHeld` semantics. Forward axis takes priority over strafe; turn rides on independent flag bits; run selects `HoldKey::Run` + run-rate speed/turn-speed scalars. The recv loop drops the cmd if no inbound `PrivateUpdatePosition` has landed yet (gate JS calls on `kind=7 EnteredWorld` to avoid the race). |
 | `EntityUpdate { kind, guid, modelId, landblockId, x, y, z, qw, qx, qy, qz }` | 4 step 2b | Typed wasm-bindgen struct surfaced to JS. `kind`: 0=Position, 1=Spawn, 2=Remove. Source messages: `UpdatePosition`, `Public`/`PrivateUpdatePosition` → kind=0; `ObjectCreate` → kind=1 (with `modelId` = `csetup_id`); `ObjectDelete` → kind=2. Coords are landblock-local; JS converts via `(landblock_x_byte * 192) + local_x`. |
 
 ---
