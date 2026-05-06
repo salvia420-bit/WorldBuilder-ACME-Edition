@@ -34,6 +34,22 @@
       #selection ul { padding-left: 1.25rem; }
       #selection li { margin: 0.45rem 0; font-family: ui-monospace, monospace; font-size: 0.92rem; }
       #selection li button { margin-left: 0.6rem; padding: 0.2rem 0.6rem; cursor: pointer; }
+      /* Phase 4 step 4: chat panel. Fixed-height scrolling log + an
+         input row underneath. Lives under the Teleport button inside
+         #post-spawn so it only appears after EnteredWorld. */
+      #chat-panel { margin-top: 0.75rem; max-width: 36rem; border: 1px solid #ccc; border-radius: 4px; background: #fafafa; }
+      #chat-log { list-style: none; padding: 0.5rem 0.75rem; margin: 0; height: 12rem; overflow-y: auto; font-family: ui-monospace, monospace; font-size: 0.88rem; line-height: 1.4; }
+      #chat-log li { padding: 0.05rem 0; word-wrap: break-word; }
+      #chat-log li.empty { color: #999; font-style: italic; }
+      #chat-log li.system { color: #1a7f1a; }
+      #chat-log li.popup { color: #b35400; }
+      #chat-log li.channel { color: #1f4f9b; }
+      #chat-log li.tell { color: #7a1f9b; font-weight: 500; }
+      #chat-log li.emote { color: #555; font-style: italic; }
+      #chat-form { display: flex; gap: 0.4rem; padding: 0.4rem; border-top: 1px solid #ddd; background: #f0f0f0; }
+      #chat-form input { flex: 1; padding: 0.3rem 0.5rem; font-family: ui-monospace, monospace; font-size: 0.92rem; }
+      #chat-form button { padding: 0.25rem 0.8rem; cursor: pointer; }
+      #chat-form button[disabled] { cursor: not-allowed; opacity: 0.6; }
     </style>
   </head>
   <body>
@@ -98,6 +114,33 @@
           <code>docs/phase-4-renderer.md</code> step 2a.6 for the SQL
           one-liner.
         </span>
+
+        <!--
+          Phase 4 step 4: chat panel. Receives kind=2 ChatReceived
+          ClientEvents from the recv loop (ServerMessage, HearSpeech,
+          HearRangedSpeech, EmoteText, SoulEmote, GameEvent::Tell,
+          GameEvent::ChannelBroadcast, GameEvent::CommunicationTransientString,
+          GameEvent::PopupString) and renders them as a rolling log.
+          The input field sends GameAction::Talk via the existing
+          SessionHandle.sendChat export — `@`/`/`-prefixed messages
+          route to ACE's command parser (access-level enforced
+          server-side; see docs/phase-4-renderer.md step 2a.6).
+        -->
+        <div id="chat-panel" hidden>
+          <ul id="chat-log">
+            <li class="empty">No messages yet — chat appears here as ACE pushes it.</li>
+          </ul>
+          <form id="chat-form">
+            <input
+              type="text"
+              id="chat-input"
+              autocomplete="off"
+              placeholder="Type to chat (or /command for ACE admin commands)…"
+              maxlength="240"
+            />
+            <button type="submit" id="chat-send">Send</button>
+          </form>
+        </div>
       </div>
 
       <form id="create-form" hidden>
@@ -1776,6 +1819,49 @@ void main() {
       const createStatus = document.getElementById("create-status");
       const postSpawn = document.getElementById("post-spawn");
       const teleportBtn = document.getElementById("teleport-button");
+      // Phase 4 step 4 — chat panel.
+      const chatPanel = document.getElementById("chat-panel");
+      const chatLog = document.getElementById("chat-log");
+      const chatForm = document.getElementById("chat-form");
+      const chatInput = document.getElementById("chat-input");
+      const chatSendBtn = document.getElementById("chat-send");
+      const CHAT_LOG_LIMIT = 200;
+      function appendChatLine(text, cls) {
+        // Drop the empty-state placeholder on first real message.
+        const empty = chatLog.querySelector("li.empty");
+        if (empty) empty.remove();
+        const li = document.createElement("li");
+        if (cls) li.className = cls;
+        li.textContent = text;
+        // Trim to prevent unbounded DOM growth in long sessions.
+        chatLog.appendChild(li);
+        while (chatLog.childElementCount > CHAT_LOG_LIMIT) {
+          chatLog.firstElementChild.remove();
+        }
+        // Auto-scroll only if the user was already pinned to the
+        // bottom — don't yank scroll position when they're reading
+        // backscroll.
+        const nearBottom =
+          chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 40;
+        if (nearBottom) chatLog.scrollTop = chatLog.scrollHeight;
+      }
+      // Heuristic class assignment for visual differentiation. Mirrors
+      // the prefix pattern the recv loop's match arms emit.
+      function classifyChat(text) {
+        if (text.startsWith("[Server]")) return "system";
+        if (text.startsWith("[Popup]")) return "popup";
+        // ChannelBroadcast format: "[ChannelName] Sender says, ..."
+        if (text.startsWith("[")) return "channel";
+        if (text.includes(" tells you, ")) return "tell";
+        if (
+          text.startsWith("*") ||
+          text.includes(" waves") ||
+          text.includes(" emote")
+        ) {
+          return "emote";
+        }
+        return "";
+      }
       let activeHandle = null;
 
       loginForm.addEventListener("submit", async (e) => {
@@ -1939,6 +2025,50 @@ void main() {
             }, 3000);
           });
 
+          // Phase 4 step 4 — chat send. Dispatches the input field's
+          // text through SessionHandle.sendChat (GameAction::Talk).
+          // `@`/`/`-prefixed messages route to ACE's command parser;
+          // access level enforced server-side. Echoes the local
+          // outbound line into the log so the user sees their own
+          // message even before ACE rebroadcasts it (which it
+          // doesn't always — ACE only echoes Talk back via
+          // ChannelBroadcast for channels the player is subscribed
+          // to).
+          chatForm.addEventListener("submit", (ev) => {
+            ev.preventDefault();
+            if (!activeHandle || !enteredWorld) return;
+            const message = chatInput.value.trim();
+            if (!message) return;
+            try {
+              activeHandle.sendChat(message);
+            } catch (err) {
+              appendChatLine(
+                `[Send error] ${String(err?.message ?? err)}`,
+                "popup",
+              );
+              return;
+            }
+            // Local echo so users can see their own commands
+            // immediately. ACE doesn't echo Talk back to the sender
+            // for ad-hoc speech, so without this the command appears
+            // to have done nothing visually.
+            appendChatLine(`> ${message}`, "");
+            chatInput.value = "";
+            chatInput.focus();
+          });
+          // Pressing keys in the chat input must NOT drive movement
+          // (Phase 4 step 3's W/A/S/D/Q/E/Shift document-level
+          // listeners would otherwise fire while typing). The
+          // existing keystate code already gates on form-input
+          // awareness via document.activeElement; the chat input is
+          // a regular <input type="text"> so it inherits that
+          // behaviour. Prevent submit on Enter from also bubbling
+          // up — `<form>` would normally swallow it but stopping
+          // propagation is defensive.
+          chatInput.addEventListener("keydown", (ev) => {
+            if (ev.key === "Enter") ev.stopPropagation();
+          });
+
           // Phase 4 step 2a.5 — create-character form. Constructs the
           // CharacterCreateRequestData in the wasm bundle (Aluvian /
           // Male / Adventurer / Holtburg defaults) and dispatches it
@@ -2046,6 +2176,14 @@ void main() {
                 // `character_list` shared state — re-render so the UI
                 // reflects the new roster.
                 renderCharacterList();
+              } else if (evt.kind === 2) {
+                // ChatReceived (Phase 4 step 4). The recv loop
+                // pre-formats every chat-bearing variant into a single
+                // display line (see ClientEvent kind=2 doc comment in
+                // src/lib.rs); JS just appends + colour-codes by
+                // prefix.
+                const text = evt.stringPayload || "";
+                appendChatLine(text, classifyChat(text));
               } else if (evt.kind === 7) {
                 // EnteredWorld — server has fully spawned the
                 // player (PlayerDescription / StartGame fired). The
@@ -2055,6 +2193,11 @@ void main() {
                 const playerGuid = (evt.u32Payload >>> 0).toString(16).toUpperCase().padStart(8, "0");
                 postSpawn.hidden = false;
                 teleportBtn.disabled = false;
+                // Phase 4 step 4: reveal the chat panel; wasm bundle's
+                // sendChat is now safe to call.
+                chatPanel.hidden = false;
+                chatInput.disabled = false;
+                chatSendBtn.disabled = false;
                 // Phase 4 step 3: open the keyboard movement gate.
                 enteredWorld = true;
                 // Phase 4 step 3.5: arm the prediction clock. First

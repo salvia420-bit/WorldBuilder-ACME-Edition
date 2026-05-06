@@ -1815,10 +1815,47 @@ pub async fn fetch_model_meshes(model_ids: Vec<u32>) -> Result<Vec<ModelMesh>, J
 // + a CharacterList re-fire, and the SessionHandle's
 // `character_list` shared state updates to include the new entry.
 
+/// Phase 4 step 4: human-readable label for a `ChatChannelId.raw()`
+/// value. Used by the `GameEvent::ChannelBroadcast` arm to format
+/// `"[Vassals] Sender says, ..."` etc. Falls back to a hex string
+/// for unknown channels (rare — covers any custom-server channel
+/// IDs not in the retail set).
+#[cfg(target_arch = "wasm32")]
+fn chat_channel_label(raw: u32) -> String {
+    use holtburger_protocol::messages::ChatChannel;
+    match ChatChannel::from_repr(raw) {
+        Some(ChatChannel::Abuse) => "Abuse".into(),
+        Some(ChatChannel::Admin) => "Admin".into(),
+        Some(ChatChannel::Audit) => "Audit".into(),
+        Some(ChatChannel::Advocate1) => "Advocate1".into(),
+        Some(ChatChannel::Advocate2) => "Advocate2".into(),
+        Some(ChatChannel::Advocate3) => "Advocate3".into(),
+        Some(ChatChannel::Sentinel) => "Sentinel".into(),
+        Some(ChatChannel::Help) => "Help".into(),
+        Some(ChatChannel::Fellow) => "Fellow".into(),
+        Some(ChatChannel::Vassals) => "Vassals".into(),
+        Some(ChatChannel::Patron) => "Patron".into(),
+        Some(ChatChannel::Monarch) => "Monarch".into(),
+        Some(ChatChannel::CoVassals) => "CoVassals".into(),
+        Some(ChatChannel::AllegianceBroadcast) => "Allegiance".into(),
+        Some(ChatChannel::FellowBroadcast) => "Fellowship".into(),
+        None => format!("Channel 0x{raw:08X}"),
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_CHARACTER_LIST_RECEIVED: u32 = 0;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_PLAYER_SPAWNED: u32 = 1;
+/// Phase 4 step 4: in-world text — server announcements, local /
+/// ranged / channel speech, tells, emotes, popup strings, and
+/// transient status messages. `string_payload` carries the
+/// already-formatted display line (`"[Channel] Sender: message"` or
+/// similar — formatting lives Rust-side so JS doesn't have to know
+/// each variant's shape). `u32_payload` carries the
+/// chat-channel-id where applicable, `0` otherwise.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_CHAT_RECEIVED: u32 = 2;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_DISCONNECTED: u32 = 4;
 #[cfg(target_arch = "wasm32")]
@@ -1916,6 +1953,17 @@ enum SessionCommand {
 ///   `u32Payload` = character count.
 /// - `kind = 1` — PlayerSpawned. `u32Payload` = the spawned player's
 ///   GUID. Fired when the recv loop receives `GameMessage::PlayerCreate`.
+/// - `kind = 2` — ChatReceived (Phase 4 step 4 — DOM chat panel).
+///   `stringPayload` = pre-formatted display line
+///   (`"[Channel] Sender: message"` etc. — the recv loop normalises
+///   each chat-bearing variant into one display string so JS treats
+///   chat as opaque text). `u32Payload` = chat-channel-id where the
+///   message arrived with one (e.g. `Vassals`, `Allegiance`,
+///   `LFG`); `0` otherwise. Source messages: `ServerMessage`,
+///   `HearSpeech`, `HearRangedSpeech`, `EmoteText`, `SoulEmote`,
+///   `GameEvent::Tell`, `GameEvent::ChannelBroadcast`,
+///   `GameEvent::CommunicationTransientString`,
+///   `GameEvent::PopupString`.
 /// - `kind = 4` — Disconnected. `stringPayload` = the error message
 ///   from `recv_message` (transport error, server hangup, etc.).
 /// - `kind = 5` — CharacterCreated (Phase 4 step 2a.5).
@@ -1931,10 +1979,6 @@ enum SessionCommand {
 ///   or `GameEvent::StartGame` after spawn. No payload — the
 ///   transition itself is the signal that in-world commands
 ///   (chat, movement, etc.) are now valid.
-///
-/// Reserved for later steps:
-/// - `kind = 2` — chat-received / Tell / ChannelBroadcast events
-///   (step 4 — DOM chat panel).
 ///
 /// Entity spawn / position / remove events do NOT flow through
 /// this stream — they live on the parallel high-frequency channel
@@ -3365,15 +3409,138 @@ async fn recv_loop(
                                 u32::from(data.guid),
                             ));
                         }
+                        // Phase 4 step 4: chat-bearing surfaces. Each
+                        // variant gets normalised into a single display
+                        // line + (optional) chat-channel-id so JS can
+                        // append to the chat panel without knowing
+                        // each AC packet's shape. Reference handlers
+                        // in the cli are scattered across
+                        // `crates/holtburger-core/src/client/messages.rs`
+                        // and `crates/holtburger-world/src/handlers/`;
+                        // we don't reuse them because the cli formats
+                        // for stdout and we format for the DOM.
+                        GameMessage::ServerMessage(data) => {
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                string_payload: Some(format!("[Server] {}", data.message)),
+                                u32_payload: Some(data.chat_type),
+                            });
+                        }
+                        GameMessage::HearSpeech(data) => {
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                string_payload: Some(format!(
+                                    "{} says, \"{}\"",
+                                    data.sender_name, data.message
+                                )),
+                                u32_payload: Some(data.chat_type),
+                            });
+                        }
+                        GameMessage::HearRangedSpeech(data) => {
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                string_payload: Some(format!(
+                                    "{} says, \"{}\"",
+                                    data.sender_name, data.message
+                                )),
+                                u32_payload: Some(data.chat_type),
+                            });
+                        }
+                        GameMessage::EmoteText(data) => {
+                            // EmoteText.text is already self-contained —
+                            // ACE pre-renders it as e.g. "Alice waves at
+                            // you." — so don't re-prepend the sender
+                            // name. Mirror the cli's display path.
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                string_payload: Some(data.text.clone()),
+                                u32_payload: Some(0),
+                            });
+                        }
+                        GameMessage::SoulEmote(data) => {
+                            // SoulEmote.text is identical in shape to
+                            // EmoteText.text — pre-rendered. Same
+                            // formatting rule.
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                string_payload: Some(data.text.clone()),
+                                u32_payload: Some(0),
+                            });
+                        }
+                        GameMessage::GameEvent(event_msg) => {
+                            // GameEvent wraps a sequenced inbound
+                            // dispatch keyed on `target` (player or
+                            // object guid) + `sequence`. The chat
+                            // surfaces here all carry text payloads;
+                            // non-chat variants (PlayerDescription,
+                            // PingResponse, ViewContents, magic /
+                            // combat / fellowship / trade events, etc.)
+                            // intentionally fall through to a catch-all
+                            // _no-op_ — those land in steps 5+
+                            // (interactive entities, vitals, inventory).
+                            match event_msg.event {
+                                holtburger_protocol::messages::GameEvent::Tell(data) => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                        string_payload: Some(format!(
+                                            "{} tells you, \"{}\"",
+                                            data.sender_name, data.message
+                                        )),
+                                        u32_payload: Some(data.chat_type),
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::ChannelBroadcast(
+                                    data,
+                                ) => {
+                                    let channel_label =
+                                        chat_channel_label(data.channel.raw());
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                        string_payload: Some(format!(
+                                            "[{}] {} says, \"{}\"",
+                                            channel_label, data.sender_name, data.message
+                                        )),
+                                        u32_payload: Some(data.channel.raw()),
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::CommunicationTransientString(
+                                    data,
+                                ) => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                        string_payload: Some(data.message.clone()),
+                                        u32_payload: Some(0),
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::PopupString(data) => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                        string_payload: Some(format!("[Popup] {}", data.message)),
+                                        u32_payload: Some(0),
+                                    });
+                                }
+                                _ => {
+                                    // Non-chat GameEvents drop through
+                                    // to the no-op outer catch-all.
+                                    // Future steps (vitals via
+                                    // UpdateHealth, vendors via
+                                    // ApproachVendor, fellowship UI,
+                                    // identify popup, ...) wire them
+                                    // up in their own arms.
+                                }
+                            }
+                        }
                         _ => {
-                            // Other GameMessages are dropped silently in
-                            // step 2b — chat (kind=2), VectorUpdate
-                            // (step 2b extension — not strictly needed
-                            // for position rendering), equipment / chat
-                            // panel (step 4) all live downstream. The
-                            // recv loop's job here is to stay alive +
-                            // deliver the InWorld signal + relay
-                            // position-bearing messages.
+                            // Other GameMessages are dropped silently —
+                            // VectorUpdate (step 2b extension — not
+                            // strictly needed for position rendering),
+                            // vitals / equipment / inventory panels
+                            // (step 4 follow-on for non-chat surfaces),
+                            // interactive entities (step 5) all live
+                            // downstream. The recv loop's job here is
+                            // to stay alive + deliver the InWorld
+                            // signal + relay position-bearing messages
+                            // + relay chat.
                         }
                     }
                 }
