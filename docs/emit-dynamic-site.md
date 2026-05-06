@@ -10,8 +10,10 @@
 ### Where the project is
 
 **Phases done:** 0, 1, 2, 3 (steps 1-6 + step 5 partial), 4 (step
-1 + 2a + 2a.5 + 2a.6 + 2b + **3 — wire round-trip validated
-2026-05-06**), 5.0, 5.0b, 5.1a, 5.1b. Native lib gate
+1 + 2a + 2a.5 + 2a.6 + 2b + 3 + **3.5 — client-side prediction
+landed 2026-05-06; press-W → local sprite slides + ACE-broadcast
+`UpdateMotion` echoes confirm wire round-trip**), 5.0, 5.0b, 5.1a,
+5.1b. Native lib gate
 **1121 / 0** across 14 workspace crates. `cargo check
 --target wasm32-unknown-unknown` clean for
 `holtburger-{dat,session,transport-ws,resource-http,web,content,
@@ -136,16 +138,20 @@ on-device validation; recipe in
 
 Pick one to pull on. The choice is real, not arbitrary.
 
-- **Content rail** — Phase 4 step 3 (input → AC movement packets)
-  **landed + wire-validated 2026-05-06** → step 3.5 (client-side
-  prediction so the local player's sprite slides during W-hold —
-  short follow-on, ~1 day's work) → step 4 (DOM panels: chat,
-  vitals, inventory) → step 5 (interactive entities: doors,
-  portals, vendors). With step 3 validated, the gameplay loop
-  closes end-to-end on the wire: WASD/Q/E keyboard input →
-  `SessionHandle.setMovementInput` → `GameAction::MoveToState`
-  → ACE accepts and broadcasts `UpdateMotion`. Step 3.5 (or
-  jumping straight to step 4) is the next pull on this rail.
+- **Content rail** — Phase 4 step 3 + 3.5 **landed
+  2026-05-06**. Step 3: `SessionHandle.setMovementInput` →
+  `GameAction::MoveToState` → ACE accepts + broadcasts
+  `UpdateMotion`. Step 3.5: per-rAF JS prediction integrates
+  the keystate into the local sprite's world coords (mirrors
+  cli's `local_velocity_for_state` /
+  `local_omega_for_state`), so the press-W → sprite-slides
+  loop closes visually. Capture validates 3 m of in-frame
+  drift over a 3-second W-hold at the canonical 1.0 m/s walk
+  speed. Next on the rail: step 4 (DOM panels: chat, vitals,
+  inventory — surfaces `kind=2 ChatReceived` events through
+  the existing `poll_events()` channel) → step 5
+  (interactive entities: doors, portals, vendors via
+  `UseObject`).
 - **Bandwidth rail** — Phase 5.2 (manifest scale fix) at
   [`manifest.md`](manifest.md). Real-world bake produces a
   **203 MB** `manifest.json` (885,043 entries × ~230 bytes

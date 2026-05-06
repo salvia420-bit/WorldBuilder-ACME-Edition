@@ -1531,6 +1531,163 @@ debug hooks):**
 
 ---
 
+## Phase 4 step 3.5 landed (2026-05-06)
+
+Closes the visual half of the gameplay loop: pressing W now
+slides the local player's sprite forward on the canvas. Step 3
+proved the wire round-trip — `MoveToState` reaches ACE and
+`UpdateMotion` echoes back — but ACE's protocol is asymmetric
+(it doesn't echo position to the originator), so step 3 alone
+left the local sprite stationary while ACE knew the player was
+walking. Step 3.5 adds client-side prediction so the on-screen
+representation matches the server's view.
+
+### What step 3.5 ships
+
+A per-rAF integration step in `apps/holtburger-web/index.html`'s
+`drainEvents` loop (right before the existing `setMovementInput`
+dispatch). Mirrors the cli's `local_velocity_for_state` +
+`local_omega_for_state`
+(`crates/holtburger-core/src/client/movement/common.rs:203-262`):
+
+- `forward != 0`: `dx = -cos(heading) * speed * dt`,
+  `dy = sin(heading) * speed * dt` (matches
+  `planar_velocity_for_heading`). Backstep flips by π and uses
+  1.0 m/s regardless of run modifier; forward-with-Shift uses
+  `FALLBACK_RUN_RATE_SCALAR = 4.5 m/s`.
+- `strafe != 0` (only if forward is zero — wire format carries
+  one of {forward, strafe} per packet, matching the cli's
+  single-axis `Locomotion`): `heading ± π/2`, 1.0 m/s.
+- `turn != 0`: `heading += turn * turn_speed * dt` with
+  `RUN_HELD_TURN_SPEED_RAD_PER_SEC = 1.5` (run) or
+  `NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC = 1.0` (walk). Cli
+  convention: right-turn omega.z = +1.5, so right (+1) →
+  heading increases.
+- `dt` is capped at 100 ms so a paused breakpoint or hidden
+  tab doesn't teleport the sprite across the world on resume.
+
+Heading is read from `sprite.rotation` each tick (existing
+convention: `sprite.rotation = -quaternionToYaw(...)`, i.e.
+`heading = -sprite.rotation`). When ACE sends authoritative
+`PrivateUpdatePosition` for the local player, the existing
+`handlePositionUpdate` overwrites `sprite.x/.y/.rotation` —
+prediction reads the new values on the next tick. No explicit
+reconciliation logic; the prediction state lives entirely in
+`sprite.rotation` so authoritative updates rubber-band
+naturally.
+
+State additions: `lastPredictionTime: number | null` (armed
+in the kind=7 EnteredWorld handler so the first tick after
+walk-enable doesn't have a stale baseline) + four mirror
+constants. No new wasm-bindgen exports; step 3.5 is JS-only.
+
+### Why JS-only, not Rust
+
+The cli does prediction inside `MovementSystem` which runs as
+part of `ClientRuntime`'s tick loop, with full `WorldState` +
+motion-table data + capabilities lookup. Standing that up in
+the wasm bundle would multiply bundle size + complexity for a
+visual-only feature. The 30-line JS integration matches the
+cli's wire-velocity formulas and uses the same constants.
+
+When the wasm bundle later gains a movement system (for
+combat or non-trivial physics), the prediction can lift up
+into Rust. For now, the JS path is enough — and any drift
+between predicted and authoritative position is reconciled
+the moment ACE sends `PrivateUpdatePosition`.
+
+### Validation
+
+`apps/holtburger-web/capture_phase4_step3.cjs`'s pass
+condition was extended to AND on `wire_ok` (≥ 1 MoveToState
+sent, ≥ 1 UpdateMotion echo) AND `motion_ok` (max delta
+≥ `MOVE_THRESHOLD_M = 1.0` m). Empirical run:
+
+```
+prediction integrations: 42, drift while held: dx=-2.94 dy=-0.47 (m)
+MoveToState send_action OK: 2
+UpdateMotion echoes (any guid): 9
+UpdateMotion echoes for local player 0x5000001B: 2
+PASS: end-to-end loop closed.
+  Sent 2 MoveToState packets → received 9 UpdateMotion echoes
+  from ACE (step 3 wire round-trip), AND local sprite slid
+  3.05 m under client-side prediction (step 3.5).
+  Moving guid 0x5000001B: (32532.00, 34567.10) → (32528.99, 34566.62).
+```
+
+42 integrations across the 3-second W-hold (~14 ticks/sec —
+half of rAF's 60 fps because the page also renders ~80 sprites
++ entity updates each tick on the headless Chromium with
+swiftshader). 2.98 m of in-frame drift (Pythagoras:
+√(2.94² + 0.47²)) at the canonical 1.0 m/s walk speed. Final
+sprite delta of 3.05 m includes residual rAF jitter in the
+post-walk settle window.
+
+The capture's diagnostic block exposes
+`window.__predTickCount` / `__predFirstPos` / `__predLastPos`
+so debugging tools can confirm prediction is running without
+parsing `[step3-trace]` log lines.
+
+### What's NOT in step 3.5 (scope deferred)
+
+- **Snap-smooth reconciliation.** When ACE sends authoritative
+  `PrivateUpdatePosition`, `handlePositionUpdate` snaps the
+  sprite. A future improvement: ~100 ms lerp instead of a
+  hard set, so corrections look soft. Trivial PIXI tween.
+- **Outbound `UpdatePosition` to ACE.** Retail clients report
+  their predicted position back periodically (~1 Hz) so ACE
+  can validate. We don't — ACE may correct us more
+  aggressively as a result. Adding this is a one-arm Rust
+  addition (`SessionHandle.sendPositionHeartbeat()` →
+  `GameAction::AutonomousPosition`) + a 1 Hz JS tick. Step
+  3.6 candidate.
+- **Server-validated walk speed.** Our walk speed is hardcoded
+  at 1.0 m/s; the cli reads `world.player_run_rate()` from
+  the player's biota properties. Speed buffs / debuffs /
+  stamina effects don't apply. Lift when the wasm bundle
+  gains a `WorldState`.
+- **Collision with terrain / buildings.** Sprite walks through
+  walls. ACE's authoritative correction snaps it back, but
+  the visual is wrong in the interim. Real collision needs
+  the BSP physics pipeline.
+- **Walk-cycle animation.** The sprite slides as a rigid
+  texture; no anim. Already in step 3's deferred list.
+- **Diagonal motion.** Forward + strafe simultaneously is
+  rejected at the wire format level (single-axis
+  `Locomotion`). Step 3.5 honours that — forward axis takes
+  priority over strafe. A future "client-only diagonal"
+  path would let the visual go diagonal but trigger
+  immediate ACE rubber-band corrections. Not worth the cost.
+
+### Files touched
+
+- `apps/holtburger-web/index.html` — prediction state
+  (`lastPredictionTime`, four constants) + ~50-line rAF
+  integration block in `drainEvents` + 3 `window.__pred*`
+  diagnostic counter writes
+- `apps/holtburger-web/capture_phase4_step3.cjs` — PASS
+  condition tightened to AND on motion delta; new
+  "PARTIAL: wire OK but no local sprite motion" message
+  for the regression case
+- `docs/images/phase-4-step-3.5-prediction.png` — capture
+  screenshot showing the player at the walked-to position
+
+No Rust changes; same wasm-bindgen surface as step 3, 1121
+/ 0 lib tests still hold.
+
+### Live-stack testing
+
+Same recipe as step 3 — open
+`http://100.116.47.66:8765/apps/holtburger-web/index.html`
+on the tailnet, log in, spawn, Teleport to Holtburg, click
+the canvas to focus, then press W. The local sprite slides
+at 1.0 m/s (run with Shift held → ~4.5 m/s). Q / E to turn,
+A / D to strafe, S to backstep. Other entities at Holtburg
+continue to update via the existing `PublicUpdatePosition`
+handler.
+
+---
+
 ## Phase 5.0 — production-grade asset delivery
 
 After Phase 4 step 2a.6 closed, manual validation against a
