@@ -1616,6 +1616,25 @@ void main() {
           // first PrivateUpdatePosition and the recv loop would drop
           // the SetMovementInput cmd anyway.
           let enteredWorld = false;
+          // Phase 4 step 3.5: client-side prediction state. ACE's
+          // protocol is asymmetric — server simulates physics and
+          // broadcasts UpdatePosition to OTHER players in visibility
+          // range, but doesn't echo position back to the originating
+          // player (retail clients are expected to predict locally).
+          // We track the last rAF timestamp + integrate the keystate
+          // each frame against the local player's sprite. Authoritative
+          // PrivateUpdatePosition / PublicUpdatePosition events still
+          // overwrite the sprite via the existing handlePositionUpdate
+          // path, so any drift snaps back when ACE sends a correction
+          // (rubber-band reconciliation).
+          let lastPredictionTime = null;
+          // Constants mirror crates/holtburger-core/src/client/movement/
+          // common.rs so the predicted motion matches what ACE simulates
+          // server-side (FastTick path).
+          const FALLBACK_RUN_RATE_SCALAR = 4.5;        // m/s
+          const WALK_FORWARD_SPEED = 1.0;              // m/s — also strafe + backstep
+          const RUN_HELD_TURN_SPEED_RAD_PER_SEC = 1.5;
+          const NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC = 1.0;
           characterUl.addEventListener("click", (ev) => {
             const btn = ev.target.closest("button[data-id]");
             if (!btn) return;
@@ -1791,6 +1810,10 @@ void main() {
                 teleportBtn.disabled = false;
                 // Phase 4 step 3: open the keyboard movement gate.
                 enteredWorld = true;
+                // Phase 4 step 3.5: arm the prediction clock. First
+                // rAF tick after this captures the wall-time baseline;
+                // the tick after that is the first one with a real dt.
+                lastPredictionTime = null;
                 loginStatus.innerHTML =
                   `<span class="ok">[OK]</span> InWorld as GUID 0x${playerGuid}. ` +
                   `<span class="hint">Click <em>Teleport to Holtburg</em> to bypass the Training Academy. ` +
@@ -1850,6 +1873,86 @@ void main() {
               else if (upd.kind === 2) handleEntityRemove(upd);
               upd.free();
             }
+            // Phase 4 step 3.5: client-side prediction. ACE doesn't
+            // echo position back to the originator (retail AC's
+            // protocol is asymmetric — see step 3 doc). Without
+            // prediction the local player sprite stays still during
+            // W-hold even though ACE has accepted the MoveToState
+            // and is broadcasting UpdateMotion to other players.
+            //
+            // Mirrors the cli's `local_velocity_for_state` +
+            // `local_omega_for_state` in
+            // `crates/holtburger-core/src/client/movement/common.rs`
+            // (lines 203-262). Forward velocity uses
+            // `planar_velocity_for_heading(heading, speed) =
+            // (-cos(h)*speed, sin(h)*speed)`; backstep uses
+            // `heading + PI` and speed=1.0; strafe uses `heading ±
+            // π/2` and speed=1.0; turn integrates heading at the
+            // walk/run-held angular speed. Forward axis takes
+            // priority over strafe (matches the wire format's
+            // single-axis `Locomotion`).
+            //
+            // Reads/writes sprite.x/.y/.rotation directly. Authoritative
+            // PrivateUpdatePosition / PublicUpdatePosition events
+            // continue to call handlePositionUpdate which overwrites
+            // these (rubber-band reconciliation on teleports + periodic
+            // ACE corrections).
+            if (enteredWorld && spawnedPlayerGuid !== null) {
+              const now = performance.now();
+              const localEntry = entityMap.get(spawnedPlayerGuid);
+              if (localEntry?.sprite) {
+                if (lastPredictionTime !== null) {
+                  // Cap dt to 100ms — clamps large jumps from rAF
+                  // throttling on hidden tabs / paused breakpoints
+                  // so we don't teleport across the world on resume.
+                  const dt = Math.min((now - lastPredictionTime) / 1000, 0.1);
+                  const forward = (keyState.w ? 1 : 0) + (keyState.s ? -1 : 0);
+                  const strafe = (keyState.d ? 1 : 0) + (keyState.a ? -1 : 0);
+                  const turn = (keyState.e ? 1 : 0) + (keyState.q ? -1 : 0);
+                  if (forward !== 0 || strafe !== 0 || turn !== 0) {
+                    window.__predTickCount = (window.__predTickCount || 0) + 1;
+                    if (!window.__predFirstPos) window.__predFirstPos = { x: localEntry.sprite.x, y: localEntry.sprite.y };
+                    window.__predLastPos = { x: localEntry.sprite.x, y: localEntry.sprite.y };
+                    const run = !!keyState.shift;
+                    const turnSpeed = run
+                      ? RUN_HELD_TURN_SPEED_RAD_PER_SEC
+                      : NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC;
+                    // Sprite stores -heading per the existing
+                    // quaternionToYaw → -sprite.rotation convention.
+                    let heading = -localEntry.sprite.rotation;
+                    if (turn !== 0) {
+                      // Cli convention: right-turn omega.z = +1.5,
+                      // left-turn omega.z = -1.5. Right (E) → +1
+                      // → heading increases. Heading→sprite.rotation
+                      // negation handles the visual flip.
+                      heading += turn * turnSpeed * dt;
+                      localEntry.sprite.rotation = -heading;
+                    }
+                    if (forward !== 0) {
+                      // Forward in heading direction; backstep flips
+                      // by PI and uses 1.0 m/s regardless of run.
+                      let effHeading = heading;
+                      let speed = run ? FALLBACK_RUN_RATE_SCALAR : WALK_FORWARD_SPEED;
+                      if (forward < 0) {
+                        effHeading = heading + Math.PI;
+                        speed = WALK_FORWARD_SPEED;
+                      }
+                      localEntry.sprite.x += -Math.cos(effHeading) * speed * dt;
+                      localEntry.sprite.y += Math.sin(effHeading) * speed * dt;
+                    } else if (strafe !== 0) {
+                      // Strafe right (D, +1) = heading + π/2;
+                      // strafe left (A, -1) = heading - π/2.
+                      // Always 1.0 m/s.
+                      const effHeading = heading + strafe * (Math.PI / 2);
+                      localEntry.sprite.x += -Math.cos(effHeading) * WALK_FORWARD_SPEED * dt;
+                      localEntry.sprite.y += Math.sin(effHeading) * WALK_FORWARD_SPEED * dt;
+                    }
+                  }
+                }
+                lastPredictionTime = now;
+              }
+            }
+
             // Phase 4 step 3: send a SetMovementInput packet on every
             // change to the keystate-derived axes. Sending on change
             // (rather than every frame) keeps the wire traffic to one
