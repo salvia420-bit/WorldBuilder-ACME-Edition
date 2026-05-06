@@ -7,9 +7,10 @@
 //! v2 lifts the architecture from O(N-records) manifest size to
 //! O(1) by moving per-shard listings out of the top-level manifest
 //! and deriving shard URLs by convention. This module hosts the
-//! v2 schema, the per-namespace `crate::catalog::NamespaceCatalog`
-//! binary format, and the URL-template helpers shared between
+//! v2 schema and the URL-template helpers shared between
 //! `dat-shard` (emission) and `ManifestResourceSource` (consumption).
+//! The per-namespace catalog binary format lands in
+//! `crate::catalog::NamespaceCatalog` (objective 3).
 //!
 //! # v1 → v2 audit
 //!
@@ -53,8 +54,8 @@
 //!    inside `prefetch` and stashing fetched bytes in a
 //!    `HashMap<OwnedKey, Vec<u8>>` shard cache. v2 satisfies
 //!    the same contract via convention shard URLs derived from
-//!    a `shard_url_template` + (when present) a
-//!    `crate::catalog::NamespaceCatalog` for batch sha256
+//!    [`ManifestV2::shard_url_template`] + (when present) a
+//!    [`crate::catalog::NamespaceCatalog`] for batch sha256
 //!    verification.
 //! 4. **`covers` short-circuit** — `manifest_source.rs::boot_serves`
 //!    (line 278) treats the boot pack's `covers` list as the
@@ -69,15 +70,15 @@
 //!
 //! ## (c) What v2 simplifies away
 //!
-//! 1. **Per-shard `url: String`** — derived from a
-//!    `shard_url_template` +
+//! 1. **Per-shard `url: String`** — derived from
+//!    [`ManifestV2::shard_url_template`] +
 //!    `(namespace, file_id, sha256_hex)` substitution. ~30 bytes
 //!    per entry × 885k = ~25 MB savings.
 //! 2. **Per-shard `size: u64`** — HTTP `Content-Length` provides
 //!    it on each fetch; not needed for the in-memory lookup.
 //!    ~10 bytes per JSON entry × 885k = ~10 MB savings.
 //! 3. **Per-shard `sha256: String`** — moved into the per-namespace
-//!    `crate::catalog::NamespaceCatalog` binary format
+//!    [`crate::catalog::NamespaceCatalog`] binary format
 //!    (truncated to 16 bytes for ~6× space win) and consulted
 //!    only when sha256 verification is desired. ~70 bytes per JSON
 //!    entry × 885k = ~62 MB savings (and dropping it entirely
@@ -97,17 +98,350 @@
 //!
 //! # Phase 5.2 implementation status
 //!
-//! - **obj 1** (this stub) — audit comment block + `pub mod`
-//!   declaration. Compiles native + wasm32. No tests.
-//! - **obj 2** — define `ManifestV2`, `MANIFEST_V2_VERSION`,
-//!   `namespace_slug`, URL-template render helpers. 4 tests.
-//! - **obj 3** — define `crate::catalog::NamespaceCatalog`
-//!   binary format + codec (lives in `catalog.rs`). 5 tests.
+//! - **obj 1** (this audit) — comment block + module declaration.
+//! - **obj 2** (this commit) — [`ManifestV2`] schema +
+//!   [`MANIFEST_V2_VERSION`] + [`namespace_slug`] +
+//!   URL-template render helpers. 4 tests.
+//! - **obj 3** — [`crate::catalog::NamespaceCatalog`] binary
+//!   format + codec. 5 tests.
 //! - **obj 4-7** — wire into `ManifestResourceSource`,
 //!   `dat-shard`, service worker. (Separate crates.)
 //! - **obj 8-11** — smoke harness + native invariant + live-ACE
 //!   validation + docs.
 
-// Implementation lands in objective 2. Stub keeps the module
-// declaration round-tripping through `lib.rs` so subsequent
-// objectives don't need to re-edit the lib.rs `pub mod` line.
+use holtburger_dat::ResourceKey;
+use serde::{Deserialize, Serialize};
+
+use crate::{BootPack, SourceMeta};
+
+/// The v2 schema version. Bumped from [`crate::MANIFEST_VERSION`]
+/// (1). Consumers route on `version` field; v1 stays parseable for
+/// one release cycle to drain in-flight CDN deploys.
+pub const MANIFEST_V2_VERSION: u32 = 2;
+
+/// Default content-addressable shard URL template. The `{sha256}`
+/// token expands to the lowercase 64-char hex digest. Suitable for
+/// flat one-dir layouts; for million-file bundles use
+/// [`DEFAULT_SHARD_URL_TEMPLATE_PREFIXED`] instead.
+pub const DEFAULT_SHARD_URL_TEMPLATE: &str = "shards/{sha256}.bin";
+
+/// 2-level prefix split: `shards/{first 2 hex chars}/{full hash}.bin`.
+/// Avoids the 885k-files-in-one-dir problem on ext4 / NTFS / APFS.
+/// `{sha256_prefix2}` expands to the first 2 chars of `{sha256}`;
+/// `{sha256}` expands to the full digest. Both substitutions happen
+/// in [`ManifestV2::shard_url`].
+pub const DEFAULT_SHARD_URL_TEMPLATE_PREFIXED: &str =
+    "shards/{sha256_prefix2}/{sha256}.bin";
+
+/// Default per-namespace catalog URL template. The `{namespace_slug}`
+/// token expands to the namespace with `'/'` replaced by `'-'`,
+/// e.g. `"eor/portal"` → `"eor-portal"`.
+pub const DEFAULT_CATALOG_URL_TEMPLATE: &str = "manifest/{namespace_slug}.bin";
+
+/// Top-level v2 manifest. Lists boot pack + namespaces +
+/// URL-template strings; **does NOT list individual shards**.
+/// Per-record listings live in lazy-loaded
+/// [`crate::catalog::NamespaceCatalog`] binaries when present, or
+/// are derived purely from convention URLs when not.
+///
+/// Total wire size on a real-world bake: ≈ 800 bytes – 2 KB.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ManifestV2 {
+    /// Schema-version sentinel. Always equal to
+    /// [`MANIFEST_V2_VERSION`] for v2-emitted manifests; consumers
+    /// route on this field after a [`ManifestVersionProbe`] sniff.
+    pub version: u32,
+    /// ISO 8601 UTC timestamp when the manifest was produced.
+    /// Free-form `String` — no chrono dep. Producers should write
+    /// `YYYY-MM-DDTHH:MM:SSZ`.
+    pub generated_at: String,
+    /// Provenance. Same shape as v1 (DAT iteration counters).
+    pub source: SourceMeta,
+    /// Bootstrap pack metadata. Same shape as v1; consumed by
+    /// `ManifestResourceSource::connect` to fetch + hash-verify
+    /// the pack at construction time.
+    pub boot_pack: BootPack,
+    /// Bumps when any per-namespace catalog or shard hash changes.
+    /// Lets the page cheaply detect "are my cached catalogs
+    /// stale?" by comparing the top-level manifest's
+    /// `catalog_version` against its cached value.
+    pub catalog_version: u32,
+    /// All namespaces present in the bundle, e.g.
+    /// `["eor/portal", "eor/cell", "eor/local", "holtburger/core"]`.
+    /// Drives namespace-catalog discovery: the page only fetches a
+    /// catalog for a namespace declared here.
+    pub namespaces: Vec<String>,
+    /// URL template for individual shard fetches. Tokens
+    /// substituted by [`ManifestV2::shard_url`]:
+    ///
+    /// | Token | Substitution |
+    /// |---|---|
+    /// | `{sha256}` | full lowercase hex sha256 |
+    /// | `{sha256_prefix2}` | first 2 chars of the hex sha256 |
+    /// | `{namespace_slug}` | namespace with `/` → `-` |
+    /// | `{file_id_hex}` | `0x{file_id:08X}` uppercase |
+    ///
+    /// Default (flat): [`DEFAULT_SHARD_URL_TEMPLATE`].
+    /// Default (2-level split): [`DEFAULT_SHARD_URL_TEMPLATE_PREFIXED`].
+    pub shard_url_template: String,
+    /// Optional URL template for per-namespace catalogs. Token
+    /// `{namespace_slug}` is substituted by
+    /// [`ManifestV2::catalog_url`]. Default:
+    /// [`DEFAULT_CATALOG_URL_TEMPLATE`]. Absent / `None` → no
+    /// catalogs available; page falls through to convention-URL
+    /// mode without sha256 verification.
+    pub catalog_url_template: Option<String>,
+}
+
+/// Cheap version-only probe deserializer. The v2 connect path
+/// uses this to route between v1 and v2 parsers without
+/// allocating the full structure first.
+#[derive(Deserialize, Debug, Clone, Copy)]
+pub struct ManifestVersionProbe {
+    pub version: u32,
+}
+
+impl ManifestV2 {
+    /// Render the shard URL for `key` with hash `sha256_hex`,
+    /// substituting all four template tokens.
+    ///
+    /// `sha256_hex` must be lowercase 64-char hex; callers
+    /// produce it via [`crate::sha256_hex`]. For
+    /// `{sha256_prefix2}` to expand correctly the digest must
+    /// be at least 2 chars long, which it always is for sha256.
+    pub fn shard_url(&self, key: ResourceKey<'_>, sha256_hex: &str) -> String {
+        render_shard_url_full(&self.shard_url_template, key, sha256_hex)
+    }
+
+    /// Render the per-namespace catalog URL, or `None` if the
+    /// manifest declares no catalog template.
+    pub fn catalog_url(&self, namespace: &str) -> Option<String> {
+        self.catalog_url_template
+            .as_ref()
+            .map(|t| render_catalog_url(t, namespace))
+    }
+}
+
+/// Convert a namespace string to its slug form: `'/'` → `'-'`.
+///
+/// `"eor/portal"` ↔ `"eor-portal"`. Used as the `{namespace_slug}`
+/// token expansion + the on-disk filename for catalog binaries
+/// (`manifest/eor-portal.bin`). The replacement is unambiguous
+/// because AC namespace strings never contain a literal `'-'`.
+pub fn namespace_slug(namespace: &str) -> String {
+    namespace.replace('/', "-")
+}
+
+/// Substitute the `{sha256}` token in `template`.
+///
+/// Standalone helper used by the simpler call sites that only
+/// need full-hash substitution (e.g. unit tests). For the full
+/// 4-token rendering used by [`ManifestV2::shard_url`] see
+/// [`render_shard_url_full`].
+pub fn render_shard_url(template: &str, sha256_hex: &str) -> String {
+    template.replace("{sha256}", sha256_hex)
+}
+
+/// Substitute all 4 shard-URL tokens at once.
+///
+/// Order matters: `{sha256_prefix2}` must expand before
+/// `{sha256}` to avoid the latter's substitution chewing
+/// the literal `{sha256_prefix2}` substring.
+pub fn render_shard_url_full(
+    template: &str,
+    key: ResourceKey<'_>,
+    sha256_hex: &str,
+) -> String {
+    let prefix2 = if sha256_hex.len() >= 2 {
+        &sha256_hex[..2]
+    } else {
+        sha256_hex
+    };
+    template
+        .replace("{sha256_prefix2}", prefix2)
+        .replace("{sha256}", sha256_hex)
+        .replace("{namespace_slug}", &namespace_slug(key.namespace))
+        .replace("{file_id_hex}", &format!("0x{:08X}", key.file_id))
+}
+
+/// Substitute the `{namespace_slug}` token in `template`.
+pub fn render_catalog_url(template: &str, namespace: &str) -> String {
+    template.replace("{namespace_slug}", &namespace_slug(namespace))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture_manifest_v2() -> ManifestV2 {
+        ManifestV2 {
+            version: MANIFEST_V2_VERSION,
+            generated_at: "2026-05-06T19:00:00Z".into(),
+            source: SourceMeta {
+                portal_dat_iteration: 2072,
+                cell_dat_iteration: 982,
+                local_dat_iteration: 994,
+            },
+            boot_pack: BootPack {
+                url: "boot.hba".into(),
+                size: 1_861_361,
+                sha256: "1dcb277bb9dd67bfbd0a3634f451ce714f1347e75b050acfd2cc3ce33febb395"
+                    .into(),
+                covers: vec![
+                    crate::format_shard_key("eor/cell", 0xA9B4_FFFF),
+                    crate::format_shard_key("eor/cell", 0xA9B4_FFFE),
+                ],
+            },
+            catalog_version: 1,
+            namespaces: vec![
+                "eor/portal".into(),
+                "eor/cell".into(),
+                "eor/local".into(),
+                "holtburger/core".into(),
+            ],
+            shard_url_template: DEFAULT_SHARD_URL_TEMPLATE_PREFIXED.into(),
+            catalog_url_template: Some(DEFAULT_CATALOG_URL_TEMPLATE.into()),
+        }
+    }
+
+    /// (1) The canonical v2 wire shape parses into [`ManifestV2`].
+    /// Catches accidental field renames or layout drift.
+    #[test]
+    fn parse_canonical_v2_manifest() {
+        let json = r#"{
+            "version": 2,
+            "generated_at": "2026-05-06T19:00:00Z",
+            "source": {
+                "portal_dat_iteration": 2072,
+                "cell_dat_iteration": 982,
+                "local_dat_iteration": 994
+            },
+            "boot_pack": {
+                "url": "boot.hba",
+                "size": 1861361,
+                "sha256": "1dcb277bb9dd67bfbd0a3634f451ce714f1347e75b050acfd2cc3ce33febb395",
+                "covers": ["eor/cell:0xA9B4FFFF", "eor/cell:0xA9B4FFFE"]
+            },
+            "catalog_version": 1,
+            "namespaces": ["eor/portal", "eor/cell", "eor/local", "holtburger/core"],
+            "shard_url_template": "shards/{sha256_prefix2}/{sha256}.bin",
+            "catalog_url_template": "manifest/{namespace_slug}.bin"
+        }"#;
+        let parsed: ManifestV2 = serde_json::from_str(json).expect("parse v2 manifest");
+        assert_eq!(parsed, fixture_manifest_v2());
+        assert_eq!(parsed.version, MANIFEST_V2_VERSION);
+
+        // Version probe sniffs `version` without parsing the rest.
+        let probe: ManifestVersionProbe =
+            serde_json::from_str(json).expect("probe v2 version");
+        assert_eq!(probe.version, 2);
+    }
+
+    /// (2) Serialize → parse → equal. Catches any field rename or
+    /// ordering regression. Also exercises the `Option<String>`
+    /// catalog template's None-variant by clearing it.
+    #[test]
+    fn writeback_round_trip() {
+        let original = fixture_manifest_v2();
+        let json = serde_json::to_string(&original).expect("serialize");
+        let back: ManifestV2 = serde_json::from_str(&json).expect("parse back");
+        assert_eq!(back, original);
+
+        // Catalog-template-absent variant: convention-URL mode
+        // (no catalogs, no sha256 verification).
+        let mut conv_only = original;
+        conv_only.catalog_url_template = None;
+        let json = serde_json::to_string(&conv_only).expect("serialize");
+        let back: ManifestV2 = serde_json::from_str(&json).expect("parse back");
+        assert_eq!(back.catalog_url_template, None);
+    }
+
+    /// (3) `namespace_slug` is symmetric in spirit (one-way
+    /// transform, but unambiguous: `'/'` → `'-'` and AC
+    /// namespaces never contain a literal `'-'`). Catches any
+    /// regression in the slug rule that would break catalog
+    /// filename generation.
+    #[test]
+    fn namespace_slug_round_trip() {
+        let cases = [
+            ("eor/portal", "eor-portal"),
+            ("eor/cell", "eor-cell"),
+            ("eor/local", "eor-local"),
+            ("holtburger/core", "holtburger-core"),
+            ("flat", "flat"),
+            ("a/b/c", "a-b-c"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(namespace_slug(input), expected);
+            // Slug → reverse-substitute → original. The reverse
+            // direction isn't exposed as a helper (no caller
+            // needs it), but the rule must be invertible if a
+            // future caller wants to.
+            assert_eq!(expected.replace('-', "/"), input);
+        }
+    }
+
+    /// (4) URL-template rendering substitutes every documented
+    /// token correctly. Covers the standalone helpers + the
+    /// [`ManifestV2`] methods + the `{sha256_prefix2}` ordering
+    /// fix (must expand before `{sha256}`).
+    #[test]
+    fn url_template_rendering() {
+        let manifest = fixture_manifest_v2();
+        let key = ResourceKey::new("eor/portal", 0x0100_0827);
+        let hash = "9f10aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+        // Standalone {sha256}-only helper.
+        assert_eq!(
+            render_shard_url("shards/{sha256}.bin", hash),
+            format!("shards/{hash}.bin"),
+        );
+
+        // ManifestV2::shard_url with the prefixed default.
+        assert_eq!(
+            manifest.shard_url(key, hash),
+            format!("shards/9f/{hash}.bin"),
+        );
+
+        // Convention-URL template — uses {namespace_slug} +
+        // {file_id_hex}, ignores {sha256}.
+        let conv_template = "shards/{namespace_slug}/{file_id_hex}.bin";
+        assert_eq!(
+            render_shard_url_full(conv_template, key, hash),
+            "shards/eor-portal/0x01000827.bin",
+        );
+
+        // Mixed template covering all four tokens at once.
+        let mixed = "{namespace_slug}/{sha256_prefix2}/{file_id_hex}-{sha256}.bin";
+        assert_eq!(
+            render_shard_url_full(mixed, key, hash),
+            format!("eor-portal/9f/0x01000827-{hash}.bin"),
+        );
+
+        // Catalog URL — present case + None case via methods.
+        assert_eq!(
+            manifest.catalog_url("eor/portal"),
+            Some("manifest/eor-portal.bin".to_owned()),
+        );
+        let mut conv_only = manifest;
+        conv_only.catalog_url_template = None;
+        assert_eq!(conv_only.catalog_url("eor/portal"), None);
+
+        // Standalone catalog renderer.
+        assert_eq!(
+            render_catalog_url("manifest/{namespace_slug}.bin", "eor/cell"),
+            "manifest/eor-cell.bin",
+        );
+
+        // {sha256_prefix2} must expand before {sha256} — verified
+        // implicitly above (the prefixed template renders
+        // `9f/9f10aaa…` not `9f10aaa…/9f10aaa…`). Make it
+        // explicit by using a degenerate template where
+        // mis-ordering would visibly corrupt output.
+        let degenerate = "{sha256_prefix2}{sha256}";
+        assert_eq!(
+            render_shard_url_full(degenerate, key, hash),
+            format!("9f{hash}"),
+        );
+    }
+}
