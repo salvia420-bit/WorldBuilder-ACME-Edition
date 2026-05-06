@@ -5,17 +5,17 @@
 > Read this section first. The rest of this document is the
 > long-lived design intent + decision history; this header is
 > the snapshot of where we actually are and what's blocking
-> what. Last refreshed **2026-05-05**.
+> what. Last refreshed **2026-05-06**.
 
 ### Where the project is
 
 **Phases done:** 0, 1, 2, 3 (steps 1-6 + step 5 partial), 4 (step
-1 + 2a + 2a.5 + 2a.6), 5.0, 5.0b, 5.1a, 5.1b. Native lib gate
+1 + 2a + 2a.5 + 2a.6 + 2b), 5.0, 5.0b, 5.1a, 5.1b. Native lib gate
 **1121 / 0** across 14 workspace crates. `cargo check
 --target wasm32-unknown-unknown` clean for
 `holtburger-{dat,session,transport-ws,resource-http,web,content,
 core,manifest}`. `wasm-pack build --target {nodejs,web}` both
-green. `node smoke_test.cjs` **56 / 56 PASS**.
+green. `node smoke_test.cjs` **58 / 58 PASS**.
 
 **What works end-to-end today.** Open
 `apps/holtburger-web/index.html` in any browser. The page calls
@@ -30,7 +30,12 @@ through `holtburger-wsbridge` to a live ACE: login →
 CharacterList → in-browser CharacterCreate → spawn handshake →
 `LoginComplete` → `kind=7 EnteredWorld` → "Teleport to
 Holtburg" button sends `@telepoi Holtburg` via
-`GameAction::Talk`.
+`GameAction::Talk`. **Phase 4 step 2b (2026-05-05):** the local
+player + every other live entity ACE pushes (NPCs, monsters,
+vendors, town guards) renders on a third PIXI `entityContainer`
+layer above the static placements. Position updates land via
+`SessionHandle.pollEntityUpdates()` and slide sprites between
+world coords as ACE streams `PublicUpdatePosition`.
 
 **Bake recipe (run once after the first clone, again whenever
 `dats/assets.hba` changes):**
@@ -61,14 +66,16 @@ on-device validation; recipe in
 
 Pick one to pull on. The choice is real, not arbitrary.
 
-- **Content rail** — Phase 4 step 2b (position rendering +
-  multi-entity sprite buffer) → step 3 (input → AC movement
-  packets) → step 4 (DOM panels: chat, vitals, inventory).
-  Unblocks the actual gameplay loop. NPCs / monsters / doors /
-  portals all sit on this rail — ACE already pushes them via
-  `ObjectCreate` / `UpdatePosition` / `RemoveObject`, but the
-  page has no `Map<guid, sprite>` and no `UpdatePosition`
-  handler in the recv loop yet. Visible features land here.
+- **Content rail** — Phase 4 step 3 (input → AC movement packets)
+  → step 4 (DOM panels: chat, vitals, inventory) → step 5
+  (interactive entities: doors, portals, vendors). Unblocks the
+  actual gameplay loop. With step 2b closed, the page renders
+  every entity ACE pushes; what's missing is the *outbound*
+  side — the user clicks the canvas, JS turns that into an AC
+  `CharacterPositionUpdate`, ACE simulates the move, and
+  `PublicUpdatePosition` flows back through the now-working
+  pipeline. Reference: cli's input handling at
+  `external/holtburger/crates/holtburger-core/src/client/input.rs`.
 - **Bandwidth rail** — Phase 5.2 (manifest scale fix) at
   [`manifest.md`](manifest.md). Real-world bake produces a
   **203 MB** `manifest.json` (885,043 entries × ~230 bytes
@@ -90,6 +97,13 @@ reverse ordering (5.2 first) also works fine; it's just more
 infrastructure-before-features. Skip 5.2 entirely until you
 need obj-11 phone validation or public CDN deploy.
 
+**Polish backlog from step 2b** (none gating, all listed in
+`phase-4-renderer.md` step 2b "What's NOT" section): camera-
+follow toggle, position interpolation, VectorUpdate handling
+for velocity-driven motion, cache-miss model upgrades via
+on-demand `fetch_model_meshes`, entity culling for dense
+zones, local-player highlight, mid-session character switching.
+
 ### What to read next
 
 In order:
@@ -98,7 +112,7 @@ In order:
    (§4 + §5), open questions (§7), phase status (§8),
    reference index (§9).
 2. [`phase-4-renderer.md`](phase-4-renderer.md) — Phase 4 step
-   1 + 2a + 2a.5 + 2a.6 as-built. Read before adding any
+   1 + 2a + 2a.5 + 2a.6 + 2b as-built. Read before adding any
    wasm-bindgen export or recv-loop branch.
 3. [`phase-3-renderer.md`](phase-3-renderer.md) — Phase 3
    step 1-6 as-built. Read before touching the renderer
@@ -1017,7 +1031,8 @@ Step ledger:
   on session error. Smoke 44 → 45 (selectCharacter symbol).
   Playwright capture at
   `apps/holtburger-web/capture_phase4_step2a.cjs`. Position
-  rendering of the local player + multi-entity buffer is step 2b.
+  rendering of the local player + multi-entity buffer landed
+  in step 2b (below).
 - ✅ **Step 2a.5 — character creation in the browser.** Landed
   2026-05-04 (see [`docs/phase-4-renderer.md`](phase-4-renderer.md)
   step 2a.5 section). Closes the empty-list gap that step 2a's
@@ -1059,26 +1074,37 @@ Step ledger:
   Smoke 47 → 48 (sendChat symbol). Deliverable at
   `docs/images/phase-4-step-2a-spawned.png` re-captured with
   Teleport button + post-teleport status.
-- ⏳ **Step 2b — `ClientViewEvent` → PIXI entity buffer.**
-  *(Active rail as of 2026-05-05. The brief framing this is
-  not yet written — see the "How to pick up this work" header
-  at the top of this doc + the §"What's NOT in step 2a.6" list
-  in [`phase-4-renderer.md`](phase-4-renderer.md).)* Adds an
+- ✅ **Step 2b — `ClientViewEvent` → PIXI entity buffer.**
+  Landed 2026-05-05 (see
+  [`docs/phase-4-renderer.md`](phase-4-renderer.md) step 2b
+  section). Five new match arms in
+  `apps/holtburger-web/src/lib.rs::recv_loop` for
   `UpdatePosition` / `PrivateUpdatePosition` /
-  `PublicUpdatePosition` handler to the recv loop in
-  `apps/holtburger-web/src/lib.rs::recv_loop`; surfaces a new
-  `kind=8 PlayerPositionUpdate` event with packed `(landblock_id,
-  x, y, z, qw, qx, qy, qz)`. Adds JS-side `Map<guid, sprite>` so
-  the local player and other entities render at world coords.
-  `ObjectCreate` events with `data.public_weenie_desc.guid`
-  + `data.pos` surface as `kind=9 EntitySpawned`; `RemoveObject`
-  surfaces as `kind=10 EntityRemoved`. Reuses Phase 3 step 6's
-  per-model render cache (`fetch_model_meshes` +
-  `fetch_surfaces_pixels`) for entity sprites — the texture
-  pipeline is already live, the missing piece is just the
-  position-driven update path. Reference for the cli's existing
-  `UpdatePosition` handler:
-  `external/holtburger/crates/holtburger-world/src/handlers/player.rs:33+`.
+  `PublicUpdatePosition` / `ObjectCreate` / `ObjectDelete`,
+  pushing into a new high-frequency `EntityUpdate` buffer
+  (separate from `ClientEvent` — position updates fire 100s/sec
+  in a populated zone, so a typed-getter struct beats the
+  tagged-payload shape). New `SessionHandle.pollEntityUpdates()`
+  drain method paired with the existing `poll_events()`. JS-side
+  `entityMap = Map<guid, { sprite, modelId }>`, a third
+  `entityContainer` PIXI layer above static placements, and 6
+  helper functions (`quaternionToYaw`, `landblockToWorldXY`,
+  `ensureEntitySprite`, `handleEntitySpawn`,
+  `handlePositionUpdate`, `handleEntityRemove`). Reuses Phase 3
+  step 6's per-model render cache for entity sprites; cache-miss
+  entities render as magenta placeholder dots. Coordinate frame
+  matches `ObjectPlacement`: landblock-local on the wire,
+  `(landblock_x_byte * 192) + local_x` to world metres on the
+  JS side. Quaternion → yaw via the same formula as the static
+  placement renderer. Smoke 56 → 58 (pollEntityUpdates +
+  EntityUpdate symbols). Capture script at
+  `apps/holtburger-web/capture_phase4_step2b.cjs`; deliverable at
+  `docs/images/phase-4-step-2b-entities.png`. The doc-text design
+  intent of `kind=8/9/10` ClientEvent kinds was superseded during
+  implementation by the parallel-channel approach (rationale in
+  the `EntityUpdate` doc comment). Reference cli handlers:
+  `external/holtburger/crates/holtburger-world/src/handlers/player.rs:33-46`
+  + `handlers/movement.rs:41-46` + `handlers/inventory.rs:19-56`.
 - ⏳ **Step 3 — input (WASD / click-to-target) → AC movement
   packets.** Translate browser input events through
   `holtburger-core`'s existing input surface to AC
@@ -1236,7 +1262,7 @@ re-discovering them.
 |---|---|
 | [`phase-2-wasm-spike.md`](phase-2-wasm-spike.md) | Phase 2 §3 per-crate cross-compile matrix, §8 step ledger, status banner |
 | [`phase-3-renderer.md`](phase-3-renderer.md) | Phase 3 steps 1, 2, 3, 3.5, 4, 4.5, 4.5b, 4.5c, 5 partial, 6 as-built reference + screenshots |
-| [`phase-4-renderer.md`](phase-4-renderer.md) | Phase 4 step 1 + 2a + 2a.5 + 2a.6 as-built (login → CharacterList → CharacterCreate → spawn handshake → chat / `@telepoi`) |
+| [`phase-4-renderer.md`](phase-4-renderer.md) | Phase 4 step 1 + 2a + 2a.5 + 2a.6 + 2b as-built (login → CharacterList → CharacterCreate → spawn handshake → chat / `@telepoi` → live entity buffer with position rendering) |
 | [`phase-5-thorough.md`](phase-5-thorough.md) | Phase 5.0 + 5.0b + 5.1a + 5.1b as-built (manifest+shards delivery, per-export refactor, transitive boot walk) |
 | [`thorough.md`](thorough.md) | Phase 5.0 framing brief (already executed; historical reference for the delivery-architecture decisions) |
 | [`manifest.md`](manifest.md) | Phase 5.2 framing brief (NOT YET EXECUTED; the manifest scale fix at the v2 schema layer) |
@@ -1281,6 +1307,8 @@ re-discovering them.
 | `SessionHandle.selectCharacter(guid) -> Result<()>` | 4 step 2a | Drive `CharacterEnterWorldRequest` → spawn handshake. |
 | `SessionHandle.createTestCharacter(name) -> Result<()>` | 4 step 2a.5 | Build an Aluvian / Male / Adventurer / Holtburg `CharacterCreateRequestData` via `holtburger_core::CharacterGenBuilder` and dispatch. |
 | `SessionHandle.sendChat(message) -> Result<()>` | 4 step 2a.6 | Dispatch `GameAction::Talk(message)`. `@`/`/`-prefixed messages route to ACE's command parser; access-level enforced server-side. |
+| `SessionHandle.pollEntityUpdates() -> Vec<EntityUpdate>` | 4 step 2b | Drain the high-frequency entity stream. Separate from `poll_events` — see the `EntityUpdate` doc comment for the rationale (position updates fire 100s/sec, dedicated typed-getter struct beats string-allocation in the hot path). Drained on every rAF tick alongside `poll_events`. |
+| `EntityUpdate { kind, guid, modelId, landblockId, x, y, z, qw, qx, qy, qz }` | 4 step 2b | Typed wasm-bindgen struct surfaced to JS. `kind`: 0=Position, 1=Spawn, 2=Remove. Source messages: `UpdatePosition`, `Public`/`PrivateUpdatePosition` → kind=0; `ObjectCreate` → kind=1 (with `modelId` = `csetup_id`); `ObjectDelete` → kind=2. Coords are landblock-local; JS converts via `(landblock_x_byte * 192) + local_x`. |
 
 ---
 

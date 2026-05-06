@@ -966,11 +966,7 @@ Modified:
 
 ### What's NOT in step 2a.6 (scope deferred)
 
-- **Position rendering.** Step 2b parses `UpdatePosition` /
-  `PrivateUpdatePosition` for the player's spatial state and
-  renders a marker on the existing 3×3 Holtburg renderer. Without
-  this, the wasm-side teleport is invisible — the user just has
-  to trust ACE moved them.
+- **Position rendering.** ✅ closed by step 2b (below).
 - **Chat-response rendering.** ACE replies to `@telepoi` with
   flavor text via `GameEvent::CommunicationTransientString` or
   similar. Step 4 (DOM panels) wires these up as
@@ -987,6 +983,230 @@ Modified:
 - **Full chat panel.** Sending plain text to local-area chat
   works (just call `sendChat("hello")` without `@`/`/` prefix),
   but no DOM panel renders incoming chat yet — step 4.
+
+---
+
+## Phase 4 step 2b landed (2026-05-05)
+
+Step 2b takes the spawn-handshake → InWorld pipeline that step 2a.6
+closed and renders the player + every other live entity ACE pushes.
+Before this step, `@telepoi Holtburg` would teleport the player
+server-side but the page had no on-screen presence — the user just
+had to trust ACE moved them. After step 2b, the local player and any
+nearby NPCs / monsters / vendors render as model-textured sprites at
+their world coordinates, updating in real time as ACE streams
+`UpdatePosition` / `PublicUpdatePosition` deltas.
+
+What "done" looks like at the end of step 2b:
+
+1. Login → CharacterList → CharacterCreate (if needed) →
+   `selectCharacter` → kind=1 PlayerSpawned + kind=7 EnteredWorld.
+   *(Same as step 2a.6.)*
+2. Click "Teleport to Holtburg" → ACE dispatches the teleport
+   server-side and within ~1-2 seconds streams an `ObjectCreate` for
+   the local player + a flurry of `ObjectCreate` /
+   `PublicUpdatePosition` for nearby entities.
+3. The local player sprite appears at Holtburg town centre. Other
+   sprites (NPCs, town guards, vendors) appear at their world
+   positions; some render as real model textures (when the live
+   render cache from Phase 3 step 6 has the model id), others as
+   small magenta placeholder dots when the model isn't in the cache.
+4. As entities move (or as ACE re-syncs positions every few hundred
+   ms), the sprites slide to their new world coords. Sprite rotation
+   tracks the entity's yaw — extracted from the on-wire quaternion
+   via `atan2(2(qw*qz + qx*qy), 1 - 2(qy² + qz²))`.
+
+The ObjectCreate messages contain a `csetup_id` — the SetupModel id
+Phase 3 step 6's render cache uses to look up a per-poly UV-mapped
+texture. When that cache has the model (every model that appeared in
+the static landblock placements at boot), the entity gets a real
+sprite; otherwise it falls back to a coloured-dot placeholder. A
+future polish step could trigger a `fetch_model_meshes` round-trip
+on cache miss to upgrade the placeholder; not in 2b's scope.
+
+### What step 2b ships
+
+The wasm side gains a parallel high-frequency event channel for
+position-bearing messages, separate from the existing `ClientEvent`
+stream. Position updates can fire 100s/sec in a populated zone;
+bundling them into `ClientEvent`'s tagged-payload shape would force
+per-event string allocation and an awkward DataView-unpack on the
+JS side. Two channels give each side the right ergonomics:
+
+- `ClientEvent` — low-frequency lifecycle (login, character list,
+  spawn, disconnect, chat — kinds 0/1/2/4/5/6/7).
+- `EntityUpdate` — high-frequency entity stream (kinds 0=Position,
+  1=Spawn, 2=Remove). Drained via
+  `SessionHandle.pollEntityUpdates()` on the same rAF tick as
+  `poll_events()`.
+
+The new `EntityUpdate` struct (`apps/holtburger-web/src/lib.rs`)
+carries: `kind`, `guid`, `model_id` (only meaningful for Spawn),
+`landblock_id`, `x`, `y`, `z`, `qw`, `qx`, `qy`, `qz`. Every field
+is a typed wasm-bindgen getter — no DataView, no string
+allocations. The on-wire `WorldPosition` is forwarded unchanged
+(landblock-local coords); JS does the `(landblock_x_byte * 192) +
+local_x` conversion to world metres, matching the existing static
+`ObjectPlacement` rendering pattern.
+
+### What step 2b ships in `recv_loop`
+
+Five new match arms before the catch-all `_` arm in
+`apps/holtburger-web/src/lib.rs::recv_loop`:
+
+- **`GameMessage::UpdatePosition(data)`** — `data.guid` +
+  `data.pos.pos` (`PositionPack` envelope around `WorldPosition`).
+  Pushes an `EntityUpdate { kind=Position, guid, position }`.
+  Reference: cli's `crates/holtburger-world/src/handlers/player.rs:33-46`.
+- **`GameMessage::PublicUpdatePosition(data)`** — `data.guid` +
+  `data.pos` (bare `WorldPosition`). Same payload shape minus the
+  `PositionPack` wrapping.
+- **`GameMessage::PrivateUpdatePosition(data)`** — *no guid in the
+  wire message*. The recv loop substitutes the local player's guid
+  from `LoopState::InWorld { player_guid }`. Pre-spawn private
+  position updates (impossible in normal flow) drop silently.
+- **`GameMessage::ObjectCreate(data)`** — `data.public_weenie_desc.guid`
+  + `data.csetup_id` (SetupModel id; the model_id Phase 3 step 6's
+  render cache uses) + `data.pos` (optional — child objects like
+  held items inherit position from their parent). Pushes
+  `EntityUpdate { kind=Spawn, guid, model_id, position }`.
+- **`GameMessage::ObjectDelete(data)`** — `data.guid`. Pushes
+  `EntityUpdate { kind=Remove, guid }`.
+
+The catch-all `_` arm kept its existing role (silent drop for chat,
+VectorUpdate, equipment, etc.) but the comment now points at
+"position-bearing messages handled above".
+
+### JS-side entity buffer
+
+`index.html` gains:
+
+- Module-scope `liveScene = null` (populated by
+  `renderNeighbourhood` on first render) and `entityMap = new Map()`
+  (guid → `{ sprite, modelId }`).
+- A new `entityContainer` PIXI Container as the third sibling of
+  `landblockContainer × 9` and `objectsContainer` inside
+  `worldContainer`. Live entities render on top of the static
+  placements.
+- Helper functions: `quaternionToYaw`,
+  `landblockToWorldXY`, `ensureEntitySprite`, `handleEntitySpawn`,
+  `handlePositionUpdate`, `handleEntityRemove`.
+- `drainEvents` (rAF tick) gains a parallel
+  `handle.pollEntityUpdates()` drain after the existing
+  `handle.poll_events()` drain. Each `EntityUpdate` is dispatched
+  by `kind`, and `upd.free()`'d after to release the wasm-bindgen
+  allocation.
+
+The placeholder-upgrade rule: if a position update arrives before
+its corresponding ObjectCreate (modelId=0 is what the wasm side
+puts on Position events), JS creates a placeholder dot. When the
+later ObjectCreate arrives with the real csetup_id, JS swaps the
+dot for a real model sprite. Subsequent position updates keep the
+real sprite (the swap condition is `entry.modelId === 0 &&
+modelId !== 0`).
+
+### Smoke checks (56 → 58)
+
+Two new symbol checks in `smoke_test.cjs`:
+
+- `SessionHandle.pollEntityUpdates()` is exported.
+- `EntityUpdate` constructor is exported (every getter is type-
+  checked through it).
+
+Both run in Node against the `--target nodejs` build, so a green
+`node smoke_test.cjs` confirms wasm-bindgen generated the right
+shims without needing a browser.
+
+### Live-ACE manual validation
+
+Use `apps/holtburger-web/capture_phase4_step2b.cjs` (mirror of
+`capture_phase4_step2a.cjs`):
+
+```bash
+# Pre-reqs: ACE up, holtburger-wsbridge up, python http.server up.
+cd external/holtburger/apps/holtburger-web
+node capture_phase4_step2b.cjs
+# → docs/images/phase-4-step-2b-entities.png
+```
+
+The script logs in, creates a character if needed, spawns, clicks
+Teleport-to-Holtburg, waits 4s for the entity flurry, then
+screenshots the canvas with the rendered entities. The
+`window.liveScene.entityContainer.children.length` probe reports
+how many sprites populated.
+
+For interactive validation, open the page and watch the canvas
+after teleport — the local player appears at Holtburg town centre,
+NPCs and town guards appear nearby, and any moving entity slides
+between positions in real time as ACE streams `PublicUpdatePosition`.
+
+### Files touched
+
+- `apps/holtburger-web/src/lib.rs`:
+  - New `ENTITY_UPDATE_KIND_*` constants + `EntityUpdate` struct +
+    impl block (~140 lines including doc comments).
+  - `SessionHandle.entity_updates` field +
+    `pollEntityUpdates()` method.
+  - `start_session` initializes `entity_updates` and threads it
+    into `recv_loop`.
+  - `recv_loop` signature gains the buffer; 5 new match arms before
+    the catch-all `_`.
+  - `ClientEvent` doc comment updated — kind=3 reservation removed,
+    cross-reference to `pollEntityUpdates()` added.
+- `apps/holtburger-web/index.html`:
+  - Scene-graph comment updated for the new `entityContainer` layer.
+  - `renderNeighbourhood` creates the entity container + populates
+    `window.liveScene` for capture-script telemetry.
+  - New module-scope `liveScene`, `entityMap`, and 6 helper
+    functions sitting between `renderNeighbourhood` and
+    `renderHoltburg`.
+  - `drainEvents` gains the entity-update drain block.
+  - Login-status hint text updated for the now-active step 2b.
+- `apps/holtburger-web/smoke_test.cjs`: 2 new checks (56 → 58).
+- `apps/holtburger-web/capture_phase4_step2b.cjs`: new — mirror of
+  step 2a's capture, framing the canvas instead of the login form.
+
+### What's NOT in step 2b (scope deferred)
+
+- **Camera-follow on the local player.** Currently the camera stays
+  centered on Holtburg town centre's geometric centre with
+  user-driven mouse-wheel zoom + drag-to-pan. A toggle for
+  "follow the local player sprite" is a nice future polish; it
+  conflicts with manual pan, so it'd need a UI affordance.
+- **Animated transitions.** Position updates snap-render — no
+  interpolation between the previous and new position. ACE pushes
+  every ~100-300ms, so the snapping is visible. A
+  `requestAnimationFrame`-driven lerp between the current sprite
+  position and the target world coords would smooth this; ~10
+  lines, but separates concerns enough that step 2b kept it out.
+- **VectorUpdate / UpdateMotion.** ACE also sends these for
+  velocity-based animation hints. The catch-all `_` arm still drops
+  them; a future step could add a velocity field to `EntityUpdate`
+  and let JS extrapolate position between full updates for smoother
+  motion at the cost of one frame of lag.
+- **Cache-miss model upgrades.** When an entity arrives with a
+  `csetup_id` the live render cache (Phase 3 step 6) doesn't know
+  about, the sprite stays as a placeholder dot. A future polish:
+  trigger a `fetch_model_meshes([id])` round-trip on cache miss
+  to upgrade. Not in 2b's scope; the dots are a clear visual
+  signal of "ACE knows about this entity but the renderer
+  doesn't have its model".
+- **Entity culling.** Every entity ACE sends gets a sprite; for a
+  populated zone with hundreds of NPCs this works fine on desktop
+  but would matter for mobile. Frustum-culling against the camera's
+  visible-world rect and skipping
+  position updates for off-screen sprites is a future
+  optimization step.
+- **Local player highlight.** No visual differentiation between
+  the local player's sprite and other entities. A coloured outline
+  ring or arrow indicator gated by `guid === spawnedPlayerGuid`
+  is a small future polish.
+- **Switching characters mid-session.** The recv loop's
+  `LoopState::InWorld { player_guid }` is set once on PlayerCreate
+  and never cleared. Switching characters means tearing down the
+  session and starting a new one (or extending the LoopState
+  machine). Step 2b keeps the one-spawn-per-session contract
+  inherited from step 2a.
 
 ---
 
