@@ -1420,33 +1420,114 @@ wasm bundle compiles.
   doesn't matter; for momentum-preserving combat moves it
   would.
 
-### Live-ACE validation — pending
+### Live-ACE validation — landed 2026-05-06
 
-Step 3 was implemented and unit-validated (smoke 58 → 60,
-native lib 1121 / 0, wasm32 cross-compile clean, both
-`--target nodejs` and `--target web` bundles built). The
-live-ACE round-trip — confirming ACE accepts the packet,
-simulates the move, and echoes `PublicUpdatePosition` — needs
-the user's live stack (Tailscale 100.116.47.66, login
-tailnet1/tailnet1 Developer-promoted). Recipe:
+Wire-effect round-trip confirmed against a live ACE (recipe in
+`docs/ace-local-setup.md`). The capture script
+`apps/holtburger-web/capture_phase4_step3.cjs` drives the full
+flow — login → CharacterCreate → Spawn → `@telepoi Holtburg`
+→ press W for 3 seconds — and validates by counting
+`UpdateMotion` echoes from ACE.
 
-1. `git pull` on the dev host, run the bake recipe if
-   `dats/assets.hba` changed.
-2. `wasm-pack build --target web` for the page bundle (already
-   done; pkg/holtburger_web.js exposes `setMovementInput`).
-3. Reload `http://100.116.47.66:8765/apps/holtburger-web/index.html`
-   in a phone or browser; log in, spawn a character, click
-   Teleport to Holtburg.
-4. Press W — the local player sprite should walk forward in
-   the direction it's facing. Q/E rotate, A/D strafe, S
-   backsteps, Shift+W runs.
+**Empirical result (`p4s3_1778084992` / `WasmDemou9w8z5`,
+local guid `0x50000017`):**
 
-If the move doesn't take effect:
-- Check ACE's log for `MoveToState` rejection (`server_control_
-  sequence` mismatch is the most likely culprit).
-- Check the browser console for `setMovementInput rejected:` or
-  `recv_loop: SetMovementInput before local position known`
-  warnings.
+```
+[step3-trace] SetMovementInput cmd: forward=1 strafe=0 turn=0 run=false pos_known=true
+[step3-trace] MoveToState send_action OK
+[step3-trace] UpdateMotion guid=0x50000017 (ACE accepted MoveToState)
+[step3-trace] SetMovementInput cmd: forward=0 strafe=0 turn=0 run=false pos_known=true
+[step3-trace] MoveToState send_action OK
+[step3-trace] UpdateMotion guid=0x50000017 (ACE accepted MoveToState)
+
+PASS: wire round-trip confirmed.
+Sent 2 MoveToState packets → received 3 UpdateMotion echoes from ACE.
+```
+
+**What this proves:**
+
+1. JS keyboard input → `setMovementInput` cmd → recv_loop
+   receives the cmd correctly (`SetMovementInput cmd: forward=1...
+   pos_known=true`).
+2. recv_loop builds `RawMotionState` + `MoveToStateActionData`
+   correctly and `session.send_action` succeeds (`MoveToState
+   send_action OK`).
+3. ACE receives, accepts, and processes the `0xF61C` packet
+   (`Player_Networking.cs::BroadcastMovement` line 365 calls
+   `EnqueueBroadcast(true, GameMessageUpdateMotion)`, which
+   includes the originator). The echo `UpdateMotion guid=
+   0x50000017` for our own guid is the round-trip confirmation.
+4. The `server_control_sequence = 0` bet paid off: ACE doesn't
+   reject the packet for stale `server_control_sequence` (the
+   field gates server-controlled motion overrides, not
+   client-driven motion).
+
+**What this does NOT prove (and why the local sprite still doesn't
+slide):** retail AC's protocol is asymmetric — when YOUR client
+sends `MoveToState`, ACE simulates server-side and broadcasts
+`UpdateMotion` + `PublicUpdatePosition` to OTHER players in
+visibility range. ACE does **not** echo position updates back
+to the originator; the retail client predicts its own position
+locally from the motion state it just sent. The wasm bundle
+deliberately doesn't run client-side prediction (would require
+WorldState + motion-table integration), so the local sprite
+appears stationary while ACE knows the player is walking. This
+is a follow-on (step 3.5 — client-side prediction) and isn't a
+defect in step 3's wire-format work.
+
+**A second observer client connecting via the same ACE would see
+the walking player's `PublicUpdatePosition` events** (and the
+sprite would slide on that observer's canvas). Step 4 / 5 work
+will exercise that path naturally.
+
+**Stack used for the validation run** (host-local, not Tailscale):
+
+- ACE Release build at
+  `~/ace-server/Source/ACE.Server/bin/Release/net10.0/ACE.Server.dll`,
+  Config.js with `DefaultAccessLevel: 4` so the auto-created
+  test account is Developer-promoted on first login (so `@pk pk`
+  works without a separate SQL UPDATE).
+- `holtburger-wsbridge --listen 127.0.0.1:8080
+  --ace-host 127.0.0.1 --ace-login-port 9000 --ace-world-port 9001`.
+- `python3 -m http.server 8765` from `external/holtburger/`.
+- `dat-shard --input dats/assets.hba --output dist/` produced the
+  manifest+shards (885,043 shards, 635 boot covers, 1.86 MB
+  boot pack).
+- Capture: `NODE_PATH=~/.npm/_npx/.../node_modules
+  PHASE4_TEST_ACCOUNT=p4s3_<ts> node capture_phase4_step3.cjs`.
+
+**Key gotcha discovered during validation: ACE's `OnMoveToState`
+short-circuits unless `IsPKType`** (`Player_Tick.cs:154` —
+`FastTick => IsPKType`, line 178 — `if (!FastTick) return;`).
+Non-PK players' MoveToState packets reach the dispatcher and
+are *broadcast* via `BroadcastMovement` (so other players see
+the motion), but the SERVER-side physics simulation only runs
+for PK / PKLite. For client-side-prediction-driven retail
+clients this doesn't matter; for our wire-effect validation,
+we send `@pk pk` (Developer command) before pressing W so ACE
+takes the FastTick path → `OnMoveToState_ClientMethod`
+→ `PhysicsObj.DoMotion` → simulated position updates broadcast
+to nearby players. The capture script handles this
+automatically; live tests against shipped servers may not
+have Developer access.
+
+**Diagnostics added during validation (kept in the bundle as
+debug hooks):**
+
+- `console_log_str` extern in `apps/holtburger-web/src/lib.rs`
+  (single `#[wasm_bindgen]` extern `console.log` shim — `web-sys`
+  is deliberately not a dep) surfaces three `[step3-trace]` log
+  lines to the browser console:
+  - `SetMovementInput cmd: forward=N strafe=N turn=N run=B
+    pos_known=B` on every cmd dispatch
+  - `MoveToState send_action OK` on every successful packet
+    send
+  - `UpdateMotion guid=0xN (ACE accepted MoveToState)` on every
+    inbound `UpdateMotion`
+- `window.__sessionHandle` exposure in `index.html` (alongside
+  the existing `window.entityMap` / `window.liveScene` debug
+  hooks) lets the capture script dispatch `@pk pk` without a
+  dedicated UI button.
 
 ---
 

@@ -10,14 +10,16 @@
 ### Where the project is
 
 **Phases done:** 0, 1, 2, 3 (steps 1-6 + step 5 partial), 4 (step
-1 + 2a + 2a.5 + 2a.6 + 2b + **3 — code-complete, live-ACE
-wire round-trip pending**), 5.0, 5.0b, 5.1a, 5.1b. Native lib
-gate **1121 / 0** across 14 workspace crates. `cargo check
+1 + 2a + 2a.5 + 2a.6 + 2b + **3 — wire round-trip validated
+2026-05-06**), 5.0, 5.0b, 5.1a, 5.1b. Native lib gate
+**1121 / 0** across 14 workspace crates. `cargo check
 --target wasm32-unknown-unknown` clean for
 `holtburger-{dat,session,transport-ws,resource-http,web,content,
 core,manifest}`. `wasm-pack build --target {nodejs,web}` both
 green. `node smoke_test.cjs` **60 / 60 PASS** (59 OK + 1 SKIP
-for live-ACE round-trip).
+for live-ACE round-trip; the SKIP is the symbol-only check —
+the actual wire-effect validation runs through the new
+`capture_phase4_step3.cjs` Playwright harness).
 
 **What works end-to-end today.** Open
 `apps/holtburger-web/index.html` in any browser. The page calls
@@ -57,14 +59,24 @@ on `kind=7 EnteredWorld`, sends one packet per change in
 keystate (one per key down/up), the recv loop populates the
 position + sequence numbers from the latest inbound
 `UpdatePosition` / `PrivateUpdatePosition` and dispatches via
-`session.send_action`. ACE simulates the move; Phase 4 step
-2b's now-working position pipeline echoes
-`PublicUpdatePosition` back, sliding the local player sprite.
-**Live-ACE wire round-trip pending the user's live stack** —
-the implementation passes smoke (60/60 with the new
-`setMovementInput` symbol check) but the wire-effect of the
-packet against ACE has not been physically verified yet.
-See [`phase-4-renderer.md`](phase-4-renderer.md) step 3 for
+`session.send_action`. **Wire round-trip validated against a
+live ACE 2026-05-06**: `capture_phase4_step3.cjs` Playwright
+harness drives login → CharacterCreate → spawn →
+`@telepoi Holtburg` → press W; recv_loop traces `SetMovementInput
+cmd` → `MoveToState send_action OK` → ACE echoes `UpdateMotion`
+for the local player's guid (proving ACE's `BroadcastMovement`
+accepted the packet). PASS: 2 packets sent, 3 echoes received.
+The local sprite stays still during the W press because retail
+AC doesn't echo position back to the originator — the retail
+client predicts locally. Client-side prediction is deferred
+follow-on (step 3.5 candidate); other observers connecting to
+the same ACE would see the walking sprite via
+`PublicUpdatePosition`. Critical gotcha discovered: ACE's
+`OnMoveToState` short-circuits unless `IsPKType`
+(`Player_Tick.cs:154` — `FastTick => IsPKType`), so the capture
+sends `@pk pk` before pressing W to flip PlayerKillerStatus and
+engage server-side physics. See
+[`phase-4-renderer.md`](phase-4-renderer.md) step 3 for
 the as-built reference and the validation recipe.
 
 **Bake recipe (run once after the first clone, again whenever
@@ -125,14 +137,15 @@ on-device validation; recipe in
 Pick one to pull on. The choice is real, not arbitrary.
 
 - **Content rail** — Phase 4 step 3 (input → AC movement packets)
-  **landed 2026-05-06; live-ACE wire round-trip pending** → step 4
-  (DOM panels: chat, vitals, inventory) → step 5 (interactive
-  entities: doors, portals, vendors). With step 3 implemented,
-  the gameplay loop now closes end-to-end on the wire: WASD/Q/E
-  keyboard input → `SessionHandle.setMovementInput` →
-  `GameAction::MoveToState` → ACE simulates → step 2b's
-  `PublicUpdatePosition` echo slides the local sprite. Step 4 is
-  the next pull on this rail.
+  **landed + wire-validated 2026-05-06** → step 3.5 (client-side
+  prediction so the local player's sprite slides during W-hold —
+  short follow-on, ~1 day's work) → step 4 (DOM panels: chat,
+  vitals, inventory) → step 5 (interactive entities: doors,
+  portals, vendors). With step 3 validated, the gameplay loop
+  closes end-to-end on the wire: WASD/Q/E keyboard input →
+  `SessionHandle.setMovementInput` → `GameAction::MoveToState`
+  → ACE accepts and broadcasts `UpdateMotion`. Step 3.5 (or
+  jumping straight to step 4) is the next pull on this rail.
 - **Bandwidth rail** — Phase 5.2 (manifest scale fix) at
   [`manifest.md`](manifest.md). Real-world bake produces a
   **203 MB** `manifest.json` (885,043 entries × ~230 bytes
