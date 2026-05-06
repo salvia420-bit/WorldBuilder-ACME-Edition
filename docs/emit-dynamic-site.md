@@ -44,13 +44,41 @@ bake; see the bake recipe below).
 **Bake recipe (run once after the first clone, again whenever
 `dats/assets.hba` changes):**
 
+> **Disk-space trap — read first.** A full bake produces ~4.7 GB
+> on disk: 203 MB `manifest.json` + 1.86 MB `boot.hba` + ~1 GB of
+> shard content **but ~4.5 GB on-disk** because each of the 885k
+> shard files rounds up to a 4 KB block (885k × 4 KB ≈ 3.5 GB of
+> tail-block overhead alone). Combined with `external/holtburger/
+> target/` (~22 GB cargo build), this **WILL fill the root
+> partition** if `dist/` lands on `/` or `/tmp`. On this host the
+> root partition is 117 GB and recently sat at 77% full; one
+> bake to `/tmp` knocked SSH offline mid-development on
+> 2026-05-04 and forced the 2026-05-05 → 2026-05-06 commit gap.
+>
+> **Set up `dist/` as a symlink to a roomy drive before baking.**
+> This host has 6.9 TB free on `/mnt/wbterminal1` (and another
+> 6.9 TB on `/mnt/wbterminal2`); aim there. The HTTP server
+> serves `external/holtburger/`, so the symlink keeps the
+> browser-visible URL `dist/manifest.json` working unchanged.
+>
+> ```bash
+> rm -f external/holtburger/dist  # in case a stale symlink exists
+> mkdir -p /mnt/wbterminal1/holtburger-dist
+> ln -s /mnt/wbterminal1/holtburger-dist external/holtburger/dist
+> ```
+>
+> Phase 5.2 ([`manifest.md`](manifest.md)) will collapse the
+> 203 MB manifest to ~2 KB top-level + per-namespace catalogs;
+> the shard count is unchanged and the on-disk overhead remains.
+
 ```bash
 cd external/holtburger
 cargo build -p holtburger-tools --bin dat-shard --release
 ./target/release/dat-shard --input dats/assets.hba --output dist/
-# Produces: dist/manifest.json (203 MB; this is what manifest.md fixes),
+# Produces: dist/manifest.json (203 MB; Phase 5.2 fixes),
 #           dist/boot.hba (1.86 MB, Holtburg's transitive closure),
-#           dist/shards/{sha256}.bin × 885k.
+#           dist/shards/{sha256}.bin × 885k (~1 GB content,
+#           ~4.5 GB on-disk — see the disk-space trap above).
 ```
 
 **Live-server stack** (the user keeps this running for
