@@ -35,7 +35,11 @@ player + every other live entity ACE pushes (NPCs, monsters,
 vendors, town guards) renders on a third PIXI `entityContainer`
 layer above the static placements. Position updates land via
 `SessionHandle.pollEntityUpdates()` and slide sprites between
-world coords as ACE streams `PublicUpdatePosition`.
+world coords as ACE streams `PublicUpdatePosition`. Pushed to
+`origin/master` 2026-05-06 in `fe85008..d01fa73` (work was held
+in the working tree on 2026-05-05 by a `/tmp` disk-fill from
+the `dat-shard` bake — symlinked `dist/` rehydrates from a fresh
+bake; see the bake recipe below).
 
 **Bake recipe (run once after the first clone, again whenever
 `dats/assets.hba` changes):**
@@ -1075,7 +1079,8 @@ Step ledger:
   `docs/images/phase-4-step-2a-spawned.png` re-captured with
   Teleport button + post-teleport status.
 - ✅ **Step 2b — `ClientViewEvent` → PIXI entity buffer.**
-  Landed 2026-05-05 (see
+  Landed 2026-05-05, commits `fe85008..d01fa73` pushed
+  2026-05-06 (see
   [`docs/phase-4-renderer.md`](phase-4-renderer.md) step 2b
   section). Five new match arms in
   `apps/holtburger-web/src/lib.rs::recv_loop` for
