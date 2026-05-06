@@ -407,6 +407,144 @@ const RETAIL_TERRAIN_SURFACE_TEXTURES: [u32; 33] = [
     0x05001458, // 32 RoadType (used by the road-overlay layer)
 ];
 
+/// Phase 3 step 3.6 — retail TexMerge alpha-mask SurfaceTexture IDs.
+///
+/// **What these are.** AC's terrain renderer doesn't bilinear-blend
+/// between cells — it composes hand-tuned alpha-mask overlays on top
+/// of a primary terrain texture. Each cell has a "palette code"
+/// derived from its 4 corner terrain types; up to 3 corners that
+/// differ from the primary become *overlay* terrains, blended in via
+/// `mix(base, overlay, alpha_mask.r / 255)` per pixel. The alpha
+/// masks are PFID_A8 (8-bit greyscale) textures with sharp,
+/// hand-drawn boundaries — that's the iconic AC "patchy splotchy"
+/// look that bilinear blending mathematically can't reproduce.
+///
+/// **Selection algorithm** (mirror `ACE.Server.Physics.Common.
+/// TexMerge::FindTerrainAlpha` and `FindRoadAlpha`):
+/// 1. Compute pcode from 4 corner terrain types
+/// 2. PRNG-pick one of the corner / side maps with a known TCode
+/// 3. Rotate the picked mask 90° increments (TCode bit-shifts mod 15)
+///    until it matches the requested cell tcode
+///
+/// **Tables below** were extracted by signature-scanning
+/// `eor/portal:0x13000000` (Region) for the TerrainDesc-count=33
+/// signature, then walking backward through TexMerge sub-lists to
+/// find BaseTexSize, CornerTerrainMaps, SideTerrainMaps, RoadMaps.
+/// Stable for retail Dereth; if a project ships a custom Region in
+/// the future, swap for a runtime Region parser (deferred follow-on
+/// — `holtburger-dat::file_type::Region`).
+///
+/// **Format**: `(TCode, SurfaceTexture ID)`. TCode bit positions:
+/// 1 = upper-left, 2 = upper-right, 4 = bottom-right, 8 = bottom-left.
+/// Single-bit TCodes (1, 2, 4, 8) are corner masks; two-bit
+/// neighbour pairs (3, 6, 9, 12) are side / edge masks; some road
+/// masks use diagonal patterns like 10 (= 2 + 8).
+#[cfg(target_arch = "wasm32")]
+const RETAIL_CORNER_TERRAIN_MASKS: [(u32, u32); 4] = [
+    (8, 0x05001371),
+    (8, 0x0500143E),
+    (8, 0x0500143F),
+    (8, 0x05001440),
+];
+
+/// Side / edge alpha masks. Only one in retail Dereth — covers the
+/// `tcode = 9` (left edge: upper-left + bottom-left) base pattern;
+/// the renderer rotates 90° increments to match other edges
+/// (9 → 3 → 6 → 12 per the cyclical bit-shift in
+/// `TexMerge::FindTerrainAlpha:319-326`).
+#[cfg(target_arch = "wasm32")]
+const RETAIL_SIDE_TERRAIN_MASKS: [(u32, u32); 1] = [
+    (9, 0x05001441),
+];
+
+/// Road alpha masks. PRNG selects one whose RCode rotates to match
+/// the cell's road pattern. `RCode = 9` covers an edge road,
+/// `RCode = 10` (= 2 + 8) is a diagonal across the cell, `RCode = 8`
+/// is a single-corner road taper.
+#[cfg(target_arch = "wasm32")]
+const RETAIL_ROAD_MASKS: [(u32, u32); 3] = [
+    (9, 0x0500168E),
+    (10, 0x0500168C),
+    (8, 0x0500168D),
+];
+
+/// One decoded alpha mask, ready for the JS atlas builder. Mirrors
+/// [`TerrainTexture`]'s shape but with TCode/RCode metadata. The
+/// `pixels` buffer is RGBA8 with R=G=B=alpha-byte, A=255 (the
+/// existing `Texture::to_rgba8` decode of PFID_A8 / `A8`); JS reads
+/// the `r` channel for the per-pixel blend weight.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct TerrainAlphaMask {
+    /// Index in the source list (0..3 for corner, 0..0 for side,
+    /// 0..2 for road). PRNG selection is JS-side; the index here
+    /// just disambiguates atlas slot.
+    index: u32,
+    /// Bit pattern indicating which corners / edges this mask covers
+    /// in its base orientation. Same encoding as `TexMerge::TCode`
+    /// (bit 0 = upper-left, bit 3 = bottom-left).
+    code: u32,
+    width: u32,
+    height: u32,
+    /// RGBA8 — `r` channel = alpha-mask weight (0..255).
+    pixels: Vec<u8>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl TerrainAlphaMask {
+    #[wasm_bindgen(getter)]
+    pub fn index(&self) -> u32 {
+        self.index
+    }
+    #[wasm_bindgen(getter)]
+    pub fn code(&self) -> u32 {
+        self.code
+    }
+    #[wasm_bindgen(getter)]
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+    #[wasm_bindgen(getter)]
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+    #[wasm_bindgen(getter)]
+    pub fn pixels(&self) -> Vec<u8> {
+        self.pixels.clone()
+    }
+}
+
+/// Tagged container — corner, side, and road masks come back in a
+/// single round-trip so JS does one `await` instead of three.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct TerrainAlphaMasks {
+    corner: Vec<TerrainAlphaMask>,
+    side: Vec<TerrainAlphaMask>,
+    road: Vec<TerrainAlphaMask>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl TerrainAlphaMasks {
+    /// Take ownership of the corner masks. Length matches
+    /// `RETAIL_CORNER_TERRAIN_MASKS` (4 in retail). JS calls each
+    /// vector getter exactly once.
+    #[wasm_bindgen(js_name = takeCorner)]
+    pub fn take_corner(&mut self) -> Vec<TerrainAlphaMask> {
+        std::mem::take(&mut self.corner)
+    }
+    #[wasm_bindgen(js_name = takeSide)]
+    pub fn take_side(&mut self) -> Vec<TerrainAlphaMask> {
+        std::mem::take(&mut self.side)
+    }
+    #[wasm_bindgen(js_name = takeRoad)]
+    pub fn take_road(&mut self) -> Vec<TerrainAlphaMask> {
+        std::mem::take(&mut self.road)
+    }
+}
+
 /// One decoded terrain tile, ready for the JS atlas builder. Each
 /// instance is a 32-row block in the wasm-bindgen output of
 /// [`fetch_terrain_textures`].
@@ -687,6 +825,131 @@ pub async fn fetch_terrain_textures() -> Result<Vec<TerrainTexture>, JsValue> {
         });
     }
     Ok(out)
+}
+
+/// Phase 3 step 3.6 — fetch the retail TexMerge alpha masks (corner,
+/// side, road) and decode each to RGBA8. Mirrors
+/// [`fetch_terrain_textures`] but for the PFID_A8 mask textures the
+/// authentic AC terrain renderer composites overlays through.
+///
+/// **Why a separate export.** Splitting alpha masks out of
+/// `fetch_terrain_textures` keeps the original 33-texture path
+/// unchanged for callers that don't need the authentic blend (the
+/// pre-3.6 shader continues to work). New callers can `await
+/// fetch_terrain_alpha_masks()` once at boot, build an atlas, and
+/// drop the originals.
+///
+/// **Round-trip cost.** Each mask is at most 1024×1024 PFID_A8
+/// (1 MB compressed pre-bake; ~4 MB after decode-to-RGBA8 in
+/// the existing `Texture::to_rgba8` greyscale-replicate path). 8
+/// masks worst-case ≈ 32 MB; in practice the masks decode at
+/// 256×256 or 512×512 → 4 MB total. Single fetch + decode round
+/// at boot, kept resident for the lifetime of the renderer.
+///
+/// **R channel = mask weight.** The decoder fills R=G=B=alpha and
+/// A=255; JS reads `r / 255` for the blend factor.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_terrain_alpha_masks() -> Result<TerrainAlphaMasks, JsValue> {
+    use holtburger_dat::file_type::{Palette, SurfaceTexture, Texture, TextureDecodeError};
+    use holtburger_dat::{ResourceKey, ResourceSource};
+
+    let source = global_source::global_source();
+
+    // Collect all 8 alpha-mask SurfaceTexture IDs in one pass so
+    // the prefetch goes through the network once. PRNG selection
+    // is JS-side; the wasm path just decodes everything.
+    let all_ids: Vec<u32> = RETAIL_CORNER_TERRAIN_MASKS
+        .iter()
+        .chain(RETAIL_SIDE_TERRAIN_MASKS.iter())
+        .chain(RETAIL_ROAD_MASKS.iter())
+        .map(|(_code, gid)| *gid)
+        .collect();
+
+    let surf_keys: Vec<ResourceKey<'_>> = all_ids
+        .iter()
+        .map(|id| ResourceKey::new("eor/portal", *id))
+        .collect();
+    source
+        .prefetch(&surf_keys)
+        .await
+        .map_err(|e| JsValue::from_str(&format!("prefetch alpha SurfaceTextures: {e}")))?;
+
+    // SurfaceTexture → top-mip Texture id. PFID_A8 masks aren't
+    // palettized, so we skip the Palette prefetch the terrain path
+    // does. They might still chain through a Texture's default
+    // palette in theory; we lazy-fetch in `to_rgba8` if so.
+    let mut tex_ids: Vec<u32> = Vec::with_capacity(all_ids.len());
+    for &surf_id in &all_ids {
+        if let Ok(b) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_id))
+            && let Ok(s) = SurfaceTexture::unpack(&b)
+            && let Some(t) = s.highest_res()
+        {
+            tex_ids.push(t);
+        } else {
+            tex_ids.push(0);
+        }
+    }
+    let tex_keys: Vec<ResourceKey<'_>> = tex_ids
+        .iter()
+        .filter(|t| **t != 0)
+        .map(|id| ResourceKey::new("eor/portal", *id))
+        .collect();
+    source
+        .prefetch(&tex_keys)
+        .await
+        .map_err(|e| JsValue::from_str(&format!("prefetch alpha Textures: {e}")))?;
+
+    // Decode helper — same logic three times for corner / side /
+    // road, factored out to keep the constants list close to the
+    // RETAIL_* tables above.
+    let decode_one = |idx: usize, code: u32, surf_id: u32| -> Result<TerrainAlphaMask, JsValue> {
+        let surf_bytes = source
+            .get_file_by_key(ResourceKey::new("eor/portal", surf_id))
+            .map_err(|e| JsValue::from_str(&format!("alpha SurfaceTexture {surf_id:#010X}: {e}")))?;
+        let surf = SurfaceTexture::unpack(&surf_bytes)
+            .map_err(|e| JsValue::from_str(&format!("SurfaceTexture::unpack {surf_id:#010X}: {e}")))?;
+        let tex_id = surf
+            .highest_res()
+            .ok_or_else(|| JsValue::from_str(&format!("alpha {surf_id:#010X}: empty mip list")))?;
+        let tex_bytes = source
+            .get_file_by_key(ResourceKey::new("eor/portal", tex_id))
+            .map_err(|e| JsValue::from_str(&format!("alpha Texture {tex_id:#010X}: {e}")))?;
+        let tex = Texture::unpack(&tex_bytes)
+            .map_err(|e| JsValue::from_str(&format!("Texture::unpack {tex_id:#010X}: {e}")))?;
+        let rgba = tex
+            .to_rgba8(|pal_id| {
+                let pal_bytes = source
+                    .get_file_by_key(ResourceKey::new("eor/portal", pal_id))
+                    .map_err(|e| TextureDecodeError::PaletteFetch(format!("{pal_id:#010X}: {e}")))?;
+                Palette::unpack(&pal_bytes).map_err(|e| {
+                    TextureDecodeError::PaletteFetch(format!("Palette::unpack {pal_id:#010X}: {e}"))
+                })
+            })
+            .map_err(|e| JsValue::from_str(&format!("Texture::to_rgba8 {tex_id:#010X}: {e}")))?;
+        Ok(TerrainAlphaMask {
+            index: idx as u32,
+            code,
+            width: tex.width as u32,
+            height: tex.height as u32,
+            pixels: rgba,
+        })
+    };
+
+    let mut corner = Vec::with_capacity(RETAIL_CORNER_TERRAIN_MASKS.len());
+    for (i, (code, gid)) in RETAIL_CORNER_TERRAIN_MASKS.iter().copied().enumerate() {
+        corner.push(decode_one(i, code, gid)?);
+    }
+    let mut side = Vec::with_capacity(RETAIL_SIDE_TERRAIN_MASKS.len());
+    for (i, (code, gid)) in RETAIL_SIDE_TERRAIN_MASKS.iter().copied().enumerate() {
+        side.push(decode_one(i, code, gid)?);
+    }
+    let mut road = Vec::with_capacity(RETAIL_ROAD_MASKS.len());
+    for (i, (code, gid)) in RETAIL_ROAD_MASKS.iter().copied().enumerate() {
+        road.push(decode_one(i, code, gid)?);
+    }
+
+    Ok(TerrainAlphaMasks { corner, side, road })
 }
 
 /// Phase 3 step 4.5: walk one model's GfxObj/SetupModel surface chain

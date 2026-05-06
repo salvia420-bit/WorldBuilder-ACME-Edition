@@ -167,6 +167,7 @@
         fetch_landblock_heightmap,
         fetch_landblock_heightmaps,
         fetch_terrain_textures,
+        fetch_terrain_alpha_masks,
         fetch_landblock_objects,
         fetch_object_colours,
         fetch_model_meshes,
@@ -467,6 +468,426 @@
         return texture;
       }
 
+      // ===== Phase 3 step 3.6 — authentic AC TexMerge rendering =====
+      //
+      // Replaces step 3 + step 5's per-cell flat-coloured shading with
+      // the same alpha-mask overlay algorithm retail AC + WB GUI use
+      // (`ACE.Server.Physics.Common.TexMerge::BuildTexture`,
+      // `WorldBuilder/Editors/Landscape/LandSurfaceManager.cs:425-477`).
+      //
+      // Per cell:
+      //   1. The 4 corner terrain types pack into a 20-bit "palette
+      //      code" (`pcode`); 8 more bits encode per-corner road bits.
+      //   2. A "primary" terrain is chosen — the first pair of equal
+      //      corners, or the first corner if all 4 differ.
+      //   3. Up to 3 *overlays* are computed. Each tagged with a
+      //      `tcode` bit pattern (1=UL, 2=UR, 4=BR, 8=BL; pairs like
+      //      3, 6, 9, 12 = edges). When all 4 corners differ, tcodes
+      //      cascade as [2, 4, 8].
+      //   4. For each overlay, the renderer PRNG-picks an alpha mask
+      //      from CornerTerrainMaps (single-corner) or SideTerrainMaps
+      //      (edge), rotates it 90° increments until its TCode matches.
+      //   5. Sequential blend per pixel:
+      //        result = primary tile sample
+      //        for each overlay:
+      //          alpha = sample alpha mask at rotated UV
+      //          overlay_tile = sample terrain atlas at overlay's terrain type
+      //          result = mix(result, overlay_tile, alpha)
+      //        for each road in cell:
+      //          alpha = sample road mask at rotated UV
+      //          road_tile = sample atlas at terrain type 32 (RoadType)
+      //          result = mix(result, road_tile, alpha)
+      //
+      // Alpha mask atlas layout (1024×512 RGBA8, 4×2 grid of 256×256
+      // tiles):
+      //   col 0..3, row 0:  corner masks 0..3 (atlas index 0..3)
+      //   col 0,    row 1:  side mask 0       (atlas index 4)
+      //   col 1..3, row 1:  road masks 0..2   (atlas index 5..7)
+      //
+      // Per-LB cell data is packed into 6 small (8×8 RGBA8) textures —
+      // each holds one slice of the per-cell render program (cell base,
+      // 3 overlays, 2 roads). The fragment shader samples the cell
+      // index from `floor(vGridUv)` and reads its slice across all 6
+      // textures via `texelFetch`.
+
+      // Atlas slot indices for the alpha masks. Match the pack order in
+      // `buildAlphaAtlas` below.
+      const ALPHA_CORNER_BASE_IDX = 0;  // 4 corner masks at 0..3
+      const ALPHA_SIDE_BASE_IDX = 4;    // 1 side mask at 4
+      const ALPHA_ROAD_BASE_IDX = 5;    // 3 road masks at 5..7
+      const ALPHA_ATLAS_COLS = 4;
+      const ALPHA_ATLAS_ROWS = 2;
+      const ALPHA_TILE_PX = 256;
+      const ALPHA_ATLAS_W = ALPHA_ATLAS_COLS * ALPHA_TILE_PX; // 1024
+      const ALPHA_ATLAS_H = ALPHA_ATLAS_ROWS * ALPHA_TILE_PX; // 512
+
+      async function buildAlphaAtlas() {
+        // Fetch all 8 retail alpha masks (4 corner + 1 side + 3 road).
+        // The wasm bundle returns them as PFID_A8 → RGBA8 (R=G=B=alpha,
+        // A=255); JS reads the R channel for the per-pixel blend
+        // weight.
+        const handle = await fetch_terrain_alpha_masks();
+        const corner = handle.takeCorner();
+        const side = handle.takeSide();
+        const road = handle.takeRoad();
+        handle.free();
+
+        const atlas = document.createElement("canvas");
+        atlas.width = ALPHA_ATLAS_W;
+        atlas.height = ALPHA_ATLAS_H;
+        const actx = atlas.getContext("2d");
+
+        const tileCanvas = document.createElement("canvas");
+        const tctx = tileCanvas.getContext("2d");
+
+        function drawIntoSlot(mask, slotIdx) {
+          const w = mask.width;
+          const h = mask.height;
+          const px = mask.pixels;  // RGBA8
+          tileCanvas.width = w;
+          tileCanvas.height = h;
+          const clamped = new Uint8ClampedArray(px.buffer, px.byteOffset, px.byteLength);
+          tctx.putImageData(new ImageData(clamped, w, h), 0, 0);
+          const col = slotIdx % ALPHA_ATLAS_COLS;
+          const row = (slotIdx / ALPHA_ATLAS_COLS) | 0;
+          actx.drawImage(
+            tileCanvas, 0, 0, w, h,
+            col * ALPHA_TILE_PX, row * ALPHA_TILE_PX,
+            ALPHA_TILE_PX, ALPHA_TILE_PX
+          );
+          mask.free();
+        }
+
+        for (let i = 0; i < corner.length; i++) drawIntoSlot(corner[i], ALPHA_CORNER_BASE_IDX + i);
+        for (let i = 0; i < side.length; i++) drawIntoSlot(side[i], ALPHA_SIDE_BASE_IDX + i);
+        for (let i = 0; i < road.length; i++) drawIntoSlot(road[i], ALPHA_ROAD_BASE_IDX + i);
+
+        const tex = PIXI.Texture.from(atlas);
+        if (tex.source) {
+          // LINEAR for smooth alpha edges; the masks are pre-tuned art.
+          tex.source.scaleMode = "linear";
+          tex.source.autoGenerateMipmaps = false;
+        }
+        return tex;
+      }
+
+      // The PRNG TexMerge uses to pick which mask out of the corner /
+      // side / road list rotates to the requested code.
+      // `(1379576222 * pcode - 1372186442) * 2^-32 * N` floored.
+      // Mirrors `TexMerge::FindTerrainAlpha:308-313` and
+      // `FindRoadAlpha:349`.
+      function texMergePrng(pcode, n) {
+        // JS doubles can hold 1379576222 * pcode (max pcode ≈ 2^28
+        // in retail; product < 2^58, well within double precision).
+        let v = Math.floor((1379576222 * pcode - 1372186442) * 2.3283064e-10 * n);
+        if (v >= n) v = 0;
+        if (v < 0) v = 0;
+        return v;
+      }
+
+      // Rotate a code by `count` 90° steps. Mirrors the
+      // `alphaCode = alphaCode * 2; if (alphaCode >= 16) alphaCode -= 15`
+      // loop in `TexMerge::FindTerrainAlpha:319-326`. Returns the
+      // resulting code; the caller cares about how many steps it took
+      // (= rotation 0..3).
+      function rotateCode(code, count) {
+        let c = code;
+        for (let i = 0; i < count; i++) {
+          c *= 2;
+          if (c >= 16) c -= 15;
+        }
+        return c;
+      }
+
+      // Find rotation count needed to make `baseCode` match `target`,
+      // or -1 if no rotation 0..3 reaches it.
+      function findRotation(baseCode, target) {
+        let c = baseCode;
+        for (let i = 0; i < 4; i++) {
+          if (c === target) return i;
+          c *= 2;
+          if (c >= 16) c -= 15;
+        }
+        return -1;
+      }
+
+      // Per-cell render program. Built once when the LB loads, sampled
+      // by the shader via 8×8 cell-data textures.
+      function decodeCellPalette(t0, t1, t2, t3, roadBits) {
+        // Mirror TexMerge::GetTerrainCodes — pcodes are indexed
+        // upper-left=0, upper-right=1, bottom-right=2, bottom-left=3.
+        // The wasm `terrainCodes` Uint8Array is indexed [vy * 9 + vx]
+        // where (vx=0, vy=0) is the LB's SW corner.
+        // For each *cell* at (cx, cy) we want corners arranged as the
+        // pcode: pcodes[0] = NW, pcodes[1] = NE, pcodes[2] = SE,
+        // pcodes[3] = SW. Caller passes in t0..t3 in that pcode order.
+        const pcodes = [t0, t1, t2, t3];
+
+        // pcode bit packing for terrain (TexMerge::GetTerrainCodes):
+        //   bits [15..19] = pcodes[0]
+        //   bits [10..14] = pcodes[1]
+        //   bits [5..9]   = pcodes[2]
+        //   bits [0..4]   = pcodes[3]
+        // pcode bits [20..27] hold the road bits (2 bits per corner).
+        const pcode =
+          ((pcodes[0] & 0x1F) << 15) |
+          ((pcodes[1] & 0x1F) << 10) |
+          ((pcodes[2] & 0x1F) << 5) |
+          (pcodes[3] & 0x1F) |
+          ((roadBits & 0xFF) << 20);
+
+        // GetTerrain: find the first pair of equal corners. That
+        // corner is the primary; the others become overlays whose
+        // tcodes describe their corner-pattern.
+        const tcodes = [0, 0, 0];
+        const overlays = [];  // [{type, alphaIdx, rotation, kind}]
+        let primary = pcodes[0];
+
+        let foundPair = -1;
+        outer: for (let i = 0; i < 4; i++) {
+          for (let j = i + 1; j < 4; j++) {
+            if (pcodes[i] === pcodes[j]) {
+              foundPair = i;
+              break outer;
+            }
+          }
+        }
+
+        if (foundPair >= 0) {
+          // BuildTCodes: i = primary corner index. Walk other corners.
+          primary = pcodes[foundPair];
+          let t2type = 0, slot = 0;
+          for (let k = 0; k < 4; k++) {
+            if (pcodes[k] === primary) continue;
+            if (tcodes[0] === 0) {
+              tcodes[0] = 1 << k;
+              t2type = pcodes[k];
+              overlays.push({ _slot: 0, type: t2type });
+            } else {
+              if (t2type === pcodes[k] && tcodes[0] === (1 << (k - 1))) {
+                tcodes[0] += 1 << k;  // merge into edge
+              } else {
+                overlays.push({ _slot: 1, type: pcodes[k] });
+                tcodes[1] = 1 << k;
+              }
+              break;
+            }
+          }
+        } else {
+          // All 4 different — tcodes are [2, 4, 8] per the cascade
+          // in TexMerge::GetTerrain:190-193.
+          primary = pcodes[0];
+          tcodes[0] = 2;
+          tcodes[1] = 4;
+          tcodes[2] = 8;
+          overlays.push({ _slot: 0, type: pcodes[1] });
+          overlays.push({ _slot: 1, type: pcodes[2] });
+          overlays.push({ _slot: 2, type: pcodes[3] });
+        }
+
+        // For each overlay, find the alpha mask + rotation that
+        // matches its tcode.
+        const overlayPlans = [];
+        for (let i = 0; i < overlays.length; i++) {
+          const tcode = tcodes[overlays[i]._slot];
+          if (!tcode) continue;
+          const isCorner = tcode === 1 || tcode === 2 || tcode === 4 || tcode === 8;
+          const list = isCorner ? RETAIL_CORNER_INFO : RETAIL_SIDE_INFO;
+          const baseIdx = isCorner ? ALPHA_CORNER_BASE_IDX : ALPHA_SIDE_BASE_IDX;
+          const prng = texMergePrng(pcode, list.length);
+          const baseCode = list[prng].code;
+          const rotation = findRotation(baseCode, tcode);
+          if (rotation < 0) continue;  // would be a renderer bug
+          overlayPlans.push({
+            type: overlays[i].type,
+            alphaIdx: baseIdx + prng,
+            rotation,
+          });
+        }
+
+        // GetRoadCode + FindRoadAlpha: same algorithm for roads.
+        // pcode road bits: bits [26..27] = corner 0 (NW), [24..25] = NE,
+        // [22..23] = SE, [20..21] = SW. Build a 4-bit mask with one
+        // bit per corner that has any road.
+        let mask = 0;
+        if ((pcode & 0xC000000) !== 0) mask |= 1;   // NW
+        if ((pcode & 0x3000000) !== 0) mask |= 2;   // NE
+        if ((pcode & 0xC00000) !== 0) mask |= 4;    // SE
+        if ((pcode & 0x300000) !== 0) mask |= 8;    // SW
+
+        const roadCodes = [0, 0];
+        let allRoad = false;
+        switch (mask) {
+          case 0xF: allRoad = true; break;
+          case 0xE: roadCodes[0] = 6;  roadCodes[1] = 12; break;
+          case 0xD: roadCodes[0] = 9;  roadCodes[1] = 12; break;
+          case 0xB: roadCodes[0] = 9;  roadCodes[1] = 3;  break;
+          case 0x7: roadCodes[0] = 3;  roadCodes[1] = 6;  break;
+          case 0x0: break;
+          default:  roadCodes[0] = mask; break;
+        }
+
+        const roadPlans = [];
+        if (!allRoad) {
+          for (let i = 0; i < 2; i++) {
+            const rcode = roadCodes[i];
+            if (!rcode) break;
+            // FindRoadAlpha: walks RoadMaps starting at PRNG offset,
+            // returns first whose RCode rotates 0..3 to match.
+            const numRoads = RETAIL_ROAD_INFO.length;
+            const prng = texMergePrng(pcode, numRoads);
+            for (let j = 0; j < numRoads; j++) {
+              const idx = (j + prng) % numRoads;
+              const baseCode = RETAIL_ROAD_INFO[idx].code;
+              const rotation = findRotation(baseCode, rcode);
+              if (rotation >= 0) {
+                roadPlans.push({
+                  alphaIdx: ALPHA_ROAD_BASE_IDX + idx,
+                  rotation,
+                });
+                break;
+              }
+            }
+          }
+        }
+
+        return { primary, allRoad, overlays: overlayPlans, roads: roadPlans };
+      }
+
+      // The corner / side / road tables are tiny — keep them in JS so
+      // the palette decoder doesn't round-trip through wasm. Order +
+      // codes mirror the RETAIL_*_TERRAIN_MASKS / RETAIL_ROAD_MASKS
+      // constants in `apps/holtburger-web/src/lib.rs`.
+      const RETAIL_CORNER_INFO = [
+        { code: 8, gid: 0x05001371 },
+        { code: 8, gid: 0x0500143E },
+        { code: 8, gid: 0x0500143F },
+        { code: 8, gid: 0x05001440 },
+      ];
+      const RETAIL_SIDE_INFO = [
+        { code: 9, gid: 0x05001441 },
+      ];
+      const RETAIL_ROAD_INFO = [
+        { code: 9,  gid: 0x0500168E },
+        { code: 10, gid: 0x0500168C },
+        { code: 8,  gid: 0x0500168D },
+      ];
+
+      // Build the 6 per-LB 8×8 RGBA8 cell-data textures. Each cell
+      // contributes one texel per texture; the fragment shader reads
+      // them via `texelFetch(uCell*, ivec2(cx, cy), 0)` once per
+      // fragment.
+      function buildCellDataTextures(terrainCodes, roadCodes) {
+        // Allocate the 6 RGBA8 buffers up front; we'll fill cell-by-cell.
+        const cellBase = new Uint8ClampedArray(8 * 8 * 4);
+        const cellOverlay = [
+          new Uint8ClampedArray(8 * 8 * 4),
+          new Uint8ClampedArray(8 * 8 * 4),
+          new Uint8ClampedArray(8 * 8 * 4),
+        ];
+        const cellRoad = [
+          new Uint8ClampedArray(8 * 8 * 4),
+          new Uint8ClampedArray(8 * 8 * 4),
+        ];
+
+        // The 9×9 vertex grid has rows indexed bottom-to-top.
+        // Cell (cx, cy) has corners:
+        //   SW = (cx, cy)         → terrainCodes index = cy * 9 + cx
+        //   SE = (cx+1, cy)
+        //   NW = (cx, cy+1)
+        //   NE = (cx+1, cy+1)
+        // Pcode order is NW, NE, SE, SW.
+        for (let cy = 0; cy < 8; cy++) {
+          for (let cx = 0; cx < 8; cx++) {
+            const swIdx = cy * 9 + cx;
+            const seIdx = cy * 9 + (cx + 1);
+            const nwIdx = (cy + 1) * 9 + cx;
+            const neIdx = (cy + 1) * 9 + (cx + 1);
+            const tNW = terrainCodes[nwIdx];
+            const tNE = terrainCodes[neIdx];
+            const tSE = terrainCodes[seIdx];
+            const tSW = terrainCodes[swIdx];
+            // Pack the 4 corner road bits into the same 8-bit slot
+            // TexMerge expects (2 bits per corner; non-zero = road).
+            const rNW = (roadCodes[nwIdx] & 0x3) << 6;
+            const rNE = (roadCodes[neIdx] & 0x3) << 4;
+            const rSE = (roadCodes[seIdx] & 0x3) << 2;
+            const rSW = (roadCodes[swIdx] & 0x3) << 0;
+            const roadBits = rNW | rNE | rSE | rSW;
+
+            const plan = decodeCellPalette(tNW, tNE, tSE, tSW, roadBits);
+
+            const cellIdx = cy * 8 + cx;
+            const px = cellIdx * 4;
+            // Sentinel `primary = 255` encodes "all road" (terrain
+            // codes only go up to 32 in retail). This frees up the
+            // alpha channel to stay 255 always — canvas → PIXI texture
+            // upload premultiplies alpha, so any A=0 byte zeroes
+            // its RGB and the shader reads (0, 0, 0) for that cell.
+            cellBase[px + 0] = plan.allRoad ? 255 : (plan.primary & 0xFF);
+            cellBase[px + 1] = plan.overlays.length;
+            cellBase[px + 2] = plan.roads.length;
+            cellBase[px + 3] = 255;
+
+            for (let i = 0; i < 3; i++) {
+              const dst = cellOverlay[i];
+              if (i < plan.overlays.length) {
+                const o = plan.overlays[i];
+                dst[px + 0] = o.type;
+                dst[px + 1] = o.alphaIdx;
+                dst[px + 2] = o.rotation;
+              } else {
+                dst[px + 0] = 0;
+                dst[px + 1] = 0;
+                dst[px + 2] = 0;
+              }
+              dst[px + 3] = 255;  // always — see cellBase alpha note
+            }
+            for (let i = 0; i < 2; i++) {
+              const dst = cellRoad[i];
+              if (i < plan.roads.length) {
+                const r = plan.roads[i];
+                dst[px + 0] = r.alphaIdx;
+                dst[px + 1] = r.rotation;
+                dst[px + 2] = 0;
+              } else {
+                dst[px + 0] = 0;
+                dst[px + 1] = 0;
+                dst[px + 2] = 0;
+              }
+              dst[px + 3] = 255;
+            }
+          }
+        }
+
+        return {
+          cellBase: makeR8DataTexture(cellBase, 8, 8),
+          cellOverlay0: makeR8DataTexture(cellOverlay[0], 8, 8),
+          cellOverlay1: makeR8DataTexture(cellOverlay[1], 8, 8),
+          cellOverlay2: makeR8DataTexture(cellOverlay[2], 8, 8),
+          cellRoad0: makeR8DataTexture(cellRoad[0], 8, 8),
+          cellRoad1: makeR8DataTexture(cellRoad[1], 8, 8),
+        };
+      }
+
+      // Helper — wrap a Uint8ClampedArray of RGBA8 bytes into a small
+      // PIXI.Texture. Use `nearest` filtering: cell-data values are
+      // discrete bytes the shader integer-decodes via texelFetch, so
+      // any interpolation would corrupt them.
+      function makeR8DataTexture(bytes, w, h) {
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.putImageData(new ImageData(bytes, w, h), 0, 0);
+        const tex = PIXI.Texture.from(canvas);
+        if (tex.source) {
+          tex.source.scaleMode = "nearest";
+          tex.source.autoGenerateMipmaps = false;
+        }
+        return tex;
+      }
+
       // Custom Mesh shader for the per-cell atlas sample. GLSL ES 3.00
       // (WebGL2). Uniforms mirror PixiJS 8's WebGL mesh shader template
       // (local-uniform-bit + global-uniforms-bit in the bundle source)
@@ -509,25 +930,20 @@ uniform vec4 uColor;
 uniform float uRound;
 
 in vec2 aPosition;
-in float aTerrainCode;
-in float aRoadCode;
 
-flat out int vTerrainCode;
-flat out int vRoadCode;
-out vec2 vCellUv;
+out vec2 vGridUv;
 out vec4 vColor;
 
 void main() {
     mat3 mvp = uProjectionMatrix * uWorldTransformMatrix * uTransformMatrix;
     vec2 pos = (mvp * vec3(aPosition, 1.0)).xy;
     gl_Position = vec4(pos, 0.0, 1.0);
-    vTerrainCode = int(aTerrainCode + 0.5);
-    vRoadCode = int(aRoadCode + 0.5);
-    // Cell-local UV: world position divided by cell size (24 m). Each
-    // cell maps [0, 1] across its 24×24 face; fragments interpolate
-    // continuously across cell boundaries. fract() in the fragment
-    // shader recovers [0, 1] tile-local UV.
-    vCellUv = aPosition / 24.0;
+    // Per-vertex grid coordinate in [0, 8] across the 192 m landblock
+    // (8 cells × 24 m each). Fragment splits into integer cell index
+    // + intra-cell UV, looks up the cell's render program from the
+    // 6 cell-data textures, samples primary + overlays + roads with
+    // alpha-mask compositing — see TERRAIN_FRAGMENT_GLSL.
+    vGridUv = aPosition / 24.0;
     vColor = uColor * uWorldColorAlpha;
 }
 `;
@@ -536,63 +952,181 @@ void main() {
 precision highp float;
 precision highp int;
 
-uniform sampler2D uAtlas;
-uniform vec2 uAtlasGridSize; // (cols, rows) of the atlas grid
+uniform sampler2D uAtlas;            // 6×6 grid of 256×256 retail terrain tiles
+uniform vec2 uAtlasGridSize;          // (cols, rows) — typically (6, 6)
+uniform sampler2D uAlphaAtlas;        // 4×2 grid of 256×256 alpha masks
+uniform vec2 uAlphaAtlasGridSize;     // (4, 2)
+uniform sampler2D uCellBase;          // 8×8 RGBA8: R=primary, G=overlayCount, B=roadCount, A=allRoad
+uniform sampler2D uCellOverlay0;      // 8×8 RGBA8: R=type, G=alphaIdx, B=rotation, A=valid
+uniform sampler2D uCellOverlay1;
+uniform sampler2D uCellOverlay2;
+uniform sampler2D uCellRoad0;         // 8×8 RGBA8: R=alphaIdx, G=rotation, B=0, A=valid
+uniform sampler2D uCellRoad1;
 
-flat in int vTerrainCode;
-flat in int vRoadCode;
-in vec2 vCellUv;
+in vec2 vGridUv;
 in vec4 vColor;
 
 out vec4 fragColor;
 
-vec2 atlasUvFor(int code) {
+// Map terrain code (0..32) → atlas UV at the given cell-local UV.
+// The retail terrain atlas is a 6×6 grid; tile index = code.
+vec2 atlasUvFor(int code, vec2 cellUv) {
     int cols = int(uAtlasGridSize.x);
     int col = code - (code / cols) * cols;
     int row = code / cols;
     vec2 origin = vec2(float(col), float(row)) / uAtlasGridSize;
     vec2 size = vec2(1.0) / uAtlasGridSize;
-    return origin + size * fract(vCellUv);
+    return origin + size * cellUv;
+}
+
+// Map alpha mask atlas index (0..7) → atlas UV at given cell-local UV.
+vec2 alphaUvFor(int idx, vec2 cellUv) {
+    int cols = int(uAlphaAtlasGridSize.x);
+    int col = idx - (idx / cols) * cols;
+    int row = idx / cols;
+    vec2 origin = vec2(float(col), float(row)) / uAlphaAtlasGridSize;
+    vec2 size = vec2(1.0) / uAlphaAtlasGridSize;
+    return origin + size * cellUv;
+}
+
+// Apply a 90° rotation to a [0..1] cell UV. Rotation 0 = no rotate;
+// 1 = 90° CW; 2 = 180°; 3 = 270° CW. Matches the rotation that
+// TexMerge::FindTerrainAlpha applies — bumping the alpha mask's
+// TCode by ×2 mod 15 each time, which corresponds to a 90° turn of
+// the alpha pattern in the cell.
+vec2 rotateCellUv(vec2 uv, int rotation) {
+    int r = rotation - (rotation / 4) * 4;  // wrap 0..3
+    if (r == 0) return uv;
+    if (r == 1) return vec2(uv.y, 1.0 - uv.x);
+    if (r == 2) return vec2(1.0 - uv.x, 1.0 - uv.y);
+    return vec2(1.0 - uv.y, uv.x);
 }
 
 void main() {
-    // Terrain layer: SW-corner terrain code → atlas region.
-    // Clamp to [0, 32] (32 = RoadType, kept reachable for the road
-    // overlay below).
-    int tCode = clamp(vTerrainCode, 0, 32);
-    vec4 terrainSample = texture(uAtlas, atlasUvFor(tCode));
+    // vGridUv is [0, 8] across the LB; integer part = cell, fractional
+    // part = intra-cell UV.
+    vec2 grid = vGridUv;
+    ivec2 cellIdx = ivec2(grid);
+    cellIdx = clamp(cellIdx, ivec2(0), ivec2(7));
+    vec2 cellUv = fract(grid);
 
-    // Road overlay: if the cell's SW corner has road_type >= 1, sample
-    // the RoadType atlas tile (code 32 in retail Dereth) and overlay.
-    // mix(...) at 0.85 keeps a hint of the underlying terrain so dirt
-    // roads through grass read warmer than stone roads through snow.
-    float roadMask = step(1.0, float(vRoadCode));
-    vec4 roadSample = texture(uAtlas, atlasUvFor(32));
-    vec3 base = mix(terrainSample.rgb, roadSample.rgb, roadMask * 0.85);
+    // Cell base: primary terrain type + per-cell counts.
+    // 'allRoad' is encoded as 'primary == 255' (sentinel — terrain
+    // codes only go up to 32). Alpha channel is always 255 so the
+    // canvas-upload alpha-premultiply does not zero the RGB bytes.
+    vec4 baseCell = texelFetch(uCellBase, cellIdx, 0);
+    int primary = int(baseCell.r * 255.0 + 0.5);
+    int overlayCount = int(baseCell.g * 255.0 + 0.5);
+    int roadCount = int(baseCell.b * 255.0 + 0.5);
+    bool allRoad = primary == 255;
 
-    fragColor = vec4(base, terrainSample.a) * vColor;
+    // Sample the primary terrain tile. If the cell is "all road",
+    // promote the road tile (code 32) to be the base.
+    vec3 result;
+    if (allRoad) {
+        result = texture(uAtlas, atlasUvFor(32, cellUv)).rgb;
+    } else {
+        int p = clamp(primary, 0, 32);
+        result = texture(uAtlas, atlasUvFor(p, cellUv)).rgb;
+    }
+
+    // Sequential overlay blend: each overlay reads its alpha mask
+    // (rotated to match its corner pattern), samples the overlay
+    // terrain tile, and mixes in by alpha weight. Up to 3 overlays
+    // per cell.
+    if (!allRoad && overlayCount >= 1) {
+        vec4 ov = texelFetch(uCellOverlay0, cellIdx, 0);
+        int type = int(ov.r * 255.0 + 0.5);
+        int alphaIdx = int(ov.g * 255.0 + 0.5);
+        int rotation = int(ov.b * 255.0 + 0.5);
+        vec2 rotUv = rotateCellUv(cellUv, rotation);
+        float alpha = texture(uAlphaAtlas, alphaUvFor(alphaIdx, rotUv)).r;
+        vec3 overlayColor = texture(uAtlas, atlasUvFor(clamp(type, 0, 32), cellUv)).rgb;
+        result = mix(result, overlayColor, alpha);
+    }
+    if (!allRoad && overlayCount >= 2) {
+        vec4 ov = texelFetch(uCellOverlay1, cellIdx, 0);
+        int type = int(ov.r * 255.0 + 0.5);
+        int alphaIdx = int(ov.g * 255.0 + 0.5);
+        int rotation = int(ov.b * 255.0 + 0.5);
+        vec2 rotUv = rotateCellUv(cellUv, rotation);
+        float alpha = texture(uAlphaAtlas, alphaUvFor(alphaIdx, rotUv)).r;
+        vec3 overlayColor = texture(uAtlas, atlasUvFor(clamp(type, 0, 32), cellUv)).rgb;
+        result = mix(result, overlayColor, alpha);
+    }
+    if (!allRoad && overlayCount >= 3) {
+        vec4 ov = texelFetch(uCellOverlay2, cellIdx, 0);
+        int type = int(ov.r * 255.0 + 0.5);
+        int alphaIdx = int(ov.g * 255.0 + 0.5);
+        int rotation = int(ov.b * 255.0 + 0.5);
+        vec2 rotUv = rotateCellUv(cellUv, rotation);
+        float alpha = texture(uAlphaAtlas, alphaUvFor(alphaIdx, rotUv)).r;
+        vec3 overlayColor = texture(uAtlas, atlasUvFor(clamp(type, 0, 32), cellUv)).rgb;
+        result = mix(result, overlayColor, alpha);
+    }
+
+    // Roads: same algorithm but always overlays the RoadType tile
+    // (terrain index 32). Up to 2 roads per cell.
+    if (!allRoad && roadCount >= 1) {
+        vec4 rd = texelFetch(uCellRoad0, cellIdx, 0);
+        int alphaIdx = int(rd.r * 255.0 + 0.5);
+        int rotation = int(rd.g * 255.0 + 0.5);
+        vec2 rotUv = rotateCellUv(cellUv, rotation);
+        float alpha = texture(uAlphaAtlas, alphaUvFor(alphaIdx, rotUv)).r;
+        vec3 roadColor = texture(uAtlas, atlasUvFor(32, cellUv)).rgb;
+        result = mix(result, roadColor, alpha);
+    }
+    if (!allRoad && roadCount >= 2) {
+        vec4 rd = texelFetch(uCellRoad1, cellIdx, 0);
+        int alphaIdx = int(rd.r * 255.0 + 0.5);
+        int rotation = int(rd.g * 255.0 + 0.5);
+        vec2 rotUv = rotateCellUv(cellUv, rotation);
+        float alpha = texture(uAlphaAtlas, alphaUvFor(alphaIdx, rotUv)).r;
+        vec3 roadColor = texture(uAtlas, atlasUvFor(32, cellUv)).rgb;
+        result = mix(result, roadColor, alpha);
+    }
+
+    fragColor = vec4(result, 1.0) * vColor;
 }
 `;
 
-      function buildTerrainShader(atlasTexture) {
-        const glProgram = PIXI.GlProgram.from({
-          vertex: TERRAIN_VERTEX_GLSL,
-          fragment: TERRAIN_FRAGMENT_GLSL,
-          name: "terrain-atlas-step3.5",
-        });
+      // Per-LB shader instance — each landblock gets its own
+      // `PIXI.Shader` (sharing the GlProgram across instances) so it
+      // can bind its own per-cell data textures. The atlas + alpha
+      // atlas are shared across all 9 LBs.
+      let _sharedTerrainGlProgram = null;
+      function buildTerrainShader(atlasTexture, alphaAtlasTexture, cellTextures) {
+        if (_sharedTerrainGlProgram === null) {
+          _sharedTerrainGlProgram = PIXI.GlProgram.from({
+            vertex: TERRAIN_VERTEX_GLSL,
+            fragment: TERRAIN_FRAGMENT_GLSL,
+            name: "terrain-tex-merge-step3.6",
+          });
+        }
         // The MeshPipe sets `shader.groups[100]` and `[101]` to its own
         // global / local UniformGroups every frame; PixiJS's
         // GlShaderSystem binds the individual `uTransformMatrix` /
         // `uColor` / `uRound` / matrix uniforms by name from those
-        // groups. The atlas texture and atlas-grid-size uniform live
-        // on the user shader.
+        // groups. Atlas + alpha atlas + cell-data textures + grid-size
+        // uniforms live on the user shader.
         return new PIXI.Shader({
-          glProgram,
+          glProgram: _sharedTerrainGlProgram,
           resources: {
             uAtlas: atlasTexture.source,
+            uAlphaAtlas: alphaAtlasTexture.source,
+            uCellBase: cellTextures.cellBase.source,
+            uCellOverlay0: cellTextures.cellOverlay0.source,
+            uCellOverlay1: cellTextures.cellOverlay1.source,
+            uCellOverlay2: cellTextures.cellOverlay2.source,
+            uCellRoad0: cellTextures.cellRoad0.source,
+            uCellRoad1: cellTextures.cellRoad1.source,
             terrainUniforms: {
               uAtlasGridSize: {
                 value: new Float32Array([ATLAS_COLS, ATLAS_ROWS]),
+                type: "vec2<f32>",
+              },
+              uAlphaAtlasGridSize: {
+                value: new Float32Array([ALPHA_ATLAS_COLS, ALPHA_ATLAS_ROWS]),
                 type: "vec2<f32>",
               },
             },
@@ -1055,13 +1589,12 @@ void main() {
         return { container, withLive, withSprite, fallback, invisible };
       }
 
-      function buildLandblockChildren(mesh, terrainShader) {
-        // Build the per-landblock mesh + wireframe pair. Heights are
-        // *not* used for shading any more (step 3); the colour comes
-        // from the per-vertex terrain code via the custom shader.
-        // Step 5 adds road codes alongside terrain codes for the road
-        // overlay. Aggregate min/max is still computed by the caller
-        // for the stage-info readout.
+      function buildLandblockChildren(mesh, atlasTexture, alphaAtlasTexture) {
+        // Build the per-landblock mesh + wireframe pair. Step 3.6 moves
+        // terrain shading from per-vertex flat (the old aTerrainCode
+        // attribute) to per-cell render programs decoded from the
+        // 4-corner palette code; the shader composites them with
+        // alpha-mask overlays for the authentic AC look.
         //
         // Snapshot positions/indices/terrainCodes/roadCodes once — each
         // getter is a wasm-bindgen call that allocates a fresh typed
@@ -1070,16 +1603,17 @@ void main() {
         const terrainCodes = mesh.terrainCodes;
         const roadCodes = mesh.roadCodes;
         const positions2D = new Float32Array(81 * 2);
-        // The shader reads codes as floats; pack the u8 codes into
-        // Float32Arrays for the GPU buffers.
-        const terrainFloats = new Float32Array(81);
-        const roadFloats = new Float32Array(81);
         for (let i = 0; i < 81; i += 1) {
           positions2D[i * 2] = positions3D[i * 3];
           positions2D[i * 2 + 1] = positions3D[i * 3 + 1];
-          terrainFloats[i] = terrainCodes[i];
-          roadFloats[i] = roadCodes[i];
         }
+
+        // Per-LB cell-data textures + shader. The 6 8×8 RGBA8 textures
+        // hold this LB's 64 cells' render programs (primary + up to
+        // 3 overlays + up to 2 roads, with PRNG-selected alpha mask
+        // indices and rotation counts pre-baked).
+        const cellTextures = buildCellDataTextures(terrainCodes, roadCodes);
+        const terrainShader = buildTerrainShader(atlasTexture, alphaAtlasTexture, cellTextures);
 
         const indicesU32 = Uint32Array.from(mesh.indices);
         const geometry = new PIXI.Geometry({
@@ -1087,14 +1621,6 @@ void main() {
             aPosition: {
               buffer: positions2D,
               format: "float32x2",
-            },
-            aTerrainCode: {
-              buffer: terrainFloats,
-              format: "float32",
-            },
-            aRoadCode: {
-              buffer: roadFloats,
-              format: "float32",
             },
           },
           indexBuffer: indicesU32,
@@ -1121,7 +1647,7 @@ void main() {
         return [pixiMesh, wire];
       }
 
-      function addLandblockToScene(parentContainer, mesh, lbX, lbY, terrainShader) {
+      function addLandblockToScene(parentContainer, mesh, lbX, lbY, atlasTexture, alphaAtlasTexture) {
         const lbContainer = new PIXI.Container();
         // Landblock (XX, YY) occupies the world-metre square
         // [XX*192, (XX+1)*192] × [YY*192, (YY+1)*192].
@@ -1129,7 +1655,7 @@ void main() {
           lbX * METERS_PER_LANDBLOCK,
           lbY * METERS_PER_LANDBLOCK
         );
-        const children = buildLandblockChildren(mesh, terrainShader);
+        const children = buildLandblockChildren(mesh, atlasTexture, alphaAtlasTexture);
         for (const child of children) lbContainer.addChild(child);
         parentContainer.addChild(lbContainer);
         return lbContainer;
@@ -1155,10 +1681,17 @@ void main() {
         // `buildTerrainAtlas` fetches all 33 retail terrain textures
         // via the wasm export, downscales each 512×512 → 256×256, and
         // packs them into a single 1536×1536 RGBA atlas (~9 MB GPU).
-        // Shared across all 9 landblocks: one texture upload, one
-        // shader compile, 9 draw calls.
-        const atlasTexture = await buildTerrainAtlas();
-        const terrainShader = buildTerrainShader(atlasTexture);
+        // Step 3.6: also fetch the 8 retail alpha masks (corner +
+        // side + road) into a 1024×512 RGBA8 atlas. The terrain shader
+        // composites overlays on top of the primary terrain via
+        // `mix(base, overlay, alpha_mask.r / 255)` — the authentic AC
+        // terrain look. Both atlases are shared across all 9 LBs;
+        // each LB still builds its own per-cell render program (the
+        // 6 small 8×8 cell-data textures) inside `buildLandblockChildren`.
+        const [atlasTexture, alphaAtlasTexture] = await Promise.all([
+          buildTerrainAtlas(),
+          buildAlphaAtlas(),
+        ]);
 
         // Scene graph:
         //   stage
@@ -1181,7 +1714,8 @@ void main() {
             meshes[i],
             n.x,
             n.y,
-            terrainShader
+            atlasTexture,
+            alphaAtlasTexture
           );
         }
 
