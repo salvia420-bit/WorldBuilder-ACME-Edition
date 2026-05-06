@@ -55,6 +55,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+pub mod catalog;
 pub mod v2;
 
 /// The manifest schema version this crate produces and parses. Phase
