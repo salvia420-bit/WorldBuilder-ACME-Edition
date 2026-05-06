@@ -273,6 +273,20 @@ check(
     `typeof ${typeof wasm.EntityUpdate}`
 );
 
+// Phase 4 step 3: SessionHandle.setMovementInput(forward, strafe,
+// turn, run) takes a tristate-axis keystate snapshot and forwards
+// it to the recv loop, which builds a `GameAction::MoveToState`
+// packet and sends it via the session. JS calls this on every
+// change to the WASD/Q/E/Shift keystate, not on every animation
+// frame — matching `PlayerDriveIntent::ManualHeld` semantics. Live
+// coverage requires a real ACE backend (server simulates motion
+// based on the packet); here we only verify the export exists.
+check(
+    "SessionHandle.setMovementInput() exposed (Phase 4 step 3 movement input)",
+    typeof sessionHandleProto?.setMovementInput === "function",
+    `setMovementInput=${typeof sessionHandleProto?.setMovementInput}`
+);
+
 
 (async () => {
     // Phase 5.0b — pre-bake a manifest+shards+boot tree from the
