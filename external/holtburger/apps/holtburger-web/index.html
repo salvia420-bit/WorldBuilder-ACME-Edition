@@ -991,30 +991,42 @@ void main() {
       async function buildLiveSpriteMap(app, objects) {
         const uniqueIds = [...new Set(objects.map((o) => o.modelId))];
         if (uniqueIds.length === 0) return { liveMap: new Map(), invisible: new Set() };
-        // One round-trip: all meshes.
-        const meshes = await fetch_model_meshes(new Uint32Array(uniqueIds));
+        const liveMap = new Map();
+        const invisible = new Set();
+        await addModelsToLiveSpriteMap(app, uniqueIds, liveMap, invisible);
+        return { liveMap, invisible };
+      }
 
-        // Collect every distinct surface DID across all meshes for one
-        // batched fetch. JS dedupes; Rust just returns one entry per
+      // Phase 4 step 2b follow-on: shared helper that fetches a list
+      // of model IDs through the same `fetch_model_meshes` +
+      // `fetch_surfaces_pixels` + `renderModelTile` pipeline as the
+      // initial bulk Holtburg load (Phase 3 step 6), and appends to
+      // an existing liveMap + invisible set. Used both for the
+      // initial neighbourhood load and for on-demand entity model
+      // fetches when ACE streams in an NPC / creature whose csetup_id
+      // wasn't in the static placement set.
+      async function addModelsToLiveSpriteMap(app, modelIds, liveMap, invisible) {
+        if (modelIds.length === 0) return;
+        const meshes = await fetch_model_meshes(new Uint32Array(modelIds));
+
+        // Collect every distinct surface DID across all meshes for
+        // one batched fetch. JS dedupes; Rust returns one entry per
         // input id.
         const allSurfaces = new Set();
         for (const m of meshes) {
-          const sList = m.surfaces;
-          for (const sid of sList) allSurfaces.add(sid);
+          for (const sid of m.surfaces) allSurfaces.add(sid);
         }
         const surfaceList = [...allSurfaces];
-        const surfacePixels = await fetch_surfaces_pixels(
-          new Uint32Array(surfaceList)
-        );
+        const surfacePixels = surfaceList.length > 0
+          ? await fetch_surfaces_pixels(new Uint32Array(surfaceList))
+          : [];
         const surfaceTexBySid = new Map();
         for (let i = 0; i < surfaceList.length; i += 1) {
           surfaceTexBySid.set(surfaceList[i], surfacePixelsToTexture(surfacePixels[i]));
         }
 
-        const liveMap = new Map();
-        const invisible = new Set();
-        for (let i = 0; i < uniqueIds.length; i += 1) {
-          const id = uniqueIds[i];
+        for (let i = 0; i < modelIds.length; i += 1) {
+          const id = modelIds[i];
           const mesh = meshes[i];
           if (mesh.triCount === 0) {
             // 0 triangles after the polygon walk = engine-internal
@@ -1040,7 +1052,6 @@ void main() {
           mesh.free();
         }
         for (const sp of surfacePixels) sp.free();
-        return { liveMap, invisible };
       }
 
       // ----- Phase 3 step 4 / 4.5 / 6: object sprite container ----
@@ -1365,11 +1376,13 @@ void main() {
         const entityContainer = new PIXI.Container();
         worldContainer.addChild(entityContainer);
         liveScene = {
+            app,
             cameraContainer,
             worldContainer,
             entityContainer,
             liveSpriteMap,
             spriteMap,
+            invisibleModels,
         };
         // Expose for capture-script telemetry (Phase 4 step 2b
         // capture probes `window.liveScene.entityContainer.children.length`).
@@ -1496,6 +1509,81 @@ void main() {
       // (which always pass modelId=0 because the wire message doesn't
       // carry it) keep the existing real sprite — that's the
       // `entry.modelId === 0 && modelId !== 0` swap condition.
+      // In-flight on-demand model fetches. Keyed by modelId; value is
+      // the Promise resolving to { texture, worldBounds } | null
+      // (null = invisible model). Multiple entities arriving with
+      // the same csetup_id share the same fetch.
+      const pendingModelFetches = new Map();
+
+      // Phase 4 step 2b follow-on: lazily fetch + cache an entity's
+      // model the first time we see its csetup_id. ACE streams in
+      // creature / NPC models that aren't in the static placement
+      // set, so the initial `buildLiveSpriteMap` cache (built from
+      // Holtburg's 81 unique placement model IDs) misses on every
+      // monster spawn. This fetches the missing model through the
+      // exact same `fetch_model_meshes` + `fetch_surfaces_pixels` +
+      // `renderModelTile` pipeline and writes the result back into
+      // `liveScene.liveSpriteMap` / `invisibleModels` so subsequent
+      // spawns of the same model are instant. Already-pending IDs
+      // de-dupe through `pendingModelFetches`.
+      function fetchEntityModelOnDemand(modelId) {
+        if (!liveScene) return Promise.resolve(null);
+        // Already cached: synchronous resolve (caller doesn't wait).
+        const cached = liveScene.liveSpriteMap?.get(modelId);
+        if (cached) return Promise.resolve(cached);
+        if (liveScene.invisibleModels?.has(modelId)) return Promise.resolve(null);
+        // In flight: piggyback the existing Promise.
+        if (pendingModelFetches.has(modelId)) return pendingModelFetches.get(modelId);
+        // Kick off a fresh fetch.
+        const app = liveScene.app;
+        if (!app) return Promise.resolve(null);
+        const liveMap = liveScene.liveSpriteMap;
+        const invisibleSet = liveScene.invisibleModels;
+        const promise = (async () => {
+          try {
+            await addModelsToLiveSpriteMap(app, [modelId], liveMap, invisibleSet);
+            return liveMap.get(modelId) ?? null;
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(`[entity-model-fetch] modelId=0x${modelId.toString(16)} failed:`, err);
+            return null;
+          } finally {
+            pendingModelFetches.delete(modelId);
+          }
+        })();
+        pendingModelFetches.set(modelId, promise);
+        return promise;
+      }
+
+      // Replace the placeholder dot in `entry` with a real model
+      // sprite once the on-demand fetch completes. Driven by
+      // `entry.pendingFetchModelId` rather than `entry.modelId === 0`
+      // so it doesn't collide with the pre-ObjectCreate placeholder
+      // path the recv loop's PrivateUpdatePosition arm uses.
+      function upgradeEntitySprite(guid, modelId, renderEntry) {
+        if (!liveScene) return;
+        const entry = entityMap.get(guid);
+        if (!entry) return;  // entity already removed
+        if (entry.pendingFetchModelId !== modelId) return;  // newer fetch superseded this one
+        entry.pendingFetchModelId = null;
+        if (!renderEntry) return;  // fetch failed; keep placeholder
+        // Preserve world position + rotation from the placeholder.
+        const { x, y, rotation } = entry.sprite;
+        entry.sprite.destroy();
+        const sprite = new PIXI.Sprite(renderEntry.texture);
+        sprite.anchor.set(0.5, 0.5);
+        sprite.position.set(x, y);
+        sprite.rotation = rotation;
+        if (renderEntry.worldBounds) {
+          sprite.width = renderEntry.worldBounds[0];
+          sprite.height = renderEntry.worldBounds[1];
+        }
+        liveScene.entityContainer.addChild(sprite);
+        entry.sprite = sprite;
+        entry.modelId = modelId;
+        entry.kind = "sprite";
+      }
+
       function ensureEntitySprite(guid, modelId) {
         if (!liveScene) return null;
         let entry = entityMap.get(guid);
@@ -1511,25 +1599,47 @@ void main() {
         }
         // Look up the model in the live render cache (Phase 3 step 6;
         // populated by buildLiveSpriteMap during renderNeighbourhood)
-        // first, then fall back to the static atlas, then to a small
-        // coloured dot. Models the cache doesn't know about render as
-        // dots until the cache is rebuilt — for runtime entities this
-        // is the steady-state fallback (the cache is built from
-        // landblock placements; any newly-arriving modelId would need
-        // a live `fetch_model_meshes` round-trip to upgrade).
+        // first, then fall back to the static atlas. If neither has
+        // it, install a placeholder dot AND kick off an on-demand
+        // model fetch — when the fetch resolves, the placeholder is
+        // upgraded to a real textured sprite via `upgradeEntitySprite`.
         const renderEntry =
           liveScene.liveSpriteMap?.get(modelId) ??
           liveScene.spriteMap?.get(modelId);
         let sprite;
+        let kind;  // "sprite" | "placeholder" | "invisible"
         if (renderEntry) {
           sprite = new PIXI.Sprite(renderEntry.texture);
           sprite.anchor.set(0.5, 0.5);
+          if (renderEntry.worldBounds) {
+            sprite.width = renderEntry.worldBounds[0];
+            sprite.height = renderEntry.worldBounds[1];
+          }
+          kind = "sprite";
+        } else if (liveScene.invisibleModels?.has(modelId)) {
+          // Engine-internal anchor (e.g. light marker). Keep a tiny
+          // invisible Container so position updates still find a
+          // sprite to mutate, but render nothing visible.
+          sprite = new PIXI.Container();
+          kind = "invisible";
         } else {
           sprite = new PIXI.Graphics().circle(0, 0, 0.6).fill({ color: 0xff4488 });
+          kind = "placeholder";
         }
         liveScene.entityContainer.addChild(sprite);
-        entry = { sprite, modelId };
+        entry = { sprite, modelId, pendingFetchModelId: null, kind };
         entityMap.set(guid, entry);
+        // For cache-miss real-modelId arrivals, kick off an on-demand
+        // fetch. When it resolves, the placeholder dot is swapped
+        // for the real textured sprite via `upgradeEntitySprite`.
+        // Modelid=0 means "no model yet" (PrivateUpdatePosition
+        // before ObjectCreate); skip the fetch — the next
+        // ObjectCreate will retry with the real csetup_id.
+        if (!renderEntry && !liveScene.invisibleModels?.has(modelId) && modelId !== 0) {
+          entry.pendingFetchModelId = modelId;
+          fetchEntityModelOnDemand(modelId)
+            .then((re) => upgradeEntitySprite(guid, modelId, re));
+        }
         return entry;
       }
 

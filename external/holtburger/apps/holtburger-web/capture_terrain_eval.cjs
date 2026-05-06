@@ -23,7 +23,7 @@ const path = require("node:path");
     const page = await context.newPage();
     page.on("console", (msg) => {
         const text = msg.text();
-        if (text.includes("[step3-trace]") || text.includes("WebGL") || text.includes("ERROR")) {
+        if (text.includes("[step3-trace]") || text.includes("ERROR") || text.includes("entity-model-fetch") || text.includes("[step6]")) {
             console.log(`[browser ${msg.type()}] ${text}`);
         }
     });
@@ -55,11 +55,55 @@ const path = require("node:path");
         await page.waitForSelector("#post-spawn:not([hidden])", { timeout: 10000 });
         await page.click("#teleport-button");
         console.log("teleport click");
-        await page.waitForTimeout(8000);
+        // Longer wait: the on-demand entity model fetches kick off
+        // when each ObjectCreate arrives. Each fetch is one
+        // round-trip through fetch_model_meshes + fetch_surfaces_pixels
+        // through the manifest source — typically ~200ms each, but
+        // with N unique entity models in Holtburg we want them all
+        // resolved before snapshotting.
+        await page.waitForTimeout(15000);
     } catch (e) {
         console.warn("teleport block didn't unhide; capturing without teleport");
         await page.waitForTimeout(2000);
     }
+
+    // Probe how the rendered entities split between cache hits and
+    // on-demand fetches. Useful for diagnosing whether the symbol-vs-
+    // textured ratio changed across captures.
+    const breakdown = await page.evaluate(() => {
+        // Force-import PIXI so we can identity-check sprite types.
+        const out = {
+            total: 0,
+            sprites: 0,
+            graphics: 0,
+            containers: 0,
+            other: 0,
+            sample: [],
+            cacheSize: window.liveScene?.liveSpriteMap?.size ?? -1,
+            invisibleCacheSize: window.liveScene?.invisibleModels?.size ?? -1,
+            // Bonus introspection: any pending on-demand fetches?
+            pendingFetches: -1,
+        };
+        if (!window.entityMap) return out;
+        for (const [guid, entry] of window.entityMap.entries()) {
+            out.total += 1;
+            const k = entry.kind ?? "(unset)";
+            if (k === "sprite") out.sprites += 1;
+            else if (k === "placeholder") out.graphics += 1;
+            else if (k === "invisible") out.containers += 1;
+            else out.other += 1;
+            if (out.sample.length < 6) {
+                out.sample.push({
+                    guid: `0x${guid.toString(16)}`,
+                    modelId: `0x${(entry.modelId ?? 0).toString(16)}`,
+                    kind: k,
+                    pending: entry.pendingFetchModelId !== null && entry.pendingFetchModelId !== undefined,
+                });
+            }
+        }
+        return out;
+    });
+    console.log(`entity render breakdown: ${JSON.stringify(breakdown, null, 2)}`);
 
     // Skip the camera zoom — multiplied scaling pushes us off-world.
     // The default fit-grid frame already shows terrain at a useful
