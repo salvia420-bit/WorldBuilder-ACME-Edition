@@ -5,6 +5,16 @@ target/
 dats/*
 !dats/README.md
 
+# emit-dynamic-site bake output (`dat-shard --output dist/`).
+# ~4.7 GB of regenerable build artifacts — manifest.json (203 MB) +
+# boot.hba (1.86 MB) + shards/{sha256}.bin × 885k (~4.5 GB on-disk
+# from 4 KB block tail overhead). On this host `dist/` is a symlink
+# to a roomy drive (see docs/emit-dynamic-site.md's bake recipe);
+# each dev's symlink target varies. No trailing slash — git treats
+# the symlink as a non-directory entry, and `dist/` would only
+# match a real directory.
+dist
+
 # Logs
 logs/
 *.log

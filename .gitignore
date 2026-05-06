@@ -633,6 +633,10 @@ external/*
 !external/holtburger/
 external/holtburger/target/
 external/holtburger/dats/*.hba
+# `dat-shard` bake output — see external/holtburger/.gitignore for context.
+# No trailing slash so it matches a symlink (typical layout per the
+# bake recipe) as well as a plain directory.
+external/holtburger/dist
 overnight_*/
 pipeline_data/models/*.safetensors
 pipeline_data/models/*.pt
