@@ -1594,6 +1594,38 @@ enum SessionCommand {
     /// `docs/phase-4-renderer.md` step 2a.6 for the SQL one-liner
     /// that promotes test accounts to `accessLevel = 4`.
     SendChat { message: String },
+    /// Phase 4 step 3: keyboard / click input → AC `MoveToState`
+    /// packet. Each axis is `-1` / `0` / `+1`; `run` is the
+    /// shift-modifier flag.
+    ///
+    /// - `forward`: +1 = walk/run forward (W), -1 = backstep (S),
+    ///   0 = no forward locomotion
+    /// - `strafe`: +1 = sidestep right (D), -1 = sidestep left (A),
+    ///   0 = no strafe (forward takes priority over strafe — the
+    ///   wire format only carries one of {forward, strafe} per
+    ///   `RawMotionState`, so the recv loop picks forward when both
+    ///   are set, mirroring the cli's `Locomotion` enum which is
+    ///   single-axis)
+    /// - `turn`: +1 = turn right (E), -1 = turn left (Q), 0 = no
+    ///   turn — turning is independent of locomotion and rides on
+    ///   its own `RawMotionFlags::TURN_*` bits
+    /// - `run`: shift-held — selects `HoldKey::Run` and the higher
+    ///   `forward_speed` / `turn_speed` scalars. Walks at 1.0 m/s
+    ///   when false, runs at the player's run-rate scalar (default
+    ///   4.5 m/s) when true
+    ///
+    /// All-zero axes + `run=false` is the canonical "stop" state,
+    /// emitted on every key-up so ACE clears the active drive.
+    /// JS sends one of these per *change* in keystate — once per
+    /// keydown / keyup transition, not on every animation frame —
+    /// matching the cli's intent semantics
+    /// ([`PlayerDriveIntent::ManualHeld`]).
+    SetMovementInput {
+        forward: i8,
+        strafe: i8,
+        turn: i8,
+        run: bool,
+    },
 }
 
 /// Tagged-payload envelope for events the wasm bundle drains to JS via
@@ -2070,6 +2102,55 @@ impl SessionHandle {
                 JsValue::from_str(&format!("send_chat: cmd channel closed ({e})"))
             })
     }
+
+    /// Phase 4 step 3: forward a keystate snapshot to the recv loop,
+    /// which builds and sends the corresponding `MoveToState` packet.
+    /// Each axis is `-1` / `0` / `+1`; `run` is the shift-modifier
+    /// flag.
+    ///
+    /// **Axes** (mirrors the retail AC keymap):
+    /// - `forward`: +1 = W (walk/run forward), -1 = S (backstep), 0 = none
+    /// - `strafe`: +1 = D (sidestep right), -1 = A (sidestep left), 0 = none
+    /// - `turn`: +1 = E (turn right), -1 = Q (turn left), 0 = none
+    /// - `run`: shift-held — selects `HoldKey::Run` and run-rate
+    ///   speed/turn-speed scalars
+    ///
+    /// **Send cadence.** JS calls this once per *change* in keystate
+    /// (keydown / keyup transition or modifier flip), not on every
+    /// animation frame. ACE simulates motion server-side once the
+    /// motion state is set; the client's role is to push state
+    /// transitions, not stream a tick rate.
+    ///
+    /// **All-zero axes is the canonical "stop"**: the wire packet
+    /// carries an empty `RawMotionState` (just `CURRENT_HOLD_KEY`)
+    /// and ACE clears the active drive.
+    ///
+    /// Returns `Ok(())` on cmd-channel enqueue. The actual send
+    /// happens asynchronously inside the recv loop. If the local
+    /// player's position is not yet known (no PrivateUpdatePosition
+    /// has landed), the recv loop drops the command with a
+    /// `log::warn!`; gate JS calls on `kind=7 EnteredWorld` to
+    /// avoid that race.
+    #[wasm_bindgen(js_name = setMovementInput)]
+    pub fn set_movement_input(
+        &self,
+        forward: i8,
+        strafe: i8,
+        turn: i8,
+        run: bool,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SetMovementInput {
+                forward,
+                strafe,
+                turn,
+                run,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("set_movement_input: cmd channel closed ({e})"))
+            })
+    }
 }
 
 /// Phase 4 step 2a.5: construct an Aluvian / Male / Adventurer /
@@ -2482,6 +2563,159 @@ enum LoopState {
 /// queued events instead, NOT as a re-fire of the oneshot. Step 2a
 /// doesn't re-fire CharacterList; if a future step needs to, lift
 /// the queue events to also carry an updated character list.
+
+// Phase 4 step 3: AC raw motion command IDs. Mirrors
+// `crates/holtburger-core/src/client/movement/common.rs:23-30` —
+// re-stated here rather than imported so the helpers stay
+// `pub(super)` in the cli (the wasm bundle owns its own packet
+// construction; see the SessionCommand::SetMovementInput doc
+// comment for why we don't go through ClientRuntime).
+#[cfg(target_arch = "wasm32")]
+const WALK_FORWARD_MOTION_COMMAND: u32 = 0x4500_0005;
+#[cfg(target_arch = "wasm32")]
+const WALK_BACKWARD_MOTION_COMMAND: u32 = 0x4500_0006;
+#[cfg(target_arch = "wasm32")]
+const TURN_RIGHT_MOTION_COMMAND: u32 = 0x6500_000d;
+#[cfg(target_arch = "wasm32")]
+const TURN_LEFT_MOTION_COMMAND: u32 = 0x6500_000e;
+#[cfg(target_arch = "wasm32")]
+const SIDESTEP_RIGHT_MOTION_COMMAND: u32 = 0x6500_000f;
+#[cfg(target_arch = "wasm32")]
+const SIDESTEP_LEFT_MOTION_COMMAND: u32 = 0x6500_0010;
+#[cfg(target_arch = "wasm32")]
+const FALLBACK_RUN_RATE_SCALAR: f32 = 4.5;
+#[cfg(target_arch = "wasm32")]
+const RUN_HELD_TURN_SPEED_RAD_PER_SEC: f32 = 1.5;
+#[cfg(target_arch = "wasm32")]
+const NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC: f32 = 1.0;
+
+/// Phase 4 step 3: build a `RawMotionState` from a tristate-axis
+/// keystate snapshot. Mirrors the cli's
+/// `build_motion_state_raw_motion_state` (private to
+/// `holtburger-core::client::movement`), inlined here so the wasm
+/// bundle's lighter-weight packet path doesn't have to go through
+/// `ClientRuntime` + `WorldState`.
+///
+/// Forward axis takes priority over strafe — the wire format
+/// carries one of {forward, sidestep} per packet (the cli's
+/// `Locomotion` enum is single-axis for the same reason). If both
+/// are non-zero, forward wins.
+///
+/// The motion-style field (`current_style`) is intentionally
+/// omitted: the cli reads the last server-echoed stance from
+/// `world.player.last_server_motion_style` when emitting motion;
+/// without `WorldState` we drop the bit and let ACE preserve
+/// whatever stance it last set.
+#[cfg(target_arch = "wasm32")]
+fn build_raw_motion_state_for_input(
+    forward: i8,
+    strafe: i8,
+    turn: i8,
+    run: bool,
+) -> holtburger_protocol::messages::game_message::RawMotionState {
+    use holtburger_protocol::messages::game_message::{RawMotionFlags, RawMotionState};
+    use holtburger_protocol::messages::movement::HoldKey;
+
+    let hold_key = if run { HoldKey::Run } else { HoldKey::None } as u32;
+    let run_speed = if run { FALLBACK_RUN_RATE_SCALAR } else { 1.0 };
+    let turn_speed = if run {
+        RUN_HELD_TURN_SPEED_RAD_PER_SEC
+    } else {
+        NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC
+    };
+
+    let mut state = RawMotionState {
+        flags: RawMotionFlags::CURRENT_HOLD_KEY,
+        current_hold_key: Some(hold_key),
+        ..Default::default()
+    };
+
+    if forward != 0 {
+        let (cmd, speed) = if forward > 0 {
+            (WALK_FORWARD_MOTION_COMMAND, run_speed)
+        } else {
+            // Backstep is always 1.0 m/s in retail — Run gait does
+            // not multiply the back-walk animation.
+            (WALK_BACKWARD_MOTION_COMMAND, 1.0)
+        };
+        state.flags |= RawMotionFlags::FORWARD_COMMAND
+            | RawMotionFlags::FORWARD_HOLD_KEY
+            | RawMotionFlags::FORWARD_SPEED;
+        state.forward_command = Some(cmd);
+        state.forward_hold_key = Some(hold_key);
+        state.forward_speed = Some(speed);
+    } else if strafe != 0 {
+        let cmd = if strafe > 0 {
+            SIDESTEP_RIGHT_MOTION_COMMAND
+        } else {
+            SIDESTEP_LEFT_MOTION_COMMAND
+        };
+        state.flags |= RawMotionFlags::SIDE_STEP_COMMAND
+            | RawMotionFlags::SIDE_STEP_HOLD_KEY
+            | RawMotionFlags::SIDE_STEP_SPEED;
+        state.sidestep_command = Some(cmd);
+        state.sidestep_hold_key = Some(hold_key);
+        // Strafe speed is fixed at 1.0 m/s in retail — same as backstep.
+        state.sidestep_speed = Some(1.0);
+    }
+
+    if turn != 0 {
+        let cmd = if turn > 0 {
+            TURN_RIGHT_MOTION_COMMAND
+        } else {
+            TURN_LEFT_MOTION_COMMAND
+        };
+        state.flags |= RawMotionFlags::TURN_COMMAND
+            | RawMotionFlags::TURN_HOLD_KEY
+            | RawMotionFlags::TURN_SPEED;
+        state.turn_command = Some(cmd);
+        state.turn_hold_key = Some(hold_key);
+        state.turn_speed = Some(turn_speed);
+    }
+
+    state
+}
+
+/// Phase 4 step 3: minimal local-player state the recv loop tracks
+/// to fill in outbound `MoveToStateActionData`. The cli holds this
+/// inside `WorldState.player`; we reproduce just the fields the
+/// action data carries so the wasm bundle doesn't have to stand up
+/// the full world simulation.
+///
+/// Sequences come from `UpdatePosition.pos` (a `PositionPack` —
+/// the only inbound message that carries all four `u16` sequence
+/// numbers; `PrivateUpdatePosition` and `PublicUpdatePosition`
+/// only carry a single `u8` bookkeeping sequence). Position can
+/// come from any of the three.
+///
+/// `server_control_sequence` is special: the cli updates it from
+/// `UpdateMotion`-style messages, not position updates (see
+/// `crates/holtburger-world/src/entity.rs:344`). We initialise it
+/// to 0 and let it ride; ACE is lenient on stale
+/// `server_control_sequence` for client-driven motion. If this
+/// turns out to be wrong, follow-on work tracks `UpdateMotion`.
+#[cfg(target_arch = "wasm32")]
+struct LocalPlayerSnapshot {
+    position: Option<holtburger_common::position::WorldPosition>,
+    instance_sequence: u16,
+    server_control_sequence: u16,
+    teleport_sequence: u16,
+    force_position_sequence: u16,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl LocalPlayerSnapshot {
+    fn new() -> Self {
+        Self {
+            position: None,
+            instance_sequence: 0,
+            server_control_sequence: 0,
+            teleport_sequence: 0,
+            force_position_sequence: 0,
+        }
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 async fn recv_loop(
     mut session: holtburger_session::Session,
@@ -2494,13 +2728,17 @@ async fn recv_loop(
     use futures::StreamExt;
     use holtburger_protocol::messages::{
         CharacterEnterWorldData, CharacterGenerationVerificationResponse, GameAction, GameMessage,
-        TalkActionData,
+        MoveToStateActionData, TalkActionData,
     };
     use holtburger_protocol::traits::ProtocolUnpack;
     use holtburger_session::SessionEvent;
 
     let mut state = LoopState::Idle;
     let mut account_name = String::new();
+    // Phase 4 step 3: tracked from inbound position messages so the
+    // SetMovementInput cmd can build a complete MoveToStateActionData
+    // without standing up a full WorldState.
+    let mut local_player = LocalPlayerSnapshot::new();
 
     loop {
         tokio::select! {
@@ -2694,6 +2932,24 @@ async fn recv_loop(
                         //   - ObjectDelete:          crates/holtburger-world/src/handlers/inventory.rs:53-56
                         GameMessage::UpdatePosition(data) => {
                             let pos = &data.pos.pos;
+                            // Phase 4 step 3: UpdatePosition is the
+                            // only inbound position message that
+                            // carries all four sequence numbers
+                            // (`PositionPack` vs. the bare `WorldPosition`
+                            // in Public/Private updates). When ACE
+                            // addresses the local player by guid here,
+                            // capture the sequences so subsequent
+                            // outbound MoveToState packets carry a
+                            // current snapshot.
+                            if let LoopState::InWorld { player_guid } = &state
+                                && data.guid == *player_guid
+                            {
+                                local_player.position = Some(data.pos.pos);
+                                local_player.instance_sequence = data.pos.instance_sequence;
+                                local_player.teleport_sequence = data.pos.teleport_sequence;
+                                local_player.force_position_sequence =
+                                    data.pos.force_position_sequence;
+                            }
                             entity_updates.borrow_mut().push(EntityUpdate {
                                 kind: ENTITY_UPDATE_KIND_POSITION,
                                 guid: u32::from(data.guid),
@@ -2722,6 +2978,10 @@ async fn recv_loop(
                             };
                             if let Some(guid) = local_guid {
                                 let pos = &data.pos;
+                                // Phase 4 step 3: this packet is
+                                // implicitly the local player; cache
+                                // position for outbound MoveToState.
+                                local_player.position = Some(*pos);
                                 entity_updates.borrow_mut().push(EntityUpdate {
                                     kind: ENTITY_UPDATE_KIND_POSITION,
                                     guid: u32::from(guid),
@@ -2739,6 +2999,15 @@ async fn recv_loop(
                         }
                         GameMessage::PublicUpdatePosition(data) => {
                             let pos = &data.pos;
+                            // Phase 4 step 3: when ACE echoes the
+                            // local player's position via the public
+                            // channel (it does, alongside Private),
+                            // refresh the cached snapshot.
+                            if let LoopState::InWorld { player_guid } = &state
+                                && data.guid == *player_guid
+                            {
+                                local_player.position = Some(*pos);
+                            }
                             entity_updates.borrow_mut().push(EntityUpdate {
                                 kind: ENTITY_UPDATE_KIND_POSITION,
                                 guid: u32::from(data.guid),
@@ -2883,6 +3152,64 @@ async fn recv_loop(
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
                                 string_payload: Some(format!("send_chat: {e}")),
+                                u32_payload: None,
+                            });
+                            return;
+                        }
+                    }
+                    Some(SessionCommand::SetMovementInput {
+                        forward,
+                        strafe,
+                        turn,
+                        run,
+                    }) => {
+                        // Phase 4 step 3: the cli routes WASD-style
+                        // input through `ClientCommand::DriveSelf(
+                        // PlayerDriveIntent::ManualHeld(MotionState))`
+                        // → ClientRuntime::handle_movement_command →
+                        // movement system tick → `MoveToState`. Our
+                        // wasm bundle skips the runtime + tick and
+                        // builds the packet directly here, mirroring
+                        // the cli's `send_motion_state_pulse`
+                        // (`crates/holtburger-core/src/client/movement/
+                        // system.rs:928-951`).
+                        //
+                        // Discarding pre-position commands: ACE expects
+                        // a position-bearing payload, and we won't have
+                        // a current snapshot until the first
+                        // PrivateUpdatePosition lands (which happens
+                        // shortly after PlayerCreate). JS gates input
+                        // on `kind=7 EnteredWorld`, so under normal
+                        // play this branch always sees `Some(...)`;
+                        // dropping silently here just protects against
+                        // the early-keystroke race.
+                        let Some(position) = local_player.position else {
+                            log::warn!(
+                                "recv_loop: SetMovementInput before local position known — dropping",
+                            );
+                            continue;
+                        };
+                        let raw_motion_state =
+                            build_raw_motion_state_for_input(forward, strafe, turn, run);
+                        let action = GameAction::MoveToState(Box::new(MoveToStateActionData {
+                            raw_motion_state,
+                            position,
+                            instance_sequence: local_player.instance_sequence,
+                            server_control_sequence: local_player.server_control_sequence,
+                            teleport_sequence: local_player.teleport_sequence,
+                            force_position_sequence: local_player.force_position_sequence,
+                            // Assume grounded — we don't yet read the
+                            // server-side grounded flag (it lives on
+                            // PositionPack.flags::IS_GROUNDED, which
+                            // the wasm bundle could read off
+                            // UpdatePosition; deferred to a follow-on).
+                            contact_long_jump: 1,
+                        }));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(MoveToState): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("set_movement_input: {e}")),
                                 u32_payload: None,
                             });
                             return;

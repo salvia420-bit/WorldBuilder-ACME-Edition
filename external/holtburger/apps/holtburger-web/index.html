@@ -1605,6 +1605,11 @@ void main() {
           // (other players, NPCs) are step 2b.
           let spawningCharId = null;
           let spawnedPlayerGuid = null;
+          // Phase 4 step 3: gate movement input on the EnteredWorld
+          // (kind=7) signal — pre-spawn keystrokes would race the
+          // first PrivateUpdatePosition and the recv loop would drop
+          // the SetMovementInput cmd anyway.
+          let enteredWorld = false;
           characterUl.addEventListener("click", (ev) => {
             const btn = ev.target.closest("button[data-id]");
             if (!btn) return;
@@ -1687,6 +1692,55 @@ void main() {
               `<span class="ok">[…]</span> Sending CharacterCreate(<strong>${name}</strong>); awaiting CharacterCreateResponse + CharacterList re-fire.`;
           });
 
+          // Phase 4 step 3 — keyboard input → AC movement packets.
+          // Tracks live keystate; the rAF tick (drainEvents below)
+          // derives a tristate-axis snapshot and forwards via
+          // handle.setMovementInput() whenever it changes from the
+          // previous frame. Sending only on change matches AC's wire
+          // semantics — ACE simulates motion server-side once the
+          // motion state is set, and over-streaming would just churn
+          // the recv loop.
+          const keyState = { w: false, a: false, s: false, d: false, q: false, e: false, shift: false };
+          let lastInputSig = "0,0,0,false";
+          const movementKeys = new Set(["w", "a", "s", "d", "q", "e"]);
+          // Skip keystate updates when the user is typing in any text
+          // input — login, character creation, future chat box. This
+          // keeps WASD scoped to "the game canvas has focus".
+          const isTypingInForm = () => {
+            const el = document.activeElement;
+            if (!el) return false;
+            const tag = el.tagName;
+            return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+          };
+          document.addEventListener("keydown", (ev) => {
+            if (!enteredWorld || isTypingInForm()) return;
+            const k = ev.key.toLowerCase();
+            if (movementKeys.has(k)) {
+              keyState[k] = true;
+              ev.preventDefault();
+            } else if (ev.key === "Shift") {
+              keyState.shift = true;
+            }
+          });
+          document.addEventListener("keyup", (ev) => {
+            // Don't gate keyup on enteredWorld — if the user was
+            // holding a key when the gate flipped or if focus moved to
+            // a form mid-press, we still want to clear the keystate
+            // so a stale "forward" doesn't get re-emitted.
+            const k = ev.key.toLowerCase();
+            if (movementKeys.has(k)) {
+              keyState[k] = false;
+            } else if (ev.key === "Shift") {
+              keyState.shift = false;
+            }
+          });
+          // Clear keystate if the page loses focus mid-press — Chrome
+          // suppresses keyup events for some modifier combos when the
+          // window blurs, which would leave the player walking forever.
+          window.addEventListener("blur", () => {
+            for (const k of Object.keys(keyState)) keyState[k] = false;
+          });
+
           // Phase 4 step 2a — drain the SessionHandle's queued events
           // each animation frame. The recv loop in Rust pushes events
           // as they arrive; this is the JS-side receiver that wires
@@ -1725,9 +1779,13 @@ void main() {
                 const playerGuid = (evt.u32Payload >>> 0).toString(16).toUpperCase().padStart(8, "0");
                 postSpawn.hidden = false;
                 teleportBtn.disabled = false;
+                // Phase 4 step 3: open the keyboard movement gate.
+                enteredWorld = true;
                 loginStatus.innerHTML =
                   `<span class="ok">[OK]</span> InWorld as GUID 0x${playerGuid}. ` +
-                  `<span class="hint">Click <em>Teleport to Holtburg</em> to bypass the Training Academy.</span>`;
+                  `<span class="hint">Click <em>Teleport to Holtburg</em> to bypass the Training Academy. ` +
+                  `Then use <kbd>W</kbd>/<kbd>A</kbd>/<kbd>S</kbd>/<kbd>D</kbd> to walk, ` +
+                  `<kbd>Q</kbd>/<kbd>E</kbd> to turn, <kbd>Shift</kbd> to run.</span>`;
               } else if (evt.kind === 5) {
                 // CharacterCreated — refresh the list (recv loop has
                 // already mutated the shared character_list state via
@@ -1781,6 +1839,27 @@ void main() {
               else if (upd.kind === 1) handleEntitySpawn(upd);
               else if (upd.kind === 2) handleEntityRemove(upd);
               upd.free();
+            }
+            // Phase 4 step 3: send a SetMovementInput packet on every
+            // change to the keystate-derived axes. Sending on change
+            // (rather than every frame) keeps the wire traffic to one
+            // packet per keypress / release, matching the cli's
+            // `PlayerDriveIntent::ManualHeld` semantics.
+            if (enteredWorld) {
+              const forward = (keyState.w ? 1 : 0) + (keyState.s ? -1 : 0);
+              const strafe = (keyState.d ? 1 : 0) + (keyState.a ? -1 : 0);
+              const turn = (keyState.e ? 1 : 0) + (keyState.q ? -1 : 0);
+              const run = !!keyState.shift;
+              const sig = `${forward},${strafe},${turn},${run}`;
+              if (sig !== lastInputSig) {
+                try {
+                  handle.setMovementInput(forward, strafe, turn, run);
+                  lastInputSig = sig;
+                } catch (err) {
+                  // eslint-disable-next-line no-console
+                  console.warn(`[step 3] setMovementInput rejected: ${String(err?.message ?? err)}`);
+                }
+              }
             }
             requestAnimationFrame(drainEvents);
           }
