@@ -255,6 +255,24 @@ check(
     `sendChat=${typeof sessionHandleProto?.sendChat}`
 );
 
+// Phase 4 step 2b: SessionHandle.pollEntityUpdates() drains the
+// high-frequency position / spawn / remove channel. Separate from
+// poll_events() — see the EntityUpdate doc comment in lib.rs for the
+// rationale (position updates fire 100s/sec; tagged-payload string
+// allocation in the hot path was the wrong shape). Live coverage
+// runs through the Playwright capture; here we just verify the
+// export + the EntityUpdate constructor.
+check(
+    "SessionHandle.pollEntityUpdates() exposed (Phase 4 step 2b entity buffer)",
+    typeof sessionHandleProto?.pollEntityUpdates === "function",
+    `pollEntityUpdates=${typeof sessionHandleProto?.pollEntityUpdates}`
+);
+check(
+    "EntityUpdate class exposed (Phase 4 step 2b position-bearing event)",
+    typeof wasm.EntityUpdate === "function",
+    `typeof ${typeof wasm.EntityUpdate}`
+);
+
 
 (async () => {
     // Phase 5.0b — pre-bake a manifest+shards+boot tree from the
