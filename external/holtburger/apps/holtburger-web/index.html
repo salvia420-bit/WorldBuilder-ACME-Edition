@@ -660,19 +660,35 @@ void main() {
         });
       }
 
-      // Build a 9×9 RGBA8 texture from this LB's per-vertex terrain
+      // Build a 9x9 RGBA8 texture from this LB's per-vertex terrain
       // types. Mirrors the data path emit-static-site uses (vertex
-      // grid in, bilinear sample out). Force A=255 across all bytes
-      // — canvas → PIXI texture upload premultiplies alpha; A=0
-      // would silently zero the RGB and the shader would read terrain
-      // type 0 (BarrenRock) for every vertex.
+      // grid in, bilinear sample out).
+      //
+      // CRITICAL transpose: wasm `terrainCodes` is laid out
+      // **column-major** -- vertex i has gridX = i/9, gridY = i%9
+      // (verified empirically vs WB.Terminal `get-terrain-data`
+      // 2026-05-06; the previous "y * 9 + x" indexing produced a
+      // diagonal-mirrored render where Holtburg's water ended up in
+      // the wrong LB and the road network ran perpendicular to its
+      // true direction). Canvas + GL textures are row-major, so we
+      // transpose on upload: canvas (col, row) <- terrainCodes[col * 9 + row].
+      // Then the shader's `texelFetch(uVertexTypes, ivec2(iu, iv))`
+      // returns the type at the *physical* vertex (gridX = iu,
+      // gridY = iv).
+      //
+      // Force A=255: canvas -> PIXI texture upload premultiplies
+      // alpha; A=0 would silently zero RGB.
       function buildVertexTypesTexture(terrainCodes) {
         const bytes = new Uint8ClampedArray(9 * 9 * 4);
-        for (let i = 0; i < 81; i += 1) {
-          bytes[i * 4 + 0] = terrainCodes[i];
-          bytes[i * 4 + 1] = 0;
-          bytes[i * 4 + 2] = 0;
-          bytes[i * 4 + 3] = 255;
+        for (let row = 0; row < 9; row += 1) {
+          for (let col = 0; col < 9; col += 1) {
+            const dst = (row * 9 + col) * 4;
+            const src = col * 9 + row;
+            bytes[dst + 0] = terrainCodes[src];
+            bytes[dst + 1] = 0;
+            bytes[dst + 2] = 0;
+            bytes[dst + 3] = 255;
+          }
         }
         return makeR8DataTexture(bytes, 9, 9);
       }
