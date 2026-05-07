@@ -321,6 +321,14 @@
       }
 
       try {
+        // Staged loading text so a slow mobile/Tailscale connection
+        // shows progress instead of staring at "Loading wasm
+        // bundle…" through both awaits below. Each await is a known
+        // long-pole on mobile: wasm init pulls the 1.5 MB
+        // holtburger_web_bg.wasm; manifest fetch pulls the 195 MB
+        // dist/manifest.json. The user-visible status lets them tell
+        // wasm-stuck from manifest-stuck.
+        root.innerHTML = "<p class=\"hint\">Initializing wasm bundle (1.5 MB)…</p>";
         await init();
 
         // Phase 5.0 obj 7 — register the service worker that does
@@ -347,6 +355,7 @@
         // (or the `--eor-portal/--eor-cell/--eor-local` form for raw
         // canonical retail DATs).
         const MANIFEST_URL = "../../dist/manifest.json";
+        root.innerHTML = "<p class=\"hint\">Fetching manifest (~200 MB — first time can take minutes on mobile/Tailscale)…</p>";
         try {
           await init_resource_source(MANIFEST_URL);
           console.log(
@@ -361,7 +370,14 @@
               "  Original error:",
             e
           );
+          // Don't keep the user staring at "fetching manifest" if it
+          // failed; surface the problem and let them log in anyway
+          // (rendering will fail but the AC handshake can still run).
+          root.innerHTML =
+            "<p class=\"fail\">Manifest fetch failed — rendering disabled, login still works.</p>" +
+            `<pre>${String(e).slice(0, 400)}</pre>`;
         }
+        root.innerHTML = "<p class=\"hint\">Running smoke checks…</p>";
 
         const info = build_info();
         check(
