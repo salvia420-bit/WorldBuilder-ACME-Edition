@@ -9,26 +9,29 @@
 
 ### Where the project is
 
-**Phases done:** 0, 1, 2, 3 (steps 1-6 + **step 3.6 — landed
-2026-05-06 after a TexMerge detour: bilinear 4-corner terrain
-blend, vector road lines, transpose fix for column-major
-terrain data, and on-demand entity model fetching for ACE-
-streamed NPCs**; step 5 partial), 4 (step 1 + 2a + 2a.5 +
-2a.6 + 2b + 3 + 3.5 + **6a + 6b + 6e — realistic-entity
-metadata + ItemType-keyed visual dispatch + glyph fallback +
-per-entity nameplates, landed 2026-05-06 evening**), 5.0,
-5.0b, 5.1a, 5.1b. Native lib gate **1130 / 0** across 14
-workspace crates. `cargo check --target
-wasm32-unknown-unknown` clean for `holtburger-{dat,session,
-transport-ws,resource-http,web,content,core,manifest}`.
-`wasm-pack build --target {nodejs,web}` both green. `node
-smoke_test.cjs` **67 / 67 PASS** (66 OK + 1 SKIP for live-ACE
-round-trip; the SKIP is the symbol-only check — the wire-
-effect validation runs through `capture_phase4_step3.cjs`,
-terrain quality validation runs through
-`capture_terrain_eval.cjs`, both Playwright-driven against
-the live stack). The +7 OK probes vs. 59 baseline are the
-new EntityUpdate getter checks for the 6a metadata fields.
+**Phases done:** 0, 1, 2, 3 (steps 1-6 + step 3.6; step 5
+partial), 4 (step 1 + 2a + 2a.5 + 2a.6 + 2b + 3 + 3.5 +
+**6a + 6b + 6e — realistic-entity metadata + ItemType-keyed
+visual dispatch + glyph fallback + per-entity nameplates,
+landed 2026-05-06 evening; 6 Phase A + B + C — apply ACE-
+shipped ClothingTable substitutions + palette overlays +
+MotionTable idle pose, landed 2026-05-07**), 5.0, 5.0b,
+5.1a, 5.1b. Native lib gate **1138 / 0** across 14 workspace
+crates (8 of those are Phase 6 substitution + palette tests
+in `holtburger-web::tests_substitution::*`). `cargo check
+--target wasm32-unknown-unknown` clean for
+`holtburger-{dat,session,transport-ws,resource-http,web,
+content,core,manifest}`. `wasm-pack build --target {nodejs,
+web}` both green. `node smoke_test.cjs` **72 / 72 PASS**
+(71 OK + 1 SKIP for live-ACE round-trip; the SKIP is the
+symbol-only check — the wire-effect validation runs through
+`capture_phase4_step3.cjs`, terrain quality validation
+through `capture_terrain_eval.cjs`, both Playwright-driven
+against the live stack). The +12 OK probes vs. 59 baseline
+are the new EntityUpdate getter checks (7 for step 6a meta
+fields + 3 for Phase A model-data substitutions) plus 2 new
+wasm exports (`fetchEntityModelRender`,
+`fetchEntitySurfacesPixels`).
 
 **What works end-to-end today.** Open
 `apps/holtburger-web/index.html` in any browser. The page calls
@@ -1514,50 +1517,91 @@ Step ledger:
   static atlas's z≥11 sprites instead of like placeholder dots
   with textures.
 
-  **Sub-step landing log (2026-05-06 evening session):**
+  **Sub-step landing log:**
+
+  *2026-05-06 evening session — initial cut:*
   - ✅ **6a — surface weenie metadata to JS.** `EntityUpdate`
     extended with `wcid`, `itemType`, `name`, `objScale`,
     `iconId`, `paletteId`, `mtableId`. The ObjectCreate recv-
-    loop arm at `apps/holtburger-web/src/lib.rs:3343-3378`
-    stops discarding `PublicWeenieDescription` /
-    `ObjectDescriptionData` fields. wasm-bindgen getters
-    emit JS-side accessors. Smoke 60 → 67 (+7 getter probes
-    = 66 OK + 1 SKIP, 0 fail). Native lib 1130/0. wasm32
-    check clean.
+    loop arm stops discarding `PublicWeenieDescription` /
+    `ObjectDescriptionData` fields.
   - ✅ **6b — ItemType-keyed visual dispatch + glyph
-    fallback.** New `ITEM_TYPE` constant table mirroring
-    `external/ACE/Source/ACE.Entity/Enum/ItemType.cs:6`,
-    `categoryForItemType()` priority dispatch, `CATEGORY_TINT`
-    table (Portal=cyan, Container=tan, Writable=amber, …),
-    `drawGlyphForCategory()` glyph table (cyan ring for
-    portals, brown square for containers, red diamond for
-    creatures, orange triangle for signs — mirrors
-    `RenderPreviewRenderer.cs:230-299`). `ensureEntitySprite`
-    accepts a `meta` arg, threads it into the entry, and
-    calls `applyMetaToSprite()` at both initial-cache-hit and
-    upgrade paths. `objScale` multiplies `worldBounds` so
-    juvenile vs. epic-tier creatures render at distinct
-    sprite sizes. Magenta-dot placeholder removed; per-
-    category glyph replaces it.
-  - ✅ **6e — per-entity nameplates.** `nameplateContainer`
-    added as sibling of `cameraContainer` on `app.stage`
-    (NOT scaled by camera — text stays at constant 12px
-    screen-space). `ensureNameplate(entry)` mints a
-    `PIXI.Text` per named entity; `nameplateColorForCategory`
-    colour-codes (creature=salmon, portal=cyan, sign=amber,
-    container=tan, default=off-white). Local player skipped
-    via new module-level `localPlayerGuid` set from the
-    PlayerSpawned (kind=1) handler. Per-rAF
-    `updateNameplatePositions()` projects entity world coords
-    to canvas pixels through `cameraContainer.scale +
-    .position`; hides the whole layer below
-    `cameraScale=0.3 px/m` to avoid overlap at zoom-out.
-  - ⏳ **6c — palette-tinted creature variants** (next).
-  - ⏳ **6d — portal swirl + sign inscription label** (next).
-  - ⏳ **6f — portal destination chips** (deferred polish).
+    fallback.** ITEM_TYPE constants mirror
+    `external/ACE/Source/ACE.Entity/Enum/ItemType.cs:6`;
+    Portal=cyan ring, Creature=red diamond, Container=brown
+    square, Writable=orange triangle (mirrors
+    `RenderPreviewRenderer.cs:230-299`). `objScale`
+    multiplies `worldBounds`.
+  - ✅ **6e — per-entity nameplates.** `PIXI.Text` per named
+    entity in a non-camera-scaled `nameplateContainer`;
+    constant 12-13px screen-space. Colour-coded by category.
+    Local player skipped.
+
+  *2026-05-07 — re-scoped after discovering ACE pre-computes
+  ClothingTable substitutions in `Creature.CalculateObjDesc()`
+  and ships them on the wire as `model_data`:*
+  - ✅ **Phase A — apply ACE-shipped per-part substitutions
+    (commit `8062509`).** `EntityUpdate` plumbs
+    `model_changes` + `texture_changes` + `sub_palettes`
+    Vec<u32> from `ObjectDescriptionData.model_data`. New
+    wasm export `fetchEntityModelRender(setup_id,
+    model_changes, texture_changes)` triangulates with per-
+    part GfxObj swaps + texture-DID rewrites. JS
+    `addEntityRenderToLiveSpriteMap` routes substituted
+    entities through it; composite cache key
+    (`computeEntitySpriteKey`) stops two NPCs sharing
+    csetup_id but different equipped armor from aliasing in
+    the cache. **Replaces the deferred 6c "palette-tinted
+    creature variants" plan** — the simpler answer was that
+    ACE already does the work; we just consume the output.
+    3 native unit tests cover tex-swap, part-swap, and
+    composition. NO ClothingTable parser added to
+    holtburger-dat (not needed).
+  - ✅ **Phase B — apply ACE-shipped palette overlays
+    (commit `ba87dfd`).** New wasm export
+    `fetchEntitySurfacesPixels(surface_dids, base_palette_id,
+    sub_palettes)` composes the decode-time palette as
+    `base_palette_id` (entity's `PaletteBaseDID`) override
+    over the texture's intrinsic palette, then splices each
+    `(sub_palette_id, offset, length)` overlay on top, then
+    feeds the composed palette to `Texture::to_rgba8`. Mirrors
+    C# at `WorldObject_Networking.cs:1017` +
+    `Creature_Networking.cs:218`. JS routes through it when
+    `meta.paletteId !== 0` OR `meta.subPalettes` is non-empty.
+    Composite cache key folds in palette state. 4 native
+    unit tests (intrinsic / override / overlay-splice /
+    out-of-range clamp).
+  - ✅ **Phase C — MotionTable idle pose
+    (commit `347f6ca`).** `try_resolve_idle_anim_frame`
+    walks `setup.default_motion_table` →
+    `cycles[(default_style << 16) | idleSubstate]` →
+    `motion_data.anims[0].anim_id` → `Animation.part_frames[0]`,
+    falls through to `setup.default_animation` (path 2),
+    falls through to placement frame, falls through to
+    identity. Mirrors C# `TryResolveIdleAnimFrame` at
+    `ObjectSpriteGenerator.cs:921-950`. NPCs in their actual
+    idle stance (knees flexed, arms at hip) instead of T-pose.
+    1 regression test guards against the helper matching
+    naked setups.
+
+  *Open polish (cosmetic, not blocking the "looks realistic" bar):*
+  - ⏳ **6d — portal swirl + sign inscription label.**
+  - ⏳ **6f — portal destination chips.** Portal `LinkedPortalOne`/
+    `Two`/`OriginalPortal` DataIds aren't on `Entity` today.
+  - ⏳ **Animation loops / walk-cycles.** Phase C uses one
+    keyframe (idle pose); a true walk-cycle anim during
+    movement would need per-frame ticking.
+
+  **Validation gates after Phase C:** 1138/0 native lib,
+  71/71 + 1 SKIP smoke, wasm32 + wasm-pack {nodejs,web} clean,
+  page module body parses clean. **Live-ACE visual sign-off
+  is the user's call** — log in via the browser, walk Holtburg,
+  confirm NPCs look like NPCs (clothing on, right skin tone,
+  not T-posed). The Tailscale stack on this host has ACE +
+  wsbridge running for the 2026-05-07 session.
 
   Reference paths for the *original* sub-plan + grounding
-  notes are kept below for future agents picking up 6c-6f.
+  notes are kept below for future agents picking up 6d/6f.
 
   **Why it's not free.** The `EntityUpdate` struct surfaced to
   JS exposes `{ kind, guid, modelId, landblockId, x, y, z, qw,
