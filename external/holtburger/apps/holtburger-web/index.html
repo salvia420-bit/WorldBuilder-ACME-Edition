@@ -1661,6 +1661,47 @@ void main() {
       function setLocalPlayerGuid(guid) { localPlayerGuid = guid >>> 0; }
       function getLocalPlayerGuid() { return localPlayerGuid; }
 
+      // Phase 4 step 6 player-fix: pre-liveScene Spawn buffer.
+      // ACE sends ObjectCreate for the local player as soon as the
+      // spawn handshake completes (Player_Networking.cs:224 —
+      // PlayerCreate + ObjectCreate enqueued together). That's
+      // typically several seconds BEFORE renderHoltburg's
+      // renderNeighbourhood completes and sets `liveScene`.
+      // ensureEntitySprite returns null when liveScene is null, so
+      // those early Spawns were silently dropped — the local player
+      // ended up in entityMap as a placeholder glyph (created by
+      // later position updates) with empty meta, never going
+      // through Phase A/B/C composition.
+      //
+      // Fix: buffer pre-liveScene Spawns as plain-JS clones (the
+      // wasm-bindgen EntityUpdate gets free()'d at the end of the
+      // drain loop, so we can't keep the live struct), then replay
+      // through handleEntitySpawn once liveScene is ready.
+      const deferredSpawns = [];
+      function cloneEntitySpawn(upd) {
+        return {
+          kind: upd.kind,
+          guid: upd.guid,
+          modelId: upd.modelId,
+          landblockId: upd.landblockId,
+          x: upd.x, y: upd.y, z: upd.z,
+          qw: upd.qw, qx: upd.qx, qy: upd.qy, qz: upd.qz,
+          wcid: upd.wcid,
+          itemType: upd.itemType,
+          name: upd.name,
+          objScale: upd.objScale,
+          iconId: upd.iconId,
+          paletteId: upd.paletteId,
+          mtableId: upd.mtableId,
+          // wasm-bindgen Vec<u32> getters return a fresh Uint32Array
+          // each call; capture the array directly so the clone is
+          // self-contained.
+          modelChanges: upd.modelChanges,
+          textureChanges: upd.textureChanges,
+          subPalettes: upd.subPalettes,
+        };
+      }
+
       // Phase 4 step 6a/6b: ItemType bitmask values from
       // external/ACE/Source/ACE.Entity/Enum/ItemType.cs:6 — the wire
       // PublicWeenieDescription.item_type IS this bitmask. Used by
@@ -3136,9 +3177,30 @@ void main() {
             const entityUpdates = handle.pollEntityUpdates();
             for (const upd of entityUpdates) {
               if (upd.kind === 0) handlePositionUpdate(upd);
-              else if (upd.kind === 1) handleEntitySpawn(upd);
+              else if (upd.kind === 1) {
+                // Phase 4 step 6 player-fix: ensureEntitySprite
+                // returns null pre-liveScene, which would silently
+                // drop the local player's Spawn (and any other
+                // Spawn that races the renderer boot). Buffer the
+                // Spawn payload as a plain-JS clone for replay
+                // once liveScene is ready.
+                if (liveScene) {
+                  handleEntitySpawn(upd);
+                } else {
+                  deferredSpawns.push(cloneEntitySpawn(upd));
+                }
+              }
               else if (upd.kind === 2) handleEntityRemove(upd);
               upd.free();
+            }
+            // Replay deferred Spawns once liveScene is ready. First
+            // tick after liveScene becomes non-null: drain the
+            // backlog so the local player + any pre-render-boot
+            // entities pick up Phase A/B/C composition.
+            if (liveScene && deferredSpawns.length > 0) {
+              const queued = deferredSpawns.splice(0);
+              console.log(`[player-fix] replaying ${queued.length} deferred Spawn(s) after liveScene ready`);
+              for (const clone of queued) handleEntitySpawn(clone);
             }
             // Phase 4 step 6e: project entity world coords to canvas
             // pixels for each visible nameplate. Cheap when zoomed in
