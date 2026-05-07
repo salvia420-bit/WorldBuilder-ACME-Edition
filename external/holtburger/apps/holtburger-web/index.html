@@ -217,6 +217,7 @@
         fetch_model_meshes,
         fetch_surfaces_pixels,
         fetchEntityModelRender,
+        fetchEntitySurfacesPixels,
         start_session,
         init_resource_source,
         has_resource_source,
@@ -1782,11 +1783,14 @@ void main() {
       // the same csetup_id don't alias each other in the cache.
       function computeEntitySpriteKey(modelId, meta) {
         if (!meta?.hasSubstitutions) return modelId;
-        // Cheap fnv-1a 32-bit over the flat substitution buffers.
-        // Collisions are visually tolerable (worst case: two NPCs
-        // share a sprite); rate is sub-ppm for reasonable equipment
-        // counts. Stringify the result so liveMap doesn't confuse
-        // it with a numeric modelId on the unsubstituted path.
+        // Cheap fnv-1a 32-bit over the flat substitution buffers + the
+        // entity's base palette ID. Two NPCs sharing the same csetup_id
+        // and same equipped armor but with different skin tones (different
+        // PaletteBaseDID) get distinct sprites in the cache. Collisions
+        // are visually tolerable (worst case: two NPCs share a sprite);
+        // rate is sub-ppm for reasonable equipment counts. Stringify the
+        // result so liveMap doesn't confuse it with a numeric modelId
+        // on the unsubstituted path.
         let h = 0x811C9DC5 >>> 0;
         const mix = (arr) => {
           if (!arr) return;
@@ -1797,17 +1801,26 @@ void main() {
         };
         mix(meta.modelChanges);
         mix(meta.textureChanges);
+        mix(meta.subPalettes);
+        // Fold paletteId in as a single-element array (so it
+        // participates in the same fnv mixing).
+        if (meta.paletteId) mix([meta.paletteId]);
         return `${modelId.toString(16)}:${h.toString(16)}`;
       }
 
-      // Phase 4 step 6 Phase A: substituted-entity render path.
-      // Mirrors addModelsToLiveSpriteMap exactly, but the mesh comes
-      // from the new fetchEntityModelRender export (which applies
-      // model_data.model_changes + model_data.texture_changes ACE
-      // pre-computed in CalculateObjDesc) instead of fetch_model_meshes.
+      // Phase 4 step 6 Phase A + B: substituted-entity render path.
+      // Mirrors addModelsToLiveSpriteMap exactly, but:
+      //  - mesh comes from fetchEntityModelRender (applies the
+      //    per-part GfxObj + texture-DID swaps ACE pre-computed in
+      //    CalculateObjDesc, Phase A);
+      //  - surface pixels come from fetchEntitySurfacesPixels when
+      //    the entity carries a base palette override OR sub-palette
+      //    overlays (Phase B), so creature skin tones / dyed armour
+      //    render with the right colours instead of every NPC's
+      //    intrinsic-palette default.
       // Output entry shape ({ texture, worldBounds }) matches the
-      // unsubstituted path so all downstream sprite construction
-      // code is path-agnostic.
+      // unsubstituted path so downstream sprite construction code is
+      // path-agnostic.
       async function addEntityRenderToLiveSpriteMap(
         app, cacheKey, modelId, meta, liveMap, invisibleSet,
       ) {
@@ -1821,13 +1834,24 @@ void main() {
           mesh.free();
           return;
         }
-        // Per-surface texture array indexed by mesh.surfaces position
-        // — same shape addModelsToLiveSpriteMap builds, so
-        // renderModelTile is happy.
         const sList = mesh.surfaces;
-        const surfacePixels = sList.length > 0
-          ? await fetch_surfaces_pixels(new Uint32Array(sList))
-          : [];
+        // Phase B: drive the palette-aware surface fetch when the
+        // entity has either a base palette override or any sub-
+        // palette overlay; otherwise keep the cheaper fetch_surfaces_
+        // pixels path so the no-recolour case stays free.
+        const hasPaletteSubs =
+          (meta?.paletteId && meta.paletteId !== 0)
+          || (meta?.subPalettes && meta.subPalettes.length > 0);
+        const surfacePixels = sList.length === 0
+          ? []
+          : (hasPaletteSubs
+              ? await fetchEntitySurfacesPixels(
+                  new Uint32Array(sList),
+                  meta.paletteId >>> 0,
+                  meta.subPalettes ?? new Uint32Array(0),
+                )
+              : await fetch_surfaces_pixels(new Uint32Array(sList))
+            );
         const texArr = new Array(sList.length);
         for (let s = 0; s < sList.length; s += 1) {
           texArr[s] = surfacePixelsToTexture(surfacePixels[s]) ?? makeFlatTexture();
@@ -2018,9 +2042,17 @@ void main() {
           modelChanges: modelChanges && modelChanges.length > 0 ? modelChanges : null,
           textureChanges: textureChanges && textureChanges.length > 0 ? textureChanges : null,
           subPalettes: subPalettes && subPalettes.length > 0 ? subPalettes : null,
+          // Phase 4 step 6 Phase A + B: route through the entity-render
+          // path if ANY of the substitution fields are populated —
+          // model/texture swaps OR a base palette override OR
+          // sub-palette overlays. Otherwise (most static placements)
+          // the cheaper fetch_model_meshes + fetch_surfaces_pixels
+          // path still wins.
           hasSubstitutions:
             (modelChanges && modelChanges.length > 0)
-            || (textureChanges && textureChanges.length > 0),
+            || (textureChanges && textureChanges.length > 0)
+            || (subPalettes && subPalettes.length > 0)
+            || ((upd.paletteId >>> 0) !== 0),
         };
       }
 

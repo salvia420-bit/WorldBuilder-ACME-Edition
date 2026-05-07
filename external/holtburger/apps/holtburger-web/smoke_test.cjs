@@ -311,6 +311,17 @@ check(
     typeof wasm.fetchEntityModelRender === "function",
     `fetchEntityModelRender=${typeof wasm.fetchEntityModelRender}`
 );
+// Phase 4 step 6 Phase B: per-surface RGBA8 fetch with entity palette
+// override + sub-palette overlays applied at decode time. ACE pre-
+// computes both via Creature.CalculateObjDesc (palette id from
+// PaletteBaseDID; overlays from each equipped item's CloSubPalEffects
+// indexed by paletteTemplate). Symbol-only check; the composition
+// arithmetic is covered by the entity_surface_pixels_* native tests.
+check(
+    "fetchEntitySurfacesPixels() exposed (Phase 4 step 6 Phase B palette overlay path)",
+    typeof wasm.fetchEntitySurfacesPixels === "function",
+    `fetchEntitySurfacesPixels=${typeof wasm.fetchEntitySurfacesPixels}`
+);
 
 // Phase 4 step 3: SessionHandle.setMovementInput(forward, strafe,
 // turn, run) takes a tristate-axis keystate snapshot and forwards

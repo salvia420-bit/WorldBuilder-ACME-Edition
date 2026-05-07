@@ -1679,8 +1679,8 @@ fn pack_model_mesh(tris: Vec<Tri>) -> ModelMesh {
 /// One surface's decoded pixels — output of [`fetch_surface_pixels`]
 /// / [`fetch_surfaces_pixels`]. Used by Phase 3 step 6's in-browser
 /// rasterizer to UV-map per-poly textures into the model's tile.
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg(any(target_arch = "wasm32", test))]
 pub struct SurfacePixels {
     width: u32,
     height: u32,
@@ -1703,7 +1703,7 @@ impl SurfacePixels {
 /// DID. Returns an empty 0x0 SurfacePixels (width=height=0,
 /// pixels.len()=0) when any step of the chain fails — JS treats that
 /// as "no texture, fall back to flat colour".
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     surface_did: u32,
@@ -1788,6 +1788,157 @@ pub async fn fetch_surfaces_pixels(
     let mut out = Vec::with_capacity(surface_dids.len());
     for &id in &surface_dids {
         out.push(fetch_surface_pixels_impl(source.as_ref(), id));
+    }
+    Ok(out)
+}
+
+/// Phase 4 step 6 Phase B: surface decode with entity palette overrides.
+/// ACE's `CalculateObjDesc` (~/ace-server/Source/ACE.Server/WorldObjects/
+/// WorldObject_Networking.cs:1017 + Creature_Networking.cs:218) sets
+/// `objDesc.PaletteID` to the entity's `PaletteBaseDID` and accumulates
+/// per-clothing-item palette overlays in `objDesc.SubPalettes` after
+/// reading each item's `ClothingTable.ClothingSubPalEffects[paletteTemplate]`
+/// and offset+length-scaling them. Mirroring it here lets a creature's
+/// skin tone, hair colour, and dyed armour read correctly instead of
+/// every NPC defaulting to the texture's intrinsic palette.
+///
+/// Composition order (matches the C#):
+/// 1. **Base palette.** If `base_palette_id != 0` use it as the starting
+///    256-entry colour array (overrides the texture's intrinsic palette).
+///    If 0, fall through to the texture's intrinsic palette ID — same
+///    path as `fetch_surface_pixels_impl`.
+/// 2. **Sub-palette overlays.** For each `(sub_palette_id, offset,
+///    length)` triple: read the named palette from the DAT, copy its
+///    first `length` colours into the base palette starting at `offset`.
+///    Out-of-range writes are clamped (NPC equipment overlays are
+///    8-colour ranges that always fit a 256-entry palette in retail
+///    data, but defensive clamping keeps a malformed wire packet from
+///    panicking the decoder).
+///
+/// `sub_palettes` is the flat `[id, offset, length, …]` triple buffer
+/// EntityUpdate exposes from `model_data.sub_palettes` (Phase A
+/// already plumbed it; Phase B consumes it).
+#[cfg(any(target_arch = "wasm32", test))]
+fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    surface_did: u32,
+    base_palette_id: u32,
+    sub_palettes: &[(u32, u8, u8)],
+) -> SurfacePixels {
+    use holtburger_dat::file_type::{Palette, Surface, SurfaceTexture, Texture, TextureDecodeError};
+    use holtburger_dat::ResourceKey;
+    let empty = SurfacePixels { width: 0, height: 0, pixels: Vec::new() };
+
+    let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else { return empty; };
+    let Ok(surface) = Surface::unpack(&bytes) else { return empty; };
+    if let Some(argb) = surface.solid_color() {
+        // Solid surfaces ignore palette substitutions — the base
+        // surface IS the colour.
+        let a = ((argb >> 24) & 0xFF) as u8;
+        let r = ((argb >> 16) & 0xFF) as u8;
+        let g = ((argb >> 8) & 0xFF) as u8;
+        let b = (argb & 0xFF) as u8;
+        return SurfacePixels { width: 1, height: 1, pixels: vec![r, g, b, a] };
+    }
+    let Some((surf_tex_id, _)) = surface.textured() else { return empty; };
+    let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else { return empty; };
+    let Ok(surf_tex) = SurfaceTexture::unpack(&stb) else { return empty; };
+    let Some(rs_id) = surf_tex.highest_res() else { return empty; };
+    let Ok(tb) = source.get_file_by_key(ResourceKey::new("eor/portal", rs_id)) else { return empty; };
+    let Ok(tex) = Texture::unpack(&tb) else { return empty; };
+
+    // Compose the palette inside `to_rgba8`'s callback — receives
+    // the texture's intrinsic palette id but we may override with
+    // the entity's base + apply overlays.
+    let rgba = tex.to_rgba8(|tex_palette_id| {
+        let chosen_base = if base_palette_id != 0 { base_palette_id } else { tex_palette_id };
+        let pb = source
+            .get_file_by_key(ResourceKey::new("eor/portal", chosen_base))
+            .map_err(|e| TextureDecodeError::PaletteFetch(format!("base {chosen_base:#010X}: {e}")))?;
+        let mut composed = Palette::unpack(&pb)
+            .map_err(|e| TextureDecodeError::PaletteFetch(format!("Palette::unpack base {chosen_base:#010X}: {e}")))?;
+        // Apply per-overlay sub-palette splices. Per-overlay failures
+        // are silently skipped — a missing or malformed sub-palette
+        // shouldn't fail the whole texture decode (worst case the
+        // creature renders with an unblended palette, which is what
+        // the unsubstituted path produces anyway).
+        for (sub_id, offset, length) in sub_palettes {
+            let Ok(spb) = source.get_file_by_key(ResourceKey::new("eor/portal", *sub_id)) else { continue; };
+            let Ok(sp) = Palette::unpack(&spb) else { continue; };
+            let off = *offset as usize;
+            let len = (*length as usize).min(sp.colors.len());
+            for i in 0..len {
+                let dst = off + i;
+                if dst < composed.colors.len() {
+                    composed.colors[dst] = sp.colors[i];
+                }
+            }
+        }
+        Ok(composed)
+    });
+    match rgba {
+        Ok(pixels) => SurfacePixels {
+            width: tex.width as u32,
+            height: tex.height as u32,
+            pixels,
+        },
+        Err(_) => empty,
+    }
+}
+
+/// Batch form of [`fetch_entity_surface_pixels_impl`] exposed to JS.
+/// `base_palette_id` and `sub_palettes` apply to **every** surface in
+/// `surface_dids` — appropriate for an NPC where one entity's palette
+/// state composes onto every body-part surface uniformly. The JS
+/// caller picks the surfaces from a single mesh's `surfaces` array
+/// and passes the entity's `palette_id` + `sub_palettes`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchEntitySurfacesPixels)]
+pub async fn fetch_entity_surfaces_pixels(
+    surface_dids: Vec<u32>,
+    base_palette_id: u32,
+    sub_palettes: Vec<u32>,
+) -> Result<Vec<SurfacePixels>, JsValue> {
+    use holtburger_dat::ResourceKey;
+    if sub_palettes.len() % 3 != 0 {
+        return Err(JsValue::from_str(
+            "fetch_entity_surfaces_pixels: sub_palettes must be flat [id, offset, length, ...] triples (length % 3 == 0)",
+        ));
+    }
+    let sp: Vec<(u32, u8, u8)> = sub_palettes
+        .chunks_exact(3)
+        .map(|c| (c[0], c[1] as u8, c[2] as u8))
+        .collect();
+    let source = global_source::global_source();
+    // Prefetch: the surfaces themselves, the base palette (if
+    // overridden), and every overlay palette. Surface→tex→intrinsic-
+    // palette walks ride into the surface prefetch already.
+    let mut initial: Vec<ResourceKey<'_>> = Vec::with_capacity(surface_dids.len() + 1 + sp.len());
+    for &sid in &surface_dids {
+        initial.push(ResourceKey::new("eor/portal", sid));
+    }
+    if base_palette_id != 0 {
+        initial.push(ResourceKey::new("eor/portal", base_palette_id));
+    }
+    for (id, _, _) in &sp {
+        initial.push(ResourceKey::new("eor/portal", *id));
+    }
+    let dids_for_walk = surface_dids.clone();
+    let sp_for_walk = sp.clone();
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        for &id in &dids_for_walk {
+            let _ = fetch_entity_surface_pixels_impl(s, id, base_palette_id, &sp_for_walk);
+        }
+    })
+    .await?;
+    let mut out = Vec::with_capacity(surface_dids.len());
+    for &id in &surface_dids {
+        out.push(fetch_entity_surface_pixels_impl(
+            source.as_ref(),
+            id,
+            base_palette_id,
+            &sp,
+        ));
     }
     Ok(out)
 }
@@ -4412,4 +4563,170 @@ mod tests_substitution {
     // future Phase C (idle-pose) test; suppress unused warning.
     #[allow(dead_code)]
     fn _unused_frame() -> Frame { Frame::default() }
+
+    // -------------------------------------------------------------
+    // Phase 4 step 6 Phase B — palette overlay tests
+    // -------------------------------------------------------------
+    //
+    // Synthesize a 1×1 P8 texture and verify three composition paths
+    // through fetch_entity_surface_pixels_impl:
+    //   1. base_palette_id = 0, no overlays → texture's intrinsic
+    //      palette wins (same as fetch_surface_pixels_impl).
+    //   2. base_palette_id = override, no overlays → override
+    //      replaces the intrinsic palette wholesale.
+    //   3. base_palette_id + sub_palettes overlay → overlay rewrites
+    //      a slice of the base palette before decode.
+    //
+    // ACE's `Creature.CalculateObjDesc` (Creature_Networking.cs:218)
+    // emits `objDesc.SubPalettes.Add({ SubPaletteId, Offset, Length })`
+    // for each `CloSubPalette.Range`; this test exercises the
+    // consumer side.
+
+    fn pack_palette(id: u32, colours: &[u32]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&(colours.len() as i32).to_le_bytes());
+        for &c in colours {
+            buf.extend_from_slice(&c.to_le_bytes());
+        }
+        buf
+    }
+
+    /// Pack a 1×1 P8 Texture pointing at `default_pal_id`. `pixel_idx`
+    /// is the single source byte (palette index) that to_rgba8 reads.
+    fn pack_p8_texture_1x1(id: u32, pixel_idx: u8, default_pal_id: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&0i32.to_le_bytes());      // _unknown
+        buf.extend_from_slice(&1i32.to_le_bytes());      // width
+        buf.extend_from_slice(&1i32.to_le_bytes());      // height
+        buf.extend_from_slice(&41u32.to_le_bytes());     // format = P8 (41)
+        buf.extend_from_slice(&1i32.to_le_bytes());      // length = 1
+        buf.push(pixel_idx);                              // source_data[0]
+        buf.extend_from_slice(&default_pal_id.to_le_bytes()); // P8 → palette_id present
+        buf
+    }
+
+    fn pack_surface_texture(id: u32, mip_chain: &[u32]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&0i32.to_le_bytes());      // unknown_int
+        buf.push(0u8);                                    // unknown_byte
+        buf.extend_from_slice(&(mip_chain.len() as i32).to_le_bytes());
+        for &t in mip_chain {
+            buf.extend_from_slice(&t.to_le_bytes());
+        }
+        buf
+    }
+
+    fn pack_textured_surface(surface_type: u32, tex_id: u32, pal_id: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&surface_type.to_le_bytes());
+        buf.extend_from_slice(&tex_id.to_le_bytes());
+        buf.extend_from_slice(&pal_id.to_le_bytes());
+        buf.extend_from_slice(&0.0f32.to_le_bytes());    // translucency
+        buf.extend_from_slice(&0.0f32.to_le_bytes());    // luminosity
+        buf.extend_from_slice(&1.0f32.to_le_bytes());    // diffuse
+        buf
+    }
+
+    fn build_palette_overlay_source() -> (
+        MockSource,
+        u32, /* surface */
+        u32, /* override_pal */
+        u32, /* overlay_pal */
+    ) {
+        // Index 42 in each palette uniquely identifies which palette
+        // wins the lookup. Source byte = 42.
+        let intrinsic_pal_id: u32 = 0x04000001;
+        let override_pal_id: u32 = 0x04000002;
+        let overlay_pal_id: u32 = 0x04000003;
+        let texture_id: u32 = 0x06000001;
+        let surface_texture_id: u32 = 0x05000001;
+        let surface_id: u32 = 0x08000001;
+
+        let mut intrinsic_colors = vec![0u32; 256];
+        intrinsic_colors[42] = 0xFFFF0000; // ARGB → red
+        let intrinsic = pack_palette(intrinsic_pal_id, &intrinsic_colors);
+
+        let mut override_colors = vec![0u32; 256];
+        override_colors[42] = 0xFF0000FF; // ARGB → blue
+        let override_pal = pack_palette(override_pal_id, &override_colors);
+
+        // Overlay only rewrites two consecutive entries starting at 42.
+        // entry 0 (= dst 42) = green; entry 1 (= dst 43) = unused here.
+        let overlay_colors = vec![0xFF00FF00u32, 0xFFFFFFFFu32];
+        let overlay_pal = pack_palette(overlay_pal_id, &overlay_colors);
+
+        let texture = pack_p8_texture_1x1(texture_id, 42, intrinsic_pal_id);
+        let surface_texture = pack_surface_texture(surface_texture_id, &[texture_id]);
+        // 0x02 = Base1Image — textured surface, body = (tex_id, pal_id).
+        let surface = pack_textured_surface(0x02, surface_texture_id, intrinsic_pal_id);
+
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(("eor/portal".into(), surface_id), surface);
+        files.insert(("eor/portal".into(), surface_texture_id), surface_texture);
+        files.insert(("eor/portal".into(), texture_id), texture);
+        files.insert(("eor/portal".into(), intrinsic_pal_id), intrinsic);
+        files.insert(("eor/portal".into(), override_pal_id), override_pal);
+        files.insert(("eor/portal".into(), overlay_pal_id), overlay_pal);
+        let source = MockSource { files };
+        (source, surface_id, override_pal_id, overlay_pal_id)
+    }
+
+    /// base_palette_id = 0 + no overlays = intrinsic palette wins.
+    /// Mirrors the no-substitution fetch_surface_pixels_impl path.
+    #[test]
+    fn entity_surface_pixels_no_override_uses_intrinsic_palette() {
+        let (source, surface_id, _, _) = build_palette_overlay_source();
+        let out = fetch_entity_surface_pixels_impl(&source, surface_id, 0, &[]);
+        assert_eq!(out.width, 1);
+        assert_eq!(out.height, 1);
+        assert_eq!(out.pixels, vec![0xFF, 0, 0, 0xFF], "expected red (intrinsic palette)");
+    }
+
+    /// base_palette_id = override + no overlays = override wins.
+    /// Mirrors C# `objDesc.PaletteID = PaletteBaseDID.Value` with no
+    /// SubPalettes (a creature's PaletteBase but no clothing dyes).
+    #[test]
+    fn entity_surface_pixels_base_override_replaces_intrinsic() {
+        let (source, surface_id, override_pal_id, _) = build_palette_overlay_source();
+        let out = fetch_entity_surface_pixels_impl(&source, surface_id, override_pal_id, &[]);
+        assert_eq!(out.pixels, vec![0, 0, 0xFF, 0xFF], "expected blue (override palette wins)");
+    }
+
+    /// base override + overlay rewriting index 42 → overlay's first
+    /// colour wins for that index. Mirrors C#'s post-overlay state
+    /// where SubPalettes splice atop the base.
+    #[test]
+    fn entity_surface_pixels_overlay_splices_into_base() {
+        let (source, surface_id, override_pal_id, overlay_pal_id) =
+            build_palette_overlay_source();
+        let out = fetch_entity_surface_pixels_impl(
+            &source,
+            surface_id,
+            override_pal_id,
+            &[(overlay_pal_id, 42u8, 1u8)], // splice 1 colour at offset 42
+        );
+        assert_eq!(out.pixels, vec![0, 0xFF, 0, 0xFF], "expected green (overlay wins at offset 42)");
+    }
+
+    /// Out-of-range overlay slice — defensive clamp prevents panic
+    /// and silently truncates beyond palette bounds. The two
+    /// in-range writes still apply.
+    #[test]
+    fn entity_surface_pixels_overlay_clamps_out_of_range() {
+        let (source, surface_id, override_pal_id, overlay_pal_id) =
+            build_palette_overlay_source();
+        let out = fetch_entity_surface_pixels_impl(
+            &source,
+            surface_id,
+            override_pal_id,
+            &[(overlay_pal_id, 42u8, 200u8)], // length way exceeds overlay's 2 entries
+        );
+        // The overlay only has 2 colours. Length is clamped to 2 →
+        // index 42 = green (overlay[0]); index 43 = white (overlay[1]).
+        // Sample pixel reads index 42 → green.
+        assert_eq!(out.pixels, vec![0, 0xFF, 0, 0xFF]);
+    }
 }
