@@ -18,6 +18,36 @@
       #stage { display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-start; margin-top: 0.5rem; }
       #stage canvas { border: 1px solid #ccc; background: #101010; image-rendering: pixelated; cursor: grab; touch-action: none; }
       #stage canvas.dragging { cursor: grabbing; }
+      /* Virtual keypad — for testing on devices without a physical
+         keyboard (Tailscale-served page on phone/tablet). Mirrors the
+         WASD/QE/Shift movement keys + scroll-wheel zoom + a centre-on-
+         player home button. Each button dispatches a synthetic
+         KeyboardEvent on document so the existing keystate handler at
+         line 2753 picks it up unchanged. */
+      #virtual-keypad {
+        display: inline-flex; gap: 1.5rem; align-items: flex-start;
+        margin: 0.6rem 0; padding: 0.7rem 0.9rem;
+        background: #1a1a1a; border: 1px solid #333; border-radius: 6px;
+        user-select: none; -webkit-user-select: none;
+        touch-action: manipulation;
+      }
+      #virtual-keypad .pad-section { display: grid; gap: 0.35rem; }
+      #virtual-keypad .pad-wasd { grid-template-columns: repeat(3, 3rem); grid-template-rows: repeat(2, 3rem); }
+      #virtual-keypad .pad-side  { grid-template-columns: repeat(3, 3rem); grid-template-rows: auto; }
+      #virtual-keypad button {
+        font-family: ui-monospace, monospace;
+        font-size: 0.95rem; font-weight: bold;
+        background: #2a2a2a; color: #ddd;
+        border: 1px solid #555; border-radius: 4px;
+        cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+        padding: 0;
+        touch-action: manipulation;
+      }
+      #virtual-keypad button:hover { background: #3a3a3a; }
+      #virtual-keypad button.held { background: #4a7a9a; color: #fff; border-color: #6a9aba; }
+      #virtual-keypad button.wide { grid-column: span 3; }
+      #virtual-keypad .pad-label { color: #888; font-size: 0.7rem; padding: 0 0 0.2rem 0.05rem; grid-column: span 3; }
       #stage-info { font-size: 0.9rem; min-width: 14rem; }
       #stage-info dt { font-weight: bold; }
       #stage-info dd { margin: 0 0 0.4rem 0; color: #444; font-family: ui-monospace, monospace; }
@@ -184,6 +214,31 @@
       <dl id="stage-info"></dl>
     </div>
     <div id="render-status" class="hint">Render pending login.</div>
+
+    <!-- Virtual keypad: lets the page be playable on touchscreens
+         (the Tailscale-served URL is opened from a phone/tablet
+         without a physical keyboard). Mirrors the WASD/QE/Shift
+         keys + scroll-wheel zoom + a centre-on-player button. Wires
+         up after the page module loads — see "virtual keypad wiring"
+         in the script below. -->
+    <div id="virtual-keypad" aria-label="Virtual movement keypad for touchscreen testing">
+      <div class="pad-section pad-wasd" aria-label="movement">
+        <div class="pad-label">move / turn</div>
+        <button data-vk-key="q" data-vk-hold>Q</button>
+        <button data-vk-key="w" data-vk-hold>W</button>
+        <button data-vk-key="e" data-vk-hold>E</button>
+        <button data-vk-key="a" data-vk-hold>A</button>
+        <button data-vk-key="s" data-vk-hold>S</button>
+        <button data-vk-key="d" data-vk-hold>D</button>
+      </div>
+      <div class="pad-section pad-side" aria-label="modifiers + camera">
+        <div class="pad-label">camera / mod</div>
+        <button data-vk-zoom="in"  title="Zoom in (mouse wheel up)">+</button>
+        <button data-vk-center     title="Centre on local player">⌂</button>
+        <button data-vk-zoom="out" title="Zoom out (mouse wheel down)">−</button>
+        <button class="wide" data-vk-key="Shift" data-vk-toggle title="Run modifier (toggle)">Shift (run)</button>
+      </div>
+    </div>
 
     <!--
       PixiJS 8 ESM build pinned via jsdelivr. We import * as PIXI rather
@@ -1452,6 +1507,7 @@ void main() {
         window.handleEntityRemove = handleEntityRemove;
         window.handlePositionUpdate = handlePositionUpdate;
         window.setLocalPlayerGuid = setLocalPlayerGuid;
+        window.getLocalPlayerGuid = getLocalPlayerGuid;
         window.updateNameplatePositions = updateNameplatePositions;
         // Phase 4 step 6 Tier 2 capture surface: expose the
         // walk-bake kicker + cache-key derivation so capture
@@ -1561,6 +1617,7 @@ void main() {
       // matches this.
       let localPlayerGuid = null;
       function setLocalPlayerGuid(guid) { localPlayerGuid = guid >>> 0; }
+      function getLocalPlayerGuid() { return localPlayerGuid; }
 
       // Phase 4 step 6a/6b: ItemType bitmask values from
       // external/ACE/Source/ACE.Entity/Enum/ItemType.cs:6 — the wire
@@ -2778,6 +2835,136 @@ void main() {
           window.addEventListener("blur", () => {
             for (const k of Object.keys(keyState)) keyState[k] = false;
           });
+
+          // ----- Virtual keypad wiring -----------------------------
+          // For touchscreen testing on the Tailscale-served URL.
+          // Each [data-vk-key] button dispatches synthetic
+          // KeyboardEvents on `document` so the existing keystate
+          // handler above picks them up unchanged. The keypad markup
+          // sits in DOM from page load (see #virtual-keypad), so we
+          // just attach handlers here once.
+          //
+          // - data-vk-hold: pointerdown → keydown, pointerup/leave/
+          //   cancel → keyup. Mirrors holding a physical key.
+          // - data-vk-toggle: pointerdown → toggle. Tap once to lock
+          //   the key down, tap again to release. Useful for Shift
+          //   on a touchscreen where you can't hold + tap movement.
+          // - data-vk-zoom: directly multiplies cameraContainer.scale
+          //   via the same math as the wheel handler at line ~1697.
+          // - data-vk-center: centres the camera on the local player
+          //   sprite (if known) or the scene centre.
+          //
+          // Synthetic KeyboardEvent quirk: `KeyboardEvent.key` is a
+          // read-only property set via the dict literal. The existing
+          // handler reads `ev.key` + `ev.key.toLowerCase()`, both
+          // honoured by the synthetic event.
+          (function wireVirtualKeypad() {
+            const pad = document.getElementById("virtual-keypad");
+            if (!pad) return;
+            const fireKey = (key, type) => {
+              document.dispatchEvent(new KeyboardEvent(type, {
+                key, bubbles: true, cancelable: true,
+              }));
+            };
+            const SCALE_MIN = 0.05, SCALE_MAX = 5.0;
+            const vkZoom = (dir) => {
+              if (!window.liveScene?.cameraContainer) return;
+              const cam = window.liveScene.cameraContainer;
+              const renderer = window.liveScene?.app?.renderer;
+              const cw = renderer?.canvas?.width  ?? 512;
+              const ch = renderer?.canvas?.height ?? 512;
+              const cx = cw / 2, cy = ch / 2;
+              const factor = dir === "in" ? 1.2 : 1 / 1.2;
+              const next = cam.scale.x * factor;
+              if (next < SCALE_MIN || next > SCALE_MAX) return;
+              const preX = (cx - cam.position.x) / cam.scale.x;
+              const preY = (cy - cam.position.y) / cam.scale.y;
+              cam.scale.set(next, next);
+              const postX = (cx - cam.position.x) / next;
+              const postY = (cy - cam.position.y) / next;
+              cam.position.x += (postX - preX) * next;
+              cam.position.y += (postY - preY) * next;
+            };
+            const vkCenter = () => {
+              if (!window.liveScene?.cameraContainer) return;
+              const cam = window.liveScene.cameraContainer;
+              const renderer = window.liveScene?.app?.renderer;
+              const cw = renderer?.canvas?.width  ?? 512;
+              const ch = renderer?.canvas?.height ?? 512;
+              // Prefer local player sprite; fall back to current
+              // camera centre (no-op visually, just normalises).
+              const lpg = (typeof window.getLocalPlayerGuid === "function")
+                ? window.getLocalPlayerGuid() : null;
+              let wx = null, wy = null;
+              if (lpg !== null && lpg !== undefined && window.entityMap) {
+                const e = window.entityMap.get(lpg >>> 0);
+                if (e?.sprite) { wx = e.sprite.x; wy = e.sprite.y; }
+              }
+              if (wx === null) {
+                // Scene centre = current camera focus point.
+                wx = (cw / 2 - cam.position.x) / cam.scale.x;
+                wy = (ch / 2 - cam.position.y) / cam.scale.y;
+              }
+              const sx = cam.scale.x;
+              cam.position.set(cw / 2 - wx * sx, ch / 2 + wy * sx);
+            };
+            // Track which buttons have been locked down via toggle so
+            // we can release them on a second tap or window blur.
+            const heldByVk = new Set();
+            const setHeld = (btn, on) => {
+              btn.classList.toggle("held", on);
+              if (on) heldByVk.add(btn); else heldByVk.delete(btn);
+            };
+            window.addEventListener("blur", () => {
+              for (const btn of heldByVk) {
+                fireKey(btn.dataset.vkKey, "keyup");
+                btn.classList.remove("held");
+              }
+              heldByVk.clear();
+            });
+            for (const btn of pad.querySelectorAll("button")) {
+              const key = btn.dataset.vkKey;
+              const isHold = btn.hasAttribute("data-vk-hold");
+              const isToggle = btn.hasAttribute("data-vk-toggle");
+              const zoom = btn.dataset.vkZoom;
+              const isCenter = btn.hasAttribute("data-vk-center");
+
+              if (isHold && key) {
+                btn.addEventListener("pointerdown", (ev) => {
+                  ev.preventDefault();
+                  btn.setPointerCapture(ev.pointerId);
+                  setHeld(btn, true);
+                  fireKey(key, "keydown");
+                });
+                const release = () => {
+                  if (!btn.classList.contains("held")) return;
+                  setHeld(btn, false);
+                  fireKey(key, "keyup");
+                };
+                btn.addEventListener("pointerup", release);
+                btn.addEventListener("pointercancel", release);
+                btn.addEventListener("pointerleave", release);
+              } else if (isToggle && key) {
+                btn.addEventListener("pointerdown", (ev) => {
+                  ev.preventDefault();
+                  const wasHeld = btn.classList.contains("held");
+                  setHeld(btn, !wasHeld);
+                  fireKey(key, wasHeld ? "keyup" : "keydown");
+                });
+              } else if (zoom) {
+                btn.addEventListener("pointerdown", (ev) => {
+                  ev.preventDefault(); vkZoom(zoom);
+                });
+              } else if (isCenter) {
+                btn.addEventListener("pointerdown", (ev) => {
+                  ev.preventDefault(); vkCenter();
+                });
+              }
+              // Suppress browser default for buttons inside the pad
+              // so contextmenu / long-press doesn't pop up on mobile.
+              btn.addEventListener("contextmenu", (ev) => ev.preventDefault());
+            }
+          })();
 
           // Phase 4 step 2a — drain the SessionHandle's queued events
           // each animation frame. The recv loop in Rust pushes events
