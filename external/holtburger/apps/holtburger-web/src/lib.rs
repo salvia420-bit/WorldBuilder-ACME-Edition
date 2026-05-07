@@ -1318,7 +1318,7 @@ impl ModelMesh {
 /// Internal triangle accumulator. Mirrors `ObjectSpriteGenerator.Tri`
 /// in the C# reference, minus the centroid-Z (we sort painter-style
 /// in JS instead of in Rust — simpler boundary).
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 struct Tri {
     pos: [[f32; 3]; 3],
     uv: [[f32; 2]; 3],
@@ -1328,16 +1328,38 @@ struct Tri {
 
 /// Walk a [`GfxObj`]'s polygons, fan-triangulate each, transform by
 /// `(part_rot, part_offset)`, and append to `tris`. Mirrors the C#
-/// `AppendGfxTris` line-for-line.
-///
-/// `surface_did = 0` for any polygon whose `pos_surface` is out of
-/// range — caller falls back to a flat colour.
-#[cfg(target_arch = "wasm32")]
+/// `AppendGfxTris` line-for-line. Equivalent to the
+/// `_with_tex_swaps` variant called with an empty swap table — kept
+/// as a thin wrapper so existing callers (static placements,
+/// non-substituted entities) don't change.
+#[cfg(any(target_arch = "wasm32", test))]
 fn append_gfx_tris(
     tris: &mut Vec<Tri>,
     gfx: &holtburger_dat::file_type::GfxObj,
     part_offset: holtburger_common::Vector3,
     part_rot: holtburger_common::Quaternion,
+) {
+    append_gfx_tris_with_tex_swaps(tris, gfx, part_offset, part_rot, &[]);
+}
+
+/// Phase 4 step 6 Phase A: like [`append_gfx_tris`], but rewrites
+/// `surface_did` per-polygon when the polygon's resolved surface_did
+/// matches one of the `(old, new)` swap entries. Implements
+/// `CloTextureEffect` substitution from ACE's `CalculateObjDesc`
+/// (mirrors `Creature_Networking.cs:185`'s
+/// `objDesc.AddTextureChange(new PropertiesTextureMap { PartIndex,
+/// OldTexture, NewTexture })` at the consumer end). Empty
+/// `tex_swaps` is the cheap path used for static placements.
+///
+/// `surface_did = 0` for any polygon whose `pos_surface` is out of
+/// range — caller falls back to a flat colour.
+#[cfg(any(target_arch = "wasm32", test))]
+fn append_gfx_tris_with_tex_swaps(
+    tris: &mut Vec<Tri>,
+    gfx: &holtburger_dat::file_type::GfxObj,
+    part_offset: holtburger_common::Vector3,
+    part_rot: holtburger_common::Quaternion,
+    tex_swaps: &[(u32, u32)],
 ) {
     use holtburger_dat::graphics::Polygon;
     if gfx.vertex_array.vertices.is_empty() || gfx.polygons.is_empty() {
@@ -1356,13 +1378,22 @@ fn append_gfx_tris(
         const NO_POS: u8 = 0x04;
         if (poly.stippling & NO_POS) != 0 { continue; }
 
-        let surface_did = if poly.pos_surface >= 0
+        let raw_surface_did = if poly.pos_surface >= 0
             && (poly.pos_surface as usize) < gfx.surfaces.len()
         {
             gfx.surfaces[poly.pos_surface as usize]
         } else {
             0
         };
+        // Phase 4 step 6 Phase A: apply per-part texture swaps. An
+        // empty `tex_swaps` (the static-placement path) skips the
+        // search entirely. NPC parts typically have ≤4 swaps each so
+        // a linear find is fine.
+        let surface_did = tex_swaps
+            .iter()
+            .find(|(old, _)| *old == raw_surface_did)
+            .map(|(_, new)| *new)
+            .unwrap_or(raw_surface_did);
 
         // Resolve ring of (position, uv) per vertex.
         let mut ring_pos: Vec<[f32; 3]> = Vec::with_capacity(poly.vertex_ids.len());
@@ -1407,7 +1438,7 @@ fn append_gfx_tris(
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 fn quat_rotate(q: holtburger_common::Quaternion, v: holtburger_common::Vector3) -> holtburger_common::Vector3 {
     // Standard quaternion vector rotation: v' = q * v * q^-1, expanded
     // to 16 mults / 12 adds. Same math as System.Numerics.Vector3.Transform.
@@ -1427,7 +1458,7 @@ fn quat_rotate(q: holtburger_common::Quaternion, v: holtburger_common::Vector3) 
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 fn tri_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
     let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
@@ -1438,15 +1469,32 @@ fn tri_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
     ]
 }
 
-/// Walk a SetupModel: for each part, fetch its GfxObj, transform by
-/// the part's placement frame, and append triangles. Step 6 v1 only
-/// uses `placement_frames` (Resting → Default → first); idle-pose
-/// animation lookup is step-6 follow-on, matching the C# reference's
-/// `TryResolveIdleAnimFrame` fallback chain.
-#[cfg(target_arch = "wasm32")]
-fn triangulate_setup_model<S: holtburger_dat::ResourceSource + ?Sized>(
+/// Phase 4 step 6 Phase A: substitution-aware setup walker. ACE's
+/// `Creature.CalculateObjDesc()` (in
+/// `~/ace-server/Source/ACE.Server/WorldObjects/Creature_Networking.cs:35-243`)
+/// walks an NPC's equipped inventory server-side, reads each equipped
+/// item's `ClothingTable` from the DAT, and ships the resulting
+/// `ObjDesc` (`AnimPartChanges` + `TextureChanges` + `SubPalettes`) on
+/// the wire as `ModelData` on `ObjectCreate`. The browser doesn't need
+/// to walk inventory or parse `ClothingTable` — it just applies what
+/// ACE already computed.
+///
+/// `model_changes` is `&[(part_index, gfx_obj_did)]`: when a part
+/// index appears here, the substituted GfxObj DID is loaded instead of
+/// the SetupModel's default `parts[part_index]`. Mirrors
+/// `CloObjectEffect` application at `Creature_Networking.cs:182`.
+///
+/// `texture_changes` is `&[(part_index, old_surface_did, new_surface_did)]`:
+/// while triangulating part `part_index`, any polygon whose
+/// `surface_did == old_surface_did` is rewritten to `new_surface_did`.
+/// Mirrors `CloTextureEffect` application at
+/// `Creature_Networking.cs:185`.
+#[cfg(any(target_arch = "wasm32", test))]
+fn triangulate_setup_model_with_substitutions<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     setup_id: u32,
+    model_changes: &[(u8, u32)],
+    texture_changes: &[(u8, u32, u32)],
     tris: &mut Vec<Tri>,
 ) -> Option<()> {
     use holtburger_dat::file_type::{GfxObj, SetupModel};
@@ -1458,14 +1506,24 @@ fn triangulate_setup_model<S: holtburger_dat::ResourceSource + ?Sized>(
     let setup = SetupModel::unpack(&mut std::io::Cursor::new(&bytes)).ok()?;
 
     // Pick the placement frame to apply: Resting (0) → Default → first.
-    // Per holtburger-common::Placement enum which mirrors AC's.
+    // Per holtburger-common::Placement enum which mirrors AC's. Phase C
+    // will replace this with MotionTable idle-cycle frames.
     let placement = setup
         .placement_frames
         .get(&0)
         .or_else(|| setup.placement_frames.get(&1))
         .or_else(|| setup.placement_frames.values().next());
 
-    for (pi, &part_id) in setup.parts.iter().enumerate() {
+    for (pi, &default_part_id) in setup.parts.iter().enumerate() {
+        // Resolve the actual GfxObj DID for this part: substitution wins
+        // over the setup's default. ACE's `CalculateObjDesc` produces
+        // exactly one AnimPartChange per substituted slot, so a linear
+        // search is fine (NPCs have at most ~25 substitutions).
+        let part_id = model_changes
+            .iter()
+            .find(|(idx, _)| *idx as usize == pi)
+            .map(|(_, gfx)| *gfx)
+            .unwrap_or(default_part_id);
         if (part_id >> 24) as u8 != 0x01 { continue; }
         let Ok(part_bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", part_id))
             else { continue };
@@ -1489,7 +1547,15 @@ fn triangulate_setup_model<S: holtburger_dat::ResourceSource + ?Sized>(
             )
         };
 
-        append_gfx_tris(tris, &gfx, offset, rot);
+        // Per-part texture remap table for append_gfx_tris_with_tex_swaps.
+        // Empty for parts without texture changes — the swap is a no-op
+        // path inside the appender, so passing empty stays cheap.
+        let part_tex_swaps_buf: Vec<(u32, u32)> = texture_changes
+            .iter()
+            .filter(|(p, _, _)| *p as usize == pi)
+            .map(|(_, old, new)| (*old, *new))
+            .collect();
+        append_gfx_tris_with_tex_swaps(tris, &gfx, offset, rot, &part_tex_swaps_buf);
     }
     Some(())
 }
@@ -1499,10 +1565,24 @@ fn triangulate_setup_model<S: holtburger_dat::ResourceSource + ?Sized>(
 /// walk through parts. Returns `None` if the model record can't be
 /// loaded; an empty Vec means "loaded but had no drawable polygons"
 /// (legitimate — some retail models are physics-only).
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 fn triangulate_model<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     model_id: u32,
+) -> Option<Vec<Tri>> {
+    triangulate_model_with_substitutions(source, model_id, &[], &[])
+}
+
+/// Phase 4 step 6 Phase A: substitution-aware top-level dispatch.
+/// `0x01` (raw GfxObj) ignores the substitution tables since there's
+/// only one part. `0x02` (SetupModel) routes through the substitution-
+/// aware walker.
+#[cfg(any(target_arch = "wasm32", test))]
+fn triangulate_model_with_substitutions<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    model_id: u32,
+    model_changes: &[(u8, u32)],
+    texture_changes: &[(u8, u32, u32)],
 ) -> Option<Vec<Tri>> {
     use holtburger_dat::file_type::GfxObj;
     use holtburger_dat::ResourceKey;
@@ -1520,7 +1600,15 @@ fn triangulate_model<S: holtburger_dat::ResourceSource + ?Sized>(
                 holtburger_common::Quaternion::identity(),
             );
         }
-        0x02 => { triangulate_setup_model(source, model_id, &mut tris)?; }
+        0x02 => {
+            triangulate_setup_model_with_substitutions(
+                source,
+                model_id,
+                model_changes,
+                texture_changes,
+                &mut tris,
+            )?;
+        }
         _ => return None,
     }
     Some(tris)
@@ -1753,6 +1841,87 @@ pub async fn fetch_model_meshes(model_ids: Vec<u32>) -> Result<Vec<ModelMesh>, J
         out.push(pack_model_mesh(tris));
     }
     Ok(out)
+}
+
+/// Phase 4 step 6 Phase A: triangulate a SetupModel with the
+/// per-part GfxObj substitutions + per-part texture remaps that ACE
+/// pre-computes server-side and ships in `ObjectDescriptionData
+/// .model_data`. Used for live entities (NPCs, monsters, players)
+/// arriving via `ObjectCreate` — static placements still call
+/// `fetch_model_mesh` since they have no substitutions.
+///
+/// Wire format match (per ACE's `ObjDesc` struct):
+/// - `model_changes` is a flat `Uint32Array` of `[part_index_u8,
+///   gfx_obj_did_u32, …]` pairs, encoded as `[index, gfx, index, gfx,
+///   …]` to keep the wasm-bindgen JS boundary cheap. Each pair
+///   replaces `setup.parts[index]` with `gfx` before triangulation.
+/// - `texture_changes` is a flat `Uint32Array` of `[part_index_u8,
+///   old_surface_did_u32, new_surface_did_u32, …]` triples. While
+///   triangulating `setup.parts[part_index]`, any polygon whose
+///   resolved surface DID matches `old_surface_did` is rewritten to
+///   `new_surface_did`.
+///
+/// JS caller: pass `EntityUpdate.modelChanges` /
+/// `EntityUpdate.textureChanges` (Uint32Array getters that mirror the
+/// ACE-side `model_data`). Empty `Uint32Array(0)` for entities without
+/// substitutions degrades to `triangulate_model`'s behaviour exactly,
+/// so passing them unconditionally is safe — the only reason we keep
+/// `fetch_model_mesh` distinct is to avoid wire-marshalling overhead
+/// on the static-placement hot path (~239 entries on Holtburg first
+/// boot).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchEntityModelRender)]
+pub async fn fetch_entity_model_render(
+    setup_id: u32,
+    model_changes: Vec<u32>,
+    texture_changes: Vec<u32>,
+) -> Result<ModelMesh, JsValue> {
+    use holtburger_dat::ResourceKey;
+    // Decode the flat-pair / flat-triple buffers. Reject mis-aligned
+    // input early so the JS-side bug surfaces as a clear error rather
+    // than a silently-truncated mesh.
+    if model_changes.len() % 2 != 0 {
+        return Err(JsValue::from_str(
+            "fetch_entity_model_render: model_changes must be flat [partIndex, gfxId, ...] pairs (even length)",
+        ));
+    }
+    if texture_changes.len() % 3 != 0 {
+        return Err(JsValue::from_str(
+            "fetch_entity_model_render: texture_changes must be flat [partIndex, oldSurface, newSurface, ...] triples (length % 3 == 0)",
+        ));
+    }
+    let mc: Vec<(u8, u32)> = model_changes
+        .chunks_exact(2)
+        .map(|c| (c[0] as u8, c[1]))
+        .collect();
+    let tc: Vec<(u8, u32, u32)> = texture_changes
+        .chunks_exact(3)
+        .map(|c| (c[0] as u8, c[1], c[2]))
+        .collect();
+
+    // Prefetch: the setup itself, every part the SetupModel references
+    // by default, AND every substituted GfxObj the model_changes table
+    // names. Texture-change targets ride into the prefetch through the
+    // GfxObj surface-DID walk inside ensure_walk_prefetched.
+    let source = global_source::global_source();
+    let mut initial: Vec<ResourceKey<'_>> = Vec::with_capacity(1 + mc.len());
+    initial.push(ResourceKey::new("eor/portal", setup_id));
+    for (_, gfx_id) in &mc {
+        initial.push(ResourceKey::new("eor/portal", *gfx_id));
+    }
+    let mc_for_walk = mc.clone();
+    let tc_for_walk = tc.clone();
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        let _ = triangulate_model_with_substitutions(s, setup_id, &mc_for_walk, &tc_for_walk);
+    })
+    .await?;
+    let tris = triangulate_model_with_substitutions(source.as_ref(), setup_id, &mc, &tc)
+        .ok_or_else(|| {
+            JsValue::from_str(&format!(
+                "fetch_entity_model_render: triangulate setup 0x{setup_id:08X} failed"
+            ))
+        })?;
+    Ok(pack_model_mesh(tris))
 }
 
 // ============================================================
@@ -2132,6 +2301,34 @@ pub struct EntityUpdate {
     /// for future animation-state polish (walk-cycle anims). `0` when
     /// absent.
     mtable_id: u32,
+    // --- Phase 4 step 6 Phase A: model-data substitutions ----------
+    // ACE's `Creature.CalculateObjDesc()` walks the NPC's equipped
+    // inventory server-side, reads each equipped item's ClothingTable
+    // from the DAT, and ships the resulting per-part GfxObj swaps +
+    // texture remaps + palette overlays in `ObjectDescriptionData
+    // .model_data`. The browser's job is to APPLY them when
+    // triangulating; we surface them here as flat Uint32Array buffers
+    // and the JS rasterizer hands them to fetch_entity_model_render.
+    /// Flat `[part_index_u8, gfx_obj_did_u32, …]` pairs. Empty for
+    /// non-Spawn updates and for entities with no part substitutions
+    /// (most static placements + bare creatures). Per pair: replace
+    /// `setup.parts[part_index]` with `gfx_obj_did`. Mirrors
+    /// `ObjectDescriptionData.model_data.model_changes` from the wire.
+    model_changes: Vec<u32>,
+    /// Flat `[part_index_u8, old_surface_did_u32, new_surface_did_u32, …]`
+    /// triples. Empty for non-Spawn / no-substitution. Per triple:
+    /// while triangulating part `part_index`, swap polygon surface
+    /// `old_surface_did` for `new_surface_did`. Mirrors
+    /// `ObjectDescriptionData.model_data.texture_changes`.
+    texture_changes: Vec<u32>,
+    /// Flat `[sub_palette_did_u32, offset_u8, length_u8, …]` triples.
+    /// Empty for non-Spawn / no-substitution. Per triple: overwrite the
+    /// base palette's `[offset, offset+length)` colour-index range with
+    /// the colours from `sub_palette_did`. Phase B consumes this in a
+    /// future `fetch_surfaces_pixels_with_palette` export; surfaced
+    /// now so step 6a/A doesn't drop the data on the floor. Mirrors
+    /// `ObjectDescriptionData.model_data.sub_palettes`.
+    sub_palettes: Vec<u32>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2238,6 +2435,29 @@ impl EntityUpdate {
     #[wasm_bindgen(getter, js_name = mtableId)]
     pub fn mtable_id(&self) -> u32 {
         self.mtable_id
+    }
+
+    /// Phase 4 step 6 Phase A: flat `[part_index, gfx_obj_did, …]`
+    /// pairs from `model_data.model_changes`. JS hands this directly
+    /// to `fetchEntityModelRender(setupId, modelChanges, …)`. Empty
+    /// for non-Spawn updates.
+    #[wasm_bindgen(getter, js_name = modelChanges)]
+    pub fn model_changes(&self) -> Vec<u32> {
+        self.model_changes.clone()
+    }
+
+    /// Phase 4 step 6 Phase A: flat `[part_index, old_surface, new_surface, …]`
+    /// triples from `model_data.texture_changes`.
+    #[wasm_bindgen(getter, js_name = textureChanges)]
+    pub fn texture_changes(&self) -> Vec<u32> {
+        self.texture_changes.clone()
+    }
+
+    /// Phase 4 step 6 Phase A: flat `[sub_palette_did, offset, length, …]`
+    /// triples from `model_data.sub_palettes`. Phase B consumer.
+    #[wasm_bindgen(getter, js_name = subPalettes)]
+    pub fn sub_palettes(&self) -> Vec<u32> {
+        self.sub_palettes.clone()
     }
 }
 
@@ -3377,6 +3597,9 @@ async fn recv_loop(
                                 icon_id: 0,
                                 palette_id: 0,
                                 mtable_id: 0,
+                                model_changes: Vec::new(),
+                                texture_changes: Vec::new(),
+                                sub_palettes: Vec::new(),
                             });
                         }
                         GameMessage::PrivateUpdatePosition(data) => {
@@ -3416,6 +3639,9 @@ async fn recv_loop(
                                     icon_id: 0,
                                     palette_id: 0,
                                     mtable_id: 0,
+                                    model_changes: Vec::new(),
+                                    texture_changes: Vec::new(),
+                                    sub_palettes: Vec::new(),
                                 });
                             }
                         }
@@ -3449,6 +3675,9 @@ async fn recv_loop(
                                 icon_id: 0,
                                 palette_id: 0,
                                 mtable_id: 0,
+                                model_changes: Vec::new(),
+                                texture_changes: Vec::new(),
+                                sub_palettes: Vec::new(),
                             });
                         }
                         GameMessage::ObjectCreate(data) => {
@@ -3495,6 +3724,38 @@ async fn recv_loop(
                             let obj_scale = data.obj_scale.unwrap_or(1.0);
                             let palette_id = data.model_data.palette_id.unwrap_or(0);
                             let mtable_id = data.mtable_id.unwrap_or(0);
+                            // Phase 4 step 6 Phase A: ACE pre-computes
+                            // ClothingTable substitutions in
+                            // `Creature.CalculateObjDesc()` (~/ace-server
+                            // /Source/ACE.Server/WorldObjects/Creature_
+                            // Networking.cs:35-243) and ships the
+                            // resulting per-part GfxObj swaps + texture
+                            // remaps + palette overlays here. Pack each
+                            // into the flat-pair / flat-triple shape
+                            // EntityUpdate's wasm-bindgen getters
+                            // expose, so the JS rasterizer can pass
+                            // them straight through to
+                            // `fetchEntityModelRender`.
+                            let mut model_changes: Vec<u32> =
+                                Vec::with_capacity(data.model_data.model_changes.len() * 2);
+                            for mc in &data.model_data.model_changes {
+                                model_changes.push(mc.index as u32);
+                                model_changes.push(mc.animation_id);
+                            }
+                            let mut texture_changes: Vec<u32> =
+                                Vec::with_capacity(data.model_data.texture_changes.len() * 3);
+                            for tc in &data.model_data.texture_changes {
+                                texture_changes.push(tc.part_index as u32);
+                                texture_changes.push(tc.old_id);
+                                texture_changes.push(tc.new_id);
+                            }
+                            let mut sub_palettes: Vec<u32> =
+                                Vec::with_capacity(data.model_data.sub_palettes.len() * 3);
+                            for sp in &data.model_data.sub_palettes {
+                                sub_palettes.push(sp.id);
+                                sub_palettes.push(sp.offset as u32);
+                                sub_palettes.push(sp.length as u32);
+                            }
                             entity_updates.borrow_mut().push(EntityUpdate {
                                 kind: ENTITY_UPDATE_KIND_SPAWN,
                                 guid: u32::from(data.public_weenie_desc.guid),
@@ -3514,6 +3775,9 @@ async fn recv_loop(
                                 icon_id,
                                 palette_id,
                                 mtable_id,
+                                model_changes,
+                                texture_changes,
+                                sub_palettes,
                             });
                         }
                         GameMessage::ObjectDelete(data) => {
@@ -3536,6 +3800,9 @@ async fn recv_loop(
                                 icon_id: 0,
                                 palette_id: 0,
                                 mtable_id: 0,
+                                model_changes: Vec::new(),
+                                texture_changes: Vec::new(),
+                                sub_palettes: Vec::new(),
                             });
                         }
                         GameMessage::UpdateMotion(data) => {
@@ -3828,4 +4095,321 @@ async fn recv_loop(
             }
         }
     }
+}
+
+// ============================================================
+// Phase 4 step 6 Phase A — substitution-aware triangulator tests
+// ============================================================
+//
+// These run on `cargo test` (native target). The substituting
+// triangulator helpers are gated `cfg(any(target_arch = "wasm32",
+// test))` so we can drive them natively against constructed
+// fixtures + the MockSource pattern from holtburger-dat's own
+// tests. End-to-end visual validation against ACE-streamed entities
+// is browser-side and intentionally out of scope here — these
+// tests prove the substitution arithmetic is correct so the visual
+// gap (if any) is in pixels, not in part-table indexing.
+#[cfg(test)]
+mod tests_substitution {
+    use super::*;
+    use holtburger_common::properties::GfxObjFlags;
+    use holtburger_common::{Quaternion, Sphere, Vector3};
+    use holtburger_dat::file_type::{GfxObj, SetupModel};
+    use holtburger_dat::graphics::{CVertexArray, Frame, Polygon, SWVertex, Vec2Duv};
+    use holtburger_dat::physics::{BspLeaf, BspNode};
+    use holtburger_dat::{
+        DatError, FileMetadata, ResourceKey, ResourceSource, Result as DatResult,
+    };
+    use std::collections::HashMap;
+    use std::io::Cursor;
+
+    // Minimal MockSource that maps `(namespace, file_id) -> Vec<u8>`.
+    // Mirrors the pattern in holtburger-dat/src/lib.rs:520-548 so the
+    // shape is familiar to anyone reading both crates.
+    struct MockSource {
+        files: HashMap<(String, u32), Vec<u8>>,
+    }
+
+    impl ResourceSource for MockSource {
+        fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+            self.files
+                .get(&(key.namespace.to_string(), key.file_id))
+                .cloned()
+                .ok_or(DatError::NotFound(key.file_id))
+        }
+        fn get_metadata_by_key(&self, key: ResourceKey<'_>) -> Option<FileMetadata> {
+            self.files
+                .get(&(key.namespace.to_string(), key.file_id))
+                .map(|data| FileMetadata { id: key.file_id, size: data.len() as u32, is_pruned: false })
+        }
+        fn has_namespace(&self, namespace: &str) -> bool {
+            self.files.keys().any(|(ns, _)| ns == namespace)
+        }
+    }
+
+    // Build a minimal-but-real GfxObj with one triangle whose
+    // resolved surface_did is `surface_did_marker`. The triangle
+    // sits at z=0 with vertices at (0,0,0), (1,0,0), (0,1,0) so
+    // the test can identify "which gfxobj's triangle is which" by
+    // looking at `tris[i].pos[0][0]` / `surface_did`.
+    fn synth_gfx_obj_one_triangle(id: u32, surface_did_marker: u32, x_offset: f32) -> Vec<u8> {
+        // 3 vertices forming a triangle in the XY plane.
+        let mk_vert = |x: f32, y: f32| SWVertex {
+            num_uvs: 1,
+            origin: Vector3 { x: x + x_offset, y, z: 0.0 },
+            normal: Vector3 { x: 0.0, y: 0.0, z: 1.0 },
+            uvs: vec![Vec2Duv { u: x, v: y }],
+        };
+        let mut vertices = HashMap::new();
+        vertices.insert(0u16, mk_vert(0.0, 0.0));
+        vertices.insert(1u16, mk_vert(1.0, 0.0));
+        vertices.insert(2u16, mk_vert(0.0, 1.0));
+
+        let poly = Polygon {
+            num_pts: 3,
+            stippling: 0, // not NoPos — keeps the polygon visible
+            sides_type: 1, // Positive only
+            pos_surface: 0, // index into `surfaces` below
+            neg_surface: -1,
+            vertex_ids: vec![0, 1, 2],
+            pos_uv_indices: vec![0, 0, 0],
+            neg_uv_indices: vec![],
+        };
+        let mut polygons = HashMap::new();
+        polygons.insert(0u16, poly);
+
+        let gfx = GfxObj {
+            id,
+            // No physics, no degrade ref. We DO need HAS_DRAWING so
+            // pack writes the polygons + a (synth) drawing BSP, and
+            // unpack reads them back.
+            flags: GfxObjFlags::HAS_DRAWING,
+            surfaces: vec![surface_did_marker],
+            vertex_array: CVertexArray { vertex_type: 1, vertices },
+            physics_polygons: HashMap::new(),
+            physics_bsp: None,
+            sort_center: Vector3::zero(),
+            polygons,
+            drawing_bsp: Some(BspNode::Leaf(BspLeaf {
+                index: 0,
+                solid: 0,
+                sphere: Some(Sphere { center: Vector3::zero(), radius: 1.0 }),
+                poly_ids: vec![0],
+            })),
+            did_degrade: None,
+        };
+        let mut data = Vec::new();
+        let mut writer = Cursor::new(&mut data);
+        gfx.pack(&mut writer).unwrap();
+        data
+    }
+
+    fn synth_setup_two_parts(setup_id: u32, part_a: u32, part_b: u32) -> Vec<u8> {
+        let setup = SetupModel {
+            id: setup_id,
+            flags: 0,
+            parts: vec![part_a, part_b],
+            parent_index: vec![],
+            default_scale: vec![],
+            holding_locations: HashMap::new(),
+            connection_points: HashMap::new(),
+            placement_frames: HashMap::new(),
+            cyl_spheres: vec![],
+            spheres: vec![],
+            height: 1.0,
+            radius: 1.0,
+            step_up: 0.1,
+            step_down: 0.1,
+            sorting_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+            selection_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+            lights: HashMap::new(),
+            default_animation: None,
+            default_script: None,
+            default_motion_table: None,
+            default_sound_table: None,
+            default_script_table: None,
+        };
+        let mut data = Vec::new();
+        let mut writer = Cursor::new(&mut data);
+        setup.pack(&mut writer).unwrap();
+        data
+    }
+
+    /// Texture swap — given a per-part `(old, new)` swap, the
+    /// resulting tris carry the rewritten `surface_did`. Mirrors
+    /// `Creature_Networking.cs:185`'s
+    /// `objDesc.AddTextureChange({ PartIndex, OldTexture,
+    /// NewTexture })` consumer side.
+    #[test]
+    fn append_gfx_tris_with_tex_swaps_rewrites_surface_did() {
+        let bytes = synth_gfx_obj_one_triangle(0x01000001, 0xAABBCCDD, 0.0);
+        let gfx = GfxObj::unpack(&mut Cursor::new(&bytes)).unwrap();
+
+        // No swap: surface_did flows through unchanged.
+        let mut tris_pass = Vec::new();
+        append_gfx_tris_with_tex_swaps(
+            &mut tris_pass,
+            &gfx,
+            Vector3::zero(),
+            Quaternion::identity(),
+            &[],
+        );
+        assert_eq!(tris_pass.len(), 1, "one triangle expected");
+        assert_eq!(tris_pass[0].surface_did, 0xAABBCCDD);
+
+        // With swap (0xAABBCCDD -> 0x11223344): rewrite happens.
+        let mut tris_swap = Vec::new();
+        append_gfx_tris_with_tex_swaps(
+            &mut tris_swap,
+            &gfx,
+            Vector3::zero(),
+            Quaternion::identity(),
+            &[(0xAABBCCDD, 0x11223344)],
+        );
+        assert_eq!(tris_swap[0].surface_did, 0x11223344);
+
+        // Non-matching swap (different `old`): no rewrite.
+        let mut tris_miss = Vec::new();
+        append_gfx_tris_with_tex_swaps(
+            &mut tris_miss,
+            &gfx,
+            Vector3::zero(),
+            Quaternion::identity(),
+            &[(0xDEADBEEF, 0x99887766)],
+        );
+        assert_eq!(tris_miss[0].surface_did, 0xAABBCCDD);
+    }
+
+    /// Part-substitution: a SetupModel whose default part 1 is GfxObj
+    /// 0x010000B (surface_did=0xBBBB) gets its part 1 replaced with
+    /// GfxObj 0x010000C (surface_did=0xCCCC) via a model_changes
+    /// entry, and the resulting tris contain ONLY the substituted
+    /// part's triangle for that slot. Part 0 (surface_did=0xAAAA)
+    /// is untouched. Mirrors Creature_Networking.cs:182's
+    /// `objDesc.AddAnimPartChange({ Index, AnimationId })`.
+    #[test]
+    fn triangulate_setup_model_with_substitutions_swaps_part() {
+        let setup_id: u32 = 0x02000099;
+        let part_default_a: u32 = 0x0100000A;
+        let part_default_b: u32 = 0x0100000B;
+        let part_replacement: u32 = 0x0100000C;
+
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(
+            ("eor/portal".into(), setup_id),
+            synth_setup_two_parts(setup_id, part_default_a, part_default_b),
+        );
+        // Each gfx gets a unique surface marker so we can identify
+        // which one produced each triangle in the output.
+        files.insert(
+            ("eor/portal".into(), part_default_a),
+            synth_gfx_obj_one_triangle(part_default_a, 0xAAAAAAAA, 0.0),
+        );
+        files.insert(
+            ("eor/portal".into(), part_default_b),
+            synth_gfx_obj_one_triangle(part_default_b, 0xBBBBBBBB, 0.0),
+        );
+        files.insert(
+            ("eor/portal".into(), part_replacement),
+            synth_gfx_obj_one_triangle(part_replacement, 0xCCCCCCCC, 0.0),
+        );
+        let source = MockSource { files };
+
+        // No substitution: parts a + b render → surface_dids
+        // {0xAAAAAAAA, 0xBBBBBBBB}.
+        let mut tris_default = Vec::new();
+        triangulate_setup_model_with_substitutions(
+            &source,
+            setup_id,
+            &[],
+            &[],
+            &mut tris_default,
+        )
+        .expect("triangulate default");
+        let surf_default: std::collections::HashSet<u32> =
+            tris_default.iter().map(|t| t.surface_did).collect();
+        assert_eq!(
+            surf_default,
+            [0xAAAAAAAAu32, 0xBBBBBBBB].iter().copied().collect(),
+        );
+
+        // Substitute part 1 (b) with the replacement gfx. Output
+        // tris should now contain {0xAAAAAAAA, 0xCCCCCCCC} — the
+        // substituted gfx's surface_did, NOT the default's
+        // 0xBBBBBBBB.
+        let mut tris_sub = Vec::new();
+        triangulate_setup_model_with_substitutions(
+            &source,
+            setup_id,
+            &[(1u8, part_replacement)],
+            &[],
+            &mut tris_sub,
+        )
+        .expect("triangulate substituted");
+        let surf_sub: std::collections::HashSet<u32> =
+            tris_sub.iter().map(|t| t.surface_did).collect();
+        assert_eq!(
+            surf_sub,
+            [0xAAAAAAAAu32, 0xCCCCCCCC].iter().copied().collect(),
+            "part 1 substitution must replace 0xBBBBBBBB with the replacement gfx's 0xCCCCCCCC",
+        );
+        assert!(
+            !surf_sub.contains(&0xBBBBBBBB),
+            "default part 1 surface_did must NOT appear after substitution",
+        );
+    }
+
+    /// Both substitutions composed: model_changes swaps part 1's
+    /// gfx, AND texture_changes rewrites the substituted gfx's
+    /// surface_did. End state: part 0's surface_did unchanged, part
+    /// 1's surface_did is the texture-swap target (NOT the
+    /// substituted gfx's intrinsic surface_did).
+    #[test]
+    fn triangulate_setup_model_with_substitutions_composes_part_and_texture() {
+        let setup_id: u32 = 0x02000099;
+        let part_default_a: u32 = 0x0100000A;
+        let part_default_b: u32 = 0x0100000B;
+        let part_replacement: u32 = 0x0100000C;
+
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(
+            ("eor/portal".into(), setup_id),
+            synth_setup_two_parts(setup_id, part_default_a, part_default_b),
+        );
+        files.insert(
+            ("eor/portal".into(), part_default_a),
+            synth_gfx_obj_one_triangle(part_default_a, 0xAAAAAAAA, 0.0),
+        );
+        files.insert(
+            ("eor/portal".into(), part_default_b),
+            synth_gfx_obj_one_triangle(part_default_b, 0xBBBBBBBB, 0.0),
+        );
+        files.insert(
+            ("eor/portal".into(), part_replacement),
+            synth_gfx_obj_one_triangle(part_replacement, 0xCCCCCCCC, 0.0),
+        );
+        let source = MockSource { files };
+
+        let mut tris = Vec::new();
+        triangulate_setup_model_with_substitutions(
+            &source,
+            setup_id,
+            &[(1u8, part_replacement)],
+            &[(1u8, 0xCCCCCCCC, 0xDDDDDDDD)], // swap the SUBSTITUTED gfx's surface
+            &mut tris,
+        )
+        .expect("triangulate");
+        let surf: std::collections::HashSet<u32> = tris.iter().map(|t| t.surface_did).collect();
+        assert_eq!(
+            surf,
+            [0xAAAAAAAAu32, 0xDDDDDDDD].iter().copied().collect(),
+            "after composing part + texture swaps, part 0 stays at 0xAAAAAAAA and part 1 reads as the swap target 0xDDDDDDDD",
+        );
+    }
+
+    // Frame import is not used by these tests but the symbol is
+    // re-exported through holtburger_dat::graphics::Frame for any
+    // future Phase C (idle-pose) test; suppress unused warning.
+    #[allow(dead_code)]
+    fn _unused_frame() -> Frame { Frame::default() }
 }

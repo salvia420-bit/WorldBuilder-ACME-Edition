@@ -216,6 +216,7 @@
         fetch_object_colours,
         fetch_model_meshes,
         fetch_surfaces_pixels,
+        fetchEntityModelRender,
         start_session,
         init_resource_source,
         has_resource_source,
@@ -1721,33 +1722,124 @@ void main() {
       // `liveScene.liveSpriteMap` / `invisibleModels` so subsequent
       // spawns of the same model are instant. Already-pending IDs
       // de-dupe through `pendingModelFetches`.
-      function fetchEntityModelOnDemand(modelId) {
+      function fetchEntityModelOnDemand(modelId, meta) {
         if (!liveScene) return Promise.resolve(null);
-        // Already cached: synchronous resolve (caller doesn't wait).
-        const cached = liveScene.liveSpriteMap?.get(modelId);
+        // Phase 4 step 6 Phase A: composite cache key. NPCs sharing the
+        // same csetup_id (e.g. two Holtburg humans) but different
+        // equipped armor produce different visual sprites — caching
+        // by raw modelId would alias them. Build a deterministic key
+        // from modelId + a hash of model_changes + texture_changes
+        // (the wire substitution data) so substituted sprites get
+        // their own cache entry, but unsubstituted entities still hit
+        // the original modelId cache.
+        const key = computeEntitySpriteKey(modelId, meta);
+        const cached = liveScene.liveSpriteMap?.get(key);
         if (cached) return Promise.resolve(cached);
-        if (liveScene.invisibleModels?.has(modelId)) return Promise.resolve(null);
-        // In flight: piggyback the existing Promise.
-        if (pendingModelFetches.has(modelId)) return pendingModelFetches.get(modelId);
-        // Kick off a fresh fetch.
+        if (liveScene.invisibleModels?.has(key)) return Promise.resolve(null);
+        if (pendingModelFetches.has(key)) return pendingModelFetches.get(key);
         const app = liveScene.app;
         if (!app) return Promise.resolve(null);
         const liveMap = liveScene.liveSpriteMap;
         const invisibleSet = liveScene.invisibleModels;
+        const hasSubs = meta?.hasSubstitutions === true;
         const promise = (async () => {
           try {
-            await addModelsToLiveSpriteMap(app, [modelId], liveMap, invisibleSet);
-            return liveMap.get(modelId) ?? null;
+            if (hasSubs) {
+              // Substituted path: drive the new fetchEntityModelRender
+              // export, which applies model_data.model_changes (per-
+              // part GfxObj swaps) + model_data.texture_changes (per-
+              // part texture remaps) at triangulation time. Result is
+              // the fully-composed NPC mesh, packed back into the
+              // same liveMap entry shape so the caller is agnostic.
+              await addEntityRenderToLiveSpriteMap(
+                app, key, modelId, meta, liveMap, invisibleSet,
+              );
+            } else {
+              // Unsubstituted path: original Phase 3 step 6 fetch.
+              // key === modelId here so the existing cache continues
+              // to share entries across all callers of this id.
+              await addModelsToLiveSpriteMap(app, [modelId], liveMap, invisibleSet);
+            }
+            return liveMap.get(key) ?? null;
           } catch (err) {
             // eslint-disable-next-line no-console
-            console.warn(`[entity-model-fetch] modelId=0x${modelId.toString(16)} failed:`, err);
+            console.warn(`[entity-model-fetch] key=${key} modelId=0x${modelId.toString(16)} failed:`, err);
             return null;
           } finally {
-            pendingModelFetches.delete(modelId);
+            pendingModelFetches.delete(key);
           }
         })();
-        pendingModelFetches.set(modelId, promise);
+        pendingModelFetches.set(key, promise);
         return promise;
+      }
+
+      // Phase 4 step 6 Phase A: derive a cache key for an entity
+      // sprite. For unsubstituted entities the key is the bare
+      // modelId — same string the static-placement path uses, so
+      // existing cache entries are reused. For substituted entities
+      // (NPCs etc.) the key folds in a content hash of the
+      // substitution arrays so different equipment combinations on
+      // the same csetup_id don't alias each other in the cache.
+      function computeEntitySpriteKey(modelId, meta) {
+        if (!meta?.hasSubstitutions) return modelId;
+        // Cheap fnv-1a 32-bit over the flat substitution buffers.
+        // Collisions are visually tolerable (worst case: two NPCs
+        // share a sprite); rate is sub-ppm for reasonable equipment
+        // counts. Stringify the result so liveMap doesn't confuse
+        // it with a numeric modelId on the unsubstituted path.
+        let h = 0x811C9DC5 >>> 0;
+        const mix = (arr) => {
+          if (!arr) return;
+          for (let i = 0; i < arr.length; i++) {
+            h ^= arr[i] >>> 0;
+            h = Math.imul(h, 0x01000193) >>> 0;
+          }
+        };
+        mix(meta.modelChanges);
+        mix(meta.textureChanges);
+        return `${modelId.toString(16)}:${h.toString(16)}`;
+      }
+
+      // Phase 4 step 6 Phase A: substituted-entity render path.
+      // Mirrors addModelsToLiveSpriteMap exactly, but the mesh comes
+      // from the new fetchEntityModelRender export (which applies
+      // model_data.model_changes + model_data.texture_changes ACE
+      // pre-computed in CalculateObjDesc) instead of fetch_model_meshes.
+      // Output entry shape ({ texture, worldBounds }) matches the
+      // unsubstituted path so all downstream sprite construction
+      // code is path-agnostic.
+      async function addEntityRenderToLiveSpriteMap(
+        app, cacheKey, modelId, meta, liveMap, invisibleSet,
+      ) {
+        const mesh = await fetchEntityModelRender(
+          modelId,
+          meta.modelChanges ?? new Uint32Array(0),
+          meta.textureChanges ?? new Uint32Array(0),
+        );
+        if (mesh.triCount === 0) {
+          if (invisibleSet) invisibleSet.add(cacheKey);
+          mesh.free();
+          return;
+        }
+        // Per-surface texture array indexed by mesh.surfaces position
+        // — same shape addModelsToLiveSpriteMap builds, so
+        // renderModelTile is happy.
+        const sList = mesh.surfaces;
+        const surfacePixels = sList.length > 0
+          ? await fetch_surfaces_pixels(new Uint32Array(sList))
+          : [];
+        const texArr = new Array(sList.length);
+        for (let s = 0; s < sList.length; s += 1) {
+          texArr[s] = surfacePixelsToTexture(surfacePixels[s]) ?? makeFlatTexture();
+        }
+        const renderTex = renderModelTile(app, mesh, texArr);
+        const wb = mesh.worldBounds;
+        liveMap.set(cacheKey, {
+          texture: renderTex,
+          worldBounds: [wb[0], wb[1]],
+        });
+        mesh.free();
+        for (const sp of surfacePixels) sp.free();
       }
 
       // Apply the visual category's tint + scale to a freshly minted
@@ -1841,8 +1933,13 @@ void main() {
         // ItemType category) AND kick off an on-demand model fetch —
         // when the fetch resolves, the placeholder is upgraded to a
         // real textured sprite via `upgradeEntitySprite`.
+        //
+        // Phase 4 step 6 Phase A: cache key folds in substitution
+        // hash for NPCs; bare modelId for unsubstituted entries
+        // (preserves the static-placement cache reuse).
+        const cacheKey = computeEntitySpriteKey(modelId, meta);
         const renderEntry =
-          liveScene.liveSpriteMap?.get(modelId) ??
+          liveScene.liveSpriteMap?.get(cacheKey) ??
           liveScene.spriteMap?.get(modelId);
         let sprite;
         let kind;  // "sprite" | "placeholder" | "invisible"
@@ -1854,7 +1951,7 @@ void main() {
             sprite.height = renderEntry.worldBounds[1];
           }
           kind = "sprite";
-        } else if (liveScene.invisibleModels?.has(modelId)) {
+        } else if (liveScene.invisibleModels?.has(cacheKey)) {
           // Engine-internal anchor (e.g. light marker). Keep a tiny
           // invisible Container so position updates still find a
           // sprite to mutate, but render nothing visible.
@@ -1885,9 +1982,9 @@ void main() {
         // Modelid=0 means "no model yet" (PrivateUpdatePosition
         // before ObjectCreate); skip the fetch — the next
         // ObjectCreate will retry with the real csetup_id.
-        if (!renderEntry && !liveScene.invisibleModels?.has(modelId) && modelId !== 0) {
+        if (!renderEntry && !liveScene.invisibleModels?.has(cacheKey) && modelId !== 0) {
           entry.pendingFetchModelId = modelId;
-          fetchEntityModelOnDemand(modelId)
+          fetchEntityModelOnDemand(modelId, meta)
             .then((re) => upgradeEntitySprite(guid, modelId, re));
         }
         return entry;
@@ -1900,6 +1997,15 @@ void main() {
       // don't redo the bitmask switch.
       function metaFromSpawn(upd) {
         const itemType = upd.itemType >>> 0;
+        // Phase 4 step 6 Phase A: pull the model_data substitutions
+        // ACE pre-computed and shipped on the wire. Empty arrays for
+        // entities without substitutions (most static placements);
+        // populated for NPCs / players / creatures with equipped
+        // items. Each is a flat Uint32Array — see EntityUpdate's
+        // wasm-bindgen getter doc-comments for the exact shape.
+        const modelChanges = upd.modelChanges;
+        const textureChanges = upd.textureChanges;
+        const subPalettes = upd.subPalettes;
         return {
           wcid: upd.wcid >>> 0,
           itemType,
@@ -1909,6 +2015,12 @@ void main() {
           iconId: upd.iconId >>> 0,
           paletteId: upd.paletteId >>> 0,
           mtableId: upd.mtableId >>> 0,
+          modelChanges: modelChanges && modelChanges.length > 0 ? modelChanges : null,
+          textureChanges: textureChanges && textureChanges.length > 0 ? textureChanges : null,
+          subPalettes: subPalettes && subPalettes.length > 0 ? subPalettes : null,
+          hasSubstitutions:
+            (modelChanges && modelChanges.length > 0)
+            || (textureChanges && textureChanges.length > 0),
         };
       }
 

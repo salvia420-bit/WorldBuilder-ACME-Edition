@@ -290,6 +290,28 @@ for (const name of step6aGetters) {
     );
 }
 
+// Phase 4 step 6 Phase A: EntityUpdate also carries the model_data
+// substitutions ACE pre-computed in CalculateObjDesc (per-part GfxObj
+// swaps + per-part texture remaps + palette overlays). The flat
+// Uint32Array shape lets JS hand them straight to the new
+// fetchEntityModelRender export. Probes confirm the getters exist;
+// real-fixture validation (wasm Substitution unit tests in
+// `tests_substitution::*`) runs through `cargo test`.
+const step6PhaseAGetters = ["modelChanges", "textureChanges", "subPalettes"];
+for (const name of step6PhaseAGetters) {
+    const desc = Object.getOwnPropertyDescriptor(entityUpdateProto || {}, name);
+    check(
+        `EntityUpdate.${name} getter exposed (Phase 4 step 6 Phase A model_data substitutions)`,
+        typeof desc?.get === "function",
+        `getter=${typeof desc?.get}`
+    );
+}
+check(
+    "fetchEntityModelRender() exposed (Phase 4 step 6 Phase A NPC render path)",
+    typeof wasm.fetchEntityModelRender === "function",
+    `fetchEntityModelRender=${typeof wasm.fetchEntityModelRender}`
+);
+
 // Phase 4 step 3: SessionHandle.setMovementInput(forward, strafe,
 // turn, run) takes a tristate-axis keystate snapshot and forwards
 // it to the recv loop, which builds a `GameAction::MoveToState`
