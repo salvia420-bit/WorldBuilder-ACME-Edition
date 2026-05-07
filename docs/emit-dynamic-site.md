@@ -14,18 +14,21 @@
 blend, vector road lines, transpose fix for column-major
 terrain data, and on-demand entity model fetching for ACE-
 streamed NPCs**; step 5 partial), 4 (step 1 + 2a + 2a.5 +
-2a.6 + 2b + 3 + **3.5 — client-side prediction, also landed
-2026-05-06**), 5.0, 5.0b, 5.1a, 5.1b. Native lib gate
-**1121 / 0** across 14 workspace crates. `cargo check
---target wasm32-unknown-unknown` clean for
-`holtburger-{dat,session,transport-ws,resource-http,web,content,
-core,manifest}`. `wasm-pack build --target {nodejs,web}` both
-green. `node smoke_test.cjs` **60 / 60 PASS** (59 OK + 1 SKIP
-for live-ACE round-trip; the SKIP is the symbol-only check —
-the wire-effect validation runs through `capture_phase4_step3
-.cjs`, terrain quality validation runs through
-`capture_terrain_eval.cjs`, both Playwright-driven against the
-live stack).
+2a.6 + 2b + 3 + 3.5 + **6a + 6b + 6e — realistic-entity
+metadata + ItemType-keyed visual dispatch + glyph fallback +
+per-entity nameplates, landed 2026-05-06 evening**), 5.0,
+5.0b, 5.1a, 5.1b. Native lib gate **1130 / 0** across 14
+workspace crates. `cargo check --target
+wasm32-unknown-unknown` clean for `holtburger-{dat,session,
+transport-ws,resource-http,web,content,core,manifest}`.
+`wasm-pack build --target {nodejs,web}` both green. `node
+smoke_test.cjs` **67 / 67 PASS** (66 OK + 1 SKIP for live-ACE
+round-trip; the SKIP is the symbol-only check — the wire-
+effect validation runs through `capture_phase4_step3.cjs`,
+terrain quality validation runs through
+`capture_terrain_eval.cjs`, both Playwright-driven against
+the live stack). The +7 OK probes vs. 59 baseline are the
+new EntityUpdate getter checks for the 6a metadata fields.
 
 **What works end-to-end today.** Open
 `apps/holtburger-web/index.html` in any browser. The page calls
@@ -188,7 +191,16 @@ Pick one to pull on. The choice is real, not arbitrary.
   on the rail: step 4** (DOM panels: chat, vitals, inventory —
   surfaces `kind=2 ChatReceived` events through the existing
   `poll_events()` channel) → step 5 (interactive entities:
-  doors, portals, vendors via `UseObject`).
+  doors, portals, vendors via `UseObject`) → **step 6
+  (realistic entity rendering: WeenieType-keyed tints,
+  nameplates, palette-tinted creature variants, portal swirls,
+  sign inscriptions — mirrors `emit-static-site`'s sprite-mode
+  output at z≥11). Today every NPC/portal/monster reads as a
+  generic textured silhouette because the recv-loop discards
+  every `PublicWeenieDescription` field except `csetup_id`;
+  step 6a is the data-plumbing fix that unblocks the rest.**
+  Brief lives inline at §8 (search for "Step 6 — realistic
+  entity rendering").
 - **Bandwidth rail** — Phase 5.2 (manifest scale fix) at
   [`manifest.md`](manifest.md). Real-world bake produces a
   **203 MB** `manifest.json` (885,043 entries × ~230 bytes
@@ -285,6 +297,14 @@ step's landing, plus what got closed since):
   need a Rust parser; deferred but not gating.
 - ⏳ **Animation state.** Sprites slide as rigid textures; no
   walk-cycle anims. Step 4+ scope.
+- ⏳ **Realistic NPC / portal / monster rendering.** Live
+  entities currently render as generic textured silhouettes
+  with no nameplate, no per-WeenieType tint, no palette
+  variant, no portal swirl, no sign inscription, and no
+  `obj_scale` propagation. **Promoted to a full step (6) — see
+  §8 Phase 4 step 6 for the as-framed brief.** Subsumes the
+  "magenta placeholder dot → static-site glyph fallback"
+  polish that was loosely tracked here previously.
 
 ### What to read next
 
@@ -1479,6 +1499,242 @@ Step ledger:
   via `PrivateUpdatePosition`, vendor inventory via
   `GameMessage::OpenContainer`). The page just dispatches the
   click + handles the response events. Parallel to step 4.
+- ⏳ **Step 6 — realistic entity rendering (NPCs, portals,
+  monsters, vendors, signs).** Today every live entity ACE
+  pushes renders as a *generic* textured sprite keyed only on
+  `csetup_id`: the local Drudge, the Holtburg portal, Ulgrim,
+  and a wandering Crier all read as anonymous brown-ish
+  silhouettes in the entity layer. `emit-static-site` already
+  solves this — it switches on `WeenieType` for category
+  glyph + tint, applies `PaletteTemplate` / `ClothingBaseDid`
+  for NPC variants, and prints inscriptions under signs at
+  z≥11 (`WorldBuilder.Terminal/ObjectSpriteGenerator.cs:683-694`
+  + `RenderPreviewRenderer.cs:911-938`). Step 6 mirrors that
+  approach in the live client so live entities look like the
+  static atlas's z≥11 sprites instead of like placeholder dots
+  with textures.
+
+  **Sub-step landing log (2026-05-06 evening session):**
+  - ✅ **6a — surface weenie metadata to JS.** `EntityUpdate`
+    extended with `wcid`, `itemType`, `name`, `objScale`,
+    `iconId`, `paletteId`, `mtableId`. The ObjectCreate recv-
+    loop arm at `apps/holtburger-web/src/lib.rs:3343-3378`
+    stops discarding `PublicWeenieDescription` /
+    `ObjectDescriptionData` fields. wasm-bindgen getters
+    emit JS-side accessors. Smoke 60 → 67 (+7 getter probes
+    = 66 OK + 1 SKIP, 0 fail). Native lib 1130/0. wasm32
+    check clean.
+  - ✅ **6b — ItemType-keyed visual dispatch + glyph
+    fallback.** New `ITEM_TYPE` constant table mirroring
+    `external/ACE/Source/ACE.Entity/Enum/ItemType.cs:6`,
+    `categoryForItemType()` priority dispatch, `CATEGORY_TINT`
+    table (Portal=cyan, Container=tan, Writable=amber, …),
+    `drawGlyphForCategory()` glyph table (cyan ring for
+    portals, brown square for containers, red diamond for
+    creatures, orange triangle for signs — mirrors
+    `RenderPreviewRenderer.cs:230-299`). `ensureEntitySprite`
+    accepts a `meta` arg, threads it into the entry, and
+    calls `applyMetaToSprite()` at both initial-cache-hit and
+    upgrade paths. `objScale` multiplies `worldBounds` so
+    juvenile vs. epic-tier creatures render at distinct
+    sprite sizes. Magenta-dot placeholder removed; per-
+    category glyph replaces it.
+  - ✅ **6e — per-entity nameplates.** `nameplateContainer`
+    added as sibling of `cameraContainer` on `app.stage`
+    (NOT scaled by camera — text stays at constant 12px
+    screen-space). `ensureNameplate(entry)` mints a
+    `PIXI.Text` per named entity; `nameplateColorForCategory`
+    colour-codes (creature=salmon, portal=cyan, sign=amber,
+    container=tan, default=off-white). Local player skipped
+    via new module-level `localPlayerGuid` set from the
+    PlayerSpawned (kind=1) handler. Per-rAF
+    `updateNameplatePositions()` projects entity world coords
+    to canvas pixels through `cameraContainer.scale +
+    .position`; hides the whole layer below
+    `cameraScale=0.3 px/m` to avoid overlap at zoom-out.
+  - ⏳ **6c — palette-tinted creature variants** (next).
+  - ⏳ **6d — portal swirl + sign inscription label** (next).
+  - ⏳ **6f — portal destination chips** (deferred polish).
+
+  Reference paths for the *original* sub-plan + grounding
+  notes are kept below for future agents picking up 6c-6f.
+
+  **Why it's not free.** The `EntityUpdate` struct surfaced to
+  JS exposes `{ kind, guid, modelId, landblockId, x, y, z, qw,
+  qx, qy, qz }` and nothing else
+  (`apps/holtburger-web/src/lib.rs:2076-2098`). The recv-loop
+  `ObjectCreate` arm at `apps/holtburger-web/src/lib.rs:3343-3378`
+  parses the inbound `PublicWeenieDescription` (which carries
+  `wcid`, `name`, `item_type`, `icon_id`, `obj_scale`, palette
+  indices — `crates/holtburger-protocol/src/messages/object/
+  messages/description.rs:183-230`) and **discards every field
+  except `csetup_id`** before pushing into the entity buffer.
+  Step 6a is the data-plumbing change; the rest of the step is
+  consumer-side.
+
+  Step 6 sub-plan:
+
+  - **6a — surface weenie metadata to JS.** Extend `EntityUpdate`
+    with `wcid`, `itemType` (the wire ItemType bitmask —
+    `ItemType::Portal = 0x00010000`, see
+    `external/ACE/Source/ACE.Entity/Enum/ItemType.cs:25`),
+    `name`, `objScale`, `armorColor`, `weaponColor`,
+    `armorHighlight`, `weaponHighlight`. Sources are already
+    on the client side: the holtburger-world `Entity` struct
+    carries them at
+    `external/holtburger/crates/holtburger-world/src/entity.rs:246-283`
+    (`wcid`, `gfx_id`, `csetup_id`, `mtable_id`, `obj_scale`,
+    `armor_color`, `weapon_color`, `armor_highlight`,
+    `weapon_highlight`, `creature_profile`, `health_fraction`).
+    The recv-loop arm just stops discarding. JS-side: the
+    existing `entityMap = Map<guid, { sprite, modelId }>` gains
+    a `meta` slot populated on `kind=1 Spawn`. WeenieType per se
+    is **not** on the wire — derive category from `item_type`
+    (Portal vs Creature vs Container vs MeleeWeapon etc.) for
+    the visual dispatch, since static-site's `WeenieType`-keyed
+    switch maps cleanly to `ItemType` flags for the categories
+    that drive rendering.
+
+  - **6b — category-keyed visual dispatch.** Mirror
+    `ObjectSpriteGenerator.cs:683-694` and the glyph table at
+    `RenderPreviewRenderer.cs:230-299`:
+    - `ItemType::Portal` → cyan tint (`0x6EC8E0`); HousePortal
+      (wcid lookup; not in ItemType) → purple (`0xA06ED4`).
+    - `ItemType::Creature` → red nameplate (hostile) or yellow
+      (friendly) keyed off `creature_profile.faction` /
+      `health_fraction == 1.0 && level == 0` heuristic.
+    - `ItemType::Vendor` → green nameplate. (Holtburger may
+      collapse Vendor into Creature; if so, gate on a future
+      `vendor: bool` propagated from ACE's
+      `Creature_BuyPrice`/`SellPrice` properties.)
+    - Doors → cyan ring fallback when model isn't cached.
+    - Signs (`ItemType::Sign` if exposed; otherwise wcid-based)
+      → orange tint + inscription label (see 6d).
+    - Apply tint via PIXI `Sprite.tint` (cheap; multiplicative
+      over the rasterized texture). For the placeholder-dot
+      fallback while a model fetch is in flight, draw the
+      static-site glyph shape (cyan ring / brown square / red
+      diamond / yellow diamond) instead of the magenta dot at
+      `apps/holtburger-web/index.html:1669` — gives the user
+      legible feedback even pre-rasterization.
+
+  - **6c — palette-tinted creature/NPC variants.** Apply
+    `armor_color` / `weapon_color` / `armor_highlight` /
+    `weapon_highlight` palette indices when the live rasterizer
+    bakes a model. Static-site reference:
+    `WorldBuilder.Terminal/ObjectSpriteGenerator.cs:773-790`
+    (PaletteTemplate substitution). The browser rasterizer
+    lives at `apps/holtburger-web/index.html:777-820` and
+    already does Lambert shading + UV sampling — the palette
+    substitution slots in before the per-poly RGBA sample. The
+    palette LUTs reach via the existing `Surface →
+    SurfaceTexture → Texture → Palette` walk
+    (`holtburger_dat::walk::collect_model_dependencies`); add a
+    `fetch_palette_pixels(palette_did) -> Promise<Vec<u32>>`
+    export if one isn't already exposed and substitute by
+    palette-template offset. **Don't fabricate palettes** — read
+    real DAT data, per the auto-memory note "Test fixtures —
+    prefer real game data over synthetic" (the rule applies to
+    runtime palette tables for the same reason it applies to
+    fixtures: synthetic colours diverge from retail in
+    impossible-to-debug ways).
+
+  - **6d — portal swirls + sign inscriptions.** Two
+    type-specific embellishments worth the polish:
+    - **Portals**: tint isn't enough at zoom-out — the static
+      site's `ObjectSpriteGenerator` falls back to a circular
+      billboard-disk render for portals
+      (`ObjectSpriteGenerator.cs:188-200`). For the live
+      client, overlay a small animated PIXI swirl sprite (or a
+      `Graphics.alpha` ring pulse on a 1.5 s loop) on top of
+      the model sprite. Cheap: one extra sprite per portal,
+      portals are rare.
+    - **Signs**: pull `name` (the sign's inscription string is
+      the weenie's display name in retail data) from
+      `EntityUpdate.name` and render a small italic
+      `PIXI.Text` below the sprite at zoom ≥ ~10. Mirrors
+      `RenderPreviewRenderer.cs:911-938`. Use a pooled-text
+      strategy — re-use `PIXI.Text` instances across signs as
+      they enter/leave the viewport rather than allocating per
+      entity, since `PIXI.Text` allocates a canvas per
+      instance.
+
+  - **6e — nameplates.** `PIXI.Text` per entity, anchored above
+    the sprite, font sized to ~12px screen-space (so it stays
+    readable at all zooms — apply inverse worldContainer scale).
+    Pull from `EntityUpdate.name`. Colour:
+    hostile creature = red, friendly NPC = yellow, vendor =
+    green, dead = grey, local player = hidden (or render a
+    small chevron / "you" instead). No retail-screenshot match
+    is possible from the static atlas (it doesn't draw
+    nameplates) — match retail in-game screenshots, not the
+    static site. Pool `PIXI.Text` instances; clear on
+    `kind=2 Remove`.
+
+  - **6f — portal destinations (deferred polish).** Portals
+    carry `LinkedPortalOne` / `LinkedPortalTwo` /
+    `OriginalPortal` DataId properties
+    (`crates/holtburger-common/src/properties/property_keys/
+    data_ids.rs:39, 56`). These aren't in the `Entity` view
+    event today; surfacing them would let the browser draw a
+    destination chip ("→ Holtburg") under the portal sprite.
+    Out of scope for v1 of step 6. The bar for "done" is
+    *"looks like a portal, has a name above it"*.
+
+  **Grounding & gotchas.**
+
+  - **`WorldBuilder.Terminal` is the visual ground truth**, same
+    as for terrain (Process notes #1+#2 above). For a populated
+    landblock — Holtburg town centre at LB 0xA9B4 has 53 live
+    entities at peak — run `render-preview` and diff against
+    the live client. Static-site sprite-mode tiles at z≥11
+    (`projects/<slug>/tiles/object/...`) are the canonical
+    reference for what a creature/NPC looks like in our
+    top-down view.
+  - **`WeenieType` lives in two places** — ACE
+    (`external/ACE/Source/ACE.Entity/Enum/WeenieType.cs:6`)
+    and holtburger
+    (`external/holtburger/crates/holtburger-common/src/properties/
+    object.rs:183-209`). They agree numerically (`Portal=7`,
+    `Creature=10`, `Vendor=12`, `Door=19`, `HousePortal=60`).
+    But `Entity` does **not** carry WeenieType — only `wcid`
+    and the `item_type` bitmask from `PublicWeenieDescription`.
+    Use `item_type` for the wire-fed dispatch; reach for
+    WeenieType only if you decide to plumb a wcid → weenie
+    ontology client-side.
+  - **`obj_scale` is currently invisible** to the live client.
+    Identical models render at identical sprite size whether
+    ACE spawned a juvenile Tumerok or an Olthoi Eviscerator.
+    6a fixes this: the rasterizer multiplies its `worldBounds`
+    output by `EntityUpdate.objScale` before placement.
+  - **Sprite atlas vs on-demand**: the static atlas at
+    `apps/holtburger-web/sprites/atlas.png` covers ~108
+    placement models; entity csetup_ids almost never overlap
+    (Phase 3 step 3.6 closing note). Step 6's per-category
+    tint applies to *both* atlas-cached sprites (set `tint` at
+    `ensureEntitySprite`) and on-demand-rasterized sprites (set
+    `tint` after the `addModelsToLiveSpriteMap` resolve).
+  - **PIXI 8 minified-class trap (Process notes #5)**: don't
+    branch on `sprite.constructor.name`. Tag entries with
+    `entry.kind = "sprite" | "placeholder" | "glyph"` if the
+    nameplate / tint logic needs to differentiate.
+
+  Smoke target: +N symbols for the new EntityUpdate fields and
+  whatever new exports 6c needs (probably +1 for
+  `fetch_palette_pixels`). Capture target: a Holtburg-town-
+  centre screenshot showing portal (cyan-tinted with swirl) +
+  Town Crier NPC (yellow nameplate + inscription label) + a
+  wandering Drudge creature (red nameplate, scaled to its
+  `obj_scale`). Validation: side-by-side with
+  `WorldBuilder.Terminal`'s `render-preview` of the same LB.
+
+  Order-of-attack within step 6: **6a first** (data plumbing
+  unblocks everything), then 6b (cheapest visual win — tints
+  + glyph fallback), then 6e (nameplates — high user-facing
+  payoff), then 6c (palette tinting — most code, hardest to
+  validate), then 6d (portal swirl + sign inscription —
+  pure polish), then 6f if anyone still cares. 6a-6b is the
+  minimum viable "looks realistic" cut.
 
 Phase 5 — **Hardening.** In flight.
 
@@ -1593,6 +1849,14 @@ re-discovering them.
 | `ContentRepository::from_mounts` | `external/holtburger/crates/holtburger-content/src/repository.rs:75-80` |
 | ClientRuntime asset loading | `external/holtburger/crates/holtburger-core/src/client/builder.rs:54-80` |
 | `METERS_PER_LANDBLOCK = 192.0` (canonical AC constant) | `external/holtburger/crates/holtburger-common/src/position.rs:5` |
+| `WeenieType` enum (Portal=7, Creature=10, Vendor=12, Door=19, HousePortal=60) | `external/holtburger/crates/holtburger-common/src/properties/object.rs:183-209` |
+| `WeenieType` enum (ACE mirror) | `external/ACE/Source/ACE.Entity/Enum/WeenieType.cs:6` |
+| `ItemType` bitmask on the wire (Portal = `0x00010000`, Creature, etc.) | `external/ACE/Source/ACE.Entity/Enum/ItemType.cs:25` |
+| `Entity` struct — wcid, gfx_id, csetup_id, obj_scale, armor/weapon palette indices, creature_profile | `external/holtburger/crates/holtburger-world/src/entity.rs:246-283` |
+| `PublicWeenieDescription` (carries name, item_type, palette indices on the wire) | `external/holtburger/crates/holtburger-protocol/src/messages/object/messages/description.rs:183-230` |
+| Recv-loop arm that **discards** every PublicWeenieDescription field except `csetup_id` | `external/holtburger/apps/holtburger-web/src/lib.rs:3343-3378` |
+| `EntityUpdate` wasm-bindgen struct (today: kind, guid, modelId, landblockId, xyz, quaternion only) | `external/holtburger/apps/holtburger-web/src/lib.rs:2076-2098` |
+| Portal-destination DataIds (`LinkedPortalOne` / `LinkedPortalTwo` / `OriginalPortal`) | `external/holtburger/crates/holtburger-common/src/properties/property_keys/data_ids.rs:39, 56` |
 
 ### emit-static-site seams
 
@@ -1604,6 +1868,14 @@ re-discovering them.
 | Forward-compat live overlay hook (unused on current rail) | (emitted) `app.js:85-90` |
 | Tile pyramid emitter (NOT consumed by the live client; see §4.5) | `WorldBuilder.Terminal/TilePyramidEmitter.cs:54-91, 101-134` |
 | Sprite atlas (consumed by the live client at Phase 3 step 4) | `projects/<slug>/sprites/atlas.{png,js}` |
+| Static-site WeenieType visual switch (Portal=cyan, HousePortal=purple, Sign=orange, fallthrough = category palette) — **Step 6b reference** | `WorldBuilder.Terminal/ObjectSpriteGenerator.cs:683-694` |
+| Static-site glyph table (shape + colour by category) — **Step 6b reference** | `WorldBuilder.Terminal/RenderPreviewRenderer.cs:230-299` |
+| Static-site portal billboard-disk fallback — **Step 6d reference** | `WorldBuilder.Terminal/ObjectSpriteGenerator.cs:188-200` |
+| Static-site PaletteTemplate substitution — **Step 6c reference** | `WorldBuilder.Terminal/ObjectSpriteGenerator.cs:773-790` |
+| Static-site sign inscription label rendering — **Step 6d reference** | `WorldBuilder.Terminal/RenderPreviewRenderer.cs:911-938` |
+| Live-client entity sprite creation + magenta placeholder dot fallback — **Step 6b call site** | `external/holtburger/apps/holtburger-web/index.html:1640-1672` (placeholder at `:1669`) |
+| Live-client per-poly rasterizer (where palette tinting slots in) — **Step 6c call site** | `external/holtburger/apps/holtburger-web/index.html:777-820` |
+| `fetchEntityModelOnDemand` (cache-miss model fetch path) | `external/holtburger/apps/holtburger-web/index.html:1572-1599` |
 
 ### ACE seams
 

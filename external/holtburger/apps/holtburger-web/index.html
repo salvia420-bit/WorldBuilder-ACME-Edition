@@ -1418,11 +1418,19 @@ void main() {
         // landblock objects are not affected.
         const entityContainer = new PIXI.Container();
         worldContainer.addChild(entityContainer);
+        // Phase 4 step 6e: nameplate layer. Sibling of cameraContainer
+        // on app.stage so it's NOT scaled or y-flipped — text stays
+        // at constant 12px screen-space at every zoom level.
+        // updateNameplatePositions() projects each entity's world coords
+        // through cameraContainer's transform every rAF tick.
+        const nameplateContainer = new PIXI.Container();
+        app.stage.addChild(nameplateContainer);
         liveScene = {
             app,
             cameraContainer,
             worldContainer,
             entityContainer,
+            nameplateContainer,
             liveSpriteMap,
             spriteMap,
             invisibleModels,
@@ -1432,6 +1440,16 @@ void main() {
         // Strictly debug-only; not relied on by production code paths.
         window.liveScene = liveScene;
         window.entityMap = entityMap;
+        // Phase 4 step 6 capture surface: same window-exposure pattern.
+        // capture_step6.cjs injects synthetic EntityUpdate-shaped objects
+        // through these so we can demonstrate step 6 visuals without a
+        // running ACE. Production code paths drive these via the
+        // pollEntityUpdates drain in drainEvents and never read window.*.
+        window.handleEntitySpawn = handleEntitySpawn;
+        window.handleEntityRemove = handleEntityRemove;
+        window.handlePositionUpdate = handlePositionUpdate;
+        window.setLocalPlayerGuid = setLocalPlayerGuid;
+        window.updateNameplatePositions = updateNameplatePositions;
 
         // Initial camera: centre on Holtburg's geometric centre at a
         // scale that fits the 3×3 grid in the canvas with a margin.
@@ -1518,7 +1536,141 @@ void main() {
       // so the gap is small in practice).
 
       let liveScene = null;
-      const entityMap = new Map();   // guid → { sprite, modelId }
+      // guid → { sprite, modelId, pendingFetchModelId, kind, meta,
+      //          nameplate?, guid }
+      // meta carries the Phase 4 step 6a weenie metadata so the visual
+      // dispatch (6b) and nameplates (6e) can re-apply after sprite
+      // upgrades (placeholder → on-demand fetched texture). Position
+      // updates leave meta untouched; only Spawn populates it.
+      // nameplate is the PIXI.Text in nameplateContainer (set by
+      // ensureNameplate, destroyed in handleEntityRemove).
+      const entityMap = new Map();
+      // Phase 4 step 6e: hide the local player's nameplate. Set by the
+      // kind=1 PlayerSpawned handler in drainEvents; nullable until
+      // PlayerCreate lands. ensureNameplate skips entries whose guid
+      // matches this.
+      let localPlayerGuid = null;
+      function setLocalPlayerGuid(guid) { localPlayerGuid = guid >>> 0; }
+
+      // Phase 4 step 6a/6b: ItemType bitmask values from
+      // external/ACE/Source/ACE.Entity/Enum/ItemType.cs:6 — the wire
+      // PublicWeenieDescription.item_type IS this bitmask. Used by
+      // `categoryForItemType` to derive the visual category for tinting
+      // and glyph fallback. We mirror the subset that drives rendering;
+      // the full enum has more (Gameboard, TinkeringMaterial, etc.)
+      // that we don't differentiate visually yet.
+      const ITEM_TYPE = Object.freeze({
+        MELEE_WEAPON:     0x00000001,
+        ARMOR:            0x00000002,
+        CLOTHING:         0x00000004,
+        JEWELRY:          0x00000008,
+        CREATURE:         0x00000010,
+        FOOD:             0x00000020,
+        MONEY:            0x00000040,
+        MISC:             0x00000080,
+        MISSILE_WEAPON:   0x00000100,
+        CONTAINER:        0x00000200,
+        USELESS:          0x00000400,
+        GEM:              0x00000800,
+        SPELL_COMPONENTS: 0x00001000,
+        WRITABLE:         0x00002000,
+        KEY:              0x00004000,
+        CASTER:           0x00008000,
+        PORTAL:           0x00010000,
+        LIFE_STONE:       0x10000000,
+      });
+
+      // Map an ItemType bitmask to a single visual category string. The
+      // wire bitmask can carry multiple bits (e.g. PortalMagicTarget =
+      // Portal | LifeStone), so order matters — Portal wins over
+      // LifeStone, Creature wins over Container, etc. Mirrors the
+      // category dispatch in WorldBuilder.Terminal/ObjectSpriteGenerator
+      // .cs:683-694 + RenderPreviewRenderer.cs:230-299, scaled down to
+      // the data we have on the wire (no WeenieType, no tags).
+      function categoryForItemType(itemType) {
+        const t = itemType >>> 0;
+        if (!t) return "unknown";
+        if (t & ITEM_TYPE.PORTAL) return "portal";
+        if (t & ITEM_TYPE.LIFE_STONE) return "lifestone";
+        if (t & ITEM_TYPE.CREATURE) return "creature";
+        if (t & ITEM_TYPE.CONTAINER) return "container";
+        if (t & (ITEM_TYPE.MELEE_WEAPON | ITEM_TYPE.MISSILE_WEAPON | ITEM_TYPE.CASTER)) return "weapon";
+        if (t & (ITEM_TYPE.ARMOR | ITEM_TYPE.CLOTHING)) return "armor";
+        if (t & ITEM_TYPE.WRITABLE) return "writable";
+        if (t & ITEM_TYPE.KEY) return "key";
+        if (t & ITEM_TYPE.GEM) return "gem";
+        if (t & ITEM_TYPE.MONEY) return "money";
+        if (t & ITEM_TYPE.FOOD) return "food";
+        return "misc";
+      }
+
+      // Tint applied multiplicatively to the rasterized sprite for each
+      // visual category. White = no tint (the model's own colours win).
+      // Hot categories (Portal, Creature) get a saturated overlay to
+      // make them readable at zoom-out; subtle categories (weapon,
+      // armor, gem) get a near-white tint that barely shifts the model.
+      // Mirrors ObjectSpriteGenerator.cs:683-694's per-WeenieType colour.
+      const CATEGORY_TINT = Object.freeze({
+        portal:    0x6EC8E0,  // cyan — matches static-site Portal=7
+        lifestone: 0x4DA0E8,  // blue — radar-NE matches LifeStone
+        creature:  0xE8A0A0,  // soft red wash on creature models
+        container: 0xE8D8B0,  // warm tan over chests/coffers
+        weapon:    0xF0F0F0,
+        armor:     0xF0E8D8,
+        writable:  0xF0C870,  // amber — signs and books
+        key:       0xF0D060,  // gold
+        gem:       0xC0E8F0,
+        money:     0xF8E090,
+        food:      0xF0E0C0,
+        misc:      0xFFFFFF,
+        unknown:   0xFFFFFF,
+      });
+
+      // Build the placeholder Graphics for a category. Replaces the
+      // generic magenta dot that step 2b shipped with the static-site
+      // glyph shapes, so even pre-rasterization the user can see "that
+      // blob is a portal, that one is a creature." Sized in world
+      // metres (the entityContainer is in world space). Mirrors the
+      // glyph table at RenderPreviewRenderer.cs:230-299.
+      function drawGlyphForCategory(category) {
+        const g = new PIXI.Graphics();
+        switch (category) {
+          case "portal":
+            // cyan ring — distinctive even at small sizes
+            return g.circle(0, 0, 0.8)
+              .stroke({ color: 0x6EC8E0, width: 0.18, alignment: 0.5 });
+          case "lifestone":
+            return g.circle(0, 0, 0.7).fill({ color: 0x4DA0E8 });
+          case "creature":
+            // red diamond
+            return g.poly([0, -0.8, 0.7, 0, 0, 0.8, -0.7, 0])
+              .fill({ color: 0xC0392B });
+          case "container":
+            // brown square
+            return g.rect(-0.6, -0.6, 1.2, 1.2).fill({ color: 0x8A7B5A });
+          case "weapon":
+            return g.rect(-0.3, -0.7, 0.6, 1.4).fill({ color: 0xCDCDCD });
+          case "armor":
+            return g.rect(-0.6, -0.4, 1.2, 0.8).fill({ color: 0x9B8A6F });
+          case "writable":
+            // orange triangle (signs / books)
+            return g.poly([0, -0.8, 0.7, 0.6, -0.7, 0.6])
+              .fill({ color: 0xE09A3F });
+          case "key":
+            return g.rect(-0.2, -0.6, 0.4, 1.2).fill({ color: 0xE8C46A });
+          case "gem":
+            return g.poly([0, -0.5, 0.4, 0, 0, 0.5, -0.4, 0])
+              .fill({ color: 0x80C0F0 });
+          case "money":
+            return g.circle(0, 0, 0.5).fill({ color: 0xF0D060 });
+          case "food":
+            return g.circle(0, 0, 0.5).fill({ color: 0xC8A060 });
+          case "misc":
+          case "unknown":
+          default:
+            return g.circle(0, 0, 0.6).fill({ color: 0xb0b0b0 });
+        }
+      }
 
       // Quaternion → yaw extraction. AC is Z-up; top-down view rotates
       // around the Z axis. Standard formula, identical to the static
@@ -1547,7 +1699,7 @@ void main() {
       // Get-or-create the sprite for a given GUID. Spawn / position
       // updates both call this; only Spawn passes a real modelId, so
       // a position update arriving before its ObjectCreate puts a
-      // placeholder dot on the scene that the later Spawn upgrades to
+      // placeholder glyph on the scene that the later Spawn upgrades to
       // a real model sprite. After upgrade, subsequent position updates
       // (which always pass modelId=0 because the wire message doesn't
       // carry it) keep the existing real sprite — that's the
@@ -1598,7 +1750,39 @@ void main() {
         return promise;
       }
 
-      // Replace the placeholder dot in `entry` with a real model
+      // Apply the visual category's tint + scale to a freshly minted
+      // sprite. Idempotent — safe to call from both `ensureEntitySprite`
+      // (initial placement) and `upgradeEntitySprite` (after on-demand
+      // fetch resolves). For the placeholder/invisible kinds, tint is a
+      // no-op (Graphics already encode their colour, Containers have no
+      // tint slot). For the real-sprite kind, it sets PIXI.Sprite.tint
+      // (multiplicative — white = identity) and scales worldBounds by
+      // meta.objScale.
+      function applyMetaToSprite(entry, renderEntry) {
+        if (!entry || !entry.sprite) return;
+        const meta = entry.meta || {};
+        const category = meta.category || "unknown";
+        const objScale = meta.objScale && meta.objScale > 0 ? meta.objScale : 1.0;
+        if (entry.kind === "sprite" && renderEntry) {
+          // Re-apply width/height in case objScale changed between fetch
+          // and meta arrival, and tint based on category.
+          if (renderEntry.worldBounds) {
+            entry.sprite.width = renderEntry.worldBounds[0] * objScale;
+            entry.sprite.height = renderEntry.worldBounds[1] * objScale;
+          }
+          // Skip tinting "misc"/"unknown" (white = identity) — and skip
+          // tinting "creature" if we haven't yet plumbed friend/foe to
+          // avoid red-washing every NPC. Step 6e (nameplates) will
+          // colour-code via the radar_blip_color path; for now leave
+          // creatures untinted so retail-coloured models read clean.
+          const tint = CATEGORY_TINT[category];
+          if (tint !== undefined && category !== "misc" && category !== "unknown" && category !== "creature") {
+            entry.sprite.tint = tint;
+          }
+        }
+      }
+
+      // Replace the placeholder glyph in `entry` with a real model
       // sprite once the on-demand fetch completes. Driven by
       // `entry.pendingFetchModelId` rather than `entry.modelId === 0`
       // so it doesn't collide with the pre-ObjectCreate placeholder
@@ -1617,6 +1801,7 @@ void main() {
         sprite.anchor.set(0.5, 0.5);
         sprite.position.set(x, y);
         sprite.rotation = rotation;
+        // worldBounds are pre-objScale; applyMetaToSprite multiplies.
         if (renderEntry.worldBounds) {
           sprite.width = renderEntry.worldBounds[0];
           sprite.height = renderEntry.worldBounds[1];
@@ -1625,12 +1810,21 @@ void main() {
         entry.sprite = sprite;
         entry.modelId = modelId;
         entry.kind = "sprite";
+        applyMetaToSprite(entry, renderEntry);
       }
 
-      function ensureEntitySprite(guid, modelId) {
+      // Build (or fetch existing) entityMap entry for a given GUID.
+      // `meta` carries the Phase 4 step 6a weenie metadata (itemType,
+      // name, objScale, …) and is only populated on Spawn. Position
+      // updates pass meta=null and reuse whatever meta the previous
+      // Spawn deposited. The placeholder→real-sprite upgrade path
+      // (existing-entry with modelId===0 + new modelId !==0) preserves
+      // the meta across the swap.
+      function ensureEntitySprite(guid, modelId, meta) {
         if (!liveScene) return null;
         let entry = entityMap.get(guid);
         if (entry) {
+          if (meta) entry.meta = meta;  // Spawn refreshes meta in place
           if (entry.modelId === 0 && modelId !== 0) {
             // Upgrade placeholder → real model sprite.
             entry.sprite.destroy();
@@ -1643,9 +1837,10 @@ void main() {
         // Look up the model in the live render cache (Phase 3 step 6;
         // populated by buildLiveSpriteMap during renderNeighbourhood)
         // first, then fall back to the static atlas. If neither has
-        // it, install a placeholder dot AND kick off an on-demand
-        // model fetch — when the fetch resolves, the placeholder is
-        // upgraded to a real textured sprite via `upgradeEntitySprite`.
+        // it, install a placeholder glyph (Phase 4 step 6b — keyed on
+        // ItemType category) AND kick off an on-demand model fetch —
+        // when the fetch resolves, the placeholder is upgraded to a
+        // real textured sprite via `upgradeEntitySprite`.
         const renderEntry =
           liveScene.liveSpriteMap?.get(modelId) ??
           liveScene.spriteMap?.get(modelId);
@@ -1666,14 +1861,26 @@ void main() {
           sprite = new PIXI.Container();
           kind = "invisible";
         } else {
-          sprite = new PIXI.Graphics().circle(0, 0, 0.6).fill({ color: 0xff4488 });
+          // Phase 4 step 6b: glyph keyed on the meta's category instead
+          // of the previous magenta-dot fallback. Until ObjectCreate
+          // lands the meta is missing → "unknown" grey dot; once it
+          // arrives the placeholder is destroyed + recreated from the
+          // glyph table, OR the on-demand fetch resolves and replaces
+          // the placeholder with the textured sprite.
+          const cat = meta?.category || "unknown";
+          sprite = drawGlyphForCategory(cat);
           kind = "placeholder";
         }
         liveScene.entityContainer.addChild(sprite);
-        entry = { sprite, modelId, pendingFetchModelId: null, kind };
+        entry = { sprite, modelId, pendingFetchModelId: null, kind, meta: meta || null };
         entityMap.set(guid, entry);
+        // Apply tint + objScale immediately for the cache-hit path. For
+        // the placeholder path, applyMetaToSprite is a no-op because
+        // Graphics already encode their colour. For the on-demand fetch
+        // path, it's re-applied inside upgradeEntitySprite.
+        applyMetaToSprite(entry, renderEntry);
         // For cache-miss real-modelId arrivals, kick off an on-demand
-        // fetch. When it resolves, the placeholder dot is swapped
+        // fetch. When it resolves, the placeholder glyph is swapped
         // for the real textured sprite via `upgradeEntitySprite`.
         // Modelid=0 means "no model yet" (PrivateUpdatePosition
         // before ObjectCreate); skip the fetch — the next
@@ -1686,17 +1893,127 @@ void main() {
         return entry;
       }
 
+      // Project an EntityUpdate's Spawn-only fields to the meta object
+      // entityMap entries store. Position / Remove updates have these
+      // fields zeroed/empty on the Rust side; we never call this for
+      // them. category is precomputed once so the per-frame tint paths
+      // don't redo the bitmask switch.
+      function metaFromSpawn(upd) {
+        const itemType = upd.itemType >>> 0;
+        return {
+          wcid: upd.wcid >>> 0,
+          itemType,
+          category: categoryForItemType(itemType),
+          name: upd.name || "",
+          objScale: upd.objScale > 0 ? upd.objScale : 1.0,
+          iconId: upd.iconId >>> 0,
+          paletteId: upd.paletteId >>> 0,
+          mtableId: upd.mtableId >>> 0,
+        };
+      }
+
+      // Phase 4 step 6e: nameplate colour-coding. We have less info on
+      // the wire than retail (no friend/foe flag), so the categories
+      // here are a coarse approximation: creature/portal/sign/container
+      // each get distinctive colours; everything else gets a neutral
+      // off-white. radar_blip_color (NPC=Yellow, Vendor=Yellow,
+      // Creature=Gold, Portal=Purple — see external/ACE/Source/
+      // ACE.Entity/Enum/RadarColor.cs) would refine this further; for
+      // now we read from item_type only.
+      function nameplateColorForCategory(category) {
+        switch (category) {
+          case "creature":  return 0xE07070;
+          case "portal":    return 0x6EC8E0;
+          case "container": return 0xCDA060;
+          case "writable":  return 0xE09A3F;
+          case "lifestone": return 0x4DA0E8;
+          case "weapon":
+          case "armor":
+          case "key":
+          case "gem":
+          case "money":
+          case "food":      return 0xC8C8B0;
+          default:          return 0xE0E0C8;
+        }
+      }
+
+      // Lazily mint a PIXI.Text in nameplateContainer for entries that
+      // have a name. Skips the local player and any entry without a
+      // name. Idempotent — safe to call multiple times for the same
+      // entry; only the first call allocates. Position is updated each
+      // frame in updateNameplatePositions; allocation here is the
+      // text-only step. Pre-multiplied alpha + black stroke matches
+      // retail's readable-on-anything style.
+      function ensureNameplate(entry) {
+        if (!liveScene || !entry || !entry.meta) return;
+        if (entry.nameplate) return;
+        const meta = entry.meta;
+        if (!meta.name) return;
+        if (entry.guid >>> 0 === (localPlayerGuid ?? 0xffffffff)) return;
+        const text = new PIXI.Text({
+          text: meta.name,
+          style: {
+            fontFamily: "monospace",
+            fontSize: 13,
+            fontWeight: "bold",
+            fill: nameplateColorForCategory(meta.category),
+            stroke: { color: 0x000000, width: 3 },
+            align: "center",
+          },
+        });
+        text.anchor.set(0.5, 1.0);  // bottom-centred above the sprite
+        liveScene.nameplateContainer.addChild(text);
+        entry.nameplate = text;
+      }
+
+      // Walk entityMap once per rAF tick and project each entry's world
+      // coords through the camera+world transforms to canvas pixels for
+      // its nameplate. Nameplate sits in nameplateContainer (sibling of
+      // cameraContainer on app.stage), NOT scaled by the camera, so it
+      // stays at 12px screen-space at every zoom level. Hides
+      // nameplates entirely when the camera is zoomed out enough that
+      // text would crowd (sx < 0.3 px/m ≈ a single landblock taking
+      // ~58px on screen — far enough out that names would overlap).
+      function updateNameplatePositions() {
+        if (!liveScene) return;
+        const cam = liveScene.cameraContainer;
+        const sx = cam.scale.x;
+        const ox = cam.position.x;
+        const oy = cam.position.y;
+        const visible = sx >= 0.3;
+        liveScene.nameplateContainer.visible = visible;
+        if (!visible) return;
+        for (const [, entry] of entityMap) {
+          if (!entry.nameplate) continue;
+          const wx = entry.sprite.x;
+          const wy = entry.sprite.y;
+          // worldContainer flips y: screen y = -wy * sx + oy.
+          // Lift 14px above the sprite centre.
+          entry.nameplate.position.set(wx * sx + ox, -wy * sx + oy - 14);
+        }
+      }
+
       function handleEntitySpawn(upd) {
-        const entry = ensureEntitySprite(upd.guid, upd.modelId);
+        const meta = metaFromSpawn(upd);
+        const guid = upd.guid >>> 0;
+        const entry = ensureEntitySprite(guid, upd.modelId, meta);
         if (!entry) return;
+        entry.guid = guid;
         const { wx, wy } = landblockToWorldXY(upd.landblockId, upd.x, upd.y);
         entry.sprite.position.set(wx, wy);
         entry.sprite.rotation = -quaternionToYaw(upd.qw, upd.qx, upd.qy, upd.qz);
+        ensureNameplate(entry);
       }
 
       function handlePositionUpdate(upd) {
-        const entry = ensureEntitySprite(upd.guid, 0);
+        // No meta on Position — reuse what the prior Spawn deposited
+        // on this guid's entry. If Position arrives before any Spawn
+        // (PrivateUpdatePosition for the local player), the entry will
+        // be a generic-grey placeholder until ObjectCreate lands.
+        const guid = upd.guid >>> 0;
+        const entry = ensureEntitySprite(guid, 0, null);
         if (!entry) return;
+        if (entry.guid === undefined) entry.guid = guid;
         const { wx, wy } = landblockToWorldXY(upd.landblockId, upd.x, upd.y);
         entry.sprite.position.set(wx, wy);
         entry.sprite.rotation = -quaternionToYaw(upd.qw, upd.qx, upd.qy, upd.qz);
@@ -1705,6 +2022,7 @@ void main() {
       function handleEntityRemove(upd) {
         const entry = entityMap.get(upd.guid);
         if (!entry) return;
+        if (entry.nameplate) entry.nameplate.destroy();
         entry.sprite.destroy();
         entityMap.delete(upd.guid);
       }
@@ -1800,6 +2118,11 @@ void main() {
         console.error("fetch_landblock_heightmaps failed:", err);
        }
       }
+
+      // Phase 4 step 6 capture surface: expose renderHoltburg so the
+      // capture script can drive the renderer without a live ACE/login.
+      // Same window-exposure pattern used for liveScene/entityMap above.
+      window.renderHoltburg = renderHoltburg;
 
       // ----- Phase 4 step 1 login flow -----------------------------
       // The login form gates the renderer. On submit we drive the
@@ -2157,6 +2480,10 @@ void main() {
               if (evt.kind === 1) {
                 // PlayerSpawned — u32Payload = spawned player GUID.
                 spawnedPlayerGuid = evt.u32Payload >>> 0;
+                // Phase 4 step 6e: tell the nameplate layer who the
+                // local player is so it skips drawing a name above
+                // them (retail convention).
+                setLocalPlayerGuid(spawnedPlayerGuid);
                 spawningCharId = null;
                 const guidHex = `0x${spawnedPlayerGuid.toString(16).toUpperCase().padStart(8, "0")}`;
                 // Find the Li that triggered this spawn (matches by guid).
@@ -2263,6 +2590,11 @@ void main() {
               else if (upd.kind === 2) handleEntityRemove(upd);
               upd.free();
             }
+            // Phase 4 step 6e: project entity world coords to canvas
+            // pixels for each visible nameplate. Cheap when zoomed in
+            // (one Map walk + a multiply-add per entity); a no-op
+            // when zoomed out below the visibility threshold.
+            updateNameplatePositions();
             // Phase 4 step 3.5: client-side prediction. ACE doesn't
             // echo position back to the originator (retail AC's
             // protocol is asymmetric — see step 3 doc). Without

@@ -273,6 +273,23 @@ check(
     `typeof ${typeof wasm.EntityUpdate}`
 );
 
+// Phase 4 step 6a: EntityUpdate carries weenie metadata on Spawn so
+// JS can dispatch by category (step 6b), label by name (step 6e), and
+// scale by obj_scale. Position/Remove updates leave these zeroed/empty.
+// The recv-loop ObjectCreate arm in lib.rs stops discarding the
+// PublicWeenieDescription + ObjectDescriptionData fields; here we
+// just probe the wasm-bindgen getters were emitted on the prototype.
+const entityUpdateProto = wasm.EntityUpdate?.prototype;
+const step6aGetters = ["wcid", "itemType", "name", "objScale", "iconId", "paletteId", "mtableId"];
+for (const name of step6aGetters) {
+    const desc = Object.getOwnPropertyDescriptor(entityUpdateProto || {}, name);
+    check(
+        `EntityUpdate.${name} getter exposed (Phase 4 step 6a weenie metadata)`,
+        typeof desc?.get === "function",
+        `getter=${typeof desc?.get}`
+    );
+}
+
 // Phase 4 step 3: SessionHandle.setMovementInput(forward, strafe,
 // turn, run) takes a tristate-axis keystate snapshot and forwards
 // it to the recv loop, which builds a `GameAction::MoveToState`

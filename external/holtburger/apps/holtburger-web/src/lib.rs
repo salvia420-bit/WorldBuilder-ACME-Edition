@@ -2095,6 +2095,43 @@ pub struct EntityUpdate {
     qx: f32,
     qy: f32,
     qz: f32,
+    // --- Phase 4 step 6a: weenie metadata (Spawn only) -----------------
+    // Position/Remove updates leave these zeroed/empty so the JS-side
+    // entityMap merges by guid and reuses the meta from the original
+    // Spawn. The category-keyed visual dispatch (step 6b) and nameplates
+    // (step 6e) read these on Spawn arrival; on Position update they're
+    // expected to be 0/"".
+    /// Weenie class id (the wcid from `PublicWeenieDescription.wcid`).
+    /// `0` for non-Spawn updates and the rare child-entity Spawn that
+    /// arrives without a description.
+    wcid: u32,
+    /// `ItemType` bitmask from `PublicWeenieDescription.item_type`. Used
+    /// JS-side as the primary discriminator for the visual category
+    /// (Portal = `0x00010000`, Creature = `0x00000010`, Sign / Door /
+    /// Vendor / Weapon / Armor — see `external/ACE/Source/ACE.Entity/
+    /// Enum/ItemType.cs`). `0` for non-Spawn.
+    item_type: u32,
+    /// Display name (`PublicWeenieDescription.name`). Empty string when
+    /// absent on the wire OR for non-Spawn updates. JS treats empty as
+    /// "no nameplate".
+    name: String,
+    /// Object scale multiplier (`ObjectDescriptionData.obj_scale`). `1.0`
+    /// when absent or for non-Spawn. JS multiplies the rasterized
+    /// sprite's `worldBounds` by this so juvenile vs. epic-tier
+    /// creatures render at distinct sprite sizes.
+    obj_scale: f32,
+    /// Icon DID (`PublicWeenieDescription.icon_id`). Surfaced for any
+    /// future icon-overlay work (e.g. nameplate prefix icons or
+    /// minimap blips); `0` when absent.
+    icon_id: u32,
+    /// Primary palette DID (`ObjectDescriptionData.model_data.palette_id`).
+    /// `0` when the model carries no recolour. Step 6c uses this as the
+    /// substitution key when rasterizing creature variants.
+    palette_id: u32,
+    /// Motion table DID (`ObjectDescriptionData.mtable_id`). Surfaced
+    /// for future animation-state polish (walk-cycle anims). `0` when
+    /// absent.
+    mtable_id: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2148,6 +2185,59 @@ impl EntityUpdate {
     #[wasm_bindgen(getter)]
     pub fn qz(&self) -> f32 {
         self.qz
+    }
+
+    /// Phase 4 step 6a: weenie class id from `PublicWeenieDescription`.
+    /// `0` when the update isn't a Spawn or the description is missing
+    /// the field.
+    #[wasm_bindgen(getter)]
+    pub fn wcid(&self) -> u32 {
+        self.wcid
+    }
+
+    /// Phase 4 step 6a: `ItemType` bitmask. JS uses this as the primary
+    /// category discriminator for tint + glyph fallback. See
+    /// `external/ACE/Source/ACE.Entity/Enum/ItemType.cs:25` for the
+    /// reference enum (Portal = `0x00010000`, Creature = `0x00000010`,
+    /// Sign / Door / Vendor / Weapon / Armor / etc.).
+    #[wasm_bindgen(getter, js_name = itemType)]
+    pub fn item_type(&self) -> u32 {
+        self.item_type
+    }
+
+    /// Phase 4 step 6a: display name (the entity's "say-able"
+    /// label). Empty string when absent. Used by step 6e nameplates.
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    /// Phase 4 step 6a: object scale multiplier. `1.0` when absent. JS
+    /// multiplies the rasterized sprite's `worldBounds` by this.
+    #[wasm_bindgen(getter, js_name = objScale)]
+    pub fn obj_scale(&self) -> f32 {
+        self.obj_scale
+    }
+
+    /// Phase 4 step 6a: icon DID. `0` when absent.
+    #[wasm_bindgen(getter, js_name = iconId)]
+    pub fn icon_id(&self) -> u32 {
+        self.icon_id
+    }
+
+    /// Phase 4 step 6a: primary palette DID. `0` when the model carries
+    /// no recolour. Step 6c reads this when rasterizing creature
+    /// variants.
+    #[wasm_bindgen(getter, js_name = paletteId)]
+    pub fn palette_id(&self) -> u32 {
+        self.palette_id
+    }
+
+    /// Phase 4 step 6a: motion table DID. `0` when absent. Surfaced for
+    /// future animation-state polish.
+    #[wasm_bindgen(getter, js_name = mtableId)]
+    pub fn mtable_id(&self) -> u32 {
+        self.mtable_id
     }
 }
 
@@ -3280,6 +3370,13 @@ async fn recv_loop(
                                 qx: pos.rotation.x,
                                 qy: pos.rotation.y,
                                 qz: pos.rotation.z,
+                                wcid: 0,
+                                item_type: 0,
+                                name: String::new(),
+                                obj_scale: 1.0,
+                                icon_id: 0,
+                                palette_id: 0,
+                                mtable_id: 0,
                             });
                         }
                         GameMessage::PrivateUpdatePosition(data) => {
@@ -3312,6 +3409,13 @@ async fn recv_loop(
                                     qx: pos.rotation.x,
                                     qy: pos.rotation.y,
                                     qz: pos.rotation.z,
+                                    wcid: 0,
+                                    item_type: 0,
+                                    name: String::new(),
+                                    obj_scale: 1.0,
+                                    icon_id: 0,
+                                    palette_id: 0,
+                                    mtable_id: 0,
                                 });
                             }
                         }
@@ -3338,6 +3442,13 @@ async fn recv_loop(
                                 qx: pos.rotation.x,
                                 qy: pos.rotation.y,
                                 qz: pos.rotation.z,
+                                wcid: 0,
+                                item_type: 0,
+                                name: String::new(),
+                                obj_scale: 1.0,
+                                icon_id: 0,
+                                palette_id: 0,
+                                mtable_id: 0,
                             });
                         }
                         GameMessage::ObjectCreate(data) => {
@@ -3363,6 +3474,27 @@ async fn recv_loop(
                                 ),
                                 None => (0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0),
                             };
+                            // Phase 4 step 6a: stop discarding the
+                            // PublicWeenieDescription. wcid + item_type
+                            // drive the JS-side category dispatch
+                            // (step 6b); name drives nameplates (step
+                            // 6e); obj_scale corrects sprite size for
+                            // juvenile-vs-epic creature variants;
+                            // palette_id + mtable_id are surfaced for
+                            // step 6c (palette tinting) and future
+                            // animation work but JS may ignore them
+                            // until those steps land.
+                            let wcid = data.public_weenie_desc.wcid;
+                            let item_type = data.public_weenie_desc.item_type;
+                            let icon_id = data.public_weenie_desc.icon_id;
+                            let name = data
+                                .public_weenie_desc
+                                .name
+                                .clone()
+                                .unwrap_or_default();
+                            let obj_scale = data.obj_scale.unwrap_or(1.0);
+                            let palette_id = data.model_data.palette_id.unwrap_or(0);
+                            let mtable_id = data.mtable_id.unwrap_or(0);
                             entity_updates.borrow_mut().push(EntityUpdate {
                                 kind: ENTITY_UPDATE_KIND_SPAWN,
                                 guid: u32::from(data.public_weenie_desc.guid),
@@ -3375,6 +3507,13 @@ async fn recv_loop(
                                 qx,
                                 qy,
                                 qz,
+                                wcid,
+                                item_type,
+                                name,
+                                obj_scale,
+                                icon_id,
+                                palette_id,
+                                mtable_id,
                             });
                         }
                         GameMessage::ObjectDelete(data) => {
@@ -3390,6 +3529,13 @@ async fn recv_loop(
                                 qx: 0.0,
                                 qy: 0.0,
                                 qz: 0.0,
+                                wcid: 0,
+                                item_type: 0,
+                                name: String::new(),
+                                obj_scale: 1.0,
+                                icon_id: 0,
+                                palette_id: 0,
+                                mtable_id: 0,
                             });
                         }
                         GameMessage::UpdateMotion(data) => {
