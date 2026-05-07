@@ -2497,6 +2497,222 @@ fn chat_channel_label(raw: u32) -> String {
     }
 }
 
+// Phase 4 step 4 — chat-category taxonomy. Every chat-bearing message
+// the recv loop normalises into a `kind=2 ChatReceived` event also
+// carries one of these category IDs in `ClientEvent.u32_payload_2`,
+// which JS dispatches on for tab routing + colour coding. Mirrors the
+// `chat_message_tags()` mapping in `apps/holtburger-cli/src/pages/
+// game/panels/chat.rs:609-642`. The taxonomy is intentionally wider
+// than ACE's `ChatMessageType` enum — it folds in "category derives
+// from non-chat-type-bearing message variant" cases (combat / death /
+// popup / transient) so JS sees one uniform attribute regardless of
+// which AC packet the line came from.
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_SYSTEM: u32 = 0;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_LOCAL: u32 = 1;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_TELL: u32 = 2;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_CHANNEL: u32 = 3;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_EMOTE: u32 = 4;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_COMBAT: u32 = 5;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_DEATH: u32 = 6;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_MAGIC: u32 = 7;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_ADVANCEMENT: u32 = 8;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_TRANSIENT: u32 = 9;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_POPUP: u32 = 10;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_HELP: u32 = 11;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_TRADE: u32 = 12;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_LFG: u32 = 13;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_ROLEPLAY: u32 = 14;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_GENERAL: u32 = 15;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_FELLOWSHIP: u32 = 16;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_ALLEGIANCE: u32 = 17;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_RECALL: u32 = 18;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_CRAFT: u32 = 19;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_APPRAISAL: u32 = 20;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_BROADCAST: u32 = 21;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_SOCIETY: u32 = 22;
+#[cfg(target_arch = "wasm32")]
+const CHAT_CATEGORY_OLTHOI: u32 = 23;
+
+/// Phase 4 step 4: map a raw `ChatMessageType` byte (the `chat_type`
+/// field carried by `ServerMessage`, `HearSpeech`, `HearRangedSpeech`,
+/// and `Tell`) to one of the `CHAT_CATEGORY_*` IDs. Mirrors the cli's
+/// `chat_message_tags()` switch in
+/// `apps/holtburger-cli/src/pages/game/panels/chat.rs:609-642`. Unknown
+/// IDs fall back to `SYSTEM` so a future ACE addition still routes
+/// somewhere instead of getting silently swallowed.
+#[cfg(target_arch = "wasm32")]
+fn chat_category_for_message_type(chat_type_raw: u32) -> u32 {
+    use holtburger_protocol::messages::chat::types::ChatMessageType;
+    match ChatMessageType::from_repr(chat_type_raw) {
+        Some(ChatMessageType::Tell)
+        | Some(ChatMessageType::OutgoingTell)
+        | Some(ChatMessageType::AdminTell) => CHAT_CATEGORY_TELL,
+        Some(ChatMessageType::Speech)
+        | Some(ChatMessageType::Channel)
+        | Some(ChatMessageType::ChannelSend) => CHAT_CATEGORY_LOCAL,
+        Some(ChatMessageType::Combat)
+        | Some(ChatMessageType::CombatEnemy)
+        | Some(ChatMessageType::CombatSelf) => CHAT_CATEGORY_COMBAT,
+        Some(ChatMessageType::Magic) | Some(ChatMessageType::Spellcasting) => CHAT_CATEGORY_MAGIC,
+        Some(ChatMessageType::Allegiance) => CHAT_CATEGORY_ALLEGIANCE,
+        Some(ChatMessageType::Fellowship) => CHAT_CATEGORY_FELLOWSHIP,
+        Some(ChatMessageType::Help) => CHAT_CATEGORY_HELP,
+        Some(ChatMessageType::Advancement) => CHAT_CATEGORY_ADVANCEMENT,
+        Some(ChatMessageType::Recall) => CHAT_CATEGORY_RECALL,
+        Some(ChatMessageType::Craft) | Some(ChatMessageType::Salvaging) => CHAT_CATEGORY_CRAFT,
+        Some(ChatMessageType::Appraisal) => CHAT_CATEGORY_APPRAISAL,
+        Some(ChatMessageType::WorldBroadcast) => CHAT_CATEGORY_BROADCAST,
+        Some(ChatMessageType::Emote)
+        | Some(ChatMessageType::Social)
+        | Some(ChatMessageType::SocialSend) => CHAT_CATEGORY_EMOTE,
+        // Broadcast / AllChannels / System / x1A..x1E / Abuse all fall
+        // into "system text" — green-on-grey in retail.
+        _ => CHAT_CATEGORY_SYSTEM,
+    }
+}
+
+/// Phase 4 step 4: map a raw `ChatChannel` bitmask (the `channel` field
+/// on a `GameEvent::ChannelBroadcast`) to a `CHAT_CATEGORY_*`. The
+/// retail UI paints allegiance ranks (Vassals/Patron/Monarch) the same
+/// colour as Allegiance broadcast; fellowship ranks similarly fold in.
+/// Mirrors the cli's `channel_tags()` in `chat.rs:646-660`.
+#[cfg(target_arch = "wasm32")]
+fn chat_category_for_channel(channel_raw: u32) -> u32 {
+    use holtburger_protocol::messages::ChatChannel;
+    match ChatChannel::from_repr(channel_raw) {
+        Some(ChatChannel::Fellow) | Some(ChatChannel::FellowBroadcast) => {
+            CHAT_CATEGORY_FELLOWSHIP
+        }
+        Some(ChatChannel::Vassals)
+        | Some(ChatChannel::Patron)
+        | Some(ChatChannel::Monarch)
+        | Some(ChatChannel::CoVassals)
+        | Some(ChatChannel::AllegianceBroadcast) => CHAT_CATEGORY_ALLEGIANCE,
+        Some(ChatChannel::Help) => CHAT_CATEGORY_HELP,
+        Some(ChatChannel::Abuse)
+        | Some(ChatChannel::Admin)
+        | Some(ChatChannel::Audit)
+        | Some(ChatChannel::Advocate1)
+        | Some(ChatChannel::Advocate2)
+        | Some(ChatChannel::Advocate3)
+        | Some(ChatChannel::Sentinel) => CHAT_CATEGORY_SYSTEM,
+        None => CHAT_CATEGORY_CHANNEL,
+    }
+}
+
+/// Phase 4 step 4: map a `TurbineChatType` (the modern channel chat
+/// taxonomy — General / Trade / LFG / Roleplay / Allegiance / Society /
+/// Olthoi, distinct from the legacy `ChatChannel` bitmask the
+/// `GameEvent::ChannelBroadcast` path uses) to a `CHAT_CATEGORY_*`.
+#[cfg(target_arch = "wasm32")]
+fn chat_category_for_turbine_chat_type(chat_type_raw: u32) -> u32 {
+    use holtburger_protocol::messages::chat::turbine::TurbineChatType;
+    match TurbineChatType::from_repr(chat_type_raw) {
+        Some(TurbineChatType::Allegiance) => CHAT_CATEGORY_ALLEGIANCE,
+        Some(TurbineChatType::General) => CHAT_CATEGORY_GENERAL,
+        Some(TurbineChatType::Trade) => CHAT_CATEGORY_TRADE,
+        Some(TurbineChatType::Lfg) => CHAT_CATEGORY_LFG,
+        Some(TurbineChatType::Roleplay) => CHAT_CATEGORY_ROLEPLAY,
+        Some(TurbineChatType::Society)
+        | Some(TurbineChatType::SocietyCelHan)
+        | Some(TurbineChatType::SocietyEldWeb)
+        | Some(TurbineChatType::SocietyRadBlo) => CHAT_CATEGORY_SOCIETY,
+        Some(TurbineChatType::Olthoi) => CHAT_CATEGORY_OLTHOI,
+        Some(TurbineChatType::Undef) | None => CHAT_CATEGORY_CHANNEL,
+    }
+}
+
+/// Phase 4 step 4: human-readable label for a `TurbineChatType`. Used
+/// to format `"[Trade] Sender says, ..."` etc.
+#[cfg(target_arch = "wasm32")]
+fn turbine_chat_type_label(chat_type_raw: u32) -> &'static str {
+    use holtburger_protocol::messages::chat::turbine::TurbineChatType;
+    match TurbineChatType::from_repr(chat_type_raw) {
+        Some(TurbineChatType::Allegiance) => "Allegiance",
+        Some(TurbineChatType::General) => "General",
+        Some(TurbineChatType::Trade) => "Trade",
+        Some(TurbineChatType::Lfg) => "LFG",
+        Some(TurbineChatType::Roleplay) => "Roleplay",
+        Some(TurbineChatType::Society) => "Society",
+        Some(TurbineChatType::SocietyCelHan) => "Celestial Hand",
+        Some(TurbineChatType::SocietyEldWeb) => "Eldrytch Web",
+        Some(TurbineChatType::SocietyRadBlo) => "Radiant Blood",
+        Some(TurbineChatType::Olthoi) => "Olthoi",
+        Some(TurbineChatType::Undef) | None => "Channel",
+    }
+}
+
+/// Phase 4 step 4: format a `DamageLocation` for combat-message
+/// rendering. Matches the cli's `format_damage_location()` mapping in
+/// `chat.rs:582-594` exactly.
+#[cfg(target_arch = "wasm32")]
+fn damage_location_label(loc: holtburger_protocol::messages::combat::types::DamageLocation) -> &'static str {
+    use holtburger_protocol::messages::combat::types::DamageLocation;
+    match loc {
+        DamageLocation::Head => "head",
+        DamageLocation::Chest => "chest",
+        DamageLocation::Abdomen => "abdomen",
+        DamageLocation::UpperArm => "upper arm",
+        DamageLocation::LowerArm => "lower arm",
+        DamageLocation::Hand => "hand",
+        DamageLocation::UpperLeg => "upper leg",
+        DamageLocation::LowerLeg => "lower leg",
+        DamageLocation::Foot => "foot",
+    }
+}
+
+/// Phase 4 step 4: format a `DamageType` bitset as a slash-joined
+/// lowercase string ("slash" / "fire/cold" / "unknown"). Mirrors
+/// `format_damage_type()` in the cli.
+#[cfg(target_arch = "wasm32")]
+fn damage_type_label(damage_type: holtburger_common::properties::DamageType) -> String {
+    let names: Vec<&'static str> = damage_type.iter_display_names().collect();
+    if names.is_empty() {
+        "unknown".to_string()
+    } else {
+        names.join("/").to_ascii_lowercase()
+    }
+}
+
+/// Phase 4 step 4: format an `AttackConditions` bitset as a
+/// bracketed suffix (" [Reckless attack, Sneak attack]") or the empty
+/// string when no conditions are set. Mirrors the cli's
+/// `format_attack_conditions_suffix()`.
+#[cfg(target_arch = "wasm32")]
+fn attack_conditions_suffix(
+    attack_conditions: holtburger_protocol::messages::combat::types::AttackConditions,
+) -> String {
+    let names: Vec<&'static str> = attack_conditions.iter_display_names().collect();
+    if names.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", names.join(", "))
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_CHARACTER_LIST_RECEIVED: u32 = 0;
 #[cfg(target_arch = "wasm32")]
@@ -2611,13 +2827,25 @@ enum SessionCommand {
 ///   `stringPayload` = pre-formatted display line
 ///   (`"[Channel] Sender: message"` etc. — the recv loop normalises
 ///   each chat-bearing variant into one display string so JS treats
-///   chat as opaque text). `u32Payload` = chat-channel-id where the
-///   message arrived with one (e.g. `Vassals`, `Allegiance`,
-///   `LFG`); `0` otherwise. Source messages: `ServerMessage`,
+///   chat as opaque text). `u32Payload` = the raw `ChatMessageType` id
+///   when one was on the wire (HearSpeech / HearRangedSpeech /
+///   ServerMessage / Tell), or the raw `ChatChannel` bitmask for
+///   `ChannelBroadcast`, or the raw `TurbineChatType` for `TurbineChat`,
+///   or `0` for variants that don't carry one (emotes, popups,
+///   transient strings, combat / death notifications).
+///   `u32Payload2` = the [`CHAT_CATEGORY_*`] constant — the JS-facing
+///   tab-routing + colour-coding key. JS reads `u32Payload2` directly;
+///   the raw `u32Payload` is exposed for debugging / audit only.
+///   Source messages (Phase 4 step 4 expansion): `ServerMessage`,
 ///   `HearSpeech`, `HearRangedSpeech`, `EmoteText`, `SoulEmote`,
+///   `PlayerKilled`, `TurbineChat` (EventSendToRoom payload),
 ///   `GameEvent::Tell`, `GameEvent::ChannelBroadcast`,
 ///   `GameEvent::CommunicationTransientString`,
-///   `GameEvent::PopupString`.
+///   `GameEvent::PopupString`, `GameEvent::AttackerNotification`,
+///   `GameEvent::DefenderNotification`,
+///   `GameEvent::EvasionAttackerNotification`,
+///   `GameEvent::EvasionDefenderNotification`,
+///   `GameEvent::VictimNotification`, `GameEvent::KillerNotification`.
 /// - `kind = 4` — Disconnected. `stringPayload` = the error message
 ///   from `recv_message` (transport error, server hangup, etc.).
 /// - `kind = 5` — CharacterCreated (Phase 4 step 2a.5).
@@ -2646,6 +2874,7 @@ pub struct ClientEvent {
     kind: u32,
     string_payload: Option<String>,
     u32_payload: Option<u32>,
+    u32_payload_2: Option<u32>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2668,10 +2897,22 @@ impl ClientEvent {
 
     /// Optional u32 payload. For `kind = 0` (CharacterListReceived)
     /// holds the count of characters in the list; for `kind = 1`
-    /// (PlayerSpawned) holds the spawned player's GUID.
+    /// (PlayerSpawned) holds the spawned player's GUID. For `kind = 2`
+    /// (ChatReceived) holds the raw `ChatMessageType` / `ChatChannel`
+    /// bitmask / `TurbineChatType` from the source packet (debugging
+    /// only — JS routes by `u32Payload2`).
     #[wasm_bindgen(getter, js_name = u32Payload)]
     pub fn u32_payload(&self) -> Option<u32> {
         self.u32_payload
+    }
+
+    /// Phase 4 step 4: secondary u32 payload. For `kind = 2`
+    /// (ChatReceived) holds the [`CHAT_CATEGORY_*`] constant — the
+    /// JS-facing tab-routing + colour-coding key. Unused (always
+    /// `None`) for other event kinds today.
+    #[wasm_bindgen(getter, js_name = u32Payload2)]
+    pub fn u32_payload_2(&self) -> Option<u32> {
+        self.u32_payload_2
     }
 }
 
@@ -3865,6 +4106,7 @@ async fn recv_loop(
                             kind: CLIENT_EVENT_KIND_DISCONNECTED,
                             string_payload: Some(msg),
                             u32_payload: None,
+                            u32_payload_2: None,
                         });
                         return;
                     }
@@ -3903,6 +4145,7 @@ async fn recv_loop(
                                     kind: CLIENT_EVENT_KIND_CHARACTER_LIST_RECEIVED,
                                     string_payload: Some(account_name.clone()),
                                     u32_payload: Some(count),
+                                    u32_payload_2: None,
                                 });
                             }
                         }
@@ -3932,6 +4175,7 @@ async fn recv_loop(
                                     kind: CLIENT_EVENT_KIND_CHARACTER_CREATED,
                                     string_payload: Some(name),
                                     u32_payload: Some(guid),
+                                    u32_payload_2: None,
                                 });
                             } else {
                                 let code = data.response as u32;
@@ -3940,6 +4184,7 @@ async fn recv_loop(
                                     kind: CLIENT_EVENT_KIND_CHARACTER_CREATE_FAILED,
                                     string_payload: Some(label),
                                     u32_payload: Some(code),
+                                    u32_payload_2: None,
                                 });
                             }
                         }
@@ -3963,6 +4208,7 @@ async fn recv_loop(
                                             "CharacterEnterWorld: {e}"
                                         )),
                                         u32_payload: None,
+                                        u32_payload_2: None,
                                     });
                                     return;
                                 }
@@ -3994,6 +4240,7 @@ async fn recv_loop(
                                 kind: CLIENT_EVENT_KIND_PLAYER_SPAWNED,
                                 string_payload: None,
                                 u32_payload: Some(player_guid_raw),
+                                u32_payload_2: None,
                             });
 
                             let login_complete = GameAction::LoginComplete(Box::new(
@@ -4005,6 +4252,7 @@ async fn recv_loop(
                                     kind: CLIENT_EVENT_KIND_DISCONNECTED,
                                     string_payload: Some(format!("LoginComplete: {e}")),
                                     u32_payload: None,
+                                    u32_payload_2: None,
                                 });
                                 return;
                             }
@@ -4016,6 +4264,7 @@ async fn recv_loop(
                                 kind: CLIENT_EVENT_KIND_ENTERED_WORLD,
                                 string_payload: None,
                                 u32_payload: Some(player_guid_raw),
+                                u32_payload_2: None,
                             });
                         }
                         GameMessage::GameAction(action_msg) => {
@@ -4309,22 +4558,39 @@ async fn recv_loop(
                         }
                         // Phase 4 step 4: chat-bearing surfaces. Each
                         // variant gets normalised into a single display
-                        // line + (optional) chat-channel-id so JS can
+                        // line + a `CHAT_CATEGORY_*` ID so JS can
                         // append to the chat panel without knowing
                         // each AC packet's shape. Reference handlers
                         // in the cli are scattered across
                         // `crates/holtburger-core/src/client/messages.rs`
-                        // and `crates/holtburger-world/src/handlers/`;
-                        // we don't reuse them because the cli formats
-                        // for stdout and we format for the DOM.
+                        // and `apps/holtburger-cli/src/pages/game/panels/
+                        // chat.rs`; we don't reuse them because the cli
+                        // formats for stdout (ratatui spans) and we
+                        // format for the DOM. Categories below mirror
+                        // the cli's `chat_message_tags()` mapping.
                         GameMessage::ServerMessage(data) => {
+                            // System chat — ChatMessageType in the
+                            // payload routes the tab (Combat → combat,
+                            // Magic → magic, Advancement → advancement,
+                            // Recall / Craft / etc. likewise).
+                            // ChatMessageType::WorldBroadcast lands here
+                            // too (server-wide announcements).
+                            let category = chat_category_for_message_type(data.chat_type);
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
                                 string_payload: Some(format!("[Server] {}", data.message)),
                                 u32_payload: Some(data.chat_type),
+                                u32_payload_2: Some(category),
                             });
                         }
                         GameMessage::HearSpeech(data) => {
+                            // Local say within speech-radius. chat_type
+                            // is usually `Speech` but ACE also uses this
+                            // packet for spell-casting words (chat_type
+                            // = Spellcasting), so the category lookup
+                            // routes spell incantations to the magic
+                            // tab instead of local.
+                            let category = chat_category_for_message_type(data.chat_type);
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
                                 string_payload: Some(format!(
@@ -4332,9 +4598,14 @@ async fn recv_loop(
                                     data.sender_name, data.message
                                 )),
                                 u32_payload: Some(data.chat_type),
+                                u32_payload_2: Some(category),
                             });
                         }
                         GameMessage::HearRangedSpeech(data) => {
+                            // Greater-range speech variant (e.g. heralds,
+                            // World Crier). Same chat_type taxonomy as
+                            // HearSpeech.
+                            let category = chat_category_for_message_type(data.chat_type);
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
                                 string_payload: Some(format!(
@@ -4342,6 +4613,7 @@ async fn recv_loop(
                                     data.sender_name, data.message
                                 )),
                                 u32_payload: Some(data.chat_type),
+                                u32_payload_2: Some(category),
                             });
                         }
                         GameMessage::EmoteText(data) => {
@@ -4353,6 +4625,7 @@ async fn recv_loop(
                                 kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
                                 string_payload: Some(data.text.clone()),
                                 u32_payload: Some(0),
+                                u32_payload_2: Some(CHAT_CATEGORY_EMOTE),
                             });
                         }
                         GameMessage::SoulEmote(data) => {
@@ -4363,21 +4636,77 @@ async fn recv_loop(
                                 kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
                                 string_payload: Some(data.text.clone()),
                                 u32_payload: Some(0),
+                                u32_payload_2: Some(CHAT_CATEGORY_EMOTE),
                             });
+                        }
+                        GameMessage::PlayerKilled(data) => {
+                            // Death broadcast — the formatted message
+                            // already reads "Player has been slain by
+                            // Monster!" or "Player killed by Player."
+                            // (PK kill). victim_id / killer_id are
+                            // GUIDs the wasm bundle could colour by
+                            // friendliness in a future step; today we
+                            // just surface the line.
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                string_payload: Some(data.death_message.clone()),
+                                u32_payload: Some(u32::from(data.killer_id)),
+                                u32_payload_2: Some(CHAT_CATEGORY_DEATH),
+                            });
+                        }
+                        GameMessage::TurbineChat(data) => {
+                            // Modern (post-Turbine) channel chat —
+                            // General / Trade / LFG / Roleplay /
+                            // Allegiance / Society / Olthoi. ACE wraps
+                            // the receive side in a SendToRoomByName
+                            // event blob; the request-side payload is
+                            // for outbound (which we don't speak yet).
+                            // Response blobs are RPC echoes — silent.
+                            use holtburger_protocol::messages::chat::turbine::TurbineChatPayload;
+                            match &data.payload {
+                                TurbineChatPayload::EventSendToRoom {
+                                    sender_name,
+                                    message,
+                                    chat_type,
+                                    ..
+                                } => {
+                                    let chat_type_raw = chat_type.raw();
+                                    let label = turbine_chat_type_label(chat_type_raw);
+                                    let category =
+                                        chat_category_for_turbine_chat_type(chat_type_raw);
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                        string_payload: Some(format!(
+                                            "[{label}] {sender_name} says, \"{message}\""
+                                        )),
+                                        u32_payload: Some(chat_type_raw),
+                                        u32_payload_2: Some(category),
+                                    });
+                                }
+                                TurbineChatPayload::RequestSendToRoomById { .. }
+                                | TurbineChatPayload::Response { .. }
+                                | TurbineChatPayload::Unknown(_) => {
+                                    // RPC echo / outbound — nothing to
+                                    // render.
+                                }
+                            }
                         }
                         GameMessage::GameEvent(event_msg) => {
                             // GameEvent wraps a sequenced inbound
                             // dispatch keyed on `target` (player or
                             // object guid) + `sequence`. The chat
-                            // surfaces here all carry text payloads;
-                            // non-chat variants (PlayerDescription,
-                            // PingResponse, ViewContents, magic /
-                            // combat / fellowship / trade events, etc.)
+                            // surfaces here all carry text payloads or
+                            // are combat/death notifications that get
+                            // formatted into chat lines below; non-chat
+                            // variants (PlayerDescription, PingResponse,
+                            // ViewContents, magic enchant updates,
+                            // fellowship / trade events, etc.)
                             // intentionally fall through to a catch-all
                             // _no-op_ — those land in steps 5+
                             // (interactive entities, vitals, inventory).
                             match event_msg.event {
                                 holtburger_protocol::messages::GameEvent::Tell(data) => {
+                                    let category = chat_category_for_message_type(data.chat_type);
                                     queued_events.borrow_mut().push(ClientEvent {
                                         kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
                                         string_payload: Some(format!(
@@ -4385,6 +4714,7 @@ async fn recv_loop(
                                             data.sender_name, data.message
                                         )),
                                         u32_payload: Some(data.chat_type),
+                                        u32_payload_2: Some(category),
                                     });
                                 }
                                 holtburger_protocol::messages::GameEvent::ChannelBroadcast(
@@ -4392,6 +4722,8 @@ async fn recv_loop(
                                 ) => {
                                     let channel_label =
                                         chat_channel_label(data.channel.raw());
+                                    let category =
+                                        chat_category_for_channel(data.channel.raw());
                                     queued_events.borrow_mut().push(ClientEvent {
                                         kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
                                         string_payload: Some(format!(
@@ -4399,6 +4731,7 @@ async fn recv_loop(
                                             channel_label, data.sender_name, data.message
                                         )),
                                         u32_payload: Some(data.channel.raw()),
+                                        u32_payload_2: Some(category),
                                     });
                                 }
                                 holtburger_protocol::messages::GameEvent::CommunicationTransientString(
@@ -4408,6 +4741,7 @@ async fn recv_loop(
                                         kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
                                         string_payload: Some(data.message.clone()),
                                         u32_payload: Some(0),
+                                        u32_payload_2: Some(CHAT_CATEGORY_TRANSIENT),
                                     });
                                 }
                                 holtburger_protocol::messages::GameEvent::PopupString(data) => {
@@ -4415,6 +4749,117 @@ async fn recv_loop(
                                         kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
                                         string_payload: Some(format!("[Popup] {}", data.message)),
                                         u32_payload: Some(0),
+                                        u32_payload_2: Some(CHAT_CATEGORY_POPUP),
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::AttackerNotification(
+                                    data,
+                                ) => {
+                                    // "You hit Drudge Ravener for 37
+                                    // slash damage (25.0%). Critical
+                                    // hit. [Recklessness, Sneak attack]"
+                                    // — mirrors cli format from
+                                    // chat.rs:250-269.
+                                    let crit = if data.critical_hit {
+                                        " Critical hit."
+                                    } else {
+                                        ""
+                                    };
+                                    let suffix = attack_conditions_suffix(data.attack_conditions);
+                                    let line = format!(
+                                        "You hit {} for {} {} damage ({:.1}%).{}{}",
+                                        data.defender_name,
+                                        data.damage,
+                                        damage_type_label(data.damage_type),
+                                        data.health_percent * 100.0,
+                                        crit,
+                                        suffix,
+                                    );
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                        string_payload: Some(line),
+                                        u32_payload: Some(0),
+                                        u32_payload_2: Some(CHAT_CATEGORY_COMBAT),
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::DefenderNotification(
+                                    data,
+                                ) => {
+                                    // "Banderling hit you for 18 fire
+                                    // damage to your chest (12.5%)."
+                                    let crit = if data.critical_hit {
+                                        " Critical hit."
+                                    } else {
+                                        ""
+                                    };
+                                    let suffix = attack_conditions_suffix(data.attack_conditions);
+                                    let line = format!(
+                                        "{} hit you for {} {} damage to your {} ({:.1}%).{}{}",
+                                        data.attacker_name,
+                                        data.damage,
+                                        damage_type_label(data.damage_type),
+                                        damage_location_label(data.damage_location),
+                                        data.health_percent * 100.0,
+                                        crit,
+                                        suffix,
+                                    );
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                        string_payload: Some(line),
+                                        u32_payload: Some(0),
+                                        u32_payload_2: Some(CHAT_CATEGORY_COMBAT),
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::EvasionAttackerNotification(
+                                    data,
+                                ) => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                        string_payload: Some(format!(
+                                            "{} evaded your attack.",
+                                            data.defender_name
+                                        )),
+                                        u32_payload: Some(0),
+                                        u32_payload_2: Some(CHAT_CATEGORY_COMBAT),
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::EvasionDefenderNotification(
+                                    data,
+                                ) => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                        string_payload: Some(format!(
+                                            "You evaded {}'s attack.",
+                                            data.attacker_name
+                                        )),
+                                        u32_payload: Some(0),
+                                        u32_payload_2: Some(CHAT_CATEGORY_COMBAT),
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::VictimNotification(
+                                    data,
+                                ) => {
+                                    // ACE pre-formats the line — "You
+                                    // have died!" / "Drudge slew you!"
+                                    // / "You killed yourself with a
+                                    // spell!" — so just relay it.
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                        string_payload: Some(data.death_message.clone()),
+                                        u32_payload: Some(0),
+                                        u32_payload_2: Some(CHAT_CATEGORY_DEATH),
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::KillerNotification(
+                                    data,
+                                ) => {
+                                    // Survivor's POV: "You killed the
+                                    // drudge!"
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                        string_payload: Some(data.death_message.clone()),
+                                        u32_payload: Some(0),
+                                        u32_payload_2: Some(CHAT_CATEGORY_DEATH),
                                     });
                                 }
                                 _ => {
@@ -4469,6 +4914,7 @@ async fn recv_loop(
                                     "CharacterEnterWorldRequest: {e}"
                                 )),
                                 u32_payload: None,
+                                u32_payload_2: None,
                             });
                             return;
                         }
@@ -4487,6 +4933,7 @@ async fn recv_loop(
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
                                 string_payload: Some(format!("CharacterCreate: {e}")),
                                 u32_payload: None,
+                                u32_payload_2: None,
                             });
                             return;
                         }
@@ -4509,6 +4956,7 @@ async fn recv_loop(
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
                                 string_payload: Some(format!("send_chat: {e}")),
                                 u32_payload: None,
+                                u32_payload_2: None,
                             });
                             return;
                         }
@@ -4571,6 +5019,7 @@ async fn recv_loop(
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
                                 string_payload: Some(format!("set_movement_input: {e}")),
                                 u32_payload: None,
+                                u32_payload_2: None,
                             });
                             return;
                         }

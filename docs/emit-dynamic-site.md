@@ -184,16 +184,22 @@ on-device validation; recipe in
 
 Pick one to pull on. The choice is real, not arbitrary.
 
-- **Content rail** — Phase 4 step 3 + 3.5 **landed 2026-05-06**.
+- **Content rail** — Phase 4 step 3 + 3.5 **landed 2026-05-06**;
+  step 4 chat panel **landed 2026-05-07**.
   Step 3: `SessionHandle.setMovementInput` →
   `GameAction::MoveToState` → ACE accepts + broadcasts
   `UpdateMotion`. Step 3.5: per-rAF JS prediction integrates
   the keystate into the local sprite's world coords (mirrors
   cli's `local_velocity_for_state` / `local_omega_for_state`),
-  so the press-W → sprite-slides loop closes visually. **Next
-  on the rail: step 4** (DOM panels: chat, vitals, inventory —
-  surfaces `kind=2 ChatReceived` events through the existing
-  `poll_events()` channel) → step 5 (interactive entities:
+  so the press-W → sprite-slides loop closes visually. Step 4
+  chat: 16 chat-bearing inbound message variants normalised
+  through 24 `CHAT_CATEGORY_*` ids, surfaced as
+  `kind=2 ChatReceived` events with a new `u32Payload2`
+  getter; DOM panel grew a tab bar (All / Local / Tells /
+  Channels / Combat / Magic / System) with category-keyed
+  colours. **Next on the rail: step 4 follow-on** (vitals +
+  inventory panels — same DOM-next-to-canvas pattern as the
+  chat panel) → step 5 (interactive entities:
   doors, portals, vendors via `UseObject`) → **step 6
   (realistic entity rendering: WeenieType-keyed tints,
   nameplates, palette-tinted creature variants, portal swirls,
@@ -1489,12 +1495,82 @@ Step ledger:
   existing handlePositionUpdate path. See
   [`phase-4-renderer.md`](phase-4-renderer.md) step 3.5
   section for the as-built reference.
-- ⏳ **Step 4 — DOM panels (chat, vitals, inventory).** Render
-  the retail UI surfaces holtburger already drives, in DOM
-  panels next to the PIXI canvas. Parallel to step 2/3.
-  `GameMessage::ServerMessage` and
-  `GameEvent::CommunicationTransientString` surface as
-  `kind=2 ChatReceived` events here.
+- ✅ **Step 4 (chat panel) — full chat-type coverage with
+  category tabs.** Landed 2026-05-07. Brings the browser
+  chat surface to parity with the cli's chat panel
+  (`apps/holtburger-cli/src/pages/game/panels/chat.rs`) by
+  routing every chat-bearing AC packet through one
+  normalised `kind=2 ChatReceived` event tagged with a
+  `CHAT_CATEGORY_*` id (24 categories: System / Local /
+  Tell / Channel / Emote / Combat / Death / Magic /
+  Advancement / Transient / Popup / Help / Trade / LFG /
+  Roleplay / General / Fellowship / Allegiance / Recall /
+  Craft / Appraisal / Broadcast / Society / Olthoi).
+  ClientEvent grew a second u32 payload getter
+  (`u32Payload2`) carrying the category; the legacy
+  `u32Payload` keeps its raw `ChatMessageType` /
+  `ChatChannel` / `TurbineChatType` semantic for
+  debugging.
+  - **New recv-loop arms** (`apps/holtburger-web/src/lib.rs`
+    GameMessage match): `PlayerKilled` (death broadcast +
+    `victim_id`/`killer_id`), `TurbineChat` (modern
+    Allegiance / General / Trade / LFG / Roleplay / Society
+    / Olthoi channel chat — `EventSendToRoom` payload only;
+    RPC echoes silenced).
+  - **New GameEvent arms**: `AttackerNotification`,
+    `DefenderNotification`, `EvasionAttackerNotification`,
+    `EvasionDefenderNotification`, `VictimNotification`,
+    `KillerNotification`. Damage lines mirror the cli's
+    format (`"You hit Drudge Ravener for 37 slash damage
+    (25.0%). Critical hit. [Recklessness, Sneak attack]"`)
+    via three new helpers (`damage_type_label`,
+    `damage_location_label`, `attack_conditions_suffix`)
+    that wrap the same `iter_display_names()` paths the
+    cli uses.
+  - **Existing arms upgraded**: `ServerMessage` /
+    `HearSpeech` / `HearRangedSpeech` now derive their
+    category from `data.chat_type` via the new
+    `chat_category_for_message_type()` helper (mirrors
+    cli's `chat_message_tags()` switch — Combat → COMBAT,
+    Magic → MAGIC, Advancement → ADVANCEMENT, Recall →
+    RECALL, Allegiance → ALLEGIANCE, Fellowship →
+    FELLOWSHIP, etc., not just LOCAL). `EmoteText` /
+    `SoulEmote` → EMOTE; `Tell` → TELL with chat-type
+    routing for AdminTell; `ChannelBroadcast` derives
+    category from the legacy `ChatChannel` bitmask via
+    `chat_category_for_channel()` (Allegiance ranks fold
+    into ALLEGIANCE, Fellow / FellowBroadcast → FELLOWSHIP,
+    admin / advocate / sentinel → SYSTEM).
+  - **DOM panel rewrite** (`apps/holtburger-web/index.html`):
+    24 category-keyed CSS colours; tab bar above
+    `#chat-log` (All / Local / Tells / Channels / Combat /
+    Magic / System); `data-tab` attribute on `#chat-log`
+    drives `:not(.cat-N)` filter chains so tab switching
+    is layout-only (no per-message reflow). The legacy
+    prefix-string `classifyChat()` heuristic is gone — JS
+    routes purely on `evt.u32Payload2`. `appendChatLine`
+    now takes a numeric category (or `null` for outbound
+    user echo, which routes to `.echo` neutral and is
+    visible across every tab). `CHAT_LOG_LIMIT` raised
+    200 → 400 to keep more backscroll across tabs.
+  - **Smoke 60 → 61** — added a check that
+    `ClientEvent.prototype.u32Payload2` is exposed (the
+    new wire contract for chat category). Live ACE chat
+    round-trip remains a capture-harness exercise.
+  - **Reference**: cli's `chat_message_tags()` and
+    `channel_tags()` in `chat.rs:609-660` — every
+    category mapping mirrors them so any in-game line
+    looks the same in both clients. The cli's
+    `log_combat_feedback()` (`chat.rs:238-315`) is the
+    other rosetta stone — combat / death format strings
+    are byte-identical.
+- ⏳ **Step 4 follow-on — vitals + inventory panels.** The
+  chat panel is the largest piece of step 4 by surface
+  area; vitals (UpdateHealth / UpdateAttribute /
+  UpdateSkill) and inventory (OpenContainer +
+  ApproachVendor) round it out. Same pattern: DOM panels
+  next to the PIXI canvas, recv loop normalises into typed
+  ClientEvent kinds.
 - ⏳ **Step 5 — interactive entities (doors, portals, vendors).**
   Adds `SessionHandle.useObject(guid)` wasm export →
   `GameAction::UseObject(guid)` outbound. Server-side ACE
@@ -1935,7 +2011,7 @@ re-discovering them.
 |---|---|
 | [`phase-2-wasm-spike.md`](phase-2-wasm-spike.md) | Phase 2 §3 per-crate cross-compile matrix, §8 step ledger, status banner |
 | [`phase-3-renderer.md`](phase-3-renderer.md) | Phase 3 steps 1, 2, 3, 3.5, 4, 4.5, 4.5b, 4.5c, 5 partial, 6 as-built reference + screenshots |
-| [`phase-4-renderer.md`](phase-4-renderer.md) | Phase 4 step 1 + 2a + 2a.5 + 2a.6 + 2b as-built (login → CharacterList → CharacterCreate → spawn handshake → chat / `@telepoi` → live entity buffer with position rendering) |
+| [`phase-4-renderer.md`](phase-4-renderer.md) | Phase 4 step 1 + 2a + 2a.5 + 2a.6 + 2b + 3 + 3.5 + 4 (chat) as-built (login → CharacterList → CharacterCreate → spawn handshake → chat / `@telepoi` → live entity buffer with position rendering → WASD movement + prediction → DOM chat panel with category tabs covering all 16 chat-bearing AC packet types) |
 | [`phase-5-thorough.md`](phase-5-thorough.md) | Phase 5.0 + 5.0b + 5.1a + 5.1b as-built (manifest+shards delivery, per-export refactor, transitive boot walk) |
 | [`thorough.md`](thorough.md) | Phase 5.0 framing brief (already executed; historical reference for the delivery-architecture decisions) |
 | [`manifest.md`](manifest.md) | Phase 5.2 framing brief (NOT YET EXECUTED; the manifest scale fix at the v2 schema layer) |
@@ -1974,7 +2050,7 @@ re-discovering them.
 | `fetch_surface_pixels(surface_did) -> Promise<SurfacePixels>` | 3 step 6 | Single surface decoded to RGBA8 (Surface → SurfaceTexture → Texture chain). Solid-colour surfaces synthesize a 1×1 ARGB tile. |
 | `fetch_surfaces_pixels(surface_dids) -> Promise<Vec<SurfacePixels>>` | 3 step 6 | Batch surface decode — feeds the in-browser per-poly rasterizer. |
 | `start_session(bridge_url, ip, port, username, password) -> Promise<SessionHandle>` | 4 step 1 + 2a.5 + 5.0b | Drive AC login → CharacterList. Background-loads `CharGen` + `SkillTable` via the global source if `has_resource_source()` is true (Phase 5.0b dropped the legacy `asset_url` 6th param). |
-| `SessionHandle.poll_events() -> Vec<ClientEvent>` | 4 step 1 | Pull-style event drain — JS calls per animation frame. Event kinds: 0 CharacterList, 1 PlayerSpawned, 2 ChatReceived (planned step 4), 4 Disconnected, 5 CharacterCreated, 6 CharacterCreateFailed, 7 EnteredWorld. |
+| `SessionHandle.poll_events() -> Vec<ClientEvent>` | 4 step 1 + 4 | Pull-style event drain — JS calls per animation frame. Event kinds: 0 CharacterList, 1 PlayerSpawned, 2 ChatReceived (step 4 expansion: 16 source variants normalised through 24 `CHAT_CATEGORY_*` ids surfaced via `evt.u32Payload2` — covers system / local / tells / channels / emotes / combat / death / magic / advancement / transient / popup / help / trade / lfg / roleplay / general / fellowship / allegiance / recall / craft / appraisal / broadcast / society / olthoi), 4 Disconnected, 5 CharacterCreated, 6 CharacterCreateFailed, 7 EnteredWorld. |
 | `SessionHandle.characterList() -> Vec<CharacterSummary>` | 4 step 1 | Account's characters once login resolves. |
 | `SessionHandle.accountName() -> String` | 4 step 1 | Account name carried in the `CharacterList` packet. |
 | `SessionHandle.canCreateCharacter() -> bool` | 4 step 2a.5 | Getter: did the catalog (`CharGen` + `SkillTable`) load? |

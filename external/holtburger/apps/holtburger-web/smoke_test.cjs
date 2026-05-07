@@ -348,6 +348,22 @@ check(
     `setMovementInput=${typeof sessionHandleProto?.setMovementInput}`
 );
 
+// Phase 4 step 4: ClientEvent grew a `u32Payload2` getter carrying
+// the CHAT_CATEGORY_* tag for kind=2 ChatReceived events. JS routes
+// chat to the right tab + colour class via this field — the legacy
+// prefix-string heuristic is gone. Symbol-presence here pins the
+// new wire contract (live ACE chat round-trip lives in the capture
+// harness, not the smoke).
+const clientEventDescr = Object.getOwnPropertyDescriptor(
+    wasm.ClientEvent?.prototype || {},
+    "u32Payload2",
+);
+check(
+    "ClientEvent.u32Payload2 getter exposed (Phase 4 step 4 chat category)",
+    typeof wasm.ClientEvent === "function" && typeof clientEventDescr?.get === "function",
+    `ClientEvent=${typeof wasm.ClientEvent}, u32Payload2=${typeof clientEventDescr?.get}`
+);
+
 
 (async () => {
     // Phase 5.0b — pre-bake a manifest+shards+boot tree from the

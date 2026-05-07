@@ -75,14 +75,81 @@
          input row underneath. Lives under the Teleport button inside
          #post-spawn so it only appears after EnteredWorld. */
       #chat-panel { margin-top: 0.75rem; max-width: 36rem; border: 1px solid #ccc; border-radius: 4px; background: #fafafa; }
+      /* Chat tabs — "All" filter plus one tab per category cluster.
+         The active tab toggles a `data-tab` attribute on #chat-log;
+         CSS hides any <li> whose `data-cat` doesn't match. */
+      #chat-tabs { display: flex; flex-wrap: wrap; gap: 0; padding: 0.25rem 0.4rem 0; border-bottom: 1px solid #ddd; background: #f4f4f4; }
+      #chat-tabs button { background: transparent; border: 1px solid transparent; border-bottom: none; padding: 0.2rem 0.7rem; font-family: inherit; font-size: 0.82rem; color: #555; cursor: pointer; border-radius: 4px 4px 0 0; margin-right: 1px; }
+      #chat-tabs button:hover { background: #e9e9e9; color: #222; }
+      #chat-tabs button.active { background: #fafafa; border-color: #ccc; color: #1a1a1a; font-weight: 500; position: relative; top: 1px; }
       #chat-log { list-style: none; padding: 0.5rem 0.75rem; margin: 0; height: 12rem; overflow-y: auto; font-family: ui-monospace, monospace; font-size: 0.88rem; line-height: 1.4; }
       #chat-log li { padding: 0.05rem 0; word-wrap: break-word; }
       #chat-log li.empty { color: #999; font-style: italic; }
-      #chat-log li.system { color: #1a7f1a; }
-      #chat-log li.popup { color: #b35400; }
-      #chat-log li.channel { color: #1f4f9b; }
-      #chat-log li.tell { color: #7a1f9b; font-weight: 500; }
-      #chat-log li.emote { color: #555; font-style: italic; }
+      /* Category-keyed colours. Mirrors the cli's chat_message_tags()
+         palette + the AC client's retail colour scheme:
+           - system:      green (server/system text)
+           - local:       black (default speech)
+           - tell:        purple (private message)
+           - channel:     dark blue (legacy channel chat)
+           - emote:       grey italic (gestures)
+           - combat:      red (damage / evasion)
+           - death:       deep red bold (slain / kill messages)
+           - magic:       magenta (spell text)
+           - advancement: gold (skill-up / level-up)
+           - transient:   light grey italic (status feedback)
+           - popup:       orange-brown (modal-ish text)
+           - help:        teal (help channel)
+           - trade:       amber (trade channel)
+           - lfg:         olive (LFG channel)
+           - roleplay:    plum (roleplay channel)
+           - general:     navy (general channel)
+           - fellowship:  emerald (fellowship chat)
+           - allegiance:  cyan (allegiance / vassals / monarch)
+           - recall:      teal-ish (recall announcements)
+           - craft:       sandstone (crafting / salvaging)
+           - appraisal:   olive (appraisal results)
+           - broadcast:   bright red bold (world broadcast)
+           - society:     deep purple (Celestial Hand / Eldrytch Web / Radiant Blood)
+           - olthoi:      acid green (Olthoi-only chat) */
+      #chat-log li.cat-0  { color: #1a7f1a; }                              /* system */
+      #chat-log li.cat-1  { color: #1a1a1a; }                              /* local */
+      #chat-log li.cat-2  { color: #7a1f9b; font-weight: 500; }            /* tell */
+      #chat-log li.cat-3  { color: #1f4f9b; }                              /* channel (legacy) */
+      #chat-log li.cat-4  { color: #555; font-style: italic; }             /* emote */
+      #chat-log li.cat-5  { color: #b22222; }                              /* combat */
+      #chat-log li.cat-6  { color: #8b0000; font-weight: 600; }            /* death */
+      #chat-log li.cat-7  { color: #a020a0; }                              /* magic */
+      #chat-log li.cat-8  { color: #b8860b; font-weight: 500; }            /* advancement */
+      #chat-log li.cat-9  { color: #777; font-style: italic; }             /* transient */
+      #chat-log li.cat-10 { color: #b35400; }                              /* popup */
+      #chat-log li.cat-11 { color: #008b8b; }                              /* help */
+      #chat-log li.cat-12 { color: #d2691e; }                              /* trade */
+      #chat-log li.cat-13 { color: #6b8e23; }                              /* lfg */
+      #chat-log li.cat-14 { color: #8a2be2; }                              /* roleplay */
+      #chat-log li.cat-15 { color: #16447a; }                              /* general */
+      #chat-log li.cat-16 { color: #2e8b57; }                              /* fellowship */
+      #chat-log li.cat-17 { color: #008080; }                              /* allegiance */
+      #chat-log li.cat-18 { color: #4682b4; }                              /* recall */
+      #chat-log li.cat-19 { color: #a0522d; }                              /* craft */
+      #chat-log li.cat-20 { color: #6b8e23; }                              /* appraisal */
+      #chat-log li.cat-21 { color: #cc0000; font-weight: 700; }            /* broadcast */
+      #chat-log li.cat-22 { color: #5c2e91; }                              /* society */
+      #chat-log li.cat-23 { color: #5fa53f; }                              /* olthoi */
+      /* Outbound echo (local user input) — neutral grey, mono. */
+      #chat-log li.echo { color: #888; }
+      /* Tab filtering. data-tab on #chat-log selects which categories
+         remain visible. "all" hides nothing. The data-tab="combat" /
+         "channels" / "system" tabs hide all <li>s whose data-cat isn't
+         in the cluster; CSS uses :not(...) chains rather than JS show/
+         hide so layout stays cheap (no per-message reflow on tab
+         switch). The `.echo` class always shows so the user sees their
+         own input regardless of which tab is active. */
+      #chat-log[data-tab="local"] li:not(.cat-1):not(.cat-4):not(.echo) { display: none; }
+      #chat-log[data-tab="combat"] li:not(.cat-5):not(.cat-6):not(.echo) { display: none; }
+      #chat-log[data-tab="channels"] li:not(.cat-3):not(.cat-12):not(.cat-13):not(.cat-14):not(.cat-15):not(.cat-16):not(.cat-17):not(.cat-22):not(.cat-23):not(.echo) { display: none; }
+      #chat-log[data-tab="tell"] li:not(.cat-2):not(.echo) { display: none; }
+      #chat-log[data-tab="magic"] li:not(.cat-7):not(.echo) { display: none; }
+      #chat-log[data-tab="system"] li:not(.cat-0):not(.cat-8):not(.cat-9):not(.cat-10):not(.cat-11):not(.cat-18):not(.cat-19):not(.cat-20):not(.cat-21):not(.echo) { display: none; }
       #chat-form { display: flex; gap: 0.4rem; padding: 0.4rem; border-top: 1px solid #ddd; background: #f0f0f0; }
       #chat-form input { flex: 1; padding: 0.3rem 0.5rem; font-family: ui-monospace, monospace; font-size: 0.92rem; }
       #chat-form button { padding: 0.25rem 0.8rem; cursor: pointer; }
@@ -177,7 +244,26 @@
           server-side; see docs/phase-4-renderer.md step 2a.6).
         -->
         <div id="chat-panel" hidden>
-          <ul id="chat-log">
+          <!--
+            Phase 4 step 4 — chat tabs. Click filters #chat-log to a
+            category cluster (Local say + emote / Combat + death /
+            Channels / Tells / Magic / System+advancement+popup+
+            transient+broadcast+craft+appraisal+recall+help). The
+            wasm bundle tags every line with a CHAT_CATEGORY_* id in
+            ClientEvent.u32Payload2; JS appends the matching `cat-N`
+            class to each <li> so CSS handles the show/hide via
+            `[data-tab]:not(...)` chains.
+          -->
+          <div id="chat-tabs" role="tablist">
+            <button type="button" data-tab="all" class="active">All</button>
+            <button type="button" data-tab="local">Local</button>
+            <button type="button" data-tab="tell">Tells</button>
+            <button type="button" data-tab="channels">Channels</button>
+            <button type="button" data-tab="combat">Combat</button>
+            <button type="button" data-tab="magic">Magic</button>
+            <button type="button" data-tab="system">System</button>
+          </div>
+          <ul id="chat-log" data-tab="all">
             <li class="empty">No messages yet — chat appears here as ACE pushes it.</li>
           </ul>
           <form id="chat-form">
@@ -2607,16 +2693,30 @@ void main() {
       // Phase 4 step 4 — chat panel.
       const chatPanel = document.getElementById("chat-panel");
       const chatLog = document.getElementById("chat-log");
+      const chatTabs = document.getElementById("chat-tabs");
       const chatForm = document.getElementById("chat-form");
       const chatInput = document.getElementById("chat-input");
       const chatSendBtn = document.getElementById("chat-send");
-      const CHAT_LOG_LIMIT = 200;
-      function appendChatLine(text, cls) {
+      const CHAT_LOG_LIMIT = 400;
+      // Phase 4 step 4: append a chat line keyed by the wasm-bundle's
+      // CHAT_CATEGORY_* id (`category` is `evt.u32Payload2`). The id
+      // becomes a `cat-N` CSS class which paints the line in its
+      // category-specific colour (see #chat-log li.cat-N rules) and
+      // also lets the data-tab filter on #chat-log show/hide whole
+      // category clusters. Outbound user echo passes `category=null`
+      // (or any non-number) which routes to the `.echo` neutral
+      // class and is always visible regardless of active tab.
+      function appendChatLine(text, category) {
         // Drop the empty-state placeholder on first real message.
         const empty = chatLog.querySelector("li.empty");
         if (empty) empty.remove();
         const li = document.createElement("li");
-        if (cls) li.className = cls;
+        if (typeof category === "number") {
+          li.className = `cat-${category}`;
+          li.dataset.cat = String(category);
+        } else {
+          li.className = "echo";
+        }
         li.textContent = text;
         // Trim to prevent unbounded DOM growth in long sessions.
         chatLog.appendChild(li);
@@ -2630,23 +2730,23 @@ void main() {
           chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 40;
         if (nearBottom) chatLog.scrollTop = chatLog.scrollHeight;
       }
-      // Heuristic class assignment for visual differentiation. Mirrors
-      // the prefix pattern the recv loop's match arms emit.
-      function classifyChat(text) {
-        if (text.startsWith("[Server]")) return "system";
-        if (text.startsWith("[Popup]")) return "popup";
-        // ChannelBroadcast format: "[ChannelName] Sender says, ..."
-        if (text.startsWith("[")) return "channel";
-        if (text.includes(" tells you, ")) return "tell";
-        if (
-          text.startsWith("*") ||
-          text.includes(" waves") ||
-          text.includes(" emote")
-        ) {
-          return "emote";
+      // Phase 4 step 4: tab switching. Updates `data-tab` on #chat-log
+      // (which CSS uses to filter visible <li>s) and the `.active`
+      // class on the chosen button. Layout-only — no per-message work.
+      function setChatTab(tab) {
+        chatLog.dataset.tab = tab;
+        for (const btn of chatTabs.querySelectorAll("button")) {
+          btn.classList.toggle("active", btn.dataset.tab === tab);
         }
-        return "";
       }
+      chatTabs.addEventListener("click", (ev) => {
+        const btn = ev.target.closest("button[data-tab]");
+        if (!btn) return;
+        setChatTab(btn.dataset.tab);
+        // Re-pin to bottom when switching tabs so the user sees the
+        // most recent line in the new filter without scrolling.
+        chatLog.scrollTop = chatLog.scrollHeight;
+      });
       let activeHandle = null;
 
       // Enable Connect now that the submit listener is wired. Until
@@ -2835,17 +2935,21 @@ void main() {
             try {
               activeHandle.sendChat(message);
             } catch (err) {
+              // Send-error gets the popup category (10) so users see
+              // it visually distinct from an ACE-pushed line.
               appendChatLine(
                 `[Send error] ${String(err?.message ?? err)}`,
-                "popup",
+                10,
               );
               return;
             }
             // Local echo so users can see their own commands
             // immediately. ACE doesn't echo Talk back to the sender
             // for ad-hoc speech, so without this the command appears
-            // to have done nothing visually.
-            appendChatLine(`> ${message}`, "");
+            // to have done nothing visually. Pass `null` so it picks
+            // up the `.echo` neutral class and stays visible across
+            // every tab filter.
+            appendChatLine(`> ${message}`, null);
             chatInput.value = "";
             chatInput.focus();
           });
@@ -3153,11 +3257,16 @@ void main() {
               } else if (evt.kind === 2) {
                 // ChatReceived (Phase 4 step 4). The recv loop
                 // pre-formats every chat-bearing variant into a single
-                // display line (see ClientEvent kind=2 doc comment in
-                // src/lib.rs); JS just appends + colour-codes by
-                // prefix.
+                // display line and tags it with a CHAT_CATEGORY_* id
+                // in `evt.u32Payload2` (see ClientEvent kind=2 doc
+                // comment in src/lib.rs). JS appends + colour-codes
+                // by category — no prefix-string heuristic.
                 const text = evt.stringPayload || "";
-                appendChatLine(text, classifyChat(text));
+                const category = evt.u32Payload2;
+                appendChatLine(
+                  text,
+                  typeof category === "number" ? category : 0,
+                );
               } else if (evt.kind === 7) {
                 // EnteredWorld — server has fully spawned the
                 // player (PlayerDescription / StartGame fired). The
