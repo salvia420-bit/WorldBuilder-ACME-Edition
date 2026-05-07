@@ -322,6 +322,17 @@ check(
     typeof wasm.fetchEntitySurfacesPixels === "function",
     `fetchEntitySurfacesPixels=${typeof wasm.fetchEntitySurfacesPixels}`
 );
+// Phase 4 step 6 Tier 2: walk-cycle frame bake. Returns Vec<ModelMesh>
+// — one per cycle frame, applying the same model_changes/texture_changes
+// as fetchEntityModelRender but with each frame's per-part transforms
+// from the WALK_FORWARD MotionTable cycle. JS swaps sprite.texture by
+// velocity-driven frame index. Empty Vec for setups without a walk
+// cycle (props, doors, signs).
+check(
+    "fetchEntityWalkFrames() exposed (Phase 4 step 6 Tier 2 walk-cycle bake)",
+    typeof wasm.fetchEntityWalkFrames === "function",
+    `fetchEntityWalkFrames=${typeof wasm.fetchEntityWalkFrames}`
+);
 
 // Phase 4 step 3: SessionHandle.setMovementInput(forward, strafe,
 // turn, run) takes a tristate-axis keystate snapshot and forwards

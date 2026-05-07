@@ -217,6 +217,7 @@
         fetch_model_meshes,
         fetch_surfaces_pixels,
         fetchEntityModelRender,
+        fetchEntityWalkFrames,
         fetchEntitySurfacesPixels,
         start_session,
         init_resource_source,
@@ -1452,6 +1453,13 @@ void main() {
         window.handlePositionUpdate = handlePositionUpdate;
         window.setLocalPlayerGuid = setLocalPlayerGuid;
         window.updateNameplatePositions = updateNameplatePositions;
+        // Phase 4 step 6 Tier 2 capture surface: expose the
+        // walk-bake kicker + cache-key derivation so capture
+        // scripts can force a bake without waiting for the rAF
+        // cycler's velocity threshold to organically trip.
+        window.kickWalkFrameBakeIfNeeded = kickWalkFrameBakeIfNeeded;
+        window.computeEntitySpriteKey = computeEntitySpriteKey;
+        window.tickEntityAnimations = tickEntityAnimations;
 
         // Initial camera: centre on Holtburg's geometric centre at a
         // scale that fits the 3×3 grid in the canvas with a margin.
@@ -1828,6 +1836,7 @@ void main() {
           modelId,
           meta.modelChanges ?? new Uint32Array(0),
           meta.textureChanges ?? new Uint32Array(0),
+          meta.mtableId >>> 0,
         );
         if (mesh.triCount === 0) {
           if (invisibleSet) invisibleSet.add(cacheKey);
@@ -1861,9 +1870,83 @@ void main() {
         liveMap.set(cacheKey, {
           texture: renderTex,
           worldBounds: [wb[0], wb[1]],
+          // Tier 2: walkFrames is populated lazily on first detected
+          // movement (kickWalkFrameBakeIfNeeded) — we don't pay the
+          // bake cost up-front for entities that never walk (signs,
+          // doors, chests, immobile NPCs).
+          walkFrames: null,
+          walkBakeStarted: false,
         });
         mesh.free();
         for (const sp of surfacePixels) sp.free();
+      }
+
+      // Tier 2: lazily bake the walk-cycle frame textures for an
+      // already-cached liveMap entry. Skipped when (a) entity has no
+      // setup (modelId === 0), (b) the bake already ran (cached or
+      // in-flight), or (c) the cached liveMap entry is gone (entity
+      // already removed). Fire-and-forget: the per-rAF cycler picks
+      // up walkFrames once it's populated; until then sprites stay
+      // on the idle texture.
+      function kickWalkFrameBakeIfNeeded(cacheKey, modelId, meta) {
+        if (!liveScene || !modelId) return;
+        const entry = liveScene.liveSpriteMap?.get(cacheKey);
+        if (!entry || entry.walkBakeStarted || entry.walkFrames) return;
+        entry.walkBakeStarted = true;
+        const app = liveScene.app;
+        if (!app) return;
+        (async () => {
+          try {
+            const meshes = await fetchEntityWalkFrames(
+              modelId,
+              meta?.modelChanges ?? new Uint32Array(0),
+              meta?.textureChanges ?? new Uint32Array(0),
+              (meta?.mtableId ?? 0) >>> 0,
+            );
+            if (!meshes || meshes.length === 0) {
+              entry.walkFrames = [];  // empty == "no walk anim available"
+              return;
+            }
+            // Each frame uses the SAME surfaces as the idle bake (the
+            // walk-cycle pose changes part transforms, not surface
+            // assignments). Look up their RGBA8 once, reuse across
+            // every frame's per-poly rasterizer pass.
+            const sList = meshes[0].surfaces;
+            const hasPaletteSubs =
+              (meta?.paletteId && meta.paletteId !== 0)
+              || (meta?.subPalettes && meta.subPalettes.length > 0);
+            const surfacePixels = sList.length === 0
+              ? []
+              : (hasPaletteSubs
+                  ? await fetchEntitySurfacesPixels(
+                      new Uint32Array(sList),
+                      meta.paletteId >>> 0,
+                      meta.subPalettes ?? new Uint32Array(0),
+                    )
+                  : await fetch_surfaces_pixels(new Uint32Array(sList))
+                );
+            const texArr = new Array(sList.length);
+            for (let s = 0; s < sList.length; s += 1) {
+              texArr[s] = surfacePixelsToTexture(surfacePixels[s]) ?? makeFlatTexture();
+            }
+            const frameTextures = [];
+            for (const mesh of meshes) {
+              if (mesh.triCount === 0) {
+                mesh.free();
+                continue;
+              }
+              const tex = renderModelTile(app, mesh, texArr);
+              frameTextures.push(tex);
+              mesh.free();
+            }
+            for (const sp of surfacePixels) sp.free();
+            entry.walkFrames = frameTextures;
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(`[walk-bake] key=${cacheKey} modelId=0x${modelId.toString(16)} failed:`, err);
+            entry.walkFrames = [];  // mark as "tried + failed"
+          }
+        })();
       }
 
       // Apply the visual category's tint + scale to a freshly minted
@@ -2146,6 +2229,14 @@ void main() {
         const { wx, wy } = landblockToWorldXY(upd.landblockId, upd.x, upd.y);
         entry.sprite.position.set(wx, wy);
         entry.sprite.rotation = -quaternionToYaw(upd.qw, upd.qx, upd.qy, upd.qz);
+        // Tier 2: capture initial position so the velocity sampler
+        // has a baseline. Without it, the first PositionUpdate would
+        // see Δt = 0 and falsely flag the entity as moving infinitely
+        // fast on its very first frame after spawn.
+        entry.lastPosX = wx;
+        entry.lastPosY = wy;
+        entry.lastPosT = performance.now();
+        entry.speedMps = 0.0;
         ensureNameplate(entry);
       }
 
@@ -2159,6 +2250,25 @@ void main() {
         if (!entry) return;
         if (entry.guid === undefined) entry.guid = guid;
         const { wx, wy } = landblockToWorldXY(upd.landblockId, upd.x, upd.y);
+        // Tier 2: sample velocity from the position delta. Speed in
+        // m/s — used by tickEntityAnimations to gate walk-cycle
+        // playback (only animate while moving above threshold).
+        const now = performance.now();
+        if (entry.lastPosT !== undefined) {
+          const dt = (now - entry.lastPosT) / 1000;
+          if (dt > 0 && dt < 1.0) {  // ignore stale / first-update
+            const dx = wx - entry.lastPosX;
+            const dy = wy - entry.lastPosY;
+            // Exponential moving average so a single
+            // PublicUpdatePosition jitter doesn't immediately
+            // flip the moving-state.
+            const inst = Math.hypot(dx, dy) / dt;
+            entry.speedMps = (entry.speedMps ?? 0) * 0.5 + inst * 0.5;
+          }
+        }
+        entry.lastPosX = wx;
+        entry.lastPosY = wy;
+        entry.lastPosT = now;
         entry.sprite.position.set(wx, wy);
         entry.sprite.rotation = -quaternionToYaw(upd.qw, upd.qx, upd.qy, upd.qz);
       }
@@ -2169,6 +2279,65 @@ void main() {
         if (entry.nameplate) entry.nameplate.destroy();
         entry.sprite.destroy();
         entityMap.delete(upd.guid);
+      }
+
+      // Tier 2: per-rAF animation cycler. Walks every entityMap
+      // entry; for those with cached walkFrames AND speedMps above
+      // the moving threshold, advances a frame index by `dt *
+      // walkRate` and swaps `sprite.texture` to the corresponding
+      // frame. Idle entities (speed below threshold) revert to the
+      // static idle texture cached at bake time.
+      //
+      // Performance: O(N) per frame over entityMap. The texture-swap
+      // itself is a PIXI texture-binding change — cheap; PIXI
+      // batches by texture so swapping triggers one batch flush per
+      // frame across all walkers, but at ~60 fps that's tens of
+      // batches/sec, negligible.
+      //
+      // Lazy walk-bake: the first time an entity's speed crosses
+      // the moving threshold, kickWalkFrameBakeIfNeeded is fired
+      // (no-op if already baked or in-flight) so we don't pre-bake
+      // walk frames for entities that never move (signs, doors,
+      // immobile NPCs). Static placements are also exempt because
+      // they don't have a meta with substitutions; only Spawn-fed
+      // entries see this path.
+      const WALK_MOVING_THRESHOLD_MPS = 0.4;
+      const WALK_FRAME_RATE = 12.0;  // frames-per-second cycle rate
+      let walkPhase = 0.0;
+      let lastAnimTickTime = null;
+      function tickEntityAnimations() {
+        if (!liveScene) return;
+        const now = performance.now();
+        const dt = lastAnimTickTime !== null
+          ? Math.min((now - lastAnimTickTime) / 1000, 0.1)
+          : 0;
+        lastAnimTickTime = now;
+        walkPhase += dt * WALK_FRAME_RATE;
+        for (const [, entry] of entityMap) {
+          if (entry.kind !== "sprite") continue;
+          const renderEntry = liveScene.liveSpriteMap?.get(
+            computeEntitySpriteKey(entry.modelId, entry.meta)
+          );
+          if (!renderEntry?.texture) continue;
+          const moving = (entry.speedMps ?? 0) >= WALK_MOVING_THRESHOLD_MPS;
+          if (moving && renderEntry.walkFrames === null) {
+            // Lazy-bake on first detected motion. Fire-and-forget;
+            // the next tick after bake completes will see frames
+            // populated and start cycling.
+            kickWalkFrameBakeIfNeeded(
+              computeEntitySpriteKey(entry.modelId, entry.meta),
+              entry.modelId,
+              entry.meta,
+            );
+          }
+          if (moving && renderEntry.walkFrames && renderEntry.walkFrames.length > 0) {
+            const idx = Math.floor(walkPhase) % renderEntry.walkFrames.length;
+            entry.sprite.texture = renderEntry.walkFrames[idx];
+          } else {
+            // Idle (or no walk frames available) — keep idle texture.
+            entry.sprite.texture = renderEntry.texture;
+          }
+        }
       }
 
       // ----- renderer entry point ----------------------------------
@@ -2739,6 +2908,11 @@ void main() {
             // (one Map walk + a multiply-add per entity); a no-op
             // when zoomed out below the visibility threshold.
             updateNameplatePositions();
+            // Phase 4 step 6 Tier 2: cycle walk-frame textures for
+            // entities whose speed crosses the moving threshold.
+            // Same Map walk; lazily kicks the per-setup walk-frame
+            // bake the first time an entity moves.
+            tickEntityAnimations();
             // Phase 4 step 3.5: client-side prediction. ACE doesn't
             // echo position back to the originator (retail AC's
             // protocol is asymmetric — see step 3 doc). Without

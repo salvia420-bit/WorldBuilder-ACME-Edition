@@ -1504,6 +1504,30 @@ fn triangulate_setup_model_with_substitutions<S: holtburger_dat::ResourceSource 
     texture_changes: &[(u8, u32, u32)],
     tris: &mut Vec<Tri>,
 ) -> Option<()> {
+    triangulate_setup_model_at_frame(source, setup_id, model_changes, texture_changes, None, None, tris)
+}
+
+/// Phase 4 step 6 Tier 2: triangulate a SetupModel with substitutions
+/// AND an optional explicit per-part pose. When `pose_override` is
+/// `Some(&AnimationFrame)`, that frame's per-part transforms replace
+/// both the idle-anim frame AND the placement-frame fallback.
+/// Used by the walk-cycle bake path: caller resolves the walk
+/// cycle's frames once via `try_resolve_walk_anim_frames`, then
+/// calls this once per frame to emit one pose-specific mesh per
+/// cycle frame.
+///
+/// `pose_override = None` is the original `with_substitutions`
+/// behaviour (Phase C idle → placement → identity fallback chain).
+#[cfg(any(target_arch = "wasm32", test))]
+fn triangulate_setup_model_at_frame<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup_id: u32,
+    model_changes: &[(u8, u32)],
+    texture_changes: &[(u8, u32, u32)],
+    mtable_override: Option<u32>,
+    pose_override: Option<&holtburger_dat::file_type::setup_model::AnimationFrame>,
+    tris: &mut Vec<Tri>,
+) -> Option<()> {
     use holtburger_dat::file_type::{GfxObj, SetupModel};
     use holtburger_dat::ResourceKey;
 
@@ -1512,10 +1536,15 @@ fn triangulate_setup_model_with_substitutions<S: holtburger_dat::ResourceSource 
         .ok()?;
     let setup = SetupModel::unpack(&mut std::io::Cursor::new(&bytes)).ok()?;
 
-    // Phase C: try idle anim frame first (NPCs in stance), fall back
-    // to static placement (Resting → Default → first) for setups
-    // without a MotionTable, fall back to identity for naked setups.
-    let idle_frame = try_resolve_idle_anim_frame(source, &setup);
+    // Phase C + Tier 2: pose_override (walk-cycle frame) wins over
+    // idle frame. Phase C still resolves idle for setups with no
+    // pose_override. Static placement (Resting → Default → first)
+    // is the per-part fallback for setups without a MotionTable.
+    let idle_frame = if pose_override.is_none() {
+        try_resolve_idle_anim_frame_with_override(source, &setup, mtable_override)
+    } else {
+        None
+    };
     let placement = setup
         .placement_frames
         .get(&0)
@@ -1538,44 +1567,25 @@ fn triangulate_setup_model_with_substitutions<S: holtburger_dat::ResourceSource 
         let Ok(gfx) = GfxObj::unpack(&mut std::io::Cursor::new(&part_bytes))
             else { continue };
 
-        // Phase C pose priority: idle anim frame → placement frame →
-        // identity. Mirrors ObjectSpriteGenerator.cs:842-852 exactly.
-        let (offset, rot) = if let Some(idle) = &idle_frame {
-            if pi < idle.frames.len() {
-                let f = &idle.frames[pi];
-                (f.origin, f.orientation)
-            } else if let Some(p) = placement {
-                if pi < p.anim_frame.frames.len() {
-                    let f = &p.anim_frame.frames[pi];
-                    (f.origin, f.orientation)
-                } else {
-                    (
-                        holtburger_common::Vector3::zero(),
-                        holtburger_common::Quaternion::identity(),
-                    )
-                }
-            } else {
-                (
-                    holtburger_common::Vector3::zero(),
-                    holtburger_common::Quaternion::identity(),
-                )
-            }
-        } else if let Some(p) = placement {
-            if pi < p.anim_frame.frames.len() {
-                let f = &p.anim_frame.frames[pi];
-                (f.origin, f.orientation)
-            } else {
-                (
-                    holtburger_common::Vector3::zero(),
-                    holtburger_common::Quaternion::identity(),
-                )
-            }
-        } else {
-            (
-                holtburger_common::Vector3::zero(),
-                holtburger_common::Quaternion::identity(),
-            )
-        };
+        // Pose priority: explicit Tier-2 pose override (walk-cycle
+        // frame) → Phase C idle anim frame → static placement frame
+        // → identity. Mirrors ObjectSpriteGenerator.cs:842-852 with
+        // an extra preceding override for the multi-frame bake path.
+        let frame_lookup = pose_override
+            .filter(|f| pi < f.frames.len())
+            .map(|f| (f.frames[pi].origin, f.frames[pi].orientation))
+            .or_else(|| {
+                idle_frame.as_ref().filter(|f| pi < f.frames.len())
+                    .map(|f| (f.frames[pi].origin, f.frames[pi].orientation))
+            })
+            .or_else(|| {
+                placement.filter(|p| pi < p.anim_frame.frames.len())
+                    .map(|p| (p.anim_frame.frames[pi].origin, p.anim_frame.frames[pi].orientation))
+            });
+        let (offset, rot) = frame_lookup.unwrap_or((
+            holtburger_common::Vector3::zero(),
+            holtburger_common::Quaternion::identity(),
+        ));
 
         // Per-part texture remap table for append_gfx_tris_with_tex_swaps.
         // Empty for parts without texture changes — the swap is a no-op
@@ -1588,6 +1598,91 @@ fn triangulate_setup_model_with_substitutions<S: holtburger_dat::ResourceSource 
         append_gfx_tris_with_tex_swaps(tris, &gfx, offset, rot, &part_tex_swaps_buf);
     }
     Some(())
+}
+
+/// Phase 4 step 6 Tier 2: resolve the *walk-forward* animation
+/// frames. Same MotionTable walk as `try_resolve_idle_anim_frame`
+/// (path 1 only — there's no `default_animation` fallback for walk),
+/// but uses `MotionTable::WALK_FORWARD_COMMAND` (`0x4500_0005`)
+/// instead of the style-defaults idle substate, and returns the
+/// **range** `[low_frame, high_frame)` from the resolved
+/// `AnimData` rather than just `part_frames[0]`. The returned
+/// `Vec<AnimationFrame>` is the walk cycle's per-frame poses;
+/// caller iterates them in order to bake one sprite per cycle frame.
+///
+/// Returns `None` for setups without a walk cycle (most static props
+/// + creatures whose MotionTable doesn't have a WalkForward entry —
+/// e.g. an Orange — fall through to whatever the caller's idle
+/// fallback is). Caller should treat None as "no walk anim
+/// available; render idle pose only" and skip the walk-frame bake.
+///
+/// Stance choice: NonCombat (`mtable.default_style`) is the only
+/// stance baked here. Combat-stance walks render with the same
+/// frames — visually approximate, but avoids 3-5× storage. A
+/// future tier could bake per-stance walks if anyone asks.
+#[cfg(any(target_arch = "wasm32", test))]
+fn try_resolve_walk_anim_frames<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup: &holtburger_dat::file_type::SetupModel,
+    mtable_override: Option<u32>,
+) -> Option<Vec<holtburger_dat::file_type::setup_model::AnimationFrame>> {
+    use holtburger_dat::file_type::{Animation, MotionTable};
+    use holtburger_dat::ResourceKey;
+
+    // Humanoid setups (0x02000001 etc.) ship `default_motion_table
+    // = None`; their MotionTable lives on the weenie record and ACE
+    // ships it on the wire as `ObjectDescriptionData.mtable_id`.
+    // EntityUpdate.mtableId carries it through, and the wasm export
+    // hands it down here as `mtable_override`. For setups with a
+    // baked-in default (props, doors), override is None and we use
+    // setup.default_motion_table.
+    let mt_id = mtable_override
+        .filter(|&id| id != 0)
+        .or(setup.default_motion_table)?;
+    if (mt_id >> 24) != 0x09 { return None; }
+    let bytes = source.get_file_by_key(ResourceKey::new("eor/portal", mt_id)).ok()?;
+    let mtable = MotionTable::read(&mut std::io::Cursor::new(&bytes)).ok()?;
+
+    // Use MotionTable::motion_data_for_cycle which builds the key
+    // via the canonical `cycle_key(stance, command)` helper —
+    // (stance & 0xFFFF) << 16 | (command & MOTION_KEY_MASK).
+    // MOTION_KEY_MASK = 0x000F_FFFF, so the high bits of
+    // WALK_FORWARD_COMMAND (0x4500_0000) are stripped before the
+    // lookup. The wrong mask width is a footgun — Phase C's idle
+    // path got away with it because style_defaults stores the
+    // pre-masked substate, not the full command.
+    let motion_data = mtable.motion_data_for_cycle(
+        mtable.default_style,
+        MotionTable::WALK_FORWARD_COMMAND,
+    )?;
+    let anim_data = motion_data.anims.first()?;
+    let anim_did = anim_data.anim_id;
+    if (anim_did >> 24) != 0x03 { return None; }
+
+    let anim_bytes = source.get_file_by_key(ResourceKey::new("eor/portal", anim_did)).ok()?;
+    let anim = Animation::read(&mut std::io::Cursor::new(&anim_bytes)).ok()?;
+    if anim.part_frames.is_empty() { return None; }
+
+    // AnimData specifies the playback range as [low_frame,
+    // high_frame] *INCLUSIVE on both ends*, with `high_frame == -1`
+    // meaning "play to the last frame of the Animation". Per
+    // ACE.Server/Physics/Animation/AnimSequenceNode.cs:30 the
+    // default `HighFrame = -1` and `get_ending_frame() = HighFrame +
+    // 1 - EPSILON` (inclusive end). My initial impl treated it as
+    // `[low, high)` exclusive end and clamped -1 to 0 via max(0),
+    // which gave an empty 0..0 range for the common "play everything"
+    // case. The correct semantic:
+    //   if high_frame == -1: range = [low_frame, num_part_frames)
+    //   else                : range = [low_frame, high_frame + 1)
+    let total = anim.part_frames.len();
+    let low = (anim_data.low_frame.max(0) as usize).min(total);
+    let high = if anim_data.high_frame < 0 {
+        total
+    } else {
+        ((anim_data.high_frame as usize).saturating_add(1)).min(total)
+    };
+    if low >= high { return None; }
+    Some(anim.part_frames[low..high].to_vec())
 }
 
 /// Phase 4 step 6 Phase C: resolve the idle pose for a SetupModel by
@@ -1610,12 +1705,27 @@ fn try_resolve_idle_anim_frame<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     setup: &holtburger_dat::file_type::SetupModel,
 ) -> Option<holtburger_dat::file_type::setup_model::AnimationFrame> {
+    try_resolve_idle_anim_frame_with_override(source, setup, None)
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn try_resolve_idle_anim_frame_with_override<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup: &holtburger_dat::file_type::SetupModel,
+    mtable_override: Option<u32>,
+) -> Option<holtburger_dat::file_type::setup_model::AnimationFrame> {
     use holtburger_dat::file_type::{Animation, MotionTable};
     use holtburger_dat::ResourceKey;
     let mut anim_did: u32 = 0;
 
-    // Path 1: default_motion_table → cycles → AnimData[0]
-    if let Some(mt_id) = setup.default_motion_table {
+    // Path 1: motion table (override → setup.default) → cycles → AnimData[0].
+    // Same override semantics as walk-cycle: humanoid setups need
+    // the wire-shipped mtable_id from EntityUpdate; props use
+    // setup.default_motion_table.
+    let resolved_mt = mtable_override
+        .filter(|&id| id != 0)
+        .or(setup.default_motion_table);
+    if let Some(mt_id) = resolved_mt {
         if (mt_id >> 24) == 0x09 {
             if let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", mt_id)) {
                 if let Ok(mtable) = MotionTable::read(&mut std::io::Cursor::new(&bytes)) {
@@ -1680,6 +1790,17 @@ fn triangulate_model_with_substitutions<S: holtburger_dat::ResourceSource + ?Siz
     model_changes: &[(u8, u32)],
     texture_changes: &[(u8, u32, u32)],
 ) -> Option<Vec<Tri>> {
+    triangulate_model_with_substitutions_and_mtable(source, model_id, model_changes, texture_changes, None)
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    model_id: u32,
+    model_changes: &[(u8, u32)],
+    texture_changes: &[(u8, u32, u32)],
+    mtable_override: Option<u32>,
+) -> Option<Vec<Tri>> {
     use holtburger_dat::file_type::GfxObj;
     use holtburger_dat::ResourceKey;
     let mut tris = Vec::new();
@@ -1697,11 +1818,13 @@ fn triangulate_model_with_substitutions<S: holtburger_dat::ResourceSource + ?Siz
             );
         }
         0x02 => {
-            triangulate_setup_model_with_substitutions(
+            triangulate_setup_model_at_frame(
                 source,
                 model_id,
                 model_changes,
                 texture_changes,
+                mtable_override,
+                None,
                 &mut tris,
             )?;
         }
@@ -2122,6 +2245,7 @@ pub async fn fetch_entity_model_render(
     setup_id: u32,
     model_changes: Vec<u32>,
     texture_changes: Vec<u32>,
+    mtable_id: u32,
 ) -> Result<ModelMesh, JsValue> {
     use holtburger_dat::ResourceKey;
     // Decode the flat-pair / flat-triple buffers. Reject mis-aligned
@@ -2158,17 +2282,131 @@ pub async fn fetch_entity_model_render(
     }
     let mc_for_walk = mc.clone();
     let tc_for_walk = tc.clone();
+    let mt_for_walk = if mtable_id == 0 { None } else { Some(mtable_id) };
     prefetch::ensure_walk_prefetched(&source, &initial, |s| {
-        let _ = triangulate_model_with_substitutions(s, setup_id, &mc_for_walk, &tc_for_walk);
+        let _ = triangulate_model_with_substitutions_and_mtable(
+            s, setup_id, &mc_for_walk, &tc_for_walk, mt_for_walk,
+        );
     })
     .await?;
-    let tris = triangulate_model_with_substitutions(source.as_ref(), setup_id, &mc, &tc)
-        .ok_or_else(|| {
-            JsValue::from_str(&format!(
-                "fetch_entity_model_render: triangulate setup 0x{setup_id:08X} failed"
-            ))
-        })?;
+    let tris = triangulate_model_with_substitutions_and_mtable(
+        source.as_ref(), setup_id, &mc, &tc, mt_for_walk,
+    )
+    .ok_or_else(|| {
+        JsValue::from_str(&format!(
+            "fetch_entity_model_render: triangulate setup 0x{setup_id:08X} failed"
+        ))
+    })?;
     Ok(pack_model_mesh(tris))
+}
+
+/// Phase 4 step 6 Tier 2: bake the walk-cycle frames for an entity
+/// setup. Resolves the setup's MotionTable WALK_FORWARD cycle once,
+/// then triangulates the SetupModel with substitutions applied AND
+/// each frame's per-part transforms — returning one [`ModelMesh`]
+/// per cycle frame. JS caches the resulting array of textures and
+/// swaps `sprite.texture` based on velocity-driven frame index.
+///
+/// Returns an empty Vec for setups that:
+/// - aren't `0x02xxxxxx` (raw GfxObj 0x01 prefix has no MotionTable)
+/// - have no `default_motion_table`
+/// - have a MotionTable but no WALK_FORWARD cycle (most static
+///   props, doors, signs)
+/// - have a malformed cycle / Animation chain
+///
+/// The empty-Vec contract lets JS conditionally enable walk cycling
+/// per entity: `if (frames.length > 0) { entry.walkFrames = ...; }`
+/// else fall back to the static idle texture.
+///
+/// Substitution arguments are identical to `fetchEntityModelRender`
+/// — the same `model_changes` + `texture_changes` apply across
+/// every frame of the walk cycle (clothing/armor doesn't move when
+/// limbs do).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchEntityWalkFrames)]
+pub async fn fetch_entity_walk_frames(
+    setup_id: u32,
+    model_changes: Vec<u32>,
+    texture_changes: Vec<u32>,
+    mtable_id: u32,
+) -> Result<Vec<ModelMesh>, JsValue> {
+    use holtburger_dat::file_type::SetupModel;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    if model_changes.len() % 2 != 0 {
+        return Err(JsValue::from_str(
+            "fetch_entity_walk_frames: model_changes must be flat [partIndex, gfxId, ...] pairs",
+        ));
+    }
+    if texture_changes.len() % 3 != 0 {
+        return Err(JsValue::from_str(
+            "fetch_entity_walk_frames: texture_changes must be flat [partIndex, oldSurface, newSurface, ...] triples",
+        ));
+    }
+    // Raw GfxObj (0x01) has no skeleton + no MotionTable — return empty.
+    if (setup_id >> 24) as u8 != 0x02 {
+        return Ok(Vec::new());
+    }
+    let mc: Vec<(u8, u32)> = model_changes.chunks_exact(2).map(|c| (c[0] as u8, c[1])).collect();
+    let tc: Vec<(u8, u32, u32)> = texture_changes
+        .chunks_exact(3)
+        .map(|c| (c[0] as u8, c[1], c[2]))
+        .collect();
+
+    // Prefetch: the setup, every substituted GfxObj, and the
+    // MotionTable + Animation reachable from setup.default_motion_table.
+    // The MotionTable + Animation DIDs are discovered inside the
+    // prefetch closure via try_resolve_walk_anim_frames, so they
+    // ride along automatically.
+    let source = global_source::global_source();
+    let mut initial: Vec<ResourceKey<'_>> = Vec::with_capacity(1 + mc.len());
+    initial.push(ResourceKey::new("eor/portal", setup_id));
+    for (_, gfx_id) in &mc {
+        initial.push(ResourceKey::new("eor/portal", *gfx_id));
+    }
+    let mc_for_walk = mc.clone();
+    let tc_for_walk = tc.clone();
+    let mt_override = if mtable_id == 0 { None } else { Some(mtable_id) };
+    if let Some(mt) = mt_override {
+        initial.push(ResourceKey::new("eor/portal", mt));
+    }
+    prefetch::ensure_walk_prefetched(&source, &initial, move |s| {
+        // Touch each cycle frame inside the prefetch so the
+        // MotionTable + Animation records are discovered.
+        if let Ok(setup_bytes) = s.get_file_by_key(ResourceKey::new("eor/portal", setup_id)) {
+            if let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(&setup_bytes)) {
+                if let Some(frames) = try_resolve_walk_anim_frames(s, &setup, mt_override) {
+                    for f in frames.iter() {
+                        let _ = triangulate_setup_model_at_frame(
+                            s, setup_id, &mc_for_walk, &tc_for_walk, mt_override, Some(f), &mut Vec::new(),
+                        );
+                    }
+                }
+            }
+        }
+    })
+    .await?;
+
+    // Now do the real bake. Re-load the setup + walk frames from the
+    // prefetched cache, triangulate each frame, pack the meshes.
+    let setup_bytes = source
+        .as_ref()
+        .get_file_by_key(ResourceKey::new("eor/portal", setup_id))
+        .map_err(|e| JsValue::from_str(&format!("fetch_entity_walk_frames: setup load: {e}")))?;
+    let setup = SetupModel::unpack(&mut std::io::Cursor::new(&setup_bytes))
+        .map_err(|e| JsValue::from_str(&format!("fetch_entity_walk_frames: setup parse: {e}")))?;
+    let walk_frames = match try_resolve_walk_anim_frames(source.as_ref(), &setup, mt_override) {
+        Some(f) => f,
+        None => return Ok(Vec::new()),
+    };
+    let mut out = Vec::with_capacity(walk_frames.len());
+    for f in &walk_frames {
+        let mut tris = Vec::new();
+        let _ = triangulate_setup_model_at_frame(
+            source.as_ref(), setup_id, &mc, &tc, mt_override, Some(f), &mut tris,
+        );
+        out.push(pack_model_mesh(tris));
+    }
+    Ok(out)
 }
 
 // ============================================================
@@ -4840,6 +5078,147 @@ mod tests_substitution {
         assert!(setup.default_motion_table.is_none());
         assert!(setup.default_animation.is_none());
         assert!(try_resolve_idle_anim_frame(&source, &setup).is_none());
+    }
+
+    // -------------------------------------------------------------
+    // Phase 4 step 6 Tier 2 — walk-cycle helpers
+    // -------------------------------------------------------------
+
+    /// `try_resolve_walk_anim_frames` returns None for a setup with
+    /// no `default_motion_table`. Same regression guard as Phase C's
+    /// idle resolver — naked setups stay on the placement-frame
+    /// path. (Synthesizing a real walk MotionTable + Animation
+    /// chain is ~150 lines of binary scaffolding for limited
+    /// coverage beyond the C# reference at
+    /// `ObjectSpriteGenerator.cs:921-950` + the wire round-trip
+    /// validation that runs against live ACE.)
+    #[test]
+    fn try_resolve_walk_anim_frames_none_for_setup_without_motion_table() {
+        let setup_id: u32 = 0x02000099;
+        let part_a: u32 = 0x0100000A;
+        let part_b: u32 = 0x0100000B;
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(
+            ("eor/portal".into(), setup_id),
+            synth_setup_two_parts(setup_id, part_a, part_b),
+        );
+        let source = MockSource { files };
+        let setup_bytes = source
+            .get_file_by_key(ResourceKey::new("eor/portal", setup_id))
+            .unwrap();
+        let setup = SetupModel::unpack(&mut Cursor::new(&setup_bytes)).unwrap();
+        assert!(try_resolve_walk_anim_frames(&source, &setup, None).is_none());
+        // Also: an mtable_override that resolves to nothing in the
+        // mock source still yields None (the setup → MotionTable
+        // load fails gracefully).
+        assert!(try_resolve_walk_anim_frames(&source, &setup, Some(0x09000099)).is_none());
+    }
+
+    /// `triangulate_setup_model_at_frame` with an explicit
+    /// `pose_override` applies that frame's per-part transforms
+    /// instead of falling through to idle/placement/identity. This
+    /// is the load-bearing piece for Tier 2's per-frame walk-cycle
+    /// bake — verify a synthetic AnimationFrame whose part 1 frame
+    /// shifts the part by (5, 0, 0) actually moves part 1's
+    /// triangles into the +5 region while part 0 stays at the
+    /// origin.
+    #[test]
+    fn triangulate_setup_model_at_frame_applies_pose_override() {
+        use holtburger_dat::file_type::setup_model::AnimationFrame;
+        let setup_id: u32 = 0x02000099;
+        let part_a: u32 = 0x0100000A;
+        let part_b: u32 = 0x0100000B;
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(
+            ("eor/portal".into(), setup_id),
+            synth_setup_two_parts(setup_id, part_a, part_b),
+        );
+        files.insert(
+            ("eor/portal".into(), part_a),
+            synth_gfx_obj_one_triangle(part_a, 0xAAAAAAAA, 0.0),
+        );
+        files.insert(
+            ("eor/portal".into(), part_b),
+            synth_gfx_obj_one_triangle(part_b, 0xBBBBBBBB, 0.0),
+        );
+        let source = MockSource { files };
+
+        // Synthesize a 2-part AnimationFrame where part 1 is
+        // displaced +5 on x, part 0 is at the origin.
+        let pose = AnimationFrame {
+            frames: vec![
+                Frame { origin: Vector3::zero(), orientation: Quaternion::identity() },
+                Frame {
+                    origin: Vector3 { x: 5.0, y: 0.0, z: 0.0 },
+                    orientation: Quaternion::identity(),
+                },
+            ],
+            hooks: vec![],
+        };
+
+        let mut tris = Vec::new();
+        triangulate_setup_model_at_frame(
+            &source, setup_id, &[], &[], None, Some(&pose), &mut tris,
+        )
+        .expect("triangulate at frame");
+
+        // synth_gfx_obj_one_triangle places vertices at (0,0,0),
+        // (1,0,0), (0,1,0). Part 0 (no offset) → triangle x in
+        // [0..1]. Part 1 (offset +5) → triangle x in [5..6].
+        let part_a_max_x = tris
+            .iter()
+            .filter(|t| t.surface_did == 0xAAAAAAAA)
+            .flat_map(|t| t.pos.iter().map(|p| p[0]))
+            .fold(f32::MIN, f32::max);
+        let part_b_min_x = tris
+            .iter()
+            .filter(|t| t.surface_did == 0xBBBBBBBB)
+            .flat_map(|t| t.pos.iter().map(|p| p[0]))
+            .fold(f32::MAX, f32::min);
+        assert!(part_a_max_x <= 1.5,
+            "part 0 (no offset) expected max x ≤ 1.5, got {part_a_max_x}");
+        assert!(part_b_min_x >= 4.5,
+            "part 1 (offset +5) expected min x ≥ 4.5, got {part_b_min_x}");
+    }
+
+    /// `pose_override = None` preserves Phase C behaviour — the
+    /// idle-anim resolver runs as the first lookup. With a setup
+    /// that has no MotionTable AND no placement frames, both lookups
+    /// fail and the part lands at identity. Regression guard so
+    /// future changes to the pose lookup chain don't silently break
+    /// the no-override path.
+    #[test]
+    fn triangulate_setup_model_at_frame_no_override_uses_identity_for_naked_setup() {
+        let setup_id: u32 = 0x02000099;
+        let part_a: u32 = 0x0100000A;
+        let part_b: u32 = 0x0100000B;
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(
+            ("eor/portal".into(), setup_id),
+            synth_setup_two_parts(setup_id, part_a, part_b),
+        );
+        files.insert(
+            ("eor/portal".into(), part_a),
+            synth_gfx_obj_one_triangle(part_a, 0xAAAAAAAA, 0.0),
+        );
+        files.insert(
+            ("eor/portal".into(), part_b),
+            synth_gfx_obj_one_triangle(part_b, 0xBBBBBBBB, 0.0),
+        );
+        let source = MockSource { files };
+
+        let mut tris = Vec::new();
+        triangulate_setup_model_at_frame(
+            &source, setup_id, &[], &[], None, None, &mut tris,
+        )
+        .expect("triangulate at identity pose");
+
+        // No MotionTable + no placement frames + no pose_override
+        // → identity transform → vertices stay at the synth gfx's
+        // (0,0,0), (1,0,0), (0,1,0) positions. Both parts land at
+        // the same locations (overlap at origin).
+        let max_x = tris.iter().flat_map(|t| t.pos.iter().map(|p| p[0])).fold(f32::MIN, f32::max);
+        assert!(max_x <= 1.5, "naked setup at identity: max x ≤ 1.5, got {max_x}");
     }
 
     /// Out-of-range overlay slice — defensive clamp prevents panic
