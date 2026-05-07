@@ -18,6 +18,12 @@
       #stage { display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-start; margin-top: 0.5rem; }
       #stage canvas { border: 1px solid #ccc; background: #101010; image-rendering: pixelated; cursor: grab; touch-action: none; }
       #stage canvas.dragging { cursor: grabbing; }
+      /* Canvas-column wraps the canvas + the virtual keypad in a
+         single flex item so the keypad sits directly under the
+         viewport (not at the bottom of the page). stage-info
+         remains a sibling flex item to the right (or wraps below
+         the column on narrow viewports). */
+      #canvas-column { display: flex; flex-direction: column; align-items: flex-start; gap: 0; }
       /* Virtual keypad — for testing on devices without a physical
          keyboard (Tailscale-served page on phone/tablet). Mirrors the
          WASD/QE/Shift movement keys + scroll-wheel zoom + a centre-on-
@@ -26,8 +32,9 @@
          line 2753 picks it up unchanged. */
       #virtual-keypad {
         display: inline-flex; gap: 1.5rem; align-items: flex-start;
-        margin: 0.6rem 0; padding: 0.7rem 0.9rem;
-        background: #1a1a1a; border: 1px solid #333; border-radius: 6px;
+        margin: 0; padding: 0.7rem 0.9rem;
+        background: #1a1a1a; border: 1px solid #333; border-top: none;
+        border-radius: 0 0 6px 6px;
         user-select: none; -webkit-user-select: none;
         touch-action: manipulation;
       }
@@ -210,35 +217,41 @@
       waits.
     </p>
     <div id="stage">
-      <canvas id="canvas" width="512" height="512"></canvas>
+      <!-- Canvas + virtual keypad are stacked vertically as one
+           flex column so the keypad sits directly below the
+           viewport. stage-info stays as a separate flex item to
+           the right (or below, when the page wraps on narrow
+           viewports). -->
+      <div id="canvas-column">
+        <canvas id="canvas" width="512" height="512"></canvas>
+        <!-- Virtual keypad: lets the page be playable on touch-
+             screens (the Tailscale-served URL is opened from a
+             phone/tablet without a physical keyboard). Mirrors
+             WASD/QE/Shift + scroll-wheel zoom + centre-on-player.
+             Wired up after the page module loads — see "virtual
+             keypad wiring" in the script below. -->
+        <div id="virtual-keypad" aria-label="Virtual movement keypad for touchscreen testing">
+          <div class="pad-section pad-wasd" aria-label="movement">
+            <div class="pad-label">move / turn</div>
+            <button data-vk-key="q" data-vk-hold>Q</button>
+            <button data-vk-key="w" data-vk-hold>W</button>
+            <button data-vk-key="e" data-vk-hold>E</button>
+            <button data-vk-key="a" data-vk-hold>A</button>
+            <button data-vk-key="s" data-vk-hold>S</button>
+            <button data-vk-key="d" data-vk-hold>D</button>
+          </div>
+          <div class="pad-section pad-side" aria-label="modifiers + camera">
+            <div class="pad-label">camera / mod</div>
+            <button data-vk-zoom="in"  title="Zoom in (mouse wheel up)">+</button>
+            <button data-vk-center     title="Centre on local player">⌂</button>
+            <button data-vk-zoom="out" title="Zoom out (mouse wheel down)">−</button>
+            <button class="wide" data-vk-key="Shift" data-vk-toggle title="Run modifier (toggle)">Shift (run)</button>
+          </div>
+        </div>
+      </div>
       <dl id="stage-info"></dl>
     </div>
     <div id="render-status" class="hint">Render pending login.</div>
-
-    <!-- Virtual keypad: lets the page be playable on touchscreens
-         (the Tailscale-served URL is opened from a phone/tablet
-         without a physical keyboard). Mirrors the WASD/QE/Shift
-         keys + scroll-wheel zoom + a centre-on-player button. Wires
-         up after the page module loads — see "virtual keypad wiring"
-         in the script below. -->
-    <div id="virtual-keypad" aria-label="Virtual movement keypad for touchscreen testing">
-      <div class="pad-section pad-wasd" aria-label="movement">
-        <div class="pad-label">move / turn</div>
-        <button data-vk-key="q" data-vk-hold>Q</button>
-        <button data-vk-key="w" data-vk-hold>W</button>
-        <button data-vk-key="e" data-vk-hold>E</button>
-        <button data-vk-key="a" data-vk-hold>A</button>
-        <button data-vk-key="s" data-vk-hold>S</button>
-        <button data-vk-key="d" data-vk-hold>D</button>
-      </div>
-      <div class="pad-section pad-side" aria-label="modifiers + camera">
-        <div class="pad-label">camera / mod</div>
-        <button data-vk-zoom="in"  title="Zoom in (mouse wheel up)">+</button>
-        <button data-vk-center     title="Centre on local player">⌂</button>
-        <button data-vk-zoom="out" title="Zoom out (mouse wheel down)">−</button>
-        <button class="wide" data-vk-key="Shift" data-vk-toggle title="Run modifier (toggle)">Shift (run)</button>
-      </div>
-    </div>
 
     <!--
       PixiJS 8 ESM build pinned via jsdelivr. We import * as PIXI rather
