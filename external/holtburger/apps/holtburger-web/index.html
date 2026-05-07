@@ -258,6 +258,7 @@
             <button data-vk-zoom="in"  title="Zoom in (mouse wheel up)">+</button>
             <button data-vk-center     title="Centre on local player">⌂</button>
             <button data-vk-zoom="out" title="Zoom out (mouse wheel down)">−</button>
+            <button class="wide" data-vk-follow title="Auto-follow local player (toggle)">Follow OFF</button>
             <button class="wide" data-vk-key="Shift" data-vk-toggle title="Run modifier (toggle)">Shift (run)</button>
           </div>
         </div>
@@ -1579,7 +1580,13 @@ void main() {
 
         // ----- input: wheel zoom + pointer drag --------------------
         const SCALE_MIN = 0.05;
-        const SCALE_MAX = 5.0;
+        // Bumped from 5.0 → 120.0 so you can zoom close enough to
+        // actually see yourself running. The default render scale
+        // for a 3×3 LB neighbourhood fitting a 512px canvas works
+        // out to ~0.9 px/m; even at the previous 5x cap a humanoid
+        // sprite was only ~9 px tall. 120 px/m makes a humanoid
+        // ~150 px — clearly visible at typical phone resolutions.
+        const SCALE_MAX = 120.0;
 
         app.stage.eventMode = "static";
         app.stage.hitArea = app.screen;
@@ -1587,7 +1594,9 @@ void main() {
         app.stage.on("wheel", (e) => {
           // Zoom around the cursor: keep the world point under the
           // cursor stationary across the scale change.
-          const factor = e.deltaY > 0 ? 1 / 1.1 : 1.1;
+          // Bumped from 1.1× → 1.25× so the wheel reaches useful
+          // zoom levels in fewer notches (10 clicks ≈ 9× vs 2.6×).
+          const factor = e.deltaY > 0 ? 1 / 1.25 : 1.25;
           const next = cameraContainer.scale.x * factor;
           if (next < SCALE_MIN || next > SCALE_MAX) return;
 
@@ -2957,7 +2966,7 @@ void main() {
                 key, bubbles: true, cancelable: true,
               }));
             };
-            const SCALE_MIN = 0.05, SCALE_MAX = 5.0;
+            const SCALE_MIN = 0.05, SCALE_MAX = 120.0;
             const vkZoom = (dir) => {
               if (!window.liveScene?.cameraContainer) return;
               const cam = window.liveScene.cameraContainer;
@@ -2965,7 +2974,10 @@ void main() {
               const cw = renderer?.canvas?.width  ?? 512;
               const ch = renderer?.canvas?.height ?? 512;
               const cx = cw / 2, cy = ch / 2;
-              const factor = dir === "in" ? 1.2 : 1 / 1.2;
+              // 1.5× per tap: 8 taps ≈ 25× — gets the user from
+              // default fit-LB scale to "see yourself" zoom in a
+              // reasonable number of presses.
+              const factor = dir === "in" ? 1.5 : 1 / 1.5;
               const next = cam.scale.x * factor;
               if (next < SCALE_MIN || next > SCALE_MAX) return;
               const preX = (cx - cam.position.x) / cam.scale.x;
@@ -2976,29 +2988,65 @@ void main() {
               cam.position.x += (postX - preX) * next;
               cam.position.y += (postY - preY) * next;
             };
-            const vkCenter = () => {
-              if (!window.liveScene?.cameraContainer) return;
+            const centreOnPlayer = () => {
+              if (!window.liveScene?.cameraContainer) return false;
               const cam = window.liveScene.cameraContainer;
               const renderer = window.liveScene?.app?.renderer;
               const cw = renderer?.canvas?.width  ?? 512;
               const ch = renderer?.canvas?.height ?? 512;
-              // Prefer local player sprite; fall back to current
-              // camera centre (no-op visually, just normalises).
               const lpg = (typeof window.getLocalPlayerGuid === "function")
                 ? window.getLocalPlayerGuid() : null;
-              let wx = null, wy = null;
-              if (lpg !== null && lpg !== undefined && window.entityMap) {
-                const e = window.entityMap.get(lpg >>> 0);
-                if (e?.sprite) { wx = e.sprite.x; wy = e.sprite.y; }
-              }
-              if (wx === null) {
-                // Scene centre = current camera focus point.
-                wx = (cw / 2 - cam.position.x) / cam.scale.x;
-                wy = (ch / 2 - cam.position.y) / cam.scale.y;
-              }
+              if (lpg === null || lpg === undefined) return false;
+              const e = window.entityMap?.get(lpg >>> 0);
+              if (!e?.sprite) return false;
+              const sx = cam.scale.x;
+              cam.position.set(cw / 2 - e.sprite.x * sx, ch / 2 + e.sprite.y * sx);
+              return true;
+            };
+            const vkCenter = () => {
+              if (centreOnPlayer()) return;
+              // Fallback: normalise on current camera focus point.
+              const cam = window.liveScene?.cameraContainer;
+              const renderer = window.liveScene?.app?.renderer;
+              if (!cam || !renderer) return;
+              const cw = renderer.canvas?.width ?? 512;
+              const ch = renderer.canvas?.height ?? 512;
+              const wx = (cw / 2 - cam.position.x) / cam.scale.x;
+              const wy = (ch / 2 - cam.position.y) / cam.scale.y;
               const sx = cam.scale.x;
               cam.position.set(cw / 2 - wx * sx, ch / 2 + wy * sx);
             };
+
+            // Follow toggle. When ON, the per-rAF auto-pan tick
+            // (registered below + hooked into requestAnimationFrame)
+            // calls centreOnPlayer() each frame so the camera tracks
+            // the local player as they walk. Manual pan still works
+            // but gets overridden the next frame; manual zoom is
+            // preserved (centreOnPlayer doesn't touch cam.scale).
+            // window.toggleFollow() exposed for the capture script
+            // + dev console.
+            let autoFollow = false;
+            const setFollow = (on, btn) => {
+              autoFollow = on;
+              if (btn) {
+                btn.classList.toggle("held", on);
+                btn.textContent = on ? "Follow ON" : "Follow OFF";
+              } else {
+                // Find the keypad's follow button + sync its label.
+                const fbtn = document.querySelector("[data-vk-follow]");
+                if (fbtn) {
+                  fbtn.classList.toggle("held", on);
+                  fbtn.textContent = on ? "Follow ON" : "Follow OFF";
+                }
+              }
+            };
+            window.setFollow = setFollow;
+            window.isFollowing = () => autoFollow;
+            const followTick = () => {
+              if (autoFollow) centreOnPlayer();
+              requestAnimationFrame(followTick);
+            };
+            requestAnimationFrame(followTick);
             // Track which buttons have been locked down via toggle so
             // we can release them on a second tap or window blur.
             const heldByVk = new Set();
@@ -3049,6 +3097,14 @@ void main() {
               } else if (isCenter) {
                 btn.addEventListener("pointerdown", (ev) => {
                   ev.preventDefault(); vkCenter();
+                });
+              } else if (btn.hasAttribute("data-vk-follow")) {
+                btn.addEventListener("pointerdown", (ev) => {
+                  ev.preventDefault();
+                  setFollow(!autoFollow, btn);
+                  // Snap to player immediately on enable so the
+                  // first frame is already centred.
+                  if (autoFollow) centreOnPlayer();
                 });
               }
               // Suppress browser default for buttons inside the pad
