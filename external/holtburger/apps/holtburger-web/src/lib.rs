@@ -1489,6 +1489,13 @@ fn tri_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
 /// `surface_did == old_surface_did` is rewritten to `new_surface_did`.
 /// Mirrors `CloTextureEffect` application at
 /// `Creature_Networking.cs:185`.
+///
+/// **Pose priority (Phase C, 2026-05-07):** idle MotionTable cycle
+/// frame → static placement frame → identity. NPCs/creatures with a
+/// `default_motion_table` get their idle stance (knees flexed, arms
+/// at hip, weapons at side) instead of the T-pose hidden in many
+/// setups' identity placement frames. Mirrors C# `TryResolveIdleAnimFrame`
+/// at `WorldBuilder.Terminal/ObjectSpriteGenerator.cs:921-950`.
 #[cfg(any(target_arch = "wasm32", test))]
 fn triangulate_setup_model_with_substitutions<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
@@ -1505,9 +1512,10 @@ fn triangulate_setup_model_with_substitutions<S: holtburger_dat::ResourceSource 
         .ok()?;
     let setup = SetupModel::unpack(&mut std::io::Cursor::new(&bytes)).ok()?;
 
-    // Pick the placement frame to apply: Resting (0) → Default → first.
-    // Per holtburger-common::Placement enum which mirrors AC's. Phase C
-    // will replace this with MotionTable idle-cycle frames.
+    // Phase C: try idle anim frame first (NPCs in stance), fall back
+    // to static placement (Resting → Default → first) for setups
+    // without a MotionTable, fall back to identity for naked setups.
+    let idle_frame = try_resolve_idle_anim_frame(source, &setup);
     let placement = setup
         .placement_frames
         .get(&0)
@@ -1530,7 +1538,29 @@ fn triangulate_setup_model_with_substitutions<S: holtburger_dat::ResourceSource 
         let Ok(gfx) = GfxObj::unpack(&mut std::io::Cursor::new(&part_bytes))
             else { continue };
 
-        let (offset, rot) = if let Some(p) = placement {
+        // Phase C pose priority: idle anim frame → placement frame →
+        // identity. Mirrors ObjectSpriteGenerator.cs:842-852 exactly.
+        let (offset, rot) = if let Some(idle) = &idle_frame {
+            if pi < idle.frames.len() {
+                let f = &idle.frames[pi];
+                (f.origin, f.orientation)
+            } else if let Some(p) = placement {
+                if pi < p.anim_frame.frames.len() {
+                    let f = &p.anim_frame.frames[pi];
+                    (f.origin, f.orientation)
+                } else {
+                    (
+                        holtburger_common::Vector3::zero(),
+                        holtburger_common::Quaternion::identity(),
+                    )
+                }
+            } else {
+                (
+                    holtburger_common::Vector3::zero(),
+                    holtburger_common::Quaternion::identity(),
+                )
+            }
+        } else if let Some(p) = placement {
             if pi < p.anim_frame.frames.len() {
                 let f = &p.anim_frame.frames[pi];
                 (f.origin, f.orientation)
@@ -1558,6 +1588,72 @@ fn triangulate_setup_model_with_substitutions<S: holtburger_dat::ResourceSource 
         append_gfx_tris_with_tex_swaps(tris, &gfx, offset, rot, &part_tex_swaps_buf);
     }
     Some(())
+}
+
+/// Phase 4 step 6 Phase C: resolve the idle pose for a SetupModel by
+/// walking `default_motion_table` → `cycles[(default_style << 16) |
+/// idleSubstate]` → first `AnimData.anim_id` → `Animation.part_frames[0]`.
+/// Falls back to `setup.default_animation` (path 2) if the MotionTable
+/// path doesn't yield. Returns `None` for setups without an animation
+/// reference (most static props), which keeps their static placement
+/// frame as the rendered pose.
+///
+/// Mirrors C# `TryResolveIdleAnimFrame` at
+/// `WorldBuilder.Terminal/ObjectSpriteGenerator.cs:921-950` — same
+/// MotionTable cycle-key formula, same path-1-then-path-2 fallback,
+/// same "is the resolved DID actually an Animation (0x03 prefix)?"
+/// guard. Per-frame failures (missing DAT record, malformed parse)
+/// silently degrade to placement-frame instead of panicking; ACE's
+/// own renderer does the same via `SafeTryGet`.
+#[cfg(any(target_arch = "wasm32", test))]
+fn try_resolve_idle_anim_frame<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup: &holtburger_dat::file_type::SetupModel,
+) -> Option<holtburger_dat::file_type::setup_model::AnimationFrame> {
+    use holtburger_dat::file_type::{Animation, MotionTable};
+    use holtburger_dat::ResourceKey;
+    let mut anim_did: u32 = 0;
+
+    // Path 1: default_motion_table → cycles → AnimData[0]
+    if let Some(mt_id) = setup.default_motion_table {
+        if (mt_id >> 24) == 0x09 {
+            if let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", mt_id)) {
+                if let Ok(mtable) = MotionTable::read(&mut std::io::Cursor::new(&bytes)) {
+                    if let Some(&idle_substate) = mtable.style_defaults.get(&mtable.default_style) {
+                        // Cycle key per AC physics: high 16 bits style,
+                        // low 24 bits substate. Mirrors C#:
+                        //   ((uint)mtable.DefaultStyle << 16) |
+                        //   ((uint)idleSubstate & 0xFFFFFF)
+                        let cycle_key =
+                            (mtable.default_style << 16) | (idle_substate & 0x00FF_FFFF);
+                        if let Some(motion_data) = mtable.cycles.get(&cycle_key) {
+                            if let Some(first_anim) = motion_data.anims.first() {
+                                anim_did = first_anim.anim_id;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Path 2: setup.default_animation (no MotionTable, but the setup
+    // points directly at an Animation).
+    if anim_did == 0 {
+        if let Some(da) = setup.default_animation {
+            anim_did = da;
+        }
+    }
+
+    // Sanity guard: must be a 0x03-prefixed Animation DID.
+    if anim_did == 0 || (anim_did >> 24) != 0x03 {
+        return None;
+    }
+    let bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", anim_did))
+        .ok()?;
+    let anim = Animation::read(&mut std::io::Cursor::new(&bytes)).ok()?;
+    anim.part_frames.into_iter().next()
 }
 
 /// Top-level model triangulation: dispatch on `model_id >> 24`.
@@ -4709,6 +4805,41 @@ mod tests_substitution {
             &[(overlay_pal_id, 42u8, 1u8)], // splice 1 colour at offset 42
         );
         assert_eq!(out.pixels, vec![0, 0xFF, 0, 0xFF], "expected green (overlay wins at offset 42)");
+    }
+
+    /// Phase C regression: setup with no `default_motion_table` and
+    /// no `default_animation` returns None from
+    /// `try_resolve_idle_anim_frame`, so the triangulator falls
+    /// through to the placement-frame path. This protects Phase A's
+    /// substitution tests from silently regressing if the idle-pose
+    /// lookup ever starts erroneously matching naked setups. The
+    /// full idle-pose vs. placement-frame visual check is a browser-
+    /// side validation against ACE-streamed entities — synthesizing
+    /// MotionTable + Animation bytes for a unit test would take
+    /// ~150 lines of binary scaffolding for limited additional
+    /// coverage beyond the C# reference at
+    /// ObjectSpriteGenerator.cs:921-950.
+    #[test]
+    fn try_resolve_idle_anim_frame_none_for_setup_without_motion_table() {
+        let setup_id: u32 = 0x02000099;
+        let part_a: u32 = 0x0100000A;
+        let part_b: u32 = 0x0100000B;
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(
+            ("eor/portal".into(), setup_id),
+            synth_setup_two_parts(setup_id, part_a, part_b),
+        );
+        let source = MockSource { files };
+        let setup_bytes = source
+            .get_file_by_key(ResourceKey::new("eor/portal", setup_id))
+            .unwrap();
+        let setup = SetupModel::unpack(&mut Cursor::new(&setup_bytes)).unwrap();
+        // synth_setup_two_parts sets both default_motion_table and
+        // default_animation to None, so the idle-pose helper has
+        // nothing to resolve and returns None.
+        assert!(setup.default_motion_table.is_none());
+        assert!(setup.default_animation.is_none());
+        assert!(try_resolve_idle_anim_frame(&source, &setup).is_none());
     }
 
     /// Out-of-range overlay slice — defensive clamp prevents panic
