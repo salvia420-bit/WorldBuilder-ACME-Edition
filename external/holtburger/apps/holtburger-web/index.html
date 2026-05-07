@@ -116,7 +116,17 @@
       with <code>cargo run -p holtburger-wsbridge</code>, then enter
       the account credentials below.
     </p>
-    <form id="login-form">
+    <!-- onsubmit="return false" is the synchronous belt for the
+         async-import suspenders below: ES modules are deferred, so
+         a slow connection (mobile / Tailscale) lets the user tap
+         Connect before the addEventListener handler is registered.
+         Without the inline blocker, the form would submit *natively*
+         → page reload → "every time I hit Connect it resets the
+         page." The inline handler runs synchronously before any
+         script does, so the native submit is always blocked. The
+         JS-side submit listener still fires and runs the real
+         logic. -->
+    <form id="login-form" onsubmit="return false;">
       <fieldset>
         <legend>Connect to ACE</legend>
         <div class="row"><label><span>Account</span><input type="text" name="account" required autocomplete="username" /></label></div>
@@ -124,7 +134,10 @@
         <div class="row"><label><span>Bridge URL</span><input type="text" name="bridge_url" value="ws://127.0.0.1:8080/" required /></label></div>
         <div class="row"><label><span>Server IP</span><input type="text" name="server_ip" value="127.0.0.1" required /></label></div>
         <div class="row"><label><span>Server port</span><input type="number" name="server_port" value="9000" min="1" max="65535" required /></label></div>
-        <button type="submit">Connect</button>
+        <!-- disabled by default so the user gets visual feedback
+             that the page isn't ready yet; the script enables it
+             once the submit handler is registered. -->
+        <button type="submit" disabled>Loading…</button>
       </fieldset>
     </form>
     <div id="login-status" class="hint">Awaiting credentials.</div>
@@ -2570,6 +2583,14 @@ void main() {
       }
       let activeHandle = null;
 
+      // Enable Connect now that the submit listener is wired. Until
+      // here the button reads "Loading…" + disabled so a tap on a
+      // slow mobile connection can't slip through to the native
+      // form submit (which would reload the page).
+      {
+        const btn = loginForm.querySelector("button[type=submit]");
+        if (btn) { btn.disabled = false; btn.textContent = "Connect"; }
+      }
       loginForm.addEventListener("submit", async (e) => {
         e.preventDefault();
         if (activeHandle) return;
