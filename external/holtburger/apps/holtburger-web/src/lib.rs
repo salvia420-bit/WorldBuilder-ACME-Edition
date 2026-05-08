@@ -7134,6 +7134,64 @@ async fn recv_loop(
                         if !entity_seeded {
                             continue;
                         }
+                        // Watchdog: when real movement caps regress to
+                        // Err between PlayerDescription's clear-and-test
+                        // and now (e.g., a property update wiped the
+                        // Run skill, the MotionTable resolution failed
+                        // mid-session, etc.), the local-pose integrator
+                        // would no-op for this tick and the heartbeat
+                        // would send a stale pose. ACE keeps the
+                        // server-side player at last-confirmed pose →
+                        // when ACE next broadcasts an UpdatePosition,
+                        // the client snaps back to that stale pose,
+                        // visible to the user as rubberband.
+                        //
+                        // Live-test root cause (2026-05-08, /tmp/walk_diag3.cjs):
+                        // PlayerDescription logged real_caps_ok=true
+                        // but tick #60 read caps_ok=false. Some message
+                        // between clears the override-vs-real divergence;
+                        // bookkeeping fix is too speculative without
+                        // narrowing further. Defense-in-depth here: if
+                        // resolve fails AND no override is currently
+                        // set, install the same fallback caps the
+                        // bootstrap path uses, so the integrator keeps
+                        // advancing. Real biota wins again on the next
+                        // PlayerDescription (which clears the override
+                        // and re-tests).
+                        if w.resolve_self_movement_capabilities().is_err() {
+                            let fallback = holtburger_world::SelfMovementCapabilities {
+                                kinematics: holtburger_world::SelfMovementKinematics {
+                                    source: holtburger_world::PlayerMotionTableSource::DirectProperty {
+                                        motion_table_id: 0,
+                                    },
+                                    motion_table_id: 0,
+                                    stance: 0,
+                                    base_walk_forward_velocity: holtburger_common::Vector3 {
+                                        x: 0.0, y: 1.0, z: 0.0,
+                                    },
+                                    base_run_forward_velocity: holtburger_common::Vector3 {
+                                        x: 0.0, y: 4.5, z: 0.0,
+                                    },
+                                    base_turn_left_omega: holtburger_common::Vector3 {
+                                        x: 0.0, y: 0.0, z: 1.5,
+                                    },
+                                    base_turn_right_omega: holtburger_common::Vector3 {
+                                        x: 0.0, y: 0.0, z: -1.5,
+                                    },
+                                },
+                                run_rate_scalar: 1.0,
+                            };
+                            w.set_self_movement_capabilities_override(fallback);
+                            // One-shot log per regression run — quieted
+                            // via a tick-count modulo so a sustained
+                            // regression doesn't spam the console.
+                            if movement.tick_count() % 60 == 0 {
+                                console_log_str(
+                                    "[step 3.6 watchdog] caps_ok regressed to false at tick; \
+                                     re-installed fallback override to keep heartbeat advancing"
+                                );
+                            }
+                        }
                         match movement.tick(now, w, &mut session).await {
                             Ok(_events) => {
                                 // Phase 4 step 3.6 diagnostic — log pose
