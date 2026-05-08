@@ -560,20 +560,25 @@
         //   `cargo run -p holtburger-tools --bin dat-shard --release \
         //       -- --input dats/assets.hba --output dist/`
         // (or the `--eor-portal/--eor-cell/--eor-local` form for raw
-        // canonical retail DATs).
+        // canonical retail DATs). Phase 5.2 made v2 the default
+        // wire format; pass `--manifest-version=1` only to drain
+        // an in-flight CDN deploy on the v1 schema.
         const MANIFEST_URL = "../../dist/manifest.json";
-        root.innerHTML = "<p class=\"hint\">Fetching manifest (~200 MB — first time can take minutes on mobile/Tailscale)…</p>";
+        root.innerHTML = "<p class=\"hint\">Fetching manifest (v2: ~2 KB top-level + lazy per-namespace catalogs; v1: ~200 MB and slower on mobile/Tailscale)…</p>";
         try {
           await init_resource_source(MANIFEST_URL);
           console.log(
-            "[Phase 5.0] manifest-mode source initialized from",
+            "[Phase 5.0/5.2] manifest-mode source initialized from",
             MANIFEST_URL
           );
         } catch (e) {
           console.error(
-            "[Phase 5.0] manifest-mode init failed; rendering will fail until dist/ is baked.\n" +
-              "  Run `cargo run -p holtburger-tools --bin dat-shard --release -- " +
-              "--input dats/assets.hba --output dist/` from external/holtburger/.\n" +
+            "[Phase 5.0/5.2] manifest-mode init failed; rendering will fail until dist/ is baked.\n" +
+              "  Re-bake with v2 (default since Phase 5.2):\n" +
+              "    `cargo run -p holtburger-tools --bin dat-shard --release -- " +
+              "--input dats/assets.hba --output dist/`\n" +
+              "  v2 produces a ~2 KB manifest.json + per-namespace catalogs in dist/manifest/.\n" +
+              "  Pass `--manifest-version=1` if you need the legacy v1 wire format.\n" +
               "  Original error:",
             e
           );
@@ -581,7 +586,8 @@
           // failed; surface the problem and let them log in anyway
           // (rendering will fail but the AC handshake can still run).
           root.innerHTML =
-            "<p class=\"fail\">Manifest fetch failed — rendering disabled, login still works.</p>" +
+            "<p class=\"fail\">Manifest fetch failed — rendering disabled, login still works. " +
+            "Re-bake with `dat-shard --output dist/` (v2 is the default; ~2 KB top-level + per-namespace catalogs).</p>" +
             `<pre>${String(e).slice(0, 400)}</pre>`;
         }
         root.innerHTML = "<p class=\"hint\">Running smoke checks…</p>";

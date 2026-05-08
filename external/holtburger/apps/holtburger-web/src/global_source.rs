@@ -88,6 +88,42 @@ pub fn cached_shard_count() -> usize {
     })
 }
 
+/// Manifest schema version of the connected source — `1` for v1,
+/// `2` for v2 (Phase 5.2), `0` if [`init_resource_source`] hasn't
+/// been called. Smoke tests use this to verify v1 / v2 dispatch
+/// works as expected.
+#[wasm_bindgen]
+pub fn manifest_version() -> u32 {
+    SOURCE.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .map(|s| s.manifest_version())
+            .unwrap_or(0)
+    })
+}
+
+/// Number of per-namespace `NamespaceCatalog` binaries the v2
+/// source has fetched + parsed. Always 0 for v1 (no catalogs in
+/// the wire format). Smoke tests use this as a "did the lazy
+/// catalog fetch land?" probe.
+#[wasm_bindgen]
+pub fn loaded_catalog_count() -> usize {
+    SOURCE.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .map(|s| s.loaded_catalog_count())
+            .unwrap_or(0)
+    })
+}
+
+/// The constant value of [`holtburger_manifest::v2::MANIFEST_V2_VERSION`].
+/// Lets the Node smoke harness assert v2 schema constants without
+/// re-vendoring them (Phase 5.2 obj 8 verification).
+#[wasm_bindgen]
+pub fn manifest_v2_version_const() -> u32 {
+    holtburger_manifest::v2::MANIFEST_V2_VERSION
+}
+
 /// Get an `Arc` clone of the global source. Panics if
 /// [`init_resource_source`] has not been called — the JS contract
 /// is that init runs before any `fetch_*` does.

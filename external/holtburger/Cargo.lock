@@ -1645,6 +1645,7 @@ dependencies = [
  "holtburger-content",
  "holtburger-core",
  "holtburger-dat",
+ "holtburger-manifest",
  "holtburger-protocol",
  "holtburger-resource-http",
  "holtburger-session",

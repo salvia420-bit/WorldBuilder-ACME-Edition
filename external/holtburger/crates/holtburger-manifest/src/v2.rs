@@ -60,7 +60,9 @@
 //! 4. **`covers` short-circuit** — `manifest_source.rs::boot_serves`
 //!    (line 278) treats the boot pack's `covers` list as the
 //!    authoritative-fast-path "this key is already in memory"
-//!    check. v2 keeps `covers` on [`crate::BootPack`] unchanged.
+//!    check. v2 drops `covers` from the wire (see audit (c) §5)
+//!    and uses `HbaReader::exists_by_key` directly — same O(1)
+//!    semantics, no scaling with boot-pack size in the JSON.
 //! 5. **`format_shard_key` / `parse_shard_key` round-trip** —
 //!    used by the manifest map keys + `prefetch` lookups +
 //!    `boot_pack.covers` entries. The string format
@@ -89,6 +91,16 @@
 //!    record-miss in that namespace. Shard URLs derive from a
 //!    convention template; the catalog supplies sha256 +
 //!    canonical size *only* when batch verification matters.
+//! 5. **`BootPack.covers: Vec<String>`** — Phase 5.1b's transitive
+//!    boot walk produces ~635 covers for the Holtburg spawn area;
+//!    each ~30 bytes formatted = ~19 KB. v2 drops this from the
+//!    wire ([`BootPackV2`] omits it) and answers
+//!    "is X in the boot pack" via `HbaReader::exists_by_key` —
+//!    the parsed boot reader already does the lookup in O(1)
+//!    via its hash-mapped namespace spans. The covers list was
+//!    only ever a linear-scan fast-path; dropping it doesn't
+//!    change runtime semantics. Brings the v2 manifest under
+//!    the brief's 2 KB target.
 //!
 //! Net effect: top-level v2 `manifest.json` shrinks from
 //! 203 MB → ≈ 800 bytes – 2 KB regardless of world size.
@@ -113,6 +125,35 @@ use holtburger_dat::ResourceKey;
 use serde::{Deserialize, Serialize};
 
 use crate::{BootPack, SourceMeta};
+
+/// v2 boot-pack metadata. Same shape as v1 [`crate::BootPack`] minus
+/// the `covers: Vec<String>` field — v2 drops it from the wire so
+/// the top-level manifest stays ≈2 KB regardless of boot-pack size.
+/// On a real-world Dereth bake the boot pack covers ~635 keys
+/// (Phase 5.1b transitive walk) which would inflate v2's manifest
+/// by ~19 KB if covers were preserved verbatim.
+///
+/// Runtime correctness without covers: the v2
+/// `ManifestResourceSource` answers "is this key in the boot pack"
+/// via `HbaReader::exists_by_key` (O(1) hash lookup over the
+/// already-parsed boot pack). The covers list was only ever a
+/// linear-scan fast-path; dropping it doesn't change semantics.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct BootPackV2 {
+    pub url: String,
+    pub size: u64,
+    pub sha256: String,
+}
+
+impl From<BootPack> for BootPackV2 {
+    fn from(v1: BootPack) -> Self {
+        Self {
+            url: v1.url,
+            size: v1.size,
+            sha256: v1.sha256,
+        }
+    }
+}
 
 /// The v2 schema version. Bumped from [`crate::MANIFEST_VERSION`]
 /// (1). Consumers route on `version` field; v1 stays parseable for
@@ -157,10 +198,9 @@ pub struct ManifestV2 {
     pub generated_at: String,
     /// Provenance. Same shape as v1 (DAT iteration counters).
     pub source: SourceMeta,
-    /// Bootstrap pack metadata. Same shape as v1; consumed by
-    /// `ManifestResourceSource::connect` to fetch + hash-verify
-    /// the pack at construction time.
-    pub boot_pack: BootPack,
+    /// Bootstrap pack metadata. v2 uses [`BootPackV2`] (no
+    /// `covers` field) — see that type's docs for the rationale.
+    pub boot_pack: BootPackV2,
     /// Bumps when any per-namespace catalog or shard hash changes.
     /// Lets the page cheaply detect "are my cached catalogs
     /// stale?" by comparing the top-level manifest's
@@ -282,15 +322,11 @@ mod tests {
                 cell_dat_iteration: 982,
                 local_dat_iteration: 994,
             },
-            boot_pack: BootPack {
+            boot_pack: BootPackV2 {
                 url: "boot.hba".into(),
                 size: 1_861_361,
                 sha256: "1dcb277bb9dd67bfbd0a3634f451ce714f1347e75b050acfd2cc3ce33febb395"
                     .into(),
-                covers: vec![
-                    crate::format_shard_key("eor/cell", 0xA9B4_FFFF),
-                    crate::format_shard_key("eor/cell", 0xA9B4_FFFE),
-                ],
             },
             catalog_version: 1,
             namespaces: vec![
@@ -319,8 +355,7 @@ mod tests {
             "boot_pack": {
                 "url": "boot.hba",
                 "size": 1861361,
-                "sha256": "1dcb277bb9dd67bfbd0a3634f451ce714f1347e75b050acfd2cc3ce33febb395",
-                "covers": ["eor/cell:0xA9B4FFFF", "eor/cell:0xA9B4FFFE"]
+                "sha256": "1dcb277bb9dd67bfbd0a3634f451ce714f1347e75b050acfd2cc3ce33febb395"
             },
             "catalog_version": 1,
             "namespaces": ["eor/portal", "eor/cell", "eor/local", "holtburger/core"],
@@ -443,5 +478,77 @@ mod tests {
             render_shard_url_full(degenerate, key, hash),
             format!("9f{hash}"),
         );
+    }
+
+    /// (5) [`ManifestVersionProbe`] is the lightweight sniff used by
+    /// `ManifestResourceSource::connect` (Phase 5.2 obj 4) to route
+    /// between v1 and v2 parsers without allocating either full
+    /// structure first. Verify it deserializes from minimal JSON +
+    /// from a v1-shaped JSON (where it must extract just the
+    /// `version` field) + from a hypothetical v3 (forward-compat:
+    /// the probe must succeed even on unsupported versions, so the
+    /// caller can surface a precise UnsupportedVersion error
+    /// instead of a parse error).
+    #[test]
+    fn version_probe_sniffs_all_versions() {
+        // v2 — parses the canonical fixture above's version field.
+        let v2_json = r#"{"version": 2, "anything": "else"}"#;
+        let probe: ManifestVersionProbe =
+            serde_json::from_str(v2_json).expect("probe v2");
+        assert_eq!(probe.version, 2);
+
+        // v1 — minimal JSON with just the version field.
+        let v1_json = r#"{"version": 1, "shards": {}}"#;
+        let probe: ManifestVersionProbe =
+            serde_json::from_str(v1_json).expect("probe v1");
+        assert_eq!(probe.version, 1);
+
+        // Unknown version — probe still succeeds; caller errors.
+        let v99_json = r#"{"version": 99}"#;
+        let probe: ManifestVersionProbe =
+            serde_json::from_str(v99_json).expect("probe v99");
+        assert_eq!(probe.version, 99);
+
+        // Malformed JSON — probe must fail with a parse error.
+        let malformed = r#"{"version":"#;
+        assert!(serde_json::from_str::<ManifestVersionProbe>(malformed).is_err());
+
+        // No `version` field — required field, probe must fail.
+        let missing = r#"{"foo": "bar"}"#;
+        assert!(serde_json::from_str::<ManifestVersionProbe>(missing).is_err());
+    }
+
+    /// (6) Convention-URL mode (`catalog_url_template = None`) is the
+    /// minimal v2 wire shape: top-level manifest declares no
+    /// catalogs at all, the page derives shard URLs purely from
+    /// `(namespace, file_id)` via the `shard_url_template`. Verify
+    /// the manifest helpers behave correctly in this mode for the
+    /// `ManifestResourceSource::prefetch` v2 path (Phase 5.2 obj 4
+    /// step 5).
+    #[test]
+    fn convention_url_mode_helpers() {
+        let conv_only_template = "shards/{namespace_slug}/{file_id_hex}.bin";
+        let mut manifest = fixture_manifest_v2();
+        manifest.catalog_url_template = None;
+        manifest.shard_url_template = conv_only_template.into();
+
+        // No catalog URL exposed.
+        assert_eq!(manifest.catalog_url("eor/portal"), None);
+        assert_eq!(manifest.catalog_url("eor/cell"), None);
+
+        // Shard URL renders without sha256 — the empty hash arg
+        // mirrors how the resource-http prefetch path invokes
+        // render_shard_url_full when no catalog entry is available.
+        let key = ResourceKey::new("eor/portal", 0x0100_0827);
+        let url = manifest.shard_url(key, "");
+        assert_eq!(url, "shards/eor-portal/0x01000827.bin");
+
+        // The same template + a populated hash still works (the
+        // hash tokens just don't appear).
+        let url_with_hash = manifest.shard_url(
+            key,
+            "9f10aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        );
+        assert_eq!(url_with_hash, "shards/eor-portal/0x01000827.bin");
     }
 }

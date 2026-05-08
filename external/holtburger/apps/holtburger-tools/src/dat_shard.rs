@@ -32,7 +32,7 @@
 //! landblock's CellLandblock + LandblockInfo for the 9-cell spawn
 //! neighborhood.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use holtburger_dat::file_type::{
@@ -46,13 +46,25 @@ use holtburger_dat::{
 };
 use holtburger_manifest::{
     BootPack, MANIFEST_VERSION, Manifest, ShardEntry, SourceMeta, format_shard_key, sha256_hex,
+    catalog::{CatalogEntry, NamespaceCatalog},
+    v2::{
+        BootPackV2, DEFAULT_CATALOG_URL_TEMPLATE, DEFAULT_SHARD_URL_TEMPLATE_PREFIXED,
+        MANIFEST_V2_VERSION, ManifestV2, namespace_slug,
+    },
 };
+use sha2::{Digest, Sha256};
 
 use crate::error::{Result, ToolError};
 
 /// Default boot landblock (Holtburg 0xA9B4 — the spawn area used
 /// by the in-browser teleport from Phase 4 step 2a.6).
 pub const DEFAULT_BOOT_LANDBLOCK: u32 = 0xA9B4;
+
+/// Default manifest version emitted by `dat-shard` — Phase 5.2 obj 5.
+/// Phase 5.0/5.1 emitted v1 (203 MB JSON); v2 is the new default.
+/// v1 stays available via `--manifest-version=1` for one release
+/// cycle to drain in-flight CDN deploys.
+pub const DEFAULT_MANIFEST_VERSION: u32 = 2;
 
 /// IDs of the records the boot pack always includes regardless of
 /// boot-landblock — the catalog tables every login needs.
@@ -74,6 +86,10 @@ pub struct DatShardOptions {
     pub eor_local: Option<PathBuf>,
     pub boot_landblock: u32,
     pub output_dir: PathBuf,
+    /// Manifest schema version to emit. Phase 5.2 obj 5 added this;
+    /// defaults to [`DEFAULT_MANIFEST_VERSION`] (= 2). Set to 1 to
+    /// produce the legacy v1 wire format.
+    pub manifest_version: u32,
 }
 
 /// Result of [`read_input_bundle`] — every record in the source
@@ -81,6 +97,49 @@ pub struct DatShardOptions {
 pub struct LoadedBundle {
     pub records: BTreeMap<(String, u32), Vec<u8>>,
     pub source_meta: SourceMeta,
+}
+
+/// Result of [`shard_bundle_v2`] — Phase 5.2 obj 5. Holds the v2
+/// manifest plus aggregate counts for status logging.
+#[derive(Debug, Clone)]
+pub struct V2BakeResult {
+    pub manifest: ManifestV2,
+    pub total_records: usize,
+    pub unique_shard_count: usize,
+    pub catalog_count: usize,
+    pub boot_covers_count: usize,
+}
+
+/// Wrapped output of the unified bake dispatcher
+/// [`shard_bundle_dispatch`]. Either variant exposes the same
+/// summary counts main() needs for its status print.
+#[derive(Debug, Clone)]
+pub enum BakeOutput {
+    V1(Manifest),
+    V2(V2BakeResult),
+}
+
+impl BakeOutput {
+    pub fn manifest_version(&self) -> u32 {
+        match self {
+            Self::V1(_) => MANIFEST_VERSION,
+            Self::V2(r) => r.manifest.version,
+        }
+    }
+
+    pub fn unique_shard_count(&self) -> usize {
+        match self {
+            Self::V1(m) => m.shards.len(),
+            Self::V2(r) => r.unique_shard_count,
+        }
+    }
+
+    pub fn boot_covers_count(&self) -> usize {
+        match self {
+            Self::V1(m) => m.boot_pack.covers.len(),
+            Self::V2(r) => r.boot_covers_count,
+        }
+    }
 }
 
 /// Parse a hex u32 with optional `0x`/`0X` prefix.
@@ -406,6 +465,269 @@ pub fn write_boot_pack(
         sha256: sha256_hex(&bytes),
         covers,
     })
+}
+
+/// Compute sha256 of `bytes` and return both the full 32-byte
+/// digest and its 16-byte truncation (the form stored in
+/// [`NamespaceCatalog`] entries). Single-pass; avoids re-hashing.
+fn sha256_full_and_trunc(bytes: &[u8]) -> ([u8; 32], [u8; 16]) {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let full: [u8; 32] = hasher.finalize().into();
+    let mut trunc = [0u8; 16];
+    trunc.copy_from_slice(&full[..16]);
+    (full, trunc)
+}
+
+/// Encode 16 bytes as 32 lowercase hex chars. Mirrors the
+/// `hex_encode_16` in `holtburger-resource-http::manifest_source`
+/// — kept inline here because that helper isn't exported and
+/// adding a re-export of a wasm-only crate's helper isn't worth it.
+fn hex_encode_16(bytes: &[u8; 16]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(32);
+    for &b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
+/// Phase 5.2 obj 5 — write shards under a 2-level prefix directory
+/// keyed by truncated sha256 (16 bytes / 32 hex chars), AND build
+/// the per-namespace catalog entry list.
+///
+/// On-disk layout: `<output_dir>/shards/{first2}/{trunc32}.bin`,
+/// where `first2` is the first 2 hex chars of the truncated digest
+/// and `trunc32` is the full 32-char truncated hex. Mirrors
+/// [`DEFAULT_SHARD_URL_TEMPLATE_PREFIXED`] which substitutes
+/// `{sha256_prefix2}` and `{sha256}` (the runtime supplies the
+/// truncated digest in both slots; see
+/// `holtburger-resource-http::manifest_source` v2 prefetch path).
+///
+/// Dedupes by truncated digest. Truncation to 128 bits keeps
+/// collision resistance to 2^64 — far beyond any realistic AC asset
+/// count — while halving the catalog size compared to a full
+/// 32-byte hash. The dev http.server can serve thousands of files
+/// per directory comfortably; the prefix split keeps any single
+/// directory under ~3500 entries (885k records / 256 prefixes).
+pub fn write_shards_v2(
+    bundle: &LoadedBundle,
+    output_dir: &Path,
+) -> Result<V2WriteShardsResult> {
+    let shards_dir = output_dir.join("shards");
+    std::fs::create_dir_all(&shards_dir)
+        .map_err(|e| ToolError::Validation(format!("create shards dir {shards_dir:?}: {e}")))?;
+
+    let mut written: HashSet<[u8; 16]> = HashSet::new();
+    let mut catalogs: HashMap<String, Vec<CatalogEntry>> = HashMap::new();
+
+    for ((namespace, file_id), bytes) in &bundle.records {
+        let (_full, trunc) = sha256_full_and_trunc(bytes);
+        let trunc_hex = hex_encode_16(&trunc);
+        let prefix2 = &trunc_hex[..2];
+
+        if written.insert(trunc) {
+            let prefix_dir = shards_dir.join(prefix2);
+            std::fs::create_dir_all(&prefix_dir).map_err(|e| {
+                ToolError::Validation(format!("create shard prefix dir {prefix_dir:?}: {e}"))
+            })?;
+            let shard_path = prefix_dir.join(format!("{trunc_hex}.bin"));
+            std::fs::write(&shard_path, bytes)
+                .map_err(|e| ToolError::Validation(format!("write {shard_path:?}: {e}")))?;
+        }
+
+        catalogs.entry(namespace.clone()).or_default().push(CatalogEntry {
+            file_id: *file_id,
+            sha256_truncated: trunc,
+            size: bytes.len() as u64,
+        });
+    }
+
+    Ok(V2WriteShardsResult {
+        catalogs,
+        unique_shard_count: written.len(),
+    })
+}
+
+/// Output of [`write_shards_v2`]: the per-namespace catalog entry
+/// vectors (unsorted; [`NamespaceCatalog::new`] will sort) plus the
+/// dedupe count for status reporting.
+pub struct V2WriteShardsResult {
+    pub catalogs: HashMap<String, Vec<CatalogEntry>>,
+    pub unique_shard_count: usize,
+}
+
+/// Phase 5.2 obj 5 — write per-namespace [`NamespaceCatalog`]
+/// binaries under `<output_dir>/manifest/{namespace_slug}.bin`.
+/// Returns the sorted namespace list for inclusion in the v2
+/// top-level manifest.
+///
+/// Catalogs are emitted as raw `.bin` (no bake-time gzip — the
+/// brief defers gzip to deployment-time `Content-Encoding: gzip`
+/// at the CDN edge, which is also the http.server / `python -m
+/// http.server` dev story).
+pub fn write_namespace_catalogs(
+    catalogs: HashMap<String, Vec<CatalogEntry>>,
+    output_dir: &Path,
+) -> Result<Vec<String>> {
+    let manifest_dir = output_dir.join("manifest");
+    std::fs::create_dir_all(&manifest_dir).map_err(|e| {
+        ToolError::Validation(format!("create manifest dir {manifest_dir:?}: {e}"))
+    })?;
+
+    let mut namespaces: Vec<String> = catalogs.keys().cloned().collect();
+    namespaces.sort();
+
+    for (namespace, entries) in catalogs {
+        let catalog = NamespaceCatalog::new(namespace.clone(), 0, entries);
+        let slug = namespace_slug(&namespace);
+        let path = manifest_dir.join(format!("{slug}.bin"));
+        let mut f = std::fs::File::create(&path).map_err(|e| {
+            ToolError::Validation(format!("create catalog {path:?}: {e}"))
+        })?;
+        catalog.write_to(&mut f).map_err(|e| {
+            ToolError::Validation(format!("write catalog {path:?}: {e}"))
+        })?;
+    }
+
+    Ok(namespaces)
+}
+
+/// Phase 5.2 obj 5 — emit convention-URL symlinks at
+/// `<output_dir>/shards/{namespace_slug}/0x{file_id:08X}.bin`,
+/// each pointing to the canonical truncated-sha256 shard. Lets
+/// pages configure `shard_url_template = "shards/{namespace_slug}/
+/// {file_id_hex}.bin"` to fetch by `(namespace, file_id)` directly
+/// without ever consulting a catalog. Both URLs serve the same
+/// bytes.
+///
+/// Uses unix symlinks. On non-unix the call is a no-op + warning;
+/// the dev workflow targets Linux exclusively (live stack is on
+/// Tailscale-on-Linux per `docs/emit-dynamic-site.md`).
+///
+/// Idempotent: removes any pre-existing symlink at the target path
+/// before linking, so re-bakes don't accumulate stale links.
+pub fn write_convention_symlinks(
+    catalogs: &HashMap<String, Vec<CatalogEntry>>,
+    output_dir: &Path,
+) -> Result<usize> {
+    let shards_dir = output_dir.join("shards");
+    let mut linked = 0usize;
+
+    for (namespace, entries) in catalogs {
+        let slug = namespace_slug(namespace);
+        let ns_dir = shards_dir.join(&slug);
+        std::fs::create_dir_all(&ns_dir).map_err(|e| {
+            ToolError::Validation(format!("create symlink ns dir {ns_dir:?}: {e}"))
+        })?;
+
+        for entry in entries {
+            let trunc_hex = hex_encode_16(&entry.sha256_truncated);
+            // Relative path from `shards/<slug>/` up to
+            // `shards/<prefix2>/<trunc_hex>.bin`.
+            let target = format!("../{}/{}.bin", &trunc_hex[..2], trunc_hex);
+            let link_path = ns_dir.join(format!("0x{:08X}.bin", entry.file_id));
+
+            // Idempotent: remove existing link/file before
+            // re-linking. Tolerate ENOENT (expected on first bake).
+            let _ = std::fs::remove_file(&link_path);
+
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(&target, &link_path).map_err(|e| {
+                    ToolError::Validation(format!(
+                        "symlink {link_path:?} -> {target}: {e}"
+                    ))
+                })?;
+                linked += 1;
+            }
+
+            #[cfg(not(unix))]
+            {
+                log::warn!(
+                    "convention-URL symlink skipped on non-unix: {link_path:?} -> {target}"
+                );
+                let _ = (target, link_path); // suppress unused warnings
+            }
+        }
+    }
+
+    Ok(linked)
+}
+
+/// Phase 5.2 obj 5 — end-to-end v2 orchestration. Reads input,
+/// writes shards under the 2-level prefix layout, builds + writes
+/// per-namespace catalogs, writes convention-URL symlinks, writes
+/// the boot pack, writes `manifest.json` (v2 schema).
+///
+/// Returns a [`V2BakeResult`] with the in-memory manifest + counts
+/// for status logging. The on-disk top-level `manifest.json` is
+/// ≈800 bytes – 2 KB regardless of input size — the dominant
+/// per-record listings live in the lazy-loaded per-namespace
+/// catalogs.
+pub fn shard_bundle_v2(opts: &DatShardOptions) -> Result<V2BakeResult> {
+    std::fs::create_dir_all(&opts.output_dir).map_err(|e| {
+        ToolError::Validation(format!("create output dir {:?}: {e}", opts.output_dir))
+    })?;
+
+    let bundle = read_input_bundle(opts)?;
+    let total_records = bundle.records.len();
+
+    let v2_shards = write_shards_v2(&bundle, &opts.output_dir)?;
+    let unique_shard_count = v2_shards.unique_shard_count;
+    let boot_pack_v1 = write_boot_pack(&bundle, opts.boot_landblock, &opts.output_dir)?;
+    let boot_covers_count = boot_pack_v1.covers.len();
+    // v2 wire format drops `covers` from BootPack — see
+    // `holtburger_manifest::v2::BootPackV2` for the rationale
+    // (boot-pack hit checks go through HbaReader::exists_by_key
+    // at runtime, no need to ship the covers list to clients).
+    let boot_pack: BootPackV2 = boot_pack_v1.into();
+
+    write_convention_symlinks(&v2_shards.catalogs, &opts.output_dir)?;
+
+    let namespaces = write_namespace_catalogs(v2_shards.catalogs, &opts.output_dir)?;
+    let catalog_count = namespaces.len();
+
+    let manifest = ManifestV2 {
+        version: MANIFEST_V2_VERSION,
+        generated_at: iso_8601_now(),
+        source: bundle.source_meta,
+        boot_pack,
+        catalog_version: 1,
+        namespaces,
+        shard_url_template: DEFAULT_SHARD_URL_TEMPLATE_PREFIXED.into(),
+        catalog_url_template: Some(DEFAULT_CATALOG_URL_TEMPLATE.into()),
+    };
+
+    let manifest_path = opts.output_dir.join("manifest.json");
+    let json = serde_json::to_string_pretty(&manifest)
+        .map_err(|e| ToolError::Validation(format!("serialize v2 manifest: {e}")))?;
+    std::fs::write(&manifest_path, &json).map_err(|e| {
+        ToolError::Validation(format!("write {manifest_path:?}: {e}"))
+    })?;
+
+    Ok(V2BakeResult {
+        manifest,
+        total_records,
+        unique_shard_count,
+        catalog_count,
+        boot_covers_count,
+    })
+}
+
+/// Phase 5.2 obj 5 — top-level dispatcher. Routes `opts` to the v1
+/// or v2 emitter based on `opts.manifest_version`. CLI defaults to
+/// 2 (the new wire format); `--manifest-version=1` keeps the
+/// legacy emission for one release cycle.
+pub fn shard_bundle_dispatch(opts: &DatShardOptions) -> Result<BakeOutput> {
+    match opts.manifest_version {
+        1 => shard_bundle(opts).map(BakeOutput::V1),
+        MANIFEST_V2_VERSION => shard_bundle_v2(opts).map(BakeOutput::V2),
+        other => Err(ToolError::Validation(format!(
+            "unsupported manifest version {other}: this build supports 1 or 2"
+        ))),
+    }
 }
 
 /// End-to-end orchestration. Reads the input, writes shards, writes

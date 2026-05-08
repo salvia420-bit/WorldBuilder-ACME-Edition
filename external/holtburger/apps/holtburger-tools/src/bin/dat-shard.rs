@@ -1,10 +1,13 @@
 //! `dat-shard` CLI front-end. See `holtburger_tools::dat_shard` for
-//! the implementation. Phase 5.0 obj 3 of `docs/thorough.md`.
+//! the implementation. Phase 5.0 obj 3 of `docs/thorough.md`;
+//! v2 emission landed in Phase 5.2 obj 5 (`docs/manifest.md`).
 
 use std::path::PathBuf;
 
 use clap::Parser;
-use holtburger_tools::dat_shard::{DatShardOptions, parse_hex_u32, shard_bundle};
+use holtburger_tools::dat_shard::{
+    DEFAULT_MANIFEST_VERSION, DatShardOptions, parse_hex_u32, shard_bundle_dispatch,
+};
 use holtburger_tools::error::Result;
 
 #[derive(Parser, Debug)]
@@ -42,8 +45,18 @@ struct Args {
     #[arg(long, value_parser = parse_hex_u32, default_value = "0xA9B4")]
     boot_landblock: u32,
 
+    /// Manifest schema version to emit (1 or 2). Phase 5.2 obj 5
+    /// added v2 as the new default; v1 stays available for one
+    /// release cycle to drain in-flight CDN deploys. v2 emission
+    /// produces a ≈2 KB top-level JSON + per-namespace binary
+    /// catalogs in `manifest/` + 2-level-prefix shard layout +
+    /// convention-URL symlinks.
+    #[arg(long, value_name = "VERSION", default_value_t = DEFAULT_MANIFEST_VERSION)]
+    manifest_version: u32,
+
     /// Output directory. Created if missing. Will contain
-    /// `manifest.json`, `shards/`, and `boot.hba`.
+    /// `manifest.json`, `shards/`, `boot.hba`, and (v2 only)
+    /// `manifest/<namespace>.bin` per-namespace catalogs.
     #[arg(long, value_name = "DIR")]
     output: PathBuf,
 }
@@ -57,6 +70,7 @@ impl Args {
             eor_local: self.eor_local,
             boot_landblock: self.boot_landblock,
             output_dir: self.output,
+            manifest_version: self.manifest_version,
         }
     }
 }
@@ -64,12 +78,16 @@ impl Args {
 fn main() -> Result<()> {
     env_logger::init();
     let opts = Args::parse().into_options();
-    println!("dat-shard: starting...");
-    let manifest = shard_bundle(&opts)?;
     println!(
-        "dat-shard: done — {} shards, {} boot covers, manifest.json at {:?}",
-        manifest.shards.len(),
-        manifest.boot_pack.covers.len(),
+        "dat-shard: starting (manifest v{})...",
+        opts.manifest_version
+    );
+    let bake = shard_bundle_dispatch(&opts)?;
+    println!(
+        "dat-shard: done — manifest v{}, {} unique shards, {} boot covers, manifest.json at {:?}",
+        bake.manifest_version(),
+        bake.unique_shard_count(),
+        bake.boot_covers_count(),
         opts.output_dir.join("manifest.json"),
     );
     Ok(())

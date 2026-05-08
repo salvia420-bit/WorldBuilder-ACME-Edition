@@ -50,6 +50,11 @@ futures = { workspace = true }
 holtburger-content = { workspace = true }
 holtburger-core = { workspace = true }
 holtburger-dat = { workspace = true }
+# Phase 5.2 obj 8 — `manifest_v2_version_const` wasm-bindgen export
+# surfaces `holtburger_manifest::v2::MANIFEST_V2_VERSION` to the
+# Node smoke harness so it can verify the v2 schema constant
+# without re-vendoring.
+holtburger-manifest = { workspace = true }
 # Phase 4 step 3.6 — `WorldBootstrap` + `WorldState` constructed in
 # the recv loop on EnteredWorld. Drives the cli's `MovementSystem` shim
 # (MovementSystemHandle) for the AutonomousPosition heartbeat fix.

@@ -5,9 +5,9 @@
 > Read this section first. The rest of this document is the
 > long-lived design intent + decision history; this header is
 > the snapshot of where we actually are and what's blocking
-> what. Last refreshed **2026-05-08** (post-Phase-4-step-6f
-> landing — portal destination chips via auto-IdentifyObject
-> round-trip).
+> what. Last refreshed **2026-05-08** (post-Phase-5.2-obj-8
+> landing — smoke harness v2 fixture + 17 new v2 checks +
+> `BootPackV2` shrinks the top-level manifest to 541 bytes).
 
 ### Where the project is
 
@@ -26,7 +26,16 @@ returning `kind=14 UseDone`** +
 visual dispatch + glyph fallback + per-entity nameplates) +
 6 Phase A + B + C (ACE-shipped ClothingTable substitutions +
 palette overlays + MotionTable idle pose), 5.0, 5.0b, 5.1a,
-5.1b. Native lib gate **1146 / 0** across 14 workspace crates.
+5.1b, 5.2 obj 1-8 (ManifestV2 schema + NamespaceCatalog binary
+codec + `ManifestResourceSource` v1/v2 enum dispatch + v2
+prefetch with lazy catalogs + convention URLs + `dat-shard`
+v2 emission with `BootPackV2` + per-namespace catalogs +
+2-level-prefix shard layout + convention-URL symlinks + page
+diagnostic v2 hint + service-worker `/manifest/*.bin` cache
+scope + smoke harness v2 fixture + 17 v2 checks). Native lib
+gate **1148 / 0** across 14 workspace crates; integration
+test gate **1179 / 0** workspace-wide; **smoke 100 / 100 +
+1 SKIP**; v2 top-level `manifest.json` at **541 bytes**.
 `cargo check --target wasm32-unknown-unknown` clean for
 `holtburger-{dat,session,transport-ws,resource-http,web,
 content,core,manifest}`. `wasm-pack build --target {nodejs,
@@ -2344,9 +2353,9 @@ Step ledger:
   parser once. Same fix in `dat2hba --profile boot`.
   1 new unit test; native lib 1120 → 1121.
 - ⏳ **Phase 5.2 — manifest scale fix (BRIEF AT
-  [`manifest.md`](manifest.md), NOT YET EXECUTED).** Real-world
-  bake produces a 203 MB `manifest.json` (885,043 entries ×
-  ~230 bytes verbose JSON; `eor/cell` envcells dominate). The
+  [`manifest.md`](manifest.md), IN FLIGHT).** Real-world bake
+  produces a 203 MB `manifest.json` (885,043 entries × ~230
+  bytes verbose JSON; `eor/cell` envcells dominate). The
   manifest is the new cliff. Phase 5.2 introduces a v2 format:
   tiny top-level (~2 KB; just version, source provenance,
   boot pack metadata, namespaces, URL templates) + lazy-fetched
@@ -2357,6 +2366,128 @@ Step ledger:
   drain, then removed. Required before public CDN deployment
   or 600 kbps cellular validation (Phase 5 obj 11); not
   required for dev iteration over Tailscale WiFi.
+
+  Sub-step ledger:
+  - ✅ **obj 1-3 (audit + ManifestV2 schema + NamespaceCatalog
+    binary codec)** — landed at 1121 → 1130 native lib gate.
+    `holtburger-manifest::v2::{ManifestV2, ManifestVersionProbe,
+    namespace_slug, render_shard_url_full, render_catalog_url}`
+    and `holtburger-manifest::catalog::{NamespaceCatalog,
+    CatalogEntry, CatalogError}` with full ULEB128 + CRC32 IEEE
+    + magic/version/flags codec. 9 cross-platform tests.
+  - ✅ **obj 4 (ManifestResourceSource v2 dispatch)** —
+    landed 2026-05-08. v1 path moved to
+    `crates/holtburger-resource-http/src/manifest_source_v1.rs`
+    as `ManifestResourceSourceV1`; the public
+    `ManifestResourceSource` is now an enum that wraps either
+    `ManifestResourceSourceV1` (v1) or a new `V2Source` (v2).
+    `connect()` fetches manifest bytes once, sniffs the
+    `version` field via `ManifestVersionProbe`, logs a
+    deprecation warning + dispatches to v1 OR parses
+    `ManifestV2` + dispatches to v2. Both halves implement
+    `ResourceSource` so callers don't care which wire format
+    is loaded; `manifest_version()` + `loaded_catalog_count()`
+    accessors expose the variant. v2 `prefetch()` walks the
+    full obj 4 spec: skip boot-served + cached; lazy-fetch any
+    needed per-namespace `NamespaceCatalog` bins (parallel via
+    `try_join_all`, 404 on a declared namespace's catalog
+    falls through to convention-URL mode); for each key,
+    look up in catalog (silent skip on miss; verify sha256 on
+    fetch) OR derive convention URL via
+    `{namespace_slug}/{file_id_hex}.bin` (404 = silent skip,
+    no verify). New `PrefetchError` variants: `CatalogFetch`,
+    `CatalogParse`. New `ManifestConnectError::UnsupportedVersion`.
+    2 new cross-platform tests in `holtburger-manifest::v2`
+    covering version probe across v1/v2/v99/malformed +
+    convention-URL helper round-trip. Native lib gate
+    1146 → 1148 / 0; wasm32 check clean; `wasm-pack build
+    --target {nodejs, web}` both green. End-to-end smoke
+    fixture exercise deferred to obj 8 (which builds a v2
+    manifest.json fixture via `dat-shard --manifest-version=2`
+    in the smoke harness).
+  - ✅ **obj 5 (dat-shard v2 emission)** — landed 2026-05-08.
+    New `--manifest-version=1|2` clap flag with default 2;
+    `DatShardOptions.manifest_version` field threads through.
+    `shard_bundle_dispatch()` routes to v1 OR v2; new
+    `shard_bundle_v2()` orchestrator calls `write_shards_v2`
+    (2-level prefix dir keyed by truncated 16-byte sha256 at
+    `shards/{first2}/{trunc32}.bin`, dedupe by truncated path),
+    `write_namespace_catalogs` (per-namespace
+    `NamespaceCatalog::write_to` → `manifest/{namespace_slug}.bin`),
+    `write_convention_symlinks` (unix symlinks at
+    `shards/{namespace_slug}/0x{file_id:08X}.bin` →
+    `../{prefix2}/{trunc32}.bin`), reuses Phase 5.1's
+    `write_boot_pack` unchanged, and writes a ≈2 KB
+    `ManifestV2` JSON with `shard_url_template =
+    DEFAULT_SHARD_URL_TEMPLATE_PREFIXED` +
+    `catalog_url_template = Some(DEFAULT_CATALOG_URL_TEMPLATE)`.
+    New `BakeOutput { V1(Manifest), V2(V2BakeResult) }` enum
+    + `V2BakeResult { manifest, total_records,
+    unique_shard_count, catalog_count, boot_covers_count }`.
+    Binary main() routes via dispatcher, prints version-aware
+    summary. Existing 4 sharding tests updated to pass
+    `manifest_version: 1`; 5 new v2 tests cover (a) <5 KB
+    top-level, (b) per-namespace catalogs exist, (c) catalog
+    `read_from` round-trip, (d) symlinks resolve to canonical
+    sha256-keyed shards, (e) every source record reachable
+    via boot-or-catalog. `cargo test --workspace` 1179 / 0;
+    workspace lib still 1148 / 0; release binary builds clean.
+  - ✅ **obj 6 (page hint update)** — landed 2026-05-08.
+    `index.html`'s init block + manifest-fetch-failed
+    diagnostic now mention v2 (the new default) and call out
+    the `--manifest-version=1` opt-out for in-flight CDN
+    deploys. The "fetching manifest" hint distinguishes
+    v2's ~2 KB top-level + lazy catalogs from v1's ~200 MB.
+    The DOM error message tells the user to re-bake with
+    `dat-shard --output dist/`.
+  - ✅ **obj 7 (service worker scope)** — landed 2026-05-08.
+    `service-worker.js` cache scope extended from `/shards/*`
+    to `/shards/* OR /manifest/<namespace>.bin` via a new
+    `isCacheable(url)` helper (specifically excludes
+    `/manifest.json` so the top-level pointer re-fetches
+    each load). Renamed cache `holtburger-shards-v1` →
+    `holtburger-content-v1`; activate-step GC sweeps both
+    `holtburger-shards-` and `holtburger-content-` prefixes
+    so legacy v0 caches don't accumulate. SW LOC 92
+    (under brief's ≤120 target). `node --check` clean.
+  - ✅ **obj 8 (smoke harness v2 fixture + checks)** — landed
+    2026-05-08. `smoke_test.cjs` now bakes both v1 and v2
+    variants of `dats/assets.hba` into sibling subdirs of the
+    smoke dist tree, with a third "convention-URL" variant
+    that reuses v2's shards/boot/manifest tree but ships a
+    rewritten top-level `manifest.json` (`catalog_url_template
+    = null` + `shard_url_template =
+    "shards/{namespace_slug}/{file_id_hex}.bin"`) — avoids a
+    4 GB cpSync of the 885k shard files by URL-prefix routing.
+    Single http.Server with prefix routing (`/v1/...`,
+    `/v2/...`, `/v2conv/...`) tracks per-path request counts
+    for the catalog-fetch invariants. New wasm-bindgen
+    exports `manifest_version()`, `loaded_catalog_count()`,
+    `manifest_v2_version_const()` let JS verify the dispatch
+    decisions. Surfaced a sub-fix: v1's `BootPack.covers:
+    Vec<String>` (635 entries × ~30 bytes = ~19 KB) blew the
+    top-level v2 manifest past the brief's 2 KB target —
+    introduced `holtburger_manifest::v2::BootPackV2` (no
+    `covers`); runtime boot-pack hit-tests now go through
+    `HbaReader::exists_by_key` (already O(1) over hash-mapped
+    namespace spans, same semantics). Real-world v2
+    `manifest.json` lands at **541 bytes**. Smoke 83 → 100
+    checks: 5 symbol-presence (3 export + 2 pre-init=0
+    sanity), 2 v1 dispatch (`manifest_version()=1`,
+    `loaded_catalog_count()=0`), 7 v2 catalog mode (init +
+    version + manifest <5 KB at 541 bytes + boot round-trip +
+    per-namespace catalog ≤1 HTTP fetch + loaded count
+    matches distinct HTTP paths), 3 v2 conv mode (init under
+    `catalog_url_template=null` + zero catalog reqs +
+    loaded_catalog_count=0). Final smoke: **100 / 100 + 1
+    SKIP**.
+  - ⏳ **obj 9 (workspace check)** — verify native lib gate +
+    smoke + wasm-pack stay green.
+  - ⏳ **obj 10 (live-ACE phone validation)** — bake v2 dist/,
+    serve over Tailscale, demonstrate <60s first paint + <5s
+    re-load on 600 kbps cellular.
+  - ⏳ **obj 11 (docs)** — `phase-5.2-manifest-fix.md` as-built
+    + bumps to `phase-5-thorough.md` + this section + auto-memory.
 - ⏳ **Phase 5.3 — boot pack adaptive sizing (no brief yet).**
   5.1b's transitive walk is "include everything reachable from
   spawn placements" — for Holtburg that's 1.86 MB. For dense

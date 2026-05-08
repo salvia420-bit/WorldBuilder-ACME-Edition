@@ -1,60 +1,47 @@
-//! `ManifestResourceSource` — Phase 5.0 obj 4 implementation.
+//! `ManifestResourceSource` — Phase 5.0 obj 4 + Phase 5.2 obj 4.
 //!
-//! Reads a `holtburger_manifest::Manifest` over HTTP, fetches the
-//! boot pack at `connect()` time, and lazily fetches individual
-//! shards on demand via the new explicit `prefetch()` method.
+//! Reads a manifest over HTTP, fetches the boot pack at `connect()`
+//! time, and lazily fetches individual shards on demand via the
+//! explicit `prefetch()` method.
 //!
-//! # Audit findings (commit boundary 1 of Phase 5.0)
+//! Phase 5.0 (v1) was a flat `manifest.json` with one
+//! `(namespace:0xFILEID) → (sha256, size, url)` row per shard. Real-
+//! world Dereth bakes produced 203 MB of JSON because `eor/cell`
+//! dominated the entry count.
 //!
-//! ## (a) The `ResourceSource` trait surface is sync
+//! Phase 5.2 (v2) lifts the per-shard listing out of the top-level
+//! manifest. The top-level shrinks to ≈2 KB (boot pack + namespaces
+//! + URL templates); each namespace's per-record listing lives in
+//! a lazily-fetched compact binary `NamespaceCatalog` at
+//! `manifest/<namespace_slug>.bin`. Convention-URL mode (no catalog
+//! at all) is also supported — shard URLs derive from
+//! `(namespace, file_id)` directly via the `shard_url_template` and
+//! 404 is treated as "record doesn't exist" silent-skip.
 //!
-//! `holtburger_dat::ResourceSource` is sync. No `.await` in
-//! `get_file_by_key`. Phase 5.0 keeps the trait sync; all
-//! *fetching* moves to a new explicit `prefetch(&[ResourceKey])`
-//! async surface called from each wasm-bindgen export before any
-//! `get_file_by_key`.
+//! `connect()` sniffs the `version` field via the cheap
+//! [`ManifestVersionProbe`] deserializer, dispatches to v1 or v2,
+//! and returns a wrapper enum. Both halves implement
+//! [`ResourceSource`] so consumers don't care which wire format
+//! they're talking to. v1 stays one release cycle to drain
+//! in-flight CDN deploys; the warning log makes that visible.
 //!
-//! ## (b) Per-call construction pattern (legacy)
+//! # Testing
 //!
-//! Pre-Phase-5.0, every wasm-bindgen export in
-//! `apps/holtburger-web/src/lib.rs` constructed its own
-//! `HttpResourceSource::connect(asset_url)` per invocation. With
-//! `ManifestResourceSource`, a single instance is constructed
-//! once at page-init time (objective 5 hoist) and shared across
-//! all callsites via a thread-local; `prefetch()` populates the
-//! shared shard cache before each `fetch_*` body runs.
+//! This crate is `#![cfg(target_arch = "wasm32")]` because every
+//! HTTP path goes through `web_sys::fetch`. Pure-data unit tests
+//! for the v2 dispatch logic live in `holtburger-manifest::v2`
+//! (cross-platform), exercising:
 //!
-//! ## (c) Records are addressed by `(namespace, file_id)`
+//! - [`ManifestVersionProbe`] sniff against v1 / v2 / unknown /
+//!   malformed JSON inputs
+//! - URL-template rendering in catalog mode + convention-URL mode
+//! - `ManifestV2::shard_url` / `catalog_url` round-trips
 //!
-//! Manifest shard map is keyed by
-//! `<namespace>:0x{file_id:08X}` strings (see
-//! `holtburger_manifest::format_shard_key`); the resource source
-//! composes the lookup key straight from a
-//! `holtburger_dat::ResourceKey` via
-//! `holtburger_manifest::key_for_resource`.
-//!
-//! # Pipeline
-//!
-//! ```text
-//!   index.html
-//!     │
-//!     ├─→ init_resource_source(manifest_url)
-//!     │     │
-//!     │     ├─→ fetch manifest.json
-//!     │     ├─→ parse Manifest
-//!     │     ├─→ fetch boot_pack.url (HBA bytes)
-//!     │     ├─→ verify boot_pack.sha256
-//!     │     └─→ HbaReader::from_bytes(boot_bytes)
-//!     │
-//!     └─→ fetch_landblock_heightmaps(cell_ids)
-//!           │
-//!           ├─→ source.prefetch(keys) ─async─→ futures::try_join_all
-//!           │                                    │
-//!           │                                    ├─→ fetch shard URL N
-//!           │                                    └─→ fetch shard URL M
-//!           ├─→ for each key: source.get_file_by_key(key) ─sync─→ ...
-//!           └─→ existing parse + tessellate logic
-//! ```
+//! Integration tests covering the full connect → prefetch → fetch
+//! chain are deferred to the Node smoke harness (Phase 5.2 obj 8 —
+//! `apps/holtburger-web/smoke_test.cjs`), which spins up an HTTP
+//! server, bakes a v2 manifest fixture via `dat-shard`, and
+//! exercises the wasm bundle end-to-end against it.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -62,9 +49,14 @@ use std::sync::{Arc, Mutex};
 use holtburger_dat::{
     DatError, FileMetadata, HbaReader, ResourceKey, ResourceSource, Result as DatResult,
 };
-use holtburger_manifest::{Manifest, key_for_resource, sha256_hex};
+use holtburger_manifest::{
+    Manifest, sha256_hex,
+    catalog::NamespaceCatalog,
+    v2::{MANIFEST_V2_VERSION, ManifestV2, ManifestVersionProbe, render_shard_url_full},
+};
 
 use crate::http::{HttpError, fetch_bytes, join_url};
+use crate::manifest_source_v1::ManifestResourceSourceV1;
 
 /// Failure surfaces for [`ManifestResourceSource::connect`].
 #[derive(Debug)]
@@ -72,12 +64,16 @@ pub enum ManifestConnectError {
     /// Couldn't reach `fetch()` / network error / non-2xx response /
     /// body read error.
     Http(HttpError),
-    /// `manifest.json` didn't parse as a [`Manifest`].
+    /// `manifest.json` didn't parse as a [`Manifest`] or
+    /// [`ManifestV2`] at the version-detected variant.
     ManifestParse(String),
     /// `boot.hba` bytes didn't parse as a valid HBA archive.
     BootParse(String),
     /// Boot pack sha256 didn't match the manifest.
     BootHashMismatch { expected: String, got: String },
+    /// `version` field was neither 1 nor 2 — older or newer than
+    /// this build supports.
+    UnsupportedVersion(u32),
 }
 
 impl std::fmt::Display for ManifestConnectError {
@@ -89,6 +85,10 @@ impl std::fmt::Display for ManifestConnectError {
             ManifestConnectError::BootHashMismatch { expected, got } => write!(
                 f,
                 "boot.hba hash mismatch: manifest expected {expected}, got {got}"
+            ),
+            ManifestConnectError::UnsupportedVersion(v) => write!(
+                f,
+                "unsupported manifest version {v}: this build expects 1 or 2"
             ),
         }
     }
@@ -107,16 +107,25 @@ impl From<HttpError> for ManifestConnectError {
 pub enum PrefetchError {
     /// Network / HTTP / body failure on a shard fetch.
     Http(HttpError),
-    /// A requested key isn't in the manifest's shard map and isn't
-    /// covered by the boot pack.
+    /// (v1 only) A requested key isn't in the manifest's shard map
+    /// and isn't covered by the boot pack. v2 uses
+    /// catalog-presence-or-convention-URL semantics instead and
+    /// never surfaces this variant.
     UnknownKey { namespace: String, file_id: u32 },
-    /// Shard sha256 didn't match the manifest.
+    /// Shard sha256 didn't match the catalog entry (v2) or the
+    /// manifest entry (v1).
     HashMismatch {
         namespace: String,
         file_id: u32,
         expected: String,
         got: String,
     },
+    /// (v2 only) Per-namespace catalog couldn't be fetched.
+    CatalogFetch { namespace: String, source: HttpError },
+    /// (v2 only) Per-namespace catalog parsed cleanly at the HTTP
+    /// layer but the binary body failed magic / version / CRC /
+    /// truncation checks.
+    CatalogParse { namespace: String, message: String },
 }
 
 impl std::fmt::Display for PrefetchError {
@@ -135,6 +144,14 @@ impl std::fmt::Display for PrefetchError {
                 f,
                 "shard {namespace}:0x{file_id:08X} hash mismatch: expected {expected}, got {got}"
             ),
+            PrefetchError::CatalogFetch { namespace, source } => write!(
+                f,
+                "catalog fetch failed for namespace {namespace}: {source}"
+            ),
+            PrefetchError::CatalogParse { namespace, message } => write!(
+                f,
+                "catalog parse failed for namespace {namespace}: {message}"
+            ),
         }
     }
 }
@@ -149,26 +166,32 @@ impl From<HttpError> for PrefetchError {
 
 /// Owned `(namespace, file_id)` cache key — `ResourceKey<'a>` is
 /// borrowing, but the shard cache outlives any single call.
-type OwnedKey = (String, u32);
+pub(crate) type OwnedKey = (String, u32);
 
-fn owned(key: ResourceKey<'_>) -> OwnedKey {
+pub(crate) fn owned(key: ResourceKey<'_>) -> OwnedKey {
     (key.namespace.to_owned(), key.file_id)
 }
 
-/// HTTP+manifest-backed `ResourceSource`. Holds the parsed
-/// [`Manifest`] + the boot pack's [`HbaReader`] in memory plus an
-/// `Arc<Mutex<HashMap>>` shard cache populated lazily via
-/// [`prefetch`].
+/// HTTP+manifest-backed `ResourceSource`. Internally an enum that
+/// dispatches between the v1 (Phase 5.0) and v2 (Phase 5.2) wire
+/// formats — [`connect`] sniffs the version field once and parks
+/// the right inner source. All public methods delegate.
 ///
 /// `Arc<Mutex<...>>` (rather than `Rc<RefCell<...>>`) is what the
 /// `ResourceSource: Send + Sync` trait bound demands. wasm32 is
 /// single-threaded so the mutex never actually contends, but the
-/// trait requires the bound for native callers; the same pattern
-/// is used by the existing `HttpResourceSource` (which holds a
-/// `Send + Sync` `HbaReader<Vec<u8>>` directly).
-pub struct ManifestResourceSource {
-    manifest: Manifest,
+/// trait requires the bound for native callers.
+pub enum ManifestResourceSource {
+    V1(ManifestResourceSourceV1),
+    V2(V2Source),
+}
+
+/// Inner v2 state. Public-in-crate so the v1 file can share helper
+/// types but external callers always go through [`ManifestResourceSource`].
+pub struct V2Source {
+    manifest: ManifestV2,
     boot: HbaReader<Vec<u8>>,
+    catalogs: Arc<Mutex<HashMap<String, NamespaceCatalog>>>,
     shards: Arc<Mutex<HashMap<OwnedKey, Vec<u8>>>>,
     base_url: String,
 }
@@ -176,13 +199,107 @@ pub struct ManifestResourceSource {
 impl ManifestResourceSource {
     /// Fetch `manifest_url`, parse it, fetch the referenced boot
     /// pack, verify its sha256, and return a ready resource source.
-    /// All subsequent record fetches go through [`prefetch`] +
-    /// [`get_file_by_key`].
+    /// Routes between v1 and v2 based on the manifest's `version`
+    /// field.
     pub async fn connect(manifest_url: &str) -> Result<Self, ManifestConnectError> {
         let manifest_bytes = fetch_bytes(manifest_url).await?;
-        let manifest: Manifest = serde_json::from_slice(&manifest_bytes)
+
+        let probe: ManifestVersionProbe = serde_json::from_slice(&manifest_bytes)
             .map_err(|e| ManifestConnectError::ManifestParse(e.to_string()))?;
 
+        match probe.version {
+            1 => {
+                log::warn!(
+                    "manifest.json is v1 (deprecated). Re-bake with `dat-shard --manifest-version=2` to drop the 203 MB top-level JSON cliff."
+                );
+                let manifest: Manifest = serde_json::from_slice(&manifest_bytes)
+                    .map_err(|e| ManifestConnectError::ManifestParse(e.to_string()))?;
+                let v1 =
+                    ManifestResourceSourceV1::from_manifest_bytes(manifest, manifest_url).await?;
+                Ok(Self::V1(v1))
+            }
+            MANIFEST_V2_VERSION => {
+                let manifest: ManifestV2 = serde_json::from_slice(&manifest_bytes)
+                    .map_err(|e| ManifestConnectError::ManifestParse(e.to_string()))?;
+                let v2 = V2Source::from_manifest(manifest, manifest_url).await?;
+                Ok(Self::V2(v2))
+            }
+            other => Err(ManifestConnectError::UnsupportedVersion(other)),
+        }
+    }
+
+    /// Walk `keys`, skip those served from the boot pack or already
+    /// cached, ensure per-namespace catalogs are loaded (v2 only),
+    /// fetch shards in parallel, verify hashes when available, and
+    /// insert into the shard cache.
+    pub async fn prefetch(&self, keys: &[ResourceKey<'_>]) -> Result<(), PrefetchError> {
+        match self {
+            Self::V1(s) => s.prefetch(keys).await,
+            Self::V2(s) => s.prefetch(keys).await,
+        }
+    }
+
+    /// Number of records currently in the shard cache (excludes
+    /// the boot pack). Smoke tests use this as a "did prefetch
+    /// land?" probe.
+    pub fn cached_shard_count(&self) -> usize {
+        match self {
+            Self::V1(s) => s.cached_shard_count(),
+            Self::V2(s) => s.cached_shard_count(),
+        }
+    }
+
+    /// Manifest format version: 1 or 2. Lets callers branch on
+    /// which wire format the connected source loaded.
+    pub fn manifest_version(&self) -> u32 {
+        match self {
+            Self::V1(_) => 1,
+            Self::V2(_) => MANIFEST_V2_VERSION,
+        }
+    }
+
+    /// Number of per-namespace catalogs currently loaded. Always 0
+    /// for v1; for v2 reflects how many `manifest/<namespace>.bin`
+    /// blobs the source has fetched + parsed.
+    pub fn loaded_catalog_count(&self) -> usize {
+        match self {
+            Self::V1(_) => 0,
+            Self::V2(s) => s.loaded_catalog_count(),
+        }
+    }
+}
+
+impl ResourceSource for ManifestResourceSource {
+    fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
+        match self {
+            Self::V1(s) => s.get_file_by_key(key),
+            Self::V2(s) => s.get_file_by_key(key),
+        }
+    }
+
+    fn get_metadata_by_key(&self, key: ResourceKey<'_>) -> Option<FileMetadata> {
+        match self {
+            Self::V1(s) => s.get_metadata_by_key(key),
+            Self::V2(s) => s.get_metadata_by_key(key),
+        }
+    }
+
+    fn has_namespace(&self, namespace: &str) -> bool {
+        match self {
+            Self::V1(s) => s.has_namespace(namespace),
+            Self::V2(s) => s.has_namespace(namespace),
+        }
+    }
+}
+
+impl V2Source {
+    /// Build the v2 source from already-fetched manifest bytes plus
+    /// the original manifest URL (used to anchor relative shard
+    /// URLs). Fetches the boot pack itself and verifies its sha256.
+    async fn from_manifest(
+        manifest: ManifestV2,
+        manifest_url: &str,
+    ) -> Result<Self, ManifestConnectError> {
         let base_url = url_dirname(manifest_url);
         let boot_url = join_url(manifest_url, &manifest.boot_pack.url);
         let boot_bytes = fetch_bytes(&boot_url).await?;
@@ -201,26 +318,22 @@ impl ManifestResourceSource {
         Ok(Self {
             manifest,
             boot,
+            catalogs: Arc::new(Mutex::new(HashMap::new())),
             shards: Arc::new(Mutex::new(HashMap::new())),
             base_url,
         })
     }
 
-    /// Walk `keys`, skip those served from the boot pack or already
-    /// cached, look up shard URLs in the manifest, fetch in
-    /// parallel, verify sha256, and insert into the shard cache.
-    ///
-    /// Errors: [`PrefetchError::UnknownKey`] if any key is missing
-    /// from the manifest *and* the boot pack;
-    /// [`PrefetchError::HashMismatch`] if a shard fetch returns
-    /// wrong bytes; otherwise an HTTP-layer failure on at least
-    /// one shard fetch.
-    pub async fn prefetch(&self, keys: &[ResourceKey<'_>]) -> Result<(), PrefetchError> {
-        // Plan: collect (key, ShardEntry, full_url) for every key
-        // not already served by boot or the cache. Bail with
-        // UnknownKey if any are missing from the manifest entirely.
-        let mut to_fetch: Vec<(OwnedKey, holtburger_manifest::ShardEntry, String)> =
-            Vec::new();
+    /// v2 prefetch: lazy-fetch any per-namespace catalogs we don't
+    /// have yet (when the manifest declares a catalog template),
+    /// then look up each requested key — silent-skip when the
+    /// catalog confirms the record doesn't exist, otherwise build
+    /// a shard URL via the `shard_url_template` and fetch in
+    /// parallel. Verifies sha256 against the catalog entry when
+    /// available; convention-URL mode skips verification.
+    async fn prefetch(&self, keys: &[ResourceKey<'_>]) -> Result<(), PrefetchError> {
+        // Step A: filter out boot-served + already-cached keys.
+        let mut work_keys: Vec<OwnedKey> = Vec::new();
         {
             let cached = self.shards.lock().expect("shard cache mutex poisoned");
             for key in keys {
@@ -230,72 +343,195 @@ impl ManifestResourceSource {
                 if cached.contains_key(&owned(*key)) {
                     continue;
                 }
-                // Tolerate unknown keys: the existing wasm-bindgen
-                // fetch_* exports treat "record not in source" as a
-                // skip (e.g. ocean cells with no LandblockInfo),
-                // not a fatal error. A miss here just means the
-                // walk's eventual `get_file_by_key` will return
-                // Err and the walk's per-id error handler decides.
-                let shard = self.manifest.shards.get(&key_for_resource(*key)).cloned();
-                if let Some(entry) = shard {
-                    let url = join_url(&self.base_url_with_slash(), &entry.url);
-                    to_fetch.push((owned(*key), entry, url));
+                work_keys.push(owned(*key));
+            }
+        }
+        if work_keys.is_empty() {
+            return Ok(());
+        }
+
+        // Step B: figure out which namespace catalogs we still
+        // need to fetch (v2 catalog-mode only). Skip if the manifest
+        // declares no catalog template — that's convention-URL mode.
+        if self.manifest.catalog_url_template.is_some() {
+            let needed_namespaces: HashSet<String> = {
+                let catalogs = self.catalogs.lock().expect("catalog cache mutex poisoned");
+                work_keys
+                    .iter()
+                    .map(|(ns, _)| ns.clone())
+                    .filter(|ns| !catalogs.contains_key(ns))
+                    .filter(|ns| self.manifest.namespaces.iter().any(|n| n == ns))
+                    .collect()
+            };
+
+            if !needed_namespaces.is_empty() {
+                let catalog_fetches = needed_namespaces.iter().map(|ns| {
+                    let url = self
+                        .manifest
+                        .catalog_url(ns)
+                        .expect("template present; checked above");
+                    let full_url = join_url(&self.base_url_with_slash(), &url);
+                    let ns = ns.clone();
+                    async move {
+                        match fetch_bytes(&full_url).await {
+                            Ok(bytes) => Ok::<(String, Option<Vec<u8>>), PrefetchError>((
+                                ns,
+                                Some(bytes),
+                            )),
+                            // 404 on a declared namespace's catalog
+                            // means the namespace is empty after
+                            // bake-time pruning — treat as
+                            // "no catalog, fall through to
+                            // convention URLs".
+                            Err(HttpError::Http { status: 404, .. }) => Ok((ns, None)),
+                            Err(e) => Err(PrefetchError::CatalogFetch {
+                                namespace: ns,
+                                source: e,
+                            }),
+                        }
+                    }
+                });
+
+                let fetched = futures::future::try_join_all(catalog_fetches).await?;
+                let mut cs = self.catalogs.lock().expect("catalog cache mutex poisoned");
+                for (ns, bytes_opt) in fetched {
+                    if let Some(bytes) = bytes_opt {
+                        let catalog = NamespaceCatalog::read_from(&bytes, ns.clone()).map_err(
+                            |e| PrefetchError::CatalogParse {
+                                namespace: ns.clone(),
+                                message: e.to_string(),
+                            },
+                        )?;
+                        cs.insert(ns, catalog);
+                    }
+                    // 404 namespaces stay absent from the catalog
+                    // map; the per-key lookup below will route
+                    // them through convention-URL mode.
                 }
             }
         }
 
-        if to_fetch.is_empty() {
+        // Step C: build the shard fetch list. For each key:
+        //   - catalog present + entry present → URL via template
+        //     with the catalog's truncated sha256; verify on receive
+        //   - catalog present + entry missing → silent skip
+        //   - no catalog → URL via template using convention
+        //     substitutions ({namespace_slug} + {file_id_hex});
+        //     no sha256 verification, 404 = silent skip
+        struct ShardTask {
+            key: OwnedKey,
+            url: String,
+            expected_trunc: Option<[u8; 16]>,
+            tolerate_404: bool,
+        }
+
+        let mut shard_tasks: Vec<ShardTask> = Vec::new();
+        {
+            let catalogs = self.catalogs.lock().expect("catalog cache mutex poisoned");
+            for (ns, file_id) in &work_keys {
+                let key_borrowed = ResourceKey {
+                    namespace: ns.as_str(),
+                    file_id: *file_id,
+                };
+
+                if let Some(catalog) = catalogs.get(ns) {
+                    if let Some(entry) = catalog.lookup(*file_id) {
+                        let hash_hex = hex_encode_16(&entry.sha256_truncated);
+                        let url = render_shard_url_full(
+                            &self.manifest.shard_url_template,
+                            key_borrowed,
+                            &hash_hex,
+                        );
+                        let full_url = join_url(&self.base_url_with_slash(), &url);
+                        shard_tasks.push(ShardTask {
+                            key: (ns.clone(), *file_id),
+                            url: full_url,
+                            expected_trunc: Some(entry.sha256_truncated),
+                            tolerate_404: false,
+                        });
+                    }
+                    // catalog has no entry → silent skip
+                } else {
+                    // No catalog for this namespace (template
+                    // absent OR namespace catalog 404'd OR
+                    // namespace not declared in manifest.namespaces).
+                    // Convention-URL mode: substitute namespace_slug
+                    // + file_id_hex; pass empty sha256 since the
+                    // template shouldn't reference it in this mode.
+                    let url =
+                        render_shard_url_full(&self.manifest.shard_url_template, key_borrowed, "");
+                    let full_url = join_url(&self.base_url_with_slash(), &url);
+                    shard_tasks.push(ShardTask {
+                        key: (ns.clone(), *file_id),
+                        url: full_url,
+                        expected_trunc: None,
+                        tolerate_404: true,
+                    });
+                }
+            }
+        }
+
+        if shard_tasks.is_empty() {
             return Ok(());
         }
 
-        let fetches = to_fetch.iter().map(|(_, _, url)| {
-            let url = url.clone();
-            async move { fetch_bytes(&url).await }
+        // Step D: parallel shard fetch. 404 maps to None for
+        // tolerate_404 tasks; other errors propagate.
+        let fetches = shard_tasks.iter().map(|task| {
+            let url = task.url.clone();
+            let tolerate_404 = task.tolerate_404;
+            async move {
+                match fetch_bytes(&url).await {
+                    Ok(bytes) => Ok::<Option<Vec<u8>>, HttpError>(Some(bytes)),
+                    Err(HttpError::Http { status: 404, .. }) if tolerate_404 => Ok(None),
+                    Err(e) => Err(e),
+                }
+            }
         });
         let bytes_vec = futures::future::try_join_all(fetches)
             .await
             .map_err(PrefetchError::Http)?;
 
+        // Step E: verify + insert. Skip None results (404s).
         let mut cache = self.shards.lock().expect("shard cache mutex poisoned");
-        for ((key, entry, _), bytes) in to_fetch.into_iter().zip(bytes_vec) {
-            let got = sha256_hex(&bytes);
-            if got != entry.sha256 {
-                return Err(PrefetchError::HashMismatch {
-                    namespace: key.0,
-                    file_id: key.1,
-                    expected: entry.sha256,
-                    got,
-                });
+        for (task, bytes_opt) in shard_tasks.into_iter().zip(bytes_vec) {
+            let Some(bytes) = bytes_opt else {
+                continue;
+            };
+            if let Some(expected_trunc) = task.expected_trunc {
+                let got_full = sha256_hex(&bytes);
+                let got_trunc = &got_full[..32];
+                let expected_str = hex_encode_16(&expected_trunc);
+                if got_trunc != expected_str {
+                    return Err(PrefetchError::HashMismatch {
+                        namespace: task.key.0,
+                        file_id: task.key.1,
+                        expected: expected_str,
+                        got: got_trunc.to_owned(),
+                    });
+                }
             }
-            cache.insert(key, bytes);
+            cache.insert(task.key, bytes);
         }
         Ok(())
     }
 
-    /// True if the boot pack reader has the record for `key` —
-    /// either via the manifest's `covers` list or via a fallback
-    /// direct lookup against the parsed HBA.
+    /// True if the boot pack reader has the record for `key`. v2
+    /// drops the `covers: Vec<String>` field that v1 carried in
+    /// the wire format (see `holtburger_manifest::v2::BootPackV2`),
+    /// so the answer comes purely from the parsed HBA via
+    /// `HbaReader::exists_by_key` — already O(1) over hash-mapped
+    /// namespace spans, same semantics as v1's covers walk.
     fn boot_serves(&self, key: ResourceKey<'_>) -> bool {
-        if self.manifest.boot_covers(key) {
-            return true;
-        }
-        // The covers list is the authoritative + fast path; this
-        // fallback handles the case where a producer omitted a
-        // record from `covers` but the boot HBA still contains it.
         self.boot.exists_by_key(key)
     }
 
-    /// Manifest the source was constructed with. Smoke tests use
-    /// this for round-trip checks.
-    pub fn manifest(&self) -> &Manifest {
-        &self.manifest
+    fn cached_shard_count(&self) -> usize {
+        self.shards.lock().expect("shard cache mutex poisoned").len()
     }
 
-    /// Number of records currently in the shard cache (excludes
-    /// the boot pack). Smoke tests use this as a
-    /// "did prefetch land?" probe.
-    pub fn cached_shard_count(&self) -> usize {
-        self.shards.lock().expect("shard cache mutex poisoned").len()
+    fn loaded_catalog_count(&self) -> usize {
+        self.catalogs.lock().expect("catalog cache mutex poisoned").len()
     }
 
     fn base_url_with_slash(&self) -> String {
@@ -307,9 +543,7 @@ impl ManifestResourceSource {
             format!("{}/", self.base_url)
         }
     }
-}
 
-impl ResourceSource for ManifestResourceSource {
     fn get_file_by_key(&self, key: ResourceKey<'_>) -> DatResult<Vec<u8>> {
         if let Ok(bytes) = self.boot.get_file_by_key(key) {
             return Ok(bytes);
@@ -323,7 +557,7 @@ impl ResourceSource for ManifestResourceSource {
             return Ok(bytes.clone());
         }
         Err(DatError::Other(format!(
-            "ManifestResourceSource: record not prefetched: {}:0x{:08X}; call prefetch() first",
+            "ManifestResourceSource(v2): record not prefetched: {}:0x{:08X}; call prefetch() first",
             key.namespace, key.file_id
         )))
     }
@@ -344,20 +578,32 @@ impl ResourceSource for ManifestResourceSource {
         if self.boot.has_namespace(namespace) {
             return true;
         }
-        let prefix = format!("{namespace}:");
-        self.manifest
-            .shards
-            .keys()
-            .any(|k| k.starts_with(&prefix))
+        // v2: declared namespaces are authoritative since per-shard
+        // listings live in lazy catalogs we may not have fetched.
+        self.manifest.namespaces.iter().any(|n| n == namespace)
     }
 }
 
 /// Strip the last path component from a URL. `https://x/y/m.json`
 /// → `https://x/y`. Used to anchor relative shard URLs.
-fn url_dirname(url: &str) -> String {
+pub(crate) fn url_dirname(url: &str) -> String {
     url.rsplit_once('/')
         .map(|(d, _)| d.to_owned())
         .unwrap_or_default()
+}
+
+/// Encode a 16-byte buffer as 32 lowercase hex chars. Inline impl
+/// to avoid pulling the `hex` crate into this wasm-only crate just
+/// for one call site (sha256_hex from holtburger-manifest already
+/// covers the 32-byte case).
+fn hex_encode_16(bytes: &[u8; 16]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(32);
+    for &b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
 }
 
 /// `ResourceSource` wrapper that records every key whose
