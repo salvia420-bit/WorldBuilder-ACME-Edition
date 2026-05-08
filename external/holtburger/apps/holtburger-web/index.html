@@ -358,7 +358,7 @@
           <header>
             <span class="name" id="vitals-name">—</span>
             <span class="level" id="vitals-level">Level 0</span>
-            <span class="stance" id="player-stance" title="Combat stance — press 1-6 to switch">NonCombat</span>
+            <span class="stance" id="player-stance" title="Combat stance — press ` (backtick) to toggle combat mode; ACE derives stance from equipped weapon">NonCombat</span>
           </header>
           <div class="body">
             <div id="vitals-bars">
@@ -4040,28 +4040,6 @@ void main() {
             const tag = el.tagName;
             return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
           };
-          // Combat-stance hotkeys. Pairs with the stance-keyed
-          // walk/run cycle bake landed prior. Press 1-6 to switch
-          // the local player's MotionStance; the wasm export sends
-          // a one-shot MoveToState pulse with current_style set;
-          // ACE accepts + broadcasts UpdateMotion; the kind=5 recv
-          // arm picks up the new stance and the bake-on-stance-
-          // change path triggers the new gait.
-          //
-          // Bound stances cover the most common subset of the 18
-          // MotionStance variants (the rest are reachable by
-          // re-equipping weapons in retail, but the hotkey set
-          // mirrors what a player would conceivably swap to in a
-          // single session). Values are MotionStance.interpreted()
-          // u16 — low 16 bits of the 0x8000_xxxx form.
-          const STANCE_HOTKEYS = {
-            "1": { stance: 0x003d, label: "NonCombat" },
-            "2": { stance: 0x003c, label: "HandCombat" },
-            "3": { stance: 0x003e, label: "SwordCombat" },
-            "4": { stance: 0x0044, label: "TwoHandedSword" },
-            "5": { stance: 0x003f, label: "BowCombat" },
-            "6": { stance: 0x0049, label: "Magic" },
-          };
           document.addEventListener("keydown", (ev) => {
             if (!enteredWorld || isTypingInForm()) return;
             const k = ev.key.toLowerCase();
@@ -4074,21 +4052,26 @@ void main() {
               keyState.shift = true;
               return;
             }
-            // Stance hotkey dispatch. Held repeats from autorepeat
-            // are harmless — wasm dedupes redundant stance changes
-            // server-side via UpdateMotion broadcast (ACE doesn't
-            // re-broadcast if stance is unchanged).
-            const stanceBinding = STANCE_HOTKEYS[ev.key];
-            if (stanceBinding && handle) {
+            // Combat-mode toggle — backtick (`) mirrors retail
+            // AC's default keybind. Wasm reads the player's current
+            // CombatMode property + suggested mode from equipment
+            // (caster→Magic, missile weapon→Missile, else Melee)
+            // and sends GameAction::ChangeCombatMode. ACE derives
+            // the actual MotionStance from inventory and broadcasts
+            // UpdateMotion — the kind=5 recv arm + applyConfirmedStance
+            // updates the vitals-header label with the
+            // server-derived stance. Holding the key triggers
+            // browser autorepeat; ACE ignores no-op transitions, so
+            // worst case is a few extra packets.
+            if (ev.key === "`" && handle) {
               try {
-                handle.setStance(stanceBinding.stance);
+                handle.toggleCombatMode();
                 if (stanceLabelEl) {
-                  stanceLabelEl.textContent = stanceBinding.label;
                   stanceLabelEl.classList.add("pending");
                 }
                 ev.preventDefault();
               } catch (e) {
-                console.warn(`[stance] setStance(${stanceBinding.label}) failed:`, e);
+                console.warn("[combat-mode] toggleCombatMode failed:", e);
               }
             }
           });

@@ -521,16 +521,18 @@ check(
     `useObject=${typeof sessionHandleProto?.useObject}`
 );
 
-// Combat-stance hotkey: SessionHandle.setStance(stance) dispatches a
-// transient motion pulse (STOP + MotionStyle::Explicit(stance)) so
-// ACE accepts + broadcasts UpdateMotion with the new current_style.
-// JS-side keymap (1-6) and the kind=5 motionStance receiver paint the
-// vitals-header stance indicator. Pairs with stance-keyed walk/run
-// cycle bake — different gait per combat stance.
+// Combat-mode toggle: SessionHandle.toggleCombatMode() flips the
+// player between NonCombat and a combat mode (Melee/Missile/Magic)
+// chosen from equipped items via WorldContextExt::get_suggested_combat_mode.
+// Sends GameAction::ChangeCombatMode; ACE's GetCombatStance derives
+// the actual MotionStance server-side and broadcasts UpdateMotion.
+// JS-side ` (backtick) hotkey + the kind=5 motionStance receiver
+// paint the vitals-header stance indicator. The retail AC default
+// keybind for this toggle is also backtick.
 check(
-    "SessionHandle.setStance() exposed (combat-stance hotkey)",
-    typeof sessionHandleProto?.setStance === "function",
-    `setStance=${typeof sessionHandleProto?.setStance}`
+    "SessionHandle.toggleCombatMode() exposed (combat-mode hotkey)",
+    typeof sessionHandleProto?.toggleCombatMode === "function",
+    `toggleCombatMode=${typeof sessionHandleProto?.toggleCombatMode}`
 );
 
 // Phase 4 step 6f (portal destination chips): EntityUpdate gained a
