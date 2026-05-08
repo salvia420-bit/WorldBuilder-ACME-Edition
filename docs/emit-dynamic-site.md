@@ -5,9 +5,9 @@
 > Read this section first. The rest of this document is the
 > long-lived design intent + decision history; this header is
 > the snapshot of where we actually are and what's blocking
-> what. Last refreshed **2026-05-08** (post-Phase-5.2-obj-8
-> landing — smoke harness v2 fixture + 17 new v2 checks +
-> `BootPackV2` shrinks the top-level manifest to 541 bytes).
+> what. Last refreshed **2026-05-08** (post terrain-following
+> + combat-mode toggle + walk/run cycle animation + stance-
+> keyed cycles + smoke perf cache + Phase 5.2 obj 8).
 
 ### Where the project is
 
@@ -32,20 +32,62 @@ prefetch with lazy catalogs + convention URLs + `dat-shard`
 v2 emission with `BootPackV2` + per-namespace catalogs +
 2-level-prefix shard layout + convention-URL symlinks + page
 diagnostic v2 hint + service-worker `/manifest/*.bin` cache
-scope + smoke harness v2 fixture + 17 v2 checks). Native lib
-gate **1148 / 0** across 14 workspace crates; integration
-test gate **1179 / 0** workspace-wide; **smoke 100 / 100 +
-1 SKIP**; v2 top-level `manifest.json` at **541 bytes**.
+scope + smoke harness v2 fixture + 17 v2 checks).
+
+**Polish + iteration loop (post-2026-05-08):** road texture
+fill (RoadType DID 0x05001458) + UpdateMotion → animation
+gate (kind=5) + walk/run cycle animation with
+motion-table-authored framerate + stance-keyed cycle bake
+(per-stance walk/run frames keyed by motionStance from
+kind=5; lazy bake per stance, MAX_BAKES_PER_SETUP=4 cap) +
+combat-mode toggle (\` hotkey, retail-correct —
+ChangeCombatMode action; ACE derives stance from equipment
+via Creature_Combat.cs::GetCombatStance). Smoke perf
+overhauled: hash-cache the dat-shard bake (~6 GB) keyed on
+fixture+binary stat tuples (10 s on cache hit vs 7 m 40 s
+baseline; 44× speedup), `--fast` tier skips bake-dependent
+tests for 0.4 s iteration loop, `--dev` wasm-pack recipe
+(~3 s incremental vs ~60 s --release; smoke server now
+emits Connection: close to dodge a Node 18 fetch+keepalive
+ECONNRESET race that masked --dev). **Movement bugs fixed:**
+a JS crash in tickEntityAnimations from the stance-keyed
+refactor (cycleBakes undefined on static-placement render
+entries colliding with un-substituted live entities) was
+killing the rAF loop, dropping all setMovementInput dispatch
+and causing rubberband; local-player snap gating ignores
+ACE's stale UpdatePosition while the keystate is non-zero;
+caps_ok watchdog re-installs the fallback override at tick
+when real biota resolution regresses. **Client-side terrain
+following landed 2026-05-08:** WorldState gains a
+`terrain_heights: HashMap<u32, [f32; 81]>` cache + bilinear-
+interp `terrain_height_at(world_x, world_y)` helper +
+SessionHandle.populateTerrain wasm method; JS prefetches the
+9-LB Holtburg neighbourhood at kind=7 EnteredWorld and feeds
+heights via fetch_landblock_heightmaps. The integrator
+snaps pose Z to terrain at every tick, so heartbeats carry
+terrain-correct Z and ACE physics no longer applies false
+gravity. Live-validated against tailnet1's Tester (PK status,
+FastTick on): walking 12 s from Holtburg @telepoi spawn used
+to kill the player ("5 → 10 points crushing/massive impact
+damage → You died!" with corpse at Z=77 vs landing Z=94);
+post-fix walks indefinitely with no damage, server SQL
+position advances correctly to (96.87, 88.37, **Z=80**)
+following the slope. **Native lib gate 1148 / 0** across 14
+workspace crates; integration test gate **1179 / 0**
+workspace-wide; **smoke 102 / 102 + 1 SKIP**; v2 top-level
+`manifest.json` at **541 bytes**.
 `cargo check --target wasm32-unknown-unknown` clean for
 `holtburger-{dat,session,transport-ws,resource-http,web,
 content,core,manifest}`. `wasm-pack build --target {nodejs,
-web}` both green. `node smoke_test.cjs` **83 / 83 PASS**
-(82 OK + 1 SKIP for live-ACE round-trip; the SKIP is the
-symbol-only check — the wire-effect validation runs through
-`capture_phase4_step3.cjs` (movement),
-`capture_phase4_step4_follow_on.cjs` (vitals + inventory),
-`capture_phase4_step5.cjs` (click-to-use), all Playwright-
-driven against the live stack).
+web}` both green (`--release` ~60 s, `--dev` ~3 s incremental
+for inner-loop iteration). `node smoke_test.cjs` **102 / 102
++ 1 SKIP** on cache hit (~10 s wall); `--fast` tier covers
+59 / 59 + 2 SKIP in 0.4 s for iteration. Wire-effect
+validation runs through `capture_phase4_step3.cjs` (movement
+end-to-end), `capture_phase4_step4_follow_on.cjs` (vitals +
+inventory), `capture_phase4_step5.cjs` (click-to-use),
+`capture_step6_monster_walking.cjs` (walk-cycle bake), all
+Playwright-driven against the live stack.
 
 **What works end-to-end today.** Open
 `apps/holtburger-web/index.html` in any browser. The page calls
@@ -532,23 +574,21 @@ step's landing, plus what got closed since):
   the lerping sprite. Pure JS; no wasm-bindgen or Rust
   changes.
 - ✅ ~~**VectorUpdate / UpdateMotion velocity handling.**~~
-  **VectorUpdate closed 2026-05-08.** New
+  **Both closed 2026-05-08.** VectorUpdate: new
   `ENTITY_UPDATE_KIND_VELOCITY = 4` carries `(guid, vx, vy, vz,
-  omega_z)` from `GameMessage::VectorUpdate(VectorUpdateData)`
-  (recv loop previously dropped these). 4 new wasm-bindgen
-  getters (`vx`, `vy`, `vz`, `omegaZ`); position fields zeroed
-  on kind=4. JS `handleEntityVelocity` stamps
-  `velX/velY/velUpdatedMs` on the entity (skips local player —
-  step 3.5 keystate prediction owns that path).
-  `tickEntityInterpolation` extended: after the catch-up lerp
-  completes, if velocity is fresh (< 500 ms old) the sprite
-  extrapolates forward at `vel × (elapsed - lerp_duration)`;
-  if stale or absent, freeze at lerpTo. Motion stays
-  continuous between PublicUpdatePosition echoes instead of
-  pausing at each lerp target. **UpdateMotion still open** —
-  its motion-state hint (walking/running/idle) could replace
-  the EMA-based animation gate for more authoritative
-  walk-cycle frame selection; tracked as a follow-on.
+  omega_z)` from `GameMessage::VectorUpdate(VectorUpdateData)`.
+  JS `handleEntityVelocity` stamps `velX/velY/velUpdatedMs`
+  on the entity (skips local player). UpdateMotion: new
+  `ENTITY_UPDATE_KIND_MOTION = 5` carries `motion_command`
+  (raw `InterpretedMotionCommand` u16) + `motion_stance`
+  (raw u16 of `MotionStance.interpreted()`). The recv arm
+  derives forward command from `(movement_type,
+  MovementTypeData)` — `StopCompletely → STOP`,
+  `Invalid → state.forward_command` else 0,
+  `MoveTo{Object,Position} → RUN_FORWARD`, other → 0.
+  `tickEntityAnimations` short-circuits the EMA gate when
+  motionUpdatedMs is fresh (<500 ms): WALK_FORWARD /
+  WALK_BACKWARDS / RUN_FORWARD ⇒ moving, STOP / 0 ⇒ idle.
 - ⏳ **Entity culling for dense zones.** Every entity ACE
   pushes gets a sprite. Frustum-culling against the camera's
   visible-world rect would matter for mobile and for high-
@@ -566,12 +606,39 @@ step's landing, plus what got closed since):
 - ⏳ **Jump (Spacebar).** Needs `MovementParameters` extension
   and resolution of the keymap collision with the chat-window
   toggle most clients use.
-- ⏳ **Combat-stance switch / weapon hotkey.** `CURRENT_STYLE`
-  flag (`MotionStance::HandCombat` etc.). Step 3 omits the
-  bit; ACE preserves whatever stance it last set.
-- ⏳ **Snap-smooth reconciliation** for `PrivateUpdatePosition`
-  authoritative corrections — currently a hard set; ~100ms
-  lerp would feel softer.
+- ✅ ~~**Combat-stance switch / weapon hotkey.**~~ **Closed
+  2026-05-08** as combat-mode toggle on `` ` `` (backtick),
+  retail-correct. Sends `GameAction::ChangeCombatMode(mode)`
+  via new `SessionCommand::ToggleCombatMode` +
+  `SessionHandle::toggle_combat_mode`; recv arm reads
+  `world.player_combat_mode()` and sends `NonCombat` ↔
+  `world.get_suggested_combat_mode()` (Magic if caster
+  equipped, Missile if missile weapon, else Melee). ACE's
+  `Creature_Combat.cs::GetCombatStance` derives the actual
+  `MotionStance` from inventory + combat mode (HandCombat
+  for fists, SwordCombat for any 1H, SwordShieldCombat with
+  shield, BowCombat / CrossbowCombat / Magic / etc.); the
+  client never requests a stance directly. New vitals-header
+  `#player-stance` indicator shows the server-derived
+  stance (italic-gold pending → solid-blue confirmed via the
+  same kind=5 motionStance path). Mirrors retail keybind.
+- ✅ ~~**Snap-smooth reconciliation** for `PrivateUpdatePosition`
+  authoritative corrections~~ — **closed 2026-05-08** by
+  gating the local-sprite snap on idle keystate. While the
+  user has active forward / strafe / turn keystate
+  (`window.__lastInputSig` non-zero), `handlePositionUpdate`
+  ignores ACE's stale UpdatePosition Z and trusts JS
+  prediction. When the player is idle (no keystate), the
+  snap fires — natural reconciliation point. Mirrors retail
+  AC's dead-reckoning: server pose is a hint during
+  locomotion, not a directive. Was the load-bearing
+  rubberband fix combined with the cycleBakes-undefined
+  guard in tickEntityAnimations (the stance-keyed cycles
+  refactor introduced an `=== null` → `.size` assertion
+  swap that crashed rAF on static-placement renderEntries
+  whose cache key collides with un-substituted live entities;
+  drainEvents died → no setMovementInput → server-frozen
+  → snap-back-on-correction = rubberband).
 - ✅ ~~**Outbound `AutonomousPosition` heartbeat to ACE.**~~
   **Closed 2026-05-07** by Phase 4 step 3.6 — the cli's
   `MovementSystem` is now wired into the wasm recv loop via
@@ -594,11 +661,24 @@ step's landing, plus what got closed since):
   `RenderPreviewRenderer.cs:487-503` adds it on top of the
   bilinear blend (9×9 height texture per LB + finite-difference
   slope in the shader). ~2 hours; deferred at step 3.6 landing.
-- ⏳ **Detail textures / road texture fill.**
-  `TMTerrainDesc::DetailTexGID` carries small-scale noise; the
-  static site uses `RoadType` as a repeating shader fill on
-  the road stroke. We use flat stone-grey for roads; switching
-  to a textured stroke is a PIXI line-style tweak.
+- ✅ ~~**Road texture fill (RoadType DID 0x05001458).**~~
+  **Closed 2026-05-08.** `buildTerrainAtlas` extracts the
+  code-32 RoadType tile as a standalone `PIXI.Texture` with
+  `addressMode{U,V} = "repeat"` + `scaleMode = "linear"`,
+  threaded through `addLandblockToScene → buildLandblockChildren`.
+  Flat `stroke({color: 0xC8B888})` replaced with
+  `stroke({texture, matrix: scale(T/srcW), textureSpace:
+  'global'})` where `T = 6 m` ensures `192 % 6 == 0` so the
+  pattern wraps seamlessly across LB boundaries. Mirrors C#
+  `SKShader.CreateBitmap(roadTile, Repeat, Repeat)` at
+  `RenderPreviewRenderer.cs:526-545`. Falls back to flat tan
+  when `fetch_terrain_textures` yields no code-32 tile (custom
+  DATs).
+- ⏳ **Detail textures (TMTerrainDesc::DetailTexGID).**
+  Small-scale per-cell noise textures applied on top of the
+  base terrain blend (separate from the road overlay landed
+  above). Static site uses `DetailTexGID` for ground-level
+  noise; live client doesn't yet sample it.
 - ✅ ~~**Real character-biota-driven movement caps**~~
   **handler wired 2026-05-07** as Phase 4 step 3.7 (a). The
   recv loop now handles `GameEvent::PlayerDescription` —
@@ -648,8 +728,26 @@ step's landing, plus what got closed since):
   retail TexMerge data is hard-coded as constants in lib.rs.
   Custom regions (e.g. WorldBuilder-emitted .dat files) would
   need a Rust parser; deferred but not gating.
-- ⏳ **Animation state.** Sprites slide as rigid textures; no
-  walk-cycle anims. Step 4+ scope.
+- ✅ ~~**Animation state — walk + run cycles.**~~ **Closed
+  2026-05-08** with stance-keyed bake. `EntityCycleSet`
+  wasm-bindgen struct returns walk + run frame meshes +
+  authoritative `AnimData.framerate` (typically 8-30 fps;
+  was hardcoded 12 fps). `try_resolve_cycle_frames(stance,
+  command)` parameterized over command (WALK_FORWARD vs
+  RUN_FORWARD) + stance — the cycle key formula
+  `(stance & 0xFFFF) << 16 | command` works the same with
+  the u16 interpreted form (from `EntityUpdate.motionStance`)
+  and the full u32 form. liveMap entry: `cycleBakes:
+  Map<stance, {walkFrames, runFrames, walkFramerate,
+  runFramerate}>` + `cycleBakesInFlight: Set<stance>` +
+  `defaultStance` (discovered from `EntityCycleSet
+  .resolvedStance` on first bake). MAX_BAKES_PER_SETUP=4
+  cap prevents combat-stance flicker from runaway memory.
+  `tickEntityAnimations` picks RUN_FORWARD vs WALK_FORWARD
+  by motionCommand; falls back walk↔run within the chosen
+  stance, then to defaultStance if the stance has no cycles.
+  Per-entity time-based frame index uses motion-table fps
+  (`Math.floor((now/1000) * fps) % cycle.length`).
 - ⏳ **Realistic NPC / portal / monster rendering.** Live
   entities currently render as generic textured silhouettes
   with no nameplate, no per-WeenieType tint, no palette
@@ -658,6 +756,74 @@ step's landing, plus what got closed since):
   §8 Phase 4 step 6 for the as-framed brief.** Subsumes the
   "magenta placeholder dot → static-site glyph fallback"
   polish that was loosely tracked here previously.
+
+#### Terrain-following follow-ons (post 2026-05-08 landing)
+
+The client-side terrain-follow integrator covers the Holtburg
+@telepoi spawn → walk-without-dying flow. These open follow-ons
+extend it:
+
+- ⏳ **Non-Holtburg teleport coverage.** The 9-LB heightmap
+  prefetch in the JS `kind=7 EnteredWorld` arm is hardcoded to
+  Holtburg's neighbourhood (`HOLT_LB_X = 0xa9, HOLT_LB_Y = 0xb4`).
+  Teleporting elsewhere (Cragstone 0xBB9F, Yaraq 0x7D64, etc.)
+  reverts to the un-prefetched path, the integrator hits a
+  cache miss, preserves the existing pose Z, and the user can
+  re-encounter impact damage off any non-Holtburg slope. Fix:
+  re-prefetch on `PlayerTeleport` for the destination LB's 9
+  neighbours. ~30 lines of JS in the recv arm.
+- ⏳ **Lazy-load on landblock entry.** The 9-LB ring covers a
+  ~580 m × 580 m square around spawn. Walking past the
+  prefetched perimeter falls off the cache. Fix: each tick,
+  if the integrator's new (X, Y) lands in an unloaded LB,
+  fire a lazy `populateTerrain(lb_id)` from JS. Need a
+  feedback signal — possibly a new wasm getter
+  `terrain_height_cache_has(landblock_id) -> bool` so JS
+  knows what to fetch.
+- ⏳ **Cliff / wall collision.** The integrator only does
+  terrain *following*, not collision. Walking into a vertical
+  wall passes through it on the client side (server-side ACE
+  physics may still wall-stop, but the local sprite desyncs).
+  For full retail-correct behavior we'd add: max-Z-drop-per-
+  tick threshold (refuse forward motion past a >N meters
+  drop in one tick = cliff edge); X/Y collision against
+  building geometry from `holtburger-dat::file_type::Setup`
+  bounding boxes. Out of scope for the rubberband fix.
+- ⏳ **DAT-side u8 → f32 memory optimization.** Cache stores
+  `[f32; 81]` (4 bytes/value × 81 = 324 bytes/LB) when the
+  underlying DAT representation is `u8` (× 2 → metres). For 9
+  LBs that's 2.9 KB vs 729 bytes raw. Negligible at current
+  scale; matters if we ever pre-load many more LBs. Not
+  blocking.
+- ⏳ **Local-pose integrator overshoot.** Diag observed
+  ~25 m/s effective walk speed when the motion table says
+  4.5 m/s, possibly a dt scaling bug. The integrator is
+  `pose.x/y += velocity * dt` with `dt` from
+  `now.saturating_duration_since(prev)`. Worth re-instrumenting
+  with both heightmap prefetch and FastTick on to confirm
+  if the overshoot persists after terrain following. May also
+  be a Playwright-headless rAF rate quirk that doesn't
+  manifest in real browsers. Doesn't cause death; would be a
+  cosmetic fix.
+- ⏳ **caps_ok regression root cause.** The watchdog re-installs
+  the fallback `SelfMovementCapabilities` override at tick
+  when `resolve_self_movement_capabilities` returns Err —
+  empirically observed `real_caps_ok=true` at PlayerDescription
+  but `caps_ok=false` at tick #60. Some message between the
+  two clears the player's Run skill or the MotionTable
+  resolution. Watchdog is a fence; finding the gap underneath
+  it would let us remove it. Likely a property update or
+  skill table mutation in the routing dispatcher; needs
+  per-tick tracing of `world.player.skills` to narrow.
+- ⏳ **biota_properties_position lazy persist.** ACE doesn't
+  flush position to MariaDB during a session — only on save /
+  logout / periodic. The wire round-trip works (UpdateMotion
+  echo proves acceptance, server-side memory tracks the
+  player), but the SQL row stays stale during gameplay.
+  Doesn't affect gameplay; affects diag scripts that poll
+  `ace_shard.biota_properties_position` (use the in-memory
+  player position via a different probe, e.g. dump
+  PrivateUpdatePosition events received by the diag).
 
 ### What to read next
 
