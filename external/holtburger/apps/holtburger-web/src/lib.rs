@@ -93,22 +93,21 @@ pub fn session_smoke_test_packet_sequence() -> u32 {
 /// caller gets the error string back via the rejected Promise.
 ///
 /// Used by browser-side validation against a live `holtburger-wsbridge`.
-/// `server_ip` should be the IP literal that ACE answers on (e.g.
-/// `"127.0.0.1"`), so the resulting session's source-address allowlist
-/// matches what the bridge will tag inbound frames with.
+/// `server_host` is the hostname or IP literal the bridge should resolve
+/// (announced in the per-connection JSON handshake — see
+/// `holtburger_transport_ws::WsTransport::connect`).
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn try_ws_handshake_smoke(
     bridge_url: String,
-    server_ip: String,
+    server_host: String,
     server_port: u16,
 ) -> Result<u32, JsValue> {
-    let ip: IpAddr = server_ip
-        .parse()
-        .map_err(|e| JsValue::from_str(&format!("server_ip: {e}")))?;
-    let transport = holtburger_transport_ws::WsTransport::connect(&bridge_url, ip)
-        .await
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let transport =
+        holtburger_transport_ws::WsTransport::connect(&bridge_url, &server_host, server_port, None)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let ip = transport.server_ip();
     let session = Session::new_with_transport(Box::new(transport), SocketAddr::new(ip, server_port));
     Ok(session.packet_sequence)
 }
@@ -4730,20 +4729,22 @@ fn first_available_character_slot(occupied: &[u32]) -> u32 {
 #[wasm_bindgen]
 pub async fn start_session(
     bridge_url: String,
-    server_ip: String,
+    server_host: String,
     server_port: u16,
     username: String,
     password: String,
 ) -> Result<SessionHandle, JsValue> {
     use futures::channel::{mpsc, oneshot};
 
-    let ip: IpAddr = server_ip
-        .parse()
-        .map_err(|e| JsValue::from_str(&format!("server_ip: {e}")))?;
-
-    let transport = holtburger_transport_ws::WsTransport::connect(&bridge_url, ip)
-        .await
-        .map_err(|e| JsValue::from_str(&format!("WsTransport::connect: {e}")))?;
+    let transport = holtburger_transport_ws::WsTransport::connect(
+        &bridge_url,
+        &server_host,
+        server_port,
+        None,
+    )
+    .await
+    .map_err(|e| JsValue::from_str(&format!("WsTransport::connect: {e}")))?;
+    let ip: IpAddr = transport.server_ip();
 
     let mut session = holtburger_session::Session::new_with_transport(
         Box::new(transport),

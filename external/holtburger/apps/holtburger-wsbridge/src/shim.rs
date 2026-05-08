@@ -50,6 +50,11 @@ pub struct Cli {
     #[arg(long)]
     pub bridge: String,
 
+    /// ACE host to ask the bridge to relay to. Sent in the per-connection
+    /// JSON handshake (see `crate::handshake`). Hostname or IP literal.
+    #[arg(long)]
+    pub upstream_host: String,
+
     /// Local IP address to listen on. Point `holtburger-cli`'s `--host` at
     /// this address so it dials the shim instead of ACE directly.
     #[arg(long, default_value = "127.0.0.1")]
@@ -92,6 +97,7 @@ pub struct Cli {
 #[derive(Clone, Debug)]
 pub struct Config {
     pub bridge_url: String,
+    pub upstream_host: String,
     pub listen_ip: IpAddr,
     pub listen_login_port: u16,
     pub listen_world_port: u16,
@@ -138,8 +144,13 @@ impl Config {
             ));
         }
 
+        if cli.upstream_host.is_empty() {
+            return Err(anyhow!("--upstream-host is required"));
+        }
+
         Ok(Config {
             bridge_url: cli.bridge,
+            upstream_host: cli.upstream_host,
             listen_ip,
             listen_login_port: cli.listen_login_port,
             listen_world_port,
@@ -180,12 +191,58 @@ pub async fn run(cfg: Config) -> Result<()> {
         .as_str()
         .into_client_request()
         .with_context(|| format!("invalid bridge url: {}", cfg.bridge_url))?;
-    let (ws, _resp) = tokio_tungstenite::connect_async(request)
+    let (mut ws, _resp) = tokio_tungstenite::connect_async(request)
         .await
         .with_context(|| format!("connect ws bridge {}", cfg.bridge_url))?;
     log::info!("ws connected to {}", cfg.bridge_url);
 
+    perform_handshake(&cfg, &mut ws).await?;
+
     run_with_sockets(cfg, login_sock, world_sock, ws).await
+}
+
+async fn perform_handshake<S>(cfg: &Config, ws: &mut WebSocketStream<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    use crate::handshake::{ClientHello, ServerHello, HANDSHAKE_VERSION};
+
+    let hello = ClientHello {
+        v: HANDSHAKE_VERSION,
+        host: cfg.upstream_host.clone(),
+        login_port: cfg.ace_login_port,
+        world_port: Some(cfg.ace_world_port),
+    };
+    let payload = serde_json::to_string(&hello).context("serialize client hello")?;
+    ws.send(Message::Text(payload.into()))
+        .await
+        .context("send handshake")?;
+
+    let reply = ws
+        .next()
+        .await
+        .ok_or_else(|| anyhow!("ws closed before handshake reply"))?
+        .context("read handshake reply")?;
+    let text = match reply {
+        Message::Text(t) => t,
+        other => return Err(anyhow!("handshake reply was not text: {other:?}")),
+    };
+    let parsed: ServerHello =
+        serde_json::from_str(&text).context("parse handshake reply")?;
+    if !parsed.ok {
+        return Err(anyhow!(
+            "bridge rejected handshake: {}",
+            parsed.error.unwrap_or_default()
+        ));
+    }
+    log::info!(
+        "bridge resolved {} → {} (login={}, world={})",
+        cfg.upstream_host,
+        parsed.ip.unwrap_or_default(),
+        parsed.login_port.unwrap_or_default(),
+        parsed.world_port.unwrap_or_default(),
+    );
+    Ok(())
 }
 
 /// Run forwarding loops over already-bound UDP sockets and an established
@@ -349,7 +406,14 @@ mod tests {
     use super::*;
 
     fn parse(args: &[&str]) -> Result<Config> {
-        let mut full = vec!["holtburger-wsshim"];
+        // All shim tests need an upstream host since the bridge now drives
+        // routing per-connection — supply a default so the existing checks
+        // can keep focusing on the listen / ace port permutations.
+        let mut full = vec![
+            "holtburger-wsshim",
+            "--upstream-host",
+            "ace.example.test",
+        ];
         full.extend_from_slice(args);
         let cli = Cli::try_parse_from(full)?;
         Config::from_cli(cli)

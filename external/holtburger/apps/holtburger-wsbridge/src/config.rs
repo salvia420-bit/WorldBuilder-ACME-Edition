@@ -1,14 +1,20 @@
 //! CLI argument parsing and resolved runtime config.
+//!
+//! Each WS connection now carries its own destination via a one-time
+//! JSON handshake (see `bridge.rs`), so the CLI no longer pins the
+//! bridge to a single ACE host. The remaining knobs are the WS listen
+//! address and an optional default world-port offset used when the
+//! handshake omits `world_port`.
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use clap::Parser;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 
 #[derive(Parser, Debug)]
 #[command(
     author,
     version,
-    about = "WebSocket→UDP bridge in front of an ACE server. Accepts WS connections and proxies binary frames to/from ACE's UDP login + world ports.",
+    about = "WebSocket→UDP bridge in front of one or more ACE servers. Each WS connection announces its destination via a JSON handshake; binary frames after that carry only [port:u16][payload].",
     long_about = None,
 )]
 pub struct Cli {
@@ -16,26 +22,16 @@ pub struct Cli {
     #[arg(long, default_value = "0.0.0.0:8080")]
     pub listen: String,
 
-    /// ACE server hostname or IPv4 address.
-    #[arg(long, default_value = "127.0.0.1")]
-    pub ace_host: String,
-
-    /// ACE login UDP port. World port defaults to login + 1 to match
-    /// holtburger's auth.rs:41-44 convention.
-    #[arg(long, default_value_t = 9000)]
-    pub ace_login_port: u16,
-
-    /// ACE world UDP port. Defaults to `ace-login-port + 1`.
-    #[arg(long)]
-    pub ace_world_port: Option<u16>,
+    /// Default world-port offset relative to the announced login port.
+    /// Used when a handshake omits `world_port`. ACE convention is +1.
+    #[arg(long, default_value_t = 1)]
+    pub default_world_port_offset: i32,
 }
 
 #[derive(Clone, Debug)]
 pub struct Config {
     pub listen: SocketAddr,
-    pub ace_ip: IpAddr,
-    pub ace_login_port: u16,
-    pub ace_world_port: u16,
+    pub default_world_port_offset: i32,
 }
 
 impl Config {
@@ -45,39 +41,10 @@ impl Config {
             .parse()
             .with_context(|| format!("invalid --listen value: {}", cli.listen))?;
 
-        let ace_ip: IpAddr = cli
-            .ace_host
-            .parse()
-            .with_context(|| format!("invalid --ace-host (expected IP literal): {}", cli.ace_host))?;
-
-        let ace_world_port = match cli.ace_world_port {
-            Some(p) => p,
-            None => cli
-                .ace_login_port
-                .checked_add(1)
-                .ok_or_else(|| anyhow!("ace-login-port + 1 overflows u16"))?,
-        };
-
-        if ace_world_port == cli.ace_login_port {
-            return Err(anyhow!(
-                "ace-login-port and ace-world-port must differ (got {} and {})",
-                cli.ace_login_port,
-                ace_world_port
-            ));
-        }
-
         Ok(Config {
             listen,
-            ace_ip,
-            ace_login_port: cli.ace_login_port,
-            ace_world_port,
+            default_world_port_offset: cli.default_world_port_offset,
         })
-    }
-
-    /// Returns true if `port` is one of the two ACE ports we're willing to
-    /// forward to/from. Used to drop misframed/forged traffic early.
-    pub fn is_ace_port(&self, port: u16) -> bool {
-        port == self.ace_login_port || port == self.ace_world_port
     }
 }
 
@@ -93,47 +60,14 @@ mod tests {
     }
 
     #[test]
-    fn defaults_world_port_to_login_plus_one() {
-        let cfg = parse(&["--ace-host", "127.0.0.1"]).unwrap();
-        assert_eq!(cfg.ace_login_port, 9000);
-        assert_eq!(cfg.ace_world_port, 9001);
-        assert!(cfg.is_ace_port(9000));
-        assert!(cfg.is_ace_port(9001));
-        assert!(!cfg.is_ace_port(9002));
+    fn defaults_listen_and_offset() {
+        let cfg = parse(&[]).unwrap();
+        assert_eq!(cfg.listen.port(), 8080);
+        assert_eq!(cfg.default_world_port_offset, 1);
     }
 
     #[test]
-    fn rejects_equal_login_and_world_ports() {
-        let err = parse(&[
-            "--ace-host",
-            "127.0.0.1",
-            "--ace-login-port",
-            "9000",
-            "--ace-world-port",
-            "9000",
-        ])
-        .unwrap_err();
-        assert!(err.to_string().contains("must differ"));
-    }
-
-    #[test]
-    fn rejects_overflow_world_port() {
-        let err = parse(&["--ace-host", "127.0.0.1", "--ace-login-port", "65535"]).unwrap_err();
-        assert!(err.to_string().contains("overflow"));
-    }
-
-    #[test]
-    fn explicit_world_port_overrides_default() {
-        let cfg = parse(&[
-            "--ace-host",
-            "10.0.0.1",
-            "--ace-login-port",
-            "9000",
-            "--ace-world-port",
-            "9100",
-        ])
-        .unwrap();
-        assert_eq!(cfg.ace_login_port, 9000);
-        assert_eq!(cfg.ace_world_port, 9100);
+    fn rejects_bad_listen() {
+        assert!(parse(&["--listen", "not a sockaddr"]).is_err());
     }
 }

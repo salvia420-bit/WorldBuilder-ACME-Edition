@@ -60,9 +60,7 @@ async fn standup() -> Result<(SocketAddr, SocketAddr)> {
     let bridge_addr = bridge_listener.local_addr()?;
     let bridge_cfg = config::Config {
         listen: bridge_addr,
-        ace_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
-        ace_login_port,
-        ace_world_port,
+        default_world_port_offset: 1,
     };
     tokio::spawn(async move {
         let _ = bridge::accept_loop(bridge_cfg, bridge_listener).await;
@@ -77,6 +75,7 @@ async fn standup() -> Result<(SocketAddr, SocketAddr)> {
     let shim_world_addr = shim_world_sock.local_addr()?;
     let shim_cfg = shim::Config {
         bridge_url: format!("ws://{bridge_addr}/"),
+        upstream_host: "127.0.0.1".into(),
         listen_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
         listen_login_port: shim_login_addr.port(),
         listen_world_port: shim_world_addr.port(),
@@ -84,9 +83,29 @@ async fn standup() -> Result<(SocketAddr, SocketAddr)> {
         ace_world_port,
     };
 
-    // Dial the bridge from the shim.
+    // Dial the bridge from the shim, including the JSON handshake.
     let url = format!("ws://{bridge_addr}/");
-    let (ws, _) = tokio_tungstenite::connect_async(url).await?;
+    let (mut ws, _) = tokio_tungstenite::connect_async(url).await?;
+    {
+        use crate::handshake::{ClientHello, ServerHello, HANDSHAKE_VERSION};
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+        let hello = ClientHello {
+            v: HANDSHAKE_VERSION,
+            host: shim_cfg.upstream_host.clone(),
+            login_port: shim_cfg.ace_login_port,
+            world_port: Some(shim_cfg.ace_world_port),
+        };
+        ws.send(Message::Text(serde_json::to_string(&hello)?.into()))
+            .await?;
+        let reply = ws.next().await.ok_or_else(|| anyhow::anyhow!("ws closed before reply"))??;
+        let text = match reply {
+            Message::Text(t) => t,
+            other => anyhow::bail!("expected text reply, got {other:?}"),
+        };
+        let parsed: ServerHello = serde_json::from_str(&text)?;
+        assert!(parsed.ok, "shim handshake failed: {:?}", parsed.error);
+    }
 
     tokio::spawn(async move {
         let _ =

@@ -18,14 +18,17 @@ use web_sys::{BinaryType, CloseEvent, Event, MessageEvent, WebSocket};
 
 use crate::frame;
 
-/// Result of `WsTransport::connect`. Distinguishes the two failure
-/// modes a caller might want to display differently — couldn't even
-/// construct a `WebSocket` (bad URL) vs. handshake failed (server
-/// down, blocked, etc.).
+/// Result of `WsTransport::connect`. Distinguishes the failure modes a
+/// caller might want to display differently — couldn't even construct a
+/// `WebSocket` (bad URL), the WS handshake itself failed (server down,
+/// blocked, etc.), or the bridge's per-connection JSON handshake (host
+/// resolution, port allowlist) was rejected.
 #[derive(Debug)]
 pub enum ConnectError {
     BadUrl(String),
     Handshake(String),
+    /// The bridge replied to the JSON handshake with `ok: false`.
+    BridgeRejected(String),
 }
 
 impl std::fmt::Display for ConnectError {
@@ -33,11 +36,31 @@ impl std::fmt::Display for ConnectError {
         match self {
             ConnectError::BadUrl(s) => write!(f, "ws bad url: {s}"),
             ConnectError::Handshake(s) => write!(f, "ws handshake failed: {s}"),
+            ConnectError::BridgeRejected(s) => write!(f, "bridge rejected handshake: {s}"),
         }
     }
 }
 
 impl std::error::Error for ConnectError {}
+
+#[derive(serde::Serialize)]
+struct ClientHello<'a> {
+    v: u32,
+    host: &'a str,
+    login_port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    world_port: Option<u16>,
+}
+
+#[derive(serde::Deserialize)]
+struct ServerHello {
+    #[serde(default)]
+    ok: bool,
+    #[serde(default)]
+    ip: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
 
 /// WebSocket-backed `Transport`.
 ///
@@ -58,14 +81,21 @@ pub struct WsTransport {
 }
 
 impl WsTransport {
-    /// Open `url` and resolve once the WS reaches the OPEN state, or
-    /// reject if it errors out before opening. `server_ip` is the IP
-    /// address the bridge fronts; it's combined with the per-frame
-    /// port tag to synthesize the `SocketAddr` returned by
-    /// `recv_from`, so the session's source-address allowlist
-    /// (`server_source_addr` / `pending_server_source_addr`) accepts
-    /// the packet.
-    pub async fn connect(url: &str, server_ip: IpAddr) -> Result<Self, ConnectError> {
+    /// Open `url`, perform the per-connection JSON handshake against
+    /// the bridge, and return once the bridge confirms the resolved
+    /// upstream IP. The transport's `server_ip` field (used to
+    /// synthesize the `SocketAddr` returned by `recv_from`, so the
+    /// session's source-address allowlist accepts the packet) is
+    /// taken from the bridge's reply.
+    ///
+    /// `host` may be a hostname or IP literal — the bridge resolves it.
+    /// `world_port` is optional; if `None`, bridge derives `login_port + 1`.
+    pub async fn connect(
+        url: &str,
+        host: &str,
+        login_port: u16,
+        world_port: Option<u16>,
+    ) -> Result<Self, ConnectError> {
         let ws = WebSocket::new(url).map_err(|e| ConnectError::BadUrl(jsval_string(&e)))?;
         ws.set_binary_type(BinaryType::Arraybuffer);
 
@@ -74,11 +104,26 @@ impl WsTransport {
         // Shared between onopen/onerror so whichever fires first
         // resolves the handshake; the other half becomes a no-op.
         let open_tx = Rc::new(RefCell::new(Some(open_tx)));
+        // First text frame after WS-OPEN is the bridge's `ServerHello`.
+        let (handshake_tx, handshake_rx) = oneshot::channel::<String>();
+        let handshake_tx = Rc::new(RefCell::new(Some(handshake_tx)));
 
         let on_message = {
             let tx = tx.clone();
+            let handshake_tx = Rc::clone(&handshake_tx);
             Closure::<dyn FnMut(MessageEvent)>::new(move |ev: MessageEvent| {
                 let data = ev.data();
+                // Text frames are only legal as the one-shot handshake reply.
+                if let Some(text) = data.as_string() {
+                    if let Some(slot) = handshake_tx.borrow_mut().take() {
+                        let _ = slot.send(text);
+                    } else {
+                        let _ = tx.unbounded_send(Err(anyhow!(
+                            "unexpected text ws frame after handshake: {text}"
+                        )));
+                    }
+                    return;
+                }
                 // Binary frames arrive as ArrayBuffer because we set
                 // binaryType=Arraybuffer above. Anything else is a
                 // protocol violation.
@@ -159,6 +204,38 @@ impl WsTransport {
             }
         }
 
+        // Per-connection JSON handshake to the bridge.
+        let hello = ClientHello {
+            v: 1,
+            host,
+            login_port,
+            world_port,
+        };
+        let payload = serde_json::to_string(&hello).map_err(|e| {
+            ConnectError::Handshake(format!("serialize ClientHello: {e}"))
+        })?;
+        ws.send_with_str(&payload).map_err(|e| {
+            ConnectError::Handshake(format!("send ClientHello: {}", jsval_string(&e)))
+        })?;
+
+        let reply = handshake_rx.await.map_err(|_| {
+            ConnectError::Handshake("ws closed before handshake reply".into())
+        })?;
+        let parsed: ServerHello = serde_json::from_str(&reply).map_err(|e| {
+            ConnectError::Handshake(format!("parse ServerHello: {e} (raw: {reply})"))
+        })?;
+        if !parsed.ok {
+            return Err(ConnectError::BridgeRejected(
+                parsed.error.unwrap_or_else(|| "(no error message)".into()),
+            ));
+        }
+        let ip_str = parsed
+            .ip
+            .ok_or_else(|| ConnectError::Handshake("ServerHello.ok=true but ip missing".into()))?;
+        let server_ip: IpAddr = ip_str.parse().map_err(|e| {
+            ConnectError::Handshake(format!("ServerHello.ip parse: {e} (raw: {ip_str})"))
+        })?;
+
         Ok(WsTransport {
             ws,
             rx: FutMutex::new(rx),
@@ -167,6 +244,13 @@ impl WsTransport {
             _on_close: on_close,
             _on_error: on_error,
         })
+    }
+
+    /// IP the bridge resolved for the host announced in the JSON
+    /// handshake. Callers use this to construct the
+    /// `holtburger_session::Session`'s `server_addr`.
+    pub fn server_ip(&self) -> IpAddr {
+        self.server_ip
     }
 }
 

@@ -21,6 +21,7 @@
 pub mod bridge;
 pub mod config;
 pub mod frame;
+pub mod handshake;
 pub mod shim;
 
 #[cfg(test)]

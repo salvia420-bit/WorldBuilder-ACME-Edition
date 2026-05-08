@@ -1629,6 +1629,8 @@ dependencies = [
  "holtburger-session",
  "js-sys",
  "log",
+ "serde",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -1690,6 +1692,8 @@ dependencies = [
  "env_logger",
  "futures-util",
  "log",
+ "serde",
+ "serde_json",
  "tokio",
  "tokio-tungstenite",
 ]
