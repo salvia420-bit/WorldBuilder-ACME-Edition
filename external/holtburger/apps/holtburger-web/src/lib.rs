@@ -3054,6 +3054,23 @@ enum SessionCommand {
     /// to the `&mut world` / `&mut session` borrows that the recv
     /// loop also holds.
     TickMovement { now: web_time::Instant },
+    /// Combat-stance hotkey — JS pressed `1`/`2`/`3`/etc. to switch
+    /// the local player's stance. The recv-loop arm enqueues a
+    /// transient motion intent on the MovementSystemHandle with
+    /// `MotionStyle::Explicit(MotionStance::from_interpreted(stance))`
+    /// + `InterpretedMotionCommand::STOP` (a stance-only pulse, no
+    /// locomotion). The next physics tick fires one MoveToState
+    /// packet edge with `current_style` set; ACE accepts + broadcasts
+    /// `UpdateMotion` (per `Player_Networking.cs::BroadcastMovement`,
+    /// no weapon-equipment validation); the existing kind=5
+    /// `ENTITY_UPDATE_KIND_MOTION` recv arm picks up the new stance
+    /// and the stance-keyed cycle bake fires for the gait change.
+    ///
+    /// `stance` is the u16 `MotionStance.interpreted()` value (low
+    /// 16 bits of `0x8000_xxxx`). Invalid values (no matching
+    /// MotionStance) are silently dropped — this is a hotkey, not a
+    /// safety-critical packet.
+    SetStance { stance: u16 },
 }
 
 /// Tagged-payload envelope for events the wasm bundle drains to JS via
@@ -4366,6 +4383,36 @@ impl SessionHandle {
             })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("set_movement_input: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Combat-stance hotkey — switch the local player's stance to
+    /// the given `MotionStance.interpreted()` u16. Pairs with the
+    /// stance-keyed walk/run cycle bake landed in the prior commit:
+    /// pressing `1`/`2`/`3` (handled JS-side) sends the new stance
+    /// to ACE; ACE accepts + broadcasts `UpdateMotion`; the existing
+    /// kind=5 `ENTITY_UPDATE_KIND_MOTION` recv arm picks up the new
+    /// stance and the bake-on-stance-change path triggers.
+    ///
+    /// `stance` is the u16 form (e.g. `0x003c` for HandCombat,
+    /// `0x003d` for NonCombat, `0x003e` for SwordCombat). The recv
+    /// loop converts via `MotionStance::from_interpreted` and silently
+    /// drops unknown values rather than erroring — this is a hotkey,
+    /// not a safety-critical packet, and the user pressing an unbound
+    /// key shouldn't crash the session.
+    ///
+    /// ACE doesn't validate weapon equip before accepting the stance
+    /// change (per `Player_Networking.cs::BroadcastMovement`'s
+    /// minimal stance handler), so any stance is acceptable on the
+    /// wire. Bows / swords / etc. will animate via the corresponding
+    /// MotionTable cycles regardless of inventory.
+    #[wasm_bindgen(js_name = setStance)]
+    pub fn set_stance(&self, stance: u16) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SetStance { stance })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("set_stance: cmd channel closed ({e})"))
             })
     }
 
@@ -6960,6 +7007,49 @@ async fn recv_loop(
                             });
                             return;
                         }
+                    }
+                    Some(SessionCommand::SetStance { stance }) => {
+                        // Combat-stance hotkey. Translate the u16
+                        // interpreted value to a `MotionStance`
+                        // (silently drop unknown values), then
+                        // enqueue a transient motion pulse — a
+                        // single MoveToState packet edge with
+                        // `current_style` set to the new stance and
+                        // command STOP (no locomotion). ACE accepts
+                        // + broadcasts `UpdateMotion` per
+                        // `Player_Networking.cs::BroadcastMovement`,
+                        // which the existing kind=5 recv arm picks
+                        // up and routes to the stance-keyed cycle
+                        // bake.
+                        use holtburger_core::MotionStyle;
+                        use holtburger_protocol::messages::movement::{
+                            InterpretedMotionCommand, MotionStance,
+                        };
+                        let Some(_) = world.as_ref() else {
+                            console_log_str(
+                                "[stance] SetStance before WorldState ready — dropping",
+                            );
+                            continue;
+                        };
+                        if !entity_seeded {
+                            console_log_str(
+                                "[stance] SetStance before player entity seeded — dropping",
+                            );
+                            continue;
+                        }
+                        let Some(motion_stance) = MotionStance::from_interpreted(stance) else {
+                            console_log_str(&format!(
+                                "[stance] unknown stance interpreted=0x{stance:04X}, ignoring",
+                            ));
+                            continue;
+                        };
+                        movement.enqueue_transient_motion(
+                            InterpretedMotionCommand::STOP,
+                            MotionStyle::Explicit(motion_stance),
+                        );
+                        console_log_str(&format!(
+                            "[stance] enqueue_transient_motion stance=0x{stance:04X}",
+                        ));
                     }
                     Some(SessionCommand::SetMovementInput {
                         forward,

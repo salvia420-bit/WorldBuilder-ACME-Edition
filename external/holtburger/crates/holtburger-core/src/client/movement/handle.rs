@@ -1,6 +1,7 @@
 use super::system::MovementSystem;
-use crate::client::movement_types::PlayerDriveIntent;
+use crate::client::movement_types::{MotionStyle, PlayerDriveIntent};
 use anyhow::Result;
+use holtburger_protocol::messages::movement::InterpretedMotionCommand;
 use holtburger_session::Session;
 use holtburger_world::{WorldEvent, WorldState};
 use std::time::Duration;
@@ -34,6 +35,31 @@ impl MovementSystemHandle {
     /// ManualHeld(MotionState)`). Processed on the next `tick` call.
     pub fn enqueue_drive_intent(&mut self, intent: PlayerDriveIntent, now: Instant) {
         self.inner.enqueue_drive_intent(intent, now);
+    }
+
+    /// Queue a one-shot transient motion pulse — a single
+    /// `MoveToState` packet edge with the given command (typically
+    /// `InterpretedMotionCommand::STOP` for a stance-only change)
+    /// and `motion_style` (typically `MotionStyle::Explicit(stance)`
+    /// to set the player's stance to a specific
+    /// `MotionStance`). Processed on the next `tick` call; takes
+    /// precedence over the active drive for that tick so the active
+    /// WASD movement isn't disturbed.
+    ///
+    /// Used by the web bundle to wire combat-stance hotkeys —
+    /// pressing `1`/`2`/`3` to switch to NonCombat / HandCombat /
+    /// SwordCombat sends one transient pulse with the stance set;
+    /// ACE accepts + broadcasts `UpdateMotion` back to all observers
+    /// (per `Player_Networking.cs::BroadcastMovement`); the
+    /// kind=5 `ENTITY_UPDATE_KIND_MOTION` path then re-bakes the
+    /// stance-specific walk/run cycle for the local player's
+    /// gait change.
+    pub fn enqueue_transient_motion(
+        &mut self,
+        command: InterpretedMotionCommand,
+        motion_style: MotionStyle,
+    ) {
+        self.inner.enqueue_transient_motion(command, motion_style);
     }
 
     /// Arm the AutonomousPosition heartbeat schedule. Call once after the

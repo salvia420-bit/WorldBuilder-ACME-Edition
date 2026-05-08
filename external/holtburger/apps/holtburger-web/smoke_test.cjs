@@ -521,6 +521,18 @@ check(
     `useObject=${typeof sessionHandleProto?.useObject}`
 );
 
+// Combat-stance hotkey: SessionHandle.setStance(stance) dispatches a
+// transient motion pulse (STOP + MotionStyle::Explicit(stance)) so
+// ACE accepts + broadcasts UpdateMotion with the new current_style.
+// JS-side keymap (1-6) and the kind=5 motionStance receiver paint the
+// vitals-header stance indicator. Pairs with stance-keyed walk/run
+// cycle bake — different gait per combat stance.
+check(
+    "SessionHandle.setStance() exposed (combat-stance hotkey)",
+    typeof sessionHandleProto?.setStance === "function",
+    `setStance=${typeof sessionHandleProto?.setStance}`
+);
+
 // Phase 4 step 6f (portal destination chips): EntityUpdate gained a
 // `portalDestination` getter so JS can render a "→ <destination>"
 // chip under portal sprites. Source: ACE's

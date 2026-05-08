@@ -167,6 +167,8 @@
       #vitals-panel header { display: flex; align-items: baseline; justify-content: space-between; gap: 0.4rem; }
       #vitals-panel header .name { font-weight: 600; color: #1a1a1a; }
       #vitals-panel header .level { color: #666; font-family: ui-monospace, monospace; font-size: 0.82rem; }
+      #vitals-panel header .stance { color: #2c5282; font-family: ui-monospace, monospace; font-size: 0.82rem; padding: 0 0.3rem; border-left: 1px solid #ddd; }
+      #vitals-panel header .stance.pending { color: #b8860b; font-style: italic; }
       #vitals-panel .body { padding: 0.5rem 0.75rem 0.6rem; max-height: 22rem; overflow-y: auto; }
       #vitals-panel .empty, #inventory-panel .empty { color: #999; font-style: italic; padding: 1rem 0.75rem; text-align: center; font-size: 0.85rem; }
       /* Vital bar — labelled progress bar with current/max numbers.
@@ -356,6 +358,7 @@
           <header>
             <span class="name" id="vitals-name">—</span>
             <span class="level" id="vitals-level">Level 0</span>
+            <span class="stance" id="player-stance" title="Combat stance — press 1-6 to switch">NonCombat</span>
           </header>
           <div class="body">
             <div id="vitals-bars">
@@ -723,6 +726,43 @@
       const renderStatus = document.getElementById("render-status");
       const canvas = document.getElementById("canvas");
       const stageInfo = document.getElementById("stage-info");
+      // Combat-stance UI state. Module-scoped so both the keymap
+      // handler (in renderHoltburg's closure) and handleEntityMotion
+      // (top-level) can write to the same indicator. Reverse map
+      // covers the full MotionStance enum, not just the hotkey-bound
+      // subset, so server-initiated stance changes (auto-sheathe on
+      // death, NPC engagement) display correctly.
+      const STANCE_LABELS = {
+        0x003c: "HandCombat",
+        0x003d: "NonCombat",
+        0x003e: "SwordCombat",
+        0x003f: "BowCombat",
+        0x0040: "SwordShield",
+        0x0041: "Crossbow",
+        0x0043: "Sling",
+        0x0044: "TwoHandedSword",
+        0x0045: "TwoHandedStaff",
+        0x0046: "DualWield",
+        0x0047: "ThrownWeapon",
+        0x0048: "Graze",
+        0x0049: "Magic",
+        0x00e8: "BowNoAmmo",
+        0x00e9: "CrossbowNoAmmo",
+        0x013b: "Atlatl",
+        0x013c: "ThrownShield",
+      };
+      const stanceLabelEl = document.getElementById("player-stance");
+      // Confirmed stance update — called from kind=5 dispatch when
+      // the local player's motionStance lands. Strips the
+      // hotkey-press "pending" italic styling and shows the
+      // server-confirmed label.
+      function applyConfirmedStance(motionStance) {
+        if (!stanceLabelEl) return;
+        const low = motionStance & 0xFFFF;
+        const label = STANCE_LABELS[low] ?? `0x${low.toString(16)}`;
+        stanceLabelEl.textContent = label;
+        stanceLabelEl.classList.remove("pending");
+      }
       // Phase 5.0b — ASSET_URL was the legacy single-bundle path,
       // replaced by the manifest+shards delivery initialized above
       // via init_resource_source(MANIFEST_URL). Every fetch_* export
@@ -3198,10 +3238,23 @@ void main() {
         // the moment ACE acknowledges the keystate change (the
         // server's command is one round-trip behind the local
         // keystate).
+        //
+        // Exception: stance updates DO apply to the local player —
+        // we route them to the vitals-header stance indicator so the
+        // hotkey's "pending" label flips to the confirmed label
+        // once ACE echoes the change. The animation gate still
+        // skips local for kind=5 (the local sprite's predictor owns
+        // walk/run frames), but stance display is independent of
+        // the animation gate.
         const guid = upd.guid >>> 0;
         const isLocal =
           localPlayerGuid !== null && guid === (localPlayerGuid >>> 0);
-        if (isLocal) return;
+        if (isLocal) {
+          if (typeof applyConfirmedStance === "function") {
+            applyConfirmedStance(upd.motionStance >>> 0);
+          }
+          return;
+        }
         const entry = entityMap.get(guid);
         if (!entry) return;
         entry.motionCommand = upd.motionCommand >>> 0;
@@ -3987,14 +4040,56 @@ void main() {
             const tag = el.tagName;
             return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
           };
+          // Combat-stance hotkeys. Pairs with the stance-keyed
+          // walk/run cycle bake landed prior. Press 1-6 to switch
+          // the local player's MotionStance; the wasm export sends
+          // a one-shot MoveToState pulse with current_style set;
+          // ACE accepts + broadcasts UpdateMotion; the kind=5 recv
+          // arm picks up the new stance and the bake-on-stance-
+          // change path triggers the new gait.
+          //
+          // Bound stances cover the most common subset of the 18
+          // MotionStance variants (the rest are reachable by
+          // re-equipping weapons in retail, but the hotkey set
+          // mirrors what a player would conceivably swap to in a
+          // single session). Values are MotionStance.interpreted()
+          // u16 — low 16 bits of the 0x8000_xxxx form.
+          const STANCE_HOTKEYS = {
+            "1": { stance: 0x003d, label: "NonCombat" },
+            "2": { stance: 0x003c, label: "HandCombat" },
+            "3": { stance: 0x003e, label: "SwordCombat" },
+            "4": { stance: 0x0044, label: "TwoHandedSword" },
+            "5": { stance: 0x003f, label: "BowCombat" },
+            "6": { stance: 0x0049, label: "Magic" },
+          };
           document.addEventListener("keydown", (ev) => {
             if (!enteredWorld || isTypingInForm()) return;
             const k = ev.key.toLowerCase();
             if (movementKeys.has(k)) {
               keyState[k] = true;
               ev.preventDefault();
-            } else if (ev.key === "Shift") {
+              return;
+            }
+            if (ev.key === "Shift") {
               keyState.shift = true;
+              return;
+            }
+            // Stance hotkey dispatch. Held repeats from autorepeat
+            // are harmless — wasm dedupes redundant stance changes
+            // server-side via UpdateMotion broadcast (ACE doesn't
+            // re-broadcast if stance is unchanged).
+            const stanceBinding = STANCE_HOTKEYS[ev.key];
+            if (stanceBinding && handle) {
+              try {
+                handle.setStance(stanceBinding.stance);
+                if (stanceLabelEl) {
+                  stanceLabelEl.textContent = stanceBinding.label;
+                  stanceLabelEl.classList.add("pending");
+                }
+                ev.preventDefault();
+              } catch (e) {
+                console.warn(`[stance] setStance(${stanceBinding.label}) failed:`, e);
+              }
             }
           });
           document.addEventListener("keyup", (ev) => {

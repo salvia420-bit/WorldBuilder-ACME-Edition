@@ -18,6 +18,10 @@ mod simulation;
 pub mod types;
 pub use builder::ClientRuntimeBuilder;
 pub use movement::MovementSystemHandle;
+// Re-exported so the wasm bundle can pass MotionStyle::Explicit(stance)
+// into MovementSystemHandle::enqueue_transient_motion when wiring
+// combat-stance hotkeys.
+pub use movement_types::MotionStyle;
 use character_selection::CharacterSelectionState;
 use movement::MovementSystem;
 use simulation::ClientSimulationSystem;
