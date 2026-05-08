@@ -143,8 +143,9 @@ const path = require("node:path");
 
     // Force the walk-bake directly via the exposed kickWalk... fn,
     // bypassing the velocity-threshold gate. The bake itself runs
-    // through fetchEntityWalkFrames against real DAT data; only
-    // the trigger is short-circuited.
+    // through fetchEntityCycleFrames against real DAT data — bakes
+    // walk and run cycles together; only the trigger is
+    // short-circuited.
     console.log(`[walk-capture] kicking walk-bake directly on guid=0x${target.guid.toString(16).toUpperCase()}`);
     const walkBakeOk = await page.evaluate(async ({ g }) => {
         const entry = window.entityMap?.get(g);
@@ -154,27 +155,49 @@ const path = require("node:path");
         const re0 = window.liveScene?.liveSpriteMap?.get(cacheKey);
         if (!re0) return { ok: false, reason: `no liveMap entry for cacheKey=${cacheKey}` };
         // Kick the bake directly — same call tickEntityAnimations
-        // would have made on first detected motion.
+        // would have made on first detected motion. Bakes BOTH
+        // walk and run cycles in one call (post-rename: the
+        // function is kickCycleFrameBakeIfNeeded; old name kept
+        // as an alias for capture-script compatibility).
         window.kickWalkFrameBakeIfNeeded(cacheKey, entry.modelId, entry.meta);
-        // Wait up to 60s for walkFrames to populate. The bake
-        // touches MotionTable + Animation + N×(SetupModel +
+        // Wait up to 60s for walk OR run frames to populate. The
+        // bake touches MotionTable + Animation + N×(SetupModel +
         // GfxObj parts + Surface chains) — first time for a
         // setup can take 5-15 s with the manifest-mode fetch
         // path. Subsequent entities sharing the same setup hit
-        // the cache instantly.
+        // the cache instantly. Some retail creatures have only
+        // a RUN_FORWARD cycle in their MotionTable (no walk
+        // entry); accept either as success.
         const t0 = performance.now();
         while (performance.now() - t0 < 60_000) {
             const re = window.liveScene?.liveSpriteMap?.get(cacheKey);
-            if (re?.walkFrames && re.walkFrames.length > 0) {
-                return { ok: true, frameCount: re.walkFrames.length, took: Math.round(performance.now() - t0) };
+            const walkN = re?.walkFrames?.length ?? 0;
+            const runN = re?.runFrames?.length ?? 0;
+            const walkSettled = re?.walkFrames !== null && re?.walkFrames !== undefined;
+            const runSettled = re?.runFrames !== null && re?.runFrames !== undefined;
+            if (walkN > 0 || runN > 0) {
+                return {
+                    ok: true,
+                    walkFrameCount: walkN,
+                    runFrameCount: runN,
+                    walkFramerate: re?.walkFramerate ?? 0,
+                    runFramerate: re?.runFramerate ?? 0,
+                    took: Math.round(performance.now() - t0),
+                };
             }
-            if (re?.walkFrames && re.walkFrames.length === 0) {
-                return { ok: false, reason: "walk-bake returned 0 frames (no MotionTable WALK_FORWARD cycle)" };
+            if (walkSettled && runSettled) {
+                return { ok: false, reason: "no walk OR run cycle in MotionTable" };
             }
             await new Promise(r => setTimeout(r, 250));
         }
         const re = window.liveScene?.liveSpriteMap?.get(cacheKey);
-        return { ok: false, reason: "timeout", walkBakeStarted: re?.walkBakeStarted, walkFramesType: typeof re?.walkFrames };
+        return {
+            ok: false,
+            reason: "timeout",
+            cycleBakeStarted: re?.cycleBakeStarted,
+            walkFramesType: typeof re?.walkFrames,
+            runFramesType: typeof re?.runFrames,
+        };
     }, { g: target.guid });
     console.log("[walk-capture] walk-bake result:", JSON.stringify(walkBakeOk, null, 2));
 

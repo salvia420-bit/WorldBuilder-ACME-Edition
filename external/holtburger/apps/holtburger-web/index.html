@@ -502,7 +502,7 @@
         fetch_model_meshes,
         fetch_surfaces_pixels,
         fetchEntityModelRender,
-        fetchEntityWalkFrames,
+        fetchEntityCycleFrames,
         fetchEntitySurfacesPixels,
         start_session,
         init_resource_source,
@@ -2293,48 +2293,73 @@ void main() {
         liveMap.set(cacheKey, {
           texture: renderTex,
           worldBounds: [wb[0], wb[1]],
-          // Tier 2: walkFrames is populated lazily on first detected
-          // movement (kickWalkFrameBakeIfNeeded) — we don't pay the
-          // bake cost up-front for entities that never walk (signs,
-          // doors, chests, immobile NPCs).
+          // Tier 2: walk + run cycle frames + their authoritative
+          // framerates from the MotionTable's AnimData. Populated
+          // lazily on first detected movement
+          // (kickCycleFrameBakeIfNeeded) — we don't pay the bake
+          // cost up-front for entities that never move (signs,
+          // doors, chests, immobile NPCs). null = not yet baked;
+          // [] = baked but no such cycle in the entity's MotionTable
+          // (e.g. creatures with walk-only OR run-only entries —
+          // the other slot stays empty and the gate falls back to
+          // the present cycle).
           walkFrames: null,
-          walkBakeStarted: false,
+          walkFramerate: 0,
+          runFrames: null,
+          runFramerate: 0,
+          cycleBakeStarted: false,
         });
         mesh.free();
         for (const sp of surfacePixels) sp.free();
       }
 
-      // Tier 2: lazily bake the walk-cycle frame textures for an
+      // Tier 2: lazily bake walk + run cycle frame textures for an
       // already-cached liveMap entry. Skipped when (a) entity has no
       // setup (modelId === 0), (b) the bake already ran (cached or
       // in-flight), or (c) the cached liveMap entry is gone (entity
       // already removed). Fire-and-forget: the per-rAF cycler picks
-      // up walkFrames once it's populated; until then sprites stay
-      // on the idle texture.
-      function kickWalkFrameBakeIfNeeded(cacheKey, modelId, meta) {
+      // up walkFrames + runFrames once they're populated; until then
+      // sprites stay on the idle texture.
+      //
+      // Walk and run cycles come back in a single EntityCycleSet
+      // round-trip from the wasm export — one prefetch + setup decode
+      // amortised across both bakes. Each cycle is independent: a
+      // creature with only WALK_FORWARD in its MotionTable yields
+      // walkFrames=[N], runFrames=[]; the gate consults motionCommand
+      // and falls back to the present cycle when the requested one
+      // is empty.
+      function kickCycleFrameBakeIfNeeded(cacheKey, modelId, meta) {
         if (!liveScene || !modelId) return;
         const entry = liveScene.liveSpriteMap?.get(cacheKey);
-        if (!entry || entry.walkBakeStarted || entry.walkFrames) return;
-        entry.walkBakeStarted = true;
+        if (!entry || entry.cycleBakeStarted) return;
+        entry.cycleBakeStarted = true;
         const app = liveScene.app;
         if (!app) return;
         (async () => {
+          let cycleSet = null;
           try {
-            const meshes = await fetchEntityWalkFrames(
+            cycleSet = await fetchEntityCycleFrames(
               modelId,
               meta?.modelChanges ?? new Uint32Array(0),
               meta?.textureChanges ?? new Uint32Array(0),
               (meta?.mtableId ?? 0) >>> 0,
             );
-            if (!meshes || meshes.length === 0) {
-              entry.walkFrames = [];  // empty == "no walk anim available"
+            const walkMeshes = cycleSet.takeWalkFrames();
+            const runMeshes = cycleSet.takeRunFrames();
+            entry.walkFramerate = cycleSet.walkFramerate;
+            entry.runFramerate = cycleSet.runFramerate;
+            // Each frame across BOTH cycles uses the same surface
+            // textures as the idle bake (walk/run pose changes part
+            // transforms, not surface assignments). Look up their
+            // RGBA8 once via the first available mesh, reuse across
+            // every frame's per-poly rasterizer pass.
+            const refMesh = walkMeshes[0] ?? runMeshes[0];
+            if (!refMesh) {
+              entry.walkFrames = [];
+              entry.runFrames = [];
               return;
             }
-            // Each frame uses the SAME surfaces as the idle bake (the
-            // walk-cycle pose changes part transforms, not surface
-            // assignments). Look up their RGBA8 once, reuse across
-            // every frame's per-poly rasterizer pass.
-            const sList = meshes[0].surfaces;
+            const sList = refMesh.surfaces;
             const hasPaletteSubs =
               (meta?.paletteId && meta.paletteId !== 0)
               || (meta?.subPalettes && meta.subPalettes.length > 0);
@@ -2352,25 +2377,36 @@ void main() {
             for (let s = 0; s < sList.length; s += 1) {
               texArr[s] = surfacePixelsToTexture(surfacePixels[s]) ?? makeFlatTexture();
             }
-            const frameTextures = [];
-            for (const mesh of meshes) {
-              if (mesh.triCount === 0) {
+            const bake = (meshes) => {
+              const out = [];
+              for (const mesh of meshes) {
+                if (mesh.triCount === 0) {
+                  mesh.free();
+                  continue;
+                }
+                const tex = renderModelTile(app, mesh, texArr);
+                out.push(tex);
                 mesh.free();
-                continue;
               }
-              const tex = renderModelTile(app, mesh, texArr);
-              frameTextures.push(tex);
-              mesh.free();
-            }
+              return out;
+            };
+            entry.walkFrames = bake(walkMeshes);
+            entry.runFrames = bake(runMeshes);
             for (const sp of surfacePixels) sp.free();
-            entry.walkFrames = frameTextures;
           } catch (err) {
             // eslint-disable-next-line no-console
-            console.warn(`[walk-bake] key=${cacheKey} modelId=0x${modelId.toString(16)} failed:`, err);
-            entry.walkFrames = [];  // mark as "tried + failed"
+            console.warn(`[cycle-bake] key=${cacheKey} modelId=0x${modelId.toString(16)} failed:`, err);
+            entry.walkFrames = entry.walkFrames ?? [];  // mark as "tried + failed"
+            entry.runFrames = entry.runFrames ?? [];
+          } finally {
+            if (cycleSet) cycleSet.free();
           }
         })();
       }
+      // Backwards-compat alias kept for capture scripts that use
+      // the old name. Same single-call bake; just routes through
+      // the renamed helper.
+      const kickWalkFrameBakeIfNeeded = kickCycleFrameBakeIfNeeded;
 
       // Apply the visual category's tint + scale to a freshly minted
       // sprite. Idempotent — safe to call from both `ensureEntitySprite`
@@ -3124,9 +3160,9 @@ void main() {
               const hasFreshMotion =
                 entry.motionUpdatedMs !== undefined &&
                 now - entry.motionUpdatedMs < ENTITY_MOTION_STALE_MS;
+              const cmd = hasFreshMotion ? (entry.motionCommand ?? 0) : 0;
               let moving;
               if (hasFreshMotion) {
-                const cmd = entry.motionCommand ?? 0;
                 moving =
                   cmd === MOTION_CMD_WALK_FORWARD ||
                   cmd === MOTION_CMD_WALK_BACKWARDS ||
@@ -3134,16 +3170,44 @@ void main() {
               } else {
                 moving = (entry.speedMps ?? 0) >= WALK_MOVING_THRESHOLD_MPS;
               }
-              if (moving && renderEntry.walkFrames === null) {
-                kickWalkFrameBakeIfNeeded(
+              if (moving && renderEntry.walkFrames === null && renderEntry.runFrames === null) {
+                kickCycleFrameBakeIfNeeded(
                   computeEntitySpriteKey(entry.modelId, entry.meta),
                   entry.modelId,
                   entry.meta,
                 );
               }
-              if (moving && renderEntry.walkFrames && renderEntry.walkFrames.length > 0) {
-                const idx = Math.floor(walkPhase) % renderEntry.walkFrames.length;
-                entry.sprite.texture = renderEntry.walkFrames[idx];
+              // Pick walk vs run cycle by motionCommand. Run when
+              // ACE explicitly says RUN_FORWARD; walk for everything
+              // else that's moving (including WALK_BACKWARDS — no
+              // separate walk-back cycle in retail data, the walk
+              // forward anim covers it). Falls back to the other
+              // cycle when the requested one is missing — many
+              // retail creatures have walk-only or run-only entries.
+              const wantRun = cmd === MOTION_CMD_RUN_FORWARD;
+              let activeFrames = null;
+              let activeFramerate = 0;
+              if (moving) {
+                if (wantRun && renderEntry.runFrames && renderEntry.runFrames.length > 0) {
+                  activeFrames = renderEntry.runFrames;
+                  activeFramerate = renderEntry.runFramerate;
+                } else if (renderEntry.walkFrames && renderEntry.walkFrames.length > 0) {
+                  activeFrames = renderEntry.walkFrames;
+                  activeFramerate = renderEntry.walkFramerate;
+                } else if (renderEntry.runFrames && renderEntry.runFrames.length > 0) {
+                  activeFrames = renderEntry.runFrames;
+                  activeFramerate = renderEntry.runFramerate;
+                }
+              }
+              if (activeFrames) {
+                // Per-entity time-based frame index using the
+                // MotionTable-authored framerate (typically 8-30 fps
+                // depending on creature). Falls back to the legacy
+                // 12 fps constant when the AnimData carries 0.0
+                // (malformed or missing).
+                const fps = activeFramerate > 0 ? activeFramerate : WALK_FRAME_RATE;
+                const idx = Math.floor((now / 1000) * fps) % activeFrames.length;
+                entry.sprite.texture = activeFrames[idx];
               } else {
                 entry.sprite.texture = renderEntry.texture;
               }

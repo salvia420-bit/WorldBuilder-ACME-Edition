@@ -1511,10 +1511,10 @@ fn triangulate_setup_model_with_substitutions<S: holtburger_dat::ResourceSource 
 /// AND an optional explicit per-part pose. When `pose_override` is
 /// `Some(&AnimationFrame)`, that frame's per-part transforms replace
 /// both the idle-anim frame AND the placement-frame fallback.
-/// Used by the walk-cycle bake path: caller resolves the walk
-/// cycle's frames once via `try_resolve_walk_anim_frames`, then
-/// calls this once per frame to emit one pose-specific mesh per
-/// cycle frame.
+/// Used by the walk/run-cycle bake path: caller resolves the
+/// cycle's frames once via `try_resolve_cycle_frames` (with the
+/// command parameter for walk vs. run), then calls this once per
+/// frame to emit one pose-specific mesh per cycle frame.
 ///
 /// `pose_override = None` is the original `with_substitutions`
 /// behaviour (Phase C idle → placement → identity fallback chain).
@@ -1621,11 +1621,15 @@ fn triangulate_setup_model_at_frame<S: holtburger_dat::ResourceSource + ?Sized>(
 /// frames — visually approximate, but avoids 3-5× storage. A
 /// future tier could bake per-stance walks if anyone asks.
 #[cfg(any(target_arch = "wasm32", test))]
-fn try_resolve_walk_anim_frames<S: holtburger_dat::ResourceSource + ?Sized>(
+fn try_resolve_cycle_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     setup: &holtburger_dat::file_type::SetupModel,
     mtable_override: Option<u32>,
-) -> Option<Vec<holtburger_dat::file_type::setup_model::AnimationFrame>> {
+    command: u32,
+) -> Option<(
+    Vec<holtburger_dat::file_type::setup_model::AnimationFrame>,
+    f32,
+)> {
     use holtburger_dat::file_type::{Animation, MotionTable};
     use holtburger_dat::ResourceKey;
 
@@ -1646,17 +1650,15 @@ fn try_resolve_walk_anim_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     // Use MotionTable::motion_data_for_cycle which builds the key
     // via the canonical `cycle_key(stance, command)` helper —
     // (stance & 0xFFFF) << 16 | (command & MOTION_KEY_MASK).
-    // MOTION_KEY_MASK = 0x000F_FFFF, so the high bits of
+    // MOTION_KEY_MASK = 0x000F_FFFF, so the high bits of e.g.
     // WALK_FORWARD_COMMAND (0x4500_0000) are stripped before the
     // lookup. The wrong mask width is a footgun — Phase C's idle
     // path got away with it because style_defaults stores the
     // pre-masked substate, not the full command.
-    let motion_data = mtable.motion_data_for_cycle(
-        mtable.default_style,
-        MotionTable::WALK_FORWARD_COMMAND,
-    )?;
+    let motion_data = mtable.motion_data_for_cycle(mtable.default_style, command)?;
     let anim_data = motion_data.anims.first()?;
     let anim_did = anim_data.anim_id;
+    let framerate = anim_data.framerate;
     if (anim_did >> 24) != 0x03 { return None; }
 
     let anim_bytes = source.get_file_by_key(ResourceKey::new("eor/portal", anim_did)).ok()?;
@@ -1682,7 +1684,7 @@ fn try_resolve_walk_anim_frames<S: holtburger_dat::ResourceSource + ?Sized>(
         ((anim_data.high_frame as usize).saturating_add(1)).min(total)
     };
     if low >= high { return None; }
-    Some(anim.part_frames[low..high].to_vec())
+    Some((anim.part_frames[low..high].to_vec(), framerate))
 }
 
 /// Phase 4 step 6 Phase C: resolve the idle pose for a SetupModel by
@@ -2300,51 +2302,116 @@ pub async fn fetch_entity_model_render(
     Ok(pack_model_mesh(tris))
 }
 
-/// Phase 4 step 6 Tier 2: bake the walk-cycle frames for an entity
-/// setup. Resolves the setup's MotionTable WALK_FORWARD cycle once,
-/// then triangulates the SetupModel with substitutions applied AND
-/// each frame's per-part transforms — returning one [`ModelMesh`]
-/// per cycle frame. JS caches the resulting array of textures and
-/// swaps `sprite.texture` based on velocity-driven frame index.
+/// Phase 4 step 6 Tier 2 + walk-cycle polish: bundle of walk + run
+/// cycle bakes for one entity setup. Each cycle is a `Vec<ModelMesh>`
+/// (one mesh per keyframe) plus the authoritative
+/// `AnimData.framerate` from the MotionTable, so the JS animation
+/// loop ticks at retail's actual rate instead of a guessed constant.
 ///
-/// Returns an empty Vec for setups that:
+/// Empty `Vec` + `0.0` framerate signals "no cycle resolved" for that
+/// command — JS falls back to the idle texture in that case.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct EntityCycleSet {
+    walk_frames: Vec<ModelMesh>,
+    walk_framerate: f32,
+    run_frames: Vec<ModelMesh>,
+    run_framerate: f32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl EntityCycleSet {
+    /// Authoritative walk-cycle playback rate (frames/sec) from the
+    /// MotionTable's `AnimData.framerate`. `0.0` when no walk cycle
+    /// resolved.
+    #[wasm_bindgen(getter, js_name = walkFramerate)]
+    pub fn walk_framerate(&self) -> f32 {
+        self.walk_framerate
+    }
+
+    /// Authoritative run-cycle playback rate (frames/sec). `0.0` when
+    /// no run cycle resolved (most non-humanoid setups).
+    #[wasm_bindgen(getter, js_name = runFramerate)]
+    pub fn run_framerate(&self) -> f32 {
+        self.run_framerate
+    }
+
+    /// Move the walk-cycle meshes out of the set into a JS-owned array.
+    /// One-shot — second call returns an empty Vec.
+    #[wasm_bindgen(js_name = takeWalkFrames)]
+    pub fn take_walk_frames(&mut self) -> Vec<ModelMesh> {
+        std::mem::take(&mut self.walk_frames)
+    }
+
+    /// Move the run-cycle meshes out of the set. One-shot.
+    #[wasm_bindgen(js_name = takeRunFrames)]
+    pub fn take_run_frames(&mut self) -> Vec<ModelMesh> {
+        std::mem::take(&mut self.run_frames)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl EntityCycleSet {
+    fn empty() -> Self {
+        Self {
+            walk_frames: Vec::new(),
+            walk_framerate: 0.0,
+            run_frames: Vec::new(),
+            run_framerate: 0.0,
+        }
+    }
+}
+
+/// Phase 4 step 6 Tier 2 + walk-cycle polish: bake both walk and run
+/// cycles for an entity setup in a single wasm round-trip. For each
+/// cycle, resolves the MotionTable's WALK_FORWARD / RUN_FORWARD entry,
+/// triangulates the SetupModel with substitutions applied at each
+/// keyframe's per-part transforms, and surfaces the
+/// `AnimData.framerate` so JS can tick at retail's authentic rate.
+///
+/// Returns an [`EntityCycleSet`] with empty Vec + `0.0` framerate for
+/// any cycle that doesn't resolve. The two cycles are independent —
+/// many humanoid creatures have walk-only or run-only entries; a
+/// missing run cycle does NOT prevent the walk cycle from being
+/// returned.
+///
+/// Returns an all-empty set for setups that:
 /// - aren't `0x02xxxxxx` (raw GfxObj 0x01 prefix has no MotionTable)
-/// - have no `default_motion_table`
-/// - have a MotionTable but no WALK_FORWARD cycle (most static
-///   props, doors, signs)
-/// - have a malformed cycle / Animation chain
+/// - have no `default_motion_table` (and no `mtable_id` override)
+/// - have a MotionTable but no WALK_FORWARD nor RUN_FORWARD cycles
+///   (most static props, doors, signs)
 ///
-/// The empty-Vec contract lets JS conditionally enable walk cycling
-/// per entity: `if (frames.length > 0) { entry.walkFrames = ...; }`
-/// else fall back to the static idle texture.
+/// JS dispatch: `if (cycle.walkFrames.length > 0) { ... }` — same
+/// per-cycle conditional pattern as the previous walk-only export.
 ///
 /// Substitution arguments are identical to `fetchEntityModelRender`
 /// — the same `model_changes` + `texture_changes` apply across
-/// every frame of the walk cycle (clothing/armor doesn't move when
+/// every frame of every cycle (clothing/armor doesn't move when
 /// limbs do).
 #[cfg(target_arch = "wasm32")]
-#[wasm_bindgen(js_name = fetchEntityWalkFrames)]
-pub async fn fetch_entity_walk_frames(
+#[wasm_bindgen(js_name = fetchEntityCycleFrames)]
+pub async fn fetch_entity_cycle_frames(
     setup_id: u32,
     model_changes: Vec<u32>,
     texture_changes: Vec<u32>,
     mtable_id: u32,
-) -> Result<Vec<ModelMesh>, JsValue> {
-    use holtburger_dat::file_type::SetupModel;
+) -> Result<EntityCycleSet, JsValue> {
+    use holtburger_dat::file_type::{MotionTable, SetupModel};
     use holtburger_dat::{ResourceKey, ResourceSource};
     if model_changes.len() % 2 != 0 {
         return Err(JsValue::from_str(
-            "fetch_entity_walk_frames: model_changes must be flat [partIndex, gfxId, ...] pairs",
+            "fetch_entity_cycle_frames: model_changes must be flat [partIndex, gfxId, ...] pairs",
         ));
     }
     if texture_changes.len() % 3 != 0 {
         return Err(JsValue::from_str(
-            "fetch_entity_walk_frames: texture_changes must be flat [partIndex, oldSurface, newSurface, ...] triples",
+            "fetch_entity_cycle_frames: texture_changes must be flat [partIndex, oldSurface, newSurface, ...] triples",
         ));
     }
     // Raw GfxObj (0x01) has no skeleton + no MotionTable — return empty.
     if (setup_id >> 24) as u8 != 0x02 {
-        return Ok(Vec::new());
+        return Ok(EntityCycleSet::empty());
     }
     let mc: Vec<(u8, u32)> = model_changes.chunks_exact(2).map(|c| (c[0] as u8, c[1])).collect();
     let tc: Vec<(u8, u32, u32)> = texture_changes
@@ -2355,30 +2422,45 @@ pub async fn fetch_entity_walk_frames(
     // Prefetch: the setup, every substituted GfxObj, and the
     // MotionTable + Animation reachable from setup.default_motion_table.
     // The MotionTable + Animation DIDs are discovered inside the
-    // prefetch closure via try_resolve_walk_anim_frames, so they
-    // ride along automatically.
+    // prefetch closure via try_resolve_cycle_frames, so they ride
+    // along automatically — for BOTH walk and run, since both need
+    // their Animation chain warm before the bake step.
     let source = global_source::global_source();
     let mut initial: Vec<ResourceKey<'_>> = Vec::with_capacity(1 + mc.len());
     initial.push(ResourceKey::new("eor/portal", setup_id));
     for (_, gfx_id) in &mc {
         initial.push(ResourceKey::new("eor/portal", *gfx_id));
     }
-    let mc_for_walk = mc.clone();
-    let tc_for_walk = tc.clone();
+    let mc_for_prefetch = mc.clone();
+    let tc_for_prefetch = tc.clone();
     let mt_override = if mtable_id == 0 { None } else { Some(mtable_id) };
     if let Some(mt) = mt_override {
         initial.push(ResourceKey::new("eor/portal", mt));
     }
     prefetch::ensure_walk_prefetched(&source, &initial, move |s| {
         // Touch each cycle frame inside the prefetch so the
-        // MotionTable + Animation records are discovered.
+        // MotionTable + Animation records (for walk AND run) are
+        // discovered before the real bake.
         if let Ok(setup_bytes) = s.get_file_by_key(ResourceKey::new("eor/portal", setup_id)) {
             if let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(&setup_bytes)) {
-                if let Some(frames) = try_resolve_walk_anim_frames(s, &setup, mt_override) {
-                    for f in frames.iter() {
-                        let _ = triangulate_setup_model_at_frame(
-                            s, setup_id, &mc_for_walk, &tc_for_walk, mt_override, Some(f), &mut Vec::new(),
-                        );
+                for command in [
+                    MotionTable::WALK_FORWARD_COMMAND,
+                    MotionTable::RUN_FORWARD_COMMAND,
+                ] {
+                    if let Some((frames, _)) =
+                        try_resolve_cycle_frames(s, &setup, mt_override, command)
+                    {
+                        for f in frames.iter() {
+                            let _ = triangulate_setup_model_at_frame(
+                                s,
+                                setup_id,
+                                &mc_for_prefetch,
+                                &tc_for_prefetch,
+                                mt_override,
+                                Some(f),
+                                &mut Vec::new(),
+                            );
+                        }
                     }
                 }
             }
@@ -2386,27 +2468,45 @@ pub async fn fetch_entity_walk_frames(
     })
     .await?;
 
-    // Now do the real bake. Re-load the setup + walk frames from the
-    // prefetched cache, triangulate each frame, pack the meshes.
+    // Now do the real bake. Re-load the setup once; bake each cycle
+    // independently so a missing run cycle doesn't suppress walk.
     let setup_bytes = source
         .as_ref()
         .get_file_by_key(ResourceKey::new("eor/portal", setup_id))
-        .map_err(|e| JsValue::from_str(&format!("fetch_entity_walk_frames: setup load: {e}")))?;
+        .map_err(|e| JsValue::from_str(&format!("fetch_entity_cycle_frames: setup load: {e}")))?;
     let setup = SetupModel::unpack(&mut std::io::Cursor::new(&setup_bytes))
-        .map_err(|e| JsValue::from_str(&format!("fetch_entity_walk_frames: setup parse: {e}")))?;
-    let walk_frames = match try_resolve_walk_anim_frames(source.as_ref(), &setup, mt_override) {
-        Some(f) => f,
-        None => return Ok(Vec::new()),
+        .map_err(|e| JsValue::from_str(&format!("fetch_entity_cycle_frames: setup parse: {e}")))?;
+
+    let bake_cycle = |command: u32| -> (Vec<ModelMesh>, f32) {
+        match try_resolve_cycle_frames(source.as_ref(), &setup, mt_override, command) {
+            Some((frames, framerate)) => {
+                let mut out = Vec::with_capacity(frames.len());
+                for f in &frames {
+                    let mut tris = Vec::new();
+                    let _ = triangulate_setup_model_at_frame(
+                        source.as_ref(),
+                        setup_id,
+                        &mc,
+                        &tc,
+                        mt_override,
+                        Some(f),
+                        &mut tris,
+                    );
+                    out.push(pack_model_mesh(tris));
+                }
+                (out, framerate)
+            }
+            None => (Vec::new(), 0.0),
+        }
     };
-    let mut out = Vec::with_capacity(walk_frames.len());
-    for f in &walk_frames {
-        let mut tris = Vec::new();
-        let _ = triangulate_setup_model_at_frame(
-            source.as_ref(), setup_id, &mc, &tc, mt_override, Some(f), &mut tris,
-        );
-        out.push(pack_model_mesh(tris));
-    }
-    Ok(out)
+    let (walk_frames, walk_framerate) = bake_cycle(MotionTable::WALK_FORWARD_COMMAND);
+    let (run_frames, run_framerate) = bake_cycle(MotionTable::RUN_FORWARD_COMMAND);
+    Ok(EntityCycleSet {
+        walk_frames,
+        walk_framerate,
+        run_frames,
+        run_framerate,
+    })
 }
 
 // ============================================================
@@ -7382,7 +7482,7 @@ mod tests_substitution {
     // Phase 4 step 6 Tier 2 — walk-cycle helpers
     // -------------------------------------------------------------
 
-    /// `try_resolve_walk_anim_frames` returns None for a setup with
+    /// `try_resolve_cycle_frames` returns None for a setup with
     /// no `default_motion_table`. Same regression guard as Phase C's
     /// idle resolver — naked setups stay on the placement-frame
     /// path. (Synthesizing a real walk MotionTable + Animation
@@ -7391,7 +7491,8 @@ mod tests_substitution {
     /// `ObjectSpriteGenerator.cs:921-950` + the wire round-trip
     /// validation that runs against live ACE.)
     #[test]
-    fn try_resolve_walk_anim_frames_none_for_setup_without_motion_table() {
+    fn try_resolve_cycle_frames_none_for_setup_without_motion_table() {
+        use holtburger_dat::file_type::MotionTable;
         let setup_id: u32 = 0x02000099;
         let part_a: u32 = 0x0100000A;
         let part_b: u32 = 0x0100000B;
@@ -7405,11 +7506,20 @@ mod tests_substitution {
             .get_file_by_key(ResourceKey::new("eor/portal", setup_id))
             .unwrap();
         let setup = SetupModel::unpack(&mut Cursor::new(&setup_bytes)).unwrap();
-        assert!(try_resolve_walk_anim_frames(&source, &setup, None).is_none());
-        // Also: an mtable_override that resolves to nothing in the
-        // mock source still yields None (the setup → MotionTable
-        // load fails gracefully).
-        assert!(try_resolve_walk_anim_frames(&source, &setup, Some(0x09000099)).is_none());
+        // Both walk and run cycles fail-soft to None when there's no
+        // mtable to query.
+        for cmd in [
+            MotionTable::WALK_FORWARD_COMMAND,
+            MotionTable::RUN_FORWARD_COMMAND,
+        ] {
+            assert!(try_resolve_cycle_frames(&source, &setup, None, cmd).is_none());
+            // Also: an mtable_override that resolves to nothing in the
+            // mock source still yields None (the setup → MotionTable
+            // load fails gracefully).
+            assert!(
+                try_resolve_cycle_frames(&source, &setup, Some(0x09000099), cmd).is_none()
+            );
+        }
     }
 
     /// `triangulate_setup_model_at_frame` with an explicit
