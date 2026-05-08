@@ -5,19 +5,22 @@
 > Read this section first. The rest of this document is the
 > long-lived design intent + decision history; this header is
 > the snapshot of where we actually are and what's blocking
-> what. Last refreshed **2026-05-08** (post-Phase-4-step-4-
-> follow-on landing — vitals + inventory DOM panels).
+> what. Last refreshed **2026-05-08** (post-Phase-4-step-5
+> landing — interactive entities via `UseObject`).
 
 ### Where the project is
 
 **Phases done:** 0, 1, 2, 3 (steps 1-6 + step 3.6 terrain
 bilinear blend; step 5 partial), 4 (step 1 + 2a + 2a.5 +
 2a.6 + 2b + 3 + 3.5 + 3.6 movement-system wiring + 3.7 biota
-handler + landblock-crossing rebucket + 4 chat panel +
-**4 follow-on — vitals + inventory DOM panels via the
-canonical world-handler dispatcher routed at the top of
-the recv loop's per-message processing block, landed
-2026-05-08** +
+handler + landblock-crossing rebucket + 4 chat panel + 4
+follow-on (vitals + inventory DOM panels) +
+**5 interactive entities — `SessionHandle.useObject(guid)`
+wasm export + per-sprite `pointerdown` handler on
+interactable categories + 3 new `ClientEvent` kinds
+(VendorOpened / UseFailed / UseDone OK), landed
+2026-05-08; live-validated against a Sparring Golem
+returning `kind=14 UseDone`** +
 6a + 6b + 6e (realistic-entity metadata + ItemType-keyed
 visual dispatch + glyph fallback + per-entity nameplates) +
 6 Phase A + B + C (ACE-shipped ClothingTable substitutions +
@@ -26,19 +29,13 @@ palette overlays + MotionTable idle pose), 5.0, 5.0b, 5.1a,
 `cargo check --target wasm32-unknown-unknown` clean for
 `holtburger-{dat,session,transport-ws,resource-http,web,
 content,core,manifest}`. `wasm-pack build --target {nodejs,
-web}` both green. `node smoke_test.cjs` **82 / 82 PASS**
-(81 OK + 1 SKIP for live-ACE round-trip; the SKIP is the
+web}` both green. `node smoke_test.cjs` **83 / 83 PASS**
+(82 OK + 1 SKIP for live-ACE round-trip; the SKIP is the
 symbol-only check — the wire-effect validation runs through
-`capture_phase4_step3.cjs`, terrain quality validation
-through `capture_terrain_eval.cjs`, both Playwright-driven
-against the live stack). The +9 OK probes from the step 4
-follow-on are: 2 new SessionHandle methods
-(`playerStats`, `playerInventory`) + 2 new wasm-bindgen
-classes (`PlayerStatsSnapshot`, `InventoryItem` — getter
-shape pinned in one assertion each) + 3 new label helpers
-(`skillName`, `attributeName`, `vitalName`) + the existing
-9 step-3 / step-3.6 / step-4 OK probes that came in since
-the prior baseline.
+`capture_phase4_step3.cjs` (movement),
+`capture_phase4_step4_follow_on.cjs` (vitals + inventory),
+`capture_phase4_step5.cjs` (click-to-use), all Playwright-
+driven against the live stack).
 
 **What works end-to-end today.** Open
 `apps/holtburger-web/index.html` in any browser. The page calls
@@ -415,12 +412,34 @@ Pick one to pull on. The choice is real, not arbitrary.
   `SessionHandle` methods (`playerStats()`,
   `playerInventory()`) return flat-typed-array
   `PlayerStatsSnapshot` / `Vec<InventoryItem>` snapshots
-  the JS panel renders. **Next on the rail:** step 5
-  (interactive entities: doors, portals, vendors via
-  `UseObject`) → step 6 (realistic entity rendering follow-
+  the JS panel renders. **Step 5 (interactive entities,
+  2026-05-08):** new `SessionHandle.useObject(guid)` wasm
+  export wraps `GameAction::Use(UseActionData { guid })`.
+  JS attaches a per-sprite `pointerdown` handler on
+  interactable categories (portal / lifestone / creature /
+  container / writable) — `cursor: pointer` + hover-tint
+  affordance + `stopPropagation` to keep the camera-pan
+  handler quiet. Three new `ClientEvent` kinds normalise
+  ACE's responses: `kind=12 VendorOpened` from
+  `GameEvent::ApproachVendor` (with vendor name + item
+  count); `kind=13 UseFailed` from
+  `GameEvent::UseDone(error != None)` for explicit use
+  errors (locked doors, etc.); `kind=14 UseDone OK` for
+  success. Bare `WeenieError` / `WeenieErrorWithString`
+  become kind=2 system-chat lines (channel-join
+  notifications and similar info-events would otherwise
+  false-positive as use failures). Live-validated
+  end-to-end against ACE: clicking a Sparring Golem
+  (creature, wcid=12698) returned `kind=14 UseDone`. **Next
+  on the rail:** step 6 (realistic entity rendering follow-
   ons: 6c palette-tinted variants, 6d portal swirls + sign
   inscriptions, 6f portal destination chips — building on
-  6a/b/e/Phase-A/B/C already landed).
+  6a/b/e/Phase-A/B/C already landed). Step 5 polish that
+  could land in a follow-on: pickup-via-MoveToObject for
+  weapons / armor / gems (currently click-only routes
+  through `UseObject`, which ACE doesn't honour for
+  pickup); vendor-window UI on `kind=12` (today the
+  reception is just a chat line in the Trade tab).
 - **Bandwidth rail** — Phase 5.2 (manifest scale fix) at
   [`manifest.md`](manifest.md). Real-world bake produces a
   **203 MB** `manifest.json` (885,043 entries × ~230 bytes

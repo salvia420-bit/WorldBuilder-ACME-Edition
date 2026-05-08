@@ -458,6 +458,22 @@ check(
     `vitalName=${typeof wasm.vitalName}, vitalName(1)=${JSON.stringify(wasm.vitalName?.(1))}`
 );
 
+// Phase 4 step 5 (interactive entities): SessionHandle.useObject(guid)
+// dispatches a `GameAction::Use(UseActionData { guid })` action. The
+// JS side fires this from per-sprite pointerdown handlers on portals
+// / vendors / lifestones / containers / signs; ACE responds with
+// either `PlayerTeleport` (portal), `GameEvent::ApproachVendor`
+// (vendor), `GameEvent::UseDone` (door / container / lifestone), or
+// `GameEvent::WeenieError(WithString)` (out-of-range / locked /
+// non-interactive). The recv loop's GameEvent arm normalises the
+// reply into kind=12 VendorOpened / kind=13 UseFailed / kind=14
+// UseDone.
+check(
+    "SessionHandle.useObject() exposed (Phase 4 step 5 click-to-use)",
+    typeof sessionHandleProto?.useObject === "function",
+    `useObject=${typeof sessionHandleProto?.useObject}`
+);
+
 
 (async () => {
     // Phase 5.0b — pre-bake a manifest+shards+boot tree from the

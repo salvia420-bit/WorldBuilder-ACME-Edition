@@ -2365,6 +2365,79 @@ void main() {
         entry.modelId = modelId;
         entry.kind = "sprite";
         applyMetaToSprite(entry, renderEntry);
+        // Phase 4 step 5: re-attach the click handler to the new
+        // sprite (the placeholder's handler died with its
+        // PIXI.Graphics instance). Skips the local player + non-
+        // interactable categories.
+        setupEntityClickability(sprite, guid, entry.meta);
+      }
+
+      // Phase 4 step 5 (interactive entities) — wire a per-sprite
+      // pointerdown handler that dispatches `handle.useObject(guid)`
+      // when the player clicks. Skips:
+      // - The local player's own sprite (self-click is a no-op).
+      // - Categories ACE doesn't respond meaningfully to (food,
+      //   gem, money, key, weapon, armor — these only react when
+      //   the player picks them up via `MoveToObject`-style flow,
+      //   not click-and-use; deferring drag/pickup to a future step).
+      //
+      // Interactable categories (Portal, LifeStone, Creature —
+      // includes Vendors and NPCs — Container, Writable — signs and
+      // books) get cursor=pointer + a hover-tint shift and the click
+      // handler. `e.stopPropagation()` keeps the camera-pan handler
+      // (which lives on `app.stage`) from also firing on the same
+      // pointerdown.
+      function setupEntityClickability(sprite, guid, meta) {
+        if (!sprite || !meta) return;
+        if (guid === getLocalPlayerGuid()) return;
+        const cat = meta.category;
+        const interactable =
+          cat === "portal"
+          || cat === "lifestone"
+          || cat === "creature"
+          || cat === "container"
+          || cat === "writable";
+        if (!interactable) return;
+        sprite.eventMode = "static";
+        sprite.cursor = "pointer";
+        // Hover affordance — slight tint multiply on the sprite. The
+        // existing `applyMetaToSprite` may already set a tint for
+        // category styling; we read+restore it on pointerout to
+        // avoid clobbering. PIXI defaults the tint to 0xFFFFFF.
+        const baseTint = sprite.tint != null ? sprite.tint : 0xFFFFFF;
+        sprite.on("pointerover", () => {
+          // Brighten by ~15% via channelwise saturating add.
+          sprite.tint = brightenTint(baseTint, 0x202020);
+        });
+        sprite.on("pointerout", () => {
+          sprite.tint = baseTint;
+        });
+        sprite.on("pointerdown", (ev) => {
+          // Block the camera-pan handler on app.stage.
+          if (ev && typeof ev.stopPropagation === "function") {
+            ev.stopPropagation();
+          }
+          const h = window.__sessionHandle;
+          if (!h || typeof h.useObject !== "function") return;
+          try {
+            h.useObject(guid);
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.warn(`useObject(0x${guid.toString(16)}): ${e?.message ?? e}`);
+          }
+        });
+      }
+
+      // Phase 4 step 5: channelwise saturating-add for hover tint.
+      // PIXI tint is a 24-bit RGB int; we add a small RGB delta and
+      // clamp at 0xFF per channel.
+      function brightenTint(base, delta) {
+        const br = (base >> 16) & 0xff, bg = (base >> 8) & 0xff, bb = base & 0xff;
+        const dr = (delta >> 16) & 0xff, dg = (delta >> 8) & 0xff, db = delta & 0xff;
+        const r = Math.min(255, br + dr);
+        const g = Math.min(255, bg + dg);
+        const b = Math.min(255, bb + db);
+        return (r << 16) | (g << 8) | b;
       }
 
       // Build (or fetch existing) entityMap entry for a given GUID.
@@ -2438,6 +2511,10 @@ void main() {
         // Graphics already encode their colour. For the on-demand fetch
         // path, it's re-applied inside upgradeEntitySprite.
         applyMetaToSprite(entry, renderEntry);
+        // Phase 4 step 5: per-sprite pointerdown handler for the
+        // click-to-use loop. Only attaches for interactable categories
+        // (portal / vendor / lifestone / container / sign).
+        setupEntityClickability(sprite, guid, entry.meta);
         // For cache-miss real-modelId arrivals, kick off an on-demand
         // fetch. When it resolves, the placeholder glyph is swapped
         // for the real textured sprite via `upgradeEntitySprite`.
@@ -3663,6 +3740,35 @@ void main() {
                 // here. The wasm-side filter excludes entities not
                 // owned by the player.
                 renderInventoryPanel(handle);
+              } else if (evt.kind === 12) {
+                // Phase 4 step 5: VendorOpened. The wasm side already
+                // pushed a kind=2 chat line into the [Trade] tab so
+                // the user sees vendor approached + item count
+                // without needing a vendor-window UI yet. Future
+                // vendor-window work hooks here to pop a modal
+                // listing the items + buy/sell buttons.
+                const vendorName = evt.stringPayload || "Vendor";
+                const vendorGuid = (evt.u32Payload >>> 0).toString(16).toUpperCase().padStart(8, "0");
+                const itemCount = evt.u32Payload2 >>> 0;
+                // eslint-disable-next-line no-console
+                console.log(`[step 5] VendorOpened ${vendorName} guid=0x${vendorGuid} items=${itemCount}`);
+              } else if (evt.kind === 13) {
+                // Phase 4 step 5: UseFailed (WeenieError /
+                // WeenieErrorWithString). Already mirrored as a
+                // chat line into the System tab; logging here for
+                // debug visibility.
+                const errLabel = evt.stringPayload || "?";
+                const errCode = evt.u32Payload >>> 0;
+                // eslint-disable-next-line no-console
+                console.log(`[step 5] UseFailed ${errLabel} code=${errCode}`);
+              } else if (evt.kind === 14) {
+                // Phase 4 step 5: UseDone OK — door opened, container
+                // approached, lifestone touched. The visible reaction
+                // (open-container UI, position update for
+                // lifestone-respawn, etc.) arrives via subsequent
+                // events; nothing to render here.
+                // eslint-disable-next-line no-console
+                console.log(`[step 5] UseDone (success)`);
               } else if (evt.kind === 0) {
                 // Re-fired CharacterListReceived (e.g. after CharacterCreate
                 // / CharacterDelete round-trip). Step 2a doesn't act on

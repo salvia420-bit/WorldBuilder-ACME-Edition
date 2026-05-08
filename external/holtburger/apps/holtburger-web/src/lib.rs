@@ -2761,6 +2761,30 @@ const CLIENT_EVENT_KIND_PLAYER_STATS_UPDATED: u32 = 8;
 /// a fresh inventory snapshot.
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_INVENTORY_UPDATED: u32 = 11;
+/// Phase 4 step 5 (interactive entities): a successful `useObject`
+/// click landed on a vendor — ACE responded with
+/// `GameEvent::ApproachVendor`, the recv loop captured the vendor's
+/// metadata, and JS should surface it (status line / chat / future
+/// vendor-window UI). `string_payload` = vendor display name;
+/// `u32_payload` = vendor guid;
+/// `u32_payload_2` = item count.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_VENDOR_OPENED: u32 = 12;
+/// Phase 4 step 5 (interactive entities): a click failed —
+/// `GameEvent::WeenieError` or `GameEvent::WeenieErrorWithString`
+/// landed (out-of-range, locked, "this person doesn't talk", etc.).
+/// `string_payload` = human-readable error description;
+/// `u32_payload` = numeric `WeenieError` code so JS can match on
+/// specific failure modes.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_USE_FAILED: u32 = 13;
+/// Phase 4 step 5 (interactive entities): a click succeeded —
+/// `GameEvent::UseDone(WeenieError::None)` landed. ACE sends this
+/// for door opens, container approaches, lifestone touches, etc.
+/// (Vendors get `kind=12 VendorOpened` instead; portals fire
+/// `PlayerTeleport`.) No payload.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_USE_DONE: u32 = 14;
 
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
@@ -2796,6 +2820,20 @@ enum SessionCommand {
     /// `docs/phase-4-renderer.md` step 2a.6 for the SQL one-liner
     /// that promotes test accounts to `accessLevel = 4`.
     SendChat { message: String },
+    /// Phase 4 step 5 (interactive entities): the JS side clicked an
+    /// entity sprite. Recv loop wraps in `GameAction::Use(Box<UseActionData>)`
+    /// and dispatches via `session.send_action`. ACE handles the
+    /// behaviour server-side based on the target's WeenieType:
+    /// - Portal → `PlayerTeleport` + position update (we already
+    ///   handle PlayerTeleport in step 3.6's recv arm).
+    /// - Vendor → `GameEvent::ApproachVendor` carrying the vendor's
+    ///   item list; recv loop normalises into `kind=12 VendorOpened`.
+    /// - Door / lockable → `GameEvent::UseDone(error)` (Ok = opened,
+    ///   non-Ok = locked / out-of-range / etc).
+    /// - Sign / writable → `GameEvent::BookDataResponse`.
+    /// - Out-of-range / not-interactive → `GameEvent::WeenieError`,
+    ///   normalised into `kind=13 UseFailed`.
+    UseObject { guid: u32 },
     /// Phase 4 step 3: keyboard / click input → AC `MoveToState`
     /// packet. Each axis is `-1` / `0` / `+1`; `run` is the
     /// shift-modifier flag.
@@ -3889,6 +3927,48 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::SendChat { message })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("send_chat: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Phase 4 step 5 (interactive entities): the player clicked an
+    /// entity sprite. Wraps the target guid in a
+    /// `GameAction::Use(UseActionData { guid })` and dispatches via
+    /// the recv loop's cmd channel. ACE handles the rest based on
+    /// the target's WeenieType:
+    /// - **Portal** → ACE responds with `PlayerTeleport` + position
+    ///   update (already handled in step 3.6's recv arm — clears
+    ///   `Teleporting` flag, fires kind=8 stat re-publish on cell
+    ///   transition).
+    /// - **Vendor** (a `Creature` weenie with merchandise) → ACE
+    ///   responds with `GameEvent::ApproachVendor` carrying the
+    ///   vendor's item list + buy/sell multipliers. Recv loop
+    ///   normalises into `kind=12 VendorOpened` (stringPayload =
+    ///   vendor display name; u32_payload = vendor guid;
+    ///   u32_payload_2 = item count).
+    /// - **Door / lockable container** → ACE responds with
+    ///   `GameEvent::UseDone(error)`. `error == None` means
+    ///   succeeded (door opened, container approached); non-None
+    ///   carries a `WeenieError` variant (Locked, OutOfRange, etc.)
+    ///   which lands as `kind=13 UseFailed`.
+    /// - **Out-of-range / non-interactive target** → ACE responds
+    ///   with `GameEvent::WeenieError` directly (no UseDone). Same
+    ///   `kind=13 UseFailed` normalisation.
+    ///
+    /// Returns `Ok(())` on cmd-channel enqueue. The actual outcome
+    /// (success vs. failure, vendor open vs. portal teleport)
+    /// arrives async via subsequent `poll_events` drains — JS
+    /// dispatches on event kind, not on this call's return value.
+    ///
+    /// **Timing.** Caller should wait for `kind=7 EnteredWorld` (or
+    /// equivalently, that the player is in-world) before clicking;
+    /// pre-EnteredWorld uses are silently dropped by ACE.
+    #[wasm_bindgen(js_name = useObject)]
+    pub fn use_object(&self, guid: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::UseObject { guid })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("use_object: cmd channel closed ({e})"))
             })
     }
 
@@ -5942,14 +6022,145 @@ async fn recv_loop(
                                         }
                                     }
                                 }
+                                holtburger_protocol::messages::GameEvent::ApproachVendor(
+                                    data,
+                                ) => {
+                                    // Phase 4 step 5 (interactive
+                                    // entities): the player clicked a
+                                    // vendor (a Creature weenie with
+                                    // merchandise) and ACE responded
+                                    // with the vendor's item list +
+                                    // buy/sell multipliers. Surface as
+                                    // kind=12 VendorOpened so JS can
+                                    // pop a vendor window (or a status
+                                    // line for the first-cut UI).
+                                    //
+                                    // The vendor's display name comes
+                                    // from `world.entities` if the
+                                    // entity was previously tracked —
+                                    // otherwise we fall back to a
+                                    // generic "Vendor" label. ACE's
+                                    // `ApproachVendorEventData` itself
+                                    // doesn't carry the vendor name on
+                                    // the wire (just the guid + item
+                                    // list); the cli looks it up via
+                                    // `state.entities.get(vendor_guid).name()`.
+                                    let vendor_guid = u32::from(data.vendor_guid);
+                                    let vendor_name = world
+                                        .as_ref()
+                                        .and_then(|w| {
+                                            w.entities.get(data.vendor_guid).map(
+                                                |entity| {
+                                                    use holtburger_common::properties::WorldObjectExt as _;
+                                                    entity.name().to_string()
+                                                },
+                                            )
+                                        })
+                                        .unwrap_or_else(|| "Vendor".to_string());
+                                    let item_count = data.items.len() as u32;
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_VENDOR_OPENED,
+                                        string_payload: Some(vendor_name.clone()),
+                                        u32_payload: Some(vendor_guid),
+                                        u32_payload_2: Some(item_count),
+                                    });
+                                    // Also surface as a chat line so
+                                    // the user sees something even
+                                    // before the vendor-window UI
+                                    // lands. Format mirrors the cli.
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                        string_payload: Some(format!(
+                                            "[Vendor] {vendor_name} has {item_count} items for sale."
+                                        )),
+                                        u32_payload: Some(0),
+                                        u32_payload_2: Some(CHAT_CATEGORY_TRADE),
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::UseDone(data) => {
+                                    // Phase 4 step 5: ACE confirms the
+                                    // player's `Use` action completed.
+                                    // `error == None` is success
+                                    // (door opened, container
+                                    // approached, etc.); non-None
+                                    // routes to kind=13 UseFailed
+                                    // instead.
+                                    use holtburger_protocol::errors::WeenieError;
+                                    if data.error == WeenieError::None {
+                                        queued_events.borrow_mut().push(ClientEvent {
+                                            kind: CLIENT_EVENT_KIND_USE_DONE,
+                                            string_payload: None,
+                                            u32_payload: None,
+                                            u32_payload_2: None,
+                                        });
+                                    } else {
+                                        let label = format!("{:?}", data.error);
+                                        queued_events.borrow_mut().push(ClientEvent {
+                                            kind: CLIENT_EVENT_KIND_USE_FAILED,
+                                            string_payload: Some(label.clone()),
+                                            u32_payload: Some(data.error as u32),
+                                            u32_payload_2: None,
+                                        });
+                                        queued_events.borrow_mut().push(ClientEvent {
+                                            kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                            string_payload: Some(format!(
+                                                "[Use failed] {label}"
+                                            )),
+                                            u32_payload: Some(0),
+                                            u32_payload_2: Some(CHAT_CATEGORY_SYSTEM),
+                                        });
+                                    }
+                                }
+                                holtburger_protocol::messages::GameEvent::WeenieError(
+                                    data,
+                                ) => {
+                                    // Phase 4 step 5: ACE sends
+                                    // `WeenieError` for many non-use
+                                    // reasons too — channel-join
+                                    // notifications
+                                    // (`YouHaveEnteredTheChannel(...)`,
+                                    // `TurbineChatIsEnabled`),
+                                    // chat-system info, fellowship /
+                                    // trade hints, etc. Surface every
+                                    // one as a kind=2 system chat
+                                    // line; the cli also routes them
+                                    // to chat. Use-failed semantics
+                                    // come exclusively from
+                                    // `UseDone(error != None)` so we
+                                    // don't false-positive on
+                                    // info-channel errors.
+                                    let label = format!("{:?}", data.error);
+                                    let code = data.error as u32;
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                        string_payload: Some(label),
+                                        u32_payload: Some(code),
+                                        u32_payload_2: Some(CHAT_CATEGORY_SYSTEM),
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::WeenieErrorWithString(
+                                    data,
+                                ) => {
+                                    // Phase 4 step 5: WeenieError +
+                                    // parameter string. Same kind=2
+                                    // chat treatment as the bare
+                                    // WeenieError arm; no kind=13.
+                                    let label = format!("{:?}({})", data.error, data.parameter);
+                                    let code = data.error as u32;
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
+                                        string_payload: Some(label),
+                                        u32_payload: Some(code),
+                                        u32_payload_2: Some(CHAT_CATEGORY_SYSTEM),
+                                    });
+                                }
                                 _ => {
                                     // Non-chat GameEvents drop through
                                     // to the no-op outer catch-all.
-                                    // Future steps (vitals via
-                                    // UpdateHealth, vendors via
-                                    // ApproachVendor, fellowship UI,
-                                    // identify popup, ...) wire them
-                                    // up in their own arms.
+                                    // Future steps (fellowship UI,
+                                    // identify popup, book contents,
+                                    // ...) wire them up in their own
+                                    // arms.
                                 }
                             }
                         }
@@ -6105,6 +6316,34 @@ async fn recv_loop(
                             queued_events.borrow_mut().push(ClientEvent {
                                 kind: CLIENT_EVENT_KIND_DISCONNECTED,
                                 string_payload: Some(format!("send_chat: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                            });
+                            return;
+                        }
+                    }
+                    Some(SessionCommand::UseObject { guid }) => {
+                        // Phase 4 step 5 (interactive entities): wrap
+                        // the click target in `GameAction::Use(UseActionData { guid })`
+                        // and send via the same path the cli's
+                        // ClientCommand::Use uses (see
+                        // `apps/holtburger-cli/src/.../commands.rs` —
+                        // confirmed in the explore-agent grounding).
+                        // ACE's response routes through GameEvent
+                        // (ApproachVendor / UseDone / WeenieError) +
+                        // top-level (PlayerTeleport / position
+                        // updates) variants we handle elsewhere in
+                        // this match.
+                        let action = holtburger_protocol::messages::GameAction::Use(
+                            Box::new(holtburger_protocol::messages::UseActionData {
+                                guid: holtburger_common::Guid::from(guid),
+                            }),
+                        );
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(Use): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("use_object: {e}")),
                                 u32_payload: None,
                                 u32_payload_2: None,
                             });
