@@ -5,12 +5,16 @@
 > Read this section first. The rest of this document is the
 > long-lived design intent + decision history; this header is
 > the snapshot of where we actually are and what's blocking
-> what. Last refreshed **2026-05-06** (afternoon session).
+> what. Last refreshed **2026-05-07** (post-Phase-4-step-3.6
+> landing — server-side player movement now works).
 
 ### Where the project is
 
-**Phases done:** 0, 1, 2, 3 (steps 1-6 + step 3.6; step 5
-partial), 4 (step 1 + 2a + 2a.5 + 2a.6 + 2b + 3 + 3.5 +
+**Phases done:** 0, 1, 2, 3 (steps 1-6 + step 3.6 terrain
+bilinear blend; step 5 partial), 4 (step 1 + 2a + 2a.5 +
+2a.6 + 2b + 3 + 3.5 + **3.6 movement-system wiring — full
+cli `MovementSystem` reuse, server-side player position
+actually advances, landed 2026-05-07** + 4 chat panel +
 **6a + 6b + 6e — realistic-entity metadata + ItemType-keyed
 visual dispatch + glyph fallback + per-entity nameplates,
 landed 2026-05-06 evening; 6 Phase A + B + C — apply ACE-
@@ -70,6 +74,49 @@ the canonical 1.0 m/s walk speed. Critical ACE gotcha:
 (`Player_Tick.cs:154` — `FastTick => IsPKType`); the capture
 sends `@pk pk` before pressing W to flip PlayerKillerStatus
 and engage server-side physics.
+
+**Phase 4 step 3.6 (2026-05-07).** Step 3 + 3.5 produced
+visual movement but the server-side player position was
+frozen at the `@telepoi` spawn point — discovered when the
+user ran south for two minutes and never aggro'd a monster.
+Diagnosed via `ace_shard.biota_properties_position`: 18+
+test characters all logged out at exact spawn coords
+`(84.0, 7.1, 94.0)` in `0xA9B40019` despite ~10 minute
+sessions. Root cause: the wasm bundle never sent the
+`AutonomousPosition` heartbeat that AC clients use to
+report their predicted position back to the server — the
+client is authoritative for player position in retail AC,
+and ACE's server-side player only moves when these
+heartbeats arrive. Step 3 sent `MoveToState` (motion intent)
+but no `AutonomousPosition` (position payload). Fix wires
+the cli's full `MovementSystem` into the wasm recv loop via
+a `MovementSystemHandle` shim in `holtburger-core::client::
+movement::handle`; design + 9-step plan at
+[`phase-4-step-3.6-movement-system.md`](phase-4-step-3.6-movement-system.md);
+shipped in commits `91190e1` (structure) + `274e213` (5
+follow-on bugs the original landing missed: silent log
+crate, wrong-arm entity seed, missing pose integrator,
+RunRateUnavailable fallback, **the load-bearing
+`Teleporting=true` PlayerTeleport→LoginComplete loop** —
+ACE silently drops AutonomousPosition while Teleporting,
+and the cli sends LoginComplete on every PlayerTeleport to
+clear it). Validated against live ACE: 15-second walk
+advanced server-side position from `(84.0, 7.1, 94.0)` to
+`(86.345, 21.908, 94.005)` (14.8 m of Y movement at
+~1 m/s). Out-of-scope for 3.6 (now → step 3.7): real
+character-biota loading so movement caps come from the
+player's actual run-rate / motion-table (3.6 installs a
+fallback `SelfMovementCapabilities` override — walk = 1 m/s,
+run = 4.5 m/s, turn = 1.5 rad/s — because the player biota
+isn't loaded in the wasm bundle and `resolve_self_movement_
+capabilities` would otherwise return `RunRateUnavailable`);
+landblock-crossing correctness in the local-pose integrator
+(currently adds delta to local coords, doesn't re-bucket
+into adjacent landblocks — single-walk testing within
+Holtburg town's 192m × 192m cell is fine, but step 3.6 lets
+you cross into `0xA9B30019` etc. for encounters and the
+integrator will produce wrong local coords on the far
+side).
 
 **Phase 3 step 3.6 (2026-05-06).** The terrain rendering now
 matches `emit-static-site`'s output (the canonical reference).
@@ -185,29 +232,44 @@ on-device validation; recipe in
 Pick one to pull on. The choice is real, not arbitrary.
 
 - **Content rail** — Phase 4 step 3 + 3.5 **landed 2026-05-06**;
-  step 4 chat panel **landed 2026-05-07**.
+  step 4 chat panel + step 3.6 (movement-system wiring; server-
+  side player position now actually advances) **landed
+  2026-05-07**.
   Step 3: `SessionHandle.setMovementInput` →
   `GameAction::MoveToState` → ACE accepts + broadcasts
   `UpdateMotion`. Step 3.5: per-rAF JS prediction integrates
   the keystate into the local sprite's world coords (mirrors
   cli's `local_velocity_for_state` / `local_omega_for_state`),
-  so the press-W → sprite-slides loop closes visually. Step 4
-  chat: 16 chat-bearing inbound message variants normalised
+  so the press-W → sprite-slides loop closes visually. Step 3.6:
+  full cli `MovementSystem` reuse via `MovementSystemHandle` in
+  the recv loop; outbound `AutonomousPosition` heartbeats now
+  fire (~1 Hz while moving), the WorldState pose advances via a
+  thin local-pose integrator, the `PlayerTeleport` →
+  `LoginComplete` loop clears ACE's `Teleporting=true` flag
+  (which silently dropped AutonomousPosition) — server-side
+  position validated to advance 14.8 m on a 15-second walk.
+  Step 4 chat: 16 chat-bearing inbound message variants normalised
   through 24 `CHAT_CATEGORY_*` ids, surfaced as
   `kind=2 ChatReceived` events with a new `u32Payload2`
   getter; DOM panel grew a tab bar (All / Local / Tells /
   Channels / Combat / Magic / System) with category-keyed
-  colours. **Next on the rail: step 4 follow-on** (vitals +
-  inventory panels — same DOM-next-to-canvas pattern as the
-  chat panel) → step 5 (interactive entities:
-  doors, portals, vendors via `UseObject`) → **step 6
-  (realistic entity rendering: WeenieType-keyed tints,
-  nameplates, palette-tinted creature variants, portal swirls,
-  sign inscriptions — mirrors `emit-static-site`'s sprite-mode
-  output at z≥11). Today every NPC/portal/monster reads as a
-  generic textured silhouette because the recv-loop discards
-  every `PublicWeenieDescription` field except `csetup_id`;
-  step 6a is the data-plumbing fix that unblocks the rest.**
+  colours. **Next on the rail: step 3.7** (real character-biota
+  loading so movement caps come from `world.player_run_rate()`
+  + the player's actual `MotionTable` instead of 3.6's hardcoded
+  fallback override; also landblock-crossing correctness in the
+  local-pose integrator so walking into `0xA9B30019` etc. for
+  encounters produces correct local coords on the far side) →
+  **step 4 follow-on** (vitals + inventory panels — same
+  DOM-next-to-canvas pattern as the chat panel) → step 5
+  (interactive entities: doors, portals, vendors via
+  `UseObject`) → **step 6 (realistic entity rendering:
+  WeenieType-keyed tints, nameplates, palette-tinted creature
+  variants, portal swirls, sign inscriptions — mirrors
+  `emit-static-site`'s sprite-mode output at z≥11). Today every
+  NPC/portal/monster reads as a generic textured silhouette
+  because the recv-loop discards every `PublicWeenieDescription`
+  field except `csetup_id`; step 6a is the data-plumbing fix
+  that unblocks the rest.**
   Brief lives inline at §8 (search for "Step 6 — realistic
   entity rendering").
 - **Bandwidth rail** — Phase 5.2 (manifest scale fix) at
@@ -274,11 +336,24 @@ step's landing, plus what got closed since):
 - ⏳ **Snap-smooth reconciliation** for `PrivateUpdatePosition`
   authoritative corrections — currently a hard set; ~100ms
   lerp would feel softer.
-- ⏳ **Outbound `AutonomousPosition` heartbeat to ACE.** The
-  retail client reports its predicted position back ~1 Hz so
-  ACE can validate. We don't, so ACE may correct us more
-  aggressively. Step 3.6 candidate (one Rust arm + 1 Hz JS
-  tick).
+- ✅ ~~**Outbound `AutonomousPosition` heartbeat to ACE.**~~
+  **Closed 2026-05-07** by Phase 4 step 3.6 — the cli's
+  `MovementSystem` is now wired into the wasm recv loop via
+  `MovementSystemHandle` and fires `AutonomousPosition`
+  packets every `AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL`
+  (1 s) while moving. Validated end-to-end via
+  `capture_phase4_step3.cjs` + `ace_shard.biota_properties_
+  position` query: 14.8 m of server-side Y advancement on a
+  15-s walk. Was the load-bearing fix; without it the
+  server-side player was frozen at spawn forever and no
+  encounter generators in adjacent landblocks ever activated
+  via vision. See `docs/phase-4-step-3.6-movement-system.md`
+  for the design + the 5 follow-on bugs the original
+  structural commit missed (silent `log` crate; entity seed
+  on the wrong recv arm; missing local-pose integrator;
+  `RunRateUnavailable` fallback caps; `PlayerTeleport` →
+  `LoginComplete` loop to clear ACE's silent-drop
+  `Teleporting=true` flag).
 - ⏳ **Lambert hillshade in the terrain shader.**
   `RenderPreviewRenderer.cs:487-503` adds it on top of the
   bilinear blend (9×9 height texture per LB + finite-difference
@@ -288,10 +363,39 @@ step's landing, plus what got closed since):
   static site uses `RoadType` as a repeating shader fill on
   the road stroke. We use flat stone-grey for roads; switching
   to a textured stroke is a PIXI line-style tweak.
-- ⏳ **Server-validated walk speed.** Step 3.5 hardcodes 1.0
-  m/s (walk) / 4.5 m/s (run); cli reads
-  `world.player_run_rate()` from biota properties. Speed
-  buffs/debuffs/stamina effects don't apply yet.
+- ⏳ **Real character-biota-driven movement caps (Phase 4
+  step 3.7 candidate).** Step 3.6 installs a fallback
+  `SelfMovementCapabilities` override on `WorldState`
+  construction (walk = 1.0 m/s, run = 4.5 m/s, turn = 1.5
+  rad/s — matches the JS-prediction constants and retail
+  defaults) because the player's character biota isn't loaded
+  in the wasm bundle, so `resolve_self_movement_capabilities`
+  would otherwise return `RunRateUnavailable` and the
+  local-pose integrator would no-op. Cli reads
+  `world.player_run_rate()` + the player's actual
+  `MotionTable` from biota properties via the
+  `CharacterEnterWorld` → `CharacterDescription` flow; the
+  wasm bundle drops `CharacterDescription` in the `_ =>`
+  catch-all today. Real biota loading would also unblock
+  per-character speed buffs / debuffs / stamina effects,
+  combat damage formulas, and skill-checked abilities. See
+  `phase-4-step-3.6-movement-system.md` §8 (out of scope).
+- ⏳ **Landblock-crossing correctness in local-pose
+  integrator (Phase 4 step 3.7 candidate).** Step 3.6's
+  `MovementSystem::advance_local_pose_for_manual_drive`
+  adds `velocity * dt` to `pose.coords.{x,y,z}` directly,
+  preserving the seeded `landblock_id`. Inside Holtburg
+  town's 192m × 192m cell that's fine; once you walk past
+  the cell boundary (e.g. south into `0xA9B30019` for
+  encounters) the integrator keeps the OLD landblock_id and
+  the local coords go > 192 — the AutonomousPosition packet
+  reports `(94, 200, 94)` instead of `(94, 8, 94)` in the
+  next landblock down. ACE may rubber-band or silently
+  reject. Fix: re-bucket coords into the correct landblock
+  on each tick (delta + landblock arithmetic). The cli's
+  `SpatialPhysics::solve` does this; the wasm bundle skips
+  the solver. ~half-day; gates step 9 of 3.6 validation
+  (running into wilderness encounters).
 - ⏳ **Authentic TexMerge mode.** `fetch_terrain_alpha_masks`
   Rust export + 3 retail-mask constant tables stay in the
   bundle as scaffolding; JS-side `decodeCellPalette` +
@@ -325,28 +429,37 @@ In order:
 2. [`phase-4-renderer.md`](phase-4-renderer.md) — Phase 4 step
    1 + 2a + 2a.5 + 2a.6 + 2b as-built. Read before adding any
    wasm-bindgen export or recv-loop branch.
-3. [`phase-3-renderer.md`](phase-3-renderer.md) — Phase 3
+3. [`phase-4-step-3.6-movement-system.md`](phase-4-step-3.6-movement-system.md)
+   — Phase 4 step 3.6 plan + as-built notes. Read before
+   touching the recv-loop's `world: Option<WorldState>` /
+   `MovementSystemHandle` plumbing or the local-pose
+   integrator. Also documents the 5 follow-on bugs the
+   structural commit missed (PlayerTeleport→LoginComplete is
+   the load-bearing one) and the step 3.7 deferred work
+   (real character-biota loading + landblock-crossing
+   correctness).
+4. [`phase-3-renderer.md`](phase-3-renderer.md) — Phase 3
    step 1-6 as-built. Read before touching the renderer
    pipeline (heightmap, terrain shader, sprite atlas, runtime
    per-model render).
-4. [`phase-5-thorough.md`](phase-5-thorough.md) — Phase 5.0 /
+5. [`phase-5-thorough.md`](phase-5-thorough.md) — Phase 5.0 /
    5.0b / 5.1a / 5.1b as-built. Read before changing the
    manifest, `ManifestResourceSource`, `dat-shard`,
    `holtburger_dat::walk`, or the smoke harness.
-5. [`thorough.md`](thorough.md) — Phase 5.0 framing brief
+6. [`thorough.md`](thorough.md) — Phase 5.0 framing brief
    (already executed; stays as historical context for the
    delivery-architecture decisions).
-6. [`manifest.md`](manifest.md) — Phase 5.2 framing brief
+7. [`manifest.md`](manifest.md) — Phase 5.2 framing brief
    (**not yet executed**; the next agent on the bandwidth
    rail picks this up).
-7. [`ace-local-setup.md`](ace-local-setup.md) — recipe for
+8. [`ace-local-setup.md`](ace-local-setup.md) — recipe for
    bringing up ACE locally for live-ACE work.
-8. [`phase-2-wasm-spike.md`](phase-2-wasm-spike.md) — Phase 2
+9. [`phase-2-wasm-spike.md`](phase-2-wasm-spike.md) — Phase 2
    wasm32 cross-compile spike record. Read only if rebooting
    the wasm cross-compile floor.
-9. `~/.claude/projects/-home-wbterminal/memory/project_emit_dynamic_site.md`
-   — auto-loaded into Claude's context. Verify it matches
-   this document's status section before relying on it.
+10. `~/.claude/projects/-home-wbterminal/memory/project_emit_dynamic_site.md`
+    — auto-loaded into Claude's context. Verify it matches
+    this document's status section before relying on it.
 
 ### Process notes for the next agent (worth reading before renderer work)
 
@@ -1495,6 +1608,95 @@ Step ledger:
   existing handlePositionUpdate path. See
   [`phase-4-renderer.md`](phase-4-renderer.md) step 3.5
   section for the as-built reference.
+- ✅ **Step 3.6 — wire cli's `MovementSystem` into the wasm
+  bundle (server-side player position actually advances).**
+  Landed 2026-05-07 (commits `91190e1` structure + `274e213`
+  fix-up). The bug: step 3 + 3.5 produced visual movement
+  but server-side player position was frozen at the
+  `@telepoi` spawn point — the wasm bundle never sent the
+  `AutonomousPosition` heartbeat that AC clients use to
+  report their predicted position back to the server. Step 3
+  sent `MoveToState` (motion intent) but no `AutonomousPosition`
+  (position payload). Fix: wire the cli's full `MovementSystem`
+  into the wasm recv loop via a new `MovementSystemHandle`
+  shim (`crates/holtburger-core/src/client/movement/handle.rs`
+  — 4-method facade: `new` / `enqueue_drive_intent` /
+  `arm_heartbeat_schedule` / `tick`). Recv loop on
+  `kind=7 EnteredWorld` constructs a real `WorldState` from a
+  parallel-loaded `WorldBootstrap` (the 5 game-data tables
+  loaded via `ContentRepository::from_mounts` from the
+  existing manifest source); `SetMovementInput` enqueues
+  `PlayerDriveIntent::ManualHeld(MotionState)` instead of
+  building `MoveToStateActionData` directly; new
+  `SessionCommand::TickMovement` cmd fires from the JS rAF
+  `drainEvents` loop and drives `MovementSystem::tick(now,
+  &mut world, &mut session)` which emits MoveToState on
+  motion-state edges AND the AutonomousPosition heartbeat.
+  Design + 9-step plan at
+  [`phase-4-step-3.6-movement-system.md`](phase-4-step-3.6-movement-system.md).
+  Five follow-on bugs the structural commit missed, all
+  fixed in `274e213`: (1) `log::info!` was silent — the wasm
+  bundle has no log backend registered; switched all 3.6
+  diagnostics to `console_log_str`. (2) Entity-seed logic
+  on the wrong recv arm — local player position arrives via
+  `UpdatePosition` with guid match, not `PrivateUpdatePosition`;
+  added the seed/heartbeat-arm path to both arms. (3) The
+  WorldState pose never advanced — the cli's tick wires
+  movement → world → simulation, and the SIMULATION tick is
+  what physically moves the player; wasm bundle skipped it;
+  added a thin local-pose integrator in `handle.rs::tick`
+  that calls a new `MovementSystem::advance_local_pose_for_
+  manual_drive` mirroring the cli's
+  `current_local_solve_body_input` velocity path without the
+  full physics solver. (4) `resolve_self_movement_capabilities`
+  returned `Err(RunRateUnavailable)` because the player's
+  character biota isn't loaded; install a fallback override
+  (1 m/s walk, 4.5 m/s run, 1.5 rad/s turn — matches
+  retail / JS-prediction defaults) right after
+  `WorldState::new`; required removing the `#[cfg(test,
+  feature = "test-support")]` gate on
+  `set_self_movement_capabilities_override`. (5) **The
+  load-bearing one: ACE silently drops AutonomousPosition
+  while `Player.Teleporting=true`** (`Player_Tick.cs:
+  UpdatePlayerPosition` returns false). The flag is set on
+  every `Player.Teleport()` call (initial spawn +
+  `@telepoi`) and cleared only via `OnTeleportComplete`
+  which is invoked from `GameActionLoginComplete.Handle`.
+  We sent `LoginComplete` once on PlayerCreate but never on
+  subsequent `PlayerTeleport` packets — so post-`@telepoi`
+  the player was perpetually `Teleporting=true` and 23
+  AutonomousPosition heartbeats during a 15-s walk were
+  silently dropped server-side. Cli does this in its
+  `PlayerTeleport` handler at `messages.rs:592`; mirrored in
+  the wasm recv loop. Validated end-to-end against live ACE:
+  position advanced from `(84.0, 7.1, 94.0)` to
+  `(86.345, 21.908, 94.005)` — 14.8 m of Y movement at
+  ~1 m/s on a 15-s walk. Per-tick diagnostic kept (every 60
+  ticks): `[step 3.6 tick #N] pose=(...) cell=0x... caps_ok=...
+  heartbeats_sent=...`. Out of scope (now Phase 4 step 3.7):
+  real character-biota loading; landblock-crossing
+  correctness — see polish backlog above.
+- ⏳ **Step 3.7 — character-biota loading + landblock-crossing
+  correctness.** Two distinct pieces, both unblocked by 3.6's
+  `WorldState` infrastructure but deferred to keep 3.6 small:
+  (a) handle inbound `CharacterDescription` (currently dropped
+  in the recv loop's `_ =>` catch-all) so `world.player_run_rate()`
+  + the player's `MotionTable` resolve correctly, removing 3.6's
+  fallback `SelfMovementCapabilities` override; this also feeds
+  per-character speed buffs / debuffs / stamina effects, combat
+  damage formulas, and skill-checked abilities. (b) extend the
+  local-pose integrator in `MovementSystem::advance_local_pose_for_
+  manual_drive` to re-bucket `pose.coords.{x,y}` into adjacent
+  landblocks when they exceed `[0, 192]` instead of overflowing
+  into the seeded `landblock_id`'s frame. Today walking far
+  enough south of Holtburg (into `0xA9B30019` etc. for encounter
+  generators) reports `(94, 200, 94)` to ACE instead of
+  `(94, 8, 94)` in the next landblock down — ACE may rubber-band
+  or silently reject. Cli's `SpatialPhysics::solve` handles
+  this; the wasm bundle skips the solver. Estimate: half-day for
+  (b), 1–2 days for (a). Either order; (b) gates step 9 of 3.6's
+  validation protocol (running into wilderness encounters), (a)
+  unblocks combat-formula correctness for step 5 / 6.
 - ✅ **Step 4 (chat panel) — full chat-type coverage with
   category tabs.** Landed 2026-05-07. Brings the browser
   chat surface to parity with the cli's chat panel
