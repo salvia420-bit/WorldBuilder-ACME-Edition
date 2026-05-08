@@ -1,13 +1,46 @@
 # Phase 4 — playable AC client (as-built)
 
-> **Status:** Phase 4 steps 1, 2a, 2a.5, 2a.6, 2b, and
-> **3** all landed (last refreshed 2026-05-06; step 3
-> implemented + smoke green, live-ACE wire round-trip pending
-> the user's live stack). The wasm bundle drives AC login →
-> CharacterList → CharacterCreate → spawn handshake → in-world
-> chat / admin commands → live entity rendering → outbound
-> WASD/Q/E movement, all from the browser through
-> `holtburger-wsbridge` to a live ACE.
+> **Status:** Phase 4 steps 1, 2a, 2a.5, 2a.6, 2b, 3 + 3.5 +
+> **3.6 movement-system** + **3.7 biota / landblock-crossing**
+> + **4 chat panel** + **4 follow-on (vitals + inventory
+> panels, landed 2026-05-08)** + **6a/b/e + Phase A/B/C** all
+> landed. The wasm bundle drives AC login → CharacterList →
+> CharacterCreate → spawn handshake → in-world chat / admin
+> commands → live entity rendering with realistic NPC / portal
+> / object models → outbound WASD/Q/E movement that ACE
+> actually advances → DOM-panel UI for chat / vitals /
+> inventory, all from the browser through
+> `holtburger-wsbridge` to a live ACE. Native lib gate
+> 1146 / 0; smoke 82 / 82 (81 OK + 1 SKIP); wasm32 +
+> wasm-pack {nodejs, web} clean.
+>
+> **Step 4 follow-on (vitals + inventory) summary
+> (2026-05-08):** every received message routes through the
+> canonical world-handler dispatcher
+> (`holtburger_world::handlers::routing::handle_message`) at
+> the top of the recv loop's per-message processing block;
+> `WorldState.player.{vitals,attributes,skills}` and
+> `state.entities` + `state.player.{inventory,equipment}`
+> stay current automatically. The recv loop scans the
+> dispatcher's `Vec<WorldEvent>` for stat / inventory
+> triggers and queues coalesced `kind=8 PlayerStatsUpdated`
+> / `kind=11 InventoryUpdated` markers. Two new
+> `SessionHandle` methods (`playerStats()`,
+> `playerInventory()`) return flat-typed-array snapshots
+> the JS panel renders. Two new wasm-bindgen classes
+> (`PlayerStatsSnapshot`, `InventoryItem`); 3 top-level
+> label helpers (`skillName`, `attributeName`,
+> `vitalName`). The recv loop's PlayerDescription arm is
+> simplified to just the step 3.6 / 3.7 fallback-caps
+> bookkeeping — the dispatcher now does
+> `hydrate_from_player_description` +
+> `apply_player_description_world_state` +
+> `emit_player_derived_stats` automatically. Position
+> messages (`Update*Position`, `VectorUpdate`,
+> `UpdateMotion`) are intentionally NOT routed — the
+> recv loop's existing arms handle them with step 3.6
+> semantics. Read-only first cut; manipulating items
+> (drop, give, use) is step 5 (interactive entities).
 >
 > **Original step-1 status (preserved for context):** Phase 4
 > steps 1, 2a, 2a.5, and **2a.6** landed (2026-05-04). The wasm

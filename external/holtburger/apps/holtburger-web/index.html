@@ -154,6 +154,61 @@
       #chat-form input { flex: 1; padding: 0.3rem 0.5rem; font-family: ui-monospace, monospace; font-size: 0.92rem; }
       #chat-form button { padding: 0.25rem 0.8rem; cursor: pointer; }
       #chat-form button[disabled] { cursor: not-allowed; opacity: 0.6; }
+      /* Phase 4 step 4 follow-on — vitals + inventory panels.
+         Sit beside the chat panel as DOM-next-to-canvas. Layout:
+         the chat / vitals / inventory panels share a flex row above
+         the canvas on wide viewports, stack vertically on narrow.
+         Each panel scrolls independently. */
+      #panels-row { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.75rem; }
+      #panels-row > * { flex: 1 1 22rem; min-width: 18rem; }
+      #panels-row #chat-panel { margin-top: 0; max-width: none; flex: 2 1 28rem; }
+      #vitals-panel, #inventory-panel { border: 1px solid #ccc; border-radius: 4px; background: #fafafa; }
+      #vitals-panel header, #inventory-panel header { padding: 0.4rem 0.6rem; background: #f0f0f0; border-bottom: 1px solid #ddd; font-size: 0.92rem; }
+      #vitals-panel header { display: flex; align-items: baseline; justify-content: space-between; gap: 0.4rem; }
+      #vitals-panel header .name { font-weight: 600; color: #1a1a1a; }
+      #vitals-panel header .level { color: #666; font-family: ui-monospace, monospace; font-size: 0.82rem; }
+      #vitals-panel .body { padding: 0.5rem 0.75rem 0.6rem; max-height: 22rem; overflow-y: auto; }
+      #vitals-panel .empty, #inventory-panel .empty { color: #999; font-style: italic; padding: 1rem 0.75rem; text-align: center; font-size: 0.85rem; }
+      /* Vital bar — labelled progress bar with current/max numbers.
+         Three colour-keyed bars: red health, yellow stamina, blue mana. */
+      .vital-row { display: grid; grid-template-columns: 4.4rem 1fr auto; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem; font-size: 0.85rem; }
+      .vital-row > .label { color: #444; }
+      .vital-row > .nums { font-family: ui-monospace, monospace; font-size: 0.78rem; color: #333; min-width: 5rem; text-align: right; }
+      .vital-bar { position: relative; height: 0.85rem; background: #ddd; border-radius: 3px; overflow: hidden; border: 1px solid #ccc; }
+      .vital-bar .fill { position: absolute; top: 0; left: 0; bottom: 0; transition: width 120ms linear; }
+      .vital-bar.health .fill { background: linear-gradient(180deg, #e64646, #b22222); }
+      .vital-bar.stamina .fill { background: linear-gradient(180deg, #d4b330, #a88a14); }
+      .vital-bar.mana .fill { background: linear-gradient(180deg, #4f8aff, #2c5fcc); }
+      /* Attribute table — six rows, current / base columns. */
+      #vitals-panel .section-h { font-weight: 600; font-size: 0.78rem; color: #555; text-transform: uppercase; letter-spacing: 0.05em; margin: 0.7rem 0 0.25rem; padding-bottom: 0.15rem; border-bottom: 1px solid #e0e0e0; }
+      #attribute-table, #skill-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+      #attribute-table td, #skill-table td { padding: 0.12rem 0.35rem; }
+      #attribute-table td.label, #skill-table td.label { color: #444; }
+      #attribute-table td.num, #skill-table td.num { font-family: ui-monospace, monospace; text-align: right; color: #333; }
+      #attribute-table td.delta, #skill-table td.delta { font-family: ui-monospace, monospace; text-align: right; font-size: 0.75rem; color: #888; }
+      #skill-table tr.untrained td.label { color: #999; }
+      #skill-table tr.specialized td.label { color: #2e8b57; font-weight: 500; }
+      #skill-table tr.trained td.label { color: #1a4f7a; }
+      /* Skills section is collapsible — `<details>` inside vitals panel. */
+      #vitals-panel details summary { cursor: pointer; font-weight: 600; font-size: 0.78rem; color: #555; text-transform: uppercase; letter-spacing: 0.05em; margin: 0.7rem 0 0.25rem; padding-bottom: 0.15rem; border-bottom: 1px solid #e0e0e0; outline: none; }
+      #vitals-panel details summary:focus-visible { outline: 2px solid #4f8aff; outline-offset: 2px; }
+      #vitals-panel details[open] summary::after { content: " ▾"; color: #888; }
+      #vitals-panel details:not([open]) summary::after { content: " ▸"; color: #888; }
+      /* Inventory list — equipped + pack sub-sections. */
+      #inventory-panel .body { padding: 0; max-height: 22rem; overflow-y: auto; }
+      #inventory-panel .section-h { font-weight: 600; font-size: 0.78rem; color: #555; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.6rem 0.75rem 0.25rem; border-bottom: 1px solid #e0e0e0; background: #f7f7f7; position: sticky; top: 0; }
+      #inventory-panel ul { list-style: none; padding: 0.25rem 0; margin: 0; }
+      #inventory-panel li { padding: 0.25rem 0.75rem; display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; font-size: 0.85rem; border-bottom: 1px solid #f0f0f0; }
+      #inventory-panel li:last-child { border-bottom: none; }
+      #inventory-panel li .name { color: #1a1a1a; flex: 1; word-break: break-word; }
+      #inventory-panel li .meta { font-family: ui-monospace, monospace; font-size: 0.72rem; color: #888; flex: 0 0 auto; }
+      #inventory-panel li .stack { color: #555; font-weight: 500; }
+      /* Item-type colour hints (matches static-site convention).
+         item_type bitmask values: see external/ACE/Source/ACE.Entity/Enum/ItemType.cs */
+      #inventory-panel li[data-type-bit="0x4"] .name { color: #1f4f9b; }    /* Weapon */
+      #inventory-panel li[data-type-bit="0x2"] .name { color: #2e8b57; }    /* Armor */
+      #inventory-panel li[data-type-bit="0x10000"] .name { color: #a020a0; }/* Magic / scroll */
+      #inventory-panel li[data-type-bit="0x20"] .name { color: #b8860b; }   /* Money / pyreal */
     </style>
   </head>
   <body>
@@ -233,6 +288,14 @@
         </span>
 
         <!--
+          Phase 4 step 4 + 4-follow-on: chat / vitals / inventory
+          panels share a flex row beneath the post-spawn controls.
+          Each panel is independently hidden until the relevant
+          ClientEvent fires (chat: kind=2; vitals: kind=8; inventory:
+          kind=11). DOM-next-to-canvas pattern; no PIXI involvement.
+        -->
+        <div id="panels-row">
+        <!--
           Phase 4 step 4: chat panel. Receives kind=2 ChatReceived
           ClientEvents from the recv loop (ServerMessage, HearSpeech,
           HearRangedSpeech, EmoteText, SoulEmote, GameEvent::Tell,
@@ -276,6 +339,60 @@
             />
             <button type="submit" id="chat-send">Send</button>
           </form>
+        </div>
+
+        <!--
+          Phase 4 step 4 follow-on — vitals panel. Receives
+          kind=8 PlayerStatsUpdated ClientEvents from the recv loop
+          (any time the canonical world handler dispatcher emits a
+          VitalUpdated / AttributeUpdated / SkillUpdated /
+          LevelInfoUpdated / DerivedStatsUpdated / PlayerEnchantmentsUpdated
+          event). JS reads SessionHandle.playerStats() on each event
+          and re-renders the bars + tables. Hidden until the first
+          PlayerDescription lands (which produces a flurry of stat
+          events).
+        -->
+        <div id="vitals-panel" hidden>
+          <header>
+            <span class="name" id="vitals-name">—</span>
+            <span class="level" id="vitals-level">Level 0</span>
+          </header>
+          <div class="body">
+            <div id="vitals-bars">
+              <div class="empty">Waiting for player biota…</div>
+            </div>
+            <div class="section-h">Attributes</div>
+            <table id="attribute-table"><tbody></tbody></table>
+            <details>
+              <summary>Skills</summary>
+              <table id="skill-table"><tbody></tbody></table>
+            </details>
+          </div>
+        </div>
+
+        <!--
+          Phase 4 step 4 follow-on — inventory panel. Receives
+          kind=11 InventoryUpdated ClientEvents from the recv loop
+          (ObjectCreate / ObjectDelete / WieldObject / ViewContents /
+          IdentifyObjectResponse routed through the world's inventory
+          + login + properties handlers). JS reads
+          SessionHandle.playerInventory() on each event. Read-only
+          first cut — manipulating items (drop, give, use) lands as
+          step 5 (interactive entities via UseObject + drop / give
+          GameActions). Equipped items appear under "Equipped";
+          pack items under "Pack".
+        -->
+        <div id="inventory-panel" hidden>
+          <header>Inventory</header>
+          <div class="body">
+            <div class="empty" id="inventory-empty">No items in inventory yet.</div>
+            <div class="section-h" id="inv-equipped-h" hidden>Equipped</div>
+            <ul id="inv-equipped"></ul>
+            <div class="section-h" id="inv-pack-h" hidden>Pack</div>
+            <ul id="inv-pack"></ul>
+          </div>
+        </div>
+
         </div>
       </div>
 
@@ -2747,6 +2864,209 @@ void main() {
         // most recent line in the new filter without scrolling.
         chatLog.scrollTop = chatLog.scrollHeight;
       });
+
+      // Phase 4 step 4 follow-on (vitals + inventory panels) — DOM
+      // refs + render helpers.
+      const vitalsPanel = document.getElementById("vitals-panel");
+      const vitalsName = document.getElementById("vitals-name");
+      const vitalsLevel = document.getElementById("vitals-level");
+      const vitalsBars = document.getElementById("vitals-bars");
+      const attributeTable = document.getElementById("attribute-table").querySelector("tbody");
+      const skillTable = document.getElementById("skill-table").querySelector("tbody");
+      const inventoryPanel = document.getElementById("inventory-panel");
+      const inventoryEmpty = document.getElementById("inventory-empty");
+      const invEquippedH = document.getElementById("inv-equipped-h");
+      const invPackH = document.getElementById("inv-pack-h");
+      const invEquipped = document.getElementById("inv-equipped");
+      const invPack = document.getElementById("inv-pack");
+
+      // Vital colour-class lookup. Maps the wasm-side VitalType
+      // numeric id (Health=1, Stamina=3, Mana=5) to the CSS class
+      // hooks defined in `#vitals-panel .vital-bar.{health,stamina,mana}`.
+      const VITAL_CSS_CLASS = { 1: "health", 3: "stamina", 5: "mana" };
+
+      // Phase 4 step 4 follow-on: re-render the vitals panel from
+      // the wasm bundle's PlayerStatsSnapshot. Called from the
+      // drainEvents tick on every kind=8 event. The snapshot getter
+      // is a fresh struct each call (clones the inner LatestStats),
+      // so this is bounded work.
+      function renderVitalsPanel(handle) {
+        if (!handle) return;
+        const stats = handle.playerStats();
+        const name = stats.name || "—";
+        vitalsName.textContent = name;
+
+        // Level / xp summary. levelInfo packs:
+        //   [level, current_xp_lo, current_xp_hi, unspent_xp_lo,
+        //    unspent_xp_hi, available_luminance_lo, available_luminance_hi]
+        const lvl = stats.levelInfo;
+        if (lvl && lvl.length === 7) {
+          const level = lvl[0];
+          // BigInt reassembly so XP > 2^32 displays correctly. Most
+          // test characters are level <50 so XP fits in 32 bits, but
+          // a level-275+ character has cumulative XP in the trillions.
+          const currentXp = (BigInt(lvl[2]) << 32n) | BigInt(lvl[1]);
+          const unspentXp = (BigInt(lvl[4]) << 32n) | BigInt(lvl[3]);
+          vitalsLevel.textContent =
+            `Level ${level} · ${currentXp.toString()} XP` +
+            (unspentXp > 0n ? ` (${unspentXp.toString()} unspent)` : "");
+        } else {
+          vitalsLevel.textContent = "Level 0";
+        }
+
+        // Vitals bars. `vitals` packs `[type, current, base, buffed_max] × 3`.
+        const vitals = stats.vitals;
+        if (!vitals || vitals.length === 0) {
+          vitalsBars.innerHTML = '<div class="empty">Waiting for player biota…</div>';
+        } else {
+          const rows = [];
+          for (let i = 0; i + 3 < vitals.length; i += 4) {
+            const type = vitals[i];
+            const current = vitals[i + 1];
+            const buffedMax = vitals[i + 3];
+            const cls = VITAL_CSS_CLASS[type] || "";
+            const label = wasm.vitalName(type);
+            const pct = buffedMax > 0
+              ? Math.max(0, Math.min(100, (current / buffedMax) * 100))
+              : 0;
+            rows.push(
+              `<div class="vital-row">` +
+                `<span class="label">${label}</span>` +
+                `<div class="vital-bar ${cls}"><div class="fill" style="width:${pct.toFixed(1)}%"></div></div>` +
+                `<span class="nums">${current} / ${buffedMax}</span>` +
+              `</div>`
+            );
+          }
+          vitalsBars.innerHTML = rows.join("");
+        }
+
+        // Attribute table. `attributes` packs `[type, current, base, ranks] × 6`.
+        const attributes = stats.attributes;
+        if (!attributes || attributes.length === 0) {
+          attributeTable.innerHTML = "";
+        } else {
+          const rows = [];
+          for (let i = 0; i + 3 < attributes.length; i += 4) {
+            const type = attributes[i];
+            const current = attributes[i + 1];
+            const base = attributes[i + 2];
+            const ranks = attributes[i + 3];
+            const buffDelta = current - base;
+            const buffStr = buffDelta === 0
+              ? ""
+              : (buffDelta > 0 ? `+${buffDelta}` : `${buffDelta}`);
+            rows.push(
+              `<tr>` +
+                `<td class="label">${wasm.attributeName(type)}</td>` +
+                `<td class="num">${current}</td>` +
+                `<td class="delta">${base}${buffStr ? ` (${buffStr})` : ""} · ${ranks} ranks</td>` +
+              `</tr>`
+            );
+          }
+          attributeTable.innerHTML = rows.join("");
+        }
+
+        // Skill table. `skills` packs `[type, current, base, ranks, training] × N`.
+        // training: 0=Untrained, 1=Untrained-but-Trainable, 2=Trained, 3=Specialized.
+        const TRAINING_CLASS = { 0: "untrained", 1: "untrained", 2: "trained", 3: "specialized" };
+        const skills = stats.skills;
+        if (!skills || skills.length === 0) {
+          skillTable.innerHTML = "";
+        } else {
+          const rows = [];
+          for (let i = 0; i + 4 < skills.length; i += 5) {
+            const type = skills[i];
+            const current = skills[i + 1];
+            const base = skills[i + 2];
+            const ranks = skills[i + 3];
+            const training = skills[i + 4];
+            const cls = TRAINING_CLASS[training] || "";
+            const label = wasm.skillName(type);
+            const buffDelta = current - base;
+            const buffStr = buffDelta === 0 ? "" : (buffDelta > 0 ? `(+${buffDelta})` : `(${buffDelta})`);
+            rows.push(
+              `<tr class="${cls}">` +
+                `<td class="label">${label}</td>` +
+                `<td class="num">${current}</td>` +
+                `<td class="delta">${base}${buffStr ? " " + buffStr : ""} · ${ranks} ranks</td>` +
+              `</tr>`
+            );
+          }
+          skillTable.innerHTML = rows.join("");
+        }
+
+        // Reveal the panel once we have data.
+        if (vitalsPanel.hidden) vitalsPanel.hidden = false;
+      }
+
+      // Phase 4 step 4 follow-on: re-render the inventory panel
+      // from `SessionHandle.playerInventory()`. Called from the
+      // drainEvents tick on every kind=11 event. The snapshot is
+      // already sorted (equipped first, then by name) so we just
+      // partition into the two sub-sections.
+      function renderInventoryPanel(handle) {
+        if (!handle) return;
+        const items = handle.playerInventory();
+        // Empty-state — both sections hidden, "no items" message shown.
+        if (!items || items.length === 0) {
+          inventoryEmpty.hidden = false;
+          invEquippedH.hidden = true;
+          invPackH.hidden = true;
+          invEquipped.innerHTML = "";
+          invPack.innerHTML = "";
+          if (inventoryPanel.hidden) inventoryPanel.hidden = false;
+          return;
+        }
+        inventoryEmpty.hidden = true;
+        const equippedRows = [];
+        const packRows = [];
+        for (const item of items) {
+          // Tag the <li> with the most-significant item-type bit so
+          // the CSS colour hints match (Weapon / Armor / Magic /
+          // Money). Multiple bits can be set; pick the lowest one.
+          const itemType = item.itemType >>> 0;
+          let typeBit = 0;
+          if (itemType !== 0) {
+            // Find lowest set bit.
+            typeBit = itemType & (~itemType + 1);
+          }
+          const meta = item.stackSize > 1
+            ? `<span class="stack">×${item.stackSize}</span>`
+            : (item.value > 0 ? `${item.value} pyreals` : "");
+          const row =
+            `<li data-guid="${item.guid}" data-type-bit="0x${typeBit.toString(16)}">` +
+              `<span class="name">${escapeHtml(item.name || "(unnamed)")}</span>` +
+              `<span class="meta">${meta}</span>` +
+            `</li>`;
+          if (item.equipMask !== 0) equippedRows.push(row);
+          else packRows.push(row);
+        }
+        if (equippedRows.length > 0) {
+          invEquippedH.hidden = false;
+          invEquipped.innerHTML = equippedRows.join("");
+        } else {
+          invEquippedH.hidden = true;
+          invEquipped.innerHTML = "";
+        }
+        if (packRows.length > 0) {
+          invPackH.hidden = false;
+          invPack.innerHTML = packRows.join("");
+        } else {
+          invPackH.hidden = true;
+          invPack.innerHTML = "";
+        }
+        if (inventoryPanel.hidden) inventoryPanel.hidden = false;
+      }
+
+      function escapeHtml(s) {
+        return String(s)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
       let activeHandle = null;
 
       // Enable Connect now that the submit listener is wired. Until
@@ -3323,6 +3643,23 @@ void main() {
                   `<span class="fail">[FAIL]</span> Disconnected: <code>${evt.stringPayload || ""}</code>` +
                   ` <span class="hint">Reload the page to retry.</span>`;
                 return; // Stop polling.
+              } else if (evt.kind === 8) {
+                // Phase 4 step 4 follow-on: PlayerStatsUpdated.
+                // The recv loop coalesces all stat-bearing wire
+                // messages (PrivateUpdate{Vital,Attribute,Skill}
+                // /Public counterparts / GameEvent::UpdateHealth /
+                // PlayerDescription) into one signal per recv
+                // iteration. Refreshing on every event is cheap
+                // because playerStats() is a clone of pre-built
+                // typed arrays.
+                renderVitalsPanel(handle);
+              } else if (evt.kind === 11) {
+                // Phase 4 step 4 follow-on: InventoryUpdated.
+                // ObjectCreate / ObjectDelete / WieldObject /
+                // ViewContents / IdentifyObjectResponse all funnel
+                // here. The wasm-side filter excludes entities not
+                // owned by the player.
+                renderInventoryPanel(handle);
               } else if (evt.kind === 0) {
                 // Re-fired CharacterListReceived (e.g. after CharacterCreate
                 // / CharacterDelete round-trip). Step 2a doesn't act on

@@ -381,6 +381,83 @@ check(
     `ClientEvent=${typeof wasm.ClientEvent}, u32Payload2=${typeof clientEventDescr?.get}`
 );
 
+// Phase 4 step 4 follow-on (vitals + inventory panels):
+// SessionHandle.playerStats() returns a PlayerStatsSnapshot
+// (vitals / attributes / skills / level info), refreshed by the
+// recv loop on every kind=8 PlayerStatsUpdated event. Symbol-
+// presence here pins the export; live wire round-trip lives in
+// the capture harness (PlayerDescription must arrive for the
+// snapshot to be non-empty).
+check(
+    "SessionHandle.playerStats() exposed (Phase 4 step 4 follow-on vitals)",
+    typeof sessionHandleProto?.playerStats === "function",
+    `playerStats=${typeof sessionHandleProto?.playerStats}`
+);
+
+check(
+    "SessionHandle.playerInventory() exposed (Phase 4 step 4 follow-on inventory)",
+    typeof sessionHandleProto?.playerInventory === "function",
+    `playerInventory=${typeof sessionHandleProto?.playerInventory}`
+);
+
+// Phase 4 step 4 follow-on: PlayerStatsSnapshot wasm-bindgen
+// class with `.vitals` / `.attributes` / `.skills` / `.levelInfo`
+// / `.name` getters. The recv loop builds one in
+// `publish_player_stats_snapshot` from `WorldState.player.*`.
+const statsProto = wasm.PlayerStatsSnapshot?.prototype || {};
+const statsVitalsDescr = Object.getOwnPropertyDescriptor(statsProto, "vitals");
+const statsAttribDescr = Object.getOwnPropertyDescriptor(statsProto, "attributes");
+const statsSkillsDescr = Object.getOwnPropertyDescriptor(statsProto, "skills");
+const statsLevelDescr = Object.getOwnPropertyDescriptor(statsProto, "levelInfo");
+const statsNameDescr = Object.getOwnPropertyDescriptor(statsProto, "name");
+check(
+    "PlayerStatsSnapshot class + 5 getters exposed (Phase 4 step 4 follow-on)",
+    typeof wasm.PlayerStatsSnapshot === "function"
+        && typeof statsVitalsDescr?.get === "function"
+        && typeof statsAttribDescr?.get === "function"
+        && typeof statsSkillsDescr?.get === "function"
+        && typeof statsLevelDescr?.get === "function"
+        && typeof statsNameDescr?.get === "function",
+    `class=${typeof wasm.PlayerStatsSnapshot}, vitals=${typeof statsVitalsDescr?.get}, attributes=${typeof statsAttribDescr?.get}, skills=${typeof statsSkillsDescr?.get}, levelInfo=${typeof statsLevelDescr?.get}, name=${typeof statsNameDescr?.get}`
+);
+
+// Phase 4 step 4 follow-on: InventoryItem wasm-bindgen class
+// with the 9 getters JS reads to render each row.
+const itemProto = wasm.InventoryItem?.prototype || {};
+const expectedItemGetters = [
+    "guid", "wcid", "name", "iconId", "itemType",
+    "value", "stackSize", "equipMask", "containerId",
+];
+const itemGettersOk = expectedItemGetters.every((g) => {
+    const d = Object.getOwnPropertyDescriptor(itemProto, g);
+    return typeof d?.get === "function";
+});
+check(
+    "InventoryItem class + 9 getters exposed (Phase 4 step 4 follow-on)",
+    typeof wasm.InventoryItem === "function" && itemGettersOk,
+    `class=${typeof wasm.InventoryItem}, getters=${itemGettersOk}`
+);
+
+// Phase 4 step 4 follow-on: top-level human-readable label
+// helpers used by JS to render the vitals panel rows. Each maps
+// a numeric stat-type id to its display string (mirrors the
+// strum Display impl on the underlying enum).
+check(
+    "skillName() exposed (Phase 4 step 4 follow-on label helper)",
+    typeof wasm.skillName === "function" && wasm.skillName(24) === "Run",
+    `skillName=${typeof wasm.skillName}, skillName(24)=${JSON.stringify(wasm.skillName?.(24))}`
+);
+check(
+    "attributeName() exposed (Phase 4 step 4 follow-on label helper)",
+    typeof wasm.attributeName === "function" && wasm.attributeName(1) === "Strength",
+    `attributeName=${typeof wasm.attributeName}, attributeName(1)=${JSON.stringify(wasm.attributeName?.(1))}`
+);
+check(
+    "vitalName() exposed (Phase 4 step 4 follow-on label helper)",
+    typeof wasm.vitalName === "function" && wasm.vitalName(1) === "Health",
+    `vitalName=${typeof wasm.vitalName}, vitalName(1)=${JSON.stringify(wasm.vitalName?.(1))}`
+);
+
 
 (async () => {
     // Phase 5.0b — pre-bake a manifest+shards+boot tree from the

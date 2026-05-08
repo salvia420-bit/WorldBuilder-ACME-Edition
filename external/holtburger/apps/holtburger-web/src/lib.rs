@@ -2740,6 +2740,27 @@ const CLIENT_EVENT_KIND_CHARACTER_CREATE_FAILED: u32 = 6;
 /// button (and any future in-world UI) gated on this.
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_ENTERED_WORLD: u32 = 7;
+/// Phase 4 step 4 follow-on (vitals + inventory panels): coalesced
+/// "the player's stat-block changed, refresh the panel" signal. Fires
+/// any time the canonical world handler dispatcher emits a
+/// `WorldEvent::{Vital,Attribute,Skill,LevelInfo,DerivedStats}Updated`
+/// or `PlayerEnchantmentsUpdated`. JS calls
+/// [`SessionHandle::player_stats`] on the next rAF tick to read a
+/// fresh snapshot. No payload — the snapshot lookup is the contract.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_PLAYER_STATS_UPDATED: u32 = 8;
+/// Phase 4 step 4 follow-on: coalesced "the player's owned-item set
+/// changed, refresh the inventory panel" signal. Fires any time the
+/// canonical world handler dispatcher routes
+/// `ObjectCreate` / `ObjectDelete` / `InventoryRemoveObject` /
+/// `ParentEvent` / `PickupEvent` for a guid the player owns, or a
+/// `GameEvent::{ViewContents,WieldObject,IdentifyObjectResponse,
+/// CloseGroundContainer,InventoryPutObjInContainer,
+/// InventoryPutObjectIn3D}` lands. JS calls
+/// [`SessionHandle::player_inventory`] on the next rAF tick to read
+/// a fresh inventory snapshot.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_INVENTORY_UPDATED: u32 = 11;
 
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
@@ -3196,6 +3217,267 @@ impl EntityUpdate {
     }
 }
 
+/// Phase 4 step 4 follow-on (vitals + inventory panels): one snapshot
+/// of the player's stat block — vitals (Health / Stamina / Mana),
+/// attributes (Strength / Endurance / Coordination / Quickness /
+/// Focus / Self), skills, and level info.
+///
+/// JS reads this on every `kind=8 PlayerStatsUpdated` event by calling
+/// [`SessionHandle::player_stats`]. The snapshot is constructed by
+/// pulling the current values out of the recv loop's `WorldState`
+/// (which the canonical handler dispatcher keeps current as
+/// `Update*Vital` / `Update*Attribute` / `Update*Skill` /
+/// `PlayerDescription` lands).
+///
+/// Wire shape: typed-array buffers JS interprets via fixed strides.
+/// - `vitals` — flat `[type_u32, current_u32, base_u32, buffed_max_u32, ...]`
+///   triples-of-four, one per vital ordered by `VitalType` value
+///   (Health=1, Stamina=3, Mana=5).
+/// - `attributes` — flat `[type_u32, current_u32, base_u32, ranks_u32, ...]`
+///   quadruples, one per attribute ordered by `AttributeType` value
+///   (Strength=1 .. Self=6).
+/// - `skills` — flat `[type_u32, current_u32, base_u32, ranks_u32,
+///   training_u32, ...]` quintuples, sorted by `SkillType` value.
+///   Training: 0=Untrained, 1=Untrained-but-Trainable, 2=Trained,
+///   3=Specialized (mirrors `holtburger_common::stats::TrainingLevel`
+///   numeric layout).
+/// - `level_info` — fixed seven-element layout
+///   `[level_u32, current_xp_lo, current_xp_hi, unspent_xp_lo,
+///   unspent_xp_hi, available_luminance_lo, available_luminance_hi]`.
+///   The 64-bit values are packed lo / hi 32-bit halves so JS can
+///   reassemble via `BigInt`.
+/// - `name` — character's display name (from `WorldState.player`).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct PlayerStatsSnapshot {
+    name: String,
+    vitals: Vec<u32>,
+    attributes: Vec<u32>,
+    skills: Vec<u32>,
+    level_info: Vec<u32>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl PlayerStatsSnapshot {
+    /// Display name of the local player.
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    /// Flat `[type, current, base, buffed_max, ...]` per vital.
+    /// `buffed_max` is the enchantment-modified max; `base` is the
+    /// unbuffed max. JS computes `% = current / buffed_max` for the
+    /// progress-bar fill.
+    #[wasm_bindgen(getter)]
+    pub fn vitals(&self) -> Vec<u32> {
+        self.vitals.clone()
+    }
+
+    /// Flat `[type, current, base, ranks, ...]` per attribute.
+    /// `current` includes enchantments; `base` is unbuffed; `ranks`
+    /// is the spent-attribute-points count (0..330 for non-Olthoi).
+    #[wasm_bindgen(getter)]
+    pub fn attributes(&self) -> Vec<u32> {
+        self.attributes.clone()
+    }
+
+    /// Flat `[type, current, base, ranks, training, ...]` per skill.
+    /// Sorted by `SkillType` value. JS labels via the `SkillType`
+    /// strum-display strings (the wasm bundle exposes a static
+    /// `skillName(type)` helper, see [`skill_name`]).
+    #[wasm_bindgen(getter)]
+    pub fn skills(&self) -> Vec<u32> {
+        self.skills.clone()
+    }
+
+    /// Fixed-shape seven-element level-info packing:
+    /// `[level, current_xp_lo, current_xp_hi, unspent_xp_lo,
+    /// unspent_xp_hi, available_luminance_lo, available_luminance_hi]`.
+    /// 64-bit values are split into lo/hi 32-bit halves for the
+    /// wasm-bindgen Vec<u32> boundary.
+    #[wasm_bindgen(getter, js_name = levelInfo)]
+    pub fn level_info(&self) -> Vec<u32> {
+        self.level_info.clone()
+    }
+}
+
+/// Phase 4 step 4 follow-on (inventory panel): one item entry in the
+/// player's inventory snapshot. JS reads `Vec<InventoryItem>` via
+/// [`SessionHandle::player_inventory`] on every `kind=11
+/// InventoryUpdated` event.
+///
+/// "Inventory" here is the union of (a) items the player owns
+/// (`WorldState.player.inventory: HashSet<Guid>`) and (b) items the
+/// player has equipped (`WorldState.player.equipment: HashMap<Guid,
+/// EquipMask>`). Equipped items have a non-zero `equip_mask`. Items
+/// in side packs / the main pack have `equip_mask == 0`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct InventoryItem {
+    guid: u32,
+    wcid: u32,
+    name: String,
+    icon_id: u32,
+    item_type: u32,
+    value: u32,
+    stack_size: u32,
+    equip_mask: u32,
+    container_id: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl InventoryItem {
+    /// Item GUID — primary key.
+    #[wasm_bindgen(getter)]
+    pub fn guid(&self) -> u32 {
+        self.guid
+    }
+
+    /// Weenie class id (`PublicWeenieDescription.wcid`). Used by JS
+    /// for icon lookup or future tooltips.
+    #[wasm_bindgen(getter)]
+    pub fn wcid(&self) -> u32 {
+        self.wcid
+    }
+
+    /// Display name (e.g. "Steel Long Sword", "Healing Kit"). Comes
+    /// from `PropertyString::Name`.
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    /// Icon DID (`PublicWeenieDescription.icon_id`). For step 4
+    /// follow-on we surface the raw DID; rendering the icon is a
+    /// step 6-style follow-on (would need an icon-atlas fetch).
+    #[wasm_bindgen(getter, js_name = iconId)]
+    pub fn icon_id(&self) -> u32 {
+        self.icon_id
+    }
+
+    /// `ItemType` bitmask. Used by the inventory-panel filter chips
+    /// (Weapons / Armor / Misc / etc.). See
+    /// `external/ACE/Source/ACE.Entity/Enum/ItemType.cs`.
+    #[wasm_bindgen(getter, js_name = itemType)]
+    pub fn item_type(&self) -> u32 {
+        self.item_type
+    }
+
+    /// Pyreal value (`PropertyInt::Value`). Used by the inventory
+    /// panel to show item worth.
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> u32 {
+        self.value
+    }
+
+    /// Stack size (`PropertyInt::StackSize`). 1 for non-stackable
+    /// items.
+    #[wasm_bindgen(getter, js_name = stackSize)]
+    pub fn stack_size(&self) -> u32 {
+        self.stack_size
+    }
+
+    /// Equip mask. Non-zero = equipped. The bits identify which slot
+    /// (`HEAD`, `CHEST`, `MELEE_WEAPON`, etc. — see
+    /// `holtburger_common::properties::EquipMask`).
+    #[wasm_bindgen(getter, js_name = equipMask)]
+    pub fn equip_mask(&self) -> u32 {
+        self.equip_mask
+    }
+
+    /// Container GUID. `0` if the item is in the player's main
+    /// pack; non-zero = the GUID of the side-pack / shop / corpse
+    /// the item sits in.
+    #[wasm_bindgen(getter, js_name = containerId)]
+    pub fn container_id(&self) -> u32 {
+        self.container_id
+    }
+}
+
+/// Phase 4 step 4 follow-on: human-readable label for a `SkillType`
+/// numeric id. Mirrors the `Display` impl on
+/// `holtburger_common::stats::SkillType` (which uses strum's
+/// `serialize` attribute on each variant). JS calls this via the
+/// wasm-bindgen export `skillName(typeId)` to label the rows in the
+/// Skills section of the vitals panel.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = skillName)]
+pub fn skill_name(skill_type: u32) -> String {
+    use holtburger_common::stats::SkillType;
+    SkillType::from_repr(skill_type)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("Skill {skill_type}"))
+}
+
+/// Phase 4 step 4 follow-on: human-readable label for an
+/// `AttributeType` numeric id. Mirrors the `Display` impl on
+/// `holtburger_common::stats::AttributeType`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = attributeName)]
+pub fn attribute_name(attribute_type: u32) -> String {
+    use holtburger_common::stats::AttributeType;
+    AttributeType::from_repr(attribute_type)
+        .map(|a| a.to_string())
+        .unwrap_or_else(|| format!("Attribute {attribute_type}"))
+}
+
+/// Phase 4 step 4 follow-on: human-readable label for a `VitalType`
+/// numeric id. Mirrors the `Display` impl on
+/// `holtburger_common::stats::VitalType`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = vitalName)]
+pub fn vital_name(vital_type: u32) -> String {
+    use holtburger_common::stats::VitalType;
+    VitalType::from_repr(vital_type)
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| format!("Vital {vital_type}"))
+}
+
+/// Phase 4 step 4 follow-on: should this `GameMessage` be routed
+/// through the canonical `holtburger_world::handlers::routing::handle_message`
+/// dispatcher so `WorldState` (player stats + entity collection)
+/// stays current?
+///
+/// We selectively route — NOT every message — because position
+/// messages (`UpdatePosition`, etc.) already get manual treatment in
+/// the recv loop's existing arms (sequence tracking, entity_seeded
+/// gating, MovementSystem heartbeat arming) and double-handling them
+/// risks regressing step 3.6 / 3.5. The vital / attribute / skill /
+/// inventory family of messages is precisely what the canonical
+/// dispatcher exists for, and the recv loop has no manual arm for
+/// any of those today.
+///
+/// Note: `GameEvent` is routed too because it carries
+/// `UpdateHealth` (vital current), `ViewContents` (container open),
+/// `IdentifyObjectResponse` (item details), `WieldObject` (equip /
+/// unequip), and the recv loop's existing PlayerDescription arm is
+/// stripped of its hydrate/apply/emit calls (the dispatcher does
+/// them) so it only handles the fallback-caps clear / re-install.
+#[cfg(target_arch = "wasm32")]
+fn should_route_message_to_world(message: &holtburger_protocol::messages::GameMessage) -> bool {
+    use holtburger_protocol::messages::GameMessage;
+    matches!(
+        message,
+        GameMessage::PrivateUpdateVital(_)
+            | GameMessage::PublicUpdateVital(_)
+            | GameMessage::PrivateUpdateVitalCurrent(_)
+            | GameMessage::PrivateUpdateAttribute(_)
+            | GameMessage::PublicUpdateAttribute(_)
+            | GameMessage::PrivateUpdateSkill(_)
+            | GameMessage::PublicUpdateSkill(_)
+            | GameMessage::ObjectCreate(_)
+            | GameMessage::ObjectDelete(_)
+            | GameMessage::InventoryRemoveObject(_)
+            | GameMessage::ParentEvent(_)
+            | GameMessage::PickupEvent(_)
+            | GameMessage::GameEvent(_)
+    )
+}
+
 /// One row from the AC CharacterList packet, projected to the fields
 /// the Selection UI displays.
 ///
@@ -3285,6 +3567,39 @@ pub struct SessionHandle {
     /// Separate from `queued_events` (the lifecycle stream) — see
     /// [`EntityUpdate`]'s doc comment for the rationale.
     entity_updates: std::rc::Rc<std::cell::RefCell<Vec<EntityUpdate>>>,
+    /// Phase 4 step 4 follow-on (vitals + inventory panels): latest
+    /// player-stat snapshot, refreshed by the recv loop whenever the
+    /// canonical world handler dispatcher reports
+    /// `WorldEvent::{Vital,Attribute,Skill,LevelInfo,DerivedStats}Updated`
+    /// or `PlayerEnchantmentsUpdated`. JS reads via
+    /// [`SessionHandle::player_stats`] on each `kind=8 PlayerStatsUpdated`
+    /// drain. `None` until the player's biota lands (at which point
+    /// the dispatcher emits a flurry of stat events on first
+    /// `PlayerDescription`).
+    latest_stats: std::rc::Rc<std::cell::RefCell<Option<LatestStats>>>,
+    /// Phase 4 step 4 follow-on (vitals + inventory panels): latest
+    /// player-inventory snapshot, refreshed by the recv loop whenever
+    /// `ObjectCreate` / `ObjectDelete` / `WieldObject` /
+    /// `ViewContents` / `IdentifyObjectResponse` lands. JS reads via
+    /// [`SessionHandle::player_inventory`] on each `kind=11
+    /// InventoryUpdated` drain.
+    latest_inventory: std::rc::Rc<std::cell::RefCell<Vec<InventoryItem>>>,
+}
+
+/// Phase 4 step 4 follow-on (vitals + inventory panels): non-wasm-bindgen
+/// owned-value carrier for the player-stats snapshot. Field-for-field
+/// match with `PlayerStatsSnapshot` (which is the JS-facing wrapper);
+/// kept separate so the shared cell can `clone()` the inner state on
+/// every read without going through the JsValue boundary. Construction
+/// happens in `recv_loop::publish_stats_snapshot`.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Default)]
+struct LatestStats {
+    name: String,
+    vitals: Vec<u32>,
+    attributes: Vec<u32>,
+    skills: Vec<u32>,
+    level_info: Vec<u32>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -3326,6 +3641,37 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = characterList)]
     pub fn character_list(&self) -> Vec<CharacterSummary> {
         self.character_list.borrow().clone()
+    }
+
+    /// Phase 4 step 4 follow-on: most recent player-stats snapshot.
+    /// Returns an "empty" snapshot (zeroed level info, no vitals /
+    /// attributes / skills) until the player's biota lands. JS calls
+    /// this on every `kind=8 PlayerStatsUpdated` drain to refresh the
+    /// vitals panel; calling it before that event fires is harmless.
+    #[wasm_bindgen(js_name = playerStats)]
+    pub fn player_stats(&self) -> PlayerStatsSnapshot {
+        let stats = self
+            .latest_stats
+            .borrow()
+            .clone()
+            .unwrap_or_default();
+        PlayerStatsSnapshot {
+            name: stats.name,
+            vitals: stats.vitals,
+            attributes: stats.attributes,
+            skills: stats.skills,
+            level_info: stats.level_info,
+        }
+    }
+
+    /// Phase 4 step 4 follow-on: most recent inventory snapshot.
+    /// Includes the player's main pack contents + every equipped
+    /// item (see [`InventoryItem::equip_mask`] for the equipped/
+    /// not-equipped discriminator). Empty until the spawn flow lands
+    /// the first `ObjectCreate` for an owned item.
+    #[wasm_bindgen(js_name = playerInventory)]
+    pub fn player_inventory(&self) -> Vec<InventoryItem> {
+        self.latest_inventory.borrow().clone()
     }
 
     /// Account name the session is logged in as. Echoed back by ACE
@@ -3793,12 +4139,23 @@ pub async fn start_session(
     let world_bootstrap: std::rc::Rc<
         std::cell::RefCell<Option<std::sync::Arc<holtburger_world::WorldBootstrap>>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(None));
+    // Phase 4 step 4 follow-on (vitals + inventory panels): shared
+    // snapshot cells the recv loop publishes into when the canonical
+    // world handler dispatcher signals stat / inventory changes. JS
+    // reads via `playerStats()` / `playerInventory()` after each
+    // `kind=8` / `kind=11` drain.
+    let latest_stats: std::rc::Rc<std::cell::RefCell<Option<LatestStats>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let latest_inventory: std::rc::Rc<std::cell::RefCell<Vec<InventoryItem>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
 
     {
         let queued_events = queued_events.clone();
         let character_list = character_list.clone();
         let entity_updates = entity_updates.clone();
         let world_bootstrap = world_bootstrap.clone();
+        let latest_stats = latest_stats.clone();
+        let latest_inventory = latest_inventory.clone();
         wasm_bindgen_futures::spawn_local(async move {
             recv_loop(
                 session,
@@ -3808,6 +4165,8 @@ pub async fn start_session(
                 entity_updates,
                 Some(charlist_tx),
                 world_bootstrap,
+                latest_stats,
+                latest_inventory,
             )
             .await;
         });
@@ -3865,6 +4224,8 @@ pub async fn start_session(
         account_name,
         catalog,
         entity_updates,
+        latest_stats,
+        latest_inventory,
     })
 }
 
@@ -4207,6 +4568,131 @@ impl LocalPlayerSnapshot {
     }
 }
 
+/// Phase 4 step 4 follow-on (vitals + inventory panels): collapse the
+/// recv loop's `WorldState.player.{vitals,attributes,skills}` HashMaps
+/// + `WorldState::get_level_info()` into a flat `LatestStats` snapshot
+/// the JS panel consumes.
+///
+/// Layout matches `PlayerStatsSnapshot`'s wasm-bindgen contract:
+/// - `vitals` is `[type, current, base, buffed_max] × 3`
+/// - `attributes` is `[type, current, base, ranks] × 6`
+/// - `skills` is `[type, current, base, ranks, training] × N`
+/// - `level_info` is `[level, current_xp_lo, current_xp_hi,
+///   unspent_xp_lo, unspent_xp_hi, available_luminance_lo,
+///   available_luminance_hi]`
+#[cfg(target_arch = "wasm32")]
+fn publish_player_stats_snapshot(
+    world: &holtburger_world::WorldState,
+    latest_stats: &std::rc::Rc<std::cell::RefCell<Option<LatestStats>>>,
+) {
+    use holtburger_common::properties::WorldObjectExt as _;
+    let mut vitals: Vec<u32> =
+        Vec::with_capacity(world.player.vitals.len() * 4);
+    for vital in world.player.vital_snapshot() {
+        vitals.push(vital.vital_type as u32);
+        vitals.push(vital.current);
+        vitals.push(vital.base);
+        vitals.push(vital.buffed_max);
+    }
+    let mut attributes: Vec<u32> =
+        Vec::with_capacity(world.player.attributes.len() * 4);
+    for attr in world.player.attribute_snapshot() {
+        attributes.push(attr.attr_type as u32);
+        attributes.push(attr.current);
+        attributes.push(attr.base);
+        attributes.push(attr.ranks);
+    }
+    let mut skills: Vec<u32> =
+        Vec::with_capacity(world.player.skills.len() * 5);
+    for skill in world.player.skill_snapshot() {
+        skills.push(skill.skill_type as u32);
+        skills.push(skill.current);
+        skills.push(skill.base);
+        skills.push(skill.ranks);
+        skills.push(skill.training as u32);
+    }
+    let lvl = world.get_level_info();
+    let level_info: Vec<u32> = vec![
+        lvl.level,
+        (lvl.current_xp & 0xFFFF_FFFF) as u32,
+        (lvl.current_xp >> 32) as u32,
+        (lvl.unspent_xp & 0xFFFF_FFFF) as u32,
+        (lvl.unspent_xp >> 32) as u32,
+        (lvl.available_luminance & 0xFFFF_FFFF) as u32,
+        (lvl.available_luminance >> 32) as u32,
+    ];
+    // Best-effort name pull from the player Entity's PropertyString::Name.
+    // The player Entity is seeded in step 3.6's `PrivateUpdatePosition` /
+    // `UpdatePosition` arms; if it's missing (rare), the empty string
+    // falls through and JS labels the panel with the account name as
+    // fallback.
+    let name = world
+        .entities
+        .get(world.player.guid)
+        .map(|entity| entity.name().to_string())
+        .unwrap_or_default();
+    *latest_stats.borrow_mut() = Some(LatestStats {
+        name,
+        vitals,
+        attributes,
+        skills,
+        level_info,
+    });
+}
+
+/// Phase 4 step 4 follow-on (vitals + inventory panels): build the
+/// inventory snapshot from `WorldState.entities` filtered to entities
+/// owned by the player (in `player.inventory` OR `player.equipment`).
+///
+/// Equipped items carry the `equip_mask` bits identifying their slot;
+/// pack-only items have `equip_mask == 0`. JS uses the mask to decide
+/// whether to render an item under "Equipped" vs "Pack" sub-sections.
+#[cfg(target_arch = "wasm32")]
+fn publish_player_inventory_snapshot(
+    world: &holtburger_world::WorldState,
+    latest_inventory: &std::rc::Rc<std::cell::RefCell<Vec<InventoryItem>>>,
+) {
+    use holtburger_common::properties::WorldObjectExt as _;
+    let mut items: Vec<InventoryItem> =
+        Vec::with_capacity(world.player.inventory.len());
+    for guid in world.player.inventory.iter().copied() {
+        let Some(entity) = world.entities.get(guid) else {
+            continue;
+        };
+        let equip_mask = world
+            .player
+            .equipment
+            .get(&guid)
+            .copied()
+            .map(|m| m.bits())
+            .unwrap_or(0);
+        let container_id = entity
+            .container_id()
+            .map(u32::from)
+            .filter(|c| *c != u32::from(world.player.guid))
+            .unwrap_or(0);
+        items.push(InventoryItem {
+            guid: u32::from(guid),
+            wcid: entity.wcid.unwrap_or(0),
+            name: entity.name().to_string(),
+            icon_id: entity.icon_id.unwrap_or(0),
+            item_type: entity.item_type_int().unwrap_or(0),
+            value: entity.item_value(),
+            stack_size: entity.stack_size(),
+            equip_mask,
+            container_id,
+        });
+    }
+    // Sort: equipped first (by mask), then by name. Stable so JS
+    // sees a deterministic order across refreshes.
+    items.sort_by(|a, b| {
+        b.equip_mask
+            .cmp(&a.equip_mask)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    *latest_inventory.borrow_mut() = items;
+}
+
 #[cfg(target_arch = "wasm32")]
 async fn recv_loop(
     mut session: holtburger_session::Session,
@@ -4218,6 +4704,8 @@ async fn recv_loop(
     world_bootstrap: std::rc::Rc<
         std::cell::RefCell<Option<std::sync::Arc<holtburger_world::WorldBootstrap>>>,
     >,
+    latest_stats: std::rc::Rc<std::cell::RefCell<Option<LatestStats>>>,
+    latest_inventory: std::rc::Rc<std::cell::RefCell<Vec<InventoryItem>>>,
 ) {
     use futures::StreamExt;
     use holtburger_protocol::messages::{
@@ -4267,6 +4755,100 @@ async fn recv_loop(
                     let Some(message) = GameMessage::unpack(&bytes, &mut offset) else {
                         continue;
                     };
+
+                    // Phase 4 step 4 follow-on (vitals + inventory panels):
+                    // route stat / inventory / GameEvent messages through the
+                    // canonical world handler dispatcher BEFORE the recv loop's
+                    // own match-block runs. The dispatcher mutates
+                    // `WorldState.player.{vitals,attributes,skills}` +
+                    // `state.entities` + `state.player.inventory` /
+                    // `state.player.equipment` so the snapshot publishers below
+                    // see current state. We then scan the events the dispatcher
+                    // emitted to decide whether stats / inventory changed
+                    // enough to warrant a JS-facing kind=8 / kind=11 signal.
+                    //
+                    // Position messages (`Update*Position`, `VectorUpdate`,
+                    // `UpdateMotion`) are intentionally NOT routed: the recv
+                    // loop's existing arms handle them with step 3.6 / 3.5
+                    // semantics (entity_seeded gating, heartbeat arming, JS
+                    // entity_updates push) that double-handling would risk
+                    // regressing.
+                    let mut stats_changed = false;
+                    let mut inventory_changed = false;
+                    if should_route_message_to_world(&message)
+                        && let Some(w) = world.as_mut()
+                    {
+                        let mut world_events: Vec<holtburger_world::WorldEvent> = Vec::new();
+                        holtburger_world::handlers::routing::handle_message(
+                            w,
+                            &message,
+                            &mut world_events,
+                        );
+                        for ev in &world_events {
+                            use holtburger_world::WorldEvent;
+                            match ev {
+                                WorldEvent::VitalUpdated(_)
+                                | WorldEvent::AttributeUpdated(_)
+                                | WorldEvent::SkillUpdated(_)
+                                | WorldEvent::LevelInfoUpdated(_)
+                                | WorldEvent::DerivedStatsUpdated(_)
+                                | WorldEvent::PlayerEnchantmentsUpdated { .. } => {
+                                    stats_changed = true;
+                                }
+                                WorldEvent::EntitySpawned(_)
+                                | WorldEvent::EntityReplaced(_)
+                                | WorldEvent::EntityIdentified(_)
+                                | WorldEvent::EntityDespawned(_)
+                                | WorldEvent::ContainerOpened(_)
+                                | WorldEvent::ContainerClosed(_)
+                                | WorldEvent::PropertiesUpdated { .. } => {
+                                    // Could affect inventory if the entity
+                                    // is owned by the player; the snapshot
+                                    // builder filters by ownership so a
+                                    // false positive here just refreshes
+                                    // the panel one extra time.
+                                    inventory_changed = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                        // ObjectCreate / ObjectDelete / InventoryRemoveObject /
+                        // ParentEvent / PickupEvent don't always emit a
+                        // tagged event — infer from the message type so we
+                        // catch every owned-item change. The snapshot
+                        // builder's ownership filter still excludes
+                        // not-owned entities (NPCs, monsters, props) from
+                        // the JS-facing panel.
+                        if matches!(
+                            &message,
+                            GameMessage::ObjectCreate(_)
+                                | GameMessage::ObjectDelete(_)
+                                | GameMessage::InventoryRemoveObject(_)
+                                | GameMessage::ParentEvent(_)
+                                | GameMessage::PickupEvent(_)
+                        ) {
+                            inventory_changed = true;
+                        }
+                    }
+                    if stats_changed && let Some(w) = world.as_ref() {
+                        publish_player_stats_snapshot(w, &latest_stats);
+                        queued_events.borrow_mut().push(ClientEvent {
+                            kind: CLIENT_EVENT_KIND_PLAYER_STATS_UPDATED,
+                            string_payload: None,
+                            u32_payload: None,
+                            u32_payload_2: None,
+                        });
+                    }
+                    if inventory_changed && let Some(w) = world.as_ref() {
+                        publish_player_inventory_snapshot(w, &latest_inventory);
+                        queued_events.borrow_mut().push(ClientEvent {
+                            kind: CLIENT_EVENT_KIND_INVENTORY_UPDATED,
+                            string_payload: None,
+                            u32_payload: None,
+                            u32_payload_2: None,
+                        });
+                    }
+
                     match message {
                         GameMessage::CharacterList(data) => {
                             account_name = data.account_name.clone();
@@ -5189,62 +5771,38 @@ async fn recv_loop(
                                     });
                                 }
                                 holtburger_protocol::messages::GameEvent::PlayerDescription(
-                                    data,
+                                    _data,
                                 ) => {
-                                    // Phase 4 step 3.7: the player's
-                                    // biota — skills (incl. Run for
-                                    // run-rate), attributes, vitals,
-                                    // motion table id, enchantments,
-                                    // spells. Hydrating this lets
-                                    // `WorldState::resolve_self_movement_capabilities`
-                                    // succeed without the 3.6 fallback
-                                    // override; subsequent ticks read
-                                    // the player's *real* run rate
-                                    // through `world.player_run_rate()`
-                                    // (which goes through Run skill
-                                    // current + burden, not 1.0/4.5
-                                    // hardcoded). Mirrors the cli's
-                                    // dual-path handler in
-                                    // `holtburger-world/handlers/{login,
-                                    // player}.rs`.
+                                    // Phase 4 step 3.7: hydrate from
+                                    // PlayerDescription so subsequent
+                                    // movement reads the player's real
+                                    // run rate / motion table / skills.
+                                    //
+                                    // Phase 4 step 4 follow-on: the
+                                    // hydrate / apply / emit-derived-
+                                    // stats trio is now handled by the
+                                    // canonical world handler dispatcher
+                                    // up at the top of the recv-loop's
+                                    // per-message processing block (the
+                                    // `should_route_message_to_world` →
+                                    // `routing::handle_message` call).
+                                    // What stays in this arm is the
+                                    // movement-capabilities-override
+                                    // bookkeeping that step 3.6/3.7
+                                    // owns: clear the bootstrap-time
+                                    // fallback, verify real caps now
+                                    // resolve, and defensively re-install
+                                    // the fallback if they don't.
                                     if let Some(w) = world.as_mut() {
-                                        let mut events: Vec<
-                                            holtburger_world::WorldEvent,
-                                        > = Vec::new();
-                                        w.player.hydrate_from_player_description(
-                                            data.as_ref(),
-                                            &w.xp_table,
-                                            &w.skill_table,
-                                            &mut events,
-                                        );
-                                        w.apply_player_description_world_state(
-                                            data.as_ref(),
-                                            &mut events,
-                                        );
-                                        w.emit_player_derived_stats(&mut events);
-                                        // Real biota now resolved —
-                                        // drop the bootstrap-time
-                                        // fallback so subsequent
-                                        // movement uses the player's
-                                        // actual capabilities.
                                         w.clear_self_movement_capabilities_override();
                                         let real_caps_ok = w
                                             .resolve_self_movement_capabilities()
                                             .is_ok();
                                         console_log_str(&format!(
-                                            "[step 3.7] PlayerDescription hydrated; \
-                                             fallback caps cleared (real_caps_ok={}); \
-                                             world_events_emitted={}",
+                                            "[step 3.7] PlayerDescription handled; \
+                                             fallback caps cleared (real_caps_ok={})",
                                             real_caps_ok,
-                                            events.len(),
                                         ));
-                                        // If the real biota didn't
-                                        // resolve (e.g. data missing /
-                                        // skills not yet populated),
-                                        // re-install the fallback so
-                                        // movement keeps working —
-                                        // better to walk wrong than
-                                        // not at all.
                                         if !real_caps_ok {
                                             let fallback =
                                                 holtburger_world::SelfMovementCapabilities {

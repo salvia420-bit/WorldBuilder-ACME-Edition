@@ -5,40 +5,40 @@
 > Read this section first. The rest of this document is the
 > long-lived design intent + decision history; this header is
 > the snapshot of where we actually are and what's blocking
-> what. Last refreshed **2026-05-07** (post-Phase-4-step-3.7
-> landing — landblock-crossing rebucket + PlayerDescription
-> biota handler).
+> what. Last refreshed **2026-05-08** (post-Phase-4-step-4-
+> follow-on landing — vitals + inventory DOM panels).
 
 ### Where the project is
 
 **Phases done:** 0, 1, 2, 3 (steps 1-6 + step 3.6 terrain
 bilinear blend; step 5 partial), 4 (step 1 + 2a + 2a.5 +
-2a.6 + 2b + 3 + 3.5 + **3.6 movement-system wiring — full
-cli `MovementSystem` reuse, server-side player position
-actually advances, landed 2026-05-07** + **3.7 biota
-handler + landblock-crossing rebucket, landed 2026-05-07**
-+ 4 chat panel +
-**6a + 6b + 6e — realistic-entity metadata + ItemType-keyed
-visual dispatch + glyph fallback + per-entity nameplates,
-landed 2026-05-06 evening; 6 Phase A + B + C — apply ACE-
-shipped ClothingTable substitutions + palette overlays +
-MotionTable idle pose, landed 2026-05-07**), 5.0, 5.0b,
-5.1a, 5.1b. Native lib gate **1138 / 0** across 14 workspace
-crates (8 of those are Phase 6 substitution + palette tests
-in `holtburger-web::tests_substitution::*`). `cargo check
---target wasm32-unknown-unknown` clean for
+2a.6 + 2b + 3 + 3.5 + 3.6 movement-system wiring + 3.7 biota
+handler + landblock-crossing rebucket + 4 chat panel +
+**4 follow-on — vitals + inventory DOM panels via the
+canonical world-handler dispatcher routed at the top of
+the recv loop's per-message processing block, landed
+2026-05-08** +
+6a + 6b + 6e (realistic-entity metadata + ItemType-keyed
+visual dispatch + glyph fallback + per-entity nameplates) +
+6 Phase A + B + C (ACE-shipped ClothingTable substitutions +
+palette overlays + MotionTable idle pose), 5.0, 5.0b, 5.1a,
+5.1b. Native lib gate **1146 / 0** across 14 workspace crates.
+`cargo check --target wasm32-unknown-unknown` clean for
 `holtburger-{dat,session,transport-ws,resource-http,web,
 content,core,manifest}`. `wasm-pack build --target {nodejs,
-web}` both green. `node smoke_test.cjs` **72 / 72 PASS**
-(71 OK + 1 SKIP for live-ACE round-trip; the SKIP is the
+web}` both green. `node smoke_test.cjs` **82 / 82 PASS**
+(81 OK + 1 SKIP for live-ACE round-trip; the SKIP is the
 symbol-only check — the wire-effect validation runs through
 `capture_phase4_step3.cjs`, terrain quality validation
 through `capture_terrain_eval.cjs`, both Playwright-driven
-against the live stack). The +12 OK probes vs. 59 baseline
-are the new EntityUpdate getter checks (7 for step 6a meta
-fields + 3 for Phase A model-data substitutions) plus 2 new
-wasm exports (`fetchEntityModelRender`,
-`fetchEntitySurfacesPixels`).
+against the live stack). The +9 OK probes from the step 4
+follow-on are: 2 new SessionHandle methods
+(`playerStats`, `playerInventory`) + 2 new wasm-bindgen
+classes (`PlayerStatsSnapshot`, `InventoryItem` — getter
+shape pinned in one assertion each) + 3 new label helpers
+(`skillName`, `attributeName`, `vitalName`) + the existing
+9 step-3 / step-3.6 / step-4 OK probes that came in since
+the prior baseline.
 
 **What works end-to-end today.** Open
 `apps/holtburger-web/index.html` in any browser. The page calls
@@ -157,6 +157,109 @@ out-of-scope items 3.6 left open.
   `holtburger-common::position::tests::test_rebucket_*`
   cover in-bounds no-op, north cross, south-west diagonal
   cross, cell-id recompute, indoor no-op — all green.
+
+**Phase 4 step 4 follow-on (2026-05-08).** Adds the vitals +
+inventory DOM panels alongside the chat panel — the third and
+fourth tiles in the post-spawn `#panels-row` flex layout above
+the canvas. Mechanism:
+
+- **Canonical world-handler dispatcher routed at the top of
+  the recv loop.** Stat / inventory / `GameEvent` messages
+  go through `holtburger_world::handlers::routing::handle_message`
+  BEFORE the recv loop's own match-block runs. The dispatcher
+  mutates `WorldState.player.{vitals,attributes,skills}`,
+  `state.entities`, and `state.player.{inventory,equipment}`
+  per the cli's reference handlers in
+  `crates/holtburger-world/src/handlers/{player,inventory,
+  login,properties,system}.rs`. Position messages
+  (`UpdatePosition`, `PrivateUpdatePosition`,
+  `PublicUpdatePosition`, `VectorUpdate`, `UpdateMotion`)
+  are intentionally NOT routed — the recv loop's existing
+  arms handle them with step 3.6 / 3.5 semantics
+  (`entity_seeded` gating, heartbeat arming, JS
+  `entity_updates` push) that double-handling would risk
+  regressing.
+- **PlayerDescription arm simplified.** With routing now
+  doing `hydrate_from_player_description` +
+  `apply_player_description_world_state` +
+  `emit_player_derived_stats` automatically (via
+  `player::handle_event` and `login::handle_event`), the
+  recv loop's PlayerDescription arm shrinks to just the
+  step 3.6 / 3.7 fallback-caps bookkeeping — clear the
+  bootstrap-time override, verify real caps resolve, re-
+  install the fallback if they don't.
+- **Two new ClientEvent kinds — `kind=8 PlayerStatsUpdated`
+  and `kind=11 InventoryUpdated`.** Both are coalesced
+  signals (one per recv iteration regardless of how many
+  underlying world events fired). The recv loop scans the
+  dispatcher's `Vec<WorldEvent>` and flips a `stats_changed`
+  flag for `Vital`/`Attribute`/`Skill`/`LevelInfo`/
+  `DerivedStats`/`PlayerEnchantments` updates, an
+  `inventory_changed` flag for `EntitySpawned`/`Replaced`/
+  `Identified`/`Despawned`/`PropertiesUpdated`/
+  `ContainerOpened`/`ContainerClosed` plus a fast-path on
+  the message-type itself for `ObjectCreate`/`ObjectDelete`/
+  `InventoryRemoveObject`/`ParentEvent`/`PickupEvent`.
+- **Snapshot-on-publish architecture.** When a flag fires,
+  the recv loop calls `publish_player_stats_snapshot` /
+  `publish_player_inventory_snapshot` to build a flat-typed-
+  array snapshot from the now-current `WorldState`, writes
+  it into a shared `Rc<RefCell<...>>` cell, and queues the
+  marker `ClientEvent`. JS reads via
+  `SessionHandle.playerStats()` /
+  `SessionHandle.playerInventory()` after each `kind=8` /
+  `kind=11` drain. `PlayerStatsSnapshot` carries flat
+  `[type, current, base, buffed_max] × 3` for vitals,
+  `[type, current, base, ranks] × 6` for attributes,
+  `[type, current, base, ranks, training] × N` for skills,
+  and a 7-u32 packing for level info (level + 64-bit XP
+  values split lo/hi). `InventoryItem` carries
+  `{guid, wcid, name, iconId, itemType, value, stackSize,
+  equipMask, containerId}`.
+- **Vitals panel.** Three colour-keyed progress bars (red
+  Health, yellow Stamina, blue Mana) with `current / max`
+  numerics. 6-row attribute table (Strength / Endurance /
+  Coordination / Quickness / Focus / Self) showing
+  `current` + `base` + `ranks`. Collapsible Skills section
+  using a `<details>` element — sorted by `SkillType`
+  numeric id, with `.untrained` / `.trained` /
+  `.specialized` CSS classes for subtle colour cues. Header
+  shows player name + level + cumulative XP via `BigInt`
+  reassembly.
+- **Inventory panel (read-only first cut).** Two
+  sub-sections: "Equipped" (items with non-zero
+  `equipMask`) above "Pack" (items with `equipMask == 0`).
+  Each row shows the item name + meta (stack size if > 1
+  else pyreal value if > 0). CSS hints colour weapon names
+  blue, armour green, magic violet, money amber via the
+  `data-type-bit` attribute. Manipulating items (drop,
+  give, use) is step 5 scope (interactive entities via
+  `UseObject` + drop / give `GameAction`s).
+- **3 new top-level wasm-bindgen helpers.** `skillName(type)`
+  / `attributeName(type)` / `vitalName(type)` map a numeric
+  enum id to its strum-Display string. JS uses these to
+  label the panel rows without re-hosting the AC enum
+  vocabulary.
+- **Smoke 72 → 82 (+ 9 OK probes).** New checks:
+  `SessionHandle.playerStats()` + `playerInventory()`
+  prototype methods; `PlayerStatsSnapshot` class + 5
+  getters (`vitals`/`attributes`/`skills`/`levelInfo`/
+  `name`); `InventoryItem` class + 9 getters
+  (`guid`/`wcid`/`name`/`iconId`/`itemType`/`value`/
+  `stackSize`/`equipMask`/`containerId`); 3 label-helper
+  function-presence-and-known-value checks (`skillName(24)
+  === "Run"`, `attributeName(1) === "Strength"`,
+  `vitalName(1) === "Health"`).
+- **Live wire round-trip pending.** The static smoke
+  exercises symbol presence + label-helper return values;
+  the live PlayerDescription / Update*Vital / Update*Skill
+  / ObjectCreate-for-owned-item flow lives in the capture
+  harness against a real ACE backend. Reuse the existing
+  `capture_phase4_step3.cjs` Playwright pattern (`@telepoi
+  Holtburg` then walk around to trigger ACE's stat /
+  vision broadcasts) — the new `kind=8` and `kind=11`
+  events fire automatically as soon as the live recv loop
+  sees the corresponding wire messages.
 
 **Phase 3 step 3.6 (2026-05-06).** The terrain rendering now
 matches `emit-static-site`'s output (the canonical reference).
@@ -300,20 +403,24 @@ Pick one to pull on. The choice is real, not arbitrary.
   `WorldPosition::rebucket_outdoor_landblock` in the local-pose
   integrator advances the high word of `landblock_id` when
   coords cross 192 m boundaries (5 unit tests cover the
-  arithmetic). **Next on the rail: step 4 follow-on**
-  (vitals + inventory panels — same DOM-next-to-canvas pattern
-  as the chat panel) → step 5 (interactive entities: doors,
-  portals, vendors via `UseObject`) → **step 6 (realistic
-  entity rendering:
-  WeenieType-keyed tints, nameplates, palette-tinted creature
-  variants, portal swirls, sign inscriptions — mirrors
-  `emit-static-site`'s sprite-mode output at z≥11). Today every
-  NPC/portal/monster reads as a generic textured silhouette
-  because the recv-loop discards every `PublicWeenieDescription`
-  field except `csetup_id`; step 6a is the data-plumbing fix
-  that unblocks the rest.**
-  Brief lives inline at §8 (search for "Step 6 — realistic
-  entity rendering").
+  arithmetic). **Step 4 follow-on (2026-05-08): vitals +
+  inventory DOM panels** — every received message routes
+  through the canonical world-handler dispatcher
+  (`holtburger_world::handlers::routing::handle_message`) so
+  `WorldState.player.{vitals,attributes,skills}` +
+  `state.entities` + `state.player.{inventory,equipment}` stay
+  current; the recv loop scans the resulting `WorldEvent`s
+  and queues coalesced `kind=8 PlayerStatsUpdated` /
+  `kind=11 InventoryUpdated` markers. Two new
+  `SessionHandle` methods (`playerStats()`,
+  `playerInventory()`) return flat-typed-array
+  `PlayerStatsSnapshot` / `Vec<InventoryItem>` snapshots
+  the JS panel renders. **Next on the rail:** step 5
+  (interactive entities: doors, portals, vendors via
+  `UseObject`) → step 6 (realistic entity rendering follow-
+  ons: 6c palette-tinted variants, 6d portal swirls + sign
+  inscriptions, 6f portal destination chips — building on
+  6a/b/e/Phase-A/B/C already landed).
 - **Bandwidth rail** — Phase 5.2 (manifest scale fix) at
   [`manifest.md`](manifest.md). Real-world bake produces a
   **203 MB** `manifest.json` (885,043 entries × ~230 bytes
