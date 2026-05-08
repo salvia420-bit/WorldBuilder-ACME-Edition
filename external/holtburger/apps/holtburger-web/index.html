@@ -2981,6 +2981,64 @@ void main() {
         });
       }
 
+      // Track which landblocks have been pushed to the wasm terrain
+      // cache so handlePositionUpdate can lazy-fetch new LBs as the
+      // player crosses boundaries (or teleports / dies-respawns into
+      // a fresh region). Without this, the kind=7 EnteredWorld
+      // one-shot prefetch only covers the initial spawn area; any
+      // subsequent teleport (including the death-respawn that fired
+      // when the user fell off the Holtburg slope before client-side
+      // terrain following landed) leaves the integrator's terrain
+      // lookup with a cache miss, so heartbeats revert to constant Z
+      // and ACE physics applies false gravity again.
+      const terrainPrefetchedLbs = new Set();
+      const terrainPrefetchInFlight = new Set();
+      async function ensureTerrainAroundLandblock(centreLb) {
+        // centreLb is the high 16 bits of a cell id (e.g. 0xA9B40000).
+        // We prefetch the 3×3 ring around it (9 cells, ~580 m radius
+        // — enough headroom that the player can run for ~2 minutes
+        // before crossing into an unprefetched LB).
+        const cx = (centreLb >>> 24) & 0xff;
+        const cy = (centreLb >>> 16) & 0xff;
+        const fetchIds = [];
+        for (let dy = -1; dy <= 1; dy += 1) {
+          for (let dx = -1; dx <= 1; dx += 1) {
+            const nx = cx + dx;
+            const ny = cy + dy;
+            if (nx < 0 || nx > 0xff || ny < 0 || ny > 0xff) continue;
+            const lbId = ((nx << 24) | (ny << 16)) >>> 0;
+            if (terrainPrefetchedLbs.has(lbId) || terrainPrefetchInFlight.has(lbId)) {
+              continue;
+            }
+            terrainPrefetchInFlight.add(lbId);
+            const cellId = (lbId | 0xffff) >>> 0;
+            fetchIds.push({ lbId, cellId });
+          }
+        }
+        if (fetchIds.length === 0) return;
+        try {
+          const meshes = await fetch_landblock_heightmaps(
+            new Uint32Array(fetchIds.map(f => f.cellId))
+          );
+          for (let i = 0; i < fetchIds.length; i += 1) {
+            const { lbId } = fetchIds[i];
+            try {
+              const h = window.__sessionHandle;
+              if (h) h.populateTerrain(lbId, meshes[i].heights);
+              terrainPrefetchedLbs.add(lbId);
+            } catch (e) {
+              console.warn(`[terrain] populateTerrain failed for 0x${lbId.toString(16)}:`, e);
+            } finally {
+              terrainPrefetchInFlight.delete(lbId);
+              meshes[i].free();
+            }
+          }
+        } catch (e) {
+          for (const { lbId } of fetchIds) terrainPrefetchInFlight.delete(lbId);
+          console.warn("[terrain] LB-change prefetch failed:", e);
+        }
+      }
+
       function handlePositionUpdate(upd) {
         // No meta on Position — reuse what the prior Spawn deposited
         // on this guid's entry. If Position arrives before any Spawn
@@ -2991,6 +3049,26 @@ void main() {
         if (!entry) return;
         if (entry.guid === undefined) entry.guid = guid;
         const { wx, wy } = landblockToWorldXY(upd.landblockId, upd.x, upd.y);
+        // LB-change terrain prefetch — fires whenever the local
+        // player's reported landblock differs from any we've already
+        // pushed to the wasm cache. Covers the initial spawn (kind=7
+        // EnteredWorld also pre-warms the Holtburg ring), teleports
+        // (no specific Holtburg coords required — ACE sends an
+        // UpdatePosition / PrivateUpdate with the destination LB
+        // post-teleport), and death-respawns (ACE places the player
+        // at the lifestone / sanctuary cell and broadcasts an
+        // UpdatePosition).
+        if (
+          localPlayerGuid !== null
+          && guid === (localPlayerGuid >>> 0)
+        ) {
+          const lbId = ((upd.landblockId >>> 16) << 16) >>> 0;
+          if (lbId !== 0 && !terrainPrefetchedLbs.has(lbId)) {
+            // Fire-and-forget; the integrator preserves pose Z on
+            // cache miss until the prefetch lands.
+            ensureTerrainAroundLandblock(lbId);
+          }
+        }
         // Tier 2: sample velocity from the position delta. Speed in
         // m/s — used by tickEntityAnimations to gate walk-cycle
         // playback (only animate while moving above threshold).
@@ -4385,45 +4463,16 @@ void main() {
                 const playerGuid = (evt.u32Payload >>> 0).toString(16).toUpperCase().padStart(8, "0");
                 postSpawn.hidden = false;
                 teleportBtn.disabled = false;
-                // Pre-populate the world's terrain heightmap cache for
-                // the Holtburg 9-LB neighbourhood. The wasm-side
-                // manual-drive integrator consults this cache to snap
-                // pose Z to terrain — without it, ACE physics (FastTick
-                // for PK players) interprets our constant-Z heartbeat
-                // as the player floating above ground, applies false
-                // gravity, and kills the player ~10 s after walking
-                // off the Holtburg town slope. Each cell carries 81
-                // f32 height values; 9 LBs is ~3 KB total.
-                //
-                // Fire-and-forget; the integrator handles a missing
-                // cache gracefully (preserves existing pose Z). If
-                // the user teleports somewhere other than Holtburg,
-                // fall damage may resurface until we extend this to
-                // re-prefetch on PlayerTeleport for the new LB.
-                (async () => {
-                  const HOLT_LB_X = 0xa9;
-                  const HOLT_LB_Y = 0xb4;
-                  const cellIds = [];
-                  for (let dy = -1; dy <= 1; dy += 1) {
-                    for (let dx = -1; dx <= 1; dx += 1) {
-                      const lbX = (HOLT_LB_X + dx) >>> 0;
-                      const lbY = (HOLT_LB_Y + dy) >>> 0;
-                      cellIds.push((lbX << 24 | lbY << 16 | 0xffff) >>> 0);
-                    }
-                  }
-                  try {
-                    const meshes = await fetch_landblock_heightmaps(new Uint32Array(cellIds));
-                    for (let i = 0; i < cellIds.length; i += 1) {
-                      const cellId = cellIds[i] >>> 0;
-                      const lbId = (cellId & 0xffff0000) >>> 0;
-                      handle.populateTerrain(lbId, meshes[i].heights);
-                      meshes[i].free();
-                    }
-                    console.log(`[terrain] prefetched ${cellIds.length} LB heightmaps for Holtburg neighbourhood`);
-                  } catch (e) {
-                    console.warn("[terrain] prefetch failed:", e);
-                  }
-                })();
+                // Terrain heightmap prefetch is now driven by the
+                // first position update for the local player (see
+                // `ensureTerrainAroundLandblock` in
+                // `handlePositionUpdate`). That covers the initial
+                // spawn, all teleports, and death-respawns uniformly
+                // — the prior hardcoded Holtburg prefetch missed
+                // every non-Holtburg destination + every
+                // death-respawn, leaving the integrator's terrain
+                // lookup with a cache miss and re-introducing
+                // impact-damage death.
                 // Phase 4 step 4: reveal the chat panel; wasm bundle's
                 // sendChat is now safe to call.
                 chatPanel.hidden = false;
