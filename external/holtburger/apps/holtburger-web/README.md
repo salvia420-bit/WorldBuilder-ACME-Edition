@@ -128,23 +128,21 @@ Both `pkg/` and `pkg-node/` are git-ignored — they're build outputs.
 ### `--release` vs `--dev` for iteration
 
 `--release` runs `wasm-opt` on the bundle (~50 s on this crate). For
-inner-loop iteration where you'll re-run `node smoke_test.cjs --fast`
-(see Verify below) repeatedly, swap to `--dev`:
+inner-loop iteration, swap to `--dev`:
 
 ```sh
 wasm-pack build --target nodejs --out-dir pkg-node --dev   # ~3 s
 ```
 
-The behavior is identical for the `--fast` smoke surface and for
-symbol-presence assertions. **Caveat:** `--dev` builds currently
-fail the full smoke's v2 manifest dispatch test (a debug-build
-timing/race that `--release` optimization happens to mask). Use
-`--release` before committing or running the full smoke.
+Behavior is identical to `--release` for both `--fast` and full
+smoke runs (the smoke's HTTP server explicitly disables keepalive,
+which closes a Node 18 fetch ECONNRESET race that `--release`
+timing happened to mask).
 
 | Build flavour | Wall time (incremental) | Use when |
 |---|---|---|
-| `--release` | ~60 s | CI, full smoke, browser screenshots, perf testing |
-| `--dev` | ~3 s | Inner-loop iteration with `node smoke_test.cjs --fast` |
+| `--release` | ~60 s | CI, browser screenshots, perf testing, shipping |
+| `--dev` | ~3 s | Inner-loop iteration |
 
 ## Verify
 

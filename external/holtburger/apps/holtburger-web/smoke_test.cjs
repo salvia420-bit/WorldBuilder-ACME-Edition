@@ -772,6 +772,18 @@ check(
         // counts for the obj 8 exactly-one-catalog-fetch assertion.
         distServer = http.createServer((req, res) => {
             requestCounts.set(req.url, (requestCounts.get(req.url) ?? 0) + 1);
+            // Force connection close on every response so undici's
+            // (Node fetch's backend) keepalive pool doesn't hold a
+            // stale TCP socket past the server's 5 s keepAliveTimeout.
+            // Without this, slow --dev wasm builds whose prefetch
+            // chain exceeds 5 s leave the pool with a closed-by-server
+            // socket; the next wasm fetch tries to reuse it and gets
+            // ECONNRESET (surfacing in lib.rs as
+            // `init_resource_source: fetch network error: {}`). The
+            // smoke is single-threaded against a fixture-only server,
+            // so per-request connect overhead is negligible (~1 ms);
+            // the bytes-served path is unchanged.
+            res.setHeader("Connection", "close");
             const url = decodeURIComponent(req.url.replace(/^\/+/, ""));
             let filePath = null;
             if (url === "v2conv/manifest.json") {
@@ -817,6 +829,11 @@ check(
                 res.end(data);
             });
         });
+        // Belt-and-suspenders: disable keepalive at the server level
+        // too. `Connection: close` headers above are the mechanism
+        // that actually closes per-request; this just ensures the
+        // server's idle-socket reaper doesn't outlast a slow client.
+        distServer.keepAliveTimeout = 0;
         await new Promise((resolve) => distServer.listen(0, "127.0.0.1", resolve));
         const distPort = distServer.address().port;
         manifestUrl = `http://127.0.0.1:${distPort}/v1/manifest.json`;
