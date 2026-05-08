@@ -595,41 +595,6 @@ impl MovementSystem {
         let ActiveDriveIntent::Manual(state) = active.intent else {
             return;
         };
-        // Skip the integrator advance entirely when the player is
-        // PK or PKLite (`IsPKType` → ACE's `FastTick`). For those
-        // players, ACE runs full physics simulation per server tick
-        // — including terrain collision, gravity, and walk speed.
-        // Our integrator's free-flying advance (no terrain knowledge,
-        // constant Z) sends MoveToState/AutonomousPosition packets
-        // with positions that diverge from ACE's authoritative pose,
-        // and ACE's physics interprets the divergence as the player
-        // floating above terrain → applies gravity → impact damage
-        // on landing → eventual death.
-        //
-        // Live-test reproduction (2026-05-08, /tmp/death_diag2.cjs
-        // against tailnet1's Tester with PK status): walking west
-        // from Holtburg teleport spawn for ~10 s killed the player
-        // via "5 → 10 points of crushing/massive impact damage".
-        // Corpse landed at cell 0xA9B4001C [85.65, 88.70, 77.42]
-        // — Z=77.4 vs landing Z=94, a 17 m drop the integrator
-        // walked the player into. ACE WARN log on teleport showed
-        // "MOVEMENT SPEED: ... speed: 34954" confirming our
-        // movement packets carry data ACE physics rejects on speed.
-        //
-        // For non-FastTick (NPK) players ACE doesn't simulate
-        // physics — `Player_Tick.cs:178: if (!FastTick) return;`
-        // — so the integrator is still required to advance
-        // server-side position via the heartbeat. Phase 4 step 3.6's
-        // server-side advancement validation was on a non-PK
-        // account; it doesn't transfer to PK gameplay.
-        const PK: i32 = 4;
-        const PK_LITE: i32 = 64;
-        let pk_status = world
-            .player_int_property(holtburger_common::properties::PropertyInt::PlayerKillerStatus)
-            .unwrap_or(0);
-        if pk_status == PK || pk_status == PK_LITE {
-            return;
-        }
         let Some(mut pose) = world.local_player_runtime_pose() else {
             return;
         };
@@ -643,6 +608,40 @@ impl MovementSystem {
         pose.coords.x += velocity.x * dt_s;
         pose.coords.y += velocity.y * dt_s;
         pose.coords.z += velocity.z * dt_s;
+        // Terrain-follow Z. Without this, the integrator output's Z
+        // stays at the teleport-landing value forever (vz==0 for
+        // forward locomotion), which causes ACE physics (FastTick on
+        // PK players, per `Player_Tick.cs:154 FastTick => IsPKType`)
+        // to interpret the player as floating above ground when the
+        // actual terrain dips → applies gravity in the simulation
+        // interval → fall → impact damage on landing.
+        //
+        // The fix: bilinear-interp the terrain Z at the integrated
+        // (X, Y) world coords against the cached 9×9 heightmap for
+        // the containing landblock. Snap pose.z to terrain. The
+        // wasm bundle pre-populates the heightmap cache for the
+        // 9-LB spawn neighbourhood after `kind=7 EnteredWorld`
+        // (see `SessionHandle::populate_terrain` /
+        // `SessionCommand::PopulateTerrain`).
+        //
+        // When the cache miss (player wandered past the prefetched
+        // neighbourhood, or DAT data is unavailable), preserve the
+        // integrator's existing Z. ACE physics will still apply
+        // false gravity in that case, but the typical play loop
+        // hits the fast path; a follow-on can extend the prefetch
+        // window or trigger lazy-load on landblock entry.
+        //
+        // World coords for the integrator's pose are
+        // `(lb_byte * 192 + local, ...)` per
+        // `WorldPosition::global_coords`. We construct the global
+        // coord from the in-progress pose so the lookup keys on the
+        // CURRENT (post-rebucket) landblock id.
+        if !pose.is_indoors() {
+            let global = pose.global_coords();
+            if let Some(z) = world.terrain_height_at(global.x, global.y) {
+                pose.coords.z = z;
+            }
+        }
         // Phase 4 step 3.7 — re-bucket coords if we crossed a 192 m
         // landblock boundary. Without this, the AutonomousPosition
         // packet reports e.g. (94, 200, 94) inside the seeded
@@ -961,49 +960,23 @@ impl MovementSystem {
             return Ok(false);
         }
 
-        // Skip the AutonomousPosition heartbeat when the player is
-        // PK or PKLite. Both flip ACE's `IsPKType` → `FastTick` → ACE
-        // runs full physics simulation for the player every server
-        // tick (~50 ms), advancing position from MoveToState's motion
-        // state alone (`Player_Tick.cs::OnMoveToState` runs the
-        // simulation; `Player_Tick.cs:178: if (!FastTick) return;`).
+        // The heartbeat used to be gated on `IsPKType` (FastTick) because
+        // our integrator emitted constant-Z poses that ACE physics
+        // (`Player_Move.cs::HandleFallingDamage`) interpreted as the
+        // player floating above terrain → applied false gravity →
+        // impact damage on landing → death walking 10 s after a
+        // Holtburg teleport (live-test reproduction 2026-05-08 against
+        // tailnet1's Tester with PK status: "5 points of crushing
+        // impact damage" → "10 points of massive impact damage" →
+        // "You died!").
         //
-        // For FastTick players the heartbeat is REDUNDANT (ACE already
-        // advances position from motion state) AND HARMFUL: the
-        // heartbeat carries the wasm-side integrator's pose with a
-        // constant Z (the teleport-landing Z), but the player walks
-        // across terrain whose actual Z varies. ACE physics receives
-        // a Z that doesn't match terrain → applies gravity in the
-        // simulation interval → player "falls" 14 m → impact damage
-        // on landing → repeated → player dies in ~10 s of walking.
-        // (Live-test reproduction at 2026-05-08 against tailnet1's
-        // Tester character with PK status: walking west from Holtburg
-        // teleport spawn produced "5 points of crushing impact damage"
-        // → "10 points of massive impact damage" → "You died!" at
-        // ~11 s, matching `Player_Move.cs::HandleFallingDamage` →
-        // `TakeDamage_Falling` chain.)
-        //
-        // For non-FastTick (NPK) players ACE doesn't simulate
-        // physics (`Player_Tick.cs:178` returns) so server-side
-        // position only advances when our heartbeat sends a position
-        // — the original Phase 4 step 3.6 motivation.
-        const PK: i32 = 4;
-        const PK_LITE: i32 = 64;
-        let pk_status = world
-            .player_int_property(holtburger_common::properties::PropertyInt::PlayerKillerStatus)
-            .unwrap_or(0);
-        if pk_status == PK || pk_status == PK_LITE {
-            // Reschedule so we don't backlog while in PK; if the
-            // player flips back to NPK we'll resume at the next
-            // interval. Counter-intuitively still consider this a
-            // "successful" heartbeat-cycle so the schedule advances.
-            if has_autonomous_position_sync_target(world) {
-                self.refresh_autonomous_position_heartbeat_schedule(now, world);
-            } else {
-                self.clear_autonomous_position_heartbeat_schedule();
-            }
-            return Ok(false);
-        }
+        // The integrator now snaps pose Z to the cached terrain
+        // heightmap before write-back (see
+        // `advance_local_pose_for_manual_drive` + the
+        // `WorldState::populate_terrain_heights` /
+        // `terrain_height_at` cache), so the heartbeat carries a Z
+        // that matches ACE's terrain. PK and NPK both fire the
+        // heartbeat as before; the gate is no longer needed.
 
         let Some(pulse) = build_autonomous_position(world, metadata) else {
             self.clear_autonomous_position_heartbeat_schedule();

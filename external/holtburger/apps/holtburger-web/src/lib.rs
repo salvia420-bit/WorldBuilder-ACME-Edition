@@ -226,6 +226,20 @@ impl LandblockMesh {
     pub fn height_max(&self) -> f32 {
         self.height_max
     }
+
+    /// `Float32Array` of just the 81 vertex Z values (drops X/Y from
+    /// `positions`). Order matches `CellLandblock::get_height` —
+    /// `idx = vx * 9 + vy`. Convenience getter for callers feeding
+    /// the terrain cache via `SessionHandle.populateTerrain`; saves
+    /// a JS-side stride loop over `positions`.
+    #[wasm_bindgen(getter)]
+    pub fn heights(&self) -> Vec<f32> {
+        let mut out = Vec::with_capacity(81);
+        for i in 0..81 {
+            out.push(self.positions[i * 3 + 2]);
+        }
+        out
+    }
 }
 
 /// Tessellate a parsed `CellLandblock` into a [`LandblockMesh`].
@@ -3054,6 +3068,24 @@ enum SessionCommand {
     /// to the `&mut world` / `&mut session` borrows that the recv
     /// loop also holds.
     TickMovement { now: web_time::Instant },
+    /// Populate the world's terrain heightmap cache for one
+    /// landblock. JS calls this once per spawn-area LB after
+    /// `kind=7 EnteredWorld` lands, feeding the 81-float height
+    /// grid extracted from `fetch_landblock_heightmap(...).heights`.
+    /// Used by the manual-drive integrator
+    /// (`MovementSystem::advance_local_pose_for_manual_drive`) to
+    /// snap pose Z to terrain — without populated heights the
+    /// integrator preserves the last-known pose Z (constant since
+    /// teleport landing), which causes ACE physics (FastTick on PK
+    /// players) to apply false gravity and impact damage on slopes.
+    PopulateTerrain {
+        /// Landblock id (high 16 bits of cell id, e.g. `0xA9B40000`
+        /// for Holtburg).
+        landblock_id: u32,
+        /// 81 Z values in metres. Length-validated in the recv arm;
+        /// non-81 lengths drop the command with a console warning.
+        heights: Vec<f32>,
+    },
     /// Combat-mode toggle hotkey — JS pressed `` ` `` (the retail
     /// AC default for "toggle combat mode"). The recv-loop arm
     /// reads the player's current `CombatMode` property; if
@@ -4418,6 +4450,41 @@ impl SessionHandle {
     /// for the new gait. Stance display in the vitals header is
     /// driven by the same kind=5 path; combat-mode toggle is
     /// fire-and-forget on the client side.
+    /// Populate the world's terrain heightmap cache for one landblock.
+    /// JS feeds the 81-float Z grid from
+    /// `fetch_landblock_heightmap(cell_id).heights` after the player
+    /// reaches `kind=7 EnteredWorld`. The integrator consults this
+    /// cache each tick to snap pose Z to terrain (preventing the
+    /// constant-Z bug that causes ACE physics to apply false gravity
+    /// and impact damage on the Holtburg town slope).
+    ///
+    /// `landblockId` is the high 16 bits of the cell id (e.g.
+    /// `0xA9B40000` for Holtburg). Length-validation: heights must
+    /// have exactly 81 entries (9×9 grid). Other lengths log a
+    /// warning and drop.
+    #[wasm_bindgen(js_name = populateTerrain)]
+    pub fn populate_terrain(
+        &self,
+        landblock_id: u32,
+        heights: Vec<f32>,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        if heights.len() != 81 {
+            return Err(JsValue::from_str(&format!(
+                "populate_terrain: heights length must be 81, got {}",
+                heights.len()
+            )));
+        }
+        self.cmd_tx
+            .unbounded_send(SessionCommand::PopulateTerrain {
+                landblock_id,
+                heights,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("populate_terrain: cmd channel closed ({e})"))
+            })
+    }
+
     #[wasm_bindgen(js_name = toggleCombatMode)]
     pub fn toggle_combat_mode(&self) -> Result<(), JsValue> {
         use futures::channel::mpsc::TrySendError;
@@ -7019,6 +7086,41 @@ async fn recv_loop(
                             });
                             return;
                         }
+                    }
+                    Some(SessionCommand::PopulateTerrain {
+                        landblock_id,
+                        heights,
+                    }) => {
+                        // Install the 81-float height grid into the
+                        // world's terrain cache. Used by the manual-
+                        // drive integrator to snap pose Z to terrain
+                        // (no client-side cliff/wall collision yet —
+                        // just terrain following so heartbeats carry
+                        // a Z that ACE physics doesn't interpret as
+                        // "player floating above ground").
+                        let Some(w) = world.as_mut() else {
+                            console_log_str(
+                                "[terrain] PopulateTerrain before WorldState ready — dropping",
+                            );
+                            continue;
+                        };
+                        // Length pre-validated by SessionHandle::populate_terrain
+                        // but recheck defensively for the array-indexed
+                        // try_into below.
+                        let arr: [f32; 81] = match heights.try_into() {
+                            Ok(a) => a,
+                            Err(_) => {
+                                console_log_str(
+                                    "[terrain] PopulateTerrain heights length != 81; dropping",
+                                );
+                                continue;
+                            }
+                        };
+                        w.populate_terrain_heights(landblock_id, arr);
+                        console_log_str(&format!(
+                            "[terrain] populated landblock 0x{landblock_id:08X} ({} cached total)",
+                            w.terrain_height_cache_len(),
+                        ));
                     }
                     Some(SessionCommand::ToggleCombatMode) => {
                         // Combat-mode toggle. Read the player's

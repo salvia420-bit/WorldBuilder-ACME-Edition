@@ -57,6 +57,22 @@ pub struct WorldState {
     pub fellowship: Option<FellowshipState>,
     pub trade: Option<TradeState>,
     pub open_containers: std::collections::HashSet<Guid>,
+    /// Per-landblock terrain heightmap cache (9×9 vertex grid per
+    /// landblock, 24 m vertex spacing, value in metres). Keyed by
+    /// landblock id (the high 16 bits of `cell_id`, e.g. `0xA9B40000`
+    /// for Holtburg). Populated lazily by the wasm bundle as the
+    /// player enters new landblocks; consulted by the manual-drive
+    /// integrator (`MovementSystem::advance_local_pose_for_manual_drive`)
+    /// to snap pose Z to terrain — without this, the integrator's
+    /// constant-Z output causes ACE physics (FastTick) to apply false
+    /// gravity, simulating the player as floating above terrain and
+    /// applying impact damage on landing.
+    ///
+    /// Storage is `[f32; 81]` indexed by `vx * 9 + vy` mirroring
+    /// `holtburger_dat::landblock::CellLandblock::get_height` —
+    /// values are already in metres (the dat-side `* 2.0` is applied
+    /// at populate time, not at lookup).
+    pub(crate) terrain_heights: std::collections::HashMap<u32, [f32; 81]>,
     pub(crate) entity_lifecycle: EntityLifecycleStore,
     pub(crate) self_movement_capabilities_override: Option<SelfMovementCapabilities>,
 }
@@ -394,9 +410,78 @@ impl WorldState {
             fellowship: None,
             trade: None,
             open_containers: std::collections::HashSet::new(),
+            terrain_heights: std::collections::HashMap::new(),
             entity_lifecycle: EntityLifecycleStore::default(),
             self_movement_capabilities_override: None,
         }
+    }
+
+    /// Install a 9×9 height grid for the given landblock. Caller is
+    /// responsible for converting raw u8 dat values to metres
+    /// (multiply by 2.0). Idempotent — overwrites the previous entry
+    /// for `landblock_id`. Layout matches
+    /// `holtburger_dat::landblock::CellLandblock::get_height`:
+    /// `idx = vx * 9 + vy` with vertex spacing 24 m.
+    ///
+    /// `landblock_id` is the high 16 bits of a cell id shifted up
+    /// (e.g. `0xA9B40000` for Holtburg) — same convention as
+    /// `WorldPosition::landblock_id` packs into.
+    pub fn populate_terrain_heights(&mut self, landblock_id: u32, heights: [f32; 81]) {
+        self.terrain_heights.insert(landblock_id, heights);
+    }
+
+    /// Number of landblocks currently cached. Diagnostic only;
+    /// used by the wasm bundle's `PopulateTerrain` recv arm to log
+    /// progress as the spawn-area neighbourhood lands.
+    pub fn terrain_height_cache_len(&self) -> usize {
+        self.terrain_heights.len()
+    }
+
+    /// Bilinear-interpolate the terrain height at the given world-frame
+    /// `(x, y)` against the cached 9×9 grid for the containing landblock.
+    /// Returns `None` if the landblock isn't in the cache (caller falls
+    /// back to "preserve current pose Z").
+    ///
+    /// World-frame: x is east, y is north, both in metres. Landblock
+    /// origin is at `(lb_x_byte * 192, lb_y_byte * 192)`. Within an LB
+    /// the 9×9 grid covers `[0, 192]` on each axis at 24 m spacing.
+    pub fn terrain_height_at(&self, world_x: f32, world_y: f32) -> Option<f32> {
+        const LB_M: f32 = 192.0;
+        const VERT_M: f32 = 24.0;
+        if !world_x.is_finite() || !world_y.is_finite() {
+            return None;
+        }
+        // Identify landblock + intra-LB coords. `floor_div` semantics
+        // so negative world coords (rare but possible at ocean/edge)
+        // still resolve correctly.
+        let lb_x = (world_x / LB_M).floor() as i32;
+        let lb_y = (world_y / LB_M).floor() as i32;
+        if !(0..256).contains(&lb_x) || !(0..256).contains(&lb_y) {
+            return None;
+        }
+        let landblock_id = ((lb_x as u32) << 24) | ((lb_y as u32) << 16);
+        let grid = self.terrain_heights.get(&landblock_id)?;
+
+        let local_x = world_x - lb_x as f32 * LB_M;
+        let local_y = world_y - lb_y as f32 * LB_M;
+        let cell_x = (local_x / VERT_M).clamp(0.0, 8.0);
+        let cell_y = (local_y / VERT_M).clamp(0.0, 8.0);
+        let cx0 = cell_x.floor() as usize;
+        let cy0 = cell_y.floor() as usize;
+        let cx1 = (cx0 + 1).min(8);
+        let cy1 = (cy0 + 1).min(8);
+        let fx = cell_x - cx0 as f32;
+        let fy = cell_y - cy0 as f32;
+        // Layout matches CellLandblock: idx = vx * 9 + vy.
+        let z00 = grid[cx0 * 9 + cy0];
+        let z10 = grid[cx1 * 9 + cy0];
+        let z01 = grid[cx0 * 9 + cy1];
+        let z11 = grid[cx1 * 9 + cy1];
+        let z = z00 * (1.0 - fx) * (1.0 - fy)
+            + z10 * fx * (1.0 - fy)
+            + z01 * (1.0 - fx) * fy
+            + z11 * fx * fy;
+        Some(z)
     }
 
     #[cfg(any(test, feature = "test-support"))]
