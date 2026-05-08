@@ -5,8 +5,9 @@
 > Read this section first. The rest of this document is the
 > long-lived design intent + decision history; this header is
 > the snapshot of where we actually are and what's blocking
-> what. Last refreshed **2026-05-08** (post-Phase-4-step-6d
-> landing — portal swirls + sign inscriptions).
+> what. Last refreshed **2026-05-08** (post-Phase-4-step-6f
+> landing — portal destination chips via auto-IdentifyObject
+> round-trip).
 
 ### Where the project is
 
@@ -446,11 +447,33 @@ Pick one to pull on. The choice is real, not arbitrary.
   place — no portals in the immediate spawn radius, will
   exercise on any flow that puts one in vision. 6c was
   already absorbed by step 6 Phase A.
-  **Next on the rail:** step 6f (portal destination chips
-  — needs `AppraisalPortalDestination` plumbing through
-  `EntityUpdate`; arrives via separate
-  `UpdatePropertyString` messages, not
-  `PublicWeenieDescription`). Step 5 polish that
+  **Step 6f (portal destination chips, landed
+  2026-05-08):** ACE marks
+  `PropertyString::AppraisalPortalDestination` with
+  `[AssessmentProperty]` (per
+  `~/ace-server/Source/ACE.Entity/Enum/Properties/PropertyString.cs:63-64`)
+  — sent server → client only in response to
+  `GameAction::IdentifyObject`. Recv loop auto-fires the
+  identify on every ObjectCreate where the entity's
+  `item_type & 0x10000` matches Portal; the response routes
+  through the world's `inventory::handle_event` arm
+  (`apply_identify_response` populates
+  `entity.properties.strings`); the recv-loop scan for
+  `WorldEvent::EntityIdentified` then emits a
+  `kind=3 ENTITY_UPDATE_KIND_META_REFRESH` EntityUpdate
+  with the destination text in a new
+  `portal_destination` field. JS handles kind=3 via
+  `handleEntityMetaRefresh`, mints a small italic cyan
+  PIXI.Text under the portal sprite via `ensurePortalChip`,
+  and the chip tracks the sprite per-frame in
+  `updateNameplatePositions`. Cleanup hooks into
+  `handleEntityRemove`. Live-validated structurally; the
+  `/create <wcid>` admin command path for spawning a test
+  portal is finicky in the @telepoi spawn radius (no
+  portals natively in vision; ACE's slash-prefix admin
+  parsing rejects under some conditions). Capture
+  soft-passes when no portal is reachable; symbol presence
+  + JS dispatch pinned by smoke. Step 5 polish that
   could land in a follow-on: pickup-via-MoveToObject for
   weapons / armor / gems (currently click-only routes
   through `UseObject`, which ACE doesn't honour for

@@ -2994,6 +2994,29 @@ const ENTITY_UPDATE_KIND_POSITION: u32 = 0;
 const ENTITY_UPDATE_KIND_SPAWN: u32 = 1;
 #[cfg(target_arch = "wasm32")]
 const ENTITY_UPDATE_KIND_REMOVE: u32 = 2;
+/// Phase 4 step 6f: metadata-only refresh — recv loop already saw an
+/// ObjectCreate / Spawn for this guid, but follow-on data has now
+/// arrived (today: portal destination text from
+/// `IdentifyObjectResponse`'s `AppraisalPortalDestination` property
+/// — sent by ACE in response to `GameAction::IdentifyObject` and
+/// stored in the entity's properties via the world's
+/// inventory::handle_event arm). JS merges into the entity's meta
+/// without disturbing position / sprite / rotation. Spawn-only
+/// metadata fields (`name`, `wcid`, `item_type`, `obj_scale`,
+/// `icon_id`, `palette_id`, `mtable_id`) are zeroed in this update
+/// kind — they were already deposited at the original Spawn and JS
+/// reuses the cached values; only fields that actually changed (the
+/// portal_destination today) carry meaningful data.
+#[cfg(target_arch = "wasm32")]
+const ENTITY_UPDATE_KIND_META_REFRESH: u32 = 3;
+/// Phase 4 step 6f: ItemType bit 0x10000 = Portal. We auto-fire
+/// `GameAction::IdentifyObject(guid)` on every ObjectCreate that
+/// matches this bit so ACE pushes back the portal's
+/// `AppraisalPortalDestination` (an
+/// `[AssessmentProperty]`-flagged property only sent on appraisal,
+/// per `~/ace-server/Source/ACE.Entity/Enum/Properties/PropertyString.cs:63-64`).
+#[cfg(target_arch = "wasm32")]
+const ITEM_TYPE_PORTAL_BIT: u32 = 0x0001_0000;
 
 /// Phase 4 step 2b: a single position / spawn / remove event for a
 /// live entity. Drained by [`SessionHandle::poll_entity_updates`] on
@@ -3095,6 +3118,19 @@ pub struct EntityUpdate {
     /// for future animation-state polish (walk-cycle anims). `0` when
     /// absent.
     mtable_id: u32,
+    /// Phase 4 step 6f (portal destination chips): the appraisal-
+    /// time portal-destination text (e.g. `"Holtburg (87, -3, 0)"`),
+    /// from `PropertyString::AppraisalPortalDestination` on the
+    /// portal's entity properties. Empty string when:
+    /// - the entity isn't a portal,
+    /// - the entity is a portal but the appraisal hasn't completed
+    ///   yet (recv loop auto-fires `GameAction::IdentifyObject` on
+    ///   ObjectCreate; the response arrives async with the property),
+    /// - or the destination isn't set server-side (rare).
+    /// JS renders a chip below the portal sprite when this is
+    /// non-empty. ALWAYS empty on Position / Remove updates and on
+    /// non-portal Spawns.
+    portal_destination: String,
     // --- Phase 4 step 6 Phase A: model-data substitutions ----------
     // ACE's `Creature.CalculateObjDesc()` walks the NPC's equipped
     // inventory server-side, reads each equipped item's ClothingTable
@@ -3229,6 +3265,16 @@ impl EntityUpdate {
     #[wasm_bindgen(getter, js_name = mtableId)]
     pub fn mtable_id(&self) -> u32 {
         self.mtable_id
+    }
+
+    /// Phase 4 step 6f: portal destination text (e.g.
+    /// `"Holtburg (87, -3, 0)"`) from
+    /// `PropertyString::AppraisalPortalDestination`. Empty until the
+    /// auto-fired `GameAction::IdentifyObject` round-trips back as a
+    /// `kind=3 META_REFRESH` update for portal entities.
+    #[wasm_bindgen(getter, js_name = portalDestination)]
+    pub fn portal_destination(&self) -> String {
+        self.portal_destination.clone()
     }
 
     /// Phase 4 step 6 Phase A: flat `[part_index, gfx_obj_did, …]`
@@ -4957,7 +5003,6 @@ async fn recv_loop(
                                 }
                                 WorldEvent::EntitySpawned(_)
                                 | WorldEvent::EntityReplaced(_)
-                                | WorldEvent::EntityIdentified(_)
                                 | WorldEvent::EntityDespawned(_)
                                 | WorldEvent::ContainerOpened(_)
                                 | WorldEvent::ContainerClosed(_)
@@ -4967,6 +5012,71 @@ async fn recv_loop(
                                     // builder filters by ownership so a
                                     // false positive here just refreshes
                                     // the panel one extra time.
+                                    inventory_changed = true;
+                                }
+                                // Phase 4 step 6f: EntityIdentified
+                                // arrives in response to our auto-fired
+                                // `GameAction::IdentifyObject` for
+                                // portals (above in the ObjectCreate
+                                // arm). The world's
+                                // `inventory::handle_event` arm has
+                                // already populated the entity's
+                                // `properties.strings` map with the
+                                // assessment props; pull
+                                // `AppraisalPortalDestination` and
+                                // emit a kind=3 META_REFRESH
+                                // EntityUpdate so JS can render the
+                                // chip below the portal sprite. Also
+                                // flag inventory_changed so the
+                                // identified-item path (e.g. a player-
+                                // appraised inventory weapon) refreshes
+                                // the panel.
+                                WorldEvent::EntityIdentified(entity) => {
+                                    use holtburger_common::properties::{
+                                        HasProperties, PropertyInt, PropertyString,
+                                    };
+                                    let entity_guid = entity.guid;
+                                    let item_type_int = entity
+                                        .properties()
+                                        .ints
+                                        .get(&PropertyInt::ItemType)
+                                        .copied()
+                                        .unwrap_or(0)
+                                        as u32;
+                                    if item_type_int & ITEM_TYPE_PORTAL_BIT != 0 {
+                                        let dest = entity
+                                            .properties()
+                                            .strings
+                                            .get(&PropertyString::AppraisalPortalDestination)
+                                            .cloned()
+                                            .unwrap_or_default();
+                                        if !dest.is_empty() {
+                                            entity_updates.borrow_mut().push(EntityUpdate {
+                                                kind: ENTITY_UPDATE_KIND_META_REFRESH,
+                                                guid: u32::from(entity_guid),
+                                                model_id: 0,
+                                                landblock_id: 0,
+                                                x: 0.0,
+                                                y: 0.0,
+                                                z: 0.0,
+                                                qw: 1.0,
+                                                qx: 0.0,
+                                                qy: 0.0,
+                                                qz: 0.0,
+                                                wcid: 0,
+                                                item_type: 0,
+                                                name: String::new(),
+                                                obj_scale: 1.0,
+                                                icon_id: 0,
+                                                palette_id: 0,
+                                                mtable_id: 0,
+                                                model_changes: Vec::new(),
+                                                texture_changes: Vec::new(),
+                                                sub_palettes: Vec::new(),
+                                                portal_destination: dest,
+                                            });
+                                        }
+                                    }
                                     inventory_changed = true;
                                 }
                                 _ => {}
@@ -5388,6 +5498,7 @@ async fn recv_loop(
                                 model_changes: Vec::new(),
                                 texture_changes: Vec::new(),
                                 sub_palettes: Vec::new(),
+                                portal_destination: String::new(),
                             });
                         }
                         GameMessage::PrivateUpdatePosition(data) => {
@@ -5465,6 +5576,7 @@ async fn recv_loop(
                                     model_changes: Vec::new(),
                                     texture_changes: Vec::new(),
                                     sub_palettes: Vec::new(),
+                                    portal_destination: String::new(),
                                 });
                             }
                         }
@@ -5501,6 +5613,7 @@ async fn recv_loop(
                                 model_changes: Vec::new(),
                                 texture_changes: Vec::new(),
                                 sub_palettes: Vec::new(),
+                                portal_destination: String::new(),
                             });
                         }
                         GameMessage::ObjectCreate(data) => {
@@ -5547,6 +5660,43 @@ async fn recv_loop(
                             let obj_scale = data.obj_scale.unwrap_or(1.0);
                             let palette_id = data.model_data.palette_id.unwrap_or(0);
                             let mtable_id = data.mtable_id.unwrap_or(0);
+
+                            // Phase 4 step 6f: auto-fire
+                            // `GameAction::IdentifyObject(guid)` for
+                            // every portal that arrives in vision.
+                            // ACE marks
+                            // `PropertyString::AppraisalPortalDestination`
+                            // with `[AssessmentProperty]` (per
+                            // `~/ace-server/Source/ACE.Entity/Enum/
+                            // Properties/PropertyString.cs:63-64`)
+                            // — the destination text is only sent
+                            // server → client in response to an
+                            // explicit appraisal. Auto-firing on
+                            // ObjectCreate means each portal sprite
+                            // gets its destination chip ~one
+                            // round-trip after appearing in vision,
+                            // without needing the player to manually
+                            // click "appraise". The response routes
+                            // through GameEvent::IdentifyObjectResponse
+                            // → world's inventory::handle_event arm
+                            // → entity.apply_identify_response →
+                            // properties.strings populated → recv
+                            // loop's WorldEvent::EntityIdentified
+                            // scan emits a kind=3 META_REFRESH
+                            // EntityUpdate with the destination text.
+                            if item_type & ITEM_TYPE_PORTAL_BIT != 0 {
+                                let id_action = GameAction::IdentifyObject(
+                                    Box::new(holtburger_protocol::messages::IdentifyObjectActionData {
+                                        guid: data.public_weenie_desc.guid,
+                                    }),
+                                );
+                                if let Err(e) = session.send_action(id_action).await {
+                                    log::warn!(
+                                        "recv_loop: send_action(IdentifyObject portal=0x{:08X}): {e}",
+                                        u32::from(data.public_weenie_desc.guid),
+                                    );
+                                }
+                            }
                             // Phase 4 step 6 Phase A: ACE pre-computes
                             // ClothingTable substitutions in
                             // `Creature.CalculateObjDesc()` (~/ace-server
@@ -5601,6 +5751,7 @@ async fn recv_loop(
                                 model_changes,
                                 texture_changes,
                                 sub_palettes,
+                                portal_destination: String::new(),
                             });
                         }
                         GameMessage::ObjectDelete(data) => {
@@ -5626,6 +5777,7 @@ async fn recv_loop(
                                 model_changes: Vec::new(),
                                 texture_changes: Vec::new(),
                                 sub_palettes: Vec::new(),
+                                portal_destination: String::new(),
                             });
                         }
                         GameMessage::UpdateMotion(data) => {

@@ -474,6 +474,23 @@ check(
     `useObject=${typeof sessionHandleProto?.useObject}`
 );
 
+// Phase 4 step 6f (portal destination chips): EntityUpdate gained a
+// `portalDestination` getter so JS can render a "→ <destination>"
+// chip under portal sprites. Source: ACE's
+// `PropertyString::AppraisalPortalDestination` (assessment-only)
+// arrives via auto-fired `GameAction::IdentifyObject` post-Spawn,
+// surfaced as a `kind=3 META_REFRESH` EntityUpdate. Empty string for
+// non-portals + portals where the appraisal hasn't completed yet.
+const entityUpdateDescr = Object.getOwnPropertyDescriptor(
+    wasm.EntityUpdate?.prototype || {},
+    "portalDestination",
+);
+check(
+    "EntityUpdate.portalDestination getter exposed (Phase 4 step 6f)",
+    typeof wasm.EntityUpdate === "function" && typeof entityUpdateDescr?.get === "function",
+    `EntityUpdate=${typeof wasm.EntityUpdate}, portalDestination=${typeof entityUpdateDescr?.get}`
+);
+
 
 (async () => {
     // Phase 5.0b — pre-bake a manifest+shards+boot tree from the

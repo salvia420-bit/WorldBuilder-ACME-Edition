@@ -2666,12 +2666,21 @@ void main() {
         liveScene.nameplateContainer.visible = visible;
         if (!visible) return;
         for (const [, entry] of entityMap) {
-          if (!entry.nameplate) continue;
           const wx = entry.sprite.x;
           const wy = entry.sprite.y;
           // worldContainer flips y: screen y = -wy * sx + oy.
-          // Lift 14px above the sprite centre.
-          entry.nameplate.position.set(wx * sx + ox, -wy * sx + oy - 14);
+          if (entry.nameplate) {
+            // Lift 14px above the sprite centre.
+            entry.nameplate.position.set(wx * sx + ox, -wy * sx + oy - 14);
+          }
+          // Phase 4 step 6f: portal destination chip sits 14px
+          // BELOW the sprite (anchor.y = 0.0 means top-of-text at
+          // that screen y, so the chip drops down). Per-frame
+          // re-projection so the chip tracks the portal as the
+          // camera pans / zooms.
+          if (entry.portalChip) {
+            entry.portalChip.position.set(wx * sx + ox, -wy * sx + oy + 14);
+          }
         }
       }
 
@@ -2792,8 +2801,65 @@ void main() {
         if (!entry) return;
         if (entry.nameplate) entry.nameplate.destroy();
         if (entry.portalSwirl) entry.portalSwirl.destroy();
+        if (entry.portalChip) entry.portalChip.destroy();
         entry.sprite.destroy();
         entityMap.delete(upd.guid);
+      }
+
+      // Phase 4 step 6f (portal destination chips): merge a kind=3
+      // META_REFRESH update into an existing entityMap entry. Today
+      // this only carries `portalDestination` (the
+      // `AppraisalPortalDestination` text from ACE's
+      // IdentifyObjectResponse). Future meta-only updates (sign
+      // inscriptions delivered post-spawn, etc.) plug into the same
+      // dispatch path with their own field guards.
+      function handleEntityMetaRefresh(upd) {
+        const guid = upd.guid >>> 0;
+        const entry = entityMap.get(guid);
+        if (!entry) return;
+        const dest = upd.portalDestination;
+        if (typeof dest === "string" && dest.length > 0) {
+          if (!entry.meta) entry.meta = {};
+          entry.meta.portalDestination = dest;
+          ensurePortalChip(entry);
+        }
+      }
+
+      // Phase 4 step 6f: lazy-mint (or refresh) the destination chip
+      // text under a portal sprite. Renders as a small italic cream
+      // PIXI.Text in nameplateContainer (NOT scaled by camera, so it
+      // stays at 11px screen-space at every zoom level — same pattern
+      // as nameplates). Position re-projected per frame in
+      // updateNameplatePositions; this function only owns the
+      // allocation + the text content.
+      //
+      // Idempotent: if the entry already has a chip, just update the
+      // text. Skipped for non-portals + entities without a destination
+      // string.
+      function ensurePortalChip(entry) {
+        if (!liveScene || !entry || !entry.meta) return;
+        if (entry.meta.category !== "portal") return;
+        const dest = entry.meta.portalDestination;
+        if (!dest) return;
+        const display = `→ ${dest}`;  // → <destination>
+        if (entry.portalChip) {
+          if (entry.portalChip.text !== display) entry.portalChip.text = display;
+          return;
+        }
+        const text = new PIXI.Text({
+          text: display,
+          style: {
+            fontFamily: "Georgia, serif",
+            fontSize: 11,
+            fontStyle: "italic",
+            fill: 0xC8E8FA,                  // pale cyan, matches portal swirl
+            stroke: { color: 0x000000, alpha: 0.85, width: 2.2 },
+            align: "center",
+          },
+        });
+        text.anchor.set(0.5, 0.0);            // top-centred below the sprite
+        liveScene.nameplateContainer.addChild(text);
+        entry.portalChip = text;
       }
 
       // Tier 2: per-rAF animation cycler. Walks every entityMap
@@ -3895,6 +3961,14 @@ void main() {
                 }
               }
               else if (upd.kind === 2) handleEntityRemove(upd);
+              // Phase 4 step 6f: kind=3 META_REFRESH carries a
+              // delta into an existing entity's metadata (today:
+              // portal_destination from the auto-fired
+              // IdentifyObject round-trip). Doesn't touch
+              // position / sprite / rotation; mutates entry.meta
+              // and refreshes any meta-driven affordances (the
+              // portal chip).
+              else if (upd.kind === 3) handleEntityMetaRefresh(upd);
               upd.free();
             }
             // Replay deferred Spawns once liveScene is ready. First
