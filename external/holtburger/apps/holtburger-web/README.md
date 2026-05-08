@@ -125,6 +125,27 @@ wasm-pack build --target nodejs --out-dir pkg-node --release
 
 Both `pkg/` and `pkg-node/` are git-ignored — they're build outputs.
 
+### `--release` vs `--dev` for iteration
+
+`--release` runs `wasm-opt` on the bundle (~50 s on this crate). For
+inner-loop iteration where you'll re-run `node smoke_test.cjs --fast`
+(see Verify below) repeatedly, swap to `--dev`:
+
+```sh
+wasm-pack build --target nodejs --out-dir pkg-node --dev   # ~3 s
+```
+
+The behavior is identical for the `--fast` smoke surface and for
+symbol-presence assertions. **Caveat:** `--dev` builds currently
+fail the full smoke's v2 manifest dispatch test (a debug-build
+timing/race that `--release` optimization happens to mask). Use
+`--release` before committing or running the full smoke.
+
+| Build flavour | Wall time (incremental) | Use when |
+|---|---|---|
+| `--release` | ~60 s | CI, full smoke, browser screenshots, perf testing |
+| `--dev` | ~3 s | Inner-loop iteration with `node smoke_test.cjs --fast` |
+
 ## Verify
 
 Two paths, both useful.
@@ -132,12 +153,27 @@ Two paths, both useful.
 **Node smoke test** — fully programmatic, exits non-zero on regression:
 
 ```sh
-node smoke_test.cjs
+node smoke_test.cjs              # full coverage (~10 s on cache hit, ~5 min on first miss)
+node smoke_test.cjs --fast       # skip the bake + dispatch tests (~0.4 s; covers ~58% of assertions)
 ```
 
-Hits `build_info` and `hash32` against deterministic reference values
-computed from the Rust impl. A green run confirms wasm-bindgen interop
-works and the protocol crate's output matches between native and wasm32.
+The full smoke bakes the `dats/assets.hba` fixture into v1 + v2
+manifest+shards trees (~6.5 GB), serves them over a local HTTP
+server, and verifies init_resource_source / prefetch / manifest
+dispatch end-to-end. The bake is **hash-cached** under
+`$HOLTBURGER_SMOKE_DIST_DIR/holtburger-smoke-cache/<hash>/` keyed on
+the fixture and dat-shard binary stat tuples — first run takes
+~5 min; every subsequent run that doesn't change either input
+reuses the cache and finishes in ~10 s. Wipe the cache manually if
+disk pressure is an issue: `rm -rf $HOLTBURGER_SMOKE_DIST_DIR/holtburger-smoke-cache`.
+
+`--fast` keeps the symbol-presence + closed-port assertions and
+skips the bake-dependent dispatch tests with a single SKIP line.
+Right for inner-loop iteration; CI runs without `--fast` for full
+coverage.
+
+A green run confirms wasm-bindgen interop works and the protocol
+crate's output matches between native and wasm32.
 
 **Browser** — verifies the actual `--target web` bundle loads via
 `fetch`/streaming compile, which is the path the production site will

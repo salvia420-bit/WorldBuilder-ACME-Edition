@@ -18,6 +18,20 @@ const wasm = require("./pkg-node/holtburger_web.js");
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
+const crypto = require("node:crypto");
+
+// Bake-cache schema. Bump when the smoke's bake layout changes
+// (e.g. add v3, change subdir names, change v2conv-manifest fields)
+// so existing cache entries are ignored. Without this bump, a stale
+// cache from an older smoke layout would silently feed the wrong
+// bytes into the new dispatch tests.
+const SMOKE_BAKE_SCHEMA = 1;
+
+// `--fast` skips the dat-shard bake (~6 min) + manifest dispatch
+// tests (~30 s), keeping the symbol-presence + closed-port reject
+// assertions. Use during inner-loop iteration; CI runs without
+// --fast for full coverage.
+const fastMode = process.argv.includes("--fast");
 
 let failed = 0;
 
@@ -562,10 +576,11 @@ check(
         __dirname, "..", "..", "target", "release", "dat-shard"
     );
 
-    const haveFixture = fs.existsSync(fixturePath);
-    const haveBin = fs.existsSync(datShardBin);
+    const haveFixture = !fastMode && fs.existsSync(fixturePath);
+    const haveBin = !fastMode && fs.existsSync(datShardBin);
 
     let distDir = null; // parent containing v1/, v2/, v2conv/ subdirs
+    let distDirIsCache = false; // true → don't rm on teardown
     let distServer = null;
     let manifestUrl = null;       // v1 manifest (legacy default — existing checks)
     let manifestUrlV2 = null;     // v2 manifest (Phase 5.2 obj 8)
@@ -575,7 +590,12 @@ check(
     // prefetch.
     const requestCounts = new Map();
 
-    if (!haveFixture) {
+    if (fastMode) {
+        console.log(
+            "  [SKIP] manifest fixture + dispatch tests — --fast mode (skipping ~6 min bake).\n" +
+            "         Re-run without --fast for full coverage; CI runs full by default."
+        );
+    } else if (!haveFixture) {
         console.log(
             "  [SKIP] manifest fixture setup — dats/assets.hba missing.\n" +
             "         Generate via `cargo run -p holtburger-tools --bin dat2hba` (see dats/README.md)."
@@ -588,10 +608,9 @@ check(
     } else if (typeof fetch !== "function") {
         console.log("  [SKIP] manifest fixture setup — Node ≥18 fetch() not available.");
     } else {
-        // Pick a bake-parent directory big enough to hold ~4 GB on
+        // Pick a bake-parent directory big enough to hold ~6.5 GB on
         // disk (885k shards × 4 KB block rounding + 1.86 MB boot pack +
-        // 200+ MB v1 manifest.json). Each smoke run creates a fresh
-        // mkdtemp under this base. Resolution order:
+        // 200+ MB v1 manifest.json). Resolution order:
         //   1. HOLTBURGER_SMOKE_DIST_DIR env var (full path, takes
         //      precedence — point this at /mnt/wbterminal{1,2} on dev
         //      hosts to keep the bake off the root partition).
@@ -603,83 +622,148 @@ check(
         if (!fs.existsSync(bakeBase)) {
             fs.mkdirSync(bakeBase, { recursive: true });
         }
-        distDir = fs.mkdtempSync(path.join(bakeBase, "holtburger-smoke-dist-"));
-        console.log(`  [info] smoke bake → ${distDir}`);
 
-        // Register cleanup hooks the moment the directory exists, so a
-        // crash / unhandled rejection / Ctrl-C between here and the
-        // explicit teardown below still rms the bake. Without this the
-        // ~4 GB pile accumulates per failed run; on this host's 117 GB
-        // root that's 5-6 runs to fill the disk and break SSH.
-        let cleanedUp = false;
-        const cleanup = () => {
-            if (cleanedUp) return;
-            cleanedUp = true;
-            try { if (distServer) distServer.close(); } catch (_) {}
-            try { if (distDir) fs.rmSync(distDir, { recursive: true, force: true }); } catch (_) {}
+        // Hash-cached bake. Cache key is derived from the stat tuple
+        // of the inputs (fixture mtime+size + dat-shard binary
+        // mtime+size + a smoke-schema version int), so any input
+        // change invalidates exactly the affected entries. Cache
+        // hits skip the ~6 min × 2 dat-shard runs and ~6.5 GB of
+        // disk writes; first run still pays the bake cost. The
+        // cache lives at `<bakeBase>/holtburger-smoke-cache/<hash>/`
+        // and is NEVER deleted by the smoke harness — wipe manually
+        // (`rm -rf <bakeBase>/holtburger-smoke-cache`) if the cache
+        // grows beyond what your disk can hold (each entry ≈ 6.5 GB).
+        const statKey = (p) => {
+            const s = fs.statSync(p);
+            return `${s.size}-${s.mtimeMs.toFixed(0)}`;
         };
-        process.on("exit", cleanup);
-        process.on("SIGINT", () => { cleanup(); process.exit(130); });
-        process.on("SIGTERM", () => { cleanup(); process.exit(143); });
-        process.on("uncaughtException", (e) => {
-            console.error("[smoke] uncaughtException:", e?.message ?? e);
-            cleanup();
-            process.exit(1);
-        });
-        process.on("unhandledRejection", (e) => {
-            console.error("[smoke] unhandledRejection:", e?.message ?? e);
-            cleanup();
-            process.exit(1);
-        });
+        const cacheKey = crypto
+            .createHash("sha256")
+            .update(
+                `v${SMOKE_BAKE_SCHEMA}|fixture:${statKey(fixturePath)}|bin:${statKey(datShardBin)}`
+            )
+            .digest("hex")
+            .slice(0, 16);
+        const cacheRoot = path.join(bakeBase, "holtburger-smoke-cache");
+        const cacheDir = path.join(cacheRoot, cacheKey);
+        const cacheCompleteMarker = path.join(cacheDir, ".complete");
 
-        // Bake two variants under sibling subdirs of `distDir`:
-        //
-        //   distDir/v1/        — Phase 5.0 wire format (existing
-        //                        smoke-test surface; ~83 checks
-        //                        target this).
-        //   distDir/v2/        — Phase 5.2 wire format with
-        //                        catalog_url_template set
-        //                        (catalog mode; the obj 4 lazy-
-        //                        catalog-fetch path).
-        //
-        // Convention-URL variant (v2conv) reuses v2's shards/
-        // and manifest/ subtrees + boot.hba — only the top-level
-        // manifest.json differs. We avoid `fs.cpSync` of the full
-        // 4 GB dist (~10 min on 885k small files) by keeping
-        // v2conv's manifest.json as a single sibling file and
-        // routing `/v2conv/manifest.json` to it while every other
-        // `/v2conv/*` request falls through to the v2 dir.
+        if (fs.existsSync(cacheCompleteMarker)) {
+            distDir = cacheDir;
+            distDirIsCache = true;
+            console.log(`  [info] reusing cached bake → ${cacheDir}`);
+        } else {
+            // Stage into a sibling .tmp dir, then atomic-rename on
+            // .complete write. Concurrent smoke runs against the same
+            // key both stage independently; whichever wins the rename
+            // is the survivor (the loser cleans up its staging on
+            // EEXIST). Per-PID suffix avoids same-host race.
+            const stagingDir = path.join(
+                cacheRoot,
+                `${cacheKey}.tmp.${process.pid}`
+            );
+            fs.mkdirSync(stagingDir, { recursive: true });
+            console.log(`  [info] baking smoke fixture (cache miss) → ${cacheDir}`);
+
+            // Register cleanup hooks the moment the staging dir exists
+            // so a crash / Ctrl-C between here and the rename still
+            // rms the partial bake. Without this the ~6.5 GB pile
+            // accumulates per failed run; the cache itself is
+            // preserved (no rm of cacheDir).
+            let cleanedUp = false;
+            const cleanup = () => {
+                if (cleanedUp) return;
+                cleanedUp = true;
+                try { if (distServer) distServer.close(); } catch (_) {}
+                try {
+                    if (fs.existsSync(stagingDir)) {
+                        fs.rmSync(stagingDir, { recursive: true, force: true });
+                    }
+                } catch (_) {}
+                // distDir is the cache OR a partial in-progress bake;
+                // never rm the cache dir itself. distDirIsCache=true
+                // means "leave it alone for the next run".
+                try {
+                    if (distDir && !distDirIsCache) {
+                        fs.rmSync(distDir, { recursive: true, force: true });
+                    }
+                } catch (_) {}
+            };
+            process.on("exit", cleanup);
+            process.on("SIGINT", () => { cleanup(); process.exit(130); });
+            process.on("SIGTERM", () => { cleanup(); process.exit(143); });
+            process.on("uncaughtException", (e) => {
+                console.error("[smoke] uncaughtException:", e?.message ?? e);
+                cleanup();
+                process.exit(1);
+            });
+            process.on("unhandledRejection", (e) => {
+                console.error("[smoke] unhandledRejection:", e?.message ?? e);
+                cleanup();
+                process.exit(1);
+            });
+
+            // Bake two variants under sibling subdirs of `stagingDir`.
+            // See cache-miss commentary above for the v1/v2/v2conv
+            // layout rationale (avoid `fs.cpSync` of the 4 GB dist).
+            const stagingV1 = path.join(stagingDir, "v1");
+            const stagingV2 = path.join(stagingDir, "v2");
+            fs.mkdirSync(stagingV1, { recursive: true });
+            fs.mkdirSync(stagingV2, { recursive: true });
+
+            cp.execFileSync(
+                datShardBin,
+                ["--manifest-version=1", "--input", fixturePath, "--output", stagingV1],
+                { stdio: "ignore" }
+            );
+            cp.execFileSync(
+                datShardBin,
+                ["--manifest-version=2", "--input", fixturePath, "--output", stagingV2],
+                { stdio: "ignore" }
+            );
+
+            // Convention-URL variant — single rewritten manifest.json,
+            // shares everything else with the v2 dir.
+            {
+                const v2ManifestObj = JSON.parse(
+                    fs.readFileSync(path.join(stagingV2, "manifest.json"), "utf8")
+                );
+                v2ManifestObj.catalog_url_template = null;
+                v2ManifestObj.shard_url_template =
+                    "shards/{namespace_slug}/{file_id_hex}.bin";
+                fs.writeFileSync(
+                    path.join(stagingDir, "v2conv-manifest.json"),
+                    JSON.stringify(v2ManifestObj, null, 2)
+                );
+            }
+
+            // Mark complete + atomic rename. If a parallel smoke
+            // already promoted its own staging into cacheDir, our
+            // rename throws EEXIST/ENOTEMPTY — discard our staging
+            // (their bake is equivalent) and use the existing cache.
+            fs.writeFileSync(
+                path.join(stagingDir, ".complete"),
+                new Date().toISOString()
+            );
+            try {
+                fs.renameSync(stagingDir, cacheDir);
+                distDir = cacheDir;
+                distDirIsCache = true;
+            } catch (renameErr) {
+                if (fs.existsSync(cacheCompleteMarker)) {
+                    fs.rmSync(stagingDir, { recursive: true, force: true });
+                    distDir = cacheDir;
+                    distDirIsCache = true;
+                    console.log("  [info] another smoke won the cache write; using its bake");
+                } else {
+                    throw renameErr;
+                }
+            }
+        }
+
         const distDirV1 = path.join(distDir, "v1");
         const distDirV2 = path.join(distDir, "v2");
-        fs.mkdirSync(distDirV1, { recursive: true });
-        fs.mkdirSync(distDirV2, { recursive: true });
-
-        cp.execFileSync(
-            datShardBin,
-            ["--manifest-version=1", "--input", fixturePath, "--output", distDirV1],
-            { stdio: "ignore" }
-        );
-        cp.execFileSync(
-            datShardBin,
-            ["--manifest-version=2", "--input", fixturePath, "--output", distDirV2],
-            { stdio: "ignore" }
-        );
-
-        // Convention-URL variant — single rewritten manifest.json,
-        // shares everything else with the v2 dir.
         const v2ConvManifestPath = path.join(distDir, "v2conv-manifest.json");
-        {
-            const v2ManifestObj = JSON.parse(
-                fs.readFileSync(path.join(distDirV2, "manifest.json"), "utf8")
-            );
-            v2ManifestObj.catalog_url_template = null;
-            v2ManifestObj.shard_url_template =
-                "shards/{namespace_slug}/{file_id_hex}.bin";
-            fs.writeFileSync(
-                v2ConvManifestPath,
-                JSON.stringify(v2ManifestObj, null, 2)
-            );
-        }
 
         // URL-prefix-routed server: `/v1/...` → distDirV1,
         // `/v2/...` → distDirV2, `/v2conv/manifest.json` →
@@ -1345,11 +1429,12 @@ check(
         );
     }
 
-    // Tear down dist server.
+    // Tear down dist server. distDir is the cached bake when
+    // distDirIsCache is true — leave it on disk for the next run.
     if (distServer) {
         await new Promise((resolve) => distServer.close(resolve));
     }
-    if (distDir) {
+    if (distDir && !distDirIsCache) {
         fs.rmSync(distDir, { recursive: true, force: true });
     }
 
