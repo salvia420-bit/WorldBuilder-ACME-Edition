@@ -595,6 +595,41 @@ impl MovementSystem {
         let ActiveDriveIntent::Manual(state) = active.intent else {
             return;
         };
+        // Skip the integrator advance entirely when the player is
+        // PK or PKLite (`IsPKType` → ACE's `FastTick`). For those
+        // players, ACE runs full physics simulation per server tick
+        // — including terrain collision, gravity, and walk speed.
+        // Our integrator's free-flying advance (no terrain knowledge,
+        // constant Z) sends MoveToState/AutonomousPosition packets
+        // with positions that diverge from ACE's authoritative pose,
+        // and ACE's physics interprets the divergence as the player
+        // floating above terrain → applies gravity → impact damage
+        // on landing → eventual death.
+        //
+        // Live-test reproduction (2026-05-08, /tmp/death_diag2.cjs
+        // against tailnet1's Tester with PK status): walking west
+        // from Holtburg teleport spawn for ~10 s killed the player
+        // via "5 → 10 points of crushing/massive impact damage".
+        // Corpse landed at cell 0xA9B4001C [85.65, 88.70, 77.42]
+        // — Z=77.4 vs landing Z=94, a 17 m drop the integrator
+        // walked the player into. ACE WARN log on teleport showed
+        // "MOVEMENT SPEED: ... speed: 34954" confirming our
+        // movement packets carry data ACE physics rejects on speed.
+        //
+        // For non-FastTick (NPK) players ACE doesn't simulate
+        // physics — `Player_Tick.cs:178: if (!FastTick) return;`
+        // — so the integrator is still required to advance
+        // server-side position via the heartbeat. Phase 4 step 3.6's
+        // server-side advancement validation was on a non-PK
+        // account; it doesn't transfer to PK gameplay.
+        const PK: i32 = 4;
+        const PK_LITE: i32 = 64;
+        let pk_status = world
+            .player_int_property(holtburger_common::properties::PropertyInt::PlayerKillerStatus)
+            .unwrap_or(0);
+        if pk_status == PK || pk_status == PK_LITE {
+            return;
+        }
         let Some(mut pose) = world.local_player_runtime_pose() else {
             return;
         };
@@ -923,6 +958,50 @@ impl MovementSystem {
         };
 
         if now < next_heartbeat_at {
+            return Ok(false);
+        }
+
+        // Skip the AutonomousPosition heartbeat when the player is
+        // PK or PKLite. Both flip ACE's `IsPKType` → `FastTick` → ACE
+        // runs full physics simulation for the player every server
+        // tick (~50 ms), advancing position from MoveToState's motion
+        // state alone (`Player_Tick.cs::OnMoveToState` runs the
+        // simulation; `Player_Tick.cs:178: if (!FastTick) return;`).
+        //
+        // For FastTick players the heartbeat is REDUNDANT (ACE already
+        // advances position from motion state) AND HARMFUL: the
+        // heartbeat carries the wasm-side integrator's pose with a
+        // constant Z (the teleport-landing Z), but the player walks
+        // across terrain whose actual Z varies. ACE physics receives
+        // a Z that doesn't match terrain → applies gravity in the
+        // simulation interval → player "falls" 14 m → impact damage
+        // on landing → repeated → player dies in ~10 s of walking.
+        // (Live-test reproduction at 2026-05-08 against tailnet1's
+        // Tester character with PK status: walking west from Holtburg
+        // teleport spawn produced "5 points of crushing impact damage"
+        // → "10 points of massive impact damage" → "You died!" at
+        // ~11 s, matching `Player_Move.cs::HandleFallingDamage` →
+        // `TakeDamage_Falling` chain.)
+        //
+        // For non-FastTick (NPK) players ACE doesn't simulate
+        // physics (`Player_Tick.cs:178` returns) so server-side
+        // position only advances when our heartbeat sends a position
+        // — the original Phase 4 step 3.6 motivation.
+        const PK: i32 = 4;
+        const PK_LITE: i32 = 64;
+        let pk_status = world
+            .player_int_property(holtburger_common::properties::PropertyInt::PlayerKillerStatus)
+            .unwrap_or(0);
+        if pk_status == PK || pk_status == PK_LITE {
+            // Reschedule so we don't backlog while in PK; if the
+            // player flips back to NPK we'll resume at the next
+            // interval. Counter-intuitively still consider this a
+            // "successful" heartbeat-cycle so the schedule advances.
+            if has_autonomous_position_sync_target(world) {
+                self.refresh_autonomous_position_heartbeat_schedule(now, world);
+            } else {
+                self.clear_autonomous_position_heartbeat_schedule();
+            }
             return Ok(false);
         }
 
