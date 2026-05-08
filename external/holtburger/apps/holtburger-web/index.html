@@ -768,6 +768,14 @@
         // Fetch all 33 retail terrain textures via the wasm export
         // and pack them into a single RGBA atlas canvas. Phase 5.0b:
         // reads from the global manifest source (no URL arg).
+        //
+        // Returns { atlasTexture, roadTexture }. The 6×6 atlas covers
+        // codes 0-31 for the per-vertex terrain shader. Code 32
+        // (RoadType, DID 0x05001458) is also written into the atlas
+        // for completeness, AND extracted as a standalone wrapping
+        // texture for the road overlay's tiled stroke (mirrors
+        // `RenderPreviewRenderer.cs:526-545`'s
+        // `SKShader.CreateBitmap(roadTile, Repeat, Repeat)`).
         const textures = await fetch_terrain_textures();
         if (textures.length !== 33) {
           throw new Error(
@@ -783,6 +791,8 @@
         // Working canvas for one tile's RGBA → ImageBitmap.
         const tileCanvas = document.createElement("canvas");
         const tctx = tileCanvas.getContext("2d");
+
+        let roadTexture = null;
 
         for (const tex of textures) {
           const code = tex.terrainType;
@@ -809,6 +819,29 @@
             dx, dy, ATLAS_TILE_PX, ATLAS_TILE_PX
           );
 
+          // Extract code 32 (RoadType) as a standalone wrapping
+          // texture for the road overlay's tiled stroke. Use a
+          // dedicated canvas so the source is exactly w×h (not
+          // ATLAS_TILE_PX) — preserves the texture's native
+          // resolution for the stroke sampler.
+          if (code === 32) {
+            const roadCanvas = document.createElement("canvas");
+            roadCanvas.width = w;
+            roadCanvas.height = h;
+            const rctx = roadCanvas.getContext("2d");
+            rctx.putImageData(new ImageData(new Uint8ClampedArray(clamped), w, h), 0, 0);
+            roadTexture = PIXI.Texture.from(roadCanvas);
+            if (roadTexture.source) {
+              roadTexture.source.scaleMode = "linear";
+              roadTexture.source.autoGenerateMipmaps = true;
+              // Wrap addressing so the stroke sampler tiles the
+              // texture across long road runs instead of clamping to
+              // the edge. Mirrors C# `SKShaderTileMode.Repeat`.
+              roadTexture.source.style.addressModeU = "repeat";
+              roadTexture.source.style.addressModeV = "repeat";
+            }
+          }
+
           tex.free();
         }
 
@@ -822,7 +855,7 @@
           texture.source.scaleMode = "linear";
           texture.source.autoGenerateMipmaps = true;
         }
-        return texture;
+        return { atlasTexture: texture, roadTexture };
       }
 
 
@@ -1515,7 +1548,7 @@ void main() {
         return { container, withLive, withSprite, fallback, invisible };
       }
 
-      function buildLandblockChildren(mesh, atlasTexture) {
+      function buildLandblockChildren(mesh, atlasTexture, roadTexture) {
         // Build the per-landblock mesh + road overlay + wireframe.
         // Step 3.6 (revised): the fragment shader does bilinear
         // 4-corner blending of the per-vertex terrain types from a
@@ -1570,11 +1603,36 @@ void main() {
         // at zoom-out via PIXI's natural scaling.
         const roadOverlay = new PIXI.Graphics();
         const ROAD_DIRS = [[1, 0], [0, 1], [1, 1], [-1, 1]];
-        // Static-site stone-grey roughly matches RoadType
-        // SurfaceTexture's average. A future pass could tile the
-        // RoadType atlas tile as a fill — see
-        // `roadShader = SKShader.CreateBitmap(roadTile, Repeat,
-        // Repeat)` in RenderPreviewRenderer.cs:538. Scope deferred.
+        // Tile the real RoadType (DID 0x05001458) texture along the
+        // stroke when available, mirroring C# `SKShader.CreateBitmap(
+        // roadTile, Repeat, Repeat)` at RenderPreviewRenderer.cs:538.
+        // Falls back to the flat tan placeholder when fetch_terrain_
+        // textures didn't produce a code-32 tile (e.g. a custom DAT
+        // with no RoadType chain).
+        //
+        // PIXI 8 StrokeStyle extends FillStyle, so `texture` +
+        // `matrix` + `textureSpace: 'global'` work directly on the
+        // stroke. With textureSpace: 'global', PIXI computes
+        // textureMatrix = scale(1/srcW, 1/srcH) * inv(style.matrix),
+        // i.e. UV = pos * inv(style.matrix) / sourceSize. To make the
+        // texture tile every T world metres regardless of native
+        // source resolution we set style.matrix = scale(T/srcW, T/srcH).
+        // T = 6 m gives a road weight that reads as cobble/dirt at
+        // the project's typical zoom (~8 px/m).
+        const ROAD_TEXTURE_TILE_M = 6.0;
+        const roadStrokeStyle = roadTexture
+          ? {
+              width: 1.5,
+              texture: roadTexture,
+              matrix: new PIXI.Matrix().scale(
+                ROAD_TEXTURE_TILE_M / Math.max(1, roadTexture.source?.width ?? 64),
+                ROAD_TEXTURE_TILE_M / Math.max(1, roadTexture.source?.height ?? 64),
+              ),
+              textureSpace: "global",
+              alpha: 0.95,
+              cap: "round",
+            }
+          : { width: 1.5, color: 0xC8B888, alpha: 0.95, cap: "round" };
         for (let vv = 0; vv < 9; vv += 1) {
           for (let vu = 0; vu < 9; vu += 1) {
             const idx = vv * 9 + vu;
@@ -1592,7 +1650,7 @@ void main() {
               roadOverlay
                 .moveTo(x0, y0)
                 .lineTo(x1, y1)
-                .stroke({ width: 1.5, color: 0xC8B888, alpha: 0.95, cap: "round" });
+                .stroke(roadStrokeStyle);
             }
           }
         }
@@ -1620,7 +1678,7 @@ void main() {
         return [pixiMesh, roadOverlay, wire];
       }
 
-      function addLandblockToScene(parentContainer, mesh, lbX, lbY, atlasTexture) {
+      function addLandblockToScene(parentContainer, mesh, lbX, lbY, atlasTexture, roadTexture) {
         const lbContainer = new PIXI.Container();
         // Landblock (XX, YY) occupies the world-metre square
         // [XX*192, (XX+1)*192] × [YY*192, (YY+1)*192].
@@ -1628,7 +1686,7 @@ void main() {
           lbX * METERS_PER_LANDBLOCK,
           lbY * METERS_PER_LANDBLOCK
         );
-        const children = buildLandblockChildren(mesh, atlasTexture);
+        const children = buildLandblockChildren(mesh, atlasTexture, roadTexture);
         for (const child of children) lbContainer.addChild(child);
         parentContainer.addChild(lbContainer);
         return lbContainer;
@@ -1662,7 +1720,7 @@ void main() {
         // earlier 3.6 commits are no longer reached from the render
         // path; `fetch_terrain_alpha_masks` is kept available in the
         // wasm bundle for any future authentic-TexMerge mode.
-        const atlasTexture = await buildTerrainAtlas();
+        const { atlasTexture, roadTexture } = await buildTerrainAtlas();
 
         // Scene graph:
         //   stage
@@ -1685,7 +1743,8 @@ void main() {
             meshes[i],
             n.x,
             n.y,
-            atlasTexture
+            atlasTexture,
+            roadTexture
           );
         }
 
@@ -1773,6 +1832,7 @@ void main() {
         window.tickEntityAnimations = tickEntityAnimations;
         window.tickEntityInterpolation = tickEntityInterpolation;
         window.handleEntityVelocity = handleEntityVelocity;
+        window.handleEntityMotion = handleEntityMotion;
 
         // Initial camera: centre on Holtburg's geometric centre at a
         // scale that fits the 3×3 grid in the canvas with a margin.
@@ -3003,6 +3063,36 @@ void main() {
         entry.omegaZ = upd.omegaZ;
         entry.velUpdatedMs = performance.now();
       }
+
+      // ENTITY_UPDATE_KIND_MOTION (kind=5) — ACE-authoritative
+      // motion-state hint from `UpdateMotion`. Lets
+      // tickEntityAnimations gate walk-cycle frames on the server's
+      // decision instead of an EMA over PublicUpdatePosition deltas.
+      // Raw `InterpretedMotionCommand` u16 values
+      // (mirrors `holtburger-protocol::messages::movement::types`):
+      const MOTION_CMD_STOP = 0x0004;
+      const MOTION_CMD_WALK_FORWARD = 0x0005;
+      const MOTION_CMD_WALK_BACKWARDS = 0x0006;
+      const MOTION_CMD_RUN_FORWARD = 0x0007;
+      const ENTITY_MOTION_STALE_MS = 500;
+      function handleEntityMotion(upd) {
+        // Same local-player exclusion as handleEntityVelocity: the
+        // local sprite's animation state is already driven by step
+        // 3.5's keystate prediction; layering a server-confirmed
+        // motion command on top would cause animation flicker around
+        // the moment ACE acknowledges the keystate change (the
+        // server's command is one round-trip behind the local
+        // keystate).
+        const guid = upd.guid >>> 0;
+        const isLocal =
+          localPlayerGuid !== null && guid === (localPlayerGuid >>> 0);
+        if (isLocal) return;
+        const entry = entityMap.get(guid);
+        if (!entry) return;
+        entry.motionCommand = upd.motionCommand >>> 0;
+        entry.motionStance = upd.motionStance >>> 0;
+        entry.motionUpdatedMs = performance.now();
+      }
       function tickEntityAnimations() {
         if (!liveScene) return;
         const now = performance.now();
@@ -3024,7 +3114,26 @@ void main() {
               computeEntitySpriteKey(entry.modelId, entry.meta)
             );
             if (renderEntry?.texture) {
-              const moving = (entry.speedMps ?? 0) >= WALK_MOVING_THRESHOLD_MPS;
+              // Animation gate: prefer ACE's authoritative motion
+              // command (kind=5 UpdateMotion) when fresh; fall back
+              // to the EMA-on-position-deltas heuristic otherwise.
+              // The EMA flaps around ~0.4 m/s for entities that
+              // shuffle between PublicUpdatePosition echoes —
+              // server's STOP / WALK_FORWARD / RUN_FORWARD is a
+              // hard-edge signal that doesn't false-positive.
+              const hasFreshMotion =
+                entry.motionUpdatedMs !== undefined &&
+                now - entry.motionUpdatedMs < ENTITY_MOTION_STALE_MS;
+              let moving;
+              if (hasFreshMotion) {
+                const cmd = entry.motionCommand ?? 0;
+                moving =
+                  cmd === MOTION_CMD_WALK_FORWARD ||
+                  cmd === MOTION_CMD_WALK_BACKWARDS ||
+                  cmd === MOTION_CMD_RUN_FORWARD;
+              } else {
+                moving = (entry.speedMps ?? 0) >= WALK_MOVING_THRESHOLD_MPS;
+              }
               if (moving && renderEntry.walkFrames === null) {
                 kickWalkFrameBakeIfNeeded(
                   computeEntitySpriteKey(entry.modelId, entry.meta),
@@ -4094,6 +4203,14 @@ void main() {
               // sprite forward at this velocity past the catch-up
               // lerp's target until the next PUP echo lands.
               else if (upd.kind === 4) handleEntityVelocity(upd);
+              // Animation-gate polish: kind=5 carries ACE's
+              // authoritative `(forward_command, current_style)`
+              // from UpdateMotion. handleEntityMotion stamps
+              // motionCommand/motionUpdatedMs on the entry;
+              // tickEntityAnimations short-circuits the EMA gate
+              // when the stamp is fresh — no more flap from
+              // PublicUpdatePosition jitter at low speeds.
+              else if (upd.kind === 5) handleEntityMotion(upd);
               upd.free();
             }
             // Replay deferred Spawns once liveScene is ready. First

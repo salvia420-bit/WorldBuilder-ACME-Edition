@@ -3020,6 +3020,22 @@ const ENTITY_UPDATE_KIND_META_REFRESH: u32 = 3;
 /// catch-up lerp to keep motion continuous.
 #[cfg(target_arch = "wasm32")]
 const ENTITY_UPDATE_KIND_VELOCITY: u32 = 4;
+/// Motion-state hint — `UpdateMotion`'s authoritative
+/// (current_style, forward_command) pair surfaced so JS can gate
+/// walk-cycle animation on a server-confirmed locomotion state
+/// instead of the EMA-on-position-deltas heuristic. The EMA gate
+/// races every PublicUpdatePosition jitter; this kind lets the
+/// animation track the server's decision directly. Only
+/// `guid`, `motion_command`, `motion_stance` carry data; everything
+/// else is zeroed. JS skips for the local player (step 3.5 keystate
+/// prediction owns that path) and stamps `motionUpdatedMs` on the
+/// entry; `tickEntityAnimations` short-circuits the EMA when the
+/// stamp is fresh (<500 ms) and consumes
+/// `entry.motionCommand` directly — matching `InterpretedMotionCommand`
+/// constants WALK_FORWARD=0x5 / WALK_BACKWARDS=0x6 / RUN_FORWARD=0x7
+/// drive walk-cycle frames; STOP=0x4 / 0 freeze the idle pose.
+#[cfg(target_arch = "wasm32")]
+const ENTITY_UPDATE_KIND_MOTION: u32 = 5;
 /// Phase 4 step 6f: ItemType bit 0x10000 = Portal. We auto-fire
 /// `GameAction::IdentifyObject(guid)` on every ObjectCreate that
 /// matches this bit so ACE pushes back the portal's
@@ -3192,6 +3208,28 @@ pub struct EntityUpdate {
     /// AC is z-up; entity rotation is yaw-only on the wire so the
     /// other two omega components are dropped. `0.0` for kind != 4.
     omega_z: f32,
+    // --- Motion-state hint (kind=5 only) -------------------------
+    // Sourced from `GameMessage::UpdateMotion(MovementEventData)` —
+    // ACE broadcasts these whenever an entity's locomotion state
+    // changes (start/stop walking, switch to running, change stance).
+    // The JS animation gate previously relied on an EMA over
+    // PublicUpdatePosition position deltas to decide walk-vs-idle;
+    // kind=5 lets it consume the server's authoritative decision
+    // when a fresh hint is available, falling back to the EMA only
+    // when no hint has arrived recently.
+    /// Raw `InterpretedMotionCommand` u16 (zero-extended) — the
+    /// active forward locomotion command in `UpdateMotion`'s state
+    /// payload, OR `STOP` when `movement_type == StopCompletely`,
+    /// OR `RUN_FORWARD` when the message is autonomous navigation
+    /// (`MoveToObject` / `MoveToPosition`), OR `0` when no forward
+    /// command was carried (turn-only, unhandled type). `0` for
+    /// kind != 5.
+    motion_command: u32,
+    /// Raw `current_style` u16 (zero-extended) from
+    /// `MovementEventData.current_style`. Maps to the low 16 bits of
+    /// `MotionStance` (HandCombat=0x003c, NonCombat=0x003d, etc.).
+    /// `0` for kind != 5.
+    motion_stance: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -3331,6 +3369,29 @@ impl EntityUpdate {
     #[wasm_bindgen(getter, js_name = subPalettes)]
     pub fn sub_palettes(&self) -> Vec<u32> {
         self.sub_palettes.clone()
+    }
+
+    /// Motion-state hint forward-command — raw `InterpretedMotionCommand`
+    /// u16 (zero-extended) from `UpdateMotion`'s active state. Meaningful
+    /// only for `kind=5 MOTION`; `0` otherwise. JS compares against
+    /// MOTION_CMD_* constants (WALK_FORWARD=0x5, WALK_BACKWARDS=0x6,
+    /// RUN_FORWARD=0x7, STOP=0x4) to decide the animation gate. `0`
+    /// means "no forward locomotion signal" (idle, turn-only, or
+    /// movement_type variant without a forward command).
+    #[wasm_bindgen(getter, js_name = motionCommand)]
+    pub fn motion_command(&self) -> u32 {
+        self.motion_command
+    }
+
+    /// Motion-state hint stance — raw u16 (zero-extended) from
+    /// `UpdateMotion`'s `current_style` field. Mirrors the low-16 bits
+    /// of `MotionStance` (HandCombat=0x003c, NonCombat=0x003d, etc.).
+    /// Meaningful only for `kind=5 MOTION`; `0` otherwise. Surfaced
+    /// for future combat-stance-driven animation polish; the current
+    /// JS gate ignores it.
+    #[wasm_bindgen(getter, js_name = motionStance)]
+    pub fn motion_stance(&self) -> u32 {
+        self.motion_stance
     }
 
     /// Velocity-hint x component (m/s, world frame). Meaningful only
@@ -5140,6 +5201,8 @@ async fn recv_loop(
                                                 vy: 0.0,
                                                 vz: 0.0,
                                                 omega_z: 0.0,
+                                                motion_command: 0,
+                                                motion_stance: 0,
                                             });
                                         }
                                     }
@@ -5569,6 +5632,8 @@ async fn recv_loop(
                                 vy: 0.0,
                                 vz: 0.0,
                                 omega_z: 0.0,
+                                motion_command: 0,
+                                motion_stance: 0,
                             });
                         }
                         GameMessage::PrivateUpdatePosition(data) => {
@@ -5651,6 +5716,8 @@ async fn recv_loop(
                                     vy: 0.0,
                                     vz: 0.0,
                                     omega_z: 0.0,
+                                    motion_command: 0,
+                                    motion_stance: 0,
                                 });
                             }
                         }
@@ -5692,6 +5759,8 @@ async fn recv_loop(
                                 vy: 0.0,
                                 vz: 0.0,
                                 omega_z: 0.0,
+                                motion_command: 0,
+                                motion_stance: 0,
                             });
                         }
                         GameMessage::ObjectCreate(data) => {
@@ -5834,6 +5903,8 @@ async fn recv_loop(
                                 vy: 0.0,
                                 vz: 0.0,
                                 omega_z: 0.0,
+                                motion_command: 0,
+                                motion_stance: 0,
                             });
                         }
                         GameMessage::ObjectDelete(data) => {
@@ -5864,6 +5935,8 @@ async fn recv_loop(
                                 vy: 0.0,
                                 vz: 0.0,
                                 omega_z: 0.0,
+                                motion_command: 0,
+                                motion_stance: 0,
                             });
                         }
                         GameMessage::UpdateMotion(data) => {
@@ -5882,6 +5955,73 @@ async fn recv_loop(
                                 "[step3-trace] UpdateMotion guid=0x{:08X} (ACE accepted MoveToState)",
                                 u32::from(data.guid),
                             ));
+                            // Animation-gate hint: derive the active
+                            // forward locomotion command so JS can
+                            // gate walk-cycle animation on a server-
+                            // authoritative state instead of the
+                            // EMA-on-position-deltas heuristic. Source
+                            // of truth varies by `MovementType`:
+                            //   - StopCompletely → STOP (definitive idle)
+                            //   - Invalid (the autonomous/raw envelope
+                            //     player movement uses): pull
+                            //     `state.forward_command` if the flag
+                            //     bit is set; else 0 (no signal).
+                            //   - MoveToObject / MoveToPosition → server
+                            //     pathing; treat as RUN_FORWARD (these
+                            //     carry a `run_rate` but no command code,
+                            //     and AI-pathed creatures default to run
+                            //     speed in retail).
+                            //   - TurnToObject / TurnToHeading → no
+                            //     forward locomotion; 0 lets JS keep
+                            //     the EMA gate's current state.
+                            use holtburger_protocol::messages::movement::{
+                                InterpretedMotionCommand, MovementType, MovementTypeData,
+                            };
+                            let motion_command_u16: u16 = match (data.movement_type, &data.data) {
+                                (MovementType::StopCompletely, _) => {
+                                    InterpretedMotionCommand::STOP.raw()
+                                }
+                                (_, MovementTypeData::Invalid(inv)) => inv
+                                    .state
+                                    .forward_command
+                                    .map(|c| c.raw())
+                                    .unwrap_or(0),
+                                (
+                                    MovementType::MoveToObject | MovementType::MoveToPosition,
+                                    _,
+                                ) => InterpretedMotionCommand::RUN_FORWARD.raw(),
+                                _ => 0,
+                            };
+                            entity_updates.borrow_mut().push(EntityUpdate {
+                                kind: ENTITY_UPDATE_KIND_MOTION,
+                                guid: u32::from(data.guid),
+                                model_id: 0,
+                                landblock_id: 0,
+                                x: 0.0,
+                                y: 0.0,
+                                z: 0.0,
+                                qw: 1.0,
+                                qx: 0.0,
+                                qy: 0.0,
+                                qz: 0.0,
+                                wcid: 0,
+                                item_type: 0,
+                                name: String::new(),
+                                obj_scale: 0.0,
+                                icon_id: 0,
+                                palette_id: 0,
+                                mtable_id: 0,
+                                model_changes: Vec::new(),
+                                texture_changes: Vec::new(),
+                                sub_palettes: Vec::new(),
+                                portal_destination: String::new(),
+                                vx: 0.0,
+                                vy: 0.0,
+                                vz: 0.0,
+                                omega_z: 0.0,
+                                motion_command: u32::from(motion_command_u16),
+                                motion_stance: u32::from(data.current_style),
+                            });
                         }
                         GameMessage::VectorUpdate(data) => {
                             // Velocity-extrapolation polish: ACE
@@ -5933,6 +6073,8 @@ async fn recv_loop(
                                 // — only the z-axis angular velocity
                                 // matters for the top-down renderer.
                                 omega_z: data.omega.z,
+                                motion_command: 0,
+                                motion_stance: 0,
                             });
                         }
                         // Phase 4 step 4: chat-bearing surfaces. Each
