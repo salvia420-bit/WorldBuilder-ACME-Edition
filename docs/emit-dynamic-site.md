@@ -531,11 +531,24 @@ step's landing, plus what got closed since):
   PrivateUpdatePosition reconciliation). Portal swirl tracks
   the lerping sprite. Pure JS; no wasm-bindgen or Rust
   changes.
-- ⏳ **VectorUpdate / UpdateMotion velocity handling.**
-  ACE sends these for animation-hint extrapolation; recv loop
-  drops them in the catch-all `_` arm. A future step could add
-  velocity to `EntityUpdate` and let JS extrapolate position
-  for smoother motion at the cost of one frame of lag.
+- ✅ ~~**VectorUpdate / UpdateMotion velocity handling.**~~
+  **VectorUpdate closed 2026-05-08.** New
+  `ENTITY_UPDATE_KIND_VELOCITY = 4` carries `(guid, vx, vy, vz,
+  omega_z)` from `GameMessage::VectorUpdate(VectorUpdateData)`
+  (recv loop previously dropped these). 4 new wasm-bindgen
+  getters (`vx`, `vy`, `vz`, `omegaZ`); position fields zeroed
+  on kind=4. JS `handleEntityVelocity` stamps
+  `velX/velY/velUpdatedMs` on the entity (skips local player —
+  step 3.5 keystate prediction owns that path).
+  `tickEntityInterpolation` extended: after the catch-up lerp
+  completes, if velocity is fresh (< 500 ms old) the sprite
+  extrapolates forward at `vel × (elapsed - lerp_duration)`;
+  if stale or absent, freeze at lerpTo. Motion stays
+  continuous between PublicUpdatePosition echoes instead of
+  pausing at each lerp target. **UpdateMotion still open** —
+  its motion-state hint (walking/running/idle) could replace
+  the EMA-based animation gate for more authoritative
+  walk-cycle frame selection; tracked as a follow-on.
 - ⏳ **Entity culling for dense zones.** Every entity ACE
   pushes gets a sprite. Frustum-culling against the camera's
   visible-world rect would matter for mobile and for high-

@@ -3009,6 +3009,17 @@ const ENTITY_UPDATE_KIND_REMOVE: u32 = 2;
 /// portal_destination today) carry meaningful data.
 #[cfg(target_arch = "wasm32")]
 const ENTITY_UPDATE_KIND_META_REFRESH: u32 = 3;
+/// Velocity-hint update — VectorUpdate's `(velocity, omega)` surfaced
+/// to JS so the per-rAF lerp can extrapolate forward between
+/// PublicUpdatePosition echoes (which arrive at ~100-300 ms cadence).
+/// Position fields (`landblock_id`, `x`, `y`, `z`, `qw..qz`) are
+/// zeroed in this kind — only `guid`, `vx/y/z`, `omega_z` carry data.
+/// JS skips for the local player (step 3.5 keystate prediction owns
+/// that path) and stamps `velUpdatedMs` on the entry; subsequent
+/// `tickEntityInterpolation` frames integrate `vel{X,Y}` past the
+/// catch-up lerp to keep motion continuous.
+#[cfg(target_arch = "wasm32")]
+const ENTITY_UPDATE_KIND_VELOCITY: u32 = 4;
 /// Phase 4 step 6f: ItemType bit 0x10000 = Portal. We auto-fire
 /// `GameAction::IdentifyObject(guid)` on every ObjectCreate that
 /// matches this bit so ACE pushes back the portal's
@@ -3159,6 +3170,28 @@ pub struct EntityUpdate {
     /// now so step 6a/A doesn't drop the data on the floor. Mirrors
     /// `ObjectDescriptionData.model_data.sub_palettes`.
     sub_palettes: Vec<u32>,
+    // --- Velocity hint (kind=4 only) ----------------------------
+    // Sourced from `GameMessage::VectorUpdate(VectorUpdateData)`
+    // — ACE broadcasts these at the wire-level whenever an
+    // entity's physics state changes (start/stop walking, change
+    // direction). Currently the recv loop drops them in the
+    // catch-all arm; the kind=4 EntityUpdate surfaces just the
+    // `(velocity, omega)` pair so JS can extrapolate position
+    // between PublicUpdatePosition echoes. ALL OTHER FIELDS ARE
+    // ZERO on kind=4 — JS reads only `guid`, `vx/y/z`, `omega_z`.
+    /// World-frame velocity x component, m/s. `0.0` for kind != 4.
+    vx: f32,
+    /// World-frame velocity y component, m/s. `0.0` for kind != 4.
+    vy: f32,
+    /// World-frame velocity z component, m/s. `0.0` for kind != 4.
+    /// Top-down renderer doesn't use this today (no jumping
+    /// extrapolation), but surfaced so future jump animation can
+    /// consume it without a wire change.
+    vz: f32,
+    /// Angular velocity around the world z-axis, rad/s (yaw rate).
+    /// AC is z-up; entity rotation is yaw-only on the wire so the
+    /// other two omega components are dropped. `0.0` for kind != 4.
+    omega_z: f32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -3298,6 +3331,35 @@ impl EntityUpdate {
     #[wasm_bindgen(getter, js_name = subPalettes)]
     pub fn sub_palettes(&self) -> Vec<u32> {
         self.sub_palettes.clone()
+    }
+
+    /// Velocity-hint x component (m/s, world frame). Meaningful only
+    /// for `kind=4 VELOCITY`; `0.0` otherwise.
+    #[wasm_bindgen(getter)]
+    pub fn vx(&self) -> f32 {
+        self.vx
+    }
+
+    /// Velocity-hint y component (m/s, world frame). Meaningful only
+    /// for `kind=4 VELOCITY`; `0.0` otherwise.
+    #[wasm_bindgen(getter)]
+    pub fn vy(&self) -> f32 {
+        self.vy
+    }
+
+    /// Velocity-hint z component (m/s, world frame). Meaningful only
+    /// for `kind=4 VELOCITY`; `0.0` otherwise. Reserved for future
+    /// jump-extrapolation; the top-down renderer doesn't use it today.
+    #[wasm_bindgen(getter)]
+    pub fn vz(&self) -> f32 {
+        self.vz
+    }
+
+    /// Angular velocity around world z-axis (rad/s, yaw rate).
+    /// Meaningful only for `kind=4 VELOCITY`; `0.0` otherwise.
+    #[wasm_bindgen(getter, js_name = omegaZ)]
+    pub fn omega_z(&self) -> f32 {
+        self.omega_z
     }
 }
 
@@ -5074,6 +5136,10 @@ async fn recv_loop(
                                                 texture_changes: Vec::new(),
                                                 sub_palettes: Vec::new(),
                                                 portal_destination: dest,
+                                                vx: 0.0,
+                                                vy: 0.0,
+                                                vz: 0.0,
+                                                omega_z: 0.0,
                                             });
                                         }
                                     }
@@ -5499,6 +5565,10 @@ async fn recv_loop(
                                 texture_changes: Vec::new(),
                                 sub_palettes: Vec::new(),
                                 portal_destination: String::new(),
+                                vx: 0.0,
+                                vy: 0.0,
+                                vz: 0.0,
+                                omega_z: 0.0,
                             });
                         }
                         GameMessage::PrivateUpdatePosition(data) => {
@@ -5577,6 +5647,10 @@ async fn recv_loop(
                                     texture_changes: Vec::new(),
                                     sub_palettes: Vec::new(),
                                     portal_destination: String::new(),
+                                    vx: 0.0,
+                                    vy: 0.0,
+                                    vz: 0.0,
+                                    omega_z: 0.0,
                                 });
                             }
                         }
@@ -5614,6 +5688,10 @@ async fn recv_loop(
                                 texture_changes: Vec::new(),
                                 sub_palettes: Vec::new(),
                                 portal_destination: String::new(),
+                                vx: 0.0,
+                                vy: 0.0,
+                                vz: 0.0,
+                                omega_z: 0.0,
                             });
                         }
                         GameMessage::ObjectCreate(data) => {
@@ -5752,6 +5830,10 @@ async fn recv_loop(
                                 texture_changes,
                                 sub_palettes,
                                 portal_destination: String::new(),
+                                vx: 0.0,
+                                vy: 0.0,
+                                vz: 0.0,
+                                omega_z: 0.0,
                             });
                         }
                         GameMessage::ObjectDelete(data) => {
@@ -5778,6 +5860,10 @@ async fn recv_loop(
                                 texture_changes: Vec::new(),
                                 sub_palettes: Vec::new(),
                                 portal_destination: String::new(),
+                                vx: 0.0,
+                                vy: 0.0,
+                                vz: 0.0,
+                                omega_z: 0.0,
                             });
                         }
                         GameMessage::UpdateMotion(data) => {
@@ -5796,6 +5882,58 @@ async fn recv_loop(
                                 "[step3-trace] UpdateMotion guid=0x{:08X} (ACE accepted MoveToState)",
                                 u32::from(data.guid),
                             ));
+                        }
+                        GameMessage::VectorUpdate(data) => {
+                            // Velocity-extrapolation polish: ACE
+                            // broadcasts VectorUpdate whenever an
+                            // entity's physics state changes
+                            // (start/stop walking, change direction).
+                            // The recv loop dropped these in the
+                            // catch-all arm pre-this commit; surfacing
+                            // them as kind=4 EntityUpdate lets JS
+                            // extrapolate sprite position past the
+                            // catch-up lerp so motion stays smooth
+                            // across the ~100-300 ms gap between
+                            // PublicUpdatePosition echoes.
+                            //
+                            // Position fields are zeroed — only
+                            // (guid, vx/y/z, omega_z) carry data on
+                            // kind=4. JS reads via the velocity
+                            // getters and stores `velX/Y/UpdatedMs`
+                            // on the entityMap entry.
+                            entity_updates.borrow_mut().push(EntityUpdate {
+                                kind: ENTITY_UPDATE_KIND_VELOCITY,
+                                guid: u32::from(data.guid),
+                                model_id: 0,
+                                landblock_id: 0,
+                                x: 0.0,
+                                y: 0.0,
+                                z: 0.0,
+                                qw: 1.0,
+                                qx: 0.0,
+                                qy: 0.0,
+                                qz: 0.0,
+                                wcid: 0,
+                                item_type: 0,
+                                name: String::new(),
+                                obj_scale: 0.0,
+                                icon_id: 0,
+                                palette_id: 0,
+                                mtable_id: 0,
+                                model_changes: Vec::new(),
+                                texture_changes: Vec::new(),
+                                sub_palettes: Vec::new(),
+                                portal_destination: String::new(),
+                                vx: data.velocity.x,
+                                vy: data.velocity.y,
+                                vz: data.velocity.z,
+                                // AC is z-up; entity rotation is
+                                // yaw-only (one quat axis), so the
+                                // x/y omega components are dropped
+                                // — only the z-axis angular velocity
+                                // matters for the top-down renderer.
+                                omega_z: data.omega.z,
+                            });
                         }
                         // Phase 4 step 4: chat-bearing surfaces. Each
                         // variant gets normalised into a single display

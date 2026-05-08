@@ -1772,6 +1772,7 @@ void main() {
         window.computeEntitySpriteKey = computeEntitySpriteKey;
         window.tickEntityAnimations = tickEntityAnimations;
         window.tickEntityInterpolation = tickEntityInterpolation;
+        window.handleEntityVelocity = handleEntityVelocity;
 
         // Initial camera: centre on Holtburg's geometric centre at a
         // scale that fits the 3×3 grid in the canvas with a margin.
@@ -2927,6 +2928,16 @@ void main() {
       // visual lag stays imperceptible against the ~100 ms
       // best case.
       const ENTITY_LERP_DURATION_MS = 150;
+      // Velocity-extrapolation polish: VectorUpdate (kind=4) lands
+      // ACE's authoritative `(velocity, omega)` for an entity. We
+      // store it on the entityMap entry and use it to keep the
+      // sprite moving AFTER the catch-up lerp completes — bridging
+      // the gap until the next PublicUpdatePosition echo arrives.
+      // If no velocity-hint arrives within this window we treat
+      // the velocity as stale and freeze the sprite at lerpTo
+      // (rather than extrapolating into the void with potentially
+      // stale data).
+      const ENTITY_VELOCITY_STALE_MS = 500;
       let walkPhase = 0.0;
       let lastAnimTickTime = null;
       function tickEntityInterpolation() {
@@ -2938,9 +2949,22 @@ void main() {
           let x;
           let y;
           if (elapsed >= ENTITY_LERP_DURATION_MS) {
-            x = entry.lerpToX;
-            y = entry.lerpToY;
-            entry.lerpStartMs = undefined;
+            // Catch-up lerp complete. Either extrapolate forward
+            // via the most-recent velocity hint (smooth continuous
+            // motion past the authoritative target) or freeze at
+            // lerpTo and stop ticking this entry.
+            const hasFreshVelocity =
+              entry.velUpdatedMs !== undefined &&
+              now - entry.velUpdatedMs < ENTITY_VELOCITY_STALE_MS;
+            if (hasFreshVelocity) {
+              const extraSec = (elapsed - ENTITY_LERP_DURATION_MS) / 1000;
+              x = entry.lerpToX + entry.velX * extraSec;
+              y = entry.lerpToY + entry.velY * extraSec;
+            } else {
+              x = entry.lerpToX;
+              y = entry.lerpToY;
+              entry.lerpStartMs = undefined;
+            }
           } else {
             const t = elapsed / ENTITY_LERP_DURATION_MS;
             x = entry.lerpFromX + (entry.lerpToX - entry.lerpFromX) * t;
@@ -2956,6 +2980,28 @@ void main() {
             entry.portalSwirl.position.set(x, y);
           }
         }
+      }
+      function handleEntityVelocity(upd) {
+        // Stash ACE's authoritative `(velocity, omega)` on the
+        // entityMap entry. The local player skips this — its
+        // step 3.5 keystate-driven prediction is what makes WASD
+        // feel responsive; using server velocity for the local
+        // sprite would chase reconciled positions on top of the
+        // already-running prediction.
+        const guid = upd.guid >>> 0;
+        const isLocal =
+          localPlayerGuid !== null && guid === (localPlayerGuid >>> 0);
+        if (isLocal) return;
+        const entry = entityMap.get(guid);
+        if (!entry) return;
+        entry.velX = upd.vx;
+        entry.velY = upd.vy;
+        // vz / omegaZ surfaced for future use (jump animation,
+        // turn-rate prediction); the top-down renderer doesn't
+        // consume them today.
+        entry.velZ = upd.vz;
+        entry.omegaZ = upd.omegaZ;
+        entry.velUpdatedMs = performance.now();
       }
       function tickEntityAnimations() {
         if (!liveScene) return;
@@ -4040,6 +4086,14 @@ void main() {
               // and refreshes any meta-driven affordances (the
               // portal chip).
               else if (upd.kind === 3) handleEntityMetaRefresh(upd);
+              // Velocity-extrapolation polish: kind=4 carries
+              // ACE's authoritative `(velocity, omega)` from
+              // VectorUpdate. handleEntityVelocity stamps
+              // velX/velY/velUpdatedMs on the entry; subsequent
+              // tickEntityInterpolation frames extrapolate the
+              // sprite forward at this velocity past the catch-up
+              // lerp's target until the next PUP echo lands.
+              else if (upd.kind === 4) handleEntityVelocity(upd);
               upd.free();
             }
             // Replay deferred Spawns once liveScene is ready. First

@@ -524,6 +524,24 @@ check(
     `EntityUpdate=${typeof wasm.EntityUpdate}, portalDestination=${typeof entityUpdateDescr?.get}`
 );
 
+// Velocity-extrapolation polish: VectorUpdate (kind=4) carries
+// ACE's authoritative `(velocity, omega)` for an entity. JS uses
+// it to extrapolate sprite position past the catch-up lerp's
+// target, smoothing motion across the ~100-300 ms gap between
+// PublicUpdatePosition echoes. Four new EntityUpdate getters:
+// vx / vy / vz / omegaZ. Position fields stay zeroed on kind=4.
+const entityUpdateProto2 = wasm.EntityUpdate?.prototype || {};
+const velocityGetters = ["vx", "vy", "vz", "omegaZ"];
+const velocityGettersOk = velocityGetters.every((g) => {
+    const d = Object.getOwnPropertyDescriptor(entityUpdateProto2, g);
+    return typeof d?.get === "function";
+});
+check(
+    "EntityUpdate vx/vy/vz/omegaZ getters exposed (velocity hint kind=4)",
+    typeof wasm.EntityUpdate === "function" && velocityGettersOk,
+    `EntityUpdate=${typeof wasm.EntityUpdate}, getters=${velocityGettersOk}`
+);
+
 
 (async () => {
     // Phase 5.0b — pre-bake a manifest+shards+boot tree from the
