@@ -203,7 +203,15 @@ impl WorldState {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
+    /// Install a fallback `SelfMovementCapabilities` override. Used by
+    /// the wasm bundle (Phase 4 step 3.6) when the player's biota
+    /// isn't loaded — without an override, `resolve_self_movement_capabilities`
+    /// errors with `RunRateUnavailable` and the local-pose integrator
+    /// in `MovementSystemHandle::tick` no-ops, leaving server-side
+    /// position frozen at spawn. (Originally `#[cfg(test, feature =
+    /// "test-support")]` for unit-test fixtures; the setter itself is
+    /// just a field write, no test-only logic, so unblocking the
+    /// production wasm path is fine.)
     pub fn set_self_movement_capabilities_override(
         &mut self,
         capabilities: SelfMovementCapabilities,
@@ -211,7 +219,6 @@ impl WorldState {
         self.self_movement_capabilities_override = Some(capabilities);
     }
 
-    #[cfg(any(test, feature = "test-support"))]
     pub fn clear_self_movement_capabilities_override(&mut self) {
         self.self_movement_capabilities_override = None;
     }

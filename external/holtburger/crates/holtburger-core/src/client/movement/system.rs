@@ -131,6 +131,13 @@ pub(crate) struct MovementSystem {
     suppress_frontend_autonomous_once: bool,
     server_controlled_projection: Option<ServerControlledProjection>,
     next_autonomous_position_heartbeat_at: Option<Instant>,
+    /// Phase 4 step 3.6 diagnostic — incremented every time the
+    /// autonomous-position heartbeat or arrival sync fires. The wasm
+    /// bundle reads this via [`MovementSystemHandle::heartbeats_sent`]
+    /// to verify the heartbeat actually emits packets (server-side
+    /// position updates are async + flushed lazily, so client-side
+    /// observability is essential for debugging).
+    pub(crate) heartbeats_sent: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -218,6 +225,7 @@ impl MovementSystem {
             suppress_frontend_autonomous_once: false,
             server_controlled_projection: None,
             next_autonomous_position_heartbeat_at: None,
+            heartbeats_sent: 0,
         }
     }
 
@@ -566,6 +574,43 @@ impl MovementSystem {
         })
     }
 
+    /// Phase 4 step 3.6 — advance the local-player runtime pose by
+    /// `velocity * dt` if the active drive is `Manual`. The cli's
+    /// full flow runs this implicitly via `simulation::tick` →
+    /// `current_local_solve_body_input` → `SpatialPhysics::solve` →
+    /// `apply_solved_body_kinematics`. The wasm bundle skips the
+    /// solver to keep the bundle small; this thin integrator is just
+    /// enough to keep the WorldState pose advancing so
+    /// `AutonomousPosition` heartbeats carry a current position.
+    /// No-op when active drive is None / Autonomous (Autonomous
+    /// already gets its delta via `current_local_drive_control`).
+    pub(crate) fn advance_local_pose_for_manual_drive(
+        &self,
+        world: &mut WorldState,
+        dt: Duration,
+    ) {
+        let Some(active) = self.active_drive else {
+            return;
+        };
+        let ActiveDriveIntent::Manual(state) = active.intent else {
+            return;
+        };
+        let Some(mut pose) = world.local_player_runtime_pose() else {
+            return;
+        };
+        let heading = pose.rotation.to_heading();
+        let capabilities = match world.resolve_self_movement_capabilities() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let velocity = local_velocity_for_state(heading, state, &capabilities);
+        let dt_s = dt.as_secs_f32();
+        pose.coords.x += velocity.x * dt_s;
+        pose.coords.y += velocity.y * dt_s;
+        pose.coords.z += velocity.z * dt_s;
+        let _ = world.set_local_player_runtime_pose(pose);
+    }
+
     pub(crate) fn current_local_solve_body_input(
         &self,
         world: &WorldState,
@@ -883,6 +928,7 @@ impl MovementSystem {
         session
             .send_action(GameAction::AutonomousPosition(Box::new(pulse)))
             .await?;
+        self.heartbeats_sent = self.heartbeats_sent.wrapping_add(1);
 
         if has_autonomous_position_sync_target(world) {
             self.refresh_autonomous_position_heartbeat_schedule(now, world);

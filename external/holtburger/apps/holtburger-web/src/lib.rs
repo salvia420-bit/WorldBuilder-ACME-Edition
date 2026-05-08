@@ -3843,10 +3843,12 @@ pub async fn start_session(
             match load_world_bootstrap().await {
                 Ok(loaded) => {
                     *world_bootstrap.borrow_mut() = Some(loaded);
-                    log::info!("[step 3.6] world bootstrap loaded");
+                    console_log_str("[step 3.6] world bootstrap loaded");
                 }
                 Err(e) => {
-                    log::warn!("[step 3.6] world bootstrap load failed: {e}");
+                    console_log_str(&format!(
+                        "[step 3.6] world bootstrap load failed: {e}"
+                    ));
                 }
             }
         });
@@ -3953,12 +3955,12 @@ async fn load_world_bootstrap()
     let motion_kinematics = repo.read_asset::<MotionKinematics>("motion kinematics table")?;
     let soul_emote_catalog = repo.read_soul_emote_catalog()?;
 
-    log::info!(
+    console_log_str(&format!(
         "[boot] WorldBootstrap loaded: skill_base_hash={} spells={} motion_tables={}",
         skill_table.skill_base_hash.len(),
         spell_table.spells.len(),
         motion_kinematics.motion_tables.len(),
-    );
+    ));
 
     Ok(std::sync::Arc::new(holtburger_world::WorldBootstrap::new(
         skill_table,
@@ -4336,6 +4338,33 @@ async fn recv_loop(
                                 });
                             }
                         }
+                        GameMessage::PlayerTeleport(data) => {
+                            // Phase 4 step 3.6: ACE sets player.Teleporting=true
+                            // on every teleport (e.g. @telepoi) and silently
+                            // drops AutonomousPosition packets while the flag
+                            // is set. The cli pattern is to fire LoginComplete
+                            // back on every PlayerTeleport — that's the action
+                            // ACE's GameActionLoginComplete invokes
+                            // OnTeleportComplete on, which clears Teleporting.
+                            // Without this, AutonomousPosition heartbeats are
+                            // received but silently dropped, server-side
+                            // position freezes at the @telepoi destination,
+                            // and movement looks fine client-side but the
+                            // server never sees it (the original 3.6 bug
+                            // pattern at a different layer).
+                            console_log_str(&format!(
+                                "[step 3.6] PlayerTeleport received (teleport_seq={}); sending LoginComplete to clear Teleporting",
+                                data.teleport_sequence,
+                            ));
+                            let login_complete = GameAction::LoginComplete(Box::new(
+                                holtburger_protocol::messages::LoginCompleteActionData,
+                            ));
+                            if let Err(e) = session.send_action(login_complete).await {
+                                console_log_str(&format!(
+                                    "[step 3.6] post-teleport LoginComplete send failed: {e}"
+                                ));
+                            }
+                        }
                         GameMessage::CharacterEnterWorldServerReady => {
                             // Server is acknowledging our CharacterEnterWorldRequest;
                             // chain the CharacterEnterWorld reply automatically so
@@ -4428,13 +4457,57 @@ async fn recv_loop(
                                 let mut new_world =
                                     holtburger_world::WorldState::new(bootstrap);
                                 new_world.player.guid = data.guid;
-                                world = Some(new_world);
-                                log::info!(
-                                    "[step 3.6] WorldState constructed for player guid=0x{:08X}",
-                                    player_guid_raw,
+                                // Phase 4 step 3.6 fallback: install a
+                                // default movement-capabilities override
+                                // because the player's character biota
+                                // isn't loaded in the wasm bundle and
+                                // `resolve_self_movement_capabilities`
+                                // would otherwise return RunRateUnavailable,
+                                // making the local-pose integrator a no-op.
+                                // Walk = 1.0 m/s, run = 4.5 m/s (matches
+                                // the JS prediction's WALK_FORWARD_SPEED
+                                // / FALLBACK_RUN_RATE_SCALAR), turn = 1.5
+                                // rad/s. Real values would come from the
+                                // player biota's runRate + motion table
+                                // (deferred to step 3.7).
+                                let fallback_caps =
+                                    holtburger_world::SelfMovementCapabilities {
+                                        kinematics:
+                                            holtburger_world::SelfMovementKinematics {
+                                                source: holtburger_world::PlayerMotionTableSource::DirectProperty {
+                                                    motion_table_id: 0,
+                                                },
+                                                motion_table_id: 0,
+                                                stance: 0,
+                                                base_walk_forward_velocity:
+                                                    holtburger_common::Vector3 {
+                                                        x: 0.0, y: 1.0, z: 0.0,
+                                                    },
+                                                base_run_forward_velocity:
+                                                    holtburger_common::Vector3 {
+                                                        x: 0.0, y: 4.5, z: 0.0,
+                                                    },
+                                                base_turn_left_omega:
+                                                    holtburger_common::Vector3 {
+                                                        x: 0.0, y: 0.0, z: 1.5,
+                                                    },
+                                                base_turn_right_omega:
+                                                    holtburger_common::Vector3 {
+                                                        x: 0.0, y: 0.0, z: -1.5,
+                                                    },
+                                            },
+                                        run_rate_scalar: 1.0,
+                                    };
+                                new_world.set_self_movement_capabilities_override(
+                                    fallback_caps,
                                 );
+                                world = Some(new_world);
+                                console_log_str(&format!(
+                                    "[step 3.6] WorldState constructed for player guid=0x{:08X} (fallback movement caps installed)",
+                                    player_guid_raw,
+                                ));
                             } else {
-                                log::warn!(
+                                console_log_str(
                                     "[step 3.6] WorldBootstrap not yet loaded at EnteredWorld; \
                                      MovementSystem disabled this session",
                                 );
@@ -4484,6 +4557,51 @@ async fn recv_loop(
                                 local_player.teleport_sequence = data.pos.teleport_sequence;
                                 local_player.force_position_sequence =
                                     data.pos.force_position_sequence;
+                                // Phase 4 step 3.6: UpdatePosition for the
+                                // local player is the canonical position
+                                // packet (PrivateUpdatePosition rarely fires
+                                // in this flow). Seed the WorldState entity
+                                // here so MovementSystem::tick has a pose
+                                // and sequences to work with.
+                                if let Some(w) = world.as_mut() {
+                                    let pose = data.pos.pos;
+                                    if !entity_seeded {
+                                        let entity =
+                                            holtburger_world::entity::Entity::new(
+                                                *player_guid,
+                                                String::from("LocalPlayer"),
+                                                pose,
+                                            );
+                                        w.add_entity(entity);
+                                        let _ = w.set_local_player_runtime_pose(pose);
+                                        entity_seeded = true;
+                                        console_log_str(&format!(
+                                            "[step 3.6] WorldState player entity seeded via UpdatePosition at landblock=0x{:08X} ({:.1}, {:.1}, {:.1})",
+                                            u32::from(pose.landblock_id),
+                                            pose.coords.x, pose.coords.y, pose.coords.z,
+                                        ));
+                                    } else {
+                                        let _ = w.set_player_position(pose);
+                                    }
+                                    // Mirror the four sequences onto the
+                                    // WorldState player so outbound
+                                    // MoveToState / AutonomousPosition pull
+                                    // current values.
+                                    w.player.instance_sequence =
+                                        data.pos.instance_sequence;
+                                    w.player.teleport_sequence =
+                                        data.pos.teleport_sequence;
+                                    w.player.force_position_sequence =
+                                        data.pos.force_position_sequence;
+                                    if !heartbeat_armed && entity_seeded {
+                                        let now = web_time::Instant::now();
+                                        movement.arm_heartbeat_schedule(now, w);
+                                        heartbeat_armed = true;
+                                        console_log_str(
+                                            "[step 3.6] AutonomousPosition heartbeat armed",
+                                        );
+                                    }
+                                }
                             }
                             entity_updates.borrow_mut().push(EntityUpdate {
                                 kind: ENTITY_UPDATE_KIND_POSITION,
@@ -4545,11 +4663,11 @@ async fn recv_loop(
                                         w.add_entity(entity);
                                         let _ = w.set_local_player_runtime_pose(*pos);
                                         entity_seeded = true;
-                                        log::info!(
+                                        console_log_str(&format!(
                                             "[step 3.6] WorldState player entity seeded at landblock=0x{:08X} ({:.1}, {:.1}, {:.1})",
                                             u32::from(pos.landblock_id),
                                             pos.coords.x, pos.coords.y, pos.coords.z,
-                                        );
+                                        ));
                                     } else {
                                         let _ = w.set_player_position(*pos);
                                     }
@@ -4557,7 +4675,7 @@ async fn recv_loop(
                                         let now = web_time::Instant::now();
                                         movement.arm_heartbeat_schedule(now, w);
                                         heartbeat_armed = true;
-                                        log::info!(
+                                        console_log_str(
                                             "[step 3.6] AutonomousPosition heartbeat armed",
                                         );
                                     }
@@ -5184,14 +5302,14 @@ async fn recv_loop(
                         // loop built MoveToState here directly and never
                         // sent AutonomousPosition — the bug fixed by 3.6.
                         let Some(w) = world.as_ref() else {
-                            log::warn!(
-                                "recv_loop: SetMovementInput before WorldState ready — dropping"
+                            console_log_str(
+                                "[step 3.6] SetMovementInput before WorldState ready — dropping",
                             );
                             continue;
                         };
                         if !entity_seeded {
-                            log::warn!(
-                                "recv_loop: SetMovementInput before player entity seeded — dropping"
+                            console_log_str(
+                                "[step 3.6] SetMovementInput before player entity seeded — dropping",
                             );
                             continue;
                         }
@@ -5224,16 +5342,33 @@ async fn recv_loop(
                         }
                         match movement.tick(now, w, &mut session).await {
                             Ok(_events) => {
-                                // WorldEvents from movement (e.g. local
-                                // pose snapshots after arrival) are not
-                                // surfaced to JS yet — JS prediction +
-                                // inbound packet rendering still owns
-                                // the visual layer. Future: route these
-                                // to the entity buffer for smoother
-                                // rubber-band recovery.
+                                // Phase 4 step 3.6 diagnostic — log pose
+                                // every ~60 ticks (~1s at 60Hz rAF) so we
+                                // can verify the local-pose integrator is
+                                // advancing the WorldState pose that the
+                                // AutonomousPosition heartbeat reads.
+                                if movement.tick_count() % 60 == 0 {
+                                    if let Some(pose) = w.local_player_runtime_pose() {
+                                        let caps_ok =
+                                            w.resolve_self_movement_capabilities()
+                                                .is_ok();
+                                        console_log_str(&format!(
+                                            "[step 3.6 tick #{}] pose=({:.2}, {:.2}, {:.2}) cell=0x{:08X} caps_ok={} heartbeats_sent={}",
+                                            movement.tick_count(),
+                                            pose.coords.x,
+                                            pose.coords.y,
+                                            pose.coords.z,
+                                            u32::from(pose.landblock_id),
+                                            caps_ok,
+                                            movement.heartbeats_sent(),
+                                        ));
+                                    }
+                                }
                             }
                             Err(e) => {
-                                log::warn!("recv_loop: MovementSystem::tick: {e}");
+                                console_log_str(&format!(
+                                    "[step 3.6] MovementSystem::tick error: {e}"
+                                ));
                                 queued_events.borrow_mut().push(ClientEvent {
                                     kind: CLIENT_EVENT_KIND_DISCONNECTED,
                                     string_payload: Some(format!("tick: {e}")),
