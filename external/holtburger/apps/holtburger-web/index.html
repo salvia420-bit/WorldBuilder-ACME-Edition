@@ -3022,7 +3022,38 @@ void main() {
         const isLocal =
           localPlayerGuid !== null && guid === (localPlayerGuid >>> 0);
         if (isLocal) {
-          entry.sprite.position.set(wx, wy);
+          // Live-test (2026-05-08, /tmp/walk_diag3.cjs): snap-rendering
+          // the local sprite to ACE's authoritative position is the
+          // load-bearing rubberband. Sequence: hold W → JS step 3.5
+          // keystate prediction drifts sprite forward → ACE sends
+          // PrivateUpdatePosition / UpdatePosition with the
+          // server-side player's CURRENT pose → before this fix we
+          // hard-set sprite to that pose, snapping back to wherever
+          // the server thinks the player is (which may be stale if
+          // FastTick is off / @pk pk wasn't dispatched / caps_ok
+          // regressed). User reports this as "rubberbanding back to
+          // where I am trying to run from."
+          //
+          // The fix: when the player has active forward/strafe/turn
+          // keystate, trust the JS prediction and ignore the server
+          // snap. ACE will catch up on the next outbound MoveToState
+          // → UpdatePosition cycle (or won't, if the server isn't
+          // simulating physics — in which case the right answer is
+          // STILL to keep predicting client-side rather than yank
+          // the player back to the stale server pose).
+          //
+          // When the player is idle (no keystate), accept the server
+          // pose as authoritative — that's the natural reconciliation
+          // point. lerpStartMs cleared either way.
+          //
+          // Mirrors the retail AC client's dead-reckoning behaviour:
+          // server position is a HINT during active locomotion, not
+          // a directive.
+          const lastSig = window.__lastInputSig ?? "0,0,0,false";
+          const movingNow = !lastSig.startsWith("0,0,0,");
+          if (!movingNow) {
+            entry.sprite.position.set(wx, wy);
+          }
           entry.lerpStartMs = undefined;
         } else {
           entry.lerpFromX = entry.sprite.x;
