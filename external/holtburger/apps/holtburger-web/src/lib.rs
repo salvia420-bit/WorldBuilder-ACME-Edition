@@ -1625,10 +1625,12 @@ fn try_resolve_cycle_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     setup: &holtburger_dat::file_type::SetupModel,
     mtable_override: Option<u32>,
+    stance_override: u32,
     command: u32,
 ) -> Option<(
     Vec<holtburger_dat::file_type::setup_model::AnimationFrame>,
     f32,
+    u32,
 )> {
     use holtburger_dat::file_type::{Animation, MotionTable};
     use holtburger_dat::ResourceKey;
@@ -1647,6 +1649,24 @@ fn try_resolve_cycle_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     let bytes = source.get_file_by_key(ResourceKey::new("eor/portal", mt_id)).ok()?;
     let mtable = MotionTable::read(&mut std::io::Cursor::new(&bytes)).ok()?;
 
+    // Stance dispatch. `stance_override == 0` is "use this MotionTable's
+    // default_style" (the pre-stance-aware behaviour: NonCombat for
+    // most creatures, HandCombat for the rare creature that spawns
+    // weapon-drawn). Nonzero stance overrides come from
+    // EntityUpdate.motionStance carrying the live UpdateMotion
+    // current_style — typically the same default for at-rest creatures
+    // and a combat stance once they engage.
+    //
+    // The cycle_key helper masks `stance & 0xFFFF`, so the u16
+    // interpreted form (`MotionStance.interpreted()` — what the wire
+    // carries) and the full u32 form (0x8000_xxxx — what `default_style`
+    // stores) produce the same key. Both work.
+    let resolved_stance = if stance_override == 0 {
+        mtable.default_style
+    } else {
+        stance_override
+    };
+
     // Use MotionTable::motion_data_for_cycle which builds the key
     // via the canonical `cycle_key(stance, command)` helper —
     // (stance & 0xFFFF) << 16 | (command & MOTION_KEY_MASK).
@@ -1655,7 +1675,7 @@ fn try_resolve_cycle_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     // lookup. The wrong mask width is a footgun — Phase C's idle
     // path got away with it because style_defaults stores the
     // pre-masked substate, not the full command.
-    let motion_data = mtable.motion_data_for_cycle(mtable.default_style, command)?;
+    let motion_data = mtable.motion_data_for_cycle(resolved_stance, command)?;
     let anim_data = motion_data.anims.first()?;
     let anim_did = anim_data.anim_id;
     let framerate = anim_data.framerate;
@@ -1684,7 +1704,11 @@ fn try_resolve_cycle_frames<S: holtburger_dat::ResourceSource + ?Sized>(
         ((anim_data.high_frame as usize).saturating_add(1)).min(total)
     };
     if low >= high { return None; }
-    Some((anim.part_frames[low..high].to_vec(), framerate))
+    Some((
+        anim.part_frames[low..high].to_vec(),
+        framerate,
+        resolved_stance,
+    ))
 }
 
 /// Phase 4 step 6 Phase C: resolve the idle pose for a SetupModel by
@@ -2317,6 +2341,13 @@ pub struct EntityCycleSet {
     walk_framerate: f32,
     run_frames: Vec<ModelMesh>,
     run_framerate: f32,
+    // The actual MotionTable stance these cycles correspond to. When
+    // the caller passes stance=0 (meaning "use default"), this lets
+    // JS key the cached bake under the resolved stance instead of
+    // under "default" — so a later motionStance update that happens
+    // to match (the common case for at-rest NonCombat creatures)
+    // hits the cache instead of triggering a redundant bake.
+    resolved_stance: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2335,6 +2366,19 @@ impl EntityCycleSet {
     #[wasm_bindgen(getter, js_name = runFramerate)]
     pub fn run_framerate(&self) -> f32 {
         self.run_framerate
+    }
+
+    /// MotionTable stance (full u32 — `0x8000_xxxx` with `xxxx` the
+    /// MotionStance.interpreted() low 16 bits) these cycles were
+    /// resolved against. When the bake was kicked with stance=0
+    /// (pre-UpdateMotion), this carries the MotionTable's
+    /// `default_style` so JS can key the cache by actual stance and
+    /// avoid re-baking when the live motionStance arrives matching it.
+    /// `0` only when no MotionTable resolved at all (raw GfxObj setups
+    /// + setups whose mtable failed to load).
+    #[wasm_bindgen(getter, js_name = resolvedStance)]
+    pub fn resolved_stance(&self) -> u32 {
+        self.resolved_stance
     }
 
     /// Move the walk-cycle meshes out of the set into a JS-owned array.
@@ -2359,31 +2403,43 @@ impl EntityCycleSet {
             walk_framerate: 0.0,
             run_frames: Vec::new(),
             run_framerate: 0.0,
+            resolved_stance: 0,
         }
     }
 }
 
-/// Phase 4 step 6 Tier 2 + walk-cycle polish: bake both walk and run
-/// cycles for an entity setup in a single wasm round-trip. For each
-/// cycle, resolves the MotionTable's WALK_FORWARD / RUN_FORWARD entry,
+/// Phase 4 step 6 Tier 2 + walk-cycle polish + stance-keyed cycles:
+/// bake walk + run cycles for an entity setup at a specific
+/// MotionTable stance in a single wasm round-trip. For each cycle,
+/// resolves the MotionTable's WALK_FORWARD / RUN_FORWARD entry under
+/// the requested `stance` (or `default_style` when stance=0),
 /// triangulates the SetupModel with substitutions applied at each
 /// keyframe's per-part transforms, and surfaces the
 /// `AnimData.framerate` so JS can tick at retail's authentic rate.
 ///
-/// Returns an [`EntityCycleSet`] with empty Vec + `0.0` framerate for
-/// any cycle that doesn't resolve. The two cycles are independent —
-/// many humanoid creatures have walk-only or run-only entries; a
-/// missing run cycle does NOT prevent the walk cycle from being
-/// returned.
+/// `stance` is the u16 `MotionStance.interpreted()` value
+/// zero-extended to u32, matching what `EntityUpdate.motionStance`
+/// surfaces from `UpdateMotion.current_style`. `0` means "use this
+/// MotionTable's `default_style`" — the bake-once pre-stance-aware
+/// behaviour, kept so first-bakes can fire before any UpdateMotion
+/// has landed for the entity.
 ///
-/// Returns an all-empty set for setups that:
+/// Returns an [`EntityCycleSet`] with `resolved_stance` populated to
+/// the actual stance used (so JS can key the cached bake by that
+/// stance and avoid re-baking when a future motionStance update
+/// matches it). Empty Vec + `0.0` framerate for any cycle that
+/// doesn't resolve under the requested stance — JS falls back to
+/// the default-stance bake at the gate.
+///
+/// Returns an all-empty set (resolved_stance=0) for setups that:
 /// - aren't `0x02xxxxxx` (raw GfxObj 0x01 prefix has no MotionTable)
 /// - have no `default_motion_table` (and no `mtable_id` override)
-/// - have a MotionTable but no WALK_FORWARD nor RUN_FORWARD cycles
-///   (most static props, doors, signs)
+/// - have a MotionTable that fails to load
 ///
-/// JS dispatch: `if (cycle.walkFrames.length > 0) { ... }` — same
-/// per-cycle conditional pattern as the previous walk-only export.
+/// **Stance-mismatched setups** (MotionTable doesn't carry the
+/// requested stance's cycles) return walk_frames=[] + run_frames=[]
+/// + resolved_stance=requested_stance. JS treats this as "this
+/// stance has no animation; fall back to default_stance".
 ///
 /// Substitution arguments are identical to `fetchEntityModelRender`
 /// — the same `model_changes` + `texture_changes` apply across
@@ -2396,6 +2452,7 @@ pub async fn fetch_entity_cycle_frames(
     model_changes: Vec<u32>,
     texture_changes: Vec<u32>,
     mtable_id: u32,
+    stance: u32,
 ) -> Result<EntityCycleSet, JsValue> {
     use holtburger_dat::file_type::{MotionTable, SetupModel};
     use holtburger_dat::{ResourceKey, ResourceSource};
@@ -2439,16 +2496,16 @@ pub async fn fetch_entity_cycle_frames(
     }
     prefetch::ensure_walk_prefetched(&source, &initial, move |s| {
         // Touch each cycle frame inside the prefetch so the
-        // MotionTable + Animation records (for walk AND run) are
-        // discovered before the real bake.
+        // MotionTable + Animation records (for walk AND run, under
+        // the requested stance) are discovered before the real bake.
         if let Ok(setup_bytes) = s.get_file_by_key(ResourceKey::new("eor/portal", setup_id)) {
             if let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(&setup_bytes)) {
                 for command in [
                     MotionTable::WALK_FORWARD_COMMAND,
                     MotionTable::RUN_FORWARD_COMMAND,
                 ] {
-                    if let Some((frames, _)) =
-                        try_resolve_cycle_frames(s, &setup, mt_override, command)
+                    if let Some((frames, _, _)) =
+                        try_resolve_cycle_frames(s, &setup, mt_override, stance, command)
                     {
                         for f in frames.iter() {
                             let _ = triangulate_setup_model_at_frame(
@@ -2477,9 +2534,13 @@ pub async fn fetch_entity_cycle_frames(
     let setup = SetupModel::unpack(&mut std::io::Cursor::new(&setup_bytes))
         .map_err(|e| JsValue::from_str(&format!("fetch_entity_cycle_frames: setup parse: {e}")))?;
 
-    let bake_cycle = |command: u32| -> (Vec<ModelMesh>, f32) {
-        match try_resolve_cycle_frames(source.as_ref(), &setup, mt_override, command) {
-            Some((frames, framerate)) => {
+    // bake_cycle returns (frames, framerate, resolved_stance). The
+    // resolved_stance is pulled from the FIRST cycle that resolves;
+    // both walk and run resolve to the same stance (the helper
+    // dispatches stance once at the top).
+    let bake_cycle = |command: u32| -> (Vec<ModelMesh>, f32, u32) {
+        match try_resolve_cycle_frames(source.as_ref(), &setup, mt_override, stance, command) {
+            Some((frames, framerate, resolved_stance)) => {
                 let mut out = Vec::with_capacity(frames.len());
                 for f in &frames {
                     let mut tris = Vec::new();
@@ -2494,18 +2555,36 @@ pub async fn fetch_entity_cycle_frames(
                     );
                     out.push(pack_model_mesh(tris));
                 }
-                (out, framerate)
+                (out, framerate, resolved_stance)
             }
-            None => (Vec::new(), 0.0),
+            None => (Vec::new(), 0.0, 0),
         }
     };
-    let (walk_frames, walk_framerate) = bake_cycle(MotionTable::WALK_FORWARD_COMMAND);
-    let (run_frames, run_framerate) = bake_cycle(MotionTable::RUN_FORWARD_COMMAND);
+    let (walk_frames, walk_framerate, walk_resolved) =
+        bake_cycle(MotionTable::WALK_FORWARD_COMMAND);
+    let (run_frames, run_framerate, run_resolved) = bake_cycle(MotionTable::RUN_FORWARD_COMMAND);
+
+    // Pick the resolved_stance from whichever cycle landed (both will
+    // agree when both resolve; only one is non-zero when only one
+    // cycle exists). Falls back to the requested stance so JS can
+    // still cache the empty-cycles result under that key — preventing
+    // re-bake spam for stances the MotionTable doesn't carry.
+    let resolved_stance = if walk_resolved != 0 {
+        walk_resolved
+    } else if run_resolved != 0 {
+        run_resolved
+    } else if stance != 0 {
+        stance
+    } else {
+        0
+    };
+
     Ok(EntityCycleSet {
         walk_frames,
         walk_framerate,
         run_frames,
         run_framerate,
+        resolved_stance,
     })
 }
 
@@ -7507,18 +7586,25 @@ mod tests_substitution {
             .unwrap();
         let setup = SetupModel::unpack(&mut Cursor::new(&setup_bytes)).unwrap();
         // Both walk and run cycles fail-soft to None when there's no
-        // mtable to query.
+        // mtable to query. Across all stance variants — stance=0 (use
+        // default), the standard NonCombat (0x003d) and HandCombat
+        // (0x003c) interpreted forms, plus a nonsense stance —
+        // the helper degrades gracefully when the mtable load fails.
+        let stances: &[u32] = &[0, 0x003d, 0x003c, 0xFFFF];
         for cmd in [
             MotionTable::WALK_FORWARD_COMMAND,
             MotionTable::RUN_FORWARD_COMMAND,
         ] {
-            assert!(try_resolve_cycle_frames(&source, &setup, None, cmd).is_none());
-            // Also: an mtable_override that resolves to nothing in the
-            // mock source still yields None (the setup → MotionTable
-            // load fails gracefully).
-            assert!(
-                try_resolve_cycle_frames(&source, &setup, Some(0x09000099), cmd).is_none()
-            );
+            for &stance in stances {
+                assert!(try_resolve_cycle_frames(&source, &setup, None, stance, cmd).is_none());
+                // Also: an mtable_override that resolves to nothing in the
+                // mock source still yields None (the setup → MotionTable
+                // load fails gracefully).
+                assert!(
+                    try_resolve_cycle_frames(&source, &setup, Some(0x09000099), stance, cmd)
+                        .is_none()
+                );
+            }
         }
     }
 

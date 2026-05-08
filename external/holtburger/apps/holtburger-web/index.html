@@ -2293,48 +2293,88 @@ void main() {
         liveMap.set(cacheKey, {
           texture: renderTex,
           worldBounds: [wb[0], wb[1]],
-          // Tier 2: walk + run cycle frames + their authoritative
-          // framerates from the MotionTable's AnimData. Populated
-          // lazily on first detected movement
-          // (kickCycleFrameBakeIfNeeded) — we don't pay the bake
-          // cost up-front for entities that never move (signs,
-          // doors, chests, immobile NPCs). null = not yet baked;
-          // [] = baked but no such cycle in the entity's MotionTable
-          // (e.g. creatures with walk-only OR run-only entries —
-          // the other slot stays empty and the gate falls back to
-          // the present cycle).
-          walkFrames: null,
-          walkFramerate: 0,
-          runFrames: null,
-          runFramerate: 0,
-          cycleBakeStarted: false,
+          // Tier 2 + stance-keyed cycles: per-stance walk/run frames
+          // + framerates from the MotionTable's AnimData. Populated
+          // lazily on first detected movement; additional stance
+          // entries land when the entity's motionStance changes
+          // (NPC engages combat → bake HandCombat cycles, etc.).
+          //
+          // Map<stance_u16, { walkFrames: Texture[], walkFramerate,
+          //                   runFrames: Texture[], runFramerate }>
+          //
+          // Stance is the u16 MotionStance.interpreted() value
+          // (low 16 bits of the 0x8000_xxxx form). Empty Texture[]
+          // for cycles the MotionTable doesn't define for this
+          // stance — the gate falls back to defaultStance's bake.
+          cycleBakes: new Map(),
+          // Stances we've fired a bake for (whether or not it landed
+          // yet, and whether or not it produced any frames). Stops
+          // re-baking the same stance on every rAF tick after a
+          // miss. Keys are u16 stances; the special value `0` means
+          // "the initial pre-UpdateMotion bake before motionStance
+          // was known" — once that bake lands we record the
+          // resolved stance under cycleBakes and add it to this set
+          // too so the gate doesn't re-kick when motionStance arrives
+          // matching the resolved default.
+          cycleBakesInFlight: new Set(),
+          // The MotionTable's `default_style` discovered at first
+          // bake. Used as the fallback target when motionStance
+          // doesn't have its own cycle baked yet (or when the
+          // entity's stance has no MotionTable cycle at all).
+          // u16; 0 = unknown / first-bake pending.
+          defaultStance: 0,
         });
         mesh.free();
         for (const sp of surfacePixels) sp.free();
       }
 
-      // Tier 2: lazily bake walk + run cycle frame textures for an
-      // already-cached liveMap entry. Skipped when (a) entity has no
-      // setup (modelId === 0), (b) the bake already ran (cached or
-      // in-flight), or (c) the cached liveMap entry is gone (entity
-      // already removed). Fire-and-forget: the per-rAF cycler picks
-      // up walkFrames + runFrames once they're populated; until then
-      // sprites stay on the idle texture.
+      // Per-setup cap on stance bakes. Each (stance, walk+run) bake
+      // costs ~6-15 MB of texture memory per entity setup; allowing
+      // unbounded bakes risks runaway memory in dense combat zones
+      // where NPCs flip stance frequently. 4 stances covers
+      // (NonCombat, HandCombat, SwordCombat, Magic) which is the
+      // realistic upper bound for a single creature. Beyond that,
+      // the gate degrades to defaultStance fallback.
+      const MAX_BAKES_PER_SETUP = 4;
+
+      // Tier 2 + stance-keyed cycles: lazily bake walk + run cycle
+      // frame textures for a (cacheKey, stance) combination. Skipped
+      // when (a) entity has no setup (modelId === 0), (b) this stance
+      // has already been baked OR is in flight, (c) the cached
+      // liveMap entry is gone, or (d) the per-setup bake cap is hit.
       //
-      // Walk and run cycles come back in a single EntityCycleSet
-      // round-trip from the wasm export — one prefetch + setup decode
-      // amortised across both bakes. Each cycle is independent: a
-      // creature with only WALK_FORWARD in its MotionTable yields
-      // walkFrames=[N], runFrames=[]; the gate consults motionCommand
-      // and falls back to the present cycle when the requested one
-      // is empty.
-      function kickCycleFrameBakeIfNeeded(cacheKey, modelId, meta) {
+      // `stance` is the u16 MotionStance.interpreted() value (low 16
+      // bits of the 0x8000_xxxx form), OR `0` for the first-bake
+      // pre-UpdateMotion call which lets the wasm export resolve
+      // against the MotionTable's default_style. The export returns
+      // the actual `resolvedStance` it used so we can key the cache
+      // by that — a later motionStance update matching the resolved
+      // default-style hits the cache instead of triggering a
+      // redundant bake.
+      //
+      // Fire-and-forget: the per-rAF cycler picks up cycleBakes once
+      // populated; until then sprites stay on the idle texture (or
+      // the previously-cached stance's frames if any).
+      function kickCycleFrameBakeIfNeeded(cacheKey, modelId, meta, stance) {
         if (!liveScene || !modelId) return;
         const entry = liveScene.liveSpriteMap?.get(cacheKey);
-        if (!entry || entry.cycleBakeStarted) return;
-        entry.cycleBakeStarted = true;
+        if (!entry) return;
+        const reqStance = (stance ?? 0) >>> 0;
+        // Already baked or baking? Skip.
+        if (entry.cycleBakes.has(reqStance) || entry.cycleBakesInFlight.has(reqStance)) {
+          return;
+        }
+        // Per-setup cap. Once hit, the gate keeps using whichever
+        // stances ARE baked + falls back to defaultStance.
+        if (entry.cycleBakes.size >= MAX_BAKES_PER_SETUP) {
+          return;
+        }
+        entry.cycleBakesInFlight.add(reqStance);
         const app = liveScene.app;
-        if (!app) return;
+        if (!app) {
+          entry.cycleBakesInFlight.delete(reqStance);
+          return;
+        }
         (async () => {
           let cycleSet = null;
           try {
@@ -2343,20 +2383,39 @@ void main() {
               meta?.modelChanges ?? new Uint32Array(0),
               meta?.textureChanges ?? new Uint32Array(0),
               (meta?.mtableId ?? 0) >>> 0,
+              reqStance,
             );
+            const resolvedStance = cycleSet.resolvedStance >>> 0;
             const walkMeshes = cycleSet.takeWalkFrames();
             const runMeshes = cycleSet.takeRunFrames();
-            entry.walkFramerate = cycleSet.walkFramerate;
-            entry.runFramerate = cycleSet.runFramerate;
+            const walkFramerate = cycleSet.walkFramerate;
+            const runFramerate = cycleSet.runFramerate;
             // Each frame across BOTH cycles uses the same surface
             // textures as the idle bake (walk/run pose changes part
             // transforms, not surface assignments). Look up their
             // RGBA8 once via the first available mesh, reuse across
             // every frame's per-poly rasterizer pass.
             const refMesh = walkMeshes[0] ?? runMeshes[0];
+            // Stash key: prefer the wasm-resolved stance (the
+            // MotionTable's actual default when reqStance was 0;
+            // identical to reqStance when it was specified). Falls
+            // back to reqStance for setups where no cycles resolved
+            // at all (raw GfxObj 0x01, mtable load failure) so we
+            // still cache the "no cycles" verdict and don't retry.
+            const cacheStance = resolvedStance !== 0 ? resolvedStance : reqStance;
             if (!refMesh) {
-              entry.walkFrames = [];
-              entry.runFrames = [];
+              // No cycles resolved under this stance. Cache an
+              // empty entry to prevent re-bake; gate falls back to
+              // defaultStance or the idle texture.
+              entry.cycleBakes.set(cacheStance, {
+                walkFrames: [],
+                walkFramerate: 0,
+                runFrames: [],
+                runFramerate: 0,
+              });
+              if (entry.defaultStance === 0 && reqStance === 0) {
+                entry.defaultStance = cacheStance;
+              }
               return;
             }
             const sList = refMesh.surfaces;
@@ -2390,23 +2449,43 @@ void main() {
               }
               return out;
             };
-            entry.walkFrames = bake(walkMeshes);
-            entry.runFrames = bake(runMeshes);
+            entry.cycleBakes.set(cacheStance, {
+              walkFrames: bake(walkMeshes),
+              walkFramerate,
+              runFrames: bake(runMeshes),
+              runFramerate,
+            });
+            // Discover the entity's default stance on first bake
+            // (when reqStance was 0). Subsequent bakes for non-zero
+            // stances don't overwrite this — defaultStance is the
+            // MotionTable's `default_style`, NOT whatever stance is
+            // currently active.
+            if (entry.defaultStance === 0 && reqStance === 0) {
+              entry.defaultStance = cacheStance;
+            }
             for (const sp of surfacePixels) sp.free();
           } catch (err) {
             // eslint-disable-next-line no-console
-            console.warn(`[cycle-bake] key=${cacheKey} modelId=0x${modelId.toString(16)} failed:`, err);
-            entry.walkFrames = entry.walkFrames ?? [];  // mark as "tried + failed"
-            entry.runFrames = entry.runFrames ?? [];
+            console.warn(`[cycle-bake] key=${cacheKey} modelId=0x${modelId.toString(16)} stance=0x${reqStance.toString(16)} failed:`, err);
+            // Cache an empty entry to prevent retry storm; gate
+            // falls back to defaultStance or idle.
+            entry.cycleBakes.set(reqStance, {
+              walkFrames: [],
+              walkFramerate: 0,
+              runFrames: [],
+              runFramerate: 0,
+            });
           } finally {
             if (cycleSet) cycleSet.free();
+            entry.cycleBakesInFlight.delete(reqStance);
           }
         })();
       }
       // Backwards-compat alias kept for capture scripts that use
-      // the old name. Same single-call bake; just routes through
-      // the renamed helper.
-      const kickWalkFrameBakeIfNeeded = kickCycleFrameBakeIfNeeded;
+      // the old name. Defaults to stance=0 (use MotionTable's
+      // default_style), which matches the pre-stance-aware semantic.
+      const kickWalkFrameBakeIfNeeded = (cacheKey, modelId, meta) =>
+        kickCycleFrameBakeIfNeeded(cacheKey, modelId, meta, 0);
 
       // Apply the visual category's tint + scale to a freshly minted
       // sprite. Idempotent — safe to call from both `ensureEntitySprite`
@@ -3144,7 +3223,8 @@ void main() {
         const PORTAL_PULSE_PERIOD_S = 1.5;
         const portalPhase = (now / 1000.0 / PORTAL_PULSE_PERIOD_S) % 1.0;
         for (const [, entry] of entityMap) {
-          // Tier 2 walk-cycle animation: sprite-kind entries only.
+          // Tier 2 + stance-keyed walk-cycle animation: sprite-kind
+          // entries only.
           if (entry.kind === "sprite") {
             const renderEntry = liveScene.liveSpriteMap?.get(
               computeEntitySpriteKey(entry.modelId, entry.meta)
@@ -3170,14 +3250,61 @@ void main() {
               } else {
                 moving = (entry.speedMps ?? 0) >= WALK_MOVING_THRESHOLD_MPS;
               }
-              if (moving && renderEntry.walkFrames === null && renderEntry.runFrames === null) {
+              // Stance-keyed cycle lookup. Two fallback layers:
+              //   1. Active stance (from kind=5 motionStance, or 0
+              //      pre-UpdateMotion which the bake resolves to
+              //      MotionTable.default_style).
+              //   2. defaultStance — the MotionTable's default_style
+              //      discovered by the first bake. Used when the
+              //      entity's current stance has no MotionTable
+              //      cycles (combat-stance walk for a creature with
+              //      no combat anims).
+              // The cacheStance dispatch:
+              //   - motionStance present + has its own bake → use it
+              //   - motionStance present + cycleBakes empty for it +
+              //     no in-flight bake → kick bake; meanwhile use
+              //     defaultStance bake (or fall through to idle)
+              //   - motionStance absent (creature pre-UpdateMotion
+              //     or local player) → use defaultStance bake
+              const activeStance = (entry.motionStance ?? 0) >>> 0;
+              const cacheKey = computeEntitySpriteKey(entry.modelId, entry.meta);
+              // Kick first bake when entity becomes movable AND no
+              // bakes have landed yet AND none are in flight.
+              if (moving && renderEntry.cycleBakes.size === 0
+                  && renderEntry.cycleBakesInFlight.size === 0) {
                 kickCycleFrameBakeIfNeeded(
-                  computeEntitySpriteKey(entry.modelId, entry.meta),
-                  entry.modelId,
-                  entry.meta,
+                  cacheKey, entry.modelId, entry.meta, 0
                 );
               }
-              // Pick walk vs run cycle by motionCommand. Run when
+              // Kick stance-specific bake when we have an active
+              // stance that differs from defaultStance and isn't
+              // already in cycleBakes / in flight.
+              if (moving && activeStance !== 0
+                  && renderEntry.defaultStance !== 0
+                  && activeStance !== renderEntry.defaultStance
+                  && !renderEntry.cycleBakes.has(activeStance)
+                  && !renderEntry.cycleBakesInFlight.has(activeStance)) {
+                kickCycleFrameBakeIfNeeded(
+                  cacheKey, entry.modelId, entry.meta, activeStance
+                );
+              }
+              // Pick the cycle bake to play this frame. Try active
+              // stance first; fall back to defaultStance.
+              let cycleBake = null;
+              if (activeStance !== 0 && renderEntry.cycleBakes.has(activeStance)) {
+                const c = renderEntry.cycleBakes.get(activeStance);
+                if (c.walkFrames.length > 0 || c.runFrames.length > 0) {
+                  cycleBake = c;
+                }
+              }
+              if (!cycleBake && renderEntry.defaultStance !== 0
+                  && renderEntry.cycleBakes.has(renderEntry.defaultStance)) {
+                const c = renderEntry.cycleBakes.get(renderEntry.defaultStance);
+                if (c.walkFrames.length > 0 || c.runFrames.length > 0) {
+                  cycleBake = c;
+                }
+              }
+              // Pick walk vs run within the chosen bake. Run when
               // ACE explicitly says RUN_FORWARD; walk for everything
               // else that's moving (including WALK_BACKWARDS — no
               // separate walk-back cycle in retail data, the walk
@@ -3187,16 +3314,16 @@ void main() {
               const wantRun = cmd === MOTION_CMD_RUN_FORWARD;
               let activeFrames = null;
               let activeFramerate = 0;
-              if (moving) {
-                if (wantRun && renderEntry.runFrames && renderEntry.runFrames.length > 0) {
-                  activeFrames = renderEntry.runFrames;
-                  activeFramerate = renderEntry.runFramerate;
-                } else if (renderEntry.walkFrames && renderEntry.walkFrames.length > 0) {
-                  activeFrames = renderEntry.walkFrames;
-                  activeFramerate = renderEntry.walkFramerate;
-                } else if (renderEntry.runFrames && renderEntry.runFrames.length > 0) {
-                  activeFrames = renderEntry.runFrames;
-                  activeFramerate = renderEntry.runFramerate;
+              if (moving && cycleBake) {
+                if (wantRun && cycleBake.runFrames.length > 0) {
+                  activeFrames = cycleBake.runFrames;
+                  activeFramerate = cycleBake.runFramerate;
+                } else if (cycleBake.walkFrames.length > 0) {
+                  activeFrames = cycleBake.walkFrames;
+                  activeFramerate = cycleBake.walkFramerate;
+                } else if (cycleBake.runFrames.length > 0) {
+                  activeFrames = cycleBake.runFrames;
+                  activeFramerate = cycleBake.runFramerate;
                 }
               }
               if (activeFrames) {
