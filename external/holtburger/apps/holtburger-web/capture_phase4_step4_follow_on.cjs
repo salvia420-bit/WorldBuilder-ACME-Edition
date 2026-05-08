@@ -76,6 +76,7 @@ const path = require("node:path");
         if (
             text.includes("[step")
             || text.includes("[s4f")
+            || text.includes("[route-")
             || text.includes("[OK]")
             || text.includes("FAIL")
             || text.includes("kind=")
@@ -203,6 +204,41 @@ const path = require("node:path");
     console.log("clicking Teleport to Holtburg button");
     await page.click("#teleport-button");
     console.log(`waiting up to ${STATS_DRAIN_MS}ms for kind=8 / kind=11 events to flow`);
+
+    // Phase 4 step 4 follow-on: a fresh ACE character has zero
+    // inventory items by default (ACE doesn't auto-grant starter
+    // gear in the world DB we're using). To exercise the inventory
+    // pipeline end-to-end we need at least one owned item, so fire
+    // a few `/ci <wcid>` admin commands after EnteredWorld lands.
+    // `/ci 30` is "Bundle of Arrows" (always populated in ACE's
+    // weenie table); `/ci 5012` is a Healing Kit; `/ci 273` is a
+    // Pyreal stack. ACE places each into the player's main pack.
+    // Requires accessLevel ≥ 4 (Developer); Config.js
+    // DefaultAccessLevel = 4 covers auto-created accounts.
+    //
+    // We dispatch via `window.__sessionHandle.sendChat` (the
+    // wasm-bindgen export the bundle exposes for chat / admin
+    // commands) and wait briefly for ACE's ObjectCreate response
+    // to flow back through the recv loop, route through the
+    // inventory dispatcher, and re-publish the inventory snapshot.
+    const itemDispatchOk = await page.evaluate(() => {
+        const h = window.__sessionHandle;
+        if (!h || typeof h.sendChat !== "function") return "handle missing";
+        try {
+            h.sendChat("/ci 5012");      // Healing Kit
+            h.sendChat("/ci 30");        // Bundle of Arrows
+            h.sendChat("/ci 273 100");   // 100 Pyreals
+            return "sent";
+        } catch (e) {
+            return `err: ${e.message || e}`;
+        }
+    });
+    console.log(`/ci dispatch: ${itemDispatchOk}`);
+    // Give ACE a moment to process the commands and broadcast
+    // ObjectCreate back. Each /ci server-side runs through
+    // `Player.CreateItem` → `TryCreateInInventoryWithNetworking` →
+    // outbound ObjectCreate; ~100-300 ms round-trip locally.
+    await page.waitForTimeout(2_500);
 
     // Wait for the vitals panel to become visible (first kind=8 fires
     // it). The recv loop coalesces a flurry of WorldEvents on

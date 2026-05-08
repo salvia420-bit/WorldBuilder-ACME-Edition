@@ -3448,25 +3448,25 @@ pub fn vital_name(vital_type: u32) -> String {
 /// gating, MovementSystem heartbeat arming) and double-handling them
 /// risks regressing step 3.6 / 3.5.
 ///
-/// **`ObjectCreate` / `ObjectDelete` / `ParentEvent` / `PickupEvent`
-/// / `InventoryRemoveObject` are deliberately NOT routed (yet).** The
-/// world's `inventory::handle_message` for `ObjectCreate` calls
+/// **`ObjectCreate` / `ObjectDelete` / `ParentEvent` / `PickupEvent` /
+/// `InventoryRemoveObject` are deliberately NOT routed.** The world's
+/// `inventory::handle_message` for `ObjectCreate` calls
 /// `state.upsert_entity_from_create` → `add_entity` → `scene.update_entity`
-/// + `reconcile_authoritative_body` which trips a wasm `unreachable`
-/// panic when the spatial body store touches state the wasm bundle
-/// hasn't fully initialised. Inventory population thus stays empty
-/// for now; vitals + attributes + skills still flow correctly because
-/// they go through the message types listed below. Resolving the
-/// inventory routing panic is tracked as a follow-on (probably
-/// requires either initialising the spatial scene differently, or
-/// applying a narrower inventory mutation in the recv loop directly).
+/// + `reconcile_authoritative_body`, which trips a wasm `unreachable`
+/// panic in the spatial body store (the wasm bundle doesn't drive the
+/// full physics tick the cli does, so some spatial preconditions
+/// aren't met). Inventory tracking bypasses routing for these
+/// variants — `apply_inventory_object_create` /
+/// `apply_inventory_object_delete` below replicate the
+/// inventory-relevant subset of the canonical handlers (entity
+/// insert, `add_to_inventory` / `remove_from_inventory`, equipment
+/// bookkeeping) without touching spatial state.
 ///
-/// `GameEvent` IS routed because it carries
-/// `UpdateHealth` (vital current), `PlayerDescription` (full biota
-/// hydrate — drives the first kind=8 stats event), and the recv
-/// loop's existing PlayerDescription arm is stripped of its
-/// hydrate/apply/emit calls (the dispatcher does them) so it only
-/// handles the fallback-caps clear / re-install.
+/// `GameEvent` IS routed because PlayerDescription drives the load-
+/// bearing first kind=8 event via login::handle_event +
+/// player::handle_event, and other GameEvents (UpdateHealth,
+/// ViewContents, IdentifyObjectResponse, WieldObject) all hit
+/// inventory / properties handlers that don't touch the spatial path.
 #[cfg(target_arch = "wasm32")]
 fn should_route_message_to_world(message: &holtburger_protocol::messages::GameMessage) -> bool {
     use holtburger_protocol::messages::GameMessage;
@@ -3481,6 +3481,81 @@ fn should_route_message_to_world(message: &holtburger_protocol::messages::GameMe
             | GameMessage::PublicUpdateSkill(_)
             | GameMessage::GameEvent(_)
     )
+}
+
+/// Phase 4 step 4 follow-on: spatial-bypass version of
+/// `holtburger_world::handlers::inventory::handle_message`'s
+/// `GameMessage::ObjectCreate` arm. Inserts the entity into
+/// `state.entities` (sans spatial body work) and updates
+/// `state.player.inventory` / `state.player.equipment` if the new
+/// entity is held / wielded by the local player.
+///
+/// Returns `true` if the entity is now owned by the player
+/// (caller flips `inventory_changed` so the snapshot publisher
+/// re-fires `kind=11`).
+#[cfg(target_arch = "wasm32")]
+fn apply_inventory_object_create(
+    world: &mut holtburger_world::WorldState,
+    data: &holtburger_protocol::messages::ObjectDescriptionData,
+) -> bool {
+    use holtburger_common::properties::WorldObjectExt as _;
+    let guid = data.public_weenie_desc.guid;
+    let entity_name = data
+        .public_weenie_desc
+        .name
+        .as_deref()
+        .unwrap_or("Unknown")
+        .to_string();
+    let pos = data.pos.unwrap_or_default();
+    let mut entity = holtburger_world::entity::Entity::new(guid, entity_name, pos);
+    entity.apply_description(data);
+
+    let container_id = entity.container_id();
+    let wielder_id = entity.wielder_id();
+    let equip_mask = entity.wield_location();
+
+    // Direct insert via the public EntityManager — skips the
+    // `add_entity` path that calls `scene.update_entity` +
+    // `reconcile_authoritative_body` (the spatial body work that
+    // panics in the wasm bundle). The entity collection is what
+    // `publish_player_inventory_snapshot` iterates against.
+    world.entities.insert(entity);
+
+    let held_by_player = container_id == Some(world.player.guid);
+    let wielded_by_player = wielder_id == Some(world.player.guid);
+
+    if held_by_player || wielded_by_player {
+        world.player.add_to_inventory(guid);
+        if wielded_by_player {
+            world.player.wield_item(guid, equip_mask);
+        } else {
+            world.player.unwield_item(guid);
+        }
+        true
+    } else {
+        false
+    }
+}
+
+/// Phase 4 step 4 follow-on: spatial-bypass version of
+/// `holtburger_world::handlers::inventory::handle_message`'s
+/// `GameMessage::ObjectDelete` /
+/// `GameMessage::InventoryRemoveObject` arms. Removes the entity
+/// from `state.entities` and from `state.player.inventory` /
+/// `state.player.equipment` if it was owned. Returns `true` if the
+/// removal touched player inventory.
+#[cfg(target_arch = "wasm32")]
+fn apply_inventory_object_delete(
+    world: &mut holtburger_world::WorldState,
+    guid: holtburger_common::Guid,
+) -> bool {
+    let was_owned = world.player.inventory.contains(&guid);
+    if was_owned {
+        world.player.remove_from_inventory(guid);
+        world.player.unwield_item(guid);
+    }
+    world.entities.remove(guid);
+    was_owned
 }
 
 /// One row from the AC CharacterList packet, projected to the fields
@@ -4817,22 +4892,42 @@ async fn recv_loop(
                                 _ => {}
                             }
                         }
-                        // Inventory-bearing message types (ObjectCreate /
-                        // ObjectDelete / InventoryRemoveObject /
-                        // ParentEvent / PickupEvent) are intentionally
-                        // NOT in `should_route_message_to_world` today —
-                        // see that function's doc comment for the reason
-                        // (routing them through the spatial-body path
-                        // panics with `unreachable` until the wasm
-                        // bundle initialises spatial scene state). The
-                        // inventory snapshot stays empty for now;
-                        // populating it will require either a narrower
-                        // inventory-only mutation that skips spatial
-                        // body work, or a follow-on that fixes the
-                        // routing panic. Stat events still drive
-                        // kind=8 PlayerStatsUpdated reliably through the
-                        // GameEvent::PlayerDescription / Update*Vital /
-                        // Update*Attribute / Update*Skill paths.
+                    }
+
+                    // Phase 4 step 4 follow-on: spatial-bypass inventory
+                    // tracking for `ObjectCreate` / `ObjectDelete` /
+                    // `InventoryRemoveObject`. Routing these through the
+                    // canonical `holtburger_world::handlers::inventory`
+                    // dispatcher trips a wasm `unreachable` panic in the
+                    // spatial body store (`scene.update_entity` +
+                    // `reconcile_authoritative_body` paths assume state
+                    // the wasm bundle doesn't initialise — see the
+                    // `should_route_message_to_world` doc comment). We
+                    // replicate the inventory-relevant subset of the
+                    // canonical handlers inline, sans spatial work, so
+                    // `state.entities` + `state.player.inventory` /
+                    // `state.player.equipment` stay current and
+                    // `publish_player_inventory_snapshot` produces a
+                    // populated snapshot.
+                    if let Some(w) = world.as_mut() {
+                        match &message {
+                            GameMessage::ObjectCreate(data) => {
+                                if apply_inventory_object_create(w, data) {
+                                    inventory_changed = true;
+                                }
+                            }
+                            GameMessage::ObjectDelete(data) => {
+                                if apply_inventory_object_delete(w, data.guid) {
+                                    inventory_changed = true;
+                                }
+                            }
+                            GameMessage::InventoryRemoveObject(data) => {
+                                if apply_inventory_object_delete(w, data.object_guid) {
+                                    inventory_changed = true;
+                                }
+                            }
+                            _ => {}
+                        }
                     }
                     if stats_changed && let Some(w) = world.as_ref() {
                         publish_player_stats_snapshot(w, &latest_stats);
