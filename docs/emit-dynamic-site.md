@@ -5,8 +5,8 @@
 > Read this section first. The rest of this document is the
 > long-lived design intent + decision history; this header is
 > the snapshot of where we actually are and what's blocking
-> what. Last refreshed **2026-05-08** (post-Phase-4-step-5
-> landing — interactive entities via `UseObject`).
+> what. Last refreshed **2026-05-08** (post-Phase-4-step-6d
+> landing — portal swirls + sign inscriptions).
 
 ### Where the project is
 
@@ -431,10 +431,26 @@ Pick one to pull on. The choice is real, not arbitrary.
   false-positive as use failures). Live-validated
   end-to-end against ACE: clicking a Sparring Golem
   (creature, wcid=12698) returned `kind=14 UseDone`. **Next
-  on the rail:** step 6 (realistic entity rendering follow-
-  ons: 6c palette-tinted variants, 6d portal swirls + sign
-  inscriptions, 6f portal destination chips — building on
-  6a/b/e/Phase-A/B/C already landed). Step 5 polish that
+  **Step 6d (portal swirls + sign inscriptions, landed
+  2026-05-08):** writable-category entities (signs / books)
+  get an italic + cream-fill / black-stroke nameplate
+  variant mirroring
+  `WorldBuilder.Terminal/RenderPreviewRenderer.cs:911-938`;
+  portals get an animated `PIXI.Graphics` cyan ring sibling
+  sprite that pulses radius + alpha on a 1.5 s loop driven
+  from `tickEntityAnimations`. Cleanup hooks into
+  `handleEntityRemove`. Live-validated: 6/6 writable
+  entities visible after @telepoi (Letter From Home,
+  VIEW CONTROLS, WIELDING ITEMS, etc.) get the sign-
+  styled nameplate; portal swirl path is structurally in
+  place — no portals in the immediate spawn radius, will
+  exercise on any flow that puts one in vision. 6c was
+  already absorbed by step 6 Phase A.
+  **Next on the rail:** step 6f (portal destination chips
+  — needs `AppraisalPortalDestination` plumbing through
+  `EntityUpdate`; arrives via separate
+  `UpdatePropertyString` messages, not
+  `PublicWeenieDescription`). Step 5 polish that
   could land in a follow-on: pickup-via-MoveToObject for
   weapons / armor / gems (currently click-only routes
   through `UseObject`, which ACE doesn't honour for

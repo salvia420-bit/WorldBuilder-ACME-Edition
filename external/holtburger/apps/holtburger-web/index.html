@@ -2603,26 +2603,49 @@ void main() {
       // frame in updateNameplatePositions; allocation here is the
       // text-only step. Pre-multiplied alpha + black stroke matches
       // retail's readable-on-anything style.
+      //
+      // Phase 4 step 6d: signs (`category === "writable"`) get a
+      // distinct italic / parchment-coloured style mirroring
+      // WorldBuilder.Terminal/RenderPreviewRenderer.cs:911-938 — the
+      // static-site visual the dynamic-site is meant to match. Cream
+      // fill (0xF0E8D0) + black stroke at 80% alpha + italic font
+      // distinguishes "this is a written sign" from "this is an
+      // entity name" at a glance. Other categories keep the bold
+      // monospace step 6e style.
       function ensureNameplate(entry) {
         if (!liveScene || !entry || !entry.meta) return;
         if (entry.nameplate) return;
         const meta = entry.meta;
         if (!meta.name) return;
         if (entry.guid >>> 0 === (localPlayerGuid ?? 0xffffffff)) return;
-        const text = new PIXI.Text({
-          text: meta.name,
-          style: {
-            fontFamily: "monospace",
-            fontSize: 13,
-            fontWeight: "bold",
-            fill: nameplateColorForCategory(meta.category),
-            stroke: { color: 0x000000, width: 3 },
-            align: "center",
-          },
-        });
+        const isSign = meta.category === "writable";
+        const text = isSign
+          ? new PIXI.Text({
+              text: meta.name,
+              style: {
+                fontFamily: "Georgia, serif",
+                fontSize: 12,
+                fontStyle: "italic",
+                fill: 0xF0E8D0,
+                stroke: { color: 0x000000, alpha: 0.8, width: 2.5 },
+                align: "center",
+              },
+            })
+          : new PIXI.Text({
+              text: meta.name,
+              style: {
+                fontFamily: "monospace",
+                fontSize: 13,
+                fontWeight: "bold",
+                fill: nameplateColorForCategory(meta.category),
+                stroke: { color: 0x000000, width: 3 },
+                align: "center",
+              },
+            });
         text.anchor.set(0.5, 1.0);  // bottom-centred above the sprite
         liveScene.nameplateContainer.addChild(text);
         entry.nameplate = text;
+        entry.nameplateIsSign = isSign;
       }
 
       // Walk entityMap once per rAF tick and project each entry's world
@@ -2670,6 +2693,60 @@ void main() {
         entry.lastPosT = performance.now();
         entry.speedMps = 0.0;
         ensureNameplate(entry);
+        ensurePortalSwirl(entry);
+      }
+
+      // Phase 4 step 6d (portal swirls): for portal-category entities,
+      // overlay a thin cyan PIXI.Graphics ring as a sibling sprite in
+      // entityContainer. The ring's radius + alpha pulse on a ~1.5s
+      // loop driven from `tickEntityAnimations` (mirrors the static-
+      // site Portal=cyan glyph but animated). Idempotent — safe to
+      // call multiple times; only the first call allocates. Cleanup
+      // hooks into `handleEntityRemove`.
+      //
+      // The ring sits on top of the sprite so it's visible regardless
+      // of whether the model is a textured sprite, a placeholder
+      // glyph, or invisible. Its world-coord position tracks the
+      // sprite (so the per-rAF animation only animates radius/alpha,
+      // not position — that lives on the sibling sprite).
+      function ensurePortalSwirl(entry) {
+        if (!liveScene || !entry || !entry.meta) return;
+        if (entry.portalSwirl) return;
+        if (entry.meta.category !== "portal") return;
+        const ring = new PIXI.Graphics();
+        liveScene.entityContainer.addChild(ring);
+        ring.position.set(entry.sprite.x, entry.sprite.y);
+        entry.portalSwirl = ring;
+        // First draw — tickPortalSwirl will redraw each frame with
+        // pulsed radius / alpha. Without this initial draw the ring
+        // would be invisible until the first animation tick.
+        drawPortalSwirl(ring, /*phase=*/0);
+      }
+
+      // Phase 4 step 6d: redraw the portal ring at the given phase
+      // (0..1, where 0 is fully contracted + full alpha and 1 is
+      // fully expanded + zero alpha). Two concentric rings inset
+      // by 0.3 m so the swirl reads as a halo instead of a flat
+      // line at zoom-out.
+      function drawPortalSwirl(g, phase) {
+        const baseRadius = 1.4;             // world metres
+        const expand = 0.9;                 // metres added at peak
+        const r1 = baseRadius + expand * phase;
+        const r2 = r1 + 0.35;
+        const alpha = 1.0 - phase;
+        g.clear();
+        g.circle(0, 0, r1).stroke({
+          color: 0x6EC8E0,
+          width: 0.18,
+          alpha: alpha * 0.85,
+          alignment: 0.5,
+        });
+        g.circle(0, 0, r2).stroke({
+          color: 0x9EE8F8,
+          width: 0.10,
+          alpha: alpha * 0.55,
+          alignment: 0.5,
+        });
       }
 
       function handlePositionUpdate(upd) {
@@ -2703,12 +2780,18 @@ void main() {
         entry.lastPosT = now;
         entry.sprite.position.set(wx, wy);
         entry.sprite.rotation = -quaternionToYaw(upd.qw, upd.qx, upd.qy, upd.qz);
+        // Phase 4 step 6d: portals don't normally move, but if the
+        // server ever repositions one we want the swirl to track.
+        if (entry.portalSwirl) {
+          entry.portalSwirl.position.set(wx, wy);
+        }
       }
 
       function handleEntityRemove(upd) {
         const entry = entityMap.get(upd.guid);
         if (!entry) return;
         if (entry.nameplate) entry.nameplate.destroy();
+        if (entry.portalSwirl) entry.portalSwirl.destroy();
         entry.sprite.destroy();
         entityMap.delete(upd.guid);
       }
@@ -2745,29 +2828,39 @@ void main() {
           : 0;
         lastAnimTickTime = now;
         walkPhase += dt * WALK_FRAME_RATE;
+        // Phase 4 step 6d: portal swirl pulse phase. 1.5 s loop
+        // (matches the design-doc target). Same global phase for
+        // every portal — synced pulses look more deliberate than
+        // randomised offsets.
+        const PORTAL_PULSE_PERIOD_S = 1.5;
+        const portalPhase = (now / 1000.0 / PORTAL_PULSE_PERIOD_S) % 1.0;
         for (const [, entry] of entityMap) {
-          if (entry.kind !== "sprite") continue;
-          const renderEntry = liveScene.liveSpriteMap?.get(
-            computeEntitySpriteKey(entry.modelId, entry.meta)
-          );
-          if (!renderEntry?.texture) continue;
-          const moving = (entry.speedMps ?? 0) >= WALK_MOVING_THRESHOLD_MPS;
-          if (moving && renderEntry.walkFrames === null) {
-            // Lazy-bake on first detected motion. Fire-and-forget;
-            // the next tick after bake completes will see frames
-            // populated and start cycling.
-            kickWalkFrameBakeIfNeeded(
-              computeEntitySpriteKey(entry.modelId, entry.meta),
-              entry.modelId,
-              entry.meta,
+          // Tier 2 walk-cycle animation: sprite-kind entries only.
+          if (entry.kind === "sprite") {
+            const renderEntry = liveScene.liveSpriteMap?.get(
+              computeEntitySpriteKey(entry.modelId, entry.meta)
             );
+            if (renderEntry?.texture) {
+              const moving = (entry.speedMps ?? 0) >= WALK_MOVING_THRESHOLD_MPS;
+              if (moving && renderEntry.walkFrames === null) {
+                kickWalkFrameBakeIfNeeded(
+                  computeEntitySpriteKey(entry.modelId, entry.meta),
+                  entry.modelId,
+                  entry.meta,
+                );
+              }
+              if (moving && renderEntry.walkFrames && renderEntry.walkFrames.length > 0) {
+                const idx = Math.floor(walkPhase) % renderEntry.walkFrames.length;
+                entry.sprite.texture = renderEntry.walkFrames[idx];
+              } else {
+                entry.sprite.texture = renderEntry.texture;
+              }
+            }
           }
-          if (moving && renderEntry.walkFrames && renderEntry.walkFrames.length > 0) {
-            const idx = Math.floor(walkPhase) % renderEntry.walkFrames.length;
-            entry.sprite.texture = renderEntry.walkFrames[idx];
-          } else {
-            // Idle (or no walk frames available) — keep idle texture.
-            entry.sprite.texture = renderEntry.texture;
+          // Phase 4 step 6d: portal swirl pulse. Independent of
+          // sprite kind — placeholder portals get the swirl too.
+          if (entry.portalSwirl) {
+            drawPortalSwirl(entry.portalSwirl, portalPhase);
           }
         }
       }
