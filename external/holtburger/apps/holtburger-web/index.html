@@ -3282,7 +3282,24 @@ void main() {
             const renderEntry = liveScene.liveSpriteMap?.get(
               computeEntitySpriteKey(entry.modelId, entry.meta)
             );
-            if (renderEntry?.texture) {
+            // Defensive: the static-placement render path
+            // (`addModelsToLiveSpriteMap`, line ~1477) creates
+            // liveMap entries with only `{texture, worldBounds}` —
+            // no `cycleBakes` field. `computeEntitySpriteKey`
+            // returns the bare modelId for entities WITHOUT
+            // substitutions, which collides with the static-
+            // placement key. Hitting this path on a static-shaped
+            // entry without a guard causes
+            // `renderEntry.cycleBakes.size` → undefined.size →
+            // throws → kills the rAF drainEvents loop →
+            // setMovementInput never fires → server-side player
+            // freezes → ACE corrects the client back to last-
+            // confirmed pose (visible as rubberbanding). Skipping
+            // the bake-gate logic for static-shaped entries paints
+            // the static texture as fallback — same as before the
+            // stance-keyed cycles refactor masked this collision
+            // via an `=== null` check that no-op'd on undefined.
+            if (renderEntry?.texture && renderEntry.cycleBakes) {
               // Animation gate: prefer ACE's authoritative motion
               // command (kind=5 UpdateMotion) when fresh; fall back
               // to the EMA-on-position-deltas heuristic otherwise.
@@ -3391,6 +3408,13 @@ void main() {
               } else {
                 entry.sprite.texture = renderEntry.texture;
               }
+            } else if (renderEntry?.texture) {
+              // Static-placement render entry (no cycleBakes field).
+              // Live entities without substitutions share the same
+              // cache key as the static-placement render path, so
+              // some entityMap entries land on these static entries.
+              // No walk-cycle data, just paint the idle texture.
+              entry.sprite.texture = renderEntry.texture;
             }
           }
           // Phase 4 step 6d: portal swirl pulse. Independent of
