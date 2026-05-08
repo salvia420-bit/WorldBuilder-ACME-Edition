@@ -3446,17 +3446,27 @@ pub fn vital_name(vital_type: u32) -> String {
 /// messages (`UpdatePosition`, etc.) already get manual treatment in
 /// the recv loop's existing arms (sequence tracking, entity_seeded
 /// gating, MovementSystem heartbeat arming) and double-handling them
-/// risks regressing step 3.6 / 3.5. The vital / attribute / skill /
-/// inventory family of messages is precisely what the canonical
-/// dispatcher exists for, and the recv loop has no manual arm for
-/// any of those today.
+/// risks regressing step 3.6 / 3.5.
 ///
-/// Note: `GameEvent` is routed too because it carries
-/// `UpdateHealth` (vital current), `ViewContents` (container open),
-/// `IdentifyObjectResponse` (item details), `WieldObject` (equip /
-/// unequip), and the recv loop's existing PlayerDescription arm is
-/// stripped of its hydrate/apply/emit calls (the dispatcher does
-/// them) so it only handles the fallback-caps clear / re-install.
+/// **`ObjectCreate` / `ObjectDelete` / `ParentEvent` / `PickupEvent`
+/// / `InventoryRemoveObject` are deliberately NOT routed (yet).** The
+/// world's `inventory::handle_message` for `ObjectCreate` calls
+/// `state.upsert_entity_from_create` → `add_entity` → `scene.update_entity`
+/// + `reconcile_authoritative_body` which trips a wasm `unreachable`
+/// panic when the spatial body store touches state the wasm bundle
+/// hasn't fully initialised. Inventory population thus stays empty
+/// for now; vitals + attributes + skills still flow correctly because
+/// they go through the message types listed below. Resolving the
+/// inventory routing panic is tracked as a follow-on (probably
+/// requires either initialising the spatial scene differently, or
+/// applying a narrower inventory mutation in the recv loop directly).
+///
+/// `GameEvent` IS routed because it carries
+/// `UpdateHealth` (vital current), `PlayerDescription` (full biota
+/// hydrate — drives the first kind=8 stats event), and the recv
+/// loop's existing PlayerDescription arm is stripped of its
+/// hydrate/apply/emit calls (the dispatcher does them) so it only
+/// handles the fallback-caps clear / re-install.
 #[cfg(target_arch = "wasm32")]
 fn should_route_message_to_world(message: &holtburger_protocol::messages::GameMessage) -> bool {
     use holtburger_protocol::messages::GameMessage;
@@ -3469,11 +3479,6 @@ fn should_route_message_to_world(message: &holtburger_protocol::messages::GameMe
             | GameMessage::PublicUpdateAttribute(_)
             | GameMessage::PrivateUpdateSkill(_)
             | GameMessage::PublicUpdateSkill(_)
-            | GameMessage::ObjectCreate(_)
-            | GameMessage::ObjectDelete(_)
-            | GameMessage::InventoryRemoveObject(_)
-            | GameMessage::ParentEvent(_)
-            | GameMessage::PickupEvent(_)
             | GameMessage::GameEvent(_)
     )
 }
@@ -4812,23 +4817,22 @@ async fn recv_loop(
                                 _ => {}
                             }
                         }
-                        // ObjectCreate / ObjectDelete / InventoryRemoveObject /
-                        // ParentEvent / PickupEvent don't always emit a
-                        // tagged event — infer from the message type so we
-                        // catch every owned-item change. The snapshot
-                        // builder's ownership filter still excludes
-                        // not-owned entities (NPCs, monsters, props) from
-                        // the JS-facing panel.
-                        if matches!(
-                            &message,
-                            GameMessage::ObjectCreate(_)
-                                | GameMessage::ObjectDelete(_)
-                                | GameMessage::InventoryRemoveObject(_)
-                                | GameMessage::ParentEvent(_)
-                                | GameMessage::PickupEvent(_)
-                        ) {
-                            inventory_changed = true;
-                        }
+                        // Inventory-bearing message types (ObjectCreate /
+                        // ObjectDelete / InventoryRemoveObject /
+                        // ParentEvent / PickupEvent) are intentionally
+                        // NOT in `should_route_message_to_world` today —
+                        // see that function's doc comment for the reason
+                        // (routing them through the spatial-body path
+                        // panics with `unreachable` until the wasm
+                        // bundle initialises spatial scene state). The
+                        // inventory snapshot stays empty for now;
+                        // populating it will require either a narrower
+                        // inventory-only mutation that skips spatial
+                        // body work, or a follow-on that fixes the
+                        // routing panic. Stat events still drive
+                        // kind=8 PlayerStatsUpdated reliably through the
+                        // GameEvent::PlayerDescription / Update*Vital /
+                        // Update*Attribute / Update*Skill paths.
                     }
                     if stats_changed && let Some(w) = world.as_ref() {
                         publish_player_stats_snapshot(w, &latest_stats);
@@ -5035,23 +5039,20 @@ async fn recv_loop(
                             // next session — log a warning and continue
                             // (existing LocalPlayerSnapshot path keeps
                             // entities rendering).
-                            if let Some(bootstrap) = world_bootstrap.borrow().clone() {
+                            // Phase 4 step 4 follow-on: WorldState is
+                            // typically constructed eagerly at
+                            // SelectCharacter time (so PlayerDescription
+                            // arrivals BEFORE PlayerCreate land on a
+                            // ready dispatcher). If that didn't happen
+                            // — bootstrap wasn't loaded yet, or
+                            // SelectCharacter took a different path —
+                            // construct here as a fallback.
+                            if world.is_none()
+                                && let Some(bootstrap) = world_bootstrap.borrow().clone()
+                            {
                                 let mut new_world =
                                     holtburger_world::WorldState::new(bootstrap);
                                 new_world.player.guid = data.guid;
-                                // Phase 4 step 3.6 fallback: install a
-                                // default movement-capabilities override
-                                // because the player's character biota
-                                // isn't loaded in the wasm bundle and
-                                // `resolve_self_movement_capabilities`
-                                // would otherwise return RunRateUnavailable,
-                                // making the local-pose integrator a no-op.
-                                // Walk = 1.0 m/s, run = 4.5 m/s (matches
-                                // the JS prediction's WALK_FORWARD_SPEED
-                                // / FALLBACK_RUN_RATE_SCALAR), turn = 1.5
-                                // rad/s. Real values would come from the
-                                // player biota's runRate + motion table
-                                // (deferred to step 3.7).
                                 let fallback_caps =
                                     holtburger_world::SelfMovementCapabilities {
                                         kinematics:
@@ -5085,12 +5086,17 @@ async fn recv_loop(
                                 );
                                 world = Some(new_world);
                                 console_log_str(&format!(
-                                    "[step 3.6] WorldState constructed for player guid=0x{:08X} (fallback movement caps installed)",
+                                    "[step 3.6] WorldState constructed lazily on PlayerCreate (guid=0x{:08X}) — eager-construct path missed",
+                                    player_guid_raw,
+                                ));
+                            } else if world.is_some() {
+                                console_log_str(&format!(
+                                    "[step 3.6] WorldState already constructed (eager path); PlayerCreate guid=0x{:08X} confirms",
                                     player_guid_raw,
                                 ));
                             } else {
                                 console_log_str(
-                                    "[step 3.6] WorldBootstrap not yet loaded at EnteredWorld; \
+                                    "[step 3.6] WorldBootstrap not yet loaded at PlayerCreate; \
                                      MovementSystem disabled this session",
                                 );
                             }
@@ -5880,6 +5886,76 @@ async fn recv_loop(
                             guid,
                             account: account_name.clone(),
                         };
+
+                        // Phase 4 step 4 follow-on: construct WorldState
+                        // EAGERLY here, not lazily on PlayerCreate. ACE's
+                        // spawn flow ships `GameEvent::PlayerDescription`
+                        // BEFORE `PlayerCreate` (verified in capture
+                        // logs); deferring construction means the
+                        // canonical world-handler dispatcher's first
+                        // call at the top of the recv loop sees
+                        // `world == None` and silently drops the
+                        // PlayerDescription, leaving WorldState.player.{
+                        // vitals,attributes,skills} empty forever.
+                        // Constructing here (we have the guid + the
+                        // bootstrap is loaded in parallel by
+                        // start_session) puts WorldState in place
+                        // before any spawn-flow message arrives. The
+                        // PlayerCreate arm later updates seeded entity
+                        // pose + arms heartbeat — those are step 3.6
+                        // bookkeeping that don't depend on WorldState
+                        // having been constructed in PlayerCreate
+                        // specifically.
+                        if world.is_none()
+                            && let Some(bootstrap) = world_bootstrap.borrow().clone()
+                        {
+                            let mut new_world =
+                                holtburger_world::WorldState::new(bootstrap);
+                            new_world.player.guid = guid;
+                            // Install the same bootstrap-time fallback
+                            // movement caps as the PlayerCreate arm's
+                            // step 3.6 logic — so movement still works
+                            // before PlayerDescription lands and clears
+                            // them in step 3.7's recv arm. Real biota
+                            // resolution clears the override.
+                            let fallback_caps =
+                                holtburger_world::SelfMovementCapabilities {
+                                    kinematics:
+                                        holtburger_world::SelfMovementKinematics {
+                                            source: holtburger_world::PlayerMotionTableSource::DirectProperty {
+                                                motion_table_id: 0,
+                                            },
+                                            motion_table_id: 0,
+                                            stance: 0,
+                                            base_walk_forward_velocity:
+                                                holtburger_common::Vector3 {
+                                                    x: 0.0, y: 1.0, z: 0.0,
+                                                },
+                                            base_run_forward_velocity:
+                                                holtburger_common::Vector3 {
+                                                    x: 0.0, y: 4.5, z: 0.0,
+                                                },
+                                            base_turn_left_omega:
+                                                holtburger_common::Vector3 {
+                                                    x: 0.0, y: 0.0, z: 1.5,
+                                                },
+                                            base_turn_right_omega:
+                                                holtburger_common::Vector3 {
+                                                    x: 0.0, y: 0.0, z: -1.5,
+                                                },
+                                        },
+                                    run_rate_scalar: 1.0,
+                                };
+                            new_world.set_self_movement_capabilities_override(
+                                fallback_caps,
+                            );
+                            world = Some(new_world);
+                            console_log_str(&format!(
+                                "[step4-follow-on] WorldState constructed eagerly on SelectCharacter (guid=0x{:08X})",
+                                u32::from(guid),
+                            ));
+                        }
+
                         let msg = GameMessage::CharacterEnterWorldRequest(Box::new(
                             holtburger_protocol::messages::CharacterEnterWorldRequestData {
                                 guid,
