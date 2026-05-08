@@ -348,6 +348,23 @@ check(
     `setMovementInput=${typeof sessionHandleProto?.setMovementInput}`
 );
 
+// Phase 4 step 3.6: SessionHandle.tickMovement() drives the cli's
+// MovementSystem on every rAF — emits MoveToState on motion-state
+// edges AND the AutonomousPosition heartbeat that was missing pre-3.6.
+// Without the heartbeat, server-side player position never advanced
+// past @telepoi spawn, encounter generators in adjacent landblocks
+// never activated via vision, and no monsters spawned into the
+// entity buffer. Symbol-presence here pins the new wire contract;
+// live walk-around + ace_shard biota_properties_position assertion
+// lives in `capture_phase4_step3.6.cjs` (full e2e harness, requires
+// running ACE + wsbridge + MySQL). Protocol documented at
+// `docs/phase-4-step-3.6-movement-system.md` §6.
+check(
+    "SessionHandle.tickMovement() exposed (Phase 4 step 3.6 AutonomousPosition heartbeat)",
+    typeof sessionHandleProto?.tickMovement === "function",
+    `tickMovement=${typeof sessionHandleProto?.tickMovement}`
+);
+
 // Phase 4 step 4: ClientEvent grew a `u32Payload2` getter carrying
 // the CHAT_CATEGORY_* tag for kind=2 ChatReceived events. JS routes
 // chat to the right tab + colour class via this field — the legacy

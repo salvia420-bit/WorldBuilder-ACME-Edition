@@ -10,7 +10,8 @@ use holtburger_world::{
     SpatialSolveRequest, WorldEvent, WorldState,
 };
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 const AUTO_MOVE_DISTANCE_LIMIT: f32 = 500.0;
 const ACTIVE_SOLVE_RADIUS_M: f32 = 96.0;

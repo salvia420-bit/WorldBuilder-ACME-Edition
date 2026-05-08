@@ -12,7 +12,7 @@ use holtburger_common::properties::WorldObjectExt as _;
 use holtburger_protocol::messages::movement::{
     PositionPack, PositionType, ServerAutonomousPositionData, UpdatePositionFlag,
 };
-use std::time::Instant;
+use web_time::Instant;
 
 impl WorldState {
     pub(crate) fn authoritative_body_id_for_guid(&self, guid: Guid) -> Option<SpatialBodyId> {

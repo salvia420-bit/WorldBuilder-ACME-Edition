@@ -2,15 +2,10 @@ use super::*;
 use anyhow::Result;
 use holtburger_world::SpatialBodyId;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 impl ClientRuntime {
-    // `_now` is taken for symmetry with `poll_busy_timeout` and the test
-    // signatures, but the time comparison uses
-    // `Session::last_send_time.elapsed()` directly because that field is
-    // `web_time::Instant` (post §8 step 3) and `now: std::time::Instant`
-    // can't be `duration_since`d against it on wasm32. `.elapsed()` works
-    // on both targets and returns the same `Duration` semantics.
     fn should_send_keepalive_ping(&self, _now: Instant) -> bool {
         matches!(self.state, ClientState::InWorld)
             && self.session.last_send_time.elapsed() > Duration::from_secs(5)

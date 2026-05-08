@@ -27,6 +27,9 @@ bitflags.workspace = true
 async-trait.workspace = true
 strum.workspace = true
 strum_macros.workspace = true
+# Phase 4 step 3.6 — wasm-friendly Instant for MovementSystem hot path
+# and ClientRuntime time comparisons. Native re-exports std::time::Instant.
+web-time = { workspace = true }
 
 # Native-only: hostname resolution via `tokio::net::lookup_host`. Used
 # only by `ClientRuntimeBuilder::connect`, which is itself native-gated

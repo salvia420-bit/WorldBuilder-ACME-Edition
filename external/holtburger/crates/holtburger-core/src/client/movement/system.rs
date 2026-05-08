@@ -18,7 +18,8 @@ use holtburger_session::Session;
 use holtburger_world::SolveBodyInput;
 use holtburger_world::spatial::{LocalDriveControl, LocalDriveGait};
 use holtburger_world::{SpatialBodyId, WorldEvent, WorldState};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 #[derive(Debug, Default)]
 struct MovementSequenceDiagnostics {

@@ -18,6 +18,12 @@ holtburger-common = { workspace = true }
 holtburger-protocol = { workspace = true }
 holtburger-session = { workspace = true }
 wasm-bindgen = "0.2"
+# Phase 4 step 3.6 — wasm-friendly Instant. Already used by
+# holtburger-session (Session::last_send_time / last_recv_time) and the
+# cli's runtime keepalive comparisons; the web bundle adopts it as part
+# of wiring the cli's MovementSystem into the recv loop. Native target
+# transparently re-exports `std::time::Instant`.
+web-time = { workspace = true }
 
 # Wasm32-only deps:
 # - `console_error_panic_hook`: surfaces Rust panics in the browser
@@ -44,6 +50,10 @@ futures = { workspace = true }
 holtburger-content = { workspace = true }
 holtburger-core = { workspace = true }
 holtburger-dat = { workspace = true }
+# Phase 4 step 3.6 — `WorldBootstrap` + `WorldState` constructed in
+# the recv loop on EnteredWorld. Drives the cli's `MovementSystem` shim
+# (MovementSystemHandle) for the AutonomousPosition heartbeat fix.
+holtburger-world = { workspace = true }
 holtburger-resource-http = { workspace = true }
 holtburger-transport-ws = { workspace = true }
 # `log` so the recv loop can route session-side log lines to

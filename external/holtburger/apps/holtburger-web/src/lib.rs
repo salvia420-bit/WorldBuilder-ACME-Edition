@@ -2807,6 +2807,15 @@ enum SessionCommand {
         turn: i8,
         run: bool,
     },
+    /// Phase 4 step 3.6 — JS-driven physics tick. Fired by
+    /// `requestAnimationFrame` from `index.html`'s drainEvents loop;
+    /// the recv loop pulls the next `now` and calls
+    /// `MovementSystemHandle::tick(now, &mut world, &mut session)`,
+    /// which emits any due `MoveToState` / `AutonomousPosition`
+    /// packets. Routing through the cmd channel serializes access
+    /// to the `&mut world` / `&mut session` borrows that the recv
+    /// loop also holds.
+    TickMovement { now: web_time::Instant },
 }
 
 /// Tagged-payload envelope for events the wasm bundle drains to JS via
@@ -3505,6 +3514,37 @@ impl SessionHandle {
                 JsValue::from_str(&format!("set_movement_input: cmd channel closed ({e})"))
             })
     }
+
+    /// Phase 4 step 3.6 — JS-driven physics tick.
+    ///
+    /// Called from `index.html`'s `requestAnimationFrame(drainEvents)`
+    /// loop on every frame (~16 ms). The recv loop pulls the command
+    /// and runs `MovementSystemHandle::tick(now, &mut world, &mut session)`
+    /// which (a) reconciles any server-controlled projection, (b)
+    /// processes queued drive intents, and (c) emits due
+    /// `MoveToState` and `AutonomousPosition` packets — including the
+    /// AutonomousPosition heartbeat that was missing pre-3.6 and is
+    /// the load-bearing fix for server-side player movement.
+    ///
+    /// rAF cadence (~60 Hz) is well under the cli's 50 ms physics tick
+    /// (20 Hz). Heartbeat scheduling internal to MovementSystem
+    /// throttles the actual outbound rate; the JS tick just provides
+    /// scheduling slots.
+    ///
+    /// Returns `Ok(())` on cmd-channel enqueue; rAF discards channel
+    /// errors via `try { ... } catch { }`. Pre-EnteredWorld ticks are
+    /// no-ops in the recv loop (no `world` exists yet).
+    #[wasm_bindgen(js_name = tickMovement)]
+    pub fn tick_movement(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::TickMovement {
+                now: web_time::Instant::now(),
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("tick_movement: cmd channel closed ({e})"))
+            })
+    }
 }
 
 /// Phase 4 step 2a.5: construct an Aluvian / Male / Adventurer /
@@ -3746,11 +3786,19 @@ pub async fn start_session(
     > = std::rc::Rc::new(std::cell::RefCell::new(None));
     let entity_updates: std::rc::Rc<std::cell::RefCell<Vec<EntityUpdate>>> =
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    // Phase 4 step 3.6: WorldBootstrap is loaded in parallel with the
+    // catalog so it's ready before EnteredWorld fires. Recv loop reads
+    // the cell on EnteredWorld to construct a `WorldState` for the
+    // cli's `MovementSystemHandle`.
+    let world_bootstrap: std::rc::Rc<
+        std::cell::RefCell<Option<std::sync::Arc<holtburger_world::WorldBootstrap>>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(None));
 
     {
         let queued_events = queued_events.clone();
         let character_list = character_list.clone();
         let entity_updates = entity_updates.clone();
+        let world_bootstrap = world_bootstrap.clone();
         wasm_bindgen_futures::spawn_local(async move {
             recv_loop(
                 session,
@@ -3759,6 +3807,7 @@ pub async fn start_session(
                 character_list,
                 entity_updates,
                 Some(charlist_tx),
+                world_bootstrap,
             )
             .await;
         });
@@ -3783,6 +3832,21 @@ pub async fn start_session(
                 }
                 Err(e) => {
                     log::warn!("character generator catalog load failed: {e}");
+                }
+            }
+        });
+        // Phase 4 step 3.6: load the 5 game-data tables (skill / spell
+        // / xp / motion-kinematics / chat-pose) needed by `WorldBootstrap`.
+        // Required for the cli's `MovementSystemHandle` movement loop.
+        let world_bootstrap = world_bootstrap.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            match load_world_bootstrap().await {
+                Ok(loaded) => {
+                    *world_bootstrap.borrow_mut() = Some(loaded);
+                    log::info!("[step 3.6] world bootstrap loaded");
+                }
+                Err(e) => {
+                    log::warn!("[step 3.6] world bootstrap load failed: {e}");
                 }
             }
         });
@@ -3825,8 +3889,7 @@ async fn load_character_gen_catalog()
         .prefetch(&keys)
         .await
         .map_err(|e| anyhow::anyhow!("prefetch catalog: {e}"))?;
-    let mounts: Vec<std::sync::Arc<dyn holtburger_dat::ResourceSource>> =
-        vec![std::sync::Arc::new(GlobalSourceMount(source))];
+    let mounts: Vec<std::sync::Arc<dyn holtburger_dat::ResourceSource>> = vec![source];
     let repo = holtburger_content::ContentRepository::from_mounts(mounts);
     let char_gen = repo
         .read_asset::<holtburger_dat::file_type::CharGen>("character generator table")?;
@@ -3837,40 +3900,73 @@ async fn load_character_gen_catalog()
     ))
 }
 
-/// Adapter: the catalog loader takes
-/// `Arc<dyn ResourceSource + Send + Sync>` mounts. The global
-/// source is `Rc<ManifestResourceSource>`; wrap it in a Send+Sync
-/// holder. wasm32 is single-threaded so the Send+Sync claim is
-/// vacuously true; the trait bound is the only thing demanding
-/// it.
+/// Phase 4 step 3.6: prefetch + parse the five game-data tables a
+/// `WorldBootstrap` needs (SkillTable, SpellTable, XpTable,
+/// MotionKinematics, ChatPoseTable → SoulEmoteCatalog), build the
+/// bootstrap, and hand it to the recv loop's `WorldState::new`.
+///
+/// Mirrors the cli's `ClientRuntimeBuilder::load_assets`
+/// (`crates/holtburger-core/src/client/builder.rs:54-80`). Called once
+/// on `kind=7 EnteredWorld`.
+///
+/// Notes on namespaces: the four AC-derived tables live in
+/// `eor/portal`; `MotionKinematics` lives in `holtburger/core` (it's a
+/// project-curated reformat of AC's MotionTable family, not a raw AC
+/// asset). All five are addressed via `StaticResourceKey` impls in
+/// `holtburger-dat`; we explicitly prefetch their record ids so the
+/// subsequent sync `read_asset` calls hit the manifest cache.
+///
+/// Failure modes: if any of the five keys isn't present in the
+/// manifest the prefetch surfaces the miss; the caller logs and falls
+/// back per `docs/phase-4-step-3.6-movement-system.md` §7.1 (per-asset
+/// `WorldBootstrap::synthetic()` shim).
 #[cfg(target_arch = "wasm32")]
-struct GlobalSourceMount(std::rc::Rc<holtburger_resource_http::ManifestResourceSource>);
+async fn load_world_bootstrap()
+-> anyhow::Result<std::sync::Arc<holtburger_world::WorldBootstrap>> {
+    use holtburger_dat::file_type::{
+        ChatPoseTable, MotionKinematics, SkillTable, SpellTable, XpTable,
+    };
+    use holtburger_dat::{EOR_PORTAL_NAMESPACE, HOLTBURGER_CORE_NAMESPACE, ResourceKey};
 
-// SAFETY: wasm32 is single-threaded; no actual cross-thread
-// access is possible. The Send+Sync claim is required by the
-// trait bound on `ContentRepository::from_mounts` mounts.
-#[cfg(target_arch = "wasm32")]
-unsafe impl Send for GlobalSourceMount {}
-#[cfg(target_arch = "wasm32")]
-unsafe impl Sync for GlobalSourceMount {}
+    let source = global_source::try_global_source().ok_or_else(|| {
+        anyhow::anyhow!("init_resource_source must be called before world bootstrap load")
+    })?;
 
-#[cfg(target_arch = "wasm32")]
-impl holtburger_dat::ResourceSource for GlobalSourceMount {
-    fn get_file_by_key(
-        &self,
-        key: holtburger_dat::ResourceKey<'_>,
-    ) -> holtburger_dat::Result<Vec<u8>> {
-        self.0.get_file_by_key(key)
-    }
-    fn get_metadata_by_key(
-        &self,
-        key: holtburger_dat::ResourceKey<'_>,
-    ) -> Option<holtburger_dat::FileMetadata> {
-        self.0.get_metadata_by_key(key)
-    }
-    fn has_namespace(&self, namespace: &str) -> bool {
-        self.0.has_namespace(namespace)
-    }
+    let keys = [
+        ResourceKey::new(EOR_PORTAL_NAMESPACE, SkillTable::FILE_ID),
+        ResourceKey::new(EOR_PORTAL_NAMESPACE, SpellTable::FILE_ID),
+        ResourceKey::new(EOR_PORTAL_NAMESPACE, XpTable::FILE_ID),
+        ResourceKey::new(HOLTBURGER_CORE_NAMESPACE, MotionKinematics::FILE_ID),
+        ResourceKey::new(EOR_PORTAL_NAMESPACE, ChatPoseTable::FILE_ID),
+    ];
+    source
+        .prefetch(&keys)
+        .await
+        .map_err(|e| anyhow::anyhow!("prefetch world bootstrap: {e}"))?;
+
+    let mounts: Vec<std::sync::Arc<dyn holtburger_dat::ResourceSource>> = vec![source];
+    let repo = holtburger_content::ContentRepository::from_mounts(mounts);
+
+    let skill_table = repo.read_asset::<SkillTable>("skill table")?;
+    let spell_table = repo.read_asset::<SpellTable>("spell table")?;
+    let xp_table = repo.read_asset::<XpTable>("XP table")?;
+    let motion_kinematics = repo.read_asset::<MotionKinematics>("motion kinematics table")?;
+    let soul_emote_catalog = repo.read_soul_emote_catalog()?;
+
+    log::info!(
+        "[boot] WorldBootstrap loaded: skill_base_hash={} spells={} motion_tables={}",
+        skill_table.skill_base_hash.len(),
+        spell_table.spells.len(),
+        motion_kinematics.motion_tables.len(),
+    );
+
+    Ok(std::sync::Arc::new(holtburger_world::WorldBootstrap::new(
+        skill_table,
+        spell_table,
+        xp_table,
+        motion_kinematics,
+        soul_emote_catalog,
+    )))
 }
 
 /// Payload the recv loop sends through the initial-CharacterList
@@ -3960,7 +4056,46 @@ const NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC: f32 = 1.0;
 /// `world.player.last_server_motion_style` when emitting motion;
 /// without `WorldState` we drop the bit and let ACE preserve
 /// whatever stance it last set.
+/// Phase 4 step 3.6 — convert WASD-style axes to the cli's high-level
+/// `MotionState`. `MovementSystemHandle::tick` translates this into the
+/// wire `RawMotionState` via the cli's `build_motion_state_raw_motion_state`
+/// (`crates/holtburger-core/src/client/movement/common.rs`).
+///
+/// Mirrors the same axis priorities as `build_raw_motion_state_for_input`:
+/// forward wins over strafe (single-axis Locomotion); turn is independent.
 #[cfg(target_arch = "wasm32")]
+fn motion_state_for_input(
+    forward: i8,
+    strafe: i8,
+    turn: i8,
+    run: bool,
+) -> holtburger_core::client::movement_types::MotionState {
+    use holtburger_core::client::movement_types::MotionState;
+    let mut builder = MotionState::builder();
+    if run {
+        builder = builder.run();
+    } else {
+        builder = builder.walk();
+    }
+    if forward > 0 {
+        builder = builder.forward();
+    } else if forward < 0 {
+        builder = builder.backstep();
+    } else if strafe > 0 {
+        builder = builder.strafe_right();
+    } else if strafe < 0 {
+        builder = builder.strafe_left();
+    }
+    if turn > 0 {
+        builder = builder.turn_right();
+    } else if turn < 0 {
+        builder = builder.turn_left();
+    }
+    builder.build()
+}
+
+#[cfg(target_arch = "wasm32")]
+#[allow(dead_code)] // kept until step 3.6 validation passes; rip-out follow-on.
 fn build_raw_motion_state_for_input(
     forward: i8,
     strafe: i8,
@@ -4078,6 +4213,9 @@ async fn recv_loop(
     character_list: std::rc::Rc<std::cell::RefCell<Vec<CharacterSummary>>>,
     entity_updates: std::rc::Rc<std::cell::RefCell<Vec<EntityUpdate>>>,
     mut charlist_tx: Option<futures::channel::oneshot::Sender<CharListReady>>,
+    world_bootstrap: std::rc::Rc<
+        std::cell::RefCell<Option<std::sync::Arc<holtburger_world::WorldBootstrap>>>,
+    >,
 ) {
     use futures::StreamExt;
     use holtburger_protocol::messages::{
@@ -4093,6 +4231,16 @@ async fn recv_loop(
     // SetMovementInput cmd can build a complete MoveToStateActionData
     // without standing up a full WorldState.
     let mut local_player = LocalPlayerSnapshot::new();
+    // Phase 4 step 3.6: full `WorldState` driven by the cli's
+    // `MovementSystemHandle`. Constructed on EnteredWorld once the
+    // parallel-loaded WorldBootstrap is in. The player entity is
+    // seeded on the first PrivateUpdatePosition (when we first know
+    // the spawn pose); the AutonomousPosition heartbeat is armed at
+    // the same point. See `docs/phase-4-step-3.6-movement-system.md`.
+    let mut world: Option<holtburger_world::WorldState> = None;
+    let mut movement = holtburger_core::MovementSystemHandle::new();
+    let mut entity_seeded = false;
+    let mut heartbeat_armed = false;
 
     loop {
         tokio::select! {
@@ -4266,6 +4414,31 @@ async fn recv_loop(
                                 u32_payload: Some(player_guid_raw),
                                 u32_payload_2: None,
                             });
+
+                            // Phase 4 step 3.6: construct the
+                            // `WorldState` the `MovementSystemHandle`
+                            // will tick against. Bootstrap was loaded
+                            // in parallel by start_session; if it isn't
+                            // ready yet (rare under normal flow), the
+                            // movement system stays disabled until the
+                            // next session — log a warning and continue
+                            // (existing LocalPlayerSnapshot path keeps
+                            // entities rendering).
+                            if let Some(bootstrap) = world_bootstrap.borrow().clone() {
+                                let mut new_world =
+                                    holtburger_world::WorldState::new(bootstrap);
+                                new_world.player.guid = data.guid;
+                                world = Some(new_world);
+                                log::info!(
+                                    "[step 3.6] WorldState constructed for player guid=0x{:08X}",
+                                    player_guid_raw,
+                                );
+                            } else {
+                                log::warn!(
+                                    "[step 3.6] WorldBootstrap not yet loaded at EnteredWorld; \
+                                     MovementSystem disabled this session",
+                                );
+                            }
                         }
                         GameMessage::GameAction(action_msg) => {
                             // Server can echo a GameAction::LoginComplete
@@ -4354,6 +4527,41 @@ async fn recv_loop(
                                 // implicitly the local player; cache
                                 // position for outbound MoveToState.
                                 local_player.position = Some(*pos);
+                                // Phase 4 step 3.6: seed the WorldState
+                                // player entity on the first inbound
+                                // position (we now know the spawn pose),
+                                // then arm the AutonomousPosition
+                                // heartbeat. Subsequent updates push
+                                // through `set_player_position` so the
+                                // outbound MovementSystem tick reads
+                                // current sequences + pose.
+                                if let Some(w) = world.as_mut() {
+                                    if !entity_seeded {
+                                        let entity = holtburger_world::entity::Entity::new(
+                                            guid,
+                                            String::from("LocalPlayer"),
+                                            *pos,
+                                        );
+                                        w.add_entity(entity);
+                                        let _ = w.set_local_player_runtime_pose(*pos);
+                                        entity_seeded = true;
+                                        log::info!(
+                                            "[step 3.6] WorldState player entity seeded at landblock=0x{:08X} ({:.1}, {:.1}, {:.1})",
+                                            u32::from(pos.landblock_id),
+                                            pos.coords.x, pos.coords.y, pos.coords.z,
+                                        );
+                                    } else {
+                                        let _ = w.set_player_position(*pos);
+                                    }
+                                    if !heartbeat_armed && entity_seeded {
+                                        let now = web_time::Instant::now();
+                                        movement.arm_heartbeat_schedule(now, w);
+                                        heartbeat_armed = true;
+                                        log::info!(
+                                            "[step 3.6] AutonomousPosition heartbeat armed",
+                                        );
+                                    }
+                                }
                                 entity_updates.borrow_mut().push(EntityUpdate {
                                     kind: ENTITY_UPDATE_KIND_POSITION,
                                     guid: u32::from(guid),
@@ -4967,63 +5175,74 @@ async fn recv_loop(
                         turn,
                         run,
                     }) => {
-                        console_log_str(&format!(
-                            "[step3-trace] SetMovementInput cmd: forward={forward} strafe={strafe} turn={turn} run={run} pos_known={}",
-                            local_player.position.is_some(),
-                        ));
-                        // Phase 4 step 3: the cli routes WASD-style
-                        // input through `ClientCommand::DriveSelf(
-                        // PlayerDriveIntent::ManualHeld(MotionState))`
-                        // → ClientRuntime::handle_movement_command →
-                        // movement system tick → `MoveToState`. Our
-                        // wasm bundle skips the runtime + tick and
-                        // builds the packet directly here, mirroring
-                        // the cli's `send_motion_state_pulse`
-                        // (`crates/holtburger-core/src/client/movement/
-                        // system.rs:928-951`).
-                        //
-                        // Discarding pre-position commands: ACE expects
-                        // a position-bearing payload, and we won't have
-                        // a current snapshot until the first
-                        // PrivateUpdatePosition lands (which happens
-                        // shortly after PlayerCreate). JS gates input
-                        // on `kind=7 EnteredWorld`, so under normal
-                        // play this branch always sees `Some(...)`;
-                        // dropping silently here just protects against
-                        // the early-keystroke race.
-                        let Some(position) = local_player.position else {
+                        // Phase 4 step 3.6: input → high-level
+                        // MotionState → MovementSystemHandle drive
+                        // intent. The actual outbound packet (MoveToState
+                        // and/or AutonomousPosition heartbeat) fires from
+                        // the next TickMovement arm via
+                        // `MovementSystemHandle::tick`. Pre-3.6 the recv
+                        // loop built MoveToState here directly and never
+                        // sent AutonomousPosition — the bug fixed by 3.6.
+                        let Some(w) = world.as_ref() else {
                             log::warn!(
-                                "recv_loop: SetMovementInput before local position known — dropping",
+                                "recv_loop: SetMovementInput before WorldState ready — dropping"
                             );
                             continue;
                         };
-                        let raw_motion_state =
-                            build_raw_motion_state_for_input(forward, strafe, turn, run);
-                        let action = GameAction::MoveToState(Box::new(MoveToStateActionData {
-                            raw_motion_state,
-                            position,
-                            instance_sequence: local_player.instance_sequence,
-                            server_control_sequence: local_player.server_control_sequence,
-                            teleport_sequence: local_player.teleport_sequence,
-                            force_position_sequence: local_player.force_position_sequence,
-                            // Assume grounded — we don't yet read the
-                            // server-side grounded flag (it lives on
-                            // PositionPack.flags::IS_GROUNDED, which
-                            // the wasm bundle could read off
-                            // UpdatePosition; deferred to a follow-on).
-                            contact_long_jump: 1,
-                        }));
-                        if let Err(e) = session.send_action(action).await {
-                            log::warn!("recv_loop: send_action(MoveToState): {e}");
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
-                                string_payload: Some(format!("set_movement_input: {e}")),
-                                u32_payload: None,
-                                u32_payload_2: None,
-                            });
-                            return;
+                        if !entity_seeded {
+                            log::warn!(
+                                "recv_loop: SetMovementInput before player entity seeded — dropping"
+                            );
+                            continue;
                         }
-                        console_log_str("[step3-trace] MoveToState send_action OK");
+                        let _ = w;
+                        let motion_state = motion_state_for_input(forward, strafe, turn, run);
+                        let now = web_time::Instant::now();
+                        movement.enqueue_drive_intent(
+                            holtburger_core::client::movement_types::PlayerDriveIntent::ManualHeld(
+                                motion_state,
+                            ),
+                            now,
+                        );
+                        console_log_str(&format!(
+                            "[step3.6-trace] enqueue_drive_intent ManualHeld(forward={forward} strafe={strafe} turn={turn} run={run})",
+                        ));
+                    }
+                    Some(SessionCommand::TickMovement { now }) => {
+                        // Phase 4 step 3.6: pumps the cli's
+                        // MovementSystem state machine. Reads
+                        // queued drive intents (from SetMovementInput),
+                        // emits MoveToState on motion-state edges, and
+                        // emits AutonomousPosition heartbeats while the
+                        // player is moving — the load-bearing fix
+                        // making server-side player position actually
+                        // advance. Pre-EnteredWorld / pre-entity-seeded
+                        // ticks are no-ops (nothing to read poses from).
+                        let Some(w) = world.as_mut() else { continue };
+                        if !entity_seeded {
+                            continue;
+                        }
+                        match movement.tick(now, w, &mut session).await {
+                            Ok(_events) => {
+                                // WorldEvents from movement (e.g. local
+                                // pose snapshots after arrival) are not
+                                // surfaced to JS yet — JS prediction +
+                                // inbound packet rendering still owns
+                                // the visual layer. Future: route these
+                                // to the entity buffer for smoother
+                                // rubber-band recovery.
+                            }
+                            Err(e) => {
+                                log::warn!("recv_loop: MovementSystem::tick: {e}");
+                                queued_events.borrow_mut().push(ClientEvent {
+                                    kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                    string_payload: Some(format!("tick: {e}")),
+                                    u32_payload: None,
+                                    u32_payload_2: None,
+                                });
+                                return;
+                            }
+                        }
                     }
                 }
             }

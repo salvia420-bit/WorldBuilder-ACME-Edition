@@ -8,7 +8,7 @@ use holtburger_common::position::WorldPosition;
 use holtburger_common::{Guid, Vector3};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Instant;
+use web_time::Instant;
 
 #[derive(Debug, Clone)]
 pub(crate) struct BodySamplingStore {

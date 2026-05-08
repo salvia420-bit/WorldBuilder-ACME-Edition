@@ -2,7 +2,7 @@ use super::*;
 use binrw::BinRead;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use web_time::Instant;
 
 use crate::entity::Entity;
 use crate::state::liveness::EntityUpsertKind;

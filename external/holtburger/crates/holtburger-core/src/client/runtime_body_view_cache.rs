@@ -10,7 +10,7 @@ use holtburger_world::{
     RuntimeSpatialBodyView, SpatialBodyId, SpatialEntitySample, SpatialSampleMode, entity::Entity,
 };
 use std::collections::HashMap;
-use std::time::Instant;
+use web_time::Instant;
 
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeBodyViewCache {

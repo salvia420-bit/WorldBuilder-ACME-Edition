@@ -2,8 +2,9 @@ use holtburger_protocol::errors::WeenieError;
 use holtburger_session::Session;
 use holtburger_world::{WorldEvent, WorldState};
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
+use web_time::Instant;
 
 mod builder;
 mod character_selection;
@@ -16,6 +17,7 @@ pub mod runtime_body_view_cache;
 mod simulation;
 pub mod types;
 pub use builder::ClientRuntimeBuilder;
+pub use movement::MovementSystemHandle;
 use character_selection::CharacterSelectionState;
 use movement::MovementSystem;
 use simulation::ClientSimulationSystem;

@@ -23,6 +23,9 @@ strum = { workspace = true }
 strum_macros = { workspace = true }
 glam = { workspace = true }
 async-trait = { workspace = true }
+# Phase 4 step 3.6 — wasm-friendly Instant for SpatialBody / SpatialScene
+# / WorldState time fields. Native target re-exports std::time::Instant.
+web-time = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "macros"] }

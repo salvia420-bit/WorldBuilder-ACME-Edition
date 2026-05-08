@@ -29,7 +29,8 @@ use holtburger_world::{RuntimeBodyResetCause, RuntimeSpatialBodyView, SpatialBod
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 pub use holtburger_world::WorldEvent;
 

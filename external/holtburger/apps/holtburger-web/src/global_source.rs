@@ -35,13 +35,13 @@
 #![cfg(target_arch = "wasm32")]
 
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use holtburger_resource_http::ManifestResourceSource;
 use wasm_bindgen::prelude::*;
 
 thread_local! {
-    static SOURCE: RefCell<Option<Rc<ManifestResourceSource>>> = const { RefCell::new(None) };
+    static SOURCE: RefCell<Option<Arc<ManifestResourceSource>>> = const { RefCell::new(None) };
 }
 
 /// Initialize the page-scoped resource source. Must be called once
@@ -62,7 +62,7 @@ pub async fn init_resource_source(manifest_url: String) -> Result<(), JsValue> {
         .await
         .map_err(|e| JsValue::from_str(&format!("init_resource_source: {e}")))?;
     SOURCE.with(|cell| {
-        *cell.borrow_mut() = Some(Rc::new(source));
+        *cell.borrow_mut() = Some(Arc::new(source));
     });
     Ok(())
 }
@@ -88,15 +88,21 @@ pub fn cached_shard_count() -> usize {
     })
 }
 
-/// Get an `Rc` clone of the global source. Panics if
+/// Get an `Arc` clone of the global source. Panics if
 /// [`init_resource_source`] has not been called — the JS contract
 /// is that init runs before any `fetch_*` does.
 ///
 /// Used by future per-export refactors (obj 9) to swap the legacy
 /// `HttpResourceSource::connect(asset_url)` constructor for
 /// `global_source().prefetch(keys).await + get_file_by_key`.
+///
+/// Was `Rc<ManifestResourceSource>` until phase 4 step 3.6 — switched
+/// to `Arc` so the same handle can satisfy `ContentRepository::
+/// from_mounts(Vec<Arc<dyn ResourceSource>>)` for `WorldBootstrap`
+/// loading. Atomic refcount overhead is negligible on single-threaded
+/// wasm32.
 #[allow(dead_code)] // wired up per-export in obj 9
-pub fn global_source() -> Rc<ManifestResourceSource> {
+pub fn global_source() -> Arc<ManifestResourceSource> {
     SOURCE.with(|cell| {
         cell.borrow()
             .as_ref()
@@ -111,6 +117,6 @@ pub fn global_source() -> Rc<ManifestResourceSource> {
 /// `asset_url` path otherwise — the bridge state during the
 /// obj-5 → obj-9 transition.
 #[allow(dead_code)]
-pub fn try_global_source() -> Option<Rc<ManifestResourceSource>> {
+pub fn try_global_source() -> Option<Arc<ManifestResourceSource>> {
     SOURCE.with(|cell| cell.borrow().as_ref().cloned())
 }

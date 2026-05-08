@@ -1,7 +1,8 @@
 use crate::entity::EntityMotionSnapshot;
 use holtburger_common::position::WorldPosition;
 use holtburger_common::{Guid, Vector3};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ContactState {

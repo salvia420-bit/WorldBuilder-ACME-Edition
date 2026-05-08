@@ -23,7 +23,7 @@ use crate::{WorldBootstrap, WorldEvent};
 
 pub struct ServerTimeSync {
     pub server_time: f64,
-    pub local_time: std::time::Instant,
+    pub local_time: web_time::Instant,
 }
 
 /// The authoritative state of the game world.
@@ -264,7 +264,7 @@ impl WorldState {
     pub fn set_server_time_sync(
         &mut self,
         server_time: f64,
-        local_time: std::time::Instant,
+        local_time: web_time::Instant,
     ) -> Vec<WorldEvent> {
         self.server_time = Some(ServerTimeSync {
             server_time,

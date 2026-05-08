@@ -23,7 +23,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use holtburger_dat::{ResourceKey, ResourceSource};
 use holtburger_resource_http::{ManifestResourceSource, RecordingSource};
@@ -44,7 +44,7 @@ use wasm_bindgen::prelude::*;
 /// The caller then runs the same walk against the real source
 /// for the final result; cache hits are sync.
 pub async fn ensure_walk_prefetched<F>(
-    source: &Rc<ManifestResourceSource>,
+    source: &Arc<ManifestResourceSource>,
     initial_keys: &[ResourceKey<'_>],
     walk: F,
 ) -> Result<(), JsValue>

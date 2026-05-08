@@ -12,7 +12,7 @@ use holtburger_protocol::messages::game_message::GameMessage;
 use holtburger_protocol::messages::transport::packet_flags;
 use holtburger_protocol::messages::*;
 use holtburger_world::spell::MagicSchool;
-use std::time::Instant;
+use web_time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NormalizedSpellCast {

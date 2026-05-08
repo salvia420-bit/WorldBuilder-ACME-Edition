@@ -3377,6 +3377,19 @@ void main() {
             // Same Map walk; lazily kicks the per-setup walk-frame
             // bake the first time an entity moves.
             tickEntityAnimations();
+            // Phase 4 step 3.6: drive the cli's MovementSystem on
+            // every frame. The recv loop pulls the TickMovement cmd
+            // and runs `MovementSystemHandle::tick`, which emits the
+            // AutonomousPosition heartbeat that was missing pre-3.6
+            // (the load-bearing fix for server-side player movement
+            // — see docs/phase-4-step-3.6-movement-system.md).
+            // Heartbeat scheduling internal to MovementSystem
+            // throttles the actual outbound rate; rAF (~60 Hz) just
+            // provides scheduling slots, well under the cli's 50 ms
+            // (20 Hz) physics tick. Channel-closed errors are
+            // discarded because rAF runs after the wasm bundle may
+            // have already torn down on disconnect.
+            try { handle.tickMovement(); } catch (_) {}
             // Phase 4 step 3.5: client-side prediction. ACE doesn't
             // echo position back to the originator (retail AC's
             // protocol is asymmetric — see step 3 doc). Without
