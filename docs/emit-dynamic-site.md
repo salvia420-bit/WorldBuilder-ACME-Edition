@@ -519,11 +519,18 @@ step's landing, plus what got closed since):
   geometric centre with mouse-wheel zoom + drag-to-pan; a
   "follow the local player sprite" mode would conflict with
   manual pan, so it needs a UI affordance.
-- ⏳ **Position interpolation between PublicUpdatePosition
-  echoes.** Local player slides smoothly via step 3.5
-  prediction, but other entities snap-render to each ACE
-  position update (~100-300ms cadence — visible jumps in
-  crowded zones). ~10 lines of rAF lerp.
+- ✅ ~~**Position interpolation between PublicUpdatePosition
+  echoes.**~~ **Closed 2026-05-08.** Non-local entities now
+  ease between authoritative position updates over a 150 ms
+  catch-up lerp instead of snap-rendering to each echo. New
+  `ENTITY_LERP_DURATION_MS` constant + `tickEntityInterpolation()`
+  per-rAF function in `index.html`; `handlePositionUpdate`
+  branches on `localPlayerGuid` so the local player keeps its
+  step 3.5 keystate-driven prediction (lerping the local
+  sprite would add input lag on top of every
+  PrivateUpdatePosition reconciliation). Portal swirl tracks
+  the lerping sprite. Pure JS; no wasm-bindgen or Rust
+  changes.
 - ⏳ **VectorUpdate / UpdateMotion velocity handling.**
   ACE sends these for animation-hint extrapolation; recv loop
   drops them in the catch-all `_` arm. A future step could add

@@ -1771,6 +1771,7 @@ void main() {
         window.kickWalkFrameBakeIfNeeded = kickWalkFrameBakeIfNeeded;
         window.computeEntitySpriteKey = computeEntitySpriteKey;
         window.tickEntityAnimations = tickEntityAnimations;
+        window.tickEntityInterpolation = tickEntityInterpolation;
 
         // Initial camera: centre on Holtburg's geometric centre at a
         // scale that fits the 3×3 grid in the canvas with a margin.
@@ -2793,11 +2794,34 @@ void main() {
         entry.lastPosX = wx;
         entry.lastPosY = wy;
         entry.lastPosT = now;
-        entry.sprite.position.set(wx, wy);
+        // Position interpolation polish: for non-local entities,
+        // lerp from the sprite's current visual position to the
+        // new authoritative target over ENTITY_LERP_DURATION_MS.
+        // ACE pushes PublicUpdatePosition at ~100-300 ms cadence;
+        // snap-rendering looked stuttery in crowded zones. The
+        // local player skips this branch — its step 3.5 keystate-
+        // driven prediction is what makes WASD feel responsive,
+        // and lerping the local sprite would add input lag on top
+        // of every PrivateUpdatePosition reconciliation.
+        const isLocal =
+          localPlayerGuid !== null && guid === (localPlayerGuid >>> 0);
+        if (isLocal) {
+          entry.sprite.position.set(wx, wy);
+          entry.lerpStartMs = undefined;
+        } else {
+          entry.lerpFromX = entry.sprite.x;
+          entry.lerpFromY = entry.sprite.y;
+          entry.lerpToX = wx;
+          entry.lerpToY = wy;
+          entry.lerpStartMs = now;
+        }
         entry.sprite.rotation = -quaternionToYaw(upd.qw, upd.qx, upd.qy, upd.qz);
-        // Phase 4 step 6d: portals don't normally move, but if the
-        // server ever repositions one we want the swirl to track.
-        if (entry.portalSwirl) {
+        // Portal swirl tracks the sprite — `tickEntityInterpolation`
+        // syncs it along with the lerp so we don't snap the swirl
+        // to the target position while the sprite is mid-lerp.
+        // For local-player snap and post-lerp finalization, the
+        // swirl is repositioned in those branches.
+        if (isLocal && entry.portalSwirl) {
           entry.portalSwirl.position.set(wx, wy);
         }
       }
@@ -2890,8 +2914,49 @@ void main() {
       // entries see this path.
       const WALK_MOVING_THRESHOLD_MPS = 0.4;
       const WALK_FRAME_RATE = 12.0;  // frames-per-second cycle rate
+      // Position-interpolation polish: ACE pushes
+      // PublicUpdatePosition at ~100-300 ms cadence; non-local
+      // entities snap-rendered between echoes looked stuttery in
+      // crowded zones. handlePositionUpdate seeds lerp state on
+      // every kind=0 EntityUpdate (except local player —
+      // step 3.5 prediction owns that path), and
+      // tickEntityInterpolation eases sprite.x/y from
+      // (lerpFromX, lerpFromY) → (lerpToX, lerpToY) over this
+      // duration. 150 ms is the sweet spot — long enough to
+      // smooth the worst 300 ms gap, short enough that the
+      // visual lag stays imperceptible against the ~100 ms
+      // best case.
+      const ENTITY_LERP_DURATION_MS = 150;
       let walkPhase = 0.0;
       let lastAnimTickTime = null;
+      function tickEntityInterpolation() {
+        if (!liveScene) return;
+        const now = performance.now();
+        for (const [, entry] of entityMap) {
+          if (entry.lerpStartMs === undefined) continue;
+          const elapsed = now - entry.lerpStartMs;
+          let x;
+          let y;
+          if (elapsed >= ENTITY_LERP_DURATION_MS) {
+            x = entry.lerpToX;
+            y = entry.lerpToY;
+            entry.lerpStartMs = undefined;
+          } else {
+            const t = elapsed / ENTITY_LERP_DURATION_MS;
+            x = entry.lerpFromX + (entry.lerpToX - entry.lerpFromX) * t;
+            y = entry.lerpFromY + (entry.lerpToY - entry.lerpFromY) * t;
+          }
+          entry.sprite.x = x;
+          entry.sprite.y = y;
+          // Portal swirl tracks the sprite so the ring stays
+          // centred on the portal during the lerp; if the swirl
+          // were left at the previous target it'd visually
+          // detach during motion.
+          if (entry.portalSwirl) {
+            entry.portalSwirl.position.set(x, y);
+          }
+        }
+      }
       function tickEntityAnimations() {
         if (!liveScene) return;
         const now = performance.now();
@@ -3986,6 +4051,12 @@ void main() {
               console.log(`[player-fix] replaying ${queued.length} deferred Spawn(s) after liveScene ready`);
               for (const clone of queued) handleEntitySpawn(clone);
             }
+            // Position-interpolation polish: ease non-local
+            // entity sprites between authoritative position
+            // updates. Must run BEFORE nameplate projection so
+            // labels track the interpolated position rather than
+            // snapping to the next echo target a frame ahead.
+            tickEntityInterpolation();
             // Phase 4 step 6e: project entity world coords to canvas
             // pixels for each visible nameplate. Cheap when zoomed in
             // (one Map walk + a multiply-add per entity); a no-op
