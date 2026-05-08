@@ -222,7 +222,10 @@ impl WorldState {
         }
     }
 
-    pub(crate) fn emit_player_derived_stats(&mut self, events: &mut Vec<WorldEvent>) {
+    /// Phase 4 step 3.7 — exposed `pub` so the wasm recv loop can call
+    /// it after hydrating the player from PlayerDescription. Body is
+    /// unchanged from the original `pub(crate)` version.
+    pub fn emit_player_derived_stats(&mut self, events: &mut Vec<WorldEvent>) {
         self.player.refresh_cached_derived_stat_inputs();
 
         let current = crate::player::types::LastSentStats {

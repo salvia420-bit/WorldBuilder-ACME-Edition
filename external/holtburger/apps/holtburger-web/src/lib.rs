@@ -5188,6 +5188,101 @@ async fn recv_loop(
                                         u32_payload_2: Some(CHAT_CATEGORY_DEATH),
                                     });
                                 }
+                                holtburger_protocol::messages::GameEvent::PlayerDescription(
+                                    data,
+                                ) => {
+                                    // Phase 4 step 3.7: the player's
+                                    // biota — skills (incl. Run for
+                                    // run-rate), attributes, vitals,
+                                    // motion table id, enchantments,
+                                    // spells. Hydrating this lets
+                                    // `WorldState::resolve_self_movement_capabilities`
+                                    // succeed without the 3.6 fallback
+                                    // override; subsequent ticks read
+                                    // the player's *real* run rate
+                                    // through `world.player_run_rate()`
+                                    // (which goes through Run skill
+                                    // current + burden, not 1.0/4.5
+                                    // hardcoded). Mirrors the cli's
+                                    // dual-path handler in
+                                    // `holtburger-world/handlers/{login,
+                                    // player}.rs`.
+                                    if let Some(w) = world.as_mut() {
+                                        let mut events: Vec<
+                                            holtburger_world::WorldEvent,
+                                        > = Vec::new();
+                                        w.player.hydrate_from_player_description(
+                                            data.as_ref(),
+                                            &w.xp_table,
+                                            &w.skill_table,
+                                            &mut events,
+                                        );
+                                        w.apply_player_description_world_state(
+                                            data.as_ref(),
+                                            &mut events,
+                                        );
+                                        w.emit_player_derived_stats(&mut events);
+                                        // Real biota now resolved —
+                                        // drop the bootstrap-time
+                                        // fallback so subsequent
+                                        // movement uses the player's
+                                        // actual capabilities.
+                                        w.clear_self_movement_capabilities_override();
+                                        let real_caps_ok = w
+                                            .resolve_self_movement_capabilities()
+                                            .is_ok();
+                                        console_log_str(&format!(
+                                            "[step 3.7] PlayerDescription hydrated; \
+                                             fallback caps cleared (real_caps_ok={}); \
+                                             world_events_emitted={}",
+                                            real_caps_ok,
+                                            events.len(),
+                                        ));
+                                        // If the real biota didn't
+                                        // resolve (e.g. data missing /
+                                        // skills not yet populated),
+                                        // re-install the fallback so
+                                        // movement keeps working —
+                                        // better to walk wrong than
+                                        // not at all.
+                                        if !real_caps_ok {
+                                            let fallback =
+                                                holtburger_world::SelfMovementCapabilities {
+                                                    kinematics: holtburger_world::SelfMovementKinematics {
+                                                        source: holtburger_world::PlayerMotionTableSource::DirectProperty {
+                                                            motion_table_id: 0,
+                                                        },
+                                                        motion_table_id: 0,
+                                                        stance: 0,
+                                                        base_walk_forward_velocity:
+                                                            holtburger_common::Vector3 {
+                                                                x: 0.0, y: 1.0, z: 0.0,
+                                                            },
+                                                        base_run_forward_velocity:
+                                                            holtburger_common::Vector3 {
+                                                                x: 0.0, y: 4.5, z: 0.0,
+                                                            },
+                                                        base_turn_left_omega:
+                                                            holtburger_common::Vector3 {
+                                                                x: 0.0, y: 0.0, z: 1.5,
+                                                            },
+                                                        base_turn_right_omega:
+                                                            holtburger_common::Vector3 {
+                                                                x: 0.0, y: 0.0, z: -1.5,
+                                                            },
+                                                    },
+                                                    run_rate_scalar: 1.0,
+                                                };
+                                            w.set_self_movement_capabilities_override(
+                                                fallback,
+                                            );
+                                            console_log_str(
+                                                "[step 3.7] real biota didn't resolve; \
+                                                 fallback caps re-installed",
+                                            );
+                                        }
+                                    }
+                                }
                                 _ => {
                                     // Non-chat GameEvents drop through
                                     // to the no-op outer catch-all.

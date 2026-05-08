@@ -444,7 +444,11 @@ impl WorldState {
         self.entities.get(guid).map(|entity| entity.position)
     }
 
-    pub(crate) fn apply_player_description_world_state(
+    /// Phase 4 step 3.7 — exposed `pub` so the wasm recv loop can call
+    /// it on inbound `GameEvent::PlayerDescription`. Cli call sites
+    /// (login + player handlers) live inside `holtburger-world`; the
+    /// wasm bundle is the only outside caller. Body is unchanged.
+    pub fn apply_player_description_world_state(
         &mut self,
         data: &PlayerDescriptionEventData,
         events: &mut Vec<WorldEvent>,

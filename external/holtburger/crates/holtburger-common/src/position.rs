@@ -111,6 +111,73 @@ impl WorldPosition {
         self
     }
 
+    /// Phase 4 step 3.7 — re-bucket an outdoor pose whose local coords
+    /// have advanced past `[0, METERS_PER_LANDBLOCK)`. Used by the wasm
+    /// bundle's local-pose integrator (`MovementSystem::advance_local_
+    /// pose_for_manual_drive`) when the player walks across a 192 m
+    /// landblock boundary — the cli's full physics solver handles this
+    /// implicitly via `SpatialPhysics::solve` + `apply_solved_body_
+    /// kinematics`, but the wasm bundle skips the solver to keep the
+    /// bundle small.
+    ///
+    /// Updates the high word of `landblock_id` (X = bits 24-31, Y = 16-23)
+    /// by floor-dividing the absolute global coords through
+    /// `METERS_PER_LANDBLOCK`, wraps `coords.{x, y}` back into
+    /// `[0, METERS_PER_LANDBLOCK)`, and re-derives the cell id via
+    /// [`Self::normalize_outdoor_cell`]. No-op if the pose is indoor or
+    /// already in-bounds. Edge of the world (X or Y at 0 / 255) clamps
+    /// rather than wrapping further — saves crashing if the integrator
+    /// runs away.
+    pub fn rebucket_outdoor_landblock(mut self) -> Self {
+        if self.is_indoors() || self.landblock_id == Guid::NULL {
+            return self;
+        }
+
+        let mut x = self.coords.x;
+        let mut y = self.coords.y;
+        let (mut lb_x, mut lb_y) = self.landblock_coords();
+        let mut moved = false;
+
+        while x >= METERS_PER_LANDBLOCK && lb_x < 0xFF {
+            lb_x += 1;
+            x -= METERS_PER_LANDBLOCK;
+            moved = true;
+        }
+        while x < 0.0 && lb_x > 0 {
+            lb_x -= 1;
+            x += METERS_PER_LANDBLOCK;
+            moved = true;
+        }
+        if x < 0.0 || x >= METERS_PER_LANDBLOCK {
+            x = x.clamp(0.0, METERS_PER_LANDBLOCK - 1e-4);
+        }
+
+        while y >= METERS_PER_LANDBLOCK && lb_y < 0xFF {
+            lb_y += 1;
+            y -= METERS_PER_LANDBLOCK;
+            moved = true;
+        }
+        while y < 0.0 && lb_y > 0 {
+            lb_y -= 1;
+            y += METERS_PER_LANDBLOCK;
+            moved = true;
+        }
+        if y < 0.0 || y >= METERS_PER_LANDBLOCK {
+            y = y.clamp(0.0, METERS_PER_LANDBLOCK - 1e-4);
+        }
+
+        if !moved {
+            return self;
+        }
+
+        self.coords.x = x;
+        self.coords.y = y;
+        let cell_word = self.landblock_id.0 & 0xFFFF;
+        self.landblock_id =
+            Guid(((lb_x as u32) << 24) | ((lb_y as u32) << 16) | cell_word);
+        self.normalize_outdoor_cell()
+    }
+
     pub fn landblock_chebyshev_distance_to(&self, other: &Self) -> Option<u8> {
         if self.landblock_id == Guid::NULL || other.landblock_id == Guid::NULL {
             return None;
@@ -193,6 +260,89 @@ impl WorldPosition {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_rebucket_outdoor_no_op_when_inside_bounds() {
+        // Holtburg town center, well inside [0, 192) — should be unchanged.
+        let pos = WorldPosition {
+            landblock_id: Guid(0xA9B40019),
+            coords: Vector3::new(84.0, 7.1, 94.0),
+            rotation: Quaternion::identity(),
+        };
+        let r = pos.rebucket_outdoor_landblock();
+        assert_eq!(r.landblock_id, Guid(0xA9B40019));
+        assert!((r.coords.x - 84.0).abs() < 1e-3);
+        assert!((r.coords.y - 7.1).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_rebucket_outdoor_crosses_north() {
+        // Walking north (Y increasing) past 192 should bump lb_y by 1
+        // and wrap Y back into [0, 192). Start: lb=0xA9B4 (X=0xA9, Y=0xB4),
+        // local Y = 200. After rebucket: lb=0xA9B5, Y=8.
+        let pos = WorldPosition {
+            landblock_id: Guid(0xA9B40019),
+            coords: Vector3::new(94.0, 200.0, 94.0),
+            rotation: Quaternion::identity(),
+        };
+        let r = pos.rebucket_outdoor_landblock();
+        let (lb_x, lb_y) = r.landblock_coords();
+        assert_eq!(lb_x, 0xA9, "X unchanged");
+        assert_eq!(lb_y, 0xB5, "Y incremented (north)");
+        assert!((r.coords.y - 8.0).abs() < 1e-3, "Y wrapped: got {}", r.coords.y);
+    }
+
+    #[test]
+    fn test_rebucket_outdoor_crosses_south_west_diagonal() {
+        // Walking south-west: y → -10, x → -50. lb_y goes from 0xB4 to 0xB3,
+        // lb_x goes from 0xA9 to 0xA8, coords wrap to (142, 182).
+        let pos = WorldPosition {
+            landblock_id: Guid(0xA9B40019),
+            coords: Vector3::new(-50.0, -10.0, 94.0),
+            rotation: Quaternion::identity(),
+        };
+        let r = pos.rebucket_outdoor_landblock();
+        let (lb_x, lb_y) = r.landblock_coords();
+        assert_eq!(lb_x, 0xA8, "X decremented (west)");
+        assert_eq!(lb_y, 0xB3, "Y decremented (south)");
+        assert!((r.coords.x - 142.0).abs() < 1e-3, "X wrapped: got {}", r.coords.x);
+        assert!((r.coords.y - 182.0).abs() < 1e-3, "Y wrapped: got {}", r.coords.y);
+    }
+
+    #[test]
+    fn test_rebucket_outdoor_recomputes_cell_id() {
+        // After rebucketing, the cell index in the low word should
+        // match the new local coords. Pre: cell 0x19 (=25) at (84, 7).
+        // Walking 200 m north: pose lands at (84, 15) in lb 0xA9B5.
+        // Cell for (84, 15) = (cellX * 8) + cellY + 1 where
+        // cellX = floor(84/24) = 3, cellY = floor(15/24) = 0
+        // → (3*8) + 0 + 1 = 25 → 0x19.
+        let pos = WorldPosition {
+            landblock_id: Guid(0xA9B40019),
+            coords: Vector3::new(84.0, 207.0, 94.0),
+            rotation: Quaternion::identity(),
+        };
+        let r = pos.rebucket_outdoor_landblock();
+        assert_eq!(
+            r.landblock_id,
+            Guid(0xA9B50019),
+            "expected lb=0xA9B5, cell=0x19; got 0x{:08X}",
+            r.landblock_id.0,
+        );
+    }
+
+    #[test]
+    fn test_rebucket_indoor_is_noop() {
+        let pos = WorldPosition {
+            landblock_id: Guid(0x860201AD), // indoor (low >= 0x100)
+            coords: Vector3::new(12.32, -28.48, 0.005),
+            rotation: Quaternion::identity(),
+        };
+        let r = pos.rebucket_outdoor_landblock();
+        assert_eq!(r.landblock_id, Guid(0x860201AD));
+        assert!((r.coords.x - 12.32).abs() < 1e-3);
+        assert!((r.coords.y - (-28.48)).abs() < 1e-3);
+    }
 
     #[test]
     fn test_indoor_format() {

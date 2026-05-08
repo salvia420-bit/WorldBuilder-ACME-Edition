@@ -5,8 +5,9 @@
 > Read this section first. The rest of this document is the
 > long-lived design intent + decision history; this header is
 > the snapshot of where we actually are and what's blocking
-> what. Last refreshed **2026-05-07** (post-Phase-4-step-3.6
-> landing — server-side player movement now works).
+> what. Last refreshed **2026-05-07** (post-Phase-4-step-3.7
+> landing — landblock-crossing rebucket + PlayerDescription
+> biota handler).
 
 ### Where the project is
 
@@ -14,7 +15,9 @@
 bilinear blend; step 5 partial), 4 (step 1 + 2a + 2a.5 +
 2a.6 + 2b + 3 + 3.5 + **3.6 movement-system wiring — full
 cli `MovementSystem` reuse, server-side player position
-actually advances, landed 2026-05-07** + 4 chat panel +
+actually advances, landed 2026-05-07** + **3.7 biota
+handler + landblock-crossing rebucket, landed 2026-05-07**
++ 4 chat panel +
 **6a + 6b + 6e — realistic-entity metadata + ItemType-keyed
 visual dispatch + glyph fallback + per-entity nameplates,
 landed 2026-05-06 evening; 6 Phase A + B + C — apply ACE-
@@ -116,7 +119,44 @@ into adjacent landblocks — single-walk testing within
 Holtburg town's 192m × 192m cell is fine, but step 3.6 lets
 you cross into `0xA9B30019` etc. for encounters and the
 integrator will produce wrong local coords on the far
-side).
+side). **Both deferred items closed by step 3.7** (below).
+
+**Phase 4 step 3.7 (2026-05-07).** Closes the two
+out-of-scope items 3.6 left open.
+- *(a) PlayerDescription biota handler.* Recv loop now
+  matches `GameEvent::PlayerDescription` and calls cli's
+  `player.hydrate_from_player_description` +
+  `world.apply_player_description_world_state` +
+  `world.emit_player_derived_stats`, then clears 3.6's
+  fallback `SelfMovementCapabilities` override so subsequent
+  `resolve_self_movement_capabilities` reads the player's
+  real `Run` skill + burden + motion table. Defensive
+  re-install of the fallback if real biota fails to resolve.
+  Required `pub` lifting on
+  `WorldState::{apply_player_description_world_state,
+  emit_player_derived_stats}` and on
+  `set_self_movement_capabilities_override` /
+  `clear_self_movement_capabilities_override` (the latter
+  pair were `#[cfg(any(test, feature = "test-support"))]`).
+  Verification still pending live confirmation —
+  PlayerDescription wasn't observed in the capture harness
+  this session (test-fixture state may be sticky); handler
+  is correct per cli reference.
+- *(b) Landblock-crossing rebucket.* New
+  `WorldPosition::rebucket_outdoor_landblock` in
+  `holtburger-common::position` walks coords past
+  `[0, METERS_PER_LANDBLOCK)` (192 m) and adjusts the high
+  word of `landblock_id` (X = bits 24-31, Y = 16-23),
+  re-deriving the cell index via `normalize_outdoor_cell`.
+  Edge-of-world clamps. Indoor poses no-op. Called from
+  `MovementSystem::advance_local_pose_for_manual_drive`
+  immediately after velocity integration so the
+  AutonomousPosition heartbeat always carries a coherent
+  `(landblock, local-coords)` pair after walking through a
+  192 m boundary. Five unit tests in
+  `holtburger-common::position::tests::test_rebucket_*`
+  cover in-bounds no-op, north cross, south-west diagonal
+  cross, cell-id recompute, indoor no-op — all green.
 
 **Phase 3 step 3.6 (2026-05-06).** The terrain rendering now
 matches `emit-static-site`'s output (the canonical reference).
@@ -253,16 +293,18 @@ Pick one to pull on. The choice is real, not arbitrary.
   `kind=2 ChatReceived` events with a new `u32Payload2`
   getter; DOM panel grew a tab bar (All / Local / Tells /
   Channels / Combat / Magic / System) with category-keyed
-  colours. **Next on the rail: step 3.7** (real character-biota
-  loading so movement caps come from `world.player_run_rate()`
-  + the player's actual `MotionTable` instead of 3.6's hardcoded
-  fallback override; also landblock-crossing correctness in the
-  local-pose integrator so walking into `0xA9B30019` etc. for
-  encounters produces correct local coords on the far side) →
-  **step 4 follow-on** (vitals + inventory panels — same
-  DOM-next-to-canvas pattern as the chat panel) → step 5
-  (interactive entities: doors, portals, vendors via
-  `UseObject`) → **step 6 (realistic entity rendering:
+  colours. Step 3.7: `GameEvent::PlayerDescription` recv arm
+  hydrates the player from inbound biota and clears 3.6's
+  fallback `SelfMovementCapabilities` override (real `Run`
+  skill + burden now drive movement caps); new
+  `WorldPosition::rebucket_outdoor_landblock` in the local-pose
+  integrator advances the high word of `landblock_id` when
+  coords cross 192 m boundaries (5 unit tests cover the
+  arithmetic). **Next on the rail: step 4 follow-on**
+  (vitals + inventory panels — same DOM-next-to-canvas pattern
+  as the chat panel) → step 5 (interactive entities: doors,
+  portals, vendors via `UseObject`) → **step 6 (realistic
+  entity rendering:
   WeenieType-keyed tints, nameplates, palette-tinted creature
   variants, portal swirls, sign inscriptions — mirrors
   `emit-static-site`'s sprite-mode output at z≥11). Today every
@@ -363,39 +405,43 @@ step's landing, plus what got closed since):
   static site uses `RoadType` as a repeating shader fill on
   the road stroke. We use flat stone-grey for roads; switching
   to a textured stroke is a PIXI line-style tweak.
-- ⏳ **Real character-biota-driven movement caps (Phase 4
-  step 3.7 candidate).** Step 3.6 installs a fallback
-  `SelfMovementCapabilities` override on `WorldState`
-  construction (walk = 1.0 m/s, run = 4.5 m/s, turn = 1.5
-  rad/s — matches the JS-prediction constants and retail
-  defaults) because the player's character biota isn't loaded
-  in the wasm bundle, so `resolve_self_movement_capabilities`
-  would otherwise return `RunRateUnavailable` and the
-  local-pose integrator would no-op. Cli reads
-  `world.player_run_rate()` + the player's actual
-  `MotionTable` from biota properties via the
-  `CharacterEnterWorld` → `CharacterDescription` flow; the
-  wasm bundle drops `CharacterDescription` in the `_ =>`
-  catch-all today. Real biota loading would also unblock
-  per-character speed buffs / debuffs / stamina effects,
-  combat damage formulas, and skill-checked abilities. See
-  `phase-4-step-3.6-movement-system.md` §8 (out of scope).
-- ⏳ **Landblock-crossing correctness in local-pose
-  integrator (Phase 4 step 3.7 candidate).** Step 3.6's
+- ✅ ~~**Real character-biota-driven movement caps**~~
+  **handler wired 2026-05-07** as Phase 4 step 3.7 (a). The
+  recv loop now handles `GameEvent::PlayerDescription` —
+  hydrates the player from the inbound description, applies
+  world-state changes, emits derived stats, and clears the
+  3.6 fallback `SelfMovementCapabilities` override so
+  subsequent `resolve_self_movement_capabilities` reads the
+  player's real run rate (Run skill + burden) and motion
+  table. If the real biota fails to resolve for any reason,
+  the fallback is re-installed defensively. Mirrors the cli's
+  dual-path handler in `holtburger-world/handlers/{login,
+  player}.rs`. Required `pub` lifting on
+  `WorldState::{apply_player_description_world_state,
+  emit_player_derived_stats}` and on
+  `set_self_movement_capabilities_override` (was test-only).
+  Verification still pending: the live capture run didn't
+  trigger PlayerDescription delivery (capture-script + ACE
+  flow specifics — ACE may send it earlier than the recv
+  loop's GameEvent arm fires under some session conditions).
+  When confirmed, real biota also unblocks per-character
+  speed buffs / debuffs / stamina effects, combat damage
+  formulas, and skill-checked abilities.
+- ✅ ~~**Landblock-crossing correctness in local-pose
+  integrator**~~ **landed 2026-05-07** as Phase 4 step 3.7
+  (b). New `WorldPosition::rebucket_outdoor_landblock` in
+  `holtburger-common::position` walks coords past
+  `[0, METERS_PER_LANDBLOCK)` and adjusts the high word of
+  `landblock_id` (X = bits 24-31, Y = 16-23) accordingly,
+  re-deriving the cell index via `normalize_outdoor_cell`.
+  Edge-of-world (X or Y at 0 / 255) clamps. Indoor poses
+  no-op. Called from
   `MovementSystem::advance_local_pose_for_manual_drive`
-  adds `velocity * dt` to `pose.coords.{x,y,z}` directly,
-  preserving the seeded `landblock_id`. Inside Holtburg
-  town's 192m × 192m cell that's fine; once you walk past
-  the cell boundary (e.g. south into `0xA9B30019` for
-  encounters) the integrator keeps the OLD landblock_id and
-  the local coords go > 192 — the AutonomousPosition packet
-  reports `(94, 200, 94)` instead of `(94, 8, 94)` in the
-  next landblock down. ACE may rubber-band or silently
-  reject. Fix: re-bucket coords into the correct landblock
-  on each tick (delta + landblock arithmetic). The cli's
-  `SpatialPhysics::solve` does this; the wasm bundle skips
-  the solver. ~half-day; gates step 9 of 3.6 validation
-  (running into wilderness encounters).
+  immediately after the velocity integration so heartbeats
+  always carry a coherent (landblock, local coords) pair.
+  Five unit tests in `position::tests::test_rebucket_*`:
+  in-bounds no-op, north cross, south-west diagonal cross,
+  cell-id recompute, indoor no-op. All green.
 - ⏳ **Authentic TexMerge mode.** `fetch_terrain_alpha_masks`
   Rust export + 3 retail-mask constant tables stay in the
   bundle as scaffolding; JS-side `decodeCellPalette` +
@@ -1676,27 +1722,45 @@ Step ledger:
   heartbeats_sent=...`. Out of scope (now Phase 4 step 3.7):
   real character-biota loading; landblock-crossing
   correctness — see polish backlog above.
-- ⏳ **Step 3.7 — character-biota loading + landblock-crossing
-  correctness.** Two distinct pieces, both unblocked by 3.6's
-  `WorldState` infrastructure but deferred to keep 3.6 small:
-  (a) handle inbound `CharacterDescription` (currently dropped
-  in the recv loop's `_ =>` catch-all) so `world.player_run_rate()`
-  + the player's `MotionTable` resolve correctly, removing 3.6's
-  fallback `SelfMovementCapabilities` override; this also feeds
-  per-character speed buffs / debuffs / stamina effects, combat
-  damage formulas, and skill-checked abilities. (b) extend the
-  local-pose integrator in `MovementSystem::advance_local_pose_for_
-  manual_drive` to re-bucket `pose.coords.{x,y}` into adjacent
-  landblocks when they exceed `[0, 192]` instead of overflowing
-  into the seeded `landblock_id`'s frame. Today walking far
-  enough south of Holtburg (into `0xA9B30019` etc. for encounter
-  generators) reports `(94, 200, 94)` to ACE instead of
-  `(94, 8, 94)` in the next landblock down — ACE may rubber-band
-  or silently reject. Cli's `SpatialPhysics::solve` handles
-  this; the wasm bundle skips the solver. Estimate: half-day for
-  (b), 1–2 days for (a). Either order; (b) gates step 9 of 3.6's
-  validation protocol (running into wilderness encounters), (a)
-  unblocks combat-formula correctness for step 5 / 6.
+- ✅ **Step 3.7 — character-biota loading + landblock-crossing
+  correctness.** Landed 2026-05-07. Two pieces, both unblocked
+  by 3.6's `WorldState` infrastructure, kept out of 3.6 for
+  scope: **(a) PlayerDescription biota handler.** Recv loop
+  matches `GameEvent::PlayerDescription` and calls
+  `world.player.hydrate_from_player_description` +
+  `world.apply_player_description_world_state` +
+  `world.emit_player_derived_stats` (cli pattern from
+  `holtburger-world/handlers/{login,player}.rs`), then clears
+  the 3.6 fallback `SelfMovementCapabilities` override so
+  `resolve_self_movement_capabilities` reads the real Run
+  skill + burden + motion table. Defensive re-install of the
+  fallback if the real biota doesn't resolve (skills not yet
+  populated, etc.). Required `pub` lifting on
+  `apply_player_description_world_state`,
+  `emit_player_derived_stats`, and the (was-test-only)
+  `set_self_movement_capabilities_override` /
+  `clear_self_movement_capabilities_override` setters. Live
+  PlayerDescription delivery wasn't observed in the capture
+  harness — possibly because ACE sends it earlier in the
+  session than the GameEvent arm fires under some session
+  conditions, possibly because the test fixture's player
+  state is sticky across sessions. Handler is correct per
+  cli reference; will validate once a clean fresh-character
+  session lands. **(b) Landblock-crossing rebucket.** New
+  `WorldPosition::rebucket_outdoor_landblock` in
+  `holtburger-common::position` walks coords past
+  `[0, METERS_PER_LANDBLOCK)` and adjusts the high word of
+  `landblock_id` (X = bits 24-31, Y = 16-23), re-deriving the
+  cell index via `normalize_outdoor_cell`. Edge-of-world
+  clamps. Indoor poses no-op. Called from
+  `MovementSystem::advance_local_pose_for_manual_drive`
+  immediately after velocity integration, so the
+  AutonomousPosition heartbeat always carries a coherent
+  `(landblock, local-coords)` pair when the player walks
+  through a 192 m boundary. Five unit tests
+  (`position::tests::test_rebucket_*`) cover: in-bounds no-op,
+  north cross, south-west diagonal cross, cell-id recompute,
+  indoor no-op. All green.
 - ✅ **Step 4 (chat panel) — full chat-type coverage with
   category tabs.** Landed 2026-05-07. Brings the browser
   chat surface to parity with the cli's chat panel

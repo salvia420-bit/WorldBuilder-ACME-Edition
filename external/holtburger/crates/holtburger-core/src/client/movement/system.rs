@@ -608,6 +608,12 @@ impl MovementSystem {
         pose.coords.x += velocity.x * dt_s;
         pose.coords.y += velocity.y * dt_s;
         pose.coords.z += velocity.z * dt_s;
+        // Phase 4 step 3.7 — re-bucket coords if we crossed a 192 m
+        // landblock boundary. Without this, the AutonomousPosition
+        // packet reports e.g. (94, 200, 94) inside the seeded
+        // landblock_id when the player has actually walked into the
+        // adjacent landblock — ACE rubber-bands or silently rejects.
+        let pose = pose.rebucket_outdoor_landblock();
         let _ = world.set_local_player_runtime_pose(pose);
     }
 
