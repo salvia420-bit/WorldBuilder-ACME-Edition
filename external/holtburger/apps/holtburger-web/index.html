@@ -522,6 +522,7 @@
         fetchEntityModelRender,
         fetchEntityCycleFrames,
         fetchEntitySurfacesPixels,
+        fetchBuildingPlacement,
         start_session,
         init_resource_source,
         has_resource_source,
@@ -1498,6 +1499,195 @@ void main() {
         for (const sp of surfacePixels) sp.free();
       }
 
+      // ----- Phase 6 step A: per-part building bake ---------------
+      //
+      // Buildings and objects share the existing `fetch_landblock_objects`
+      // call but route differently: buildings (`isBuilding === true`) go
+      // through `fetchBuildingPlacement` to get N per-part meshes per
+      // model_id, each baked into its own `RenderTexture`. Each placement
+      // becomes a `PIXI.Container` of N child sprites, tagged with
+      // `{ buildingId, partIndex }` in user-data so Phase E can rotate a
+      // door GfxObj around its hinge frame by part_index lookup. The
+      // single-fused atlas/dot fallback path is kept as a safety net for
+      // model_ids the per-part bake fails on.
+      async function bakePerPartBuildingTextures(app, modelIds) {
+        // Map<modelId, Array<{ texture, worldBounds, partIndex } | null>>
+        // Position in the inner array IS the part_index; null entries
+        // mark parts whose triangulation produced 0 triangles (engine-
+        // internal anchors inside a building Setup, e.g. invisible
+        // collision proxies — preserved as null to keep the slot
+        // addressable for later phases).
+        const perPart = new Map();
+        if (modelIds.length === 0) return perPart;
+        const allSurfaceIds = new Set();
+        const buildingBakes = new Map();
+        for (const modelId of modelIds) {
+          let bundle;
+          try {
+            bundle = await fetchBuildingPlacement(modelId);
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[phase6.A] fetchBuildingPlacement(0x${(modelId >>> 0).toString(16)}) failed:`, e
+            );
+            continue;
+          }
+          const partCount = bundle.partCount;
+          if (partCount === 0) {
+            bundle.free();
+            continue;
+          }
+          const meshes = bundle.takePartMeshes();
+          buildingBakes.set(modelId, meshes);
+          bundle.free();
+          for (const m of meshes) {
+            for (const sid of m.surfaces) allSurfaceIds.add(sid);
+          }
+        }
+
+        const surfaceList = [...allSurfaceIds];
+        const surfacePixels = surfaceList.length > 0
+          ? await fetch_surfaces_pixels(new Uint32Array(surfaceList))
+          : [];
+        const surfaceTexBySid = new Map();
+        for (let i = 0; i < surfaceList.length; i += 1) {
+          surfaceTexBySid.set(surfaceList[i], surfacePixelsToTexture(surfacePixels[i]));
+        }
+
+        for (const [modelId, meshes] of buildingBakes) {
+          const partEntries = new Array(meshes.length);
+          for (let pi = 0; pi < meshes.length; pi += 1) {
+            const mesh = meshes[pi];
+            if (mesh.triCount === 0) {
+              partEntries[pi] = null;
+              mesh.free();
+              continue;
+            }
+            const sList = mesh.surfaces;
+            const texArr = new Array(sList.length);
+            for (let s = 0; s < sList.length; s += 1) {
+              texArr[s] = surfaceTexBySid.get(sList[s]) ?? makeFlatTexture();
+            }
+            const renderTex = renderModelTile(app, mesh, texArr);
+            const wb = mesh.worldBounds;
+            const bbox = mesh.bbox;
+            partEntries[pi] = {
+              texture: renderTex,
+              worldBounds: [wb[0], wb[1]],
+              triCount: mesh.triCount,
+              // bbox.min in model-local x/y so the per-part sprite can
+              // anchor on the part's centre rather than the whole
+              // building's centre — without this every leaf draws
+              // stacked at the placement origin, defeating per-part
+              // addressability.
+              localOffset: [
+                (bbox[0] + bbox[3]) * 0.5,
+                (bbox[1] + bbox[4]) * 0.5,
+              ],
+              partIndex: pi,
+            };
+            mesh.free();
+          }
+          perPart.set(modelId, partEntries);
+        }
+        for (const sp of surfacePixels) sp.free();
+        return perPart;
+      }
+
+      // Build a `PIXI.Container` of per-building per-part sprites and
+      // populate `buildingMap`. Per-placement key is
+      // `${landblockId.toString(16)}_${x.toFixed(2)}_${y.toFixed(2)}_${modelId.toString(16)}`
+      // — stable across re-renders because the inputs come from the
+      // server-authoritative `LandblockInfo.buildings` list, which
+      // doesn't shift between fetches. Phase E will use the
+      // `buildingMap` lookup to find the exact placement whose door
+      // toggled.
+      function buildBuildingsContainer(neighbourhood, buildings, perPartMap, fallbackMap, fallbackInvisible) {
+        const container = new PIXI.Container();
+        const buildingMap = new Map();
+        const lbIndex = new Map();
+        for (const n of neighbourhood) lbIndex.set((n.x << 16) | n.y, n);
+
+        let withParts = 0;
+        let withFallback = 0;
+        let dropped = 0;
+
+        for (const obj of buildings) {
+          const lbX = (obj.landblockId >>> 24) & 0xff;
+          const lbY = (obj.landblockId >>> 16) & 0xff;
+          const n = lbIndex.get((lbX << 16) | lbY);
+          if (!n) continue;
+          const wx = n.x * METERS_PER_LANDBLOCK + obj.x;
+          const wy = n.y * METERS_PER_LANDBLOCK + obj.y;
+          const buildingKey =
+            `${(obj.landblockId >>> 0).toString(16).padStart(8, "0")}_`
+            + `${obj.x.toFixed(2)}_${obj.y.toFixed(2)}_`
+            + `${(obj.modelId >>> 0).toString(16).padStart(8, "0")}`;
+
+          const partEntries = perPartMap.get(obj.modelId);
+          if (partEntries && partEntries.some((p) => p !== null)) {
+            const buildingContainer = new PIXI.Container();
+            buildingContainer.position.set(wx, wy);
+            buildingContainer.rotation = -obj.rotationZ;
+            buildingContainer.__buildingKey = buildingKey;
+            buildingContainer.__buildingId = obj.modelId;
+            buildingContainer.__landblockId = obj.landblockId;
+            for (let pi = 0; pi < partEntries.length; pi += 1) {
+              const part = partEntries[pi];
+              if (!part) continue;
+              const sprite = new PIXI.Sprite(part.texture);
+              sprite.anchor.set(0.5, 0.5);
+              sprite.position.set(part.localOffset[0], part.localOffset[1]);
+              sprite.width = part.worldBounds[0];
+              sprite.height = part.worldBounds[1];
+              // Mirror compensation: same per-sprite pattern as the
+              // fused single-sprite path. Without it the parent
+              // worldContainer's scale.y=-1 puts model NORTH at screen
+              // SOUTH (see the long comment in `buildObjectsContainer`).
+              sprite.scale.y = -sprite.scale.y;
+              sprite.__buildingId = obj.modelId;
+              sprite.__partIndex = pi;
+              sprite.__triCount = part.triCount;
+              buildingContainer.addChild(sprite);
+            }
+            container.addChild(buildingContainer);
+            buildingMap.set(buildingKey, buildingContainer);
+            withParts += 1;
+          } else {
+            // Per-part bake unavailable; fall back to the fused single-
+            // sprite path so the building still renders. JS still adds
+            // a buildingMap entry (Container with one fused-sprite
+            // child) so capture probes find it.
+            const fused = fallbackMap?.get(obj.modelId);
+            const buildingContainer = new PIXI.Container();
+            buildingContainer.position.set(wx, wy);
+            buildingContainer.rotation = -obj.rotationZ;
+            buildingContainer.__buildingKey = buildingKey;
+            buildingContainer.__buildingId = obj.modelId;
+            buildingContainer.__landblockId = obj.landblockId;
+            if (fused) {
+              const sprite = new PIXI.Sprite(fused.texture);
+              sprite.anchor.set(0.5, 0.5);
+              sprite.position.set(0, 0);
+              sprite.width = fused.worldBounds[0];
+              sprite.height = fused.worldBounds[1];
+              sprite.scale.y = -sprite.scale.y;
+              sprite.__buildingId = obj.modelId;
+              sprite.__partIndex = 0;
+              buildingContainer.addChild(sprite);
+              withFallback += 1;
+            } else if (fallbackInvisible?.has(obj.modelId)) {
+              dropped += 1;
+            } else {
+              dropped += 1;
+            }
+            container.addChild(buildingContainer);
+            buildingMap.set(buildingKey, buildingContainer);
+          }
+        }
+        return { container, buildingMap, withParts, withFallback, dropped };
+      }
+
       // ----- Phase 3 step 4 / 4.5 / 6: object sprite container ----
 
       function buildObjectsContainer(neighbourhood, objects, spriteMap, colourMap, liveSpriteMap, invisibleModels) {
@@ -1843,6 +2033,32 @@ void main() {
           console.warn("[step6] buildLiveSpriteMap failed; falling back to static atlas:", e);
         }
 
+        // Phase 6 step A: split building placements out of the object
+        // list and route them through the per-part bake. Buildings get
+        // a `PIXI.Container` of N child sprites (one per Setup part)
+        // tagged `{ buildingId, partIndex }`; non-building objects keep
+        // the existing single-fused sprite path. The fused
+        // `liveSpriteMap` still has entries for building model_ids
+        // (from `buildLiveSpriteMap` above) — those serve as a fallback
+        // texture if the per-part bake fails for a model_id.
+        const buildings = objects.filter((o) => o.isBuilding);
+        const nonBuildings = objects.filter((o) => !o.isBuilding);
+        let perPartBuildingMap = new Map();
+        try {
+          const uniqueBuildingIds = [...new Set(buildings.map((o) => o.modelId))];
+          perPartBuildingMap = await bakePerPartBuildingTextures(app, uniqueBuildingIds);
+          console.log(
+            `[phase6.A] per-part bake: ${perPartBuildingMap.size} of `
+            + `${uniqueBuildingIds.length} unique building model_ids (${buildings.length} placements)`
+          );
+        } catch (e) {
+          console.warn("[phase6.A] bakePerPartBuildingTextures failed; buildings will use fused fallback:", e);
+        }
+        const buildingsBundle = buildBuildingsContainer(
+          neighbourhood, buildings, perPartBuildingMap, liveSpriteMap, invisibleModels
+        );
+        worldContainer.addChild(buildingsBundle.container);
+
         // Step 4: object sprites on top of the textured terrain.
         // Step 4.5: tinted with the per-model real ARGB resolved from
         // each model's Surface chain (`colourMap`); models without a
@@ -1851,11 +2067,18 @@ void main() {
         // the static atlas; fall back to atlas, then to colour-tinted
         // dot. Models in `invisibleModels` get nothing — they're
         // engine-internal anchors meant to be unseen in-game.
+        // Phase 6 step A: only non-building placements come through
+        // here; buildings render via `buildingsBundle.container` above.
         const { container: objectsContainer, withSprite, fallback, withLive, invisible } =
-          buildObjectsContainer(neighbourhood, objects, spriteMap, colourMap, liveSpriteMap, invisibleModels);
+          buildObjectsContainer(neighbourhood, nonBuildings, spriteMap, colourMap, liveSpriteMap, invisibleModels);
         worldContainer.addChild(objectsContainer);
         // Stash the counts on the app for the stage-info panel.
         app._stepFourCounts = { withSprite, fallback, withLive, invisible };
+        app._phase6BuildingCounts = {
+          withParts: buildingsBundle.withParts,
+          withFallback: buildingsBundle.withFallback,
+          dropped: buildingsBundle.dropped,
+        };
 
         // Phase 4 step 2b: live-entity layer. Sits on top of the
         // static objectsContainer so dynamic NPCs / monsters / players
@@ -1880,12 +2103,19 @@ void main() {
             liveSpriteMap,
             spriteMap,
             invisibleModels,
+            buildingMap: buildingsBundle.buildingMap,
         };
         // Expose for capture-script telemetry (Phase 4 step 2b
         // capture probes `window.liveScene.entityContainer.children.length`).
         // Strictly debug-only; not relied on by production code paths.
         window.liveScene = liveScene;
         window.entityMap = entityMap;
+        // Phase 6 step A: per-building per-part container registry.
+        // Keyed by stable `${landblockId}_${x}_${y}_${modelId}` strings;
+        // values are `PIXI.Container`s whose children are sprites
+        // tagged `{ buildingId, partIndex }` so Phase E can rotate door
+        // GfxObjs around their hinge frames by part_index lookup.
+        window.buildingMap = buildingsBundle.buildingMap;
         // Phase 4 step 6 capture surface: same window-exposure pattern.
         // capture_step6.cjs injects synthetic EntityUpdate-shaped objects
         // through these so we can demonstrate step 6 visuals without a

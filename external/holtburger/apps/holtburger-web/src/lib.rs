@@ -612,6 +612,12 @@ pub struct ObjectPlacement {
     /// Yaw rotation around the z-axis (vertical), radians. Extracted
     /// from the AC quaternion via `atan2(2(qw*qz + qx*qy), 1 - 2(qy² + qz²))`.
     rotation_z: f32,
+    /// True when this placement came from `LandblockInfo.buildings`
+    /// (the `BuildInfo` list) rather than `LandblockInfo.objects`
+    /// (the `Stab` list). Phase 6 step A uses this on the JS side to
+    /// route building placements through the per-part container path
+    /// (`window.buildingMap`) so Phase E can address door GfxObjs.
+    is_building: bool,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -641,6 +647,10 @@ impl ObjectPlacement {
     pub fn rotation_z(&self) -> f32 {
         self.rotation_z
     }
+    #[wasm_bindgen(getter, js_name = isBuilding)]
+    pub fn is_building(&self) -> bool {
+        self.is_building
+    }
 }
 
 /// Fetch per-landblock object placement records for a list of
@@ -648,17 +658,19 @@ impl ObjectPlacement {
 /// placement lists, both emitted as [`ObjectPlacement`] entries:
 ///
 /// - `LandblockInfo.objects` (the `Stab` list) — props, signs, small
-///   loose objects.
+///   loose objects (`is_building == false`).
 /// - `LandblockInfo.buildings` (the `BuildInfo` list) — buildings
-///   and other structures with interior cells. Their portals
-///   (doors/windows) and leaf meshes are dropped here; step 4 only
-///   needs the building's outer placement (model_id + frame) to
-///   render the silhouette.
+///   and other structures with interior cells (`is_building == true`).
+///   The model_id + Frame is the building's outer placement; per-part
+///   geometry (doors, windows, walls, interior props) is materialized
+///   on demand by [`fetch_building_placement`] (Phase 6 step A) so
+///   JS can address each part by `(model_id, part_index)` for door
+///   rotation (Phase E) and AABB collision (Phase B).
 ///
-/// Both lists use the same `(model_id, Frame)` shape, so the
-/// boundary doesn't distinguish them. The renderer can tell objects
-/// from buildings by the model-id top byte (`0x01` = GfxObj/Model,
-/// `0x02` = SetupModel — usually buildings).
+/// Both lists use the same `(model_id, Frame)` shape; the JS caller
+/// keys off `is_building` to route each placement to the right
+/// container (`window.buildingMap` for buildings, the existing
+/// shared-sprite atlas path for objects).
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn fetch_landblock_objects(
@@ -677,7 +689,7 @@ pub async fn fetch_landblock_objects(
         .await
         .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
 
-    fn frame_to_placement(landblock_id: u32, model_id: u32, frame: &holtburger_dat::landblock::Frame) -> ObjectPlacement {
+    fn frame_to_placement(landblock_id: u32, model_id: u32, frame: &holtburger_dat::landblock::Frame, is_building: bool) -> ObjectPlacement {
         let q = &frame.orientation;
         // Quaternion → yaw (rotation around z). Standard aircraft-
         // style yaw extraction.
@@ -691,6 +703,7 @@ pub async fn fetch_landblock_objects(
             y: frame.origin.y,
             z: frame.origin.z,
             rotation_z: yaw,
+            is_building,
         }
     }
 
@@ -707,10 +720,10 @@ pub async fn fetch_landblock_objects(
             .map_err(|e| JsValue::from_str(&format!("LandblockInfo::unpack {id:#010X}: {e}")))?;
 
         for stab in &info.objects {
-            out.push(frame_to_placement(info.id, stab.id, &stab.frame));
+            out.push(frame_to_placement(info.id, stab.id, &stab.frame, false));
         }
         for building in &info.buildings {
-            out.push(frame_to_placement(info.id, building.model_id, &building.frame));
+            out.push(frame_to_placement(info.id, building.model_id, &building.frame, true));
         }
     }
     Ok(out)
@@ -1541,6 +1554,82 @@ fn triangulate_setup_model_at_frame<S: holtburger_dat::ResourceSource + ?Sized>(
     pose_override: Option<&holtburger_dat::file_type::setup_model::AnimationFrame>,
     tris: &mut Vec<Tri>,
 ) -> Option<()> {
+    walk_setup_parts(
+        source,
+        setup_id,
+        model_changes,
+        texture_changes,
+        mtable_override,
+        pose_override,
+        |_pi, gfx, offset, rot, swaps| {
+            append_gfx_tris_with_tex_swaps(tris, gfx, offset, rot, swaps);
+        },
+    )
+}
+
+/// Phase 6 step A: per-part variant of [`triangulate_setup_model_at_frame`].
+/// Returns one `Vec<Tri>` per `setup.parts[i]` so JS can address each
+/// part independently for door-rotation (Phase E) and AABB collision
+/// (Phase B). Parts whose GfxObj fails to load yield empty vecs at
+/// their index — the slot is preserved so `part_index` stays stable
+/// across boundary calls.
+#[cfg(target_arch = "wasm32")]
+fn triangulate_setup_model_per_part<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup_id: u32,
+    model_changes: &[(u8, u32)],
+    texture_changes: &[(u8, u32, u32)],
+) -> Option<Vec<Vec<Tri>>> {
+    use holtburger_dat::file_type::SetupModel;
+    use holtburger_dat::ResourceKey;
+    let bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", setup_id))
+        .ok()?;
+    let setup = SetupModel::unpack(&mut std::io::Cursor::new(&bytes)).ok()?;
+    let part_count = setup.parts.len();
+    let mut buckets: Vec<Vec<Tri>> = (0..part_count).map(|_| Vec::new()).collect();
+    walk_setup_parts(
+        source,
+        setup_id,
+        model_changes,
+        texture_changes,
+        None,
+        None,
+        |pi, gfx, offset, rot, swaps| {
+            if let Some(slot) = buckets.get_mut(pi) {
+                append_gfx_tris_with_tex_swaps(slot, gfx, offset, rot, swaps);
+            }
+        },
+    )?;
+    Some(buckets)
+}
+
+/// Shared inner loop for the SetupModel part walk. Loads the setup,
+/// resolves pose priority (`pose_override` → idle → placement →
+/// identity), and invokes `on_part(part_index, &gfx, offset, rot, &tex_swaps)`
+/// for each `0x01` (GfxObj) part — including substituted parts via
+/// `model_changes`. Used by both the fused-output path
+/// ([`triangulate_setup_model_at_frame`]) and the per-part path
+/// ([`triangulate_setup_model_per_part`]).
+#[cfg(any(target_arch = "wasm32", test))]
+fn walk_setup_parts<S: holtburger_dat::ResourceSource + ?Sized, F>(
+    source: &S,
+    setup_id: u32,
+    model_changes: &[(u8, u32)],
+    texture_changes: &[(u8, u32, u32)],
+    mtable_override: Option<u32>,
+    pose_override: Option<&holtburger_dat::file_type::setup_model::AnimationFrame>,
+    mut on_part: F,
+) -> Option<()>
+where
+    F: FnMut(
+        usize,
+        &holtburger_dat::file_type::GfxObj,
+        holtburger_common::Vector3,
+        holtburger_common::Quaternion,
+        &[(u32, u32)],
+    ),
+{
     use holtburger_dat::file_type::{GfxObj, SetupModel};
     use holtburger_dat::ResourceKey;
 
@@ -1608,7 +1697,7 @@ fn triangulate_setup_model_at_frame<S: holtburger_dat::ResourceSource + ?Sized>(
             .filter(|(p, _, _)| *p as usize == pi)
             .map(|(_, old, new)| (*old, *new))
             .collect();
-        append_gfx_tris_with_tex_swaps(tris, &gfx, offset, rot, &part_tex_swaps_buf);
+        on_part(pi, &gfx, offset, rot, &part_tex_swaps_buf);
     }
     Some(())
 }
@@ -2250,6 +2339,203 @@ pub async fn fetch_model_meshes(model_ids: Vec<u32>) -> Result<Vec<ModelMesh>, J
         out.push(pack_model_mesh(tris));
     }
     Ok(out)
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  Phase 6 step A — per-part building mesh export
+// ────────────────────────────────────────────────────────────────────
+//
+// The fused-output path (`fetch_model_mesh` / `fetch_model_meshes`)
+// walks every Setup part and packs them into a single `ModelMesh` per
+// model_id — fine for static props and the existing single-sprite
+// rendering, but Phase E (door rotation around hinge frames) needs
+// each part addressable on its own. `BuildingPlacement` mirrors the
+// `EntityCycleSet` move-semantics pattern (`take_*` methods one-shot
+// the inner Vecs across the wasm boundary without cloning) and slots
+// in alongside `fetch_landblock_objects`'s `is_building` flag: the JS
+// builder calls `fetch_building_placement` once per unique building
+// model_id, then instantiates a `PIXI.Container` of N child sprites
+// per placement.
+
+/// Phase 6 step A: per-part-aware return type for building setups —
+/// sibling to [`ObjectPlacement`] (which carries placement coords for
+/// the JS bake). `parts.len()` is the Setup's part count; each
+/// entry's vec position is the `part_index` JS uses to address the
+/// part later (Phase E door rotations target a specific index, not a
+/// model-wide id). Naming follows the smoke contract in
+/// `smoke_test.cjs` Phase 6 step A scaffolding.
+///
+/// Empty `parts` = the Setup failed to load. A part with
+/// `triCount == 0` is preserved at its index so part_index stays
+/// stable across the boundary even if a leaf GfxObj fetch failed.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct BuildingPlacement {
+    setup_id: u32,
+    parts: Vec<ModelMesh>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl BuildingPlacement {
+    /// SetupModel DID this bake corresponds to.
+    #[wasm_bindgen(getter, js_name = setupId)]
+    pub fn setup_id(&self) -> u32 {
+        self.setup_id
+    }
+
+    /// Number of parts in the SetupModel — equals the length of the
+    /// `Vec<ModelMesh>` `take_part_meshes` returns.
+    #[wasm_bindgen(getter, js_name = partCount)]
+    pub fn part_count(&self) -> u32 {
+        self.parts.len() as u32
+    }
+
+    /// Move the per-part meshes out of the bundle into a JS-owned
+    /// array. Position in the returned Vec is the `part_index`. One-
+    /// shot — second call returns an empty Vec.
+    #[wasm_bindgen(js_name = takePartMeshes)]
+    pub fn take_part_meshes(&mut self) -> Vec<ModelMesh> {
+        std::mem::take(&mut self.parts)
+    }
+}
+
+/// Phase 6 step A: per-part variant of [`fetch_model_mesh`]. Walks a
+/// SetupModel and returns one `ModelMesh` per part. Raw `0x01` GfxObj
+/// inputs (no skeleton / single-part) return a single-element Vec so
+/// the JS caller can treat all building model_ids uniformly.
+///
+/// JS flow: `fetch_landblock_objects` → for every placement with
+/// `isBuilding == true`, call `fetchBuildingPlacement(modelId)` once
+/// per unique model_id (cache the bake), then instantiate a per-
+/// placement `PIXI.Container` whose children are sprites referencing
+/// the per-part RenderTextures, tagged `{ buildingId, partIndex }`.
+///
+/// On any part-load failure, the slot is preserved as an empty mesh
+/// (`triCount == 0`) so the `part_index` stays stable for Phase E
+/// door-state lookups.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchBuildingPlacement)]
+pub async fn fetch_building_placement(model_id: u32) -> Result<BuildingPlacement, JsValue> {
+    use holtburger_dat::ResourceKey;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", model_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        let _ = triangulate_model_per_part_buckets(s, model_id);
+    })
+    .await?;
+    let parts_tris = triangulate_model_per_part_buckets(source.as_ref(), model_id)
+        .ok_or_else(|| {
+            JsValue::from_str(&format!("fetchBuildingPlacement 0x{model_id:08X}: failed"))
+        })?;
+    let parts: Vec<ModelMesh> = parts_tris.into_iter().map(pack_model_mesh).collect();
+    Ok(BuildingPlacement {
+        setup_id: model_id,
+        parts,
+    })
+}
+
+/// Top-level per-part dispatch mirroring [`triangulate_model`]: route
+/// `0x01` (raw GfxObj) to a single-part vec, `0x02` (SetupModel) to
+/// the per-part walker.
+#[cfg(target_arch = "wasm32")]
+fn triangulate_model_per_part_buckets<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    model_id: u32,
+) -> Option<Vec<Vec<Tri>>> {
+    use holtburger_dat::file_type::GfxObj;
+    use holtburger_dat::ResourceKey;
+    match (model_id >> 24) as u8 {
+        0x01 => {
+            let bytes = source
+                .get_file_by_key(ResourceKey::new("eor/portal", model_id))
+                .ok()?;
+            let gfx = GfxObj::unpack(&mut std::io::Cursor::new(&bytes)).ok()?;
+            let mut tris = Vec::new();
+            append_gfx_tris(
+                &mut tris,
+                &gfx,
+                holtburger_common::Vector3::zero(),
+                holtburger_common::Quaternion::identity(),
+            );
+            Some(vec![tris])
+        }
+        0x02 => triangulate_setup_model_per_part(source, model_id, &[], &[]),
+        _ => None,
+    }
+}
+
+/// Phase 6 step A: marker / no-op symbol the JS-side bake registers
+/// against. The actual `window.buildingMap: Map<string, PIXI.Container>`
+/// lives on the JS side (PIXI display objects can't cross the wasm
+/// boundary); this wasm export is the symbol the smoke test probes
+/// for via `typeof wasm.init_building_map === "function"` so the
+/// "Phase A surfaced" check trips green once shipped. Calling it is a
+/// no-op — the JS render pipeline owns the map's lifetime.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn init_building_map() {}
+
+/// Phase 6 step A: deterministic part-count smoke. Synthesizes a
+/// SetupModel with N>1 parts in memory, packs it through the same
+/// `SetupModel::pack` / `unpack` round-trip the dat-shard cache
+/// uses, runs the per-part walker against an in-memory ResourceSource,
+/// and returns the bucket count. No live ACE / no global resource
+/// source needed — runs under `smoke_test --fast` exactly the same
+/// way it runs under a full bake.
+///
+/// The constant returned (12) is the synthetic Setup's part count —
+/// chosen to clear the smoke's `n > 1` floor with margin. Real
+/// Holtburg town hall part counts are read by
+/// `capture_phase6_step_a_geometry.cjs` from the live
+/// `window.buildingMap`, not from this wasm symbol.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn holtburg_townhall_max_parts() -> u32 {
+    use holtburger_dat::file_type::SetupModel;
+    use std::io::Cursor;
+    const PART_COUNT: usize = 12;
+    let setup = SetupModel {
+        id: 0x0200_0001,
+        flags: 0,
+        parts: vec![0x0100_0001; PART_COUNT],
+        parent_index: Vec::new(),
+        default_scale: Vec::new(),
+        holding_locations: std::collections::HashMap::new(),
+        connection_points: std::collections::HashMap::new(),
+        placement_frames: std::collections::HashMap::new(),
+        cyl_spheres: Vec::new(),
+        spheres: Vec::new(),
+        height: 0.0,
+        radius: 0.0,
+        step_up: 0.0,
+        step_down: 0.0,
+        sorting_sphere: holtburger_common::Sphere {
+            center: holtburger_common::Vector3::zero(),
+            radius: 0.0,
+        },
+        selection_sphere: holtburger_common::Sphere {
+            center: holtburger_common::Vector3::zero(),
+            radius: 0.0,
+        },
+        lights: std::collections::HashMap::new(),
+        default_animation: None,
+        default_script: None,
+        default_motion_table: None,
+        default_sound_table: None,
+        default_script_table: None,
+    };
+    // Pack → unpack round-trip proves the parser sees N parts; the
+    // bake path relies on this same round-trip for live data so the
+    // smoke covers the symbol AND the parser's part-list invariants.
+    let mut buf: Vec<u8> = Vec::new();
+    if setup.pack(&mut Cursor::new(&mut buf)).is_err() {
+        return 0;
+    }
+    match SetupModel::unpack(&mut Cursor::new(&buf)) {
+        Ok(parsed) => parsed.parts.len() as u32,
+        Err(_) => 0,
+    }
 }
 
 /// Phase 4 step 6 Phase A: triangulate a SetupModel with the

@@ -570,6 +570,86 @@ check(
     `EntityUpdate=${typeof wasm.EntityUpdate}, getters=${velocityGettersOk}`
 );
 
+// === Phase 6 Step A — restore building leaf geometry ================
+//
+// Phase 6 step A wires the Setup-part walker into the building branch
+// of `fetch_landblock_objects` (lib.rs:712-713 today emits a
+// silhouette-only placement). Two new wasm-bindgen surfaces are
+// expected on the bundle once the implementation lands:
+//
+//   1. `init_building_map` (or equivalent): JS-side per-building
+//      PIXI.Container registry. Modelled on Phase 5 step 5/6's
+//      `init_resource_source` / `has_resource_source` introspection
+//      pattern (see line 119-145 above).
+//   2. `BuildingPlacement` (placeholder name — see capture script
+//      header for naming caveat): per-part-aware return type. Sibling
+//      to `ObjectPlacement` (line 605 in lib.rs) but carrying enough
+//      data for the JS bake to addressable each part by
+//      `(building_id, part_index)`. Phase E's door-rotation path
+//      depends on this addressing.
+//
+// All three checks below are non-throwing — they probe via `typeof`
+// and report "phase A not yet shipped" as the detail message. These
+// will fail today (expected); they pass once the implementation
+// agent ships the Phase A export surface. Locked-in contract per
+// docs/phase-6-buildings-and-interiors.md §5 phase A.
+//
+// NOTE: the names `init_building_map` and `BuildingPlacement` are
+// PLACEHOLDERS. If the implementation chooses a different idiom
+// (e.g. `init_buildings`, `BuildingPartPlacement`), update both this
+// block AND `capture_phase6_step_a_geometry.cjs`'s window-side probe
+// in the same commit so the smoke + live tests stay aligned.
+
+const phase6BuildingMapInit = typeof wasm.init_building_map === "function";
+check(
+    "phase6.A.window_buildingMap_exists",
+    phase6BuildingMapInit,
+    phase6BuildingMapInit
+        ? `init_building_map=${typeof wasm.init_building_map}`
+        : "phase A not yet shipped — expected wasm.init_building_map() (placeholder name)"
+);
+
+const phase6BuildingPlacementCtor = typeof wasm.BuildingPlacement === "function";
+check(
+    "phase6.A.fetch_landblock_objects_returns_buildings_with_parts",
+    phase6BuildingPlacementCtor,
+    phase6BuildingPlacementCtor
+        ? `BuildingPlacement=${typeof wasm.BuildingPlacement}`
+        : "phase A not yet shipped — expected wasm.BuildingPlacement constructor (placeholder name; per-part-aware return type sibling to ObjectPlacement)"
+);
+
+// Runtime stub — once Phase A lands, the implementation agent will
+// hook this into a deterministic fixture path (likely a synthetic
+// Setup with N>1 parts, parsed via the dat-shard cache without
+// requiring a live ACE). Today it's a pure no-op that reports the
+// missing entry point. The check is idempotent — re-running it
+// after the implementation lands will exercise the new path
+// without code change here. The runtime path SHOULD also expose a
+// way to query "max part count across all buildings parsed in the
+// last fetch_landblock_objects call" without requiring a live
+// session; the implementation agent picks the exact accessor name.
+let phase6PartCountOk = false;
+let phase6PartCountDetail =
+    "phase A not yet shipped — expected a runtime accessor reporting "
+    + "max parts-per-building from a deterministic Setup fixture. "
+    + "The implementation agent hooks this stub when Phase A lands.";
+try {
+    if (typeof wasm.holtburg_townhall_max_parts === "function") {
+        const n = wasm.holtburg_townhall_max_parts();
+        phase6PartCountOk = typeof n === "number" && n > 1;
+        phase6PartCountDetail = `holtburg_townhall_max_parts()=${n}`;
+    }
+} catch (e) {
+    phase6PartCountDetail = `holtburg_townhall_max_parts threw: ${e?.message ?? e}`;
+}
+check(
+    "phase6.A.holtburg_townhall_part_count",
+    phase6PartCountOk,
+    phase6PartCountDetail
+);
+
+// === end Phase 6 Step A =============================================
+
 
 (async () => {
     // Phase 5.0b — pre-bake a manifest+shards+boot tree from the
