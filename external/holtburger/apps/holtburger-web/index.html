@@ -524,6 +524,8 @@
         fetchEntitySurfacesPixels,
         fetchBuildingPlacement,
         populateBuildingAabbsForLandblock,
+        fetchEnvCellsInLandblock,
+        init_cell_containers,
         start_session,
         init_resource_source,
         has_resource_source,
@@ -1689,6 +1691,204 @@ void main() {
         return { container, buildingMap, withParts, withFallback, dropped };
       }
 
+      // ----- Phase 6 step C: EnvCell render ------------------------
+      //
+      // A landblock's interior cells live behind doors. Each EnvCell
+      // ships an environment_id (`0x0D…`), a frame transform in
+      // landblock-local space, a portal table linking to neighbour
+      // cells (Phase D's traversal graph), and a static-object list
+      // (chairs, tables, chests). The wasm side
+      // (`fetchEnvCellsInLandblock`) does the LandblockInfo →
+      // EnvCell → Environment walk and ships placements as
+      // `EnvCellPlacement` records: pre-baked mesh in cell-local
+      // coords + per-static-object placements in world coords.
+      //
+      // The JS-side bake mirrors `bakePerPartBuildingTextures`
+      // closely: one PIXI.RenderTexture per (cell_id, environment_id)
+      // pair, baked from the wasm-returned mesh. Cells are stamped
+      // into the scene graph at the cell origin with the cell
+      // orientation applied. Phase D will gate per-cell `.visible` on
+      // the active render set; Phase C unconditionally shows every
+      // cell in a populated landblock.
+      //
+      // Visibility default: a fully-rendered dungeon would be visually
+      // overwhelming and slow. Phase C ships with cells DISABLED by
+      // default — `window.__cellRenderEnabled = false` — and only
+      // populates `cellContainers` lazily once flipped. Phase D's
+      // proper render-set culling deletes this gate. The capture
+      // script flips the toggle to true before walking inside the
+      // town hall.
+      window.__cellRenderEnabled = false;
+
+      async function bakeCellTextures(app, cellPlacements) {
+        // Map<cell_id, { mesh: ModelMesh, environmentId, ...renderData }>.
+        // The placement bundles already carry baked meshes per cell;
+        // here we render each into a RenderTexture (one per cell since
+        // the cell origin shifts the bake into a unique tile).
+        // Buildings use one texture per (model_id, part_index) cached
+        // because every placement is the same setup; cells, in
+        // contrast, are unique geometries — every (cell_id,
+        // environment_id) pair is a one-shot bake.
+        const baked = new Map();
+        if (cellPlacements.length === 0) return baked;
+        const allSurfaceIds = new Set();
+        const meshByCell = new Map();
+        for (const placement of cellPlacements) {
+          const cellId = placement.cellId;
+          const mesh = placement.takeMesh();
+          if (mesh.triCount === 0) {
+            // No drawable geometry — skip cell-level render but keep
+            // the placement entry visible to Phase D so the static-
+            // object children still show up.
+            mesh.free();
+            meshByCell.set(cellId, null);
+            continue;
+          }
+          for (const sid of mesh.surfaces) allSurfaceIds.add(sid);
+          meshByCell.set(cellId, { mesh, environmentId: placement.environmentId });
+        }
+
+        const surfaceList = [...allSurfaceIds];
+        const surfacePixels = surfaceList.length > 0
+          ? await fetch_surfaces_pixels(new Uint32Array(surfaceList))
+          : [];
+        const surfaceTexBySid = new Map();
+        for (let i = 0; i < surfaceList.length; i += 1) {
+          surfaceTexBySid.set(surfaceList[i], surfacePixelsToTexture(surfacePixels[i]));
+        }
+
+        for (const [cellId, entry] of meshByCell) {
+          if (!entry) continue;
+          const { mesh, environmentId } = entry;
+          const sList = mesh.surfaces;
+          const texArr = new Array(sList.length);
+          for (let s = 0; s < sList.length; s += 1) {
+            texArr[s] = surfaceTexBySid.get(sList[s]) ?? makeFlatTexture();
+          }
+          const renderTex = renderModelTile(app, mesh, texArr);
+          const wb = mesh.worldBounds;
+          const bbox = mesh.bbox;
+          baked.set(cellId, {
+            texture: renderTex,
+            worldBounds: [wb[0], wb[1]],
+            triCount: mesh.triCount,
+            // Same per-part offset trick as buildings: anchor the
+            // sprite at the bake's bbox centre rather than the cell
+            // origin, so the sprite covers the geometry regardless of
+            // where the geometry sits relative to the cell origin
+            // frame.
+            localOffset: [
+              (bbox[0] + bbox[3]) * 0.5,
+              (bbox[1] + bbox[4]) * 0.5,
+            ],
+            environmentId,
+          });
+          mesh.free();
+        }
+        for (const sp of surfacePixels) sp.free();
+        return baked;
+      }
+
+      // Build a `PIXI.Container` of per-cell containers (mesh sprite +
+      // static-object children). Returns the parent container plus a
+      // `cellContainers: Map<cell_id, PIXI.Container>` for capture-
+      // script telemetry. Each cell container is tagged with
+      // `__cellId`, `__environmentId`, `__landblockId`. Static-object
+      // children carry `__staticObjectDid`. Static objects route
+      // through the existing static-placement sprite map (atlas /
+      // live tile / colour dot) — Phase C doesn't bake new sprites for
+      // them; it only PLACES them at the cell-origin-rotated
+      // positions exported by the wasm bundle.
+      function buildCellsContainer(neighbourhood, cellPlacements, bakedCells, fallbackInvisible) {
+        const container = new PIXI.Container();
+        const cellContainers = new Map();
+        const lbIndex = new Map();
+        for (const n of neighbourhood) lbIndex.set((n.x << 16) | n.y, n);
+
+        let withMesh = 0;
+        let withStatics = 0;
+        let totalStatics = 0;
+
+        for (const placement of cellPlacements) {
+          const cellId = placement.cellId;
+          const landblockId = (cellId & 0xFFFF0000) >>> 0;
+          const lbX = (landblockId >>> 24) & 0xff;
+          const lbY = (landblockId >>> 16) & 0xff;
+          // Cells outside the active neighbourhood drop. lbIndex is
+          // populated from the rendered LB ring; cells whose parent
+          // LB isn't in the ring are skipped.
+          if (!lbIndex.has((lbX << 16) | lbY)) continue;
+          const wx = placement.cellOriginX;
+          const wy = placement.cellOriginY;
+          const baked = bakedCells.get(cellId);
+          const cellContainer = new PIXI.Container();
+          cellContainer.position.set(wx, wy);
+          // Cell orientation → yaw. Same atan2 reduction as
+          // `frame_to_placement` on the Rust side.
+          const qw = placement.cellOrientationQw;
+          const qx = placement.cellOrientationQx;
+          const qy = placement.cellOrientationQy;
+          const qz = placement.cellOrientationQz;
+          const siny_cosp = 2.0 * (qw * qz + qx * qy);
+          const cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz);
+          const yaw = Math.atan2(siny_cosp, cosy_cosp);
+          cellContainer.rotation = -yaw;
+          cellContainer.__cellId = cellId;
+          cellContainer.__environmentId = placement.environmentId;
+          cellContainer.__landblockId = landblockId;
+          if (baked) {
+            const sprite = new PIXI.Sprite(baked.texture);
+            sprite.anchor.set(0.5, 0.5);
+            sprite.position.set(baked.localOffset[0], baked.localOffset[1]);
+            sprite.width = baked.worldBounds[0];
+            sprite.height = baked.worldBounds[1];
+            sprite.scale.y = -sprite.scale.y;
+            sprite.__triCount = baked.triCount;
+            sprite.__cellMesh = true;
+            cellContainer.addChild(sprite);
+            withMesh += 1;
+          }
+          // Static objects: positions are already in WORLD coords (the
+          // wasm side applied cell origin + cell rotation). Strip out
+          // the parent cellContainer's offset+rotation by parking the
+          // child at world coords directly inside cellContainer's
+          // local frame: child.position = (worldX - wx, worldY - wy)
+          // pre-rotation — but cellContainer's rotation will rotate
+          // the child too, distorting the world placement. Use a
+          // sibling child container (no rotation) to anchor static
+          // objects in world space while the cell mesh sprite
+          // continues to rotate with the cellContainer.
+          const placementStatics = placement.takeStaticObjects();
+          if (placementStatics.length > 0) {
+            withStatics += 1;
+            for (const so of placementStatics) {
+              const childContainer = new PIXI.Container();
+              // Park at world coord; subtract cell origin so the child
+              // sits at the right global position inside the
+              // cellContainer's pre-rotation frame. Then counter-
+              // rotate so the child stays world-aligned.
+              const localX = so.x - wx;
+              const localY = so.y - wy;
+              childContainer.position.set(localX, localY);
+              // Counter-rotate to undo the parent's rotation.
+              childContainer.rotation = yaw;
+              childContainer.__staticObjectDid = so.did;
+              childContainer.__staticObjectAabbLocal = so.aabbLocal;
+              cellContainer.addChild(childContainer);
+              so.free();
+              totalStatics += 1;
+            }
+          }
+          container.addChild(cellContainer);
+          cellContainers.set(cellId, cellContainer);
+          // Phase C default: cells are invisible until the global
+          // `__cellRenderEnabled` toggle flips. Phase D removes this
+          // gate when active-cell tracking lands.
+          cellContainer.visible = window.__cellRenderEnabled === true;
+        }
+        return { container, cellContainers, withMesh, withStatics, totalStatics };
+      }
+
       // ----- Phase 3 step 4 / 4.5 / 6: object sprite container ----
 
       function buildObjectsContainer(neighbourhood, objects, spriteMap, colourMap, liveSpriteMap, invisibleModels) {
@@ -2105,6 +2305,13 @@ void main() {
             spriteMap,
             invisibleModels,
             buildingMap: buildingsBundle.buildingMap,
+            // Phase 6 step C: shared cell-container registry. Pre-
+            // populate empty so capture probes can read
+            // `liveScene.cellContainers.size === 0` before any LB
+            // entry has triggered the lazy bake. Once
+            // `ensureCellContainersForLandblock` runs, entries land
+            // here AND in `window.cellContainers` (same Map).
+            cellContainers: cellContainerRegistry,
         };
         // Expose for capture-script telemetry (Phase 4 step 2b
         // capture probes `window.liveScene.entityContainer.children.length`).
@@ -2117,6 +2324,20 @@ void main() {
         // tagged `{ buildingId, partIndex }` so Phase E can rotate door
         // GfxObjs around their hinge frames by part_index lookup.
         window.buildingMap = buildingsBundle.buildingMap;
+        // Phase 6 step C: per-EnvCell PIXI.Container registry. Populated
+        // lazily on landblock entry by
+        // `ensureCellContainersForLandblock`. Each entry is keyed by
+        // the cell's full 32-bit cell_id (XXYY01XX etc.) and tagged
+        // with `__cellId`, `__environmentId`, `__landblockId`. The
+        // capture script reads either `window.cellContainers` or
+        // `window.liveScene.cellContainers` (both point to the same
+        // Map).
+        window.cellContainers = cellContainerRegistry;
+        // Phase 6 step C: marker symbol the smoke checks via
+        // `typeof wasm.init_cell_containers === "function"`. Calling
+        // it is a no-op; the JS render pipeline owns the registry's
+        // lifetime, the wasm export only signals presence.
+        try { init_cell_containers(); } catch (_) { /* ignore */ }
         // Phase 4 step 6 capture surface: same window-exposure pattern.
         // capture_step6.cjs injects synthetic EntityUpdate-shaped objects
         // through these so we can demonstrate step 6 visuals without a
@@ -3278,6 +3499,84 @@ void main() {
       // walks-through-walls regime.
       const buildingAabbsPopulatedLbs = new Set();
       const buildingAabbsPopulateInFlight = new Set();
+      // Phase 6 step C: track which landblocks have had their EnvCells
+      // fetched + baked. Same lazy-on-landblock-entry trigger as
+      // `buildingAabbsPopulatedLbs` — when the player crosses into a
+      // new landblock, queue an EnvCell load for that LB (and its 3x3
+      // ring once Phase D needs neighbour visibility). The bake is
+      // expensive (one RenderTexture per cell), so we don't preload —
+      // a 50-cell town hall lands one bake per cell on first entry.
+      const cellContainersPopulatedLbs = new Set();
+      const cellContainersPopulateInFlight = new Set();
+      // Cell-container registry: stable across LB entries. JS adds
+      // entries on `ensureCellContainersForLandblock`, never removes
+      // (capture probe walks the map). Phase D's culling toggles
+      // `.visible` per cell, not membership.
+      const cellContainerRegistry = new Map();
+      async function ensureCellContainersForLandblock(centreLb) {
+        // Phase 6 step C: lazy-fetch + bake the EnvCells in a single
+        // landblock on player entry. Mirrors
+        // `ensureBuildingAabbsAroundLandblock` shape but operates on
+        // ONE landblock at a time (not a 3x3 ring) — interior cells
+        // are only relevant when the player is actually inside the
+        // landblock, and a 50-cell town hall already costs ~50
+        // RenderTextures. Phase D may extend to neighbour-LB cells
+        // once cross-LB portals matter (rare; most dungeons sit in
+        // one landblock).
+        const lbId = (centreLb & 0xFFFF0000) >>> 0;
+        if (
+          cellContainersPopulatedLbs.has(lbId)
+          || cellContainersPopulateInFlight.has(lbId)
+        ) {
+          return;
+        }
+        cellContainersPopulateInFlight.add(lbId);
+        try {
+          const placements = await fetchEnvCellsInLandblock(lbId);
+          if (!placements || placements.length === 0) {
+            cellContainersPopulatedLbs.add(lbId);
+            return;
+          }
+          const app = liveScene?.app;
+          if (!app) {
+            // liveScene is set asynchronously; if a position update
+            // arrives before the initial render completes, defer by
+            // re-clearing the in-flight bit so the next position
+            // update retries the bake.
+            return;
+          }
+          // Bake meshes + build the per-cell PIXI containers.
+          const baked = await bakeCellTextures(app, placements);
+          // Build a single-LB neighbourhood so buildCellsContainer's
+          // landblock filter accepts these cells; the actual
+          // worldContainer placement is independent.
+          const lbX = (lbId >>> 24) & 0xff;
+          const lbY = (lbId >>> 16) & 0xff;
+          const neighbourhood = [{ x: lbX, y: lbY }];
+          const bundle = buildCellsContainer(neighbourhood, placements, baked, null);
+          // Attach the bundle to the worldContainer so cells render
+          // alongside outdoor objects.
+          if (liveScene?.worldContainer) {
+            liveScene.worldContainer.addChild(bundle.container);
+            liveScene.cellContainers = liveScene.cellContainers ?? cellContainerRegistry;
+            for (const [cellId, cont] of bundle.cellContainers) {
+              cellContainerRegistry.set(cellId, cont);
+            }
+          }
+          cellContainersPopulatedLbs.add(lbId);
+          console.log(
+            `[phase6.C] baked ${bundle.withMesh}/${placements.length} EnvCells `
+            + `(${bundle.totalStatics} static objects) for landblock 0x${lbId.toString(16).padStart(8, "0")}`
+          );
+          for (const placement of placements) placement.free();
+        } catch (e) {
+          console.warn(
+            `[phase6.C] fetchEnvCellsInLandblock(0x${lbId.toString(16)}) failed:`, e
+          );
+        } finally {
+          cellContainersPopulateInFlight.delete(lbId);
+        }
+      }
       async function ensureBuildingAabbsAroundLandblock(centreLb) {
         // Same 3x3 ring as `ensureTerrainAroundLandblock`: the player
         // needs collision in the cells surrounding the spawn / current
@@ -3410,6 +3709,15 @@ void main() {
           // walls outside the spawn neighbourhood.
           if (lbId !== 0 && !buildingAabbsPopulatedLbs.has(lbId)) {
             ensureBuildingAabbsAroundLandblock(lbId);
+          }
+          // Phase 6 step C: lazy-fetch + bake EnvCells when entering
+          // a landblock. Single-LB scope (not a 3x3 ring) because
+          // interior cells only matter when the player is inside the
+          // building. Cells stay invisible until
+          // `window.__cellRenderEnabled = true` flips (capture script
+          // does this; Phase D's culling replaces the toggle).
+          if (lbId !== 0 && !cellContainersPopulatedLbs.has(lbId)) {
+            ensureCellContainersForLandblock(lbId);
           }
         }
         // Tier 2: sample velocity from the position delta. Speed in

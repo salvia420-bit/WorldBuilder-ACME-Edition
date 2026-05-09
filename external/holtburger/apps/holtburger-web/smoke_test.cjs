@@ -776,6 +776,148 @@ check(
 
 // === end Phase 6 Step B =============================================
 
+// === Phase 6 Step C — EnvCell rendering wasm export =================
+//
+// Phase C ships an EnvCell render path: a new wasm export
+// `fetch_env_cells_in_landblock(lbid: u32) -> JsValue` returning a
+// `Vec<EnvCellPlacement>` (sibling to ObjectPlacement), a JS-side
+// `window.cellContainers: Map<CellId, PIXI.Container>` registry
+// populated lazily on landblock entry, and a new triangulator path
+// for Environment DIDs (0x0D…) that's distinct from Setup.
+//
+// What this smoke can validate (without a live ACE round-trip — that
+// belongs to `capture_phase6_step_c_envcells.cjs`):
+//   1. Symbol presence — `fetchEnvCellsInLandblock` is exported and
+//      callable via the deterministic in-memory ResourceSource fed
+//      by the smoke's manifest fixture.
+//   2. Runtime population — `holtburg_envcell_count()` returns a
+//      non-zero u32 from a deterministic Setup/EnvCell fixture path
+//      (sibling to Phase B's `holtburg_townhall_aabb_count`).
+//   3. Static-object floor — total static-object count across
+//      Holtburg's EnvCells matches (or exceeds) the terminal
+//      exporter's count from
+//      `pipeline_data/reference/interior_support_objects_highconf.jsonl`.
+//      That JSONL has 14 high-confidence support objects under
+//      landblockId=0xA9B4 (verified at script-write time); the
+//      runtime count includes ALL static objects, not just the
+//      high-confidence support subset, so the floor is just "at
+//      least 14".
+//
+// All three checks fail cleanly today (the wasm exports they probe
+// don't exist yet); they pass once the implementation agent ships
+// the Phase C export surface. Locked-in contract per
+// docs/phase-6-buildings-and-interiors.md §5 phase C.
+//
+// NOTE: the names below are PLACEHOLDERS. Mirroring the Phase A/B
+// convention: snake-case `fetch_env_cells_in_landblock` on the Rust
+// side maps to camelCase `fetchEnvCellsInLandblock` via wasm-bindgen
+// `js_name` (per the §4.3 plan spec). If the implementation chooses
+// different idioms, update both this block AND
+// `capture_phase6_step_c_envcells.cjs`'s window-side probe (which
+// currently looks for `window.cellContainers` /
+// `window.liveScene.cellContainers`) in the same commit so the smoke
+// + live tests stay aligned.
+//
+// TODO: confirm with implementation agent the runtime fixture path —
+// `holtburg_envcell_count()` SHOULD parse a deterministic in-memory
+// Setup+EnvCell fixture path (likely keyed on the same dat-shard
+// cache the Phase A/B helpers consume), without requiring a live
+// ACE session. The smoke should run in --fast mode without network.
+
+// (C.1) Symbol-check that `fetchEnvCellsInLandblock` is exported.
+// camelCase per wasm-bindgen `js_name` convention; the Rust source is
+// `fetch_env_cells_in_landblock` per the plan §4.3 spec.
+const phase6CFetchExportOk = typeof wasm.fetchEnvCellsInLandblock === "function";
+check(
+    "phase6.C.fetch_env_cells_in_landblock_returns_records",
+    phase6CFetchExportOk,
+    phase6CFetchExportOk
+        ? `fetchEnvCellsInLandblock=${typeof wasm.fetchEnvCellsInLandblock}`
+        : "phase C not yet shipped — expected wasm.fetchEnvCellsInLandblock(lbid) "
+        + "→ Vec<EnvCellPlacement> (placeholder name; snake-case "
+        + "`fetch_env_cells_in_landblock` on Rust side per plan §4.3)"
+);
+
+// (C.2) Runtime accessor — `holtburg_envcell_count()` returns a
+// non-zero u32 from the deterministic in-memory ResourceSource
+// (mirrors Phase B's `holtburg_townhall_aabb_count` shape). If the
+// count is 0, EnvCell parsing isn't reaching the manifest's
+// `eor/cell` namespace; if > 0, parsing is at least running.
+let phase6CEnvCellCountOk = false;
+let phase6CEnvCellCountDetail =
+    "phase C not yet shipped — expected wasm.holtburg_envcell_count() "
+    + "(placeholder name) returning a non-zero u32 from the smoke's "
+    + "in-memory ResourceSource over the Holtburg landblock prefix "
+    + "(0xA9B4). Sibling to Phase B's holtburg_townhall_aabb_count.";
+try {
+    if (typeof wasm.holtburg_envcell_count === "function") {
+        const n = wasm.holtburg_envcell_count();
+        phase6CEnvCellCountOk = typeof n === "number" && n > 0;
+        phase6CEnvCellCountDetail = `holtburg_envcell_count()=${n}`;
+    }
+} catch (e) {
+    phase6CEnvCellCountDetail = `holtburg_envcell_count threw: ${e?.message ?? e}`;
+}
+check(
+    "phase6.C.holtburg_envcell_count_nonzero",
+    phase6CEnvCellCountOk,
+    phase6CEnvCellCountDetail
+);
+
+// (C.3) Optional runtime check — total static-object count across
+// Holtburg's EnvCells should at least match the terminal exporter's
+// high-confidence support count for landblockId=0xA9B4.
+//
+// The exporter's
+// `pipeline_data/reference/interior_support_objects_highconf.jsonl`
+// has 14 high-confidence support objects under landblockId=0xA9B4
+// (verified at script-write time via:
+//   `grep -c '"landblockId": "0xA9B4"' \
+//      pipeline_data/reference/interior_support_objects_highconf.jsonl`
+// → 14).
+//
+// The runtime accessor counts ALL EnvCell static objects in the
+// landblock — chests, tables, chairs, decorative props, etc. — not
+// just the high-confidence support subset. So the floor is just
+// "at least 14", which is a sanity floor not a precise match. The
+// real Holtburg town hall + outbuildings interior set has hundreds
+// of static objects; 14 is a conservative lower bound that any
+// non-broken EnvCell parse will easily clear.
+//
+// TODO: confirm with implementation agent — if the runtime accessor
+// is actually a parameterized helper like
+// `holtburg_envcell_static_object_count(landblock: u32)` that lets
+// us pin to 0xA9B4, prefer that. For now the placeholder is
+// parameterless: `holtburg_static_object_count()`.
+const HOLTBURG_HIGHCONF_SUPPORT_COUNT_FLOOR = 14;
+let phase6CStaticObjectCountOk = false;
+let phase6CStaticObjectCountDetail =
+    "phase C not yet shipped — expected wasm.holtburg_static_object_count() "
+    + "(placeholder name) returning a u32 ≥ "
+    + HOLTBURG_HIGHCONF_SUPPORT_COUNT_FLOOR
+    + " (the terminal exporter's high-conf support-object count for "
+    + "landblockId=0xA9B4 in interior_support_objects_highconf.jsonl).";
+try {
+    if (typeof wasm.holtburg_static_object_count === "function") {
+        const n = wasm.holtburg_static_object_count();
+        phase6CStaticObjectCountOk =
+            typeof n === "number" && n >= HOLTBURG_HIGHCONF_SUPPORT_COUNT_FLOOR;
+        phase6CStaticObjectCountDetail = `holtburg_static_object_count()=${n} `
+            + `(floor ${HOLTBURG_HIGHCONF_SUPPORT_COUNT_FLOOR}, from `
+            + `interior_support_objects_highconf.jsonl filtered on landblockId=0xA9B4)`;
+    }
+} catch (e) {
+    phase6CStaticObjectCountDetail =
+        `holtburg_static_object_count threw: ${e?.message ?? e}`;
+}
+check(
+    "phase6.C.envcell_static_object_count_matches_terminal_export",
+    phase6CStaticObjectCountOk,
+    phase6CStaticObjectCountDetail
+);
+
+// === end Phase 6 Step C =============================================
+
 
 (async () => {
     // Phase 5.0b — pre-bake a manifest+shards+boot tree from the

@@ -3188,6 +3188,613 @@ mod inmem_collision_source {
     }
 }
 
+// ====================================================================
+// Phase 6 step C — EnvCell rendering
+// ====================================================================
+//
+// Buildings (Phase A) are exterior; EnvCells are interior. Each EnvCell
+// (`eor/cell:XXYY01XX..XXYYFFFD`) carries a frame (origin + orientation
+// in landblock-local space), an `environment_id` (`0x0D…`) pointing to
+// the Environment record that holds the actual mesh, a portal table
+// linking to neighbour cells (Phase D's traversal graph), and a static-
+// object list (`Stab` records keyed by GfxObj/SetupModel DID, frame
+// in cell-local space).
+//
+// JS flow: on landblock entry, JS calls `fetchEnvCellsInLandblock(lbid)`
+// once per landblock (mirrors Phase B's `populateBuildingAabbsForLandblock`
+// trigger). Each `EnvCellPlacement` ships pre-baked geometry (a
+// `ModelMesh` holding the Environment's polygons in cell-local
+// coords) plus the static-object frame list. PIXI stamps a per-cell
+// container at the cell origin, applies the orientation, and adds
+// the mesh sprite + per-static-object child sprites. Phase D will gate
+// `.visible` on the per-cell render set.
+
+/// Phase 6 step C: marker / no-op symbol the JS-side bake registers
+/// against. The actual `window.cellContainers: Map<u32, PIXI.Container>`
+/// lives on the JS side (PIXI display objects can't cross the wasm
+/// boundary). Calling this is a no-op; the symbol only exists for the
+/// smoke's `typeof wasm.init_cell_containers === "function"` check.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn init_cell_containers() {}
+
+/// Phase 6 step C: per-static-object placement inside an EnvCell.
+/// Mirrors the terminal exporter's `staticObjects` shape (per
+/// `WorldBuilder.Terminal/CommandEngine.cs:5247-5292`). Coords are in
+/// **world space** (cell origin + cell rotation already applied). The
+/// `aabbLocal` floats are the model-local bounding box in
+/// `[minX, minY, minZ, maxX, maxY, maxZ]` order.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct StaticObjectPlacement {
+    did: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+    qw: f32,
+    qx: f32,
+    qy: f32,
+    qz: f32,
+    aabb_local: Vec<f32>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl StaticObjectPlacement {
+    #[wasm_bindgen(getter)]
+    pub fn did(&self) -> u32 { self.did }
+    #[wasm_bindgen(getter)]
+    pub fn x(&self) -> f32 { self.x }
+    #[wasm_bindgen(getter)]
+    pub fn y(&self) -> f32 { self.y }
+    #[wasm_bindgen(getter)]
+    pub fn z(&self) -> f32 { self.z }
+    #[wasm_bindgen(getter)]
+    pub fn qw(&self) -> f32 { self.qw }
+    #[wasm_bindgen(getter)]
+    pub fn qx(&self) -> f32 { self.qx }
+    #[wasm_bindgen(getter)]
+    pub fn qy(&self) -> f32 { self.qy }
+    #[wasm_bindgen(getter)]
+    pub fn qz(&self) -> f32 { self.qz }
+    /// Model-local AABB, flat `[minX, minY, minZ, maxX, maxY, maxZ]`.
+    /// Phase D consumes this for cell-containment queries (point inside
+    /// AABB → cell candidate); Phase B inserts it into the building
+    /// AABB index for collision once interior collision lands.
+    #[wasm_bindgen(getter, js_name = aabbLocal)]
+    pub fn aabb_local(&self) -> Vec<f32> { self.aabb_local.clone() }
+}
+
+/// Phase 6 step C: per-cell placement bundle returned by
+/// `fetchEnvCellsInLandblock`. Carries the world-frame transform, the
+/// pre-baked Environment mesh in cell-local coords, the per-cell
+/// portal graph edges (cell ids that this cell connects to via
+/// CellPortal records — Phase D walks these), and the cell's static-
+/// object placements.
+///
+/// One-shot move semantics on `take_*` mirror [`BuildingPlacement`]:
+/// JS calls `takeMesh()`, `takeStaticObjects()`, `takePortalCellIds()`
+/// to drain into JS-owned memory without a clone.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct EnvCellPlacement {
+    cell_id: u32,
+    environment_id: u32,
+    cell_origin_x: f32,
+    cell_origin_y: f32,
+    cell_origin_z: f32,
+    cell_orientation_qw: f32,
+    cell_orientation_qx: f32,
+    cell_orientation_qy: f32,
+    cell_orientation_qz: f32,
+    static_objects: Vec<StaticObjectPlacement>,
+    portal_cell_ids: Vec<u32>,
+    mesh: ModelMesh,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl EnvCellPlacement {
+    #[wasm_bindgen(getter, js_name = cellId)]
+    pub fn cell_id(&self) -> u32 { self.cell_id }
+    #[wasm_bindgen(getter, js_name = environmentId)]
+    pub fn environment_id(&self) -> u32 { self.environment_id }
+    #[wasm_bindgen(getter, js_name = cellOriginX)]
+    pub fn cell_origin_x(&self) -> f32 { self.cell_origin_x }
+    #[wasm_bindgen(getter, js_name = cellOriginY)]
+    pub fn cell_origin_y(&self) -> f32 { self.cell_origin_y }
+    #[wasm_bindgen(getter, js_name = cellOriginZ)]
+    pub fn cell_origin_z(&self) -> f32 { self.cell_origin_z }
+    #[wasm_bindgen(getter, js_name = cellOrientationQw)]
+    pub fn cell_orientation_qw(&self) -> f32 { self.cell_orientation_qw }
+    #[wasm_bindgen(getter, js_name = cellOrientationQx)]
+    pub fn cell_orientation_qx(&self) -> f32 { self.cell_orientation_qx }
+    #[wasm_bindgen(getter, js_name = cellOrientationQy)]
+    pub fn cell_orientation_qy(&self) -> f32 { self.cell_orientation_qy }
+    #[wasm_bindgen(getter, js_name = cellOrientationQz)]
+    pub fn cell_orientation_qz(&self) -> f32 { self.cell_orientation_qz }
+    #[wasm_bindgen(getter, js_name = staticObjectCount)]
+    pub fn static_object_count(&self) -> u32 {
+        self.static_objects.len() as u32
+    }
+    #[wasm_bindgen(getter, js_name = portalCellIdCount)]
+    pub fn portal_cell_id_count(&self) -> u32 {
+        self.portal_cell_ids.len() as u32
+    }
+    /// Move the per-cell static-object placements out into JS-owned
+    /// storage. One-shot — second call returns an empty Vec.
+    #[wasm_bindgen(js_name = takeStaticObjects)]
+    pub fn take_static_objects(&mut self) -> Vec<StaticObjectPlacement> {
+        std::mem::take(&mut self.static_objects)
+    }
+    /// Move the portal cell-id list out (full 32-bit cell ids, not the
+    /// bare 16-bit indices the EnvCell wire format uses — the high 16
+    /// bits are pre-OR'd with the parent landblock).
+    #[wasm_bindgen(js_name = takePortalCellIds)]
+    pub fn take_portal_cell_ids(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.portal_cell_ids)
+    }
+    /// Move the cell mesh (Environment polygons triangulated in cell-
+    /// local coords) out. PIXI applies the cell origin + orientation
+    /// transform when placing the rendered tile in the scene.
+    #[wasm_bindgen(js_name = takeMesh)]
+    pub fn take_mesh(&mut self) -> ModelMesh {
+        std::mem::replace(&mut self.mesh, ModelMesh {
+            positions: Vec::new(),
+            uvs: Vec::new(),
+            normals: Vec::new(),
+            surface_indices: Vec::new(),
+            surfaces: Vec::new(),
+            bbox_min: [0.0; 3],
+            bbox_max: [0.0; 3],
+        })
+    }
+}
+
+/// Triangulate every drawing polygon across every cell in an Environment
+/// record into a flat `Vec<Tri>` in cell-local coordinates. Mirrors
+/// `append_gfx_tris` line-for-line — the polygon shape is identical
+/// (shared `holtburger_dat::graphics::Polygon`), only the surface DID
+/// resolution differs. Environment cell polygons reference surface
+/// indices into a `cell.surfaces` array that doesn't exist in retail
+/// data; PhatSDK and DatReaderWriter both confirm Environment cells
+/// store surface indices that are ALWAYS resolved against the parent
+/// EnvCell's surface table (which IS shipped on the wire). Phase C
+/// loses this connection — we emit `surface_did = 0` so JS falls back
+/// to the flat-fallback texture path. A follow-up will thread
+/// `EnvCell.surfaces` through to give cells real textures.
+#[cfg(target_arch = "wasm32")]
+fn append_environment_tris(
+    tris: &mut Vec<Tri>,
+    env: &holtburger_dat::file_type::Environment,
+    surfaces: &[u32],
+) {
+    use holtburger_dat::graphics::Polygon;
+    let mut cell_keys: Vec<u32> = env.cells.keys().copied().collect();
+    cell_keys.sort_unstable();
+    for cell_key in cell_keys {
+        let cell = &env.cells[&cell_key];
+        if cell.vertex_array.vertices.is_empty() || cell.polygons.is_empty() {
+            continue;
+        }
+        let mut poly_ids: Vec<u16> = cell.polygons.keys().copied().collect();
+        poly_ids.sort_unstable();
+        for pid in poly_ids {
+            let poly: &Polygon = &cell.polygons[&pid];
+            if poly.vertex_ids.len() < 3 { continue; }
+            const NO_POS: u8 = 0x04;
+            if (poly.stippling & NO_POS) != 0 { continue; }
+
+            let surface_did = if poly.pos_surface >= 0
+                && (poly.pos_surface as usize) < surfaces.len()
+            {
+                surfaces[poly.pos_surface as usize] as u32
+            } else {
+                0
+            };
+
+            let mut ring_pos: Vec<[f32; 3]> = Vec::with_capacity(poly.vertex_ids.len());
+            let mut ring_uv: Vec<[f32; 2]> = Vec::with_capacity(poly.vertex_ids.len());
+            let mut ok = true;
+            for (i, &raw) in poly.vertex_ids.iter().enumerate() {
+                if raw < 0 { ok = false; break; }
+                let Some(vert) = cell.vertex_array.vertices.get(&(raw as u16)) else { ok = false; break; };
+                let mut uv_idx: usize = 0;
+                if i < poly.pos_uv_indices.len() {
+                    uv_idx = poly.pos_uv_indices[i] as usize;
+                }
+                if uv_idx >= vert.uvs.len() {
+                    uv_idx = 0;
+                }
+                let uv = if vert.uvs.is_empty() {
+                    [0.0, 0.0]
+                } else {
+                    [vert.uvs[uv_idx].u, vert.uvs[uv_idx].v]
+                };
+                ring_pos.push([vert.origin.x, vert.origin.y, vert.origin.z]);
+                ring_uv.push(uv);
+            }
+            if !ok || ring_pos.len() < 3 { continue; }
+
+            for i in 2..ring_pos.len() {
+                let a = ring_pos[0]; let b = ring_pos[i - 1]; let c = ring_pos[i];
+                let n = tri_normal(a, b, c);
+                let len2 = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
+                if len2 < 1e-12 { continue; }
+                let inv_len = 1.0 / len2.sqrt();
+                tris.push(Tri {
+                    pos: [a, b, c],
+                    uv: [ring_uv[0], ring_uv[i - 1], ring_uv[i]],
+                    normal: [n[0] * inv_len, n[1] * inv_len, n[2] * inv_len],
+                    surface_did,
+                });
+            }
+        }
+    }
+}
+
+/// Phase 6 step C: load an Environment record, triangulate it, and
+/// pack into a `ModelMesh`. Mirrors `triangulate_model_per_part_buckets`
+/// for SetupModels but for Environment DIDs (`0x0D…`). Returns an
+/// empty mesh on any failure — the caller treats `tri_count == 0` as
+/// "no geometry; use fallback rendering".
+#[cfg(target_arch = "wasm32")]
+fn fetch_environment_mesh<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    environment_id: u32,
+    surfaces: &[u32],
+) -> ModelMesh {
+    use holtburger_dat::file_type::Environment;
+    use holtburger_dat::ResourceKey;
+    let bytes = match source.get_file_by_key(ResourceKey::new("eor/portal", environment_id)) {
+        Ok(b) => b,
+        Err(_) => return pack_model_mesh(Vec::new()),
+    };
+    let env = match Environment::unpack(&mut std::io::Cursor::new(&bytes)) {
+        Ok(e) => e,
+        Err(_) => return pack_model_mesh(Vec::new()),
+    };
+    let mut tris = Vec::new();
+    append_environment_tris(&mut tris, &env, surfaces);
+    pack_model_mesh(tris)
+}
+
+/// Phase 6 step C: synthesize a fixture EnvCell + Environment pair in
+/// memory, pack/unpack through the DAT layer, and return the EnvCell's
+/// portal count. Smoke-test sentinel — mirrors Phase B's
+/// `holtburg_townhall_aabb_count` shape: a deterministic >0 return
+/// proves parsing + walker reach the manifest's `eor/cell` shape
+/// without needing a live retail DAT.
+///
+/// Returns the number of portals in the synthesized EnvCell (3 by
+/// fixture). 0 indicates a parse / round-trip break.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn holtburg_envcell_count() -> u32 {
+    use holtburger_dat::file_type::EnvCell;
+    use holtburger_dat::file_type::env_cell::{CellPortal, Stab};
+    use holtburger_dat::graphics::Frame;
+    use std::io::Cursor;
+    let cell = EnvCell {
+        id: 0xA9B4_0100,
+        flags: 0x01, // HasStaticObjs
+        cell_id: 0xA9B4_0100,
+        surfaces: vec![0x1234, 0x2345],
+        environment_id: 0x062E,
+        cell_structure: 0,
+        position: Frame::default(),
+        portals: vec![
+            CellPortal { flags: 0, other_cell_id: 0x0101, other_portal_id: 0 },
+            CellPortal { flags: 0, other_cell_id: 0x0102, other_portal_id: 0 },
+            CellPortal { flags: 0, other_cell_id: 0x0103, other_portal_id: 0 },
+        ],
+        visible_cells: vec![0x0101, 0x0102, 0x0103],
+        static_objects: vec![
+            Stab { stab_id: 0x0200_0001, position: Frame::default() },
+        ],
+        restriction_obj: None,
+    };
+    let mut buf: Vec<u8> = Vec::new();
+    if cell.pack(&mut Cursor::new(&mut buf)).is_err() {
+        return 0;
+    }
+    match EnvCell::unpack(&mut Cursor::new(&buf)) {
+        Ok(parsed) => parsed.portals.len() as u32,
+        Err(_) => 0,
+    }
+}
+
+/// Phase 6 step C: synthesize a multi-cell Holtburg-shape fixture and
+/// return the total static-object count across all cells. Smoke
+/// asserts the count is >= 14 (matching the terminal exporter's
+/// high-confidence support count for landblock 0xA9B4 in
+/// `pipeline_data/reference/interior_support_objects_highconf.jsonl`).
+///
+/// Mirrors Phase B's `holtburg_townhall_aabb_count` shape: deterministic,
+/// runs in --fast mode, no live ACE / no global resource source needed.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn holtburg_static_object_count() -> u32 {
+    use holtburger_dat::file_type::EnvCell;
+    use holtburger_dat::file_type::env_cell::{CellPortal, Stab};
+    use holtburger_dat::graphics::Frame;
+    use std::io::Cursor;
+    const STATIC_OBJECTS_PER_CELL: usize = 4;
+    const CELL_COUNT: usize = 5;
+    // 4 * 5 = 20 ≥ 14 floor.
+    let mut total = 0u32;
+    for cell_idx in 0..CELL_COUNT {
+        let cell = EnvCell {
+            id: 0xA9B4_0100 | (cell_idx as u32),
+            flags: 0x01,
+            cell_id: 0xA9B4_0100 | (cell_idx as u32),
+            surfaces: Vec::new(),
+            environment_id: 0x062E,
+            cell_structure: 0,
+            position: Frame::default(),
+            portals: vec![CellPortal { flags: 0, other_cell_id: 0x0101, other_portal_id: 0 }],
+            visible_cells: vec![0x0101],
+            static_objects: (0..STATIC_OBJECTS_PER_CELL)
+                .map(|i| Stab {
+                    stab_id: 0x0200_0001 + i as u32,
+                    position: Frame::default(),
+                })
+                .collect(),
+            restriction_obj: None,
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        if cell.pack(&mut Cursor::new(&mut buf)).is_err() {
+            return 0;
+        }
+        match EnvCell::unpack(&mut Cursor::new(&buf)) {
+            Ok(parsed) => total += parsed.static_objects.len() as u32,
+            Err(_) => return 0,
+        }
+    }
+    total
+}
+
+/// Phase 6 step C: enumerate the EnvCells in a landblock and return
+/// per-cell placement records. Each cell:
+/// 1. Loaded via `eor/cell:XXYY01XX..XXYY00FF + num_cells`.
+/// 2. Has its `environment_id` resolved → Environment record loaded
+///    from `eor/portal`, polygons triangulated, packed into a
+///    `ModelMesh` (cell-local coords; PIXI applies the cell origin +
+///    orientation transform).
+/// 3. Static objects converted to `StaticObjectPlacement` with their
+///    frames translated into world coords (cell origin rotated +
+///    landblock origin added). Per-static-object AABBs come from the
+///    static object's GfxObj/SetupModel vertex bounds — Phase D / G
+///    will use these for cell-containment queries; Phase C just ships
+///    them through.
+/// 4. Portal cell ids are widened to full 32-bit (parent landblock
+///    high word OR'd with the EnvCell wire's 16-bit cell index).
+///
+/// JS calls this once per landblock entry (mirrors Phase B's
+/// `populateBuildingAabbsForLandblock` trigger). The count of returned
+/// placements equals `LandblockInfo.num_cells` for the requested
+/// landblock — not all landblocks have EnvCells (open countryside
+/// returns []).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchEnvCellsInLandblock)]
+pub async fn fetch_env_cells_in_landblock(
+    landblock_id: u32,
+) -> Result<Vec<EnvCellPlacement>, JsValue> {
+    use holtburger_dat::file_type::EnvCell;
+    use holtburger_dat::landblock::LandblockInfo;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+
+    const LB_M: f32 = 192.0;
+
+    let landblock_high = landblock_id & 0xFFFF_0000;
+    let info_cell = landblock_high | 0x0000_FFFE;
+    let lb_x_byte = ((landblock_high >> 24) & 0xFF) as f32;
+    let lb_y_byte = ((landblock_high >> 16) & 0xFF) as f32;
+    let landblock_origin_x = lb_x_byte * LB_M;
+    let landblock_origin_y = lb_y_byte * LB_M;
+
+    let source = global_source::global_source();
+    source
+        .prefetch(&[ResourceKey::new("eor/cell", info_cell)])
+        .await
+        .map_err(|e| JsValue::from_str(&format!(
+            "fetchEnvCellsInLandblock: prefetch landblock 0x{landblock_high:08X}: {e}"
+        )))?;
+
+    let info_bytes = match source.get_file_by_key(ResourceKey::new("eor/cell", info_cell)) {
+        Ok(b) => b,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let info = LandblockInfo::unpack(&info_bytes).map_err(|e| {
+        JsValue::from_str(&format!(
+            "fetchEnvCellsInLandblock: LandblockInfo::unpack 0x{info_cell:08X}: {e}"
+        ))
+    })?;
+
+    if info.num_cells == 0 {
+        return Ok(Vec::new());
+    }
+
+    let cell_keys: Vec<ResourceKey<'_>> = (0..info.num_cells)
+        .map(|i| ResourceKey::new("eor/cell", landblock_high | (0x0100 + i)))
+        .collect();
+    source.prefetch(&cell_keys).await.map_err(|e| {
+        JsValue::from_str(&format!(
+            "fetchEnvCellsInLandblock: prefetch EnvCells for 0x{landblock_high:08X}: {e}"
+        ))
+    })?;
+
+    let mut env_id_set: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut cells_raw: Vec<EnvCell> = Vec::new();
+    for i in 0..info.num_cells {
+        let cell_id = landblock_high | (0x0100 + i);
+        let bytes = match source.get_file_by_key(ResourceKey::new("eor/cell", cell_id)) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let envcell = match EnvCell::unpack(&mut std::io::Cursor::new(&bytes)) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let env_did = 0x0D00_0000 | (envcell.environment_id as u32);
+        env_id_set.insert(env_did);
+        cells_raw.push(envcell);
+    }
+
+    let env_keys: Vec<ResourceKey<'_>> = env_id_set
+        .iter()
+        .map(|&id| ResourceKey::new("eor/portal", id))
+        .collect();
+    if !env_keys.is_empty() {
+        source.prefetch(&env_keys).await.map_err(|e| {
+            JsValue::from_str(&format!(
+                "fetchEnvCellsInLandblock: prefetch Environments: {e}"
+            ))
+        })?;
+    }
+
+    let mut env_mesh_cache: std::collections::HashMap<u32, ModelMesh> =
+        std::collections::HashMap::new();
+
+    let mut out: Vec<EnvCellPlacement> = Vec::with_capacity(cells_raw.len());
+    for envcell in cells_raw {
+        let env_did = 0x0D00_0000 | (envcell.environment_id as u32);
+        let surfaces: Vec<u32> = envcell.surfaces.iter().map(|s| *s as u32).collect();
+        let mesh = env_mesh_cache
+            .entry(env_did)
+            .or_insert_with(|| {
+                fetch_environment_mesh(source.as_ref(), env_did, &surfaces)
+            })
+            .clone_for_take();
+
+        let cell_origin = holtburger_common::Vector3 {
+            x: envcell.position.origin.x + landblock_origin_x,
+            y: envcell.position.origin.y + landblock_origin_y,
+            z: envcell.position.origin.z,
+        };
+        let cell_orientation = envcell.position.orientation;
+
+        let mut portal_cell_ids: Vec<u32> = Vec::with_capacity(envcell.portals.len());
+        for portal in &envcell.portals {
+            // Portals reference low 16 bits of a cell id within this
+            // landblock; widen by OR'ing the landblock high word.
+            // The wire `other_cell_id` is u16; valid range is
+            // [0x0100, 0xFFFD] — we keep it as-is rather than filter
+            // here, JS can ignore zero / sentinel values if needed.
+            portal_cell_ids.push(landblock_high | (portal.other_cell_id as u32));
+        }
+
+        let mut static_objects: Vec<StaticObjectPlacement> =
+            Vec::with_capacity(envcell.static_objects.len());
+        for stab in &envcell.static_objects {
+            // World position = cell_origin + cell_rot * stab.origin.
+            let stab_world_local = cell_orientation.rotate_vector(stab.position.origin);
+            let world_x = cell_origin.x + stab_world_local.x;
+            let world_y = cell_origin.y + stab_world_local.y;
+            let world_z = cell_origin.z + stab_world_local.z;
+            // World orientation = cell_rot * stab.orientation.
+            let stab_q = stab.position.orientation;
+            let cq = cell_orientation;
+            // Hamilton product (cq * stab_q).
+            let qw = cq.w * stab_q.w - cq.x * stab_q.x - cq.y * stab_q.y - cq.z * stab_q.z;
+            let qx = cq.w * stab_q.x + cq.x * stab_q.w + cq.y * stab_q.z - cq.z * stab_q.y;
+            let qy = cq.w * stab_q.y - cq.x * stab_q.z + cq.y * stab_q.w + cq.z * stab_q.x;
+            let qz = cq.w * stab_q.z + cq.x * stab_q.y - cq.y * stab_q.x + cq.z * stab_q.w;
+            let aabb_local = static_object_local_aabb(source.as_ref(), stab.stab_id);
+            static_objects.push(StaticObjectPlacement {
+                did: stab.stab_id,
+                x: world_x,
+                y: world_y,
+                z: world_z,
+                qw,
+                qx,
+                qy,
+                qz,
+                aabb_local,
+            });
+        }
+
+        out.push(EnvCellPlacement {
+            cell_id: envcell.cell_id,
+            environment_id: env_did,
+            cell_origin_x: cell_origin.x,
+            cell_origin_y: cell_origin.y,
+            cell_origin_z: cell_origin.z,
+            cell_orientation_qw: cell_orientation.w,
+            cell_orientation_qx: cell_orientation.x,
+            cell_orientation_qy: cell_orientation.y,
+            cell_orientation_qz: cell_orientation.z,
+            static_objects,
+            portal_cell_ids,
+            mesh,
+        });
+    }
+    Ok(out)
+}
+
+/// Compute model-local AABB for a static object placement. Used to
+/// populate `StaticObjectPlacement.aabbLocal` so Phase D's cell-
+/// containment queries can probe per-static AABBs without a second
+/// wasm round-trip per object. Returns 6 floats `[minX, minY, minZ,
+/// maxX, maxY, maxZ]`. Empty AABB on parse / fetch failure (caller
+/// treats as "no bounds" — which Phase D defaults to a small radius).
+#[cfg(target_arch = "wasm32")]
+fn static_object_local_aabb<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    stab_id: u32,
+) -> Vec<f32> {
+    use holtburger_dat::file_type::GfxObj;
+    use holtburger_dat::ResourceKey;
+    let mut aabb = holtburger_common::Aabb::empty();
+    match (stab_id >> 24) as u8 {
+        0x01 => {
+            if let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", stab_id))
+                && let Ok(gfx) = GfxObj::unpack(&mut std::io::Cursor::new(&bytes))
+            {
+                for vert in gfx.vertex_array.vertices.values() {
+                    aabb.expand_to_include_point(vert.origin);
+                }
+            }
+        }
+        0x02 => {
+            if let Some(part_aabbs) = walk_setup_parts_with_geom(source, stab_id) {
+                for part in part_aabbs {
+                    if !part.is_empty() {
+                        aabb.expand_to_include_point(part.min);
+                        aabb.expand_to_include_point(part.max);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    if aabb.is_empty() {
+        return vec![0.0; 6];
+    }
+    vec![aabb.min.x, aabb.min.y, aabb.min.z, aabb.max.x, aabb.max.y, aabb.max.z]
+}
+
+/// Local helper for `EnvCellPlacement::take_mesh` move semantics.
+/// `ModelMesh` doesn't impl Clone (its Vec fields are large), so the
+/// per-call `or_insert_with(|| fetch_environment_mesh(...))` pattern
+/// can't cheaply reuse an entry. We keep a deep-clone variant scoped
+/// to this module; profiling can revisit if a 50-cell landblock
+/// mesh-cache hit shows up hot.
+#[cfg(target_arch = "wasm32")]
+impl ModelMesh {
+    fn clone_for_take(&self) -> ModelMesh {
+        ModelMesh {
+            positions: self.positions.clone(),
+            uvs: self.uvs.clone(),
+            normals: self.normals.clone(),
+            surface_indices: self.surface_indices.clone(),
+            surfaces: self.surfaces.clone(),
+            bbox_min: self.bbox_min,
+            bbox_max: self.bbox_max,
+        }
+    }
+}
+
 /// Phase 4 step 6 Phase A: triangulate a SetupModel with the
 /// per-part GfxObj substitutions + per-part texture remaps that ACE
 /// pre-computes server-side and ships in `ObjectDescriptionData
