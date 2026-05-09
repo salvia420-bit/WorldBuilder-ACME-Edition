@@ -2190,9 +2190,22 @@ void main() {
         //   stage
         //   └── cameraContainer  (world metres → canvas pixels)
         //       └── worldContainer  (one-time AC y-flip)
-        //           ├── landblockContainer × 9    (terrain, beneath)
-        //           ├── objectsContainer          (static sprites, middle)
-        //           └── entityContainer           (live entities, on top — Phase 4 step 2b)
+        //           ├── outdoorContainer            (toggleable group)
+        //           │   ├── landblockContainer × 9  (terrain, beneath)
+        //           │   ├── buildingsBundle.container (per-part building meshes)
+        //           │   └── objectsContainer          (static sprites)
+        //           ├── cellContainers (added dynamically by
+        //           │   ensureCellContainersForLandblock — interior
+        //           │   geometry, must stay visible while indoor)
+        //           └── entityContainer             (live entities, on top — Phase 4 step 2b)
+        //
+        // `outdoorContainer.visible` is flipped by `tickCellVisibility`
+        // based on the wasm-side `isCurrentCellIndoor()` flag — when
+        // the player walks into an interior cell the entire outdoor
+        // group hides as one PIXI batch toggle. Cell containers + live
+        // entities stay direct children of `worldContainer` so they
+        // remain visible while indoor (cells render the interior
+        // geometry; entities can be NPCs that exist inside or out).
         const cameraContainer = new PIXI.Container();
         app.stage.addChild(cameraContainer);
 
@@ -2200,10 +2213,13 @@ void main() {
         worldContainer.scale.set(1, -1); // AC +north → canvas-up
         cameraContainer.addChild(worldContainer);
 
+        const outdoorContainer = new PIXI.Container();
+        worldContainer.addChild(outdoorContainer);
+
         for (let i = 0; i < neighbourhood.length; i += 1) {
           const n = neighbourhood[i];
           addLandblockToScene(
-            worldContainer,
+            outdoorContainer,
             meshes[i],
             n.x,
             n.y,
@@ -2257,7 +2273,7 @@ void main() {
         const buildingsBundle = buildBuildingsContainer(
           neighbourhood, buildings, perPartBuildingMap, liveSpriteMap, invisibleModels
         );
-        worldContainer.addChild(buildingsBundle.container);
+        outdoorContainer.addChild(buildingsBundle.container);
 
         // Step 4: object sprites on top of the textured terrain.
         // Step 4.5: tinted with the per-model real ARGB resolved from
@@ -2271,7 +2287,7 @@ void main() {
         // here; buildings render via `buildingsBundle.container` above.
         const { container: objectsContainer, withSprite, fallback, withLive, invisible } =
           buildObjectsContainer(neighbourhood, nonBuildings, spriteMap, colourMap, liveSpriteMap, invisibleModels);
-        worldContainer.addChild(objectsContainer);
+        outdoorContainer.addChild(objectsContainer);
         // Stash the counts on the app for the stage-info panel.
         app._stepFourCounts = { withSprite, fallback, withLive, invisible };
         app._phase6BuildingCounts = {
@@ -2298,6 +2314,7 @@ void main() {
             app,
             cameraContainer,
             worldContainer,
+            outdoorContainer,
             entityContainer,
             nameplateContainer,
             liveSpriteMap,
@@ -4038,26 +4055,27 @@ void main() {
       // set or current cell actually changes, so a stationary player
       // pays one set-equality check per frame and zero PIXI mutation.
       //
-      // Outdoor terrain handling: when the snapshot's `is_indoor`
-      // is false, leave the outdoor terrain alone (Phase 3 step 4
-      // textured tiles + the static objects layer). When indoor,
-      // hide them — the player is inside a cell and shouldn't see
-      // the world outside. Today the outdoor layer doesn't yet have
-      // a single .visible toggle (worldContainer holds many sibling
-      // children) so this is a Phase D follow-up; for now we only
-      // toggle per-cell containers and let the outdoor layer keep
-      // rendering. Phase D's primary contract — Z-floor culling
-      // inside multi-floor buildings — is fully satisfied by the
-      // per-cell toggle alone.
+      // Outdoor terrain handling (2026-05-09 follow-up): when the
+      // wasm-side `isCurrentCellIndoor()` is true, hide the entire
+      // `outdoorContainer` (terrain + buildings + non-building
+      // objects) as one PIXI batch toggle so the outdoor world
+      // doesn't bleed through interior walls. Cell containers + live
+      // entities stay direct children of `worldContainer`, so they
+      // remain visible while indoor. Outdoor mode re-shows the
+      // outdoor group; per-cell toggling continues regardless (an
+      // empty render_set hides every interior cell).
       let lastCellRenderSetSig = "";
       let lastCurrentCellId = 0;
+      let lastOutdoorVisible = null;
       function tickCellVisibility() {
         if (!liveScene || !window.__sessionHandle) return;
         let cellId = 0;
         let renderSet;
+        let isIndoor = false;
         try {
           cellId = window.__sessionHandle.getCurrentCellId() >>> 0;
           renderSet = window.__sessionHandle.getRenderSet(1);
+          isIndoor = !!window.__sessionHandle.isCurrentCellIndoor();
         } catch (_) {
           return;
         }
@@ -4067,10 +4085,20 @@ void main() {
         window.__renderSet = Array.isArray(renderSet)
           ? Array.from(renderSet, (v) => v >>> 0)
           : [];
+        window.__isIndoor = isIndoor;
         // Pre-spawn / pre-snapshot: cellId is 0. Leave existing cell
         // visibility alone — the tick that follows the next snapshot
         // publish takes care of the first paint.
         if (cellId === 0) return;
+        // Outdoor toggle: do this BEFORE the diff-guard so a transition
+        // from outdoor → indoor that doesn't change render_set (rare —
+        // crossing a portal usually changes render_set too — but
+        // possible during teleport) still flips the outdoor layer.
+        const wantOutdoorVisible = !isIndoor;
+        if (lastOutdoorVisible !== wantOutdoorVisible && liveScene.outdoorContainer) {
+          liveScene.outdoorContainer.visible = wantOutdoorVisible;
+          lastOutdoorVisible = wantOutdoorVisible;
+        }
         // Diff guard. Compare a stable signature of the (current_cell,
         // render_set) tuple to last frame's. Skip the per-cell walk on
         // no change — Pixi batch state stays put.

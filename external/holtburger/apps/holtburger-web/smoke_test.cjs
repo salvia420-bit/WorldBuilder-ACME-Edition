@@ -1174,6 +1174,42 @@ check(
     phase6DStairTraversalDetail
 );
 
+// (D.5) Outdoor visibility signal — Phase 6 step D originally toggled
+// per-cell `.visible` for interior cells but left the outdoor
+// terrain/buildings/objects layer always-on (TODO comment in
+// `tickCellVisibility`). The 2026-05-09 follow-up wraps the outdoor
+// children in a single `outdoorContainer` and toggles its visibility
+// via `SessionHandle.isCurrentCellIndoor()` (mirrors
+// `WorldPosition::is_indoors` — `(landblock_id & 0xFFFF) >= 0x0100`).
+// This check pins the wasm-side derivation across an outdoor + indoor
+// + boundary cell-id set so a regression in either threshold direction
+// fails loudly here before the JS-side toggle ever gets the chance to
+// silently misbehave.
+let phase6DOutdoorVisibilityOk = false;
+let phase6DOutdoorVisibilityDetail =
+    "phase D outdoor-visibility follow-up not shipped — expected "
+    + "wasm.holtburg_test_outdoor_visibility_signal() returning 0 across "
+    + "{outdoor 0xA9B40019, indoor 0xA9B40100, sentinel 0xA9B4FFFE, "
+    + "boundary 0xA9B400FF, boundary 0xA9B40100}.";
+try {
+    if (typeof wasm.holtburg_test_outdoor_visibility_signal === "function") {
+        const code = wasm.holtburg_test_outdoor_visibility_signal();
+        phase6DOutdoorVisibilityOk = code === 0;
+        phase6DOutdoorVisibilityDetail =
+            `holtburg_test_outdoor_visibility_signal()=${code} `
+            + `(0 = is_indoors() pin holds across outdoor/indoor/sentinel `
+            + `cell-ids; non-zero = error code, see wasm export doc)`;
+    }
+} catch (e) {
+    phase6DOutdoorVisibilityDetail =
+        `holtburg_test_outdoor_visibility_signal threw: ${e?.message ?? e}`;
+}
+check(
+    "phase6.D.outdoor_visibility_signal_pins_indoor_threshold",
+    phase6DOutdoorVisibilityOk,
+    phase6DOutdoorVisibilityDetail
+);
+
 // === end Phase 6 Step D =============================================
 
 // === Phase 6 Step E — door geometry + state ========================

@@ -3908,6 +3908,41 @@ pub fn holtburg_test_current_cell_indoor() -> u32 {
     0
 }
 
+/// Phase 6 step D follow-up (2026-05-09): pin `WorldPosition::is_indoors()`
+/// across an outdoor/indoor cell-id pair so the JS-side
+/// `outdoorContainer.visible` toggle has a wasm-validated contract.
+/// The threshold is `(landblock_id & 0xFFFF) >= 0x0100` per
+/// `holtburger_common::position::WorldPosition::is_indoors`.
+///
+/// Returns 0 on pass or a nonzero error code:
+/// - `1` — outdoor cell `0xA9B40019` reported as indoor.
+/// - `2` — indoor cell `0xA9B40100` reported as outdoor.
+/// - `3` — landblock-info sentinel `0xA9B4FFFE` reported as outdoor
+///   (low word `0xFFFE >= 0x0100` so the contract treats it as indoor;
+///   JS shouldn't see this id at runtime, but the threshold should
+///   hold consistently).
+/// - `4` — boundary case `0xA9B400FF` (last outdoor-range value)
+///   reported as indoor.
+/// - `5` — boundary case `0xA9B40100` (first indoor-range value)
+///   reported as outdoor.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn holtburg_test_outdoor_visibility_signal() -> u32 {
+    use holtburger_common::position::WorldPosition;
+    use holtburger_common::{Guid, Quaternion, Vector3};
+    let make = |id: u32| WorldPosition {
+        landblock_id: Guid(id),
+        coords: Vector3::new(0.0, 0.0, 0.0),
+        rotation: Quaternion::identity(),
+    };
+    if make(0xA9B4_0019).is_indoors() { return 1; }
+    if !make(0xA9B4_0100).is_indoors() { return 2; }
+    if !make(0xA9B4_FFFE).is_indoors() { return 3; }
+    if make(0xA9B4_00FF).is_indoors() { return 4; }
+    if !make(0xA9B4_0100).is_indoors() { return 5; }
+    0
+}
+
 /// Phase 6 step D: synthesize a 3-cell A→B→C portal chain and assert
 /// the BFS render set semantics. `render_set(A, 1) = {A, B}`,
 /// `render_set(B, 1) = {A, B, C}`, `render_set(C, 1) = {B, C}`.
