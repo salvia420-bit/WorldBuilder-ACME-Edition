@@ -1577,6 +1577,25 @@ void main() {
             // the scene; AC's CCW-from-above yaw reads as CW after
             // the flip.
             sprite.rotation = -obj.rotationZ;
+            // Compensate for worldContainer.scale.y = -1.
+            // Both bakes — the C# atlas (ObjectSpriteGenerator.cs's
+            // WorldToPx: `pxY = (originY - vy) * pxPerUnit`) and our
+            // wasm renderModelTile (`stage.scale.set(pxPerUnit, -pxPerUnit)`)
+            // — produce textures whose pixel-row-0 is the model's
+            // +Y (north) end. The static-site renderer
+            // (RenderPreviewRenderer.cs) drops those textures
+            // straight onto a Y-flipped canvas, so row 0 lands at
+            // canvas-top = north on screen — correct.
+            // PIXI by contrast nests the sprite's quad inside a
+            // Y-flipped container, which inverts the quad's local
+            // Y axis on render. Without this compensation, sprite-
+            // local -h/2 (texture row 0, model NORTH) ends up at
+            // screen +h/2 — i.e. the model's north side appears
+            // SOUTH of its placement on screen. Asymmetric buildings
+            // (e.g. Holtburg's `0x01000C1E` with the spiral tower
+            // at one end) read as visibly mirrored along their local
+            // east-west axis. Symmetric entities mask the bug.
+            sprite.scale.y = -sprite.scale.y;
             container.addChild(sprite);
             if (liveEntry) withLive += 1;
             else withSprite += 1;
@@ -2598,6 +2617,12 @@ void main() {
           sprite.width = renderEntry.worldBounds[0];
           sprite.height = renderEntry.worldBounds[1];
         }
+        // worldContainer Y-flip compensation — see the long comment
+        // on the static-placement sprite at the top of
+        // buildObjectsContainer for the full derivation. Same fix
+        // applied uniformly so symmetric entities also render in
+        // the correct orientation rather than being secretly mirrored.
+        sprite.scale.y = -sprite.scale.y;
         liveScene.entityContainer.addChild(sprite);
         entry.sprite = sprite;
         entry.modelId = modelId;
@@ -2723,6 +2748,9 @@ void main() {
             sprite.width = renderEntry.worldBounds[0];
             sprite.height = renderEntry.worldBounds[1];
           }
+          // worldContainer Y-flip compensation; see
+          // buildObjectsContainer for the full derivation.
+          sprite.scale.y = -sprite.scale.y;
           kind = "sprite";
         } else if (liveScene.invisibleModels?.has(cacheKey)) {
           // Engine-internal anchor (e.g. light marker). Keep a tiny
