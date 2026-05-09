@@ -468,9 +468,12 @@ Pick one to pull on. The choice is real, not arbitrary.
 > collision, cell-graph Z-culling, doors, vertical-dungeon
 > validation) landed in 8 commits `dc49b6f → e5bf8a8`. The
 > content rail's next pull is **Phase 6 follow-ons** —
-> outdoor-terrain hide-on-indoor, non-Holtburg teleport
-> prefetch for buildings/EnvCells, and chromium capture
-> re-enablement. (EnvCell surface-index resolution closed
+> Phase 6A part-fusion regression (buildings render as one
+> mesh per building instead of N parts), Phase 6C empty
+> cellContainers registry post-teleport, and a mechanical
+> selector sweep across 12 stale Phase 4 / older captures
+> (`server_ip` → `server_host`). (EnvCell surface-index
+> resolution closed
 > 2026-05-09 in commit `bc71009`; smoke check
 > `phase6.C.envcell_surface_did_resolves_via_namespace_or_mask`
 > pins the 0x0800… DID resolution.) Details in the Phase 6 ledger in
@@ -893,16 +896,27 @@ extend it:
     trigger the building/EnvCell prefetch. Same fix as the
     terrain-following non-Holtburg follow-on below: re-fire
     on `PlayerTeleport`.
-  - **Live captures broken (chromium "Target crashed").**
-    `capture_phase4_step3.cjs` + `capture_phase6_step_*.cjs`
-    against `100.116.47.66` were failing post the 2026-05-08
-    login-form refactor (`server_ip` → `server_host`); the
-    fix at `57de06b` updated the selector but chromium itself
-    crashes mid-run on this host. Smoke 121/0/1 is the
-    practical validation gate today; live-server visual
-    sign-off is paused until the chromium issue is diagnosed.
-    Phase 6F's Mite Maze / Holtburg Dungeon captures are
-    staged but unrun for this reason.
+  - **Live captures: chromium-crash claim was stale; real
+    failures are product bugs.** Verified 2026-05-09:
+    chromium runs end-to-end (Phase 6 step A + step C
+    captures both reach login → spawn → @telepoi → screenshot
+    full flow). Two genuine regressions surfaced when the
+    captures *did* run: (i) Phase 6A asserts `MIN_PARTS=5`
+    per building but `buildingMap` shows every building with
+    1 child + ~150-220 tris — the per-part walker is fusing
+    into a single mesh, likely after the open-world LB-entry
+    render path landed (357e8ed/5587fa0) bypassed
+    `bakePerPartBuildingTextures`; (ii) Phase 6C asserts
+    `cellContainers.size ≥ 1` post-walk-into-town-hall, but
+    the registry stays at 0 — either
+    `ensureCellContainersForLandblock` doesn't fire on
+    `PlayerTeleport`, or the player walks too short a
+    distance to cross into an EnvCell. Phase 4 + older
+    `capture_step6_*.cjs` (12 files total) still use the
+    pre-`3954289` `input[name="server_ip"]` selector; only
+    the 6 Phase 6 captures got the `57de06b` fix. Mechanical
+    sweep + investigations needed; smoke 121/0/1 remains the
+    fast gate.
 - ⏳ **DAT-side u8 → f32 memory optimization.** Cache stores
   `[f32; 81]` (4 bytes/value × 81 = 324 bytes/LB) when the
   underlying DAT representation is `u8` (× 2 → metres). For 9
@@ -2801,10 +2815,10 @@ Step ledger:
     figure.
   - ⏳ **obj 10 (live-ACE phone validation)** — bake v2 dist/,
     serve over Tailscale, demonstrate <60s first paint + <5s
-    re-load on 600 kbps cellular. Blocked on the broken
-    chromium captures noted in the polish backlog above; phone
-    validation needs the same browser path that's currently
-    crashing.
+    re-load on 600 kbps cellular. Phone validation needs a
+    real browser test from a tailnet device — hand-run by PK
+    until the Phase 6A part-fusion + Phase 6C empty-registry
+    regressions noted in the polish backlog above are fixed.
   - ⏳ **obj 11 (docs)** — `phase-5.2-manifest-fix.md` as-built
     + bumps to `phase-5-thorough.md` + this section + auto-memory.
 - ⏳ **Phase 5.3 — boot pack adaptive sizing (no brief yet).**
@@ -2896,8 +2910,9 @@ Step ledger:
   6.1 -101.6 0`) and Holtburg Dungeon (`@teleloc 0x01F60289
   96.7 -10 0`) staged as live capture targets — `@telepoi`
   rejects dungeon names so `@teleloc` is the only path.
-  Live capture deferred to follow-up because chromium is
-  crashing on this host (see polish backlog).
+  Live capture deferred to follow-up — needs the Phase 6A
+  part-fusion + Phase 6C empty-registry regressions fixed
+  first (see polish backlog).
 
 Open Phase 6 follow-ons (cosmetic / streaming reach;
 none gate the architecture):
@@ -2905,8 +2920,12 @@ none gate the architecture):
 - Outdoor-terrain hide-on-indoor (terrain leaks through).
 - Door per-part-container rotation around hinge frame.
 - Non-Holtburg teleport prefetch for EnvCells + building AABBs.
-- Live-capture re-enablement (chromium "Target crashed" on
-  this host).
+- Phase 6A part-fusion regression (buildings render as 1
+  child / mesh instead of N parts) — captures run, walker
+  is buggy.
+- Phase 6C empty cellContainers registry post-teleport.
+- Stale `server_ip` selector in 12 Phase 4 / older capture
+  scripts (mechanical sweep).
 - Cliff-edge max-Z-drop-per-tick threshold (a player walking
   off a sheer cliff still drops Z to terrain at full speed).
 

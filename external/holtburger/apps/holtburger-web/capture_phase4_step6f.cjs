@@ -71,7 +71,7 @@ const path = require("node:path");
     await page.fill('input[name="account"]', ACCOUNT);
     await page.fill('input[name="password"]', PASSWORD);
     await page.fill('input[name="bridge_url"]', BRIDGE_URL);
-    await page.fill('input[name="server_ip"]', SERVER_IP);
+    await page.fill('input[name="server_host"]', SERVER_IP);
     await page.fill('input[name="server_port"]', SERVER_PORT);
     await page.click('#login-form button[type=submit]');
     await page.waitForSelector("#selection:not([hidden])", { timeout: 30_000 });

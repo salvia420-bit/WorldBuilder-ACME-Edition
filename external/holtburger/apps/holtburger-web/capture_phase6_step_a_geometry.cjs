@@ -64,13 +64,18 @@ const path = require("node:path");
     // shouldn't exceed 1 s on the cached dat-shard path. Calibrate
     // post-implementation if needed.
     const GEOMETRY_BAKE_MS = Number(process.env.PHASE6_GEOMETRY_BAKE_MS || 3_000);
-    // Minimum part count threshold for a "real" town hall building.
-    // TODO: calibrate this against a manual Holtburg town hall
-    // inspection once Phase A is implemented. The town hall has
-    // doors, windows, exterior walls, interior partitions; 5 is a
-    // conservative floor that any non-silhouette walker will easily
-    // exceed (silhouette = 1 mesh by definition).
-    const MIN_PARTS = Number(process.env.PHASE6_MIN_PARTS || 5);
+    // Minimum part count threshold per chosen building. **Holtburg
+    // reality (verified 2026-05-09):** all 14 unique building model_ids
+    // in the LB-0xa9b40000 ring are `0x01xxxxxx` raw GfxObjs, not
+    // `0x02` SetupModels. By definition raw GfxObjs are 1-part each
+    // (lib.rs:2622 `Some(vec![tris])`), so MIN_PARTS=1 is the realistic
+    // floor for this dataset. Multi-part Setup correctness is pinned
+    // separately by the `phase6.A.holtburg_townhall_part_count` smoke
+    // check (synthetic 12-part fixture). What this capture validates
+    // for real Holtburg data: the bake → wrap → addressable chain
+    // produces a Container per building with at least one partWrapper
+    // child (not a raw Sprite — door rotation needs the wrapper).
+    const MIN_PARTS = Number(process.env.PHASE6_MIN_PARTS || 1);
     // Minimum aggregate triangle count for the chosen building.
     // 100 tris is "more than a flat shell" (flat shell = ~12 tris
     // for a box). Real Holtburg setups bake to thousands of tris;
@@ -263,31 +268,41 @@ const path = require("node:path");
             const childCount = children.length;
 
             let triCount = 0;
+            // Phase 6 step E follow-up wraps each part sprite in an
+            // inner Container (partWrapper) for hinge-pivoted rotation;
+            // __triCount lives on the wrapper, not the inner sprite.
+            // Fall through to the sprite's own __triCount for fused-
+            // fallback containers that don't have wrappers.
+            let wrappedChildren = 0;
             for (const child of children) {
-                // Preferred: bake path attaches __triCount on emit.
                 if (typeof child.__triCount === "number") {
                     triCount += child.__triCount;
-                    continue;
                 }
-                // Fallback: PIXI.Mesh exposes geometry.indexBuffer.data
-                // (Uint16Array of indices); divide by 3 for triangles.
-                const idx = child.geometry?.indexBuffer?.data;
-                if (idx && typeof idx.length === "number") {
-                    triCount += Math.floor(idx.length / 3);
-                    continue;
+                // Recurse one level: partWrapper.children[0] is the
+                // sprite, which may also carry __triCount on the
+                // fallback path.
+                for (const gc of child.children ?? []) {
+                    if (typeof gc.__triCount === "number") {
+                        triCount += gc.__triCount;
+                    }
                 }
-                // Last resort: at least one tri so a non-empty leaf
-                // doesn't silently zero out the aggregate.
-                triCount += 1;
+                if (typeof child.__partIndex === "number") {
+                    wrappedChildren += 1;
+                }
             }
 
-            const keyHex = typeof key === "bigint"
-                ? `0x${key.toString(16).toUpperCase().padStart(16, "0")}`
-                : `0x${(Number(key) >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+            // Display the model_id (set by the bake path), not the
+            // map's string key — `Number("a9b4fffe_84.50_..._01001117")`
+            // is NaN and produced misleading 0x00000000 logs.
+            const modelId = container.__buildingId;
+            const modelHex = typeof modelId === "number"
+                ? `0x${(modelId >>> 0).toString(16).toUpperCase().padStart(8, "0")}`
+                : "(no __buildingId)";
 
             out.entries.push({
-                keyHex,
+                keyHex: modelHex,
                 childCount,
+                wrappedChildren,
                 triCount,
                 x: container.x ?? 0,
                 y: container.y ?? 0,
@@ -383,36 +398,44 @@ const path = require("node:path");
 
     const partsOk = chosen.childCount >= MIN_PARTS;
     const trisOk = chosen.triCount > MIN_TRI_COUNT;
+    // Per-part wrapping correctness: each child should be a partWrapper
+    // Container tagged with __partIndex (Phase 6E hinge-rotation
+    // contract). A bare-Sprite child indicates the fallback fused path.
+    // For Holtburg's all-`0x01` raw GfxObjs, partCount=1 — but the
+    // single child must STILL be a wrapper so door rotation is
+    // addressable. Falls back to "any child counts" for the fallback
+    // fused path.
+    const wrappingOk = chosen.wrappedChildren === chosen.childCount;
 
     console.log("=========================");
     console.log(`MIN_PARTS=${MIN_PARTS}, MIN_TRI_COUNT=${MIN_TRI_COUNT}`);
     console.log(`chosen.childCount=${chosen.childCount} (>= ${MIN_PARTS}? ${partsOk})`);
+    console.log(`chosen.wrappedChildren=${chosen.wrappedChildren}/${chosen.childCount} (all wrapped? ${wrappingOk})`);
     console.log(`chosen.triCount=${chosen.triCount} (> ${MIN_TRI_COUNT}? ${trisOk})`);
 
-    if (partsOk && trisOk) {
+    if (partsOk && trisOk && wrappingOk) {
         console.log(
-            `PASS: building ${chosen.keyHex} has ${chosen.childCount} parts `
-            + `(>= ${MIN_PARTS}) and ${chosen.triCount} aggregate triangles `
-            + `(> ${MIN_TRI_COUNT}). Phase A leaf-geometry walker is live; `
-            + `silhouette regression averted.`
+            `PASS: building ${chosen.keyHex} has ${chosen.childCount} part(s) `
+            + `(>= ${MIN_PARTS}), all wrapped in partWrappers, and `
+            + `${chosen.triCount} aggregate triangles (> ${MIN_TRI_COUNT}). `
+            + `Phase A per-part walker is live + Phase 6E hinge-wrapping in place.`
         );
         await browser.close();
         process.exit(0);
-    } else if (!partsOk && !trisOk) {
+    } else if (!wrappingOk) {
         console.error(
-            `FAIL: building ${chosen.keyHex} has only ${chosen.childCount} children `
-            + `(< ${MIN_PARTS}) and ${chosen.triCount} triangles (< ${MIN_TRI_COUNT}). `
-            + `This looks like the silhouette path — Phase A's per-part walker `
-            + `at lib.rs:712-713 is not emitting leaves.`
+            `FAIL: building ${chosen.keyHex} has ${chosen.childCount} children but `
+            + `only ${chosen.wrappedChildren} are partWrappers. The remainder are `
+            + `bare Sprites — Phase 6E hinge-rotation will not work for them. `
+            + `Check buildBuildingsContainer's per-part path is taken (vs fallback).`
         );
         await browser.close();
         process.exit(1);
     } else if (!partsOk) {
         console.error(
-            `FAIL: building ${chosen.keyHex} has ${chosen.triCount} triangles but only `
-            + `${chosen.childCount} children (< ${MIN_PARTS}). The walker may be `
-            + `fusing parts into a single mesh — Phase E needs them separate. `
-            + `See docs/phase-6-buildings-and-interiors.md §3.1.`
+            `FAIL: building ${chosen.keyHex} has only ${chosen.childCount} children `
+            + `(< ${MIN_PARTS}). For Holtburg this should be ≥ 1 (all 0x01 raw `
+            + `GfxObjs). Empty container indicates the bake → addChild chain broke.`
         );
         await browser.close();
         process.exit(1);

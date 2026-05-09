@@ -50,13 +50,21 @@ this doc only covers the *remaining* work after Phase 6's follow-ons.
 
 ## Validation gates
 
-**Critical constraint.** Live captures via Playwright + Chromium have
-been crashing with "Target crashed" since the 2026-05-08 server-picker
-form change (commit `3954289`). The selector fix at `57de06b` updated
-field names but didn't unblock the underlying browser crash. Until a
-human diagnoses the chromium issue, **the practical signal for any
-change is `node smoke_test.cjs --fast`** plus `cargo test --workspace
---lib`.
+**Update 2026-05-09:** the prior "Target crashed" claim was stale.
+Re-tested today: chromium runs full login → spawn → @telepoi →
+screenshot end-to-end on this host. Two real product regressions
+surfaced when the captures *do* run: Phase 6A asserts buildings
+have `MIN_PARTS=5` per building but `buildingMap` shows every
+building with 1 child + ~150-220 tris (per-part walker fusing
+into one mesh, likely after the open-world LB-entry render path
+landed); Phase 6C asserts `cellContainers.size ≥ 1` post-walk
+but the registry stays at 0. Phase 4 + older `capture_step6_*.cjs`
+(12 files) still use the pre-`3954289` `input[name="server_ip"]`
+selector — only the 6 Phase 6 captures got the `57de06b` fix.
+
+For day-to-day work `node smoke_test.cjs --fast` (≈1 min) +
+`cargo test --workspace --lib` (≈10 min) remain the fast gates;
+live captures should be added back once 6A + 6C are fixed.
 
 ### Live-server stack (for browser-side validation)
 
@@ -268,11 +276,11 @@ watchdog can be removed.
   bookkeeping (added in `bbf8aae`).
 
 **Risk of inconclusive outcome.** This is the most diagnostic-heavy
-item on the list. The investigation could take several
-iterations against the live stack (currently chromium-blocked) and
-end with "still don't know which message triggers it." Worth
-timeboxing to ~4 hours and falling back to "documented mystery,
-keep the watchdog" if the trace doesn't narrow.
+item on the list. The investigation could take several iterations
+against the live stack and end with "still don't know which
+message triggers it." Worth timeboxing to ~4 hours and falling
+back to "documented mystery, keep the watchdog" if the trace
+doesn't narrow.
 
 **Concrete starting points.**
 - Per-tick trace of `world.player.skills.get(Skill::Run)` in the
@@ -389,19 +397,39 @@ first.
   - Adding new namespace entries
 - NOT required for pure JS / pure wasm-bindgen export changes.
 
-### Live-capture status
+### Live-capture status (re-verified 2026-05-09)
 
 Captures are at `apps/holtburger-web/capture_phase*.cjs`. All use
-Playwright + Chromium with `--use-gl=swiftshader`. Currently
-crashing post-`3954289`. Anyone diagnosing this should:
-- First confirm chromium itself launches: try
-  `chromium --headless --disable-gpu about:blank` from the
-  Playwright bin path.
-- If chromium dies on launch, the issue is environment, not
-  Playwright/holtburger code.
-- If chromium launches but crashes in the page, capture
-  `page.on('pageerror')` and look at the wasm bundle's first 60
-  console events.
+Playwright + Chromium with `--use-gl=swiftshader`. **Chromium
+runs fine on this host.** The prior "Target crashed" claim was
+stale.
+
+Real status:
+- Phase 6 captures (6 files: `capture_phase6_step_{a..f}_*.cjs`)
+  use the post-`3954289` `input[name="server_host"]` selector
+  and run end-to-end through login → spawn → @telepoi →
+  screenshot. They fail on real product assertions:
+  - **Phase 6A** asserts buildings have ≥5 child parts; today
+    every building shows 1 child + ~150 tris. Per-part walker
+    fusing into a single mesh — likely a regression after the
+    open-world LB-entry render landed (357e8ed/5587fa0)
+    bypassed `bakePerPartBuildingTextures`.
+  - **Phase 6C** asserts `cellContainers.size ≥ 1` after
+    walking 3s W toward Holtburg town hall doorway; registry
+    stays at 0. Either `ensureCellContainersForLandblock`
+    isn't firing on `PlayerTeleport`, or the player
+    doesn't walk far enough to cross into an EnvCell.
+- Phase 4 + older `capture_step6_*.cjs` (12 files) still use
+  the pre-`3954289` `server_ip` selector — only Phase 6
+  captures got the `57de06b` fix. Mechanical sweep needed.
+
+If captures DO crash unexpectedly: confirm bare chromium
+launches with `chromium --headless --disable-gpu about:blank`,
+then capture `page.on('pageerror')` + first 60 console events.
+The `playwright` install is in the npx cache at
+`/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules` —
+set `NODE_PATH` accordingly when running scripts directly via
+`node ...cjs`.
 
 ### Memory pointers
 

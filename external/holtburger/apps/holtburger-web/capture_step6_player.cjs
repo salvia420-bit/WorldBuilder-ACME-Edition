@@ -49,7 +49,7 @@ const path = require("node:path");
     await page.fill('input[name="account"]', ACCOUNT);
     await page.fill('input[name="password"]', PASSWORD);
     await page.fill('input[name="bridge_url"]', BRIDGE_URL);
-    await page.fill('input[name="server_ip"]', SERVER_IP);
+    await page.fill('input[name="server_host"]', SERVER_IP);
     await page.fill('input[name="server_port"]', SERVER_PORT);
     // Wait for the Connect button to enable (post-fbbe773 the button
     // is disabled+"Loading…" until the JS submit handler is wired).
