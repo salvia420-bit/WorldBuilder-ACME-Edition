@@ -29,7 +29,7 @@ pub mod vendor;
 
 pub use self::state::WorldState;
 pub use bootstrap::WorldBootstrap;
-pub use events::{DerivedStatsData, FellowshipActivity, PlayerInfoData, WorldEvent};
+pub use events::{DerivedStatsData, DoorState, FellowshipActivity, PlayerInfoData, WorldEvent};
 pub use spatial::{
     AuthoritativeBodySync, BasicSpatialPhysics, BuildingAabbEntry, BuildingId, ContactState,
     LocalDriveControl, LocalDriveGait, NoopSpatialPhysics, PLAYER_CAPSULE_HEIGHT,

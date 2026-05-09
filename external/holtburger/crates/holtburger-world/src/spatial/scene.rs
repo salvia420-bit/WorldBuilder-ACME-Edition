@@ -1,5 +1,5 @@
 use super::{
-    AuthoritativeBodySync, BasicSpatialPhysics, BuildingAabbEntry, ContactState,
+    AuthoritativeBodySync, BasicSpatialPhysics, BuildingAabbEntry, BuildingId, ContactState,
     RuntimeSpatialBodyView, SolvedBodyKinematics, SpatialBody, SpatialBodyId, SpatialPhysics,
     SpatialSampleMode, SpatialSamplingConfig, physics::sample_mode_for_projection_state,
 };
@@ -114,6 +114,15 @@ pub struct SpatialScene {
     /// containment is computed from the 8x8 grid in O(1) by
     /// `WorldPosition::derived_outdoor_cell_id`.
     cell_aabbs: HashMap<u32, Aabb>,
+    /// Phase 6 step E: door GUID → `(building_id, part_index)` lookup.
+    /// JS-side door binding is by entity GUID (the ACE-broadcast `Door`
+    /// weenie's full guid); the AABB index is keyed by per-part
+    /// `(BuildingId, u8)` because the same door part may belong to a
+    /// building shared by many cells. JS calls `register_door_part` once
+    /// per spawned door (after matching the door's setup_id + part bbox
+    /// against the building's AABB entries) so subsequent
+    /// `set_door_aabb_active` calls only need the door GUID.
+    door_part_index: HashMap<u64, (BuildingId, u8)>,
 }
 
 impl Default for SpatialScene {
@@ -136,6 +145,7 @@ impl SpatialScene {
             building_aabb_index: HashMap::new(),
             cell_portal_graph: HashMap::new(),
             cell_aabbs: HashMap::new(),
+            door_part_index: HashMap::new(),
         }
     }
 
@@ -192,16 +202,23 @@ impl SpatialScene {
         let mut out: Vec<BuildingAabbEntry> = Vec::new();
         let lb_high = pose.landblock_id.0 & 0xFFFF_0000;
         let low = pose.landblock_id.0 & 0xFFFF;
+        // Phase 6 step E: filter inactive entries (open doors) so they
+        // drop out of the swept-sphere clamp without rebuilding the
+        // index. Closed-door re-activation flips the flag back and the
+        // entry returns to the candidate set.
+        let push_active = |out: &mut Vec<BuildingAabbEntry>, entries: &[BuildingAabbEntry]| {
+            out.extend(entries.iter().copied().filter(|e| e.active));
+        };
         if low >= 0x0100 {
             if let Some(entries) = self.building_aabb_index.get(&pose.landblock_id.0) {
-                out.extend_from_slice(entries);
+                push_active(&mut out, entries);
             }
             return out;
         }
         let cell_idx = (low as i32) - 1;
         if !(0..64).contains(&cell_idx) {
             if let Some(entries) = self.building_aabb_index.get(&pose.landblock_id.0) {
-                out.extend_from_slice(entries);
+                push_active(&mut out, entries);
             }
             return out;
         }
@@ -217,11 +234,58 @@ impl SpatialScene {
                 let neighbour_cell = ((nx << 3) | ny) as u32 + 1;
                 let key = lb_high | neighbour_cell;
                 if let Some(entries) = self.building_aabb_index.get(&key) {
-                    out.extend_from_slice(entries);
+                    push_active(&mut out, entries);
                 }
             }
         }
         out
+    }
+
+    /// Phase 6 step E: bind a door's full GUID to the building part it
+    /// occupies, so a future `WorldEvent::DoorStateChanged` can flip
+    /// the matching AABB entry's `active` flag without re-scanning the
+    /// whole index. The wasm bundle calls this once per door
+    /// `ObjectCreate` after matching the door's setup_id against the
+    /// containing building's part list.
+    pub fn register_door_part(&mut self, door_guid: u64, building_id: BuildingId, part_index: u8) {
+        self.door_part_index
+            .insert(door_guid, (building_id, part_index));
+    }
+
+    /// Phase 6 step E: lookup the `(BuildingId, part_index)` registered
+    /// for a door GUID. Returns `None` if the door wasn't seen during
+    /// the building-AABB load or if the GUID isn't a door at all.
+    pub fn door_part_for_guid(&self, door_guid: u64) -> Option<(BuildingId, u8)> {
+        self.door_part_index.get(&door_guid).copied()
+    }
+
+    /// Phase 6 step E: count of registered door GUIDs. Diagnostic only.
+    pub fn door_part_index_len(&self) -> usize {
+        self.door_part_index.len()
+    }
+
+    /// Phase 6 step E: toggle the `active` flag on every AABB entry
+    /// matching `(building_id, part_index)`. Open doors set
+    /// `active = false`; closed doors set `active = true`. Returns the
+    /// number of entries flipped (typically 1 for a door part, but
+    /// >1 if the part straddles multiple cells and was bucketed into
+    /// each cell during load — all of those toggle in lockstep).
+    pub fn set_door_aabb_active(
+        &mut self,
+        building_id: BuildingId,
+        part_index: u8,
+        active: bool,
+    ) -> usize {
+        let mut flipped = 0usize;
+        for entries in self.building_aabb_index.values_mut() {
+            for entry in entries.iter_mut() {
+                if entry.building_id == building_id && entry.part_index == part_index {
+                    entry.active = active;
+                    flipped += 1;
+                }
+            }
+        }
+        flipped
     }
 
     /// Phase 6 step D: register a directed portal edge `from → to` in

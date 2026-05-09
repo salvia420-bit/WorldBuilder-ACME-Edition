@@ -58,7 +58,10 @@ holtburger-manifest = { workspace = true }
 # Phase 4 step 3.6 — `WorldBootstrap` + `WorldState` constructed in
 # the recv loop on EnteredWorld. Drives the cli's `MovementSystem` shim
 # (MovementSystemHandle) for the AutonomousPosition heartbeat fix.
-holtburger-world = { workspace = true }
+# Phase 6 step E — `test-support` exposes `WorldBootstrap::synthetic()`
+# so the wasm-side `holtburg_test_door_state_event_emitted` smoke can
+# stand up a live `WorldState` without any DAT files.
+holtburger-world = { workspace = true, features = ["test-support"] }
 holtburger-resource-http = { workspace = true }
 holtburger-transport-ws = { workspace = true }
 # `log` so the recv loop can route session-side log lines to

@@ -1068,17 +1068,38 @@ impl WorldState {
         data: &SetStateData,
         events: &mut Vec<WorldEvent>,
     ) -> bool {
+        use holtburger_common::properties::{ObjectDescriptionFlag, PhysicsState};
         if data.guid == self.player.guid {
             self.player.instance_sequence = data.instance_sequence;
         }
 
         if let Some(entity) = self.entities.get_mut(data.guid) {
+            let is_door = entity.flags.contains(ObjectDescriptionFlag::DOOR);
             entity.physics_state = data.physics_state;
             entity.properties.hydrate_from_set_state(data);
             events.push(WorldEvent::EntityStateUpdated {
                 guid: data.guid,
                 physics_state: data.physics_state,
             });
+            // Phase 6 step E: derive DoorState from ETHEREAL on SetState
+            // updates for door-flagged entities. ACE's Door.cs::Open()
+            // sets `Ethereal = true` and Door.cs::Close()/FinalizeClose()
+            // clears it; both broadcast via EnqueueBroadcastPhysicsState()
+            // → GameMessageSetState. Emit unconditionally (not gated on a
+            // diff against the previous physics_state) so the JS state
+            // map syncs on every door state announcement, including the
+            // initial spawn-time state from a recv-loop reconnect.
+            if is_door {
+                let state = if data.physics_state.contains(PhysicsState::ETHEREAL) {
+                    crate::events::DoorState::Open
+                } else {
+                    crate::events::DoorState::Closed
+                };
+                events.push(WorldEvent::DoorStateChanged {
+                    guid: data.guid,
+                    state,
+                });
+            }
             true
         } else {
             data.guid == self.player.guid

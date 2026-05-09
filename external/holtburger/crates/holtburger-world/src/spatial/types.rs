@@ -30,10 +30,20 @@ impl BuildingId {
 /// index buckets these by the cell id the AABB falls into; the
 /// sweeper looks up the player's current cell + immediate neighbours
 /// each tick.
+///
+/// Phase 6 step E: `part_index` and `active` were added so door parts
+/// can be addressed individually and toggled on/off when their state
+/// changes. The `building_aabbs_near_pose` sweeper filters out
+/// `active == false` entries so an open door drops out of collision
+/// without rebuilding the index, and a subsequent close flips the
+/// flag back. Non-door parts default to `active == true` and never
+/// change.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BuildingAabbEntry {
     pub building_id: BuildingId,
+    pub part_index: u8,
     pub aabb: Aabb,
+    pub active: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

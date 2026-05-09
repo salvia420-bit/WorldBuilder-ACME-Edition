@@ -593,7 +593,12 @@ mod collision {
     }
 
     fn entry(building_id: BuildingId, aabb: Aabb) -> BuildingAabbEntry {
-        BuildingAabbEntry { building_id, aabb }
+        BuildingAabbEntry {
+            building_id,
+            part_index: 0,
+            aabb,
+            active: true,
+        }
     }
 
     fn make_id(seq: u32) -> BuildingId {

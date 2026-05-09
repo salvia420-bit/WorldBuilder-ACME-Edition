@@ -11,6 +11,20 @@ use holtburger_protocol::errors::WeenieError;
 use holtburger_protocol::messages::MovementEventData;
 use holtburger_protocol::messages::magic::Enchantment;
 
+/// Phase 6 step E: client-facing door open/closed flag derived from
+/// the entity's `PhysicsState::ETHEREAL` bit. ACE's `Door.cs` sets
+/// `Ethereal = true` on `Open()` and `false` on `Close()`, broadcasting
+/// the new state via `GameMessageSetState` (mirrored here on
+/// [`WorldEvent::EntityStateUpdated`]). A door with the `DOOR`
+/// `ObjectDescriptionFlag` and ETHEREAL set is open; without ETHEREAL,
+/// closed. ACE's `Locked` semantics collapse to `Closed` for the
+/// client's purposes — locked doors are still solid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DoorState {
+    Closed,
+    Open,
+}
+
 #[derive(Debug, Clone)]
 pub struct PlayerInfoData {
     /// Authoritative world/entity snapshot for the local player.
@@ -127,6 +141,19 @@ pub enum WorldEvent {
     EntityStateUpdated {
         guid: Guid,
         physics_state: holtburger_common::properties::PhysicsState,
+    },
+    /// Phase 6 step E: an entity flagged as a door
+    /// (`ObjectDescriptionFlag::DOOR`) flipped its open/closed state.
+    /// Derived from the ETHEREAL bit on a `SetStateData` update — open
+    /// doors are ethereal, closed doors are not. Emitted alongside
+    /// `EntityStateUpdated` rather than replacing it; the recv loop
+    /// uses this event to forward a kind=15 ClientEvent to JS, which
+    /// rotates the door GfxObj sprite around its hinge frame and
+    /// toggles the door's AABB entry between active/inactive in the
+    /// `building_aabb_index`.
+    DoorStateChanged {
+        guid: Guid,
+        state: crate::events::DoorState,
     },
     // Keep the full protocol payload for now: a future 3D client will likely need
     // richer server-authored movement detail than the current core/TUI consumer.

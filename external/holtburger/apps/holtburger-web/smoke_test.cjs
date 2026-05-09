@@ -1139,6 +1139,216 @@ check(
 
 // === end Phase 6 Step D =============================================
 
+// === Phase 6 Step E — door geometry + state ========================
+//
+// Phase E ships door state + door rotation. Closed doors block (their
+// AABBs sit in Phase B's `building_aabb_index`); clicking a door
+// dispatches `useObject` → ACE flips state → ACE pushes the new
+// `DoorState` via `PublicWeenieDesc` → client emits a
+// `WorldEvent::DoorStateChanged { guid, state }` (placeholder name)
+// → JS handler rotates the door's GfxObj sprite around its hinge
+// frame and the AABB index drops the open door's entry. Walking
+// through the open door then succeeds because the index no longer
+// covers it.
+//
+// What this smoke can validate (without a live ACE round-trip — that
+// belongs to `capture_phase6_step_e_doors.cjs`):
+//   E.1  Open-state mutation drops the door's AABB from the index.
+//        Helper: synthesize a single-AABB index containing one door,
+//        mutate that door's state to "open", assert the AABB is
+//        removed (lookup against the same cell returns the empty
+//        bucket).
+//   E.2  Closed-state mutation re-inserts the AABB. Same fixture as
+//        E.1 but starting from "open" state and flipping back to
+//        "closed"; asserts the AABB is re-inserted.
+//   E.3  DoorStateChanged event is emitted. Helper: synth a
+//        WorldState + a simulated PublicWeenieDesc packet carrying
+//        a DoorState int property; pump it through the handler;
+//        assert exactly one `WorldEvent::DoorStateChanged { guid,
+//        state }` is in the resulting event queue.
+//   E.4  (optional) Hinge-frame rotation keyframe matches expected
+//        values. Helper: synth a hinge-frame transform, apply
+//        "closed" rotation, assert the resulting matrix matches a
+//        baseline (likely identity); apply "open" rotation, assert
+//        the matrix matches a 90°-around-hinge baseline (the exact
+//        axis is impl-picked — likely Z for vertical-axis door
+//        swings, X or Y for double-leaf swing-up doors).
+//
+// All four checks fail cleanly today (the wasm exports they probe
+// don't exist yet); they pass once the implementation agent ships
+// the Phase E export surface. Locked-in contract per
+// docs/phase-6-buildings-and-interiors.md §5 phase E.
+//
+// NOTE: the names below are PLACEHOLDERS. Mirroring the Phase A/B/C/D
+// convention: snake-case `holtburg_test_*` helper names on the Rust
+// side. If the implementation chooses different idioms, update both
+// this block AND `capture_phase6_step_e_doors.cjs`'s window-side
+// probes (which currently look for `window.__doorStates` /
+// `entry.__doorState` / `sprite.rotation`) in the same commit so the
+// smoke + live tests stay aligned.
+//
+// Per-helper error-code conventions mirror Phase B/D:
+//   0  = test passed
+//   >0 = test ran but a specific assertion failed (impl agent picks
+//        the meaning of each non-zero code, documents in the wasm
+//        export's doc comment).
+// (Symbol-missing is reported via `typeof === "function"` BEFORE the
+// call, so a non-zero return strictly means "ran and failed".)
+
+// (E.1) Open mutation drops AABB. The helper builds a single-cell
+// AABB index containing one door, sets the door's state to "open",
+// and asserts that subsequent lookups against the cell return the
+// empty bucket. Returns 0 on pass, non-zero error code otherwise.
+let phase6EOpenDropsAabbOk = false;
+let phase6EOpenDropsAabbDetail =
+    "phase E not yet shipped — expected wasm.holtburg_test_door_open_drops_aabb() "
+    + "(placeholder name) returning 0 if mutating a door's state to \"open\" "
+    + "removes its AABB from the per-cell `building_aabb_index`, non-zero error "
+    + "code otherwise. Sibling shape to Phase B's "
+    + "holtburg_test_collision_clamp_axis_aligned.";
+try {
+    if (typeof wasm.holtburg_test_door_open_drops_aabb === "function") {
+        const code = wasm.holtburg_test_door_open_drops_aabb();
+        phase6EOpenDropsAabbOk = code === 0;
+        phase6EOpenDropsAabbDetail =
+            `holtburg_test_door_open_drops_aabb()=${code} `
+            + `(0 = open-state mutation removed AABB; non-zero = error code, `
+            + `see wasm export doc)`;
+    }
+} catch (e) {
+    phase6EOpenDropsAabbDetail =
+        `holtburg_test_door_open_drops_aabb threw: ${e?.message ?? e}`;
+}
+check(
+    "phase6.E.door_open_drops_aabb_from_index",
+    phase6EOpenDropsAabbOk,
+    phase6EOpenDropsAabbDetail
+);
+
+// (E.2) Closed mutation re-inserts AABB. Same fixture as E.1 but
+// starting from "open" and flipping to "closed"; asserts the AABB
+// is re-inserted. Returns 0 on pass, non-zero error code otherwise.
+//
+// Why both directions: the Phase E AABB toggle has to be symmetric.
+// A bug that drops the AABB on open but doesn't re-insert on close
+// would leave the world progressively door-less after every open/
+// close cycle.
+let phase6ECloseInsertsAabbOk = false;
+let phase6ECloseInsertsAabbDetail =
+    "phase E not yet shipped — expected wasm.holtburg_test_door_close_inserts_aabb() "
+    + "(placeholder name) returning 0 if mutating a door's state to \"closed\" "
+    + "re-inserts its AABB into the `building_aabb_index`, non-zero error code "
+    + "otherwise.";
+try {
+    if (typeof wasm.holtburg_test_door_close_inserts_aabb === "function") {
+        const code = wasm.holtburg_test_door_close_inserts_aabb();
+        phase6ECloseInsertsAabbOk = code === 0;
+        phase6ECloseInsertsAabbDetail =
+            `holtburg_test_door_close_inserts_aabb()=${code} `
+            + `(0 = closed-state mutation re-inserted AABB; non-zero = error code, `
+            + `see wasm export doc)`;
+    }
+} catch (e) {
+    phase6ECloseInsertsAabbDetail =
+        `holtburg_test_door_close_inserts_aabb threw: ${e?.message ?? e}`;
+}
+check(
+    "phase6.E.door_close_re_inserts_aabb",
+    phase6ECloseInsertsAabbOk,
+    phase6ECloseInsertsAabbDetail
+);
+
+// (E.3) DoorStateChanged event emission. The helper builds a
+// synthetic WorldState, simulates a `PublicWeenieDesc` packet
+// arriving with a DoorState int property change for a known door
+// guid, pumps it through the Phase E handler at
+// `crates/holtburger-core/src/client/world/handlers/`, and asserts
+// exactly one `WorldEvent::DoorStateChanged { guid, state }`
+// (placeholder name) lands in the resulting event queue with the
+// expected guid and state values.
+//
+// Returns 0 on pass; non-zero error codes (impl agent picks):
+//   1 = no DoorStateChanged event emitted
+//   2 = wrong guid in emitted event
+//   3 = wrong state in emitted event
+//   4 = multiple DoorStateChanged events emitted (handler ran more
+//       than once for a single packet)
+let phase6EDoorEventOk = false;
+let phase6EDoorEventDetail =
+    "phase E not yet shipped — expected wasm.holtburg_test_door_state_event_emitted() "
+    + "(placeholder name) returning 0 if a synthetic PublicWeenieDesc with a "
+    + "DoorState int property produces exactly one WorldEvent::DoorStateChanged "
+    + "{ guid, state } in the WorldState event queue, non-zero error code otherwise. "
+    + "WorldEvent variant name is also a placeholder; if the impl agent picks a "
+    + "different variant (e.g. WorldEvent::DoorOpened/DoorClosed instead of a "
+    + "single DoorStateChanged variant), update this check + the capture script "
+    + "together.";
+try {
+    if (typeof wasm.holtburg_test_door_state_event_emitted === "function") {
+        const code = wasm.holtburg_test_door_state_event_emitted();
+        phase6EDoorEventOk = code === 0;
+        phase6EDoorEventDetail =
+            `holtburg_test_door_state_event_emitted()=${code} `
+            + `(0 = exactly one DoorStateChanged event emitted with expected guid+state; `
+            + `non-zero = error code, see wasm export doc)`;
+    }
+} catch (e) {
+    phase6EDoorEventDetail =
+        `holtburg_test_door_state_event_emitted threw: ${e?.message ?? e}`;
+}
+check(
+    "phase6.E.door_state_changed_event_is_emitted",
+    phase6EDoorEventOk,
+    phase6EDoorEventDetail
+);
+
+// (E.4 — optional) Hinge-frame rotation keyframe. The helper
+// synthesizes a hinge-frame transform with a known axis and pivot,
+// applies the "closed" rotation, asserts the resulting matrix
+// matches an expected baseline (typically identity); applies the
+// "open" rotation, asserts the matrix matches the swung-90°
+// baseline.
+//
+// Why "optional": the live capture's "rotation differs from
+// baseline" assertion already proves the rotation runs — the
+// keyframe match here is value-level confidence (proves the rotation
+// is the RIGHT amount around the RIGHT axis), but isn't load-bearing
+// for the contract. If the impl agent skips the helper, the check
+// just stays at "phase E not yet shipped" and doesn't gate.
+//
+// Tolerance: 1e-4 on each matrix element is generous for f32
+// rotations (~0.01° angular drift floor). The impl agent picks the
+// exact axis convention (Z-vertical for swing doors is most common
+// in retail AC), documents in the doc comment.
+let phase6EHingeRotationOk = false;
+let phase6EHingeRotationDetail =
+    "phase E not yet shipped (optional) — expected "
+    + "wasm.holtburg_test_door_rotation_keyframe() (placeholder name) returning 0 "
+    + "if the hinge-frame rotation matrix matches expected baselines for both "
+    + "\"closed\" (typically identity) and \"open\" (typically 90° around the "
+    + "impl-picked hinge axis), non-zero error code otherwise. Optional: the live "
+    + "capture proves rotation runs, this proves it's the right amount.";
+try {
+    if (typeof wasm.holtburg_test_door_rotation_keyframe === "function") {
+        const code = wasm.holtburg_test_door_rotation_keyframe();
+        phase6EHingeRotationOk = code === 0;
+        phase6EHingeRotationDetail =
+            `holtburg_test_door_rotation_keyframe()=${code} `
+            + `(0 = hinge-frame matrices match closed+open baselines; `
+            + `non-zero = error code, see wasm export doc)`;
+    }
+} catch (e) {
+    phase6EHingeRotationDetail =
+        `holtburg_test_door_rotation_keyframe threw: ${e?.message ?? e}`;
+}
+check(
+    "phase6.E.door_rotation_keyframe",
+    phase6EHingeRotationOk,
+    phase6EHingeRotationDetail
+);
+
+// === end Phase 6 Step E =============================================
+
 
 (async () => {
     // Phase 5.0b — pre-bake a manifest+shards+boot tree from the

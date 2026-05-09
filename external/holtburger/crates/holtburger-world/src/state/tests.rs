@@ -3062,6 +3062,109 @@ fn apply_set_state_updates_local_player_instance_sequence_and_entity_physics_sta
     ));
 }
 
+/// Phase 6 step E: a SetState update targeting a door-flagged entity
+/// emits both `EntityStateUpdated` and `DoorStateChanged`. ACE's
+/// `Door.cs::Open()` sets `Ethereal = true` and broadcasts via
+/// `GameMessageSetState`; the client maps that to
+/// `DoorState::Open`. The non-door equivalent test above proves
+/// non-door entities only emit `EntityStateUpdated`.
+#[test]
+fn apply_set_state_emits_door_state_changed_open_for_ethereal_door() {
+    use crate::events::DoorState;
+    use holtburger_common::properties::ObjectDescriptionFlag;
+    use holtburger_protocol::messages::object::messages::properties::SetStateData;
+
+    let mut state = WorldState::synthetic();
+    let door_guid = Guid(0x5000_DEAD);
+    let mut door = Entity::new(door_guid, "Door".into(), WorldPosition::default());
+    door.flags = ObjectDescriptionFlag::DOOR;
+    state.entities.insert(door);
+
+    let mut events = Vec::new();
+    state.apply_set_state_update(
+        &SetStateData {
+            guid: door_guid,
+            physics_state: PhysicsState::ETHEREAL,
+            instance_sequence: 0,
+            state_sequence: 1,
+        },
+        &mut events,
+    );
+
+    let door_events: Vec<&WorldEvent> = events
+        .iter()
+        .filter(|e| matches!(e, WorldEvent::DoorStateChanged { .. }))
+        .collect();
+    assert_eq!(door_events.len(), 1);
+    assert!(matches!(
+        door_events[0],
+        WorldEvent::DoorStateChanged { guid, state: DoorState::Open } if *guid == door_guid
+    ));
+}
+
+/// Phase 6 step E: closing a door (clearing ETHEREAL) emits
+/// `DoorStateChanged { state: Closed }`.
+#[test]
+fn apply_set_state_emits_door_state_changed_closed_for_clear_ethereal() {
+    use crate::events::DoorState;
+    use holtburger_common::properties::ObjectDescriptionFlag;
+    use holtburger_protocol::messages::object::messages::properties::SetStateData;
+
+    let mut state = WorldState::synthetic();
+    let door_guid = Guid(0x5000_DEAF);
+    let mut door = Entity::new(door_guid, "Door".into(), WorldPosition::default());
+    door.flags = ObjectDescriptionFlag::DOOR;
+    door.physics_state = PhysicsState::ETHEREAL;
+    state.entities.insert(door);
+
+    let mut events = Vec::new();
+    state.apply_set_state_update(
+        &SetStateData {
+            guid: door_guid,
+            physics_state: PhysicsState::NONE,
+            instance_sequence: 0,
+            state_sequence: 2,
+        },
+        &mut events,
+    );
+
+    assert!(events.iter().any(|e| matches!(
+        e,
+        WorldEvent::DoorStateChanged { guid, state: DoorState::Closed } if *guid == door_guid
+    )));
+}
+
+/// Phase 6 step E: a SetState update on a non-door entity must NOT
+/// emit `DoorStateChanged`. Guards against a future refactor that
+/// loses the `ObjectDescriptionFlag::DOOR` gate and starts emitting
+/// the event for every state change.
+#[test]
+fn apply_set_state_skips_door_state_changed_for_non_door() {
+    use holtburger_protocol::messages::object::messages::properties::SetStateData;
+
+    let mut state = WorldState::synthetic();
+    let entity_guid = Guid(0x6000_BABE);
+    let entity = Entity::new(entity_guid, "Lamp".into(), WorldPosition::default());
+    state.entities.insert(entity);
+
+    let mut events = Vec::new();
+    state.apply_set_state_update(
+        &SetStateData {
+            guid: entity_guid,
+            physics_state: PhysicsState::ETHEREAL,
+            instance_sequence: 0,
+            state_sequence: 1,
+        },
+        &mut events,
+    );
+
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, WorldEvent::DoorStateChanged { .. }))
+    );
+}
+
 #[test]
 fn test_tick_does_not_sweep_unexpired_deadline() {
     let mut state = WorldState::synthetic();

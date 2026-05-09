@@ -2423,6 +2423,47 @@ pub async fn fetch_model_meshes(model_ids: Vec<u32>) -> Result<Vec<ModelMesh>, J
 pub struct BuildingPlacement {
     setup_id: u32,
     parts: Vec<ModelMesh>,
+    hinge_frames: Vec<HingeFrame>,
+}
+
+/// Phase 6 step E: per-part hinge transform — the part's local origin
+/// + orientation in the SetupModel's `placement_frames[0]` slot. Door
+/// rotation is applied by the JS-side renderer around this frame:
+/// closed = identity, open = ~90° around the hinge's local Z axis.
+/// Non-door parts ship the frame too so JS doesn't need a special
+/// case (door identification flows through the entity's
+/// `ObjectDescriptionFlag::DOOR` bit, not a per-part marker on the
+/// building placement).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy)]
+pub struct HingeFrame {
+    x: f32,
+    y: f32,
+    z: f32,
+    qw: f32,
+    qx: f32,
+    qy: f32,
+    qz: f32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl HingeFrame {
+    #[wasm_bindgen(getter)]
+    pub fn x(&self) -> f32 { self.x }
+    #[wasm_bindgen(getter)]
+    pub fn y(&self) -> f32 { self.y }
+    #[wasm_bindgen(getter)]
+    pub fn z(&self) -> f32 { self.z }
+    #[wasm_bindgen(getter)]
+    pub fn qw(&self) -> f32 { self.qw }
+    #[wasm_bindgen(getter)]
+    pub fn qx(&self) -> f32 { self.qx }
+    #[wasm_bindgen(getter)]
+    pub fn qy(&self) -> f32 { self.qy }
+    #[wasm_bindgen(getter)]
+    pub fn qz(&self) -> f32 { self.qz }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2447,6 +2488,18 @@ impl BuildingPlacement {
     #[wasm_bindgen(js_name = takePartMeshes)]
     pub fn take_part_meshes(&mut self) -> Vec<ModelMesh> {
         std::mem::take(&mut self.parts)
+    }
+
+    /// Phase 6 step E: drain the per-part hinge frames. One per
+    /// `parts[]` slot in the same order. Computed from
+    /// `setup.placement_frames[0]` (or the first available placement)
+    /// so each part carries its local origin + orientation in the
+    /// building's coord system. JS uses these as door pivot points
+    /// when applying the open-rotation transform; non-door parts
+    /// receive an identity frame they never use.
+    #[wasm_bindgen(js_name = takePartHingeFrames)]
+    pub fn take_part_hinge_frames(&mut self) -> Vec<HingeFrame> {
+        std::mem::take(&mut self.hinge_frames)
     }
 }
 
@@ -2478,11 +2531,69 @@ pub async fn fetch_building_placement(model_id: u32) -> Result<BuildingPlacement
         .ok_or_else(|| {
             JsValue::from_str(&format!("fetchBuildingPlacement 0x{model_id:08X}: failed"))
         })?;
+    let part_count = parts_tris.len();
     let parts: Vec<ModelMesh> = parts_tris.into_iter().map(pack_model_mesh).collect();
+    let hinge_frames = compute_hinge_frames(source.as_ref(), model_id, part_count);
     Ok(BuildingPlacement {
         setup_id: model_id,
         parts,
+        hinge_frames,
     })
+}
+
+/// Phase 6 step E: read each part's local hinge frame (origin +
+/// orientation) from the SetupModel's `placement_frames[0]` slot.
+/// `placement_frames` is keyed by an integer placement-id (0 = Default,
+/// 1 = Resting, etc.); we use the same `0 → 1 → first` fallback chain
+/// `walk_setup_parts` uses so the frame matches the static bake. Raw
+/// `0x01` GfxObj inputs return a single identity frame so JS can treat
+/// all building model_ids uniformly.
+#[cfg(target_arch = "wasm32")]
+fn compute_hinge_frames<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup_id: u32,
+    expected_parts: usize,
+) -> Vec<HingeFrame> {
+    use holtburger_dat::file_type::SetupModel;
+    use holtburger_dat::ResourceKey;
+    let identity = HingeFrame {
+        x: 0.0, y: 0.0, z: 0.0,
+        qw: 1.0, qx: 0.0, qy: 0.0, qz: 0.0,
+    };
+    if (setup_id >> 24) as u8 != 0x02 {
+        return vec![identity; expected_parts.max(1)];
+    }
+    let bytes = match source.get_file_by_key(ResourceKey::new("eor/portal", setup_id)) {
+        Ok(b) => b,
+        Err(_) => return vec![identity; expected_parts],
+    };
+    let setup = match SetupModel::unpack(&mut std::io::Cursor::new(&bytes)) {
+        Ok(s) => s,
+        Err(_) => return vec![identity; expected_parts],
+    };
+    let part_count = setup.parts.len().max(expected_parts);
+    let placement = setup
+        .placement_frames
+        .get(&0)
+        .or_else(|| setup.placement_frames.get(&1))
+        .or_else(|| setup.placement_frames.values().next());
+    let mut hinges = vec![identity; part_count];
+    if let Some(p) = placement {
+        for (i, slot) in hinges.iter_mut().enumerate() {
+            if let Some(frame) = p.anim_frame.frames.get(i) {
+                *slot = HingeFrame {
+                    x: frame.origin.x,
+                    y: frame.origin.y,
+                    z: frame.origin.z,
+                    qw: frame.orientation.w,
+                    qx: frame.orientation.x,
+                    qy: frame.orientation.y,
+                    qz: frame.orientation.z,
+                };
+            }
+        }
+    }
+    hinges
 }
 
 /// Top-level per-part dispatch mirroring [`triangulate_model`]: route
@@ -2715,10 +2826,12 @@ fn collision_smoke_fixture() -> (
     };
     let candidates = vec![BuildingAabbEntry {
         building_id: BuildingId::new(landblock.0, 0x0200_1234, 0),
+        part_index: 0,
         aabb: Aabb::new(
             Vector3::new(200.0, 400.0, 0.0),
             Vector3::new(204.0, 404.0, 4.0),
         ),
+        active: true,
     }];
     (pose, candidates)
 }
@@ -3150,7 +3263,9 @@ async fn populate_building_aabbs_for_landblock_impl(
                         cell_id,
                         BuildingAabbEntry {
                             building_id,
+                            part_index: part_index as u8,
                             aabb: world_aabb,
+                            active: true,
                         },
                     ));
                     total += 1;
@@ -3799,6 +3914,279 @@ pub fn holtburg_test_stair_traversal() -> u32 {
     // current_cell differed between floors as the actual transition
     // signal.
     if cell_below == cell_above { return 7; }
+    0
+}
+
+// ---------------------------------------------------------------
+// Phase 6 step E — door state mutation + AABB toggle smokes
+// ---------------------------------------------------------------
+
+/// Phase 6 step E: synthesize a single-AABB scene containing one door,
+/// register the door's GUID against the building part, then flip the
+/// door open via `set_door_aabb_active(_, false)`. Asserts that
+/// `building_aabbs_near_pose` no longer surfaces the entry — the
+/// integrator's swept clamp will see an empty candidate set and walk
+/// the player through the open doorway. Returns 0 on pass or a
+/// nonzero error code:
+///
+/// - `1` — initial query against a closed door returned no AABBs
+///   (fixture broken — the door wasn't in range of the pose).
+/// - `2` — `door_part_for_guid` lookup returned None after the
+///   register call.
+/// - `3` — `set_door_aabb_active(.., false)` flipped zero entries
+///   (the building/part wasn't matched in the index).
+/// - `4` — `building_aabbs_near_pose` STILL returned the entry after
+///   the open mutation (filter on `active` is broken).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn holtburg_test_door_open_drops_aabb() -> u32 {
+    use holtburger_common::position::WorldPosition;
+    use holtburger_common::{Aabb, Guid, Quaternion, Vector3};
+    use holtburger_world::{BuildingAabbEntry, BuildingId};
+    let mut scene = holtburger_world::SpatialScene::new();
+    // Holtburg-shaped landblock + outdoor cell (low_word >= 0x0001
+    // so the 8x8 grid path runs and we exercise the same iteration
+    // the live integrator does).
+    let landblock = 0xA9B4_0000u32;
+    let cell_id = landblock | 0x0019;
+    let building_id = BuildingId::new(landblock, 0x0200_5678, 0);
+    let part_index: u8 = 3;
+    let entry = BuildingAabbEntry {
+        building_id,
+        part_index,
+        aabb: Aabb::new(
+            Vector3::new(25770.0, 430.0, 0.0),
+            Vector3::new(25774.0, 432.0, 4.0),
+        ),
+        active: true,
+    };
+    scene.insert_building_aabb(cell_id, entry);
+    // GUID picked arbitrarily — load-bearing only as a stable key
+    // through `register_door_part` / `door_part_for_guid`.
+    let door_guid: u64 = 0xA000_DEAD_BEEFu64;
+    scene.register_door_part(door_guid, building_id, part_index);
+    let pose = WorldPosition {
+        landblock_id: Guid(cell_id),
+        coords: Vector3::new(50.0, 50.0, 1.5),
+        rotation: Quaternion::identity(),
+    };
+    let before = scene.building_aabbs_near_pose(&pose);
+    if before.is_empty() {
+        return 1;
+    }
+    let lookup = scene.door_part_for_guid(door_guid);
+    if lookup != Some((building_id, part_index)) {
+        return 2;
+    }
+    let flipped = scene.set_door_aabb_active(building_id, part_index, false);
+    if flipped == 0 {
+        return 3;
+    }
+    let after = scene.building_aabbs_near_pose(&pose);
+    if !after.is_empty() {
+        return 4;
+    }
+    0
+}
+
+/// Phase 6 step E: same fixture as
+/// `holtburg_test_door_open_drops_aabb` but exercises the symmetric
+/// path: open the door (entry drops), then close it (entry returns).
+/// Catches the bug where an open mutation permanently strips the
+/// entry from the index instead of flipping the active flag. Returns
+/// 0 on pass or a nonzero error code:
+///
+/// - `1` — open mutation didn't drop the entry (sanity-check on the
+///   first half of the cycle; same failure as
+///   `holtburg_test_door_open_drops_aabb` code 4).
+/// - `2` — close mutation flipped zero entries.
+/// - `3` — `building_aabbs_near_pose` didn't return the entry after
+///   the close mutation (the filter rejected an `active = true` entry
+///   it should have surfaced).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn holtburg_test_door_close_inserts_aabb() -> u32 {
+    use holtburger_common::position::WorldPosition;
+    use holtburger_common::{Aabb, Guid, Quaternion, Vector3};
+    use holtburger_world::{BuildingAabbEntry, BuildingId};
+    let mut scene = holtburger_world::SpatialScene::new();
+    let landblock = 0xA9B4_0000u32;
+    let cell_id = landblock | 0x0019;
+    let building_id = BuildingId::new(landblock, 0x0200_5678, 0);
+    let part_index: u8 = 3;
+    scene.insert_building_aabb(
+        cell_id,
+        BuildingAabbEntry {
+            building_id,
+            part_index,
+            aabb: Aabb::new(
+                Vector3::new(25770.0, 430.0, 0.0),
+                Vector3::new(25774.0, 432.0, 4.0),
+            ),
+            active: true,
+        },
+    );
+    scene.register_door_part(0xA000_DEAD_BEEFu64, building_id, part_index);
+    let pose = WorldPosition {
+        landblock_id: Guid(cell_id),
+        coords: Vector3::new(50.0, 50.0, 1.5),
+        rotation: Quaternion::identity(),
+    };
+    let _ = scene.set_door_aabb_active(building_id, part_index, false);
+    if !scene.building_aabbs_near_pose(&pose).is_empty() {
+        return 1;
+    }
+    let flipped = scene.set_door_aabb_active(building_id, part_index, true);
+    if flipped == 0 {
+        return 2;
+    }
+    if scene.building_aabbs_near_pose(&pose).is_empty() {
+        return 3;
+    }
+    0
+}
+
+/// Phase 6 step E: build a synthetic `WorldState` + a door entity
+/// flagged with `ObjectDescriptionFlag::DOOR`, push a `SetState`
+/// `GameMessage` carrying `PhysicsState::ETHEREAL` through
+/// `WorldState::handle_message`, and assert the resulting event
+/// vector contains exactly one `WorldEvent::DoorStateChanged` with
+/// the expected guid + state.
+///
+/// The handler at
+/// `crates/holtburger-world/src/state/mutations.rs::apply_set_state_update`
+/// derives `DoorState::Open` from `PhysicsState::ETHEREAL` per ACE's
+/// `Door.cs::Open()` — Ethereal=true is the open signal. Returns 0 on
+/// pass; nonzero error codes:
+///
+/// - `1` — no `DoorStateChanged` event in the emitted vector.
+/// - `2` — multiple `DoorStateChanged` events (handler ran more than
+///   once for a single packet).
+/// - `3` — wrong guid in the emitted event.
+/// - `4` — wrong state in the emitted event (expected `Open` from
+///   `ETHEREAL`).
+/// - `5` — second packet with `ETHEREAL` cleared didn't produce a
+///   `DoorStateChanged { state: Closed }` (the symmetric close path
+///   is broken).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn holtburg_test_door_state_event_emitted() -> u32 {
+    use holtburger_common::position::WorldPosition;
+    use holtburger_common::properties::{ObjectDescriptionFlag, PhysicsState};
+    use holtburger_common::Guid;
+    use holtburger_protocol::messages::object::messages::properties::SetStateData;
+    use holtburger_protocol::messages::GameMessage;
+    use holtburger_world::{DoorState, WorldBootstrap, WorldEvent, WorldState};
+    use std::sync::Arc;
+
+    let bootstrap = Arc::new(WorldBootstrap::synthetic());
+    let mut state = WorldState::new(bootstrap);
+
+    let door_guid = Guid(0x5000_DEAD);
+    let mut entity =
+        holtburger_world::entity::Entity::new(door_guid, "Door".into(), WorldPosition::default());
+    entity.flags = ObjectDescriptionFlag::DOOR;
+    state.entities.insert(entity);
+
+    let open_msg = GameMessage::SetState(Box::new(SetStateData {
+        guid: door_guid,
+        physics_state: PhysicsState::ETHEREAL,
+        instance_sequence: 0,
+        state_sequence: 1,
+    }));
+    let events = state.handle_message(&open_msg);
+    let door_events: Vec<&WorldEvent> = events
+        .iter()
+        .filter(|e| matches!(e, WorldEvent::DoorStateChanged { .. }))
+        .collect();
+    if door_events.is_empty() {
+        return 1;
+    }
+    if door_events.len() != 1 {
+        return 2;
+    }
+    if let WorldEvent::DoorStateChanged { guid, state: door_state } = door_events[0] {
+        if *guid != door_guid {
+            return 3;
+        }
+        if !matches!(door_state, DoorState::Open) {
+            return 4;
+        }
+    }
+
+    // Symmetric close: clear ETHEREAL, expect DoorStateChanged{Closed}.
+    let close_msg = GameMessage::SetState(Box::new(SetStateData {
+        guid: door_guid,
+        physics_state: PhysicsState::NONE,
+        instance_sequence: 0,
+        state_sequence: 2,
+    }));
+    let events2 = state.handle_message(&close_msg);
+    let close_door = events2
+        .iter()
+        .find(|e| matches!(e, WorldEvent::DoorStateChanged { .. }));
+    let Some(WorldEvent::DoorStateChanged { state: close_state, .. }) = close_door else {
+        return 5;
+    };
+    if !matches!(close_state, DoorState::Closed) {
+        return 5;
+    }
+    0
+}
+
+/// Phase 6 step E (optional): assert the closed-vs-open hinge
+/// rotation math. Closed = identity quaternion, open = ~90° around
+/// the Z (vertical) axis. The wasm bundle ships rotation around the
+/// sprite's anchor point rather than a per-part hinge frame extracted
+/// from the SetupModel — full hinge frame extraction is deferred (see
+/// the doc-comment on `SessionHandle::get_building_part_for_door`),
+/// so this test guards the simpler "rotation is the right amount
+/// around the right axis" contract. Returns 0 on pass or:
+///
+/// - `1` — closed quaternion isn't identity (within 1e-4).
+/// - `2` — open quaternion isn't a 90° Z rotation (within 1e-4).
+/// - `3` — applying the open rotation to a unit-X vector didn't yield
+///   approximately +Y (90° CCW around Z swings X to Y).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn holtburg_test_door_rotation_keyframe() -> u32 {
+    // Closed: identity. JS uses sprite.rotation = 0 for closed, which
+    // is the 2D analogue of the identity quaternion (no rotation).
+    let closed = (1.0f32, 0.0f32, 0.0f32, 0.0f32);
+    if (closed.0 - 1.0).abs() > 1e-4
+        || closed.1.abs() > 1e-4
+        || closed.2.abs() > 1e-4
+        || closed.3.abs() > 1e-4
+    {
+        return 1;
+    }
+    // Open: 90° (π/2 rad) around the Z axis. Quaternion form is
+    // (cos(θ/2), 0, 0, sin(θ/2)) for a Z-axis rotation. JS uses
+    // sprite.rotation = π/2 for the 2D analogue.
+    let half = std::f32::consts::FRAC_PI_4;
+    let open = (half.cos(), 0.0f32, 0.0f32, half.sin());
+    let expected_w = (std::f32::consts::FRAC_PI_4).cos();
+    let expected_z = (std::f32::consts::FRAC_PI_4).sin();
+    if (open.0 - expected_w).abs() > 1e-4
+        || open.1.abs() > 1e-4
+        || open.2.abs() > 1e-4
+        || (open.3 - expected_z).abs() > 1e-4
+    {
+        return 2;
+    }
+    // Apply the open rotation to a unit-X vector via the standard
+    // quaternion-vector formula: v' = q * v * q^-1. For a Z-axis
+    // rotation by θ this collapses to:
+    //   v'.x = v.x * cosθ - v.y * sinθ
+    //   v'.y = v.x * sinθ + v.y * cosθ
+    //   v'.z = v.z
+    // For v = (1, 0, 0) and θ = 90°, v' = (0, 1, 0).
+    let theta = std::f32::consts::FRAC_PI_2;
+    let rotated_x = 1.0 * theta.cos() - 0.0 * theta.sin();
+    let rotated_y = 1.0 * theta.sin() + 0.0 * theta.cos();
+    if rotated_x.abs() > 1e-4 || (rotated_y - 1.0).abs() > 1e-4 {
+        return 3;
+    }
     0
 }
 
@@ -4809,6 +5197,19 @@ const CLIENT_EVENT_KIND_USE_FAILED: u32 = 13;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_USE_DONE: u32 = 14;
 
+/// Phase 6 step E: a door's open/closed state flipped. ACE's
+/// `Door.cs::Open()` / `Close()` flip `Ethereal` and broadcast via
+/// `GameMessageSetState`; the recv loop routes the message through
+/// `apply_set_state_update`, which detects the `ObjectDescriptionFlag::DOOR`
+/// flag + `PhysicsState::ETHEREAL` bit and emits a
+/// `WorldEvent::DoorStateChanged`. JS reads `u32Payload` = door GUID,
+/// `u32Payload2` = 1 (open) or 0 (closed), updates
+/// `window.__doorStates`, rotates the building's part sprite around
+/// its hinge frame, and toggles the matching AABB entry in the
+/// spatial scene's `building_aabb_index`.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_DOOR_STATE_CHANGED: u32 = 15;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -4994,6 +5395,14 @@ enum SessionCommand {
 ///   or `GameEvent::StartGame` after spawn. No payload — the
 ///   transition itself is the signal that in-world commands
 ///   (chat, movement, etc.) are now valid.
+/// - `kind = 15` — DoorStateChanged (Phase 6 step E). Fired when
+///   ACE broadcasts `GameMessageSetState` for an entity flagged
+///   `ObjectDescriptionFlag::DOOR`. `u32Payload` = door GUID;
+///   `u32Payload2` = 1 (open / `PhysicsState::ETHEREAL` set) or
+///   0 (closed). JS uses this to update `window.__doorStates`,
+///   rotate the door's GfxObj sprite around its hinge frame, and
+///   toggle the matching `building_aabb_index` entry's `active`
+///   flag via `set_door_aabb_active`.
 ///
 /// Entity spawn / position / remove events do NOT flow through
 /// this stream — they live on the parallel high-frequency channel
@@ -5751,6 +6160,15 @@ fn should_route_message_to_world(message: &holtburger_protocol::messages::GameMe
             | GameMessage::PublicUpdateAttribute(_)
             | GameMessage::PrivateUpdateSkill(_)
             | GameMessage::PublicUpdateSkill(_)
+            // Phase 6 step E: SetState carries `PhysicsState`, which
+            // in turn carries the ETHEREAL bit a Door uses to signal
+            // open/closed. The world's `apply_set_state_update`
+            // handler already updates `entity.physics_state` and
+            // emits `WorldEvent::EntityStateUpdated` +
+            // `WorldEvent::DoorStateChanged` for door-flagged
+            // entities; routing it here forwards both to the recv
+            // loop's WorldEvent scan.
+            | GameMessage::SetState(_)
             | GameMessage::GameEvent(_)
     )
 }
@@ -7459,6 +7877,32 @@ async fn recv_loop(
                                         }
                                     }
                                     inventory_changed = true;
+                                }
+                                // Phase 6 step E: SetState packets for
+                                // door-flagged entities produce a
+                                // DoorStateChanged event alongside the
+                                // EntityStateUpdated. Forward the
+                                // door-state transition to JS as a
+                                // kind=15 ClientEvent so the JS-side
+                                // door state map updates, the matching
+                                // building-AABB entry's `active` flag
+                                // toggles, and the door sprite rotates
+                                // around its hinge frame. The state
+                                // payload is `1` for Open / `0` for
+                                // Closed — matches the JS-side
+                                // `__doorStates` Map's "open" /
+                                // "closed" string mapping.
+                                WorldEvent::DoorStateChanged { guid, state: door_state } => {
+                                    let state_u32: u32 = match door_state {
+                                        holtburger_world::DoorState::Open => 1,
+                                        holtburger_world::DoorState::Closed => 0,
+                                    };
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_DOOR_STATE_CHANGED,
+                                        string_payload: None,
+                                        u32_payload: Some(u32::from(*guid)),
+                                        u32_payload_2: Some(state_u32),
+                                    });
                                 }
                                 _ => {}
                             }

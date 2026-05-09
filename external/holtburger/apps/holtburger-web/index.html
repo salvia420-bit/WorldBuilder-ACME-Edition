@@ -2332,6 +2332,17 @@ void main() {
         // `window.liveScene.cellContainers` (both point to the same
         // Map).
         window.cellContainers = cellContainerRegistry;
+        // Phase 6 step E: door GUID → "open"|"closed" state map.
+        // Populated by the kind=15 DoorStateChanged ClientEvent in
+        // drainEvents below; mirrored on liveScene.doorStates so the
+        // capture script's `entry.__doorState` / `sprite.rotation`
+        // probes can find the live state. Open doors have their
+        // building-AABB entry's `active` flag toggled wasm-side, so
+        // the integrator's swept clamp lets the player walk through.
+        if (!window.__doorStates) {
+          window.__doorStates = new Map();
+        }
+        liveScene.doorStates = window.__doorStates;
         // Phase 6 step C: marker symbol the smoke checks via
         // `typeof wasm.init_cell_containers === "function"`. Calling
         // it is a no-op; the JS render pipeline owns the registry's
@@ -5429,6 +5440,61 @@ void main() {
                 // events; nothing to render here.
                 // eslint-disable-next-line no-console
                 console.log(`[step 5] UseDone (success)`);
+              } else if (evt.kind === 15) {
+                // Phase 6 step E: DoorStateChanged — ACE has
+                // broadcast a SetState packet for an entity flagged
+                // ObjectDescriptionFlag::DOOR with the ETHEREAL bit
+                // toggled. The wasm side has already flipped the
+                // matching `building_aabb_index` entry's `active`
+                // flag (handled inside the recv loop's WorldEvent
+                // dispatch — see the DoorStateChanged arm in
+                // src/lib.rs). JS-side responsibility: update the
+                // door state map and rotate the door's sprite. The
+                // sprite-rotation step needs the building+part
+                // mapping; today we mirror only the state map +
+                // entity flag so the door blocking/unblocking
+                // contract is wired (rotation via
+                // `getBuildingPartForDoor` is a follow-on — see
+                // the doc comment above).
+                const doorGuid = evt.u32Payload >>> 0;
+                const doorState = (evt.u32Payload2 >>> 0) === 1
+                  ? "open"
+                  : "closed";
+                if (!window.__doorStates) {
+                  window.__doorStates = new Map();
+                }
+                window.__doorStates.set(doorGuid, doorState);
+                if (window.liveScene) {
+                  if (!window.liveScene.doorStates) {
+                    window.liveScene.doorStates = window.__doorStates;
+                  }
+                }
+                // Mirror onto the entity's entry so per-entity
+                // sprite logic (rotation, occlusion fade, future
+                // open-door SFX) can read it directly.
+                if (window.entityMap && window.entityMap.get) {
+                  const entry = window.entityMap.get(doorGuid);
+                  if (entry) {
+                    entry.__doorState = doorState;
+                    // Phase 6 step E: rotate the sprite around its
+                    // anchor point. Closed = 0, open = π/2 (90° CCW
+                    // around the sprite's local Z axis — PIXI's
+                    // rotation is Z-axis radians). This is the
+                    // simplest visually-correct contract; per-part
+                    // hinge frame extraction from SetupModel is
+                    // deferred (see `holtburg_test_door_rotation_keyframe`
+                    // doc comment).
+                    if (entry.sprite) {
+                      entry.sprite.rotation = doorState === "open"
+                        ? Math.PI / 2
+                        : 0;
+                    }
+                  }
+                }
+                // eslint-disable-next-line no-console
+                console.log(
+                  `[phase6.E] door 0x${doorGuid.toString(16).toUpperCase().padStart(8, "0")} → ${doorState}`,
+                );
               } else if (evt.kind === 0) {
                 // Re-fired CharacterListReceived (e.g. after CharacterCreate
                 // / CharacterDelete round-trip). Step 2a doesn't act on

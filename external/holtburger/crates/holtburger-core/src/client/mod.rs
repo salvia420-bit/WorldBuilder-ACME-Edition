@@ -513,6 +513,7 @@ impl ClientRuntime {
                     .send(ClientViewEvent::RuntimeBodiesReset { cause: *cause });
             }
             WorldEvent::EntityStateUpdated { .. } => {}
+            WorldEvent::DoorStateChanged { .. } => {}
             WorldEvent::ServerTimeUpdate(time) => {
                 let _ = self
                     .client_view_event_tx
