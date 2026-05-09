@@ -2295,6 +2295,18 @@ void main() {
         const { container: objectsContainer, withSprite, fallback, withLive, invisible } =
           buildObjectsContainer(neighbourhood, nonBuildings, spriteMap, colourMap, liveSpriteMap, invisibleModels);
         outdoorContainer.addChild(objectsContainer);
+        // Mark the initial neighbourhood as already rendered so the
+        // first-position-update LB-change handler doesn't re-bake +
+        // re-add buildings/objects for the spawn area.
+        for (const n of neighbourhood) {
+          const lbId = ((n.x << 24) | (n.y << 16)) >>> 0;
+          objectsRenderAddedLbs.add(lbId);
+        }
+        // Same for already-resolved colours — mark every object's
+        // model id so we don't re-fetch on first LB change.
+        for (const o of objects) {
+          colourResolveAttempted.add(o.modelId);
+        }
         // Stash the counts on the app for the stage-info panel.
         app._stepFourCounts = { withSprite, fallback, withLive, invisible };
         app._phase6BuildingCounts = {
@@ -2337,6 +2349,14 @@ void main() {
             spriteMap,
             invisibleModels,
             buildingMap: buildingsBundle.buildingMap,
+            // 2026-05-09 follow-up: stashed for ensureLandblockObjects-
+            // ForLandblock. perPartBuildingMap is the per-model bake
+            // cache (modelId → Vec<PartBake>); reused across LBs so
+            // the same building model appearing in two landblocks
+            // bakes once. colourMap is per-model representative ARGB;
+            // extended for new models discovered on new-LB entry.
+            perPartBuildingMap,
+            colourMap,
             // Phase 6 step C: shared cell-container registry. Pre-
             // populate empty so capture probes can read
             // `liveScene.cellContainers.size === 0` before any LB
@@ -3552,6 +3572,20 @@ void main() {
       // walks-through-walls regime.
       const buildingAabbsPopulatedLbs = new Set();
       const buildingAabbsPopulateInFlight = new Set();
+      // 2026-05-09 follow-up: track which landblocks have had their
+      // building meshes + non-building object sprites added to
+      // outdoorContainer. Distinct from buildingAabbsPopulatedLbs
+      // because that one only loads collision; this one drives the
+      // visible PIXI tree. Pre-populated below with the initial 9
+      // Holtburg LBs once renderNeighbourhood completes — those
+      // already render via the startup buildings/objects bundles.
+      const objectsRenderAddedLbs = new Set();
+      const objectsRenderAddInFlight = new Set();
+      // Models we've already attempted to resolve a representative
+      // ARGB for via fetch_object_colours (whether or not the resolve
+      // succeeded — null result is recorded as "tried, no colour" so
+      // we don't re-fetch on every LB entry).
+      const colourResolveAttempted = new Set();
       // Phase 6 step C: track which landblocks have had their EnvCells
       // fetched + baked. Same lazy-on-landblock-entry trigger as
       // `buildingAabbsPopulatedLbs` — when the player crosses into a
@@ -3680,6 +3714,118 @@ void main() {
           }
         }
       }
+      // 2026-05-09 follow-up: render building meshes + non-building
+      // object sprites for an arbitrary landblock when the local
+      // player walks/portals into it. Mirrors the startup path
+      // (renderNeighbourhood's bakePerPartBuildingTextures +
+      // buildBuildingsContainer + buildObjectsContainer pipeline)
+      // but scoped to one LB at a time. Called from
+      // handlePositionUpdate after the LB-change terrain prefetch
+      // fires; idempotent per LB via objectsRenderAddedLbs.
+      //
+      // Without this, walking out of Holtburg paints terrain (step
+      // 1/3) but leaves every building + sign + tree invisible —
+      // the player sees a textured ground with no landmarks.
+      async function ensureLandblockObjectsForLandblock(lbId) {
+        if (
+          objectsRenderAddedLbs.has(lbId)
+          || objectsRenderAddInFlight.has(lbId)
+        ) return;
+        if (!liveScene || !liveScene.outdoorContainer) return;
+        objectsRenderAddInFlight.add(lbId);
+        const lbHex = `0x${lbId.toString(16).padStart(8, "0")}`;
+        try {
+          const cellId = (lbId | 0xfffe) >>> 0;
+          const objects = await fetch_landblock_objects(new Uint32Array([cellId]));
+          if (!objects || objects.length === 0) {
+            objectsRenderAddedLbs.add(lbId);
+            return;
+          }
+          // Resolve representative ARGB for any model id we haven't
+          // tried yet. fetch_object_colours returns 0 when the walk
+          // can't resolve a colour; we still mark "tried" so we don't
+          // re-fetch every LB change for unresolveable models.
+          const newColourModels = [...new Set(objects.map((o) => o.modelId))]
+            .filter((id) => !colourResolveAttempted.has(id));
+          if (newColourModels.length > 0) {
+            try {
+              const colours = await fetch_object_colours(new Uint32Array(newColourModels));
+              for (let i = 0; i < newColourModels.length; i += 1) {
+                colourResolveAttempted.add(newColourModels[i]);
+                if (colours[i] !== 0) {
+                  liveScene.colourMap.set(newColourModels[i], colours[i]);
+                }
+              }
+            } catch (e) {
+              for (const id of newColourModels) colourResolveAttempted.add(id);
+              console.warn(`[colour] LB-change resolve failed for ${lbHex}:`, e);
+            }
+          }
+          const lbX = (lbId >>> 24) & 0xff;
+          const lbY = (lbId >>> 16) & 0xff;
+          const neighbourhood = [{ x: lbX, y: lbY, id: cellId }];
+          const buildings = objects.filter((o) => o.isBuilding);
+          const nonBuildings = objects.filter((o) => !o.isBuilding);
+          // Bake per-part textures for any building model we haven't
+          // baked before. The bake cache is shared across LBs so a
+          // building model that appears in two landblocks bakes once.
+          if (buildings.length > 0) {
+            const newBuildingModels = [...new Set(buildings.map((o) => o.modelId))]
+              .filter((id) => !liveScene.perPartBuildingMap.has(id));
+            if (newBuildingModels.length > 0) {
+              try {
+                const newBakes = await bakePerPartBuildingTextures(
+                  liveScene.app, newBuildingModels
+                );
+                for (const [k, v] of newBakes) {
+                  liveScene.perPartBuildingMap.set(k, v);
+                }
+              } catch (e) {
+                console.warn(`[phase6.A] bake failed for ${lbHex}:`, e);
+              }
+            }
+            const buildingsBundle = buildBuildingsContainer(
+              neighbourhood,
+              buildings,
+              liveScene.perPartBuildingMap,
+              liveScene.liveSpriteMap,
+              liveScene.invisibleModels,
+            );
+            liveScene.outdoorContainer.addChild(buildingsBundle.container);
+            // Merge per-placement entries into the shared buildingMap
+            // so wasm-side door state lookups (Phase 6E) find them.
+            for (const [k, v] of buildingsBundle.buildingMap) {
+              liveScene.buildingMap.set(k, v);
+            }
+            console.log(
+              `[phase6.A] painted ${buildingsBundle.withParts}+${buildingsBundle.withFallback} `
+              + `(parts+fallback) buildings, dropped ${buildingsBundle.dropped} for ${lbHex}`
+            );
+          }
+          if (nonBuildings.length > 0) {
+            const objectsBundle = buildObjectsContainer(
+              neighbourhood,
+              nonBuildings,
+              liveScene.spriteMap,
+              liveScene.colourMap,
+              liveScene.liveSpriteMap,
+              liveScene.invisibleModels,
+            );
+            liveScene.outdoorContainer.addChild(objectsBundle.container);
+            console.log(
+              `[step4] painted ${objectsBundle.withSprite}+${objectsBundle.withLive} `
+              + `(atlas+live) objects, fallback ${objectsBundle.fallback}, `
+              + `invisible ${objectsBundle.invisible} for ${lbHex}`
+            );
+          }
+          objectsRenderAddedLbs.add(lbId);
+        } catch (e) {
+          console.warn(`[buildings/objects] LB-change render failed for ${lbHex}:`, e);
+        } finally {
+          objectsRenderAddInFlight.delete(lbId);
+        }
+      }
+
       async function ensureTerrainAroundLandblock(centreLb) {
         // centreLb is the high 16 bits of a cell id (e.g. 0xA9B40000).
         // We prefetch the 3×3 ring around it (9 cells, ~580 m radius
@@ -3800,6 +3946,17 @@ void main() {
           // graph + render set lands.
           if (lbId !== 0 && !cellContainersPopulatedLbs.has(lbId)) {
             ensureCellContainersForLandblock(lbId);
+          }
+          // 2026-05-09 follow-up (open-world step 2/3 + 3/3): paint
+          // building meshes + non-building object sprites for the
+          // new LB so the player sees landmarks, not just textured
+          // ground. Same single-LB scope as the EnvCell trigger;
+          // buildings/objects beyond the current LB matter less for
+          // immediate exploration than the LB the player is standing
+          // in (a follow-up could expand to a 3x3 ring like terrain
+          // if performance allows).
+          if (lbId !== 0 && !objectsRenderAddedLbs.has(lbId)) {
+            ensureLandblockObjectsForLandblock(lbId);
           }
         }
         // Tier 2: sample velocity from the position delta. Speed in
