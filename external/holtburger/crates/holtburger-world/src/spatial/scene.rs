@@ -1,7 +1,7 @@
 use super::{
-    AuthoritativeBodySync, BasicSpatialPhysics, ContactState, RuntimeSpatialBodyView,
-    SolvedBodyKinematics, SpatialBody, SpatialBodyId, SpatialPhysics, SpatialSampleMode,
-    SpatialSamplingConfig, physics::sample_mode_for_projection_state,
+    AuthoritativeBodySync, BasicSpatialPhysics, BuildingAabbEntry, ContactState,
+    RuntimeSpatialBodyView, SolvedBodyKinematics, SpatialBody, SpatialBodyId, SpatialPhysics,
+    SpatialSampleMode, SpatialSamplingConfig, physics::sample_mode_for_projection_state,
 };
 use crate::entity::EntityMotionSnapshot;
 use holtburger_common::position::WorldPosition;
@@ -89,6 +89,15 @@ pub struct SpatialScene {
     entity_poses: HashMap<Guid, WorldPosition>,
     body_store: BodySamplingStore,
     physics: Arc<dyn SpatialPhysics>,
+    /// Phase 6 step B: per-cell building AABB index. Keyed by full
+    /// 32-bit cell id (`landblock_id | cell_low_word`). Populated
+    /// from a landblock-load path which walks each `BuildInfo`
+    /// placement's Setup, derives per-part AABBs from GfxObj
+    /// vertex data, transforms them by the placement's frame, and
+    /// buckets each AABB into the cell its centre falls into.
+    /// The integrator's swept-sphere clamp queries this map by the
+    /// player's current cell + the cells the swept volume crosses.
+    building_aabb_index: HashMap<u32, Vec<BuildingAabbEntry>>,
 }
 
 impl Default for SpatialScene {
@@ -108,7 +117,107 @@ impl SpatialScene {
             entity_poses: HashMap::new(),
             body_store: BodySamplingStore::default(),
             physics,
+            building_aabb_index: HashMap::new(),
         }
+    }
+
+    /// Phase 6 step B: register one per-part building AABB into the
+    /// cell that contains the AABB's centre. JS calls this once per
+    /// `(building, part)` after `fetchBuildingPlacement` resolves the
+    /// per-part bake; the wasm bundle wraps it through
+    /// `SessionHandle::populate_building_aabb`.
+    pub fn insert_building_aabb(&mut self, cell_id: u32, entry: BuildingAabbEntry) {
+        self.building_aabb_index
+            .entry(cell_id)
+            .or_default()
+            .push(entry);
+    }
+
+    /// Phase 6 step B: drop every AABB whose `building_id.landblock_id`
+    /// matches the argument. Used when a landblock unloads — the next
+    /// load will repopulate. Returns the number of removed entries
+    /// for diagnostic logging.
+    pub fn clear_building_aabbs_for_landblock(&mut self, landblock_id: u32) -> usize {
+        let mut removed = 0usize;
+        self.building_aabb_index.retain(|_cell, entries| {
+            let before = entries.len();
+            entries.retain(|e| e.building_id.landblock_id != landblock_id);
+            removed += before - entries.len();
+            !entries.is_empty()
+        });
+        removed
+    }
+
+    pub fn building_aabb_count(&self) -> usize {
+        self.building_aabb_index
+            .values()
+            .map(|v| v.len())
+            .sum()
+    }
+
+    pub fn building_aabbs_for_cell(&self, cell_id: u32) -> &[BuildingAabbEntry] {
+        self.building_aabb_index
+            .get(&cell_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Phase 6 step B: collect the AABBs candidate for a swept-sphere
+    /// query starting at `pose`. Includes the pose's containing cell
+    /// plus the eight adjacent outdoor cells (so a delta crossing a
+    /// 24 m cell boundary still sees walls in the next cell over).
+    /// Indoor poses currently only check the containing cell — the
+    /// per-cell EnvCell graph in Phase D will widen this to portal
+    /// neighbours. Returns AABBs by value to dodge the per-cell
+    /// borrow.
+    pub fn building_aabbs_near_pose(&self, pose: &WorldPosition) -> Vec<BuildingAabbEntry> {
+        let mut out: Vec<BuildingAabbEntry> = Vec::new();
+        let lb_high = pose.landblock_id.0 & 0xFFFF_0000;
+        let low = pose.landblock_id.0 & 0xFFFF;
+        if low >= 0x0100 {
+            if let Some(entries) = self.building_aabb_index.get(&pose.landblock_id.0) {
+                out.extend_from_slice(entries);
+            }
+            return out;
+        }
+        let cell_idx = (low as i32) - 1;
+        if !(0..64).contains(&cell_idx) {
+            if let Some(entries) = self.building_aabb_index.get(&pose.landblock_id.0) {
+                out.extend_from_slice(entries);
+            }
+            return out;
+        }
+        let cx = cell_idx >> 3;
+        let cy = cell_idx & 0x7;
+        for dx in -1i32..=1 {
+            for dy in -1i32..=1 {
+                let nx = cx + dx;
+                let ny = cy + dy;
+                if !(0..8).contains(&nx) || !(0..8).contains(&ny) {
+                    continue;
+                }
+                let neighbour_cell = ((nx << 3) | ny) as u32 + 1;
+                let key = lb_high | neighbour_cell;
+                if let Some(entries) = self.building_aabb_index.get(&key) {
+                    out.extend_from_slice(entries);
+                }
+            }
+        }
+        out
+    }
+
+    pub fn sweep_sphere_against_buildings(
+        &self,
+        pose: &WorldPosition,
+        delta: Vector3,
+        radius: f32,
+    ) -> Option<crate::spatial::SweptSphereHit> {
+        crate::spatial::sweep_sphere_against_aabbs(
+            &self.building_aabbs_near_pose(pose),
+            pose,
+            delta,
+            radius,
+        )
     }
 
     pub fn physics(&self) -> &Arc<dyn SpatialPhysics> {

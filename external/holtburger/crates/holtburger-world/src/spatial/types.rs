@@ -1,8 +1,40 @@
 use crate::entity::EntityMotionSnapshot;
 use holtburger_common::position::WorldPosition;
-use holtburger_common::{Guid, Vector3};
+use holtburger_common::{Aabb, Guid, Vector3};
 use std::time::Duration;
 use web_time::Instant;
+
+/// Identifier for a building placement loaded into the per-cell
+/// AABB index. Phase 6 step B uses the placement's `(landblock_id,
+/// model_id, sequence)` tuple — the manifest doesn't expose stable
+/// per-placement guids and a single building model can occur many
+/// times in one landblock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BuildingId {
+    pub landblock_id: u32,
+    pub model_id: u32,
+    pub sequence: u32,
+}
+
+impl BuildingId {
+    pub const fn new(landblock_id: u32, model_id: u32, sequence: u32) -> Self {
+        Self {
+            landblock_id,
+            model_id,
+            sequence,
+        }
+    }
+}
+
+/// Single per-part building AABB stored in the per-cell index. The
+/// index buckets these by the cell id the AABB falls into; the
+/// sweeper looks up the player's current cell + immediate neighbours
+/// each tick.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BuildingAabbEntry {
+    pub building_id: BuildingId,
+    pub aabb: Aabb,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ContactState {

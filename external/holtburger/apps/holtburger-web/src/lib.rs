@@ -1702,6 +1702,56 @@ where
     Some(())
 }
 
+/// Phase 6 step B: per-part AABB walker. Sister to `walk_setup_parts`,
+/// but accumulates each part's GfxObj vertex positions into a
+/// part-local axis-aligned bounding box (post per-part frame
+/// transform, pre placement frame). Returns one `Aabb` per
+/// `setup.parts[i]` so the caller can bucket each AABB independently
+/// into the per-cell collision index. Coarser cyl_sphere bounds
+/// would over-block (Holtburg roof overhangs would block ground-
+/// level walking past the wall plane); per-vertex bounds match what
+/// the renderer actually draws.
+///
+/// Empty parts (substituted GfxObj missing, raw `0x01` instead of
+/// SetupModel, or all polygons skipped) yield an `Aabb::empty()`
+/// at their slot — caller filters those before bucketing.
+#[cfg(any(target_arch = "wasm32", test))]
+fn walk_setup_parts_with_geom<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup_id: u32,
+) -> Option<Vec<holtburger_common::Aabb>> {
+    use holtburger_dat::file_type::SetupModel;
+    use holtburger_dat::ResourceKey;
+    let bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", setup_id))
+        .ok()?;
+    let setup = SetupModel::unpack(&mut std::io::Cursor::new(&bytes)).ok()?;
+    let part_count = setup.parts.len();
+    let mut aabbs: Vec<holtburger_common::Aabb> =
+        (0..part_count).map(|_| holtburger_common::Aabb::empty()).collect();
+    walk_setup_parts(
+        source,
+        setup_id,
+        &[],
+        &[],
+        None,
+        None,
+        |pi, gfx, offset, rot, _swaps| {
+            let Some(slot) = aabbs.get_mut(pi) else { return };
+            for vert in gfx.vertex_array.vertices.values() {
+                let p = quat_rotate(rot, vert.origin);
+                let world = holtburger_common::Vector3 {
+                    x: p.x + offset.x,
+                    y: p.y + offset.y,
+                    z: p.z + offset.z,
+                };
+                slot.expand_to_include_point(world);
+            }
+        },
+    )?;
+    Some(aabbs)
+}
+
 /// Phase 4 step 6 Tier 2: resolve the *walk-forward* animation
 /// frames. Same MotionTable walk as `try_resolve_idle_anim_frame`
 /// (path 1 only — there's no `default_animation` fallback for walk),
@@ -2535,6 +2585,606 @@ pub fn holtburg_townhall_max_parts() -> u32 {
     match SetupModel::unpack(&mut Cursor::new(&buf)) {
         Ok(parsed) => parsed.parts.len() as u32,
         Err(_) => 0,
+    }
+}
+
+/// Phase 6 step B: deterministic per-part AABB-walker smoke. Builds
+/// an in-memory Setup with N>1 parts that all reference the same
+/// synthetic GfxObj (a unit-cube vertex set), packs both into an
+/// `InMemoryResourceSource`, and runs `walk_setup_parts_with_geom`
+/// to derive one AABB per part. Returns the number of non-empty
+/// AABBs — equals `PART_COUNT` when the walker visits every part
+/// successfully.
+///
+/// The synthesized GfxObj has 8 vertices forming a unit cube (its
+/// AABB is `(0,0,0)..(1,1,1)`); each part shares the same GfxObj
+/// id so the walker pulls the cube into every slot. Returning a
+/// nonzero value means: parser parses the synthetic Setup, walker
+/// resolves linked GfxObj parts, and the AABB accumulator visits
+/// vertices.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn holtburg_townhall_aabb_count() -> u32 {
+    use holtburger_dat::file_type::{GfxObj, SetupModel};
+    use holtburger_dat::graphics::{CVertexArray, SWVertex};
+    use holtburger_common::properties::GfxObjFlags;
+    use std::collections::HashMap;
+    use std::io::Cursor;
+    const PART_COUNT: usize = 6;
+    const GFX_ID: u32 = 0x0100_0001;
+    let mut vertices: HashMap<u16, SWVertex> = HashMap::new();
+    for (i, (x, y, z)) in [
+        (0.0f32, 0.0f32, 0.0f32),
+        (1.0, 0.0, 0.0),
+        (0.0, 1.0, 0.0),
+        (0.0, 0.0, 1.0),
+        (1.0, 1.0, 0.0),
+        (1.0, 0.0, 1.0),
+        (0.0, 1.0, 1.0),
+        (1.0, 1.0, 1.0),
+    ]
+    .iter()
+    .enumerate()
+    {
+        vertices.insert(
+            i as u16,
+            SWVertex {
+                num_uvs: 0,
+                origin: holtburger_common::Vector3::new(*x, *y, *z),
+                normal: holtburger_common::Vector3::zero(),
+                uvs: Vec::new(),
+            },
+        );
+    }
+    let gfx = GfxObj {
+        id: GFX_ID,
+        flags: GfxObjFlags::empty(),
+        surfaces: Vec::new(),
+        vertex_array: CVertexArray {
+            vertex_type: 1,
+            vertices,
+        },
+        physics_polygons: HashMap::new(),
+        physics_bsp: None,
+        sort_center: holtburger_common::Vector3::zero(),
+        polygons: HashMap::new(),
+        drawing_bsp: None,
+        did_degrade: None,
+    };
+    let setup = SetupModel {
+        id: 0x0200_0001,
+        flags: 0,
+        parts: vec![GFX_ID; PART_COUNT],
+        parent_index: Vec::new(),
+        default_scale: Vec::new(),
+        holding_locations: HashMap::new(),
+        connection_points: HashMap::new(),
+        placement_frames: HashMap::new(),
+        cyl_spheres: Vec::new(),
+        spheres: Vec::new(),
+        height: 0.0,
+        radius: 0.0,
+        step_up: 0.0,
+        step_down: 0.0,
+        sorting_sphere: holtburger_common::Sphere {
+            center: holtburger_common::Vector3::zero(),
+            radius: 0.0,
+        },
+        selection_sphere: holtburger_common::Sphere {
+            center: holtburger_common::Vector3::zero(),
+            radius: 0.0,
+        },
+        lights: HashMap::new(),
+        default_animation: None,
+        default_script: None,
+        default_motion_table: None,
+        default_sound_table: None,
+        default_script_table: None,
+    };
+    let mut setup_buf: Vec<u8> = Vec::new();
+    if setup.pack(&mut Cursor::new(&mut setup_buf)).is_err() {
+        return 0;
+    }
+    let mut gfx_buf: Vec<u8> = Vec::new();
+    if gfx.pack(&mut Cursor::new(&mut gfx_buf)).is_err() {
+        return 0;
+    }
+    let source = inmem_collision_source::InMemorySource::new(vec![
+        ("eor/portal".to_string(), 0x0200_0001u32, setup_buf),
+        ("eor/portal".to_string(), GFX_ID, gfx_buf),
+    ]);
+    match walk_setup_parts_with_geom(&source, 0x0200_0001) {
+        Some(aabbs) => aabbs.iter().filter(|a| !a.is_empty()).count() as u32,
+        None => 0,
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn collision_smoke_fixture() -> (
+    holtburger_common::position::WorldPosition,
+    Vec<holtburger_world::BuildingAabbEntry>,
+) {
+    use holtburger_common::position::WorldPosition;
+    use holtburger_common::{Aabb, Guid, Quaternion, Vector3};
+    use holtburger_world::{BuildingAabbEntry, BuildingId};
+    let landblock = Guid(0x0102_0000);
+    let pose = WorldPosition {
+        landblock_id: landblock,
+        coords: Vector3::new(199.0 - 192.0, 401.0 - 384.0, 1.0),
+        rotation: Quaternion::identity(),
+    };
+    let candidates = vec![BuildingAabbEntry {
+        building_id: BuildingId::new(landblock.0, 0x0200_1234, 0),
+        aabb: Aabb::new(
+            Vector3::new(200.0, 400.0, 0.0),
+            Vector3::new(204.0, 404.0, 4.0),
+        ),
+    }];
+    (pose, candidates)
+}
+
+/// Phase 6 step B: deterministic clamp-axis-aligned smoke. Sets up
+/// a single AABB at world-x ∈ [200, 204], runs the X-axis sweep
+/// against a player capsule walking +X from x=199, and asserts the
+/// projected pose has x in `[199.0, 199.7]` (clamp at the inflated
+/// wall plane minus a back-off epsilon). Returns 0 on success or a
+/// nonzero error code:
+///
+/// - `1` — clamp returned input pose unchanged (collision didn't fire).
+/// - `2` — clamp went past the wall (projected x ≥ 199.7).
+/// - `3` — clamp moved the player backwards (projected x < 199.0).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn holtburg_test_collision_clamp_axis_aligned() -> u32 {
+    use holtburger_common::Vector3;
+    let (pose, candidates) = collision_smoke_fixture();
+    let clamped = holtburger_world::clamp_delta_against_buildings(
+        &candidates,
+        &pose,
+        Vector3::new(5.0, 0.0, 0.0),
+        holtburger_world::PLAYER_CAPSULE_RADIUS,
+    );
+    if clamped.x.abs() < 1e-3 {
+        return 1;
+    }
+    let post_x = pose.coords.x + clamped.x + 192.0;
+    if post_x >= 199.7 {
+        return 2;
+    }
+    if post_x < 199.0 {
+        return 3;
+    }
+    0
+}
+
+/// Phase 6 step B: deterministic slide-along-wall smoke. Same
+/// fixture as `holtburg_test_collision_clamp_axis_aligned` but the
+/// proposed velocity is PARALLEL to the wall (only +Y, no +X) so no
+/// clamp should fire. Asserts the full +Y delta is preserved (within
+/// 1e-3 m of the unclamped projection). Starts from x=198.5 so the
+/// player capsule (radius 0.4) is just barely outside the inflated
+/// wall plane and any false clamp manifests immediately. Returns 0
+/// on success or:
+///
+/// - `1` — Y delta dropped (full slide not preserved).
+/// - `2` — X delta gained from nowhere (false slide projection).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn holtburg_test_collision_slide_along_wall() -> u32 {
+    use holtburger_common::position::WorldPosition;
+    use holtburger_common::Vector3;
+    let (pose_at_wall, candidates) = collision_smoke_fixture();
+    // Push the start away from the wall by 0.5 m so the inflated
+    // sweep has a clean ray entry; otherwise an "already inside the
+    // inflated AABB" start would short-circuit the sweep.
+    let pose = WorldPosition {
+        coords: Vector3::new(
+            pose_at_wall.coords.x - 0.5,
+            pose_at_wall.coords.y,
+            pose_at_wall.coords.z,
+        ),
+        ..pose_at_wall
+    };
+    let velocity = Vector3::new(0.0, 5.0, 0.0);
+    let clamped = holtburger_world::clamp_delta_against_buildings(
+        &candidates,
+        &pose,
+        velocity,
+        holtburger_world::PLAYER_CAPSULE_RADIUS,
+    );
+    if (clamped.y - 5.0).abs() > 1e-3 {
+        return 1;
+    }
+    if clamped.x.abs() > 1e-3 {
+        return 2;
+    }
+    0
+}
+
+// ---------------------------------------------------------------
+// Phase 6 step B follow-up — populate the live `building_aabb_index`
+// from real LandblockInfo + Setup data.
+//
+// Flow:
+//   1. JS calls `populateBuildingAabbsForLandblock(landblock_id)`
+//      after `fetchBuildingPlacement` warm-up (kind=7 EnteredWorld
+//      ring + LB-change handler).
+//   2. The export fetches `eor/cell:landblock_id|0xFFFE`
+//      (LandblockInfo), walks each `BuildInfo` placement.
+//   3. For each placement, fetch the Setup, call
+//      `walk_setup_parts_with_geom` to derive per-part AABBs in
+//      building-local space, then transform each by the placement's
+//      `(orientation, origin + landblock_origin)` to get a world-
+//      space AABB.
+//   4. Bucket each world-space AABB into the outdoor cells it
+//      intersects (8x8 grid, 24 m per side, landblock origin at
+//      `(lb_x * 192, lb_y * 192)`), pushing entries onto a thread-
+//      local pending pile.
+//   5. The recv-loop drains the pile on every `TickMovement`,
+//      calling `scene.insert_building_aabb` per entry.
+//   6. Caller gets the count of AABBs queued (= the count that
+//      will land in `building_aabb_index` once the next tick fires).
+//
+// Why a thread-local pile instead of holding `&mut WorldState`?
+// The scope of `&mut world` lives inside the recv loop's
+// `tokio::select!` body; wasm-bindgen exports run on the JS-driven
+// `Promise` task, which can't pre-empt the recv loop's borrow.
+// Routing through a queue mirrors the pattern used by
+// `SessionCommand::PopulateTerrain`: compute on the JS-promise side,
+// hand off the result to the recv loop on the next iteration.
+//
+// The thread-local also lets the smoke test exercise the export
+// without standing up a full session — the count returned reflects
+// the compute path even when no recv loop is running.
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    /// Pending per-cell building AABB inserts, drained by the recv
+    /// loop on each `SessionCommand::TickMovement`. Outer Vec entries
+    /// are `(cell_id, BuildingAabbEntry)` tuples — the same shape
+    /// `SpatialScene::insert_building_aabb` consumes one at a time.
+    static BUILDING_AABB_PENDING:
+        std::cell::RefCell<Vec<(u32, holtburger_world::BuildingAabbEntry)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Phase 6 step B follow-up: drain the pending building-AABB pile
+/// into the live world's spatial scene. Returns the number of
+/// entries inserted. Called by the recv loop on every
+/// `SessionCommand::TickMovement` so the queue never holds more
+/// than one tick's worth of pending inserts in normal operation.
+///
+/// Idempotent on an empty pile (returns 0). Lifted out of the recv
+/// loop body to keep the `&mut world` borrow scope narrow and
+/// to make the drain semantics testable in isolation.
+#[cfg(target_arch = "wasm32")]
+fn drain_pending_building_aabbs_into(scene: &mut holtburger_world::SpatialScene) -> usize {
+    BUILDING_AABB_PENDING.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let count = buf.len();
+        for (cell_id, entry) in buf.drain(..) {
+            scene.insert_building_aabb(cell_id, entry);
+        }
+        count
+    })
+}
+
+/// Phase 6 step B follow-up: derive the outdoor-cell ID a world-
+/// frame AABB falls into for the given landblock. Returns
+/// `landblock_high | (cellX * 8 + cellY + 1)`. AABBs whose centre
+/// lies outside `[0, 192)` in either axis (overhang spilling into
+/// a neighbour landblock) clamp to the nearest in-range cell —
+/// the swept-sphere query later widens to neighbour cells anyway,
+/// so a one-cell rounding error doesn't lose a wall.
+#[cfg(target_arch = "wasm32")]
+fn outdoor_cell_for_world_xy(
+    landblock_high: u32,
+    world_x: f32,
+    world_y: f32,
+) -> u32 {
+    const LB_M: f32 = 192.0;
+    const VERT_M: f32 = 24.0;
+    let lb_x_byte = ((landblock_high >> 24) & 0xFF) as f32;
+    let lb_y_byte = ((landblock_high >> 16) & 0xFF) as f32;
+    let local_x = world_x - lb_x_byte * LB_M;
+    let local_y = world_y - lb_y_byte * LB_M;
+    let cx = (local_x / VERT_M).floor() as i32;
+    let cy = (local_y / VERT_M).floor() as i32;
+    let cx = cx.clamp(0, 7) as u32;
+    let cy = cy.clamp(0, 7) as u32;
+    let cell_low = (cx * 8) + cy + 1;
+    landblock_high | cell_low
+}
+
+/// Phase 6 step B follow-up: collect every outdoor-cell ID a
+/// world-frame AABB intersects within `landblock_high`. Returns the
+/// list of cells whose 24x24 footprint overlaps the AABB's `[min, max]`
+/// XY projection. Caller uses this to bucket each per-part AABB into
+/// every cell it touches — a single building wall straddling two
+/// 24 m cells must show up in both buckets so the swept query
+/// resolves the wall when entering from either side.
+#[cfg(target_arch = "wasm32")]
+fn outdoor_cells_for_world_aabb(
+    landblock_high: u32,
+    aabb: &holtburger_common::Aabb,
+) -> Vec<u32> {
+    const LB_M: f32 = 192.0;
+    const VERT_M: f32 = 24.0;
+    let lb_x_byte = ((landblock_high >> 24) & 0xFF) as f32;
+    let lb_y_byte = ((landblock_high >> 16) & 0xFF) as f32;
+    let local_min_x = aabb.min.x - lb_x_byte * LB_M;
+    let local_max_x = aabb.max.x - lb_x_byte * LB_M;
+    let local_min_y = aabb.min.y - lb_y_byte * LB_M;
+    let local_max_y = aabb.max.y - lb_y_byte * LB_M;
+    // Floor for min, ceil-1 for max so a 24.0-aligned wall doesn't
+    // spuriously claim the next cell. Clamp to [0, 7] — out-of-LB
+    // overhangs (rare) drop to the nearest in-LB cell.
+    let cx_min = (local_min_x / VERT_M).floor().clamp(0.0, 7.0) as u32;
+    let cx_max = ((local_max_x / VERT_M).ceil() - 1.0).clamp(0.0, 7.0) as u32;
+    let cy_min = (local_min_y / VERT_M).floor().clamp(0.0, 7.0) as u32;
+    let cy_max = ((local_max_y / VERT_M).ceil() - 1.0).clamp(0.0, 7.0) as u32;
+    let mut out = Vec::with_capacity(((cx_max - cx_min + 1) * (cy_max - cy_min + 1)) as usize);
+    for cx in cx_min..=cx_max {
+        for cy in cy_min..=cy_max {
+            let cell_low = (cx * 8) + cy + 1;
+            out.push(landblock_high | cell_low);
+        }
+    }
+    if out.is_empty() {
+        // Fallback: bucket by the AABB centre. Defensive — the
+        // floor/ceil math above should never produce an empty range
+        // for a non-empty AABB.
+        out.push(outdoor_cell_for_world_xy(
+            landblock_high,
+            (aabb.min.x + aabb.max.x) * 0.5,
+            (aabb.min.y + aabb.max.y) * 0.5,
+        ));
+    }
+    out
+}
+
+/// Phase 6 step B follow-up: shared compute path that both the
+/// public wasm export and any internal caller use. Walks the
+/// landblock's `BuildInfo` list, derives per-part world-space AABBs,
+/// buckets them into outdoor cells, and pushes each into the
+/// thread-local pending pile (drained next tick by
+/// `drain_pending_building_aabbs_into`). Returns the count of
+/// entries pushed.
+///
+/// `landblock_id` may be either the `XXYYFFFE` LandblockInfo cell id
+/// or any cell within the landblock — only the high 16 bits matter
+/// for resolution. Internally we always probe `XXYYFFFE`.
+#[cfg(target_arch = "wasm32")]
+async fn populate_building_aabbs_for_landblock_impl(
+    landblock_id: u32,
+) -> Result<u32, JsValue> {
+    use holtburger_common::Aabb;
+    use holtburger_dat::landblock::LandblockInfo;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    use holtburger_world::{BuildingAabbEntry, BuildingId};
+
+    const LB_M: f32 = 192.0;
+
+    let landblock_high = landblock_id & 0xFFFF_0000;
+    let info_cell = landblock_high | 0x0000_FFFE;
+    let lb_x_byte = ((landblock_high >> 24) & 0xFF) as f32;
+    let lb_y_byte = ((landblock_high >> 16) & 0xFF) as f32;
+    let landblock_origin_x = lb_x_byte * LB_M;
+    let landblock_origin_y = lb_y_byte * LB_M;
+
+    let source = global_source::global_source();
+
+    // Prefetch the LandblockInfo first; subsequent Setup fetches
+    // chase down per-building keys discovered during the walk.
+    source
+        .prefetch(&[ResourceKey::new("eor/cell", info_cell)])
+        .await
+        .map_err(|e| JsValue::from_str(&format!(
+            "populateBuildingAabbsForLandblock: prefetch landblock 0x{landblock_high:08X}: {e}"
+        )))?;
+
+    let info_bytes = match source.get_file_by_key(ResourceKey::new("eor/cell", info_cell)) {
+        Ok(b) => b,
+        Err(_) => {
+            // No LandblockInfo in this landblock (ocean cell, sparse
+            // wilderness). Zero buildings is a valid outcome — return
+            // 0 rather than fail.
+            return Ok(0);
+        }
+    };
+    let info = LandblockInfo::unpack(&info_bytes).map_err(|e| {
+        JsValue::from_str(&format!(
+            "populateBuildingAabbsForLandblock: LandblockInfo::unpack 0x{info_cell:08X}: {e}"
+        ))
+    })?;
+
+    if info.buildings.is_empty() {
+        return Ok(0);
+    }
+
+    // Prefetch every Setup referenced by the buildings list. Setup
+    // walks discover GfxObj parts dynamically, so we rely on
+    // `prefetch::ensure_walk_prefetched` per Setup to chase missing
+    // children. Pre-prefetching the top-level Setup keys batches
+    // the network round-trip.
+    let setup_keys: Vec<ResourceKey<'_>> = info
+        .buildings
+        .iter()
+        .map(|b| ResourceKey::new("eor/portal", b.model_id))
+        .collect();
+    source.prefetch(&setup_keys).await.map_err(|e| {
+        JsValue::from_str(&format!(
+            "populateBuildingAabbsForLandblock: prefetch Setups for 0x{landblock_high:08X}: {e}"
+        ))
+    })?;
+
+    let mut total = 0u32;
+
+    for (sequence, build_info) in info.buildings.iter().enumerate() {
+        let model_id = build_info.model_id;
+        let placement_origin = holtburger_common::Vector3 {
+            x: build_info.frame.origin.x + landblock_origin_x,
+            y: build_info.frame.origin.y + landblock_origin_y,
+            z: build_info.frame.origin.z,
+        };
+        let placement_orientation = build_info.frame.orientation;
+        let building_id = BuildingId::new(landblock_high, model_id, sequence as u32);
+
+        // Buildings may be raw GfxObjs (`0x01...`) or SetupModels
+        // (`0x02...`); the existing renderer dispatches both via
+        // `triangulate_model_per_part_buckets`. Mirror that branching
+        // here so the collision path covers what the renderer covers.
+        let part_aabbs: Vec<Aabb> = match (model_id >> 24) as u8 {
+            0x01 => {
+                // Single-part building. Prefetch the GfxObj, then
+                // synthesize a 1-element AABB vec by accumulating
+                // its vertex array.
+                source
+                    .prefetch(&[ResourceKey::new("eor/portal", model_id)])
+                    .await
+                    .ok();
+                match source.get_file_by_key(ResourceKey::new("eor/portal", model_id)) {
+                    Ok(bytes) => {
+                        match holtburger_dat::file_type::GfxObj::unpack(
+                            &mut std::io::Cursor::new(&bytes),
+                        ) {
+                            Ok(gfx) => {
+                                let mut aabb = Aabb::empty();
+                                for vert in gfx.vertex_array.vertices.values() {
+                                    aabb.expand_to_include_point(vert.origin);
+                                }
+                                vec![aabb]
+                            }
+                            Err(_) => continue,
+                        }
+                    }
+                    Err(_) => continue,
+                }
+            }
+            0x02 => {
+                // Multi-part Setup. Iterative discovery of GfxObj
+                // children referenced by this Setup mirrors
+                // `fetch_building_placement`'s prefetch shape.
+                let initial = [ResourceKey::new("eor/portal", model_id)];
+                if let Err(e) = prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+                    let _ = walk_setup_parts_with_geom(s, model_id);
+                })
+                .await
+                {
+                    log::warn!(
+                        "populateBuildingAabbsForLandblock: ensure_walk_prefetched 0x{model_id:08X}: {e:?}"
+                    );
+                    continue;
+                }
+                match walk_setup_parts_with_geom(source.as_ref(), model_id) {
+                    Some(v) => v,
+                    None => continue,
+                }
+            }
+            _ => continue,
+        };
+
+        for (part_index, part_local) in part_aabbs.iter().enumerate() {
+            if part_local.is_empty() {
+                continue;
+            }
+            // Lift the part-local AABB to world space: rotate the
+            // 8 corners by the placement quaternion, translate by
+            // the placement origin in global world coords. The
+            // resulting AABB conservatively bounds the rotated
+            // mesh — see `Aabb::transform_by` for the math.
+            let world_aabb: Aabb = part_local.transform_by(placement_orientation, placement_origin);
+            let cells = outdoor_cells_for_world_aabb(landblock_high, &world_aabb);
+            BUILDING_AABB_PENDING.with(|pile| {
+                let mut pile = pile.borrow_mut();
+                for cell_id in cells {
+                    pile.push((
+                        cell_id,
+                        BuildingAabbEntry {
+                            building_id,
+                            aabb: world_aabb,
+                        },
+                    ));
+                    total += 1;
+                }
+            });
+            // Phase E (door state) will use part_index to address
+            // a specific entry for AABB-toggle on door-open. Today
+            // all parts are inserted unconditionally.
+            let _ = part_index;
+        }
+    }
+
+    Ok(total)
+}
+
+/// Phase 6 step B follow-up: public wasm export. Fetches the
+/// LandblockInfo for `landblock_id`, walks every `BuildInfo`
+/// placement, derives per-part world-space AABBs, and queues them
+/// for insertion into the live `WorldState::scene::building_aabb_index`
+/// on the next `MovementSystemHandle::tick`. Returns the count of
+/// AABBs queued.
+///
+/// JS callers should fire-and-forget this once per landblock loaded
+/// (mirror the terrain-prefetch path: kind=7 EnteredWorld + LB-change
+/// handler in `index.html`'s `handlePositionUpdate`). Subsequent
+/// calls into the same landblock_id are idempotent in the sense that
+/// they re-queue the same entries — production use should gate on
+/// a `populated_landblocks: Set` to avoid double-insertion. (Smoke
+/// tests deliberately don't gate so the count reflects fresh
+/// compute every call.)
+///
+/// `landblock_id` accepts either the bare landblock high word
+/// (`0xA9B40000`) or any cell ID within the landblock; only the
+/// high 16 bits drive resolution. Returns 0 (not an error) when the
+/// landblock has no LandblockInfo record (ocean, sparse wilderness)
+/// or no `BuildInfo` entries (open countryside). Errors propagate
+/// only on prefetch / parse failures.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = populateBuildingAabbsForLandblock)]
+pub async fn populate_building_aabbs_for_landblock(
+    landblock_id: u32,
+) -> Result<u32, JsValue> {
+    populate_building_aabbs_for_landblock_impl(landblock_id).await
+}
+
+#[cfg(target_arch = "wasm32")]
+mod inmem_collision_source {
+    use holtburger_dat::{DatError, FileMetadata, ResourceKey, ResourceSource};
+
+    pub(super) struct InMemorySource {
+        files: Vec<(String, u32, Vec<u8>)>,
+    }
+
+    impl InMemorySource {
+        pub(super) fn new(files: Vec<(String, u32, Vec<u8>)>) -> Self {
+            Self { files }
+        }
+    }
+
+    impl ResourceSource for InMemorySource {
+        fn get_file_by_key(&self, key: ResourceKey<'_>) -> Result<Vec<u8>, DatError> {
+            self.files
+                .iter()
+                .find(|(ns, id, _)| ns == key.namespace && *id == key.file_id)
+                .map(|(_, _, b)| b.clone())
+                .ok_or(DatError::NotFound(key.file_id))
+        }
+
+        fn get_metadata_by_key(&self, key: ResourceKey<'_>) -> Option<FileMetadata> {
+            self.files
+                .iter()
+                .find(|(ns, id, _)| ns == key.namespace && *id == key.file_id)
+                .map(|(_, id, b)| FileMetadata {
+                    id: *id,
+                    size: b.len() as u32,
+                    is_pruned: false,
+                })
+        }
+
+        fn has_namespace(&self, namespace: &str) -> bool {
+            self.files.iter().any(|(ns, _, _)| ns == namespace)
+        }
     }
 }
 
@@ -7522,6 +8172,19 @@ async fn recv_loop(
                         let Some(w) = world.as_mut() else { continue };
                         if !entity_seeded {
                             continue;
+                        }
+                        // Phase 6 step B follow-up: drain any
+                        // building-AABB inserts queued by JS-side
+                        // `populateBuildingAabbsForLandblock` calls.
+                        // Runs before the integrator tick so the
+                        // first sweep against new AABBs sees them.
+                        let drained = drain_pending_building_aabbs_into(&mut w.scene);
+                        if drained > 0 {
+                            console_log_str(&format!(
+                                "[phase6.B] drained {drained} pending building AABBs into scene \
+                                 (total now {} across all cells)",
+                                w.scene.building_aabb_count(),
+                            ));
                         }
                         // Watchdog: when real movement caps regress to
                         // Err between PlayerDescription's clear-and-test

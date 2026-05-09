@@ -31,12 +31,14 @@ pub use self::state::WorldState;
 pub use bootstrap::WorldBootstrap;
 pub use events::{DerivedStatsData, FellowshipActivity, PlayerInfoData, WorldEvent};
 pub use spatial::{
-    AuthoritativeBodySync, BasicSpatialPhysics, ContactState, LocalDriveControl, LocalDriveGait,
-    NoopSpatialPhysics, RuntimeBodyResetCause, RuntimeSpatialBodyView,
+    AuthoritativeBodySync, BasicSpatialPhysics, BuildingAabbEntry, BuildingId, ContactState,
+    LocalDriveControl, LocalDriveGait, NoopSpatialPhysics, PLAYER_CAPSULE_HEIGHT,
+    PLAYER_CAPSULE_RADIUS, RuntimeBodyResetCause, RuntimeSpatialBodyView,
     SelfPlayerDriveProjectionState, SolveBodyInput, SolveProjectionBasis, SolvedBodyKinematics,
     SpatialBody, SpatialBodyEvent, SpatialBodyId, SpatialEntitySample, SpatialPhysics,
     SpatialSampleMode, SpatialSamplingConfig, SpatialSamplingState, SpatialScene,
-    SpatialSolveBatch, SpatialSolveRequest, advance_body_kinematics, project_pose_forward_distance,
+    SpatialSolveBatch, SpatialSolveRequest, SweptSphereHit, advance_body_kinematics,
+    clamp_delta_against_buildings, project_pose_forward_distance, sweep_sphere_against_aabbs,
 };
 pub use state::{
     PlayerMotionTableLookupError, PlayerMotionTableResolution, PlayerMotionTableSource,

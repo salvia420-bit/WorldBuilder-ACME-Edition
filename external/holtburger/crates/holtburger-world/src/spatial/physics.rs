@@ -1,14 +1,177 @@
 use super::{
-    ContactState, LocalDriveControl, SelfPlayerDriveProjectionState, SolveBodyInput,
-    SolveProjectionBasis, SolvedBodyKinematics, SpatialSampleMode, SpatialScene, SpatialSolveBatch,
-    SpatialSolveRequest,
+    BuildingAabbEntry, ContactState, LocalDriveControl, SelfPlayerDriveProjectionState,
+    SolveBodyInput, SolveProjectionBasis, SolvedBodyKinematics, SpatialSampleMode, SpatialScene,
+    SpatialSolveBatch, SpatialSolveRequest,
 };
 use holtburger_common::position::{METERS_PER_LANDBLOCK, WorldPosition};
-use holtburger_common::{Guid, Quaternion, Vector3};
+use holtburger_common::{Aabb, Guid, Quaternion, Vector3};
 use std::f32::consts::{PI, TAU};
 use std::time::Duration;
 
 const EPSILON: f32 = 1e-4;
+
+/// Phase 6 step B player-capsule dimensions. ACE derives these from
+/// `Setup._dat.Height` / `Setup._dat.Radius` per
+/// `external/ACE/Source/ACE.Server/Physics/PartArray.cs:189-206`.
+/// Retail human Setup `0x0200_0001` ships radius=0.4, height=1.8;
+/// hard-coded here rather than read at runtime to avoid a Setup
+/// fetch on every collision tick.
+pub const PLAYER_CAPSULE_RADIUS: f32 = 0.4;
+pub const PLAYER_CAPSULE_HEIGHT: f32 = 1.8;
+
+/// Phase 6 step B: result of a single swept-sphere-vs-AABB query.
+/// `t` is the parametric time of first contact in `[0.0, 1.0]`
+/// (where 0.0 = start, 1.0 = full delta), `normal` is the
+/// AABB-face outward normal at the contact point (used for slide
+/// projection on the second sweep iteration), and `entry` carries
+/// the building reference for diagnostics / Phase E door-state
+/// sliding.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SweptSphereHit {
+    pub t: f32,
+    pub normal: Vector3,
+    pub entry: BuildingAabbEntry,
+}
+
+/// Phase 6 step B: sweep a sphere of `radius` along `delta` and
+/// return the earliest AABB contact, or `None` for a clean miss.
+/// Uses the standard Minkowski-sum trick: inflate every AABB by the
+/// sphere radius and ray-cast the sphere centre. `pose.coords` is
+/// the start in the AC world frame (note: AABBs are stored in the
+/// same global-meters frame as `pose.global_coords`, so the
+/// caller's `delta` is consumed directly without per-landblock
+/// conversion).
+///
+/// Implementation note: this is the slab method
+/// (Kay-Kajiya / Williams) — for each axis compute t-range for the
+/// ray entering and exiting the slab, intersect the three ranges,
+/// pick the entry t. Capsule approximation uses sphere-at-chest-
+/// height; vertical extent is folded into the AABBs themselves
+/// (a 0.5 m roof overhang lookup against a 1.8 m capsule means the
+/// AABB's `min.z` is below the player's feet anyway).
+pub fn sweep_sphere_against_aabbs(
+    candidates: &[BuildingAabbEntry],
+    pose: &WorldPosition,
+    delta: Vector3,
+    radius: f32,
+) -> Option<SweptSphereHit> {
+    if delta.length_squared() <= 1e-10 || candidates.is_empty() {
+        return None;
+    }
+    let start = pose.global_coords();
+    let mut best: Option<SweptSphereHit> = None;
+    for entry in candidates {
+        let inflated = entry.aabb.inflate(radius);
+        if let Some((t, normal)) = ray_aabb_entry(start, delta, &inflated)
+            && (best.is_none() || t < best.unwrap().t)
+        {
+            best = Some(SweptSphereHit {
+                t,
+                normal,
+                entry: *entry,
+            });
+        }
+    }
+    best
+}
+
+fn ray_aabb_entry(
+    origin: Vector3,
+    direction: Vector3,
+    aabb: &Aabb,
+) -> Option<(f32, Vector3)> {
+    let mut t_enter = 0.0f32;
+    let mut t_exit = 1.0f32;
+    let mut entry_axis: u8 = u8::MAX;
+    let mut entry_sign: f32 = 0.0;
+
+    let mins = [aabb.min.x, aabb.min.y, aabb.min.z];
+    let maxs = [aabb.max.x, aabb.max.y, aabb.max.z];
+    let starts = [origin.x, origin.y, origin.z];
+    let dirs = [direction.x, direction.y, direction.z];
+
+    for axis in 0..3 {
+        let d = dirs[axis];
+        let s = starts[axis];
+        let lo = mins[axis];
+        let hi = maxs[axis];
+        if d.abs() < f32::EPSILON {
+            if s < lo || s > hi {
+                return None;
+            }
+            continue;
+        }
+        let inv_d = 1.0 / d;
+        let mut t_lo = (lo - s) * inv_d;
+        let mut t_hi = (hi - s) * inv_d;
+        let mut sign_for_axis = -1.0f32;
+        if t_lo > t_hi {
+            std::mem::swap(&mut t_lo, &mut t_hi);
+            sign_for_axis = 1.0;
+        }
+        if t_lo > t_enter {
+            t_enter = t_lo;
+            entry_axis = axis as u8;
+            entry_sign = sign_for_axis;
+        }
+        if t_hi < t_exit {
+            t_exit = t_hi;
+        }
+        if t_enter > t_exit {
+            return None;
+        }
+    }
+
+    if t_enter >= 1.0 || t_enter < 0.0 {
+        return None;
+    }
+    if entry_axis == u8::MAX {
+        return None;
+    }
+    let normal = match entry_axis {
+        0 => Vector3::new(entry_sign, 0.0, 0.0),
+        1 => Vector3::new(0.0, entry_sign, 0.0),
+        _ => Vector3::new(0.0, 0.0, entry_sign),
+    };
+    Some((t_enter, normal))
+}
+
+/// Apply swept-sphere clamp + single-iteration slide. Returns the
+/// new `delta` the integrator should consume (in place of the raw
+/// `velocity * dt`). Does not mutate input.
+pub fn clamp_delta_against_buildings(
+    candidates: &[BuildingAabbEntry],
+    pose: &WorldPosition,
+    delta: Vector3,
+    radius: f32,
+) -> Vector3 {
+    let Some(hit) = sweep_sphere_against_aabbs(candidates, pose, delta, radius) else {
+        return delta;
+    };
+    let backoff = 1e-3;
+    let safe_t = (hit.t - backoff / delta.length().max(1e-6)).max(0.0);
+    let stopped_delta = delta * safe_t;
+    let remaining = delta * (1.0 - safe_t);
+    let into_normal = remaining.dot(&hit.normal);
+    let slide = remaining - hit.normal * into_normal;
+    if slide.length_squared() <= 1e-10 {
+        return stopped_delta;
+    }
+    let slide_pose = WorldPosition {
+        landblock_id: pose.landblock_id,
+        coords: Vector3::new(
+            pose.coords.x + stopped_delta.x,
+            pose.coords.y + stopped_delta.y,
+            pose.coords.z + stopped_delta.z,
+        ),
+        rotation: pose.rotation,
+    };
+    let slide_clamped = match sweep_sphere_against_aabbs(candidates, &slide_pose, slide, radius) {
+        Some(slide_hit) => slide * (slide_hit.t - backoff / slide.length().max(1e-6)).max(0.0),
+        None => slide,
+    };
+    stopped_delta + slide_clamped
+}
 
 fn velocity_kinematics_for_input(input: &SolveBodyInput) -> (Vector3, Vector3) {
     match input.basis {
@@ -141,11 +304,13 @@ fn solve_self_player_local_drive(
             let desired_velocity = control.desired_world_delta / dt_secs;
             let current_heading = input.pose.rotation.to_heading();
             let desired_heading = desired_heading_for_local_drive(control, current_heading);
-            let mut next_pose = project_pose_by_velocity(
+            let candidates = scene.building_aabbs_near_pose(&input.pose);
+            let mut next_pose = project_pose_by_velocity_with_collision(
                 input.pose,
                 desired_velocity,
                 dt_secs,
                 control.target_hint,
+                &candidates,
             );
             next_pose.rotation = Quaternion::from_heading(desired_heading);
 
@@ -316,6 +481,35 @@ pub(crate) fn project_pose_by_velocity(
     }
 
     project_pose_by_offset(authoritative_pose, velocity * dt_secs, target_hint)
+}
+
+/// Phase 6 step B: collision-aware variant of
+/// [`project_pose_by_velocity`]. Sweeps the player capsule (treated
+/// as a sphere at chest height) against `building_aabbs` before
+/// applying the delta; clamps + slides on first contact. Falls back
+/// to the unclamped path when `building_aabbs` is empty (preserves
+/// pre-Phase-B behaviour during landblock entry / cache miss).
+pub(crate) fn project_pose_by_velocity_with_collision(
+    authoritative_pose: WorldPosition,
+    velocity: Vector3,
+    dt_secs: f32,
+    target_hint: Option<WorldPosition>,
+    building_aabbs: &[BuildingAabbEntry],
+) -> WorldPosition {
+    if dt_secs <= 0.0 {
+        return authoritative_pose;
+    }
+    if building_aabbs.is_empty() {
+        return project_pose_by_offset(authoritative_pose, velocity * dt_secs, target_hint);
+    }
+    let raw_delta = velocity * dt_secs;
+    let clamped = clamp_delta_against_buildings(
+        building_aabbs,
+        &authoritative_pose,
+        raw_delta,
+        PLAYER_CAPSULE_RADIUS,
+    );
+    project_pose_by_offset(authoritative_pose, clamped, target_hint)
 }
 
 pub fn project_pose_forward_distance(

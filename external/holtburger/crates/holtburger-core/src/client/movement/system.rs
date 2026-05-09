@@ -605,9 +605,26 @@ impl MovementSystem {
         };
         let velocity = local_velocity_for_state(heading, state, &capabilities);
         let dt_s = dt.as_secs_f32();
-        pose.coords.x += velocity.x * dt_s;
-        pose.coords.y += velocity.y * dt_s;
-        pose.coords.z += velocity.z * dt_s;
+        let raw_delta = Vector3::new(velocity.x * dt_s, velocity.y * dt_s, velocity.z * dt_s);
+        // Phase 6 step B — clamp the X/Y component of the delta
+        // against the per-cell building AABB index. Z stays raw so
+        // terrain follow below still snaps to the height grid; walls
+        // only block lateral movement, not the gravity axis.
+        let candidates = world.scene.building_aabbs_near_pose(&pose);
+        let lateral = Vector3::new(raw_delta.x, raw_delta.y, 0.0);
+        let lateral_clamped = if candidates.is_empty() {
+            lateral
+        } else {
+            holtburger_world::spatial::clamp_delta_against_buildings(
+                &candidates,
+                &pose,
+                lateral,
+                holtburger_world::spatial::PLAYER_CAPSULE_RADIUS,
+            )
+        };
+        pose.coords.x += lateral_clamped.x;
+        pose.coords.y += lateral_clamped.y;
+        pose.coords.z += raw_delta.z;
         // Terrain-follow Z. Without this, the integrator output's Z
         // stays at the teleport-landing value forever (vz==0 for
         // forward locomotion), which causes ACE physics (FastTick on

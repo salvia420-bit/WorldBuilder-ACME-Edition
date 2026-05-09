@@ -523,6 +523,7 @@
         fetchEntityCycleFrames,
         fetchEntitySurfacesPixels,
         fetchBuildingPlacement,
+        populateBuildingAabbsForLandblock,
         start_session,
         init_resource_source,
         has_resource_source,
@@ -3266,6 +3267,67 @@ void main() {
       // and ACE physics applies false gravity again.
       const terrainPrefetchedLbs = new Set();
       const terrainPrefetchInFlight = new Set();
+      // Phase 6 step B follow-up: track which landblocks have had
+      // their per-part building AABBs queued into the world's spatial
+      // scene. Mirrors `terrainPrefetchedLbs` exactly — same lazy-on-
+      // landblock-entry trigger from `handlePositionUpdate`, same
+      // teleport / death-respawn coverage. Without this, only the
+      // initial spawn neighbourhood would have collision; running
+      // into Hebian-To, Cragstone, or any other zone a level-1 might
+      // reach via @telepoi would put the player back into the
+      // walks-through-walls regime.
+      const buildingAabbsPopulatedLbs = new Set();
+      const buildingAabbsPopulateInFlight = new Set();
+      async function ensureBuildingAabbsAroundLandblock(centreLb) {
+        // Same 3x3 ring as `ensureTerrainAroundLandblock`: the player
+        // needs collision in the cells surrounding the spawn / current
+        // LB so a sprint across an LB boundary doesn't tear through a
+        // wall on the far side. Cell IDs use the `XXYYFFFE` low word
+        // (LandblockInfo lookup); the wasm export only reads the high
+        // 16 bits for resolution.
+        const cx = (centreLb >>> 24) & 0xff;
+        const cy = (centreLb >>> 16) & 0xff;
+        const targets = [];
+        for (let dy = -1; dy <= 1; dy += 1) {
+          for (let dx = -1; dx <= 1; dx += 1) {
+            const nx = cx + dx;
+            const ny = cy + dy;
+            if (nx < 0 || nx > 0xff || ny < 0 || ny > 0xff) continue;
+            const lbId = ((nx << 24) | (ny << 16)) >>> 0;
+            if (
+              buildingAabbsPopulatedLbs.has(lbId)
+              || buildingAabbsPopulateInFlight.has(lbId)
+            ) {
+              continue;
+            }
+            buildingAabbsPopulateInFlight.add(lbId);
+            targets.push(lbId);
+          }
+        }
+        if (targets.length === 0) return;
+        // Run sequentially rather than in parallel — each export
+        // pulls a LandblockInfo + N Setup records through the
+        // manifest source, and a 9-LB barrage on a fresh region can
+        // saturate the catalog HTTP path. Heartbeats remain on the
+        // rAF cadence regardless.
+        for (const lbId of targets) {
+          try {
+            const count = await populateBuildingAabbsForLandblock(lbId);
+            buildingAabbsPopulatedLbs.add(lbId);
+            // Diagnostic — cross-check against the recv-loop drain
+            // log that prints the running building_aabb_count.
+            console.log(
+              `[phase6.B] queued ${count} building AABBs for landblock 0x${lbId.toString(16).padStart(8, "0")}`
+            );
+          } catch (e) {
+            console.warn(
+              `[phase6.B] populateBuildingAabbsForLandblock(0x${lbId.toString(16)}) failed:`, e
+            );
+          } finally {
+            buildingAabbsPopulateInFlight.delete(lbId);
+          }
+        }
+      }
       async function ensureTerrainAroundLandblock(centreLb) {
         // centreLb is the high 16 bits of a cell id (e.g. 0xA9B40000).
         // We prefetch the 3×3 ring around it (9 cells, ~580 m radius
@@ -3340,6 +3402,14 @@ void main() {
             // Fire-and-forget; the integrator preserves pose Z on
             // cache miss until the prefetch lands.
             ensureTerrainAroundLandblock(lbId);
+          }
+          // Phase 6 step B follow-up: mirror the terrain prefetch
+          // for building AABBs. Same trigger (every position update
+          // for the local player), same 3x3 ring, same lazy gate.
+          // Until this lands collision, the player walks through
+          // walls outside the spawn neighbourhood.
+          if (lbId !== 0 && !buildingAabbsPopulatedLbs.has(lbId)) {
+            ensureBuildingAabbsAroundLandblock(lbId);
           }
         }
         // Tier 2: sample velocity from the position delta. Speed in

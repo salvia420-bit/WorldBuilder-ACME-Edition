@@ -650,6 +650,132 @@ check(
 
 // === end Phase 6 Step A =============================================
 
+// === Phase 6 Step B — player ↔ building AABB collision ==============
+//
+// Phase B wires a swept-AABB check into `project_pose_by_velocity`
+// (`crates/holtburger-world/src/spatial/physics.rs:308-319`). The
+// integrator looks up `building_aabb_index: HashMap<CellId, Vec<Aabb>>`
+// for the current cell + neighbours, sweeps the player capsule along
+// the proposed velocity * dt vector, and clamps the delta to first
+// hit. Walking parallel to the wall slides without blocking.
+//
+// The smoke can't drive a live ACE round-trip (that's the live capture
+// `capture_phase6_step_b_collision.cjs`'s job) but it CAN exercise:
+//   1. Symbol presence — does Phase B expose the AABB extraction +
+//      sweep helpers it claims to? If the count returns 0 from a
+//      deterministic fixture path, AABB extraction isn't wired.
+//   2. Synthetic axis-aligned clamp — set up an in-memory Setup with
+//      one AABB at a known position, propose a velocity that crosses
+//      it, assert the clamped distance is less than the proposed
+//      distance.
+//   3. Synthetic slide — same fixture, propose a parallel-to-wall
+//      velocity, assert NO clamp (slide returns full distance).
+//
+// All three checks fail cleanly today (the wasm exports they probe
+// don't exist yet); they pass once the implementation agent ships
+// the Phase B export surface. Locked-in contract per
+// docs/phase-6-buildings-and-interiors.md §5 phase B.
+//
+// NOTE: the names below are PLACEHOLDERS. If the implementation
+// chooses different idioms (e.g. `holtburg_aabb_clamp_test` instead
+// of `holtburg_test_collision_clamp_axis_aligned`), update both this
+// block AND `capture_phase6_step_b_collision.cjs`'s symbol probe
+// in the same commit so the smoke + live tests stay aligned.
+//
+// TODO: confirm with implementation agent — error-code conventions
+// for the synthetic test helpers. Today the contract is:
+//   0  = test passed
+//   1  = wasm export missing (symbol not yet shipped)
+//   >1 = test ran but a specific assertion failed (impl agent picks
+//        the meaning of each non-zero code, documents in the wasm
+//        export's doc comment).
+
+// (B.1) Symbol-check that Phase B's per-Setup AABB extraction is
+// wired. Mirrors Phase A's `holtburg_townhall_max_parts` shape: a
+// deterministic accessor returning a count from a known fixture. If
+// the count is 0, the Phase B walker isn't extracting AABBs from
+// Setup parts; if > 0, AABB extraction is at least running.
+let phase6BAabbCountOk = false;
+let phase6BAabbCountDetail =
+    "phase B not yet shipped — expected wasm.holtburg_townhall_aabb_count() "
+    + "(placeholder name) returning a non-zero u32 from a deterministic "
+    + "Setup fixture. Sibling to Phase A's holtburg_townhall_max_parts.";
+try {
+    if (typeof wasm.holtburg_townhall_aabb_count === "function") {
+        const n = wasm.holtburg_townhall_aabb_count();
+        phase6BAabbCountOk = typeof n === "number" && n > 0;
+        phase6BAabbCountDetail = `holtburg_townhall_aabb_count()=${n}`;
+    }
+} catch (e) {
+    phase6BAabbCountDetail = `holtburg_townhall_aabb_count threw: ${e?.message ?? e}`;
+}
+check(
+    "phase6.B.project_pose_returns_clamped_when_aabb_blocks",
+    phase6BAabbCountOk,
+    phase6BAabbCountDetail
+);
+
+// (B.2) Synthetic axis-aligned clamp. The wasm export builds an
+// in-memory Setup with one AABB box and proposes a velocity that
+// crosses it; the helper itself asserts that the clamped distance
+// is strictly less than the proposed distance. Returns 0 on
+// success, non-zero error code on failure.
+//
+// Using a self-asserting helper (rather than returning floats for
+// JS-side comparison) is deliberate: keeps the floating-point
+// epsilon decisions inside Rust where they belong, and the smoke
+// just observes the verdict. Mirrors the typed-error convention
+// used by other holtburger-world unit tests.
+let phase6BClampOk = false;
+let phase6BClampDetail =
+    "phase B not yet shipped — expected wasm.holtburg_test_collision_clamp_axis_aligned() "
+    + "(placeholder name) returning 0 if proposed-into-wall is clamped, non-zero "
+    + "error code otherwise.";
+try {
+    if (typeof wasm.holtburg_test_collision_clamp_axis_aligned === "function") {
+        const code = wasm.holtburg_test_collision_clamp_axis_aligned();
+        phase6BClampOk = code === 0;
+        phase6BClampDetail = `holtburg_test_collision_clamp_axis_aligned()=${code} `
+            + `(0 = clamp asserted; non-zero = error code, see wasm export doc)`;
+    }
+} catch (e) {
+    phase6BClampDetail = `holtburg_test_collision_clamp_axis_aligned threw: ${e?.message ?? e}`;
+}
+check(
+    "phase6.B.set_velocity_into_wall_clamps",
+    phase6BClampOk,
+    phase6BClampDetail
+);
+
+// (B.3) Synthetic slide-along-wall. Same fixture as B.2, but the
+// proposed velocity is PARALLEL to the wall plane rather than
+// perpendicular. The helper asserts NO clamp occurs — the full
+// proposed distance is preserved. Returns 0 on success, non-zero
+// error code on failure (sweep over-clamped, dropped a slide axis,
+// etc.).
+let phase6BSlideOk = false;
+let phase6BSlideDetail =
+    "phase B not yet shipped — expected wasm.holtburg_test_collision_slide_along_wall() "
+    + "(placeholder name) returning 0 if a parallel-to-wall velocity slides "
+    + "the full distance, non-zero error code otherwise.";
+try {
+    if (typeof wasm.holtburg_test_collision_slide_along_wall === "function") {
+        const code = wasm.holtburg_test_collision_slide_along_wall();
+        phase6BSlideOk = code === 0;
+        phase6BSlideDetail = `holtburg_test_collision_slide_along_wall()=${code} `
+            + `(0 = slide preserves full distance; non-zero = error code)`;
+    }
+} catch (e) {
+    phase6BSlideDetail = `holtburg_test_collision_slide_along_wall threw: ${e?.message ?? e}`;
+}
+check(
+    "phase6.B.slide_along_wall",
+    phase6BSlideOk,
+    phase6BSlideDetail
+);
+
+// === end Phase 6 Step B =============================================
+
 
 (async () => {
     // Phase 5.0b — pre-bake a manifest+shards+boot tree from the
@@ -1336,6 +1462,49 @@ check(
                 `pos=${houseMesh.positions.length}, uv=${houseMesh.uvs.length}, sidx=${houseMesh.surfaceIndices.length}`
             );
             houseMesh.free();
+
+            // === Phase 6 Step B follow-up ============================
+            //
+            // Live integration probe: end-to-end exercise of the
+            // `populateBuildingAabbsForLandblock` wasm export against
+            // real Holtburg landblock data via the manifest source.
+            //
+            // The export walks `LandblockInfo.buildings` for
+            // `0xA9B4FFFE`, fetches each Setup, derives per-part
+            // AABBs, transforms them to world space, buckets them
+            // into outdoor cells, and pushes them onto a thread-
+            // local pending pile. Returns the queued count.
+            //
+            // What this proves:
+            //   - The LandblockInfo path resolves through manifest
+            //     mode (boot pack covers 0xA9B4FFFE).
+            //   - Setup walks chase missing GfxObj children via
+            //     `prefetch::ensure_walk_prefetched`.
+            //   - `walk_setup_parts_with_geom` yields non-empty
+            //     AABBs for at least one Holtburg building.
+            //   - The placement-frame transform produces world-space
+            //     AABBs that fall inside the LB's outdoor cells.
+            //
+            // The compute path is what the live recv loop drains
+            // into the spatial scene on the next TickMovement; a
+            // non-zero count here = non-zero entries available to
+            // the integrator's swept-sphere query in the browser.
+            try {
+                const queued = await wasm.populateBuildingAabbsForLandblock(0xA9B40000);
+                check(
+                    "phase6.B.populateBuildingAabbsForLandblock_holtburg_nonzero",
+                    typeof queued === "number" && queued > 0,
+                    `populateBuildingAabbsForLandblock(0xA9B40000)=${queued} `
+                    + `(expected > 0; queued AABBs land in scene on next TickMovement)`
+                );
+            } catch (e) {
+                check(
+                    "phase6.B.populateBuildingAabbsForLandblock_holtburg_nonzero",
+                    false,
+                    `threw: ${e?.message ?? e}`
+                );
+            }
+            // === end Phase 6 Step B follow-up =========================
 
             for (const o of objects) o.free();
         } catch (e) {

@@ -579,3 +579,331 @@ fn spatial_scene_forced_reposition_reset_clears_runtime_motion_and_suspends_body
     assert_eq!(body.motion_state, None);
     assert_eq!(body.sampling.mode, SpatialSampleMode::Suspended);
 }
+
+mod collision {
+    use super::*;
+    use holtburger_common::Aabb;
+
+    fn pose_at(landblock: Guid, x: f32, y: f32, z: f32) -> WorldPosition {
+        WorldPosition {
+            landblock_id: landblock,
+            coords: Vector3::new(x, y, z),
+            rotation: Quaternion::identity(),
+        }
+    }
+
+    fn entry(building_id: BuildingId, aabb: Aabb) -> BuildingAabbEntry {
+        BuildingAabbEntry { building_id, aabb }
+    }
+
+    fn make_id(seq: u32) -> BuildingId {
+        BuildingId::new(0x0102_0000, 0x0200_1234, seq)
+    }
+
+    fn global_aabb(min: Vector3, max: Vector3) -> Aabb {
+        Aabb::new(min, max)
+    }
+
+    fn pose_global(landblock: Guid, world_xy: (f32, f32), z: f32) -> WorldPosition {
+        // Landblock 0x0102_0000 → byte (0x01, 0x02) → origin (192, 384).
+        let (lb_x, lb_y) = (
+            ((landblock.0 >> 24) & 0xFF) as f32,
+            ((landblock.0 >> 16) & 0xFF) as f32,
+        );
+        let local_x = world_xy.0 - lb_x * 192.0;
+        let local_y = world_xy.1 - lb_y * 192.0;
+        WorldPosition {
+            landblock_id: landblock,
+            coords: Vector3::new(local_x, local_y, z),
+            rotation: Quaternion::identity(),
+        }
+    }
+
+    #[test]
+    fn move_into_aabb_clamps_short_of_wall() {
+        // World-space AABB at global (200, 400, 0)..(204, 404, 4).
+        // Player starts at global (190, 402, 1) and walks +X at 5 m/s
+        // for 1 s — would land at (195, 402, 1) without wall, but the
+        // wall starts at x=200 so the capsule (radius 0.4) should
+        // stop at x ≈ 199.6.
+        // Wait — 195 < 199.6, so this case would NOT actually hit.
+        // Push the start closer: global_x = 199, walk +X 5 m for 1 s.
+        // Inflated AABB starts at x = 199.6 → t = (199.6-199)/5 = 0.12.
+        // Stopped at global x ≈ 199.6 (minus ε backoff).
+        let landblock = Guid(0x0102_0000);
+        let pose = pose_global(landblock, (199.0, 402.0), 1.0);
+        let candidates = vec![entry(
+            make_id(1),
+            global_aabb(
+                Vector3::new(200.0, 400.0, 0.0),
+                Vector3::new(204.0, 404.0, 4.0),
+            ),
+        )];
+        let velocity = Vector3::new(5.0, 0.0, 0.0);
+        let projected = project_pose_by_velocity_with_collision(
+            pose,
+            velocity,
+            1.0,
+            None,
+            &candidates,
+        );
+        let projected_global = projected.global_coords();
+        assert!(
+            projected_global.x < 199.7,
+            "expected clamp at wall (~199.6), got x={}",
+            projected_global.x,
+        );
+        assert!(
+            projected_global.x > 199.0,
+            "expected forward motion before clamp, got x={}",
+            projected_global.x,
+        );
+    }
+
+    #[test]
+    fn move_parallel_to_aabb_face_does_not_clamp() {
+        // Player walks +Y along the side of the wall at x=199.5
+        // (within radius=0.4 of the wall at x=200) but moves only in
+        // Y, so X stays where it is. Without contact on entry, no
+        // clamp, full delta applied.
+        let landblock = Guid(0x0102_0000);
+        let pose = pose_global(landblock, (199.5, 401.0), 1.0);
+        let candidates = vec![entry(
+            make_id(2),
+            global_aabb(
+                Vector3::new(200.0, 400.0, 0.0),
+                Vector3::new(204.0, 404.0, 4.0),
+            ),
+        )];
+        // Note: starting at x=199.5 with radius=0.4 means the player
+        // is *already* overlapping the inflated AABB at start. The
+        // sweep treats that as "ray starts inside" → t_enter clamped
+        // to 0 → no hit reported. Skip overlapping-start by nudging
+        // the start out to x=199.0.
+        let pose = WorldPosition { coords: Vector3::new(pose.coords.x - 0.5, pose.coords.y, pose.coords.z), ..pose };
+        let velocity = Vector3::new(0.0, 5.0, 0.0);
+        let projected = project_pose_by_velocity_with_collision(
+            pose,
+            velocity,
+            1.0,
+            None,
+            &candidates,
+        );
+        let projected_global = projected.global_coords();
+        let expected_y = 401.0 + 5.0;
+        assert!(
+            (projected_global.y - expected_y).abs() < 1e-3,
+            "expected unclamped y={expected_y}, got y={}",
+            projected_global.y,
+        );
+        assert!(
+            (projected_global.x - 199.0).abs() < 1e-3,
+            "x should not change, got x={}",
+            projected_global.x,
+        );
+    }
+
+    #[test]
+    fn move_past_aabb_does_not_clamp() {
+        // Wall is far north; player walks +X (orthogonal). No hit.
+        let landblock = Guid(0x0102_0000);
+        let pose = pose_global(landblock, (200.0, 380.0), 1.0);
+        let candidates = vec![entry(
+            make_id(3),
+            global_aabb(
+                Vector3::new(200.0, 400.0, 0.0),
+                Vector3::new(204.0, 404.0, 4.0),
+            ),
+        )];
+        let velocity = Vector3::new(5.0, 0.0, 0.0);
+        let projected = project_pose_by_velocity_with_collision(
+            pose,
+            velocity,
+            1.0,
+            None,
+            &candidates,
+        );
+        let projected_global = projected.global_coords();
+        assert!(
+            (projected_global.x - 205.0).abs() < 1e-3,
+            "expected x=205 (full delta), got x={}",
+            projected_global.x,
+        );
+    }
+
+    #[test]
+    fn slide_along_wall_when_velocity_oblique() {
+        // Player walks NE (+X +Y) into a wall that only blocks +X.
+        // First sweep clamps the +X component; remaining +Y slides
+        // along the wall face. Verify forward motion in X is clamped
+        // but Y still advances.
+        let landblock = Guid(0x0102_0000);
+        let pose = pose_global(landblock, (199.0, 401.0), 1.0);
+        let candidates = vec![entry(
+            make_id(4),
+            global_aabb(
+                Vector3::new(200.0, 400.0, 0.0),
+                Vector3::new(204.0, 404.0, 4.0),
+            ),
+        )];
+        let velocity = Vector3::new(5.0, 5.0, 0.0);
+        let projected = project_pose_by_velocity_with_collision(
+            pose,
+            velocity,
+            1.0,
+            None,
+            &candidates,
+        );
+        let projected_global = projected.global_coords();
+        assert!(
+            projected_global.x < 199.7,
+            "x should clamp at wall, got x={}",
+            projected_global.x,
+        );
+        assert!(
+            projected_global.y > 405.0,
+            "y should slide along wall, got y={}",
+            projected_global.y,
+        );
+    }
+
+    #[test]
+    fn empty_candidate_list_falls_back_to_unclamped() {
+        let landblock = Guid(0x0102_0000);
+        let pose = pose_global(landblock, (199.0, 401.0), 1.0);
+        let velocity = Vector3::new(5.0, 0.0, 0.0);
+        let projected =
+            project_pose_by_velocity_with_collision(pose, velocity, 1.0, None, &[]);
+        let projected_global = projected.global_coords();
+        assert!(
+            (projected_global.x - 204.0).abs() < 1e-3,
+            "expected unclamped x=204, got x={}",
+            projected_global.x,
+        );
+    }
+
+    #[test]
+    fn scene_buckets_aabbs_by_cell() {
+        let mut scene = SpatialScene::new();
+        let landblock_high = 0x0102_0000u32;
+        let cell_a = landblock_high | 0x0001;
+        let cell_b = landblock_high | 0x0002;
+        scene.insert_building_aabb(
+            cell_a,
+            entry(
+                BuildingId::new(landblock_high, 0x0200_1234, 0),
+                global_aabb(Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 1.0, 1.0)),
+            ),
+        );
+        scene.insert_building_aabb(
+            cell_b,
+            entry(
+                BuildingId::new(landblock_high, 0x0200_1234, 1),
+                global_aabb(Vector3::new(2.0, 0.0, 0.0), Vector3::new(3.0, 1.0, 1.0)),
+            ),
+        );
+        assert_eq!(scene.building_aabbs_for_cell(cell_a).len(), 1);
+        assert_eq!(scene.building_aabbs_for_cell(cell_b).len(), 1);
+        assert_eq!(scene.building_aabb_count(), 2);
+        let removed = scene.clear_building_aabbs_for_landblock(landblock_high);
+        assert_eq!(removed, 2);
+        assert_eq!(scene.building_aabb_count(), 0);
+    }
+
+    #[test]
+    fn near_pose_includes_neighbour_outdoor_cells() {
+        let mut scene = SpatialScene::new();
+        let landblock_high = 0x0102_0000u32;
+        // Pose at outdoor cell (cx=1, cy=1) → idx=8+1+1=10 → 0x000A.
+        let pose_cell = landblock_high | 0x000A;
+        let pose = pose_at(Guid(pose_cell), 28.0, 28.0, 0.0);
+        // Neighbour cell (cx=2, cy=1) → idx=2*8+1+1=18 → 0x0012.
+        let neighbour_cell = landblock_high | 0x0012;
+        scene.insert_building_aabb(
+            neighbour_cell,
+            entry(
+                BuildingId::new(landblock_high, 0x0200_1234, 0),
+                global_aabb(
+                    Vector3::new(192.0 + 50.0, 384.0 + 24.0, 0.0),
+                    Vector3::new(192.0 + 54.0, 384.0 + 28.0, 4.0),
+                ),
+            ),
+        );
+        let nearby = scene.building_aabbs_near_pose(&pose);
+        assert_eq!(nearby.len(), 1, "expected neighbour cell AABB to be included");
+    }
+
+    #[test]
+    fn aabb_transform_yaw_45_translates_and_rotates_corners() {
+        // Phase 6 step B follow-up: per-part AABBs come back from
+        // `walk_setup_parts_with_geom` in the building's local frame.
+        // Lifting them to world space requires applying the
+        // placement's `(orientation, origin)` — for outdoor buildings
+        // the orientation is a yaw-only quaternion. Verify the
+        // 8-corner technique on a known cube → 45° yaw → translate
+        // case so an off-by-one in the rotation handler trips
+        // immediately.
+        //
+        // Input: cube at origin spanning ±1 on every axis.
+        // Rotation: 45° yaw. AC convention: `Quaternion::from_heading`
+        // takes radians where 0=West, π/2=North; what matters here is
+        // that the rotation around the Z axis is non-trivial — pick
+        // 45° via a hand-built quaternion (cos(22.5°), 0, 0, sin(22.5°))
+        // so the math is independent of the AC heading offset.
+        // Translation: (10, 0, 0).
+        //
+        // Expected: a 1×1×1 cube rotated 45° in the XY plane has
+        // diagonal corners at ±√2 along X and Y. Z-extent is
+        // unchanged at ±1. After translating by (10, 0, 0), the
+        // bounding box is x ∈ [10-√2, 10+√2], y ∈ [-√2, √2],
+        // z ∈ [-1, 1].
+        let aabb = Aabb::new(Vector3::new(-1.0, -1.0, -1.0), Vector3::new(1.0, 1.0, 1.0));
+        let half = std::f32::consts::FRAC_PI_4 * 0.5; // half of 45° = 22.5°
+        let yaw_45 = Quaternion {
+            w: half.cos(),
+            x: 0.0,
+            y: 0.0,
+            z: half.sin(),
+        };
+        let translated = aabb.transform_by(yaw_45, Vector3::new(10.0, 0.0, 0.0));
+
+        let sqrt2 = std::f32::consts::SQRT_2;
+        let eps = 1e-4;
+        assert!(
+            (translated.min.x - (10.0 - sqrt2)).abs() < eps,
+            "min.x got {}, expected {}",
+            translated.min.x,
+            10.0 - sqrt2,
+        );
+        assert!(
+            (translated.max.x - (10.0 + sqrt2)).abs() < eps,
+            "max.x got {}, expected {}",
+            translated.max.x,
+            10.0 + sqrt2,
+        );
+        assert!(
+            (translated.min.y - (-sqrt2)).abs() < eps,
+            "min.y got {}, expected {}",
+            translated.min.y,
+            -sqrt2,
+        );
+        assert!(
+            (translated.max.y - sqrt2).abs() < eps,
+            "max.y got {}, expected {}",
+            translated.max.y,
+            sqrt2,
+        );
+        assert!(
+            (translated.min.z - (-1.0)).abs() < eps,
+            "min.z got {}, expected {}",
+            translated.min.z,
+            -1.0,
+        );
+        assert!(
+            (translated.max.z - 1.0).abs() < eps,
+            "max.z got {}, expected {}",
+            translated.max.z,
+            1.0,
+        );
+    }
+}
