@@ -3917,6 +3917,131 @@ pub fn holtburg_test_stair_traversal() -> u32 {
     0
 }
 
+/// Phase 6 step F: prove Phase D's portal-graph culling generalizes to
+/// an N-floor dungeon with NO additional code. Synthesizes a 5-cell
+/// stack (floor 1 → 2 → 3 → 4 → 5) connected by sequential CellPortals
+/// — the same shape as a vertical dungeon (Mite Maze / Holtburg
+/// Dungeon). Walks a synthetic pose UP through every Z band sampling
+/// `render_set(current, depth=1)` at each floor, then asserts:
+///
+/// 1. Every floor's render set is bounded (≤ 3 cells: self + up + down).
+///    The default depth-1 BFS visits the current cell + 1-hop neighbours
+///    only; a 5-floor stack must NEVER produce a render set of size 5
+///    (which would mean the whole dungeon is "visible" — breaks Z-cull).
+/// 2. The current cell transitions monotonically as Z increases.
+/// 3. The pre-walk floor falls out of the post-walk render set
+///    (lower-floor culling is the load-bearing Phase D contract).
+///
+/// Returns 0 on success or a nonzero error code:
+///
+/// - `1` — pose at floor 1's mid-Z didn't resolve to floor 1.
+/// - `2` — pose at floor 5's mid-Z didn't resolve to floor 5.
+/// - `3` — render set at any floor exceeded 3 (BFS depth=1 escaped its
+///   bound; Phase D's Z-cull guarantee broken).
+/// - `4` — render set at any floor didn't include the current cell.
+/// - `5` — current_cell didn't transition monotonically (Z-stack
+///   containment broken when more than 2 cells are stacked).
+/// - `6` — bottom-floor cell appears in the top-floor render set
+///   (depth=1 should not reach 4-hop neighbour — render set unbounded).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn holtburg_test_dungeon_render_set_bounded() -> u32 {
+    use holtburger_common::position::WorldPosition;
+    use holtburger_common::{Aabb, Guid, Quaternion, Vector3};
+    const N_FLOORS: usize = 5;
+    const FLOOR_HEIGHT: f32 = 3.0;
+    let mut scene = holtburger_world::SpatialScene::new();
+    // Synthetic dungeon-shaped landblock. Use the same `0x8602` high
+    // word as the Phase D stair-traversal fixture (well-trodden path
+    // through `current_cell`'s indoor branch — landblock_x = 0x86,
+    // landblock_y = 0x02). With METERS_PER_LANDBLOCK = 192, global
+    // coords for our XY=(50, 50) probe land at (25778, 434), so the
+    // AABBs need to be in that XY band — reuse the Phase D test's
+    // (25770, 430)–(25790, 450) footprint.
+    let lb_high = 0x8602_0000u32;
+    let cell_ids: [u32; N_FLOORS] = [
+        lb_high | 0x0100,
+        lb_high | 0x0101,
+        lb_high | 0x0102,
+        lb_high | 0x0103,
+        lb_high | 0x0104,
+    ];
+    // Stack 5 cells in Z, same XY footprint. Floor i spans
+    // [i*3, (i+1)*3] in Z. World-space XY = global coords (matches
+    // landblock 0x8602 prefix → 25770..25790, 430..450).
+    for (i, &cid) in cell_ids.iter().enumerate() {
+        let z_lo = (i as f32) * FLOOR_HEIGHT;
+        let z_hi = z_lo + FLOOR_HEIGHT;
+        scene.insert_cell_aabb(
+            cid,
+            Aabb::new(
+                Vector3::new(25770.0, 430.0, z_lo),
+                Vector3::new(25790.0, 450.0, z_hi),
+            ),
+        );
+    }
+    // Sequential portals: i ↔ i+1 (bidirectional, like a stairwell).
+    // No "skip-floor" portals — a 5-floor stack should produce a 1-D
+    // chain in the portal graph.
+    for i in 0..N_FLOORS - 1 {
+        scene.insert_cell_portal(cell_ids[i], cell_ids[i + 1]);
+        scene.insert_cell_portal(cell_ids[i + 1], cell_ids[i]);
+    }
+    // Walk a synthetic pose up through every floor, sampling the
+    // render set at each floor's mid-Z. Assert the render set stays
+    // bounded (≤ 3 = self + up-neighbour + down-neighbour) — this is
+    // the load-bearing Phase F validation: Phase D's BFS depth=1
+    // contract MUST hold across N floors with no per-floor tuning.
+    let make_pose = |z: f32| WorldPosition {
+        landblock_id: Guid(cell_ids[0]),
+        coords: Vector3::new(50.0, 50.0, z),
+        rotation: Quaternion::identity(),
+    };
+    let mut prev_cell: Option<u32> = None;
+    for (i, _) in cell_ids.iter().enumerate() {
+        let z = (i as f32) * FLOOR_HEIGHT + FLOOR_HEIGHT / 2.0;
+        let pose = make_pose(z);
+        let cur = scene.current_cell(&pose);
+        // (1) pose at floor 1 must resolve to floor 1.
+        if i == 0 && cur != cell_ids[0] {
+            return 1;
+        }
+        // (2) pose at floor 5 must resolve to floor 5.
+        if i == N_FLOORS - 1 && cur != cell_ids[N_FLOORS - 1] {
+            return 2;
+        }
+        let rs = scene.render_set(cur, 1);
+        // (3) render set must stay bounded — this is the whole point
+        // of Phase F: prove Phase D's BFS doesn't blow up on tall
+        // graphs. Depth=1 should produce ≤ 3 cells (self + 2 neighbours
+        // for middle floors, ≤ 2 for end-cap floors).
+        if rs.len() > 3 {
+            return 3;
+        }
+        // (4) render set must always contain the current cell.
+        if !rs.contains(&cur) {
+            return 4;
+        }
+        // (5) current_cell must transition monotonically as Z
+        // increases (Z-stack containment correctness across N floors).
+        if let Some(prev) = prev_cell {
+            if prev == cur {
+                return 5;
+            }
+        }
+        prev_cell = Some(cur);
+    }
+    // (6) Bottom floor (cell_ids[0]) must NOT appear in top floor's
+    // render set — depth=1 BFS should not reach a 4-hop neighbour.
+    // This is the strongest "render set bounded" assertion: even on
+    // a long chain, distant cells stay culled.
+    let top_rs = scene.render_set(cell_ids[N_FLOORS - 1], 1);
+    if top_rs.contains(&cell_ids[0]) {
+        return 6;
+    }
+    0
+}
+
 // ---------------------------------------------------------------
 // Phase 6 step E — door state mutation + AABB toggle smokes
 // ---------------------------------------------------------------

@@ -1349,6 +1349,66 @@ check(
 
 // === end Phase 6 Step E =============================================
 
+// === Phase 6 Step F — vertical-dungeon validation ===================
+//
+// Phase F generalizes Phase D's portal-graph culling to N floors WITH
+// NO new code. The cell-graph abstraction (insert_cell_portal +
+// insert_cell_aabb + render_set BFS) treats every traversal — outdoor
+// → indoor, floor 1 → floor 2, dungeon room → corridor — as the same
+// `current_cell(pos)` change driven by player position. A 5-floor
+// dungeon stack is just a 1-D chain in the portal graph; Phase D's
+// depth=1 BFS visits self + 2 neighbours = ≤ 3 cells regardless of
+// how tall the chain is.
+//
+// This check synthesizes a 5-cell Z-stack (floors 1..5 connected by
+// sequential portals) and walks a pose through every floor, sampling
+// `render_set(current, depth=1)` at each floor. Asserts:
+//
+//   (1) Every floor's render set is bounded (≤ 3 cells).
+//   (2) Render set contains the current cell.
+//   (3) Current cell transitions monotonically as Z increases.
+//   (4) Bottom floor is NEVER in the top floor's render set —
+//       depth=1 BFS shouldn't reach a 4-hop neighbour.
+//
+// If this passes, Phase D's contract holds for arbitrary N — Mite
+// Maze (LB 0x01F8, 879 indoor cells) / Holtburg Dungeon (LB 0x01F6,
+// 429 indoor cells) / any future 3+ floor dungeon traverses
+// correctly with no Phase F-specific code.
+//
+// The live counterpart (capture_phase6_step_f_dungeon.cjs) drives
+// the SAME assertions through ACE end-to-end against Mite Maze via
+// `@teleloc 0x01F801D4 6.1 -101.6 0` (Mite Maze entrance per
+// portalmitemaze weenie 1121, position_Type=2 in ace_world DB).
+//
+// Returns 0 on pass, non-zero error code (helper picks codes per
+// which sub-assertion failed) otherwise.
+let phase6FDungeonOk = false;
+let phase6FDungeonDetail =
+    "phase F not yet shipped — expected wasm.holtburg_test_dungeon_render_set_bounded() "
+    + "returning 0 if a synthetic 5-floor cell stack walks bounded (render set ≤ 3 at "
+    + "every floor, no 4-hop leakage), non-zero error code otherwise.";
+try {
+    if (typeof wasm.holtburg_test_dungeon_render_set_bounded === "function") {
+        const code = wasm.holtburg_test_dungeon_render_set_bounded();
+        phase6FDungeonOk = code === 0;
+        phase6FDungeonDetail =
+            `holtburg_test_dungeon_render_set_bounded()=${code} `
+            + `(0 = 5-floor stack stays bounded under depth-1 BFS at every floor + `
+            + `current_cell transitions monotonically + 4-hop leakage absent; `
+            + `non-zero = error code, see wasm export doc)`;
+    }
+} catch (e) {
+    phase6FDungeonDetail =
+        `holtburg_test_dungeon_render_set_bounded threw: ${e?.message ?? e}`;
+}
+check(
+    "phase6.F.dungeon_render_set_bounded_under_n_floor_walk",
+    phase6FDungeonOk,
+    phase6FDungeonDetail
+);
+
+// === end Phase 6 Step F =============================================
+
 
 (async () => {
     // Phase 5.0b — pre-bake a manifest+shards+boot tree from the

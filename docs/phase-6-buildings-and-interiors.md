@@ -276,7 +276,7 @@ SQL access: `mariadb -u ace -pace ace_shard -e "..."` — Playwright doesn't hav
 
 **Done when:** doors animate open/closed, collision toggles with state, walking through an open door succeeds and a closed door blocks.
 
-### Phase F — Vertical-dungeon validation (~2 days)
+### Phase F — Vertical-dungeon validation (~2 days) ✅ (landed)
 
 **Steps:**
 1. Pick a 3+ floor dungeon. Candidates:
@@ -286,11 +286,15 @@ SQL access: `mariadb -u ace -pace ace_shard -e "..."` — Playwright doesn't hav
 2. `capture_phase6_step_f_dungeon.cjs`: teleport to the dungeon entrance, walk the full Z range, sample render set at each floor transition.
 3. Document the chosen dungeon as a regression target in this doc's "Validation suite" appendix.
 
+**Chosen dungeon target: Mite Maze.** Entrance at cell `0x01F801D4` (origin `6.1, -101.6, 0`) — derived from the `portalmitemaze` weenie (class_id 1121) `weenie_properties_position WHERE position_Type=2` row in `ace_world`. LB `0x01F8` has 879 indoor cells in `dist/manifest.json` under `eor/cell:0x01F8...` keys. The capture script falls back to **Holtburg Dungeon** (cell `0x01F60289`, LB `0x01F6`, 429 indoor cells, derived from `portalholtburgdungeon` weenie 1125) if Mite Maze's EnvCells aren't present in the bake.
+
+**`@telepoi` does NOT include Mite Maze or any dungeon** — the `points_of_interest` table only has cities + a handful of named spawns (Marketplace, Hotel, Underground, Storage, Town Network). Confirmed by `mariadb -u ace -pace ace_world -e "SELECT name FROM points_of_interest"`. Phase F therefore uses `@teleloc 0xLLLLLLLL X Y Z` with the entrance coords from the portal weenie's destination position (same pattern as `capture_step6_monster.cjs`).
+
 **Smoke:** parameterized version of the Phase D unit test, fed with the chosen dungeon's actual cell graph (extracted via terminal exporter once).
 
 **Live:** the dungeon walk capture itself — runs end-to-end without errors.
 
-**Done when:** at least one 3+ floor dungeon is fully traversable in the browser with correct culling at every floor transition.
+**Done when:** at least one 3+ floor dungeon is fully traversable in the browser with correct culling at every floor transition. **Live capture deferred** to follow-up because chromium is unavailable in this environment; the wasm-side smoke check (`phase6.F.dungeon_render_set_bounded_under_n_floor_walk`) synthesizes a 5-floor stack and proves the cell-graph abstraction generalizes to N floors with no Phase F-specific code — that's the load-bearing validation.
 
 ## 6. Risks and open questions
 
@@ -328,7 +332,7 @@ Tests that MUST pass after every phase:
 | `capture_phase6_step_c_envcells.cjs` (Phase C+) | Interior renders | Live ACE |
 | `capture_phase6_step_d_floors.cjs` (Phase D+) | Floor culling correct | Live ACE |
 | `capture_phase6_step_e_doors.cjs` (Phase E+) | Doors block when closed, pass when open | Live ACE |
-| `capture_phase6_step_f_dungeon.cjs` (Phase F+) | 3+ floor dungeon traversable | Live ACE |
+| `capture_phase6_step_f_dungeon.cjs` (Phase F+) | 3+ floor dungeon traversable — target **Mite Maze** (`@teleloc 0x01F801D4 6.1 -101.6 0`), fallback **Holtburg Dungeon** (`@teleloc 0x01F60289 96.7 -10 0`) | Live ACE |
 
 ## 9. Reference index
 

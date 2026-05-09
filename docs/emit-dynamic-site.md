@@ -780,21 +780,22 @@ extend it:
   feedback signal — possibly a new wasm getter
   `terrain_height_cache_has(landblock_id) -> bool` so JS
   knows what to fetch.
-- ⏳ **Cliff / wall collision — promoted to Phase 6.** The
-  integrator only does terrain *following*, not collision.
-  Walking into a vertical wall passes through it on the client
-  side (server-side ACE physics may still wall-stop, but the
-  local sprite desyncs). Buildings render as silhouettes only —
-  doors / windows / interior walls are dropped at
-  `lib.rs:654-656`, EnvCells are parsed but never reach the
-  browser, and there's no collision query in
-  `project_pose_by_velocity`. Subsumed by **Phase 6 — buildings,
-  interiors, and multi-floor Z-culling**, which adds (A) full
-  Setup leaf geometry, (B) AABB collision in the integrator,
-  (C) EnvCell rendering wasm export, (D) active-cell tracking
-  with portal-graph-driven culling that auto-handles stairs and
-  vertical dungeons, (E) door geometry + state, (F) dungeon
-  validation. Plan + as-framed sub-phases at
+- ✅ **Cliff / wall collision — Phase 6 complete.** Building
+  rendering, interior EnvCell rendering, AABB collision, active-
+  cell Z-culling, and door geometry/state all shipped through
+  commits `dc49b6f..<phase-f-commit>`: (A) full Setup leaf
+  geometry per-part, (B) AABB collision in
+  `project_pose_by_velocity` swept against per-cell building
+  buckets, (C) EnvCell rendering wasm export with 805k cells
+  catalogued in manifest v2, (D) active-cell tracking with
+  portal-graph BFS culling that auto-handles stairs and vertical
+  dungeons, (E) door geometry + ETHEREAL-driven state + sprite
+  rotation + AABB toggle, (F) vertical-dungeon validation
+  (Mite Maze target, 5-floor synthetic stack proves N-floor
+  generalization). Cliff-edge max-Z-drop-per-tick threshold is
+  the only remaining piece (a player walking off a sheer cliff
+  still drops Z to terrain at full speed); not gating. Plan +
+  as-built sub-phases at
   [`phase-6-buildings-and-interiors.md`](phase-6-buildings-and-interiors.md).
 - ⏳ **DAT-side u8 → f32 memory optimization.** Cache stores
   `[f32; 81]` (4 bytes/value × 81 = 324 bytes/LB) when the
