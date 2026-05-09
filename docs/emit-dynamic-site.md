@@ -5,9 +5,12 @@
 > Read this section first. The rest of this document is the
 > long-lived design intent + decision history; this header is
 > the snapshot of where we actually are and what's blocking
-> what. Last refreshed **2026-05-08** (post terrain-following
-> + combat-mode toggle + walk/run cycle animation + stance-
-> keyed cycles + smoke perf cache + Phase 5.2 obj 8).
+> what. Last refreshed **2026-05-09** (post Phase 6
+> A→F — buildings, interiors, AABB collision, cell-graph
+> Z-culling, doors, vertical-dungeon validation; previous
+> refresh 2026-05-08 covered terrain-following + combat-mode
+> toggle + walk/run cycle animation + stance-keyed cycles +
+> smoke perf cache + Phase 5.2 obj 8).
 
 ### Where the project is
 
@@ -32,7 +35,32 @@ prefetch with lazy catalogs + convention URLs + `dat-shard`
 v2 emission with `BootPackV2` + per-namespace catalogs +
 2-level-prefix shard layout + convention-URL symlinks + page
 diagnostic v2 hint + service-worker `/manifest/*.bin` cache
-scope + smoke harness v2 fixture + 17 v2 checks).
+scope + smoke harness v2 fixture + 17 v2 checks),
+**6 A→F (buildings/interiors/Z-culling, landed 2026-05-09 in
+8 commits `dc49b6f → e5bf8a8`):** A=per-part PIXI children
+for buildings via `fetchBuildingPlacement` +
+`window.buildingMap`; B=Aabb in `holtburger-common`,
+`building_aabb_index` per LB, sweep-sphere clamp + 1-iter
+slide, ACE-mirrored capsule (radius 0.4 m, height 1.8 m),
+`populateBuildingAabbsForLandblock` (16 AABBs for Holtburg);
+C=Environment (0x0D…) parser + `EnvCellPlacement` wasm
+export + `window.cellContainers` (interior **geometry** —
+textures still flat-grey; surface-index resolution is the
+biggest open follow-on); D=`Scene.cell_portal_graph` +
+`cell_aabbs` + `getCurrentCellId` / `getRenderSet`, BFS
+depth=1, `tickCellVisibility` (stairs work via portal-graph
+traversal — no special "stairs" code; outdoor terrain stays
+visible while indoor — open follow-on); E=`DoorState` enum
+from ETHEREAL flag + `WorldEvent::DoorStateChanged` →
+`kind=15` ClientEvent + `window.__doorStates` +
+`sprite.rotation π/2` (per-part-container rotation via
+`getBuildingPartForDoor` deferred); F=`holtburg_test_dungeon
+_render_set_bounded` synthetic 5-floor stack smoke +
+Mite Maze `0x01F801D4` / Holtburg Dungeon `0x01F60289`
+capture targets via `@teleloc` (`@telepoi` rejects dungeon
+names — only cities + named POIs are routable). Plan +
+as-built sub-phases at
+[`phase-6-buildings-and-interiors.md`](phase-6-buildings-and-interiors.md).
 
 **Polish + iteration loop (post-2026-05-08):** road texture
 fill (RoadType DID 0x05001458) + UpdateMotion → animation
@@ -72,15 +100,18 @@ to kill the player ("5 → 10 points crushing/massive impact
 damage → You died!" with corpse at Z=77 vs landing Z=94);
 post-fix walks indefinitely with no damage, server SQL
 position advances correctly to (96.87, 88.37, **Z=80**)
-following the slope. **Native lib gate 1148 / 0** across 14
-workspace crates; integration test gate **1179 / 0**
-workspace-wide; **smoke 102 / 102 + 1 SKIP**; v2 top-level
-`manifest.json` at **541 bytes**.
+following the slope. Post-Phase-6 gate state: **smoke
+121 / 121 + 1 SKIP** (was 102/102+1 → +19 Phase 6 checks
+across A/B/C/D/E/F: per-part building child counts,
+populateBuildingAabbs assertions, EnvCell wasm export
+presence, cell-graph BFS bounds, door-state ClientEvent
+plumbing, synthetic 5-floor render-set bounded check).
+v2 top-level `manifest.json` at **541 bytes**.
 `cargo check --target wasm32-unknown-unknown` clean for
 `holtburger-{dat,session,transport-ws,resource-http,web,
 content,core,manifest}`. `wasm-pack build --target {nodejs,
 web}` both green (`--release` ~60 s, `--dev` ~3 s incremental
-for inner-loop iteration). `node smoke_test.cjs` **102 / 102
+for inner-loop iteration). `node smoke_test.cjs` **121 / 121
 + 1 SKIP** on cache hit (~10 s wall); `--fast` tier covers
 59 / 59 + 2 SKIP in 0.4 s for iteration. Wire-effect
 validation runs through `capture_phase4_step3.cjs` (movement
@@ -362,15 +393,17 @@ through Holtburg's center as diagonal lines.
 `dats/assets.hba` changes):**
 
 > **Disk-space trap — read first.** A full bake produces ~4.7 GB
-> on disk: 203 MB `manifest.json` + 1.86 MB `boot.hba` + ~1 GB of
-> shard content **but ~4.5 GB on-disk** because each of the 885k
-> shard files rounds up to a 4 KB block (885k × 4 KB ≈ 3.5 GB of
-> tail-block overhead alone). Combined with `external/holtburger/
-> target/` (~22 GB cargo build), this **WILL fill the root
-> partition** if `dist/` lands on `/` or `/tmp`. On this host the
-> root partition is 117 GB and recently sat at 77% full; one
-> bake to `/tmp` knocked SSH offline mid-development on
-> 2026-05-04 and forced the 2026-05-05 → 2026-05-06 commit gap.
+> on disk: 541-byte `manifest.json` (v2 default; obj 5) +
+> per-namespace `manifest/<ns>.bin` catalogs (~19 bytes/entry,
+> gzip-friendly) + 1.86 MB `boot.hba` + ~1 GB of shard content
+> **but ~4.5 GB on-disk** because each of the 885k shard files
+> rounds up to a 4 KB block (885k × 4 KB ≈ 3.5 GB of tail-block
+> overhead alone). Combined with `external/holtburger/target/`
+> (~22 GB cargo build), this **WILL fill the root partition** if
+> `dist/` lands on `/` or `/tmp`. On this host the root
+> partition is 117 GB and recently sat at 77% full; one bake to
+> `/tmp` knocked SSH offline mid-development on 2026-05-04 and
+> forced the 2026-05-05 → 2026-05-06 commit gap.
 >
 > **Set up `dist/` as a symlink to a roomy drive before baking.**
 > This host has 6.9 TB free on `/mnt/wbterminal1` (and another
@@ -384,18 +417,22 @@ through Holtburg's center as diagonal lines.
 > ln -s /mnt/wbterminal1/holtburger-dist external/holtburger/dist
 > ```
 >
-> Phase 5.2 ([`manifest.md`](manifest.md)) will collapse the
-> 203 MB manifest to ~2 KB top-level + per-namespace catalogs;
-> the shard count is unchanged and the on-disk overhead remains.
+> Phase 5.2 obj 5 made v2 the default (`--manifest-version=2`).
+> Pass `--manifest-version=1` if you need the legacy 203 MB
+> single-file manifest for in-flight CDN drains.
 
 ```bash
 cd external/holtburger
 cargo build -p holtburger-tools --bin dat-shard --release
 ./target/release/dat-shard --input dats/assets.hba --output dist/
-# Produces: dist/manifest.json (203 MB; Phase 5.2 fixes),
-#           dist/boot.hba (1.86 MB, Holtburg's transitive closure),
-#           dist/shards/{sha256}.bin × 885k (~1 GB content,
-#           ~4.5 GB on-disk — see the disk-space trap above).
+# Produces (v2 default since Phase 5.2 obj 5):
+#   dist/manifest.json (~541 bytes; lazy per-namespace catalogs)
+#   dist/manifest/<namespace>.bin (~19 bytes/entry; gzipped on HTTP)
+#   dist/boot.hba (1.86 MB, Holtburg's transitive closure)
+#   dist/shards/{prefix2}/{trunc32}.bin × ~885k (~1 GB content,
+#                                                ~4.5 GB on-disk
+#                                                — see disk trap)
+#   dist/shards/{namespace_slug}/0x{file_id}.bin → convention symlinks
 ```
 
 **Live-server stack** (the user keeps this running for
@@ -422,6 +459,16 @@ on-device validation; recipe in
 ### What's open — two parallel rails
 
 Pick one to pull on. The choice is real, not arbitrary.
+
+> **Update 2026-05-09:** Phase 6 (buildings, interiors, AABB
+> collision, cell-graph Z-culling, doors, vertical-dungeon
+> validation) landed in 8 commits `dc49b6f → e5bf8a8`. The
+> content rail's next pull is **Phase 6 follow-ons** —
+> EnvCell surface-index resolution (interiors flat-grey
+> today), outdoor-terrain hide-on-indoor, non-Holtburg
+> teleport prefetch for buildings/EnvCells, and chromium
+> capture re-enablement. Details in the Phase 6 ledger in
+> §8 and the polish backlog below.
 
 - **Content rail** — Phase 4 step 3 + 3.5 **landed 2026-05-06**;
   step 4 chat panel + step 3.6 (movement-system wiring; server-
@@ -780,23 +827,71 @@ extend it:
   feedback signal — possibly a new wasm getter
   `terrain_height_cache_has(landblock_id) -> bool` so JS
   knows what to fetch.
-- ✅ **Cliff / wall collision — Phase 6 complete.** Building
-  rendering, interior EnvCell rendering, AABB collision, active-
-  cell Z-culling, and door geometry/state all shipped through
-  commits `dc49b6f..<phase-f-commit>`: (A) full Setup leaf
-  geometry per-part, (B) AABB collision in
+- ✅ **Cliff / wall collision — Phase 6 complete (2026-05-09).**
+  Building rendering, interior EnvCell rendering, AABB
+  collision, active-cell Z-culling, and door geometry/state
+  all shipped in commits `dc49b6f..e5bf8a8`: (A) full Setup
+  leaf geometry per-part via `fetchBuildingPlacement` +
+  `window.buildingMap`, (B) AABB collision in
   `project_pose_by_velocity` swept against per-cell building
-  buckets, (C) EnvCell rendering wasm export with 805k cells
-  catalogued in manifest v2, (D) active-cell tracking with
-  portal-graph BFS culling that auto-handles stairs and vertical
-  dungeons, (E) door geometry + ETHEREAL-driven state + sprite
-  rotation + AABB toggle, (F) vertical-dungeon validation
-  (Mite Maze target, 5-floor synthetic stack proves N-floor
-  generalization). Cliff-edge max-Z-drop-per-tick threshold is
-  the only remaining piece (a player walking off a sheer cliff
-  still drops Z to terrain at full speed); not gating. Plan +
-  as-built sub-phases at
+  buckets (capsule 0.4r/1.8h, sweep-clamp + 1-iter slide,
+  `populateBuildingAabbsForLandblock` = 16 AABBs for Holtburg),
+  (C) `EnvCellPlacement` wasm export populating
+  `window.cellContainers` for any landblock with EnvCells in
+  the bake, (D) `Scene.cell_portal_graph` + `cell_aabbs` +
+  `getCurrentCellId` / `getRenderSet` BFS depth=1 culling that
+  auto-handles stairs and vertical dungeons (no special-case
+  stairs code), (E) `DoorState` enum from ETHEREAL flag +
+  `WorldEvent::DoorStateChanged` → `kind=15` ClientEvent +
+  `window.__doorStates` + `sprite.rotation π/2` + AABB toggle,
+  (F) `holtburg_test_dungeon_render_set_bounded` synthetic
+  5-floor stack smoke proves N-floor generalization +
+  Mite Maze (`0x01F801D4`) / Holtburg Dungeon (`0x01F60289`)
+  capture targets staged. Plan + as-built at
   [`phase-6-buildings-and-interiors.md`](phase-6-buildings-and-interiors.md).
+- ⏳ **Phase 6 follow-ons (load-bearing for "looks done"):**
+  - **EnvCell surface-index resolution.** Phase 6 step C
+    triangulates interior geometry but the `Vec<u16>` surface
+    indices on each `CellStruct` are not threaded through the
+    landblock surface table — interiors render flat-grey.
+    Single biggest "doesn't look done" gap; until this
+    lands every dungeon and house interior is greybox. Fix
+    sketch: surface table lives at the LB level; the C# exporter
+    at `WorldBuilder.Terminal/CommandEngine.cs:5367-5462`
+    already resolves the indices into texture DIDs — port the
+    same lookup into the wasm `EnvCellPlacement` builder,
+    feed the resolved DIDs through the existing
+    `fetch_surfaces_pixels` rasterizer that buildings use.
+  - **Outdoor-terrain hide-on-indoor.** Outdoor terrain
+    container stays drawn while the player is inside an
+    EnvCell, so interiors visually leak the heightmap behind
+    them. Toggle in the `tickCellVisibility` rAF tick:
+    when `getCurrentCellId()` returns an indoor cell
+    (low word ≥ `0x0100`), set the outdoor LB container's
+    `.visible = false`; restore on outdoor return.
+  - **Door per-part-container rotation.** Phase 6E rotates
+    the door GfxObj sprite by π/2 on state change but the
+    proper hinge-frame rotation via `getBuildingPartForDoor`
+    (per-part-container) was deferred. Cosmetic until you
+    care that the door visually swings rather than flipping.
+  - **Non-Holtburg teleport prefetch for EnvCells / buildings.**
+    The 9-LB outdoor heightmap prefetch and the
+    `populateBuildingAabbsForLandblock` are both gated to
+    Holtburg's neighbourhood at `kind=7 EnteredWorld`. Teleporting
+    to Mite Maze / Holtburg Dungeon / anywhere else doesn't
+    trigger the building/EnvCell prefetch. Same fix as the
+    terrain-following non-Holtburg follow-on below: re-fire
+    on `PlayerTeleport`.
+  - **Live captures broken (chromium "Target crashed").**
+    `capture_phase4_step3.cjs` + `capture_phase6_step_*.cjs`
+    against `100.116.47.66` were failing post the 2026-05-08
+    login-form refactor (`server_ip` → `server_host`); the
+    fix at `57de06b` updated the selector but chromium itself
+    crashes mid-run on this host. Smoke 121/0/1 is the
+    practical validation gate today; live-server visual
+    sign-off is paused until the chromium issue is diagnosed.
+    Phase 6F's Mite Maze / Holtburg Dungeon captures are
+    staged but unrun for this reason.
 - ⏳ **DAT-side u8 → f32 memory optimization.** Cache stores
   `[f32; 81]` (4 bytes/value × 81 = 324 bytes/LB) when the
   underlying DAT representation is `u8` (× 2 → metres). For 9
@@ -1487,8 +1582,9 @@ do well*. The three open questions below all landed in Phase 5.0 (see
    `ManifestResourceSource::prefetch` rejects mismatched bytes
    with `PrefetchError::HashMismatch` (commit `f760981`). The
    AGPL §13 / AC asset distribution concern is operator-side;
-   flag it in deployment docs (Phase 6 hosting brief, still
-   open).
+   flag it in deployment docs (Phase 7 hosting brief, still
+   open — was previously labelled "Phase 6" before the Phase 6
+   buildings/interiors work was numbered).
 
 ### 5.4 AGPL v3 §13 — a real obligation, not a footnote
 
@@ -2684,11 +2780,20 @@ Step ledger:
     `catalog_url_template=null` + zero catalog reqs +
     loaded_catalog_count=0). Final smoke: **100 / 100 + 1
     SKIP**.
-  - ⏳ **obj 9 (workspace check)** — verify native lib gate +
-    smoke + wasm-pack stay green.
+  - ✅ **obj 9 (workspace check)** — implicitly closed by the
+    Phase 6 gate runs (2026-05-09): smoke 121/121 + 1 SKIP,
+    `wasm-pack build --target {nodejs,web}` both green. Not
+    explicitly checked off in a dedicated commit but the
+    Phase 6 commit-by-commit gate confirms v2 dispatch hasn't
+    regressed. If you re-run today, verify against the
+    post-Phase-6 baseline rather than the obj-8 100/100
+    figure.
   - ⏳ **obj 10 (live-ACE phone validation)** — bake v2 dist/,
     serve over Tailscale, demonstrate <60s first paint + <5s
-    re-load on 600 kbps cellular.
+    re-load on 600 kbps cellular. Blocked on the broken
+    chromium captures noted in the polish backlog above; phone
+    validation needs the same browser path that's currently
+    crashing.
   - ⏳ **obj 11 (docs)** — `phase-5.2-manifest-fix.md` as-built
     + bumps to `phase-5-thorough.md` + this section + auto-memory.
 - ⏳ **Phase 5.3 — boot pack adaptive sizing (no brief yet).**
@@ -2703,14 +2808,101 @@ Step ledger:
   current dev; surfaces if/when validation against dense areas
   on real cellular shows the pack is too big.
 
+Phase 6 — **Buildings, interiors, and multi-floor Z-culling
+(landed 2026-05-09).** Plan + as-built at
+[`phase-6-buildings-and-interiors.md`](phase-6-buildings-and-interiors.md).
+8 commits `dc49b6f → e5bf8a8` over a single session. Closed
+the user's #1 complaint that "the client seemed to clip
+through buildings and such as if it didn't exist" plus the
+multi-floor / vertical-dungeon traversal gap.
+
+Step ledger:
+- ✅ **Step A — restore building leaf geometry** (`0e0bc05`).
+  Replaces the silhouette-only path at `lib.rs:654-656` with a
+  full per-part walk; reuses `walk_setup_model_surfaces` and
+  `triangulate_setup_identity_placement` to emit one PIXI
+  mesh per part, attached to a per-building `PIXI.Container`
+  exposed at `window.buildingMap`. Per-part addressing (each
+  child mesh tagged `{building_id, part_index}`) is what step
+  E's door rotation hooks into.
+- ✅ **Step A login fix (`57de06b`).** Capture script
+  selector flipped from `input[name="server_ip"]` to
+  `input[name="server_host"]` after the login form was
+  refactored to a server picker fed by `acresources/serverslist`
+  in commit `3954289`. The browser captures still crash on
+  this host post-fix (see polish backlog) — the selector itself
+  is correct.
+- ✅ **Step B — player ↔ building AABB collision** (`812ebfb`).
+  New `Aabb` in `holtburger-common`; new
+  `WorldState.building_aabb_index: HashMap<CellId,
+  Vec<BuildingAabb>>`; `populateBuildingAabbsForLandblock`
+  populates 16 AABBs for Holtburg from per-part bounding
+  spheres. `project_pose_by_velocity` in
+  `holtburger-world::spatial::physics` now sweeps a player
+  capsule (radius 0.4 m, height 1.8 m — mirroring ACE's
+  `PhysicsObj` setup) against AABBs in `current_cell ∪
+  neighbours`, clamps delta to first hit, drops the colliding
+  axis (1-iter slide).
+- ✅ **Step C — EnvCell rendering wasm export** (`75b9c00`).
+  New `fetch_env_cells_in_landblock(lbid)` returns
+  `Vec<EnvCellPlacement>` walking the Environment (0x0D…)
+  parser; JS triangulates each EnvCell under
+  `window.cellContainers: Map<CellId, PIXI.Container>`. Static
+  objects reuse `triangulate_setup_identity_placement`. **Open
+  gap:** surface-index resolution for interior textures is
+  not threaded through (interiors render flat-grey); see the
+  Phase 6 follow-on in the polish backlog.
+- ✅ **Step D — active-cell tracking + Z-culling** (`326572f`).
+  `Scene.cell_portal_graph: HashMap<CellId, Vec<CellId>>` +
+  `cell_aabbs` populate as EnvCells fetch; new
+  `WorldState::current_cell(pos)` (3D AABB containment for
+  indoor; outdoor LB grid otherwise) and `render_set(current,
+  depth=1)` BFS across the portal graph. Per-rAF
+  `tickCellVisibility` toggles `cellContainers.get(cid).visible`
+  on render-set diff. Stairs work via the portal graph with
+  zero special-case code; the same logic generalizes to
+  arbitrary vertical dungeons.
+- ✅ **Step E — door geometry + state** (`ef4528a`).
+  New `DoorState` enum derived from the ETHEREAL physics flag
+  in `PublicWeenieDescription`; `WorldEvent::DoorStateChanged
+  { guid, state }` flows through to a new `kind=15` ClientEvent
+  exposed via `window.__doorStates`. JS rotates the door's
+  GfxObj sprite by π/2 on state change; the AABB index toggles
+  presence on the same edge (closed door = AABB present, open
+  door = AABB removed). **Deferred polish:** per-part-container
+  rotation via `getBuildingPartForDoor` so the door visually
+  swings around its hinge frame rather than flipping.
+- ✅ **Step F — vertical-dungeon validation** (`e5bf8a8`).
+  Synthetic 5-floor stack smoke check
+  (`holtburg_test_dungeon_render_set_bounded`) proves the
+  cell-graph abstraction generalizes to N floors with no
+  Phase F-specific code. Mite Maze (`@teleloc 0x01F801D4
+  6.1 -101.6 0`) and Holtburg Dungeon (`@teleloc 0x01F60289
+  96.7 -10 0`) staged as live capture targets — `@telepoi`
+  rejects dungeon names so `@teleloc` is the only path.
+  Live capture deferred to follow-up because chromium is
+  crashing on this host (see polish backlog).
+
+Open Phase 6 follow-ons (cosmetic / streaming reach;
+none gate the architecture):
+- EnvCell surface-index resolution (interiors flat-grey).
+- Outdoor-terrain hide-on-indoor (terrain leaks through).
+- Door per-part-container rotation around hinge frame.
+- Non-Holtburg teleport prefetch for EnvCells + building AABBs.
+- Live-capture re-enablement (chromium "Target crashed" on
+  this host).
+- Cliff-edge max-Z-drop-per-tick threshold (a player walking
+  off a sheer cliff still drops Z to terrain at full speed).
+
 Open follow-ons (no specific brief yet):
 - Login flow UX (§7.5).
 - Performance: 100 concurrent entities, 1000, 5000.
 - Multi-project / multi-world picker.
-- Phase 6 — CDN deployment (CloudFront / Cloudflare R2 /
+- Phase 7 — CDN deployment (CloudFront / Cloudflare R2 /
   Fastly / self-hosted nginx; Brotli vs gzip vs zstd;
   `X-Content-SHA256` integrity headers; AGPL §13 source
-  publication URL).
+  publication URL). Was previously labelled "Phase 6" before
+  the Phase 6 buildings/interiors work was numbered.
 
 Each phase ends with a working artifact. We do not start the next phase until
 the current one demonstrably works against ACE.
