@@ -780,15 +780,22 @@ extend it:
   feedback signal — possibly a new wasm getter
   `terrain_height_cache_has(landblock_id) -> bool` so JS
   knows what to fetch.
-- ⏳ **Cliff / wall collision.** The integrator only does
-  terrain *following*, not collision. Walking into a vertical
-  wall passes through it on the client side (server-side ACE
-  physics may still wall-stop, but the local sprite desyncs).
-  For full retail-correct behavior we'd add: max-Z-drop-per-
-  tick threshold (refuse forward motion past a >N meters
-  drop in one tick = cliff edge); X/Y collision against
-  building geometry from `holtburger-dat::file_type::Setup`
-  bounding boxes. Out of scope for the rubberband fix.
+- ⏳ **Cliff / wall collision — promoted to Phase 6.** The
+  integrator only does terrain *following*, not collision.
+  Walking into a vertical wall passes through it on the client
+  side (server-side ACE physics may still wall-stop, but the
+  local sprite desyncs). Buildings render as silhouettes only —
+  doors / windows / interior walls are dropped at
+  `lib.rs:654-656`, EnvCells are parsed but never reach the
+  browser, and there's no collision query in
+  `project_pose_by_velocity`. Subsumed by **Phase 6 — buildings,
+  interiors, and multi-floor Z-culling**, which adds (A) full
+  Setup leaf geometry, (B) AABB collision in the integrator,
+  (C) EnvCell rendering wasm export, (D) active-cell tracking
+  with portal-graph-driven culling that auto-handles stairs and
+  vertical dungeons, (E) door geometry + state, (F) dungeon
+  validation. Plan + as-framed sub-phases at
+  [`phase-6-buildings-and-interiors.md`](phase-6-buildings-and-interiors.md).
 - ⏳ **DAT-side u8 → f32 memory optimization.** Cache stores
   `[f32; 81]` (4 bytes/value × 81 = 324 bytes/LB) when the
   underlying DAT representation is `u8` (× 2 → metres). For 9
@@ -844,26 +851,35 @@ In order:
    the load-bearing one) and the step 3.7 deferred work
    (real character-biota loading + landblock-crossing
    correctness).
-4. [`phase-3-renderer.md`](phase-3-renderer.md) — Phase 3
+4. [`phase-6-buildings-and-interiors.md`](phase-6-buildings-and-interiors.md)
+   — **Phase 6 plan, planned 2026-05-09.** Buildings,
+   interiors, multi-floor Z-culling. Read before touching
+   building rendering at `lib.rs:654`, the physics integrator
+   at `physics.rs:308`, the `EnvCell` parser, or anything
+   touching cell-to-cell traversal. Documents six sub-phases
+   A-F (leaf geometry → AABB collision → EnvCell render →
+   cell tracking → doors → dungeon validation) with
+   live-server captures per phase.
+5. [`phase-3-renderer.md`](phase-3-renderer.md) — Phase 3
    step 1-6 as-built. Read before touching the renderer
    pipeline (heightmap, terrain shader, sprite atlas, runtime
    per-model render).
-5. [`phase-5-thorough.md`](phase-5-thorough.md) — Phase 5.0 /
+6. [`phase-5-thorough.md`](phase-5-thorough.md) — Phase 5.0 /
    5.0b / 5.1a / 5.1b as-built. Read before changing the
    manifest, `ManifestResourceSource`, `dat-shard`,
    `holtburger_dat::walk`, or the smoke harness.
-6. [`thorough.md`](thorough.md) — Phase 5.0 framing brief
+7. [`thorough.md`](thorough.md) — Phase 5.0 framing brief
    (already executed; stays as historical context for the
    delivery-architecture decisions).
-7. [`manifest.md`](manifest.md) — Phase 5.2 framing brief
+8. [`manifest.md`](manifest.md) — Phase 5.2 framing brief
    (**not yet executed**; the next agent on the bandwidth
    rail picks this up).
-8. [`ace-local-setup.md`](ace-local-setup.md) — recipe for
+9. [`ace-local-setup.md`](ace-local-setup.md) — recipe for
    bringing up ACE locally for live-ACE work.
-9. [`phase-2-wasm-spike.md`](phase-2-wasm-spike.md) — Phase 2
-   wasm32 cross-compile spike record. Read only if rebooting
-   the wasm cross-compile floor.
-10. `~/.claude/projects/-home-wbterminal/memory/project_emit_dynamic_site.md`
+10. [`phase-2-wasm-spike.md`](phase-2-wasm-spike.md) — Phase 2
+    wasm32 cross-compile spike record. Read only if rebooting
+    the wasm cross-compile floor.
+11. `~/.claude/projects/-home-wbterminal/memory/project_emit_dynamic_site.md`
     — auto-loaded into Claude's context. Verify it matches
     this document's status section before relying on it.
 
