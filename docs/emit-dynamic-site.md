@@ -44,9 +44,13 @@ for buildings via `fetchBuildingPlacement` +
 slide, ACE-mirrored capsule (radius 0.4 m, height 1.8 m),
 `populateBuildingAabbsForLandblock` (16 AABBs for Holtburg);
 C=Environment (0x0D…) parser + `EnvCellPlacement` wasm
-export + `window.cellContainers` (interior **geometry** —
-textures still flat-grey; surface-index resolution is the
-biggest open follow-on); D=`Scene.cell_portal_graph` +
+export + `window.cellContainers` (interior geometry +
+**textured surfaces** — `EnvCell.surfaces` u16 indices are
+OR'd with `0x08000000` via `surface_did_for_envcell_index`
+in `holtburger-dat`, threaded through `fetch_environment_mesh`
+into `Tri.surface_did`, and JS-side `bakeCellTextures` calls
+`fetch_surfaces_pixels` + `renderModelTile` on the same path
+buildings use; closed in commit `bc71009`); D=`Scene.cell_portal_graph` +
 `cell_aabbs` + `getCurrentCellId` / `getRenderSet`, BFS
 depth=1, `tickCellVisibility` (stairs work via portal-graph
 traversal — no special "stairs" code; outdoor terrain stays
@@ -464,10 +468,12 @@ Pick one to pull on. The choice is real, not arbitrary.
 > collision, cell-graph Z-culling, doors, vertical-dungeon
 > validation) landed in 8 commits `dc49b6f → e5bf8a8`. The
 > content rail's next pull is **Phase 6 follow-ons** —
-> EnvCell surface-index resolution (interiors flat-grey
-> today), outdoor-terrain hide-on-indoor, non-Holtburg
-> teleport prefetch for buildings/EnvCells, and chromium
-> capture re-enablement. Details in the Phase 6 ledger in
+> outdoor-terrain hide-on-indoor, non-Holtburg teleport
+> prefetch for buildings/EnvCells, and chromium capture
+> re-enablement. (EnvCell surface-index resolution closed
+> 2026-05-09 in commit `bc71009`; smoke check
+> `phase6.C.envcell_surface_did_resolves_via_namespace_or_mask`
+> pins the 0x0800… DID resolution.) Details in the Phase 6 ledger in
 > §8 and the polish backlog below.
 
 - **Content rail** — Phase 4 step 3 + 3.5 **landed 2026-05-06**;
@@ -850,18 +856,23 @@ extend it:
   capture targets staged. Plan + as-built at
   [`phase-6-buildings-and-interiors.md`](phase-6-buildings-and-interiors.md).
 - ⏳ **Phase 6 follow-ons (load-bearing for "looks done"):**
-  - **EnvCell surface-index resolution.** Phase 6 step C
-    triangulates interior geometry but the `Vec<u16>` surface
-    indices on each `CellStruct` are not threaded through the
-    landblock surface table — interiors render flat-grey.
-    Single biggest "doesn't look done" gap; until this
-    lands every dungeon and house interior is greybox. Fix
-    sketch: surface table lives at the LB level; the C# exporter
-    at `WorldBuilder.Terminal/CommandEngine.cs:5367-5462`
-    already resolves the indices into texture DIDs — port the
-    same lookup into the wasm `EnvCellPlacement` builder,
-    feed the resolved DIDs through the existing
-    `fetch_surfaces_pixels` rasterizer that buildings use.
+  - ✅ ~~**EnvCell surface-index resolution.**~~ **Closed
+    2026-05-09 in commit `bc71009`.** Surface table is
+    actually per-EnvCell (not per-LB as the original sketch
+    assumed) — each `EnvCell` ships its own `Vec<u16>`
+    surfaces on the wire. New
+    `holtburger_dat::file_type::env_cell::surface_did_for_envcell_index`
+    helper OR's each u16 with `0x08000000` (mirrors ACE
+    `DatLoader/FileTypes/EnvCell.cs:50`); `fetch_env_cells_in_landblock`
+    routes `envcell.surfaces` through the helper, feeds the
+    resolved Vec<u32> into `fetch_environment_mesh` →
+    `append_environment_tris` → `Tri.surface_did`. JS-side
+    `bakeCellTextures` (`index.html:1769-1836`) collects
+    `mesh.surfaces`, calls `fetch_surfaces_pixels`, builds
+    PIXI textures and rasterizes via `renderModelTile` —
+    same path buildings use. Pinned by smoke check
+    `phase6.C.envcell_surface_did_resolves_via_namespace_or_mask`
+    against fixture `0x0800ABCD`.
   - **Outdoor-terrain hide-on-indoor.** Outdoor terrain
     container stays drawn while the player is inside an
     EnvCell, so interiors visually leak the heightmap behind
@@ -2843,15 +2854,20 @@ Step ledger:
   `PhysicsObj` setup) against AABBs in `current_cell ∪
   neighbours`, clamps delta to first hit, drops the colliding
   axis (1-iter slide).
-- ✅ **Step C — EnvCell rendering wasm export** (`75b9c00`).
-  New `fetch_env_cells_in_landblock(lbid)` returns
+- ✅ **Step C — EnvCell rendering wasm export** (`75b9c00`,
+  surfaces follow-up `bc71009`). New
+  `fetch_env_cells_in_landblock(lbid)` returns
   `Vec<EnvCellPlacement>` walking the Environment (0x0D…)
   parser; JS triangulates each EnvCell under
   `window.cellContainers: Map<CellId, PIXI.Container>`. Static
-  objects reuse `triangulate_setup_identity_placement`. **Open
-  gap:** surface-index resolution for interior textures is
-  not threaded through (interiors render flat-grey); see the
-  Phase 6 follow-on in the polish backlog.
+  objects reuse `triangulate_setup_identity_placement`. Surface
+  indices on each EnvCell are OR'd with `0x08000000` via
+  `surface_did_for_envcell_index` (mirrors ACE
+  `DatLoader/FileTypes/EnvCell.cs:50`), threaded into
+  `Tri.surface_did`, and rasterized JS-side via
+  `bakeCellTextures` → `fetch_surfaces_pixels` →
+  `renderModelTile` (same path buildings use). Pinned by
+  smoke `phase6.C.envcell_surface_did_resolves_via_namespace_or_mask`.
 - ✅ **Step D — active-cell tracking + Z-culling** (`326572f`).
   `Scene.cell_portal_graph: HashMap<CellId, Vec<CellId>>` +
   `cell_aabbs` populate as EnvCells fetch; new
@@ -2885,7 +2901,7 @@ Step ledger:
 
 Open Phase 6 follow-ons (cosmetic / streaming reach;
 none gate the architecture):
-- EnvCell surface-index resolution (interiors flat-grey).
+- ✅ ~~EnvCell surface-index resolution~~ (closed `bc71009`).
 - Outdoor-terrain hide-on-indoor (terrain leaks through).
 - Door per-part-container rotation around hinge frame.
 - Non-Holtburg teleport prefetch for EnvCells + building AABBs.
