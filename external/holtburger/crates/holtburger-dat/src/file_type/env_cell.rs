@@ -4,6 +4,27 @@ use binrw::{
     io::{Read, Seek, Write},
 };
 
+/// AC's Surface namespace prefix (DAT file type 0x08 — see
+/// `crate::file_type::Surface`). EnvCell stores its surface table as
+/// 16-bit indices on the wire to save bytes; callers OR each entry
+/// with this constant to recover the full Surface DID. Mirrors ACE
+/// `DatLoader/FileTypes/EnvCell.cs:50`:
+/// `Surfaces.Add(0x08000000u | reader.ReadUInt16());`
+///
+/// Kept in `holtburger-dat` (not the wasm bundle) so both the parser
+/// and any future native consumer of `EnvCell.surfaces` get the same
+/// convention.
+pub const SURFACE_DID_NAMESPACE_PREFIX: u32 = 0x0800_0000;
+
+/// Resolve a wire-format EnvCell surface table entry to a full Surface
+/// DID by OR'ing with the namespace prefix. Trivial today; defined as a
+/// helper so consumers don't open-code `0x0800_0000 | (s as u32)` and
+/// risk getting the prefix wrong.
+#[inline]
+pub fn surface_did_for_envcell_index(wire_value: u16) -> u32 {
+    SURFACE_DID_NAMESPACE_PREFIX | (wire_value as u32)
+}
+
 #[derive(Debug, Clone, BinRead, BinWrite)]
 #[br(little)]
 #[bw(little)]
@@ -163,6 +184,19 @@ impl EnvCell {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn surface_did_for_envcell_index_or_masks_with_namespace_prefix() {
+        // Pin the namespace prefix to the documented 0x08 byte. If a
+        // future refactor changes the prefix to 0x05 (Surface vs
+        // SurfaceTexture confusion) or strips the OR, this test fails
+        // and the EnvCell triangulator's surface lookup goes silent
+        // (flat-grey textures everywhere).
+        assert_eq!(SURFACE_DID_NAMESPACE_PREFIX, 0x0800_0000);
+        assert_eq!(surface_did_for_envcell_index(0x0000), 0x0800_0000);
+        assert_eq!(surface_did_for_envcell_index(0xABCD), 0x0800_ABCD);
+        assert_eq!(surface_did_for_envcell_index(0xFFFF), 0x0800_FFFF);
+    }
 
     #[test]
     fn test_env_cell_prune() {

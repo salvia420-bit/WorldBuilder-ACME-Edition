@@ -3519,13 +3519,12 @@ impl EnvCellPlacement {
 /// `append_gfx_tris` line-for-line — the polygon shape is identical
 /// (shared `holtburger_dat::graphics::Polygon`), only the surface DID
 /// resolution differs. Environment cell polygons reference surface
-/// indices into a `cell.surfaces` array that doesn't exist in retail
-/// data; PhatSDK and DatReaderWriter both confirm Environment cells
-/// store surface indices that are ALWAYS resolved against the parent
-/// EnvCell's surface table (which IS shipped on the wire). Phase C
-/// loses this connection — we emit `surface_did = 0` so JS falls back
-/// to the flat-fallback texture path. A follow-up will thread
-/// `EnvCell.surfaces` through to give cells real textures.
+/// indices into the parent EnvCell's surface table (a `Vec<u16>`
+/// shipped on the wire); the caller is responsible for converting each
+/// u16 to a full Surface DID via `0x08000000 | u16` (mirrors ACE's
+/// `DatLoader/FileTypes/EnvCell.cs:50`) before passing the resolved
+/// `surfaces: &[u32]` here. `pos_surface < 0` or out-of-range polygons
+/// emit `surface_did = 0` and fall through to the flat-fallback path.
 #[cfg(target_arch = "wasm32")]
 fn append_environment_tris(
     tris: &mut Vec<Tri>,
@@ -3715,6 +3714,113 @@ pub fn holtburg_static_object_count() -> u32 {
         }
     }
     total
+}
+
+/// Phase 6 step C follow-up: synthesize a one-cell Environment with a
+/// single textured polygon, run the full triangulation through
+/// `append_environment_tris` + `pack_model_mesh`, and return the first
+/// resolved Surface DID. Pinned to `0x0800_ABCD` — the parent EnvCell
+/// fixture stores `surfaces: vec![0xABCD]`, and the OR with the
+/// `0x08000000` Surface namespace prefix should produce `0x0800_ABCD`.
+/// A return of `0` indicates the surface threading is broken (the
+/// pre-fix `*s as u32` cast would yield `0xABCD` instead, which then
+/// gets demoted to `0xFF`/no-surface by the fallback path elsewhere —
+/// either way the smoke catches the regression).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn holtburg_envcell_synthetic_textured_mesh_surface() -> u32 {
+    use holtburger_dat::file_type::Environment;
+
+    // Build a minimal Environment record byte-for-byte (mirrors
+    // `environment.rs::unpack_synthetic_single_cell_triangle` but
+    // without pulling in `binrw` — `holtburger-web` doesn't depend
+    // on it directly). Layout: one cell with 3 vertices forming one
+    // triangle, and one drawing polygon with `pos_surface = 0`
+    // pointing at the parent EnvCell's surface table slot 0.
+    let mut data: Vec<u8> = Vec::with_capacity(256);
+    let push_u32 = |d: &mut Vec<u8>, v: u32| d.extend_from_slice(&v.to_le_bytes());
+    let push_i32 = |d: &mut Vec<u8>, v: i32| d.extend_from_slice(&v.to_le_bytes());
+    let push_u16 = |d: &mut Vec<u8>, v: u16| d.extend_from_slice(&v.to_le_bytes());
+    let push_i16 = |d: &mut Vec<u8>, v: i16| d.extend_from_slice(&v.to_le_bytes());
+    let push_u8 = |d: &mut Vec<u8>, v: u8| d.push(v);
+    let push_f32 = |d: &mut Vec<u8>, v: f32| d.extend_from_slice(&v.to_le_bytes());
+
+    // Environment header.
+    push_u32(&mut data, 0x0D00_0001); // id
+    push_u32(&mut data, 1); // num_cells
+    // CellStruct header.
+    push_u32(&mut data, 0); // cell_struct_id
+    push_u32(&mut data, 1); // num_polygons
+    push_u32(&mut data, 0); // num_physics_polygons
+    push_u32(&mut data, 0); // num_portals
+    // VertexArray: type=1, 3 vertices.
+    push_i32(&mut data, 1); // vertex_type
+    push_u32(&mut data, 3); // num_vertices
+    for (vid, x, y, z) in [
+        (0u16, 0.0f32, 0.0, 0.0),
+        (1, 1.0, 0.0, 0.0),
+        (2, 0.0, 1.0, 0.0),
+    ] {
+        push_u16(&mut data, vid);
+        push_u16(&mut data, 1); // num_uvs
+        push_f32(&mut data, x);
+        push_f32(&mut data, y);
+        push_f32(&mut data, z);
+        push_f32(&mut data, 0.0); // normal.x
+        push_f32(&mut data, 0.0); // normal.y
+        push_f32(&mut data, 1.0); // normal.z
+        push_f32(&mut data, 0.0); // uv.u
+        push_f32(&mut data, 0.0); // uv.v
+    }
+    // One Polygon: `[u16 poly_id]` then the body. Polygon body layout
+    // mirrors `holtburger_dat::graphics::polygon::Polygon`'s binread:
+    // `[u8 num_pts][u8 stippling][u32 sides_type][i16 pos_surface]
+    //  [i16 neg_surface][num_pts × i16 vertex_ids]
+    //  [num_pts × u8 pos_uv_indices][num_pts × u8 neg_uv_indices]`.
+    // sides_type=2 (Clockwise) + stippling=0 → both pos+neg uv arrays
+    // are read; neg_surface=-1 still consumes the array bytes.
+    push_u16(&mut data, 0); // poly_id
+    push_u8(&mut data, 3);  // num_pts
+    push_u8(&mut data, 0);  // stippling
+    push_u32(&mut data, 2); // sides_type = Clockwise
+    push_i16(&mut data, 0);  // pos_surface
+    push_i16(&mut data, -1); // neg_surface
+    for vid in [0i16, 1, 2] { push_i16(&mut data, vid); }
+    for u in [0u8, 0, 0]    { push_u8(&mut data, u); } // pos_uv_indices
+    for u in [0u8, 0, 0]    { push_u8(&mut data, u); } // neg_uv_indices
+    // Pad to 4-byte alignment before the cell BSP.
+    while data.len() % 4 != 0 { data.push(0); }
+    // Cell BSP: single LEAF. Tag is "LEAF" reversed in memory →
+    // bytes "FAEL" in file order (binread reads `[u8;4]` raw).
+    data.extend_from_slice(b"FAEL");
+    push_i32(&mut data, 0); // index
+    // Physics BSP: single LEAF. The Physics-type LEAF reader pulls
+    // four extra fields beyond the Cell-type LEAF: `[i32 solid]
+    // [Vector3 sphere_center][f32 sphere_radius][u32 num_polys]`.
+    data.extend_from_slice(b"FAEL");
+    push_i32(&mut data, 0); // index
+    push_i32(&mut data, 0); // solid
+    push_f32(&mut data, 0.0); push_f32(&mut data, 0.0); push_f32(&mut data, 0.0); // center
+    push_f32(&mut data, 0.0); // radius
+    push_u32(&mut data, 0);   // num_polys
+    // LastField = 0 → no drawing BSP. EOR uses !PHATSDK_USE_EXTENDED_CELL_DATA.
+    push_u32(&mut data, 0);
+
+    let env = match Environment::unpack(&mut std::io::Cursor::new(&data)) {
+        Ok(e) => e,
+        Err(_) => return 0,
+    };
+    // Mirror `fetch_env_cells_in_landblock`'s OR-mask: u16 wire value
+    // 0xABCD becomes Surface DID 0x0800_ABCD via the shared helper.
+    let surfaces: Vec<u32> = [0xABCDu16]
+        .iter()
+        .copied()
+        .map(holtburger_dat::file_type::env_cell::surface_did_for_envcell_index)
+        .collect();
+    let mut tris = Vec::new();
+    append_environment_tris(&mut tris, &env, &surfaces);
+    let mesh = pack_model_mesh(tris);
+    mesh.surfaces.first().copied().unwrap_or(0)
 }
 
 // ---------------------------------------------------------------
@@ -4420,7 +4526,15 @@ pub async fn fetch_env_cells_in_landblock(
     let mut out: Vec<EnvCellPlacement> = Vec::with_capacity(cells_raw.len());
     for envcell in cells_raw {
         let env_did = 0x0D00_0000 | (envcell.environment_id as u32);
-        let surfaces: Vec<u32> = envcell.surfaces.iter().map(|s| *s as u32).collect();
+        // EnvCell wire format stores surface table as u16 indices; OR
+        // each with the Surface namespace prefix (0x08) to recover the
+        // full DID. Mirrors ACE `DatLoader/FileTypes/EnvCell.cs:50`.
+        let surfaces: Vec<u32> = envcell
+            .surfaces
+            .iter()
+            .copied()
+            .map(holtburger_dat::file_type::env_cell::surface_did_for_envcell_index)
+            .collect();
         let mesh = env_mesh_cache
             .entry(env_did)
             .or_insert_with(|| {

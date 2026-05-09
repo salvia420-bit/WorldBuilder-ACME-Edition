@@ -916,6 +916,43 @@ check(
     phase6CStaticObjectCountDetail
 );
 
+// (C.4) Surface DID resolution — Phase 6 step C originally emitted
+// `surface_did = 0` for every Environment polygon (interior cells
+// rendered flat-grey). The 2026-05-09 follow-up ORs each EnvCell
+// surface-table u16 with the 0x08000000 Surface namespace prefix
+// (mirrors ACE `DatLoader/FileTypes/EnvCell.cs:50`). The fixture
+// synthesizes a one-cell Environment + one polygon with `pos_surface
+// = 0` and an EnvCell with `surfaces = [0xABCD]`; the resolved
+// Surface DID should be exactly `0x0800_ABCD`. The pre-fix code
+// would yield `0xABCD` (low 16 bits only) which then gets demoted
+// to a 0xFF "no surface" sentinel further downstream, so checking
+// for `=== 0x0800ABCD` catches the regression cleanly.
+let phase6CEnvCellSurfaceDidOk = false;
+let phase6CEnvCellSurfaceDidDetail =
+    "phase C surface-DID follow-up not shipped — expected "
+    + "wasm.holtburg_envcell_synthetic_textured_mesh_surface() "
+    + "returning 0x0800ABCD (Surface DID for u16 wire value 0xABCD "
+    + "OR'd with the 0x08 namespace prefix).";
+try {
+    if (typeof wasm.holtburg_envcell_synthetic_textured_mesh_surface === "function") {
+        const did = wasm.holtburg_envcell_synthetic_textured_mesh_surface();
+        const expected = 0x0800ABCD;
+        phase6CEnvCellSurfaceDidOk = did === expected;
+        phase6CEnvCellSurfaceDidDetail =
+            `holtburg_envcell_synthetic_textured_mesh_surface()=`
+            + `0x${did.toString(16).padStart(8, "0").toUpperCase()} `
+            + `(expected 0x0800ABCD = 0x08000000 | 0xABCD)`;
+    }
+} catch (e) {
+    phase6CEnvCellSurfaceDidDetail =
+        `holtburg_envcell_synthetic_textured_mesh_surface threw: ${e?.message ?? e}`;
+}
+check(
+    "phase6.C.envcell_surface_did_resolves_via_namespace_or_mask",
+    phase6CEnvCellSurfaceDidOk,
+    phase6CEnvCellSurfaceDidDetail
+);
+
 // === end Phase 6 Step C =============================================
 
 // === Phase 6 Step D — active-cell tracking + Z-culling ==============
