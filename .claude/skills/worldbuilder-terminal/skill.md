@@ -38,6 +38,47 @@ Every response is a single JSON line on stdout shaped `{"success":true|false,"co
 
 Most commands take `lbX` and `lbY` as **integers 0–254**, not the packed `0xAABB` form. Holtburg = `lbX:169, lbY:180` (= `0xA9B4`). Convert any hex packed key with `lbX = (key >> 8) & 0xFF`, `lbY = key & 0xFF`.
 
+## Recommended agent loop
+
+Per `docs/agent_api_reference.md`:
+
+1. **Always check `success`** before reading response fields.
+2. **Mutate → `validate-all` → fix errors → repeat.** Never let a malformed delta reach `export`.
+3. **After `remove-object`, re-query `list-objects`** — indices shift down by one.
+4. **Retry transient errors** (file locks, DAT read failures) once before failing the loop.
+5. **Validate touched LBs before `export`.**
+
+Whenever the work is more than one mutation, prefer `transact` — it bundles ops, validates the staged delta atomically, and rolls back on any failure (commit-or-undo, never half-applied state). `transact-diff <txId>` then summarises the change as added/removed/moved objects, validation regressions, and an optional visual diff PNG.
+
+## The three observation channels
+
+Validation catches *symbolic* mistakes; these three commands catch the rest. The README frames them as the canonical post-mutation survey set:
+
+- **`render-preview`** — visual. Top-down PNG of an N×N LB region; catches mode collapse, density drift, awkward placement that symbols can't see. Pass `useSprites:true` for the full-fidelity static-site renderer.
+- **`describe-landblock`** — factual (the "Living Atlas"). Verbal block + structured fields composing ontology + region/town gazetteer + Acpedia POIs + LSD spawnMap. Identity is stored on docs; descriptions are derived fresh per call, so post-`transact` they're always current.
+- **`compare-to-retail`** — statistical. Subprocesses `scripts/PopulationPipeline/Validation/compare_world_to_retail.py` to score a generated world vs a captured retail JSONL with per-LB drilldown.
+
+## Validation diagnostic code families
+
+When a validator fires, the diagnostic carries a four-character code. Recognise these prefixes:
+
+| Prefix | Meaning |
+|---|---|
+| `DNG###` | Dungeon — broken portal links, orphaned cells, asymmetric portals, env refs, connectivity. |
+| `LBK###` | Landblock — object bounds, Z clamping, zero-scale, degenerate quat, model existence (LBK010 = footprint flushness). |
+| `TRN###` | Terrain — cliffs, edge stitching with adjacent LBs, flat / mono-type warnings. |
+| `BSH###` | Building shells — group-Z divergence (BSH009), shell completeness; needs `building_pairings.json`. |
+| `BLD###` | Building portals — outdoor exit, interior portal target validity, VisibleCells refs. |
+
+Full code table with descriptions in `docs/agent_api_reference.md` § Validation Diagnostic Codes.
+
+## Canonical references
+
+- **`docs/agent_api_reference.md`** — 2 000-line schema-grade reference for protocol, every parameter, and every response field. Skim this when a command's args feel ambiguous from the help text.
+- **`docs/agent_api_schema.json`** — machine-readable JSON schema for the same protocol.
+- **`docs/terminal_repl_commands.md`** — REPL-side surface (the slightly different colored-prompt mode the agent doesn't normally use).
+- **`README.md` § Headless Terminal & Agent API** — high-level framing of the agent loop and the observation channels. Note: the README's "63 documented / 140+ REPL" command counts are pre-2026-04 and now stale; the live `help` output has **131 documented + 16 unadvertised = 147**, which is what this skill reflects.
+
 ## Categorical command catalog
 
 ### Project lifecycle
