@@ -2226,6 +2226,13 @@ void main() {
             atlasTexture,
             roadTexture
           );
+          // Mark this LB's terrain mesh as already painted so
+          // ensureTerrainAroundLandblock skips re-rendering when the
+          // local player's first position update fires for the spawn
+          // LB. The wasm-side `terrainPrefetchedLbs` cache is
+          // separately populated by the same path.
+          const lbId = ((n.x << 24) | (n.y << 16)) >>> 0;
+          terrainMeshAddedLbs.add(lbId);
         }
 
         // Step 6: live-render every unique placed model into a
@@ -2317,6 +2324,15 @@ void main() {
             outdoorContainer,
             entityContainer,
             nameplateContainer,
+            // 2026-05-09 follow-up: stashed for ensureTerrainAroundLandblock
+            // so terrain meshes for new LBs (player walks across an LB
+            // boundary, portals out, dies and respawns elsewhere) can
+            // be added to outdoorContainer using the same atlas/road
+            // textures the startup paint baked. Without these, the
+            // terrain prefetch only populates the wasm-side height
+            // cache and the player walks over an empty void.
+            atlasTexture,
+            roadTexture,
             liveSpriteMap,
             spriteMap,
             invisibleModels,
@@ -3515,6 +3531,16 @@ void main() {
       // and ACE physics applies false gravity again.
       const terrainPrefetchedLbs = new Set();
       const terrainPrefetchInFlight = new Set();
+      // 2026-05-09 follow-up: track which landblocks have had their
+      // PIXI terrain mesh added to outdoorContainer. Distinct from
+      // `terrainPrefetchedLbs` because the wasm-side height cache and
+      // the JS-side render are separate concerns: the startup paint
+      // (renderHoltburg) renders the initial NEIGHBOURHOOD without
+      // touching the cache, and the kind=7 EnteredWorld follow-on
+      // populates the cache without re-rendering already-painted
+      // tiles. Pre-populated below once renderNeighbourhood has added
+      // the initial 9 Holtburg landblocks to outdoorContainer.
+      const terrainMeshAddedLbs = new Set();
       // Phase 6 step B follow-up: track which landblocks have had
       // their per-part building AABBs queued into the world's spatial
       // scene. Mirrors `terrainPrefetchedLbs` exactly — same lazy-on-
@@ -3687,6 +3713,35 @@ void main() {
               const h = window.__sessionHandle;
               if (h) h.populateTerrain(lbId, meshes[i].heights);
               terrainPrefetchedLbs.add(lbId);
+              // 2026-05-09 follow-up: also paint this LB's terrain
+              // tile into outdoorContainer if it hasn't been painted
+              // yet. Without this branch the player walks into a new
+              // landblock and sees the void beyond the startup-baked
+              // 9-tile patch (collision still works because the wasm
+              // cache populated above; the player just walks
+              // invisibly across an unrendered terrain). Skipped
+              // when liveScene isn't ready yet (renderNeighbourhood
+              // hasn't completed) — the startup loop pre-populates
+              // terrainMeshAddedLbs for the initial 9 LBs so we
+              // don't double-paint them.
+              if (
+                liveScene
+                && liveScene.outdoorContainer
+                && liveScene.atlasTexture
+                && !terrainMeshAddedLbs.has(lbId)
+              ) {
+                const lbX = (lbId >>> 24) & 0xff;
+                const lbY = (lbId >>> 16) & 0xff;
+                addLandblockToScene(
+                  liveScene.outdoorContainer,
+                  meshes[i],
+                  lbX,
+                  lbY,
+                  liveScene.atlasTexture,
+                  liveScene.roadTexture,
+                );
+                terrainMeshAddedLbs.add(lbId);
+              }
             } catch (e) {
               console.warn(`[terrain] populateTerrain failed for 0x${lbId.toString(16)}:`, e);
             } finally {
