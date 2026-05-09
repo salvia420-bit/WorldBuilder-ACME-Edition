@@ -1888,6 +1888,21 @@ public partial class CommandEngine {
         return ValidationEngine.ValidateLandblock(lbDoc, lbKey, heightLookup, dats, ontoLookup);
     }
 
+    /// <summary>
+    /// Cross-checks per-building footprint corners using the validator's
+    /// full-quaternion math against a yaw-only rotation, so we can flag
+    /// any LB whose buildings would diverge under emit-dynamic-site's
+    /// top-down (yaw-only) sprite renderer.
+    /// </summary>
+    public ValidationEngine.CornerDiffReport CompareRenderCorners(
+        uint lbX, uint lbY, float toleranceMetres = 0.05f) {
+        RequireProject();
+        ushort lbKey = LbKey(lbX, lbY);
+        var lbDoc = GetLandblockDoc(lbKey);
+        var ontoLookup = OntologyLookupOrNull();
+        return ValidationEngine.CompareRenderCorners(lbDoc, lbKey, ontoLookup, toleranceMetres);
+    }
+
     public ValidationReport ValidateTerrain(uint lbX, uint lbY, float cliffThreshold = ValidationEngine.DefaultCliffThreshold) {
         RequireProject();
         ushort lbKey = LbKey(lbX, lbY);

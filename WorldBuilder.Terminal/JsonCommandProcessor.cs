@@ -178,6 +178,7 @@ public class JsonCommandProcessor {
             ["get-dungeon-info"] = CmdGetDungeonInfo,
             ["validate-dungeon"] = CmdValidateDungeon,
             ["validate-landblock"] = CmdValidateLandblock,
+            ["compare-render-corners"] = CmdCompareRenderCorners,
             ["validate-terrain"] = CmdValidateTerrain,
             ["validate-building-shells"] = CmdValidateBuildingShells,
             ["validate-building-portals"] = CmdValidateBuildingPortals,
@@ -1151,6 +1152,39 @@ public class JsonCommandProcessor {
     private string CmdValidateLandblock(System.Text.Json.Nodes.JsonNode node) {
         var (lbX, lbY) = Lb(node);
         return FormatValidation("validate-landblock", lbX, lbY, _engine.ValidateLandblock(lbX, lbY));
+    }
+
+    private string CmdCompareRenderCorners(System.Text.Json.Nodes.JsonNode node) {
+        var (lbX, lbY) = Lb(node);
+        float tol = node["toleranceMetres"]?.GetValue<float>() ?? 0.05f;
+        bool includeAll = node["includeAll"]?.GetValue<bool>() ?? false;
+        var r = _engine.CompareRenderCorners(lbX, lbY, tol);
+        // Always emit failures; emit all entries only when caller asks
+        // — full corner dumps for an LB with hundreds of buildings
+        // bloat the response.
+        object MapBuilding(WorldBuilder.Shared.Lib.Validation.ValidationEngine.CornerDiffBuilding b) => new {
+            modelId = $"0x{b.ObjectId:X8}",
+            origin = new { x = b.Origin.X, y = b.Origin.Y, z = b.Origin.Z },
+            orientation = new { w = b.Orientation.W, x = b.Orientation.X, y = b.Orientation.Y, z = b.Orientation.Z },
+            yawRadians = b.YawRadians,
+            cornerCount = b.LocalCorners.Length,
+            maxCornerDeltaMetres = b.MaxCornerDeltaMetres,
+            localCorners = b.LocalCorners.Select(c => new[] { c.X, c.Y }).ToArray(),
+            worldCornersFullQuat = b.WorldCornersFullQuat.Select(c => new[] { c.X, c.Y }).ToArray(),
+            worldCornersYawOnly = b.WorldCornersYawOnly.Select(c => new[] { c.X, c.Y }).ToArray(),
+        };
+        return Serialize(new {
+            success = true,
+            command = "compare-render-corners",
+            landblock = $"0x{r.LandblockKey:X4}",
+            toleranceMetres = r.ToleranceMetres,
+            buildingCount = r.BuildingCount,
+            passedCount = r.PassedCount,
+            failedCount = r.FailedCount,
+            isClean = r.FailedCount == 0,
+            failures = r.Failures.Select(MapBuilding).ToArray(),
+            buildings = includeAll ? r.Buildings.Select(MapBuilding).ToArray() : null,
+        });
     }
 
     private string CmdValidateTerrain(System.Text.Json.Nodes.JsonNode node) {

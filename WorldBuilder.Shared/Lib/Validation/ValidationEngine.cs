@@ -347,6 +347,148 @@ public static class ValidationEngine {
     }
 
     // ════════════════════════════════════════════════════════════
+    //  Corner-diff harness — render-correctness check
+    // ════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Per-building entry in a corner-diff report.
+    /// </summary>
+    public record CornerDiffBuilding(
+        uint ObjectId,
+        Vector3 Origin,
+        Quaternion Orientation,
+        float YawRadians,
+        Vector2[] LocalCorners,
+        Vector2[] WorldCornersFullQuat,
+        Vector2[] WorldCornersYawOnly,
+        float MaxCornerDeltaMetres);
+
+    /// <summary>
+    /// Aggregate corner-diff result for one landblock.
+    /// </summary>
+    public record CornerDiffReport(
+        ushort LandblockKey,
+        float ToleranceMetres,
+        int BuildingCount,
+        int PassedCount,
+        int FailedCount,
+        IReadOnlyList<CornerDiffBuilding> Buildings,
+        IReadOnlyList<CornerDiffBuilding> Failures);
+
+    /// <summary>
+    /// Computes per-building footprint corners in world space using two
+    /// rotation paths and reports their disagreement, so a renderer that
+    /// only consumes yaw (e.g. holtburger-web's top-down sprite stack)
+    /// can be regression-tested against the validator's full-quaternion
+    /// math.
+    ///
+    /// Path A: <c>Vector3.Transform(corner, orientation)</c> — full
+    /// quaternion rotation, equivalent to <c>RenderPreviewRenderer</c>'s
+    /// per-vertex transform in <c>ObjectSpriteGenerator</c>.
+    ///
+    /// Path B: extract yaw via the same <c>atan2(2(qw*qz + qx*qy),
+    /// 1 - 2(qy² + qz²))</c> formula <c>holtburger-web/src/lib.rs::frame_to_placement</c>
+    /// uses, then rotate the corner around +Z by that single angle.
+    ///
+    /// For placements whose orientation is pure-yaw (the AC-typical
+    /// case — buildings sit upright on the ground plane), the two
+    /// paths agree to floating-point precision. Buildings with a
+    /// non-trivial pitch/roll component diverge, and the renderer's
+    /// yaw-only assumption is unsafe — the harness flags those LBs
+    /// for inspection before they ship through emit-dynamic-site.
+    /// </summary>
+    public static CornerDiffReport CompareRenderCorners(
+        LandblockDocument lbDoc,
+        ushort lbKey,
+        Func<uint, OntologyEntry?>? ontologyLookup = null,
+        float toleranceMetres = 0.05f) {
+
+        var entries = new List<CornerDiffBuilding>();
+        if (lbDoc == null || ontologyLookup == null) {
+            return new CornerDiffReport(lbKey, toleranceMetres, 0, 0, 0,
+                Array.Empty<CornerDiffBuilding>(), Array.Empty<CornerDiffBuilding>());
+        }
+
+        foreach (var obj in lbDoc.GetStaticObjects()) {
+            var entry = ontologyLookup(obj.Id);
+            if (entry == null) continue;
+            // Skip pure props/scenery — focus on placeable structures
+            // and furniture (the asymmetric class where the renderer's
+            // orientation matters).
+            if (entry.Category != "Structure"
+                && entry.Category != "Furniture") continue;
+
+            // Prefer the per-model footprint ring when the ontology
+            // has one — that's what the validator's flushness check
+            // consumes. Fall back to the model AABB corners if it
+            // doesn't (the ontology cache often has BoundsMin/BoundsMax
+            // but no FootprintCorners until `extract-cell-footprints`
+            // runs); the AABB rectangle still rotates predictably and
+            // catches yaw / quaternion / sign bugs.
+            Vector2[] corners;
+            if (entry.FootprintCorners.Length >= 3) {
+                corners = entry.FootprintCorners;
+            } else if (entry.BoundsMax.X > entry.BoundsMin.X
+                       && entry.BoundsMax.Y > entry.BoundsMin.Y) {
+                corners = new[] {
+                    new Vector2(entry.BoundsMin.X, entry.BoundsMin.Y),
+                    new Vector2(entry.BoundsMax.X, entry.BoundsMin.Y),
+                    new Vector2(entry.BoundsMax.X, entry.BoundsMax.Y),
+                    new Vector2(entry.BoundsMin.X, entry.BoundsMax.Y),
+                };
+            } else {
+                continue;
+            }
+
+            float yaw = QuaternionYaw(obj.Orientation);
+            float cosYaw = MathF.Cos(yaw);
+            float sinYaw = MathF.Sin(yaw);
+            var worldFull = new Vector2[corners.Length];
+            var worldYaw = new Vector2[corners.Length];
+            float maxDelta = 0f;
+
+            for (int i = 0; i < corners.Length; i++) {
+                var localXY = new Vector3(corners[i].X, corners[i].Y, 0f);
+
+                var rotatedFull = Vector3.Transform(localXY, obj.Orientation);
+                worldFull[i] = new Vector2(
+                    obj.Origin.X + rotatedFull.X,
+                    obj.Origin.Y + rotatedFull.Y);
+
+                // Rotation around +Z by yaw: (x', y') = (x cos - y sin, x sin + y cos).
+                float rotYawX = localXY.X * cosYaw - localXY.Y * sinYaw;
+                float rotYawY = localXY.X * sinYaw + localXY.Y * cosYaw;
+                worldYaw[i] = new Vector2(
+                    obj.Origin.X + rotYawX,
+                    obj.Origin.Y + rotYawY);
+
+                float dx = worldFull[i].X - worldYaw[i].X;
+                float dy = worldFull[i].Y - worldYaw[i].Y;
+                float delta = MathF.Sqrt(dx * dx + dy * dy);
+                if (delta > maxDelta) maxDelta = delta;
+            }
+
+            entries.Add(new CornerDiffBuilding(
+                obj.Id, obj.Origin, obj.Orientation, yaw,
+                corners, worldFull, worldYaw, maxDelta));
+        }
+
+        var failures = entries.Where(b => b.MaxCornerDeltaMetres > toleranceMetres).ToList();
+        return new CornerDiffReport(
+            lbKey, toleranceMetres,
+            entries.Count,
+            entries.Count - failures.Count,
+            failures.Count,
+            entries, failures);
+    }
+
+    private static float QuaternionYaw(Quaternion q) {
+        float sinyCosp = 2f * (q.W * q.Z + q.X * q.Y);
+        float cosyCosp = 1f - 2f * (q.Y * q.Y + q.Z * q.Z);
+        return MathF.Atan2(sinyCosp, cosyCosp);
+    }
+
+    // ════════════════════════════════════════════════════════════
     //  Terrain validation
     // ════════════════════════════════════════════════════════════
 
