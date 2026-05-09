@@ -918,6 +918,227 @@ check(
 
 // === end Phase 6 Step C =============================================
 
+// === Phase 6 Step D — active-cell tracking + Z-culling ==============
+//
+// Phase D is the load-bearing phase that makes multi-floor and dungeon
+// traversal work. It adds:
+//
+//   1. `WorldState::current_cell(pos: &WorldPosition) -> CellId` — for
+//      a given pose, which cell is the player IN? Outdoor: derive from
+//      landblock + 8x8 grid. Indoor: 3D AABB containment across cached
+//      EnvCells (cells stack in Z, so a 2D query is insufficient).
+//   2. `WorldState::render_set(current: CellId, depth: u8)
+//      -> HashSet<CellId>` — BFS across `cell_portal_graph` to depth=1
+//      by default. Returns the set of cells whose containers should be
+//      `.visible = true` this frame.
+//   3. JS-side: `window.__currentCellId: u32` and
+//      `window.__renderSet: Set<u32>` (placeholder names) updated each
+//      rAF tick from wasm getters; the rAF tick toggles
+//      `cellContainers.get(cid).visible = renderSet.has(cid)`.
+//   4. Stairs are EnvCell `CellPortal` connections between Z-stacked
+//      cells. Walking up the stairwell crosses a portal => current_cell
+//      shifts => render_set shifts => lower floor falls out, upper
+//      floor pops in. NO special "stairs" code path.
+//
+// What this smoke can validate (without a live ACE round-trip — that
+// belongs to `capture_phase6_step_d_floors.cjs`):
+//   D.1  current_cell(pos) for a synthetic OUTDOOR pose returns the
+//        expected outdoor cell id. Confirms the outdoor 8x8 grid path.
+//   D.2  current_cell(pos) for a synthetic INDOOR pose (inside a
+//        known EnvCell AABB) returns that cell's id. Confirms the
+//        indoor 3D containment path.
+//   D.3  render_set BFS on a synthetic 3-cell graph (A → B → C):
+//        - render_set(A, depth=1) = {A, B}
+//        - render_set(B, depth=1) = {A, B, C}
+//        Asserts the BFS traversal is correct AND seeds the current
+//        cell.
+//   D.4  Stair traversal: synthetic 2-floor cell graph stacked in Z
+//        + a synthetic player walking up; current_cell transitions at
+//        the expected Z threshold. End-to-end on the wasm side, no JS
+//        rAF involvement.
+//
+// All four checks fail cleanly today (the wasm exports they probe
+// don't exist yet); they pass once the implementation agent ships
+// the Phase D export surface. Locked-in contract per
+// docs/phase-6-buildings-and-interiors.md §5 phase D.
+//
+// NOTE: the names below are PLACEHOLDERS. Mirroring the Phase A/B/C
+// convention: snake-case helper names (`holtburg_test_*`) on the Rust
+// side. If the implementation chooses different idioms, update both
+// this block AND `capture_phase6_step_d_floors.cjs`'s window-side
+// probes (which currently look for `window.__currentCellId` /
+// `window.__renderSet` / `window.__sessionHandle.getCurrentCellId` /
+// `window.__sessionHandle.getRenderSet`) in the same commit so the
+// smoke + live tests stay aligned.
+//
+// TODO: confirm with implementation agent the error-code conventions
+// for the synthetic test helpers. Mirroring Phase B's contract:
+//   0  = test passed
+//   >0 = test ran but a specific assertion failed (impl agent picks
+//        the meaning of each non-zero code, documents in the wasm
+//        export's doc comment).
+// (Symbol-missing is reported via `typeof === "function"` BEFORE the
+// call, so a non-zero return strictly means "ran and failed".)
+
+// (D.1) current_cell for an outdoor pose. The helper synthesizes a
+// player position in a known outdoor cell (e.g. the centre of the
+// Holtburg landblock 0xA9B4 outdoor 8x8 grid cell (3,4)), feeds it
+// through the indoor/outdoor router, and asserts the returned cell
+// id matches the expected value. Returns 0 on pass, non-zero on
+// failure. The expected outdoor cell id is encoded as a constant
+// inside the helper; the impl agent is free to pick any deterministic
+// outdoor cell so long as it's documented in the wasm export's doc
+// comment.
+let phase6DCurrentCellOutdoorOk = false;
+let phase6DCurrentCellOutdoorDetail =
+    "phase D not yet shipped — expected wasm.holtburg_test_current_cell_outdoor() "
+    + "(placeholder name) returning 0 if current_cell(synthetic outdoor pose) "
+    + "matches the expected outdoor cell id, non-zero error code otherwise. "
+    + "Sibling to Phase B's holtburg_test_collision_clamp_axis_aligned shape.";
+try {
+    if (typeof wasm.holtburg_test_current_cell_outdoor === "function") {
+        const code = wasm.holtburg_test_current_cell_outdoor();
+        phase6DCurrentCellOutdoorOk = code === 0;
+        phase6DCurrentCellOutdoorDetail =
+            `holtburg_test_current_cell_outdoor()=${code} `
+            + `(0 = outdoor lookup matched expected; non-zero = error code, `
+            + `see wasm export doc)`;
+    }
+} catch (e) {
+    phase6DCurrentCellOutdoorDetail =
+        `holtburg_test_current_cell_outdoor threw: ${e?.message ?? e}`;
+}
+check(
+    "phase6.D.current_cell_for_outdoor_position",
+    phase6DCurrentCellOutdoorOk,
+    phase6DCurrentCellOutdoorDetail
+);
+
+// (D.2) current_cell for an indoor pose. The helper synthesizes a
+// player position INSIDE a known EnvCell's AABB (likely a unit-cube
+// EnvCell at a known cell_origin, similar to Phase C's
+// `holtburg_envcell_count` fixture but with non-trivial AABB
+// extents). Asserts current_cell returns that cell's id. Returns 0
+// on pass, non-zero on failure.
+//
+// Indoor lookup is fundamentally different from outdoor: outdoor is
+// O(1) grid index, indoor is O(N) AABB containment over cached
+// EnvCells in the current landblock (cells stack in Z, so a 2D grid
+// query won't pick the right floor — this is the load-bearing
+// distinction Phase D adds).
+let phase6DCurrentCellIndoorOk = false;
+let phase6DCurrentCellIndoorDetail =
+    "phase D not yet shipped — expected wasm.holtburg_test_current_cell_indoor() "
+    + "(placeholder name) returning 0 if current_cell(synthetic indoor pose "
+    + "inside a known EnvCell AABB) matches the cell's id, non-zero error code "
+    + "otherwise. The helper must also assert that a pose OUTSIDE the AABB "
+    + "does NOT return the cell's id — to catch the false-positive case where "
+    + "the indoor lookup returns the first cell in the bucket regardless of pose.";
+try {
+    if (typeof wasm.holtburg_test_current_cell_indoor === "function") {
+        const code = wasm.holtburg_test_current_cell_indoor();
+        phase6DCurrentCellIndoorOk = code === 0;
+        phase6DCurrentCellIndoorDetail =
+            `holtburg_test_current_cell_indoor()=${code} `
+            + `(0 = indoor AABB containment matched; non-zero = error code, `
+            + `see wasm export doc)`;
+    }
+} catch (e) {
+    phase6DCurrentCellIndoorDetail =
+        `holtburg_test_current_cell_indoor threw: ${e?.message ?? e}`;
+}
+check(
+    "phase6.D.current_cell_for_indoor_position",
+    phase6DCurrentCellIndoorOk,
+    phase6DCurrentCellIndoorDetail
+);
+
+// (D.3) render_set BFS on a synthetic 3-cell graph (A → B → C). The
+// helper builds a synthetic `cell_portal_graph` with three nodes
+// connected in a chain (A's only neighbour is B; B's neighbours are
+// A and C; C's only neighbour is B), and asserts:
+//   - render_set(A, depth=1) = {A, B}    — current cell + 1 hop
+//   - render_set(B, depth=1) = {A, B, C} — current cell + both hops
+//   - render_set(C, depth=1) = {B, C}    — current cell + 1 hop
+//
+// Returns 0 on pass, non-zero error code (helper picks codes per
+// which sub-assertion failed) otherwise.
+//
+// The 3-cell chain is the simplest non-trivial graph that distinguishes
+// "BFS depth 1 vs depth 0" (a 2-cell pair would only test seeding) AND
+// "BFS includes self vs excludes self" (depth=1 from B must include B).
+let phase6DRenderSetOk = false;
+let phase6DRenderSetDetail =
+    "phase D not yet shipped — expected wasm.holtburg_test_render_set_three_cell_graph() "
+    + "(placeholder name) returning 0 if render_set BFS on a synthetic "
+    + "A → B → C graph produces {A,B} from A, {A,B,C} from B, {B,C} from C "
+    + "at depth=1, non-zero error code otherwise.";
+try {
+    if (typeof wasm.holtburg_test_render_set_three_cell_graph === "function") {
+        const code = wasm.holtburg_test_render_set_three_cell_graph();
+        phase6DRenderSetOk = code === 0;
+        phase6DRenderSetDetail =
+            `holtburg_test_render_set_three_cell_graph()=${code} `
+            + `(0 = BFS depth=1 on chain matches expected; non-zero = error code, `
+            + `see wasm export doc)`;
+    }
+} catch (e) {
+    phase6DRenderSetDetail =
+        `holtburg_test_render_set_three_cell_graph threw: ${e?.message ?? e}`;
+}
+check(
+    "phase6.D.render_set_bfs_depth_1",
+    phase6DRenderSetOk,
+    phase6DRenderSetDetail
+);
+
+// (D.4) Stair traversal: synthetic 2-floor cell graph stacked in Z +
+// a synthetic player walking up; current_cell transitions at the
+// expected Z threshold. The helper:
+//   1. Builds two EnvCells stacked in Z (lower at z=0..3, upper at
+//      z=3..6) connected by a single CellPortal.
+//   2. Synthesizes player poses at z = 1.0 (lower), 2.5 (still lower),
+//      3.5 (upper), 5.0 (upper) — same x/y, walking straight up.
+//   3. Asserts current_cell returns lower-cell-id at z<3 and
+//      upper-cell-id at z≥3.
+//   4. Asserts that crossing the threshold updates the render set
+//      to drop the lower cell and add the upper cell (combined
+//      Phase D contract — current_cell change implies render_set
+//      change).
+//
+// Returns 0 on pass, non-zero error code otherwise. This is the
+// closest the smoke can get to the live capture's full contract
+// without driving a real ACE; the live capture exercises the same
+// transition end-to-end through ACE's authoritative physics.
+let phase6DStairTraversalOk = false;
+let phase6DStairTraversalDetail =
+    "phase D not yet shipped — expected wasm.holtburg_test_stair_traversal() "
+    + "(placeholder name) returning 0 if current_cell transitions at the "
+    + "expected Z threshold across a synthetic 2-floor graph and the render "
+    + "set tracks the transition, non-zero error code otherwise. This is the "
+    + "wasm-side mirror of capture_phase6_step_d_floors.cjs's live walk-up-"
+    + "stairs assertion.";
+try {
+    if (typeof wasm.holtburg_test_stair_traversal === "function") {
+        const code = wasm.holtburg_test_stair_traversal();
+        phase6DStairTraversalOk = code === 0;
+        phase6DStairTraversalDetail =
+            `holtburg_test_stair_traversal()=${code} `
+            + `(0 = current_cell + render_set both transition at the Z threshold; `
+            + `non-zero = error code, see wasm export doc)`;
+    }
+} catch (e) {
+    phase6DStairTraversalDetail =
+        `holtburg_test_stair_traversal threw: ${e?.message ?? e}`;
+}
+check(
+    "phase6.D.stair_traversal_changes_current_cell",
+    phase6DStairTraversalOk,
+    phase6DStairTraversalDetail
+);
+
+// === end Phase 6 Step D =============================================
+
 
 (async () => {
     // Phase 5.0b — pre-bake a manifest+shards+boot tree from the

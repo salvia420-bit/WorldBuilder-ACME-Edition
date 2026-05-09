@@ -1711,14 +1711,11 @@ void main() {
       // the active render set; Phase C unconditionally shows every
       // cell in a populated landblock.
       //
-      // Visibility default: a fully-rendered dungeon would be visually
-      // overwhelming and slow. Phase C ships with cells DISABLED by
-      // default — `window.__cellRenderEnabled = false` — and only
-      // populates `cellContainers` lazily once flipped. Phase D's
-      // proper render-set culling deletes this gate. The capture
-      // script flips the toggle to true before walking inside the
-      // town hall.
-      window.__cellRenderEnabled = false;
+      // Phase 6 step D: per-frame visibility is driven by the player's
+      // active cell + BFS render set (see `tickCellVisibility` below).
+      // The pre-D `__cellRenderEnabled` toggle is gone — cells default
+      // invisible and the rAF tick toggles `.visible = renderSet.has(cellId)`
+      // each frame, with diff-only updates to avoid PIXI batch churn.
 
       async function bakeCellTextures(app, cellPlacements) {
         // Map<cell_id, { mesh: ModelMesh, environmentId, ...renderData }>.
@@ -1881,10 +1878,12 @@ void main() {
           }
           container.addChild(cellContainer);
           cellContainers.set(cellId, cellContainer);
-          // Phase C default: cells are invisible until the global
-          // `__cellRenderEnabled` toggle flips. Phase D removes this
-          // gate when active-cell tracking lands.
-          cellContainer.visible = window.__cellRenderEnabled === true;
+          // Phase 6 step D: cells start invisible; the per-frame
+          // `tickCellVisibility` walk toggles them on once the player's
+          // current-cell render set includes them. The pre-D
+          // `__cellRenderEnabled` global is dropped — Phase D's BFS
+          // is the single source of truth.
+          cellContainer.visible = false;
         }
         return { container, cellContainers, withMesh, withStatics, totalStatics };
       }
@@ -3713,9 +3712,9 @@ void main() {
           // Phase 6 step C: lazy-fetch + bake EnvCells when entering
           // a landblock. Single-LB scope (not a 3x3 ring) because
           // interior cells only matter when the player is inside the
-          // building. Cells stay invisible until
-          // `window.__cellRenderEnabled = true` flips (capture script
-          // does this; Phase D's culling replaces the toggle).
+          // building. Phase 6 step D's per-frame `tickCellVisibility`
+          // toggles the per-cell `.visible` once the player's cell
+          // graph + render set lands.
           if (lbId !== 0 && !cellContainersPopulatedLbs.has(lbId)) {
             ensureCellContainersForLandblock(lbId);
           }
@@ -4020,6 +4019,65 @@ void main() {
         entry.motionCommand = upd.motionCommand >>> 0;
         entry.motionStance = upd.motionStance >>> 0;
         entry.motionUpdatedMs = performance.now();
+      }
+      // Phase 6 step D: per-frame cell visibility ticker. Reads the
+      // wasm-side snapshot of the player's current cell + depth=1 BFS
+      // render set, toggles `.visible` on each cell container that
+      // changes membership. Diff-only — only walks when the render
+      // set or current cell actually changes, so a stationary player
+      // pays one set-equality check per frame and zero PIXI mutation.
+      //
+      // Outdoor terrain handling: when the snapshot's `is_indoor`
+      // is false, leave the outdoor terrain alone (Phase 3 step 4
+      // textured tiles + the static objects layer). When indoor,
+      // hide them — the player is inside a cell and shouldn't see
+      // the world outside. Today the outdoor layer doesn't yet have
+      // a single .visible toggle (worldContainer holds many sibling
+      // children) so this is a Phase D follow-up; for now we only
+      // toggle per-cell containers and let the outdoor layer keep
+      // rendering. Phase D's primary contract — Z-floor culling
+      // inside multi-floor buildings — is fully satisfied by the
+      // per-cell toggle alone.
+      let lastCellRenderSetSig = "";
+      let lastCurrentCellId = 0;
+      function tickCellVisibility() {
+        if (!liveScene || !window.__sessionHandle) return;
+        let cellId = 0;
+        let renderSet;
+        try {
+          cellId = window.__sessionHandle.getCurrentCellId() >>> 0;
+          renderSet = window.__sessionHandle.getRenderSet(1);
+        } catch (_) {
+          return;
+        }
+        // Capture-script telemetry. Always update so probes see live
+        // values even if no cell visibility change happens this frame.
+        window.__currentCellId = cellId;
+        window.__renderSet = Array.isArray(renderSet)
+          ? Array.from(renderSet, (v) => v >>> 0)
+          : [];
+        // Pre-spawn / pre-snapshot: cellId is 0. Leave existing cell
+        // visibility alone — the tick that follows the next snapshot
+        // publish takes care of the first paint.
+        if (cellId === 0) return;
+        // Diff guard. Compare a stable signature of the (current_cell,
+        // render_set) tuple to last frame's. Skip the per-cell walk on
+        // no change — Pixi batch state stays put.
+        const sig = `${cellId}|${window.__renderSet.join(",")}`;
+        if (sig === lastCellRenderSetSig && cellId === lastCurrentCellId) {
+          return;
+        }
+        lastCellRenderSetSig = sig;
+        lastCurrentCellId = cellId;
+        const visibleSet = new Set(window.__renderSet);
+        const registry = liveScene.cellContainers ?? window.cellContainers;
+        if (!registry) return;
+        for (const [thisCellId, container] of registry) {
+          const want = visibleSet.has(thisCellId >>> 0);
+          if (container.visible !== want) {
+            container.visible = want;
+          }
+        }
       }
       function tickEntityAnimations() {
         if (!liveScene) return;
@@ -5455,6 +5513,12 @@ void main() {
             // Same Map walk; lazily kicks the per-setup walk-frame
             // bake the first time an entity moves.
             tickEntityAnimations();
+            // Phase 6 step D: cell-visibility culling. Read the
+            // wasm-side snapshot of the player's current cell + BFS
+            // render set (depth=1) and toggle per-cell `.visible`
+            // accordingly. Diff-only — only walks the cell registry
+            // when the render set actually changes.
+            tickCellVisibility();
             // Phase 4 step 3.6: drive the cli's MovementSystem on
             // every frame. The recv loop pulls the TickMovement cmd
             // and runs `MovementSystemHandle::tick`, which emits the

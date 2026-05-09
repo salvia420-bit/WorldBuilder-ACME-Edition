@@ -907,3 +907,214 @@ mod collision {
         );
     }
 }
+
+mod cell_graph {
+    use super::*;
+    use holtburger_common::Aabb;
+
+    #[test]
+    fn current_cell_outdoor_uses_8x8_grid() {
+        // Phase 6 step D: outdoor cell containment falls out of the
+        // 8x8 grid math `WorldPosition::derived_outdoor_cell_id`
+        // already implements; the scene method just OR's the
+        // landblock high word back in. Holtburg landblock 0xA9B40000
+        // at local (84, 7) with cell length 24 m → cellX = 3, cellY = 0
+        // → low_word = (3*8) + 0 + 1 = 25 = 0x19. Full cell id =
+        // 0xA9B40019.
+        let scene = SpatialScene::new();
+        let pose = WorldPosition {
+            landblock_id: Guid(0xA9B4_0000),
+            coords: Vector3::new(84.0, 7.0, 94.0),
+            rotation: Quaternion::identity(),
+        };
+        assert_eq!(scene.current_cell(&pose), 0xA9B4_0019);
+    }
+
+    #[test]
+    fn current_cell_indoor_uses_aabb_containment() {
+        // Phase 6 step D: indoor cells stack in Z. Two cells with
+        // overlapping XY footprints but different Z ranges — only the
+        // cell whose AABB contains pose.z is returned.
+        let mut scene = SpatialScene::new();
+        // Both cells are in landblock 0x86020000.
+        let cell_lower = 0x8602_0100u32;
+        let cell_upper = 0x8602_0101u32;
+        // Lower floor: Z ∈ [0, 3]. Upper floor: Z ∈ [3, 6].
+        scene.insert_cell_aabb(
+            cell_lower,
+            Aabb::new(
+                Vector3::new(100.0, 100.0, 0.0),
+                Vector3::new(110.0, 110.0, 3.0),
+            ),
+        );
+        scene.insert_cell_aabb(
+            cell_upper,
+            Aabb::new(
+                Vector3::new(100.0, 100.0, 3.0),
+                Vector3::new(110.0, 110.0, 6.0),
+            ),
+        );
+        // Pose at world (105, 105, 1.5) — inside lower floor.
+        // Convert to landblock-local: lb_x_byte = 0x86 = 134, so
+        // landblock origin x = 134*192 = 25728. world_x = 105 implies
+        // local_x = 105 - 25728 = -25623. That's clearly outside the
+        // 0x86 landblock — pick a coord pair where local stays in
+        // [0, 192). lb_y_byte = 0x02 = 2 → origin y = 384.
+        // Want world (x, y) inside [25728, 25920) × [384, 576) and
+        // also inside the AABB at (100, 100, ...).
+        // Cleaner: rebuild the AABB at coords inside this landblock.
+        let mut scene2 = SpatialScene::new();
+        // Landblock 0x86020000 → origin (25728, 384). Pose at local
+        // (50, 50, 1.5) → global (25778, 434, 1.5). AABB lower covers
+        // z ∈ [0, 3], upper covers z ∈ [3, 6], both at xy
+        // [25770, 25790] × [430, 450].
+        let cell_lower2 = 0x8602_0100u32;
+        let cell_upper2 = 0x8602_0101u32;
+        scene2.insert_cell_aabb(
+            cell_lower2,
+            Aabb::new(
+                Vector3::new(25770.0, 430.0, 0.0),
+                Vector3::new(25790.0, 450.0, 3.0),
+            ),
+        );
+        scene2.insert_cell_aabb(
+            cell_upper2,
+            Aabb::new(
+                Vector3::new(25770.0, 430.0, 3.0),
+                Vector3::new(25790.0, 450.0, 6.0),
+            ),
+        );
+        let pose_lower = WorldPosition {
+            landblock_id: Guid(0x8602_0100),
+            coords: Vector3::new(50.0, 50.0, 1.5),
+            rotation: Quaternion::identity(),
+        };
+        assert_eq!(scene2.current_cell(&pose_lower), cell_lower2);
+        let pose_upper = WorldPosition {
+            landblock_id: Guid(0x8602_0101),
+            coords: Vector3::new(50.0, 50.0, 4.5),
+            rotation: Quaternion::identity(),
+        };
+        assert_eq!(scene2.current_cell(&pose_upper), cell_upper2);
+    }
+
+    #[test]
+    fn render_set_bfs_three_cell_chain() {
+        // Phase 6 step D: A → B → C portal chain.
+        // depth=0: {A}. depth=1: {A, B}. depth=2: {A, B, C}.
+        let mut scene = SpatialScene::new();
+        let cell_a = 0xA9B4_0100u32;
+        let cell_b = 0xA9B4_0101u32;
+        let cell_c = 0xA9B4_0102u32;
+        scene.insert_cell_portal(cell_a, cell_b);
+        scene.insert_cell_portal(cell_b, cell_a);
+        scene.insert_cell_portal(cell_b, cell_c);
+        scene.insert_cell_portal(cell_c, cell_b);
+
+        let depth0 = scene.render_set(cell_a, 0);
+        assert_eq!(depth0.len(), 1);
+        assert!(depth0.contains(&cell_a));
+
+        let depth1 = scene.render_set(cell_a, 1);
+        assert_eq!(depth1.len(), 2);
+        assert!(depth1.contains(&cell_a));
+        assert!(depth1.contains(&cell_b));
+        assert!(!depth1.contains(&cell_c));
+
+        let depth2 = scene.render_set(cell_a, 2);
+        assert_eq!(depth2.len(), 3);
+        assert!(depth2.contains(&cell_c));
+
+        // From the middle: depth=1 sees {A, B, C} since both ends
+        // are direct neighbours.
+        let from_b_depth1 = scene.render_set(cell_b, 1);
+        assert_eq!(from_b_depth1.len(), 3);
+        assert!(from_b_depth1.contains(&cell_a));
+        assert!(from_b_depth1.contains(&cell_b));
+        assert!(from_b_depth1.contains(&cell_c));
+    }
+
+    #[test]
+    fn stair_z_threshold_transitions_cell() {
+        // Phase 6 step D: walking up stairs is just `current_cell`
+        // changing as Z crosses the boundary between two Z-stacked
+        // cell AABBs. No special "stair" code — the cell graph + the
+        // AABB containment test are the abstraction.
+        let mut scene = SpatialScene::new();
+        let cell_floor1 = 0x8602_0100u32;
+        let cell_floor2 = 0x8602_0101u32;
+        // Same XY footprint, stacked Z ranges. Floor 1: 0..3. Floor 2: 3..6.
+        scene.insert_cell_aabb(
+            cell_floor1,
+            Aabb::new(
+                Vector3::new(25770.0, 430.0, 0.0),
+                Vector3::new(25790.0, 450.0, 3.0),
+            ),
+        );
+        scene.insert_cell_aabb(
+            cell_floor2,
+            Aabb::new(
+                Vector3::new(25770.0, 430.0, 3.0),
+                Vector3::new(25790.0, 450.0, 6.0),
+            ),
+        );
+        // Walk Z from 0.5 to 5.5 in 0.5 m steps — assert the
+        // transition occurs at z >= 3.0 (the top of floor 1 / bottom
+        // of floor 2; AABB containment is inclusive on min, so floor
+        // 2 wins on the boundary, but iteration order over the
+        // HashMap means we accept whichever cell wins — both are
+        // valid at the exact boundary).
+        let mut last_below: Option<u32> = None;
+        let mut last_above: Option<u32> = None;
+        for step in 0..=10 {
+            let z = 0.5 + step as f32 * 0.5;
+            let pose = WorldPosition {
+                landblock_id: Guid(cell_floor1),
+                coords: Vector3::new(50.0, 50.0, z),
+                rotation: Quaternion::identity(),
+            };
+            let cell = scene.current_cell(&pose);
+            if z < 3.0 {
+                last_below = Some(cell);
+            } else if z > 3.0 {
+                last_above = Some(cell);
+            }
+        }
+        assert_eq!(last_below, Some(cell_floor1));
+        assert_eq!(last_above, Some(cell_floor2));
+    }
+
+    #[test]
+    fn clear_cells_for_landblock_drops_only_matching() {
+        let mut scene = SpatialScene::new();
+        let lb1_high = 0xA9B4_0000u32;
+        let lb2_high = 0x8602_0000u32;
+        scene.insert_cell_portal(lb1_high | 0x0100, lb1_high | 0x0101);
+        scene.insert_cell_portal(lb1_high | 0x0101, lb1_high | 0x0100);
+        scene.insert_cell_portal(lb2_high | 0x0100, lb2_high | 0x0101);
+        scene.insert_cell_aabb(
+            lb1_high | 0x0100,
+            Aabb::new(Vector3::zero(), Vector3::new(1.0, 1.0, 1.0)),
+        );
+        scene.insert_cell_aabb(
+            lb2_high | 0x0100,
+            Aabb::new(Vector3::zero(), Vector3::new(1.0, 1.0, 1.0)),
+        );
+        assert_eq!(scene.cell_portal_graph_len(), 3);
+        assert_eq!(scene.cell_aabb_count(), 2);
+
+        let (edges, aabbs) = scene.clear_cells_for_landblock(lb1_high);
+        assert_eq!(edges, 2);
+        assert_eq!(aabbs, 1);
+        assert_eq!(scene.cell_portal_graph_len(), 1);
+        assert_eq!(scene.cell_aabb_count(), 1);
+    }
+
+    #[test]
+    fn insert_cell_portal_dedups_within_a_cell() {
+        let mut scene = SpatialScene::new();
+        scene.insert_cell_portal(0xA9B4_0100, 0xA9B4_0101);
+        scene.insert_cell_portal(0xA9B4_0100, 0xA9B4_0101);
+        assert_eq!(scene.cell_portal_neighbours(0xA9B4_0100).len(), 1);
+    }
+}

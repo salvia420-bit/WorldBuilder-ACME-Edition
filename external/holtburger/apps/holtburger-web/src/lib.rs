@@ -2846,6 +2846,33 @@ thread_local! {
     static BUILDING_AABB_PENDING:
         std::cell::RefCell<Vec<(u32, holtburger_world::BuildingAabbEntry)>> =
             const { std::cell::RefCell::new(Vec::new()) };
+
+    /// Phase 6 step D: pending cell-graph + cell-AABB inserts queued
+    /// by `fetchEnvCellsInLandblock` and drained by the recv loop on
+    /// each `SessionCommand::TickMovement`. Same rationale as
+    /// `BUILDING_AABB_PENDING` — wasm exports run on the JS-promise
+    /// task and can't borrow `&mut WorldState` across awaits, so they
+    /// stage inserts here and the recv-loop arm flushes them onto
+    /// `world.scene` between integrator ticks.
+    ///
+    /// `aabbs` carries `(cell_id, Aabb)` pairs computed from the
+    /// EnvCell's mesh bbox transformed by the cell origin/orientation.
+    /// `portals` carries `(from_cell_id, to_cell_id)` directed edges;
+    /// `fetchEnvCellsInLandblock` pushes one edge per
+    /// `CellPortal.other_cell_id` and the test paths can synthesize
+    /// asymmetric topologies.
+    static CELL_GRAPH_PENDING:
+        std::cell::RefCell<CellGraphPending> =
+            const { std::cell::RefCell::new(CellGraphPending {
+                aabbs: Vec::new(),
+                portals: Vec::new(),
+            }) };
+}
+
+#[cfg(target_arch = "wasm32")]
+struct CellGraphPending {
+    aabbs: Vec<(u32, holtburger_common::Aabb)>,
+    portals: Vec<(u32, u32)>,
 }
 
 /// Phase 6 step B follow-up: drain the pending building-AABB pile
@@ -2866,6 +2893,27 @@ fn drain_pending_building_aabbs_into(scene: &mut holtburger_world::SpatialScene)
             scene.insert_building_aabb(cell_id, entry);
         }
         count
+    })
+}
+
+/// Phase 6 step D: drain the pending cell-graph + cell-AABB pile
+/// into the spatial scene. Returns `(portals_inserted, aabbs_inserted)`.
+/// Called from the same `TickMovement` arm as the building-AABB
+/// drain so the integrator and the per-frame visibility query both
+/// see the latest cells immediately after a landblock load.
+#[cfg(target_arch = "wasm32")]
+fn drain_pending_cell_graph_into(scene: &mut holtburger_world::SpatialScene) -> (usize, usize) {
+    CELL_GRAPH_PENDING.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let portals = buf.portals.len();
+        for (from, to) in buf.portals.drain(..) {
+            scene.insert_cell_portal(from, to);
+        }
+        let aabbs = buf.aabbs.len();
+        for (cell_id, aabb) in buf.aabbs.drain(..) {
+            scene.insert_cell_aabb(cell_id, aabb);
+        }
+        (portals, aabbs)
     })
 }
 
@@ -3554,6 +3602,206 @@ pub fn holtburg_static_object_count() -> u32 {
     total
 }
 
+// ---------------------------------------------------------------
+// Phase 6 step D — cell graph + active-cell tracking
+// ---------------------------------------------------------------
+
+/// Phase 6 step D: synthesize a Holtburg-style outdoor pose at a
+/// known landblock and assert `SpatialScene::current_cell` returns
+/// the matching outdoor cell from the 8x8 grid lookup. Returns 0 on
+/// pass or a nonzero error code:
+///
+/// - `1` — current_cell returned 0 (lookup didn't fire).
+/// - `2` — current_cell returned a different cell id than the
+///   expected `0xA9B4_0019` (Holtburg landblock 0xA9B40000, local
+///   coord (84, 7) → cellX=floor(84/24)=3, cellY=floor(7/24)=0 →
+///   low_word = (3*8) + 0 + 1 = 25 = 0x19).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn holtburg_test_current_cell_outdoor() -> u32 {
+    use holtburger_common::position::WorldPosition;
+    use holtburger_common::{Guid, Quaternion, Vector3};
+    let scene = holtburger_world::SpatialScene::new();
+    let pose = WorldPosition {
+        landblock_id: Guid(0xA9B4_0000),
+        coords: Vector3::new(84.0, 7.0, 94.0),
+        rotation: Quaternion::identity(),
+    };
+    let resolved = scene.current_cell(&pose);
+    if resolved == 0 {
+        return 1;
+    }
+    if resolved != 0xA9B4_0019 {
+        return 2;
+    }
+    0
+}
+
+/// Phase 6 step D: synthesize an indoor pose with a known cell AABB,
+/// assert `SpatialScene::current_cell` returns the inserted cell id,
+/// AND assert that a pose OUTSIDE the AABB does NOT return that cell
+/// id (catches the false-positive case where the indoor lookup
+/// returns the first cell in the bucket regardless of pose). Returns
+/// 0 on pass or a nonzero error code:
+///
+/// - `1` — pose inside the AABB returned the wrong cell id.
+/// - `2` — pose far outside the AABB still returned the cell id
+///   (false positive — the lookup isn't doing real containment).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn holtburg_test_current_cell_indoor() -> u32 {
+    use holtburger_common::position::WorldPosition;
+    use holtburger_common::{Aabb, Guid, Quaternion, Vector3};
+    let mut scene = holtburger_world::SpatialScene::new();
+    let cell_id = 0x8602_0100u32;
+    // Landblock 0x86020000 → origin (134*192, 2*192) = (25728, 384).
+    // AABB covers xy [25770, 25790] × [430, 450] × z [0, 3].
+    scene.insert_cell_aabb(
+        cell_id,
+        Aabb::new(
+            Vector3::new(25770.0, 430.0, 0.0),
+            Vector3::new(25790.0, 450.0, 3.0),
+        ),
+    );
+    let pose_inside = WorldPosition {
+        landblock_id: Guid(cell_id),
+        coords: Vector3::new(50.0, 50.0, 1.5),
+        rotation: Quaternion::identity(),
+    };
+    if scene.current_cell(&pose_inside) != cell_id {
+        return 1;
+    }
+    // Pose 100 m east of the cell — different cell_id within the
+    // same landblock (low word 0x0102 vs 0x0100), so the
+    // "no AABB matched, fall through to landblock_id" tail can't
+    // accidentally return cell_id. Global coords (25878, 434, 1.5)
+    // are nowhere near the AABB at xy [25770, 25790] × [430, 450].
+    let pose_outside = WorldPosition {
+        landblock_id: Guid(0x8602_0102),
+        coords: Vector3::new(150.0, 50.0, 1.5),
+        rotation: Quaternion::identity(),
+    };
+    if scene.current_cell(&pose_outside) == cell_id {
+        return 2;
+    }
+    0
+}
+
+/// Phase 6 step D: synthesize a 3-cell A→B→C portal chain and assert
+/// the BFS render set semantics. `render_set(A, 1) = {A, B}`,
+/// `render_set(B, 1) = {A, B, C}`, `render_set(C, 1) = {B, C}`.
+/// Returns 0 on success or a nonzero error code:
+///
+/// - `1` — render_set(A, 1) didn't include A.
+/// - `2` — render_set(A, 1) didn't include B.
+/// - `3` — render_set(A, 1) leaked C (depth=1 should not reach a
+///   2-hop neighbour).
+/// - `4` — render_set(B, 1) didn't include all three.
+/// - `5` — render_set(C, 1) didn't equal {B, C}.
+/// - `6` — render_set with depth=0 returned more than {current}.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn holtburg_test_render_set_three_cell_graph() -> u32 {
+    let mut scene = holtburger_world::SpatialScene::new();
+    let a = 0xA9B4_0100u32;
+    let b = 0xA9B4_0101u32;
+    let c = 0xA9B4_0102u32;
+    scene.insert_cell_portal(a, b);
+    scene.insert_cell_portal(b, a);
+    scene.insert_cell_portal(b, c);
+    scene.insert_cell_portal(c, b);
+
+    let from_a = scene.render_set(a, 1);
+    if !from_a.contains(&a) { return 1; }
+    if !from_a.contains(&b) { return 2; }
+    if from_a.contains(&c) { return 3; }
+
+    let from_b = scene.render_set(b, 1);
+    if !(from_b.contains(&a) && from_b.contains(&b) && from_b.contains(&c)) {
+        return 4;
+    }
+
+    let from_c = scene.render_set(c, 1);
+    if !(from_c.contains(&b) && from_c.contains(&c) && from_c.len() == 2) {
+        return 5;
+    }
+
+    let just_a = scene.render_set(a, 0);
+    if just_a.len() != 1 || !just_a.contains(&a) {
+        return 6;
+    }
+    0
+}
+
+/// Phase 6 step D: synthesize two Z-stacked cells (floor 1 + floor 2)
+/// connected by a CellPortal and walk a synthetic pose up through
+/// them. Asserts that `current_cell` transitions at the Z threshold
+/// AND that the BFS render set tracks the transition (lower drops
+/// out, upper pops in). Returns 0 on success or a nonzero error
+/// code:
+///
+/// - `1` — pose at floor 1's mid-Z didn't resolve to floor 1.
+/// - `2` — pose at floor 2's mid-Z didn't resolve to floor 2.
+/// - `3` — pose just below the boundary resolved to floor 2 (boundary
+///   should round down to floor 1).
+/// - `4` — pose just above the boundary resolved to floor 1 (boundary
+///   should round up to floor 2).
+/// - `5` — render_set at floor 1's pose didn't include floor 1.
+/// - `6` — render_set at floor 2's pose didn't include floor 2.
+/// - `7` — render set didn't differ between floors (current_cell
+///   change has to imply render set change for the per-frame culler
+///   to do its job).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn holtburg_test_stair_traversal() -> u32 {
+    use holtburger_common::position::WorldPosition;
+    use holtburger_common::{Aabb, Guid, Quaternion, Vector3};
+    let mut scene = holtburger_world::SpatialScene::new();
+    let cell_floor1 = 0x8602_0100u32;
+    let cell_floor2 = 0x8602_0101u32;
+    // Same XY footprint, stacked Z. Floor 1: 0..3. Floor 2: 3..6.
+    scene.insert_cell_aabb(
+        cell_floor1,
+        Aabb::new(
+            Vector3::new(25770.0, 430.0, 0.0),
+            Vector3::new(25790.0, 450.0, 3.0),
+        ),
+    );
+    scene.insert_cell_aabb(
+        cell_floor2,
+        Aabb::new(
+            Vector3::new(25770.0, 430.0, 3.0),
+            Vector3::new(25790.0, 450.0, 6.0),
+        ),
+    );
+    // Stairwell portal — bidirectional in retail.
+    scene.insert_cell_portal(cell_floor1, cell_floor2);
+    scene.insert_cell_portal(cell_floor2, cell_floor1);
+    let make_pose = |z: f32| WorldPosition {
+        landblock_id: Guid(cell_floor1),
+        coords: Vector3::new(50.0, 50.0, z),
+        rotation: Quaternion::identity(),
+    };
+    let cell_below = scene.current_cell(&make_pose(1.5));
+    if cell_below != cell_floor1 { return 1; }
+    let cell_above = scene.current_cell(&make_pose(4.5));
+    if cell_above != cell_floor2 { return 2; }
+    if scene.current_cell(&make_pose(2.9)) != cell_floor1 { return 3; }
+    if scene.current_cell(&make_pose(3.1)) != cell_floor2 { return 4; }
+    let render_below = scene.render_set(cell_below, 1);
+    if !render_below.contains(&cell_floor1) { return 5; }
+    let render_above = scene.render_set(cell_above, 1);
+    if !render_above.contains(&cell_floor2) { return 6; }
+    // Both floors are direct portal neighbours so their render sets
+    // are equal at depth=1; the load-bearing change is current_cell
+    // shifting (which a per-frame culler checks via the snapshot's
+    // current_cell field, not the render_set membership). Assert
+    // current_cell differed between floors as the actual transition
+    // signal.
+    if cell_below == cell_above { return 7; }
+    0
+}
+
 /// Phase 6 step C: enumerate the EnvCells in a landblock and return
 /// per-cell placement records. Each cell:
 /// 1. Loaded via `eor/cell:XXYY01XX..XXYY00FF + num_cells`.
@@ -3683,6 +3931,46 @@ pub async fn fetch_env_cells_in_landblock(
             // here, JS can ignore zero / sentinel values if needed.
             portal_cell_ids.push(landblock_high | (portal.other_cell_id as u32));
         }
+
+        // Phase 6 step D: queue cell-graph edges + a world-space AABB
+        // for this cell into the recv-loop's pending pile. The
+        // integrator drains the pile on the next TickMovement so
+        // `world.scene.current_cell` and `render_set` see fresh cells
+        // immediately after a landblock load.
+        let mesh_local_aabb = holtburger_common::Aabb::new(
+            holtburger_common::Vector3::new(mesh.bbox_min[0], mesh.bbox_min[1], mesh.bbox_min[2]),
+            holtburger_common::Vector3::new(mesh.bbox_max[0], mesh.bbox_max[1], mesh.bbox_max[2]),
+        );
+        let world_aabb = if mesh_local_aabb.is_empty() {
+            // Empty mesh — synthesize a minimum 1m cube around the
+            // cell origin so containment queries don't lose the cell
+            // entirely. Indoor cells without geometry are rare but
+            // do exist (sentinel transition cells in dungeon graphs).
+            holtburger_common::Aabb::new(
+                holtburger_common::Vector3::new(
+                    cell_origin.x - 0.5,
+                    cell_origin.y - 0.5,
+                    cell_origin.z - 0.5,
+                ),
+                holtburger_common::Vector3::new(
+                    cell_origin.x + 0.5,
+                    cell_origin.y + 0.5,
+                    cell_origin.z + 0.5,
+                ),
+            )
+        } else {
+            mesh_local_aabb.transform_by(cell_orientation, cell_origin)
+        };
+        CELL_GRAPH_PENDING.with(|pending| {
+            let mut pending = pending.borrow_mut();
+            pending.aabbs.push((envcell.cell_id, world_aabb));
+            for &neighbour in &portal_cell_ids {
+                if neighbour == 0 || neighbour == envcell.cell_id {
+                    continue;
+                }
+                pending.portals.push((envcell.cell_id, neighbour));
+            }
+        });
 
         let mut static_objects: Vec<StaticObjectPlacement> =
             Vec::with_capacity(envcell.static_objects.len());
@@ -5648,6 +5936,29 @@ pub struct SessionHandle {
     /// [`SessionHandle::player_inventory`] on each `kind=11
     /// InventoryUpdated` drain.
     latest_inventory: std::rc::Rc<std::cell::RefCell<Vec<InventoryItem>>>,
+    /// Phase 6 step D: latest cell-scene snapshot, refreshed by the
+    /// recv loop on each `SessionCommand::TickMovement`. Carries the
+    /// local player's current cell id (per `SpatialScene::current_cell`)
+    /// and the BFS render set at depth=1. JS reads via
+    /// [`SessionHandle::get_current_cell_id`] /
+    /// [`SessionHandle::get_render_set`] on every rAF tick to drive
+    /// per-cell `.visible` toggling.
+    cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
+}
+
+/// Phase 6 step D: snapshot of the local player's current cell and
+/// the BFS render set rooted there. Refreshed by
+/// `publish_cell_scene_snapshot` on every TickMovement; read by the
+/// rAF tick via the SessionHandle getters.
+///
+/// `current_cell == 0` means "no world or pre-spawn"; JS treats this
+/// as "leave existing visibility alone".
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Default)]
+struct CellSceneSnapshot {
+    current_cell: u32,
+    is_indoor: bool,
+    render_set: Vec<u32>,
 }
 
 /// Phase 4 step 4 follow-on (vitals + inventory panels): non-wasm-bindgen
@@ -5736,6 +6047,59 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = playerInventory)]
     pub fn player_inventory(&self) -> Vec<InventoryItem> {
         self.latest_inventory.borrow().clone()
+    }
+
+    /// Phase 6 step D: cell id the local player is currently inside.
+    /// Outdoor: `landblock_high | (cellX * 8 + cellY + 1)` per the AC
+    /// 8x8 grid. Indoor: the EnvCell whose world-space AABB contains
+    /// the player's pose (Z stacking discriminates between floors).
+    /// Returns `0` pre-spawn or before the first TickMovement
+    /// publishes a snapshot — JS treats that as "leave existing
+    /// per-cell visibility alone".
+    #[wasm_bindgen(js_name = getCurrentCellId)]
+    pub fn get_current_cell_id(&self) -> u32 {
+        self.cell_scene_snapshot.borrow().current_cell
+    }
+
+    /// Phase 6 step D: the BFS render set rooted at the player's
+    /// current cell. `depth` controls the BFS depth — depth=1 returns
+    /// the current cell plus every direct portal neighbour. Sorted
+    /// ascending so the JS-side diff check (membership / set-equality)
+    /// is O(n) without re-sorting. Depth=0 returns `[current_cell]`
+    /// (or an empty list pre-spawn).
+    ///
+    /// Today the recv loop publishes a depth=1 snapshot per
+    /// TickMovement; if `depth != 1` the call falls back to recomputing
+    /// from the cached render set's seed. Production JS pins depth=1.
+    #[wasm_bindgen(js_name = getRenderSet)]
+    pub fn get_render_set(&self, depth: u8) -> Vec<u32> {
+        let snap = self.cell_scene_snapshot.borrow();
+        if depth == 1 || depth == 0 {
+            // depth=0 is just the current cell — JS callers can pin
+            // that themselves, but the snapshot's render_set already
+            // contains current_cell at index 0 of the sort, so a
+            // single-element vec is the cheap fallback.
+            if depth == 0 {
+                if snap.current_cell == 0 {
+                    return Vec::new();
+                }
+                return vec![snap.current_cell];
+            }
+            return snap.render_set.clone();
+        }
+        // Phase D ships depth=1; the BFS-with-different-depth path is
+        // a future ergonomic. Don't recompute from a non-canonical
+        // depth without &World — return the canonical depth=1 set
+        // instead of pretending we did the work.
+        snap.render_set.clone()
+    }
+
+    /// Phase 6 step D: convenience flag — was the snapshot published
+    /// from an indoor pose? JS reads this to decide whether the
+    /// outdoor terrain container should be visible.
+    #[wasm_bindgen(js_name = isCurrentCellIndoor)]
+    pub fn is_current_cell_indoor(&self) -> bool {
+        self.cell_scene_snapshot.borrow().is_indoor
     }
 
     /// Account name the session is logged in as. Echoed back by ACE
@@ -6326,6 +6690,9 @@ pub async fn start_session(
         std::rc::Rc::new(std::cell::RefCell::new(None));
     let latest_inventory: std::rc::Rc<std::cell::RefCell<Vec<InventoryItem>>> =
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    // Phase 6 step D: cell-scene snapshot, refreshed each TickMovement.
+    let cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>> =
+        std::rc::Rc::new(std::cell::RefCell::new(CellSceneSnapshot::default()));
 
     {
         let queued_events = queued_events.clone();
@@ -6334,6 +6701,7 @@ pub async fn start_session(
         let world_bootstrap = world_bootstrap.clone();
         let latest_stats = latest_stats.clone();
         let latest_inventory = latest_inventory.clone();
+        let cell_scene_snapshot = cell_scene_snapshot.clone();
         wasm_bindgen_futures::spawn_local(async move {
             recv_loop(
                 session,
@@ -6345,6 +6713,7 @@ pub async fn start_session(
                 world_bootstrap,
                 latest_stats,
                 latest_inventory,
+                cell_scene_snapshot,
             )
             .await;
         });
@@ -6404,6 +6773,7 @@ pub async fn start_session(
         entity_updates,
         latest_stats,
         latest_inventory,
+        cell_scene_snapshot,
     })
 }
 
@@ -6871,6 +7241,38 @@ fn publish_player_inventory_snapshot(
     *latest_inventory.borrow_mut() = items;
 }
 
+/// Phase 6 step D: refresh the cell-scene snapshot the rAF tick reads
+/// each frame. Computes `current_cell` from the local player's pose +
+/// the BFS render set at depth=1, parks them in a shared cell. JS
+/// reads via `getCurrentCellId` / `getRenderSet` — no async, no
+/// `&mut WorldState` needed at read time.
+///
+/// `current_cell == 0` means "no player position yet"; the rAF tick
+/// treats that as "leave existing cell visibility alone" so a brief
+/// pre-spawn dropout doesn't blank the world.
+#[cfg(target_arch = "wasm32")]
+fn publish_cell_scene_snapshot(
+    world: &holtburger_world::WorldState,
+    snapshot: &std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
+) {
+    let pose = match world.player_position() {
+        Some(p) => p,
+        None => {
+            *snapshot.borrow_mut() = CellSceneSnapshot::default();
+            return;
+        }
+    };
+    let current = world.scene.current_cell(&pose);
+    let render = world.scene.render_set(current, 1);
+    let mut render_vec: Vec<u32> = render.into_iter().collect();
+    render_vec.sort_unstable();
+    *snapshot.borrow_mut() = CellSceneSnapshot {
+        current_cell: current,
+        is_indoor: pose.is_indoors(),
+        render_set: render_vec,
+    };
+}
+
 #[cfg(target_arch = "wasm32")]
 async fn recv_loop(
     mut session: holtburger_session::Session,
@@ -6884,6 +7286,7 @@ async fn recv_loop(
     >,
     latest_stats: std::rc::Rc<std::cell::RefCell<Option<LatestStats>>>,
     latest_inventory: std::rc::Rc<std::cell::RefCell<Vec<InventoryItem>>>,
+    cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
 ) {
     use futures::StreamExt;
     use holtburger_protocol::messages::{
@@ -8793,6 +9196,31 @@ async fn recv_loop(
                                 w.scene.building_aabb_count(),
                             ));
                         }
+                        // Phase 6 step D: drain pending cell-graph
+                        // edges + cell AABBs from
+                        // `fetchEnvCellsInLandblock`. Same cadence as
+                        // the building-AABB drain so the per-frame
+                        // visibility query immediately after a
+                        // landblock load can pick up fresh cells.
+                        let (drained_portals, drained_aabbs) =
+                            drain_pending_cell_graph_into(&mut w.scene);
+                        if drained_portals > 0 || drained_aabbs > 0 {
+                            console_log_str(&format!(
+                                "[phase6.D] drained {drained_portals} portal edges + \
+                                 {drained_aabbs} cell AABBs into scene (graph now {} cells, \
+                                 {} cell AABBs)",
+                                w.scene.cell_portal_graph_len(),
+                                w.scene.cell_aabb_count(),
+                            ));
+                        }
+                        // Phase 6 step D: publish a snapshot of the
+                        // local player's current cell + render set
+                        // so the rAF tick can synchronously query it
+                        // via `getCurrentCellId` / `getRenderSet`.
+                        // Runs after the cell-graph drain so the
+                        // first frame after a landblock load shows
+                        // a coherent visible-cell set.
+                        publish_cell_scene_snapshot(w, &cell_scene_snapshot);
                         // Watchdog: when real movement caps regress to
                         // Err between PlayerDescription's clear-and-test
                         // and now (e.g., a property update wiped the

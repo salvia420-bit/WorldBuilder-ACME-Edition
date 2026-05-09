@@ -5,8 +5,8 @@ use super::{
 };
 use crate::entity::EntityMotionSnapshot;
 use holtburger_common::position::WorldPosition;
-use holtburger_common::{Guid, Vector3};
-use std::collections::{HashMap, HashSet};
+use holtburger_common::{Aabb, Guid, Vector3};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use web_time::Instant;
 
@@ -98,6 +98,22 @@ pub struct SpatialScene {
     /// The integrator's swept-sphere clamp queries this map by the
     /// player's current cell + the cells the swept volume crosses.
     building_aabb_index: HashMap<u32, Vec<BuildingAabbEntry>>,
+    /// Phase 6 step D: portal-driven visibility graph. Keyed by full
+    /// 32-bit cell id; each entry lists every cell reachable through
+    /// a single CellPortal record on the source EnvCell. Populated by
+    /// `fetchEnvCellsInLandblock` (see the wasm bundle's pending pile)
+    /// and consulted per-frame to compute the active render set.
+    /// Stairs are EnvCell-to-EnvCell portal connections — there is no
+    /// special-cased stair logic; walking up shifts `current_cell`,
+    /// which shifts the BFS frontier, which swaps the visible set.
+    cell_portal_graph: HashMap<u32, Vec<u32>>,
+    /// Phase 6 step D: world-space AABB for each cell, keyed by full
+    /// 32-bit cell id. Used by `current_cell` to pick the indoor cell
+    /// containing a position when several Z-stacked cells share the
+    /// same XY footprint. Outdoor cells aren't stored here — their
+    /// containment is computed from the 8x8 grid in O(1) by
+    /// `WorldPosition::derived_outdoor_cell_id`.
+    cell_aabbs: HashMap<u32, Aabb>,
 }
 
 impl Default for SpatialScene {
@@ -118,6 +134,8 @@ impl SpatialScene {
             body_store: BodySamplingStore::default(),
             physics,
             building_aabb_index: HashMap::new(),
+            cell_portal_graph: HashMap::new(),
+            cell_aabbs: HashMap::new(),
         }
     }
 
@@ -204,6 +222,162 @@ impl SpatialScene {
             }
         }
         out
+    }
+
+    /// Phase 6 step D: register a directed portal edge `from → to` in
+    /// the cell graph. EnvCell `CellPortal` records are bidirectional
+    /// in retail (a portal between cell A and cell B has matching
+    /// records on both sides), so the JS-side population path queues
+    /// both directions. The graph itself is directed so test fixtures
+    /// can synthesize asymmetric topologies if needed.
+    pub fn insert_cell_portal(&mut self, from: u32, to: u32) {
+        let entry = self.cell_portal_graph.entry(from).or_default();
+        if !entry.contains(&to) {
+            entry.push(to);
+        }
+    }
+
+    /// Phase 6 step D: register a world-space AABB for an indoor cell.
+    /// JS computes the AABB from the cell's environment-mesh bounding
+    /// box translated by the cell origin (and rotated by the cell
+    /// orientation, then 8-corner-bounded — same `Aabb::transform_by`
+    /// trick Phase B uses for buildings). Outdoor cells are not
+    /// stored here — `current_cell` derives them from the 8x8 grid.
+    pub fn insert_cell_aabb(&mut self, cell_id: u32, aabb: Aabb) {
+        self.cell_aabbs.insert(cell_id, aabb);
+    }
+
+    /// Phase 6 step D: drop every portal edge and AABB whose endpoint
+    /// shares the given landblock high word. Used when a landblock
+    /// unloads — the next entry will repopulate via the lazy
+    /// fetchEnvCellsInLandblock path. Returns `(edges_removed,
+    /// aabbs_removed)` for diagnostic logging. `landblock_id` is
+    /// expected to be the full landblock high word
+    /// (e.g. `0xA9B40000`) — the comparison masks the low 16 bits.
+    pub fn clear_cells_for_landblock(&mut self, landblock_id: u32) -> (usize, usize) {
+        let lb_high = landblock_id & 0xFFFF_0000;
+        let mut edges_removed = 0usize;
+        self.cell_portal_graph.retain(|from, edges| {
+            if (*from & 0xFFFF_0000) == lb_high {
+                edges_removed += edges.len();
+                return false;
+            }
+            let before = edges.len();
+            edges.retain(|to| (*to & 0xFFFF_0000) != lb_high);
+            edges_removed += before - edges.len();
+            !edges.is_empty()
+        });
+        let aabbs_before = self.cell_aabbs.len();
+        self.cell_aabbs
+            .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
+        let aabbs_removed = aabbs_before - self.cell_aabbs.len();
+        (edges_removed, aabbs_removed)
+    }
+
+    /// Phase 6 step D: count cells in the portal graph (any cell with
+    /// at least one outbound edge). Diagnostic only — used by the
+    /// recv-loop drain to log progress.
+    pub fn cell_portal_graph_len(&self) -> usize {
+        self.cell_portal_graph.len()
+    }
+
+    /// Phase 6 step D: count cells with cached world AABBs.
+    /// Diagnostic only.
+    pub fn cell_aabb_count(&self) -> usize {
+        self.cell_aabbs.len()
+    }
+
+    /// Phase 6 step D: portal neighbours of `cell_id`. Empty slice if
+    /// the cell isn't in the graph (no EnvCell loaded yet, or an
+    /// outdoor cell). Phase E may want an iterator; today the slice
+    /// is plenty.
+    pub fn cell_portal_neighbours(&self, cell_id: u32) -> &[u32] {
+        self.cell_portal_graph
+            .get(&cell_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Phase 6 step D: derive the cell id containing `pos`. Outdoor
+    /// poses re-use `WorldPosition::derived_outdoor_cell_id` (which
+    /// already implements the 8x8 grid lookup). Indoor poses scan the
+    /// `cell_aabbs` cache for the first AABB in this landblock that
+    /// contains the global `(x, y, z)` — multiple Z-stacked cells
+    /// share an XY footprint, so the Z component is what discriminates
+    /// floors. Returns `pos.landblock_id` unchanged if no match — the
+    /// per-frame culling layer treats that as "stay on whatever cell
+    /// we last saw" rather than blanking the world.
+    pub fn current_cell(&self, pos: &WorldPosition) -> u32 {
+        if pos.landblock_id == Guid::NULL {
+            return 0;
+        }
+        if !pos.is_indoors() {
+            // Outdoor: derive from the 8x8 grid. `derived_outdoor_cell_id`
+            // returns the low-word index; OR with the landblock high
+            // word to get the full cell id.
+            let lb_high = pos.landblock_id.0 & 0xFFFF_0000;
+            return match pos.derived_outdoor_cell_id() {
+                Some(low) => lb_high | low,
+                None => pos.landblock_id.0,
+            };
+        }
+        // Indoor: scan cached AABBs in this landblock for containment.
+        // EnvCells stack vertically so this is a 3D point-in-AABB test,
+        // not an XY one — the Z component is what disambiguates floors.
+        let global = pos.global_coords();
+        let lb_high = pos.landblock_id.0 & 0xFFFF_0000;
+        for (&cell_id, aabb) in &self.cell_aabbs {
+            if (cell_id & 0xFFFF_0000) != lb_high {
+                continue;
+            }
+            if aabb.is_empty() {
+                continue;
+            }
+            if global.x >= aabb.min.x
+                && global.x <= aabb.max.x
+                && global.y >= aabb.min.y
+                && global.y <= aabb.max.y
+                && global.z >= aabb.min.z
+                && global.z <= aabb.max.z
+            {
+                return cell_id;
+            }
+        }
+        pos.landblock_id.0
+    }
+
+    /// Phase 6 step D: compute the visible cell set rooted at
+    /// `current` via BFS through `cell_portal_graph`. `depth` controls
+    /// the BFS frontier — depth=1 includes the current cell plus
+    /// every direct portal neighbour, depth=2 also their neighbours,
+    /// etc. Depth=0 returns just `{current}`. Always includes
+    /// `current` even if it isn't in the graph (e.g., outdoor cells).
+    pub fn render_set(&self, current: u32, depth: u8) -> HashSet<u32> {
+        let mut visited: HashSet<u32> = HashSet::new();
+        if current == 0 {
+            return visited;
+        }
+        visited.insert(current);
+        if depth == 0 {
+            return visited;
+        }
+        let mut frontier: VecDeque<(u32, u8)> = VecDeque::new();
+        frontier.push_back((current, 0));
+        while let Some((cell_id, hop)) = frontier.pop_front() {
+            if hop >= depth {
+                continue;
+            }
+            let neighbours = match self.cell_portal_graph.get(&cell_id) {
+                Some(n) => n,
+                None => continue,
+            };
+            for &neighbour in neighbours {
+                if visited.insert(neighbour) {
+                    frontier.push_back((neighbour, hop + 1));
+                }
+            }
+        }
+        visited
     }
 
     pub fn sweep_sphere_against_buildings(
