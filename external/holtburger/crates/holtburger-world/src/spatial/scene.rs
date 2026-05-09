@@ -123,6 +123,17 @@ pub struct SpatialScene {
     /// against the building's AABB entries) so subsequent
     /// `set_door_aabb_active` calls only need the door GUID.
     door_part_index: HashMap<u64, (BuildingId, u8)>,
+    /// Phase 6 step E follow-up (2026-05-09): per-placement world-space
+    /// origin (xy only — Z varies along the landblock height field and
+    /// isn't load-bearing for sprite lookup) keyed by `BuildingId`. The
+    /// recv-loop's ObjectCreate door-registration arm uses this to
+    /// project a `(BuildingId, part_index)` match back into the JS-side
+    /// `buildingMap` keying scheme, which encodes
+    /// `${landblockId}_${x.toFixed(2)}_${y.toFixed(2)}_${modelId}`.
+    /// Populated alongside the AABB index by
+    /// `populateBuildingAabbsForLandblock`; cleared per-landblock by
+    /// `clear_building_aabbs_for_landblock`.
+    building_origins: HashMap<BuildingId, (f32, f32)>,
 }
 
 impl Default for SpatialScene {
@@ -146,6 +157,7 @@ impl SpatialScene {
             cell_portal_graph: HashMap::new(),
             cell_aabbs: HashMap::new(),
             door_part_index: HashMap::new(),
+            building_origins: HashMap::new(),
         }
     }
 
@@ -173,6 +185,13 @@ impl SpatialScene {
             removed += before - entries.len();
             !entries.is_empty()
         });
+        // Phase 6 step E follow-up: drop the matching origin entries so
+        // a subsequent re-bake of the same landblock starts from a clean
+        // map. Doors registered from the prior load become orphans (no
+        // origin lookup), which is the right semantics — they would
+        // re-register on the next ObjectCreate.
+        self.building_origins
+            .retain(|building_id, _| building_id.landblock_id != landblock_id);
         removed
     }
 
@@ -262,6 +281,37 @@ impl SpatialScene {
     /// Phase 6 step E: count of registered door GUIDs. Diagnostic only.
     pub fn door_part_index_len(&self) -> usize {
         self.door_part_index.len()
+    }
+
+    /// Phase 6 step E follow-up (2026-05-09): record a building's
+    /// world-space xy origin under its `BuildingId`, so a later
+    /// `(BuildingId, part_index)` match can be projected back into the
+    /// JS-side `buildingMap` keying scheme without a parallel scan. The
+    /// value is the placement frame's origin in *global* world coords
+    /// (already shifted by the landblock origin), not the part's AABB
+    /// centre — that distinction matters because the JS-side
+    /// `buildingKey` encodes the placement origin verbatim from
+    /// `LandblockInfo.buildings[i].frame.origin`. Idempotent: repeated
+    /// calls with the same `BuildingId` overwrite (the underlying
+    /// `BuildInfo` is immutable per landblock load, so the value is
+    /// stable across calls).
+    pub fn register_building_origin(
+        &mut self,
+        building_id: BuildingId,
+        world_x: f32,
+        world_y: f32,
+    ) {
+        self.building_origins
+            .insert(building_id, (world_x, world_y));
+    }
+
+    /// Phase 6 step E follow-up: lookup a building placement's
+    /// world-space xy origin by `BuildingId`. Returns `None` for
+    /// unregistered placements (a door whose ObjectCreate raced
+    /// `populateBuildingAabbsForLandblock`, an admin-spawned dynamic
+    /// dungeon, etc.).
+    pub fn building_origin(&self, building_id: BuildingId) -> Option<(f32, f32)> {
+        self.building_origins.get(&building_id).copied()
     }
 
     /// Phase 6 step E: toggle the `active` flag on every AABB entry

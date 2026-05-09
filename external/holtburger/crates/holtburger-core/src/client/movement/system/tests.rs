@@ -1626,3 +1626,86 @@ async fn stop_without_active_drive_keeps_autonomous_position_heartbeat_armed() {
 
     assert!(movement.next_autonomous_position_heartbeat_at.is_some());
 }
+
+/// 2026-05-09 follow-up: lock in the contract that
+/// `advance_local_pose_for_manual_drive` integrates `velocity * dt`
+/// once per call (no double-application). Defends against a regression
+/// of the type that triggered the integrator-overshoot investigation —
+/// the live observation was effective walk speed ~25 m/s when the
+/// MotionTable said 4.5 m/s. The leading hypothesis (Playwright
+/// headless rAF batching coalescing multiple frames into a single tick
+/// with a 5x-larger dt) is environmental and not reproducible in
+/// native tests; this test covers the orthogonal failure mode where
+/// the integrator itself applies dt twice. Live validation against
+/// real-chrome vs Playwright remains a manual step (PK).
+#[test]
+fn advance_local_pose_for_manual_drive_applies_velocity_times_dt_once() {
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x50000777);
+    world.player.guid = player_guid;
+    let _capabilities =
+        seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+    // Place the player well inside the landblock (192 m per side) so
+    // the integrator's `rebucket_outdoor_landblock` step at the end of
+    // `advance_local_pose_for_manual_drive` doesn't shift coords into a
+    // neighbour LB and skew the displacement accounting. Heading 0 +
+    // run forward = velocity along world -X (per
+    // `planar_velocity_for_heading`: vel.x = -cos(0)*speed = -speed).
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(100.0, 100.0, 1.5),
+        rotation: Quaternion::identity(),
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+
+    let mut movement = MovementSystem::new();
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().forward().build(),
+        None,
+    ));
+
+    // Pick dt = 100ms — large enough that any `velocity * dt`
+    // miscount lands far outside f32 noise.
+    let dt = Duration::from_millis(100);
+    let dt_s = dt.as_secs_f32();
+    let expected_speed = 4.5_f32; // base_run_forward_velocity (run_rate_scalar = 1.0)
+    let expected_delta = expected_speed * dt_s;
+
+    movement.advance_local_pose_for_manual_drive(&mut world, dt);
+
+    let after = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+    let dx = after.coords.x - start_pose.coords.x;
+    let dy = after.coords.y - start_pose.coords.y;
+    let actual_speed_squared = dx * dx + dy * dy;
+    // Accept any horizontal direction (the heading→velocity rotation
+    // is the system's; we just want the magnitude of the lateral
+    // displacement to match).
+    let expected_squared = expected_delta * expected_delta;
+    let tol = 1e-3_f32; // 1 mm tolerance on dt=100ms at 4.5 m/s
+    assert!(
+        (actual_speed_squared - expected_squared).abs() < tol,
+        "single-tick lateral displacement should be |velocity * dt| = {expected_delta:.4} m, \
+         got dx={dx:.4} dy={dy:.4} |delta|^2={actual_speed_squared:.6} expected^2={expected_squared:.6}"
+    );
+
+    // Sanity: a SECOND tick with the same dt should advance by ~the
+    // same amount again — total displacement ≈ 2 * velocity * dt.
+    // Catches a different bug: state accumulation that scales by
+    // tick count instead of dt.
+    movement.advance_local_pose_for_manual_drive(&mut world, dt);
+    let after_two = world
+        .local_player_runtime_pose()
+        .expect("runtime pose still seeded");
+    let total_dx = after_two.coords.x - start_pose.coords.x;
+    let total_dy = after_two.coords.y - start_pose.coords.y;
+    let total_squared = total_dx * total_dx + total_dy * total_dy;
+    let expected_two = (2.0 * expected_delta).powi(2);
+    assert!(
+        (total_squared - expected_two).abs() < tol,
+        "two-tick lateral displacement should be |2 * velocity * dt|^2 = {expected_two:.6}, \
+         got total_dx={total_dx:.4} total_dy={total_dy:.4} |delta|^2={total_squared:.6}"
+    );
+}

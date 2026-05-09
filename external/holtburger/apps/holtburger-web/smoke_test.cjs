@@ -1331,6 +1331,72 @@ check(
     phase6ECloseInsertsAabbDetail
 );
 
+// (E.2.5) Door-part registration via AABB sweep. Mirrors the live-recv-
+// loop logic that binds a door GUID to (BuildingId, part_index) by
+// sweeping the per-cell AABB index for the door's spawn pose and
+// picking the AABB whose XY footprint contains the door point. Replaces
+// the JS-side `findClosestBuildingPart` 5m heuristic with an indexed
+// lookup; the heuristic stays as fallback for races (door spawns before
+// landblock AABBs drain).
+let phase6EDoorPartRegOk = false;
+let phase6EDoorPartRegDetail =
+    "phase E follow-up not yet shipped — expected "
+    + "wasm.holtburg_test_door_part_registration_via_aabb_index() returning 0 "
+    + "if the AABB-sweep correctly identifies the door part within a multi-part "
+    + "building and binds the door GUID via register_door_part. Non-zero codes "
+    + "indicate which step failed (sweep too narrow, XY-containment picked the "
+    + "wrong part, building_origin round-trip broken, or door_part_for_guid "
+    + "lookup missing).";
+try {
+    if (typeof wasm.holtburg_test_door_part_registration_via_aabb_index === "function") {
+        const code = wasm.holtburg_test_door_part_registration_via_aabb_index();
+        phase6EDoorPartRegOk = code === 0;
+        phase6EDoorPartRegDetail =
+            `holtburg_test_door_part_registration_via_aabb_index()=${code} `
+            + `(0 = sweep + bind round-trip works; non-zero = error code, see wasm export doc)`;
+    }
+} catch (e) {
+    phase6EDoorPartRegDetail =
+        `holtburg_test_door_part_registration_via_aabb_index threw: ${e?.message ?? e}`;
+}
+check(
+    "phase6.E.door_part_registration_via_aabb_index",
+    phase6EDoorPartRegOk,
+    phase6EDoorPartRegDetail
+);
+
+// (E.2.6) Skill-update routing contract. Locks in that
+// `should_route_message_to_world` includes PrivateUpdateSkill so a
+// PrivateUpdateSkill for SkillType::Run actually lands in
+// `world.player.skills` (which `resolve_self_movement_capabilities`
+// reads via `player_run_rate`). Defends against future regressions
+// to the routing list that would silently disable the integrator.
+let phase6ESkillRouteOk = false;
+let phase6ESkillRouteDetail =
+    "skill-update routing not yet shipped — expected "
+    + "wasm.holtburg_test_skill_update_routes_to_world() returning 0 if a "
+    + "PrivateUpdateSkill for SkillType::Run flows through "
+    + "WorldState::handle_message into player.skills and emits a "
+    + "WorldEvent::SkillUpdated.";
+try {
+    if (typeof wasm.holtburg_test_skill_update_routes_to_world === "function") {
+        const code = wasm.holtburg_test_skill_update_routes_to_world();
+        phase6ESkillRouteOk = code === 0;
+        phase6ESkillRouteDetail =
+            `holtburg_test_skill_update_routes_to_world()=${code} `
+            + `(0 = Run skill update reached player.skills + emitted SkillUpdated; `
+            + `non-zero = error code, see wasm export doc)`;
+    }
+} catch (e) {
+    phase6ESkillRouteDetail =
+        `holtburg_test_skill_update_routes_to_world threw: ${e?.message ?? e}`;
+}
+check(
+    "phase6.E.skill_update_routes_to_world_player_skills",
+    phase6ESkillRouteOk,
+    phase6ESkillRouteDetail
+);
+
 // (E.3) DoorStateChanged event emission. The helper builds a
 // synthetic WorldState, simulates a `PublicWeenieDesc` packet
 // arriving with a DoorState int property change for a known door

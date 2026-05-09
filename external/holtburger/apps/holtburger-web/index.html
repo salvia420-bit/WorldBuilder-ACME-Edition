@@ -1541,7 +1541,15 @@ void main() {
             continue;
           }
           const meshes = bundle.takePartMeshes();
-          buildingBakes.set(modelId, meshes);
+          // Phase 6 step E follow-up (2026-05-09): pull per-part hinge
+          // frames alongside the meshes so `buildBuildingsContainer` can
+          // wrap each part sprite in a hinge-pivoted Container. Frames
+          // are in model-local coords; identity-frame parts (raw 0x01
+          // GfxObj or Setup with no placement_frames) get (0, 0, 0, q=1)
+          // and rotate around the model origin — harmless for non-door
+          // parts since we never set their rotation.
+          const hingeFrames = bundle.takePartHingeFrames();
+          buildingBakes.set(modelId, { meshes, hingeFrames });
           bundle.free();
           for (const m of meshes) {
             for (const sid of m.surfaces) allSurfaceIds.add(sid);
@@ -1557,7 +1565,8 @@ void main() {
           surfaceTexBySid.set(surfaceList[i], surfacePixelsToTexture(surfacePixels[i]));
         }
 
-        for (const [modelId, meshes] of buildingBakes) {
+        for (const [modelId, bake] of buildingBakes) {
+          const { meshes, hingeFrames } = bake;
           const partEntries = new Array(meshes.length);
           for (let pi = 0; pi < meshes.length; pi += 1) {
             const mesh = meshes[pi];
@@ -1574,6 +1583,19 @@ void main() {
             const renderTex = renderModelTile(app, mesh, texArr);
             const wb = mesh.worldBounds;
             const bbox = mesh.bbox;
+            // Phase 6 step E follow-up (2026-05-09): hinge frame for
+            // this part. `compute_hinge_frames` returns one entry per
+            // part in the same order as `take_part_meshes` (or an
+            // identity (0, 0, 0, q=1) for missing/raw-GfxObj parts).
+            // JS only consumes (x, y) — the rotation axis for top-down
+            // door swing is Z, which corresponds to the entity's
+            // `rotation` property (not the quaternion itself). Snapshot
+            // the (x, y) immediately and free the wasm-bindgen handle
+            // before the per-model loop drops the reference.
+            const hinge = hingeFrames[pi];
+            const hingeOffset = hinge
+              ? [hinge.x, hinge.y]
+              : [0, 0];
             partEntries[pi] = {
               texture: renderTex,
               worldBounds: [wb[0], wb[1]],
@@ -1587,9 +1609,13 @@ void main() {
                 (bbox[0] + bbox[3]) * 0.5,
                 (bbox[1] + bbox[4]) * 0.5,
               ],
+              hingeOffset,
               partIndex: pi,
             };
             mesh.free();
+          }
+          for (const h of hingeFrames) {
+            if (h && typeof h.free === "function") h.free();
           }
           perPart.set(modelId, partEntries);
         }
@@ -1640,7 +1666,22 @@ void main() {
               if (!part) continue;
               const sprite = new PIXI.Sprite(part.texture);
               sprite.anchor.set(0.5, 0.5);
-              sprite.position.set(part.localOffset[0], part.localOffset[1]);
+              // Phase 6 step E follow-up (2026-05-09): wrap each part
+              // in an inner Container pivoted at the part's hinge, so
+              // setting `partWrapper.rotation = θ` rotates the part
+              // around the hinge edge instead of its geometric centre.
+              // The wrapper sits at the hinge in model-local coords;
+              // the inner sprite is offset to (localOffset - hinge) so
+              // it visually lands at `localOffset` when rotation = 0.
+              // Non-door parts have identity hinges (or arbitrary
+              // placement_frames[0] origins) and never rotate, so the
+              // wrapper is a no-op for them.
+              const hox = part.hingeOffset[0];
+              const hoy = part.hingeOffset[1];
+              sprite.position.set(
+                part.localOffset[0] - hox,
+                part.localOffset[1] - hoy,
+              );
               sprite.width = part.worldBounds[0];
               sprite.height = part.worldBounds[1];
               // Mirror compensation: same per-sprite pattern as the
@@ -1648,10 +1689,18 @@ void main() {
               // worldContainer's scale.y=-1 puts model NORTH at screen
               // SOUTH (see the long comment in `buildObjectsContainer`).
               sprite.scale.y = -sprite.scale.y;
-              sprite.__buildingId = obj.modelId;
-              sprite.__partIndex = pi;
-              sprite.__triCount = part.triCount;
-              buildingContainer.addChild(sprite);
+              const partWrapper = new PIXI.Container();
+              partWrapper.position.set(hox, hoy);
+              partWrapper.__buildingId = obj.modelId;
+              partWrapper.__partIndex = pi;
+              partWrapper.__triCount = part.triCount;
+              partWrapper.__hingeOffset = [hox, hoy];
+              partWrapper.__partLocalOffset = [
+                part.localOffset[0],
+                part.localOffset[1],
+              ];
+              partWrapper.addChild(sprite);
+              buildingContainer.addChild(partWrapper);
             }
             container.addChild(buildingContainer);
             buildingMap.set(buildingKey, buildingContainer);
@@ -4058,18 +4107,24 @@ void main() {
       // handler can rotate the building's static door part to
       // match the door entity's swing.
       //
-      // Spatial match instead of setup_id match: the wasm-side
-      // `Scene::register_door_part` infrastructure exists (per the
-      // doc-comment on holtburg_test_door_rotation_keyframe) but
-      // isn't wired to live ObjectCreate events yet. Spatial match
-      // works without that wiring because every Holtburg-style
-      // building has at most one or two doors, and the door
-      // entity's broadcast position lands within ~0.5 m of the
-      // door part's centre. A 5 m threshold safely catches the
-      // intended part while rejecting wall sprites that happen to
-      // be in the same building. Returns `{ container, sprite }`
-      // on a hit (sprite is the per-part PIXI sprite to rotate),
-      // null on no match.
+      // Fallback path: the wasm-side `Scene::register_door_part`
+      // is now wired to live ObjectCreate (recv-loop sweeps the
+      // building AABB index for the door's spawn pose and binds
+      // the GUID), so the kind=15 handler asks
+      // `handle.getBuildingPartForDoor` first and only falls back
+      // to this spatial scan when the indexed lookup misses —
+      // either because ObjectCreate raced
+      // `populateBuildingAabbsForLandblock`, or because the door
+      // is admin-spawned in a dynamic dungeon outside the
+      // LandblockInfo.buildings flow.
+      //
+      // The 5 m threshold safely catches the intended part while
+      // rejecting wall sprites that happen to be in the same
+      // building (Holtburg buildings have at most one or two
+      // doors, and the door entity's broadcast position lands
+      // within ~0.5 m of the door part's centre). Returns
+      // `{ container, sprite }` on a hit (sprite is the per-part
+      // PIXI sprite to rotate), null on no match.
       function findClosestBuildingPart(doorEntry) {
         if (!liveScene || !liveScene.buildingMap) return null;
         if (!doorEntry || !doorEntry.sprite) return null;
@@ -5751,15 +5806,13 @@ void main() {
                 // src/lib.rs). JS-side responsibility: update the
                 // door state map, rotate the door entity's own
                 // sprite, AND rotate the building's static door
-                // part sprite so both swing together (2026-05-09
-                // follow-up — was previously sprite-only, leaving
-                // the building's door part visibly fixed under the
-                // rotated entity sprite). Per-part match is by
-                // spatial proximity via findClosestBuildingPart;
-                // wasm-side `Scene::register_door_part` exists but
-                // isn't wired to live ObjectCreate yet (a future
-                // refactor would replace the spatial heuristic
-                // with the indexed lookup once that wiring lands).
+                // part sprite so both swing together. Per-part
+                // match goes through the wasm-side indexed lookup
+                // (`handle.getBuildingPartForDoor`) populated on
+                // ObjectCreate; spatial proximity via
+                // `findClosestBuildingPart` is the fallback when
+                // the indexed lookup misses (race with AABB drain,
+                // dynamic-dungeon doors).
                 const doorGuid = evt.u32Payload >>> 0;
                 const doorState = (evt.u32Payload2 >>> 0) === 1
                   ? "open"
@@ -5805,7 +5858,53 @@ void main() {
                     // the same sprite even if findClosestBuilding-
                     // Part would now miss because the entity moved).
                     if (doorState === "open") {
-                      matchedPart = findClosestBuildingPart(entry);
+                      // Phase 6 step E follow-up (2026-05-09): try the
+                      // wasm-side indexed lookup first. The recv-loop's
+                      // ObjectCreate arm registers each DOOR-flagged
+                      // entity against its building part's AABB, so
+                      // most doors resolve in O(1) by GUID instead of
+                      // an O(N parts) spatial scan with a 5 m
+                      // proximity threshold. The spatial heuristic
+                      // stays as fallback for the race window between
+                      // door spawn and the landblock's AABB drain
+                      // (and for admin-spawned dynamic dungeons that
+                      // skip the LandblockInfo.buildings flow).
+                      let resolved = null;
+                      if (typeof handle.getBuildingPartForDoor === "function") {
+                        try {
+                          const ref = handle.getBuildingPartForDoor(doorGuid);
+                          if (ref) {
+                            const lbHex = (ref.landblockId >>> 0)
+                              .toString(16).padStart(8, "0");
+                            const modelHex = (ref.modelId >>> 0)
+                              .toString(16).padStart(8, "0");
+                            const buildingKey =
+                              `${lbHex}_`
+                              + `${ref.originX.toFixed(2)}_${ref.originY.toFixed(2)}_`
+                              + `${modelHex}`;
+                            const buildingContainer =
+                              liveScene && liveScene.buildingMap
+                                ? liveScene.buildingMap.get(buildingKey)
+                                : null;
+                            if (buildingContainer) {
+                              const partSprite = buildingContainer.children
+                                .find((c) => c.__partIndex === ref.partIndex);
+                              if (partSprite) {
+                                resolved = { container: buildingContainer, sprite: partSprite };
+                              }
+                            }
+                          }
+                        } catch (err) {
+                          // Indexed lookup is best-effort. Any failure
+                          // falls back to the spatial heuristic below.
+                          // eslint-disable-next-line no-console
+                          console.warn(
+                            `[phase6.E] getBuildingPartForDoor(0x${doorGuid.toString(16)}) failed:`,
+                            err,
+                          );
+                        }
+                      }
+                      matchedPart = resolved || findClosestBuildingPart(entry);
                       if (matchedPart) {
                         window.__doorBuildingParts.set(doorGuid, matchedPart.sprite);
                       }

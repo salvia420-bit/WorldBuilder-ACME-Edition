@@ -2980,6 +2980,19 @@ thread_local! {
                 aabbs: Vec::new(),
                 portals: Vec::new(),
             }) };
+
+    /// Phase 6 step E follow-up (2026-05-09): pending building-origin
+    /// inserts queued by `populateBuildingAabbsForLandblock` and drained
+    /// by the recv loop on each `SessionCommand::TickMovement` (same
+    /// cadence as `BUILDING_AABB_PENDING`). One entry per building
+    /// placement, regardless of how many parts the placement has —
+    /// origins are per-`BuildingId`, parts share the placement frame.
+    /// The recv-loop's ObjectCreate door-registration arm uses this
+    /// to project a `(BuildingId, part_index)` match back into the
+    /// JS-side `buildingMap` key shape.
+    static BUILDING_ORIGIN_PENDING:
+        std::cell::RefCell<Vec<(holtburger_world::BuildingId, f32, f32)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -3004,6 +3017,23 @@ fn drain_pending_building_aabbs_into(scene: &mut holtburger_world::SpatialScene)
         let count = buf.len();
         for (cell_id, entry) in buf.drain(..) {
             scene.insert_building_aabb(cell_id, entry);
+        }
+        count
+    })
+}
+
+/// Phase 6 step E follow-up (2026-05-09): drain the pending building-
+/// origin pile into the live scene. Returns the number of origins
+/// inserted. Called from the same `TickMovement` arm as the AABB drain
+/// so a door-registration arm running on the very next ObjectCreate
+/// already sees the placement origin (no race against AABB population).
+#[cfg(target_arch = "wasm32")]
+fn drain_pending_building_origins_into(scene: &mut holtburger_world::SpatialScene) -> usize {
+    BUILDING_ORIGIN_PENDING.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let count = buf.len();
+        for (building_id, x, y) in buf.drain(..) {
+            scene.register_building_origin(building_id, x, y);
         }
         count
     })
@@ -3190,6 +3220,19 @@ async fn populate_building_aabbs_for_landblock_impl(
         };
         let placement_orientation = build_info.frame.orientation;
         let building_id = BuildingId::new(landblock_high, model_id, sequence as u32);
+
+        // Phase 6 step E follow-up (2026-05-09): record the placement's
+        // world-space origin so the recv-loop ObjectCreate arm can map a
+        // `(BuildingId, part_index)` AABB hit back into the JS-side
+        // `buildingMap` key. One entry per placement (parts share the
+        // frame); drained next tick alongside the AABBs.
+        BUILDING_ORIGIN_PENDING.with(|pile| {
+            pile.borrow_mut().push((
+                building_id,
+                placement_origin.x,
+                placement_origin.y,
+            ));
+        });
 
         // Buildings may be raw GfxObjs (`0x01...`) or SetupModels
         // (`0x02...`); the existing renderer dispatches both via
@@ -4255,6 +4298,107 @@ pub fn holtburg_test_door_open_drops_aabb() -> u32 {
     0
 }
 
+/// Phase 6 step E follow-up (2026-05-09): exercise the AABB-sweep
+/// path the recv-loop ObjectCreate arm uses to bind a door GUID to the
+/// `(BuildingId, part_index)` it sits inside. The synthetic scene
+/// holds two parts of one building (a wall + a door) at distinct AABBs;
+/// the door's spawn point falls inside ONLY the door part's AABB. The
+/// fixture asserts that:
+///   - sweeping AABBs near the door pose returns both candidates;
+///   - XY-containment correctly picks the door part (not the wall);
+///   - `register_building_origin` round-trips through `building_origin`;
+///   - `register_door_part` + `door_part_for_guid` resolve the bound
+///     `(BuildingId, part_index)` after the sweep selects it.
+///
+/// Returns 0 on pass; nonzero error codes:
+/// - `1` — sweep returned fewer than 2 candidates (fixture broken — the
+///   AABBs landed in different cells than the pose's neighbour set).
+/// - `2` — XY-containment failed to identify the door part (picked the
+///   wall, picked nothing, or picked the wrong part_index).
+/// - `3` — `building_origin` returned something other than the
+///   registered `(x, y)`.
+/// - `4` — `door_part_for_guid` lookup did not return the bound
+///   `(BuildingId, part_index)` after registration.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn holtburg_test_door_part_registration_via_aabb_index() -> u32 {
+    use holtburger_common::position::WorldPosition;
+    use holtburger_common::{Aabb, Guid, Quaternion, Vector3};
+    use holtburger_world::{BuildingAabbEntry, BuildingId};
+    let mut scene = holtburger_world::SpatialScene::new();
+    let landblock = 0xA9B4_0000u32;
+    let cell_id = landblock | 0x0019;
+    let building_id = BuildingId::new(landblock, 0x0200_5678, 0);
+    // Wall part: large AABB along one side of the building.
+    let wall_part: u8 = 0;
+    scene.insert_building_aabb(
+        cell_id,
+        BuildingAabbEntry {
+            building_id,
+            part_index: wall_part,
+            aabb: Aabb::new(
+                Vector3::new(25770.0, 425.0, 0.0),
+                Vector3::new(25778.0, 428.0, 4.0),
+            ),
+            active: true,
+        },
+    );
+    // Door part: small AABB the door entity will spawn inside.
+    let door_part: u8 = 3;
+    scene.insert_building_aabb(
+        cell_id,
+        BuildingAabbEntry {
+            building_id,
+            part_index: door_part,
+            aabb: Aabb::new(
+                Vector3::new(25771.0, 430.0, 0.0),
+                Vector3::new(25773.0, 432.0, 4.0),
+            ),
+            active: true,
+        },
+    );
+    // Placement origin: the value the JS-side `buildingMap` keys on.
+    // Picked arbitrary-but-stable so we can assert the round-trip.
+    let origin = (25774.5_f32, 431.0_f32);
+    scene.register_building_origin(building_id, origin.0, origin.1);
+    // Door spawn point: inside the door AABB, NOT inside the wall AABB.
+    let door_pose = WorldPosition {
+        landblock_id: Guid(cell_id),
+        coords: Vector3::new(25772.0, 431.0, 1.5),
+        rotation: Quaternion::identity(),
+    };
+    let candidates = scene.building_aabbs_near_pose(&door_pose);
+    if candidates.len() < 2 {
+        return 1;
+    }
+    let mut hit: Option<(BuildingId, u8)> = None;
+    let px = door_pose.coords.x;
+    let py = door_pose.coords.y;
+    for entry in &candidates {
+        if px >= entry.aabb.min.x
+            && px <= entry.aabb.max.x
+            && py >= entry.aabb.min.y
+            && py <= entry.aabb.max.y
+        {
+            hit = Some((entry.building_id, entry.part_index));
+            break;
+        }
+    }
+    if hit != Some((building_id, door_part)) {
+        return 2;
+    }
+    let recovered_origin = scene.building_origin(building_id);
+    if recovered_origin != Some(origin) {
+        return 3;
+    }
+    let door_guid: u64 = 0xB000_C0FF_EE00u64;
+    scene.register_door_part(door_guid, building_id, door_part);
+    if scene.door_part_for_guid(door_guid) != Some((building_id, door_part)) {
+        return 4;
+    }
+    0
+}
+
 /// Phase 6 step E: same fixture as
 /// `holtburg_test_door_open_drops_aabb` but exercises the symmetric
 /// path: open the door (entry drops), then close it (entry returns).
@@ -4396,6 +4540,78 @@ pub fn holtburg_test_door_state_event_emitted() -> u32 {
     };
     if !matches!(close_state, DoorState::Closed) {
         return 5;
+    }
+    0
+}
+
+/// 2026-05-09 follow-up: assert that a `PrivateUpdateSkill` for
+/// SkillType::Run actually flows through `WorldState::handle_message`
+/// and lands in `state.player.skills`. This is the routing contract
+/// `should_route_message_to_world` (in apps/holtburger-web/src/lib.rs)
+/// must keep intact for the local-pose integrator's
+/// `resolve_self_movement_capabilities` to keep returning Ok.
+///
+/// Background: the watchdog at the recv-loop's TickMovement arm
+/// (lib.rs around the `caps_ok regressed` log line) defends against an
+/// observed regression where PlayerDescription handled real_caps_ok=true
+/// but a later tick read caps_ok=false. The exploration agent's leading
+/// hypothesis (cli messages.rs:488 `PrivateUpdatePropertyInt` no-op)
+/// was a false trail — the cli already routes through
+/// `self.world.handle_message` BEFORE that match arm at messages.rs:137.
+/// Real root cause is still unknown (needs live tracing); this fixture
+/// at least locks in the wasm-side routing contract so any regression
+/// to `should_route_message_to_world` (e.g., dropping
+/// PrivateUpdateSkill from the include list) lights up here instead of
+/// rubberbanding silently in the field.
+///
+/// Returns 0 on pass; nonzero error codes:
+/// - `1` — Run skill is unexpectedly already present at fixture init
+///   (`WorldBootstrap::synthetic`'s WorldState ships with no skills).
+/// - `2` — `state.handle_message(PrivateUpdateSkill)` left
+///   `state.player.skills` without a Run entry.
+/// - `3` — Run skill's `ranks` doesn't match what the message specified.
+/// - `4` — `state.handle_message` did not emit a `WorldEvent::SkillUpdated`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn holtburg_test_skill_update_routes_to_world() -> u32 {
+    use holtburger_common::stats::SkillType;
+    use holtburger_protocol::messages::{
+        GameMessage, player::types::PrivateUpdateSkillData,
+    };
+    use holtburger_world::{WorldBootstrap, WorldEvent, WorldState};
+    use std::sync::Arc;
+
+    let bootstrap = Arc::new(WorldBootstrap::synthetic());
+    let mut state = WorldState::new(bootstrap);
+    if state.player.skills.contains_key(&SkillType::Run) {
+        return 1;
+    }
+    let target_ranks: u32 = 137;
+    let msg = GameMessage::PrivateUpdateSkill(Box::new(PrivateUpdateSkillData {
+        sequence: 0,
+        object_guid: None,
+        skill: SkillType::Run as u32,
+        ranks: target_ranks,
+        adjust_pp: 0,
+        status: 1,
+        xp: 0,
+        init: 100,
+        resistance: 0,
+        last_used: 0.0,
+    }));
+    let events = state.handle_message(&msg);
+    let entry = match state.player.skills.get(&SkillType::Run) {
+        Some(s) => s,
+        None => return 2,
+    };
+    if entry.ranks != target_ranks {
+        return 3;
+    }
+    let saw_skill_event = events
+        .iter()
+        .any(|e| matches!(e, WorldEvent::SkillUpdated(_)));
+    if !saw_skill_event {
+        return 4;
     }
     0
 }
@@ -6636,6 +6852,16 @@ pub struct SessionHandle {
     /// [`SessionHandle::get_render_set`] on every rAF tick to drive
     /// per-cell `.visible` toggling.
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
+    /// Phase 6 step E follow-up (2026-05-09): door GUID → snapshot of
+    /// the building part the door was registered against during its
+    /// ObjectCreate. Populated incrementally by the recv-loop as
+    /// DOOR-flagged entities spawn into landblocks whose AABBs have
+    /// already been drained. Read by JS via `getBuildingPartForDoor`
+    /// on the kind=15 DoorStateChanged path; absent entries fall back
+    /// to the spatial heuristic.
+    door_part_snapshot: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, DoorPartSnapshot>>,
+    >,
 }
 
 /// Phase 6 step D: snapshot of the local player's current cell and
@@ -6651,6 +6877,68 @@ struct CellSceneSnapshot {
     current_cell: u32,
     is_indoor: bool,
     render_set: Vec<u32>,
+}
+
+/// Phase 6 step E follow-up (2026-05-09): JS-facing payload for a door
+/// GUID's `(BuildingId, part_index)` registration. The recv-loop fills
+/// this in the ObjectCreate arm whenever a DOOR-flagged entity spawns
+/// and the swept AABB index returns a hit; the JS-side kind=15 handler
+/// reads it via `getBuildingPartForDoor` to look up the building's
+/// PIXI container by the same `${landblockId}_${x}_${y}_${modelId}`
+/// key shape `buildBuildingsContainer` populates. No registration =
+/// JS falls back to the spatial heuristic in `findClosestBuildingPart`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone, Copy)]
+pub struct DoorPartSnapshot {
+    landblock_id: u32,
+    model_id: u32,
+    /// Placement origin's xy in *global* world coords — same shape
+    /// `buildBuildingsContainer` uses to build the JS-side `buildingKey`
+    /// (which `.toFixed(2)`s the values verbatim).
+    origin_x: f32,
+    origin_y: f32,
+    part_index: u8,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl DoorPartSnapshot {
+    /// `BuildingId.landblock_id` for the building this door is part of —
+    /// the high 16 bits of any cell ID in the landblock, padded to a
+    /// full 32-bit word (`0xA9B4_0000`).
+    #[wasm_bindgen(getter, js_name = landblockId)]
+    pub fn landblock_id(&self) -> u32 {
+        self.landblock_id
+    }
+
+    /// `BuildingId.model_id` — the building's Setup/GfxObj DID.
+    #[wasm_bindgen(getter, js_name = modelId)]
+    pub fn model_id(&self) -> u32 {
+        self.model_id
+    }
+
+    /// Placement origin x in global world coords (matches
+    /// `LandblockInfo.buildings[i].frame.origin.x` shifted by the
+    /// landblock origin). JS uses `.toFixed(2)` on this to rebuild the
+    /// `buildingKey`.
+    #[wasm_bindgen(getter, js_name = originX)]
+    pub fn origin_x(&self) -> f32 {
+        self.origin_x
+    }
+
+    #[wasm_bindgen(getter, js_name = originY)]
+    pub fn origin_y(&self) -> f32 {
+        self.origin_y
+    }
+
+    /// 0-based child index of the door part within the building's PIXI
+    /// container. Matches `BuildingAabbEntry.part_index` and the
+    /// per-part bake order in `bakePerPartBuildingTextures`.
+    #[wasm_bindgen(getter, js_name = partIndex)]
+    pub fn part_index(&self) -> u8 {
+        self.part_index
+    }
 }
 
 /// Phase 4 step 4 follow-on (vitals + inventory panels): non-wasm-bindgen
@@ -6792,6 +7080,33 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = isCurrentCellIndoor)]
     pub fn is_current_cell_indoor(&self) -> bool {
         self.cell_scene_snapshot.borrow().is_indoor
+    }
+
+    /// Phase 6 step E follow-up (2026-05-09): resolve a door GUID to the
+    /// building placement and part index it was registered against. The
+    /// recv-loop populates this on ObjectCreate by sweeping
+    /// `building_aabb_index` for the door's spawn pose; JS calls this on
+    /// kind=15 DoorStateChanged to look up the matching PIXI container
+    /// in `liveScene.buildingMap` by reconstructing the same
+    /// `${landblockId}_${x}_${y}_${modelId}` key shape
+    /// `buildBuildingsContainer` builds.
+    ///
+    /// Returns `null` (JsValue) when:
+    /// - The door spawned before its landblock's AABBs were drained
+    ///   (race — JS falls back to `findClosestBuildingPart`);
+    /// - The door is admin-spawned in a dynamic dungeon with no
+    ///   `LandblockInfo.buildings` entry;
+    /// - `door_guid` doesn't correspond to a registered door (caller
+    ///   bug or pre-spawn lookup).
+    ///
+    /// On hit, returns a [`DoorPartSnapshot`] (a wasm-bindgen struct
+    /// with `landblockId`, `modelId`, `originX`, `originY`, `partIndex`
+    /// getters). JS rebuilds the buildingKey via
+    /// ``` `${landblockId.toString(16).padStart(8, "0")}_${originX.toFixed(2)}_${originY.toFixed(2)}_${modelId.toString(16).padStart(8, "0")}` ```
+    /// and indexes `liveScene.buildingMap.get(key).children[partIndex]`.
+    #[wasm_bindgen(js_name = getBuildingPartForDoor)]
+    pub fn get_building_part_for_door(&self, door_guid: u32) -> Option<DoorPartSnapshot> {
+        self.door_part_snapshot.borrow().get(&door_guid).copied()
     }
 
     /// Account name the session is logged in as. Echoed back by ACE
@@ -7385,6 +7700,12 @@ pub async fn start_session(
     // Phase 6 step D: cell-scene snapshot, refreshed each TickMovement.
     let cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>> =
         std::rc::Rc::new(std::cell::RefCell::new(CellSceneSnapshot::default()));
+    // Phase 6 step E follow-up (2026-05-09): door-part snapshot, mutated
+    // by the recv-loop ObjectCreate arm and read by JS via
+    // `getBuildingPartForDoor`.
+    let door_part_snapshot: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, DoorPartSnapshot>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
 
     {
         let queued_events = queued_events.clone();
@@ -7394,6 +7715,7 @@ pub async fn start_session(
         let latest_stats = latest_stats.clone();
         let latest_inventory = latest_inventory.clone();
         let cell_scene_snapshot = cell_scene_snapshot.clone();
+        let door_part_snapshot = door_part_snapshot.clone();
         wasm_bindgen_futures::spawn_local(async move {
             recv_loop(
                 session,
@@ -7406,6 +7728,7 @@ pub async fn start_session(
                 latest_stats,
                 latest_inventory,
                 cell_scene_snapshot,
+                door_part_snapshot,
             )
             .await;
         });
@@ -7466,6 +7789,7 @@ pub async fn start_session(
         latest_stats,
         latest_inventory,
         cell_scene_snapshot,
+        door_part_snapshot,
     })
 }
 
@@ -7979,6 +8303,9 @@ async fn recv_loop(
     latest_stats: std::rc::Rc<std::cell::RefCell<Option<LatestStats>>>,
     latest_inventory: std::rc::Rc<std::cell::RefCell<Vec<InventoryItem>>>,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
+    door_part_snapshot: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, DoorPartSnapshot>>,
+    >,
 ) {
     use futures::StreamExt;
     use holtburger_protocol::messages::{
@@ -8876,6 +9203,89 @@ async fn recv_loop(
                                 motion_command: 0,
                                 motion_stance: 0,
                             });
+
+                            // Phase 6 step E follow-up (2026-05-09):
+                            // Door registration. The DOOR-flagged entity
+                            // was inserted into `world.entities` by
+                            // `apply_inventory_object_create` above, so
+                            // its `flags` carry the DOOR bit from
+                            // `PublicWeenieDescription::obj_desc_flags`
+                            // and its `position` is the spawn pose. We
+                            // sweep the per-cell building-AABB index for
+                            // the spawn point: the AABB whose XY
+                            // footprint contains the door point is the
+                            // building part the door lives in. Bind
+                            // `door_guid → (BuildingId, part_index)` in
+                            // the scene so subsequent
+                            // `set_door_aabb_active` calls can flip the
+                            // exact entry by GUID, AND publish a
+                            // `DoorPartSnapshot` carrying the placement
+                            // origin so the JS-side kind=15 handler can
+                            // map back to the building's PIXI container
+                            // by `${landblockId}_${x}_${y}_${modelId}`.
+                            //
+                            // Failure modes — all benign, JS keeps a 5m
+                            // `findClosestBuildingPart` fallback:
+                            // - ObjectCreate races
+                            //   `populateBuildingAabbsForLandblock` (no
+                            //   AABBs yet → empty candidate list);
+                            // - placement origin not yet drained from
+                            //   `BUILDING_ORIGIN_PENDING` (we register
+                            //   the door but skip the snapshot push so
+                            //   we don't store a bogus xy);
+                            // - door for an admin-spawned dynamic
+                            //   dungeon (no `LandblockInfo.buildings`
+                            //   entry → no AABB candidates).
+                            if let Some(w) = world.as_mut() {
+                                use holtburger_common::properties::ObjectDescriptionFlag;
+                                let guid = data.public_weenie_desc.guid;
+                                let pose = w
+                                    .entities
+                                    .get(guid)
+                                    .filter(|e| e.flags.contains(ObjectDescriptionFlag::DOOR))
+                                    .map(|e| e.position);
+                                if let Some(pose) = pose {
+                                    let candidates = w.scene.building_aabbs_near_pose(&pose);
+                                    let px = pose.coords.x;
+                                    let py = pose.coords.y;
+                                    let mut hit: Option<(
+                                        holtburger_world::BuildingId,
+                                        u8,
+                                    )> = None;
+                                    for entry in candidates {
+                                        if px >= entry.aabb.min.x
+                                            && px <= entry.aabb.max.x
+                                            && py >= entry.aabb.min.y
+                                            && py <= entry.aabb.max.y
+                                        {
+                                            hit = Some((entry.building_id, entry.part_index));
+                                            break;
+                                        }
+                                    }
+                                    if let Some((building_id, part_index)) = hit {
+                                        let door_guid = u64::from(u32::from(guid));
+                                        w.scene.register_door_part(
+                                            door_guid,
+                                            building_id,
+                                            part_index,
+                                        );
+                                        if let Some((origin_x, origin_y)) =
+                                            w.scene.building_origin(building_id)
+                                        {
+                                            door_part_snapshot.borrow_mut().insert(
+                                                u32::from(guid),
+                                                DoorPartSnapshot {
+                                                    landblock_id: building_id.landblock_id,
+                                                    model_id: building_id.model_id,
+                                                    origin_x,
+                                                    origin_y,
+                                                    part_index,
+                                                },
+                                            );
+                                        }
+                                    }
+                                }
+                            }
                         }
                         GameMessage::ObjectDelete(data) => {
                             entity_updates.borrow_mut().push(EntityUpdate {
@@ -9912,6 +10322,20 @@ async fn recv_loop(
                                 "[phase6.B] drained {drained} pending building AABBs into scene \
                                  (total now {} across all cells)",
                                 w.scene.building_aabb_count(),
+                            ));
+                        }
+                        // Phase 6 step E follow-up (2026-05-09): drain
+                        // any pending building-origin entries queued by
+                        // the same `populateBuildingAabbsForLandblock`
+                        // call. Origins are needed by the ObjectCreate
+                        // door-registration arm to project a
+                        // `(BuildingId, part_index)` hit back into the
+                        // JS-side `buildingMap` key.
+                        let drained_origins =
+                            drain_pending_building_origins_into(&mut w.scene);
+                        if drained_origins > 0 {
+                            console_log_str(&format!(
+                                "[phase6.E] drained {drained_origins} pending building origins"
                             ));
                         }
                         // Phase 6 step D: drain pending cell-graph
