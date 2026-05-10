@@ -10,6 +10,6 @@ pub mod traits;
 
 pub use character::*;
 pub use guid::Guid;
-pub use math::{Aabb, Plane, Quaternion, Sphere, Vector3};
+pub use math::{Aabb, Plane, Quaternion, Sphere, Triangle, Vector3};
 
 pub mod position;

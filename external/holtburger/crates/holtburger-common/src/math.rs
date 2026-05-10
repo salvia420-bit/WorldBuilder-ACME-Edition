@@ -224,6 +224,183 @@ impl Plane {
     pub fn distance_to_point(&self, point: &Vector3) -> f32 {
         self.normal.dot(point) + self.d
     }
+
+    /// Build a plane from three CCW-wound triangle vertices. The
+    /// normal points out of the side where v0 → v1 → v2 traces
+    /// counter-clockwise (right-hand rule on `(v1 - v0) × (v2 - v0)`).
+    /// Returns `None` for degenerate triangles (zero or near-zero
+    /// area), which would otherwise produce a NaN normal.
+    pub fn from_triangle(v0: Vector3, v1: Vector3, v2: Vector3) -> Option<Self> {
+        let edge1 = Vector3::new(v1.x - v0.x, v1.y - v0.y, v1.z - v0.z);
+        let edge2 = Vector3::new(v2.x - v0.x, v2.y - v0.y, v2.z - v0.z);
+        let cross = edge1.cross(&edge2);
+        let length_sq = cross.length_squared();
+        if length_sq < 1e-12 {
+            return None;
+        }
+        let length = length_sq.sqrt();
+        let normal = Vector3::new(cross.x / length, cross.y / length, cross.z / length);
+        let d = -normal.dot(&v0);
+        Some(Self { normal, d })
+    }
+}
+
+/// 2026-05-10 indoor collision (Phase 6 step G follow-on): a
+/// world-space triangle pre-transformed from EnvCell physics_polygons
+/// for swept-capsule and floor-raycast queries. The wasm bundle's
+/// indoor populator builds these by:
+///
+///   1. Reading `physics_polygons` from a parsed `Environment`
+///      (`crates/holtburger-dat/src/file_type/environment.rs`).
+///   2. Looking up each polygon's `vertex_ids` in the cell's
+///      `vertex_array` to recover cell-local positions.
+///   3. Transforming local positions to world coords via the
+///      EnvCell's `position` frame (origin + rotate_vector).
+///   4. Triangulating polygons with `num_pts > 3` as a fan from `v0`.
+///
+/// Storing world coords (not cell-local) trades memory for
+/// per-tick simplicity — the integrator's swept-capsule kernel
+/// can run a closed-form ray-vs-triangle test without re-running
+/// the cell-frame transform every frame. Cells get re-baked when
+/// the landblock unloads (matches the building AABB index's
+/// lifetime semantics).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Triangle {
+    pub v0: Vector3,
+    pub v1: Vector3,
+    pub v2: Vector3,
+}
+
+impl Triangle {
+    pub fn new(v0: Vector3, v1: Vector3, v2: Vector3) -> Self {
+        Self { v0, v1, v2 }
+    }
+
+    /// Plane of the triangle, derived from CCW winding via
+    /// `Plane::from_triangle`. Returns `None` for degenerate
+    /// triangles (collinear or coincident vertices).
+    pub fn plane(&self) -> Option<Plane> {
+        Plane::from_triangle(self.v0, self.v1, self.v2)
+    }
+
+    /// AABB enclosing the three vertices.
+    pub fn aabb(&self) -> Aabb {
+        let mut a = Aabb::empty();
+        a.expand_to_include_point(self.v0);
+        a.expand_to_include_point(self.v1);
+        a.expand_to_include_point(self.v2);
+        a
+    }
+
+    /// 2D-projected (XY-plane) point-in-triangle test using
+    /// barycentric signs. Returns `true` when `(x, y)` lies inside
+    /// the triangle's XY shadow — the floor-raycast helper uses
+    /// this to gate the ray-vs-plane Z lookup against the actual
+    /// triangle footprint, not its infinite plane.
+    pub fn contains_xy(&self, x: f32, y: f32) -> bool {
+        // Edge sign test: for each edge (a → b) compute the
+        // 2D cross of (b - a) × ((x, y) - a). All three signs
+        // must agree (or be zero, which puts the point on an
+        // edge). Tolerance lets points fractionally outside still
+        // count, accommodating shared edges between adjacent
+        // triangles.
+        let tol = 1e-4_f32;
+        let s = |ax: f32, ay: f32, bx: f32, by: f32| -> f32 {
+            (bx - ax) * (y - ay) - (by - ay) * (x - ax)
+        };
+        let d0 = s(self.v0.x, self.v0.y, self.v1.x, self.v1.y);
+        let d1 = s(self.v1.x, self.v1.y, self.v2.x, self.v2.y);
+        let d2 = s(self.v2.x, self.v2.y, self.v0.x, self.v0.y);
+        let has_neg = d0 < -tol || d1 < -tol || d2 < -tol;
+        let has_pos = d0 > tol || d1 > tol || d2 > tol;
+        !(has_neg && has_pos)
+    }
+
+    /// Z height at `(x, y)` interpolated on the triangle's plane.
+    /// Returns `None` if the plane is vertical (normal.z ≈ 0) —
+    /// vertical triangles ARE walls, not floors, and have no
+    /// well-defined "floor height". Caller should filter for
+    /// floor-ish triangles before calling.
+    pub fn z_at_xy(&self, x: f32, y: f32) -> Option<f32> {
+        let plane = self.plane()?;
+        if plane.normal.z.abs() < 1e-4 {
+            return None;
+        }
+        // Plane equation: normal·p + d = 0 → solve for z.
+        Some(-(plane.normal.x * x + plane.normal.y * y + plane.d) / plane.normal.z)
+    }
+
+    /// Closest point on (or inside) the triangle to `p`. Used by
+    /// the swept-capsule kernel to compute the contact-point
+    /// distance: project `p` onto the triangle plane, then clamp
+    /// to the triangle interior via barycentric. This is Real-Time
+    /// Collision Detection §5.1.5 (Christer Ericson) verbatim —
+    /// straightforward but easy to get wrong, hence verbatim.
+    pub fn closest_point(&self, p: Vector3) -> Vector3 {
+        let ab = Vector3::new(
+            self.v1.x - self.v0.x,
+            self.v1.y - self.v0.y,
+            self.v1.z - self.v0.z,
+        );
+        let ac = Vector3::new(
+            self.v2.x - self.v0.x,
+            self.v2.y - self.v0.y,
+            self.v2.z - self.v0.z,
+        );
+        let ap = Vector3::new(p.x - self.v0.x, p.y - self.v0.y, p.z - self.v0.z);
+        let d1 = ab.dot(&ap);
+        let d2 = ac.dot(&ap);
+        if d1 <= 0.0 && d2 <= 0.0 {
+            return self.v0;
+        }
+        let bp = Vector3::new(p.x - self.v1.x, p.y - self.v1.y, p.z - self.v1.z);
+        let d3 = ab.dot(&bp);
+        let d4 = ac.dot(&bp);
+        if d3 >= 0.0 && d4 <= d3 {
+            return self.v1;
+        }
+        let vc = d1 * d4 - d3 * d2;
+        if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+            let v = d1 / (d1 - d3);
+            return Vector3::new(
+                self.v0.x + ab.x * v,
+                self.v0.y + ab.y * v,
+                self.v0.z + ab.z * v,
+            );
+        }
+        let cp = Vector3::new(p.x - self.v2.x, p.y - self.v2.y, p.z - self.v2.z);
+        let d5 = ab.dot(&cp);
+        let d6 = ac.dot(&cp);
+        if d6 >= 0.0 && d5 <= d6 {
+            return self.v2;
+        }
+        let vb = d5 * d2 - d1 * d6;
+        if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+            let w = d2 / (d2 - d6);
+            return Vector3::new(
+                self.v0.x + ac.x * w,
+                self.v0.y + ac.y * w,
+                self.v0.z + ac.z * w,
+            );
+        }
+        let va = d3 * d6 - d5 * d4;
+        if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+            let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+            return Vector3::new(
+                self.v1.x + (self.v2.x - self.v1.x) * w,
+                self.v1.y + (self.v2.y - self.v1.y) * w,
+                self.v1.z + (self.v2.z - self.v1.z) * w,
+            );
+        }
+        let denom = 1.0 / (va + vb + vc);
+        let v = vb * denom;
+        let w = vc * denom;
+        Vector3::new(
+            self.v0.x + ab.x * v + ac.x * w,
+            self.v0.y + ab.y * v + ac.y * w,
+            self.v0.z + ab.z * v + ac.z * w,
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, BinRead, BinWrite)]
@@ -438,5 +615,135 @@ mod tests {
         };
         let h = q.to_heading();
         assert!(h.is_nan());
+    }
+
+    // 2026-05-10 Triangle / Plane primitives for indoor collision.
+
+    #[test]
+    fn plane_from_triangle_ccw_normal_points_up_for_floor() {
+        // CCW (right-hand rule) winding on a flat z=2 floor →
+        // normal points +Z.
+        let plane = Plane::from_triangle(
+            Vector3::new(0.0, 0.0, 2.0),
+            Vector3::new(1.0, 0.0, 2.0),
+            Vector3::new(0.0, 1.0, 2.0),
+        )
+        .expect("non-degenerate triangle");
+        assert!(
+            (plane.normal.z - 1.0).abs() < 1e-4,
+            "floor normal.z should be +1, got {:.4}",
+            plane.normal.z
+        );
+        assert!(
+            plane.normal.x.abs() < 1e-4 && plane.normal.y.abs() < 1e-4,
+            "floor normal lateral should be 0; got ({:.4}, {:.4})",
+            plane.normal.x,
+            plane.normal.y
+        );
+        assert!(
+            (plane.distance_to_point(&Vector3::new(0.5, 0.5, 2.0))).abs() < 1e-4,
+            "point on the plane should have distance 0"
+        );
+        assert!(
+            (plane.distance_to_point(&Vector3::new(0.5, 0.5, 5.0)) - 3.0).abs() < 1e-4,
+            "point 3 m above should have distance +3"
+        );
+    }
+
+    #[test]
+    fn plane_from_triangle_degenerate_returns_none() {
+        // Collinear vertices (zero area) — no well-defined normal.
+        let plane = Plane::from_triangle(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(2.0, 0.0, 0.0),
+        );
+        assert!(plane.is_none());
+    }
+
+    #[test]
+    fn triangle_contains_xy_inside_and_outside() {
+        let tri = Triangle::new(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(2.0, 0.0, 0.0),
+            Vector3::new(0.0, 2.0, 0.0),
+        );
+        assert!(tri.contains_xy(0.5, 0.5), "centre should be inside");
+        assert!(tri.contains_xy(0.0, 0.0), "vertex should be inside (edge tol)");
+        assert!(!tri.contains_xy(2.0, 2.0), "far corner should be outside");
+        assert!(!tri.contains_xy(-1.0, 0.5), "left of v0 edge should be outside");
+    }
+
+    #[test]
+    fn triangle_z_at_xy_interpolates_sloped_floor() {
+        // Ramp from z=0 at (0,0) up to z=4 at (4,0); flat in y.
+        let tri = Triangle::new(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(4.0, 0.0, 4.0),
+            Vector3::new(0.0, 4.0, 0.0),
+        );
+        let z_at_2_2 = tri
+            .z_at_xy(2.0, 2.0)
+            .expect("non-vertical triangle has well-defined z");
+        // Plane through (0,0,0), (4,0,4), (0,4,0): z = x.
+        assert!(
+            (z_at_2_2 - 2.0).abs() < 1e-3,
+            "z at (2,2) should be 2 (z = x along the ramp), got {:.4}",
+            z_at_2_2
+        );
+    }
+
+    #[test]
+    fn triangle_z_at_xy_returns_none_for_vertical_wall() {
+        // A vertical wall (constant y, varying x and z) has plane
+        // normal in the XZ plane → normal.z ≈ 0, so z_at_xy is
+        // undefined.
+        let tri = Triangle::new(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(2.0, 0.0, 0.0),
+            Vector3::new(0.0, 0.0, 3.0),
+        );
+        assert!(tri.z_at_xy(1.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn triangle_closest_point_inside_projects_to_plane() {
+        // Flat floor at z=0; query point above the centre.
+        let tri = Triangle::new(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(2.0, 0.0, 0.0),
+            Vector3::new(0.0, 2.0, 0.0),
+        );
+        let p = Vector3::new(0.5, 0.5, 5.0);
+        let q = tri.closest_point(p);
+        // Closest point is the projection onto the plane —
+        // directly below at z=0.
+        assert!((q.x - 0.5).abs() < 1e-3 && (q.y - 0.5).abs() < 1e-3);
+        assert!(q.z.abs() < 1e-3, "closest_point z should be 0, got {:.4}", q.z);
+    }
+
+    #[test]
+    fn triangle_closest_point_outside_clamps_to_edge_or_vertex() {
+        let tri = Triangle::new(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(2.0, 0.0, 0.0),
+            Vector3::new(0.0, 2.0, 0.0),
+        );
+        // Far past v0 in -X, -Y → closest is v0.
+        let q = tri.closest_point(Vector3::new(-5.0, -5.0, 0.0));
+        assert!((q.x - 0.0).abs() < 1e-3 && (q.y - 0.0).abs() < 1e-3);
+        // Far past v1 in +X → closest is v1.
+        let q = tri.closest_point(Vector3::new(10.0, 0.0, 0.0));
+        assert!((q.x - 2.0).abs() < 1e-3 && (q.y - 0.0).abs() < 1e-3);
+        // Above the (v1, v2) hypotenuse → closest is on that edge.
+        // Edge midpoint is (1, 1, 0); query point (2, 2, 0) lies
+        // on the line through midpoint perpendicular to the edge.
+        let q = tri.closest_point(Vector3::new(2.0, 2.0, 0.0));
+        assert!(
+            (q.x - 1.0).abs() < 1e-3 && (q.y - 1.0).abs() < 1e-3,
+            "expected hypotenuse midpoint (1, 1); got ({:.3}, {:.3})",
+            q.x,
+            q.y
+        );
     }
 }

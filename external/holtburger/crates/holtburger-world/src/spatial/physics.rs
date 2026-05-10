@@ -173,6 +173,306 @@ pub fn clamp_delta_against_buildings(
     stopped_delta + slide_clamped
 }
 
+/// Phase 6 follow-on (academy rubberband, 2026-05-10): clamp a
+/// proposed lateral delta so the player capsule centre stays inside
+/// the cell's world-space AABB (inset by `radius` on X/Y).
+///
+/// Indoor rubberband mechanism: the integrator currently has no
+/// indoor wall collision (the `building_aabb_index` is outdoor-only
+/// — see `clamp_delta_against_buildings` above), so a few seconds of
+/// forward walking inside a dungeon cell pushes the player past the
+/// cell wall. ACE's server-side physics rejects the out-of-cell
+/// pose, increments `force_position_sequence`, and rubber-bands the
+/// player back to the last in-cell position. ACE log evidence: in
+/// cell `0x860201AD` (Holtburg Outpost academy area) +Tester drifts
+/// to `[-43.15, -95.47, 0.005]`, then ACE relocates to cell origin
+/// `[12.32, -28.48, 0.005]`.
+///
+/// This is a coarser proxy than per-polygon collision against the
+/// EnvCell's `physics_polygons` (which `holtburger-dat` already
+/// parses but the wasm side does not yet surface) — clamping to the
+/// cell's bounding box prevents the player from ever leaving the
+/// cell, but doesn't model interior obstacles like pillars or steep
+/// stair walls. A future commit can replace this with a swept-
+/// triangle test against `physics_polygons` and demote this clamp
+/// to a fast-reject early-out.
+///
+/// Mirrors `clamp_delta_against_buildings`'s public signature so the
+/// integrator's call site reads as a sibling. `pose` is the player's
+/// landblock-local pose (the integrator hasn't applied `delta` yet).
+/// `cell` is the world-space AABB returned by `SpatialScene::cell_-
+/// aabb(current_cell_id)`.
+pub fn clamp_delta_to_cell_interior(
+    pose: &WorldPosition,
+    delta: Vector3,
+    cell: &Aabb,
+    radius: f32,
+) -> Vector3 {
+    if cell.is_empty() {
+        return delta;
+    }
+    // Player's current global X/Y (per `WorldPosition::global_coords`).
+    let global = pose.global_coords();
+    let proposed_x = global.x + delta.x;
+    let proposed_y = global.y + delta.y;
+    // Inset the AABB by `radius` so the capsule centre never crosses
+    // a wall by more than a hair. If the cell is narrower than 2*radius
+    // on an axis (e.g. a tight corridor smaller than a player capsule
+    // — degenerate but possible for boss arenas), collapse the bounds
+    // to the centre rather than producing inverted bounds that would
+    // jam the player at NaN.
+    let inset_min_x = if cell.max.x - cell.min.x > 2.0 * radius {
+        cell.min.x + radius
+    } else {
+        (cell.min.x + cell.max.x) * 0.5
+    };
+    let inset_max_x = if cell.max.x - cell.min.x > 2.0 * radius {
+        cell.max.x - radius
+    } else {
+        (cell.min.x + cell.max.x) * 0.5
+    };
+    let inset_min_y = if cell.max.y - cell.min.y > 2.0 * radius {
+        cell.min.y + radius
+    } else {
+        (cell.min.y + cell.max.y) * 0.5
+    };
+    let inset_max_y = if cell.max.y - cell.min.y > 2.0 * radius {
+        cell.max.y - radius
+    } else {
+        (cell.min.y + cell.max.y) * 0.5
+    };
+    let clamped_global_x = proposed_x.clamp(inset_min_x, inset_max_x);
+    let clamped_global_y = proposed_y.clamp(inset_min_y, inset_max_y);
+    // Translate the clamped global X/Y back to a delta off the
+    // pre-delta global pose. Z is untouched — the integrator's
+    // indoor floor-Z snap (in `advance_local_pose_for_manual_drive`)
+    // handles the vertical axis separately against the cell's min.z.
+    Vector3::new(
+        clamped_global_x - global.x,
+        clamped_global_y - global.y,
+        delta.z,
+    )
+}
+
+use holtburger_common::Triangle;
+
+/// 2026-05-10 indoor collision (Phase 6 step G follow-on): return the
+/// highest "floor" Z below `(x, y)` from the given triangles, or
+/// `None` when no triangle qualifies. A triangle qualifies as a floor
+/// when its plane normal points mostly upward (`normal.z >=
+/// FLOOR_NORMAL_MIN`). We track the max Z amongst qualifying floors
+/// whose `z_at_xy <= ceiling_z` so multi-floor cells (Z-stacked
+/// EnvCells with stairs threading them) pick the floor below the
+/// player's head, not one stacked on top.
+///
+/// Returns `None` for: no triangles loaded yet, or the player's
+/// current XY is outside every floor triangle (e.g. drifted into a
+/// gap between cells, or the cell's physics_polygons set is sparse).
+/// The integrator's indoor branch falls back to `cell.aabb.min.z`
+/// when this returns `None`, so the player still doesn't fall
+/// through the world.
+pub fn highest_floor_z_under(
+    triangles: &[Triangle],
+    x: f32,
+    y: f32,
+    ceiling_z: f32,
+) -> Option<f32> {
+    // 0.5 corresponds to a 60° slope (normal angle from vertical) —
+    // anything steeper is a wall, not a floor. AC dungeon stairs
+    // sit well below this threshold so they still register as floor.
+    const FLOOR_NORMAL_MIN: f32 = 0.5;
+    let mut best: Option<f32> = None;
+    for tri in triangles {
+        if !tri.contains_xy(x, y) {
+            continue;
+        }
+        let Some(plane) = tri.plane() else {
+            continue;
+        };
+        if plane.normal.z < FLOOR_NORMAL_MIN {
+            continue;
+        }
+        let Some(z) = tri.z_at_xy(x, y) else {
+            continue;
+        };
+        // Allow a small tolerance above the ceiling so a player
+        // standing right on a floor (z == ceiling_z) doesn't lose
+        // their footing because of f32 rounding.
+        if z > ceiling_z + 1e-3 {
+            continue;
+        }
+        match best {
+            None => best = Some(z),
+            Some(prev) if z > prev => best = Some(z),
+            _ => {}
+        }
+    }
+    best
+}
+
+/// 2026-05-10 indoor collision: clamp a proposed lateral delta
+/// against indoor wall triangles. The player capsule is treated as a
+/// vertical cylinder of `radius` centred at the pose, spanning Z ∈
+/// `[pose.z, pose.z + height]`. For each triangle whose plane is
+/// mostly vertical (`|normal.z| <= WALL_NORMAL_MAX`), we bisect the
+/// proposed delta to find the earliest `t` where the cylinder's axis
+/// (sampled at mid-height) gets within `radius` of the triangle.
+/// Earliest hit clamps the delta + projects the remainder onto the
+/// wall tangent for a single-iteration slide — same pattern as
+/// `clamp_delta_against_buildings`.
+///
+/// This is a coarser proxy than a full swept-capsule-vs-triangle
+/// test (it samples the capsule axis at one Z height rather than
+/// integrating along the segment), but for AC dungeons — where
+/// walls extend floor-to-ceiling and the player's mid-height is
+/// representative — it gives accurate clamping for the cost of one
+/// bisection per triangle. A future commit can upgrade to full
+/// capsule-segment-vs-triangle if a wall-cap interaction surfaces
+/// (e.g. a half-height railing).
+///
+/// Returns `delta` unchanged when no walls are present or no hits
+/// occur. Defends against degenerate triangles (zero area) by
+/// skipping any with `Plane::from_triangle == None`.
+pub fn clamp_delta_against_cell_walls(
+    triangles: &[Triangle],
+    pose: &WorldPosition,
+    delta: Vector3,
+    radius: f32,
+    height: f32,
+) -> Vector3 {
+    // 0.7 corresponds to a 45° slope from horizontal — anything more
+    // upward-facing is a floor, anything more downward is a ceiling;
+    // both are skipped here so the floor raycast doesn't double-clamp.
+    const WALL_NORMAL_MAX: f32 = 0.7;
+    let lateral_len = (delta.x * delta.x + delta.y * delta.y).sqrt();
+    if lateral_len < 1e-6 {
+        return delta;
+    }
+
+    let global = pose.global_coords();
+    let mid_z = global.z + height * 0.5;
+    let cap_z_min = global.z;
+    let cap_z_max = global.z + height;
+
+    let mut earliest_t = 1.0_f32;
+    let mut earliest_normal: Option<Vector3> = None;
+
+    for tri in triangles {
+        let Some(plane) = tri.plane() else {
+            continue;
+        };
+        if plane.normal.z.abs() > WALL_NORMAL_MAX {
+            continue;
+        }
+        // Skip triangles whose Z range doesn't overlap our capsule.
+        let tri_aabb = tri.aabb();
+        if tri_aabb.max.z < cap_z_min || tri_aabb.min.z > cap_z_max {
+            continue;
+        }
+
+        // Signed distance from each end of the proposed motion to
+        // the wall plane. Positive = on the +normal side.
+        let start = Vector3::new(global.x, global.y, mid_z);
+        let end = Vector3::new(global.x + delta.x, global.y + delta.y, mid_z);
+        let dist_start = plane.distance_to_point(&start);
+        let dist_end = plane.distance_to_point(&end);
+
+        // Three cases:
+        //   1. Already inside the radius shell at start → contact at t=0.
+        //   2. Crosses the plane (signs differ) → contact when |dist|=radius.
+        //   3. Same sign + both > radius → no penetration.
+        let t_contact = if dist_start.abs() <= radius {
+            // Case 1: already touching.
+            0.0_f32
+        } else if dist_start.signum() != dist_end.signum() {
+            // Case 2: crossed. Solve for t where dist hits ±radius
+            // on the start's side.
+            let target = radius * dist_start.signum();
+            // dist(t) = dist_start + (dist_end - dist_start) * t
+            // → t = (target - dist_start) / (dist_end - dist_start)
+            let denom = dist_end - dist_start;
+            if denom.abs() < 1e-6 {
+                continue;
+            }
+            let t = (target - dist_start) / denom;
+            if !(0.0..=1.0).contains(&t) {
+                continue;
+            }
+            t
+        } else {
+            // Case 3: same side, no crossing.
+            continue;
+        };
+
+        // Sanity-check the contact point is within the triangle's
+        // bounds — `closest_point` returns the on-triangle nearest
+        // point; if it's > `radius` away then we passed an edge or
+        // a corner of this triangle, which the swept-circle treats
+        // as a non-hit (any neighbouring triangle will catch us if
+        // the wall continues; otherwise the gap is real, e.g. a
+        // doorway).
+        let cap_at_t = Vector3::new(
+            global.x + delta.x * t_contact,
+            global.y + delta.y * t_contact,
+            mid_z,
+        );
+        let cp = tri.closest_point(cap_at_t);
+        let dx = cp.x - cap_at_t.x;
+        let dy = cp.y - cap_at_t.y;
+        let dz = cp.z - cap_at_t.z;
+        let dist_3d = (dx * dx + dy * dy + dz * dz).sqrt();
+        // Tolerance accounts for f32 rounding in the parametric
+        // solve plus the capsule's mid-Z sample missing tall
+        // triangles by a hair.
+        if dist_3d > radius + 1e-2 {
+            continue;
+        }
+
+        if t_contact < earliest_t {
+            earliest_t = t_contact;
+            // Slide normal: the wall's plane normal, projected to
+            // XY (Z component zeroed since the integrator doesn't
+            // change Z via the lateral clamp). Sign-flip so the
+            // normal points AWAY from the wall toward where the
+            // player came from — `dist_start.signum()` gives that.
+            let nx = plane.normal.x * dist_start.signum();
+            let ny = plane.normal.y * dist_start.signum();
+            let n_len = (nx * nx + ny * ny).sqrt();
+            let normal = if n_len < 1e-6 {
+                // Plane is purely vertical (a rare edge case where
+                // both lateral components round to zero) — fall
+                // back to start-minus-closest-point.
+                let mut fnx = cap_at_t.x - cp.x;
+                let mut fny = cap_at_t.y - cp.y;
+                let fn_len = (fnx * fnx + fny * fny).sqrt().max(1e-6);
+                fnx /= fn_len;
+                fny /= fn_len;
+                Vector3::new(fnx, fny, 0.0)
+            } else {
+                Vector3::new(nx / n_len, ny / n_len, 0.0)
+            };
+            earliest_normal = Some(normal);
+        }
+    }
+
+    let Some(normal) = earliest_normal else {
+        return delta;
+    };
+    if earliest_t >= 0.999 {
+        return delta;
+    }
+
+    // Backoff so the capsule sits a hair short of the wall (matches
+    // the pattern in `clamp_delta_against_buildings`).
+    let backoff = 1e-3;
+    let safe_t = (earliest_t - backoff / lateral_len.max(1e-6)).max(0.0);
+    let stopped = delta * safe_t;
+    let remaining = delta * (1.0 - safe_t);
+    let into_normal = remaining.dot(&normal);
+    let slide = remaining - normal * into_normal;
+    stopped + slide
+}
+
 fn velocity_kinematics_for_input(input: &SolveBodyInput) -> (Vector3, Vector3) {
     match input.basis {
         Some(SolveProjectionBasis::Velocity { velocity, omega }) => (velocity, omega),

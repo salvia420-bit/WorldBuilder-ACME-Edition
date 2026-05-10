@@ -606,57 +606,198 @@ impl MovementSystem {
         let velocity = local_velocity_for_state(heading, state, &capabilities);
         let dt_s = dt.as_secs_f32();
         let raw_delta = Vector3::new(velocity.x * dt_s, velocity.y * dt_s, velocity.z * dt_s);
-        // Phase 6 step B — clamp the X/Y component of the delta
-        // against the per-cell building AABB index. Z stays raw so
-        // terrain follow below still snaps to the height grid; walls
-        // only block lateral movement, not the gravity axis.
-        let candidates = world.scene.building_aabbs_near_pose(&pose);
-        let lateral = Vector3::new(raw_delta.x, raw_delta.y, 0.0);
-        let lateral_clamped = if candidates.is_empty() {
-            lateral
+        // Lateral (X/Y) clamp. Two paths:
+        //   - Outdoor: Phase 6 step B sweep-sphere against the
+        //     per-cell `building_aabb_index`. Z stays raw so the
+        //     terrain-Z snap below can do its job.
+        //   - Indoor:  Phase 6 follow-on (academy rubberband fix,
+        //     2026-05-10) — clamp the proposed lateral motion to the
+        //     interior of the player's current EnvCell's world-space
+        //     AABB (already populated by Phase 6D). Without this the
+        //     player walks straight through dungeon walls because
+        //     `building_aabb_index` is outdoor-only; the divergence
+        //     between the client's predicted pose and ACE's
+        //     authoritative cell-bounded pose is what surfaces as
+        //     visible rubberbanding. Falls back to no-clamp when the
+        //     cell hasn't been baked yet (lazy `fetchEnvCellsInLand-
+        //     block` path) or the player has drifted outside every
+        //     cell — in the latter case the next server `Update-
+        //     Position` will snap them back inside, after which this
+        //     clamp engages and keeps them there.
+        // Pre-bake gate: indoor cell whose physics_polygons +
+        // cell AABB haven't been baked yet. Detected once so the
+        // lateral clamp, the Z delta, and the floor-Z snap all
+        // agree to leave `pose` exactly where the server seeded
+        // it. The first frame after `[phase6.G] drained …` flips
+        // this false and full prediction engages.
+        let indoor_unbaked = if pose.is_indoors() {
+            let cell_id = world.scene.current_cell(&pose);
+            world.scene.cell_triangles(cell_id).is_empty()
+                && world.scene.cell_aabb(cell_id).is_none()
         } else {
-            holtburger_world::spatial::clamp_delta_against_buildings(
-                &candidates,
-                &pose,
-                lateral,
-                holtburger_world::spatial::PLAYER_CAPSULE_RADIUS,
-            )
+            false
+        };
+        let lateral = Vector3::new(raw_delta.x, raw_delta.y, 0.0);
+        let lateral_clamped = if pose.is_indoors() {
+            // 2026-05-10 indoor collision: prefer per-polygon
+            // wall-clamp against the cell's `physics_polygons`
+            // (Phase 6 step G) when triangles are loaded; fall back
+            // to the cell-AABB containment clamp when they aren't.
+            // The per-poly clamp handles non-rectangular cells
+            // (L-shapes, corridors with bends, doorways) accurately;
+            // the AABB clamp is the safety net while the lazy
+            // physics-bake catches up after a landblock entry.
+            //
+            // Pre-bake gate (academy rubberband fix follow-on
+            // 2026-05-10): when neither the cell AABB nor any
+            // physics triangles have been loaded yet — typical for
+            // the first few seconds after entity seed before
+            // `fetchEnvCellsInLandblock` finishes its async bake —
+            // refuse to predict any indoor motion. Without this,
+            // the integrator runs unclamped, the heartbeat ships
+            // positions ACE rejects, and the resulting force-
+            // reposition snaps the player back to spawn (the
+            // "moves a little, snaps back" symptom). With this
+            // gate, the heartbeat keeps repeating the last server-
+            // confirmed pose until the bake completes; rotation
+            // flow is unaffected since rotation flows through
+            // `UpdateMotion` (server-driven), not this integrator.
+            let cell_id = world.scene.current_cell(&pose);
+            let triangles = world.scene.cell_triangles(cell_id);
+            let cell_aabb_opt = world.scene.cell_aabb(cell_id);
+            if triangles.is_empty() && cell_aabb_opt.is_none() {
+                Vector3::zero()
+            } else {
+                let pre_clamped = if !triangles.is_empty() {
+                    holtburger_world::spatial::clamp_delta_against_cell_walls(
+                        triangles,
+                        &pose,
+                        lateral,
+                        holtburger_world::spatial::PLAYER_CAPSULE_RADIUS,
+                        holtburger_world::spatial::PLAYER_CAPSULE_HEIGHT,
+                    )
+                } else {
+                    lateral
+                };
+                // Always also apply the AABB containment clamp as a
+                // safety net — even with per-poly walls, an L-shaped
+                // cell whose wall triangles are missing on one segment
+                // could let the player drift out of the AABB. Cheap
+                // and idempotent on top of per-poly.
+                match cell_aabb_opt {
+                    Some(aabb) => holtburger_world::spatial::clamp_delta_to_cell_interior(
+                        &pose,
+                        pre_clamped,
+                        &aabb,
+                        holtburger_world::spatial::PLAYER_CAPSULE_RADIUS,
+                    ),
+                    None => pre_clamped,
+                }
+            }
+        } else {
+            let candidates = world.scene.building_aabbs_near_pose(&pose);
+            if candidates.is_empty() {
+                lateral
+            } else {
+                holtburger_world::spatial::clamp_delta_against_buildings(
+                    &candidates,
+                    &pose,
+                    lateral,
+                    holtburger_world::spatial::PLAYER_CAPSULE_RADIUS,
+                )
+            }
         };
         pose.coords.x += lateral_clamped.x;
         pose.coords.y += lateral_clamped.y;
-        pose.coords.z += raw_delta.z;
-        // Terrain-follow Z. Without this, the integrator output's Z
-        // stays at the teleport-landing value forever (vz==0 for
-        // forward locomotion), which causes ACE physics (FastTick on
-        // PK players, per `Player_Tick.cs:154 FastTick => IsPKType`)
-        // to interpret the player as floating above ground when the
-        // actual terrain dips → applies gravity in the simulation
-        // interval → fall → impact damage on landing.
+        // Pre-bake gate: zero Z delta when the indoor cell is
+        // unbaked, same rationale as the lateral zero above —
+        // sending an uncorrected Z drift would let ACE force-
+        // reposition us back to spawn.
+        if !indoor_unbaked {
+            pose.coords.z += raw_delta.z;
+        }
+        // Floor-Z snap. Two paths:
+        //   - Outdoor: bilinear-interp the cached 9×9 terrain
+        //     heightmap. Without this the integrator's Z stays at the
+        //     teleport-landing value (vz==0 for forward locomotion),
+        //     ACE's FastTick (Player_Tick.cs:154 `IsPKType` gate)
+        //     reads the client as floating above ground, applies
+        //     gravity → fall damage on landing.
+        //   - Indoor:  Phase 6 follow-on — snap to `cell_aabb.min.z`
+        //     plus a 5 mm headroom (matches the AC convention; ACE
+        //     log shows persisted indoor positions at z=0.005). Also
+        //     clamp from above so a long jump doesn't punch through
+        //     the cell ceiling. This is a coarser proxy than a
+        //     swept-triangle test against `physics_polygons` — for a
+        //     ramped floor the player visually pops to the cell's
+        //     lowest point, but it's enough to stop the rubberband.
         //
-        // The fix: bilinear-interp the terrain Z at the integrated
-        // (X, Y) world coords against the cached 9×9 heightmap for
-        // the containing landblock. Snap pose.z to terrain. The
-        // wasm bundle pre-populates the heightmap cache for the
-        // 9-LB spawn neighbourhood after `kind=7 EnteredWorld`
-        // (see `SessionHandle::populate_terrain` /
-        // `SessionCommand::PopulateTerrain`).
-        //
-        // When the cache miss (player wandered past the prefetched
-        // neighbourhood, or DAT data is unavailable), preserve the
-        // integrator's existing Z. ACE physics will still apply
-        // false gravity in that case, but the typical play loop
-        // hits the fast path; a follow-on can extend the prefetch
-        // window or trigger lazy-load on landblock entry.
-        //
-        // World coords for the integrator's pose are
-        // `(lb_byte * 192 + local, ...)` per
-        // `WorldPosition::global_coords`. We construct the global
-        // coord from the in-progress pose so the lookup keys on the
-        // CURRENT (post-rebucket) landblock id.
+        // The outdoor heightmap cache is pre-populated for the 9-LB
+        // spawn neighbourhood at `kind=7 EnteredWorld` (see
+        // `SessionHandle::populate_terrain`). When it misses
+        // (player wandered past the prefetched window) we preserve
+        // the existing Z; ACE will apply false gravity in that
+        // narrow band but the typical play loop hits the fast path.
         if !pose.is_indoors() {
             let global = pose.global_coords();
             if let Some(z) = world.terrain_height_at(global.x, global.y) {
                 pose.coords.z = z;
+            }
+        } else if indoor_unbaked {
+            // Pre-bake gate: skip floor-Z snap entirely. Without
+            // a baked AABB or triangles there's no source of
+            // floor-Z, and any computed snap would either no-op
+            // (ok) or use stale data (not ok).
+        } else {
+            // 2026-05-10 indoor floor-Z: prefer per-polygon raycast
+            // (`highest_floor_z_under`) when the cell's
+            // `physics_polygons` are loaded — handles stairs and
+            // ramps accurately. Fall back to `cell_aabb.min.z` when
+            // they aren't (initial seconds after landblock entry,
+            // before the lazy physics bake completes), so the
+            // player still has a floor to stand on.
+            let cell_id = world.scene.current_cell(&pose);
+            let global = pose.global_coords();
+            let triangles = world.scene.cell_triangles(cell_id);
+            let cell_aabb = world.scene.cell_aabb(cell_id);
+            // Pick a generous "ceiling" Z for the floor query so a
+            // player jumping or perched on stairs still finds a
+            // floor below them. The cell's max.z is a natural cap;
+            // when no AABB is registered, use a far-future value so
+            // the raycast doesn't artificially exclude high stairs.
+            let ceiling_for_floor_query = cell_aabb
+                .map(|a| a.max.z + 1.0)
+                .unwrap_or(pose.coords.z + 100.0);
+            let floor_z = if !triangles.is_empty() {
+                holtburger_world::spatial::highest_floor_z_under(
+                    triangles,
+                    global.x,
+                    global.y,
+                    ceiling_for_floor_query,
+                )
+                .or_else(|| cell_aabb.map(|a| a.min.z))
+            } else {
+                cell_aabb.map(|a| a.min.z)
+            };
+            if let Some(floor) = floor_z {
+                let snap_z = floor + 0.005; // 5 mm headroom; matches AC
+                if pose.coords.z < snap_z {
+                    pose.coords.z = snap_z;
+                }
+            }
+            // Ceiling clamp — protect against the player being
+            // shoved through the ceiling by a tall jump or a server
+            // forced reposition. Uses cell AABB max.z; per-poly
+            // ceiling raycast is left for a future commit (rare in
+            // practice — AC ceilings are usually higher than the
+            // player ever reaches in a normal walk).
+            if let Some(aabb) = cell_aabb {
+                let ceiling_z =
+                    aabb.max.z - holtburger_world::spatial::PLAYER_CAPSULE_HEIGHT;
+                let floor_min = floor_z.unwrap_or(aabb.min.z + 0.005);
+                if pose.coords.z > ceiling_z {
+                    pose.coords.z = ceiling_z.max(floor_min);
+                }
             }
         }
         // Phase 4 step 3.7 — re-bucket coords if we crossed a 192 m

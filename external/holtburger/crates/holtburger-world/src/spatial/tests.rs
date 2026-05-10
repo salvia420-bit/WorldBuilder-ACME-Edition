@@ -911,6 +911,294 @@ mod collision {
             1.0,
         );
     }
+
+    /// 2026-05-10 academy rubberband — `clamp_delta_to_cell_interior`
+    /// shrinks the proposed delta to keep the player capsule centre
+    /// inside the cell AABB on X/Y, leaving Z untouched (the
+    /// integrator handles vertical separately against `aabb.min.z`
+    /// and `aabb.max.z`).
+    #[test]
+    fn clamp_delta_to_cell_interior_blocks_lateral_at_far_wall() {
+        let landblock = Guid(0x0102_0000);
+        // LB 0x0102 → world origin (1*192, 2*192) = (192, 384).
+        // Player at local (1.0, 1.0, 0.0) → world (193, 385, 0).
+        let pose = WorldPosition {
+            landblock_id: landblock,
+            coords: Vector3::new(1.0, 1.0, 0.0),
+            rotation: Quaternion::identity(),
+        };
+        // Cell AABB tightly hugs the player on +X side: 1 m of room
+        // before the wall.
+        let cell = Aabb::new(
+            Vector3::new(192.0, 380.0, 0.0),
+            Vector3::new(194.0, 390.0, 5.0),
+        );
+        // Capsule radius 0.4 → effective +X room before the inset
+        // wall is 194 - 0.4 - 193 = 0.6 m.
+        let radius = 0.4_f32;
+        // Try to walk +X by 5 m. Should clamp to 0.6 m.
+        let delta = Vector3::new(5.0, 0.0, 0.0);
+        let clamped = crate::spatial::clamp_delta_to_cell_interior(
+            &pose, delta, &cell, radius,
+        );
+        assert!(
+            (clamped.x - 0.6).abs() < 1e-3,
+            "clamped Δx should be ~0.6 m (cell max.x 194 minus radius 0.4 minus pose.x 193); got {:.4}",
+            clamped.x
+        );
+        assert!(clamped.y.abs() < 1e-6, "Δy untouched (no Y motion proposed)");
+        assert!(clamped.z.abs() < 1e-6, "Δz untouched (vertical handled separately)");
+    }
+
+    /// 2026-05-10 academy rubberband — when the proposed delta keeps
+    /// the player inside the AABB interior (well clear of all walls),
+    /// the clamp returns the delta unchanged.
+    #[test]
+    fn clamp_delta_to_cell_interior_passes_through_interior_motion() {
+        let landblock = Guid(0x0102_0000);
+        let pose = WorldPosition {
+            landblock_id: landblock,
+            coords: Vector3::new(50.0, 50.0, 0.0),
+            rotation: Quaternion::identity(),
+        };
+        let cell = Aabb::new(
+            Vector3::new(192.0, 384.0, 0.0),
+            Vector3::new(384.0, 576.0, 5.0),
+        );
+        let delta = Vector3::new(0.5, -0.3, 0.0);
+        let clamped = crate::spatial::clamp_delta_to_cell_interior(
+            &pose, delta, &cell, 0.4,
+        );
+        // 1e-3 tolerance — `global_coords` adds a 192*lb_byte offset
+        // (here 384.0 for Y), and `clamped_global_y - global.y` then
+        // accumulates one f32 ULP of subtraction error against the
+        // 0.3-magnitude target (~3e-5). 1e-3 is plenty for "pass-
+        // through" semantics; sub-mm precision isn't the contract.
+        assert!(
+            (clamped.x - 0.5).abs() < 1e-3 && (clamped.y - (-0.3)).abs() < 1e-3,
+            "interior motion should pass through unchanged; got ({:.4}, {:.4})",
+            clamped.x, clamped.y,
+        );
+    }
+
+    /// 2026-05-10 academy rubberband — `Aabb::empty()` (the sentinel
+    /// returned when no vertices have been accumulated) is treated
+    /// as "no clamp" so a half-baked cell AABB doesn't pin the
+    /// player at NaN. Same fallback as the integrator's no-cell path.
+    #[test]
+    fn clamp_delta_to_cell_interior_no_op_for_empty_aabb() {
+        let pose = WorldPosition {
+            landblock_id: Guid(0x0102_0000),
+            coords: Vector3::new(50.0, 50.0, 0.0),
+            rotation: Quaternion::identity(),
+        };
+        let delta = Vector3::new(2.0, 1.0, 0.5);
+        let clamped = crate::spatial::clamp_delta_to_cell_interior(
+            &pose, delta, &Aabb::empty(), 0.4,
+        );
+        assert_eq!(clamped, delta, "empty AABB should be a clamp no-op");
+    }
+
+    /// 2026-05-10 indoor per-polygon — `highest_floor_z_under` picks
+    /// the highest floor below the player from a triangle bag,
+    /// skipping non-floor (vertical/down) triangles.
+    #[test]
+    fn highest_floor_z_under_picks_max_below_ceiling() {
+        use holtburger_common::Triangle;
+        // Two stacked floor triangles at z=0 and z=4 (an upper
+        // floor, like a stairwell landing). Player's head at z=2
+        // → ceiling-Z = 2 → only the lower floor qualifies.
+        let lower = Triangle::new(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(10.0, 0.0, 0.0),
+            Vector3::new(0.0, 10.0, 0.0),
+        );
+        let upper = Triangle::new(
+            Vector3::new(0.0, 0.0, 4.0),
+            Vector3::new(10.0, 0.0, 4.0),
+            Vector3::new(0.0, 10.0, 4.0),
+        );
+        let wall = Triangle::new(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(10.0, 0.0, 0.0),
+            Vector3::new(0.0, 0.0, 5.0),
+        );
+        let triangles = [lower, upper, wall];
+        // Player at (3, 3, 2) — head at z=2.
+        let z = crate::spatial::highest_floor_z_under(&triangles, 3.0, 3.0, 2.0);
+        assert_eq!(z, Some(0.0), "should pick lower floor at z=0");
+        // Lift the ceiling to z=5 → upper floor (z=4) qualifies and
+        // is now the highest below.
+        let z = crate::spatial::highest_floor_z_under(&triangles, 3.0, 3.0, 5.0);
+        assert_eq!(z, Some(4.0), "should pick upper floor at z=4");
+        // Outside the triangles' XY shadow → None.
+        let z = crate::spatial::highest_floor_z_under(&triangles, 100.0, 100.0, 5.0);
+        assert_eq!(z, None);
+    }
+
+    /// 2026-05-10 indoor per-polygon — `clamp_delta_against_cell_walls`
+    /// stops the capsule before crossing a wall triangle and slides
+    /// the residual delta along the wall tangent.
+    #[test]
+    fn clamp_delta_against_cell_walls_stops_at_wall_and_slides() {
+        use holtburger_common::Triangle;
+        // Vertical wall at y=2, spanning x ∈ [0, 4], z ∈ [0, 4].
+        // Two triangles to fill the rectangle.
+        let wall_a = Triangle::new(
+            Vector3::new(0.0, 2.0, 0.0),
+            Vector3::new(4.0, 2.0, 0.0),
+            Vector3::new(0.0, 2.0, 4.0),
+        );
+        let wall_b = Triangle::new(
+            Vector3::new(4.0, 2.0, 0.0),
+            Vector3::new(4.0, 2.0, 4.0),
+            Vector3::new(0.0, 2.0, 4.0),
+        );
+        let walls = [wall_a, wall_b];
+        // LB 0x0102 → world origin (192, 384). Player at local
+        // (1, 0, 1) → world (193, 384, 1). Pushing toward +Y at
+        // y=2 wall.
+        let pose = WorldPosition {
+            landblock_id: Guid(0x0102_0000),
+            coords: Vector3::new(193.0 - 192.0, 0.0, 1.0),
+            rotation: Quaternion::identity(),
+        };
+        // Walk +Y by 5 m. Wall is at world.y=2 (NOT the local 2 +
+        // 384 — let me redo).
+        // Re-pick coords so the wall is in world space:
+        // Adjust the walls to world coords compatible with this LB.
+        let wall_y_world = 384.5_f32;
+        let wall_a = Triangle::new(
+            Vector3::new(192.0, wall_y_world, 0.0),
+            Vector3::new(196.0, wall_y_world, 0.0),
+            Vector3::new(192.0, wall_y_world, 4.0),
+        );
+        let wall_b = Triangle::new(
+            Vector3::new(196.0, wall_y_world, 0.0),
+            Vector3::new(196.0, wall_y_world, 4.0),
+            Vector3::new(192.0, wall_y_world, 4.0),
+        );
+        let walls = [wall_a, wall_b];
+
+        let pose = WorldPosition {
+            landblock_id: Guid(0x0102_0000),
+            // Local (2, 0, 1) → world (194, 384, 1). Wall at world
+            // y = 384.5; player is 0.5 m on the -Y side.
+            coords: Vector3::new(2.0, 0.0, 1.0),
+            rotation: Quaternion::identity(),
+        };
+        let delta = Vector3::new(0.0, 5.0, 0.0); // walk +Y 5 m
+        let radius = 0.4_f32;
+        let height = 1.8_f32;
+        let clamped = crate::spatial::clamp_delta_against_cell_walls(
+            &walls, &pose, delta, radius, height,
+        );
+        // Expected: clamped.y < 0.1 (we hit the wall ~immediately),
+        // clamped.x ≈ 0 (no slide possible — head-on).
+        assert!(
+            clamped.y < 0.15,
+            "clamped Δy should be small (head-on into wall, ~0.1 m before contact); got {:.4}",
+            clamped.y
+        );
+        assert!(
+            clamped.y >= 0.0,
+            "clamped Δy should not go negative; got {:.4}",
+            clamped.y
+        );
+    }
+
+    /// 2026-05-10 indoor per-polygon — when the proposed delta
+    /// doesn't cross any wall, the clamp returns delta unchanged.
+    #[test]
+    fn clamp_delta_against_cell_walls_passes_through_no_wall_path() {
+        use holtburger_common::Triangle;
+        let wall = Triangle::new(
+            Vector3::new(192.0, 400.0, 0.0),
+            Vector3::new(196.0, 400.0, 0.0),
+            Vector3::new(192.0, 400.0, 4.0),
+        );
+        let walls = [wall];
+        let pose = WorldPosition {
+            landblock_id: Guid(0x0102_0000),
+            coords: Vector3::new(2.0, 0.0, 1.0),
+            rotation: Quaternion::identity(),
+        };
+        // Walk -Y (away from the wall) — should pass through.
+        let delta = Vector3::new(0.0, -3.0, 0.0);
+        let clamped = crate::spatial::clamp_delta_against_cell_walls(
+            &walls, &pose, delta, 0.4, 1.8,
+        );
+        assert!(
+            (clamped.y - (-3.0)).abs() < 1e-3,
+            "delta away from wall should pass through; got Δy = {:.4}",
+            clamped.y
+        );
+    }
+
+    /// 2026-05-10 indoor per-polygon — floor / ceiling triangles
+    /// (normal mostly vertical) are NOT treated as walls; the clamp
+    /// passes through even when the player walks into a floor edge.
+    #[test]
+    fn clamp_delta_against_cell_walls_ignores_floors() {
+        use holtburger_common::Triangle;
+        let floor = Triangle::new(
+            Vector3::new(192.0, 384.0, 1.0),
+            Vector3::new(196.0, 384.0, 1.0),
+            Vector3::new(192.0, 388.0, 1.0),
+        );
+        let pose = WorldPosition {
+            landblock_id: Guid(0x0102_0000),
+            coords: Vector3::new(2.0, 0.0, 0.5),
+            rotation: Quaternion::identity(),
+        };
+        let delta = Vector3::new(0.0, 5.0, 0.0);
+        let clamped = crate::spatial::clamp_delta_against_cell_walls(
+            &[floor], &pose, delta, 0.4, 1.8,
+        );
+        assert!(
+            (clamped.y - 5.0).abs() < 1e-3,
+            "floor should not block lateral motion; got Δy = {:.4}",
+            clamped.y
+        );
+    }
+
+    /// 2026-05-10 academy rubberband — when the AABB is narrower
+    /// than `2 * radius` on an axis (a degenerate boss-arena slab
+    /// that's smaller than the player capsule), the clamp collapses
+    /// that axis to the AABB centre rather than producing inverted
+    /// inset bounds (which would jam the player at NaN). Player
+    /// effectively pins to the cell midline on the narrow axis.
+    #[test]
+    fn clamp_delta_to_cell_interior_collapses_narrow_axis() {
+        let pose = WorldPosition {
+            landblock_id: Guid(0x0102_0000),
+            // World pose (193, 385, 0) — pose.x at the cell's far side.
+            coords: Vector3::new(1.0, 1.0, 0.0),
+            rotation: Quaternion::identity(),
+        };
+        // Cell is 0.5 m wide on X (narrower than 2*radius = 0.8) and
+        // wide on Y. Centre on X is 192.25.
+        let cell = Aabb::new(
+            Vector3::new(192.0, 380.0, 0.0),
+            Vector3::new(192.5, 390.0, 5.0),
+        );
+        let delta = Vector3::new(5.0, 1.0, 0.0);
+        let clamped = crate::spatial::clamp_delta_to_cell_interior(
+            &pose, delta, &cell, 0.4,
+        );
+        // X is collapsed to centre 192.25; pose.x = 193 → clamped Δx = -0.75.
+        assert!(
+            (clamped.x - (-0.75)).abs() < 1e-3,
+            "narrow X axis should collapse to centre; expected Δx ≈ -0.75, got {:.4}",
+            clamped.x
+        );
+        // Y axis is wide → motion within bounds passes through.
+        assert!(
+            (clamped.y - 1.0).abs() < 1e-3,
+            "wide Y axis should not be collapsed; expected Δy = 1.0, got {:.4}",
+            clamped.y
+        );
+    }
 }
 
 mod cell_graph {

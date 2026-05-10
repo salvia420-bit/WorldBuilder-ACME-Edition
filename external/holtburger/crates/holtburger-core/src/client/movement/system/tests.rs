@@ -1709,3 +1709,231 @@ fn advance_local_pose_for_manual_drive_applies_velocity_times_dt_once() {
          got total_dx={total_dx:.4} total_dy={total_dy:.4} |delta|^2={total_squared:.6}"
     );
 }
+
+/// 2026-05-10 academy rubberband — pre-bake gate: when an indoor
+/// cell has neither AABB nor physics triangles loaded yet (the
+/// usual state for the first few seconds after entity seed, while
+/// `fetchEnvCellsInLandblock` is still running its async bake),
+/// the integrator REFUSES to predict any motion. The pose stays at
+/// the server-seeded position; rotation flow is unaffected (it
+/// flows through `UpdateMotion`, not this integrator). Without
+/// this gate the integrator runs unclamped during the bake window,
+/// the heartbeat ships uncorrected positions, and ACE force-
+/// repositions back to spawn — surfacing as the user-visible
+/// "moves a little, snaps back" symptom.
+#[test]
+fn advance_local_pose_for_manual_drive_indoor_pre_bake_gates_motion() {
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0888);
+    world.player.guid = player_guid;
+    let _capabilities =
+        seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+
+    let indoor_landblock = Guid(0x8602_0100);
+    let start_z = 5.0_f32;
+    let start_pose = WorldPosition {
+        landblock_id: indoor_landblock,
+        coords: Vector3::new(50.0, 50.0, start_z),
+        rotation: Quaternion::identity(),
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+
+    // No `insert_cell_aabb` and no `insert_cell_triangle` — the
+    // pre-bake state. Populate the outdoor heightmap so we can
+    // also prove the indoor branch doesn't accidentally read it.
+    world.populate_terrain_heights(0x8602_0000, [99.0_f32; 81]);
+
+    let mut movement = MovementSystem::new();
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().forward().build(),
+        None,
+    ));
+
+    let dt = Duration::from_millis(100);
+    for _ in 0..10 {
+        movement.advance_local_pose_for_manual_drive(&mut world, dt);
+    }
+
+    let after = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+
+    // Pre-bake gate: pose unchanged on all axes.
+    assert!(
+        (after.coords.x - start_pose.coords.x).abs() < 1e-3,
+        "pre-bake gate: X should be unchanged (got {:.4}, expected {:.4})",
+        after.coords.x, start_pose.coords.x
+    );
+    assert!(
+        (after.coords.y - start_pose.coords.y).abs() < 1e-3,
+        "pre-bake gate: Y should be unchanged (got {:.4}, expected {:.4})",
+        after.coords.y, start_pose.coords.y
+    );
+    assert!(
+        (after.coords.z - start_z).abs() < 1e-3,
+        "pre-bake gate: Z should be unchanged (got {:.4}, expected {start_z})",
+        after.coords.z
+    );
+
+    // Rebucket is no-op for indoor regardless of cell-AABB presence.
+    assert_eq!(
+        after.landblock_id, indoor_landblock,
+        "indoor: landblock_id should be unchanged"
+    );
+}
+
+/// 2026-05-10 academy rubberband — when a cell AABB is registered
+/// for the player's current cell, the integrator clamps lateral
+/// motion to the AABB interior (inset by `PLAYER_CAPSULE_RADIUS`)
+/// and floor-snaps Z to `aabb.min.z + 0.005`. This test exercises
+/// the user-visible academy fix end-to-end at the integrator layer.
+///
+/// Replaces the pre-fix contract pin
+/// (`advance_local_pose_for_manual_drive_indoor_skips_all_three_-
+/// outdoor_branches`) — that test asserted the buggy "no clamp"
+/// behaviour was preserved and is now obsolete.
+#[test]
+fn advance_local_pose_for_manual_drive_indoor_clamps_to_cell_aabb() {
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0889);
+    world.player.guid = player_guid;
+    let _capabilities =
+        seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+
+    // Holtburg Outpost academy area landblock — cell `0x86020100`
+    // sits at the indoor end of the LB (`is_indoors()` → true). The
+    // landblock high word for the cell AABB is `0x86020000`; its low
+    // word `0x0100` goes into the cell-id key.
+    let cell_landblock = Guid(0x8602_0100);
+    let cell_id = u32::from(cell_landblock);
+
+    // Player local coords inside the LB are `(50, 50, 1.5)`. Per
+    // `WorldPosition::global_coords()` the world-space pose is
+    // `(landblock_x_byte * 192 + 50, landblock_y_byte * 192 + 50,
+    // 1.5)` → with high word `0x8602`, lb_x_byte = 0x86 = 134,
+    // lb_y_byte = 0x02 = 2 → world `(134*192+50, 2*192+50, 1.5) =
+    // (25778, 434, 1.5)`. Build the cell AABB around that so the
+    // player starts well inside.
+    let start_pose = WorldPosition {
+        landblock_id: cell_landblock,
+        coords: Vector3::new(50.0, 50.0, 1.5),
+        rotation: Quaternion::identity(),
+    };
+    let global = start_pose.global_coords();
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+
+    // Cell AABB: 4 m wide on each lateral axis, centred on the
+    // player; 3 m tall, floor at z=1.0 (so floor_z = 1.005). The
+    // player will run forward for 1 s at 4.5 m/s — without the
+    // clamp they'd cover ~4.5 m laterally, far outside the 4 m AABB.
+    let cell_aabb = holtburger_common::Aabb {
+        min: holtburger_common::Vector3::new(global.x - 2.0, global.y - 2.0, 1.0),
+        max: holtburger_common::Vector3::new(global.x + 2.0, global.y + 2.0, 4.0),
+    };
+    world.scene.insert_cell_aabb(cell_id, cell_aabb);
+
+    let mut movement = MovementSystem::new();
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().forward().build(),
+        None,
+    ));
+
+    let dt = Duration::from_millis(100);
+    for _ in 0..10 {
+        movement.advance_local_pose_for_manual_drive(&mut world, dt);
+    }
+
+    let after = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+
+    // Cell AABB clamp: the player's global X/Y must stay inside
+    // the AABB inset by PLAYER_CAPSULE_RADIUS (0.4). Inset bounds:
+    // x ∈ [global.x - 1.6, global.x + 1.6], same for y.
+    let after_global = after.global_coords();
+    let inset = 2.0 - 0.4;
+    let abs_dx = (after_global.x - global.x).abs();
+    let abs_dy = (after_global.y - global.y).abs();
+    assert!(
+        abs_dx <= inset + 1e-3,
+        "indoor clamp: |Δx| = {abs_dx:.4} should be ≤ inset {inset:.4} (cell AABB half-width 2.0 - capsule radius 0.4)"
+    );
+    assert!(
+        abs_dy <= inset + 1e-3,
+        "indoor clamp: |Δy| = {abs_dy:.4} should be ≤ inset {inset:.4}"
+    );
+
+    // Floor snap: Z must be ≥ floor_z = 1.005 m, and (since spawn
+    // Z 1.5 was already above floor_z) it should equal exactly the
+    // spawn Z (no upward kick) given vz=0 throughout.
+    assert!(
+        after.coords.z >= 1.005 - 1e-4,
+        "indoor floor snap: Z = {:.4} must be ≥ floor_z 1.005",
+        after.coords.z
+    );
+    assert!(
+        after.coords.z <= 1.5 + 1e-3,
+        "indoor floor snap: Z = {:.4} should not have spuriously risen above spawn Z 1.5",
+        after.coords.z
+    );
+
+    // Landblock unchanged (rebucket early-returns indoor).
+    assert_eq!(
+        after.landblock_id, cell_landblock,
+        "landblock id should be preserved"
+    );
+}
+
+/// 2026-05-10 academy rubberband — floor-Z snap kicks the player up
+/// to `aabb.min.z + 0.005` when the integrator's Z would otherwise
+/// fall below the cell floor (e.g. because the persisted spawn pose
+/// arrived at z=0.0 from ACE's relocate-to-cell-origin path, but the
+/// cell mesh's actual floor is at z=1.0).
+#[test]
+fn advance_local_pose_for_manual_drive_indoor_floor_snap_lifts_from_below() {
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_088A);
+    world.player.guid = player_guid;
+    let _capabilities =
+        seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+
+    let cell_landblock = Guid(0x8602_0100);
+    let cell_id = u32::from(cell_landblock);
+    // Spawn Z is BELOW the cell's floor — represents the post-relocate
+    // case where ACE plops the player at z≈0 but the actual cell
+    // floor is higher up.
+    let start_pose = WorldPosition {
+        landblock_id: cell_landblock,
+        coords: Vector3::new(50.0, 50.0, 0.0),
+        rotation: Quaternion::identity(),
+    };
+    let global = start_pose.global_coords();
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+
+    let cell_aabb = holtburger_common::Aabb {
+        min: holtburger_common::Vector3::new(global.x - 5.0, global.y - 5.0, 1.0),
+        max: holtburger_common::Vector3::new(global.x + 5.0, global.y + 5.0, 4.0),
+    };
+    world.scene.insert_cell_aabb(cell_id, cell_aabb);
+
+    let mut movement = MovementSystem::new();
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().forward().build(),
+        None,
+    ));
+
+    movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_millis(100));
+
+    let after = world
+        .local_player_runtime_pose()
+        .expect("runtime pose seeded above");
+    // First tick should already lift to floor_z = 1.005.
+    assert!(
+        (after.coords.z - 1.005).abs() < 1e-3,
+        "first-tick floor snap: Z should be 1.005 (cell floor + 5 mm), got {:.4}",
+        after.coords.z
+    );
+}

@@ -5,7 +5,7 @@ use super::{
 };
 use crate::entity::EntityMotionSnapshot;
 use holtburger_common::position::WorldPosition;
-use holtburger_common::{Aabb, Guid, Vector3};
+use holtburger_common::{Aabb, Guid, Triangle, Vector3};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use web_time::Instant;
@@ -114,6 +114,16 @@ pub struct SpatialScene {
     /// containment is computed from the 8x8 grid in O(1) by
     /// `WorldPosition::derived_outdoor_cell_id`.
     cell_aabbs: HashMap<u32, Aabb>,
+    /// 2026-05-10 indoor collision (Phase 6 step G follow-on):
+    /// world-space physics triangles per cell, populated by the
+    /// wasm bundle's `populateCellPhysicsForLandblock` from
+    /// `Environment.cell_structures[id].physics_polygons` (the parser
+    /// preserves these but the renderer ignores them — they're
+    /// collision-only). Triangles are pre-transformed through the
+    /// EnvCell's `position` frame so the per-tick swept-capsule
+    /// kernel doesn't have to redo the cell-frame rotation each
+    /// frame. Cleared on landblock unload alongside `cell_aabbs`.
+    cell_physics_index: HashMap<u32, Vec<Triangle>>,
     /// Phase 6 step E: door GUID → `(building_id, part_index)` lookup.
     /// JS-side door binding is by entity GUID (the ACE-broadcast `Door`
     /// weenie's full guid); the AABB index is keyed by per-part
@@ -156,6 +166,7 @@ impl SpatialScene {
             building_aabb_index: HashMap::new(),
             cell_portal_graph: HashMap::new(),
             cell_aabbs: HashMap::new(),
+            cell_physics_index: HashMap::new(),
             door_part_index: HashMap::new(),
             building_origins: HashMap::new(),
         }
@@ -385,6 +396,14 @@ impl SpatialScene {
         self.cell_aabbs
             .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
         let aabbs_removed = aabbs_before - self.cell_aabbs.len();
+        // 2026-05-10 indoor collision: keep `cell_physics_index`
+        // sympathetic with `cell_aabbs` — when a landblock unloads,
+        // its triangles go too. Counts roll into `aabbs_removed` so
+        // the diagnostic log doesn't drift; per-cell triangle counts
+        // aren't load-bearing and a future commit can split them
+        // out if a gauge is needed.
+        self.cell_physics_index
+            .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
         (edges_removed, aabbs_removed)
     }
 
@@ -399,6 +418,51 @@ impl SpatialScene {
     /// Diagnostic only.
     pub fn cell_aabb_count(&self) -> usize {
         self.cell_aabbs.len()
+    }
+
+    /// Phase 6 follow-on (academy rubberband, 2026-05-10): read access
+    /// to the world-space AABB cached for `cell_id`. Returned `None`
+    /// when the cell hasn't been baked yet (lazy `fetchEnvCellsInLand-
+    /// block` path) or `cell_id` is outdoor (outdoor containment is
+    /// derived from the 8x8 grid in `current_cell`, not from this map).
+    /// The integrator's indoor branch uses this to clamp the player's
+    /// lateral motion to the cell interior + floor-snap Z to the
+    /// cell's bottom — same data Phase 6D's `current_cell` already
+    /// reads to disambiguate Z-stacked floors.
+    pub fn cell_aabb(&self, cell_id: u32) -> Option<Aabb> {
+        self.cell_aabbs.get(&cell_id).copied()
+    }
+
+    /// 2026-05-10 indoor collision: insert a world-space triangle
+    /// into the per-cell physics index. Called by the wasm bundle's
+    /// `populateCellPhysicsForLandblock` populator after transforming
+    /// each `physics_polygon` from cell-local coords through the
+    /// EnvCell `position` frame to world coords + triangulating
+    /// fan-style for `num_pts > 3`. Stored by full 32-bit cell id
+    /// to mirror `cell_aabbs`.
+    pub fn insert_cell_triangle(&mut self, cell_id: u32, tri: Triangle) {
+        self.cell_physics_index.entry(cell_id).or_default().push(tri);
+    }
+
+    /// 2026-05-10 indoor collision: read access to the world-space
+    /// physics triangles for `cell_id`. Returned slice may be empty
+    /// when the cell hasn't been baked yet, or when the cell exists
+    /// in the scene but its EnvCell carried no `physics_polygons`
+    /// (rare — usually the EnvCell parser drops a few cells where
+    /// the BSP is unparseable, and the integrator falls back to the
+    /// cell-AABB clamp).
+    pub fn cell_triangles(&self, cell_id: u32) -> &[Triangle] {
+        self.cell_physics_index
+            .get(&cell_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// 2026-05-10 indoor collision: count of cells with at least one
+    /// indexed triangle. Diagnostic only — the wasm bundle's drain
+    /// log uses this to confirm the populator wired up.
+    pub fn cell_physics_count(&self) -> usize {
+        self.cell_physics_index.len()
     }
 
     /// Phase 6 step D: portal neighbours of `cell_id`. Empty slice if

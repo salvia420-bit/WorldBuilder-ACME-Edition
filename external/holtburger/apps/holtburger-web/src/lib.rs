@@ -2993,6 +2993,20 @@ thread_local! {
     static BUILDING_ORIGIN_PENDING:
         std::cell::RefCell<Vec<(holtburger_world::BuildingId, f32, f32)>> =
             const { std::cell::RefCell::new(Vec::new()) };
+
+    /// 2026-05-10 indoor collision (Phase 6 step G follow-on):
+    /// pending cell-physics-triangle inserts queued by
+    /// `fetchEnvCellsInLandblock` (alongside the existing cell-AABB
+    /// + portal pushes) and drained by the recv loop on each
+    /// `SessionCommand::TickMovement`. One entry per
+    /// `physics_polygon` per EnvCell, transformed cell-local →
+    /// world via the EnvCell's `position` frame so the integrator's
+    /// per-tick swept-capsule kernel doesn't re-do the rotation
+    /// every frame. Cleared together with `CELL_GRAPH_PENDING` —
+    /// triangles and AABBs share the EnvCell's lifetime.
+    static CELL_PHYSICS_PENDING:
+        std::cell::RefCell<Vec<(u32, holtburger_common::Triangle)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -3057,6 +3071,24 @@ fn drain_pending_cell_graph_into(scene: &mut holtburger_world::SpatialScene) -> 
             scene.insert_cell_aabb(cell_id, aabb);
         }
         (portals, aabbs)
+    })
+}
+
+/// 2026-05-10 indoor collision (Phase 6 step G follow-on): drain the
+/// pending cell-physics-triangle pile into the live scene's
+/// `cell_physics_index`. Returns the number of triangles inserted.
+/// Called from the same `TickMovement` arm as the cell-graph drain
+/// so collision math has triangles available the same tick the
+/// EnvCell AABBs land.
+#[cfg(target_arch = "wasm32")]
+fn drain_pending_cell_physics_into(scene: &mut holtburger_world::SpatialScene) -> usize {
+    CELL_PHYSICS_PENDING.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let count = buf.len();
+        for (cell_id, tri) in buf.drain(..) {
+            scene.insert_cell_triangle(cell_id, tri);
+        }
+        count
     })
 }
 
@@ -4849,6 +4881,99 @@ pub async fn fetch_env_cells_in_landblock(
                 pending.portals.push((envcell.cell_id, neighbour));
             }
         });
+
+        // 2026-05-10 indoor collision (Phase 6 step G follow-on):
+        // extract `physics_polygons` from this cell's `CellStruct`,
+        // triangulate fan-style for any polygon with `num_pts > 3`
+        // (rare but possible for retail dat — most are triangles
+        // already), and transform vertices from cell-local into
+        // world coords via the same `cell_origin + cell_orientation
+        // .rotate_vector(...)` frame used by static-object placement.
+        // Push each triangle into `CELL_PHYSICS_PENDING`; the recv-
+        // loop drain inserts them into `scene.cell_physics_index`
+        // on the next TickMovement, where the integrator's indoor
+        // wall-clamp + floor-raycast paths read them.
+        //
+        // Re-parses the Environment record per cell, which is wasted
+        // work when several cells share an environment_id (a Hold-
+        // burg dungeon sub-section uses one Environment for many
+        // cells). The `env_mesh_cache` HashMap above already memo-
+        // izes the visual mesh; a future commit can extend it to
+        // also cache the parsed Environment so this loop reads
+        // physics polygons without a re-parse. For now: correctness
+        // first, the dat-source cache layer absorbs the cost.
+        {
+            use holtburger_dat::ResourceKey;
+            use holtburger_dat::file_type::Environment;
+            let env_bytes = source
+                .get_file_by_key(ResourceKey::new("eor/portal", env_did))
+                .ok();
+            if let Some(env_bytes) = env_bytes {
+                if let Ok(env) =
+                    Environment::unpack(&mut std::io::Cursor::new(&env_bytes))
+                {
+                    if let Some(cell_struct) =
+                        env.cells.get(&(envcell.cell_structure as u32))
+                    {
+                        // Walk physics polygons, fan-triangulate,
+                        // transform to world coords. Skip degenerate
+                        // / missing-vertex polygons silently — a
+                        // stray bad polygon shouldn't break the rest
+                        // of the cell.
+                        for poly in cell_struct.physics_polygons.values() {
+                            if poly.num_pts < 3 {
+                                continue;
+                            }
+                            // Resolve vertex_ids → world-space Vector3.
+                            let mut world_verts: Vec<holtburger_common::Vector3> =
+                                Vec::with_capacity(poly.num_pts as usize);
+                            let mut all_ok = true;
+                            for &vid in &poly.vertex_ids {
+                                let key = vid as u16;
+                                let Some(sw) =
+                                    cell_struct.vertex_array.vertices.get(&key)
+                                else {
+                                    all_ok = false;
+                                    break;
+                                };
+                                let local = holtburger_common::Vector3::new(
+                                    sw.origin.x,
+                                    sw.origin.y,
+                                    sw.origin.z,
+                                );
+                                let rotated =
+                                    cell_orientation.rotate_vector(local);
+                                world_verts.push(holtburger_common::Vector3::new(
+                                    cell_origin.x + rotated.x,
+                                    cell_origin.y + rotated.y,
+                                    cell_origin.z + rotated.z,
+                                ));
+                            }
+                            if !all_ok || world_verts.len() < 3 {
+                                continue;
+                            }
+                            // Fan triangulation: (v0, v1, v2),
+                            // (v0, v2, v3), … ; correct for convex
+                            // polys, which AC physics polygons are
+                            // (the BSP tree only emits convex).
+                            CELL_PHYSICS_PENDING.with(|pending| {
+                                let mut pending = pending.borrow_mut();
+                                for i in 1..(world_verts.len() - 1) {
+                                    pending.push((
+                                        envcell.cell_id,
+                                        holtburger_common::Triangle::new(
+                                            world_verts[0],
+                                            world_verts[i],
+                                            world_verts[i + 1],
+                                        ),
+                                    ));
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+        }
 
         let mut static_objects: Vec<StaticObjectPlacement> =
             Vec::with_capacity(envcell.static_objects.len());
@@ -8331,6 +8456,13 @@ async fn recv_loop(
     let mut movement = holtburger_core::MovementSystemHandle::new();
     let mut entity_seeded = false;
     let mut heartbeat_armed = false;
+    // Academy-rubberband diagnostic — when set, holds the last
+    // observed `world.player.force_position_sequence`. Any tick where
+    // it changes emits a `[acad-diag rubberband]` console line so the
+    // capture script can correlate server-forced repositions against
+    // the client's predicted pose. Removed once the indoor floor-Z
+    // diagnosis is complete.
+    let mut last_diag_force_seq: Option<u16> = None;
 
     loop {
         tokio::select! {
@@ -8880,7 +9012,57 @@ async fn recv_loop(
                                             pose.coords.x, pose.coords.y, pose.coords.z,
                                         ));
                                     } else {
-                                        let _ = w.set_player_position(pose);
+                                        // 2026-05-10 reconciliation gate:
+                                        // ONLY snap to the server pose
+                                        // when ACE signalled a force-
+                                        // reposition (force_position_seq
+                                        // incremented) or a teleport
+                                        // (teleport_seq incremented).
+                                        // Otherwise this is a routine
+                                        // position broadcast — ACE relays
+                                        // the local player's pose to
+                                        // every nearby client including
+                                        // ourselves, and unconditionally
+                                        // snapping to it OVERWRITES the
+                                        // integrator's predicted pose
+                                        // every broadcast, producing the
+                                        // user-visible "moves a bit, snaps
+                                        // back" symptom even when no
+                                        // server rejection occurred. Trust
+                                        // the integrator's prediction by
+                                        // default; the heartbeat keeps
+                                        // ACE in sync, and any genuine
+                                        // physics divergence comes back
+                                        // as a force_position_sequence
+                                        // bump that this gate honours.
+                                        use holtburger_common::sequence::is_newer_u16;
+                                        let server_force_seq =
+                                            data.pos.force_position_sequence;
+                                        let server_teleport_seq =
+                                            data.pos.teleport_sequence;
+                                        let force_advanced = is_newer_u16(
+                                            server_force_seq,
+                                            w.player.force_position_sequence,
+                                        );
+                                        let teleport_advanced = is_newer_u16(
+                                            server_teleport_seq,
+                                            w.player.teleport_sequence,
+                                        );
+                                        if force_advanced || teleport_advanced {
+                                            console_log_str(&format!(
+                                                "[acad-diag reconcile] snapping to server pose: force_seq {}→{} teleport_seq {}→{} pose=({:.2}, {:.2}, {:.2})",
+                                                w.player.force_position_sequence,
+                                                server_force_seq,
+                                                w.player.teleport_sequence,
+                                                server_teleport_seq,
+                                                pose.coords.x,
+                                                pose.coords.y,
+                                                pose.coords.z,
+                                            ));
+                                            let _ = w.set_player_position(pose);
+                                        }
+                                        // else: trust client integrator;
+                                        // sequences are mirrored below.
                                     }
                                     // Mirror the four sequences onto the
                                     // WorldState player so outbound
@@ -8975,7 +9157,49 @@ async fn recv_loop(
                                             pos.coords.x, pos.coords.y, pos.coords.z,
                                         ));
                                     } else {
-                                        let _ = w.set_player_position(*pos);
+                                        // 2026-05-10 reconciliation gate:
+                                        // PrivateUpdatePosition has no
+                                        // sequence numbers in its payload
+                                        // (`PrivateUpdatePositionData`
+                                        // ships only `pos: WorldPosition`),
+                                        // so we can't gate on force /
+                                        // teleport seqs here. Conservative
+                                        // choice: trust the integrator's
+                                        // prediction unconditionally for
+                                        // `position_type == Location`
+                                        // (the routine local-player
+                                        // broadcast). UpdatePosition's
+                                        // sequence-aware gate above is
+                                        // where genuine force-repositions
+                                        // come through. If a regression
+                                        // shows up where ACE does send a
+                                        // force via PrivateUpdatePosition,
+                                        // wire `data.position_type` into
+                                        // a separate snap branch here.
+                                        // Diagnostic: log when we'd
+                                        // previously have snapped, so a
+                                        // future regression is visible
+                                        // before it bites.
+                                        if let Some(client_pose) =
+                                            w.local_player_runtime_pose()
+                                        {
+                                            let dx = client_pose.coords.x - pos.coords.x;
+                                            let dy = client_pose.coords.y - pos.coords.y;
+                                            let dz = client_pose.coords.z - pos.coords.z;
+                                            let dist_sq = dx * dx + dy * dy + dz * dz;
+                                            // 5 m drift tolerance — ACE
+                                            // typically broadcasts within
+                                            // a meter of client prediction;
+                                            // larger drifts indicate the
+                                            // integrator has gotten lost.
+                                            if dist_sq > 25.0 {
+                                                console_log_str(&format!(
+                                                    "[acad-diag reconcile] PrivateUpdatePosition drift {:.2} m → snapping to server",
+                                                    dist_sq.sqrt(),
+                                                ));
+                                                let _ = w.set_player_position(*pos);
+                                            }
+                                        }
                                     }
                                     if !heartbeat_armed && entity_seeded {
                                         let now = web_time::Instant::now();
@@ -9083,6 +9307,97 @@ async fn recv_loop(
                                 ),
                                 None => (0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0),
                             };
+                            // Academy seed (2026-05-10): for fresh-
+                            // character spawns ACE's `Player_Networking
+                            // ::SendSelf` order is PlayerDescription
+                            // (no pos field populated) → PlayerCreate
+                            // (guid only) → ObjectCreate (carries the
+                            // pos in `ObjectDescriptionData.pos`). The
+                            // existing `UpdatePosition` /
+                            // `PrivateUpdatePosition` seed sites at
+                            // `:8866-8888` and `:8970-8983` never fire
+                            // for the local player on a fresh spawn
+                            // because ACE doesn't send those messages
+                            // until something forces a position
+                            // change. Without seeding here the player
+                            // entity stays unseeded forever, the
+                            // integrator no-ops, the heartbeat never
+                            // arms, and ACE eventually drops us with
+                            // `Network Timeout`. Seed when
+                            // `data.public_weenie_desc.guid` is the
+                            // local player and `data.pos` is `Some`;
+                            // the entity_updates push below still
+                            // fires so the local-player sprite
+                            // renders.
+                            if let Some(w) = world.as_mut()
+                                && !entity_seeded
+                                && data.public_weenie_desc.guid == w.player.guid
+                                && w.player.guid != holtburger_common::Guid::NULL
+                                && let Some(pos) = data.pos
+                            {
+                                let entity = holtburger_world::entity::Entity::new(
+                                    data.public_weenie_desc.guid,
+                                    String::from("LocalPlayer"),
+                                    pos,
+                                );
+                                w.add_entity(entity);
+                                let _ = w.set_local_player_runtime_pose(pos);
+                                entity_seeded = true;
+                                console_log_str(&format!(
+                                    "[step 3.7] WorldState player entity seeded via ObjectCreate at landblock=0x{:08X} ({:.1}, {:.1}, {:.1})",
+                                    u32::from(pos.landblock_id),
+                                    pos.coords.x, pos.coords.y, pos.coords.z,
+                                ));
+                                if !heartbeat_armed {
+                                    let now = web_time::Instant::now();
+                                    movement.arm_heartbeat_schedule(now, w);
+                                    heartbeat_armed = true;
+                                    console_log_str(
+                                        "[step 3.7] AutonomousPosition heartbeat armed",
+                                    );
+                                }
+                            }
+                            // Academy-rubberband diagnostic
+                            // (2026-05-10): when ANY ObjectCreate
+                            // arrives for the local player, log the
+                            // current spawn-cell AABB + triangle count.
+                            // Catches the "AABB is the 1 m fallback"
+                            // failure mode where cells with empty
+                            // drawing polys but real physics polys
+                            // get pinned at the cell centroid by the
+                            // safety-net clamp. This emits ONCE per
+                            // session via `entity_seeded` (immediately
+                            // after seeding above), so the operator
+                            // can sanity-check the spawn cell without
+                            // log spam.
+                            if let Some(w) = world.as_ref()
+                                && entity_seeded
+                                && data.public_weenie_desc.guid == w.player.guid
+                                && let Some(seed_pos) = data.pos
+                            {
+                                let cell_id = w
+                                    .scene
+                                    .current_cell(&seed_pos);
+                                let aabb = w.scene.cell_aabb(cell_id);
+                                let tri_count = w.scene.cell_triangles(cell_id).len();
+                                if let Some(a) = aabb {
+                                    console_log_str(&format!(
+                                        "[acad-diag init] spawn cell=0x{:08X} aabb=[{:.2},{:.2},{:.2}]→[{:.2},{:.2},{:.2}] (size {:.2}×{:.2}×{:.2}) triangles={}",
+                                        cell_id,
+                                        a.min.x, a.min.y, a.min.z,
+                                        a.max.x, a.max.y, a.max.z,
+                                        a.max.x - a.min.x,
+                                        a.max.y - a.min.y,
+                                        a.max.z - a.min.z,
+                                        tri_count,
+                                    ));
+                                } else {
+                                    console_log_str(&format!(
+                                        "[acad-diag init] spawn cell=0x{:08X} aabb=NONE (cell not yet baked) triangles={}",
+                                        cell_id, tri_count,
+                                    ));
+                                }
+                            }
                             // Phase 4 step 6a: stop discarding the
                             // PublicWeenieDescription. wcid + item_type
                             // drive the JS-side category dispatch
@@ -9764,7 +10079,7 @@ async fn recv_loop(
                                     });
                                 }
                                 holtburger_protocol::messages::GameEvent::PlayerDescription(
-                                    _data,
+                                    data,
                                 ) => {
                                     // Phase 4 step 3.7: hydrate from
                                     // PlayerDescription so subsequent
@@ -9786,7 +10101,79 @@ async fn recv_loop(
                                     // fallback, verify real caps now
                                     // resolve, and defensively re-install
                                     // the fallback if they don't.
+                                    //
+                                    // Academy seed (2026-05-10): for
+                                    // fresh-character spawns ACE never
+                                    // sends `UpdatePosition` /
+                                    // `PrivateUpdatePosition` for the
+                                    // local player guid (ACE's
+                                    // `Player_Networking.SendSelf` order
+                                    // is PlayerDescription → PlayerCreate
+                                    // → CreateObject; the position rides
+                                    // on PlayerDescription, not a
+                                    // dedicated position update). Without
+                                    // this fall-through the player
+                                    // entity never gets seeded and the
+                                    // integrator no-ops every tick. Seed
+                                    // here when `data.pos` is `Some`,
+                                    // matching the pattern at
+                                    // `:8866-8888` (UpdatePosition path)
+                                    // and `:8970-8983`
+                                    // (PrivateUpdatePosition path); the
+                                    // existing teleport / motion arms
+                                    // overwrite via `set_player_position`
+                                    // once `entity_seeded` is true.
                                     if let Some(w) = world.as_mut() {
+                                        // Gate on `w.player.guid` (set at
+                                        // SelectCharacter time, before
+                                        // PlayerDescription arrives) rather
+                                        // than `LoopState::InWorld` —
+                                        // PlayerDescription typically
+                                        // races PlayerCreate by a few ms,
+                                        // and PlayerCreate is what
+                                        // transitions to InWorld. So at
+                                        // PlayerDescription handling time
+                                        // the loop state is still
+                                        // `EnteringWorld`, but `w.player.
+                                        // guid` already matches `data.guid`
+                                        // for the local player.
+                                        if !entity_seeded
+                                            && data.guid == w.player.guid
+                                            && data.guid != holtburger_common::Guid::NULL
+                                        {
+                                            if let Some(pos) = data.pos {
+                                                let entity =
+                                                    holtburger_world::entity::Entity::new(
+                                                        data.guid,
+                                                        String::from("LocalPlayer"),
+                                                        pos,
+                                                    );
+                                                w.add_entity(entity);
+                                                let _ = w
+                                                    .set_local_player_runtime_pose(pos);
+                                                entity_seeded = true;
+                                                console_log_str(&format!(
+                                                    "[step 3.7] WorldState player entity seeded via PlayerDescription at landblock=0x{:08X} ({:.1}, {:.1}, {:.1})",
+                                                    u32::from(pos.landblock_id),
+                                                    pos.coords.x,
+                                                    pos.coords.y,
+                                                    pos.coords.z,
+                                                ));
+                                                if !heartbeat_armed {
+                                                    let now = web_time::Instant::now();
+                                                    movement
+                                                        .arm_heartbeat_schedule(now, w);
+                                                    heartbeat_armed = true;
+                                                    console_log_str(
+                                                        "[step 3.7] AutonomousPosition heartbeat armed",
+                                                    );
+                                                }
+                                            } else {
+                                                console_log_str(
+                                                    "[step 3.7] PlayerDescription arrived without pos field — entity remains unseeded; waiting for UpdatePosition",
+                                                );
+                                            }
+                                        }
                                         w.clear_self_movement_capabilities_override();
                                         let real_caps_ok = w
                                             .resolve_self_movement_capabilities()
@@ -10355,6 +10742,21 @@ async fn recv_loop(
                                 w.scene.cell_aabb_count(),
                             ));
                         }
+                        // 2026-05-10 indoor collision (Phase 6 step G
+                        // follow-on): drain `physics_polygons`
+                        // triangles into `scene.cell_physics_index`
+                        // so the integrator's indoor branch can
+                        // immediately read them. Same cadence as the
+                        // cell-graph drain — triangles and AABBs
+                        // share the EnvCell's lifetime.
+                        let drained_tris =
+                            drain_pending_cell_physics_into(&mut w.scene);
+                        if drained_tris > 0 {
+                            console_log_str(&format!(
+                                "[phase6.G] drained {drained_tris} cell physics triangles into scene ({} cells with physics)",
+                                w.scene.cell_physics_count(),
+                            ));
+                        }
                         // Phase 6 step D: publish a snapshot of the
                         // local player's current cell + render set
                         // so the rAF tick can synchronously query it
@@ -10433,17 +10835,87 @@ async fn recv_loop(
                                         let caps_ok =
                                             w.resolve_self_movement_capabilities()
                                                 .is_ok();
+                                        // 2026-05-10 reconciliation
+                                        // diagnostic — log the body's
+                                        // authoritative pose + sample
+                                        // mode so we can see when (if
+                                        // ever) the runtime/authoritative
+                                        // poses diverge or the mode drops
+                                        // off SimulatingMotionState.
+                                        let body_view = w
+                                            .runtime_body_id_for_guid(w.player.guid)
+                                            .and_then(|bid| w.scene.runtime_body_view(bid));
+                                        let (auth_x, auth_y, auth_z, auth_present, mode_str) =
+                                            match body_view {
+                                                Some(view) => {
+                                                    let (ax, ay, az, present) = match view
+                                                        .authoritative_pose
+                                                    {
+                                                        Some(p) => (
+                                                            p.coords.x,
+                                                            p.coords.y,
+                                                            p.coords.z,
+                                                            true,
+                                                        ),
+                                                        None => (0.0, 0.0, 0.0, false),
+                                                    };
+                                                    let mode = format!("{:?}", view.sample_mode);
+                                                    (ax, ay, az, present, mode)
+                                                }
+                                                None => (0.0, 0.0, 0.0, false, "no-body".into()),
+                                            };
                                         console_log_str(&format!(
-                                            "[step 3.6 tick #{}] pose=({:.2}, {:.2}, {:.2}) cell=0x{:08X} caps_ok={} heartbeats_sent={}",
+                                            "[step 3.6 tick #{}] pose=({:.2}, {:.2}, {:.2}) cell=0x{:08X} indoor={} caps_ok={} force_seq={} heartbeats_sent={} auth=({:.2}, {:.2}, {:.2}) auth_present={} mode={}",
                                             movement.tick_count(),
                                             pose.coords.x,
                                             pose.coords.y,
                                             pose.coords.z,
                                             u32::from(pose.landblock_id),
+                                            pose.is_indoors(),
                                             caps_ok,
+                                            w.player.force_position_sequence,
                                             movement.heartbeats_sent(),
+                                            auth_x,
+                                            auth_y,
+                                            auth_z,
+                                            auth_present,
+                                            mode_str,
                                         ));
                                     }
+                                }
+                                // Academy-rubberband diagnostic — log
+                                // every change of force_position_sequence
+                                // (the server's "rubber band me back"
+                                // counter) at the tick it happens, so
+                                // the capture script can correlate
+                                // server-forced repositions against the
+                                // pose log above. The cli's existing
+                                // `log::warn!("Server forced reposition
+                                // (rubber band): ...")` in
+                                // movement/system.rs:35 goes through
+                                // the `log` crate facade, which has no
+                                // logger registered in the wasm build —
+                                // so it is silently dropped. This is a
+                                // direct console_log_str so the warn
+                                // surfaces in the browser console.
+                                let force_seq = w.player.force_position_sequence;
+                                if last_diag_force_seq != Some(force_seq) {
+                                    if let Some(prev) = last_diag_force_seq {
+                                        if let Some(pose) = w.local_player_runtime_pose() {
+                                            console_log_str(&format!(
+                                                "[acad-diag rubberband] tick #{} force_seq {} -> {} pose=({:.2}, {:.2}, {:.2}) cell=0x{:08X} indoor={}",
+                                                movement.tick_count(),
+                                                prev,
+                                                force_seq,
+                                                pose.coords.x,
+                                                pose.coords.y,
+                                                pose.coords.z,
+                                                u32::from(pose.landblock_id),
+                                                pose.is_indoors(),
+                                            ));
+                                        }
+                                    }
+                                    last_diag_force_seq = Some(force_seq);
                                 }
                             }
                             Err(e) => {
