@@ -2753,6 +2753,14 @@ void main() {
         );
       }
 
+      // Per-frame baked sprites face screen-east at heading=0 (the bake
+      // pose's natural orientation), so a 90° CCW visual rotation is
+      // applied so a north-bound character actually faces screen-up.
+      // Under worldContainer.scale.y = -1 a positive sprite.rotation is
+      // a CCW visual turn, hence +π/2. Applied symmetrically wherever
+      // sprite.rotation is derived from heading and vice versa.
+      const SPRITE_HEADING_OFFSET = Math.PI / 2;
+
       // Landblock-id + landblock-local (x, y) → world (wx, wy) in metres.
       // Matches the existing static-placement conversion at line 994
       // (`n.x * METERS_PER_LANDBLOCK + obj.x`). The wasm side forwards
@@ -3522,7 +3530,7 @@ void main() {
         entry.guid = guid;
         const { wx, wy } = landblockToWorldXY(upd.landblockId, upd.x, upd.y);
         entry.sprite.position.set(wx, wy);
-        entry.sprite.rotation = -quaternionToYaw(upd.qw, upd.qx, upd.qy, upd.qz);
+        entry.sprite.rotation = -quaternionToYaw(upd.qw, upd.qx, upd.qy, upd.qz) + SPRITE_HEADING_OFFSET;
         // Tier 2: capture initial position so the velocity sampler
         // has a baseline. Without it, the first PositionUpdate would
         // see Δt = 0 and falsely flag the entity as moving infinitely
@@ -4089,7 +4097,7 @@ void main() {
           && window.__predLastTickMs !== undefined
           && (now - window.__predLastTickMs) < 1500;
         if (!turningNow && !recentLocalActivity) {
-            entry.sprite.rotation = -quaternionToYaw(upd.qw, upd.qx, upd.qy, upd.qz);
+            entry.sprite.rotation = -quaternionToYaw(upd.qw, upd.qx, upd.qy, upd.qz) + SPRITE_HEADING_OFFSET;
         }
         // Portal swirl tracks the sprite — `tickEntityInterpolation`
         // syncs it along with the lerp so we don't snap the swirl
@@ -6099,16 +6107,18 @@ void main() {
                     const turnSpeed = run
                       ? RUN_HELD_TURN_SPEED_RAD_PER_SEC
                       : NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC;
-                    // Sprite stores -heading per the existing
-                    // quaternionToYaw → -sprite.rotation convention.
-                    let heading = -localEntry.sprite.rotation;
+                    // Sprite stores -heading + offset per the existing
+                    // quaternionToYaw → -sprite.rotation convention
+                    // (see SPRITE_HEADING_OFFSET above for the offset
+                    // rationale).
+                    let heading = -localEntry.sprite.rotation + SPRITE_HEADING_OFFSET;
                     if (turn !== 0) {
                       // Cli convention: right-turn omega.z = +1.5,
                       // left-turn omega.z = -1.5. Right (E) → +1
                       // → heading increases. Heading→sprite.rotation
                       // negation handles the visual flip.
                       heading += turn * turnSpeed * dt;
-                      localEntry.sprite.rotation = -heading;
+                      localEntry.sprite.rotation = -heading + SPRITE_HEADING_OFFSET;
                     }
                     if (forward !== 0) {
                       // Forward in heading direction; backstep flips
