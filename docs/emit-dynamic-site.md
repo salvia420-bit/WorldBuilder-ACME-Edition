@@ -2676,20 +2676,25 @@ Step ledger:
   `default_value = "0xA9B4"` so the default flows through the
   parser once. Same fix in `dat2hba --profile boot`.
   1 new unit test; native lib 1120 → 1121.
-- ⏳ **Phase 5.2 — manifest scale fix (BRIEF AT
-  [`manifest.md`](manifest.md), IN FLIGHT).** Real-world bake
-  produces a 203 MB `manifest.json` (885,043 entries × ~230
-  bytes verbose JSON; `eor/cell` envcells dominate). The
-  manifest is the new cliff. Phase 5.2 introduces a v2 format:
-  tiny top-level (~2 KB; just version, source provenance,
-  boot pack metadata, namespaces, URL templates) + lazy-fetched
-  per-namespace binary catalogs (`manifest/<namespace>.bin`,
-  ~19 bytes/entry × namespace size, gzipped at HTTP layer) +
-  convention shard URLs derived from `(namespace, file_id)` or
-  sha256. v1 stays one release cycle for in-flight CDN deploy
-  drain, then removed. Required before public CDN deployment
-  or 600 kbps cellular validation (Phase 5 obj 11); not
-  required for dev iteration over Tailscale WiFi.
+- ✅ **Phase 5.2 — manifest scale fix (LANDED 2026-05-09;
+  BRIEF AT [`manifest.md`](manifest.md), AS-BUILT AT
+  [`phase-5.2-manifest-fix.md`](phase-5.2-manifest-fix.md)).**
+  Real-world bake produced a 195 MB `manifest.json` (885k
+  entries × ~230 bytes verbose JSON; `eor/cell` envcells
+  dominated). Phase 5.2 introduced a v2 format: 541-byte
+  top-level (version, source provenance, boot pack metadata,
+  namespace list, URL templates) + lazy-fetched per-namespace
+  binary catalogs (`manifest/<namespace>.bin`; eor-cell 15 MB,
+  eor-portal 1.5 MB, holtburger-core 48 bytes) + convention
+  shard URLs from `(namespace, file_id)` or sha256. **361,000×
+  smaller top-level**; production v2 dist landed today via
+  `ln -sfn /mnt/wbterminal1/holtburger-dist-v2 dist`. v2 is
+  the default (`--manifest-version=2`); v1 stays one release
+  cycle for in-flight CDN deploy drain, then removed. Live
+  page-init→PASS in 603 ms on local loop with single 541-byte
+  manifest fetch + 0 catalog fetches (boot pack covers
+  smoke). 600 kbps cellular validation (obj 10) still pending
+  PK with phone.
 
   Sub-step ledger:
   - ✅ **obj 1-3 (audit + ManifestV2 schema + NamespaceCatalog
@@ -2813,14 +2818,32 @@ Step ledger:
     regressed. If you re-run today, verify against the
     post-Phase-6 baseline rather than the obj-8 100/100
     figure.
-  - ⏳ **obj 10 (live-ACE phone validation)** — bake v2 dist/,
-    serve over Tailscale, demonstrate <60s first paint + <5s
-    re-load on 600 kbps cellular. Phone validation needs a
-    real browser test from a tailnet device — hand-run by PK
-    until the Phase 6A part-fusion + Phase 6C empty-registry
-    regressions noted in the polish backlog above are fixed.
-  - ⏳ **obj 11 (docs)** — `phase-5.2-manifest-fix.md` as-built
-    + bumps to `phase-5-thorough.md` + this section + auto-memory.
+  - ✅ **obj 10-prod (production v2 bake + symlink swap)** —
+    landed 2026-05-09. Ran
+    `target/release/dat-shard --input dats/assets.hba --output
+    /mnt/wbterminal1/holtburger-dist-v2` (~5 min on this host;
+    885,037 unique shards, 635 boot covers). Atomic
+    `ln -sfn /mnt/wbterminal1/holtburger-dist-v2 dist`. Result
+    visible immediately on the running http.server: page-init
+    → all in-page smoke checks PASS in **603 ms** on local
+    loop (single 541-byte `manifest.json` fetch + 0 catalog
+    fetches; boot pack covers the smoke checks). Old v1 dist
+    preserved at `/mnt/wbterminal1/holtburger-dist` for
+    rollback (6.8 TB free on `/mnt/wbterminal1`). Phase 6A
+    capture re-run against v2 dist: PASS with identical
+    building counts (16 buildings, same model IDs, same
+    triangles).
+  - ⏳ **obj 10 (live-ACE phone validation)** — Phone
+    validation needs a real browser test from a tailnet
+    device on cellular, hand-run by PK. Local-loop is well
+    under target (603 ms vs 60 s); cellular adds RTT +
+    bandwidth limits the boot-pack download to ~25 s for
+    1.86 MB. Manual measurement is the only signal.
+  - ✅ **obj 11 (docs)** — landed 2026-05-09. New
+    [`phase-5.2-manifest-fix.md`](phase-5.2-manifest-fix.md)
+    as-built; [`phase-5-thorough.md`](phase-5-thorough.md)
+    bumped with a Phase 5.2 reference; this section updated;
+    auto-memory entry refreshed.
 - ⏳ **Phase 5.3 — boot pack adaptive sizing (no brief yet).**
   5.1b's transitive walk is "include everything reachable from
   spawn placements" — for Holtburg that's 1.86 MB. For dense

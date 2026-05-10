@@ -218,6 +218,16 @@ first paint fetches `manifest.json` (~few KB) + `boot.hba`
 panning to non-boot landblocks adds shard fetches at 5-100 KB
 per record.
 
+> **Update 2026-05-09: Phase 5.2 closed the manifest cliff.**
+> The 195 MB single `manifest.json` was the new bandwidth
+> bottleneck after Phase 5.0; Phase 5.2 split it into a
+> 541-byte top-level pointer + per-namespace lazy-fetched
+> binary catalogs. Production v2 dist landed today via
+> `dat-shard --manifest-version=2` (default). See
+> [`phase-5.2-manifest-fix.md`](phase-5.2-manifest-fix.md)
+> for the as-built. The 600 kbps phone test (obj 10/11)
+> remains pending PK validation.
+
 ## Files this work touches
 
 | File | Role |
