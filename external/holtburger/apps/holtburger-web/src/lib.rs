@@ -10375,6 +10375,64 @@ async fn recv_loop(
                                 "[step 3.6] PlayerTeleport received (teleport_seq={}); sending LoginComplete to clear Teleporting",
                                 data.teleport_sequence,
                             ));
+                            // Workstream G (3D camera/game-feel fix, 2026-05-11):
+                            // mirror the cli's `holtburger_world::handlers::player.rs:71-78`
+                            // PlayerTeleport flow on the wasm side. The cli routes
+                            // PlayerTeleport through `routing::handle_message` →
+                            // `player::handle_message` which (a) advances the
+                            // player's teleport_sequence and (b) calls
+                            // `suspend_runtime_bodies(TeleportOrWorldReset)` so
+                            // each body's pose snaps to its authoritative_pose
+                            // and `sampling.mode` flips to `Suspended`. The wasm
+                            // bundle's `should_route_message_to_world` filter
+                            // does NOT include `PlayerTeleport` (the recv loop
+                            // owns the LoginComplete action), so without this
+                            // mirror the wasm-side WorldState gets:
+                            //   - teleport_sequence stale (never advanced).
+                            //   - body.sampling.mode stuck at SimulatingMotionState
+                            //     (from the entity-seed `set_local_player_runtime_pose`
+                            //     call), which is then load-bearing for the
+                            //     subsequent UpdatePosition's
+                            //     `reconcile_authoritative_body` preserve-runtime
+                            //     gate: with `Snapshot` + `LocalPlayer` +
+                            //     SimulatingMotionState, preserve=true and
+                            //     body.pose is NOT reset to the new (destination)
+                            //     pose. body.authoritative_pose updates fine via
+                            //     the wasm-side `set_player_position` path; the
+                            //     runtime pose silently sticks at the source
+                            //     landblock. The F-capture diag (2026-05-11)
+                            //     confirms:
+                            //       [step 3.6 tick #120] pose=(12.32,-28.48,0.00)
+                            //         cell=0x860201AD indoor=true ...
+                            //         auth=(84.00,7.10,94.00) (Holtburg
+                            //         destination) mode=SimulatingMotionState
+                            //     With pose stuck at the Academy indoor cell,
+                            //     the integrator's `advance_local_pose_for_-
+                            //     manual_drive` hits the academy-rubberband-fix
+                            //     pre-bake gate (indoor cell with no triangles +
+                            //     no AABB) and zeros lateral delta — player
+                            //     can't move at all even when W is pressed.
+                            //
+                            // Fix: advance teleport_sequence + suspend bodies
+                            // here, mirroring the world handler. Then the
+                            // subsequent UpdatePosition for the destination
+                            // hits the wasm's reconcile gate, set_player_position
+                            // fires (Workstream G unconditional-snap below),
+                            // and `reconcile_authoritative_body` sees
+                            // mode=Suspended → preserve=false → body.pose snaps
+                            // to the destination pose. mode flips to
+                            // AuthoritativeOnly; the integrator's next W press
+                            // sets it back to SimulatingMotionState.
+                            if let Some(w) = world.as_mut() {
+                                w.player.set_teleport_sequence(data.teleport_sequence);
+                                let _ = w.suspend_runtime_bodies(
+                                    holtburger_world::RuntimeBodyResetCause::TeleportOrWorldReset,
+                                );
+                                console_log_str(&format!(
+                                    "[workstream-G] PlayerTeleport: advanced teleport_sequence → {} + suspended runtime bodies; runtime pose will snap on next UpdatePosition",
+                                    data.teleport_sequence,
+                                ));
+                            }
                             let login_complete = GameAction::LoginComplete(Box::new(
                                 holtburger_protocol::messages::LoginCompleteActionData,
                             ));
@@ -10613,57 +10671,122 @@ async fn recv_loop(
                                             pose.coords.x, pose.coords.y, pose.coords.z,
                                         ));
                                     } else {
-                                        // 2026-05-10 reconciliation gate:
-                                        // ONLY snap to the server pose
-                                        // when ACE signalled a force-
-                                        // reposition (force_position_seq
-                                        // incremented) or a teleport
-                                        // (teleport_seq incremented).
-                                        // Otherwise this is a routine
-                                        // position broadcast — ACE relays
-                                        // the local player's pose to
-                                        // every nearby client including
-                                        // ourselves, and unconditionally
-                                        // snapping to it OVERWRITES the
-                                        // integrator's predicted pose
-                                        // every broadcast, producing the
-                                        // user-visible "moves a bit, snaps
-                                        // back" symptom even when no
-                                        // server rejection occurred. Trust
-                                        // the integrator's prediction by
-                                        // default; the heartbeat keeps
-                                        // ACE in sync, and any genuine
-                                        // physics divergence comes back
-                                        // as a force_position_sequence
-                                        // bump that this gate honours.
-                                        use holtburger_common::sequence::is_newer_u16;
-                                        let server_force_seq =
-                                            data.pos.force_position_sequence;
-                                        let server_teleport_seq =
-                                            data.pos.teleport_sequence;
-                                        let force_advanced = is_newer_u16(
-                                            server_force_seq,
-                                            w.player.force_position_sequence,
-                                        );
-                                        let teleport_advanced = is_newer_u16(
-                                            server_teleport_seq,
-                                            w.player.teleport_sequence,
-                                        );
-                                        if force_advanced || teleport_advanced {
+                                        // Workstream G (3D camera/game-feel
+                                        // fix, 2026-05-11): always call
+                                        // `set_player_position` for the local
+                                        // player's UpdatePosition. The
+                                        // `reconcile_authoritative_body`
+                                        // implementation (in scene.rs:880-896)
+                                        // has a `preserve_local_runtime_pose`
+                                        // gate that fires when
+                                        //   LocalPlayer ∧ Snapshot ∧
+                                        //   mode ∈ {SimulatingMotionState,
+                                        //          SimulatingVelocity}
+                                        // and preserves body.pose while
+                                        // updating body.authoritative_pose +
+                                        // velocity/omega. That gate IS the
+                                        // load-bearing piece preventing the
+                                        // 2026-05-10 academy-rubberband
+                                        // "moves a bit, snaps back" symptom:
+                                        // during active simulation the
+                                        // integrator's mode is
+                                        // SimulatingMotionState so routine
+                                        // UpdatePosition broadcasts only
+                                        // refresh the auth pose, leaving the
+                                        // predicted runtime pose intact.
+                                        //
+                                        // The previous wasm-side
+                                        // `force_advanced || teleport_advanced`
+                                        // gate was a second-layer defense
+                                        // that, in retrospect, has a load-
+                                        // bearing failure mode for teleports:
+                                        // PlayerTeleport's wasm handler
+                                        // (above, line ~10387) advances
+                                        // `w.player.teleport_sequence`, so
+                                        // the subsequent UpdatePosition for
+                                        // the destination carries the SAME
+                                        // teleport_sequence the wasm
+                                        // mirrored when PlayerTeleport
+                                        // landed — `teleport_advanced =
+                                        // is_newer_u16(N, N) = false`. The
+                                        // gate doesn't fire, set_player_-
+                                        // position is never called, and
+                                        // body.pose stays at the source
+                                        // landblock while body.authoritative_-
+                                        // pose updates to the destination
+                                        // (via the implicit reconcile path
+                                        // through subsequent ObjectCreate /
+                                        // VectorUpdate / etc.). The
+                                        // integrator's
+                                        // `advance_local_pose_for_manual_-
+                                        // drive` then runs against the
+                                        // source pose, hits the academy-
+                                        // rubberband-fix indoor pre-bake
+                                        // gate if the source is an indoor
+                                        // cell, and zeros lateral delta —
+                                        // player can't walk at all.
+                                        //
+                                        // PlayerTeleport (above) now ALSO
+                                        // calls
+                                        // `suspend_runtime_bodies(Teleport-
+                                        // OrWorldReset)` which flips
+                                        // `body.sampling.mode` to Suspended.
+                                        // On the next UpdatePosition,
+                                        // unconditional set_player_position
+                                        // → reconcile_authoritative_body
+                                        // sees Suspended (NOT Simulating*),
+                                        // preserve=false, body.pose snaps
+                                        // to the destination. After that
+                                        // the integrator's first W press
+                                        // re-arms SimulatingMotionState
+                                        // and the preserve gate engages
+                                        // for routine broadcasts as before.
+                                        //
+                                        // The diagnostic log now fires on
+                                        // every snap so a regression where
+                                        // routine broadcasts overwrite the
+                                        // runtime pose would be visible
+                                        // immediately (look for
+                                        // `[acad-diag reconcile]` lines
+                                        // accumulating during active
+                                        // W-hold — should be empty post-fix).
+                                        // Only emit a diagnostic when the
+                                        // snap will actually take effect
+                                        // (mode ∉ Simulating*). During
+                                        // active integration the
+                                        // preserve-runtime-pose gate
+                                        // fires and the set_player_position
+                                        // call is a no-op on body.pose;
+                                        // logging on every routine
+                                        // broadcast floods the JS
+                                        // console / postMessage bridge
+                                        // and observably slows the
+                                        // recv-loop drain cadence
+                                        // (verified via F-capture: at-fix
+                                        // log-on-every-tick ran 4× slower
+                                        // than log-on-snap-only).
+                                        use holtburger_world::SpatialSampleMode;
+                                        let snap_will_apply = w
+                                            .runtime_body_id_for_guid(w.player.guid)
+                                            .and_then(|bid| w.runtime_body_view(bid))
+                                            .is_some_and(|view| {
+                                                !matches!(
+                                                    view.sample_mode,
+                                                    SpatialSampleMode::SimulatingMotionState
+                                                        | SpatialSampleMode::SimulatingVelocity
+                                                )
+                                            });
+                                        if snap_will_apply {
                                             console_log_str(&format!(
-                                                "[acad-diag reconcile] snapping to server pose: force_seq {}→{} teleport_seq {}→{} pose=({:.2}, {:.2}, {:.2})",
-                                                w.player.force_position_sequence,
-                                                server_force_seq,
-                                                w.player.teleport_sequence,
-                                                server_teleport_seq,
+                                                "[acad-diag reconcile] snapping to server pose: force_seq={} teleport_seq={} pose=({:.2}, {:.2}, {:.2})",
+                                                data.pos.force_position_sequence,
+                                                data.pos.teleport_sequence,
                                                 pose.coords.x,
                                                 pose.coords.y,
                                                 pose.coords.z,
                                             ));
-                                            let _ = w.set_player_position(pose);
                                         }
-                                        // else: trust client integrator;
-                                        // sequences are mirrored below.
+                                        let _ = w.set_player_position(pose);
                                     }
                                     // Mirror the four sequences onto the
                                     // WorldState player so outbound

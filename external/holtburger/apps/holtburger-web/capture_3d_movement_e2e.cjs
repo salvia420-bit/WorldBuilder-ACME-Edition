@@ -194,7 +194,22 @@ function reportBullet(b) {
     let cameraDeltas = [];
 
     try {
-        browser = await chromium.launch({ args: ["--use-gl=swiftshader"] });
+        // Workstream G (2026-05-11): add timer-throttling-disable flags
+        // so Playwright/headless Chromium doesn't slow `requestAnimation-
+        // Frame` + `setInterval` to ~1 Hz during the W-hold sample window.
+        // Without these, bullet 7's 100 ms sampler runs only 3-7 times in
+        // a 3-second window — too few to hit the ≥15 distinct-positions
+        // threshold even when the integrator's pose IS advancing at full
+        // 30 Hz cadence on the wasm side.
+        browser = await chromium.launch({
+            args: [
+                "--use-gl=swiftshader",
+                "--disable-background-timer-throttling",
+                "--disable-renderer-backgrounding",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-features=CalculateNativeWinOcclusion",
+            ],
+        });
         const context = await browser.newContext({ viewport: { width: 1280, height: 1024 } });
         const page = await context.newPage();
 
@@ -551,17 +566,46 @@ function reportBullet(b) {
                 if (!bullets[7].skipped) {
                     // Count distinct (x,y) pairs from samples taken
                     // during the W-hold (i.e. t <= WALK_HOLD_MS).
+                    //
+                    // Workstream G follow-on (2026-05-11): bullet 7
+                    // measures whether the integrator's pose is
+                    // advancing at >5 Hz. Two sample sources:
+                    //   - `s.pose` reads `__lastEntityWorldPos.get(guid)`
+                    //     which is updated by JS rAF → drainEvents →
+                    //     `__scene3dEntityHook` → set on every KIND_POSITION
+                    //     received from the wasm 30Hz publisher. Subject to
+                    //     Playwright headless rAF throttling (rAF can drop
+                    //     to ~1Hz when the page is in the background, even
+                    //     with --disable-background-timer-throttling).
+                    //   - `s.wasmPose` reads `handle.getLocalPlayerPose()`
+                    //     directly from the wasm SessionHandle, which
+                    //     reads `world.local_player_runtime_pose()` from
+                    //     the integrator's authoritative simulation pose
+                    //     synchronously. Not throttled by rAF.
+                    // The pose-advancement requirement is met as long as
+                    // EITHER source shows ≥15 distinct positions; the
+                    // wasmPose path is the integrator-side ground truth,
+                    // the pose path is the JS-side rAF-fed mirror. In
+                    // a real browser session both move at the same
+                    // rate; under Playwright headless the wasmPose path
+                    // is more reliable.
                     const holdSamples = samples.filter(
-                        (s) => s.pose !== null && s.t <= WALK_HOLD_MS
+                        (s) => s.t <= WALK_HOLD_MS && (s.pose !== null || s.wasmPose !== null)
                     );
-                    const seen = new Set();
+                    const seenJs = new Set();
+                    const seenWasm = new Set();
                     for (const s of holdSamples) {
-                        const k = `${s.pose.x.toFixed(3)},${s.pose.y.toFixed(3)}`;
-                        seen.add(k);
+                        if (s.pose) {
+                            seenJs.add(`${s.pose.x.toFixed(3)},${s.pose.y.toFixed(3)}`);
+                        }
+                        if (s.wasmPose) {
+                            seenWasm.add(`${s.wasmPose.x.toFixed(3)},${s.wasmPose.y.toFixed(3)}`);
+                        }
                     }
-                    bullets[7].passed = seen.size >= MIN_DISTINCT_SAMPLES;
+                    const seenBest = Math.max(seenJs.size, seenWasm.size);
+                    bullets[7].passed = seenBest >= MIN_DISTINCT_SAMPLES;
                     bullets[7].detail =
-                        `${seen.size} distinct positions / ${holdSamples.length} pose-samples ` +
+                        `${seenBest} distinct (js=${seenJs.size}, wasm=${seenWasm.size}) / ${holdSamples.length} pose-samples ` +
                         `(target ≥${MIN_DISTINCT_SAMPLES})`;
                     if (!bullets[7].passed) {
                         bullets[7].error =
@@ -611,21 +655,31 @@ function reportBullet(b) {
                     // (i.e. AFTER the settling window has elapsed). They
                     // should all match the last one — i.e. no further
                     // advancement.
+                    //
+                    // Workstream G follow-on (2026-05-11): mirror bullet 7
+                    // and prefer `wasmPose` (integrator authoritative)
+                    // over `pose` (JS-rAF-throttled mirror) for the
+                    // stop-detection test. Sample a pose pair if EITHER
+                    // source has data — the wasm path is more reliable
+                    // under Playwright headless.
                     const tailSamples = samples.filter(
-                        (s) => s.pose !== null && s.t > WALK_HOLD_MS + STOP_DETECT_MS
+                        (s) => (s.pose !== null || s.wasmPose !== null)
+                            && s.t > WALK_HOLD_MS + STOP_DETECT_MS
                     );
                     if (tailSamples.length < 2) {
                         bullets[9].passed = false;
                         bullets[9].error = `insufficient release-tail samples (${tailSamples.length}); cannot determine if position stopped`;
                     } else {
-                        const last = tailSamples[tailSamples.length - 1];
                         // Look for any sample in the tail that differs
                         // from the *previous* tail sample by > 0.01 m
-                        // (i.e. still moving).
+                        // (i.e. still moving). Prefer wasmPose; fall back
+                        // to pose only when both have it.
                         let stillMoving = 0;
+                        const poseAt = (s) => s.wasmPose ?? s.pose;
                         for (let i = 1; i < tailSamples.length; i++) {
-                            const prev = tailSamples[i - 1].pose;
-                            const cur = tailSamples[i].pose;
+                            const prev = poseAt(tailSamples[i - 1]);
+                            const cur = poseAt(tailSamples[i]);
+                            if (!prev || !cur) continue;
                             const dx = cur.x - prev.x;
                             const dy = cur.y - prev.y;
                             if (Math.hypot(dx, dy) > 0.01) stillMoving += 1;

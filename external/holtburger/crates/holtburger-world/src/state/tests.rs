@@ -997,6 +997,145 @@ fn player_teleport_suspends_runtime_bodies_and_emits_reset_signal() {
     );
 }
 
+/// Workstream G (3D camera/game-feel fix, 2026-05-11) regression test.
+///
+/// Reproduces the F-capture failure: after a teleport, the runtime
+/// pose sticks at the source landblock (Academy `0x8602`) while the
+/// authoritative pose advances to the destination (Holtburg `0xA9B4`).
+/// The integrator then runs against the stuck-at-source pose, hits the
+/// academy-rubberband pre-bake gate (indoor cell with no cell physics
+/// triangles), and zeros lateral delta — player can't move.
+///
+/// **Pre-fix behavior** (`mode` left at `SimulatingMotionState` after
+/// the integrator's `set_local_player_runtime_pose` lands):
+///   `reconcile_authoritative_body(... Snapshot)` preserves `body.pose`
+///   even on teleport, because `preserve_local_runtime_pose` is true
+///   when `mode ∈ {SimulatingMotionState, SimulatingVelocity}`. So
+///   `set_player_position(destination_pos)` only updates
+///   `body.authoritative_pose`, leaving `body.pose` (runtime) stuck.
+///
+/// **Post-fix behavior** (`PlayerTeleport` wasm handler calls
+/// `suspend_runtime_bodies(TeleportOrWorldReset)` which flips
+/// `mode` to `Suspended` BEFORE `set_player_position` runs):
+///   `preserve_local_runtime_pose` is false (Suspended ∉ {Simulating-
+///   MotionState, SimulatingVelocity}), so `body.pose` snaps to the
+///   destination as intended.
+///
+/// This test isolates the `WorldState`-level behavior — the wasm
+/// recv-loop's specific dispatch (which calls
+/// `w.player.set_teleport_sequence(...)` + `w.suspend_runtime_bodies(...)`
+/// from its `GameMessage::PlayerTeleport` arm before any subsequent
+/// `set_player_position` lands) is verified separately by the live
+/// `capture_3d_movement_e2e.cjs` Workstream F capture (bullet 7 flips
+/// from FAIL → PASS post-fix).
+#[test]
+fn workstream_g_post_teleport_set_player_position_updates_runtime_pose_when_body_suspended() {
+    use crate::AuthoritativeBodySync;
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0095);
+    // Academy spawn (indoor cell 0x860201AD — matches the F capture).
+    let source_pos = WorldPosition {
+        landblock_id: Guid(0x8602_01AD),
+        coords: Vector3::new(12.32, -28.48, 0.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    state.seed_local_player_entity(player_guid, "Player", source_pos);
+
+    // Simulate the integrator running once: this calls
+    // `apply_runtime_body_pose(body_id, pose, SimulatingMotionState)`
+    // which flips `body.sampling.mode` to SimulatingMotionState (the
+    // mode the academy-rubberband-fix `preserve_local_runtime_pose`
+    // gate keys off of). Without this step, `mode` would be
+    // `AuthoritativeOnly` (default from `add_entity` →
+    // `reconcile_authoritative_body(Snapshot)`) and the post-fix
+    // path's defenses against routine-broadcast pose overwrite
+    // would never engage.
+    let _ = state.set_local_player_runtime_pose(source_pos);
+    assert_eq!(
+        state
+            .scene
+            .body(SpatialBodyId::LocalPlayer(player_guid))
+            .expect("body should be registered post entity seed")
+            .sampling
+            .mode,
+        SpatialSampleMode::SimulatingMotionState,
+        "integrator's first set_local_player_runtime_pose call should arm SimulatingMotionState"
+    );
+
+    // Pre-fix path: routine `set_player_position(dest)` with
+    // mode=SimulatingMotionState preserves body.pose (academy-rubberband
+    // fix's defense against ACE's routine UpdatePosition broadcasts).
+    // This is intentional and correct for the routine case.
+    let destination_pos = WorldPosition {
+        landblock_id: Guid(0xA9B4_FFFE),
+        coords: Vector3::new(84.0, 7.1, 94.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    let _ = state.set_player_position(destination_pos);
+    let body_after_routine = state
+        .scene
+        .body(SpatialBodyId::LocalPlayer(player_guid))
+        .expect("body still registered after set_player_position");
+    assert_eq!(
+        body_after_routine.pose, source_pos,
+        "preserve_local_runtime_pose should keep body.pose at source under SimulatingMotionState (academy fix)"
+    );
+    assert_eq!(
+        body_after_routine.authoritative_pose,
+        Some(destination_pos),
+        "authoritative_pose should update to destination on routine set_player_position"
+    );
+
+    // Now exercise the post-fix path: suspend_runtime_bodies flips
+    // mode → Suspended. A subsequent `set_player_position` then
+    // reconciles the body via `reconcile_authoritative_body(Snapshot)`;
+    // with mode=Suspended (∉ Simulating*), `preserve_local_runtime_pose`
+    // is false, and body.pose snaps to the new destination. THIS is
+    // the gate Workstream G's wasm-side PlayerTeleport handler arm
+    // needs to engage before the subsequent UpdatePosition handler
+    // calls `set_player_position` again.
+    let _ = state.suspend_runtime_bodies(RuntimeBodyResetCause::TeleportOrWorldReset);
+    assert_eq!(
+        state
+            .scene
+            .body(SpatialBodyId::LocalPlayer(player_guid))
+            .expect("body suspended")
+            .sampling
+            .mode,
+        SpatialSampleMode::Suspended,
+        "suspend_runtime_bodies should flip mode to Suspended"
+    );
+
+    // Re-do the set_player_position to simulate the post-teleport
+    // UpdatePosition arriving with the destination pose. Now body.pose
+    // should snap.
+    let _ = state.set_player_position(destination_pos);
+    let body_after_teleport_snap = state
+        .scene
+        .body(SpatialBodyId::LocalPlayer(player_guid))
+        .expect("body still registered post teleport snap");
+    assert_eq!(
+        body_after_teleport_snap.pose, destination_pos,
+        "post-fix path: body.pose snaps to destination after suspend → set_player_position"
+    );
+    assert_eq!(
+        body_after_teleport_snap.authoritative_pose,
+        Some(destination_pos),
+        "authoritative_pose stays at destination"
+    );
+    // After the snap, reconcile_authoritative_body(Snapshot) with mode
+    // != Simulating* sets sampling.mode = AuthoritativeOnly (its
+    // default-snapshot mode). This is the correct steady-state until
+    // the integrator's next set_local_player_runtime_pose arms
+    // SimulatingMotionState again on the next W press.
+    assert_eq!(
+        body_after_teleport_snap.sampling.mode,
+        SpatialSampleMode::AuthoritativeOnly,
+        "snapshot reconcile from Suspended should land in AuthoritativeOnly (default-snapshot mode)"
+    );
+    let _ = AuthoritativeBodySync::Snapshot; // silence unused-import lint without changing public API
+}
+
 #[test]
 fn test_spell_name_resolution() {
     use crate::spell::{SpellCatalog, SpellInfo};

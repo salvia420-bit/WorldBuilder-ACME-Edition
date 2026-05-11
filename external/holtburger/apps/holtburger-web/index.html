@@ -4070,19 +4070,43 @@ void main() {
         // (PrivateUpdatePosition for the local player), the entry will
         // be a generic-grey placeholder until ObjectCreate lands.
         const guid = upd.guid >>> 0;
-        const entry = ensureEntitySprite(guid, 0, null);
-        if (!entry) return;
-        if (entry.guid === undefined) entry.guid = guid;
-        const { wx, wy } = landblockToWorldXY(upd.landblockId, upd.x, upd.y);
-        // LB-change terrain prefetch — fires whenever the local
-        // player's reported landblock differs from any we've already
-        // pushed to the wasm cache. Covers the initial spawn (kind=7
-        // EnteredWorld also pre-warms the Holtburg ring), teleports
-        // (no specific Holtburg coords required — ACE sends an
-        // UpdatePosition / PrivateUpdate with the destination LB
-        // post-teleport), and death-respawns (ACE places the player
-        // at the lifestone / sanctuary cell and broadcasts an
-        // UpdatePosition).
+        // Workstream G (3D camera/game-feel fix, 2026-05-11): hoist the
+        // local-player LB-prefetch out of the `if (!entry) return` early-
+        // return at line ~4074. The prior structure gated the prefetch
+        // on `ensureEntitySprite(guid, 0, null)` returning a non-null
+        // entry — that function returns null when `liveScene` is null
+        // (which is the case under `?renderer=3d` because the 2D PIXI
+        // `renderNeighbourhood` call site is skipped). Without the
+        // hoist, the four wasm-side bake calls (terrain heightmap,
+        // building AABBs, EnvCell physics_polygons, objects/buildings
+        // visual atlas) never fire for the local player in 3D mode →
+        // the integrator's indoor pre-bake gate (academy-rubberband
+        // follow-on, 2026-05-10) keeps the player frozen on the
+        // spawn cell because `cell_physics_index` and
+        // `building_aabb_index` are empty for the Academy LB.
+        //
+        // The four prefetch helpers are themselves idempotent and
+        // guard against missing `liveScene` for their 2D-rendering
+        // side effects:
+        //   - `ensureTerrainAroundLandblock`     — calls
+        //     `h.populateTerrain(lbId, heights)` unconditionally; only
+        //     the `addLandblockToScene` PIXI-render branch checks
+        //     `liveScene`.
+        //   - `ensureBuildingAabbsAroundLandblock` — calls
+        //     `populateBuildingAabbsForLandblock(lbId)` unconditionally
+        //     (pure wasm-side bake — no PIXI work).
+        //   - `ensureCellContainersForLandblock`  — calls
+        //     `fetchEnvCellsInLandblock(lbId)` BEFORE the `liveScene`
+        //     check, so the wasm-side `cell_physics_index` populates
+        //     correctly; only the bake-and-PIXI-attach branch needs
+        //     liveScene.
+        //   - `ensureLandblockObjectsForLandblock` — short-circuits at
+        //     `if (!liveScene || !liveScene.outdoorContainer) return;`
+        //     so it stays a no-op in 3D mode (pure 2D PIXI work). The
+        //     3D path has its own buildings/objects pipeline via
+        //     `init3D` / `buildHoltburgBuildings`.
+        // So calling all four for the local player regardless of
+        // liveScene is safe + idempotent + correct.
         if (
           localPlayerGuid !== null
           && guid === (localPlayerGuid >>> 0)
@@ -4117,11 +4141,21 @@ void main() {
           // buildings/objects beyond the current LB matter less for
           // immediate exploration than the LB the player is standing
           // in (a follow-up could expand to a 3x3 ring like terrain
-          // if performance allows).
+          // if performance allows). 3D mode: this helper is gated on
+          // `liveScene.outdoorContainer` and is a no-op (the 3D path
+          // builds its own outdoor objects via init3D).
           if (lbId !== 0 && !objectsRenderAddedLbs.has(lbId)) {
             ensureLandblockObjectsForLandblock(lbId);
           }
         }
+        // 2D-only branch below (sprite manipulation, lerp setup,
+        // velocity sampler) — these require a sprite entry that only
+        // `liveScene` (and thus only 2D mode) can provide. Return
+        // early in 3D mode where ensureEntitySprite returns null.
+        const entry = ensureEntitySprite(guid, 0, null);
+        if (!entry) return;
+        if (entry.guid === undefined) entry.guid = guid;
+        const { wx, wy } = landblockToWorldXY(upd.landblockId, upd.x, upd.y);
         // Tier 2: sample velocity from the position delta. Speed in
         // m/s — used by tickEntityAnimations to gate walk-cycle
         // playback (only animate while moving above threshold).
