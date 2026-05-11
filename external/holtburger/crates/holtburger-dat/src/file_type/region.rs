@@ -1287,4 +1287,121 @@ mod tests {
              {total_skyobjects} SkyObjects ({total_gfx_objs} GfxObj + {total_setup_models} SetupModel)"
         );
     }
+
+    /// Probe (Sky-I investigation, 2026-05-11): print AABB + bounding
+    /// sphere for each celestial body in Dereth Region 0x13000000
+    /// DayGroup[0]. Answer the "are the meshes too small to see"
+    /// question for the renderer-side debugging.
+    ///
+    /// For GfxObj (0x01) bodies: walk vertex_array.vertices and compute
+    /// AABB directly. For SetupModel (0x02) bodies: print AC's own
+    /// authoritative `radius`, `height`, `sorting_sphere`, plus the
+    /// per-part GfxObj AABB.
+    ///
+    /// Always passes — diagnostic-only, output via eprintln.
+    #[test]
+    fn sky_i_probe_sky_object_mesh_sizes() {
+        use crate::DatDatabase;
+        use crate::file_type::gfx_obj::GfxObj;
+        use crate::file_type::setup_model::SetupModel;
+
+        let Some(path) = locate_portal_dat() else {
+            eprintln!("[sky-i-probe] SKIP — no portal.dat");
+            return;
+        };
+        let dat = DatDatabase::new(&path).expect("portal.dat must open");
+        let bytes = dat.get_file(0x1300_0000).expect("Region 0x13000000");
+        let region = Region::unpack(&mut Cursor::new(&bytes))
+            .expect("Region must parse");
+        let sky = region.sky_info.as_ref().expect("SkyInfo");
+        let dg0 = &sky.day_groups[0];
+
+        eprintln!("\n=== [sky-i-probe] DayGroup[0] '{}' mesh sizes ===", dg0.day_name);
+
+        fn gfx_aabb(gfx: &GfxObj) -> ((f32, f32, f32), (f32, f32, f32), usize) {
+            let mut min = (f32::INFINITY, f32::INFINITY, f32::INFINITY);
+            let mut max = (f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+            for v in gfx.vertex_array.vertices.values() {
+                let o = &v.origin;
+                if o.x < min.0 { min.0 = o.x; }
+                if o.y < min.1 { min.1 = o.y; }
+                if o.z < min.2 { min.2 = o.z; }
+                if o.x > max.0 { max.0 = o.x; }
+                if o.y > max.1 { max.1 = o.y; }
+                if o.z > max.2 { max.2 = o.z; }
+            }
+            (min, max, gfx.vertex_array.vertices.len())
+        }
+
+        for (i, so) in dg0.sky_objects.iter().enumerate() {
+            let id = so.default_gfx_object_id;
+            if id == 0 { continue; }
+            let prefix = (id >> 24) as u8;
+            eprintln!(
+                "\n--- SkyObject[{i}] 0x{id:08X} (prefix 0x{prefix:02X}) begin={:.3} end={:.3} ---",
+                so.begin_time, so.end_time
+            );
+            match prefix {
+                0x01 => {
+                    let gb = dat.get_file(id).expect("GfxObj must resolve");
+                    let gfx = GfxObj::unpack(&mut Cursor::new(&gb)).expect("GfxObj must parse");
+                    let (min, max, nv) = gfx_aabb(&gfx);
+                    let ex = (max.0 - min.0, max.1 - min.1, max.2 - min.2);
+                    let diag = (ex.0 * ex.0 + ex.1 * ex.1 + ex.2 * ex.2).sqrt();
+                    eprintln!("  GfxObj: {nv} vertices");
+                    eprintln!("  AABB min ({:>8.3}, {:>8.3}, {:>8.3})", min.0, min.1, min.2);
+                    eprintln!("       max ({:>8.3}, {:>8.3}, {:>8.3})", max.0, max.1, max.2);
+                    eprintln!("    extent ({:>8.3}, {:>8.3}, {:>8.3})", ex.0, ex.1, ex.2);
+                    eprintln!("  diagonal {diag:.3} units (AC \"feet\" ≈ metres)");
+                }
+                0x02 => {
+                    let sb = dat.get_file(id).expect("SetupModel must resolve");
+                    let setup = SetupModel::unpack(&mut Cursor::new(&sb))
+                        .expect("SetupModel must parse");
+                    eprintln!("  SetupModel: {} parts", setup.parts.len());
+                    eprintln!("  AC-authoritative: radius={:.3}  height={:.3}",
+                              setup.radius, setup.height);
+                    eprintln!(
+                        "  sorting_sphere: origin=({:.3},{:.3},{:.3}) r={:.3}",
+                        setup.sorting_sphere.center.x,
+                        setup.sorting_sphere.center.y,
+                        setup.sorting_sphere.center.z,
+                        setup.sorting_sphere.radius
+                    );
+                    eprintln!(
+                        "  selection_sphere: origin=({:.3},{:.3},{:.3}) r={:.3}",
+                        setup.selection_sphere.center.x,
+                        setup.selection_sphere.center.y,
+                        setup.selection_sphere.center.z,
+                        setup.selection_sphere.radius
+                    );
+                    for (pi, part_id) in setup.parts.iter().enumerate() {
+                        let gb = match dat.get_file(*part_id) {
+                            Ok(b) => b,
+                            Err(_) => {
+                                eprintln!("    part[{pi}] 0x{part_id:08X}: (not found)");
+                                continue;
+                            }
+                        };
+                        let gfx = match GfxObj::unpack(&mut Cursor::new(&gb)) {
+                            Ok(g) => g,
+                            Err(_) => {
+                                eprintln!("    part[{pi}] 0x{part_id:08X}: parse failed");
+                                continue;
+                            }
+                        };
+                        let (min, max, nv) = gfx_aabb(&gfx);
+                        let ex = (max.0 - min.0, max.1 - min.1, max.2 - min.2);
+                        let diag = (ex.0 * ex.0 + ex.1 * ex.1 + ex.2 * ex.2).sqrt();
+                        eprintln!(
+                            "    part[{pi}] 0x{part_id:08X} {nv}v extent=({:.3},{:.3},{:.3}) diag={:.3}",
+                            ex.0, ex.1, ex.2, diag
+                        );
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+        eprintln!();
+    }
 }
