@@ -3362,6 +3362,44 @@ check(
         check("Workstream C: wasm camera-collision exports + JS sweep chain", false, String(e).slice(0, 120));
     }
 
+    // === Workstream B (2026-05-11) — client-side prediction in 3D camera ===
+    // Verifies that the camera switcher carries the prediction state +
+    // helpers (predictedPlayerPos, getPredictedPlayerWorldPos,
+    // _advancePrediction, _reconcilePrediction, _applyPredictionLerp) and
+    // that loop.js stamps `ts` on every __lastEntityWorldPos entry,
+    // entities.js reads predictedPlayerPos before falling back to the
+    // stash, and index.html exposes window.__movementConstants. Functional
+    // verification (advance math, reconcile lerp, snap-on-teleport) lives
+    // in test_workstream_b_prediction.mjs.
+    try {
+        const fs = require("fs");
+        const camSrc = fs.readFileSync(__dirname + "/scene3d/camera.js", "utf8");
+        const loopSrc = fs.readFileSync(__dirname + "/scene3d/loop.js", "utf8");
+        const entSrc = fs.readFileSync(__dirname + "/scene3d/entities.js", "utf8");
+        const indexSrc = fs.readFileSync(__dirname + "/index.html", "utf8");
+        const hasPredictedPos = /this\.predictedPlayerPos\s*=/.test(camSrc);
+        const hasGetPredicted = /getPredictedPlayerWorldPos\s*\(\s*\)\s*{/.test(camSrc);
+        const hasAdvance = /_advancePrediction\s*\(\s*dt\s*\)\s*{/.test(camSrc);
+        const hasReconcile = /_reconcilePrediction\s*\(\s*\)\s*{/.test(camSrc);
+        const hasLerp = /_applyPredictionLerp\s*\(\s*dt\s*\)\s*{/.test(camSrc);
+        const hasTickChain = /this\._reconcilePrediction\s*\(\s*\)\s*;[\s\S]*?this\._advancePrediction[\s\S]*?this\._applyPredictionLerp/
+            .test(camSrc);
+        const hasTsOnPose = /__lastEntityWorldPos\.set\([\s\S]*?ts:/.test(loopSrc);
+        const hasEntitiesReadPredicted = /getPredictedPlayerWorldPos\s*\(\s*\)/.test(entSrc);
+        const hasMovementConsts = /window\.__movementConstants\s*=\s*{/.test(indexSrc);
+        check(
+            "Workstream B: client-side prediction state + ts + getPredictedPlayerWorldPos + entities + consts",
+            hasPredictedPos && hasGetPredicted && hasAdvance && hasReconcile &&
+                hasLerp && hasTickChain && hasTsOnPose && hasEntitiesReadPredicted &&
+                hasMovementConsts,
+            `pred=${hasPredictedPos} get=${hasGetPredicted} advance=${hasAdvance} ` +
+                `reconcile=${hasReconcile} lerp=${hasLerp} chain=${hasTickChain} ` +
+                `ts=${hasTsOnPose} ent=${hasEntitiesReadPredicted} consts=${hasMovementConsts}`
+        );
+    } catch (e) {
+        check("Workstream B: client-side prediction state + helpers", false, String(e).slice(0, 120));
+    }
+
     console.log("=========================");
     if (failed === 0) {
         console.log("PASS: all smoke checks green.");

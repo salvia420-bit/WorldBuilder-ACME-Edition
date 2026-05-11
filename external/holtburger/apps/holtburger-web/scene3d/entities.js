@@ -779,6 +779,22 @@ export class EntityManager {
   getLocalPlayerWorldPos() {
     // eslint-disable-next-line no-undef
     if (typeof window === "undefined") return null;
+    // Workstream B (2026-05-11) — prefer the cameraSwitcher's
+    // client-side predicted pose if it's been seeded. The predicted
+    // pose advances every rAF along the WASD intent vector + reconciles
+    // against the 30 Hz authoritative KIND_POSITION emit, giving the
+    // follow camera a smooth 60 FPS player track instead of the
+    // discrete server-step jitter the bare `__lastEntityWorldPos` read
+    // produces. Falls through to the original three-tier resolution
+    // pre-spawn (predictedPlayerPos is null until the first server pose
+    // arrives) or in the unit-test path (no liveScene3d on window).
+    //
+    // eslint-disable-next-line no-undef
+    const cs = window.liveScene3d?.cameraSwitcher;
+    if (cs && typeof cs.getPredictedPlayerWorldPos === "function") {
+      const predicted = cs.getPredictedPlayerWorldPos();
+      if (predicted) return predicted;
+    }
     // eslint-disable-next-line no-undef
     const lpgFn = window.getLocalPlayerGuid;
     let guid = (typeof lpgFn === "function") ? lpgFn() : null;

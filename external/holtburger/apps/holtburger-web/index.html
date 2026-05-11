@@ -5347,6 +5347,22 @@ void main() {
           const WALK_FORWARD_SPEED = 1.0;              // m/s — also strafe + backstep
           const RUN_HELD_TURN_SPEED_RAD_PER_SEC = 1.5;
           const NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC = 1.0;
+          // Workstream B (2026-05-11) — expose the prediction constants on
+          // window.__movementConstants so the 3D camera path (camera.js)
+          // can pull them at runtime instead of redefining them. Single
+          // source of truth — drift between 2D and 3D prediction speeds
+          // would be silent and load-bearing for game-feel parity.
+          // SPRITE_HEADING_OFFSET lives at module-scope (line ~2784) and
+          // is also hoisted for symmetry.
+          if (typeof window !== "undefined") {
+            window.__movementConstants = {
+              FALLBACK_RUN_RATE_SCALAR,
+              WALK_FORWARD_SPEED,
+              RUN_HELD_TURN_SPEED_RAD_PER_SEC,
+              NON_RUN_HELD_TURN_SPEED_RAD_PER_SEC,
+              SPRITE_HEADING_OFFSET,
+            };
+          }
           characterUl.addEventListener("click", (ev) => {
             const btn = ev.target.closest("button[data-id]");
             if (!btn) return;

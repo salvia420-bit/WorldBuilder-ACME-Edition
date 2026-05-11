@@ -341,10 +341,24 @@ export function installSharedDrainHook(scene3d) {
           // is a no-op for that guid). `getLocalPlayerWorldPos` uses
           // this as its last-resort fallback so the camera tracks the
           // server pose regardless of whether a rig ever spawned.
+          //
+          // Workstream B (2026-05-11): `ts` is the rAF wall-clock when
+          // this server-authoritative pose landed. The cameraSwitcher's
+          // client-side prediction reads (x, y, z, ts) on each rAF: a
+          // changed `ts` means a fresh KIND_POSITION arrived from ACE
+          // since the last reconcile, so the prediction can snap-or-lerp
+          // toward the new authoritative pose. Without the timestamp the
+          // prediction would re-reconcile on every rAF and never let the
+          // client-side integration breathe.
           if (!window.__lastEntityWorldPos) {
             window.__lastEntityWorldPos = new Map();
           }
-          window.__lastEntityWorldPos.set(g, { x: wx, y: wy, z: wz });
+          window.__lastEntityWorldPos.set(g, {
+            x: wx, y: wy, z: wz,
+            ts: (typeof performance !== "undefined" && performance.now)
+              ? performance.now()
+              : Date.now(),
+          });
           em.setPose(
             g,
             wx, wy, wz,

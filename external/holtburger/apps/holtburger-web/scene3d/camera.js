@@ -253,6 +253,59 @@ export class CameraSwitcher {
     this.lastInputSig = "0,0,0,false";
     this.setMovementInputCount = 0;
 
+    // Workstream B (2026-05-11) — client-side prediction state for the
+    // 3D follow camera. ACE-side simulation runs at the integrator's
+    // tick rate (60+ Hz); wasm fans out `KIND_POSITION` at <= 30 Hz
+    // (Workstream A); the network/proxy adds jitter. Without prediction
+    // the camera lerps in discrete server steps and the viewport feels
+    // ratchety even on a clean ACE.
+    //
+    // Mirrors the 2D path's prediction block at `index.html:6144-6207`.
+    // While WASD is held in follow mode, `tick(dt)` advances
+    // `predictedPlayerPos` along the heading vector from
+    // `__sessionHandle.getLocalPlayerPose().heading` at
+    // run/walk/strafe/backstep speeds copied from `index.html` via
+    // `window.__movementConstants`. When a fresh `__lastEntityWorldPos`
+    // entry lands (detected via the `ts` field added in
+    // `loop.js:dispatchOne`), the predicted pose snap-or-lerps toward
+    // the authoritative server pose so drift never accumulates.
+    //
+    // `lastReconcileTs` is the `__lastEntityWorldPos.get(guid).ts` value
+    // we last reconciled against — incoming updates with a strictly
+    // greater `ts` are "new" and reset the lerp.
+    //
+    // `lerpTargetX/Y/Z` + `lerpDurationMs` carry the in-flight lerp
+    // toward server pose. While `lerpRemainingMs > 0`, the prediction
+    // is a blend `predictedPos -> lerpTarget` over `lerpDurationMs`.
+    // Snap-mode (large delta) sets `lerpRemainingMs = 0` and writes
+    // the pose directly.
+    //
+    // `lastTickMs` is the wall-clock `performance.now()` from the
+    // previous `tick(dt)`; we use it both to gate "no rAF since last
+    // tick" (prevents predictedPos from jumping when a hidden tab
+    // resumes) and to advance the in-flight lerp.
+    //
+    // Initially null until the first authoritative pose arrives — the
+    // prediction layer falls through to the existing three-tier
+    // fallback in `getLocalPlayerWorldPos` until then.
+    //
+    // Debug ring buffer (`_predictionTrace`) captures the last 256
+    // samples for post-hoc analysis; toggled by setting
+    // `window.__predTrace3d = true` in the console. Off by default
+    // (the per-rAF push is cheap but the GC pressure adds up over a
+    // long session).
+    this.predictedPlayerPos = null; // { x, y, z, lastReconcileTs }
+    this._lerpTargetX = 0.0;
+    this._lerpTargetY = 0.0;
+    this._lerpTargetZ = 0.0;
+    this._lerpRemainingMs = 0.0;
+    this._lerpDurationMs = 150.0; // middle of the 100-300 ms band from
+    // the spec; tuned by eye-test if drift is visible.
+    this._predLastTickMs = null;
+    this._predictionWarned = false;
+    this._predictionTrace = [];
+    this._predictionTraceCapacity = 256;
+
     // Listeners registered for cleanup in `dispose()`.
     this._listeners = [];
 
@@ -373,13 +426,30 @@ export class CameraSwitcher {
 
   /**
    * Per-frame update. Driven from `loop.js` `tickPerFrame`.
-   * - Positions the active camera.
+   * - Advances `predictedPlayerPos` from WASD intent + integrator
+   *   heading (Workstream B prediction step). Composes BEFORE
+   *   `positionCamera` so the follow-cam frames the predicted pose,
+   *   not the stashed server pose.
+   * - Reconciles `predictedPlayerPos` against any fresh server pose
+   *   landed in `__lastEntityWorldPos` since the last reconcile.
+   * - Positions the active camera (consuming `predictedPlayerPos` via
+   *   `getLocalPlayerWorldPos` → cameraSwitcher fallback).
    * - Computes movement input from keystate + camera yaw and forwards
    *   to `sessionHandle.setMovementInput` on change.
    * - Calls `controls.update()` for OrbitControls damping (no-op for
    *   other modes).
+   *
+   * Order matters:
+   *   1. Reconcile incoming server pose (may snap or start a lerp).
+   *   2. Advance prediction by WASD intent for `dt` seconds.
+   *   3. Apply in-flight lerp toward server pose.
+   *   4. Position camera (reads `_safePlayerPos` → predicted pose).
+   *   5. Dispatch movement input.
    */
   tick(dt) {
+    this._reconcilePrediction();
+    this._advancePrediction(dt);
+    this._applyPredictionLerp(dt);
     this.positionCamera(dt);
     if (this.controls && typeof this.controls.update === "function") {
       try {
@@ -598,6 +668,327 @@ export class CameraSwitcher {
     } catch (_) {}
 
     return { x: finalX, y: finalY, z: finalZ };
+  }
+
+  // ---- prediction (Workstream B) -----------------------------------
+
+  /**
+   * Workstream B (2026-05-11) — reconcile `predictedPlayerPos` against
+   * any fresh server pose landed in `__lastEntityWorldPos` since the
+   * last reconcile. Mirrors the 2D path's authoritative-pose snap in
+   * `handlePositionUpdate` (`index.html:~4115`) for the 3D follow
+   * camera.
+   *
+   * Reconciliation rules:
+   *   - First time we see a pose: seed `predictedPlayerPos` directly
+   *     from the server (no lerp; pre-spawn → first-spawn transition).
+   *   - Delta magnitude > 5 m: treat as a teleport. Snap predicted to
+   *     server pose and clear any in-flight lerp.
+   *   - Otherwise: start a 150 ms lerp from current predicted pose to
+   *     server pose. `_applyPredictionLerp(dt)` consumes the lerp.
+   *
+   * `lastReconcileTs` is the server's `ts` we last reconciled against.
+   * Only `ts > lastReconcileTs` triggers a re-reconcile, so a stale
+   * server pose (e.g. between 30 Hz emits) doesn't keep pulling the
+   * prediction back to the same point on every rAF.
+   */
+  _reconcilePrediction() {
+    if (typeof window === "undefined") return;
+    // Resolve the local-player GUID. Mirrors the same fallback chain as
+    // entities.js#getLocalPlayerWorldPos so the prediction layer
+    // converges on the same GUID as the rest of the 3D path.
+    const lpgFn = window.getLocalPlayerGuid;
+    let guid = (typeof lpgFn === "function") ? lpgFn() : null;
+    const lastMap = window.__lastEntityWorldPos;
+    if ((guid === null || guid === undefined) && lastMap) {
+      for (const k of lastMap.keys()) {
+        if (((k >>> 0) & 0xF0000000) === 0x50000000) {
+          guid = k >>> 0;
+          break;
+        }
+      }
+    }
+    if (guid === null || guid === undefined) return;
+    const serverPose = lastMap && typeof lastMap.get === "function"
+      ? lastMap.get(guid >>> 0)
+      : null;
+    if (!serverPose) return;
+    const sx = serverPose.x;
+    const sy = serverPose.y;
+    const sz = serverPose.z;
+    const sts = typeof serverPose.ts === "number" ? serverPose.ts : 0;
+    if (!Number.isFinite(sx) || !Number.isFinite(sy)) return;
+
+    // First-time seed — no lerp, just plant the flag.
+    if (!this.predictedPlayerPos) {
+      this.predictedPlayerPos = {
+        x: sx, y: sy, z: sz,
+        lastReconcileTs: sts,
+      };
+      this._lerpRemainingMs = 0.0;
+      return;
+    }
+
+    // Already up-to-date — nothing fresh from the server since our
+    // last reconcile. Common case: ACE emits at 30 Hz, rAF runs at 60+
+    // Hz, so half of frames see no change in `serverPose.ts`.
+    if (sts <= this.predictedPlayerPos.lastReconcileTs) return;
+
+    const px = this.predictedPlayerPos.x;
+    const py = this.predictedPlayerPos.y;
+    const pz = this.predictedPlayerPos.z;
+    const dx = sx - px;
+    const dy = sy - py;
+    const dz = sz - pz;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+    // Snap on large delta (teleport, rubberband, init). The 5 m
+    // threshold comes from the spec — comfortably larger than worst-case
+    // single-tick drift at 4.5 m/s × 33 ms ≈ 0.15 m.
+    if (dist > 5.0) {
+      this.predictedPlayerPos.x = sx;
+      this.predictedPlayerPos.y = sy;
+      this.predictedPlayerPos.z = sz;
+      this.predictedPlayerPos.lastReconcileTs = sts;
+      this._lerpRemainingMs = 0.0;
+      return;
+    }
+
+    // Small drift — start a lerp toward the server pose. Setting the
+    // target every time a fresh server pose arrives means the lerp
+    // chases the latest authoritative state; the in-flight blend in
+    // `_applyPredictionLerp` smooths the rough edges between 30 Hz
+    // updates.
+    this._lerpTargetX = sx;
+    this._lerpTargetY = sy;
+    this._lerpTargetZ = sz;
+    this._lerpRemainingMs = this._lerpDurationMs;
+    this.predictedPlayerPos.lastReconcileTs = sts;
+  }
+
+  /**
+   * Workstream B (2026-05-11) — advance `predictedPlayerPos` by the
+   * current WASD intent vector for `dt` seconds. Mirrors the 2D
+   * prediction block at `index.html:6168-6235` for the 3D path.
+   *
+   * Heading source priority:
+   *   1. `__sessionHandle.getLocalPlayerPose().heading` — authoritative
+   *      integrator heading, available post-Workstream-A (lands on the
+   *      first heartbeat tick after EnteredWorld).
+   *   2. `this.getPlayerHeading()` — the 3D rig's quaternion-derived
+   *      yaw, available once the EntityManager builds the local-player
+   *      rig (post-Workstream-E, currently unreliable).
+   *   3. `0` — north-facing default. Pre-spawn `predictedPlayerPos` is
+   *      `null` anyway, so this branch only fires in the brief window
+   *      after the first server pose lands but before the first
+   *      heartbeat tick publishes a heading.
+   *
+   * Speed constants come from `window.__movementConstants` (exposed by
+   * `index.html` so 2D and 3D prediction stay in sync). If the page
+   * hasn't run the login closure yet (`__movementConstants` undefined),
+   * the prediction silently no-ops — the predicted pose stays anchored
+   * at whatever the last server pose was, and the camera tracks that.
+   *
+   * Convention bridge (heading → world delta): the 3D follow camera
+   * uses the **compass-bearing** convention (CW-from-+Y-north) for
+   * heading, identical to `followYaw` in `positionCamera`'s forward
+   * vector `(sin yaw, cos yaw)`. This DIFFERS from the 2D path's
+   * formula at `index.html:6212-6230` because the 2D path's heading
+   * is offset by `SPRITE_HEADING_OFFSET = π/2` to account for the
+   * sprite-coordinate convention (sprite rotation 0 = facing screen-
+   * east, not screen-up). For the 3D path, the wasm-side
+   * `getLocalPlayerPose().heading` is the raw compass bearing — yaw=0
+   * means +Y north, yaw=π/2 means +X east — so we use the same
+   * `(sin h, cos h)` math the camera uses internally.
+   *
+   *   - forward in heading: `dx = +sin(h) * speed * dt`,
+   *                         `dy = +cos(h) * speed * dt`
+   *     (heading=0 north → (0, +speed); heading=π/2 east → (+speed, 0))
+   *   - backstep: forward direction flipped, walk speed
+   *   - strafe right (D, +1): heading + π/2 (right of forward), walk speed
+   *   - strafe left (A, -1):  heading - π/2 (left of forward),  walk speed
+   *
+   * Forward axis takes priority over strafe (the wire format's
+   * `Locomotion` carries a single direction), so W+D produces forward
+   * motion only — strafe only applies when forward is zero.
+   *
+   * Q/E manual turn: the prediction layer does NOT integrate heading
+   * locally. The server-authoritative pose's heading is the source of
+   * truth, and the next reconcile pulls it in. Spinning in place
+   * (forward=0, turn=±1) → predicted pose stays still (correct —
+   * the player rotates without translating). This matches the 2D
+   * prediction block, which DOES integrate heading locally but only to
+   * keep `sprite.rotation` in sync; the actual translation still uses
+   * the integrated heading. The 3D path defers heading-integration
+   * to the server because the wasm-side authoritative heading is
+   * already exposed via `getLocalPlayerPose()`.
+   */
+  _advancePrediction(dt) {
+    if (typeof window === "undefined") return;
+    if (this.mode !== "follow") return; // topDown / orbit don't need prediction
+    if (!this.predictedPlayerPos) return; // pre-spawn — no anchor
+
+    // Capture wall-clock for the trace buffer + the lerp ledger.
+    const now = (typeof performance !== "undefined" && performance.now)
+      ? performance.now()
+      : Date.now();
+
+    // Skip the very first tick after seeding — no `dt` baseline yet.
+    if (this._predLastTickMs === null) {
+      this._predLastTickMs = now;
+      return;
+    }
+    this._predLastTickMs = now;
+
+    // Cap dt at 100 ms to clamp big jumps when a hidden tab resumes
+    // and rAF fires after a multi-second pause (matches 2D path's
+    // `Math.min((now - lastPredictionTime) / 1000, 0.1)`).
+    const dtSafe = Math.min(dt, 0.1);
+    if (!(dtSafe > 0)) return;
+
+    const k = this.keys;
+    const inputForward = (k.w ? 1 : 0) - (k.s ? 1 : 0);
+    const inputStrafe = (k.d ? 1 : 0) - (k.a ? 1 : 0);
+    if (inputForward === 0 && inputStrafe === 0) {
+      // No WASD held — no advancement. The reconcile path will still
+      // drag predicted toward server pose if the integrator continues
+      // to advance (e.g. on a slope where gravity matters), but the
+      // client doesn't extrapolate without input.
+      return;
+    }
+
+    // Constants from the 2D path's prediction block, hoisted onto
+    // window.__movementConstants by index.html. Hard-coded fallbacks
+    // mirror the values at `index.html:5346-5349` so the prediction
+    // doesn't silently no-op if the constants aren't exposed yet —
+    // but the eslint rule against magic numbers is appeased by the
+    // `??` rather than redeclared literals.
+    const consts = window.__movementConstants ?? {};
+    const RUN_SPEED = consts.FALLBACK_RUN_RATE_SCALAR ?? 4.5;
+    const WALK_SPEED = consts.WALK_FORWARD_SPEED ?? 1.0;
+
+    // Heading source. getLocalPlayerPose() is the post-Workstream-A
+    // authoritative read; falls back to `getPlayerHeading()` (3D rig
+    // quaternion) pre-spawn or in unit-test mocks.
+    let heading = null;
+    const handle = this._getSessionHandle?.();
+    if (handle && typeof handle.getLocalPlayerPose === "function") {
+      try {
+        const pose = handle.getLocalPlayerPose();
+        if (pose && typeof pose.heading === "number"
+            && Number.isFinite(pose.heading)) {
+          heading = pose.heading;
+        }
+      } catch (_) {}
+    }
+    if (heading === null && typeof this.getPlayerHeading === "function") {
+      try {
+        const h = this.getPlayerHeading();
+        if (typeof h === "number" && Number.isFinite(h)) heading = h;
+      } catch (_) {}
+    }
+    if (heading === null) heading = 0.0;
+
+    const run = !k.shift;
+    let advanced = false;
+    if (inputForward !== 0) {
+      // Forward in heading direction; backstep flips by π and uses
+      // walk speed. Compass-bearing convention: heading=0 → +Y north,
+      // heading=π/2 → +X east. dx=+sin(h)*speed, dy=+cos(h)*speed.
+      let effHeading = heading;
+      let speed = run ? RUN_SPEED : WALK_SPEED;
+      if (inputForward < 0) {
+        effHeading = heading + Math.PI;
+        speed = WALK_SPEED;
+      }
+      this.predictedPlayerPos.x += Math.sin(effHeading) * speed * dtSafe;
+      this.predictedPlayerPos.y += Math.cos(effHeading) * speed * dtSafe;
+      advanced = true;
+    } else if (inputStrafe !== 0) {
+      // Strafe right (D, +1) = heading + π/2; strafe left (A, -1) =
+      // heading - π/2. Always walk speed (matches 2D path's
+      // strafe-as-walk-speed convention).
+      const effHeading = heading + inputStrafe * (Math.PI / 2);
+      this.predictedPlayerPos.x += Math.sin(effHeading) * WALK_SPEED * dtSafe;
+      this.predictedPlayerPos.y += Math.cos(effHeading) * WALK_SPEED * dtSafe;
+      advanced = true;
+    }
+
+    // Optional debug trace — pushes `(t, predX, predY, authX, authY)`
+    // for post-hoc smoothness analysis. Enabled by setting
+    // `window.__predTrace3d = true` in the console; off by default.
+    if (advanced && window.__predTrace3d === true) {
+      let authX = null, authY = null;
+      try {
+        const pose = handle?.getLocalPlayerPose?.();
+        if (pose) {
+          // pose.x / pose.y are landblock-local (0..192); convert to
+          // world coords using landblockId.
+          const lbX = ((pose.landblockId >>> 24) & 0xff) * 192.0;
+          const lbY = ((pose.landblockId >>> 16) & 0xff) * 192.0;
+          authX = lbX + pose.x;
+          authY = lbY + pose.y;
+        }
+      } catch (_) {}
+      this._predictionTrace.push({
+        t: now,
+        predX: this.predictedPlayerPos.x,
+        predY: this.predictedPlayerPos.y,
+        authX, authY,
+      });
+      if (this._predictionTrace.length > this._predictionTraceCapacity) {
+        this._predictionTrace.shift();
+      }
+    }
+  }
+
+  /**
+   * Workstream B (2026-05-11) — apply any in-flight lerp from
+   * `_reconcilePrediction` toward the server pose. The lerp duration
+   * (`_lerpDurationMs`) is 150 ms — middle of the 100-300 ms band from
+   * the spec. Shorter durations are more responsive but show micro-
+   * stutter on a network with jitter; longer durations smooth more but
+   * the predicted pose drifts further from the authoritative pose
+   * before each reconcile.
+   *
+   * Math: `predicted += (target - predicted) * (step / remaining)`,
+   * where `step = min(dt_ms, remaining)`. This is an inverse-time lerp
+   * — each step is a fraction of the remaining gap, so the lerp
+   * converges asymptotically on the target without overshooting.
+   * Equivalent in steady-state to `predicted = lerp(predicted, target,
+   * step / remaining)` and self-correcting if the target moves
+   * mid-lerp (which happens every 33 ms at 30 Hz emit cadence).
+   */
+  _applyPredictionLerp(dt) {
+    if (!this.predictedPlayerPos) return;
+    if (!(this._lerpRemainingMs > 0)) return;
+    const dtMs = dt * 1000.0;
+    const step = Math.min(dtMs, this._lerpRemainingMs);
+    const frac = step / this._lerpRemainingMs;
+    this.predictedPlayerPos.x +=
+      (this._lerpTargetX - this.predictedPlayerPos.x) * frac;
+    this.predictedPlayerPos.y +=
+      (this._lerpTargetY - this.predictedPlayerPos.y) * frac;
+    this.predictedPlayerPos.z +=
+      (this._lerpTargetZ - this.predictedPlayerPos.z) * frac;
+    this._lerpRemainingMs -= step;
+    if (this._lerpRemainingMs < 1e-3) this._lerpRemainingMs = 0.0;
+  }
+
+  /**
+   * Workstream B (2026-05-11) — expose the predicted pose to
+   * `entities.js#getLocalPlayerWorldPos` so the follow camera reads
+   * the smooth-interpolated position instead of the discrete-stepped
+   * stash. Returns `null` pre-spawn (predicted hasn't been seeded);
+   * the caller falls back to the existing three-tier resolution.
+   */
+  getPredictedPlayerWorldPos() {
+    if (!this.predictedPlayerPos) return null;
+    return {
+      x: this.predictedPlayerPos.x,
+      y: this.predictedPlayerPos.y,
+      z: this.predictedPlayerPos.z,
+    };
   }
 
   // ---- input → movement conversion (load-bearing math) -------------
