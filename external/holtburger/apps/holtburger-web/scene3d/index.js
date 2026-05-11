@@ -30,17 +30,56 @@ const HOLTBURG_X = 0xa9;
 const HOLTBURG_Y = 0xb4;
 
 export async function init3D(canvas, sessionHandle, wasmExports) {
-  // Renderer attaches to the existing canvas — same one the 2D path
-  // would have used. The CSS sizing in index.html keeps it
-  // viewport-filling; we read clientWidth/clientHeight from the live
-  // element so the initial aspect ratio matches whatever the page
-  // layout settled on.
+  // Canvas sizing — index.html's <canvas> has width="512" height="512"
+  // as an attribute fallback for the 2D path's pixel-art look. For
+  // the 3D path we override to a viewport-relative size so the world
+  // actually fills the screen instead of rendering into a 512px square
+  // that gets lost on a 4K display.
+  //
+  // Pick min(viewport - chrome, sensible cap) so:
+  //   - The canvas grows to fill the visible area on big screens.
+  //   - We cap at 1920×1080 in CSS pixels so the GPU isn't asked to
+  //     fill 4K natively (the wasm bundle + three.js already strain
+  //     mid-range GPUs at higher res).
+  //   - devicePixelRatio caps at 2 so HiDPI screens don't quadruple
+  //     the draw cost.
+  // Both `canvas.width/height` (drawing buffer) and `canvas.style.*`
+  // (CSS rendered size) are set explicitly so the browser doesn't
+  // fall back to the 512 attribute defaults.
+  const layoutChromeH = 320; // reserve space for HUD panels above + status
+  const cssW = Math.min(window.innerWidth - 32, 1920);
+  const cssH = Math.min(window.innerHeight - layoutChromeH, 1080);
+  canvas.style.width = `${cssW}px`;
+  canvas.style.height = `${cssH}px`;
+  canvas.width = cssW;
+  canvas.height = cssH;
+
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-  renderer.setPixelRatio(window.devicePixelRatio || 1);
-  const w = canvas.clientWidth || canvas.width || 1280;
-  const h = canvas.clientHeight || canvas.height || 720;
-  renderer.setSize(w, h, false);
+  // Cap DPR at 2 — beyond that the cost outpaces the visual gain on
+  // a textured-mesh scene of this complexity.
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(cssW, cssH, false);
   renderer.setClearColor(0x101418, 1);
+
+  // Keep the canvas + renderer in sync with viewport resizes (the
+  // 2D path lives with the static 512×512 attribute size, but the 3D
+  // path is set up to be a real game viewport). Debounce so resize-
+  // drag doesn't thrash the WebGL framebuffer reallocation.
+  let resizeDebounce = null;
+  window.addEventListener("resize", () => {
+    if (resizeDebounce) clearTimeout(resizeDebounce);
+    resizeDebounce = setTimeout(() => {
+      const newW = Math.min(window.innerWidth - 32, 1920);
+      const newH = Math.min(window.innerHeight - layoutChromeH, 1080);
+      canvas.style.width = `${newW}px`;
+      canvas.style.height = `${newH}px`;
+      renderer.setSize(newW, newH, false);
+      if (typeof camera !== "undefined" && camera.isPerspectiveCamera) {
+        camera.aspect = newW / newH;
+        camera.updateProjectionMatrix();
+      }
+    }, 150);
+  });
 
   const scene = new THREE.Scene();
 
@@ -401,7 +440,11 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     perspectiveCamera: camera,
     orthoCamera,
     domElement: canvas,
-    sessionHandle,
+    // Lazy resolver — init3D fires BEFORE the login form completes so
+    // the `sessionHandle` argument here is typically `undefined`. Read
+    // window.__sessionHandle on each tick instead. The 2D bootstrap
+    // sets it from the login handler.
+    sessionHandle: () => sessionHandle ?? window.__sessionHandle,
     getPlayerWorldPos: () => {
       // EntityManager exposes the local player's world pos once a
       // Spawn lands for the GUID setLocalPlayerGuid recorded (see the

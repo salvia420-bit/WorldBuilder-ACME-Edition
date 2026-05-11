@@ -112,6 +112,12 @@ function loadModule(relPath) {
         .replace(
             /^\s*import\s+\{\s*PointerLockControls\s*\}\s+from\s+["']three\/addons\/controls\/PointerLockControls\.js["'];?\s*$/m,
             ""
+        )
+        .replace(
+            // F#0 added `import { acToThree } from "./adapter.js"`. Inline
+            // the implementation here so the test stays self-contained.
+            /^\s*import\s+\{\s*acToThree\s*\}\s+from\s+["']\.\/adapter\.js["'];?\s*$/m,
+            "const acToThree = (ax, ay, az) => [ax, az, -ay];"
         );
     return src;
 }

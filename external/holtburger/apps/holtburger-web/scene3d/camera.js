@@ -203,7 +203,23 @@ export class CameraSwitcher {
     this.persp = perspectiveCamera;
     this.ortho = orthoCamera;
     this.domElement = domElement;
-    this.sessionHandle = sessionHandle;
+    // Accept either an object (legacy contract) or a function (lazy
+    // resolver). The 3D feature-flag block in index.html calls init3D
+    // BEFORE the login form completes, so `window.__sessionHandle` is
+    // `undefined` at the moment cameraSwitcher is constructed. Capturing
+    // it directly would freeze the null forever; instead we read it
+    // each tick. Backwards-compatible with the synthetic tests (which
+    // pass a mock SessionHandle object).
+    this._getSessionHandle =
+      typeof sessionHandle === "function"
+        ? sessionHandle
+        : () => sessionHandle;
+    // Keep the legacy field so existing reads (none today, but defensive)
+    // still see something — but use the resolver in _dispatchMovement.
+    Object.defineProperty(this, "sessionHandle", {
+      get: () => this._getSessionHandle(),
+      configurable: true,
+    });
     this.getPlayerWorldPos = getPlayerWorldPos;
     this.getPlayerHeading = getPlayerHeading;
 
@@ -529,7 +545,8 @@ export class CameraSwitcher {
   }
 
   _dispatchMovement() {
-    if (!this.sessionHandle || typeof this.sessionHandle.setMovementInput !== "function") {
+    const handle = this._getSessionHandle();
+    if (!handle || typeof handle.setMovementInput !== "function") {
       return;
     }
     const m = this.computeMovementFromKeys();
@@ -537,7 +554,7 @@ export class CameraSwitcher {
     const sig = `${m.forward},${m.strafe},${m.turn},${m.run}`;
     if (sig === this.lastInputSig) return;
     try {
-      this.sessionHandle.setMovementInput(m.forward, m.strafe, m.turn, m.run);
+      handle.setMovementInput(m.forward, m.strafe, m.turn, m.run);
       this.lastInputSig = sig;
       this.setMovementInputCount += 1;
     } catch (e) {
