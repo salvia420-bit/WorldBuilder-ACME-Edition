@@ -22,6 +22,7 @@ import { tickPerFrame, installSharedDrainHook } from "./loop.js";
 import { EntityManager } from "./entities.js";
 import { CameraSwitcher, createOrthoCamera } from "./camera.js";
 import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
+import { SkyLightingController } from "./sky_lighting.js";
 import { acToThree } from "./adapter.js";
 import { createNameplateOverlay } from "./hud.js";
 
@@ -524,6 +525,17 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // Capture scripts read .lastTickVisibleCount + .nodes.size to
     // verify per-frame projection produced live pixel coords.
     nameplateLayer,
+    // Workstream Sky-C — dynamic sky lighting / fog controller, wired
+    // below after liveScene3d is constructed so its `liveScene3dRef`
+    // points at the final object (the controller publishes
+    // `skyBackgroundColor` onto it for Sky-D's sky-dome to consume).
+    // Null when THREE.DirectionalLight + THREE.AmbientLight aren't
+    // available (i.e. when setupSceneLighting was skipped).
+    skyLightingController: null,
+    // Workstream Sky-C — `skyBackgroundColor` sink for Sky-D's dome.
+    // ARGB u32 (0xAARRGGBB). Initialised to the Sky-C fallback fog
+    // colour and updated each tick once the wasm SkyState lands.
+    skyBackgroundColor: 0xff9cb3d9,
     // Stop hook — future phases use this for renderer hot-swap.
     stop() { running = false; },
     // Reference back to the wasm exports the caller passed in. Phases
@@ -537,6 +549,48 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   // the latest fields (sessionHandle, cellContainers3d) — capture
   // scripts can replace these post-init without restarting init3D.
   liveScene3dRef = liveScene3d;
+
+  // Workstream Sky-C — instantiate the dynamic sky-lighting controller.
+  // Takes over the existing Phase 7.6 sun + ambient handles + assigns
+  // `scene.fog`. The per-tick path in `loop.js` calls
+  // `skyLightingController.tick(dt)` AFTER `tickLightingForCellState`
+  // so Phase 7.6's indoor-toggle (sun.visible flip) lands before
+  // Sky-C's color / position override — composes cleanly because
+  // Sky-C writes only color/intensity/position, never .visible.
+  //
+  // Session-handle accessor: lazy via `() => window.__sessionHandle ??
+  // sessionHandle`. The login form sets `window.__sessionHandle` after
+  // SelectCharacter completes; the init3D-time `sessionHandle`
+  // argument is typically null when init3D fires (same pattern as
+  // CameraSwitcher). The lazy accessor means the controller starts
+  // returning real SkyState the moment populateSkyDescFromRegion
+  // resolves (post-EnteredWorld), without the controller needing a
+  // post-hoc update path.
+  if (lighting && lighting.sun && lighting.ambient) {
+    try {
+      const skyLightingController = new SkyLightingController({
+        scene,
+        sun: lighting.sun,
+        ambient: lighting.ambient,
+        sessionHandleAccessor: () =>
+          // eslint-disable-next-line no-undef
+          (typeof window !== "undefined" ? window.__sessionHandle : null) ??
+          sessionHandle ??
+          null,
+        liveScene3dRef: liveScene3d,
+      });
+      liveScene3d.skyLightingController = skyLightingController;
+      // eslint-disable-next-line no-console
+      console.log(
+        "[sky-c] SkyLightingController attached; skyBackgroundColor sink " +
+          "= window.liveScene3d.skyBackgroundColor"
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[sky-c] SkyLightingController init failed:", e);
+    }
+  }
+
   // Phase 7.4b — install the shared-drain hook last so the
   // window-level hook references the final EntityManager instance.
   // The 2D drainEvents at index.html:5723 can call

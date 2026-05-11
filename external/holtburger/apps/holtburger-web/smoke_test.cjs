@@ -3500,6 +3500,65 @@ check(
             false, String(e).slice(0, 120));
     }
 
+    // === Workstream Sky-C (2026-05-11) — sky lighting + fog controller ===
+    // Verifies `scene3d/sky_lighting.js` exists, exports
+    // `SkyLightingController`, references the expected getSkyState
+    // fields (decoded ARGB into THREE.DirectionalLight color/intensity/
+    // position + THREE.AmbientLight color/intensity + THREE.Fog
+    // color/near/far), and publishes `skyBackgroundColor` for Sky-D's
+    // sky-dome to consume. Functional correctness (calibration math,
+    // lerped color values) lives in `test_sky_lighting.mjs` against
+    // Sky-B's verified t=0.25/0.5/0.75/0.99 values.
+    try {
+        const fs = require("fs");
+        const skyLightingPath = __dirname + "/scene3d/sky_lighting.js";
+        const present = fs.existsSync(skyLightingPath);
+        const src = present ? fs.readFileSync(skyLightingPath, "utf8") : "";
+        const hasController = /export\s+class\s+SkyLightingController/.test(src);
+        const hasTick = /\btick\s*\(/.test(src);
+        const hasApplyState = /_applyState\s*\(/.test(src);
+        const referencesDirColor = /dirColorArgb/.test(src);
+        const referencesDirBright = /dirBright/.test(src);
+        const referencesDirHeading = /dirHeading/.test(src);
+        const referencesDirPitch = /dirPitch/.test(src);
+        const referencesAmbColor = /ambColorArgb/.test(src);
+        const referencesAmbBright = /ambBright/.test(src);
+        const referencesFogColor = /fogColorArgb/.test(src);
+        const referencesFogMin = /fogMin/.test(src);
+        const referencesFogMax = /fogMax/.test(src);
+        // skyBackgroundColor sink path for Sky-D.
+        const exposesSkyBgSink = /skyBackgroundColor/.test(src);
+        // Calibration: degrees-to-radians conversion present.
+        const hasDegToRad = /Math\.PI\s*\)\s*\/\s*180/.test(src) ||
+            /Math\.PI\s*\/\s*180/.test(src);
+        // Wired into loop.js + index.js.
+        const loopSrc = fs.readFileSync(__dirname + "/scene3d/loop.js", "utf8");
+        const indexSrc = fs.readFileSync(__dirname + "/scene3d/index.js", "utf8");
+        const wiredInLoop = /skyLightingController\s*\.\s*tick/.test(loopSrc);
+        const wiredInIndex = /new\s+SkyLightingController/.test(indexSrc);
+        check(
+            "Workstream Sky-C: sky_lighting.js SkyLightingController + getSkyState consumer + skyBackgroundColor sink",
+            present && hasController && hasTick && hasApplyState &&
+                referencesDirColor && referencesDirBright &&
+                referencesDirHeading && referencesDirPitch &&
+                referencesAmbColor && referencesAmbBright &&
+                referencesFogColor && referencesFogMin && referencesFogMax &&
+                exposesSkyBgSink && hasDegToRad &&
+                wiredInLoop && wiredInIndex,
+            `present=${present} controller=${hasController} tick=${hasTick} ` +
+                `apply=${hasApplyState} dirColor=${referencesDirColor} ` +
+                `dirBright=${referencesDirBright} dirHeading=${referencesDirHeading} ` +
+                `dirPitch=${referencesDirPitch} ambColor=${referencesAmbColor} ` +
+                `ambBright=${referencesAmbBright} fogColor=${referencesFogColor} ` +
+                `fogMin=${referencesFogMin} fogMax=${referencesFogMax} ` +
+                `skyBgSink=${exposesSkyBgSink} degToRad=${hasDegToRad} ` +
+                `loopWired=${wiredInLoop} indexWired=${wiredInIndex} bytes=${src.length}`
+        );
+    } catch (e) {
+        check("Workstream Sky-C: sky_lighting.js SkyLightingController + getSkyState consumer + skyBackgroundColor sink",
+            false, String(e).slice(0, 120));
+    }
+
     console.log("=========================");
     if (failed === 0) {
         console.log("PASS: all smoke checks green.");

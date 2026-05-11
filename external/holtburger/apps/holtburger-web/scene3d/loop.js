@@ -77,6 +77,24 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
       console.warn("[phase7.6] tickLightingForCellState threw:", e);
     }
   }
+  // Workstream Sky-C — dynamic sky lighting (color + intensity +
+  // position + fog) from wasm SkyState. Runs AFTER Phase 7.6's
+  // tickLightingForCellState so the indoor/outdoor visible-flag is
+  // already settled; Sky-C writes color/intensity/position WITHOUT
+  // touching `.visible` so the two composers don't fight. No-op when
+  // the controller hasn't been wired (e.g. setupSceneLighting was
+  // skipped) or when `getSkyState()` returns null (pre-populator).
+  if (scene3d?.skyLightingController) {
+    try {
+      scene3d.skyLightingController.tick(dt);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      if (!scene3d._skyLightingTickWarned) {
+        scene3d._skyLightingTickWarned = true;
+        console.warn("[sky-c] skyLightingController.tick threw:", e);
+      }
+    }
+  }
   // Phase 7.5 — camera tick BEFORE entity tick. The switcher reads
   // last-frame entity poses for follow framing AND dispatches
   // setMovementInput (which the wasm side consumes asynchronously, so
