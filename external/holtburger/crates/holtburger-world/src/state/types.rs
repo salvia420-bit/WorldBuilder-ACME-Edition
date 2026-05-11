@@ -437,6 +437,18 @@ impl WorldState {
         self.terrain_heights.len()
     }
 
+    /// Workstream C (3D camera collision, 2026-05-11): clone the
+    /// terrain heightmap cache for the camera-side shadow. Called by
+    /// the wasm bundle's recv-loop on each TickMovement to refresh the
+    /// JS-readable shadow `SessionHandle.terrain_heights_shadow` reads
+    /// to back the `terrainHeightAt(x, y)` export. The HashMap is
+    /// shallow-cloned (the value type is `[f32; 81]` which is Copy),
+    /// so cost is O(num_loaded_landblocks) — for Holtburg's 9-LB ring
+    /// that's effectively free.
+    pub fn terrain_heights_snapshot(&self) -> std::collections::HashMap<u32, [f32; 81]> {
+        self.terrain_heights.clone()
+    }
+
     /// Bilinear-interpolate the terrain height at the given world-frame
     /// `(x, y)` against the cached 9×9 grid for the containing landblock.
     /// Returns `None` if the landblock isn't in the cache (caller falls

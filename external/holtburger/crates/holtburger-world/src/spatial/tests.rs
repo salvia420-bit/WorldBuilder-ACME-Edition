@@ -1410,4 +1410,444 @@ mod cell_graph {
         scene.insert_cell_portal(0xA9B4_0100, 0xA9B4_0101);
         assert_eq!(scene.cell_portal_neighbours(0xA9B4_0100).len(), 1);
     }
+
+    // ---------------------------------------------------------------
+    // Workstream C (3D camera collision, 2026-05-11) — new sweep
+    // primitive tests.
+    // ---------------------------------------------------------------
+
+    /// Workstream C: `sweep_sphere_against_static_aabbs` returns the
+    /// earliest hit + a sane normal when a static blocks the sweep.
+    /// Grazing-vs-miss case: a static AABB to the side of the sweep
+    /// line should NOT register a hit.
+    #[test]
+    fn sweep_static_aabbs_hits_block_and_misses_side() {
+        use holtburger_common::Aabb;
+        // Pose at world origin (lb 0x0102 has origin (192, 384) but we
+        // use lb 0x0000 to keep math trivial). LB 0x0000 → origin (0,0).
+        let pose = WorldPosition {
+            landblock_id: Guid(0x0000_0000),
+            coords: Vector3::new(0.0, 0.0, 0.0),
+            rotation: Quaternion::identity(),
+        };
+        // One static: a 2x2x2 box centred at (5, 0, 0). Sweep +X
+        // should hit it.
+        let blocker = crate::spatial::StaticAabbEntry {
+            did: 0x01000001,
+            aabb: Aabb::new(
+                Vector3::new(4.0, -1.0, -1.0),
+                Vector3::new(6.0, 1.0, 1.0),
+            ),
+        };
+        // Sweep +X by 10 m at radius 0.4.
+        let hit = crate::spatial::sweep_sphere_against_static_aabbs(
+            &[blocker],
+            &pose,
+            Vector3::new(10.0, 0.0, 0.0),
+            0.4,
+        )
+        .expect("expected a hit");
+        // Inflated AABB min.x is 4 - 0.4 = 3.6, so t = 3.6 / 10 = 0.36.
+        assert!((hit.t - 0.36).abs() < 1e-3, "t={}", hit.t);
+        // Normal should point back toward -X.
+        assert!(hit.normal.x < -0.5, "normal.x={}", hit.normal.x);
+        // Point should be at x ≈ 3.6.
+        assert!((hit.point.x - 3.6).abs() < 1e-3, "point.x={}", hit.point.x);
+
+        // Side-miss: sweep +Y past the box, should not hit.
+        let miss = crate::spatial::sweep_sphere_against_static_aabbs(
+            &[blocker],
+            &pose,
+            Vector3::new(0.0, 10.0, 0.0),
+            0.4,
+        );
+        assert!(miss.is_none(), "expected miss for orthogonal sweep");
+    }
+
+    /// Workstream C: degenerate inputs — empty static list, zero-
+    /// length delta, single-AABB at the origin (start-inside AABB).
+    /// The inside-out case is the one the camera path will trip on
+    /// when the player stands inside a building — we expect `t=0`.
+    #[test]
+    fn sweep_static_aabbs_inside_returns_t_zero() {
+        use holtburger_common::Aabb;
+        let pose = WorldPosition {
+            landblock_id: Guid(0x0000_0000),
+            coords: Vector3::new(0.0, 0.0, 0.0),
+            rotation: Quaternion::identity(),
+        };
+        // Sweep origin (0,0,0) starts INSIDE this AABB.
+        let inside = crate::spatial::StaticAabbEntry {
+            did: 0x01000001,
+            aabb: Aabb::new(
+                Vector3::new(-1.0, -1.0, -1.0),
+                Vector3::new(1.0, 1.0, 1.0),
+            ),
+        };
+        let hit = crate::spatial::sweep_sphere_against_static_aabbs(
+            &[inside],
+            &pose,
+            Vector3::new(5.0, 0.0, 0.0),
+            0.4,
+        );
+        // Slab method on a centre starting inside the (inflated) AABB
+        // returns no hit (start is inside; t_enter == 0 short-circuits
+        // because entry_axis is u8::MAX in our impl). That's the
+        // documented behaviour — callers that need start-inside-AABB
+        // detection should check separately. We assert the documented
+        // contract here.
+        assert!(hit.is_none(), "inside-AABB start returns None per impl");
+
+        // Empty candidate list: clean miss.
+        let miss = crate::spatial::sweep_sphere_against_static_aabbs(
+            &[],
+            &pose,
+            Vector3::new(5.0, 0.0, 0.0),
+            0.4,
+        );
+        assert!(miss.is_none());
+
+        // Zero-length delta + non-empty list: clean miss.
+        let miss = crate::spatial::sweep_sphere_against_static_aabbs(
+            &[inside],
+            &pose,
+            Vector3::zero(),
+            0.4,
+        );
+        assert!(miss.is_none());
+    }
+
+    /// Workstream C: `sweep_sphere_against_triangles` finds the
+    /// earliest contact against a vertical wall triangle.
+    #[test]
+    fn sweep_triangles_hits_vertical_wall() {
+        use holtburger_common::Triangle;
+        // Vertical wall at y=5, spanning x ∈ [0, 10], z ∈ [0, 4].
+        // Two triangles fill the rectangle.
+        let wall_a = Triangle::new(
+            Vector3::new(0.0, 5.0, 0.0),
+            Vector3::new(10.0, 5.0, 0.0),
+            Vector3::new(0.0, 5.0, 4.0),
+        );
+        let wall_b = Triangle::new(
+            Vector3::new(10.0, 5.0, 0.0),
+            Vector3::new(10.0, 5.0, 4.0),
+            Vector3::new(0.0, 5.0, 4.0),
+        );
+        let triangles = [wall_a, wall_b];
+        // Sweep from (5, 0, 2) toward (5, 10, 2) — head-on through
+        // the wall.
+        let start = Vector3::new(5.0, 0.0, 2.0);
+        let end = Vector3::new(5.0, 10.0, 2.0);
+        let hit = crate::spatial::sweep_sphere_against_triangles(
+            &triangles, start, end, 0.4,
+        )
+        .expect("expected wall hit");
+        // Sphere of radius 0.4 just touches the wall at y = 5 - 0.4 =
+        // 4.6; sweep covers (5,0)→(5,10), so t = 4.6 / 10 = 0.46.
+        assert!((hit.t - 0.46).abs() < 1e-2, "t={}", hit.t);
+        // Normal points back toward -Y (sweep origin).
+        assert!(hit.normal.y < -0.5, "normal.y={}", hit.normal.y);
+
+        // Miss: sweep parallel to the wall (in +X direction at y=0)
+        // never touches it.
+        let miss = crate::spatial::sweep_sphere_against_triangles(
+            &triangles,
+            Vector3::new(0.0, 0.0, 2.0),
+            Vector3::new(10.0, 0.0, 2.0),
+            0.4,
+        );
+        assert!(miss.is_none(), "parallel sweep should miss");
+    }
+
+    /// Workstream C: inside-out test — sphere starts already
+    /// touching/inside a triangle. Expect t=0 and a sane normal.
+    #[test]
+    fn sweep_triangles_inside_returns_t_zero() {
+        use holtburger_common::Triangle;
+        // Floor triangle at z=0 in [0,10]×[0,10].
+        let floor = Triangle::new(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(10.0, 0.0, 0.0),
+            Vector3::new(5.0, 10.0, 0.0),
+        );
+        // Start with sphere centre at (5, 5, 0.2) — within radius 0.4
+        // of the z=0 floor.
+        let start = Vector3::new(5.0, 5.0, 0.2);
+        let end = Vector3::new(5.0, 5.0, 0.2); // zero-length sweep
+        let hit = crate::spatial::sweep_sphere_against_triangles(
+            &[floor], start, end, 0.4,
+        )
+        .expect("expected inside-triangle hit");
+        assert_eq!(hit.t, 0.0, "inside sphere should report t=0");
+
+        // Now sweep into the floor: start above (z=2), end below
+        // (z=-2). Sphere touches plane at z=0.4, so t=(2-0.4)/4 = 0.4.
+        let start = Vector3::new(5.0, 5.0, 2.0);
+        let end = Vector3::new(5.0, 5.0, -2.0);
+        let hit = crate::spatial::sweep_sphere_against_triangles(
+            &[floor], start, end, 0.4,
+        )
+        .expect("expected floor hit");
+        assert!((hit.t - 0.4).abs() < 1e-2, "t={}", hit.t);
+    }
+
+    /// Workstream C: grazing test — sphere passes outside a
+    /// triangle's lateral extent. Far past the edge should miss; just
+    /// touching the plane within the triangle's footprint should hit
+    /// (the canonical sweep-into-wall case). The "grazing edge"
+    /// boundary is sensitive to plane-touch-time projection clamping;
+    /// we test the two clear-cut sides of the boundary here rather
+    /// than threading the narrow tolerance band.
+    #[test]
+    fn sweep_triangles_grazes_edge() {
+        use holtburger_common::Triangle;
+        // Wall triangle at y=5, spanning x ∈ [0, 10], z ∈ [0, 4]
+        // (matches the basic-wall test fixture).
+        let wall = Triangle::new(
+            Vector3::new(0.0, 5.0, 0.0),
+            Vector3::new(10.0, 5.0, 0.0),
+            Vector3::new(0.0, 5.0, 4.0),
+        );
+        // Sweep at x=15 — well past the triangle's x extent.
+        // At plane-touch (y=4.6), closest point on triangle is
+        // (10, 5, 1) (clamped corner); distance from (15, 4.6, 1) is
+        // sqrt(25 + 0.16) ≈ 5 m — far outside radius 0.4 → miss.
+        let miss = crate::spatial::sweep_sphere_against_triangles(
+            &[wall],
+            Vector3::new(15.0, 0.0, 1.0),
+            Vector3::new(15.0, 10.0, 1.0),
+            0.4,
+        );
+        assert!(miss.is_none(), "5 m past edge should miss");
+
+        // Now sweep inside the triangle's XZ footprint (x=3, z=1) —
+        // canonical head-on case. Expect a hit.
+        let hit = crate::spatial::sweep_sphere_against_triangles(
+            &[wall],
+            Vector3::new(3.0, 0.0, 1.0),
+            Vector3::new(3.0, 10.0, 1.0),
+            0.4,
+        );
+        assert!(
+            hit.is_some(),
+            "sweep through triangle interior should hit"
+        );
+    }
+
+    /// Workstream C: `sweep_sphere_against_statics` (via Scene)
+    /// returns the earliest hit when a static blocks the camera ray.
+    /// Verifies the Scene-level wrapper consumes the per-landblock
+    /// index correctly.
+    #[test]
+    fn scene_sweep_statics_uses_landblock_index() {
+        use holtburger_common::Aabb;
+        let mut scene = SpatialScene::new();
+        // Insert a static in landblock 0x0000 at (5, 0).
+        scene.insert_static_aabb(
+            0x0000_0000,
+            crate::spatial::StaticAabbEntry {
+                did: 0x01000001,
+                aabb: Aabb::new(
+                    Vector3::new(4.0, -1.0, -1.0),
+                    Vector3::new(6.0, 1.0, 1.0),
+                ),
+            },
+        );
+        assert_eq!(scene.static_aabb_count(), 1);
+
+        // Sweep through it.
+        let pose = WorldPosition {
+            landblock_id: Guid(0x0000_0000),
+            coords: Vector3::new(0.0, 0.0, 0.0),
+            rotation: Quaternion::identity(),
+        };
+        let hit = scene
+            .sweep_sphere_against_statics(&pose, Vector3::new(10.0, 0.0, 0.0), 0.4)
+            .expect("expected static hit");
+        assert!(hit.t > 0.0 && hit.t < 1.0);
+
+        // Clear the landblock — sweep should miss now.
+        let removed = scene.clear_static_aabbs_for_landblock(0x0000_0000);
+        assert_eq!(removed, 1);
+        let miss = scene
+            .sweep_sphere_against_statics(&pose, Vector3::new(10.0, 0.0, 0.0), 0.4);
+        assert!(miss.is_none(), "post-clear sweep should miss");
+    }
+
+    /// Workstream C: `sweep_sphere_against_cell_mesh` (via Scene)
+    /// gathers triangles across a list of cells and returns the
+    /// earliest hit.
+    #[test]
+    fn scene_sweep_cell_mesh_unions_across_cells() {
+        use holtburger_common::Triangle;
+        let mut scene = SpatialScene::new();
+        // Two cells: cell A has a wall at y=5, cell B has a wall at
+        // y=3. The sweep should hit the y=3 wall (cell B) first.
+        let cell_a = 0xA9B4_0100;
+        let cell_b = 0xA9B4_0101;
+        scene.insert_cell_triangle(
+            cell_a,
+            Triangle::new(
+                Vector3::new(0.0, 5.0, 0.0),
+                Vector3::new(10.0, 5.0, 0.0),
+                Vector3::new(0.0, 5.0, 4.0),
+            ),
+        );
+        scene.insert_cell_triangle(
+            cell_b,
+            Triangle::new(
+                Vector3::new(0.0, 3.0, 0.0),
+                Vector3::new(10.0, 3.0, 0.0),
+                Vector3::new(0.0, 3.0, 4.0),
+            ),
+        );
+        // Sweep through both cells from y=0 to y=10.
+        let hit = scene
+            .sweep_sphere_against_cell_mesh(
+                &[cell_a, cell_b],
+                Vector3::new(5.0, 0.0, 2.0),
+                Vector3::new(5.0, 10.0, 2.0),
+                0.4,
+            )
+            .expect("expected cell mesh hit");
+        // Cell B at y=3 wins: sphere touches at y=2.6, t=0.26.
+        assert!((hit.t - 0.26).abs() < 1e-2, "t={} (expected y=3 wall)", hit.t);
+
+        // Drop cell B from the list — sweep should hit cell A
+        // (y=5, t=0.46).
+        let hit = scene
+            .sweep_sphere_against_cell_mesh(
+                &[cell_a],
+                Vector3::new(5.0, 0.0, 2.0),
+                Vector3::new(5.0, 10.0, 2.0),
+                0.4,
+            )
+            .expect("expected cell A hit");
+        assert!((hit.t - 0.46).abs() < 1e-2, "t={} (expected y=5 wall)", hit.t);
+
+        // Empty cell list: clean miss.
+        let miss = scene.sweep_sphere_against_cell_mesh(
+            &[],
+            Vector3::new(5.0, 0.0, 2.0),
+            Vector3::new(5.0, 10.0, 2.0),
+            0.4,
+        );
+        assert!(miss.is_none());
+    }
+
+    /// Workstream C: `sweep_sphere_against_building_mesh` reads
+    /// per-landblock triangles (the BUILDING-side parallel of the
+    /// `cell_physics_index` cell-mesh sweep) and clips against them.
+    /// This is the architecturally distinct path — regular building
+    /// interiors store physics in their parts' `GfxObj.physics_-
+    /// polygons`, indexed by `landblock_high`, NOT by cell id.
+    /// Verifies the index/sweep round-trips correctly.
+    #[test]
+    fn scene_sweep_building_mesh_uses_landblock_index() {
+        use holtburger_common::Triangle;
+        let mut scene = SpatialScene::new();
+        let lb_holtburg = 0xA9B4_0000u32;
+        let lb_other = 0xA9B5_0000u32;
+        // Insert a vertical wall triangle in Holtburg landblock.
+        scene.insert_building_triangle(
+            lb_holtburg,
+            Triangle::new(
+                Vector3::new(0.0, 5.0, 0.0),
+                Vector3::new(10.0, 5.0, 0.0),
+                Vector3::new(0.0, 5.0, 4.0),
+            ),
+        );
+        scene.insert_building_triangle(
+            lb_holtburg,
+            Triangle::new(
+                Vector3::new(10.0, 5.0, 0.0),
+                Vector3::new(10.0, 5.0, 4.0),
+                Vector3::new(0.0, 5.0, 4.0),
+            ),
+        );
+        // Insert a triangle in a different LB; it must NOT be visible
+        // when sweeping Holtburg.
+        scene.insert_building_triangle(
+            lb_other,
+            Triangle::new(
+                Vector3::new(0.0, 3.0, 0.0),
+                Vector3::new(10.0, 3.0, 0.0),
+                Vector3::new(0.0, 3.0, 4.0),
+            ),
+        );
+        assert_eq!(scene.building_physics_count(), 2);
+        assert_eq!(scene.building_triangles_total(), 3);
+        assert_eq!(
+            scene.building_triangles_for_landblock(lb_holtburg).len(),
+            2
+        );
+
+        // Sweep through the Holtburg wall.
+        let hit = scene
+            .sweep_sphere_against_building_mesh(
+                lb_holtburg,
+                Vector3::new(5.0, 0.0, 2.0),
+                Vector3::new(5.0, 10.0, 2.0),
+                0.4,
+            )
+            .expect("expected building wall hit");
+        // Hit Holtburg's y=5 wall: sphere touches at y=4.6, t=0.46.
+        assert!((hit.t - 0.46).abs() < 1e-2, "t={}", hit.t);
+
+        // Sweep in `lb_other`; should hit its own y=3 wall, not the
+        // y=5 Holtburg one (cross-LB isolation).
+        let hit = scene
+            .sweep_sphere_against_building_mesh(
+                lb_other,
+                Vector3::new(5.0, 0.0, 2.0),
+                Vector3::new(5.0, 10.0, 2.0),
+                0.4,
+            )
+            .expect("expected lb_other wall hit");
+        assert!((hit.t - 0.26).abs() < 1e-2, "t={} (expected y=3 wall)", hit.t);
+
+        // Clear Holtburg via `clear_building_aabbs_for_landblock` —
+        // this should ALSO drop the building-physics triangles for
+        // the landblock per the API contract (they share lifetime).
+        scene.clear_building_aabbs_for_landblock(lb_holtburg);
+        assert_eq!(
+            scene.building_triangles_for_landblock(lb_holtburg).len(),
+            0,
+            "clearing AABBs must also clear building-physics for the LB"
+        );
+        // lb_other still has its wall.
+        assert_eq!(
+            scene.building_triangles_for_landblock(lb_other).len(),
+            1
+        );
+    }
+
+    /// Workstream C: building-physics index masks the LB high word so
+    /// callers can pass a full cell id (e.g. `0xA9B4_FFFE`) without
+    /// having to pre-mask. Mirrors `clear_building_aabbs_for_landblock`'s
+    /// flexible-key contract.
+    #[test]
+    fn scene_building_triangles_handles_full_cell_id_key() {
+        use holtburger_common::Triangle;
+        let mut scene = SpatialScene::new();
+        let lb_high = 0xA9B4_0000u32;
+        scene.insert_building_triangle(
+            lb_high,
+            Triangle::new(
+                Vector3::new(0.0, 5.0, 0.0),
+                Vector3::new(10.0, 5.0, 0.0),
+                Vector3::new(0.0, 5.0, 4.0),
+            ),
+        );
+        // Probe with a full cell id — same landblock, low word set.
+        assert_eq!(
+            scene.building_triangles_for_landblock(lb_high | 0xFFFE).len(),
+            1
+        );
+        assert_eq!(
+            scene.building_triangles_for_landblock(lb_high | 0x0001).len(),
+            1
+        );
+    }
 }

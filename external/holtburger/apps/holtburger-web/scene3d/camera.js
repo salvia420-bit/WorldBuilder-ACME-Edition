@@ -408,15 +408,26 @@ export class CameraSwitcher {
       // Coords are AC-native here; acToThree applies the worldRoot
       // rotation on the way out so the camera lands where geometry
       // actually renders (Phase 7.7 audit fix).
-      const cx = p.x - forwardX * horizDist;
-      const cy = p.y - forwardY * horizDist;
-      // Camera height: lift well above the player so Holtburg's terrain
-      // doesn't clip the camera into a hillside. Without a wasm-side
-      // heightmap lookup at the camera's XY, the cheap fix is a fixed
-      // ~8 m lift — enough to clear typical landblock relief. The pitch
-      // already tilts the camera down to keep the player framed.
-      const cz = p.z + vertDist + 8.0;
-      this.persp.position.set(...acToThree(cx, cy, cz));
+      const idealX = p.x - forwardX * horizDist;
+      const idealY = p.y - forwardY * horizDist;
+      // Ideal camera Z = player z + pitch lift + safety lift. The
+      // safety lift is small (1.0 m) now that the heightfield sweep
+      // can clamp the camera off the ground continuously — without
+      // the sweep the old code used a fat 8 m fixed lift to dodge
+      // clipping into Holtburg hillsides.
+      const idealZ = p.z + vertDist + 1.0;
+
+      // Workstream C (3D camera collision, 2026-05-11): chain the
+      // wasm-side collision sweeps to clip the camera against
+      // terrain, buildings, building-interior triangles, statics,
+      // and EnvCell triangles. Order matters: cheapest rejects first,
+      // most expensive last. Each sweep narrows the camera's target
+      // toward the player; the nearest hit wins.
+      let finalX = idealX, finalY = idealY, finalZ = idealZ;
+      const camera = this._clipCameraAgainstWorld(p, finalX, finalY, finalZ);
+      finalX = camera.x; finalY = camera.y; finalZ = camera.z;
+
+      this.persp.position.set(...acToThree(finalX, finalY, finalZ));
       // Look at the player's head (z + 1.6 ≈ eye height).
       this.persp.lookAt(...acToThree(p.x, p.y, p.z + 1.6));
     } else if (this.mode === "orbit") {
@@ -437,6 +448,156 @@ export class CameraSwitcher {
       this.ortho.up.set(0, 0, -1);
       this.ortho.lookAt(...acToThree(p.x, p.y, p.z));
     }
+  }
+
+  /**
+   * Workstream C (3D camera collision, 2026-05-11): chain the wasm-side
+   * collision sweeps to clip the camera target against terrain,
+   * outdoor building AABBs, building-interior triangles, statics, and
+   * EnvCell triangles. Returns the final camera position `{x, y, z}`.
+   *
+   * Sweep chain (cheapest → most expensive):
+   *   1. **Terrain heightfield clamp.** Continuous (bilinear), so no
+   *      jitter on slopes — beats discrete poly-vs-poly tests on
+   *      Holtburg's gentle hills.
+   *   2. **Outdoor building AABB sweep** (`cameraSweepCollision`). Fast
+   *      Minkowski-sum slab test; rejects most frames.
+   *   3. **Building-interior triangle sweep** (`sweepSphereAgainstBuilding-
+   *      Mesh`). Per-`physics_polygon` triangle, lifted through the
+   *      placement frame. Catches interior + basement walls the
+   *      coarse AABB misses.
+   *   4. **Outdoor static sweep** (`sweepSphereAgainstStatics`). Same
+   *      Minkowski-sum AABB test, but against the tree/sign/prop
+   *      index.
+   *   5. **EnvCell triangle sweep** (`sweepSphereAgainstCellMesh`),
+   *      gated on the cells in the BFS render set. Dungeons + apartments.
+   *
+   * Each hit clips `final` to `start + (final - start) * (t - backoff)`,
+   * so subsequent sweeps run against the already-clipped target. The
+   * 0.2 m backoff keeps the camera slightly off the surface so the
+   * pull-in tracks smoothly when the player walks toward a wall.
+   *
+   * Returns `{x, y, z}` to be passed to `acToThree(...)` by the caller.
+   * No-ops when the SessionHandle isn't wired (synthetic test path) or
+   * pre-spawn (the shadow scene is empty and every sweep returns null).
+   */
+  _clipCameraAgainstWorld(playerPos, idealX, idealY, idealZ) {
+    const handle = this._getSessionHandle();
+    const CAM_RADIUS = 0.5; // metres
+    const BACKOFF = 0.2; // metres short of contact
+
+    let finalX = idealX, finalY = idealY, finalZ = idealZ;
+    if (!handle) {
+      return { x: finalX, y: finalY, z: finalZ };
+    }
+
+    // ---- 1. Continuous heightfield clamp ----
+    try {
+      if (typeof handle.terrainHeightAt === "function") {
+        const terrainZ = handle.terrainHeightAt(finalX, finalY);
+        if (typeof terrainZ === "number" && Number.isFinite(terrainZ)) {
+          const minZ = terrainZ + CAM_RADIUS + BACKOFF;
+          if (finalZ < minZ) {
+            finalZ = minZ;
+          }
+        }
+      }
+    } catch (_) {}
+
+    // The chain of sweep sweeps operates against (start, end) =
+    // (headPos, finalCamPos). When a hit lands at parametric `t`,
+    // we clip `final` to `start + delta * (t - backoff/delta_len)`.
+    const startX = playerPos.x;
+    const startY = playerPos.y;
+    const startZ = playerPos.z + 1.6;
+
+    const clipFinalTo = (hit) => {
+      // hit.t in [0, 1]; clamp to a tiny minimum so we don't snap the
+      // camera to the player's head.
+      const dx = finalX - startX, dy = finalY - startY, dz = finalZ - startZ;
+      const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (len < 1e-3) return;
+      const backoffT = BACKOFF / len;
+      const t = Math.max(0.0, hit.t - backoffT);
+      finalX = startX + dx * t;
+      finalY = startY + dy * t;
+      finalZ = startZ + dz * t;
+    };
+
+    // Get the player's current landblock id from the session handle.
+    let landblockId = 0;
+    try {
+      const pose = handle.getLocalPlayerPose?.();
+      if (pose && typeof pose.landblockId === "number") {
+        landblockId = pose.landblockId;
+      }
+    } catch (_) {}
+
+    if (landblockId !== 0) {
+      // ---- 2. Outdoor building AABB sweep ----
+      try {
+        if (typeof handle.cameraSweepCollision === "function") {
+          const hit = handle.cameraSweepCollision(
+            startX, startY, startZ,
+            finalX, finalY, finalZ,
+            CAM_RADIUS,
+            landblockId,
+          );
+          if (hit) clipFinalTo(hit);
+        }
+      } catch (_) {}
+
+      // ---- 3. Building-interior triangle sweep ----
+      try {
+        if (typeof handle.sweepSphereAgainstBuildingMesh === "function") {
+          const hit = handle.sweepSphereAgainstBuildingMesh(
+            startX, startY, startZ,
+            finalX, finalY, finalZ,
+            CAM_RADIUS,
+            landblockId,
+          );
+          if (hit) clipFinalTo(hit);
+        }
+      } catch (_) {}
+
+      // ---- 4. Outdoor static sweep ----
+      try {
+        if (typeof handle.sweepSphereAgainstStatics === "function") {
+          const hit = handle.sweepSphereAgainstStatics(
+            startX, startY, startZ,
+            finalX, finalY, finalZ,
+            CAM_RADIUS,
+            landblockId,
+          );
+          if (hit) clipFinalTo(hit);
+        }
+      } catch (_) {}
+    }
+
+    // ---- 5. EnvCell triangle sweep (cells in current render set) ----
+    try {
+      if (
+        typeof handle.sweepSphereAgainstCellMesh === "function" &&
+        typeof handle.getRenderSet === "function"
+      ) {
+        const renderSet = handle.getRenderSet(1);
+        if (renderSet && renderSet.length > 0) {
+          // Pass as a Uint32Array (wasm-bindgen `&[u32]` expects this).
+          const cellArr = renderSet instanceof Uint32Array
+            ? renderSet
+            : new Uint32Array(renderSet);
+          const hit = handle.sweepSphereAgainstCellMesh(
+            startX, startY, startZ,
+            finalX, finalY, finalZ,
+            CAM_RADIUS,
+            cellArr,
+          );
+          if (hit) clipFinalTo(hit);
+        }
+      }
+    } catch (_) {}
+
+    return { x: finalX, y: finalY, z: finalZ };
   }
 
   // ---- input → movement conversion (load-bearing math) -------------

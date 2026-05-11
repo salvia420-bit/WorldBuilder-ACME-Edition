@@ -3332,6 +3332,36 @@ check(
         check("F#9: WB.Terminal visual diff capture script present", false, String(e).slice(0, 120));
     }
 
+    // === Workstream C (2026-05-11) — wasm-backed camera collision ===
+    // Workstream C lands five wasm-bindgen exports on SessionHandle and
+    // a chained sweep in scene3d/camera.js's positionCamera. The smoke
+    // check verifies the exports' bindgen names land in the generated
+    // wasm glue (.d.ts) and that camera.js calls the chain. Live
+    // capture (`capture_3d_movement_e2e.cjs` and friends) covers the
+    // end-to-end clipping behaviour against Holtburg geometry.
+    try {
+        const fs = require("fs");
+        const camSrc = fs.readFileSync(__dirname + "/scene3d/camera.js", "utf8");
+        const dtsPath = __dirname + "/pkg/holtburger_web.d.ts";
+        const dtsSrc = fs.existsSync(dtsPath) ? fs.readFileSync(dtsPath, "utf8") : "";
+        const hasTerrain = /terrainHeightAt/.test(dtsSrc);
+        const hasCameraSweep = /cameraSweepCollision/.test(dtsSrc);
+        const hasBuildingMesh = /sweepSphereAgainstBuildingMesh/.test(dtsSrc);
+        const hasCellMesh = /sweepSphereAgainstCellMesh/.test(dtsSrc);
+        const hasStatics = /sweepSphereAgainstStatics/.test(dtsSrc);
+        const hasCollisionHit = /class CollisionHit/.test(dtsSrc);
+        const hasClipChain = /_clipCameraAgainstWorld|terrainHeightAt|sweepSphereAgainstBuildingMesh/
+            .test(camSrc);
+        check(
+            "Workstream C: wasm camera-collision exports + JS sweep chain",
+            hasTerrain && hasCameraSweep && hasBuildingMesh && hasCellMesh &&
+                hasStatics && hasCollisionHit && hasClipChain,
+            `terrain=${hasTerrain} cam=${hasCameraSweep} bldg=${hasBuildingMesh} cell=${hasCellMesh} statics=${hasStatics} hit=${hasCollisionHit} chain=${hasClipChain}`
+        );
+    } catch (e) {
+        check("Workstream C: wasm camera-collision exports + JS sweep chain", false, String(e).slice(0, 120));
+    }
+
     console.log("=========================");
     if (failed === 0) {
         console.log("PASS: all smoke checks green.");

@@ -46,6 +46,29 @@ pub struct BuildingAabbEntry {
     pub active: bool,
 }
 
+/// Workstream C (3D camera collision, 2026-05-11): world-space AABB for
+/// a non-building static placement (signs, props, foliage, trees).
+/// Statics are loaded from `LandblockInfo.objects` (the `Stab` list)
+/// alongside buildings, but with `is_building == false`. They live in
+/// outdoor space; indoor statics ride through `EnvCellPlacement
+/// .static_objects` and are addressable via the per-cell AABB index.
+///
+/// Camera collision uses this index to keep the third-person follow
+/// camera from poking through trees and signage. The player capsule
+/// already avoids walking through building parts via the existing
+/// `building_aabb_index`; statics are camera-only collision today.
+///
+/// `did` is the placement's model id (`0x01XXXXXX` GfxObj or
+/// `0x02XXXXXX` SetupModel) — kept for diagnostics. `aabb` is in the
+/// global-meters frame so the existing `sweep_sphere_against_aabbs`
+/// primitive consumes it without per-landblock conversion.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StaticAabbEntry {
+    pub did: u32,
+    pub aabb: Aabb,
+}
+
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ContactState {
     #[default]

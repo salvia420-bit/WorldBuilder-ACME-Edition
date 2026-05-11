@@ -1,7 +1,8 @@
 use super::{
     AuthoritativeBodySync, BasicSpatialPhysics, BuildingAabbEntry, BuildingId, ContactState,
     RuntimeSpatialBodyView, SolvedBodyKinematics, SpatialBody, SpatialBodyId, SpatialPhysics,
-    SpatialSampleMode, SpatialSamplingConfig, physics::sample_mode_for_projection_state,
+    SpatialSampleMode, SpatialSamplingConfig, StaticAabbEntry,
+    physics::sample_mode_for_projection_state,
 };
 use crate::entity::EntityMotionSnapshot;
 use holtburger_common::position::WorldPosition;
@@ -144,6 +145,41 @@ pub struct SpatialScene {
     /// `populateBuildingAabbsForLandblock`; cleared per-landblock by
     /// `clear_building_aabbs_for_landblock`.
     building_origins: HashMap<BuildingId, (f32, f32)>,
+    /// Workstream C (3D camera collision, 2026-05-11): per-landblock
+    /// world-space AABB index for non-building outdoor static placements
+    /// (signs, props, trees). Keyed by the landblock high word (the
+    /// 0xXXYY0000 form of `BuildingId.landblock_id`) so the camera
+    /// sweep can query just the entries near the player's current
+    /// landblock without scanning every static loaded across all 9
+    /// landblocks in the Holtburg 3x3 ring.
+    ///
+    /// Populated by the wasm bundle's `populateStaticsAabbsForLandblock`
+    /// from `LandblockInfo.objects` (the `Stab` list); cleared per-
+    /// landblock when the LB unloads. Indoor statics ride through the
+    /// existing `EnvCellPlacement.static_objects` path and don't land
+    /// here — they're picked up by the cell-mesh sweep.
+    statics_aabb_index: HashMap<u32, Vec<StaticAabbEntry>>,
+    /// Workstream C (3D camera collision, 2026-05-11): per-landblock
+    /// world-space physics triangles for building interiors / basements.
+    /// **This is the building-side parallel of `cell_physics_index`.**
+    ///
+    /// In Asheron's Call's data model:
+    /// - **Regular building interiors (incl. basements)** live in the
+    ///   building's `SetupModel` parts → each part's `GfxObj.physics_-
+    ///   polygons` field. They are NOT EnvCells. This index covers them.
+    /// - **EnvCells** (dungeons, apartments, instanced indoor spaces)
+    ///   have their physics in `Environment.physics_polygons`. Those
+    ///   live in `cell_physics_index` keyed by cell id.
+    ///
+    /// Both feed the same `sweep_sphere_against_triangles` primitive,
+    /// but the population paths are distinct and the index keys differ
+    /// (landblock_high here, full cell_id for the cell index).
+    ///
+    /// Populated by `populateBuildingAabbsForLandblock` (extended in
+    /// Workstream C to walk each part's GfxObj.physics_polygons in the
+    /// same per-part frame transform used for AABBs); cleared per-
+    /// landblock alongside the AABB index when the LB unloads.
+    building_physics_index: HashMap<u32, Vec<Triangle>>,
 }
 
 impl Default for SpatialScene {
@@ -169,6 +205,8 @@ impl SpatialScene {
             cell_physics_index: HashMap::new(),
             door_part_index: HashMap::new(),
             building_origins: HashMap::new(),
+            statics_aabb_index: HashMap::new(),
+            building_physics_index: HashMap::new(),
         }
     }
 
@@ -203,6 +241,13 @@ impl SpatialScene {
         // re-register on the next ObjectCreate.
         self.building_origins
             .retain(|building_id, _| building_id.landblock_id != landblock_id);
+        // Workstream C (3D camera collision, 2026-05-11): drop matching
+        // per-building-interior triangles so the next load starts from
+        // a clean index. Building physics share the AABB lifetime
+        // (both are populated by the same `populateBuildingAabbsFor-
+        // Landblock` pass), so they get torn down together.
+        self.building_physics_index
+            .remove(&(landblock_id & 0xFFFF_0000));
         removed
     }
 
@@ -570,6 +615,195 @@ impl SpatialScene {
             delta,
             radius,
         )
+    }
+
+    /// Workstream C (3D camera collision, 2026-05-11): insert a static
+    /// placement's world-space AABB into the per-landblock index.
+    /// Called by the wasm bundle's `populateStaticsAabbsForLandblock`
+    /// once per non-building entry in `LandblockInfo.objects`. The
+    /// landblock key is the high word (`0xXXYY0000`); callers SHOULD
+    /// have already masked it. Idempotent at the API level — repeated
+    /// calls with the same `(landblock, entry)` accumulate (the camera
+    /// sweep tolerates duplicates; deduplication would cost more in
+    /// HashMap probes than we'd save).
+    pub fn insert_static_aabb(&mut self, landblock_high: u32, entry: StaticAabbEntry) {
+        self.statics_aabb_index
+            .entry(landblock_high)
+            .or_default()
+            .push(entry);
+    }
+
+    /// Workstream C: drop every static-AABB entry for the given
+    /// landblock. Called when the LB unloads (mirror of
+    /// `clear_building_aabbs_for_landblock`). Returns the count of
+    /// removed entries for diagnostic logging.
+    pub fn clear_static_aabbs_for_landblock(&mut self, landblock_high: u32) -> usize {
+        match self.statics_aabb_index.remove(&landblock_high) {
+            Some(v) => v.len(),
+            None => 0,
+        }
+    }
+
+    /// Workstream C: total static-AABB entry count across all loaded
+    /// landblocks. Diagnostic only.
+    pub fn static_aabb_count(&self) -> usize {
+        self.statics_aabb_index.values().map(|v| v.len()).sum()
+    }
+
+    /// Workstream C: candidate statics for a swept-sphere query
+    /// starting at `pose`. Returns entries for the pose's containing
+    /// landblock plus the immediate neighbours (Holtburg's 3x3 ring is
+    /// always loaded but the camera might sweep across an LB boundary
+    /// at the edge). Returns by value to dodge per-cell borrows —
+    /// statics fan-in is small (Holtburg's central LB has ~70 statics)
+    /// so the clone cost is negligible.
+    pub fn statics_aabbs_near_pose(&self, pose: &WorldPosition) -> Vec<StaticAabbEntry> {
+        let lb_high = pose.landblock_id.0 & 0xFFFF_0000;
+        let lb_x = ((lb_high >> 24) & 0xFF) as i32;
+        let lb_y = ((lb_high >> 16) & 0xFF) as i32;
+        let mut out: Vec<StaticAabbEntry> = Vec::new();
+        for dx in -1i32..=1 {
+            for dy in -1i32..=1 {
+                let nx = lb_x + dx;
+                let ny = lb_y + dy;
+                if !(0..256).contains(&nx) || !(0..256).contains(&ny) {
+                    continue;
+                }
+                let key = ((nx as u32) << 24) | ((ny as u32) << 16);
+                if let Some(entries) = self.statics_aabb_index.get(&key) {
+                    out.extend_from_slice(entries);
+                }
+            }
+        }
+        out
+    }
+
+    /// Workstream C: sweep a sphere of `radius` along `delta` against
+    /// statics near `pose`, returning the earliest hit. Mirrors
+    /// `sweep_sphere_against_buildings` but returns a `GenericSweptHit`
+    /// (statics don't carry per-part / door state — no need for the
+    /// `BuildingAabbEntry` reference).
+    pub fn sweep_sphere_against_statics(
+        &self,
+        pose: &WorldPosition,
+        delta: Vector3,
+        radius: f32,
+    ) -> Option<crate::spatial::GenericSweptHit> {
+        crate::spatial::sweep_sphere_against_static_aabbs(
+            &self.statics_aabbs_near_pose(pose),
+            pose,
+            delta,
+            radius,
+        )
+    }
+
+    /// Workstream C: sweep a sphere from `start` to `end` (world-space
+    /// metres) against the cell-physics triangles of the cells in
+    /// `cell_ids`. Used by the camera collision path to clip against
+    /// indoor walls without snapping the camera to the player's exact
+    /// cell — the camera ray crosses multiple cells in a dungeon
+    /// corridor, so callers pass the BFS render set (depth=1).
+    /// Returns the earliest hit across all cells, or `None` for a
+    /// clean miss / no cells with cached triangles.
+    pub fn sweep_sphere_against_cell_mesh(
+        &self,
+        cell_ids: &[u32],
+        start: Vector3,
+        end: Vector3,
+        radius: f32,
+    ) -> Option<crate::spatial::GenericSweptHit> {
+        // Build a working triangle list from every cell the caller
+        // gave us. We don't merge into a single Vec ahead of time
+        // because the per-cell counts are small and most cells in a
+        // depth=1 render set are reachable but currently empty
+        // (portal-only frontier). Iterate by cell so empty buckets
+        // cost a single HashMap probe.
+        let mut best: Option<crate::spatial::GenericSweptHit> = None;
+        for &cell_id in cell_ids {
+            let tris = self.cell_triangles(cell_id);
+            if tris.is_empty() {
+                continue;
+            }
+            if let Some(hit) = crate::spatial::sweep_sphere_against_triangles(
+                tris, start, end, radius,
+            ) && (best.is_none() || hit.t < best.unwrap().t)
+            {
+                best = Some(hit);
+            }
+        }
+        best
+    }
+
+    /// Workstream C (3D camera collision, 2026-05-11): insert a
+    /// world-space physics triangle for a building part into the
+    /// per-landblock index. Called by the wasm bundle's
+    /// `populateBuildingAabbsForLandblock` (extended in Workstream C
+    /// to also extract per-part GfxObj.physics_polygons) after
+    /// transforming each polygon through the building's placement
+    /// frame + the part's per-part frame.
+    ///
+    /// Keyed by `landblock_high` (the `0xXXYY0000` form), not full
+    /// cell id — building interiors don't subdivide on AC's 8x8 grid;
+    /// they belong to whatever building's placement origin is in this
+    /// landblock. The camera sweep collects all triangles for the
+    /// landblock the player is in.
+    pub fn insert_building_triangle(&mut self, landblock_high: u32, tri: Triangle) {
+        self.building_physics_index
+            .entry(landblock_high)
+            .or_default()
+            .push(tri);
+    }
+
+    /// Workstream C: read access to the world-space building-interior
+    /// triangles for `landblock_high`. Returned slice may be empty when
+    /// the landblock hasn't been baked yet, or when no building in this
+    /// landblock has any `physics_polygons` (e.g. early-AC content where
+    /// the buildings ship with only coarse AABB collision).
+    pub fn building_triangles_for_landblock(&self, landblock_high: u32) -> &[Triangle] {
+        self.building_physics_index
+            .get(&(landblock_high & 0xFFFF_0000))
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Workstream C: count of landblocks with at least one indexed
+    /// building-interior triangle. Diagnostic only — used by the
+    /// recv-loop drain logger to confirm the populator wired up. Mirrors
+    /// `cell_physics_count`'s shape.
+    pub fn building_physics_count(&self) -> usize {
+        self.building_physics_index.len()
+    }
+
+    /// Workstream C: total triangle count across all loaded landblocks
+    /// in `building_physics_index`. Used by the wasm-side drain log to
+    /// report Holtburg town hall's per-part triangulated wall count.
+    pub fn building_triangles_total(&self) -> usize {
+        self.building_physics_index.values().map(|v| v.len()).sum()
+    }
+
+    /// Workstream C: sweep a sphere of `radius` from `start` to `end`
+    /// against the building-interior triangles of the landblock at
+    /// `landblock_high`. Mirrors `sweep_sphere_against_cell_mesh` but
+    /// targets the building-physics index instead of the cell-physics
+    /// one. Returns `None` for a clean miss / no triangles loaded.
+    ///
+    /// The camera path uses this when the player is inside (or near)
+    /// a Holtburg building — town hall interior rooms, multi-storey
+    /// merchant shops, etc. — to clip the follow camera against
+    /// interior walls and basement walls that the building's coarse
+    /// per-part AABB doesn't resolve.
+    pub fn sweep_sphere_against_building_mesh(
+        &self,
+        landblock_high: u32,
+        start: Vector3,
+        end: Vector3,
+        radius: f32,
+    ) -> Option<crate::spatial::GenericSweptHit> {
+        let tris = self.building_triangles_for_landblock(landblock_high);
+        if tris.is_empty() {
+            return None;
+        }
+        crate::spatial::sweep_sphere_against_triangles(tris, start, end, radius)
     }
 
     pub fn physics(&self) -> &Arc<dyn SpatialPhysics> {

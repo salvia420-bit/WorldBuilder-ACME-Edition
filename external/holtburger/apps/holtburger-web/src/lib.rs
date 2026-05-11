@@ -1853,6 +1853,120 @@ fn walk_setup_parts_with_geom<S: holtburger_dat::ResourceSource + ?Sized>(
     Some(aabbs)
 }
 
+/// Workstream C (3D camera collision, 2026-05-11): sister to
+/// [`walk_setup_parts_with_geom`] that returns **both** per-part
+/// AABBs AND per-part fan-triangulated physics triangles in the
+/// setup's local frame (post per-part frame composition, pre
+/// placement-frame transform). Used by
+/// `populate_building_aabbs_for_landblock_impl` to populate the
+/// camera-collision building-physics index alongside the existing
+/// AABB index.
+///
+/// Returned `Vec<(Aabb, Vec<Triangle>)>` has one tuple per
+/// `setup.parts[i]`. Empty triangle vecs for parts whose GfxObj has
+/// no `physics_polygons` — most retail Holtburg building parts ship
+/// physics polys, but a few props (decorative items, sign posts) have
+/// only drawing geometry. AABB is built from the GfxObj's vertex
+/// array (post part-frame transform); triangles are fan-triangulated
+/// from `physics_polygons` against the same vertex array, with the
+/// SAME part-frame transform applied so the AABB conservatively
+/// bounds the triangles.
+///
+/// Mirrors the cell-physics path in `populate_env_cells_for_landblock`
+/// step G: fan-triangulate `num_pts > 3`, drop polygons with
+/// `num_pts < 3`, silently skip vertices that don't resolve (rare
+/// dat corruption). Triangles are returned in part-local-post-part-
+/// frame coords; caller applies the placement transform.
+#[cfg(target_arch = "wasm32")]
+fn walk_setup_parts_with_geom_and_physics<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup_id: u32,
+) -> Option<Vec<(holtburger_common::Aabb, Vec<holtburger_common::Triangle>)>> {
+    use holtburger_dat::file_type::SetupModel;
+    use holtburger_dat::ResourceKey;
+    let bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", setup_id))
+        .ok()?;
+    let setup = SetupModel::unpack(&mut std::io::Cursor::new(&bytes)).ok()?;
+    let part_count = setup.parts.len();
+    let mut out: Vec<(holtburger_common::Aabb, Vec<holtburger_common::Triangle>)> =
+        (0..part_count)
+            .map(|_| (holtburger_common::Aabb::empty(), Vec::new()))
+            .collect();
+    walk_setup_parts(
+        source,
+        setup_id,
+        &[],
+        &[],
+        None,
+        None,
+        |pi, gfx, offset, rot, _swaps| {
+            let Some(slot) = out.get_mut(pi) else { return };
+            // AABB from vertex array (post part frame).
+            for vert in gfx.vertex_array.vertices.values() {
+                let p = quat_rotate(rot, vert.origin);
+                let world = holtburger_common::Vector3 {
+                    x: p.x + offset.x,
+                    y: p.y + offset.y,
+                    z: p.z + offset.z,
+                };
+                slot.0.expand_to_include_point(world);
+            }
+            // Physics triangles from `physics_polygons` (post part
+            // frame). Fan-triangulate `num_pts > 3`; skip polygons
+            // with `num_pts < 3` (degenerate). Skip polygons whose
+            // vertex_ids don't all resolve — defensive against dat
+            // corruption (the polygon list and vertex array are
+            // separately read).
+            for poly in gfx.physics_polygons.values() {
+                if poly.num_pts < 3 {
+                    continue;
+                }
+                let mut part_local_verts: Vec<holtburger_common::Vector3> =
+                    Vec::with_capacity(poly.num_pts as usize);
+                let mut all_ok = true;
+                for &vid in &poly.vertex_ids {
+                    if vid < 0 {
+                        all_ok = false;
+                        break;
+                    }
+                    let key = vid as u16;
+                    let Some(sw) = gfx.vertex_array.vertices.get(&key) else {
+                        all_ok = false;
+                        break;
+                    };
+                    // Apply part-frame transform (same as AABB above).
+                    let local = holtburger_common::Vector3::new(
+                        sw.origin.x,
+                        sw.origin.y,
+                        sw.origin.z,
+                    );
+                    let rotated = quat_rotate(rot, local);
+                    part_local_verts.push(holtburger_common::Vector3::new(
+                        rotated.x + offset.x,
+                        rotated.y + offset.y,
+                        rotated.z + offset.z,
+                    ));
+                }
+                if !all_ok || part_local_verts.len() < 3 {
+                    continue;
+                }
+                // Fan triangulation: (v0, v1, v2), (v0, v2, v3), …
+                // AC physics polygons are convex (BSP-emitted), so fan
+                // is correct.
+                for i in 1..(part_local_verts.len() - 1) {
+                    slot.1.push(holtburger_common::Triangle::new(
+                        part_local_verts[0],
+                        part_local_verts[i],
+                        part_local_verts[i + 1],
+                    ));
+                }
+            }
+        },
+    )?;
+    Some(out)
+}
+
 /// Phase 4 step 6 Tier 2: resolve the *walk-forward* animation
 /// frames. Same MotionTable walk as `try_resolve_idle_anim_frame`
 /// (path 1 only — there's no `default_animation` fallback for walk),
@@ -3465,6 +3579,22 @@ thread_local! {
     static CELL_PHYSICS_PENDING:
         std::cell::RefCell<Vec<(u32, holtburger_common::Triangle)>> =
             const { std::cell::RefCell::new(Vec::new()) };
+
+    /// Workstream C (3D camera collision, 2026-05-11): pending
+    /// building-interior physics-triangle inserts queued by the
+    /// extended `populateBuildingAabbsForLandblock` and drained by
+    /// the recv loop on each `SessionCommand::TickMovement` alongside
+    /// `BUILDING_AABB_PENDING`. One entry per `physics_polygon` per
+    /// part per building placement, fan-triangulated for `num_pts > 3`
+    /// and transformed part-local → placement-frame → world via the
+    /// building's `(placement_origin, placement_orientation)` and the
+    /// part's per-part frame. Keyed by `landblock_high` (the
+    /// `0xXXYY0000` form) to match `building_physics_index`'s shape.
+    /// Cleared together with `BUILDING_AABB_PENDING` — building
+    /// physics share the placement's lifetime in the index.
+    static BUILDING_PHYSICS_PENDING:
+        std::cell::RefCell<Vec<(u32, holtburger_common::Triangle)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -3545,6 +3675,30 @@ fn drain_pending_cell_physics_into(scene: &mut holtburger_world::SpatialScene) -
         let count = buf.len();
         for (cell_id, tri) in buf.drain(..) {
             scene.insert_cell_triangle(cell_id, tri);
+        }
+        count
+    })
+}
+
+/// Workstream C (3D camera collision, 2026-05-11): drain the pending
+/// building-physics-triangle pile into the live scene's
+/// `building_physics_index`. Returns the number of triangles
+/// inserted. Called from the same `TickMovement` arm as the
+/// building-AABB drain so the camera sweep against building interiors
+/// has triangles available the same tick the AABBs land.
+///
+/// Mirrors `drain_pending_cell_physics_into` in shape — the only
+/// difference is the destination index keying (landblock-high here,
+/// full cell id for the cell-physics path).
+#[cfg(target_arch = "wasm32")]
+fn drain_pending_building_physics_into(
+    scene: &mut holtburger_world::SpatialScene,
+) -> usize {
+    BUILDING_PHYSICS_PENDING.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let count = buf.len();
+        for (landblock_high, tri) in buf.drain(..) {
+            scene.insert_building_triangle(landblock_high, tri);
         }
         count
     })
@@ -3728,18 +3882,26 @@ async fn populate_building_aabbs_for_landblock_impl(
         // (`0x02...`); the existing renderer dispatches both via
         // `triangulate_model_per_part_buckets`. Mirror that branching
         // here so the collision path covers what the renderer covers.
-        let part_aabbs: Vec<Aabb> = match (model_id >> 24) as u8 {
-            0x01 => {
-                // Single-part building. Prefetch the GfxObj, then
-                // synthesize a 1-element AABB vec by accumulating
-                // its vertex array.
-                source
-                    .prefetch(&[ResourceKey::new("eor/portal", model_id)])
-                    .await
-                    .ok();
-                match source.get_file_by_key(ResourceKey::new("eor/portal", model_id)) {
-                    Ok(bytes) => {
-                        match holtburger_dat::file_type::GfxObj::unpack(
+        //
+        // Workstream C (3D camera collision, 2026-05-11): also extract
+        // each part's physics_polygons → fan-triangulated triangles in
+        // part-local frame coords. These get the same placement-frame
+        // transform as the AABB and feed `building_physics_index`.
+        let part_data: Vec<(Aabb, Vec<holtburger_common::Triangle>)> =
+            match (model_id >> 24) as u8 {
+                0x01 => {
+                    // Single-part building. Prefetch the GfxObj, then
+                    // synthesize the (AABB, triangles) tuple by walking
+                    // its vertex array + physics_polygons. The part
+                    // frame is identity here — single-part buildings
+                    // are placed directly via the BuildInfo frame.
+                    source
+                        .prefetch(&[ResourceKey::new("eor/portal", model_id)])
+                        .await
+                        .ok();
+                    match source.get_file_by_key(ResourceKey::new("eor/portal", model_id))
+                    {
+                        Ok(bytes) => match holtburger_dat::file_type::GfxObj::unpack(
                             &mut std::io::Cursor::new(&bytes),
                         ) {
                             Ok(gfx) => {
@@ -3747,38 +3909,77 @@ async fn populate_building_aabbs_for_landblock_impl(
                                 for vert in gfx.vertex_array.vertices.values() {
                                     aabb.expand_to_include_point(vert.origin);
                                 }
-                                vec![aabb]
+                                // Fan-triangulate physics_polygons in
+                                // part-local frame (identity here).
+                                let mut tris: Vec<holtburger_common::Triangle> =
+                                    Vec::new();
+                                for poly in gfx.physics_polygons.values() {
+                                    if poly.num_pts < 3 {
+                                        continue;
+                                    }
+                                    let mut verts: Vec<holtburger_common::Vector3> =
+                                        Vec::with_capacity(poly.num_pts as usize);
+                                    let mut all_ok = true;
+                                    for &vid in &poly.vertex_ids {
+                                        if vid < 0 {
+                                            all_ok = false;
+                                            break;
+                                        }
+                                        let key = vid as u16;
+                                        let Some(sw) =
+                                            gfx.vertex_array.vertices.get(&key)
+                                        else {
+                                            all_ok = false;
+                                            break;
+                                        };
+                                        verts.push(holtburger_common::Vector3::new(
+                                            sw.origin.x,
+                                            sw.origin.y,
+                                            sw.origin.z,
+                                        ));
+                                    }
+                                    if !all_ok || verts.len() < 3 {
+                                        continue;
+                                    }
+                                    for i in 1..(verts.len() - 1) {
+                                        tris.push(holtburger_common::Triangle::new(
+                                            verts[0],
+                                            verts[i],
+                                            verts[i + 1],
+                                        ));
+                                    }
+                                }
+                                vec![(aabb, tris)]
                             }
                             Err(_) => continue,
-                        }
+                        },
+                        Err(_) => continue,
                     }
-                    Err(_) => continue,
                 }
-            }
-            0x02 => {
-                // Multi-part Setup. Iterative discovery of GfxObj
-                // children referenced by this Setup mirrors
-                // `fetch_building_placement`'s prefetch shape.
-                let initial = [ResourceKey::new("eor/portal", model_id)];
-                if let Err(e) = prefetch::ensure_walk_prefetched(&source, &initial, |s| {
-                    let _ = walk_setup_parts_with_geom(s, model_id);
-                })
-                .await
-                {
-                    log::warn!(
-                        "populateBuildingAabbsForLandblock: ensure_walk_prefetched 0x{model_id:08X}: {e:?}"
-                    );
-                    continue;
+                0x02 => {
+                    // Multi-part Setup. Iterative discovery of GfxObj
+                    // children referenced by this Setup mirrors
+                    // `fetch_building_placement`'s prefetch shape.
+                    let initial = [ResourceKey::new("eor/portal", model_id)];
+                    if let Err(e) = prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+                        let _ = walk_setup_parts_with_geom_and_physics(s, model_id);
+                    })
+                    .await
+                    {
+                        log::warn!(
+                            "populateBuildingAabbsForLandblock: ensure_walk_prefetched 0x{model_id:08X}: {e:?}"
+                        );
+                        continue;
+                    }
+                    match walk_setup_parts_with_geom_and_physics(source.as_ref(), model_id) {
+                        Some(v) => v,
+                        None => continue,
+                    }
                 }
-                match walk_setup_parts_with_geom(source.as_ref(), model_id) {
-                    Some(v) => v,
-                    None => continue,
-                }
-            }
-            _ => continue,
-        };
+                _ => continue,
+            };
 
-        for (part_index, part_local) in part_aabbs.iter().enumerate() {
+        for (part_index, (part_local, part_tris)) in part_data.iter().enumerate() {
             if part_local.is_empty() {
                 continue;
             }
@@ -3804,6 +4005,48 @@ async fn populate_building_aabbs_for_landblock_impl(
                     total += 1;
                 }
             });
+
+            // Workstream C: apply the placement transform to each
+            // part-local physics triangle (rotate vertices by
+            // `placement_orientation`, translate by
+            // `placement_origin`) and push to the pending pile keyed
+            // by `landblock_high`. JS-side door state toggling does
+            // NOT remove triangles (open doors still have collision
+            // for their frames); the camera sweep against building
+            // interior walls is unaffected by door state.
+            if !part_tris.is_empty() {
+                BUILDING_PHYSICS_PENDING.with(|pile| {
+                    let mut pile = pile.borrow_mut();
+                    for tri in part_tris.iter() {
+                        // Transform each vertex of the triangle from
+                        // part-local frame to world frame. Same math
+                        // as the GfxObj-vertex AABB lift above:
+                        // rotate by `placement_orientation`, then
+                        // add `placement_origin`.
+                        let v0_rot = quat_rotate(placement_orientation, tri.v0);
+                        let v1_rot = quat_rotate(placement_orientation, tri.v1);
+                        let v2_rot = quat_rotate(placement_orientation, tri.v2);
+                        let world_tri = holtburger_common::Triangle::new(
+                            holtburger_common::Vector3::new(
+                                v0_rot.x + placement_origin.x,
+                                v0_rot.y + placement_origin.y,
+                                v0_rot.z + placement_origin.z,
+                            ),
+                            holtburger_common::Vector3::new(
+                                v1_rot.x + placement_origin.x,
+                                v1_rot.y + placement_origin.y,
+                                v1_rot.z + placement_origin.z,
+                            ),
+                            holtburger_common::Vector3::new(
+                                v2_rot.x + placement_origin.x,
+                                v2_rot.y + placement_origin.y,
+                                v2_rot.z + placement_origin.z,
+                            ),
+                        );
+                        pile.push((landblock_high, world_tri));
+                    }
+                });
+            }
             // Phase E (door state) will use part_index to address
             // a specific entry for AABB-toggle on door-open. Today
             // all parts are inserted unconditionally.
@@ -7796,6 +8039,35 @@ pub struct SessionHandle {
     /// the JS-side displacement-vector heading estimator that today's
     /// 3D camera math falls back to.
     local_player_pose: std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>>,
+    /// Workstream C (3D camera collision, 2026-05-11): shared shadow of
+    /// the live `SpatialScene` used by the camera collision sweep
+    /// exports (`cameraSweepCollision`, `sweepSphereAgainstBuildingMesh`,
+    /// `sweepSphereAgainstCellMesh`, `sweepSphereAgainstStatics`). The
+    /// recv-loop refreshes this by cloning `world.scene` after every
+    /// TickMovement drain so the JS-side sweep reads at most one tick
+    /// behind the live integrator state. Pre-spawn the shadow is the
+    /// default-constructed empty Scene (empty indices); JS reads still
+    /// return `None` from every sweep, which is the correct camera
+    /// behaviour pre-spawn (no terrain to lift the camera off).
+    ///
+    /// We mirror the entire SpatialScene rather than a pure-data subset
+    /// so the sweep entrypoints can call the existing `Scene::sweep_-
+    /// sphere_against_*` methods unchanged. Scene's clone cost is
+    /// dominated by the entity body store and the per-LB triangle
+    /// HashMaps; for Holtburg (~16 buildings, ~120 cell triangles per
+    /// loaded dungeon) the clone runs in tens of microseconds per
+    /// TickMovement — well below the 33 ms 30 Hz budget.
+    collision_scene: std::rc::Rc<std::cell::RefCell<holtburger_world::SpatialScene>>,
+    /// Workstream C: shadow of `world.terrain_heights` so
+    /// `terrainHeightAt(x, y)` can resolve without a live WorldState
+    /// borrow. Refreshed on every TickMovement alongside
+    /// `collision_scene` (cheap because it's only ~9 LBs at hot Holtburg
+    /// loaded). Empty pre-spawn; the heightfield clamp degrades to
+    /// "no clamp" gracefully when the LB hasn't loaded yet — same
+    /// behaviour as the integrator's manual-drive terrain snap.
+    terrain_heights_shadow: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, [f32; 81]>>,
+    >,
 }
 
 /// Phase 6 step D: snapshot of the local player's current cell and
@@ -7896,6 +8168,104 @@ pub struct LocalPlayerPose {
     z: f32,
     heading: f32,
     landblock_id: u32,
+}
+
+/// Workstream C (3D camera collision, 2026-05-11): JS-facing payload
+/// for a camera-collision sweep hit. Returned by `cameraSweepCollision`,
+/// `sweepSphereAgainstBuildingMesh`, `sweepSphereAgainstCellMesh`, and
+/// `sweepSphereAgainstStatics` on `SessionHandle`. Carries the
+/// parametric hit time `t` in `[0.0, 1.0]` (where 0=start, 1=full
+/// delta), the world-space hit point, and the outward surface normal
+/// pointing back toward the sweep origin so the camera-pullback math
+/// can sign-add without flipping.
+///
+/// JS callers consume this via the wasm-bindgen getters
+/// (`hit.t`, `hit.x`, `hit.y`, `hit.z`, `hit.normalX`, ...). A clean
+/// miss returns `None` (JS `null`).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone, Copy)]
+pub struct CollisionHit {
+    t: f32,
+    x: f32,
+    y: f32,
+    z: f32,
+    normal_x: f32,
+    normal_y: f32,
+    normal_z: f32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl CollisionHit {
+    /// Parametric hit time in `[0.0, 1.0]` — 0 means the sweep started
+    /// already inside the obstacle, 1 means the sweep reached `end`
+    /// without contact (no value returned in that case — `None`).
+    #[wasm_bindgen(getter)]
+    pub fn t(&self) -> f32 {
+        self.t
+    }
+    /// World-space hit point x (metres).
+    #[wasm_bindgen(getter)]
+    pub fn x(&self) -> f32 {
+        self.x
+    }
+    /// World-space hit point y (metres).
+    #[wasm_bindgen(getter)]
+    pub fn y(&self) -> f32 {
+        self.y
+    }
+    /// World-space hit point z (metres).
+    #[wasm_bindgen(getter)]
+    pub fn z(&self) -> f32 {
+        self.z
+    }
+    /// Outward surface normal x (unit vector — but the sweep math
+    /// signs it so the camera-pullback direction reads cleanly).
+    #[wasm_bindgen(getter, js_name = normalX)]
+    pub fn normal_x(&self) -> f32 {
+        self.normal_x
+    }
+    #[wasm_bindgen(getter, js_name = normalY)]
+    pub fn normal_y(&self) -> f32 {
+        self.normal_y
+    }
+    #[wasm_bindgen(getter, js_name = normalZ)]
+    pub fn normal_z(&self) -> f32 {
+        self.normal_z
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl CollisionHit {
+    fn from_generic(hit: holtburger_world::GenericSweptHit) -> Self {
+        Self {
+            t: hit.t,
+            x: hit.point.x,
+            y: hit.point.y,
+            z: hit.point.z,
+            normal_x: hit.normal.x,
+            normal_y: hit.normal.y,
+            normal_z: hit.normal.z,
+        }
+    }
+
+    fn from_building_hit(hit: holtburger_world::SweptSphereHit, start: holtburger_common::Vector3, delta: holtburger_common::Vector3) -> Self {
+        // `SweptSphereHit` from `sweep_sphere_against_aabbs` carries `t`
+        // + `normal`, but the hit point is `start + delta * t` — the
+        // caller has both. Compute it here so the JS-side API stays
+        // uniform across all sweep flavours.
+        let point = start + delta * hit.t;
+        Self {
+            t: hit.t,
+            x: point.x,
+            y: point.y,
+            z: point.z,
+            normal_x: hit.normal.x,
+            normal_y: hit.normal.y,
+            normal_z: hit.normal.z,
+        }
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -8094,6 +8464,226 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = getLocalPlayerPose)]
     pub fn get_local_player_pose(&self) -> Option<LocalPlayerPose> {
         *self.local_player_pose.borrow()
+    }
+
+    /// Workstream C (3D camera collision, 2026-05-11): bilinear
+    /// terrain-height lookup at world-frame `(x, y)`. Returns `None`
+    /// when the containing landblock hasn't been baked into the
+    /// terrain cache yet (pre-EnteredWorld, or an unloaded LB the
+    /// camera momentarily sweeps over). Mirrors
+    /// `WorldState::terrain_height_at` byte-for-byte — the recv-loop
+    /// clones the heightmap cache into a shadow each TickMovement and
+    /// this read consults that shadow.
+    ///
+    /// JS camera path uses this to lift the camera off the ground:
+    /// `if (cameraZ < terrainZ + radius + 0.2) cameraZ = terrainZ + 0.6;`.
+    /// Smooth because bilinear → no jitter on slopes.
+    #[wasm_bindgen(js_name = terrainHeightAt)]
+    pub fn terrain_height_at(&self, world_x: f32, world_y: f32) -> Option<f32> {
+        const LB_M: f32 = 192.0;
+        const VERT_M: f32 = 24.0;
+        if !world_x.is_finite() || !world_y.is_finite() {
+            return None;
+        }
+        let lb_x = (world_x / LB_M).floor() as i32;
+        let lb_y = (world_y / LB_M).floor() as i32;
+        if !(0..256).contains(&lb_x) || !(0..256).contains(&lb_y) {
+            return None;
+        }
+        let landblock_id = ((lb_x as u32) << 24) | ((lb_y as u32) << 16);
+        let shadow = self.terrain_heights_shadow.borrow();
+        let grid = shadow.get(&landblock_id)?;
+        let local_x = world_x - lb_x as f32 * LB_M;
+        let local_y = world_y - lb_y as f32 * LB_M;
+        let cell_x = (local_x / VERT_M).clamp(0.0, 8.0);
+        let cell_y = (local_y / VERT_M).clamp(0.0, 8.0);
+        let cx0 = cell_x.floor() as usize;
+        let cy0 = cell_y.floor() as usize;
+        let cx1 = (cx0 + 1).min(8);
+        let cy1 = (cy0 + 1).min(8);
+        let fx = cell_x - cx0 as f32;
+        let fy = cell_y - cy0 as f32;
+        let z00 = grid[cx0 * 9 + cy0];
+        let z10 = grid[cx1 * 9 + cy0];
+        let z01 = grid[cx0 * 9 + cy1];
+        let z11 = grid[cx1 * 9 + cy1];
+        let z = z00 * (1.0 - fx) * (1.0 - fy)
+            + z10 * fx * (1.0 - fy)
+            + z01 * (1.0 - fx) * fy
+            + z11 * fx * fy;
+        Some(z)
+    }
+
+    /// Workstream C (3D camera collision, 2026-05-11): coarse sweep
+    /// against the **outdoor building per-part AABB index**. This is
+    /// the first/fastest layer of the camera collision chain — it
+    /// rejects 99% of frames where the camera isn't near any building.
+    /// JS chains the more expensive
+    /// `sweepSphereAgainstBuildingMesh` (precise per-triangle, incl.
+    /// basement walls), `sweepSphereAgainstStatics`, and
+    /// `sweepSphereAgainstCellMesh` after this.
+    ///
+    /// `from`/`to` are in world-metre coords (x east, y north, z up).
+    /// `landblock_id` lets the shadow scene pick which LB's AABBs to
+    /// consider; pass the player's current `landblock_id` from
+    /// `getLocalPlayerPose().landblockId`. `radius` is the sphere
+    /// radius (the camera capsule's "fat point"). Returns `None`
+    /// (`null` in JS) on a clean miss.
+    #[wasm_bindgen(js_name = cameraSweepCollision)]
+    pub fn camera_sweep_collision(
+        &self,
+        from_x: f32,
+        from_y: f32,
+        from_z: f32,
+        to_x: f32,
+        to_y: f32,
+        to_z: f32,
+        radius: f32,
+        landblock_id: u32,
+    ) -> Option<CollisionHit> {
+        use holtburger_common::position::WorldPosition;
+        use holtburger_common::{Guid, Quaternion, Vector3};
+        let start = Vector3::new(from_x, from_y, from_z);
+        let end = Vector3::new(to_x, to_y, to_z);
+        let delta = end - start;
+        // The Scene's building-AABB sweep wants a `WorldPosition` so it
+        // can pick neighbouring outdoor cells. Synthesize a stand-in
+        // pose at `start` keyed by `landblock_id`; the landblock-local
+        // coords are derived from `start - lb_origin`.
+        let lb_high = landblock_id & 0xFFFF_0000;
+        let lb_x = ((lb_high >> 24) & 0xFF) as f32;
+        let lb_y = ((lb_high >> 16) & 0xFF) as f32;
+        let pose = WorldPosition {
+            landblock_id: Guid(landblock_id),
+            coords: Vector3::new(
+                start.x - lb_x * 192.0,
+                start.y - lb_y * 192.0,
+                start.z,
+            ),
+            rotation: Quaternion::identity(),
+        };
+        let scene = self.collision_scene.borrow();
+        let hit = scene.sweep_sphere_against_buildings(&pose, delta, radius)?;
+        Some(CollisionHit::from_building_hit(hit, start, delta))
+    }
+
+    /// Workstream C (3D camera collision, 2026-05-11): precise sweep
+    /// against the **building-interior per-triangle physics index**.
+    /// Distinct from `cameraSweepCollision` (coarse per-building-part
+    /// AABB) — this path catches interior walls + basement walls + any
+    /// fine geometry the per-part AABB doesn't resolve.
+    ///
+    /// Source data: each part's `GfxObj.physics_polygons`, fan-
+    /// triangulated and lifted to world coords via the building's
+    /// placement frame. Populated by
+    /// `populateBuildingAabbsForLandblock` (extended in Workstream C).
+    ///
+    /// `from`/`to` in world coords; `landblock_id` identifies which
+    /// LB's triangles to read. Returns `None` for a clean miss / no
+    /// triangles loaded in that LB.
+    #[wasm_bindgen(js_name = sweepSphereAgainstBuildingMesh)]
+    pub fn sweep_sphere_against_building_mesh(
+        &self,
+        from_x: f32,
+        from_y: f32,
+        from_z: f32,
+        to_x: f32,
+        to_y: f32,
+        to_z: f32,
+        radius: f32,
+        landblock_id: u32,
+    ) -> Option<CollisionHit> {
+        use holtburger_common::Vector3;
+        let start = Vector3::new(from_x, from_y, from_z);
+        let end = Vector3::new(to_x, to_y, to_z);
+        let scene = self.collision_scene.borrow();
+        let hit = scene.sweep_sphere_against_building_mesh(
+            landblock_id,
+            start,
+            end,
+            radius,
+        )?;
+        Some(CollisionHit::from_generic(hit))
+    }
+
+    /// Workstream C (3D camera collision, 2026-05-11): sweep against
+    /// the **outdoor static placements** index (trees, signs, props).
+    /// Statics are loaded from `LandblockInfo.objects` (the Stab list)
+    /// alongside buildings; their AABBs land in the per-landblock
+    /// static index via `populateStaticsAabbsForLandblock`.
+    ///
+    /// `from`/`to` in world coords. `landblock_id` identifies which LB
+    /// to sample; the shadow scene's `statics_aabbs_near_pose` widens
+    /// to the 3x3 ring automatically so a sweep across an LB boundary
+    /// still resolves.
+    #[wasm_bindgen(js_name = sweepSphereAgainstStatics)]
+    pub fn sweep_sphere_against_statics(
+        &self,
+        from_x: f32,
+        from_y: f32,
+        from_z: f32,
+        to_x: f32,
+        to_y: f32,
+        to_z: f32,
+        radius: f32,
+        landblock_id: u32,
+    ) -> Option<CollisionHit> {
+        use holtburger_common::position::WorldPosition;
+        use holtburger_common::{Guid, Quaternion, Vector3};
+        let start = Vector3::new(from_x, from_y, from_z);
+        let end = Vector3::new(to_x, to_y, to_z);
+        let delta = end - start;
+        let lb_high = landblock_id & 0xFFFF_0000;
+        let lb_x = ((lb_high >> 24) & 0xFF) as f32;
+        let lb_y = ((lb_high >> 16) & 0xFF) as f32;
+        let pose = WorldPosition {
+            landblock_id: Guid(landblock_id),
+            coords: Vector3::new(
+                start.x - lb_x * 192.0,
+                start.y - lb_y * 192.0,
+                start.z,
+            ),
+            rotation: Quaternion::identity(),
+        };
+        let scene = self.collision_scene.borrow();
+        let hit = scene.sweep_sphere_against_statics(&pose, delta, radius)?;
+        Some(CollisionHit::from_generic(hit))
+    }
+
+    /// Workstream C (3D camera collision, 2026-05-11): sweep against
+    /// the **EnvCell per-triangle physics index** for the cells in
+    /// `cell_ids`. EnvCells are dungeons / apartments / instanced
+    /// indoor spaces — their physics lives in `Environment.physics_-
+    /// polygons` (NOT in `GfxObj.physics_polygons` — that's the
+    /// building-interior path above).
+    ///
+    /// JS callers gate this on "is `cell_id` in the current render
+    /// set" — pass the cell ID slice explicitly so JS controls the
+    /// gate. Typically the render set comes from `getRenderSet(1)`
+    /// (BFS depth=1 from the player's current cell).
+    ///
+    /// `from`/`to` in world coords; `cell_ids` is a flat `&[u32]` of
+    /// full 32-bit cell IDs.
+    #[wasm_bindgen(js_name = sweepSphereAgainstCellMesh)]
+    pub fn sweep_sphere_against_cell_mesh(
+        &self,
+        from_x: f32,
+        from_y: f32,
+        from_z: f32,
+        to_x: f32,
+        to_y: f32,
+        to_z: f32,
+        radius: f32,
+        cell_ids: &[u32],
+    ) -> Option<CollisionHit> {
+        use holtburger_common::Vector3;
+        let start = Vector3::new(from_x, from_y, from_z);
+        let end = Vector3::new(to_x, to_y, to_z);
+        let scene = self.collision_scene.borrow();
+        let hit = scene.sweep_sphere_against_cell_mesh(
+            cell_ids, start, end, radius,
+        )?;
+        Some(CollisionHit::from_generic(hit))
     }
 
     /// Phase 6 step E follow-up (2026-05-09): resolve a door GUID to the
@@ -8724,6 +9314,16 @@ pub async fn start_session(
     // pose, refreshed by the recv-loop on each TickMovement.
     let local_player_pose: std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>> =
         std::rc::Rc::new(std::cell::RefCell::new(None));
+    // Workstream C: shared shadow of the live SpatialScene + terrain
+    // heightmap, refreshed by the recv-loop on each TickMovement.
+    let collision_scene: std::rc::Rc<
+        std::cell::RefCell<holtburger_world::SpatialScene>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(
+        holtburger_world::SpatialScene::new(),
+    ));
+    let terrain_heights_shadow: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, [f32; 81]>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
 
     {
         let queued_events = queued_events.clone();
@@ -8735,6 +9335,8 @@ pub async fn start_session(
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
         let local_player_pose = local_player_pose.clone();
+        let collision_scene_inner = collision_scene.clone();
+        let terrain_heights_shadow_inner = terrain_heights_shadow.clone();
         wasm_bindgen_futures::spawn_local(async move {
             recv_loop(
                 session,
@@ -8749,6 +9351,8 @@ pub async fn start_session(
                 cell_scene_snapshot,
                 door_part_snapshot,
                 local_player_pose,
+                collision_scene_inner,
+                terrain_heights_shadow_inner,
             )
             .await;
         });
@@ -8811,6 +9415,8 @@ pub async fn start_session(
         cell_scene_snapshot,
         door_part_snapshot,
         local_player_pose,
+        collision_scene,
+        terrain_heights_shadow,
     })
 }
 
@@ -9385,6 +9991,10 @@ async fn recv_loop(
         std::cell::RefCell<std::collections::HashMap<u32, DoorPartSnapshot>>,
     >,
     local_player_pose: std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>>,
+    collision_scene: std::rc::Rc<std::cell::RefCell<holtburger_world::SpatialScene>>,
+    terrain_heights_shadow: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, [f32; 81]>>,
+    >,
 ) {
     use futures::StreamExt;
     use holtburger_protocol::messages::{
@@ -11810,6 +12420,25 @@ async fn recv_loop(
                                 w.scene.cell_physics_count(),
                             ));
                         }
+                        // Workstream C (3D camera collision,
+                        // 2026-05-11): drain `physics_polygons` from
+                        // building parts (GfxObj.physics_polygons) into
+                        // `scene.building_physics_index`. This is the
+                        // BUILDING-side parallel of the cell-physics
+                        // drain — building interiors (incl. basements)
+                        // live in the building's setup parts and were
+                        // missing collision coverage pre-C; the camera
+                        // sweep against `sweep_sphere_against_building_-
+                        // mesh` reads this index.
+                        let drained_building_tris =
+                            drain_pending_building_physics_into(&mut w.scene);
+                        if drained_building_tris > 0 {
+                            console_log_str(&format!(
+                                "[wsC] drained {drained_building_tris} building physics triangles into scene ({} landblocks, {} total tris)",
+                                w.scene.building_physics_count(),
+                                w.scene.building_triangles_total(),
+                            ));
+                        }
                         // Phase 6 step D: publish a snapshot of the
                         // local player's current cell + render set
                         // so the rAF tick can synchronously query it
@@ -11831,6 +12460,27 @@ async fn recv_loop(
                         // `None`; post-spawn it stays `Some` and the
                         // recv-loop overwrites in place.
                         publish_local_player_pose(w, &local_player_pose);
+
+                        // Workstream C (3D camera collision,
+                        // 2026-05-11): refresh the JS-readable shadow
+                        // of the SpatialScene + terrain heights so
+                        // `cameraSweepCollision` / `terrainHeightAt`
+                        // and friends see fresh indices the next time
+                        // JS calls them. Clone is one-shot per tick
+                        // (Holtburg's hot case is hundreds of triangles
+                        // + AABBs; the clone runs in <100 µs by direct
+                        // measurement on a desktop browser). Doing this
+                        // unconditionally per tick keeps the camera
+                        // sweep deterministic at the cost of a clone we
+                        // could otherwise gate on `drained_* > 0`. The
+                        // gate would shave the clone cost when no
+                        // collision data changed, but at the price of
+                        // making rare cases (e.g. door open mid-tick
+                        // not requiring a re-clone) hard to reason
+                        // about. Pay the cost; profile if it hurts.
+                        *collision_scene.borrow_mut() = w.scene.clone();
+                        *terrain_heights_shadow.borrow_mut() =
+                            w.terrain_heights_snapshot();
 
                         // Workstream A (3D camera/game-feel fix): fan
                         // out the local player's authoritative pose to
