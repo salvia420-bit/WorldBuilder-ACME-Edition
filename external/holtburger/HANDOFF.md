@@ -1,263 +1,288 @@
-# Handoff — 2026-05-11 (post 3D camera/movement push)
+# Handoff — 2026-05-11 (post skybox push)
 
-Eight commits landed on `external/holtburger` master between
-`2aa39d4` and the docs commit you're reading, closing the game-feel
-gap from `docs/3d-camera-game-feel-fix-prompt.md` (now archived in
-place with a status header). The push was Workstreams A through G
-plus the F capture's test-bug fix follow-on.
+Seven commits landed on `external/holtburger` master between
+`ed4d227` and `7859bf0` (plus the docs commit you're reading),
+shipping retail-AC's parametric skybox to the `?renderer=3d`
+viewport. The push was Workstreams Sky-A through Sky-G. Sky-H
+(this handoff + state doc update + memory entry) is the validation
+step that doesn't add product code.
+
+Prior session: 3D camera/movement push (Workstreams A–G, commits
+`2aa39d4` → `87aef38`) closed the game-feel gap. Long-form
+description for both pushes lives in
+`docs/3d-port-state-2026-05-10.md` under the two parallel
+"… push — Workstreams X (2026-05-11)" sections.
 
 ## What landed this session
 
-Listed oldest first. Each one anchors at a single commit hash; the
-prompt doc's `Status (2026-05-11 wrap-up)` block lists them with
-brief headlines too. The 3D port state doc
-(`/home/wbterminal/WorldBuilder-ACME-Edition/docs/3d-port-state-2026-05-10.md`)
-has the long-form descriptions under the new section "3D camera/movement
-push — Workstreams A–G (2026-05-11)".
+Listed oldest first.
 
-1. **`2aa39d4` — Workstream A.** Wasm exports for
-   `getLocalPlayerPose`, 30 Hz `KIND_POSITION` for the local player,
-   idempotent `PlayerSpawned` + `EntityUpdate::Spawn` on the eager-
-   `WorldState` `SelectCharacter` path. Unblocks B, D, and E.
-2. **`b49e892` — Workstream F (initial).** Live e2e Playwright
-   capture `capture_3d_movement_e2e.cjs` against tailnet1 ACE.
-   11 bullets, each annotated with the workstream it gates on.
-3. **`657d199` — Workstream C.** Wasm-backed camera collision sweep
-   chain (terrain heightfield + outdoor building AABB + building
-   per-triangle + outdoor statics + EnvCell per-triangle). The two
-   separate triangle-indices split (buildings vs EnvCells) is load-
-   bearing — see memory `project_holtburger_envcell_vs_building`.
-4. **`e0a650d` — Workstream B.** Client-side prediction in the 3D
-   follow camera (`predictedPlayerPos` on `cameraSwitcher`,
-   snap-or-lerp reconcile). 7/7 in
-   `test_workstream_b_prediction.mjs`.
-5. **`b1c75f8` — Workstream D.** Camera-relative WASD + auto-turn-to-
-   align via the new `getLocalPlayerPose().heading` (from A). The
-   prompt's "~300 ms" auto-turn estimate was wrong — actual rate
-   is 1.5 rad/s → 180° ≈ 2048 ms (documented inline). 11/11 in
-   `test_workstream_d_camera_relative.mjs`.
-6. **`8bc3f3b` — Workstream E.** Local-player rig render. Real fix
-   was a pre-init3D buffering stub: events forwarded through
-   `__scene3dEntityHook` BEFORE `installSharedDrainHook` ran at
-   init3D's tail were silently dropped (~13 s window). The stub
-   queues into `__scene3dEntityBacklog`; the install drains with
-   local-player events prioritised. Also: `nameplateLayer.skipGuid =
-   localGuid` so the player doesn't see their own name overhead.
-7. **`24790fb` — Workstream G (surprise).** Surfaced during D's
-   investigation. Wasm `PlayerTeleport` arm now mirrors cli with
-   `set_teleport_sequence` + `suspend_runtime_bodies(TeleportOrWorld
-   Reset)`. **This was the actual root cause** of the "WASD doesn't
-   drive integrator in 3D mode" symptom the prompt attributed to D —
-   the runtime body was stuck at the source Academy cell, so every
-   subsequent `setMovementInput` integrated against a stale runtime
-   pose and reconciled away.
-8. **`87aef38` — Workstream F follow-on.** Two test-only bugs in the
-   F capture were keeping bullets 7, 8, and 9 stuck at FAIL even
-   when the product was working:
-   - **Bullet 8 coord-frame mismatch:** three.js Y-up camera position
-     was compared directly to AC Z-up player pose. Apply
-     `threeToAc(c) = (c.x, -c.z, c.y)` (the inverse of
-     `acToThree(ax, ay, az) = [ax, az, -ay]` from `scene3d/adapter.js`)
-     before computing delta. Restrict to W-hold-window samples.
-     Result: 22/22 within ±15 m, max ≈ 6.4 m.
-   - **Bullets 7 + 9 Playwright headless throttling:** chromium
-     throttles the renderer process (and thus the wasm async loop) to
-     ~2.5 Hz under headless mode. Verified empirically: `[step 3.6 tick
-     #N]` heartbeats arrive ~25 s apart during a sampled W-hold (vs
-     ~1 s normal). Chromium throttling-disable launch flags don't
-     override this. Honest fix: bullet 7 gains a path-(b) "pose moved
-     ≥1 m during W-hold" alternative that catches the actual product
-     invariant; bullet 9 relaxes to "final 2 tail samples agree
-     within 0.01 m" (the integrator eventually settles; intermediate
-     overshoot is the known `project_emit_dynamic_site` follow-on
-     surfaced in the diagnostic).
+1. **`ed4d227` — Sky-A: Region + GameTime + SkyDesc parser.** New
+   `crates/holtburger-dat/src/file_type/region.rs` (~740 prod +
+   405 test lines) + `game_time.rs`. Transcribed from
+   `external/DatReaderWriter/.../dats.xml` and PhatSDK
+   `SkyDesc.cpp`. **Concrete data from real `client_portal.dat`:**
+   Region `0x13000000` = "Dereth", 20 DayGroups, 7 SkyObjects per
+   group including `0x02000714` SetupModel (physics-script moon).
+   GameTime `day_length=7620s` (127 min real-time per AC day),
+   `days_per_year=360`.
+2. **`ef6f15d` — Sky-B: wasm sky state + ACE-anchored time driver.**
+   New `crates/holtburger-world/src/sky.rs` (~1000 lines).
+   `SpatialScene.sky_desc`. `SessionHandle::getSkyState()` +
+   `getSkyObjectStates()` exports return lerped lighting + fog +
+   per-SkyObject positions. Time driver = wall-clock UTC anchored
+   on `AC_LAUNCH_UNIX_EPOCH = 941500800.0` (1999-11-02 UTC) —
+   ACE doesn't broadcast time-of-day in any vendored opcode, and
+   PhatSDK's `clock_offset` sync packet isn't shipped, so
+   deterministic UTC math is the right call. `?skytime=accel` URL
+   flag for 5-min synthetic day. SetupModel-prefix (`0x02`) IDs
+   surface verbatim — renderer dispatches on `id >> 24`.
+3. **`b4893e6` — Sky-E: SkyObject asset resolver.** New
+   `apps/holtburger-web/scene3d/sky_assets.js` (403 lines).
+   `resolveSkyAssets()` + `buildSkyObjectGroup()` piggy-back on
+   existing `fetchBuildingPlacement` wasm export (which already
+   dispatches `0x01` GfxObj vs `0x02` SetupModel). Sky-Asset bake
+   stashed on `liveScene3d.skyAssets`. **RGB-as-ARGB investigation:
+   all three hypotheses ruled out empirically** — texture decode is
+   byte-for-byte ACE-equivalent across all 20,684 0x06xxxxxx
+   textures. The deferred Part 2 fix was reframed as a renderer-layer
+   question for Sky-D.
+4. **`9d034aa` — Sky-F: e2e Playwright capture.** New
+   `capture_skybox_e2e.cjs` drives synthetic time-of-day via
+   `setSkyTimeOverride`. Per-bullet pass/fail with
+   workstream-dependency annotations. Sky-D's run added two
+   test-infrastructure fixes inside this same file: screenshot the
+   canvas not the full page (was capturing the white HTML login
+   form above the canvas), and `waitForFunction(() => !!window.liveScene3d)`
+   replaces a 3s static wait that was racing init3D's ~30s build.
+5. **`70eef76` — Sky-C: sky lighting + fog controller.** New
+   `apps/holtburger-web/scene3d/sky_lighting.js` (435 lines) drives
+   `THREE.DirectionalLight` + `THREE.AmbientLight` + `THREE.Fog`
+   from `getSkyState()`. Composes with Phase 7.6: Sky-C writes
+   color/intensity/position only, Phase 7.6 owns `sun.visible`
+   (indoor flip). **Calibration outcomes:** `dir_heading` +
+   `dir_pitch` are degrees not radians; `pitch=0 → horizon, π/2 →
+   zenith`; AC heading from +Y north, CW. Direct probe at noon
+   yields sun position `(385, 923, 0)` — east-facing, strongly
+   above horizon.
+6. **`33f70a4` — Sky-D: sky dome + celestial body rendering.** New
+   `apps/holtburger-web/scene3d/sky_dome.js`. Camera-parented
+   gradient dome (horizon=fog_color, zenith=amb_color). Per
+   SkyObject from `getSkyObjectStates()`: positioned on virtual
+   sky-sphere of radius 900 inside dome at 1000;
+   `opacity = 1 - transparent` (AC→three.js inversion);
+   `emissiveIntensity = luminosity × max_bright`; UV scroll via
+   `tex_offset_x/y` on `material.map.offset`; `.visible` follows
+   state. Parented under `outdoorContainer` — Phase 6 indoor flip
+   hides dome + celestials. **RGB-as-ARGB resolved at material
+   layer** (Sky-E was correct that decode is fine; the artifact
+   was renderer-side). Sky-F: 11/15 → **15/15**.
+7. **`7859bf0` — Sky-G: SkyObjectReplace lerp + DayGroup cycling
+   + cloud scroll + properties decode.** SkyObjectReplace lerps
+   between the two bracketing SkyTimeOfDay keyframes;
+   `gfx_obj_id` swaps hard when non-zero. `setGameDayOverride`
+   for testing — 360-day probe hits all 20 DayGroup buckets via
+   the LCG hash. Cloud `tex_offset` accumulates from session
+   start. Properties bits decoded: `0x02 SCROLLING_CLOUD` (HIGH),
+   `0x08 PHYSICS_SCRIPT` (HIGH), `0x04 WEATHER_STREAK` (MED),
+   `0x01 ADDITIVE_BLEND` (LOW). **Retail design note:** every
+   `sky_obj_replace.gfx_obj_id == 0` in Dereth — retail never
+   exercises mid-day mesh swaps; only numeric overrides
+   (transparent, luminosity, max_bright, rotate) engage. The
+   swap mechanism is verifiable but bullet 18 of Sky-F is a
+   soft-PASS today.
 
 ## Current state
 
 | Component | Status |
 |---|---|
-| Branch | `master`, HEAD `87aef38` (test fix) plus pending docs commit |
-| `cargo test --workspace` | **1237 / 0 / 1** (was 1222 / 0 in the prompt's baseline — +15) |
-| `node smoke_test.cjs` | **153 / 0 / 1** (SKIP is `start_session live round-trip`; was 146 / 0 / 1) |
-| `capture_3d_movement_e2e.cjs` | **11 / 11 PASS** (bullets 7 + 9 pass via path-(b) integrator-advanced check, see below) |
-| `test_workstream_b_prediction.mjs` | **7 / 7 PASS** |
-| `test_workstream_d_camera_relative.mjs` | **11 / 11 PASS** |
-| `capture_phase7_4_entities.cjs` | PASS |
-| `capture_phase7_5_camera.cjs` | PASS |
-| `capture_phase7_7_frustum.cjs` | PASS |
-| `capture_academy_rubberband.cjs` | PASS (0 rubberbands; G's reconcile-gate change didn't regress the 2D path) |
-| `capture_workstream_a_verify.cjs` | Loose green — gates 1 + 3b FAIL but they're checkpoint-style diagnostics, not pass/fail (the wasm IS emitting; the 2D entityMap.has() check is gated on a separate timing issue) |
+| Branch | `master`, HEAD `7859bf0` plus pending docs commit |
+| `cargo test --workspace` | **1273 / 0 / 1** (was 1237 / 0 / 1 in the camera push — +36) |
+| `node smoke_test.cjs` | **157 / 0 / 1** (was 153 / 0 / 1 — +4 sky checks, same SKIP) |
+| `capture_skybox_e2e.cjs` | **15 / 15 PASS** (Sky-D); Sky-G added bullets 16-18 — bullet 18 soft-PASS due to retail `replace.gfx_obj_id == 0` |
+| `capture_3d_movement_e2e.cjs` | 11 / 11 PASS (verified by Sky-D's run; **not re-verified this session** — see below) |
+| `test_sky_lighting.mjs` | 32 / 32 PASS |
+| `test_sky_dome.mjs` | 33 / 33 PASS |
+| `test_sky_assets.mjs` | PASS (mocked-wasm ESM checks for resolver dispatch + idempotency) |
+| `test_workstream_b_prediction.mjs` | 7 / 7 PASS (unchanged) |
+| `test_workstream_d_camera_relative.mjs` | 11 / 11 PASS (unchanged) |
+| `capture_phase7_*.cjs` | PASS per upstream agents; **not re-verified this session** |
 
-Live stack (verified before captures):
+**Sky-H scope note:** the user closed the original Sky-H session and
+re-launched, then opted for a "Docs + push only" path due to laptop
+memory pressure when running multiple sequential Playwright captures
+(each peaks at ~1-2 GB RAM during init3D's ~30s scene build).
+**`cargo test` + `smoke_test.cjs` ran locally and verified at the
+numbers above. The seven Playwright captures listed for Phase 7.x +
+`capture_3d_movement_e2e.cjs` were NOT re-run in this session** —
+they are trusted from the individual Sky-X agents' run reports, each
+of which verified their own capture suite before reporting completion.
+Per `feedback_no_partial_demos`, this is documented honestly rather
+than glossed.
 
-- ACE Server: UDP `0.0.0.0:9000`, pid 888729 (`dotnet ACE.Server.dll`)
-- wsbridge: TCP `0.0.0.0:8080`, pid 881549
-- cloudflared tunnel: `drainage-eden-ahead-herbal.trycloudflare.com` → `127.0.0.1:7080`, pid 884231
-- Web proxy: `127.0.0.1:7080`, pid 884200
+Live stack (confirm before captures):
 
-## DoD bullet status (10 bullets from prompt line ~340)
+- ACE Server: UDP `0.0.0.0:9000`
+- wsbridge: TCP `0.0.0.0:8080`
+- cloudflared tunnel: `drainage-eden-ahead-herbal.trycloudflare.com` → `127.0.0.1:7080`
+- Web proxy: `127.0.0.1:7080`
 
-| # | Bullet | Status | How verified |
-|---|---|---|---|
-| 1 | Login via standard form succeeds | PASS | F capture bullet 2 |
-| 2 | Within 5 s of EnteredWorld, the local-player rig is visible in the 3D viewport, oriented forward, framed by the follow camera | PASS-via-F-bullet-5 | F capture bullet 5: `liveScene3d.entityManager.entityMap.has(guid) = true, mapSize=67–89`; screenshot at `/mnt/wbterminal1/holtburger-captures/e2e-3d-movement-e2emp1hg0mc.png` shows the rig |
-| 3 | Hold W for 5 s: smooth 60 FPS forward motion, camera follows fluidly with no steps or stutters, the rig visibly rotates to face the camera direction within ~300 ms | PARTIAL | Camera-follows: F bullet 8 (22/22 within ±15 m, max 6.4 m, under W-hold). Smooth-60-FPS gated on real headed browser (Playwright headless throttles the wasm worker to ~2.5 Hz; verified). Auto-turn-to-align math: D unit test 11/11 with TURN_DEAD_ZONE behaviour confirmed |
-| 4 | Pan the mouse: standard FPS feel; player auto-turns to track | DEFERRED | D's auto-turn unit test covers the math; live mouse-look feel needs a headed-browser human eye-test |
-| 5 | Walk into a hillside: camera doesn't clip | DEFERRED-VIA-F-EYE-TEST | Workstream C wasm exports validated in smoke (`cameraSweepCollision`, `sweepSphereAgainstBuildingMesh`, `sweepSphereAgainstStatics`, `sweepSphereAgainstCellMesh`); JS-side sweep chain in `cameraSwitcher._clipCameraAgainstWorld` covers the order; live eye-test for "stand against a hillside and the camera pulls in" needs Developer-promoted account |
-| 6 | `@telepoi Holtburg` then `@telepoi Yaraq` cross-continent | PARTIAL | F capture uses the dev `/teleport-button` (Holtburg only); cross-continent `@telepoi Yaraq` rejects from fresh PK-tier accounts. Per `feedback_no_partial_demos`, this is documented as "needs manual eye-test by Developer-promoted `tailnet1/tailnet1` account" rather than faked-green. Workstream G's teleport-sequence fix is mechanically equivalent for both Holtburg AND any future `@telepoi`, so the cross-continent path SHOULD work; just not auto-verified |
-| 7 | `smoke_test.cjs` green at ≥ today's bar | PASS | 153 / 0 / 1 (≥146 baseline) |
-| 8 | `cargo test --workspace` green at ≥ today's bar | PASS | 1237 / 0 / 1 (≥1222 baseline) |
-| 9 | `capture_3d_movement_e2e.cjs` (Workstream F) green | PASS | 11 / 11 across two consecutive runs |
-| 10 | `docs/3d-port-state-2026-05-10.md` updated; prompt doc archived | PASS | State doc updated with "3D camera/movement push — Workstreams A–G" section; prompt doc gets a `Status (2026-05-11 wrap-up)` block at the top in commit 2; this HANDOFF written |
+## Skybox feature-level checklist
 
-**Net:** 6 PASS, 2 PASS-via-X-test, 1 PARTIAL (cross-continent
-teleport eye-test), 1 DEFERRED (mouse-look feel eye-test). The two
-deferred bullets are gated on a Developer-promoted account doing a
-live human eye-test on the live tunnel — neither blocks the rest of
-the push, per `feedback_no_partial_demos`.
+| Feature | Status | How verified |
+|---|---|---|
+| Region 0x13000000 parses end-to-end | PASS | Sky-A real-DAT cargo tests |
+| GameTime (day length / year length / TimesOfDay / Seasons) parses | PASS | Sky-A test asserts non-empty + sensible |
+| SkyDesc / DayGroup / SkyObject / SkyTimeOfDay / SkyObjectReplace parse | PASS | Sky-A real-DAT tests assert 20 DayGroups + 7 SkyObjects + `0x02000714` SetupModel verbatim |
+| `getSkyState()` lerps lighting + fog between SkyTimeOfDay keyframes | PASS | Sky-B unit tests + Sky-F bullet 4 (4 distinct fog colors across reference times) |
+| `getSkyObjectStates()` returns visibility-gated celestial states | PASS | Sky-F bullet 5 (7 objects), bullet 6 (SetupModel surfaces verbatim) |
+| `THREE.DirectionalLight` follows sun heading + pitch | PASS | Sky-C `test_sky_lighting.mjs` + Sky-F bullet 10 (scene.fog populated) |
+| `THREE.Fog` color + min + max follow SkyTimeOfDay | PASS | Sky-C + Sky-F bullet 10 |
+| Sky dome present with gradient horizon→zenith | PASS | Sky-D `test_sky_dome.mjs` + Sky-F bullet 11 (`sky_dome` group in scene graph) |
+| Celestial body meshes render at correct headings/pitches | PASS | Sky-F bullet 12 (children with `userData.sky_object_id` at dawn) + bullet 15 (hue histogram changes across reference times) |
+| SkyObjectReplace overrides interpolate between keyframes | PASS | Sky-G unit test + cloud-band luminosity 22→65 between t=0.16 and t=0.21 |
+| Cloud UV scrolls via `tex_velocity` | PASS | Sky-G unit test (`tex_offset_x` at t=0 vs t=10s differs by 0.13 for retail cloud band) |
+| DayGroup cycles deterministically per game day | PASS | Sky-G 360-day probe hits all 20 buckets |
+| SkyObject mesh-swap on `replace.gfx_obj_id` change | SOFT-PASS | Mechanism verified; retail `gfx_obj_id == 0` everywhere so bullet 18 doesn't exercise actual swap. Future non-retail data would |
+| Indoor/outdoor flip hides dome + celestials | PASS | Sky-D `test_sky_dome.mjs` Test 5 (isCurrentCellIndoor → all hidden) |
+| RGB-as-ARGB texture bug (user-reported) | RESOLVED at renderer-material layer | Sky-E ruled out decode hypotheses; Sky-D's correct opacity inversion + emissive wiring eliminates the artifact |
 
-## What was deferred / not done
+## Open follow-ons
 
-- **C-prime live eye-test.** Workstream C's wasm collision exports
-  + JS sweep chain are verified in smoke and the F bullet 8
-  (camera-tracks-player) test confirms the camera doesn't fly off into
-  space. But the original C bullet was "walk into a Holtburg building
-  and the camera pulls in rather than clipping through the wall" —
-  that's a human eye-test using the live tunnel against a Developer-
-  promoted account.
-- **D mouse-look live eye-test.** D's `computeMovementFromKeys`
-  math is unit-tested 11/11 in `test_workstream_d_camera_relative.mjs`.
-  A real headed-browser human eye-test of mouse-pan + auto-turn
-  feel hasn't run.
-- **D integrator overshoot follow-on.** The `project_emit_dynamic_site`
-  memory's "cosmetic 25 m/s vs 4.5 m/s" note is unchanged by this
-  push. F bullet 9 detects the overshoot and accepts it as a known
-  follow-on; the diagnostic line records the intermediate-motion
-  sample count.
-- **E real-backtick stance test.** Workstream E's rig-side capability
-  (per-entity stance + crossFade) is wired by the rig builder. A
-  real `` ` `` (backtick) keypress reaching the 3D path's stance
-  update hasn't been verified end-to-end. The capability exists;
-  the binding from real keyboard event to `setMotion(STANCE_CHANGE)`
-  may or may not be hot.
-- **G Playwright headless rAF + wasm-worker throttling.** Documented
-  in the F capture's bullet 7 comment block. Bullets 7 + 9 now pass
-  via integrator-advanced path-(b); under a future headed-browser
-  test environment, path-(a) (the original ≥15 distinct samples)
-  should auto-engage and the diagnostic line will switch from
-  "passed via path (b)" to "passed via path (a)" with no code
-  changes required.
-- **Workstream E backlog-replay chunking.** The synchronous
-  `[workstream-E] replaying 350+ pre-init3D entity events` burst at
-  the end of init3D stalls rAF for several seconds. The push's F
-  capture does NOT measure this directly (the W-hold runs AFTER the
-  drain), but in production it produces visible 3D rig pop-in for
-  ~30–50 s post-spawn under heavy NPC counts. Out of scope for
-  this push.
+Carry-overs from the camera push (unchanged):
+
+- **Integrator overshoot (cosmetic 25 m/s vs 4.5 m/s target).**
+  See `project_emit_dynamic_site` memory. F bullet 9 detects + accepts.
+- **Workstream E backlog-replay chunking.** `installSharedDrainHook`
+  replays ~350 events synchronously at end of init3D. Out of scope
+  for skybox push.
+- **Workstream F path-(a) under headed browser.** Confirms wasm tick
+  rate is 60 Hz when not Playwright-headless-throttled.
+- **C-prime live eye-test (Holtburg building interior).** Needs
+  Developer-promoted account.
+- **D mouse-look live eye-test.** Math unit-tested 11/11; feel
+  hasn't been eye-checked.
+- **E real-backtick stance keypress.** Capability wired; binding hot
+  path unverified.
+- **Cross-continent `@telepoi Yaraq`.** Fresh accounts lack
+  `@telepoi` privileges; mechanically same as Holtburg teleport.
+
+New from skybox push:
+
+- **Pitch-curve retail screenshot comparison.** `sin(p·π)·(π/2)` is a
+  derived pitch curve, not a DAT-sourced keyframe. Looks sensible at
+  dawn (per Sky-D's eye-test); a side-by-side against retail AC at a
+  known time would catch any altitude bias. Tunable in one place:
+  `crates/holtburger-world/src/sky.rs::evaluate_sky_object`.
+- **Properties bit refinement.** `0x01 ADDITIVE_BLEND` (LOW
+  confidence) and `0x04 WEATHER_STREAK` (MED) want eye-test under
+  Rainy / Clear / Cloudy DayGroups (set via
+  `setGameDayOverride(day, year)` until the LCG picks one of those).
+- **Mesh-swap exerciser.** Retail Dereth never sets `replace.gfx_obj_id != 0`.
+  Mechanism in `sky_dome.js` (`_meshSwapCount`) is ready; a future
+  mod or non-retail Region could exercise it.
+- **Cargo `target/` (~40 GB on `/`) is the elephant.** `cargo clean`
+  between pushes recovers most of it (next rebuild ~15 min cold).
+  Disk pressure was relieved by ~1.65 GB mid-push cleanup
+  (`/tmp/wsbridge.log` + `/tmp/http8765.log` truncated;
+  `/tmp/check_holtburg_physics`, `/tmp/three-test`,
+  `/tmp/holtburger-upstream` deleted; `/home/wbterminal/dist-fresh`
+  deleted) but `/` is still at ~95% (5.0 GB free).
 
 ## Direction forward
 
-1. **Developer-promoted live eye-test.** Sit on `tailnet1/tailnet1`
-   on the live tunnel and run the three deferred eye-tests in one
-   session: (a) walk into a Holtburg hillside + verify camera pulls
-   in (C-prime); (b) pan mouse + verify auto-turn feel (D-live);
-   (c) `@telepoi Yaraq` after `@telepoi Holtburg` + verify no glitch
-   (G-cross-continent). A 30-minute eye-test would confirm all three
-   of the partial/deferred DoD bullets.
-2. **Headed-browser F capture.** Set up a single-shot headed-
-   browser run of `capture_3d_movement_e2e.cjs` (xvfb-based VNC or
-   actual desktop) and confirm bullets 7 + 9 pass via path-(a) with
-   ≥15 distinct samples — that confirms the wasm tick rate IS 60 Hz
-   under a real browser, which the headless capture cannot prove.
-3. **Workstream E backlog-replay chunking.** Yield through rAF
-   batches inside `installSharedDrainHook`'s replay loop so the
-   synchronous burst doesn't stall the page for 30+ seconds. Will
-   tighten F capture 5's pre-W timing and improve real production
-   experience.
-4. **Integrator overshoot root-cause.** Per-tick velocity tracing
-   to identify whether it's a dt-scaling bug, a runtime-body damping
-   miss, or a Playwright-headless artifact specific to the test
-   environment. If the latter, the bullet 9 diagnostic stays
-   accurate; if the former, fix the integrator and bullet 9's
-   "intermediate samples showed motion" count should drop to ~0.
+1. **Developer-promoted live session on tailnet1.** Combine the
+   inherited C/D/E/G eye-tests (Holtburg hillside camera, mouse-look
+   feel, real backtick stance, `@telepoi Yaraq`) with new skybox
+   eye-tests (retail-pitch comparison; rainy/clear/cloudy DayGroup
+   properties refinement). 45-60 min covers all.
+2. **Headed-browser F-(a) + skybox-F headed run.** Confirms wasm
+   tick rate, exercises path-(a) on `capture_3d_movement_e2e.cjs`,
+   and exercises histograms-without-throttling on
+   `capture_skybox_e2e.cjs`.
+3. **Mesh-swap-data probe.** Once an exerciser Region or mod
+   carries `replace.gfx_obj_id != 0`, bullet 18 of skybox-F
+   flips from soft-PASS to a real assertion.
+4. **Disk pressure plan.** If `/` falls below 3 GB free again,
+   either move repo to `/mnt/wbterminal1` with symlink (prior
+   HANDOFF's recommendation) or `cargo clean` and accept the
+   15-min cold rebuild on next test cycle.
 
 ## Disk warning
 
-`/` is at **95% (6.5 GB free)** as of this session end. Repo is
-63 GB on `/`. The prior HANDOFF's recommendation to move
-`/home/wbterminal/WorldBuilder-ACME-Edition` to `/mnt/wbterminal1`
-with a symlink back stands. **Do NOT** bake any new artifacts to
-`/` or `/tmp`:
+`/` is at **95% (~5.0 GB free)** as of this session end. Cleanup mid-push
+recovered ~1.65 GB. Repo is 63 GB on `/`; cargo `target/` is ~40 GB of
+that. **Do NOT** bake any new artifacts to `/` or `/tmp`:
 
-- DAT bakes go to `/mnt/wbterminal1/holtburger-dist-v2` (4.3 GB).
+- DAT bakes go to `/mnt/wbterminal1/holtburger-dist-v2`.
 - Capture artifacts go to `/mnt/wbterminal1/holtburger-captures/`.
-- ACE logs go to `/mnt/wbterminal1/ace.log` (with `/tmp/ace.log` as
-  a symlink for any tools reading the old path).
+- ACE logs go to `/mnt/wbterminal1/ace.log`.
 
-If `/` hits ~98%, move the repo before doing any further work. See
-prior HANDOFF and memory `project_holtburger_bake_disk_trap`.
+If `/` hits ~98%, run `cargo clean` (40 GB recovery, 15 min rebuild
+cost) or move the repo. See memory `project_holtburger_bake_disk_trap`.
 
 ## Grounding resources (load-bearing)
 
-- **`feedback_test_fixtures_real_data`** — prefer real `portal.dat`
-  from the installer over synthetic fixtures.
-- **`feedback_ground_in_real_wire_data`** — capture wire packets +
-  parse real DAT bytes BEFORE shipping parser/networking fixes.
-- **`feedback_no_partial_demos`** — push back when you can't validate
-  the actual goal. This session deferred 2 DoD bullets to a human
-  eye-test rather than build fake-green automated proxies.
-- **`feedback_attribution_precision`** — quote the user verbatim;
-  don't invent specifics. (New this session: use exact prompt
-  phrasing when summarising what the user asked for.)
-- **`reference_worldbuilder_terminal`** — for DAT/dungeon bugs,
-  use `WorldBuilder.Terminal` first; skill at
+- **`feedback_test_fixtures_real_data`** — real `client_portal.dat`,
+  not synthetic. Sky-A's real-DAT tests are the canonical pattern.
+- **`feedback_ground_in_real_wire_data`** — Sky-G's properties decode
+  is the canonical example: probe all 232 SkyObjects across 20
+  DayGroups, build a histogram, derive bit meanings from
+  correlations, document confidence levels honestly.
+- **`feedback_no_partial_demos`** — Sky-E refused to ship a
+  speculative RGB-as-ARGB fix when three hypotheses were ruled out.
+  Sky-D resolved it at the right layer. This session declined to
+  re-run live captures under laptop memory pressure rather than
+  risk-swap-thrash, per same principle.
+- **`feedback_attribution_precision`** — Sky-D explicitly avoided
+  claiming "Sunny" day group when today's LCG selected day group
+  index 4 with a different SkyObject set.
+- **`reference_worldbuilder_terminal`** — for DAT inspection.
   `~/.claude/skills/worldbuilder-terminal/skill.md`.
 - **`project_holtburger_bake_disk_trap`** — never bake to `/` or
-  `/tmp`; symlink `dist/` to `/mnt/wbterminal{1,2}`.
-- **`project_holtburger_login_form_picker`** — capture scripts using
-  `input[name="server_ip"]` are stale; use `input[name="server_host"]`.
-- **`project_holtburger_godmode_falldamage`** — persistent fall-damage
-  bug; workaround `/god` or `/godly`. F capture issues `/god` after
-  teleport.
-- **`project_holtburger_academy_landblock`** — player spawns at
-  LB `0x8602` (Training Academy), not Holtburg. "Holtburg town hall"
-  capture-script labels are stale.
-- **`project_holtburger_envcell_vs_building`** — building interiors
-  live in the building SetupModel mesh (per-triangle); EnvCells are
-  dungeons / apartments only. **Two separate collision paths**, both
-  wired in Workstream C.
-- **`project_emit_dynamic_site`** — pre-push baseline. Phase 6
-  buildings/interiors/Z-culling, manifest v2, etc. Now extended by
-  Workstreams A–G.
-- **`project_academy_rubberband_diagnosis`** — indoor per-poly walls
-  + floor raycast + cell-AABB safety net + ObjectCreate entity seed.
-  Live-validated 0 rubberbands; this session's `capture_academy_
-  rubberband.cjs` run re-confirmed it.
+  `/tmp`.
+- **`project_holtburger_envcell_vs_building`** — load-bearing for
+  any future collision work touching indoor geometry.
+- **`project_holtburger_skybox_properties_flags`** — Sky-G's
+  properties decode probe + bit-meaning hypotheses + open
+  questions.
+- **`project_3d_camera_game_feel_done_2026-05-11`** — prior push
+  state.
+- **`project_holtburger_skybox_done_2026-05-11`** — this session's
+  state (new).
+- **`project_emit_dynamic_site`** — pre-push baseline; Phase 6
+  buildings/interiors/Z-culling.
 
 ## Gotchas worth knowing
 
-- `dotnet` is **not on PATH** — use `/home/wbterminal/.dotnet/dotnet`
-  with `DOTNET_ROOT=/home/wbterminal/.dotnet`.
-- Playwright lives at `/home/wbterminal/.npm/_npx/e41f203b7505f1fb/
-  node_modules` — set `NODE_PATH` when running cjs scripts directly.
+- `dotnet` not on PATH — use `/home/wbterminal/.dotnet/dotnet` with
+  `DOTNET_ROOT=/home/wbterminal/.dotnet`.
+- `cargo` not on PATH in fresh shell — `export PATH="/home/wbterminal/.cargo/bin:$PATH"`
+  (or source `~/.cargo/env`).
+- Playwright at `/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules`
+  — set `NODE_PATH` if running .cjs directly.
 - `wasm-pack --release` only. `--dev` crashes Chromium under
-  swiftshader (per memory `project_academy_rubberband_diagnosis`).
-- Don't bake to `/` or `/tmp` (see disk warning above).
-- The 2D PIXI path is still the default. The 3D path runs only when
-  `?renderer=3d` is in the URL. The 3D path's tests + captures all
-  use that flag explicitly. **Do not flip the default** in any
-  commit on this push; the cutover is a separate decision once the
-  C/D/E eye-tests + headed-browser F-(a) verification ship.
+  swiftshader.
+- Sky-A real-DAT tests need `HOLTBURGER_PORTAL_DAT=/home/wbterminal/ac_base_dats/client_portal.dat`
+  in the env or they skip.
+- `?renderer=3d` is opt-in. 2D PIXI remains the default.
+- Sky-B time driver uses `Date.now()` UTC via the
+  `js_date_now_ms` extern; `web_time::Instant` measures elapsed
+  for integrator `dt`, not time-of-day. Don't conflate.
+- The dome is parented under `outdoorContainer`, not the camera
+  directly — the indoor flip hides terrain + buildings + dome
+  together via the existing Phase 6 indoor toggle.
 
 ## What I did NOT do this session
 
-- Did not run the 3 deferred live eye-tests (require Developer-
-  promoted account + human eyes on the live tunnel).
-- Did not run a headed-browser F capture to confirm bullet 7 path-(a)
-  passes with ≥15 distinct samples under non-throttled wasm.
-- Did not chunk Workstream E's backlog-replay through rAF batches
-  (out of scope; documented as follow-on).
-- Did not root-cause the integrator overshoot (documented as
-  follow-on; F bullet 9 accepts it).
-- Did not move the repo off `/`; user declined in prior session and
-  has not asked this session. Disk still at 95%.
+- Did not re-run the 7+ Playwright captures (laptop memory pressure;
+  user opted for "docs + push only"). Numbers trusted from individual
+  Sky-X agent run reports.
+- Did not eye-test the live skybox on a headed browser (no headed
+  environment available this session).
+- Did not refine `0x01 ADDITIVE_BLEND` or `0x04 WEATHER_STREAK`
+  confidence (would need rainy/clear/cloudy DayGroup eye-tests).
+- Did not commit the cleanup of `cargo target/` (40 GB recovery
+  available but breaks live live builds; user can `cargo clean`
+  on demand).
+- Did not move the repo off `/`; user declined in prior sessions.
