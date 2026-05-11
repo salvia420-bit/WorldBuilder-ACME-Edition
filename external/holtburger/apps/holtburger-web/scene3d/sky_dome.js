@@ -326,6 +326,24 @@ export class SkyDome {
     // events this session (how many times a SkyObject's active
     // gfx_obj_id changed across consecutive ticks).
     this._meshSwapCount = 0;
+    // Workstream Sky-I-A: optional `?skydebug=1` URL flag. When set,
+    // `tick()` writes a per-frame dump to `window.__skyDebugLastDump`
+    // (object, mesh, camera, fog details). The capture script's
+    // `?skydebug=1` probe reads this once per second at four
+    // time-of-day overrides and writes JSON to disk. Pure measurement
+    // — no behaviour change when flag is unset.
+    this._skyDebug = false;
+    try {
+      if (typeof window !== "undefined" && window.location?.search) {
+        const params = new URLSearchParams(window.location.search);
+        this._skyDebug = params.get("skydebug") === "1";
+      }
+    } catch (_) { /* no-window in worker context */ }
+    if (this._skyDebug && typeof window !== "undefined") {
+      // eslint-disable-next-line no-console
+      console.log("[sky-i-a] ?skydebug=1 — installing per-tick state dump on window.__skyDebugLastDump");
+      window.__skyDebugLastDump = null;
+    }
   }
 
   /**
@@ -639,6 +657,147 @@ export class SkyDome {
         }
       });
     }
+
+    // === E. Sky-I-A debug dump =======================================
+    //
+    // When `?skydebug=1`, capture per-frame state including each
+    // celestial body's world-space center (after the position offsets
+    // applied above), distance from camera, and the camera/fog frustum
+    // bounds — for the Sky-I-A probe. No behaviour change when flag
+    // unset. Updates `window.__skyDebugLastDump` once per tick.
+    if (this._skyDebug && typeof window !== "undefined" && camera) {
+      try {
+        window.__skyDebugLastDump = this._buildSkyDebugDump(states, camera);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn("[sky-i-a] debug-dump build failed:", e?.message);
+      }
+    }
+  }
+
+  /**
+   * Sky-I-A: build a JSON-friendly debug dump describing each visible
+   * SkyObject's geometry in world space + the camera + fog bounds.
+   * Pure read-only — no mutation of scene-graph state. Called once
+   * per tick when `?skydebug=1`.
+   */
+  _buildSkyDebugDump(states, camera) {
+    // World-matrix needs to reflect the position writes done above.
+    // Force update before reading worldMatrix on each body.
+    for (const mesh of this.skyObjectMeshes.values()) {
+      mesh.updateMatrixWorld(true);
+    }
+
+    const camPos = camera.position;
+    const cameraInfo = {
+      position: { x: camPos.x, y: camPos.y, z: camPos.z },
+      fovDeg: typeof camera.fov === "number" ? camera.fov : null,
+      near: typeof camera.near === "number" ? camera.near : null,
+      far: typeof camera.far === "number" ? camera.far : null,
+    };
+    const fogInfo = (() => {
+      const f = this.scene?.fog;
+      if (!f) return null;
+      // Fog has `near`/`far` (linear) OR `density` (exp). Capture both
+      // shapes so the consumer can distinguish.
+      return {
+        near: typeof f.near === "number" ? f.near : null,
+        far: typeof f.far === "number" ? f.far : null,
+        density: typeof f.density === "number" ? f.density : null,
+        color: f.color ? `0x${f.color.getHex().toString(16).padStart(6, "0")}` : null,
+      };
+    })();
+
+    const objects = [];
+    const stateById = new Map();
+    if (Array.isArray(states)) {
+      for (const s of states) {
+        stateById.set(s.gfxObjectId >>> 0, s);
+      }
+    }
+    for (const [skyObjectId, mesh] of this.skyObjectMeshes.entries()) {
+      const state = stateById.get(skyObjectId);
+      // Compute the union AABB across child meshes — that's the
+      // "native" vertex-space AABB before the celestial-sphere offset.
+      // Aggregate per-mesh boundingBox under the group's LOCAL transform.
+      let lmin = null;
+      let lmax = null;
+      let totalVerts = 0;
+      mesh.traverse((child) => {
+        if (!child.isMesh || !child.geometry) return;
+        if (!child.geometry.boundingBox) child.geometry.computeBoundingBox();
+        const bb = child.geometry.boundingBox;
+        if (!bb) return;
+        totalVerts += (child.geometry.attributes?.position?.count || 0);
+        if (lmin === null) {
+          lmin = bb.min.clone();
+          lmax = bb.max.clone();
+        } else {
+          lmin.min(bb.min);
+          lmax.max(bb.max);
+        }
+      });
+      const nativeAabb = lmin && lmax ? {
+        min: { x: lmin.x, y: lmin.y, z: lmin.z },
+        max: { x: lmax.x, y: lmax.y, z: lmax.z },
+        center: { x: (lmin.x + lmax.x) / 2, y: (lmin.y + lmax.y) / 2, z: (lmin.z + lmax.z) / 2 },
+        verts: totalVerts,
+      } : null;
+
+      // The world center: transform the local-aabb center by the
+      // mesh's worldMatrix. That answers the headline "where does the
+      // sun actually end up after all the transforms".
+      let worldCenter = null;
+      let distanceFromCamera = null;
+      if (nativeAabb) {
+        const v = new THREE.Vector3(
+          nativeAabb.center.x,
+          nativeAabb.center.y,
+          nativeAabb.center.z
+        );
+        v.applyMatrix4(mesh.matrixWorld);
+        worldCenter = { x: v.x, y: v.y, z: v.z };
+        distanceFromCamera = v.distanceTo(camPos);
+      }
+
+      objects.push({
+        id: `0x${skyObjectId.toString(16).padStart(8, "0").toUpperCase()}`,
+        state: state ? {
+          heading: state.heading,
+          headingDeg: state.heading * (180 / Math.PI),
+          pitch: state.pitch,
+          pitchDeg: state.pitch * (180 / Math.PI),
+          visible: !!state.visible,
+          transparent: state.transparent,
+          luminosity: state.luminosity,
+          maxBright: state.maxBright,
+          properties: state.properties >>> 0,
+          texOffsetX: state.texOffsetX,
+          texOffsetY: state.texOffsetY,
+        } : null,
+        mesh: {
+          visible: mesh.visible,
+          nativeAabb,
+          positionApplied: { x: mesh.position.x, y: mesh.position.y, z: mesh.position.z },
+          scaleApplied: { x: mesh.scale.x, y: mesh.scale.y, z: mesh.scale.z },
+          worldMatrix: Array.from(mesh.matrixWorld.elements),
+          worldCenter,
+          distanceFromCamera,
+        },
+      });
+    }
+
+    return {
+      tickCount: this._tickCount,
+      timeUnixMs: Date.now(),
+      isIndoor: this._lastIsIndoor,
+      domeRadius: this.domeRadius,
+      celestialRadius: this.celestialRadius,
+      objectCount: objects.length,
+      camera: cameraInfo,
+      fog: fogInfo,
+      objects,
+    };
   }
 
   /**
