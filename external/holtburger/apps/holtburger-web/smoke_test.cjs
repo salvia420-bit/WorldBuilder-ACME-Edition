@@ -3559,6 +3559,56 @@ check(
             false, String(e).slice(0, 120));
     }
 
+    // === Workstream Sky-D (2026-05-11) — sky dome + celestial bodies =
+    // Verifies `scene3d/sky_dome.js` is present, exports `SkyDome` class,
+    // references the expected shape (gradient ShaderMaterial uniforms +
+    // `populateCelestialBodies` + `tick` reading `getSkyObjectStates` +
+    // `isCurrentCellIndoor`), and is wired into `loop.js` (per-frame
+    // tick) + `index.js` (instantiation + lazy `resolveSkyAssets`
+    // hand-off). Functional correctness lives in `test_sky_dome.mjs`.
+    try {
+        const fs = require("fs");
+        const skyDomePath = __dirname + "/scene3d/sky_dome.js";
+        const present = fs.existsSync(skyDomePath);
+        const src = present ? fs.readFileSync(skyDomePath, "utf8") : "";
+        const hasClass = /export\s+class\s+SkyDome/.test(src);
+        const hasDomeName = /"sky_dome"|'sky_dome'/.test(src);
+        const hasUserDataTag = /sky_object_id\s*:/.test(src);
+        const hasPopulate = /populateCelestialBodies\s*\(/.test(src);
+        const hasGradientUniforms = /uHorizonColor[\s\S]*uZenithColor/.test(src);
+        const hasShaderMat = /ShaderMaterial/.test(src);
+        const hasBackSide = /BackSide/.test(src);
+        const hasCelestialPosition = /celestialPosition\s*\(/.test(src);
+        const readsSkyObjectStates = /getSkyObjectStates\s*\(/.test(src);
+        const readsIndoor = /isCurrentCellIndoor\s*\(/.test(src);
+        const readsSkyBgColor = /skyBackgroundColor/.test(src);
+        // Wired into loop.js + index.js.
+        const loopSrc = fs.readFileSync(__dirname + "/scene3d/loop.js", "utf8");
+        const indexSrc = fs.readFileSync(__dirname + "/scene3d/index.js", "utf8");
+        const wiredInLoop = /skyDome\s*\.\s*tick/.test(loopSrc);
+        const wiredInIndex = /new\s+SkyDome/.test(indexSrc);
+        const wiredResolveAssets = /resolveSkyAssets/.test(indexSrc);
+        check(
+            "Workstream Sky-D: sky_dome.js SkyDome class + gradient dome + celestial bodies + indoor flip",
+            present && hasClass && hasDomeName && hasUserDataTag &&
+                hasPopulate && hasGradientUniforms && hasShaderMat &&
+                hasBackSide && hasCelestialPosition &&
+                readsSkyObjectStates && readsIndoor && readsSkyBgColor &&
+                wiredInLoop && wiredInIndex && wiredResolveAssets,
+            `present=${present} class=${hasClass} domeName=${hasDomeName} ` +
+                `userData=${hasUserDataTag} populate=${hasPopulate} ` +
+                `uniforms=${hasGradientUniforms} shaderMat=${hasShaderMat} ` +
+                `backSide=${hasBackSide} celPos=${hasCelestialPosition} ` +
+                `readsStates=${readsSkyObjectStates} readsIndoor=${readsIndoor} ` +
+                `readsBg=${readsSkyBgColor} loopWired=${wiredInLoop} ` +
+                `indexWired=${wiredInIndex} resolveWired=${wiredResolveAssets} ` +
+                `bytes=${src.length}`
+        );
+    } catch (e) {
+        check("Workstream Sky-D: sky_dome.js SkyDome class + gradient dome + celestial bodies + indoor flip",
+            false, String(e).slice(0, 120));
+    }
+
     console.log("=========================");
     if (failed === 0) {
         console.log("PASS: all smoke checks green.");

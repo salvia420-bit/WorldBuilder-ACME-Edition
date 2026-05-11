@@ -23,6 +23,8 @@ import { EntityManager } from "./entities.js";
 import { CameraSwitcher, createOrthoCamera } from "./camera.js";
 import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
 import { SkyLightingController } from "./sky_lighting.js";
+import { SkyDome } from "./sky_dome.js";
+import { resolveSkyAssets } from "./sky_assets.js";
 import { acToThree } from "./adapter.js";
 import { createNameplateOverlay } from "./hud.js";
 
@@ -536,6 +538,18 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // ARGB u32 (0xAARRGGBB). Initialised to the Sky-C fallback fog
     // colour and updated each tick once the wasm SkyState lands.
     skyBackgroundColor: 0xff9cb3d9,
+    // Workstream Sky-D — sky-dome + celestial body renderer. Null
+    // when THREE / scene aren't available; instantiated below after
+    // liveScene3d is constructed so the lazy `liveScene3dRef`
+    // captures the final object (Sky-D reads `skyBackgroundColor`
+    // and `skyLightingController._lastState.ambColorArgb` through
+    // this ref).
+    skyDome: null,
+    // Workstream Sky-E — resolved SkyObject bakes (Map<id, bake>).
+    // Populated by `resolveSkyAssets` kicked off below once Sky-B's
+    // populateSkyDescFromRegion lands. Sky-D reads through this when
+    // populating celestial bodies.
+    skyAssets: null,
     // Stop hook — future phases use this for renderer hot-swap.
     stop() { running = false; },
     // Reference back to the wasm exports the caller passed in. Phases
@@ -589,6 +603,109 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
       // eslint-disable-next-line no-console
       console.warn("[sky-c] SkyLightingController init failed:", e);
     }
+  }
+
+  // Workstream Sky-D — sky dome geometry + celestial body rendering.
+  // Instantiated synchronously here; celestial bodies are populated
+  // lazily by an async resolveSkyAssets call below once Sky-B's
+  // populateSkyDescFromRegion lands. Pre-population the dome reads as
+  // a fallback-color gradient; bullet 11 (sky_dome group present)
+  // passes immediately, bullet 12 (celestial children present)
+  // passes after the async populate completes.
+  //
+  // Session-handle accessor: lazy via `() => window.__sessionHandle
+  // ?? sessionHandle`. Same lazy pattern as SkyLightingController —
+  // the init3D `sessionHandle` arg is null at construction; the real
+  // handle lands on window post-SelectCharacter.
+  try {
+    const skyDome = new SkyDome({
+      scene,
+      sessionHandleAccessor: () =>
+        // eslint-disable-next-line no-undef
+        (typeof window !== "undefined" ? window.__sessionHandle : null) ??
+        sessionHandle ??
+        null,
+      liveScene3dRef: liveScene3d,
+    });
+    liveScene3d.skyDome = skyDome;
+    // eslint-disable-next-line no-console
+    console.log(
+      "[sky-d] SkyDome attached; horizon←skyBackgroundColor, " +
+        "zenith←skyLightingController._lastState.ambColorArgb"
+    );
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[sky-d] SkyDome init failed:", e);
+  }
+
+  // Workstream Sky-E + Sky-D bridge — poll for `hasSkyDesc() === true`
+  // (which fires when Sky-B's populateSkyDescFromRegion lands on
+  // kind=7 EnteredWorld), then call `resolveSkyAssets` with the 7
+  // SkyObject IDs from `getSkyObjectStates()` and pass the result to
+  // `skyDome.populateCelestialBodies`. Idempotent: once skyAssets is
+  // populated the poll exits. Bullet 12 (celestial bodies present
+  // at dawn) auto-flips PASS the frame after this resolves.
+  if (
+    wasmExports &&
+    typeof wasmExports.fetchBuildingPlacement === "function" &&
+    typeof wasmExports.fetch_surfaces_pixels === "function"
+  ) {
+    let resolveAttempted = false;
+    const skyAssetPollHandle = setInterval(async () => {
+      if (resolveAttempted) {
+        clearInterval(skyAssetPollHandle);
+        return;
+      }
+      // eslint-disable-next-line no-undef
+      const handle =
+        (typeof window !== "undefined" ? window.__sessionHandle : null) ??
+        sessionHandle ??
+        null;
+      if (!handle || typeof handle.hasSkyDesc !== "function") {
+        return;
+      }
+      let ready = false;
+      try {
+        ready = !!handle.hasSkyDesc();
+      } catch (_) {
+        return;
+      }
+      if (!ready) return;
+      resolveAttempted = true;
+      clearInterval(skyAssetPollHandle);
+      try {
+        const states = handle.getSkyObjectStates();
+        const ids = [];
+        for (let i = 0; i < states.length; i += 1) {
+          ids.push(states[i].gfxObjectId >>> 0);
+        }
+        const summary = await resolveSkyAssets(
+          scene3dForBuilders,
+          ids,
+          wasmExports
+        );
+        liveScene3d.skyAssets = scene3dForBuilders.skyAssets;
+        // eslint-disable-next-line no-console
+        console.log(
+          `[sky-d] resolveSkyAssets summary: resolved=${summary.resolved} ` +
+            `failed=${summary.failed} surfaces=${summary.uniqueSurfaceCount} ` +
+            `setupModels=${summary.setupModelCount} tris=${summary.totalTriangles}`
+        );
+        if (liveScene3d.skyDome && scene3dForBuilders.skyAssets) {
+          const added = liveScene3d.skyDome.populateCelestialBodies(
+            scene3dForBuilders.skyAssets,
+            scene3dForBuilders.materialCache
+          );
+          // eslint-disable-next-line no-console
+          console.log(
+            `[sky-d] populateCelestialBodies → ${added} bodies on scene root`
+          );
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn("[sky-d] resolveSkyAssets / populateCelestialBodies failed:", e);
+      }
+    }, 250);
   }
 
   // Phase 7.4b — install the shared-drain hook last so the

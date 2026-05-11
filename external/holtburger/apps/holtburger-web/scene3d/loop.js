@@ -95,6 +95,26 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
       }
     }
   }
+  // Workstream Sky-D — sky dome + celestial body renderer. Runs AFTER
+  // Sky-C so the freshly-written `skyBackgroundColor` (Sky-C's horizon
+  // color sink) + `skyLightingController._lastState.ambColorArgb`
+  // (zenith color source) land on the dome's shader uniforms in the
+  // same frame. Camera-parented; reads `cameraSwitcher.activeCamera`
+  // (Phase 7.5) so the dome translates with whichever camera the
+  // user has toggled to. No-op pre-construction or pre-populate.
+  if (scene3d?.skyDome) {
+    try {
+      const activeCam =
+        scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera;
+      scene3d.skyDome.tick(dt, activeCam);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      if (!scene3d._skyDomeTickWarned) {
+        scene3d._skyDomeTickWarned = true;
+        console.warn("[sky-d] skyDome.tick threw:", e);
+      }
+    }
+  }
   // Phase 7.5 — camera tick BEFORE entity tick. The switcher reads
   // last-frame entity poses for follow framing AND dispatches
   // setMovementInput (which the wasm side consumes asynchronously, so

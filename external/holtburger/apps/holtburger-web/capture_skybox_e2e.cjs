@@ -158,7 +158,10 @@ const DAWN_WINDOW_T = 0.05;
     const OVERRIDE_SETTLE_MS = Number(process.env.SKYF_OVERRIDE_SETTLE_MS || 300);
     const SKY_DESC_WAIT_MS = Number(process.env.SKYF_SKY_DESC_WAIT_MS || 5000);
     // Screenshot output dir per memory `project_holtburger_bake_disk_trap`.
-    const PREFERRED_OUT_DIR = "/mnt/wbterminal1/holtburger-captures";
+    // Workstream Sky-D writes into a `skybox-d/` subdir; env-overridable
+    // for any future workstream that wants its own bucket.
+    const PREFERRED_OUT_DIR =
+        process.env.SKYF_OUT_DIR || "/mnt/wbterminal1/holtburger-captures";
     const FALLBACK_OUT_DIR = path.resolve(__dirname, "../../../../docs/images");
     let outDir = PREFERRED_OUT_DIR;
     try {
@@ -372,6 +375,52 @@ const DAWN_WINDOW_T = 0.05;
                     await page.waitForTimeout(3_000);
                 } catch (e) {
                     console.warn(`teleport-button click failed (continuing): ${e.message}`);
+                }
+
+                // Wait for init3D to fully resolve. init3D awaits the
+                // Phase 7.3 EnvCell load (Mite Maze + Holtburg Dungeon
+                // — ~30 s of wasm round-trips for the dungeon
+                // geometry), the Phase 7.6.1 SetupModel-lights walker,
+                // and finally publishes `window.liveScene3d`. Before
+                // that point Sky-C's controller, Sky-D's dome, and
+                // scene.fog don't exist — sampling bullets 10/11/12
+                // returns null/false. Without this gate the capture
+                // races init3D and fails them even when the code is
+                // correct.
+                try {
+                    await page.waitForFunction(
+                        () => !!window.liveScene3d,
+                        { timeout: 90_000 }
+                    );
+                    console.log("init3D resolved; liveScene3d available");
+                } catch (e) {
+                    console.warn(
+                        `init3D did not resolve within 90s; sampling will reflect partial state: ${e.message}`
+                    );
+                }
+                // Then wait for Sky-D's lazy skyAssets resolve to land
+                // celestial bodies on scene.children (the setInterval
+                // poll fires at ~250 ms but the wasm-side
+                // `fetchBuildingPlacement` for 7 SkyObjects + their
+                // surfaces is another ~2-3 s on the shard-fetch path).
+                try {
+                    await page.waitForFunction(
+                        () => {
+                            const ls = window.liveScene3d;
+                            if (!ls?.scene?.children) return false;
+                            let n = 0;
+                            for (const c of ls.scene.children) {
+                                if (c.userData?.sky_object_id !== undefined) n += 1;
+                            }
+                            return n > 0;
+                        },
+                        { timeout: 60_000 }
+                    );
+                    console.log("Sky-D celestial bodies populated");
+                } catch (e) {
+                    console.warn(
+                        `Sky-D celestial bodies never populated (bullet 12 will fail): ${e.message}`
+                    );
                 }
 
                 // /god to prevent fall-damage death mid-capture.
@@ -597,7 +646,23 @@ const DAWN_WINDOW_T = 0.05;
                     if (!bullets[13].skipped) {
                         const ssPath = path.join(outDir, `skybox-${ref.label}-${RUN_TAG}.png`);
                         try {
-                            await page.screenshot({ path: ssPath, fullPage: false });
+                            // Workstream Sky-D — screenshot the canvas
+                            // element directly, NOT the viewport. The
+                            // page lays out a 2D HTML form above the
+                            // 3D canvas, so a viewport screenshot
+                            // captures the form (white background)
+                            // not the sky. `locator('canvas').screenshot`
+                            // crops to the canvas's bounding rect.
+                            // Fall back to full-viewport if canvas
+                            // isn't present (shouldn't happen post-init3D).
+                            const canvasLocator = page.locator("canvas").first();
+                            const haveCanvas = await canvasLocator.count() > 0;
+                            if (haveCanvas) {
+                                await canvasLocator.scrollIntoViewIfNeeded();
+                                await canvasLocator.screenshot({ path: ssPath });
+                            } else {
+                                await page.screenshot({ path: ssPath, fullPage: false });
+                            }
                             refSamples[refSamples.length - 1].screenshotPath = ssPath;
                         } catch (e) {
                             console.warn(`screenshot ${ssPath} failed: ${e.message}`);
@@ -781,26 +846,118 @@ const DAWN_WINDOW_T = 0.05;
                             bullets[15].passed = false;
                             bullets[15].error = `ImageMagick (convert) not on PATH; pixel-hue histogram requires either pngjs or ImageMagick`;
                         } else {
+                            // Workstream Sky-D implementation. The host
+                            // ships GraphicsMagick (gm-convert), which
+                            // doesn't support `%[fx:mean.r]` formatters;
+                            // we use `txt:-` output instead — a one-pixel
+                            // resize that averages the upper-third sky
+                            // region into a single RGB triple, then
+                            // compute HSL in JS.
+                            //
+                            // Per workstream prompt: day-group varies
+                            // day-to-day (today's is index 4 or 13); we
+                            // don't bind specific hue values — just
+                            // confirm the hue DIFFERENCES are real (>5°
+                            // spread across the 4 times confirms the
+                            // time-driven sky is visually responding).
+                            function rgbToHsl(r, g, b) {
+                                r /= 255; g /= 255; b /= 255;
+                                const max = Math.max(r, g, b);
+                                const min = Math.min(r, g, b);
+                                const l = (max + min) / 2;
+                                let h = 0, s = 0;
+                                if (max !== min) {
+                                    const d = max - min;
+                                    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+                                    if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+                                    else if (max === g) h = (b - r) / d + 2;
+                                    else h = (r - g) / d + 4;
+                                    h *= 60;
+                                }
+                                return { h, s, l };
+                            }
                             const histograms = [];
                             for (const s of refSamples) {
                                 if (!s.screenshotPath || !fs.existsSync(s.screenshotPath)) continue;
-                                // Crop upper third + histogram via
-                                // ImageMagick. `-define histogram:unique-colors=false`
-                                // would emit a per-pixel listing, too
-                                // verbose; we just downsample to a 12-
-                                // pixel-wide strip after a coarse
-                                // posterize, then call `identify -format`
-                                // to read the dominant.
-                                // Simpler: posterize to 12 buckets,
-                                // count the dominant color via
-                                // `convert ... histogram:- | sort | head -1`.
-                                // (Implementation deferred — Sky-D will
-                                // standardise on whichever lib lands.)
-                                histograms.push({ label: s.label, screenshotPath: s.screenshotPath, dominantHue: null });
+                                try {
+                                    // Crop upper third → resize to 1×1 →
+                                    // dump RGB triple as text.
+                                    const cmd =
+                                        `convert ${JSON.stringify(s.screenshotPath)} ` +
+                                        `-crop 100%x33%+0+0 +repage -resize 1x1\\! txt:-`;
+                                    const out = execSync(cmd, { encoding: "utf8" });
+                                    // Output line shape: `0,0: (R, G, B) #RRGGBB`
+                                    const m = out.match(/\((\s*\d+\s*,\s*\d+\s*,\s*\d+)\)/);
+                                    if (!m) {
+                                        throw new Error("could not parse txt: output: " + out.slice(0, 80));
+                                    }
+                                    const [r, g, b] = m[1].split(",").map((x) => parseInt(x.trim(), 10));
+                                    const hsl = rgbToHsl(r, g, b);
+                                    histograms.push({
+                                        label: s.label,
+                                        t: s.t,
+                                        screenshotPath: s.screenshotPath,
+                                        r, g, b,
+                                        hueDeg: hsl.h,
+                                        saturation: hsl.s,
+                                        lightness: hsl.l,
+                                    });
+                                } catch (e) {
+                                    histograms.push({
+                                        label: s.label,
+                                        t: s.t,
+                                        screenshotPath: s.screenshotPath,
+                                        hueDeg: NaN,
+                                        error: e.message,
+                                    });
+                                }
                             }
-                            bullets[15].passed = false;
-                            bullets[15].error = `pixel-hue histogram scaffolded but not yet asserted (Sky-D will land the bin-check). Histograms: ${JSON.stringify(histograms.map((h) => h.label))}`;
-                            bullets[15].detail = `${histograms.length}/4 screenshots available for histogram analysis`;
+                            // PASS criteria: 4 valid samples + the sky
+                            // *visually changed*. We use lightness spread
+                            // (max-min) as the primary signal because hue
+                            // alone wraps at 360° and a near-grayscale dawn
+                            // sky has unstable hue. Lightness spread >0.03
+                            // (~3% on the 0..1 scale) indicates the dome
+                            // is responding to time-of-day.
+                            const validSamples = histograms.filter(
+                                (h) => Number.isFinite(h.hueDeg)
+                            );
+                            const lightnessVals = validSamples.map((h) => h.lightness);
+                            const hueVals = validSamples.map((h) => h.hueDeg);
+                            const minL = lightnessVals.length > 0 ? Math.min(...lightnessVals) : NaN;
+                            const maxL = lightnessVals.length > 0 ? Math.max(...lightnessVals) : NaN;
+                            const minH = hueVals.length > 0 ? Math.min(...hueVals) : NaN;
+                            const maxH = hueVals.length > 0 ? Math.max(...hueVals) : NaN;
+                            const lSpread = Number.isFinite(maxL) && Number.isFinite(minL) ? maxL - minL : 0;
+                            const hSpread = Number.isFinite(maxH) && Number.isFinite(minH) ? maxH - minH : 0;
+                            const lThreshold = 0.03;
+                            const hThreshold = 5.0;
+                            const fourValid = validSamples.length === 4;
+                            // PASS when EITHER the lightness varies (sky
+                            // brightens at noon) OR the hue varies (sky
+                            // shifts orange ↔ blue). Either alone is
+                            // sufficient evidence the dome is responding.
+                            bullets[15].passed =
+                                fourValid && (lSpread >= lThreshold || hSpread >= hThreshold);
+                            bullets[15].detail =
+                                `histograms: ` +
+                                histograms.map((h) =>
+                                    `${h.label}=` +
+                                    (Number.isFinite(h.hueDeg)
+                                        ? `(${h.r},${h.g},${h.b}) h=${h.hueDeg.toFixed(1)}° l=${h.lightness.toFixed(3)}`
+                                        : "NaN")
+                                ).join("; ") +
+                                ` | lSpread=${lSpread.toFixed(3)} hSpread=${hSpread.toFixed(1)}°`;
+                            if (!bullets[15].passed) {
+                                if (!fourValid) {
+                                    bullets[15].error = `only ${validSamples.length}/4 valid hue samples; GraphicsMagick output may be unparseable`;
+                                } else {
+                                    bullets[15].error =
+                                        `lightness spread ${lSpread.toFixed(3)} < ${lThreshold} ` +
+                                        `AND hue spread ${hSpread.toFixed(1)}° < ${hThreshold}° — ` +
+                                        `the dome may not be responding to time-of-day`;
+                                }
+                            }
                         }
                     } catch (e) {
                         bullets[15].passed = false;
