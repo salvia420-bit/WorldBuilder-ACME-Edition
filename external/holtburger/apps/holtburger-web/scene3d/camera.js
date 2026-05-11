@@ -64,19 +64,68 @@
 // holds WASD in follow mode, `computeMovementFromKeys` emits a
 // `turn = sign(followYaw - playerHeading)` delta so ACE's
 // MovementSystem rotates the player heading toward the camera yaw
-// over a handful of ticks. Once `|headingError| < TURN_DEAD_ZONE`
-// the auto-turn releases and Q/E manual turn takes precedence again.
-// Combined with the existing camera-relative (forward, strafe) math,
-// the player visually walks in the camera-facing direction even
-// before the heading has aligned: the wasm-side (forward, strafe)
-// is still rotated by `followYaw`, and the new `turn` delta closes
-// the heading gap. Once `playerHeading == followYaw`, the per-tick
-// forward/strafe values are stable and only `turn` flickers — the
-// integrator settles within a few hundred ms of pure forward motion.
-// Precedence rule: Q/E intent ADDS to the auto-turn outside the dead
-// zone (so the user can override the auto-turn by holding Q or E)
-// but the result is still sign-clamped to -1/0/+1. Inside the dead
-// zone Q/E behaves as before.
+// at `RUN_HELD_TURN_SPEED_RAD_PER_SEC = 1.5 rad/s`. Once
+// `|headingError| < TURN_DEAD_ZONE` the auto-turn releases and Q/E
+// manual turn takes precedence again. Combined with the existing
+// camera-relative (forward, strafe) math, the player visually walks
+// in the camera-facing direction even before the heading has aligned:
+// the wasm-side (forward, strafe) is rotated by `followYaw` AND by
+// `-playerHeading` (so the local-frame motion ACE consumes is in the
+// camera direction regardless of where the player currently faces),
+// and the new `turn` delta closes the heading gap. Convergence time
+// is bounded by `|headingError| / 1.5 s` — a 90° pan settles in ≈1 s,
+// a 180° turn in ≈2 s.
+//
+// **Workstream D restore (2026-05-11).** The 2026-05-11 debug session
+// reverted this math to raw player-local-frame WASD because
+// `getLocalPlayerHeading()` always returned 0 (the wasm eager-WorldState
+// path swallowed the local-player KIND_SPAWN, so the 3D rig was never
+// built and the quaternion-derived heading collapsed to the identity).
+// Every WASD axis flipped after a teleport. Workstream A's new
+// `__sessionHandle.getLocalPlayerPose().heading` export lands the
+// authoritative integrator heading directly — no need for the 3D rig
+// to build. With that wired as the primary heading source (and the
+// quaternion-based callback as fallback for the pre-spawn / unit-test
+// path), the math below works correctly.
+//
+// Heading-source priority in `computeMovementFromKeys`:
+//   1. `__sessionHandle.getLocalPlayerPose().heading` — authoritative
+//      integrator heading, available post-Workstream-A. Same convention
+//      as `followYaw` (CW from +Y north).
+//   2. `this.getPlayerHeading()` — the 3D rig's quaternion-derived yaw,
+//      available once Workstream E builds the local-player rig (today
+//      unreliable on the eager-WorldState path).
+//   3. `0` (north). Pre-spawn the auto-turn delta is sign-clamped on a
+//      heading error that may be large; the wasm side drops
+//      SetMovementInput pre-EnteredWorld anyway, so the early auto-turn
+//      doesn't reach ACE.
+//
+// World-frame intent → player-local-frame rotation (the load-bearing
+// bit for the camera-relative feel):
+//   Given world-frame intent (worldDx along +X east, worldDy along +Y
+//   north) and player heading h (CW from +Y north), the player's local
+//   forward (+Y in local frame) points world-(sin h, cos h) and local
+//   right (+X in local frame) points world-(cos h, -sin h). The
+//   inverse rotation (world → local) is:
+//     localF = worldDx * sin(h) + worldDy * cos(h)
+//     localS = worldDx * cos(h) - worldDy * sin(h)
+//
+// Sanity check: at h=0 (north) and yaw=0, W → (worldDx=0, worldDy=1)
+//   → (localF=1, localS=0). ACE walks forward in local frame.
+//   At h=0 and yaw=π/2 (camera east), W → (worldDx=1, worldDy=0)
+//   → (localF=0, localS=1). ACE strafes right in local frame, which
+//   in world coords is east — exactly camera-forward. ✓
+//   At h=π/2 (player east) and yaw=π/2 (camera east, aligned), W →
+//   (worldDx=1, worldDy=0). Local rotate: localF = 1*1 + 0*0 = 1,
+//   localS = 1*0 - 0*1 = 0. ACE walks forward in local frame, which
+//   is east in world coords. ✓
+//
+// Precedence rule (manual Q/E overrides auto-turn): if Q or E is held,
+// `turn = sign(qeTurn)` directly — the auto-turn is suppressed for the
+// duration of the manual press. This matches the user expectation that
+// pressing Q/E means "I want to manually steer right now", not "I want
+// my manual steer to fight the auto-turn". Inside the dead zone the
+// auto-turn is 0 and Q/E is the only contributor anyway.
 
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -996,31 +1045,48 @@ export class CameraSwitcher {
   /**
    * Camera-relative WASD → wasm setMovementInput contract.
    *
-   * In follow mode: rotate intent vector by `followYaw` to produce
-   * world-axis (forward, strafe). At yaw=0 this is the identity
-   * (W → forward=+1; D → strafe=+1). At yaw=π/2 the camera is facing
-   * AC +X (east), so W (camera-forward) should produce world-east
-   * motion, which is strafe=+1 in world-fixed terms.
+   * In follow mode: rotate (inputForward, inputStrafe) by `followYaw`
+   * → world-frame intent (worldDx along +X east, worldDy along +Y
+   * north). Then rotate world-frame intent by `-playerHeading` →
+   * player-local intent (forward, strafe in the player's body frame
+   * — which is what ACE's MovementSystem consumes). With these two
+   * rotations chained, pressing W always walks the player toward
+   * camera-forward; the path curves slightly until the auto-turn
+   * (below) brings playerHeading into alignment with followYaw, then
+   * stabilises to a straight line.
    *
-   * **Follow-on #2 (2026-05-10) — turn-to-align.** ACE's MovementSystem
-   * consumes (forward, strafe) in the player's LOCAL frame, not world.
-   * So the camera-relative `forward = clampSign(worldDy)` form only
-   * walks the player along the camera-facing direction once
-   * `playerHeading == followYaw`. To converge on alignment, we emit
+   * **Workstream D auto-turn-to-align (2026-05-11 restore).** ACE's
+   * MovementSystem rotates the player heading at
+   * `RUN_HELD_TURN_SPEED_RAD_PER_SEC = 1.5 rad/s` (see
+   * `crates/holtburger-core/src/client/movement/common.rs:29`) when
+   * `turn` is held and the player is running. Emit
    * `turn = sign(followYaw - playerHeading)` while WASD is held; ACE
-   * rotates the player heading ~3.5 rad/s, so within ~300 ms (about 6
-   * rAF ticks at 50 ms each) the player's heading lands inside the
-   * `TURN_DEAD_ZONE` and the walking direction stabilises. Combined
-   * with the camera-relative (forward, strafe) math, the player
-   * visually walks toward the camera-facing point of interest from the
-   * first key press — the path curves slightly until alignment, then
-   * goes straight. Auto-turn only fires when WASD is held; idle Q/E
-   * still drives the manual turn unchanged.
+   * rotates at 1.5 rad/s, so the convergence time is bounded by
+   * `|headingError| / 1.5 s`. A 90° pan (π/2 rad) settles in ≈1 s; a
+   * 180° turn (π rad) settles in ≈2 s. (The original spec doc claimed
+   * "~300 ms" for the auto-turn convergence; that's only true for
+   * misalignments under ~25°. Larger pans take proportionally longer.)
+   * Once `|headingError| < TURN_DEAD_ZONE` the auto-turn releases.
+   * Combined with the camera-relative (forward, strafe) math above,
+   * the player visually walks toward the camera-facing point of
+   * interest from the first key press.
    *
-   * Precedence: Q/E intent is ADDED to the auto-turn delta and the
-   * sum is sign-clamped. So holding Q (left) while auto-turn is +1
-   * (right) cancels out → turn=0 — the user wins. Inside the dead
-   * zone the auto-turn is 0 and Q/E is the only contributor.
+   * The 2026-05-11 debug session reverted this math to raw player-
+   * local-frame WASD because the heading source was always 0 (the
+   * wasm eager-WorldState path swallowed local-player KIND_SPAWN, so
+   * the 3D rig's quaternion was the identity). Workstream A's new
+   * `__sessionHandle.getLocalPlayerPose().heading` export lands the
+   * authoritative integrator heading directly. Heading-source
+   * priority: (1) `__sessionHandle.getLocalPlayerPose().heading`,
+   * (2) `this.getPlayerHeading()` (3D rig quaternion fallback),
+   * (3) `0` (north) pre-spawn.
+   *
+   * Precedence (spec rule #5): manual Q/E overrides auto-turn. When
+   * Q or E is held, `turn = sign(qeTurn)` directly, bypassing the
+   * auto-turn for that tick. The user expects pressing Q/E to mean
+   * "I want to steer right now", not "fight the auto-turn".  Inside
+   * the dead zone (|headingError| < TURN_DEAD_ZONE) the auto-turn is
+   * 0 anyway, so Q/E flows through unchanged.
    *
    * In topDown mode: WASD is world-fixed (no yaw rotation). W → +Y
    * north, D → +X east. Mirrors the 2D path's top-down convention so
@@ -1058,23 +1124,90 @@ export class CameraSwitcher {
       };
     }
 
-    // Follow mode — raw WASD in the player's local frame, matching the
-    // 2D path (index.html:6219-6235). The Phase 7.5 design rotated
-    // intent through `followYaw` and used an auto-turn that read
-    // `getLocalPlayerHeading()` to align the player with the camera,
-    // but the wasm eager-WorldState path never spawns the local-player
-    // rig in the 3D EntityManager, so `getLocalPlayerHeading()` always
-    // falls back to 0. That makes every WASD axis flip whenever the
-    // actual player heading isn't 0 — exactly what users see after a
-    // teleport (W→S, A↔D, mouse pan inverted). Drop the world-rotation
-    // entirely and let Q/E manual-turn the player as in retail AC.
-    // The camera still tracks the player's POSITION; orientation just
-    // doesn't auto-couple anymore until the wasm side gains a
-    // KIND_SPAWN emission for the eager-path local player.
+    // Follow mode — camera-relative WASD math, restored from Phase 7.5
+    // (`88ed71a`) with the heading source now driven by Workstream A's
+    // `__sessionHandle.getLocalPlayerPose().heading` instead of the
+    // always-zero quaternion fallback that triggered the 2026-05-11
+    // revert. See the camera.js header for the math derivation + sanity
+    // checks; in short:
+    //   - Rotate (inputForward, inputStrafe) by `followYaw` → world-frame
+    //     intent (worldDx along +X east, worldDy along +Y north).
+    //   - Rotate world-frame intent by `-playerHeading` → player-local
+    //     intent (forward, strafe in the player's body frame, which is
+    //     what ACE's MovementSystem consumes).
+    //   - Auto-turn: while WASD is held and |headingError| > dead zone,
+    //     emit `turn = sign(followYaw - playerHeading)` to drive ACE's
+    //     rotational integrator toward camera-facing alignment
+    //     (1.5 rad/s when running; convergence time = |error| / 1.5 s).
+    //   - Manual Q/E takes precedence — when Q or E is held, the user's
+    //     intent overrides the auto-turn for that tick.
+    const yaw = this.followYaw;
+    const sinY = Math.sin(yaw);
+    const cosY = Math.cos(yaw);
+    // Camera-frame intent → world-axis direction:
+    //   worldDx = inputForward * sin(yaw) + inputStrafe * cos(yaw) → +X east
+    //   worldDy = inputForward * cos(yaw) - inputStrafe * sin(yaw) → +Y north
+    const worldDx = inputForward * sinY + inputStrafe * cosY;
+    const worldDy = inputForward * cosY - inputStrafe * sinY;
+
+    // Heading source priority (see header for full rationale):
+    //   1. __sessionHandle.getLocalPlayerPose().heading (Workstream A)
+    //   2. this.getPlayerHeading() (3D rig quaternion fallback)
+    //   3. 0 (north) — sensible pre-spawn default
+    let playerHeading = null;
+    const handle = this._getSessionHandle?.();
+    if (handle && typeof handle.getLocalPlayerPose === "function") {
+      try {
+        const pose = handle.getLocalPlayerPose();
+        if (pose && typeof pose.heading === "number"
+            && Number.isFinite(pose.heading)) {
+          playerHeading = pose.heading;
+        }
+      } catch (_) {
+        // Defensive: never let a bad wasm read break movement.
+        playerHeading = null;
+      }
+    }
+    if (playerHeading === null && typeof this.getPlayerHeading === "function") {
+      try {
+        const h = this.getPlayerHeading();
+        if (typeof h === "number" && Number.isFinite(h)) playerHeading = h;
+      } catch (_) {
+        playerHeading = null;
+      }
+    }
+    if (playerHeading === null) playerHeading = 0.0;
+
+    // World-frame intent → player-local-frame:
+    //   localF = worldDx * sin(h) + worldDy * cos(h)
+    //   localS = worldDx * cos(h) - worldDy * sin(h)
+    const sinH = Math.sin(playerHeading);
+    const cosH = Math.cos(playerHeading);
+    const localForward = worldDx * sinH + worldDy * cosH;
+    const localStrafe = worldDx * cosH - worldDy * sinH;
+
+    // Auto-turn: drive player heading toward `followYaw` while WASD is
+    // held. Sign of the wrapped heading error → ±1 turn delta (ACE
+    // rotates at RUN_HELD_TURN_SPEED_RAD_PER_SEC = 1.5 rad/s when
+    // run-held; convergence time = |headingError| / 1.5 s; e.g. 90°
+    // settles in ≈1 s, 180° in ≈2 s).
+    const wasdHeld = k.w || k.a || k.s || k.d;
+    let autoTurn = 0;
+    if (wasdHeld) {
+      const headingError = wrapAngle(this.followYaw - playerHeading);
+      if (Math.abs(headingError) > TURN_DEAD_ZONE) {
+        autoTurn = headingError > 0 ? 1 : -1;
+      }
+    }
+    // Manual Q/E overrides auto-turn: when the user actively holds Q
+    // or E, they win for that tick (spec rule #5). Inside the dead
+    // zone the auto-turn is 0 anyway, so Q/E flows through unchanged.
+    const turnOut = qeTurn !== 0 ? clampSign(qeTurn) : autoTurn;
+
     return {
-      forward: clampSign(inputForward),
-      strafe: clampSign(inputStrafe),
-      turn: clampSign(qeTurn),
+      forward: clampSign(localForward),
+      strafe: clampSign(localStrafe),
+      turn: turnOut,
       run,
     };
   }

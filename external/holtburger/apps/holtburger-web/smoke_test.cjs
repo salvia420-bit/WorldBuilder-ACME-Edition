@@ -3400,6 +3400,37 @@ check(
         check("Workstream B: client-side prediction state + helpers", false, String(e).slice(0, 120));
     }
 
+    // === Workstream D (2026-05-11) — camera-relative WASD + auto-turn-to-align ===
+    // Verifies the math restored to `computeMovementFromKeys` in
+    // scene3d/camera.js: world-frame rotation, player-local frame
+    // rotation, heading source priority (getLocalPlayerPose → fallback),
+    // auto-turn sign-of-headingError, manual Q/E override.
+    // Functional verification (convergence, dead-zone release, manual
+    // override) lives in test_workstream_d_camera_relative.mjs.
+    try {
+        const fs = require("fs");
+        const camSrc = fs.readFileSync(__dirname + "/scene3d/camera.js", "utf8");
+        const hasWorldRot = /worldDx\s*=\s*inputForward\s*\*\s*sinY\s*\+\s*inputStrafe\s*\*\s*cosY/.test(camSrc);
+        const hasLocalRot = /localForward\s*=\s*worldDx\s*\*\s*sinH\s*\+\s*worldDy\s*\*\s*cosH/.test(camSrc);
+        const hasPoseHeadingPrimary = /handle\.getLocalPlayerPose[\s\S]{0,200}pose\.heading/.test(camSrc);
+        const hasFallbackHeading = /this\.getPlayerHeading\s*===\s*"function"/.test(camSrc);
+        const hasAutoTurn = /autoTurn\s*=\s*headingError\s*>\s*0\s*\?\s*1\s*:\s*-1/.test(camSrc);
+        const hasDeadZone = /Math\.abs\(headingError\)\s*>\s*TURN_DEAD_ZONE/.test(camSrc);
+        const hasManualOverride = /qeTurn\s*!==\s*0\s*\?\s*clampSign\(qeTurn\)\s*:\s*autoTurn/.test(camSrc);
+        const hasWasdGate = /wasdHeld\s*=\s*k\.w\s*\|\|\s*k\.a\s*\|\|\s*k\.s\s*\|\|\s*k\.d/.test(camSrc);
+        check(
+            "Workstream D: camera-relative WASD + auto-turn-to-align math",
+            hasWorldRot && hasLocalRot && hasPoseHeadingPrimary && hasFallbackHeading &&
+                hasAutoTurn && hasDeadZone && hasManualOverride && hasWasdGate,
+            `worldRot=${hasWorldRot} localRot=${hasLocalRot} ` +
+                `poseHeading=${hasPoseHeadingPrimary} fallback=${hasFallbackHeading} ` +
+                `autoTurn=${hasAutoTurn} deadZone=${hasDeadZone} ` +
+                `manualOverride=${hasManualOverride} wasdGate=${hasWasdGate}`
+        );
+    } catch (e) {
+        check("Workstream D: camera-relative WASD + auto-turn-to-align math", false, String(e).slice(0, 120));
+    }
+
     console.log("=========================");
     if (failed === 0) {
         console.log("PASS: all smoke checks green.");
