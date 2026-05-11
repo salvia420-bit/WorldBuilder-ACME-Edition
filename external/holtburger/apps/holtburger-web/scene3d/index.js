@@ -61,26 +61,6 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   renderer.setSize(cssW, cssH, false);
   renderer.setClearColor(0x101418, 1);
 
-  // Keep the canvas + renderer in sync with viewport resizes (the
-  // 2D path lives with the static 512×512 attribute size, but the 3D
-  // path is set up to be a real game viewport). Debounce so resize-
-  // drag doesn't thrash the WebGL framebuffer reallocation.
-  let resizeDebounce = null;
-  window.addEventListener("resize", () => {
-    if (resizeDebounce) clearTimeout(resizeDebounce);
-    resizeDebounce = setTimeout(() => {
-      const newW = Math.min(window.innerWidth - 32, 1920);
-      const newH = Math.min(window.innerHeight - layoutChromeH, 1080);
-      canvas.style.width = `${newW}px`;
-      canvas.style.height = `${newH}px`;
-      renderer.setSize(newW, newH, false);
-      if (typeof camera !== "undefined" && camera.isPerspectiveCamera) {
-        camera.aspect = newW / newH;
-        camera.updateProjectionMatrix();
-      }
-    }, 150);
-  });
-
   const scene = new THREE.Scene();
 
   // worldRoot carries the AC-Z-up→three-Y-up correction. Every
@@ -135,9 +115,30 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   // Camera — perspective. Default framing for the Phase 7.0 hello-
   // world is back-and-up from the cube; Phase 7.1+ retargets it onto
   // the Holtburg LB centre after terrain is built.
-  const camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 5000);
+  const camera = new THREE.PerspectiveCamera(60, cssW / cssH, 0.1, 5000);
   camera.position.set(15, 15, 15);
   camera.lookAt(0, 0, 5);
+
+  // Keep the canvas + renderer in sync with viewport resizes (the
+  // 2D path lives with the static 512×512 attribute size, but the 3D
+  // path is set up to be a real game viewport). Debounce so resize-
+  // drag doesn't thrash the WebGL framebuffer reallocation. Attached
+  // AFTER `camera` is constructed so the closure access doesn't TDZ
+  // when DevTools-open / window-resize fires during the long init3D
+  // await chain below.
+  let resizeDebounce = null;
+  window.addEventListener("resize", () => {
+    if (resizeDebounce) clearTimeout(resizeDebounce);
+    resizeDebounce = setTimeout(() => {
+      const newW = Math.min(window.innerWidth - 32, 1920);
+      const newH = Math.min(window.innerHeight - layoutChromeH, 1080);
+      canvas.style.width = `${newW}px`;
+      canvas.style.height = `${newH}px`;
+      renderer.setSize(newW, newH, false);
+      camera.aspect = newW / newH;
+      camera.updateProjectionMatrix();
+    }, 150);
+  });
 
   // Phase 7.1 — build Holtburg 9-LB terrain when real wasmExports
   // are available. The Phase 7.0 capture still calls init3D with an

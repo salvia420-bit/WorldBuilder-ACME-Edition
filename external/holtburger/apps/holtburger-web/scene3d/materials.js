@@ -320,16 +320,33 @@ export class MaterialCache {
   }
 
   _installFromPixels(did, sp) {
-    if (!sp || sp.width === 0 || sp.height === 0) {
-      if (sp && typeof sp.free === "function") sp.free();
+    if (!sp) return this.fallbackMaterial;
+    // wasm-bindgen wrappers around a null Rust pointer throw on every
+    // getter (`.width` / `.height` / `.pixels`), so read them once under
+    // a try/catch instead of an inline `sp.width === 0` check. A throw
+    // here means the surface DID had no pixels — fall back to the
+    // shared fallback material exactly as for the zero-dim case.
+    let w, h, pixels, surfaceType;
+    try {
+      w = sp.width;
+      h = sp.height;
+    } catch (_) {
       return this.fallbackMaterial;
     }
-    const tex = surfacePixelsToTexture(sp.pixels, sp.width, sp.height);
+    if (w === 0 || h === 0) {
+      try { if (typeof sp.free === "function") sp.free(); } catch (_) {}
+      return this.fallbackMaterial;
+    }
+    try {
+      pixels = sp.pixels;
+      surfaceType = sp.surfaceType ?? 0;
+    } catch (_) {
+      return this.fallbackMaterial;
+    }
+    const tex = surfacePixelsToTexture(pixels, w, h);
     // Phase 7 follow-on #7+8: surface_type bitfield from the wasm side.
-    // The getter is JS-camelCased to `surfaceType` (see lib.rs).
-    // Older wasm builds without the field pass through 0 → opaque.
-    const surfaceTypeFlags = (sp.surfaceType ?? 0) >>> 0;
-    if (typeof sp.free === "function") sp.free();
+    const surfaceTypeFlags = surfaceType >>> 0;
+    try { if (typeof sp.free === "function") sp.free(); } catch (_) {}
     const mat = this._materialFromFlags(surfaceTypeFlags, tex);
     mat.name = `scene3d-surface-${did.toString(16).padStart(8, "0")}`;
     mat.userData = {

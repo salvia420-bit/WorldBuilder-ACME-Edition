@@ -5771,7 +5771,18 @@ void main() {
                 // wasm bundle's chat / movement commands now take
                 // effect server-side. Unhide the post-spawn block
                 // and enable the Teleport button.
-                const playerGuid = (evt.u32Payload >>> 0).toString(16).toUpperCase().padStart(8, "0");
+                const playerGuidU32 = evt.u32Payload >>> 0;
+                const playerGuid = playerGuidU32.toString(16).toUpperCase().padStart(8, "0");
+                // Safety-net: the eager-WorldState path on SelectCharacter
+                // suppresses the kind=1 PlayerCreate event, leaving
+                // spawnedPlayerGuid + setLocalPlayerGuid unset. Without
+                // these, the 3D follow camera can't resolve the local
+                // player's pose and falls back to a Holtburg-centre
+                // constant. Idempotent: no-op when kind=1 already ran.
+                if (spawnedPlayerGuid === null) {
+                  spawnedPlayerGuid = playerGuidU32;
+                  setLocalPlayerGuid(spawnedPlayerGuid);
+                }
                 postSpawn.hidden = false;
                 teleportBtn.disabled = false;
                 // Terrain heightmap prefetch is now driven by the

@@ -327,7 +327,17 @@ const FALLBACK_SURFACE_DID = 0;
  * Note: an empty `triCount === 0` mesh returns `{ groups: [], surfaceDids: [] }`.
  */
 export function meshToGeometryGroups(wasmMesh) {
-  const triCount = wasmMesh.triCount | 0;
+  // wasm-bindgen sometimes hands us a wrapper whose inner Rust pointer
+  // is null (the entity's mesh DID resolved but `fetchEntityModelRender`
+  // returned no triangles, or the wasm-side cache evicted the mesh
+  // between the lookup and this read). Any getter on a null-ptr wrapper
+  // throws "null pointer passed to rust" — guard the first read.
+  let triCount;
+  try {
+    triCount = wasmMesh.triCount | 0;
+  } catch (_) {
+    return { groups: [], surfaceDids: [] };
+  }
   if (triCount === 0) {
     return { groups: [], surfaceDids: [] };
   }

@@ -332,9 +332,22 @@ export function installSharedDrainHook(scene3d) {
           const lbY = (lbId >>> 16) & 0xff;
           const wx = lbX * 192.0 + (upd.x ?? 0);
           const wy = lbY * 192.0 + (upd.y ?? 0);
+          const wz = upd.z ?? 0;
+          const g = upd.guid >>> 0;
+          // Always stash the latest world-space position per guid, even
+          // when the 3D EntityManager has no rig for this guid yet (the
+          // wasm-side eager-WorldState path suppresses KIND_SPAWN for
+          // the local player on SelectCharacter, so `em.setPose` below
+          // is a no-op for that guid). `getLocalPlayerWorldPos` uses
+          // this as its last-resort fallback so the camera tracks the
+          // server pose regardless of whether a rig ever spawned.
+          if (!window.__lastEntityWorldPos) {
+            window.__lastEntityWorldPos = new Map();
+          }
+          window.__lastEntityWorldPos.set(g, { x: wx, y: wy, z: wz });
           em.setPose(
-            upd.guid >>> 0,
-            wx, wy, upd.z ?? 0,
+            g,
+            wx, wy, wz,
             upd.qw ?? 1, upd.qx ?? 0, upd.qy ?? 0, upd.qz ?? 0
           );
         } else if (kind === KIND_VELOCITY) {

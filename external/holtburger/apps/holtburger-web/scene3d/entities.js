@@ -781,16 +781,78 @@ export class EntityManager {
     if (typeof window === "undefined") return null;
     // eslint-disable-next-line no-undef
     const lpgFn = window.getLocalPlayerGuid;
-    if (typeof lpgFn !== "function") return null;
-    const guid = lpgFn();
+    let guid = (typeof lpgFn === "function") ? lpgFn() : null;
+    // GUID-prefix fallback: the wasm-side eager-WorldState path on
+    // SelectCharacter suppresses the kind=1/kind=7 ClientEvents, so
+    // setLocalPlayerGuid is never called and the page-level lookup
+    // returns null. AC's 32-bit GUIDs are namespaced — 0x5xxxxxxx is
+    // the player-character tier, 0x8xxxxxxx is dynamic spawn (NPCs),
+    // 0x7xxxxxxx is world-static. The KIND_POSITION stream in
+    // __lastEntityWorldPos still carries the player's pose; scan for
+    // the first 0x5-prefix key as a fallback identifier. If none is
+    // present yet (pre-spawn frames), fall through to a null return.
+    if ((guid === null || guid === undefined)
+      // eslint-disable-next-line no-undef
+      && window.__lastEntityWorldPos) {
+      // eslint-disable-next-line no-undef
+      for (const k of window.__lastEntityWorldPos.keys()) {
+        if (((k >>> 0) & 0xF0000000) === 0x50000000) {
+          guid = k >>> 0;
+          break;
+        }
+      }
+    }
     if (guid === null || guid === undefined) return null;
-    const inst = this.entityMap.get((guid >>> 0));
-    if (!inst || !inst.root) return null;
-    return {
-      x: inst.root.position.x,
-      y: inst.root.position.y,
-      z: inst.root.position.z,
-    };
+    const guidU32 = guid >>> 0;
+    const inst = this.entityMap.get(guidU32);
+    if (inst && inst.root) {
+      return {
+        x: inst.root.position.x,
+        y: inst.root.position.y,
+        z: inst.root.position.z,
+      };
+    }
+    // Fallback: the wasm-side's eager-WorldState path on SelectCharacter
+    // suppresses the KIND_SPAWN entity-update for the local player, so
+    // the 3D EntityManager never builds a rig. The 2D path's entityMap
+    // (`window.entityMap`, exposed at index.html:2430) is seeded by the
+    // same ObjectCreate flow and tracks the player's authoritative
+    // world position in `sprite.x` / `sprite.y` (AC world metres). Use
+    // the 2D entry as the camera-follow source until the wasm-side
+    // gains a local-player KIND_SPAWN emission.
+    // eslint-disable-next-line no-undef
+    const twoDMap = window.entityMap;
+    const twoDEntry = twoDMap && typeof twoDMap.get === "function"
+      ? twoDMap.get(guidU32)
+      : null;
+    if (twoDEntry && twoDEntry.sprite) {
+      return {
+        x: twoDEntry.sprite.x,
+        y: twoDEntry.sprite.y,
+        // 2D sprites don't carry world-Z; the wasm-side authoritative
+        // pose isn't directly readable, but `__predLastPos` reflects
+        // the last predicted Z when one was set. Default to 80 (typical
+        // Holtburg outdoor Z) to keep the camera at eye-height — the
+        // follow-camera's vertical framing tolerates ±a few metres.
+        z: 80,
+      };
+    }
+    // Third-tier fallback: every KIND_POSITION drained by the shared
+    // hook is stashed in `window.__lastEntityWorldPos` regardless of
+    // whether either entityMap ever spawned a rig. Even with both
+    // upstream maps missing the player, this carries the wasm-side
+    // pose (the same one the heartbeat trace prints) so the camera
+    // tracks teleports + walks without requiring a wasm rebuild to
+    // emit KIND_SPAWN for the eager-WorldState path.
+    // eslint-disable-next-line no-undef
+    const lastMap = window.__lastEntityWorldPos;
+    if (lastMap && typeof lastMap.get === "function") {
+      const p = lastMap.get(guidU32);
+      if (p) {
+        return { x: p.x, y: p.y, z: p.z };
+      }
+    }
+    return null;
   }
 
   /**

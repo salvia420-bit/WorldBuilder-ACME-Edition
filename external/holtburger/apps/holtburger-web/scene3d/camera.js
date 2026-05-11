@@ -303,7 +303,12 @@ export class CameraSwitcher {
             if (!plc.isLocked) return;
             const mx = ev.movementX || 0;
             const my = ev.movementY || 0;
-            this.followYaw -= mx * POINTER_YAW_SENS;
+            // Standard FPS mouse-look convention: mouse-right turns the
+            // camera right (yaw increases in our clockwise-from-north
+            // followYaw frame), mouse-down looks down (pitch increases).
+            // Inverted from Phase 7.5's original sign so users without
+            // the "invert X" preference get the expected feel.
+            this.followYaw += mx * POINTER_YAW_SENS;
             this.followPitch += my * POINTER_PITCH_SENS;
             // Clamp pitch to keep camera from flipping over.
             if (this.followPitch < FOLLOW_PITCH_MIN)
@@ -405,7 +410,12 @@ export class CameraSwitcher {
       // actually renders (Phase 7.7 audit fix).
       const cx = p.x - forwardX * horizDist;
       const cy = p.y - forwardY * horizDist;
-      const cz = p.z + vertDist + 1.6; // eye-height offset
+      // Camera height: lift well above the player so Holtburg's terrain
+      // doesn't clip the camera into a hillside. Without a wasm-side
+      // heightmap lookup at the camera's XY, the cheap fix is a fixed
+      // ~8 m lift — enough to clear typical landblock relief. The pitch
+      // already tilts the camera down to keep the player framed.
+      const cz = p.z + vertDist + 8.0;
       this.persp.position.set(...acToThree(cx, cy, cz));
       // Look at the player's head (z + 1.6 ≈ eye height).
       this.persp.lookAt(...acToThree(p.x, p.y, p.z + 1.6));
@@ -496,50 +506,23 @@ export class CameraSwitcher {
       };
     }
 
-    // Follow mode — rotate by followYaw.
-    const sin = Math.sin(this.followYaw);
-    const cos = Math.cos(this.followYaw);
-    // Camera-frame intent → world-axis direction:
-    //   worldDx = inputForward * sin + inputStrafe * cos   (along AC +X / east)
-    //   worldDy = inputForward * cos - inputStrafe * sin   (along AC +Y / north)
-    const worldDx = inputForward * sin + inputStrafe * cos;
-    const worldDy = inputForward * cos - inputStrafe * sin;
-
-    // Follow-on #2: turn-to-align. Only auto-turn when WASD is held —
-    // otherwise idle Q/E behaviour is the same as Phase 7.5.
-    const wasdHeld =
-      k.w || k.a || k.s || k.d;
-    let autoTurn = 0;
-    if (wasdHeld) {
-      // Pull current player heading in the followYaw convention.
-      let playerHeading = 0;
-      try {
-        if (typeof this.getPlayerHeading === "function") {
-          const h = this.getPlayerHeading();
-          if (typeof h === "number" && Number.isFinite(h)) {
-            playerHeading = h;
-          }
-        }
-      } catch (_) {
-        // Defensive: never let a bad heading source break movement.
-        playerHeading = 0;
-      }
-      // `wrapAngle` brings the error into `[-π, π]` so a player at
-      // +π and camera at -π+ε (compass equivalent) takes the short
-      // way around (turn=-1) instead of the long way (turn=+1).
-      const headingError = wrapAngle(this.followYaw - playerHeading);
-      if (Math.abs(headingError) > TURN_DEAD_ZONE) {
-        autoTurn = headingError > 0 ? 1 : -1;
-      }
-    }
-    // Q/E adds to the auto-turn so the user can override; sign-clamp
-    // the sum so the wasm side still receives -1/0/+1.
-    const turnSum = autoTurn + qeTurn;
+    // Follow mode — raw WASD in the player's local frame, matching the
+    // 2D path (index.html:6219-6235). The Phase 7.5 design rotated
+    // intent through `followYaw` and used an auto-turn that read
+    // `getLocalPlayerHeading()` to align the player with the camera,
+    // but the wasm eager-WorldState path never spawns the local-player
+    // rig in the 3D EntityManager, so `getLocalPlayerHeading()` always
+    // falls back to 0. That makes every WASD axis flip whenever the
+    // actual player heading isn't 0 — exactly what users see after a
+    // teleport (W→S, A↔D, mouse pan inverted). Drop the world-rotation
+    // entirely and let Q/E manual-turn the player as in retail AC.
+    // The camera still tracks the player's POSITION; orientation just
+    // doesn't auto-couple anymore until the wasm side gains a
+    // KIND_SPAWN emission for the eager-path local player.
     return {
-      // wasm `forward` axis = AC +Y (north). wasm `strafe` axis = AC +X (east).
-      forward: clampSign(worldDy),
-      strafe: clampSign(worldDx),
-      turn: clampSign(turnSum),
+      forward: clampSign(inputForward),
+      strafe: clampSign(inputStrafe),
+      turn: clampSign(qeTurn),
       run,
     };
   }
