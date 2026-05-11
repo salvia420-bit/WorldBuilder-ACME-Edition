@@ -3609,6 +3609,70 @@ check(
             false, String(e).slice(0, 120));
     }
 
+    // === Workstream Sky-G (2026-05-11) — SkyObjectReplace lerp + cloud
+    // UV scroll + DayGroup cycling override + properties decode =====
+    // Verifies the four Sky-G pieces are wired:
+    //   1. SkyObjectReplace lerping — `lerp_sky_object_replace` exists in
+    //      `crates/holtburger-world/src/sky.rs`.
+    //   2. `setGameDayOverride` exists as a wasm export (lib.rs).
+    //   3. `getSkyOverrideObjectIds` wasm export wired into index.js to
+    //      pre-bake override mesh set.
+    //   4. SkyObject.properties decode constants
+    //      (`SKY_OBJ_PROP_SCROLLING_CLOUD` etc.) declared in sky.rs.
+    //   5. SkyDome controller exposes `_meshSwapCount` counter for the
+    //      capture-script bullet 18 assertion.
+    try {
+        const fs = require("fs");
+        const skyRsPath = __dirname + "/../../crates/holtburger-world/src/sky.rs";
+        const libRsPath = __dirname + "/src/lib.rs";
+        const indexJsPath = __dirname + "/scene3d/index.js";
+        const skyDomePath = __dirname + "/scene3d/sky_dome.js";
+        const captureCjsPath = __dirname + "/capture_skybox_e2e.cjs";
+        const skyRsSrc = fs.readFileSync(skyRsPath, "utf8");
+        const libRsSrc = fs.readFileSync(libRsPath, "utf8");
+        const indexJsSrc = fs.readFileSync(indexJsPath, "utf8");
+        const skyDomeSrc = fs.readFileSync(skyDomePath, "utf8");
+        const captureCjsSrc = fs.readFileSync(captureCjsPath, "utf8");
+
+        const hasReplaceLerp = /fn\s+lerp_sky_object_replace\b/.test(skyRsSrc);
+        const hasSessionStart = /session_start_unix\b/.test(skyRsSrc);
+        const hasGameDayOverrideField = /game_day_override\b/.test(skyRsSrc);
+        const hasPropConstants =
+            /SKY_OBJ_PROP_SCROLLING_CLOUD\b/.test(skyRsSrc) &&
+            /SKY_OBJ_PROP_PHYSICS_SCRIPT\b/.test(skyRsSrc) &&
+            /SKY_OBJ_PROP_WEATHER_STREAK\b/.test(skyRsSrc) &&
+            /SKY_OBJ_PROP_ADDITIVE_BLEND\b/.test(skyRsSrc);
+        const hasSetGameDayWasmExport = /setGameDayOverride/.test(libRsSrc);
+        const hasGetSkyOverrideExport = /getSkyOverrideObjectIds/.test(libRsSrc);
+        const indexConsumesOverrideIds = /getSkyOverrideObjectIds/.test(indexJsSrc);
+        const domeHasMeshSwapCount = /_meshSwapCount\b/.test(skyDomeSrc);
+        const domeHasLastActiveMap = /_lastActiveIdPerObjectIndex\b/.test(skyDomeSrc);
+        const captureHasBullet16 = /Bullet 16: cloud UV offset/.test(captureCjsSrc);
+        const captureHasBullet17 = /Bullet 17: day_group_index/.test(captureCjsSrc);
+        const captureHasBullet18 = /Bullet 18: SkyObjectReplace mesh-swap/.test(captureCjsSrc);
+
+        check(
+            "Workstream Sky-G: SkyObjectReplace lerp + cloud UV scroll + setGameDayOverride + property bit decode",
+            hasReplaceLerp && hasSessionStart && hasGameDayOverrideField &&
+                hasPropConstants && hasSetGameDayWasmExport &&
+                hasGetSkyOverrideExport && indexConsumesOverrideIds &&
+                domeHasMeshSwapCount && domeHasLastActiveMap &&
+                captureHasBullet16 && captureHasBullet17 && captureHasBullet18,
+            `replaceLerp=${hasReplaceLerp} sessionStart=${hasSessionStart} ` +
+                `gameDayOverride=${hasGameDayOverrideField} ` +
+                `propConsts=${hasPropConstants} ` +
+                `setGameDayWasm=${hasSetGameDayWasmExport} ` +
+                `getOverrideIds=${hasGetSkyOverrideExport} ` +
+                `indexConsumes=${indexConsumesOverrideIds} ` +
+                `domeSwapCount=${domeHasMeshSwapCount} ` +
+                `domeLastActive=${domeHasLastActiveMap} ` +
+                `bullet16=${captureHasBullet16} bullet17=${captureHasBullet17} bullet18=${captureHasBullet18}`
+        );
+    } catch (e) {
+        check("Workstream Sky-G: SkyObjectReplace lerp + cloud UV scroll + setGameDayOverride + property bit decode",
+            false, String(e).slice(0, 120));
+    }
+
     console.log("=========================");
     if (failed === 0) {
         console.log("PASS: all smoke checks green.");

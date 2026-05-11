@@ -679,6 +679,29 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
         for (let i = 0; i < states.length; i += 1) {
           ids.push(states[i].gfxObjectId >>> 0);
         }
+        // Workstream Sky-G: also pre-resolve every gfx_obj_id
+        // referenced by SkyObjectReplace entries across ALL DayGroups
+        // (not just the active one) so mesh swaps at keyframe
+        // boundaries are zero-network. In retail Dereth every
+        // replace.gfx_obj_id is 0x00000000 — `getSkyOverrideObjectIds`
+        // returns the union of SkyObject.default_gfx_object_id and any
+        // non-zero replace.gfx_obj_id, which collapses to just the
+        // defaults; for custom regions with real overrides the resolver
+        // bakes those too.
+        if (typeof handle.getSkyOverrideObjectIds === "function") {
+          try {
+            const overrideIds = handle.getSkyOverrideObjectIds();
+            if (overrideIds && typeof overrideIds.length === "number") {
+              for (let i = 0; i < overrideIds.length; i += 1) {
+                const id = overrideIds[i] >>> 0;
+                if (id !== 0 && !ids.includes(id)) ids.push(id);
+              }
+            }
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.warn("[sky-g] getSkyOverrideObjectIds threw:", e);
+          }
+        }
         const summary = await resolveSkyAssets(
           scene3dForBuilders,
           ids,

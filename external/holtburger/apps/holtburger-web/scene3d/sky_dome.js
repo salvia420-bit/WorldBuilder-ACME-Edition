@@ -318,6 +318,14 @@ export class SkyDome {
     this._noStateTickCount = 0;
     this._lastSkyObjectCount = 0;
     this._lastIsIndoor = false;
+    // Workstream Sky-G: per-SkyObject-index → last-active gfx_obj_id.
+    // When a SkyObjectReplace swaps the target mesh, we hide the
+    // previously-active one and un-hide the new target.
+    this._lastActiveIdPerObjectIndex = new Map();
+    // Capture-script bullet 18 introspection: count of mesh-swap
+    // events this session (how many times a SkyObject's active
+    // gfx_obj_id changed across consecutive ticks).
+    this._meshSwapCount = 0;
   }
 
   /**
@@ -326,6 +334,13 @@ export class SkyDome {
    * Sky-E completes). Idempotent: a second call with the same assets
    * is a no-op; with a different skyAssets, replaces the existing
    * meshes.
+   *
+   * Workstream Sky-G: every bake in `skyAssets` becomes a mesh added
+   * to the scene root. The renderer keys lookups by the post-replace
+   * `s.gfxObjectId` — so if `skyAssets` includes both a SkyObject's
+   * default mesh AND a SkyObjectReplace override mesh, the renderer
+   * naturally swaps in the override on keyframe transitions (no
+   * runtime bake; zero network).
    */
   populateCelestialBodies(skyAssets, materialCache) {
     if (!(skyAssets instanceof Map) || skyAssets.size === 0) {
@@ -389,6 +404,11 @@ export class SkyDome {
           child.material.fog = false;
         }
       });
+      // Sky-G: start every override mesh hidden — the tick() pass will
+      // un-hide whichever ID is currently the active one for any
+      // SkyObject. Without this every mesh would render on top of
+      // every other one.
+      group.visible = false;
       // Add directly to scene root (NOT to celestialGroup which is
       // bookkeeping-only). Bullet 12 walks scene.children.
       this.scene.add(group);
@@ -527,6 +547,23 @@ export class SkyDome {
       const skyObjectId = (s.gfxObjectId >>> 0);
       const mesh = this.skyObjectMeshes.get(skyObjectId);
       if (!mesh) continue;
+
+      // Workstream Sky-G: SkyObjectReplace mesh-swap handling. If the
+      // SkyObject at index `i` was previously rendering with a
+      // different gfx_obj_id, we need to:
+      //   1. Hide the previously-active mesh for this object index.
+      //   2. Increment the mesh-swap counter (bullet 18).
+      // The new mesh's visibility is then set by `s.visible` below.
+      const lastActive = this._lastActiveIdPerObjectIndex.get(i);
+      if (lastActive !== undefined && lastActive !== skyObjectId) {
+        const lastMesh = this.skyObjectMeshes.get(lastActive);
+        if (lastMesh && lastMesh.visible) {
+          lastMesh.visible = false;
+        }
+        this._meshSwapCount += 1;
+      }
+      this._lastActiveIdPerObjectIndex.set(i, skyObjectId);
+
       // Per-state visibility. Indoor flip already gates the parent
       // dome; this is the per-body day-of-arc flag.
       if (mesh.visible !== s.visible) {

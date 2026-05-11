@@ -4255,6 +4255,77 @@ pub fn set_sky_time_override(time_of_day: f32) -> bool {
     })
 }
 
+/// Workstream Sky-G: force the in-world `(day, year)` tuple used by the
+/// LCG-hash DayGroup selector. Set both to `u32::MAX` (sentinel) to
+/// clear the override and return to wall-clock derivation. Used by
+/// the Sky-F capture script to drive DayGroup cycling without waiting
+/// for real-world midnight (Dereth's `day_length=7620s` means a real
+/// 127-min wait between game-days).
+///
+/// Returns `true` if applied; `false` if the SkyDesc hasn't been
+/// populated yet.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = setGameDayOverride)]
+pub fn set_game_day_override(day: u32, year: u32) -> bool {
+    SKY_SHADOW.with(|shadow| {
+        let mut shadow = shadow.borrow_mut();
+        let Some(s) = shadow.as_mut() else {
+            return false;
+        };
+        if day == u32::MAX && year == u32::MAX {
+            s.evaluator.set_game_day_override(None);
+        } else {
+            s.evaluator.set_game_day_override(Some((day, year)));
+        }
+        true
+    })
+}
+
+/// Workstream Sky-G: collect EVERY `gfx_obj_id` referenced by ANY
+/// SkyObject or SkyObjectReplace across ALL DayGroups in the cached
+/// SkyDesc. JS calls this at session init so the asset resolver can
+/// pre-bake the full override set; mesh swaps at keyframe boundaries
+/// are then zero-network at runtime.
+///
+/// Returns an empty Vec if the SkyDesc hasn't been populated. Each
+/// returned ID is a `0x01xxxxxx` (GfxObj) or `0x02xxxxxx` (SetupModel)
+/// DID. Deduplication is the CALLER's job (the wasm side returns the
+/// raw union).
+///
+/// In retail Dereth the union equals the set of `default_gfx_object_id`s
+/// (every replace.gfx_obj_id is `0x00000000`, meaning "no mesh
+/// override"). The export exists for the general case (Marae, custom
+/// regions) and to keep the resolver pipeline future-proof.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = getSkyOverrideObjectIds)]
+pub fn get_sky_override_object_ids() -> Vec<u32> {
+    SKY_SHADOW.with(|shadow| {
+        let shadow = shadow.borrow();
+        let Some(s) = shadow.as_ref() else {
+            return Vec::new();
+        };
+        let mut ids: Vec<u32> = Vec::new();
+        for dg in &s.sky_desc.day_groups {
+            for so in &dg.sky_objects {
+                if so.default_gfx_object_id != 0 {
+                    ids.push(so.default_gfx_object_id);
+                }
+            }
+            for kf in &dg.sky_time {
+                for r in &kf.sky_obj_replace {
+                    // Replace records with gfx_obj_id==0 keep the
+                    // SkyObject's default mesh; only non-zero
+                    // overrides need pre-baking.
+                    if r.gfx_obj_id != 0 {
+                        ids.push(r.gfx_obj_id);
+                    }
+                }
+            }
+        }
+        ids
+    })
+}
+
 /// Workstream Sky-B: wasm-bindgen-friendly mirror of
 /// [`holtburger_world::SkyStateSnapshot`]. Plain-data so wasm-bindgen
 /// can pass it through getters without `serde`.
@@ -8914,6 +8985,28 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = setSkyTimeOverride)]
     pub fn set_sky_time_override(&self, time_of_day: f32) -> bool {
         set_sky_time_override(time_of_day)
+    }
+
+    /// Workstream Sky-G: force `(day, year)` for DayGroup-cycling tests.
+    /// Pass `(u32::MAX, u32::MAX)` to clear the override and return to
+    /// wall-clock derivation. Used by the Sky-F capture script (bullet
+    /// 17) to confirm `CalcPresentDayGroup` recomputes on date
+    /// boundary crossings without waiting for real-world midnight.
+    /// Mirrors `setSkyTimeOverride`.
+    #[wasm_bindgen(js_name = setGameDayOverride)]
+    pub fn set_game_day_override(&self, day: u32, year: u32) -> bool {
+        set_game_day_override(day, year)
+    }
+
+    /// Workstream Sky-G: aggregate every gfx_obj_id referenced anywhere
+    /// in the active SkyDesc — across all DayGroups, all SkyObjects'
+    /// `default_gfx_object_id`, and all SkyTimeOfDay's
+    /// `sky_obj_replace[*].gfx_obj_id`. The resolver pre-bakes this set
+    /// so SkyObjectReplace mesh swaps at keyframe boundaries are
+    /// zero-network.
+    #[wasm_bindgen(js_name = getSkyOverrideObjectIds)]
+    pub fn get_sky_override_object_ids(&self) -> Vec<u32> {
+        get_sky_override_object_ids()
     }
 
     /// Workstream A (3D camera/game-feel fix): authoritative local-

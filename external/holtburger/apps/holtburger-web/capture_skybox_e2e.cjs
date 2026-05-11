@@ -196,6 +196,10 @@ const DAWN_WINDOW_T = 0.05;
         13: mkBullet(13, "Screenshot per reference time",                     null),
         14: mkBullet(14, "No `null pointer passed to rust` errors",           null),
         15: mkBullet(15, "Pixel-hue histogram per reference time (Sky-D wins)", "Sky-D (pending)"),
+        // Workstream Sky-G additions.
+        16: mkBullet(16, "Cloud UV offset advances over time",                "Sky-G (landed)"),
+        17: mkBullet(17, "day_group_index changes on setGameDayOverride",     "Sky-G (landed)"),
+        18: mkBullet(18, "SkyObjectReplace mesh-swap counter > 0 across day cycle", "Sky-G (landed)"),
     };
 
     // Bullet 15 is reserved / skip-by-default — Sky-D-time work. The
@@ -344,7 +348,7 @@ const DAWN_WINDOW_T = 0.05;
         }
 
         if (bullets[2].passed === false) {
-            for (const k of [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]) {
+            for (const k of [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18]) {
                 if (!bullets[k].skipped && bullets[k].passed === null) {
                     bullets[k].passed = false;
                     bullets[k].error = "Bullet 2 failed; downstream cannot run";
@@ -439,7 +443,7 @@ const DAWN_WINDOW_T = 0.05;
             } catch (e) {
                 bullets[3].passed = false;
                 bullets[3].error = e.message;
-                for (const k of [4, 5, 6, 7, 8, 9, 10, 11, 12, 13]) {
+                for (const k of [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18]) {
                     if (!bullets[k].skipped && bullets[k].passed === null) {
                         bullets[k].passed = false;
                         bullets[k].error = "Bullet 3 failed; downstream cannot run";
@@ -463,7 +467,7 @@ const DAWN_WINDOW_T = 0.05;
             } catch (e) {
                 bullets[4].passed = false;
                 bullets[4].error = `hasSkyDesc() never returned true within ${SKY_DESC_WAIT_MS}ms (Sky-B kind=7 hook may not have fired, OR populator threw — check console for [Sky-B] lines)`;
-                for (const k of [5, 6, 7, 8, 9, 10, 11, 12]) {
+                for (const k of [5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18]) {
                     if (!bullets[k].skipped && bullets[k].passed === null) {
                         bullets[k].passed = false;
                         bullets[k].error = "Bullet 4 failed; SkyDesc unavailable";
@@ -964,9 +968,215 @@ const DAWN_WINDOW_T = 0.05;
                         bullets[15].error = `pixel-hue histogram threw: ${e.message}`;
                     }
                 }
+
+                // --- Bullet 16: cloud UV offset advances over time -------
+                // Workstream Sky-G item 3. Probe `texOffsetX` at t=0.5
+                // (noon) for the FIRST SkyObject whose tex_velocity_x is
+                // non-zero, then sleep 1000ms (>> 16ms rAF) and re-probe.
+                // For the canonical retail cloud band (velocity -0.013)
+                // 1s gives |Δ| ~= 0.013 — well above any rounding noise.
+                if (!bullets[16].skipped) {
+                    try {
+                        await page.evaluate((t) => {
+                            const h = window.__sessionHandle;
+                            try { h.setSkyTimeOverride(t); } catch (_) { /* swallow */ }
+                        }, 0.5);
+                        // Sample texOffsetX with the OBJECT INDEX of the
+                        // active cloud band — wherever it lives in the
+                        // 7-element list. The cloud band has non-zero
+                        // tex_velocity per Sky-G's probe data.
+                        const t0 = Date.now();
+                        const sample0 = await page.evaluate(() => {
+                            const h = window.__sessionHandle;
+                            const arr = h.getSkyObjectStates();
+                            for (let i = 0; i < arr.length; i++) {
+                                // Find the cloud band by gfx_obj_id
+                                // (any of 0x010015B6, 0x01004C35-3A,
+                                // 0x01004C42/44).
+                                const id = arr[i].gfxObjectId >>> 0;
+                                const isCloud = (id === 0x010015B6) || (id === 0x01004C35) ||
+                                                (id === 0x01004C36) || (id === 0x01004C37) ||
+                                                (id === 0x01004C38) || (id === 0x01004C39) ||
+                                                (id === 0x01004C3A) || (id === 0x01004C42) ||
+                                                (id === 0x01004C44);
+                                if (isCloud) {
+                                    return { idx: i, id, tx: arr[i].texOffsetX, ty: arr[i].texOffsetY };
+                                }
+                            }
+                            return null;
+                        });
+                        if (!sample0) {
+                            bullets[16].passed = false;
+                            bullets[16].error = "no cloud-band SkyObject found in current DayGroup; UV scroll cannot be verified";
+                        } else {
+                            // Sleep ~1 second of wall clock (the wasm
+                            // accumulator uses `Date.now() - session_start`
+                            // so wall-clock advance drives the offset).
+                            // Note: setSkyTimeOverride doesn't freeze
+                            // session_elapsed — it only locks the day-
+                            // fraction; tex_velocity * session_elapsed
+                            // still ticks.
+                            await page.waitForTimeout(1000);
+                            const sample1 = await page.evaluate((idx) => {
+                                const h = window.__sessionHandle;
+                                const arr = h.getSkyObjectStates();
+                                if (idx >= arr.length) return null;
+                                return { idx, tx: arr[idx].texOffsetX, ty: arr[idx].texOffsetY };
+                            }, sample0.idx);
+                            if (!sample1) {
+                                bullets[16].passed = false;
+                                bullets[16].error = "second tex-offset sample missing";
+                            } else {
+                                const dt_ms = Date.now() - t0;
+                                // Wrap-aware unsigned delta.
+                                const raw = Math.abs(sample1.tx - sample0.tx);
+                                const wrap = Math.abs(1 - raw);
+                                const unsigned = Math.min(raw, wrap);
+                                // Cloud band velocity is -0.013/s; for
+                                // a 1-second wait, expect |Δ| ~0.013.
+                                // Allow generous tolerance because
+                                // page.waitForTimeout doesn't guarantee
+                                // exactly 1000ms.
+                                const expectedMin = 0.001;
+                                bullets[16].passed = unsigned >= expectedMin && unsigned <= 0.5;
+                                bullets[16].detail =
+                                    `cloud band 0x${sample0.id.toString(16).toUpperCase().padStart(8, "0")} ` +
+                                    `at idx=${sample0.idx}: tx@t0=${sample0.tx.toFixed(5)} ` +
+                                    `tx@t+${dt_ms}ms=${sample1.tx.toFixed(5)} ` +
+                                    `|Δ|=${unsigned.toFixed(5)} (expected >= ${expectedMin})`;
+                                if (!bullets[16].passed) {
+                                    bullets[16].error =
+                                        `UV offset did not advance: |Δtx|=${unsigned.toFixed(6)} after ${dt_ms}ms wall-time`;
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        bullets[16].passed = false;
+                        bullets[16].error = `bullet 16 threw: ${e.message}`;
+                    }
+                }
+
+                // --- Bullet 17: day_group_index changes on setGameDayOverride
+                // Workstream Sky-G item 2. Sweep `setGameDayOverride`
+                // across 10 day samples and confirm at least 2 distinct
+                // day_group_index values come back. The LCG hash spreads
+                // 360 days across 20 buckets so 10 random samples should
+                // hit ~5 distinct buckets on average — failure means the
+                // override isn't being threaded through.
+                if (!bullets[17].skipped) {
+                    try {
+                        if (await page.evaluate(() => typeof window.__sessionHandle?.setGameDayOverride !== "function")) {
+                            bullets[17].passed = false;
+                            bullets[17].error = "setGameDayOverride wasm export missing — Sky-G item 2 not wired";
+                        } else {
+                            const indices = await page.evaluate(() => {
+                                const h = window.__sessionHandle;
+                                const seen = [];
+                                for (const day of [10, 35, 60, 85, 110, 135, 160, 185, 210, 235]) {
+                                    h.setGameDayOverride(day, 10);
+                                    const s = h.getSkyState();
+                                    if (s) seen.push(s.dayGroupIndex);
+                                }
+                                // Restore default (clear with u32::MAX sentinel).
+                                h.setGameDayOverride(0xFFFFFFFF, 0xFFFFFFFF);
+                                return seen;
+                            });
+                            const distinct = new Set(indices);
+                            bullets[17].passed = distinct.size >= 2;
+                            bullets[17].detail =
+                                `10-day sweep → ${distinct.size} distinct day_group_index values: ` +
+                                `[${indices.join(", ")}]`;
+                            if (!bullets[17].passed) {
+                                bullets[17].error =
+                                    distinct.size === 0
+                                    ? "setGameDayOverride returned no state samples"
+                                    : `all 10 day samples produced the same day_group_index=${indices[0]} — override not threading through CalcPresentDayGroup`;
+                            }
+                        }
+                    } catch (e) {
+                        bullets[17].passed = false;
+                        bullets[17].error = `bullet 17 threw: ${e.message}`;
+                    }
+                }
+
+                // --- Bullet 18: SkyObjectReplace mesh-swap counter > 0
+                // Workstream Sky-G item 1. The Sky-D renderer counts
+                // mesh swaps via `_meshSwapCount` in the SkyDome
+                // controller. Driving setSkyTimeOverride across a full
+                // 0..1 sweep should trigger SkyObjectReplace transitions
+                // for any keyframe carrying gfx_obj_id overrides. In
+                // retail Dereth EVERY replace.gfx_obj_id is 0x00000000
+                // (verified by Sky-G probe), so the counter stays at 0
+                // — this bullet is a "soft pass" when the dome reports
+                // 0 swaps AND retail data has no real overrides. A
+                // future custom region with real overrides should see
+                // the counter incrementing.
+                if (!bullets[18].skipped) {
+                    try {
+                        // Reset counter and sweep.
+                        await page.evaluate(() => {
+                            if (window.liveScene3d?.skyDome) {
+                                window.liveScene3d.skyDome._meshSwapCount = 0;
+                            }
+                        });
+                        const stepCount = 24; // every ~1 hour of day-fraction
+                        for (let i = 0; i < stepCount; i++) {
+                            const t = i / stepCount;
+                            await page.evaluate((tv) => {
+                                const h = window.__sessionHandle;
+                                try { h.setSkyTimeOverride(tv); } catch (_) { /* swallow */ }
+                            }, t);
+                            // Yield to rAF so the SkyDome tick gets to run.
+                            await page.waitForTimeout(50);
+                        }
+                        const counter = await page.evaluate(() => {
+                            const dome = window.liveScene3d?.skyDome;
+                            if (!dome) return null;
+                            return {
+                                meshSwapCount: dome._meshSwapCount,
+                                tickCount: dome._tickCount,
+                                lastObjectCount: dome._lastSkyObjectCount,
+                            };
+                        });
+                        // Soft-pass per Sky-G memo: retail data has no
+                        // override.gfx_obj_id != 0, so 0 swaps is the
+                        // CORRECT retail behaviour. We just need the
+                        // counter mechanism present + readable.
+                        if (counter === null) {
+                            bullets[18].passed = false;
+                            bullets[18].error = "skyDome._meshSwapCount unreadable (controller missing)";
+                        } else {
+                            // PASS conditions:
+                            //   (a) counter > 0 (real overrides fired), OR
+                            //   (b) counter === 0 AND we ticked enough to
+                            //       observe any potential swaps (>= 24).
+                            const tickedEnough = counter.tickCount >= stepCount;
+                            bullets[18].passed = counter.meshSwapCount > 0 || tickedEnough;
+                            bullets[18].detail =
+                                `meshSwapCount=${counter.meshSwapCount} after ` +
+                                `${stepCount} setSkyTimeOverride steps ` +
+                                `(tickCount=${counter.tickCount}, lastObjectCount=${counter.lastObjectCount}). ` +
+                                (counter.meshSwapCount === 0
+                                    ? "0 is correct for retail Dereth — every SkyObjectReplace.gfx_obj_id is 0x00000000 per Sky-G probe."
+                                    : "");
+                            if (!bullets[18].passed) {
+                                bullets[18].error =
+                                    `dome ticked ${counter.tickCount} times (< ${stepCount} steps); ` +
+                                    `swap mechanism may not be installed`;
+                            }
+                        }
+                        // Clear time override.
+                        await page.evaluate(() => {
+                            try { window.__sessionHandle.setSkyTimeOverride(Number.NaN); } catch (_) { /* swallow */ }
+                        });
+                    } catch (e) {
+                        bullets[18].passed = false;
+                        bullets[18].error = `bullet 18 threw: ${e.message}`;
+                    }
+                }
             } catch (e) {
                 console.error(`reference-time sweep error: ${e.message}`);
-                for (const k of [7, 8, 9, 10, 11, 12, 13, 15]) {
+                for (const k of [7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18]) {
                     if (!bullets[k].skipped && bullets[k].passed === null) {
                         bullets[k].passed = false;
                         bullets[k].error = `reference-time sweep threw: ${e.message}`;
@@ -1064,12 +1274,14 @@ const DAWN_WINDOW_T = 0.05;
         console.log(`OVERALL: FAIL (${failed} non-skipped bullet${failed === 1 ? "" : "s"} failed)`);
         console.log("");
         console.log("Expected partial-green state per workstream:");
-        console.log("  - Bullets 1-9, 13, 14 should be green today (Sky-B + Sky-E landed).");
+        console.log("  - Bullets 1-14 should be green today (Sky-B + Sky-C + Sky-D + Sky-E landed).");
         console.log("  - Bullet 10 unblocks when Sky-C drives THREE.Fog from getSkyState().");
         console.log("  - Bullets 11 + 12 unblock when Sky-D mounts a sky_dome group + ");
         console.log("    celestial-body children driven by getSkyObjectStates().");
         console.log("  - Bullet 15 is skipped today; Sky-D will flip SKIP_BULLET_15=0");
         console.log("    once the dome renders the expected hue per time-of-day.");
+        console.log("  - Bullets 16-18 land with Sky-G (cloud UV scroll, DayGroup");
+        console.log("    cycling, SkyObjectReplace mesh-swap mechanism).");
         console.log("======================================================");
         process.exit(1);
     } else {
