@@ -2604,6 +2604,90 @@ void main() {
       window.getLocalPlayerGuid = getLocalPlayerGuid;
       window.entityMap = entityMap;
 
+      // Workstream E (3D camera/game-feel fix): pre-init3D entity-event
+      // backlog. The 2D drainEvents loop forwards every pollEntityUpdates
+      // batch via `window.__scene3dEntityHook?.(entityUpdates)` (line
+      // ~6080). Pre-Workstream-E the hook was only defined AFTER init3D
+      // resolved (loop.js#installSharedDrainHook), so every entity update
+      // that arrived in the ~10 s window between the wasm-side
+      // eager-WorldState SPAWN emit (~+2 s post-SelectCharacter, per
+      // Workstream A) and init3D finishing was silently dropped — the
+      // 3D EntityManager.entityMap stayed empty even for the local
+      // player whose KIND_SPAWN unambiguously fires before init3D's
+      // mesh/atlas resolution completes.
+      //
+      // Fix: install a pre-init3D buffering stub that clones each
+      // event into `__scene3dEntityBacklog`. `installSharedDrainHook`
+      // drains the backlog through the real dispatcher on install,
+      // then replaces the stub with the live dispatcher. Idempotent —
+      // re-running init3D (renderer hot-swap) re-drains.
+      //
+      // Mirrors the 2D path's `deferredSpawns` pattern (~line 2623)
+      // for the same race against `liveScene` resolution; the two
+      // queues coexist because the 2D + 3D paths run different
+      // EntityManagers off the same upstream wire stream.
+      window.__scene3dEntityBacklog = [];
+      function __scene3dCloneEntityUpdate(upd) {
+        // Comprehensive clone — covers every field every dispatch path
+        // in loop.js reads (KIND_SPAWN via toMeta + KIND_POSITION +
+        // KIND_VELOCITY + KIND_MOTION + KIND_META_REFRESH + KIND_REMOVE).
+        // Uint32Array views are copied via Uint32Array.from so the
+        // backlog survives the wasm-bindgen `.free()` on each event.
+        try {
+          return {
+            kind: upd.kind,
+            guid: upd.guid,
+            modelId: upd.modelId ?? 0,
+            landblockId: upd.landblockId ?? 0,
+            x: upd.x ?? 0, y: upd.y ?? 0, z: upd.z ?? 0,
+            qw: upd.qw ?? 1, qx: upd.qx ?? 0, qy: upd.qy ?? 0, qz: upd.qz ?? 0,
+            vx: upd.vx ?? 0, vy: upd.vy ?? 0, vz: upd.vz ?? 0,
+            omegaZ: upd.omegaZ ?? 0,
+            motionCommand: (upd.motionCommand ?? 0) >>> 0,
+            motionStance: (upd.motionStance ?? 0) >>> 0,
+            wcid: (upd.wcid ?? 0) >>> 0,
+            itemType: (upd.itemType ?? 0) >>> 0,
+            name: upd.name ?? "",
+            iconId: (upd.iconId ?? 0) >>> 0,
+            objScale: upd.objScale && upd.objScale > 0 ? upd.objScale : 1,
+            paletteId: (upd.paletteId ?? 0) >>> 0,
+            mtableId: (upd.mtableId ?? 0) >>> 0,
+            modelChanges: upd.modelChanges && upd.modelChanges.length > 0
+              ? Uint32Array.from(upd.modelChanges) : new Uint32Array(0),
+            textureChanges: upd.textureChanges && upd.textureChanges.length > 0
+              ? Uint32Array.from(upd.textureChanges) : new Uint32Array(0),
+            subPalettes: upd.subPalettes && upd.subPalettes.length > 0
+              ? Uint32Array.from(upd.subPalettes) : new Uint32Array(0),
+          };
+        } catch (e) {
+          // wasm-bindgen handle was freed between forward + clone —
+          // skip rather than crash. The backlog is best-effort; the
+          // local player's KIND_SPAWN arrives at most once per session
+          // so a single drop is recoverable via the next subscription
+          // tick (the wasm side re-emits idempotent SPAWN on
+          // ObjectCreate per Workstream A's `local_player_spawn_emitted`
+          // flag, suppressing duplicate-emission rather than re-fire,
+          // so this path is rarely exercised in practice).
+          return null;
+        }
+      }
+      window.__scene3dCloneEntityUpdate = __scene3dCloneEntityUpdate;
+      // Initial hook is a buffering stub. installSharedDrainHook
+      // replaces this after init3D resolves; subsequent calls go
+      // direct to the EntityManager dispatcher in loop.js.
+      window.__scene3dEntityHook = function bufferingHook(updOrArray) {
+        if (!updOrArray) return;
+        if (typeof updOrArray.length === "number" && typeof updOrArray !== "string") {
+          for (let i = 0; i < updOrArray.length; i += 1) {
+            const cloned = __scene3dCloneEntityUpdate(updOrArray[i]);
+            if (cloned) window.__scene3dEntityBacklog.push(cloned);
+          }
+        } else {
+          const cloned = __scene3dCloneEntityUpdate(updOrArray);
+          if (cloned) window.__scene3dEntityBacklog.push(cloned);
+        }
+      };
+
       // Phase 4 step 6 player-fix: pre-liveScene Spawn buffer.
       // ACE sends ObjectCreate for the local player as soon as the
       // spawn handshake completes (Player_Networking.cs:224 —

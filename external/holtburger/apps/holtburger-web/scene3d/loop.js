@@ -400,5 +400,78 @@ export function installSharedDrainHook(scene3d) {
       // mode 2 still calls the hook once per event).
       dispatchOne(updOrArray);
     };
+
+    // Workstream E (3D camera/game-feel fix): drain the pre-init3D
+    // backlog now that the real dispatcher is wired. The buffering
+    // stub installed at index.html module-init pushed cloned events
+    // into `window.__scene3dEntityBacklog` for every drainEvents tick
+    // that fired before init3D resolved. Replay those events through
+    // the real dispatcher so the local player's KIND_SPAWN (emitted
+    // ~+2 s post-SelectCharacter by Workstream A) builds a rig instead
+    // of being silently dropped. Idempotent — splice(0) drains the
+    // array; a second call (renderer hot-swap) sees an empty backlog.
+    //
+    // Each entry is a plain-JS clone produced by
+    // `__scene3dCloneEntityUpdate`; `dispatchOne` reads the same
+    // properties (kind, guid, modelId, etc.) so the clone IS the wire
+    // shape from the dispatcher's perspective. `toMeta(clone)` works
+    // identically on the wasm-bindgen handle and the plain-JS clone
+    // because both expose the same numeric / array getters.
+    //
+    // Replay ordering: the backlog often contains ~80-90 NPC SPAWNs +
+    // 1 local-player SPAWN intermixed. `em.spawn()` is async and
+    // serialized on the wasm-bindgen single-threaded
+    // fetchEntityAnimationKeyframes round-trip (≈150 ms per spawn);
+    // 90 spawns = ~13 s wall-clock to complete. To make the local
+    // player's rig visible quickly (so the camera follow can latch
+    // onto it without a 13-s "no rig" gap), we PRIORITISE the local
+    // player's SPAWN to the front of the dispatch queue. Other event
+    // kinds (POSITION / MOTION / VELOCITY) for the local player also
+    // float to the front so their first KIND_POSITION reconcile lands
+    // immediately. The remaining NPC spawns dispatch in original
+    // arrival order behind the local-player batch.
+    // eslint-disable-next-line no-undef
+    const backlog = window.__scene3dEntityBacklog;
+    if (Array.isArray(backlog) && backlog.length > 0) {
+      const queued = backlog.splice(0);
+      // eslint-disable-next-line no-undef
+      let localGuid = null;
+      // eslint-disable-next-line no-undef
+      if (typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function") {
+        try {
+          const g = window.getLocalPlayerGuid();
+          if (g !== null && g !== undefined) localGuid = g >>> 0;
+        } catch (_) {}
+      }
+      // Partition: local-player events first (stable order within),
+      // then everything else (stable order within).
+      const localEvents = [];
+      const otherEvents = [];
+      for (const upd of queued) {
+        if (localGuid !== null && (upd.guid >>> 0) === localGuid) {
+          localEvents.push(upd);
+        } else {
+          otherEvents.push(upd);
+        }
+      }
+      // eslint-disable-next-line no-console
+      console.log(
+        `[workstream-E] replaying ${queued.length} pre-init3D entity events ` +
+        `(kinds=${
+          (() => {
+            const counts = {};
+            for (const e of queued) counts[e.kind] = (counts[e.kind] || 0) + 1;
+            return Object.entries(counts).map(([k, v]) => `${k}:${v}`).join(",");
+          })()
+        }, localGuid=${localGuid !== null ? "0x" + localGuid.toString(16) : "null"}, ` +
+        `local=${localEvents.length}, other=${otherEvents.length}) through 3D EntityManager`
+      );
+      for (const upd of localEvents) {
+        dispatchOne(upd);
+      }
+      for (const upd of otherEvents) {
+        dispatchOne(upd);
+      }
+    }
   }
 }

@@ -389,27 +389,66 @@ function reportBullet(b) {
         }
 
         // --- Bullet 5: 3D entityManager.entityMap has player guid --------
+        // Workstream E: init3D resolves asynchronously and typically
+        // completes ~5-10s after PlayerSpawned fires (atlas + mesh +
+        // EnvCell loads behind a Promise chain). Pre-Workstream-E the
+        // local player's KIND_SPAWN forwarded via __scene3dEntityHook
+        // was DROPPED during this window because the hook was undefined
+        // until installSharedDrainHook ran at the end of init3D. The
+        // Workstream-E fix installs a buffering stub at module-init
+        // that clones events into __scene3dEntityBacklog;
+        // installSharedDrainHook drains the backlog on install.
+        //
+        // Bullet 5 polls (up to 20s) for the rig to land in the
+        // EntityManager rather than probing once and giving up — the
+        // poll covers both init3D's lazy mesh resolution AND the
+        // async em.spawn() promise chain (fetchEntityAnimationKeyframes
+        // round-trip per entity).
         if (!bullets[5].skipped) {
             if (playerGuid === null) {
                 bullets[5].passed = false;
                 bullets[5].error = "no playerGuid (bullet 4 failed); cannot check entityMap";
             } else {
                 try {
+                    await page.waitForFunction((guid) => {
+                        return !!window.liveScene3d
+                            && !!window.liveScene3d.entityManager
+                            && window.liveScene3d.entityManager.entityMap
+                            && window.liveScene3d.entityManager.entityMap.has(guid >>> 0);
+                    }, playerGuid, { timeout: 20_000 });
                     const info = await page.evaluate((guid) => {
                         const out = { live: !!window.liveScene3d };
                         out.hasEntityManager = !!window.liveScene3d?.entityManager;
                         out.entityMapSize = window.liveScene3d?.entityManager?.entityMap?.size ?? 0;
                         out.has = !!window.liveScene3d?.entityManager?.entityMap?.has(guid >>> 0);
+                        out.backlogPending = (window.__scene3dEntityBacklog || []).length;
                         return out;
                     }, playerGuid);
                     bullets[5].passed = info.has;
-                    bullets[5].detail = `liveScene3d=${info.live} mapSize=${info.entityMapSize} has=${info.has}`;
+                    bullets[5].detail = `liveScene3d=${info.live} mapSize=${info.entityMapSize} has=${info.has} backlog=${info.backlogPending}`;
                     if (!bullets[5].passed) {
-                        bullets[5].error = `3D entityMap missing local player rig (depends on Workstream E — handleEntitySpawn must build the rig when liveScene resolves post-init3D)`;
+                        bullets[5].error = `3D entityMap missing local player rig after 20s wait (Workstream E backlog should have replayed)`;
                     }
                 } catch (e) {
-                    bullets[5].passed = false;
-                    bullets[5].error = e.message;
+                    // waitForFunction timeout — capture the current state.
+                    try {
+                        const info = await page.evaluate((guid) => {
+                            const out = { live: !!window.liveScene3d };
+                            out.hasEntityManager = !!window.liveScene3d?.entityManager;
+                            out.entityMapSize = window.liveScene3d?.entityManager?.entityMap?.size ?? 0;
+                            out.has = !!window.liveScene3d?.entityManager?.entityMap?.has(guid >>> 0);
+                            out.backlogPending = (window.__scene3dEntityBacklog || []).length;
+                            return out;
+                        }, playerGuid);
+                        bullets[5].passed = info.has;
+                        bullets[5].detail = `liveScene3d=${info.live} mapSize=${info.entityMapSize} has=${info.has} backlog=${info.backlogPending}`;
+                        if (!bullets[5].passed) {
+                            bullets[5].error = `3D entityMap missing local player rig after 20s wait (live=${info.live}, mapSize=${info.entityMapSize}, backlog=${info.backlogPending})`;
+                        }
+                    } catch (e2) {
+                        bullets[5].passed = false;
+                        bullets[5].error = `bullet 5 wait failed: ${e.message}`;
+                    }
                 }
             }
         }
