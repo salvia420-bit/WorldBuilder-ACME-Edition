@@ -1142,4 +1142,149 @@ mod tests {
             "at least one TimeOfDay entry required"
         );
     }
+
+    /// Workstream Sky-E (2026-05-11): asserts every SkyObject in Dereth
+    /// Region 1 DayGroup[0] resolves through the GfxObj/SetupModel chain
+    /// the Sky-E asset resolver consumes. Specifically:
+    ///   - Each `default_gfx_object_id` is a `0x01` GfxObj or `0x02`
+    ///     SetupModel (no other prefix is supported).
+    ///   - The chain Surface → SurfaceTexture → Texture resolves at
+    ///     least one non-zero texture DID per SkyObject (i.e. every
+    ///     sky object has at least one visible surface).
+    ///   - For SetupModel entries: at least one part is present and
+    ///     each part's GfxObj parses cleanly.
+    ///
+    /// This is the load-bearing evidence the JS-side `resolveSkyAssets`
+    /// has something real to consume from `client_portal.dat`.
+    #[test]
+    fn workstream_sky_e_seven_skyobjects_walk_to_textures() {
+        use crate::DatDatabase;
+        use crate::file_type::gfx_obj::GfxObj;
+        use crate::file_type::setup_model::SetupModel;
+        use crate::file_type::surface::Surface;
+        use crate::file_type::surface_texture::SurfaceTexture;
+        use crate::file_type::texture::Texture;
+
+        let Some(path) = locate_portal_dat() else {
+            eprintln!(
+                "[workstream_sky_e_seven_skyobjects_walk_to_textures] SKIP — no portal.dat"
+            );
+            return;
+        };
+        let dat = DatDatabase::new(&path).expect("portal.dat must open");
+        let bytes = dat.get_file(0x1300_0000).expect("Region 0x13000000");
+        let region = Region::unpack(&mut Cursor::new(&bytes))
+            .expect("Region must parse");
+        let sky = region.sky_info.as_ref().expect("SkyInfo");
+        assert!(!sky.day_groups.is_empty(), "at least one DayGroup");
+
+        let dg0 = &sky.day_groups[0];
+        assert!(
+            !dg0.sky_objects.is_empty(),
+            "DayGroup[0] must carry at least one SkyObject"
+        );
+
+        // Track totals so the JS-side resolver test can compare.
+        let mut total_skyobjects = 0usize;
+        let mut total_gfx_objs = 0usize;     // raw 0x01 SkyObjects
+        let mut total_setup_models = 0usize; // 0x02 SkyObjects
+        let mut total_textures_resolved = 0usize;
+
+        // Pre-walk to texture so any chain failure surfaces here, NOT
+        // at JS resolve time in the browser.
+        for (i, so) in dg0.sky_objects.iter().enumerate() {
+            let id = so.default_gfx_object_id;
+            if id == 0 {
+                // PhatSDK sentinel — "no mesh", filtered out in JS resolver.
+                continue;
+            }
+            total_skyobjects += 1;
+            let prefix = (id >> 24) as u8;
+            assert!(
+                prefix == 0x01 || prefix == 0x02,
+                "SkyObject[{i}].default_gfx_object_id 0x{id:08X} must be GfxObj (0x01) or SetupModel (0x02), got prefix 0x{prefix:02X}"
+            );
+
+            // Collect part GfxObj IDs (single-elem for 0x01, parts[] for 0x02).
+            let part_ids: Vec<u32> = match prefix {
+                0x01 => {
+                    total_gfx_objs += 1;
+                    vec![id]
+                }
+                0x02 => {
+                    total_setup_models += 1;
+                    let setup_bytes = dat
+                        .get_file(id)
+                        .unwrap_or_else(|_| panic!(
+                            "SkyObject[{i}] SetupModel 0x{id:08X} must resolve in DAT"
+                        ));
+                    let setup = SetupModel::unpack(&mut Cursor::new(&setup_bytes))
+                        .unwrap_or_else(|_| panic!(
+                            "SkyObject[{i}] SetupModel 0x{id:08X} must parse"
+                        ));
+                    assert!(
+                        !setup.parts.is_empty(),
+                        "SkyObject[{i}] SetupModel 0x{id:08X} must have at least one part"
+                    );
+                    setup.parts.clone()
+                }
+                _ => unreachable!(),
+            };
+
+            // Walk every part's GfxObj → surfaces → SurfaceTexture → Texture.
+            // Assert at least one texture DID resolves cleanly for the
+            // SkyObject overall (some surfaces may be solid-only ARGB).
+            let mut textures_for_this_sky_object = 0usize;
+            for part_id in &part_ids {
+                let gfx_bytes = dat
+                    .get_file(*part_id)
+                    .unwrap_or_else(|_| panic!(
+                        "SkyObject[{i}] part 0x{part_id:08X} must resolve in DAT"
+                    ));
+                let gfx = GfxObj::unpack(&mut Cursor::new(&gfx_bytes))
+                    .unwrap_or_else(|_| panic!(
+                        "SkyObject[{i}] part 0x{part_id:08X} must parse as GfxObj"
+                    ));
+                for surf_id in &gfx.surfaces {
+                    let Ok(sbytes) = dat.get_file(*surf_id) else { continue };
+                    let Ok(surf) = Surface::unpack(&sbytes) else { continue };
+                    let Some((surf_tex_id, _)) = surf.textured() else {
+                        continue;
+                    };
+                    let Ok(stb) = dat.get_file(surf_tex_id) else { continue };
+                    let Ok(surf_tex) = SurfaceTexture::unpack(&stb) else { continue };
+                    let Some(tex_id) = surf_tex.highest_res() else { continue };
+                    let Ok(tb) = dat.get_file(tex_id) else { continue };
+                    // Texture::unpack also handles palette-bearing formats
+                    // by reading the trailing palette_id only when
+                    // `format == P8 | Index16`.
+                    let _tex = Texture::unpack(&tb)
+                        .unwrap_or_else(|_| panic!(
+                            "SkyObject[{i}] surface 0x{surf_id:08X} texture 0x{tex_id:08X} must parse"
+                        ));
+                    textures_for_this_sky_object += 1;
+                }
+            }
+            total_textures_resolved += textures_for_this_sky_object;
+            assert!(
+                textures_for_this_sky_object > 0,
+                "SkyObject[{i}] (0x{id:08X}) must resolve to at least one texture"
+            );
+        }
+
+        // Sanity floor: retail Dereth DayGroup[0] has 7 SkyObjects with
+        // a known prefix split (6 × 0x01 + 1 × 0x02).
+        assert!(
+            total_skyobjects >= 7,
+            "expected at least 7 visible SkyObjects in DayGroup[0], got {total_skyobjects}"
+        );
+        assert!(
+            total_setup_models >= 1,
+            "expected at least 1 SetupModel SkyObject (the physics moon 0x02000714), got {total_setup_models}"
+        );
+        eprintln!(
+            "[workstream_sky_e_seven_skyobjects_walk_to_textures] resolved {total_textures_resolved} textures across \
+             {total_skyobjects} SkyObjects ({total_gfx_objs} GfxObj + {total_setup_models} SetupModel)"
+        );
+    }
 }
