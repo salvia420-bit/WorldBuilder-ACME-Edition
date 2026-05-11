@@ -4,10 +4,12 @@ pub mod chat_pose_table;
 pub mod dxt;
 pub mod env_cell;
 pub mod environment;
+pub mod game_time;
 pub mod gfx_obj;
 pub mod motion_kinematics;
 pub mod motion_table;
 pub mod palette;
+pub mod region;
 pub mod setup_model;
 pub mod skill_table;
 pub mod spell_table;
@@ -21,10 +23,15 @@ pub use char_gen::CharGen;
 pub use chat_pose_table::{ChatEmoteData, ChatPoseTable};
 pub use env_cell::EnvCell;
 pub use environment::{CellStruct, Environment};
+pub use game_time::{GameTime, Season, TimeOfDay};
 pub use gfx_obj::GfxObj;
 pub use motion_kinematics::{MotionKinematics, MotionKinematicsTable};
 pub use motion_table::{MotionCommandKinematics, MotionTable, MotionTableMovementProfile};
 pub use palette::Palette;
+pub use region::{
+    DayGroup, LandDefs, Region, RegionMisc, SceneDesc, SkyDesc, SkyObject, SkyObjectReplace,
+    SkyTimeOfDay, SoundDesc, TerrainDesc,
+};
 pub use setup_model::SetupModel;
 pub use skill_table::SkillTable;
 pub use spell_table::SpellTable;
