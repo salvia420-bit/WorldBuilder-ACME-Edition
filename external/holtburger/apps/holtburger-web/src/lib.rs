@@ -7786,6 +7786,16 @@ pub struct SessionHandle {
     door_part_snapshot: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, DoorPartSnapshot>>,
     >,
+    /// Workstream A (3D camera/game-feel fix): latest authoritative
+    /// pose for the local player, refreshed by the recv-loop on every
+    /// TickMovement after the integrator step. `None` pre-spawn (before
+    /// `world.player_position()` resolves); flips to `Some` once the
+    /// player entity has been seeded and stays Some thereafter. Read
+    /// synchronously by JS via [`SessionHandle::get_local_player_pose`]
+    /// — the camera/prediction layer reads this each rAF tick to avoid
+    /// the JS-side displacement-vector heading estimator that today's
+    /// 3D camera math falls back to.
+    local_player_pose: std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>>,
 }
 
 /// Phase 6 step D: snapshot of the local player's current cell and
@@ -7862,6 +7872,64 @@ impl DoorPartSnapshot {
     #[wasm_bindgen(getter, js_name = partIndex)]
     pub fn part_index(&self) -> u8 {
         self.part_index
+    }
+}
+
+/// Workstream A (3D camera/game-feel fix): JS-facing payload for the
+/// local player's authoritative pose, returned by
+/// [`SessionHandle::get_local_player_pose`]. Carries landblock-local
+/// `(x, y, z)` in metres (range 0..192 m on x/y) plus a derived heading
+/// in radians extracted from the AC quaternion via the same
+/// `atan2(2(qw*qz + qx*qy), 1 - 2(qy² + qz²))` formula JS's
+/// `quaternionToYaw` and Rust's `frame_to_placement` use (so the value
+/// is directly compatible with the camera-relative WASD math
+/// Workstream D restores). `None` is returned when the WorldState
+/// hasn't been constructed yet OR the player entity hasn't been seeded
+/// — JS callers should treat that as "fall back to the stashed pose"
+/// rather than as a hard error.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone, Copy)]
+pub struct LocalPlayerPose {
+    x: f32,
+    y: f32,
+    z: f32,
+    heading: f32,
+    landblock_id: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl LocalPlayerPose {
+    /// Landblock-local x coordinate in metres, range 0..192.
+    #[wasm_bindgen(getter)]
+    pub fn x(&self) -> f32 {
+        self.x
+    }
+    /// Landblock-local y coordinate in metres, range 0..192.
+    #[wasm_bindgen(getter)]
+    pub fn y(&self) -> f32 {
+        self.y
+    }
+    /// World z (altitude) coordinate in metres.
+    #[wasm_bindgen(getter)]
+    pub fn z(&self) -> f32 {
+        self.z
+    }
+    /// Heading (yaw) in radians, extracted via
+    /// `atan2(2(qw*qz + qx*qy), 1 - 2(qy² + qz²))` — same convention as
+    /// JS's `quaternionToYaw` at `index.html:2757-2762`.
+    /// `yaw = 0` → facing +Y (north); `yaw = π/2` → facing +X (east).
+    #[wasm_bindgen(getter)]
+    pub fn heading(&self) -> f32 {
+        self.heading
+    }
+    /// AC landblock id (`(x_byte << 24) | (y_byte << 16) | cell_in_lb`).
+    /// JS uses this with `landblockToWorldXY` to project (x, y) to
+    /// world metres.
+    #[wasm_bindgen(getter, js_name = landblockId)]
+    pub fn landblock_id(&self) -> u32 {
+        self.landblock_id
     }
 }
 
@@ -8004,6 +8072,28 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = isCurrentCellIndoor)]
     pub fn is_current_cell_indoor(&self) -> bool {
         self.cell_scene_snapshot.borrow().is_indoor
+    }
+
+    /// Workstream A (3D camera/game-feel fix): authoritative local-
+    /// player runtime pose, refreshed by the recv-loop on each
+    /// TickMovement after the integrator tick. JS reads this every rAF
+    /// tick to drive the 3D follow camera, replacing the prior
+    /// fallback chain that relied on the 2D `entityMap` /
+    /// `__lastEntityWorldPos` stash. The pose matches what the
+    /// `[step 3.6 tick #N]` heartbeat trace logs (both read
+    /// `local_player_runtime_pose`).
+    ///
+    /// Returns `None` when:
+    /// - The session is connected but the player entity hasn't been
+    ///   seeded yet (pre-spawn flow);
+    /// - WorldState isn't constructed (rare; wire-level errors).
+    ///
+    /// JS callers should treat `None` as "use last-known pose / wait
+    /// for first emit" rather than as a hard error. The first
+    /// non-`None` read lands within a few rAF ticks of EnteredWorld.
+    #[wasm_bindgen(js_name = getLocalPlayerPose)]
+    pub fn get_local_player_pose(&self) -> Option<LocalPlayerPose> {
+        *self.local_player_pose.borrow()
     }
 
     /// Phase 6 step E follow-up (2026-05-09): resolve a door GUID to the
@@ -8630,6 +8720,10 @@ pub async fn start_session(
     let door_part_snapshot: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, DoorPartSnapshot>>,
     > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+    // Workstream A: shared cell for the local player's authoritative
+    // pose, refreshed by the recv-loop on each TickMovement.
+    let local_player_pose: std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
 
     {
         let queued_events = queued_events.clone();
@@ -8640,6 +8734,7 @@ pub async fn start_session(
         let latest_inventory = latest_inventory.clone();
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
+        let local_player_pose = local_player_pose.clone();
         wasm_bindgen_futures::spawn_local(async move {
             recv_loop(
                 session,
@@ -8653,6 +8748,7 @@ pub async fn start_session(
                 latest_inventory,
                 cell_scene_snapshot,
                 door_part_snapshot,
+                local_player_pose,
             )
             .await;
         });
@@ -8714,6 +8810,7 @@ pub async fn start_session(
         latest_inventory,
         cell_scene_snapshot,
         door_part_snapshot,
+        local_player_pose,
     })
 }
 
@@ -9213,6 +9310,63 @@ fn publish_cell_scene_snapshot(
     };
 }
 
+/// Workstream A (3D camera/game-feel fix): refresh the shared
+/// [`LocalPlayerPose`] cell from `world.local_player_runtime_pose()`.
+/// Called by the recv-loop on every TickMovement after
+/// `publish_cell_scene_snapshot`, so the JS-side `getLocalPlayerPose`
+/// read returns the same pose the integrator just simulated against —
+/// matching what the `[step 3.6 tick #N]` heartbeat trace logs and
+/// what the AutonomousPosition heartbeat will send on the next emit.
+/// Heading is derived from the stored quaternion via the same
+/// yaw-extraction formula `frame_to_placement` uses for static
+/// placements (and that JS's `quaternionToYaw` at
+/// `index.html:2757-2762` uses for entity sprites) — so a roundtrip
+/// through this getter is bit-for-bit compatible with the JS-side
+/// camera math.
+///
+/// We deliberately read `local_player_runtime_pose()` instead of
+/// `player_position()` because the runtime pose IS the camera's
+/// authoritative view: the integrator advances it every tick, and
+/// reconciliation against ACE's force/teleport-sequence updates the
+/// entity AND the runtime body together. Reading the entity pose
+/// directly would lag the integrator's prediction by one TickMovement
+/// → KIND_POSITION fan-out cycle. `local_player_runtime_pose` falls
+/// back to `entity.position` when no runtime body exists (pre-spawn,
+/// post-respawn races); we propagate `None` upward in that case so
+/// JS callers treat the read as "use stashed pose / wait for next
+/// emit".
+#[cfg(target_arch = "wasm32")]
+fn publish_local_player_pose(
+    world: &holtburger_world::WorldState,
+    pose_cell: &std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>>,
+) {
+    let pose = match world.local_player_runtime_pose() {
+        Some(p) => p,
+        None => {
+            *pose_cell.borrow_mut() = None;
+            return;
+        }
+    };
+    let q = &pose.rotation;
+    // Standard Z-up yaw extraction — identical formula to
+    // `quaternionToYaw` (`apps/holtburger-web/index.html:2757-2762`) and
+    // `frame_to_placement` (`lib.rs:~692-708`). `yaw = 0` → facing +Y,
+    // `yaw = π/2` → facing +X. Differs from
+    // `holtburger_common::Quaternion::to_heading`, which applies AC's
+    // legacy 450°-offset client-compass convention — that one is wrong
+    // for the camera path.
+    let siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
+    let cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
+    let heading = siny_cosp.atan2(cosy_cosp);
+    *pose_cell.borrow_mut() = Some(LocalPlayerPose {
+        x: pose.coords.x,
+        y: pose.coords.y,
+        z: pose.coords.z,
+        heading,
+        landblock_id: u32::from(pose.landblock_id),
+    });
+}
+
 #[cfg(target_arch = "wasm32")]
 async fn recv_loop(
     mut session: holtburger_session::Session,
@@ -9230,6 +9384,7 @@ async fn recv_loop(
     door_part_snapshot: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, DoorPartSnapshot>>,
     >,
+    local_player_pose: std::rc::Rc<std::cell::RefCell<Option<LocalPlayerPose>>>,
 ) {
     use futures::StreamExt;
     use holtburger_protocol::messages::{
@@ -9262,6 +9417,32 @@ async fn recv_loop(
     // the client's predicted pose. Removed once the indoor floor-Z
     // diagnosis is complete.
     let mut last_diag_force_seq: Option<u16> = None;
+
+    // Workstream A (3D camera/game-feel fix): idempotency flags for
+    // the local-player's lifecycle signals to JS. Pre-Workstream-A the
+    // eager-WorldState construction at SelectCharacter (~line 11213)
+    // raced ACE's PlayerCreate / ObjectCreate broadcast — when the
+    // race went the wrong way the JS `drainEvents` handler missed
+    // the kind=1 PlayerSpawned signal and never called
+    // `setLocalPlayerGuid`, leaving the 3D follow-camera with a null
+    // local-player resolve and the 2D `entityMap` without an entry.
+    // The fix is belt-and-suspenders: emit both signals at every
+    // path that has the data, gated by a one-shot flag so duplicate
+    // emissions get dropped before they cross the JS boundary. JS
+    // `handleEntitySpawn` is itself idempotent on the GUID (re-spawns
+    // just reuse the existing entry), but quieting the wasm side
+    // keeps the queue clean.
+    let mut local_player_kind1_emitted = false;
+    let mut local_player_spawn_emitted = false;
+    // Workstream A: throttle clock for the per-TickMovement local-
+    // player Position fan-out. Pre-A the only local-player KIND_POSITION
+    // updates came from ACE's ~1Hz UpdatePosition broadcast; that's too
+    // coarse for the 3D camera's 60FPS prediction layer. The TickMovement
+    // arm now publishes a synthetic KIND_POSITION carrying
+    // `world.player_position()` after each integrator step, throttled
+    // to ≤30Hz (one emit per ≥33.3 ms) to keep the entity-update queue
+    // from flooding under high-rAF cadence. `None` until first emit.
+    let mut last_local_player_position_emit: Option<web_time::Instant> = None;
 
     loop {
         tokio::select! {
@@ -9641,12 +9822,23 @@ async fn recv_loop(
                             // path through line 464 makes it the
                             // canonical InWorld trigger anyway.
                             let player_guid_raw = u32::from(data.guid);
-                            queued_events.borrow_mut().push(ClientEvent {
-                                kind: CLIENT_EVENT_KIND_PLAYER_SPAWNED,
-                                string_payload: None,
-                                u32_payload: Some(player_guid_raw),
-                                u32_payload_2: None,
-                            });
+                            // Workstream A: idempotent — the SelectCharacter
+                            // eager-construct path (~line 11270) already
+                            // emitted kind=1 PlayerSpawned with this same
+                            // guid; suppress the duplicate so JS doesn't
+                            // re-run `setLocalPlayerGuid` + status-line
+                            // flash on a no-op event. The flag is set in
+                            // whichever arm fires first; the other arm
+                            // sees it set and skips.
+                            if !local_player_kind1_emitted {
+                                queued_events.borrow_mut().push(ClientEvent {
+                                    kind: CLIENT_EVENT_KIND_PLAYER_SPAWNED,
+                                    string_payload: None,
+                                    u32_payload: Some(player_guid_raw),
+                                    u32_payload_2: None,
+                                });
+                                local_player_kind1_emitted = true;
+                            }
 
                             let login_complete = GameAction::LoginComplete(Box::new(
                                 holtburger_protocol::messages::LoginCompleteActionData,
@@ -10287,36 +10479,72 @@ async fn recv_loop(
                                 sub_palettes.push(sp.offset as u32);
                                 sub_palettes.push(sp.length as u32);
                             }
-                            entity_updates.borrow_mut().push(EntityUpdate {
-                                kind: ENTITY_UPDATE_KIND_SPAWN,
-                                guid: u32::from(data.public_weenie_desc.guid),
-                                model_id,
-                                landblock_id: lb,
-                                x,
-                                y,
-                                z,
-                                qw,
-                                qx,
-                                qy,
-                                qz,
-                                wcid,
-                                item_type,
-                                name,
-                                obj_scale,
-                                icon_id,
-                                palette_id,
-                                mtable_id,
-                                model_changes,
-                                texture_changes,
-                                sub_palettes,
-                                portal_destination: String::new(),
-                                vx: 0.0,
-                                vy: 0.0,
-                                vz: 0.0,
-                                omega_z: 0.0,
-                                motion_command: 0,
-                                motion_stance: 0,
-                            });
+                            // Workstream A: detect if this ObjectCreate is
+                            // for the local player so we can flag-track the
+                            // KIND_SPAWN emission. Pre-A every ObjectCreate
+                            // unconditionally pushed a KIND_SPAWN; that
+                            // remains the path for NPC / item spawns. For
+                            // the local player specifically we want
+                            // idempotent emit: if this is the local player
+                            // AND we've already emitted their Spawn (e.g.
+                            // we'll add a UpdatePosition-driven emit below
+                            // once we know pose), drop the duplicate so the
+                            // JS-side spawn handler runs once. The local-
+                            // player guid only equals `world.player.guid`
+                            // when the eager-WorldState construct already
+                            // ran — pre-eager-construct it's
+                            // `Guid::NULL` and the comparison is false, so
+                            // pre-spawn ObjectCreates (rare in this flow)
+                            // still emit unconditionally.
+                            let is_local_player = world
+                                .as_ref()
+                                .map(|w| {
+                                    w.player.guid != holtburger_common::Guid::NULL
+                                        && data.public_weenie_desc.guid == w.player.guid
+                                })
+                                .unwrap_or(false);
+                            let skip_local_player_spawn =
+                                is_local_player && local_player_spawn_emitted;
+                            if !skip_local_player_spawn {
+                                entity_updates.borrow_mut().push(EntityUpdate {
+                                    kind: ENTITY_UPDATE_KIND_SPAWN,
+                                    guid: u32::from(data.public_weenie_desc.guid),
+                                    model_id,
+                                    landblock_id: lb,
+                                    x,
+                                    y,
+                                    z,
+                                    qw,
+                                    qx,
+                                    qy,
+                                    qz,
+                                    wcid,
+                                    item_type,
+                                    name,
+                                    obj_scale,
+                                    icon_id,
+                                    palette_id,
+                                    mtable_id,
+                                    model_changes,
+                                    texture_changes,
+                                    sub_palettes,
+                                    portal_destination: String::new(),
+                                    vx: 0.0,
+                                    vy: 0.0,
+                                    vz: 0.0,
+                                    omega_z: 0.0,
+                                    motion_command: 0,
+                                    motion_stance: 0,
+                                });
+                                if is_local_player {
+                                    local_player_spawn_emitted = true;
+                                    console_log_str(&format!(
+                                        "[workstream-A] emitted KIND_SPAWN for local player on ObjectCreate (guid=0x{:08X}, pose lb=0x{:08X} ({:.1}, {:.1}, {:.1}))",
+                                        u32::from(data.public_weenie_desc.guid),
+                                        lb, x, y, z,
+                                    ));
+                                }
+                            }
 
                             // Phase 6 step E follow-up (2026-05-09):
                             // Door registration. The DOOR-flagged entity
@@ -11260,6 +11488,32 @@ async fn recv_loop(
                             ));
                         }
 
+                        // Workstream A (3D camera/game-feel fix): emit
+                        // `ClientEvent::PlayerSpawned` (kind=1) eagerly on
+                        // SelectCharacter so the JS `drainEvents` handler
+                        // always sees the guid before the spawn handshake
+                        // races to PlayerCreate. The wire-level PlayerCreate
+                        // arm at ~line 9645 mirrors this emission gated by
+                        // the same `local_player_kind1_emitted` flag so the
+                        // duplicate gets dropped. KIND_SPAWN (KIND_SPAWN=1)
+                        // can't fire here because we don't yet have pose —
+                        // it lands on the first message that carries a pose
+                        // for the local player (PlayerCreate /
+                        // PrivateUpdatePosition / UpdatePosition / ObjectCreate).
+                        if !local_player_kind1_emitted {
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_PLAYER_SPAWNED,
+                                string_payload: None,
+                                u32_payload: Some(u32::from(guid)),
+                                u32_payload_2: None,
+                            });
+                            local_player_kind1_emitted = true;
+                            console_log_str(&format!(
+                                "[workstream-A] eagerly emitted kind=1 PlayerSpawned on SelectCharacter (guid=0x{:08X})",
+                                u32::from(guid),
+                            ));
+                        }
+
                         let msg = GameMessage::CharacterEnterWorldRequest(Box::new(
                             holtburger_protocol::messages::CharacterEnterWorldRequestData {
                                 guid,
@@ -11564,6 +11818,95 @@ async fn recv_loop(
                         // first frame after a landblock load shows
                         // a coherent visible-cell set.
                         publish_cell_scene_snapshot(w, &cell_scene_snapshot);
+
+                        // Workstream A (3D camera/game-feel fix):
+                        // publish the local player's pose into the
+                        // shared cell so JS can read it synchronously
+                        // via `SessionHandle::get_local_player_pose`.
+                        // Same cadence as the cell-scene snapshot
+                        // (every TickMovement) — the JS camera reads
+                        // this on every rAF tick to keep follow logic
+                        // smooth without rebroadcasting through the
+                        // entity_updates queue. Pre-spawn the pose is
+                        // `None`; post-spawn it stays `Some` and the
+                        // recv-loop overwrites in place.
+                        publish_local_player_pose(w, &local_player_pose);
+
+                        // Workstream A (3D camera/game-feel fix): fan
+                        // out the local player's authoritative pose to
+                        // JS at ≤30 Hz as a KIND_POSITION EntityUpdate.
+                        // Pre-A the only local-player KIND_POSITION was
+                        // ACE's ~1Hz UpdatePosition broadcast — too
+                        // coarse for the 3D camera's 60 FPS prediction
+                        // layer. The integrator updates the local
+                        // runtime body pose every tick; we surface it
+                        // here at the throttled 30 Hz cadence so the
+                        // JS-side `__lastEntityWorldPos` updates
+                        // smoothly and the camera follow tracks without
+                        // 1-second jumps. Read `local_player_runtime_pose`
+                        // (not `player_position`) so the fan-out matches
+                        // the heartbeat trace + the camera's prediction
+                        // layer; the runtime pose is what the integrator
+                        // simulated against this tick. Gated on
+                        // `local_player_spawn_emitted` so we don't emit
+                        // a KIND_POSITION before the JS side has seen
+                        // the KIND_SPAWN that built the entity entry
+                        // (the spawn handler stamps `lastPosX/Y/T` at
+                        // the same time as the entry insert; without it
+                        // the position handler's first lookup misses
+                        // and silently drops the update).
+                        if local_player_spawn_emitted
+                            && let Some(pose) = w.local_player_runtime_pose()
+                            && pose.landblock_id != holtburger_common::Guid::NULL
+                        {
+                            // 30 Hz = one emit per ≥ 33.3 ms. Compare
+                            // wall-clock against the last emit instant;
+                            // if enough time has elapsed (or this is the
+                            // first emit), enqueue the update + reset
+                            // the clock. `web_time::Instant::now()` is
+                            // already in scope as the TickMovement arm's
+                            // `now` parameter.
+                            let throttle_ok = match last_local_player_position_emit {
+                                Some(prev) => {
+                                    now.saturating_duration_since(prev)
+                                        >= std::time::Duration::from_millis(33)
+                                }
+                                None => true,
+                            };
+                            if throttle_ok {
+                                last_local_player_position_emit = Some(now);
+                                entity_updates.borrow_mut().push(EntityUpdate {
+                                    kind: ENTITY_UPDATE_KIND_POSITION,
+                                    guid: u32::from(w.player.guid),
+                                    model_id: 0,
+                                    landblock_id: u32::from(pose.landblock_id),
+                                    x: pose.coords.x,
+                                    y: pose.coords.y,
+                                    z: pose.coords.z,
+                                    qw: pose.rotation.w,
+                                    qx: pose.rotation.x,
+                                    qy: pose.rotation.y,
+                                    qz: pose.rotation.z,
+                                    wcid: 0,
+                                    item_type: 0,
+                                    name: String::new(),
+                                    obj_scale: 1.0,
+                                    icon_id: 0,
+                                    palette_id: 0,
+                                    mtable_id: 0,
+                                    model_changes: Vec::new(),
+                                    texture_changes: Vec::new(),
+                                    sub_palettes: Vec::new(),
+                                    portal_destination: String::new(),
+                                    vx: 0.0,
+                                    vy: 0.0,
+                                    vz: 0.0,
+                                    omega_z: 0.0,
+                                    motion_command: 0,
+                                    motion_stance: 0,
+                                });
+                            }
+                        }
                         // Watchdog: when real movement caps regress to
                         // Err between PlayerDescription's clear-and-test
                         // and now (e.g., a property update wiped the

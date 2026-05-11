@@ -2590,6 +2590,19 @@ void main() {
       let localPlayerGuid = null;
       function setLocalPlayerGuid(guid) { localPlayerGuid = guid >>> 0; }
       function getLocalPlayerGuid() { return localPlayerGuid; }
+      // Workstream A (3D camera/game-feel fix): hoist
+      // `setLocalPlayerGuid` / `getLocalPlayerGuid` / `entityMap` onto
+      // `window` at module scope so the `?renderer=3d` path picks them
+      // up too. Pre-Workstream-A these globals were installed inside
+      // `renderNeighbourhood` (the 2D PIXI bring-up function), which is
+      // skipped under `?renderer=3d` — leaving the 3D viewport with a
+      // `window.getLocalPlayerGuid` of `undefined` even though the
+      // module-scope closure variable WAS being set by the kind=1
+      // handler. Verification CP1 (workstream A doc) reads through
+      // `window.getLocalPlayerGuid()` and breaks without this hoist.
+      window.setLocalPlayerGuid = setLocalPlayerGuid;
+      window.getLocalPlayerGuid = getLocalPlayerGuid;
+      window.entityMap = entityMap;
 
       // Phase 4 step 6 player-fix: pre-liveScene Spawn buffer.
       // ACE sends ObjectCreate for the local player as soon as the
