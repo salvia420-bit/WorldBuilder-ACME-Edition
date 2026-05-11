@@ -35,6 +35,18 @@ use wasm_bindgen::prelude::*;
 extern "C" {
     #[wasm_bindgen(js_namespace = console, js_name = log)]
     fn console_log_str(s: &str);
+
+    /// Workstream Sky-B: bind JS's `Date.now()` for wall-clock UTC
+    /// derivation of the in-world time-of-day. Returns milliseconds
+    /// since Unix epoch as an f64 (matches `Date.now()`'s native shape).
+    /// The wasm-side sky evaluator divides by 1000 to get seconds.
+    ///
+    /// Bound via wasm-bindgen `extern "C"` rather than dragging in the
+    /// full `js-sys` / `web-sys` modules — the bundle already keeps
+    /// those out of its dep graph (see Cargo.toml comment), and one
+    /// extern is cheaper than the dep weight.
+    #[wasm_bindgen(js_namespace = Date, js_name = now)]
+    fn js_date_now_ms() -> f64;
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -3595,6 +3607,37 @@ thread_local! {
     static BUILDING_PHYSICS_PENDING:
         std::cell::RefCell<Vec<(u32, holtburger_common::Triangle)>> =
             const { std::cell::RefCell::new(Vec::new()) };
+
+    /// Workstream Sky-B (parametric skybox, 2026-05-11): thread-local
+    /// holding the parsed SkyDesc + GameTime + per-frame evaluator
+    /// state. Populated once per session by `populateSkyDescFromRegion`
+    /// (fired on `kind=7 EnteredWorld` from JS) with Region `0x13000000`'s
+    /// SkyInfo + GameTime. Read by the SYNCHRONOUS `getSkyState` /
+    /// `getSkyObjectStates` exports each rAF tick — no recv-loop
+    /// involvement required because the data is read-only after init
+    /// (the evaluator's cache mutates but that's internal to the
+    /// thread-local).
+    ///
+    /// This dodges the per-frame `&mut world` borrow contention that
+    /// the cell/building drains route around via the pending-pile
+    /// pattern — SkyDesc doesn't need the world state at all, only
+    /// the wall-clock and the static dat data.
+    ///
+    /// `None` until `populateSkyDescFromRegion` lands; subsequent
+    /// reads return `None` from `getSkyState` (JS gates on this).
+    static SKY_SHADOW: std::cell::RefCell<Option<SkyShadow>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Workstream Sky-B: in-memory bundle of the SkyDesc + GameTime + the
+/// per-frame `SkyEvalState` evaluator. Lives in the `SKY_SHADOW`
+/// thread-local so JS-side `getSkyState` can read without crossing the
+/// recv-loop's `&mut world` borrow scope.
+#[cfg(target_arch = "wasm32")]
+struct SkyShadow {
+    sky_desc: holtburger_dat::file_type::SkyDesc,
+    game_time: holtburger_dat::file_type::GameTime,
+    evaluator: holtburger_world::SkyEvalState,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -4085,6 +4128,367 @@ pub async fn populate_building_aabbs_for_landblock(
     landblock_id: u32,
 ) -> Result<u32, JsValue> {
     populate_building_aabbs_for_landblock_impl(landblock_id).await
+}
+
+/// Workstream Sky-B (parametric skybox, 2026-05-11): populate the
+/// thread-local `SKY_SHADOW` with the parsed SkyDesc + GameTime from
+/// the given Region file. JS calls this once per session on
+/// `kind=7 EnteredWorld` with `region_file_id = 0x13000000` (Dereth's
+/// canonical Region, the only one shipped in retail
+/// `client_portal.dat`).
+///
+/// Idempotent: a second call overwrites the shadow with a fresh parse
+/// (Region descriptors don't change mid-session, but the API doesn't
+/// fail if JS double-fires). Returns the number of DayGroups parsed,
+/// so JS smoke tests can assert non-zero without re-reading the
+/// shadow. Returns an error on prefetch / parse failures.
+///
+/// **Time anchor:** the new evaluator is constructed against
+/// [`holtburger_world::AC_LAUNCH_UNIX_EPOCH`] (`1999-11-02 UTC`).
+/// See `crates/holtburger-world/src/sky.rs` for the rationale on
+/// why this anchor is load-bearing (deterministic across browser
+/// sessions, no server-broadcast time-sync packet available in the
+/// ACE bundle).
+#[cfg(target_arch = "wasm32")]
+async fn populate_sky_desc_from_region_impl(region_file_id: u32) -> Result<u32, JsValue> {
+    use holtburger_dat::file_type::Region;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+
+    let source = global_source::global_source();
+
+    // Prefetch the Region. Region records live in the
+    // `eor/portal` namespace (alongside GfxObj, SetupModel, etc.).
+    // The dat-source manifest catalogs Region by full 32-bit file id,
+    // so we just thread it through.
+    source
+        .prefetch(&[ResourceKey::new("eor/portal", region_file_id)])
+        .await
+        .map_err(|e| {
+            JsValue::from_str(&format!(
+                "populateSkyDescFromRegion: prefetch Region 0x{region_file_id:08X}: {e}"
+            ))
+        })?;
+
+    let bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", region_file_id))
+        .map_err(|e| {
+            JsValue::from_str(&format!(
+                "populateSkyDescFromRegion: fetch Region 0x{region_file_id:08X}: {e:?}"
+            ))
+        })?;
+
+    let region = Region::unpack(&mut std::io::Cursor::new(&bytes)).map_err(|e| {
+        JsValue::from_str(&format!(
+            "populateSkyDescFromRegion: Region::unpack 0x{region_file_id:08X}: {e}"
+        ))
+    })?;
+
+    let sky_desc = region
+        .sky_info
+        .ok_or_else(|| {
+            JsValue::from_str(&format!(
+                "populateSkyDescFromRegion: Region 0x{region_file_id:08X} has no SkyInfo \
+                 (parts_mask = 0x{:04X} — HasSkyInfo bit 0x10 is not set)",
+                region.parts_mask
+            ))
+        })?;
+
+    let game_time = region.game_time;
+    let day_group_count = sky_desc.day_groups.len() as u32;
+
+    SKY_SHADOW.with(|shadow| {
+        *shadow.borrow_mut() = Some(SkyShadow {
+            sky_desc,
+            game_time,
+            evaluator: holtburger_world::SkyEvalState::new(),
+        });
+    });
+
+    console_log_str(&format!(
+        "[Sky-B] populateSkyDescFromRegion 0x{region_file_id:08X} → {day_group_count} DayGroups"
+    ));
+    Ok(day_group_count)
+}
+
+/// Workstream Sky-B: public wasm export wrapping
+/// [`populate_sky_desc_from_region_impl`]. JS fires this on
+/// `kind=7 EnteredWorld` with `region_file_id = 0x13000000`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = populateSkyDescFromRegion)]
+pub async fn populate_sky_desc_from_region(region_file_id: u32) -> Result<u32, JsValue> {
+    populate_sky_desc_from_region_impl(region_file_id).await
+}
+
+/// Workstream Sky-B: predicate for JS to gate `getSkyState` reads on.
+/// Returns `true` once `populateSkyDescFromRegion` has landed at least
+/// once. Synchronous — no recv-loop involvement.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = hasSkyDesc)]
+pub fn has_sky_desc() -> bool {
+    SKY_SHADOW.with(|shadow| shadow.borrow().is_some())
+}
+
+/// Workstream Sky-B: set a time-of-day override in `[0.0, 1.0)`. JS-side
+/// `?skytime=accel` demo path drives a 5-minute synthetic day cycle by
+/// calling this with `t = (elapsed_ms / (5*60*1000)) % 1.0` per rAF
+/// tick.
+///
+/// Passing `f32::NAN` clears the override (back to wall-clock UTC
+/// derivation). Calling before `populateSkyDescFromRegion` lands is a
+/// no-op (the override is on the evaluator, which only exists after
+/// SkyDesc lands). Returns `true` if the override was applied (sky was
+/// populated), else `false`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = setSkyTimeOverride)]
+pub fn set_sky_time_override(time_of_day: f32) -> bool {
+    SKY_SHADOW.with(|shadow| {
+        let mut shadow = shadow.borrow_mut();
+        let Some(s) = shadow.as_mut() else {
+            return false;
+        };
+        if time_of_day.is_nan() {
+            s.evaluator.set_time_of_day_override(None);
+        } else {
+            s.evaluator.set_time_of_day_override(Some(time_of_day));
+        }
+        true
+    })
+}
+
+/// Workstream Sky-B: wasm-bindgen-friendly mirror of
+/// [`holtburger_world::SkyStateSnapshot`]. Plain-data so wasm-bindgen
+/// can pass it through getters without `serde`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone, Copy)]
+pub struct SkyState {
+    dir_color_argb: u32,
+    dir_bright: f32,
+    dir_heading: f32,
+    dir_pitch: f32,
+    amb_color_argb: u32,
+    amb_bright: f32,
+    fog_color_argb: u32,
+    fog_min: f32,
+    fog_max: f32,
+    world_fog: u32,
+    time_of_day_normalized: f32,
+    day_group_index: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SkyState {
+    /// Directional light color packed as `0xAARRGGBB` u32. Decode to
+    /// `[A, R, G, B]` for shader / sprite tint dispatch.
+    #[wasm_bindgen(getter, js_name = dirColorArgb)]
+    pub fn dir_color_argb(&self) -> u32 {
+        self.dir_color_argb
+    }
+
+    /// Directional light brightness multiplier (typically 0..1).
+    #[wasm_bindgen(getter, js_name = dirBright)]
+    pub fn dir_bright(&self) -> f32 {
+        self.dir_bright
+    }
+
+    /// Directional light heading on the world XY plane (radians).
+    #[wasm_bindgen(getter, js_name = dirHeading)]
+    pub fn dir_heading(&self) -> f32 {
+        self.dir_heading
+    }
+
+    /// Directional light pitch above horizon (radians).
+    #[wasm_bindgen(getter, js_name = dirPitch)]
+    pub fn dir_pitch(&self) -> f32 {
+        self.dir_pitch
+    }
+
+    /// Ambient light color (`0xAARRGGBB`).
+    #[wasm_bindgen(getter, js_name = ambColorArgb)]
+    pub fn amb_color_argb(&self) -> u32 {
+        self.amb_color_argb
+    }
+
+    /// Ambient light brightness multiplier.
+    #[wasm_bindgen(getter, js_name = ambBright)]
+    pub fn amb_bright(&self) -> f32 {
+        self.amb_bright
+    }
+
+    /// World-fog color (`0xAARRGGBB`).
+    #[wasm_bindgen(getter, js_name = fogColorArgb)]
+    pub fn fog_color_argb(&self) -> u32 {
+        self.fog_color_argb
+    }
+
+    /// Near-fog distance plane (metres).
+    #[wasm_bindgen(getter, js_name = fogMin)]
+    pub fn fog_min(&self) -> f32 {
+        self.fog_min
+    }
+
+    /// Far-fog distance plane (metres).
+    #[wasm_bindgen(getter, js_name = fogMax)]
+    pub fn fog_max(&self) -> f32 {
+        self.fog_max
+    }
+
+    /// Fog-mode enum (uint pass-through; not lerped — discrete).
+    #[wasm_bindgen(getter, js_name = worldFog)]
+    pub fn world_fog(&self) -> u32 {
+        self.world_fog
+    }
+
+    /// Normalized day-fraction in `[0.0, 1.0)`. 0.0 = midnight,
+    /// 0.25 = dawn, 0.5 = noon, 0.75 = dusk.
+    #[wasm_bindgen(getter, js_name = timeOfDayNormalized)]
+    pub fn time_of_day_normalized(&self) -> f32 {
+        self.time_of_day_normalized
+    }
+
+    /// Index of the active DayGroup in `SkyDesc.day_groups`. Stable per
+    /// game-day (changes only at midnight boundary per the LCG hash).
+    #[wasm_bindgen(getter, js_name = dayGroupIndex)]
+    pub fn day_group_index(&self) -> u32 {
+        self.day_group_index
+    }
+}
+
+/// Workstream Sky-B: wasm-bindgen-friendly mirror of
+/// [`holtburger_world::SkyObjectSnapshot`].
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone, Copy)]
+pub struct SkyObjectState {
+    gfx_object_id: u32,
+    heading: f32,
+    pitch: f32,
+    tex_offset_x: f32,
+    tex_offset_y: f32,
+    transparent: f32,
+    luminosity: f32,
+    max_bright: f32,
+    visible: bool,
+    properties: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SkyObjectState {
+    /// `0x01xxxxxx` (GfxObj) OR `0x02xxxxxx` (SetupModel). Renderer
+    /// dispatches on the high byte. Reflects any SkyObjectReplace
+    /// override active in the surrounding SkyTimeOfDay keyframe.
+    #[wasm_bindgen(getter, js_name = gfxObjectId)]
+    pub fn gfx_object_id(&self) -> u32 {
+        self.gfx_object_id
+    }
+
+    /// Heading on the sky dome (radians, world XY plane).
+    #[wasm_bindgen(getter)]
+    pub fn heading(&self) -> f32 {
+        self.heading
+    }
+
+    /// Pitch (radians off horizon). Synthesized via `sin(p * pi)` arc;
+    /// see [`holtburger_world::SkyObjectSnapshot`] for the derivation.
+    #[wasm_bindgen(getter)]
+    pub fn pitch(&self) -> f32 {
+        self.pitch
+    }
+
+    /// Accumulated UV scroll-x offset, modulo'd to `[0, 1)`.
+    #[wasm_bindgen(getter, js_name = texOffsetX)]
+    pub fn tex_offset_x(&self) -> f32 {
+        self.tex_offset_x
+    }
+
+    #[wasm_bindgen(getter, js_name = texOffsetY)]
+    pub fn tex_offset_y(&self) -> f32 {
+        self.tex_offset_y
+    }
+
+    /// Active SkyObjectReplace's `transparent` value (0..1) or `-1.0`
+    /// when no replace targets this object index.
+    #[wasm_bindgen(getter)]
+    pub fn transparent(&self) -> f32 {
+        self.transparent
+    }
+
+    /// Active replace's `luminosity` or `-1.0` when no replace.
+    #[wasm_bindgen(getter)]
+    pub fn luminosity(&self) -> f32 {
+        self.luminosity
+    }
+
+    /// Active replace's `max_bright` or `-1.0` when no replace.
+    #[wasm_bindgen(getter, js_name = maxBright)]
+    pub fn max_bright(&self) -> f32 {
+        self.max_bright
+    }
+
+    /// `true` when this object is on the visible side of the sky dome
+    /// for the current time-of-day.
+    #[wasm_bindgen(getter)]
+    pub fn visible(&self) -> bool {
+        self.visible
+    }
+
+    /// Pass-through `SkyObject.properties` flag bitmask (rotation
+    /// mode, billboard, etc.).
+    #[wasm_bindgen(getter)]
+    pub fn properties(&self) -> u32 {
+        self.properties
+    }
+}
+
+/// Workstream Sky-B: read `Date.now()` from JS, normalize to Unix
+/// seconds (f64), evaluate the cached SkyDesc against the wall clock
+/// (or override), and return the snapshot. Synchronous — no
+/// recv-loop / promise involvement. JS calls this once per rAF tick
+/// from the skybox renderer.
+///
+/// Returns `None` (JS receives `undefined`) when:
+/// - `populateSkyDescFromRegion` hasn't landed yet.
+/// - The cached SkyDesc has zero DayGroups (sentinel).
+#[cfg(target_arch = "wasm32")]
+fn evaluate_sky_now() -> Option<(SkyState, Vec<SkyObjectState>)> {
+    let now_unix = js_date_now_ms() / 1000.0;
+    SKY_SHADOW.with(|shadow| {
+        let mut shadow = shadow.borrow_mut();
+        let s = shadow.as_mut()?;
+        let (state, objects) = s.evaluator.evaluate(&s.sky_desc, &s.game_time, now_unix)?;
+        let sky_state = SkyState {
+            dir_color_argb: state.dir_color_argb,
+            dir_bright: state.dir_bright,
+            dir_heading: state.dir_heading,
+            dir_pitch: state.dir_pitch,
+            amb_color_argb: state.amb_color_argb,
+            amb_bright: state.amb_bright,
+            fog_color_argb: state.fog_color_argb,
+            fog_min: state.fog_min,
+            fog_max: state.fog_max,
+            world_fog: state.world_fog,
+            time_of_day_normalized: state.time_of_day_normalized,
+            day_group_index: state.day_group_index,
+        };
+        let mapped: Vec<SkyObjectState> = objects
+            .into_iter()
+            .map(|o| SkyObjectState {
+                gfx_object_id: o.gfx_object_id,
+                heading: o.heading,
+                pitch: o.pitch,
+                tex_offset_x: o.tex_offset_x,
+                tex_offset_y: o.tex_offset_y,
+                transparent: o.transparent,
+                luminosity: o.luminosity,
+                max_bright: o.max_bright,
+                visible: o.visible,
+                properties: o.properties,
+            })
+            .collect();
+        Some((sky_state, mapped))
+    })
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -8442,6 +8846,74 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = isCurrentCellIndoor)]
     pub fn is_current_cell_indoor(&self) -> bool {
         self.cell_scene_snapshot.borrow().is_indoor
+    }
+
+    /// Workstream Sky-B (parametric skybox, 2026-05-11): evaluate the
+    /// cached SkyDesc against wall-clock UTC (or the active override)
+    /// and return the per-frame lerped lighting state. JS calls this
+    /// once per rAF tick from the skybox renderer.
+    ///
+    /// Returns `None` (JS receives `undefined`) when:
+    /// - [`populate_sky_desc_from_region`] hasn't landed yet —
+    ///   typically the first few rAF ticks after spawn.
+    /// - The cached SkyDesc has zero DayGroups (sentinel; shouldn't
+    ///   happen for retail Dereth).
+    ///
+    /// **Time semantics.** The time-of-day fraction is derived from
+    /// `Date.now()` against [`holtburger_world::AC_LAUNCH_UNIX_EPOCH`]
+    /// (Hypothesis B per Sky-B's investigation — see the module
+    /// docstring on `crates/holtburger-world/src/sky.rs` for the
+    /// evidence trail). JS can override via [`set_sky_time_override`].
+    ///
+    /// **Per-frame cost.** ~5 µs in release for retail Dereth's
+    /// SkyDesc (20 DayGroups × 11 keyframes), well under the 16 ms
+    /// 60 Hz budget. The expensive bit is the LCG day-group
+    /// selection which the evaluator caches per (day, year) pair.
+    #[wasm_bindgen(js_name = getSkyState)]
+    pub fn get_sky_state(&self) -> Option<SkyState> {
+        evaluate_sky_now().map(|(s, _)| s)
+    }
+
+    /// Workstream Sky-B: per-SkyObject snapshots for the active
+    /// DayGroup. Returns one entry per `SkyObject` in
+    /// `day_group.sky_objects` — `7` entries for retail Dereth's
+    /// "Sunny" group (sky shell, alternate shell, sun, moon, cloud
+    /// band, stars, physics-scripted moon).
+    ///
+    /// The `gfx_object_id` is surfaced VERBATIM — both `0x01xxxxxx`
+    /// (GfxObj) and `0x02xxxxxx` (SetupModel) DIDs are returned
+    /// untruncated, and the renderer is expected to dispatch on the
+    /// high byte. SkyObjectReplace overrides applied by the surrounding
+    /// SkyTimeOfDay keyframe are folded in here — `transparent`,
+    /// `luminosity`, `max_bright` carry the override values (or `-1.0`
+    /// when no replace targets the object).
+    ///
+    /// Empty Vec when [`populate_sky_desc_from_region`] hasn't landed.
+    #[wasm_bindgen(js_name = getSkyObjectStates)]
+    pub fn get_sky_object_states(&self) -> Vec<SkyObjectState> {
+        evaluate_sky_now().map(|(_, o)| o).unwrap_or_default()
+    }
+
+    /// Workstream Sky-B: true once
+    /// [`populate_sky_desc_from_region`] has landed. JS gates the
+    /// per-frame `getSkyState` reads on this to avoid the first-few-
+    /// frames `undefined` returns.
+    #[wasm_bindgen(js_name = hasSkyDesc)]
+    pub fn has_sky_desc(&self) -> bool {
+        has_sky_desc()
+    }
+
+    /// Workstream Sky-B: drive the synthetic-day demo at
+    /// `?skytime=accel`. JS calls this once per rAF tick with
+    /// `t = (elapsed_ms / (5 * 60 * 1000)) % 1.0` to cycle a full day
+    /// in 5 real minutes. Passing `f32::NAN` clears the override.
+    ///
+    /// Returns `true` if applied. `false` when the SkyDesc hasn't been
+    /// populated yet (override is on the evaluator, which only exists
+    /// after `populateSkyDescFromRegion`).
+    #[wasm_bindgen(js_name = setSkyTimeOverride)]
+    pub fn set_sky_time_override(&self, time_of_day: f32) -> bool {
+        set_sky_time_override(time_of_day)
     }
 
     /// Workstream A (3D camera/game-feel fix): authoritative local-

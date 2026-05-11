@@ -533,6 +533,7 @@
         fetchBuildingPlacement,
         fetchSetupModelLights,
         populateBuildingAabbsForLandblock,
+        populateSkyDescFromRegion,
         fetchEnvCellsInLandblock,
         init_cell_containers,
         start_session,
@@ -5869,8 +5870,33 @@ void main() {
           window.__rafTickCount = 0;
           window.__lastInputSig = "0,0,0,false";
           window.__smiCallCount = 0;
+          // Workstream Sky-B (2026-05-11): `?skytime=accel` URL flag
+          // drives a 5-minute synthetic day cycle through the wasm
+          // `setSkyTimeOverride` export. Used by Workstream Sky-F's e2e
+          // capture to validate the full sky lerp in 5 min instead of
+          // 127 min (one real-world AC day). Override is cleared if
+          // the flag isn't present so wall-clock UTC derivation stays
+          // authoritative.
+          const __skyTimeAccel =
+            new URLSearchParams(window.location.search).get("skytime") === "accel";
+          const __skyTimeAccelStart = performance.now();
+          window.__skyTimeAccel = __skyTimeAccel; // exposed for e2e probes
           function drainEvents() {
             window.__rafTickCount++;
+            // Sky-B: drive the `?skytime=accel` synthetic day cycle.
+            // Cheap (~0.5 µs per call) so it runs on every rAF tick
+            // even when the SkyDesc hasn't been populated — the wasm
+            // path returns `false` until populateSkyDescFromRegion
+            // lands, then `true` thereafter.
+            if (__skyTimeAccel) {
+              const elapsedMs = performance.now() - __skyTimeAccelStart;
+              const t = (elapsedMs / (5 * 60 * 1000)) % 1.0;
+              try {
+                handle.setSkyTimeOverride(t);
+              } catch (e) {
+                /* pre-shadow no-op */
+              }
+            }
             const events = handle.poll_events();
             for (const evt of events) {
               if (evt.kind === 1) {
@@ -5932,6 +5958,31 @@ void main() {
                 }
                 postSpawn.hidden = false;
                 teleportBtn.disabled = false;
+                // Workstream Sky-B (parametric skybox, 2026-05-11):
+                // populate the SkyDesc shadow from Region 0x13000000
+                // (Dereth — the only Region shipped in retail
+                // client_portal.dat). One-shot per session; the wasm
+                // populator is idempotent so a double-fire from a
+                // PlayerCreate / EnteredWorld race is harmless. The
+                // synchronous getSkyState reads gate on the shadow's
+                // presence via `handle.hasSkyDesc()`.
+                // URL param `?skytime=accel` drives the demo 5-min
+                // synthetic day via `setSkyTimeOverride` per rAF tick
+                // (the rAF loop handles the override drive separately).
+                (async () => {
+                  try {
+                    const dayGroupCount =
+                      await populateSkyDescFromRegion(0x13000000);
+                    console.log(
+                      `[Sky-B] populateSkyDescFromRegion → ${dayGroupCount} DayGroups`,
+                    );
+                  } catch (e) {
+                    console.warn(
+                      "[Sky-B] populateSkyDescFromRegion failed (renderer will skip skybox):",
+                      e,
+                    );
+                  }
+                })();
                 // Terrain heightmap prefetch is now driven by the
                 // first position update for the local player (see
                 // `ensureTerrainAroundLandblock` in

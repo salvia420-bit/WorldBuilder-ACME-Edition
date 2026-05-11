@@ -3431,6 +3431,75 @@ check(
         check("Workstream D: camera-relative WASD + auto-turn-to-align math", false, String(e).slice(0, 120));
     }
 
+    // === Workstream Sky-B (2026-05-11) — wasm sky state + ACE-anchored time-of-day driver ===
+    // Verifies the new SessionHandle exports are in the d.ts (`getSkyState`,
+    // `getSkyObjectStates`, `hasSkyDesc`, `setSkyTimeOverride`), the
+    // module-level `populateSkyDescFromRegion` export is bound, and the
+    // index.html kind=7 EnteredWorld handler fires it. Functional
+    // verification (lerp determinism, day-group selection, real-DAT dawn
+    // vs dusk) lives in the holtburger-world unit tests
+    // (`crates/holtburger-world/src/sky.rs`).
+    try {
+        const fs = require("fs");
+        const dtsPath = __dirname + "/pkg/holtburger_web.d.ts";
+        const dtsSrc = fs.existsSync(dtsPath) ? fs.readFileSync(dtsPath, "utf8") : "";
+        const indexSrc = fs.readFileSync(__dirname + "/index.html", "utf8");
+        const hasGetSkyState = /getSkyState/.test(dtsSrc);
+        const hasGetSkyObjectStates = /getSkyObjectStates/.test(dtsSrc);
+        const hasHasSkyDesc = /hasSkyDesc/.test(dtsSrc);
+        const hasSetOverride = /setSkyTimeOverride/.test(dtsSrc);
+        const hasPopulate = /populateSkyDescFromRegion/.test(dtsSrc);
+        const hasSkyStateClass = /class SkyState\b/.test(dtsSrc);
+        const hasSkyObjectStateClass = /class SkyObjectState\b/.test(dtsSrc);
+        const hasKind7Hook = /populateSkyDescFromRegion\(0x13000000\)/.test(indexSrc);
+        const hasAccelDriver = /__skyTimeAccel|setSkyTimeOverride\(t\)/.test(indexSrc);
+        check(
+            "Workstream Sky-B: wasm sky state exports + kind=7 hook + ?skytime=accel driver",
+            hasGetSkyState && hasGetSkyObjectStates && hasHasSkyDesc &&
+                hasSetOverride && hasPopulate && hasSkyStateClass &&
+                hasSkyObjectStateClass && hasKind7Hook && hasAccelDriver,
+            `getSkyState=${hasGetSkyState} getSkyObjectStates=${hasGetSkyObjectStates} ` +
+                `hasSkyDesc=${hasHasSkyDesc} setOverride=${hasSetOverride} ` +
+                `populate=${hasPopulate} stateClass=${hasSkyStateClass} ` +
+                `objStateClass=${hasSkyObjectStateClass} kind7Hook=${hasKind7Hook} ` +
+                `accelDriver=${hasAccelDriver}`
+        );
+    } catch (e) {
+        check("Workstream Sky-B: wasm sky state exports + kind=7 hook + ?skytime=accel driver", false, String(e).slice(0, 120));
+    }
+
+    // === Workstream Sky-E (2026-05-11) — SkyObject asset resolver ====
+    // Verifies `scene3d/sky_assets.js` is present and exports the
+    // `resolveSkyAssets` + `buildSkyObjectGroup` entrypoints Sky-D's
+    // renderer will call. The functional half (7 retail SkyObject IDs
+    // resolve via the existing `fetchBuildingPlacement` path,
+    // SetupModel 0x02000714 walks parts, surface DIDs preload through
+    // the shared MaterialCache) is exercised by
+    // `test_sky_assets.mjs` against the mocked wasm exports.
+    try {
+        const fs = require("fs");
+        const skyAssetsPath = __dirname + "/scene3d/sky_assets.js";
+        const present = fs.existsSync(skyAssetsPath);
+        const src = present ? fs.readFileSync(skyAssetsPath, "utf8") : "";
+        const hasResolve = /export\s+async\s+function\s+resolveSkyAssets/.test(src);
+        const hasBuildGroup = /export\s+function\s+buildSkyObjectGroup/.test(src);
+        const dispatchesOn01 = /prefix\s*!==\s*0x01\s*&&\s*prefix\s*!==\s*0x02/.test(src);
+        const usesFetchBuildingPlacement = /fetchBuildingPlacement/.test(src);
+        const usesMaterialCache = /MaterialCache\b/.test(src);
+        const idempotentPath = /opts\.force|cached instanceof Map/.test(src);
+        check(
+            "Workstream Sky-E: sky_assets.js exports resolveSkyAssets + buildSkyObjectGroup",
+            present && hasResolve && hasBuildGroup && dispatchesOn01 &&
+                usesFetchBuildingPlacement && usesMaterialCache && idempotentPath,
+            `present=${present} resolve=${hasResolve} group=${hasBuildGroup} ` +
+                `dispatch=${dispatchesOn01} fetchBuild=${usesFetchBuildingPlacement} ` +
+                `matCache=${usesMaterialCache} idempotent=${idempotentPath} bytes=${src.length}`
+        );
+    } catch (e) {
+        check("Workstream Sky-E: sky_assets.js exports resolveSkyAssets + buildSkyObjectGroup",
+            false, String(e).slice(0, 120));
+    }
+
     console.log("=========================");
     if (failed === 0) {
         console.log("PASS: all smoke checks green.");

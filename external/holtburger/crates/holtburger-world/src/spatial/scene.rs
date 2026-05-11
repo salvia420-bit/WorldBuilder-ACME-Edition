@@ -7,6 +7,7 @@ use super::{
 use crate::entity::EntityMotionSnapshot;
 use holtburger_common::position::WorldPosition;
 use holtburger_common::{Aabb, Guid, Triangle, Vector3};
+use holtburger_dat::file_type::SkyDesc;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use web_time::Instant;
@@ -180,6 +181,25 @@ pub struct SpatialScene {
     /// same per-part frame transform used for AABBs); cleared per-
     /// landblock alongside the AABB index when the LB unloads.
     building_physics_index: HashMap<u32, Vec<Triangle>>,
+    /// Workstream Sky-B (parametric skybox, 2026-05-11): the parsed
+    /// SkyDesc + GameTime for the active Region. `None` until the
+    /// wasm bundle's `populateSkyDescFromRegion` lands; populated once
+    /// per session on `kind=7 EnteredWorld` from Region `0x13000000`.
+    ///
+    /// The `(SkyDesc, GameTime)` pair is the *static* portion of the
+    /// skybox — DayGroup keyframes, SkyObject DIDs, time anchors. The
+    /// *dynamic* portion (current_time_of_day, day_group_index, lerped
+    /// lighting) is computed per-frame by `crate::sky::SkyEvalState`
+    /// against this data. Renderer reads via
+    /// `SessionHandle::getSkyState()` / `getSkyObjectStates()` which
+    /// internally call `SkyEvalState::evaluate(&self.sky_desc, ...)`.
+    ///
+    /// Boxed because the value is large (Dereth's SkyDesc ships 20
+    /// DayGroups × {7 SkyObjects + 11 SkyTimeOfDay} ≈ 7-10 KB) and
+    /// the rest of `SpatialScene` is per-frame hot — keeping the
+    /// SkyDesc heap-side avoids paying the copy cost on every body
+    /// snapshot clone in the integrator.
+    sky_desc: Option<Box<(SkyDesc, holtburger_dat::file_type::GameTime)>>,
 }
 
 impl Default for SpatialScene {
@@ -207,7 +227,34 @@ impl SpatialScene {
             building_origins: HashMap::new(),
             statics_aabb_index: HashMap::new(),
             building_physics_index: HashMap::new(),
+            sky_desc: None,
         }
+    }
+
+    /// Workstream Sky-B: install a parsed SkyDesc + GameTime onto the
+    /// scene. Called once per session by the wasm bundle's
+    /// `populateSkyDescFromRegion` after fetching Region `0x13000000`
+    /// from the dat catalog. Idempotent — subsequent calls overwrite
+    /// (Region descriptors don't change mid-session, but the API
+    /// doesn't enforce this; out-of-order populates land cleanly).
+    pub fn set_sky_desc(
+        &mut self,
+        sky_desc: SkyDesc,
+        game_time: holtburger_dat::file_type::GameTime,
+    ) {
+        self.sky_desc = Some(Box::new((sky_desc, game_time)));
+    }
+
+    /// Workstream Sky-B: read access to the parsed SkyDesc + GameTime.
+    /// `None` until `set_sky_desc` lands.
+    pub fn sky_desc(&self) -> Option<&(SkyDesc, holtburger_dat::file_type::GameTime)> {
+        self.sky_desc.as_deref()
+    }
+
+    /// Workstream Sky-B: predicate for the populator's idempotency
+    /// gate — `true` once the SkyDesc has landed at least once.
+    pub fn has_sky_desc(&self) -> bool {
+        self.sky_desc.is_some()
     }
 
     /// Phase 6 step B: register one per-part building AABB into the

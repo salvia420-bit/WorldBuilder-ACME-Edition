@@ -21,6 +21,7 @@ mod identify;
 pub mod inspect;
 pub mod magic;
 pub mod player;
+pub mod sky;
 pub mod spatial;
 pub mod spell;
 pub mod state;
@@ -30,6 +31,10 @@ pub mod vendor;
 pub use self::state::WorldState;
 pub use bootstrap::WorldBootstrap;
 pub use events::{DerivedStatsData, DoorState, FellowshipActivity, PlayerInfoData, WorldEvent};
+pub use sky::{
+    AC_LAUNCH_UNIX_EPOCH, SkyEvalState, SkyObjectSnapshot, SkyStateSnapshot,
+    calc_present_day_group,
+};
 pub use spatial::{
     AuthoritativeBodySync, BasicSpatialPhysics, BuildingAabbEntry, BuildingId, ContactState,
     GenericSweptHit, LocalDriveControl, LocalDriveGait, NoopSpatialPhysics, PLAYER_CAPSULE_HEIGHT,
