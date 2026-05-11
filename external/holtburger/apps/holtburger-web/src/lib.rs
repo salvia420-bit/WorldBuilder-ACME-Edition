@@ -1302,6 +1302,14 @@ pub struct ModelMesh {
     /// the destination RenderTexture.
     bbox_min: [f32; 3],
     bbox_max: [f32; 3],
+    /// Follow-on #5 (LOD) — the model's `did_degrade` chain entry, or
+    /// 0 if the GfxObj has no `HAS_DID_DEGRADE` flag set. For 0x01 raw
+    /// GfxObjs this is the model's own degrade DID; for 0x02 SetupModels
+    /// it's the first part GfxObj's degrade DID (sufficient for Holtburg,
+    /// which has mostly single-part SetupModels). 0 = no degraded
+    /// variant available; JS-side LOD wrappers fall back to a plain
+    /// `THREE.Mesh` instead of `THREE.LOD`.
+    did_degrade: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1338,6 +1346,16 @@ impl ModelMesh {
             self.bbox_max[0] - self.bbox_min[0],
             self.bbox_max[1] - self.bbox_min[1],
         ]
+    }
+    /// Follow-on #5 (LOD) — the model's `did_degrade` chain entry
+    /// (0 = no degraded variant). JS-side `statics.js` / `buildings.js`
+    /// wrap the full + degraded variants in a `THREE.LOD` node when this
+    /// is non-zero; the JS-side `fetch_model_meshes([didDegrade])` round-
+    /// trip fetches the degraded geometry for the LOD's distance-100m
+    /// slot. The full variant remains at distance 0.
+    #[wasm_bindgen(getter, js_name = didDegrade)]
+    pub fn did_degrade(&self) -> u32 {
+        self.did_degrade
     }
 }
 
@@ -1392,6 +1410,23 @@ fn append_gfx_tris_with_tex_swaps(
         return;
     }
 
+    // Phase 7 follow-on #7: AC two-sided polygons. The Polygon.sides_type
+    // field encodes a CullMode: 0x0=Landblock, 0x1=None, 0x2=Clockwise,
+    // 0x3=CounterClockwise. CullMode::Clockwise (0x2) signals "draw the
+    // back face too" — `neg_uv_indices` is populated on read iff
+    // `sides_type == 0x2 && (stippling & NoNeg=0x8) == 0`. The back face
+    // potentially uses a DIFFERENT surface (`neg_surface != pos_surface`):
+    // think a stained-glass window with one texture on the interior side
+    // and a different one outside, or a stage-curtain banner. When the
+    // surfaces differ we must emit BOTH faces as oriented tris with
+    // opposite winding so the JS-side MaterialCache can paint each side
+    // with its own MeshStandardMaterial. When they match, one tri with
+    // `side: DoubleSide` is sufficient (cheaper draw call); this is the
+    // common case — most cloth banners use one texture both sides.
+    const NO_POS: u8 = 0x04;
+    const NO_NEG: u8 = 0x08;
+    const CULL_CLOCKWISE: i32 = 0x2;
+
     // Sort polygon ids for deterministic output (HashMap iteration is
     // not stable; PIXI.Mesh draw order matches whatever order we feed
     // in).
@@ -1401,10 +1436,9 @@ fn append_gfx_tris_with_tex_swaps(
         let poly: &Polygon = &gfx.polygons[&pid];
         if poly.vertex_ids.len() < 3 { continue; }
         // Skip "no positive surface" polygons — same as C# `NoPos` skip.
-        const NO_POS: u8 = 0x04;
         if (poly.stippling & NO_POS) != 0 { continue; }
 
-        let raw_surface_did = if poly.pos_surface >= 0
+        let raw_pos_surface_did = if poly.pos_surface >= 0
             && (poly.pos_surface as usize) < gfx.surfaces.len()
         {
             gfx.surfaces[poly.pos_surface as usize]
@@ -1415,51 +1449,118 @@ fn append_gfx_tris_with_tex_swaps(
         // empty `tex_swaps` (the static-placement path) skips the
         // search entirely. NPC parts typically have ≤4 swaps each so
         // a linear find is fine.
-        let surface_did = tex_swaps
+        let pos_surface_did = tex_swaps
             .iter()
-            .find(|(old, _)| *old == raw_surface_did)
+            .find(|(old, _)| *old == raw_pos_surface_did)
             .map(|(_, new)| *new)
-            .unwrap_or(raw_surface_did);
+            .unwrap_or(raw_pos_surface_did);
 
-        // Resolve ring of (position, uv) per vertex.
+        // Two-sided detection. The parser populates `neg_uv_indices`
+        // only when `sides_type == 0x2 && (stippling & NoNeg) == 0`.
+        // We additionally require `neg_surface >= 0 && in-range` to
+        // emit a back-face tri; otherwise the back face would have no
+        // surface DID and would resolve to the same texture as the
+        // front, defeating the point of the second draw.
+        let has_back_face =
+            poly.sides_type == CULL_CLOCKWISE
+                && (poly.stippling & NO_NEG) == 0
+                && !poly.neg_uv_indices.is_empty();
+        let raw_neg_surface_did = if has_back_face
+            && poly.neg_surface >= 0
+            && (poly.neg_surface as usize) < gfx.surfaces.len()
+        {
+            gfx.surfaces[poly.neg_surface as usize]
+        } else {
+            0
+        };
+        let neg_surface_did = if raw_neg_surface_did != 0 {
+            tex_swaps
+                .iter()
+                .find(|(old, _)| *old == raw_neg_surface_did)
+                .map(|(_, new)| *new)
+                .unwrap_or(raw_neg_surface_did)
+        } else {
+            0
+        };
+        // Only emit a distinct back-face tri when the surface actually
+        // differs from the front. When `neg_surface_did == pos_surface_did`,
+        // a single DoubleSide draw is cheaper; the materials.js decoder
+        // applies DoubleSide as the default for the front-face tri.
+        let emit_back_face = has_back_face
+            && neg_surface_did != 0
+            && neg_surface_did != pos_surface_did;
+
+        // Resolve ring of (position, pos_uv, neg_uv) per vertex.
         let mut ring_pos: Vec<[f32; 3]> = Vec::with_capacity(poly.vertex_ids.len());
-        let mut ring_uv: Vec<[f32; 2]> = Vec::with_capacity(poly.vertex_ids.len());
+        let mut ring_uv_pos: Vec<[f32; 2]> = Vec::with_capacity(poly.vertex_ids.len());
+        let mut ring_uv_neg: Vec<[f32; 2]> = Vec::with_capacity(poly.vertex_ids.len());
         let mut ok = true;
         for (i, &raw) in poly.vertex_ids.iter().enumerate() {
             if raw < 0 { ok = false; break; }
             let Some(vert) = gfx.vertex_array.vertices.get(&(raw as u16)) else { ok = false; break; };
-            let mut uv_idx: usize = 0;
+            let mut uv_pos_idx: usize = 0;
             if i < poly.pos_uv_indices.len() {
-                uv_idx = poly.pos_uv_indices[i] as usize;
+                uv_pos_idx = poly.pos_uv_indices[i] as usize;
             }
-            if uv_idx >= vert.uvs.len() {
-                uv_idx = 0;
+            if uv_pos_idx >= vert.uvs.len() {
+                uv_pos_idx = 0;
             }
-            let uv = if vert.uvs.is_empty() {
+            let uv_pos = if vert.uvs.is_empty() {
                 [0.0, 0.0]
             } else {
-                [vert.uvs[uv_idx].u, vert.uvs[uv_idx].v]
+                [vert.uvs[uv_pos_idx].u, vert.uvs[uv_pos_idx].v]
+            };
+            let uv_neg = if emit_back_face && i < poly.neg_uv_indices.len() {
+                let mut uv_neg_idx = poly.neg_uv_indices[i] as usize;
+                if uv_neg_idx >= vert.uvs.len() {
+                    uv_neg_idx = 0;
+                }
+                if vert.uvs.is_empty() {
+                    [0.0, 0.0]
+                } else {
+                    [vert.uvs[uv_neg_idx].u, vert.uvs[uv_neg_idx].v]
+                }
+            } else {
+                [0.0, 0.0]
             };
             // Apply the per-part transform: `part_rot * vert.origin + part_offset`.
             let p = quat_rotate(part_rot, vert.origin);
             ring_pos.push([p.x + part_offset.x, p.y + part_offset.y, p.z + part_offset.z]);
-            ring_uv.push(uv);
+            ring_uv_pos.push(uv_pos);
+            ring_uv_neg.push(uv_neg);
         }
         if !ok || ring_pos.len() < 3 { continue; }
 
-        // Fan-triangulate around vertex 0.
+        // Fan-triangulate around vertex 0. Emit front-face tri first
+        // (pos_surface_did, ABC winding) and, when applicable, the
+        // back-face tri (neg_surface_did, ACB winding, negated normal).
         for i in 2..ring_pos.len() {
             let a = ring_pos[0]; let b = ring_pos[i - 1]; let c = ring_pos[i];
             let n = tri_normal(a, b, c);
             let len2 = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
             if len2 < 1e-12 { continue; }
             let inv_len = 1.0 / len2.sqrt();
+            let nx = n[0] * inv_len;
+            let ny = n[1] * inv_len;
+            let nz = n[2] * inv_len;
             tris.push(Tri {
                 pos: [a, b, c],
-                uv: [ring_uv[0], ring_uv[i - 1], ring_uv[i]],
-                normal: [n[0] * inv_len, n[1] * inv_len, n[2] * inv_len],
-                surface_did,
+                uv: [ring_uv_pos[0], ring_uv_pos[i - 1], ring_uv_pos[i]],
+                normal: [nx, ny, nz],
+                surface_did: pos_surface_did,
             });
+            if emit_back_face {
+                // Reversed winding (A, C, B) + flipped normal so the
+                // back face's triangle has its outward normal pointing
+                // the opposite way. UV ring follows the same reversal
+                // so neg_uv_indices line up with the back vertices.
+                tris.push(Tri {
+                    pos: [a, c, b],
+                    uv: [ring_uv_neg[0], ring_uv_neg[i], ring_uv_neg[i - 1]],
+                    normal: [-nx, -ny, -nz],
+                    surface_did: neg_surface_did,
+                });
+            }
         }
     }
 }
@@ -2011,6 +2112,79 @@ fn triangulate_model_with_substitutions_and_mtable<S: holtburger_dat::ResourceSo
     Some(tris)
 }
 
+/// Follow-on #5 (LOD) — resolve a model_id's `did_degrade` chain entry.
+///
+/// AC's `GfxObj` struct carries an `Option<u32>` `did_degrade` field
+/// pointing at a lower-detail GfxObj of the same visual; the engine
+/// historically swapped to it at view distances >~100 m. Most Holtburg
+/// models don't have one (it's mainly for distant scenery like trees).
+///
+///   - `0x01XXXXXX` raw GfxObj: returns the GfxObj's own `did_degrade`
+///     (or 0 if `HAS_DID_DEGRADE` is unset).
+///   - `0x02XXXXXX` SetupModel: returns the first part GfxObj's
+///     `did_degrade`. Multi-part SetupModels share one "level of
+///     detail" decision per-model in retail AC (you don't degrade
+///     individual parts independently — that would risk parts falling
+///     out of alignment), so the first part's chain is sufficient.
+///     Holtburg statics are almost all single-part SetupModels so this
+///     simplification covers the realistic case.
+///   - Any other prefix: returns 0 (not a model — environments, etc.).
+///
+/// Returns 0 on any I/O / parse failure — JS treats 0 as "no LOD chain
+/// available, use a plain Mesh".
+#[cfg(any(target_arch = "wasm32", test))]
+fn resolve_did_degrade<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    model_id: u32,
+) -> u32 {
+    use holtburger_dat::file_type::{GfxObj, SetupModel};
+    use holtburger_dat::ResourceKey;
+    match (model_id >> 24) as u8 {
+        0x01 => {
+            let Ok(bytes) =
+                source.get_file_by_key(ResourceKey::new("eor/portal", model_id))
+            else {
+                return 0;
+            };
+            let Ok(gfx) = GfxObj::unpack(&mut std::io::Cursor::new(&bytes)) else {
+                return 0;
+            };
+            gfx.did_degrade.unwrap_or(0)
+        }
+        0x02 => {
+            let Ok(bytes) =
+                source.get_file_by_key(ResourceKey::new("eor/portal", model_id))
+            else {
+                return 0;
+            };
+            let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(&bytes)) else {
+                return 0;
+            };
+            let Some(&first_part) = setup.parts.first() else {
+                return 0;
+            };
+            // Recurse — for the typical Holtburg setup, first_part is a
+            // 0x01 GfxObj. The recursion bottom-outs at the 0x01 branch
+            // above; we cap the recursion at one level by only matching
+            // the first_part's prefix once.
+            if (first_part >> 24) as u8 == 0x01 {
+                let Ok(pbytes) =
+                    source.get_file_by_key(ResourceKey::new("eor/portal", first_part))
+                else {
+                    return 0;
+                };
+                let Ok(pgfx) = GfxObj::unpack(&mut std::io::Cursor::new(&pbytes)) else {
+                    return 0;
+                };
+                pgfx.did_degrade.unwrap_or(0)
+            } else {
+                0
+            }
+        }
+        _ => 0,
+    }
+}
+
 /// Pack a `Vec<Tri>` into the wasm-bindgen-friendly [`ModelMesh`]
 /// shape: dedupe surface_dids into the `surfaces` array, replace each
 /// triangle's `surface_did` with a u8 index, flatten per-triangle
@@ -2070,18 +2244,45 @@ fn pack_model_mesh(tris: Vec<Tri>) -> ModelMesh {
         surfaces,
         bbox_min,
         bbox_max,
+        // Follow-on #5: pack_model_mesh has no access to the source
+        // model_id (and so can't resolve a degrade chain). The caller
+        // (`fetch_model_mesh` / `fetch_model_meshes`) post-fills this
+        // via a separate GfxObj walk after the pack returns.
+        did_degrade: 0,
     }
 }
 
 /// One surface's decoded pixels — output of [`fetch_surface_pixels`]
 /// / [`fetch_surfaces_pixels`]. Used by Phase 3 step 6's in-browser
 /// rasterizer to UV-map per-poly textures into the model's tile.
+///
+/// `surface_type` is the raw `SurfaceType` bitfield read from the
+/// Surface record (see `holtburger_dat::file_type::surface::Surface`
+/// and `ACE.Entity.Enum.SurfaceType`). The 3D path's `MaterialCache`
+/// (`scene3d/materials.js`) decodes it into MeshStandardMaterial flags:
+///   - `Translucent (0x10)` → `transparent = true, depthWrite = false`
+///   - `Base1ClipMap (0x4)` → `alphaTest = 0.5`
+///   - `Luminous (0x40)` → emissive map + colour
+///   - `Additive (0x10000)` → `blending = AdditiveBlending`
+///   - `Diffuse (0x20)` → matte (no specular reflection)
+/// AC has no explicit "TwoSided" bit; two-sidedness is encoded
+/// per-Polygon via `sides_type == CullMode::Clockwise (0x2)` and is
+/// handled in the triangulator — see Phase 7 follow-on #7 (two-sided
+/// polys with distinct pos/neg surfaces emit two tris with opposite
+/// winding in `append_gfx_tris_with_tex_swaps`).
+///
+/// Defaults to 0 for empty/failed surfaces — the JS decoder reads 0 as
+/// "no flag bits set → opaque path", which is the desired fallback.
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 #[cfg(any(target_arch = "wasm32", test))]
 pub struct SurfacePixels {
     width: u32,
     height: u32,
     pixels: Vec<u8>, // RGBA8, length = width * height * 4
+    /// Raw `Surface.surface_type` bitfield from the DAT. 0 for empty
+    /// fallbacks so the JS material decoder treats it as opaque.
+    /// (See `ACE.Entity.Enum.SurfaceType` for the canonical bit list.)
+    surface_type: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2094,6 +2295,11 @@ impl SurfacePixels {
     /// `Uint8Array(width * height * 4)` of straight-RGBA pixels.
     #[wasm_bindgen(getter)]
     pub fn pixels(&self) -> Vec<u8> { self.pixels.clone() }
+    /// Raw `Surface.surface_type` bitfield (see `ACE.Entity.Enum.SurfaceType`).
+    /// 0 for the empty fallback surface — the JS material decoder
+    /// treats 0 as "no flags set → fully opaque".
+    #[wasm_bindgen(getter, js_name = surfaceType)]
+    pub fn surface_type(&self) -> u32 { self.surface_type }
 }
 
 /// Walk Surface → SurfaceTexture → Texture → RGBA8 for one surface
@@ -2107,10 +2313,16 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
 ) -> SurfacePixels {
     use holtburger_dat::file_type::{Palette, Surface, SurfaceTexture, Texture, TextureDecodeError};
     use holtburger_dat::ResourceKey;
-    let empty = SurfacePixels { width: 0, height: 0, pixels: Vec::new() };
+    let empty = SurfacePixels { width: 0, height: 0, pixels: Vec::new(), surface_type: 0 };
 
     let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else { return empty; };
     let Ok(surface) = Surface::unpack(&bytes) else { return empty; };
+    // Capture the raw bitfield BEFORE the solid/textured branch so both
+    // 1×1 ARGB synthesized surfaces AND real textures surface the same
+    // flags to JS (e.g. a solid translucent overlay still wants
+    // `transparent = true` even though the body holds a colour, not a
+    // texture ref).
+    let surface_type = surface.surface_type;
     if let Some(argb) = surface.solid_color() {
         // Solid surfaces have no pixel data — synthesize a 1×1 ARGB
         // texture so the shader can sample-and-modulate uniformly.
@@ -2118,7 +2330,7 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         let r = ((argb >> 16) & 0xFF) as u8;
         let g = ((argb >> 8) & 0xFF) as u8;
         let b = (argb & 0xFF) as u8;
-        return SurfacePixels { width: 1, height: 1, pixels: vec![r, g, b, a] };
+        return SurfacePixels { width: 1, height: 1, pixels: vec![r, g, b, a], surface_type };
     }
     let Some((surf_tex_id, _)) = surface.textured() else { return empty; };
     let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else { return empty; };
@@ -2140,6 +2352,7 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             width: tex.width as u32,
             height: tex.height as u32,
             pixels,
+            surface_type,
         },
         Err(_) => empty,
     }
@@ -2224,10 +2437,11 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
 ) -> SurfacePixels {
     use holtburger_dat::file_type::{Palette, Surface, SurfaceTexture, Texture, TextureDecodeError};
     use holtburger_dat::ResourceKey;
-    let empty = SurfacePixels { width: 0, height: 0, pixels: Vec::new() };
+    let empty = SurfacePixels { width: 0, height: 0, pixels: Vec::new(), surface_type: 0 };
 
     let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else { return empty; };
     let Ok(surface) = Surface::unpack(&bytes) else { return empty; };
+    let surface_type = surface.surface_type;
     if let Some(argb) = surface.solid_color() {
         // Solid surfaces ignore palette substitutions — the base
         // surface IS the colour.
@@ -2235,7 +2449,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         let r = ((argb >> 16) & 0xFF) as u8;
         let g = ((argb >> 8) & 0xFF) as u8;
         let b = (argb & 0xFF) as u8;
-        return SurfacePixels { width: 1, height: 1, pixels: vec![r, g, b, a] };
+        return SurfacePixels { width: 1, height: 1, pixels: vec![r, g, b, a], surface_type };
     }
     let Some((surf_tex_id, _)) = surface.textured() else { return empty; };
     let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else { return empty; };
@@ -2278,6 +2492,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             width: tex.width as u32,
             height: tex.height as u32,
             pixels,
+            surface_type,
         },
         Err(_) => empty,
     }
@@ -2359,7 +2574,47 @@ pub async fn fetch_model_mesh(model_id: u32) -> Result<ModelMesh, JsValue> {
     .await?;
     let tris = triangulate_model(source.as_ref(), model_id)
         .ok_or_else(|| JsValue::from_str(&format!("triangulate_model 0x{model_id:08X}: failed")))?;
-    Ok(pack_model_mesh(tris))
+    let mut mesh = pack_model_mesh(tris);
+    // Follow-on #5 — resolve LOD chain after pack. 0 = no degraded
+    // variant; JS uses plain Mesh in that case.
+    mesh.did_degrade = resolve_did_degrade(source.as_ref(), model_id);
+    Ok(mesh)
+}
+
+/// Follow-on #5 (LOD) — batch query for per-model `did_degrade` chain
+/// entries, WITHOUT triangulating. The buildings path
+/// (`fetchBuildingPlacement`) doesn't go through `fetch_model_meshes`
+/// so it can't read `ModelMesh.didDegrade`; this thin export lets it
+/// look up the chain via a single byte-level GfxObj parse.
+///
+/// Returns one u32 per input model id; 0 = no degrade chain
+/// (`HAS_DID_DEGRADE` flag unset OR model not parseable). Holtburg
+/// buildings are mostly raw `0x01` GfxObjs and most have no degrade
+/// entry — the typical return is all zeros, which the JS caller
+/// handles by falling back to plain `THREE.Mesh` instead of `THREE.LOD`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchModelDidDegrades)]
+pub async fn fetch_model_did_degrades(
+    model_ids: Vec<u32>,
+) -> Result<Vec<u32>, JsValue> {
+    use holtburger_dat::ResourceKey;
+    let source = global_source::global_source();
+    let initial: Vec<ResourceKey<'_>> = model_ids
+        .iter()
+        .map(|id| ResourceKey::new("eor/portal", *id))
+        .collect();
+    let ids_for_walk = model_ids.clone();
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        for &id in &ids_for_walk {
+            let _ = resolve_did_degrade(s, id);
+        }
+    })
+    .await?;
+    let mut out = Vec::with_capacity(model_ids.len());
+    for &id in &model_ids {
+        out.push(resolve_did_degrade(source.as_ref(), id));
+    }
+    Ok(out)
 }
 
 /// Batch form: triangulate many models in one call. Returns a vector
@@ -2386,7 +2641,11 @@ pub async fn fetch_model_meshes(model_ids: Vec<u32>) -> Result<Vec<ModelMesh>, J
     let mut out = Vec::with_capacity(model_ids.len());
     for &id in &model_ids {
         let tris = triangulate_model(source.as_ref(), id).unwrap_or_default();
-        out.push(pack_model_mesh(tris));
+        let mut mesh = pack_model_mesh(tris);
+        // Follow-on #5 — resolve LOD chain after pack. 0 = no degraded
+        // variant; JS uses plain Mesh in that case.
+        mesh.did_degrade = resolve_did_degrade(source.as_ref(), id);
+        out.push(mesh);
     }
     Ok(out)
 }
@@ -2594,6 +2853,205 @@ fn compute_hinge_frames<S: holtburger_dat::ResourceSource + ?Sized>(
         }
     }
     hinges
+}
+
+// ============================================================
+// 3D port follow-on #1: per-SetupModel point/spot lights.
+//
+// Mirrors [`fetch_building_placement`] for the
+// `SetupModel.lights: HashMap<i32, LightInfo>` table (defined at
+// `crates/holtburger-dat/src/file_type/setup_model.rs:29-35`). One
+// `SetupLight` per `LightInfo` carrying origin + ARGB-extracted color
+// + intensity + falloff + cone_angle. The JS-side
+// `attachSetupModelLights` walks every unique setup id used by
+// buildings/statics/entities/cells, calls this export, and instantiates
+// `THREE.PointLight` (cone_angle == 0) or `THREE.SpotLight`
+// (cone_angle > 0) as children of the per-part `Object3D` so the light
+// follows the model's transform tree.
+//
+// Empty `Vec` = "this Setup has no light descriptors" — typical for
+// retail Holtburg buildings, which are mostly raw `0x01` GfxObjs with
+// no Setup at all (`setup_id == model_id` in that case and the wasm
+// returns empty). Returning Vec rather than failing keeps the JS path
+// uniform.
+// ============================================================
+
+/// Phase 7.6.1 (follow-on #1): one per-part light descriptor drained
+/// from `SetupModel.lights`. `part_index` is the HashMap key —
+/// identifies which Setup part the light is rigidly attached to.
+/// `color_r/g/b` are normalized [0,1] components extracted from the
+/// ARGB `color: u32` in the DAT (`R = (color >> 16) & 0xFF`).
+/// `intensity / falloff / cone_angle` are passed through verbatim;
+/// `cone_angle == 0.0` → PointLight, `> 0.0` → SpotLight.
+#[cfg(any(target_arch = "wasm32", test))]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[derive(Debug, Clone, Copy)]
+pub struct SetupLight {
+    pub(crate) part_index: u32,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) z: f32,
+    pub(crate) color_r: f32,
+    pub(crate) color_g: f32,
+    pub(crate) color_b: f32,
+    pub(crate) intensity: f32,
+    pub(crate) falloff: f32,
+    pub(crate) cone_angle: f32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SetupLight {
+    #[wasm_bindgen(getter, js_name = partIndex)]
+    pub fn part_index(&self) -> u32 { self.part_index }
+    #[wasm_bindgen(getter)]
+    pub fn x(&self) -> f32 { self.x }
+    #[wasm_bindgen(getter)]
+    pub fn y(&self) -> f32 { self.y }
+    #[wasm_bindgen(getter)]
+    pub fn z(&self) -> f32 { self.z }
+    #[wasm_bindgen(getter, js_name = colorR)]
+    pub fn color_r(&self) -> f32 { self.color_r }
+    #[wasm_bindgen(getter, js_name = colorG)]
+    pub fn color_g(&self) -> f32 { self.color_g }
+    #[wasm_bindgen(getter, js_name = colorB)]
+    pub fn color_b(&self) -> f32 { self.color_b }
+    #[wasm_bindgen(getter)]
+    pub fn intensity(&self) -> f32 { self.intensity }
+    #[wasm_bindgen(getter)]
+    pub fn falloff(&self) -> f32 { self.falloff }
+    #[wasm_bindgen(getter, js_name = coneAngle)]
+    pub fn cone_angle(&self) -> f32 { self.cone_angle }
+}
+
+/// Phase 7.6.1 (follow-on #1): per-SetupModel light bundle returned
+/// from [`fetch_setup_model_lights`]. Mirrors [`BuildingPlacement`]:
+/// one-shot `take_lights()` drain so JS lifts the Vec across the wasm
+/// boundary without cloning. `part_count` is the LIGHT COUNT (not the
+/// Setup's part count) — naming follows the task spec.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct SetupModelLights {
+    setup_id: u32,
+    lights: Vec<SetupLight>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SetupModelLights {
+    #[wasm_bindgen(getter, js_name = setupId)]
+    pub fn setup_id(&self) -> u32 { self.setup_id }
+
+    /// Light count (NOT the Setup's part count — naming per the task
+    /// spec). Equals `take_lights().len()` on the very first call.
+    #[wasm_bindgen(getter, js_name = partCount)]
+    pub fn part_count(&self) -> u32 { self.lights.len() as u32 }
+
+    /// One-shot drain. Second call returns an empty Vec — JS callers
+    /// hold the resulting array; the wasm side stops owning it.
+    #[wasm_bindgen(js_name = takeLights)]
+    pub fn take_lights(&mut self) -> Vec<SetupLight> {
+        std::mem::take(&mut self.lights)
+    }
+}
+
+/// Phase 7.6.1 (follow-on #1) — new wasm export. Walks a SetupModel
+/// and drains its `lights: HashMap<i32, LightInfo>` table into a flat
+/// Vec of [`SetupLight`] descriptors. JS calls this once per unique
+/// `setup_id` used by buildings/statics/entities/cells.
+///
+/// Raw `0x01` GfxObj inputs (no Setup) return an empty Vec — JS treats
+/// this as "no lights for this model".
+///
+/// Failure modes: the DAT fetch / SetupModel parse failures both
+/// resolve to an empty Vec (caller can tell from `part_count == 0`).
+/// Promise rejection is reserved for prefetch errors only (network /
+/// IO), mirroring the [`fetch_building_placement`] contract.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchSetupModelLights)]
+pub async fn fetch_setup_model_lights(setup_id: u32) -> Result<SetupModelLights, JsValue> {
+    use holtburger_dat::ResourceKey;
+    let source = global_source::global_source();
+    let initial = [ResourceKey::new("eor/portal", setup_id)];
+    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        // Touch the resource so the prefetch walker is happy. The
+        // unpacked SetupModel is consumed below — this just primes
+        // the cache.
+        let _ = s.get_file_by_key(ResourceKey::new("eor/portal", setup_id));
+    })
+    .await?;
+    let lights = collect_setup_model_lights(source.as_ref(), setup_id);
+    Ok(SetupModelLights {
+        setup_id,
+        lights,
+    })
+}
+
+/// Phase 7.6.1 (follow-on #1): pure helper drained from a
+/// `ResourceSource`. Empty Vec for `0x01` GfxObjs and for any parse
+/// failure, so JS uniformly treats "no lights" the same way regardless
+/// of the underlying cause.
+///
+/// AC's `LightInfo.color` is an ARGB-packed u32:
+///   R = (color >> 16) & 0xFF
+///   G = (color >>  8) & 0xFF
+///   B = (color >>  0) & 0xFF
+///   A = (color >> 24) & 0xFF  // the alpha byte; ignored — three.js
+///                              // PointLight.color is RGB only.
+///
+/// HashMap ordering is non-deterministic in Rust; we sort by key so
+/// the returned Vec is stable across runs (tests can assert specific
+/// indices). The key (the HashMap's i32) IS the Setup part index the
+/// light is attached to — preserved on `SetupLight.part_index`.
+#[cfg(any(target_arch = "wasm32", test))]
+fn collect_setup_model_lights<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup_id: u32,
+) -> Vec<SetupLight> {
+    use holtburger_dat::file_type::SetupModel;
+    use holtburger_dat::ResourceKey;
+    // 0x01 = raw GfxObj — no Setup; no lights table to walk.
+    if (setup_id >> 24) as u8 != 0x02 {
+        return Vec::new();
+    }
+    let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", setup_id)) else {
+        return Vec::new();
+    };
+    let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(&bytes)) else {
+        return Vec::new();
+    };
+    if setup.lights.is_empty() {
+        return Vec::new();
+    }
+    // Stable order — sort by HashMap key (the part index).
+    let mut entries: Vec<(i32, &holtburger_dat::file_type::setup_model::LightInfo)> =
+        setup.lights.iter().map(|(k, v)| (*k, v)).collect();
+    entries.sort_by_key(|(k, _)| *k);
+    let mut out = Vec::with_capacity(entries.len());
+    for (part_index, info) in entries {
+        // Negative HashMap keys are theoretically possible in the
+        // DAT format but in practice all live retail entries are >= 0.
+        // Cast to u32 with saturation at 0 — JS reads partIndex as a
+        // u32 getter (`.part_index() -> u32`).
+        let pi = if part_index < 0 { 0u32 } else { part_index as u32 };
+        let argb = info.color;
+        let r = ((argb >> 16) & 0xFF) as f32 / 255.0;
+        let g = ((argb >>  8) & 0xFF) as f32 / 255.0;
+        let b = ((argb      ) & 0xFF) as f32 / 255.0;
+        out.push(SetupLight {
+            part_index: pi,
+            x: info.viewer_space_location.origin.x,
+            y: info.viewer_space_location.origin.y,
+            z: info.viewer_space_location.origin.z,
+            color_r: r,
+            color_g: g,
+            color_b: b,
+            intensity: info.intensity,
+            falloff: info.falloff,
+            cone_angle: info.cone_angle,
+        });
+    }
+    out
 }
 
 /// Top-level per-part dispatch mirroring [`triangulate_model`]: route
@@ -3585,6 +4043,7 @@ impl EnvCellPlacement {
             surfaces: Vec::new(),
             bbox_min: [0.0; 3],
             bbox_max: [0.0; 3],
+            did_degrade: 0,
         })
     }
 }
@@ -5082,6 +5541,7 @@ impl ModelMesh {
             surfaces: self.surfaces.clone(),
             bbox_min: self.bbox_min,
             bbox_max: self.bbox_max,
+            did_degrade: self.did_degrade,
         }
     }
 }
@@ -5432,6 +5892,345 @@ pub async fn fetch_entity_cycle_frames(
         run_frames,
         run_framerate,
         resolved_stance,
+    })
+}
+
+/// Phase 7.4a (3D migration) — RAW per-frame per-part keyframe
+/// transforms for an entity setup at a specific MotionTable
+/// `(stance, command)`. Sibling of [`fetch_entity_cycle_frames`]:
+/// instead of pre-rasterizing each pose into a `ModelMesh`, the
+/// keyframe data is shipped as a flat `Vec<f32>` ready to feed into
+/// `THREE.AnimationClip` / `KeyframeTrack` JS-side.
+///
+/// Layout: `part_frames[(frame_idx * part_count + part_idx) * 7 + i]`
+/// where `i ∈ {0,1,2}` is `(x, y, z)` from the part's
+/// `Frame.origin` and `i ∈ {3,4,5,6}` is `(qw, qx, qy, qz)` from the
+/// part's `Frame.orientation`. AC stores quaternions w-first; three.js
+/// wants `(x, y, z, w)` — the JS adapter (`acQuatToThree` /
+/// `buildAnimationClip`) reorders during the copy. No reordering at
+/// the wasm boundary: ship DAT bytes verbatim so the contract is
+/// trivial to inspect / cross-reference against the parsed
+/// `holtburger_dat::file_type::setup_model::AnimationFrame`.
+///
+/// The accompanying `part_meshes` are the rest-pose per-part
+/// meshes (one `ModelMesh` per `setup.parts[i]`) — the JS side uses
+/// these to build the per-entity rig once, then animates by mutating
+/// each part's `Object3D.position` / `Object3D.quaternion` from the
+/// `AnimationMixer`. This mirrors the Phase 7.2 `BuildingPlacement`
+/// pattern except the parts here belong to a *moving* entity rig,
+/// not a static building.
+///
+/// Empty `part_frames` + `num_frames == 0` + `framerate == 0.0` is
+/// the "no animation resolved" signal — JS treats this as "render
+/// rest pose only; no `AnimationClip` to build". Same triggers as
+/// `fetch_entity_cycle_frames`: raw GfxObj 0x01 setups, MotionTables
+/// missing the requested `(stance, command)` cycle, etc.
+///
+/// `palette_subs_flat` is accepted but currently unused — kept in
+/// the signature to mirror `fetch_entity_model_render`'s contract so
+/// callers can pass the same struct without a special-case
+/// destructure. The actual palette overlays are applied at texture
+/// bake time (Phase 7.4b's `EntityManager` will call
+/// `fetchEntitySurfacesPixels` with these args separately). The
+/// accept-and-validate gate prevents a future caller-mismatch bug
+/// from manifesting as silent texture corruption.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct EntityAnimationData {
+    part_meshes: Vec<ModelMesh>,
+    part_count: u32,
+    num_frames: u32,
+    framerate: f32,
+    resolved_stance: u32,
+    /// Flat keyframe buffer: `num_frames * part_count * 7` f32s.
+    /// `[(x, y, z, qw, qx, qy, qz) per part] per frame`. Empty when
+    /// no cycle resolved. See struct doc for layout invariants.
+    part_frames: Vec<f32>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl EntityAnimationData {
+    /// Number of parts in the SetupModel — equals the length of the
+    /// `Vec<ModelMesh>` `take_part_meshes` returns AND the per-frame
+    /// stride into `part_frames` (each frame contributes `part_count`
+    /// transforms).
+    #[wasm_bindgen(getter, js_name = partCount)]
+    pub fn part_count(&self) -> u32 {
+        self.part_count
+    }
+
+    /// Number of keyframes in the resolved cycle. `0` when no cycle
+    /// resolved under `(stance, command)` — JS falls back to rest pose.
+    #[wasm_bindgen(getter, js_name = numFrames)]
+    pub fn num_frames(&self) -> u32 {
+        self.num_frames
+    }
+
+    /// Authoritative cycle playback rate (frames/sec) from the
+    /// MotionTable's `AnimData.framerate`. `0.0` when no cycle
+    /// resolved.
+    #[wasm_bindgen(getter)]
+    pub fn framerate(&self) -> f32 {
+        self.framerate
+    }
+
+    /// MotionTable stance these keyframes were resolved against —
+    /// same semantics as [`EntityCycleSet::resolved_stance`]. `0`
+    /// when no MotionTable resolved at all.
+    #[wasm_bindgen(getter, js_name = resolvedStance)]
+    pub fn resolved_stance(&self) -> u32 {
+        self.resolved_stance
+    }
+
+    /// Drain the rest-pose per-part meshes. One per `setup.parts[i]`
+    /// in stable order; an empty mesh (`triCount == 0`) at any slot
+    /// preserves the part_index for callers that key animation data
+    /// by it. One-shot — second call returns an empty Vec.
+    #[wasm_bindgen(js_name = takePartMeshes)]
+    pub fn take_part_meshes(&mut self) -> Vec<ModelMesh> {
+        std::mem::take(&mut self.part_meshes)
+    }
+
+    /// Clone the flat keyframe buffer into a JS `Float32Array`.
+    /// Layout: `[(x, y, z, qw, qx, qy, qz) per part] per frame`.
+    /// Total length: `numFrames * partCount * 7`.
+    ///
+    /// Cloned (not drained) because JS may inspect this multiple
+    /// times during a single bake (clip build + future re-target).
+    /// The buffer for a typical 30-frame humanoid walk cycle of 20
+    /// parts is `30 × 20 × 7 = 4200 floats = 16.8 KB` — cheap.
+    #[wasm_bindgen(getter, js_name = partFrames)]
+    pub fn part_frames(&self) -> Vec<f32> {
+        self.part_frames.clone()
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl EntityAnimationData {
+    fn empty(part_meshes: Vec<ModelMesh>, resolved_stance: u32) -> Self {
+        let part_count = part_meshes.len() as u32;
+        Self {
+            part_meshes,
+            part_count,
+            num_frames: 0,
+            framerate: 0.0,
+            resolved_stance,
+            part_frames: Vec::new(),
+        }
+    }
+}
+
+/// Phase 7.4a (3D migration): bake rest-pose per-part meshes + RAW
+/// per-frame keyframe transforms for an entity setup at a specific
+/// `(stance, command)`. JS-side adapter (`scene3d/animation.js`)
+/// converts the keyframe buffer into a `THREE.AnimationClip` with
+/// 2 KeyframeTracks per part (position + quaternion).
+///
+/// Sibling of [`fetch_entity_cycle_frames`] — same prefetch walk,
+/// same substitution path, same stance dispatch — but ships keyframe
+/// data instead of rasterized meshes. The 3D path doesn't need the
+/// pre-rasterized walk-frame meshes because three.js animates the
+/// rest-pose mesh on the GPU via per-part `Object3D` transforms.
+///
+/// `palette_id` and `palette_subs_flat` are accepted to mirror
+/// `fetchEntityModelRender`'s parameter shape so the caller can pass
+/// one struct's worth of args. They're validated for shape but not
+/// applied here — the per-surface RGBA8 bake (which DOES consume them)
+/// runs through `fetchEntitySurfacesPixels` separately.
+///
+/// `motion_command` is a full u32 — `MotionTable::WALK_FORWARD_COMMAND`
+/// (`0x4500_0005`), `RUN_FORWARD_COMMAND`, etc. The high bits are
+/// stripped via `MOTION_KEY_MASK` inside `motion_data_for_cycle`.
+///
+/// Returns `EntityAnimationData::empty()` (rest-pose meshes baked,
+/// `numFrames=0`) when:
+///   - `setup_id` is raw GfxObj (0x01 prefix — no skeleton)
+///   - no MotionTable resolves (no override + no `default_motion_table`)
+///   - the MotionTable doesn't carry the requested `(stance, command)`
+///   - the resolved Animation has no `part_frames`
+///
+/// JS treats `numFrames=0` as "render rest pose only; no clip needed".
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchEntityAnimationKeyframes)]
+pub async fn fetch_entity_animation_keyframes(
+    setup_id: u32,
+    model_changes: Vec<u32>,
+    texture_changes: Vec<u32>,
+    palette_id: u32,
+    palette_subs_flat: Vec<u32>,
+    mtable_id: u32,
+    motion_command: u32,
+    stance: u32,
+) -> Result<EntityAnimationData, JsValue> {
+    use holtburger_dat::file_type::SetupModel;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+
+    if model_changes.len() % 2 != 0 {
+        return Err(JsValue::from_str(
+            "fetch_entity_animation_keyframes: model_changes must be flat [partIndex, gfxId, ...] pairs",
+        ));
+    }
+    if texture_changes.len() % 3 != 0 {
+        return Err(JsValue::from_str(
+            "fetch_entity_animation_keyframes: texture_changes must be flat [partIndex, oldSurface, newSurface, ...] triples",
+        ));
+    }
+    if palette_subs_flat.len() % 3 != 0 {
+        return Err(JsValue::from_str(
+            "fetch_entity_animation_keyframes: palette_subs_flat must be flat [subId, low, len, ...] triples",
+        ));
+    }
+    // palette_id and palette_subs_flat ride through unused at this
+    // layer — the per-surface palette overlay path lives in
+    // fetchEntitySurfacesPixels. Touching the args here ensures any
+    // future palette-aware bake step sees them without a signature
+    // change. Use a `let _` dance so wasm-bindgen doesn't trim them
+    // from the export and the borrow-checker doesn't warn.
+    let _palette_id = palette_id;
+    let _palette_subs_flat = palette_subs_flat;
+
+    let mc: Vec<(u8, u32)> = model_changes
+        .chunks_exact(2)
+        .map(|c| (c[0] as u8, c[1]))
+        .collect();
+    let tc: Vec<(u8, u32, u32)> = texture_changes
+        .chunks_exact(3)
+        .map(|c| (c[0] as u8, c[1], c[2]))
+        .collect();
+    let mt_override = if mtable_id == 0 { None } else { Some(mtable_id) };
+
+    // Raw GfxObj setups have no skeleton. Bake a single rest-pose part
+    // mesh so JS still gets geometry to render, and ship empty keyframes.
+    let source = global_source::global_source();
+    if (setup_id >> 24) as u8 != 0x02 {
+        let initial = [ResourceKey::new("eor/portal", setup_id)];
+        prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+            let _ = triangulate_model_per_part_buckets(s, setup_id);
+        })
+        .await?;
+        let parts_tris = triangulate_model_per_part_buckets(source.as_ref(), setup_id)
+            .ok_or_else(|| {
+                JsValue::from_str(&format!(
+                    "fetch_entity_animation_keyframes: triangulate raw GfxObj 0x{setup_id:08X} failed"
+                ))
+            })?;
+        let part_meshes: Vec<ModelMesh> =
+            parts_tris.into_iter().map(pack_model_mesh).collect();
+        return Ok(EntityAnimationData::empty(part_meshes, 0));
+    }
+
+    // Prefetch: setup, every substituted GfxObj, the MotionTable, and
+    // (lazily, via the closure) the Animation chain reachable through
+    // try_resolve_cycle_frames under the requested (stance, command).
+    let mut initial: Vec<ResourceKey<'_>> = Vec::with_capacity(2 + mc.len());
+    initial.push(ResourceKey::new("eor/portal", setup_id));
+    for (_, gfx_id) in &mc {
+        initial.push(ResourceKey::new("eor/portal", *gfx_id));
+    }
+    if let Some(mt) = mt_override {
+        initial.push(ResourceKey::new("eor/portal", mt));
+    }
+    let mc_for_walk = mc.clone();
+    let tc_for_walk = tc.clone();
+    prefetch::ensure_walk_prefetched(&source, &initial, move |s| {
+        // Touch rest-pose triangulation (warms substituted GfxObjs)
+        // and the cycle frames (warms Animation + chained Anim parts).
+        let _ = triangulate_setup_model_per_part(
+            s, setup_id, &mc_for_walk, &tc_for_walk,
+        );
+        if let Ok(setup_bytes) = s.get_file_by_key(ResourceKey::new("eor/portal", setup_id)) {
+            if let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(&setup_bytes)) {
+                let _ = try_resolve_cycle_frames(s, &setup, mt_override, stance, motion_command);
+            }
+        }
+    })
+    .await?;
+
+    // Rest-pose per-part bake. Substitutions applied via
+    // triangulate_setup_model_per_part — same path
+    // fetchBuildingPlacement uses (Phase 6 step A), extended with
+    // model_changes / texture_changes so clothing + armor land on
+    // the right parts without a re-walk.
+    let parts_tris = triangulate_setup_model_per_part(source.as_ref(), setup_id, &mc, &tc)
+        .ok_or_else(|| {
+            JsValue::from_str(&format!(
+                "fetch_entity_animation_keyframes: triangulate setup 0x{setup_id:08X} failed"
+            ))
+        })?;
+    let part_count = parts_tris.len();
+    let part_meshes: Vec<ModelMesh> = parts_tris.into_iter().map(pack_model_mesh).collect();
+
+    // Cycle resolution. `setup` is reloaded once; cheap relative to
+    // the per-frame mesh bake `fetchEntityCycleFrames` does.
+    let setup_bytes = source
+        .as_ref()
+        .get_file_by_key(ResourceKey::new("eor/portal", setup_id))
+        .map_err(|e| {
+            JsValue::from_str(&format!(
+                "fetch_entity_animation_keyframes: setup load: {e}"
+            ))
+        })?;
+    let setup = SetupModel::unpack(&mut std::io::Cursor::new(&setup_bytes))
+        .map_err(|e| {
+            JsValue::from_str(&format!(
+                "fetch_entity_animation_keyframes: setup parse: {e}"
+            ))
+        })?;
+
+    let (frames, framerate, resolved_stance) =
+        match try_resolve_cycle_frames(source.as_ref(), &setup, mt_override, stance, motion_command)
+        {
+            Some(triple) => triple,
+            None => {
+                // No cycle under this (stance, command). JS gets the
+                // rest-pose meshes + empty keyframes; renderer plays
+                // a static pose until it can fall back to default
+                // stance / command.
+                let fallback_stance = if stance != 0 { stance } else { 0 };
+                return Ok(EntityAnimationData::empty(part_meshes, fallback_stance));
+            }
+        };
+
+    // Flatten keyframes to (num_frames, part_count, 7) row-major in
+    // frame-major order. Per-frame stride: part_count * 7. Per-part
+    // stride within a frame: 7 floats. Layout invariants documented
+    // on the EntityAnimationData struct + the partFrames getter.
+    //
+    // The Animation parser may have laid down a different per-frame
+    // part count than the SetupModel — e.g. an animation built for
+    // a different rig variant. Pad with rest-pose-style identity
+    // (origin=0, orientation=identity) when the keyframe is short,
+    // and truncate when it's long. Either case is rare in retail
+    // assets but we keep the buffer shape strictly `numFrames *
+    // partCount * 7` so JS's stride math stays simple.
+    let num_frames = frames.len();
+    let mut part_frames: Vec<f32> = Vec::with_capacity(num_frames * part_count * 7);
+    for af in &frames {
+        for pi in 0..part_count {
+            if let Some(f) = af.frames.get(pi) {
+                part_frames.push(f.origin.x);
+                part_frames.push(f.origin.y);
+                part_frames.push(f.origin.z);
+                part_frames.push(f.orientation.w);
+                part_frames.push(f.orientation.x);
+                part_frames.push(f.orientation.y);
+                part_frames.push(f.orientation.z);
+            } else {
+                // Short keyframe — pad identity so the buffer stays
+                // dense and JS's stride math holds. Rare in practice.
+                part_frames.extend_from_slice(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
+            }
+        }
+    }
+
+    Ok(EntityAnimationData {
+        part_meshes,
+        part_count: part_count as u32,
+        num_frames: num_frames as u32,
+        framerate,
+        resolved_stance,
+        part_frames,
     })
 }
 
@@ -11611,5 +12410,261 @@ mod tests_substitution {
         // index 42 = green (overlay[0]); index 43 = white (overlay[1]).
         // Sample pixel reads index 42 → green.
         assert_eq!(out.pixels, vec![0, 0xFF, 0, 0xFF]);
+    }
+
+    // ============================================================
+    // Phase 7.6.1 (3D follow-on #1) — per-SetupModel light tests.
+    // ============================================================
+
+    /// Synth a SetupModel with N entries in `lights: HashMap<i32,
+    /// LightInfo>`. Each entry's key is the part index the light is
+    /// rigidly attached to. Returned bytes round-trip through
+    /// `SetupModel::pack` / `unpack` so the test exercises the same
+    /// binrw path live retail data flows through.
+    fn synth_setup_with_lights(
+        setup_id: u32,
+        lights: Vec<(i32, holtburger_dat::file_type::setup_model::LightInfo)>,
+    ) -> Vec<u8> {
+        let mut lights_map = HashMap::new();
+        for (k, v) in lights {
+            lights_map.insert(k, v);
+        }
+        let setup = SetupModel {
+            id: setup_id,
+            flags: 0,
+            parts: vec![0x01000001],
+            parent_index: vec![],
+            default_scale: vec![],
+            holding_locations: HashMap::new(),
+            connection_points: HashMap::new(),
+            placement_frames: HashMap::new(),
+            cyl_spheres: vec![],
+            spheres: vec![],
+            height: 1.0,
+            radius: 1.0,
+            step_up: 0.1,
+            step_down: 0.1,
+            sorting_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+            selection_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+            lights: lights_map,
+            default_animation: None,
+            default_script: None,
+            default_motion_table: None,
+            default_sound_table: None,
+            default_script_table: None,
+        };
+        let mut data = Vec::new();
+        let mut writer = Cursor::new(&mut data);
+        setup.pack(&mut writer).unwrap();
+        data
+    }
+
+    /// Empty-lights Setup drains to an empty Vec — and a raw 0x01
+    /// GfxObj input (no Setup) also drains to empty without trying to
+    /// parse a SetupModel.
+    #[test]
+    fn collect_setup_model_lights_empty_setup_returns_empty() {
+        let setup_id: u32 = 0x02000010;
+        let bytes = synth_setup_with_lights(setup_id, vec![]);
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(("eor/portal".into(), setup_id), bytes);
+        let source = MockSource { files };
+        let out = collect_setup_model_lights(&source, setup_id);
+        assert!(out.is_empty(), "Setup with no lights → empty Vec");
+
+        // 0x01 GfxObj input — collect_setup_model_lights short-circuits
+        // (never even tries to fetch).
+        let out_raw = collect_setup_model_lights(&source, 0x01000001);
+        assert!(out_raw.is_empty(), "0x01 raw GfxObj → empty Vec");
+    }
+
+    /// Two-light Setup: stable order (sorted by part-index key), color
+    /// channels extracted from ARGB packing, cone_angle / intensity /
+    /// falloff pass through verbatim.
+    #[test]
+    fn collect_setup_model_lights_drains_argb_correctly() {
+        use holtburger_dat::file_type::setup_model::LightInfo;
+        use holtburger_dat::graphics::Frame;
+        let setup_id: u32 = 0x02000020;
+        // Part 3, white light, cone_angle 0 → PointLight semantics on JS side.
+        let li_3 = LightInfo {
+            viewer_space_location: Frame {
+                origin: Vector3 { x: 1.0, y: 2.0, z: 3.0 },
+                orientation: Quaternion::identity(),
+            },
+            color: 0xFF_FF_FF_FFu32, // ARGB: A=255, R=255, G=255, B=255
+            intensity: 1.5,
+            falloff: 10.0,
+            cone_angle: 0.0,
+        };
+        // Part 1, pure red, cone_angle 0.5 → SpotLight on JS side.
+        let li_1 = LightInfo {
+            viewer_space_location: Frame {
+                origin: Vector3 { x: -1.0, y: 0.0, z: 5.0 },
+                orientation: Quaternion::identity(),
+            },
+            color: 0xFF_FF_00_00u32, // ARGB: R=255, G=0, B=0
+            intensity: 0.8,
+            falloff: 5.0,
+            cone_angle: 0.5,
+        };
+        let bytes = synth_setup_with_lights(setup_id, vec![(3, li_3), (1, li_1)]);
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(("eor/portal".into(), setup_id), bytes);
+        let source = MockSource { files };
+        let out = collect_setup_model_lights(&source, setup_id);
+        assert_eq!(out.len(), 2);
+
+        // Stable sort by part index → part 1 first, part 3 second.
+        assert_eq!(out[0].part_index, 1);
+        assert_eq!(out[0].x, -1.0);
+        assert_eq!(out[0].z, 5.0);
+        assert!((out[0].color_r - 1.0).abs() < 1e-6, "red R=1.0");
+        assert!(out[0].color_g.abs() < 1e-6, "red G=0");
+        assert!(out[0].color_b.abs() < 1e-6, "red B=0");
+        assert!((out[0].intensity - 0.8).abs() < 1e-6);
+        assert!((out[0].falloff - 5.0).abs() < 1e-6);
+        assert!((out[0].cone_angle - 0.5).abs() < 1e-6);
+
+        assert_eq!(out[1].part_index, 3);
+        assert_eq!(out[1].x, 1.0);
+        assert_eq!(out[1].y, 2.0);
+        assert_eq!(out[1].z, 3.0);
+        assert!((out[1].color_r - 1.0).abs() < 1e-6, "white R");
+        assert!((out[1].color_g - 1.0).abs() < 1e-6, "white G");
+        assert!((out[1].color_b - 1.0).abs() < 1e-6, "white B");
+        assert!((out[1].intensity - 1.5).abs() < 1e-6);
+        assert!((out[1].falloff - 10.0).abs() < 1e-6);
+        assert_eq!(out[1].cone_angle, 0.0); // PointLight semantics.
+    }
+
+    /// Missing DAT file → empty Vec, NOT a panic. Caller observes
+    /// `part_count == 0` and skips this Setup.
+    #[test]
+    fn collect_setup_model_lights_missing_file_returns_empty() {
+        let files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        let source = MockSource { files };
+        let out = collect_setup_model_lights(&source, 0x02000030);
+        assert!(out.is_empty());
+    }
+
+    /// Build a synthetic two-sided GfxObj with distinct pos/neg
+    /// surface DIDs. `sides_type = 2 (CullMode::Clockwise)` triggers
+    /// the back-face emission path in `append_gfx_tris_with_tex_swaps`.
+    fn synth_gfx_obj_two_sided(
+        id: u32,
+        pos_surf_did: u32,
+        neg_surf_did: u32,
+    ) -> Vec<u8> {
+        let mk_vert = |x: f32, y: f32| SWVertex {
+            num_uvs: 1,
+            origin: Vector3 { x, y, z: 0.0 },
+            normal: Vector3 { x: 0.0, y: 0.0, z: 1.0 },
+            uvs: vec![Vec2Duv { u: x, v: y }],
+        };
+        let mut vertices = HashMap::new();
+        vertices.insert(0u16, mk_vert(0.0, 0.0));
+        vertices.insert(1u16, mk_vert(1.0, 0.0));
+        vertices.insert(2u16, mk_vert(0.0, 1.0));
+
+        let poly = Polygon {
+            num_pts: 3,
+            stippling: 0,
+            sides_type: 2, // CullMode::Clockwise → emit back face
+            pos_surface: 0,
+            neg_surface: 1,
+            vertex_ids: vec![0, 1, 2],
+            pos_uv_indices: vec![0, 0, 0],
+            neg_uv_indices: vec![0, 0, 0],
+        };
+        let mut polygons = HashMap::new();
+        polygons.insert(0u16, poly);
+
+        let gfx = GfxObj {
+            id,
+            flags: GfxObjFlags::HAS_DRAWING,
+            surfaces: vec![pos_surf_did, neg_surf_did],
+            vertex_array: CVertexArray { vertex_type: 1, vertices },
+            physics_polygons: HashMap::new(),
+            physics_bsp: None,
+            sort_center: Vector3::zero(),
+            polygons,
+            drawing_bsp: Some(BspNode::Leaf(BspLeaf {
+                index: 0,
+                solid: 0,
+                sphere: Some(Sphere { center: Vector3::zero(), radius: 1.0 }),
+                poly_ids: vec![0],
+            })),
+            did_degrade: None,
+        };
+        let mut data = Vec::new();
+        let mut writer = Cursor::new(&mut data);
+        gfx.pack(&mut writer).unwrap();
+        data
+    }
+
+    /// Phase 7 follow-on #7 — two-sided polygons with DISTINCT
+    /// `pos_surface != neg_surface` emit TWO tris: one with the pos
+    /// surface (forward winding) and one with the neg surface
+    /// (reverse winding + negated normal). The single-surface and
+    /// one-sided (sides_type != 0x2) paths must remain backward-
+    /// compatible — one tri each.
+    #[test]
+    fn append_gfx_tris_emits_back_face_for_distinct_two_sided_surfaces() {
+        let bytes = synth_gfx_obj_two_sided(0x01000002, 0xAABB0001, 0xAABB0002);
+        let gfx = GfxObj::unpack(&mut Cursor::new(&bytes)).unwrap();
+        let mut tris = Vec::new();
+        append_gfx_tris_with_tex_swaps(
+            &mut tris,
+            &gfx,
+            Vector3::zero(),
+            Quaternion::identity(),
+            &[],
+        );
+        assert_eq!(
+            tris.len(),
+            2,
+            "two-sided distinct-surface poly must emit pos + neg tris"
+        );
+        // First tri = front face, pos surface, original winding.
+        assert_eq!(tris[0].surface_did, 0xAABB0001);
+        assert_eq!(tris[0].pos[0], [0.0, 0.0, 0.0]);
+        assert_eq!(tris[0].pos[1], [1.0, 0.0, 0.0]);
+        assert_eq!(tris[0].pos[2], [0.0, 1.0, 0.0]);
+        // Second tri = back face, neg surface, reversed winding (A, C, B).
+        assert_eq!(tris[1].surface_did, 0xAABB0002);
+        assert_eq!(tris[1].pos[0], [0.0, 0.0, 0.0]);
+        assert_eq!(tris[1].pos[1], [0.0, 1.0, 0.0]);
+        assert_eq!(tris[1].pos[2], [1.0, 0.0, 0.0]);
+        // Normals are antiparallel.
+        assert!((tris[0].normal[0] + tris[1].normal[0]).abs() < 1e-6);
+        assert!((tris[0].normal[1] + tris[1].normal[1]).abs() < 1e-6);
+        assert!((tris[0].normal[2] + tris[1].normal[2]).abs() < 1e-6);
+    }
+
+    /// Same `sides_type=2` two-sided polygon but with pos and neg
+    /// surfaces pointing at the SAME DID — only the front face is
+    /// emitted; the back face uses three.js DoubleSide on the same
+    /// material. Avoids doubling draw calls on common cloth banners.
+    #[test]
+    fn append_gfx_tris_skips_back_face_when_surfaces_match() {
+        // Build the same synth as above, then mutate the surfaces
+        // vector to make pos and neg point at the same DID.
+        let bytes = synth_gfx_obj_two_sided(0x01000003, 0xCCDD0001, 0xCCDD0001);
+        let gfx = GfxObj::unpack(&mut Cursor::new(&bytes)).unwrap();
+        let mut tris = Vec::new();
+        append_gfx_tris_with_tex_swaps(
+            &mut tris,
+            &gfx,
+            Vector3::zero(),
+            Quaternion::identity(),
+            &[],
+        );
+        assert_eq!(
+            tris.len(),
+            1,
+            "two-sided same-surface poly must emit ONE tri (DoubleSide draw)"
+        );
+        assert_eq!(tris[0].surface_did, 0xCCDD0001);
     }
 }

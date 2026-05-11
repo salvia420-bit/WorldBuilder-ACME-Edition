@@ -496,11 +496,18 @@
       Pin: 8.18.1 (npm `pixi.js@8.18.1`). Update both this URL and the
       version note in `apps/holtburger-web/README.md` together when
       bumping.
+
+      Phase 7.0 (3D migration): three.js r184 + addons added behind the
+      `?renderer=3d` URL flag. The 2D PIXI path stays the default; three
+      is dynamically imported only when the flag is present, so 2D-only
+      users pay nothing for the additional bundle bytes.
     -->
     <script type="importmap">
       {
         "imports": {
-          "pixi.js": "https://cdn.jsdelivr.net/npm/pixi.js@8.18.1/dist/pixi.min.mjs"
+          "pixi.js": "https://cdn.jsdelivr.net/npm/pixi.js@8.18.1/dist/pixi.min.mjs",
+          "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/"
         }
       }
     </script>
@@ -521,8 +528,10 @@
         fetch_surfaces_pixels,
         fetchEntityModelRender,
         fetchEntityCycleFrames,
+        fetchEntityAnimationKeyframes,
         fetchEntitySurfacesPixels,
         fetchBuildingPlacement,
+        fetchSetupModelLights,
         populateBuildingAabbsForLandblock,
         fetchEnvCellsInLandblock,
         init_cell_containers,
@@ -4677,41 +4686,87 @@ void main() {
           if (colours[i] !== 0) colourMap.set(uniqueModels[i], colours[i]);
         }
 
-        renderStatus.textContent = "Rendering…";
-        const renderCounts = await renderNeighbourhood(canvas, NEIGHBOURHOOD, meshes, objects, spriteMap, colourMap);
+        // Phase 7.0 — `?renderer=3d` URL flag gates the three.js
+        // hello-world path. The 2D PIXI path (the `else` block below)
+        // stays default and unchanged; phases 7.1–7.7 grow the 3D
+        // path until parity is reached, then 3D becomes default.
+        // Three.js is dynamically imported so 2D-only users never
+        // pay the bundle cost.
+        const useRenderer3d =
+          new URLSearchParams(window.location.search).get("renderer") === "3d";
+        if (useRenderer3d) {
+          renderStatus.textContent = "Initializing 3D renderer (?renderer=3d)…";
+          const { init3D } = await import("./scene3d/index.js");
+          // sessionHandle exposed via window.__sessionHandle by the
+          // login-flow handler (see line ~5251). Pass it through so
+          // future phases (cell visibility, MovementSystem) can read
+          // the same handle the 2D path consumes via the global.
+          await init3D(canvas, window.__sessionHandle, {
+            fetch_landblock_heightmaps,
+            fetch_terrain_textures,
+            fetch_landblock_objects,
+            fetch_model_meshes,
+            fetch_surfaces_pixels,
+            fetchEntityModelRender,
+            fetchEntityCycleFrames,
+            fetchEntityAnimationKeyframes,
+            fetchEntitySurfacesPixels,
+            fetchBuildingPlacement,
+            fetchSetupModelLights,
+            populateBuildingAabbsForLandblock,
+            fetchEnvCellsInLandblock,
+          });
+          // Free the meshes/objects views the 3D path doesn't consume
+          // yet (Phase 7.1 will read them via wasmExports directly).
+          // The HUD panels (vitals, inventory, chat) are DOM and stay
+          // wired by the login/spawn flow regardless of renderer.
+          for (const m of meshes) m.free();
+          for (const o of objects) o.free();
+          stageInfo.innerHTML = `
+            <dt>Renderer</dt><dd>three.js r184 (Phase 7.0 hello-world)</dd>
+            <dt>Status</dt><dd>BoxGeometry cube at AC (0, 0, 5)</dd>
+            <dt>Coord system</dt><dd>worldRoot rotation.x = -π/2 (AC Z-up → three Y-up)</dd>
+            <dt>Flag</dt><dd>?renderer=3d (omit for default 2D PIXI path)</dd>
+          `;
+          renderStatus.innerHTML =
+            `<span class="ok">[OK]</span> 3D renderer initialised — see hello-cube. Terrain / buildings / cells / entities land in phases 7.1–7.4.`;
+        } else {
+          renderStatus.textContent = "Rendering…";
+          const renderCounts = await renderNeighbourhood(canvas, NEIGHBOURHOOD, meshes, objects, spriteMap, colourMap);
 
-        // Aggregate height range across the 9 landblocks for the panel.
-        let aggMin = Infinity;
-        let aggMax = -Infinity;
-        for (const m of meshes) {
-          if (m.heightMin < aggMin) aggMin = m.heightMin;
-          if (m.heightMax > aggMax) aggMax = m.heightMax;
+          // Aggregate height range across the 9 landblocks for the panel.
+          let aggMin = Infinity;
+          let aggMax = -Infinity;
+          for (const m of meshes) {
+            if (m.heightMin < aggMin) aggMin = m.heightMin;
+            if (m.heightMax > aggMax) aggMax = m.heightMax;
+          }
+          const centre = meshes[4];
+          const distinctTypes = new Set(centre.terrainCodes).size;
+          const centreObjects = objects.filter((o) => o.landblockId === (NEIGHBOURHOOD[4].id ^ 1) >>> 0).length;
+          const totalObjects = objects.length;
+          stageInfo.innerHTML = `
+            <dt>Centre cell</dt><dd>0x${(NEIGHBOURHOOD[4].id >>> 0)
+              .toString(16)
+              .toUpperCase()
+              .padStart(8, "0")} (Holtburg)</dd>
+            <dt>Landblocks</dt><dd>${meshes.length} (3×3)</dd>
+            <dt>Centre min/max</dt><dd>${centre.heightMin.toFixed(1)} / ${centre.heightMax.toFixed(1)} m</dd>
+            <dt>Aggregate min/max</dt><dd>${aggMin.toFixed(1)} / ${aggMax.toFixed(1)} m</dd>
+            <dt>Centre terrain types</dt><dd>${distinctTypes} distinct</dd>
+            <dt>Objects</dt><dd>${totalObjects} placed (${centreObjects} at Holtburg)</dd>
+            <dt>Sprite coverage</dt><dd>${spriteMap.size} atlas entries available</dd>
+            <dt>Live tiles</dt><dd>${renderCounts?.withLive ?? 0} placements rendered live (step 6)</dd>
+            <dt>Invisible</dt><dd>${renderCounts?.invisible ?? 0} engine-internal anchors suppressed</dd>
+            <dt>Real colours</dt><dd>${colourMap.size} of ${uniqueModels.length} unique models resolved</dd>
+            <dt>Vertex spacing</dt><dd>${(METERS_PER_LANDBLOCK / 8).toFixed(0)} m</dd>
+            <dt>Controls</dt><dd>wheel = zoom, drag = pan</dd>
+          `;
+          renderStatus.innerHTML =
+            `<span class="ok">[OK]</span> Rendered Holtburg + 8 neighbours with terrain atlas + ${totalObjects} object sprites. Mouse-wheel to zoom, click-and-drag to pan.`;
+          for (const m of meshes) m.free();
+          for (const o of objects) o.free();
         }
-        const centre = meshes[4];
-        const distinctTypes = new Set(centre.terrainCodes).size;
-        const centreObjects = objects.filter((o) => o.landblockId === (NEIGHBOURHOOD[4].id ^ 1) >>> 0).length;
-        const totalObjects = objects.length;
-        stageInfo.innerHTML = `
-          <dt>Centre cell</dt><dd>0x${(NEIGHBOURHOOD[4].id >>> 0)
-            .toString(16)
-            .toUpperCase()
-            .padStart(8, "0")} (Holtburg)</dd>
-          <dt>Landblocks</dt><dd>${meshes.length} (3×3)</dd>
-          <dt>Centre min/max</dt><dd>${centre.heightMin.toFixed(1)} / ${centre.heightMax.toFixed(1)} m</dd>
-          <dt>Aggregate min/max</dt><dd>${aggMin.toFixed(1)} / ${aggMax.toFixed(1)} m</dd>
-          <dt>Centre terrain types</dt><dd>${distinctTypes} distinct</dd>
-          <dt>Objects</dt><dd>${totalObjects} placed (${centreObjects} at Holtburg)</dd>
-          <dt>Sprite coverage</dt><dd>${spriteMap.size} atlas entries available</dd>
-          <dt>Live tiles</dt><dd>${renderCounts?.withLive ?? 0} placements rendered live (step 6)</dd>
-          <dt>Invisible</dt><dd>${renderCounts?.invisible ?? 0} engine-internal anchors suppressed</dd>
-          <dt>Real colours</dt><dd>${colourMap.size} of ${uniqueModels.length} unique models resolved</dd>
-          <dt>Vertex spacing</dt><dd>${(METERS_PER_LANDBLOCK / 8).toFixed(0)} m</dd>
-          <dt>Controls</dt><dd>wheel = zoom, drag = pan</dd>
-        `;
-        renderStatus.innerHTML =
-          `<span class="ok">[OK]</span> Rendered Holtburg + 8 neighbours with terrain atlas + ${totalObjects} object sprites. Mouse-wheel to zoom, click-and-drag to pan.`;
-        for (const m of meshes) m.free();
-        for (const o of objects) o.free();
        } catch (err) {
         const msg = String(err?.message ?? err);
         const missingFixture =
@@ -5966,6 +6021,16 @@ void main() {
             // wasm-bindgen-allocated structs leak across the boundary
             // until JS releases them.
             const entityUpdates = handle.pollEntityUpdates();
+            // Phase 7.5: forward the still-alive (pre-.free()) updates
+            // array to the 3D EntityManager when `?renderer=3d` is
+            // active. The hook (installed by
+            // `scene3d/loop.js#installSharedDrainHook` after init3D
+            // resolves) iterates read-only — it does NOT consume / .free()
+            // the wasm-bindgen handles; the for-loop below still owns
+            // the lifecycle and calls upd.free() at line ~6062. No-op
+            // in 2D mode (the hook is undefined when ?renderer=3d isn't
+            // present).
+            try { window.__scene3dEntityHook?.(entityUpdates); } catch (e) { console.warn("[7.5] scene3d hook:", e); }
             for (const upd of entityUpdates) {
               if (upd.kind === 0) handlePositionUpdate(upd);
               else if (upd.kind === 1) {

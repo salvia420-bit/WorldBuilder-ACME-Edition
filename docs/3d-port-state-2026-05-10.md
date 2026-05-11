@@ -1,0 +1,248 @@
+# 3D Port State — 2026-05-10
+
+This document is the canonical entry point for any agent picking up
+the 3D port of `apps/holtburger-web`. It lists what works end-to-end,
+what's still on the 2D path, every smoke check, every capture, every
+test, and every documented follow-on across Phases 7.0 → 7.7.
+
+## Summary
+
+- **Migration target:** three.js r184 for world rendering, PIXI v8.18.1 retained for HUD/nameplate overlays. Decision recorded in `/home/wbterminal/.claude/plans/atomic-marinating-stearns.md` (the working plan file).
+- **Phases landed:** 7.0 → 7.7 (8 phases total).
+- **Default renderer:** **2D PIXI v8** — the 3D path is feature-flagged via the URL parameter `?renderer=3d` (see `apps/holtburger-web/index.html:4694`). The 2D path stays the default until a separate cutover commit is approved.
+- **Smoke:** 146 OK / 0 FAIL / 1 SKIP (the SKIP is the `start_session live round-trip` check that needs a real ACE). The `--fast` mode runs the static-only subset (100 checks) faster by skipping the manifest fixture bake.
+- **Workspace cargo tests:** 1222 passed / 0 failed across the Rust workspace as of this commit (`cargo test --workspace`).
+- **Captures (all PASS as of this writing):**
+  - `apps/holtburger-web/capture_phase7_0_hello_cube.cjs`
+  - `apps/holtburger-web/capture_phase7_1_terrain.cjs`
+  - `apps/holtburger-web/capture_phase7_2_buildings.cjs`
+  - `apps/holtburger-web/capture_phase7_3_envcells.cjs`
+  - `apps/holtburger-web/capture_phase7_4_entities.cjs`
+  - `apps/holtburger-web/capture_phase7_5_camera.cjs`
+  - `apps/holtburger-web/capture_phase7_6_lighting.cjs`
+  - `apps/holtburger-web/capture_phase7_7_frustum.cjs`
+- **ESM tests (Node, no browser):**
+  - `apps/holtburger-web/test_phase7_4a_animation_clip.mjs`
+  - `apps/holtburger-web/test_phase7_4b_entity_pipeline.mjs`
+  - `apps/holtburger-web/test_phase7_5_camera.mjs`
+  - `apps/holtburger-web/test_phase7_6_lighting.mjs`
+
+## What works end-to-end on the 3D path
+
+**Note:** the live 3D path is currently NOT visually rendering Holtburg because of the camera-rotation bug discovered in Phase 7.7 (see follow-on #0 below). The data pipeline, scene graph, animation, lighting, and frustum culling are all correct AND verified — the camera simply points 90° wrong. Earlier-phase captures pass because they verify scene-graph membership counts and module-export shape, not pixel output. The list below is the scene-graph state that init3D produces.
+
+Driving `?renderer=3d` against tailnet1's live ACE (Tailscale 100.116.47.66, port 8765) AND under capture-script mode-1 (mock SessionHandle + real wasm DAT exports):
+
+- **Terrain.** 9-LB Holtburg neighbourhood mesh built via `fetch_landblock_heightmaps([9 cell ids])` → `landblockMeshToGeometry`. Each LB is a `THREE.Mesh` with a custom `ShaderMaterial` running the bilinear-blend GLSL ES 3.00 shader from the 2D path. Atlas + road textures uploaded as `CanvasTexture` (sRGB). Per-LB world position is `(lbX*192, lbY*192, 0)`.
+- **Buildings.** 16 Holtburg buildings via `fetchBuildingPlacement(modelId)`. Per-part `Object3D` tree mirrors the SetupModel hierarchy. Per-part hinge wrappers retained so door rotation can drive `Object3D.rotation.z` on the named wrapper. Per-surface `THREE.Mesh` leaves grouped by surface_did, materials cached in `MaterialCache: Map<surfaceDid, MeshStandardMaterial>`.
+- **Statics.** Fused `meshToFusedGeometry` per unique modelId, then placement-instanced `Mesh`es under `staticsGroup`.
+- **EnvCells.** Mite Maze (`0x01F80000`) + Holtburg Dungeon (`0x01F60000`) lazy-loaded; 1308 cells total registered into `liveScene3d.cellContainers3d`. Per-cell `Group` containing per-surface `Mesh`es + per-cell static `Mesh`es.
+- **Cell visibility.** Per-rAF `tickCellVisibility3D` reads `SessionHandle.getCurrentCellId() / getRenderSet(d) / isCurrentCellIndoor()` and flips `Group.visible` on cell containers and the outdoor batch. Identical semantics to the 2D `tickCellVisibility` at `index.html:4414-4470`.
+- **Animations.** `fetch_entity_animation_keyframes(setup_id, motion_table_id, motion_command, stance) → EntityAnimationData` (Rust at `apps/holtburger-web/src/lib.rs:5596`). JS-side `buildAnimationClip` in `scene3d/animation.js` converts the raw per-frame `Frame { origin, orientation }` arrays into `THREE.AnimationClip` with 2N `KeyframeTrack`s (position + quaternion per part). `AnimationCache` keys on `(setupId, motionTableId, motionCommand, stance)`.
+- **Entities.** `EntityManager` in `scene3d/entities.js` owns one `THREE.Object3D` rig per GUID, one `THREE.AnimationMixer` per entity, with `crossFade` between actions on motion-command changes. Stance-keyed clip lookup. 2D `drainEvents` at `index.html:6022` forwards `pollEntityUpdates()` results to `window.__scene3dEntityHook` so the 3D path sees the same wire stream without re-draining.
+- **Camera.** `CameraSwitcher` in `scene3d/camera.js` hot-swaps between `follow` (perspective), `orbit` (perspective + OrbitControls), and `topDown` (orthographic) on the `C` keypress. WASD → `setMovementInput` math is camera-relative for the follow camera. `PointerLockControls` wired for mouse-look (correct only when `playerHeading == followYaw` — see follow-on #2 below).
+- **Lighting.** `setupSceneLighting(scene, { sceneSize: 600 })` attaches a `DirectionalLight` (sun) + `AmbientLight` + optional `HemisphereLight` to a `lights` group on the scene root. `tickLightingForCellState(scene3d, sessionHandle)` runs every frame, flips `sun.visible=false` + boosts `ambient.intensity` 0.5 → 0.7 when the wasm BFS reports indoor.
+- **Frustum culling.** Verified in Phase 7.7. Every `BufferGeometry` in `scene3d/*.js` is constructed via one of four helpers (`landblockMeshToGeometry`, `meshToGeometryGroups`, `meshToFusedGeometry`, or the inline road overlay in `terrain.js`) and every helper calls `geometry.computeBoundingSphere()` before the geometry is wrapped in a `Mesh`. The hello-cube's `BoxGeometry` was missing `computeBoundingSphere()` and the call was added in Phase 7.7 (`scene3d/index.js:73`); three.js's primitive constructors do NOT auto-compute boundingSphere in r184. No code sets `frustumCulled = false`. Measured reduction (`capture_phase7_7_frustum.cjs` against a camera positioned correctly through the AC→three.js worldRoot rotation): in-Holtburg view = 153 draw calls / 4069 triangles, 100km-away view = 0 draw calls / 0 triangles → 100% reduction. The away-view result is even stronger than the 50% pass threshold because the far-plane is 5000 m and the entire scene fits in a 600 m box, so a 100 km translation puts everything beyond both the near-plane and the bounding-sphere test.
+
+## Architecture
+
+### Plan + working files
+
+- **Working plan:** `/home/wbterminal/.claude/plans/atomic-marinating-stearns.md` (8 sections: Context, Strategic decisions, Data conversion pipelines table, Phased implementation, Critical files, Existing code to reuse, Risks and mitigations, Verification).
+- **Renderer scaffolding:** `apps/holtburger-web/scene3d/` directory, 13 modules, 5005 lines total.
+
+### `scene3d/` modules (with line counts)
+
+| File | Lines | Role |
+|---|---|---|
+| `apps/holtburger-web/scene3d/index.js` | 412 | Public `init3D(canvas, sessionHandle, wasmExports)` entry point. Builds renderer + scene + cameras, calls per-phase builders, exposes `window.liveScene3d`. |
+| `apps/holtburger-web/scene3d/adapter.js` | 561 | Wasm → three.js converters. `landblockMeshToGeometry`, `meshToGeometryGroups`, `meshToFusedGeometry`, `placementToMatrix4`, `acQuatToThree`, `surfacePixelsToTexture`. Always copies wasm buffers (`Float32Array.from(...)`). |
+| `apps/holtburger-web/scene3d/materials.js` | 232 | `MaterialCache: Map<surfaceDid, MeshStandardMaterial>` + bulk `preload([dids])`. `fallbackMaterial` for missing-texture cases. |
+| `apps/holtburger-web/scene3d/terrain.js` | 441 | Bilinear-blend `ShaderMaterial` port from `index.html:999-1075`. Road overlay as additive `MeshBasicMaterial` with `polygonOffset`. |
+| `apps/holtburger-web/scene3d/buildings.js` | 404 | Holtburg building loader; per-part `Object3D` tree with hinge wrappers; per-surface `Mesh` leaves. |
+| `apps/holtburger-web/scene3d/statics.js` | 250 | Fused-geometry placement loader for non-building statics. |
+| `apps/holtburger-web/scene3d/cells.js` | 431 | EnvCell loader (Mite Maze + Holtburg Dungeon) + `tickCellVisibility3D`. |
+| `apps/holtburger-web/scene3d/animation.js` | 269 | `buildAnimationClip(anim, partNames)` + `AnimationCache`. |
+| `apps/holtburger-web/scene3d/entities.js` | 792 | `EntityManager` with per-entity rig + `AnimationMixer` + `crossFade`. |
+| `apps/holtburger-web/scene3d/camera.js` | 550 | `CameraSwitcher` (follow / orbit / topDown), `PointerLockControls`, `OrbitControls`, camera-relative WASD math. |
+| `apps/holtburger-web/scene3d/lighting.js` | 302 | `setupSceneLighting` + `tickLightingForCellState` + `attachSetupModelLights` (stub, deferred). |
+| `apps/holtburger-web/scene3d/loop.js` | 355 | Per-frame tick (`tickPerFrame`): cell visibility → lighting → camera → entity mixer → entity-event drain. |
+| `apps/holtburger-web/scene3d/hud.js` | 6 | Placeholder. Nameplate / chip overlay is a documented follow-on. |
+
+### Wasm-bindgen surface consumed by the 3D path
+
+All exports already exist in `apps/holtburger-web/src/lib.rs`; only `fetch_entity_animation_keyframes` was added in Phase 7.4a. Every other export is reused unmodified from the 2D path.
+
+| Export | Rust location | Used by | Purpose |
+|---|---|---|---|
+| `fetch_landblock_heightmaps(Vec<u32>) -> Vec<LandblockMesh>` | `src/lib.rs:341` | `terrain.js` | 9-LB heightmap fetch for Holtburg. |
+| `fetch_terrain_textures() -> Vec<TerrainTexture>` | `src/lib.rs:757` | `terrain.js` | 33-tile terrain atlas + standalone road tile. |
+| `fetch_landblock_objects(Vec<u32>, u16) -> Vec<...>` | `src/lib.rs:676` | `buildings.js`, `statics.js` | Per-LB placement records (buildings + statics). |
+| `fetchBuildingPlacement(model_id: u32) -> BuildingPlacement` | `src/lib.rs:2522` | `buildings.js` | Per-part mesh + hinge frame + AABB list. |
+| `fetch_model_meshes(Vec<u32>) -> Vec<ModelMesh>` | `src/lib.rs:2372` | `statics.js`, `cells.js` | Per-model triangle data for fused statics. |
+| `fetch_surfaces_pixels(Vec<u32>) -> Vec<SurfacePixels>` | `src/lib.rs:2169` | `materials.js` | Bulk texture-pixel fetch for `MaterialCache.preload`. |
+| `fetchEnvCellsInLandblock(landblock_id: u32) -> Vec<EnvCellPlacement>` | `src/lib.rs:4730` | `cells.js` | EnvCell geometry + portal references. |
+| `fetchEntityModelRender(setup_id, model_changes, texture_changes, mtable_id) -> EntityRender` | `src/lib.rs:5117` | `entities.js` | Per-part mesh + texture for entity rig build. |
+| `fetchEntitySurfacesPixels(...) -> Vec<SurfacePixels>` | `src/lib.rs:2294` | `entities.js` | Per-entity surface textures (clothing-table substituted). |
+| `fetchEntityAnimationKeyframes(setup_id, mtable_id, motion_cmd, stance) -> EntityAnimationData` | `src/lib.rs:5596` | `animation.js`, `entities.js` | **NEW in Phase 7.4a** — raw per-frame `Frame { origin, orientation }` arrays. |
+
+### Coordinate convention
+
+- **AC native:** Z-up, +X east, +Y north, heights in metres (range [0, 510 m] = `u8 * 2.0`).
+- **three.js scene root:** identity matrix. **`worldRoot` (a child of `scene`) carries `rotation.x = -π/2`** (`scene3d/index.js:51`), converting AC Z-up to three.js Y-up. Every gameplay group (`terrainGroup`, `buildingsGroup`, `staticsGroup`, `cellsGroup`, `entitiesGroup`) is a child of `worldRoot`, so all geometry inside those groups is set in raw AC coordinates and three.js does the rotation once at the root. **Cameras live OUTSIDE `worldRoot`** (added directly to `scene`); they operate in three.js world coords. To put a camera at the AC location `(ax, ay, az)`, set the camera position to three.js `(ax, az, -ay)` — that is, apply the same `rotation.x = -π/2` mapping AC → three.js. The capture script `capture_phase7_7_frustum.cjs` does this explicitly.
+- **Quaternion convention.** AC stores `(qw, qx, qy, qz)`; three.js `Quaternion.set(x, y, z, w)`. The `acQuatToThree(qw, qx, qy, qz)` helper in `scene3d/adapter.js` does the reorder.
+
+## Phases — as-built
+
+### Phase 7.0 — Scaffolding
+
+Three.js r184 added to the page's importmap (`index.html:501-506`). Empty `THREE.Scene` + `THREE.WebGLRenderer` constructed in `scene3d/index.js`. `BoxGeometry` hello-cube at `(0, 0, 5)` for the very first capture's "scene has at least one Mesh" assertion. Feature flag wired at `index.html:4694` — `?renderer=3d` URL param dynamically imports `scene3d/index.js`; the 2D `renderNeighbourhood` path stays default. Smoke delta: +1 check.
+
+### Phase 7.1 — Terrain
+
+Bilinear-blend GLSL ES 3.00 fragment shader from `index.html:999-1075` ported to `THREE.ShaderMaterial` with `glslVersion: THREE.GLSL3` and `side: THREE.FrontSide`. 9-LB Holtburg neighbourhood mesh built; per-LB heightfield geometry has `computeVertexNormals()` for free Lambert hillshade and `computeBoundingSphere()` for frustum culling. Road overlay as additive `MeshBasicMaterial` with `polygonOffset: true`. Atlas + road textures uploaded as `CanvasTexture(canvas)` with `SRGBColorSpace`. Smoke delta: +1 check.
+
+### Phase 7.2 — Buildings + statics
+
+`renderModelTile()` replaced with direct `Mesh` construction. Per-part `Object3D` tree mirrors SetupModel hierarchy; named hinge wrappers retained for door rotation. `MaterialCache` introduced (one `MeshStandardMaterial` per `surface_did`, cached). `bakePerPartBuildingTextures()` from the 2D path dropped — that step's `RenderTexture` flatten was the 2D pipeline's only 3D-flattening op. Statics use `meshToFusedGeometry` (single fused geom per modelId) for draw-call efficiency. Smoke delta: +1 check.
+
+### Phase 7.3 — EnvCells
+
+Mite Maze (`0x01F80000`) + Holtburg Dungeon (`0x01F60000`) eager-loaded at init3D time. 1308 cells total across the two dungeons. Per-cell `Group` containing per-surface `Mesh`es + per-cell static `Mesh`es. `tickCellVisibility3D` wires the wasm cell BFS (`getCurrentCellId / getRenderSet(d) / isCurrentCellIndoor`) to `Group.visible` flips. Outdoor batch (`terrainGroup + buildingsGroup + staticsGroup`) toggled by the same indoor-flag check. Smoke delta: +1 check.
+
+### Phase 7.4a — Animation keyframe export + AnimationClip adapter
+
+New wasm export `fetch_entity_animation_keyframes(setup_id, mtable_id, motion_cmd, stance) -> EntityAnimationData` in `apps/holtburger-web/src/lib.rs:5596`. Thin Rust shim over the existing `holtburger_dat::file_type::animation::Animation` parser + `MotionTable.cycles[(stance, command)].framerate`. JS-side `buildAnimationClip(anim, partNames)` in `scene3d/animation.js` produces `THREE.AnimationClip` with 2N `KeyframeTrack`s. `AnimationCache` deduplicates by `(setupId, mtableId, motionCmd, stance)`. Smoke delta: +3 checks.
+
+### Phase 7.4b — EntityManager + AnimationMixer
+
+`EntityManager` in `scene3d/entities.js` (792 lines) owns per-entity rigs (one `Object3D` root per GUID, per-part `Group`s under it). One `THREE.AnimationMixer` per entity, `crossFade(0.15s)` between actions on motion-command changes. 2D `drainEvents` at `index.html:6022` forwards `pollEntityUpdates()` results to `window.__scene3dEntityHook` (installed by `installSharedDrainHook`) so the 3D path consumes the same event stream without double-draining the wasm `pollEntityUpdates()`. Smoke delta: +1 check.
+
+### Phase 7.5 — Camera + controls
+
+`CameraSwitcher` with three modes: `follow` (perspective), `orbit` (perspective + `OrbitControls`), `topDown` (orthographic). `C` keypress cycles through them. WASD → `sessionHandle.setMovementInput(...)` is camera-relative: in follow mode, "forward" is whatever the follow yaw is pointing at; the wasm `MovementSystem` consumes the result identically to the 2D path's mapping. `PointerLockControls` wired for mouse-look. Smoke delta: +2 checks.
+
+### Phase 7.6 — Lighting + atmosphere
+
+`setupSceneLighting(scene, { sceneSize: 600 })` attaches `DirectionalLight` (sun, intensity 1.0) + `AmbientLight` (intensity 0.5 outdoor, 0.7 indoor) + optional `HemisphereLight`. `tickLightingForCellState(scene3d, sessionHandle)` runs every frame; flips `sun.visible=false` when the wasm BFS reports indoor. Shadow camera framing covers Holtburg's 9-LB box (sceneSize 600 m square). Shadows opt-in, disabled by default. `attachSetupModelLights` exists as a deferred stub returning `{ lightCount: 0, deferred: true }` — per-SetupModel point/spot lights are explicitly NOT implemented in 7.6 (see follow-on #1 below). Smoke delta: +1 check.
+
+### Phase 7.7 — Final polish + audit
+
+Frustum-culling audit performed across `scene3d/*.js`. Findings:
+
+1. Every `BufferGeometry` creation site in the adapter helpers (`landblockMeshToGeometry`, `meshToGeometryGroups`, `meshToFusedGeometry`) calls `computeBoundingSphere()` correctly. The inline road overlay in `terrain.js` also calls it.
+2. **One Mesh creation site was missing the call** — the `THREE.BoxGeometry` hello-cube at `scene3d/index.js:69`. three.js r184's primitive constructors do NOT auto-compute boundingSphere (verified empirically); without the explicit call, the hello-cube's `frustumCulled` falls back to "always visible". Fixed in Phase 7.7 by adding `cubeGeom.computeBoundingSphere()` at `index.js:73`.
+3. No `frustumCulled = false` assignments anywhere in `scene3d/*.js` or `index.html`.
+4. **Bonus bug discovered in the dynamic measurement:** the live 3D path's camera does not apply the AC→three.js worldRoot rotation when setting its position. A naive AC-coords camera at the Holtburg LB centre renders **0 draw calls** — the camera misses the geometry by the 90° rotation that `worldRoot.rotation.x = -π/2` applies to its children. After mapping the camera position through `acToThree(ax, ay, az) = (ax, az, -ay)`, the same camera renders **153 draw calls / 4069 triangles**. Moving the camera 100 km away in three.js world coords drops it to **0 draw calls** (100% reduction; far exceeds the 50% pass threshold). This proves three.js's per-Mesh boundingSphere-vs-frustum check is working correctly. The camera-rotation bug itself is documented as priority-0 follow-on below; it's out of scope for the Phase 7.7 audit per the working plan.
+
+The numerical proof lives in `capture_phase7_7_frustum.cjs`. It applies the AC→three rotation explicitly and asserts both samples + the 50% reduction floor.
+
+Smoke delta: +1 check (the doc-exists check at the tail of `smoke_test.cjs`). Production-code delta: +1 line in `scene3d/index.js` (the missing `computeBoundingSphere` on the hello-cube). The audit was otherwise a no-op-but-proven phase.
+
+## Open follow-ons (priority order — highest impact first)
+
+**Phase 7.7 audit discovery (NEW — highest impact):**
+
+0. **Cameras don't apply the AC→three.js worldRoot rotation.** `worldRoot` carries `rotation.x = -π/2` (`scene3d/index.js:51`) so child geometry in AC coords lands at three.js world `(ax, az, -ay)`. But `init3D` at `index.js:148-149` sets `camera.position.set(cx, cy, 200)` with AC coords directly, and the `cameraSwitcher.positionCamera` in follow mode at `scene3d/camera.js:332-337` does `this.persp.position.set(cx, cy, cz)` with AC `_safePlayerPos()` values directly. The camera ends up at three.js world `(ax, ay, az)` while the geometry it should be looking at is at three.js world `(ax, az, -ay)` — typically tens of thousands of metres away from where the camera looks. **`renderer.info.render.calls` is 0 for the live 3D path** unless the camera position is rewritten through the rotation. Discovered in Phase 7.7 by `capture_phase7_7_frustum.cjs`: a naively-positioned camera at AC `(32544, 34656, 200)` renders 0 draw calls; the same camera positioned at three.js `(32544, 200, -34656)` (applying `acToThree(ax, ay, az) = (ax, az, -ay)`) renders 153 draw calls. **Fix:** wrap `_safePlayerPos()`'s result through `acToThree` in `camera.js`, and apply the same transform to the init3D camera at `index.js:141-142`. Most earlier-phase captures passed because they only assert scene-graph membership counts, not visual rendering. **Impact:** the live 3D path currently shows empty space; nothing is fixable visually until this rotation is consistently applied. The 2D path is unaffected.
+
+The pre-Phase-7.7 follow-ons documented across earlier phases:
+
+1. **Per-SetupModel point/spot lights (Phase 7.6 deferred).** `lighting.js`'s `attachSetupModelLights` is a stub. The plan reads SetupModel's per-part light list (color, intensity, falloff, cone_angle), maps `cone_angle == 0 → PointLight` and `> 0 → SpotLight`, and caps 32 active lights via distance-sort + `.visible` toggle per tick. Need a new `fetchSetupModelLights` wasm export. **Impact:** Holtburg dungeons currently look dim and untextured-by-light; torches, lanterns, glowing surfaces would all light up correctly.
+
+2. **Full mouse-look turn-to-align (Phase 7.5 incomplete).** `PointerLockControls` is wired in `scene3d/camera.js` but the implementation is only correct when `playerHeading == followYaw`. When the player has not aligned their heading to the camera's yaw, WASD → `setMovementInput` produces drift. **Impact:** mouse-look + WASD together can rubberband against the ACE-server-authoritative position.
+
+3. **Live ACE end-to-end against tailnet1.** Phase 7.4b+ capture scripts time out at ~60 s on the live-ACE login round-trip and fall back to mode-1 standalone. The 2D path round-trips fine, so this is a 3D-specific timing or event-binding issue. **Impact:** the 3D path is not currently live-validated against a real ACE world session; capture coverage is real-DAT-data-only.
+
+4. **`fetchEntityAnimationKeyframes` returns 0 parts for some setup ids — RESOLVED 2026-05-10 (false alarm; capture-script labels were stale).** ROOT CAUSE: the original Phase 7.4b capture script used **fabricated setup IDs**, not real ones. Setup `0x02000099` is a synthetic in-memory SetupModel ID used inside the `triangulate_setup_model_with_substitutions_*` unit tests in `lib.rs:11696-11814`; it does NOT exist in the real DAT (cross-referenced against `pipeline_data/enrichment/ace_world_setup_names.json` — wcid_count = 0). `0x020001ED` is also not in any wcid. `0x0200013D` exists but is used by wcid 322 (Jo), wcid 338 (Quarter Staff) — a 1-part weapon model, not Drudge. REAL IDs from the LSD-Partial weenie JSON `didStats` (key 1 = SetupId, key 2 = MotionTableId): Sparring Golem (wcid 12698) → setup 0x020007CC, mtable 0x09000081 → **21 parts / 60 frames / 30 fps**; Drudge Toiler (wcid 30649) → setup 0x020007DD, mtable 0x09000008 → **17 parts / 40 frames / 30 fps**; Mite Sentry (wcid 945) → setup 0x02001080, mtable 0x0900000B → **18 parts / 0 frames** (mtable legitimately has no WALK_FORWARD cycle — only the Ready idle resolves; mites in retail AC walked via mtable links/modifiers, a different dispatch path entirely; renderer correctly falls back to rest pose). The wasm walk in `lib.rs:fetch_entity_animation_keyframes` (line 5595) is correct in all cases — Drudge returning 1 part was the wasm faithfully reporting a 1-part Quarter Staff; Golem/Mite throwing "triangulate failed" was the wasm faithfully reporting that those IDs aren't valid SetupModels in the DAT. Fix landed: `capture_phase7_4_entities.cjs` setup table updated with real `didStats` IDs; smoke check added (`F#4: 0-parts setups investigation`). Investigation scripts preserved at `apps/holtburger-web/investigate_followon4.cjs` + `probe_mite_mtable.cjs` for any future agent that wants to retrace the diagnosis. NO Rust code changes were required.
+
+5. **LOD via existing `did_degrade` chain (Phase 7.7 deferred).** AC's portal.dat stores degraded versions of each model in a chain (`did_degrade`). The 3D path picks the highest-detail version unconditionally. A distance-based LOD swap would dramatically cut draw calls + triangle counts at view distances >100 m. **Impact:** perf optimization, no visual regression vs current state.
+
+6. **`InstancedMesh` for repeated buildings (Phase 7.7 deferred).** Holtburg has multiple instances of the same building type (huts, towers). Each currently produces its own `Mesh`. Migrating to `THREE.InstancedMesh` collapses N draw calls into 1 per unique geometry. **Impact:** perf optimization for the dense parts of Holtburg.
+
+7. **Two-sided polys with distinct `pos_surface != neg_surface` (Plan risk #1).** AC's `Polygon` struct allows a different surface_did per side. `MaterialCache` currently uses one material per `surface_did`; the back-side surface gets ignored. Mitigation in `meshToGeometryGroups` would be to group polys by `(pos_surface, neg_surface)` tuple and emit one mesh per tuple. **Impact:** specific known-bad surfaces (translucent windows, double-sided cloth banners) render with the wrong material on one side.
+
+8. **Surface-type bitfield decode (Plan risk #5).** The `surface_type` flags carry transparent / alphaTest / additive / two-sided bits; only `transparent: false` is decoded today. **Impact:** translucent particles, additive flame effects, alphaTest foliage all render as opaque.
+
+9. **Visual ground-truth comparison vs WorldBuilder.Terminal `render-preview`** (Phase 7.1+ deferred). The plan calls for the top-down ortho mode (camera toggle) to match WorldBuilder.Terminal's `render-preview` output pixel-for-pixel as the visual baseline. This comparison has not been run. **Impact:** an objective regression detector for any future renderer-pipeline change.
+
+10. **Nameplate / chip / chat overlay via PIXI HUD** (`hud.js` is a 6-line placeholder). PIXI v8 stays in the page for HUD overlays, but the 3D path's `hud.js` is empty. The 2D path's nameplate / chat / vitals chips still render correctly because the 2D path is still default. **Impact:** when the 3D path becomes default, nameplate text disappears.
+
+11. **Mobile validation on PK's phone over 600 kbps cellular (Phase 7.7 deferred — open Phase 5.2 obj 11).** Plan calls for first-paint <60 s in 3D mode on mobile. Not validated. **Impact:** unknown; iOS Safari WebGL2 has historic quirks the plan flags.
+
+12. **Bundle-size measurement and gating** (Phase 7.7 deferred). Plan calls for <1 MB gzipped on the 3D path. The dynamic `import("./scene3d/index.js")` only loads on the 3D path so the 2D-default flow pays nothing today. Numerical measurement not run.
+
+13. **Animation framerate variance** (Plan risk #3) — **CLOSED-AS-NIL 2026-05-10.** Audited the AC animation data model against three independent sources (holtburger-dat parser, ACE.Server `AnimData.cs`, DatReaderWriter `AnimationTests.cs`). The data carries framerate per-cycle (`AnimData.framerate: f32`), not per-frame. `Frame { origin, orientation }` and `AnimationFrame { frames, hooks }` have NO time/delta/duration fields. AC's `AnimationHook` payloads carry direction + type but no timing — hooks fire on the indexed frame as it's rendered. Therefore uniform `times[i] = i / framerate` IS the authoritative AC semantics; the existing `buildAnimationClip` is correct as-shipped. Audit note documenting this is at `apps/holtburger-web/scene3d/animation.js:83-110`. Any future judder is a different bug (mixer step size, crossFade timing, dt accumulation in the rAF loop).
+
+## How to validate
+
+End-to-end recipe to confirm the 3D path is healthy after a code change:
+
+1. **Smoke test (fast, file-only checks):**
+   ```bash
+   cd /home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger
+   node apps/holtburger-web/smoke_test.cjs --fast 2>&1 | tail -5
+   ```
+   Expect: `PASS: all smoke checks green.` and ~93 OK lines (the `--fast` mode runs a subset).
+
+2. **Smoke test (full, includes the wasm-pack build):**
+   ```bash
+   node apps/holtburger-web/smoke_test.cjs 2>&1 | tail -5
+   ```
+   Expect: 138 OK + 1 SKIP = 139 total. The SKIP is `start_session live round-trip`.
+
+3. **Per-phase captures (Playwright; needs the live HTTP server on 100.116.47.66:8765):**
+   ```bash
+   for phase in 7_0 7_1 7_2 7_3 7_4 7_5 7_6 7_7; do
+     for f in apps/holtburger-web/capture_phase${phase}*.cjs; do
+       echo "--- $f ---"
+       NODE_PATH=/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules node "$f" 2>&1 | tail -3
+     done
+   done
+   ```
+   Each capture should print `PASS: all Phase 7.X capture checks green.` at the end.
+
+4. **Cargo tests:**
+   ```bash
+   source ~/.cargo/env
+   cargo test --workspace 2>&1 | grep -E "test result"
+   ```
+   Expect: 1222 passed across all crates, 0 failed.
+
+5. **Phase 7.7 frustum measurement specifically:**
+   ```bash
+   NODE_PATH=/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules \
+     node apps/holtburger-web/capture_phase7_7_frustum.cjs 2>&1 | tail -25
+   ```
+   Look for the `holtCalls` vs `awayCalls` numbers in the printed JSON. The away count should be < 50% of the holt count. If it's not, three.js's frustum culling is broken — investigate any newly added `Mesh` for a missing `computeBoundingSphere()` or an accidental `frustumCulled = false`.
+
+## How to roll back
+
+If a future commit breaks the 3D path and you need to disable it without redeploying:
+
+1. **Per-user, no code change:** simply visit the page without `?renderer=3d`. The 2D PIXI path is still the default and is completely independent of the 3D code path.
+
+2. **Permanently, code change:** in `apps/holtburger-web/index.html:4694-4696`, the feature flag reads:
+   ```js
+   const useRenderer3d =
+     new URLSearchParams(window.location.search).get("renderer") === "3d";
+   if (useRenderer3d) {
+     renderStatus.textContent = "Initializing 3D renderer (?renderer=3d)…";
+     const { init3D } = await import("./scene3d/index.js");
+     // ...
+   }
+   ```
+   Replace the first `useRenderer3d` declaration with `const useRenderer3d = false;` and the 3D path is unreachable. The 2D path retains all coverage.
+
+3. **Cutover to 3D default (when ready):** flip the same flag to `const useRenderer3d = new URLSearchParams(...).get("renderer") !== "2d";` so the 3D path is the default and `?renderer=2d` becomes the opt-out. Do this only after the highest-priority follow-ons above (per-SetupModel lights, mouse-look correctness, nameplate HUD) are landed and live-validated.
+
+## Files referenced
+
+- Working plan: `/home/wbterminal/.claude/plans/atomic-marinating-stearns.md`
+- Renderer scaffolding: `apps/holtburger-web/scene3d/` (13 modules, 5005 lines)
+- Wasm entry: `apps/holtburger-web/src/lib.rs` (notably `fetch_entity_animation_keyframes` at line 5596)
+- Feature flag: `apps/holtburger-web/index.html:4694-4699`
+- Drain forwarding: `apps/holtburger-web/index.html:6022-6030`
+- Smoke harness: `apps/holtburger-web/smoke_test.cjs` (139 checks)
+- Captures: `apps/holtburger-web/capture_phase7_*.cjs` (8 files)
+- ESM tests: `apps/holtburger-web/test_phase7_*.mjs` (4 files)
+- Prior milestone docs: `docs/phase-5.2-manifest-fix.md`, `docs/phase-6-buildings-and-interiors.md`, `docs/post-phase-6-followons-handoff.md`
