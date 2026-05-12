@@ -336,12 +336,30 @@ export class SkyDome {
       glslVersion: THREE.GLSL3,
       // Inside of sphere — render back faces.
       side: THREE.BackSide,
-      // Dome doesn't write depth — every sky-internal mesh paints over
-      // it as needed. In the separate render pass with `clearDepth()`
-      // run before, this is mostly cosmetic, but keeps the ordering
-      // sensible if a future fog/water mesh joins skyScene.
-      depthWrite: false,
-      depthTest: false,
+      // Sky-I-C (2026-05-11): `depthTest=true + depthWrite=true`.
+      // The original Sky-D used `depthTest=false + depthWrite=false`,
+      // but with Sky-I-B's separate skyScene render some drivers
+      // (chromium/swiftshader, observed 2026-05-11) discard upper-
+      // hemisphere fragments on a back-side sphere when depthTest is
+      // off — empirically only the lower hemisphere rendered.
+      //
+      // Celestials at vertex distance ~2700 (sun) are CLOSER to camera
+      // than the dome's farthest point would be at radius 1000 in
+      // post-projection terms, BUT the dome is "in front" because
+      // the sphere CAMERA-RELATIVE depth is the radius to surface
+      // crossings (all 1000). Celestials at 2700 in their bake-local
+      // vertex coords end up at scattered depths because the bake
+      // sits inside the rotator inside the skyCell — when the camera
+      // is at skyCell origin, celestial vertices project to depths
+      // that depend on their AABB layout. Empirically the celestials
+      // render in front of the dome with `depthWrite=true` on both
+      // — likely because three.js's renderOrder=-1 on the dome pushes
+      // it BEHIND the celestials' renderOrder=0 in the sort, and the
+      // depthWrite from dome is overwritten by celestials' subsequent
+      // (renderOrder=0, default-depthWrite=true via MaterialCache)
+      // depth writes. Verified working at skyic47672 capture.
+      depthWrite: true,
+      depthTest: true,
       fog: false, // exempt from fog (and skyScene.fog is null anyway)
     });
     domeMat.name = "sky-dome-gradient";
@@ -773,23 +791,71 @@ export class SkyDome {
   }
 
   /**
-   * Sky-I-B: render the sky pass. Called from `init3D`'s rAF tick
-   * AFTER the main `renderer.render(scene, mainCamera)` finishes.
+   * Sky-I-B + Sky-I-C: render the sky pass.
+   *
+   * **Sky-I-C call-order fix (2026-05-11).** Originally Sky-I-B
+   * called this AFTER the main world render with `clearDepth()`
+   * preceding it. That had a load-bearing bug: the dome's
+   * `depthTest=false + depthWrite=false` material paints every
+   * fragment in the framebuffer, and with depth cleared the dome
+   * happily overpainted every world pixel — empty (dark fog-colored)
+   * frames with only HTML-overlay nameplates visible. The probe in
+   * `/tmp/skyic-logs/probe2.json` showed the celestials at correct
+   * world coords (sun at distance 2676 from camera, well inside
+   * skyCamera.far=50000) and the dome rendering, but the world
+   * geometry was being overdrawn frame after frame.
+   *
+   * Fix: render sky FIRST (in `init3D`'s tick), then the world
+   * scene SECOND. The world render is `renderer.render(scene,
+   * activeCam)` with `renderer.autoClear = true` (the default),
+   * which resets the depth buffer cleanly, so the world paints with
+   * fresh depth. World geometry naturally overpaints the sky pixels
+   * wherever it draws. Where the world doesn't paint (sky pixels
+   * remain visible in the color buffer), the sky stays visible from
+   * THIS pass. The sky camera mirrors the main camera each tick so
+   * the projection aligns.
    *
    * Pipeline:
-   *   - Skip entirely when indoor (saves clearDepth + the second
-   *     render call).
-   *   - Otherwise: clearDepth → sync skyCamera with mainCamera
-   *     (position + quaternion + fov + aspect) → render skyScene.
+   *   - Skip entirely when indoor (saves one render call).
+   *   - Otherwise: sync skyCamera with mainCamera (position +
+   *     quaternion + fov + aspect) → render skyScene with autoClear
+   *     so the framebuffer starts cleared each frame.
    *
-   * `renderer.autoClear` is toggled around the pass so the main
-   * scene's color/depth aren't clobbered. After the pass, autoClear
-   * is restored to `true` so the NEXT frame's `renderer.render(scene,
-   * mainCamera)` clears as usual.
+   * The main render (downstream of this call) then disables
+   * autoClear-color (preserves sky paint) but does its own depth
+   * clear via `renderer.autoClear = true` for the actual call.
+   * Actually — three.js's default render with `autoClear = true`
+   * clears BOTH color AND depth. To preserve the sky color paint
+   * across the boundary we set `autoClear = false` on the main
+   * render and manually clear depth between the two passes.
+   *
+   * Concretely:
+   *   1. This method does `renderer.clear()` (color+depth) then
+   *      `renderer.autoClear = false` + `renderer.render(skyScene,
+   *      skyCamera)`. After this the color buffer has the sky and
+   *      the depth buffer has the dome/celestial depth values.
+   *   2. The caller in `index.js` then calls `renderer.clearDepth()`
+   *      to reset depth (sky paint preserved in color buffer; depth
+   *      reset to far) before `renderer.render(scene, mainCamera)`.
+   *      That render does NOT clear color (autoClear stays false)
+   *      but writes new depth values for world geometry. World
+   *      paints over sky.
+   *
+   * Indoor flip: when `_lastIsIndoor === true`, we skip this entirely
+   * AND the caller must use the normal `renderer.render` with
+   * `autoClear = true` so the framebuffer gets cleared cleanly (the
+   * EnvCell renders its own walls; no sky needed). We expose
+   * `wasSkyRenderedLastFrame()` so the caller can decide.
    */
   renderSkyPass(renderer, mainCamera) {
-    if (!renderer || !mainCamera) return;
-    if (this._lastIsIndoor) return;
+    if (!renderer || !mainCamera) {
+      this._lastSkyRendered = false;
+      return;
+    }
+    if (this._lastIsIndoor) {
+      this._lastSkyRendered = false;
+      return;
+    }
 
     // Sync the sky camera with the main camera. Position is critical
     // for proper rendering of any sky-internal vertex data that's not
@@ -809,17 +875,28 @@ export class SkyDome {
     }
     this.skyCamera.updateProjectionMatrix();
 
-    // Disable autoClear so the main scene's color+depth aren't wiped.
-    // Then clearDepth() resets the depth buffer to "far" — every sky
-    // pixel passes depth-test against world-painted pixels (sky is
-    // ALWAYS behind by construction). The color buffer keeps the
-    // world's paint, and the sky paints over wherever the world
-    // didn't write a pixel.
+    // Clear color + depth, then render the sky. After this call the
+    // framebuffer has sky pixels and the depth buffer has sky depths.
+    // The caller will then clear depth (preserving sky color paint)
+    // and render the world OVER the sky — world depth-test naturally
+    // beats sky depth at world pixels; sky stays visible elsewhere.
     const prevAutoClear = renderer.autoClear;
-    renderer.autoClear = false;
-    renderer.clearDepth();
+    renderer.autoClear = true; // clears color+depth at render start
     renderer.render(this.skyScene, this.skyCamera);
     renderer.autoClear = prevAutoClear;
+    this._lastSkyRendered = true;
+  }
+
+  /**
+   * Sky-I-C: did the most recent renderSkyPass actually issue a draw?
+   * (false when indoor, true when outdoor). Used by the caller in
+   * `index.js` to decide whether to preserve color via
+   * `autoClear=false` on the subsequent world render (sky pass was
+   * the framebuffer-clear) or use the normal `autoClear=true` flow
+   * (no sky pass; world render does the buffer clear).
+   */
+  wasSkyRenderedLastFrame() {
+    return !!this._lastSkyRendered;
   }
 
   /**

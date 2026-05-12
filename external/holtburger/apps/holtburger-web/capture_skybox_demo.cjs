@@ -72,6 +72,35 @@ const SHOTS = [
       desc: "noon, DayGroup via day=120,year=10 — alternative weather" },
     { name: "11-noon-dgC-day240",      t: 0.50, day: 240, year: 10,
       desc: "noon, DayGroup via day=240,year=10 — alternative weather" },
+
+    // Sky-I-C eye-test shots — explicit camera-look-up at sun-in-window
+    // times. Sky-I-A's probe verified sun world pos `(34674, 96.8,
+    // -36165)` at t=0.05 — distance 2676 from camera, well inside
+    // skyCamera.far=50000. But the follow-camera looks ~horizontally
+    // by default; sun is sky-up. These shots force the camera's
+    // quaternion to look 30° up + 7° west of north so the sun's
+    // compass-bearing arc passes through the center of the frame.
+    //
+    // Sun progression across the visible window (sun_visibility_probe
+    // 2026-05-11):
+    //   t=0.04 begin: NDC (1.44, 0.35) — off-screen RIGHT, just rising
+    //   t=0.05:       NDC (0.87, 0.35) — on right edge of frame
+    //   t=0.10:       NDC (-0.10, 0.35) — DIRECTLY OVERHEAD center
+    //   t=0.15:       NDC (-1.83, 0.35) — off-screen LEFT, past zenith
+    //   t=0.21 end:   sun out-of-window, becomes invisible
+    //
+    // t=0.07 sits at NDC ~0.4 — sun visible in upper-right, mid-rise.
+    // t=0.10 sits at NDC ~-0.1 — sun directly overhead. Clearest shot.
+    // t=0.13 sits at NDC ~-0.8 — sun in upper-left, late morning.
+    { name: "12-sun-arc-rising-look-up", t: 0.07, day: null, year: null,
+      lookUp: true,
+      desc: "Sky-I-C eye-test: t=0.07 + camera tilt up 30° — sun visible upper-right at compass ~40° east of north" },
+    { name: "13-sun-overhead-look-up",   t: 0.10, day: null, year: null,
+      lookUp: true,
+      desc: "Sky-I-C eye-test: t=0.10 + camera tilt up — sun directly overhead (NDC -0.1, 0.35); definitive sun-visible shot" },
+    { name: "14-sun-arc-setting-look-up", t: 0.13, day: null, year: null,
+      lookUp: true,
+      desc: "Sky-I-C eye-test: t=0.13 + camera tilt up — sun upper-left passing through zenith" },
 ];
 
 (async () => {
@@ -161,12 +190,61 @@ const SHOTS = [
         await page.waitForTimeout(3_000); // post-spawn drain
 
         // Teleport to Holtburg outdoor (sky is meaningless inside Academy).
+        //
+        // Sky-I-C (2026-05-11): the prior 3-second post-teleport wait was
+        // racing the LB transition. Click order: client clicks #teleport-button
+        // → ACE processes server-side → UpdatePosition fires with the new
+        // Holtburg landblockId → client's Phase 6 cell-graph publishes a
+        // fresh cell snapshot with `is_indoor=false`. At 3s the player was
+        // **still inside Academy** with the sky cell hidden by the indoor
+        // flip, so every demo screenshot was an Academy interior shot —
+        // explaining the "midnight looks like noon" report that motivated
+        // the whole Sky-I correction.
+        //
+        // The right poll has two parts:
+        //   (a) `getCurrentCellId() > 0` — proves the recv-loop has
+        //       published at least one cell snapshot (pre-snapshot the
+        //       snapshot defaults to `is_indoor=false` with `current_cell=0`,
+        //       so reading `isCurrentCellIndoor()` alone passes vacuously).
+        //   (b) `isCurrentCellIndoor() === false` — proves the published
+        //       snapshot is outdoor (i.e. we're actually in Holtburg, not
+        //       Academy).
         try {
             await page.click('#teleport-button', { timeout: 5_000 });
             console.log("clicked Teleport to Holtburg");
-            await page.waitForTimeout(3_000);
+            const teleportStartMs = Date.now();
+            await page.waitForFunction(
+                () => {
+                    const h = window.__sessionHandle;
+                    try {
+                        if (!h
+                            || typeof h.getCurrentCellId !== "function"
+                            || typeof h.isCurrentCellIndoor !== "function") {
+                            return false;
+                        }
+                        const cellId = h.getCurrentCellId() >>> 0;
+                        if (cellId === 0) return false;
+                        return h.isCurrentCellIndoor() === false;
+                    } catch (_) {
+                        return false;
+                    }
+                },
+                { timeout: 60_000 }
+            );
+            const teleportMs = Date.now() - teleportStartMs;
+            const stateInfo = await page.evaluate(() => {
+                const h = window.__sessionHandle;
+                const cellId = h.getCurrentCellId() >>> 0;
+                const pose = (typeof h.getLocalPlayerPose === "function")
+                    ? h.getLocalPlayerPose() : null;
+                return {
+                    cellId: "0x" + cellId.toString(16).padStart(8, "0"),
+                    lb: pose ? "0x" + ((pose.landblockId >>> 0) >>> 0).toString(16).padStart(8, "0") : null,
+                };
+            });
+            console.log(`outdoor after ${teleportMs} ms (cellId=${stateInfo.cellId} lb=${stateInfo.lb})`);
         } catch (e) {
-            console.warn(`teleport-button click failed (continuing): ${e.message}`);
+            console.warn(`teleport-button + outdoor-wait failed (continuing): ${e.message}`);
         }
 
         // Wait for init3D + Sky-D celestials.
@@ -239,20 +317,63 @@ const SHOTS = [
                 }
             }, shot.t);
 
+            // Sky-I-C eye-test camera-look-up override (shots 12-14).
+            // The follow-camera looks ~horizontally by default; the sun
+            // is sky-up. For the explicit "sun visible" eye-test shots
+            // we monkey-patch `renderer.render` to override the camera
+            // quaternion JUST BEFORE the actual draw call — after the
+            // camera-switcher's per-frame follow tick has written its
+            // own quaternion. Bare rAF-end hooks fire after rendering
+            // and get clobbered by the next tick's follow logic.
+            await page.evaluate((lookUp) => {
+                if (!lookUp) {
+                    window.__skyDemoLookUp = false;
+                    return;
+                }
+                window.__skyDemoLookUp = true;
+                const ls = window.liveScene3d;
+                if (ls?.renderer && !ls.__skyDemoRenderHook) {
+                    ls.__skyDemoRenderHook = true;
+                    const origRender = ls.renderer.render.bind(ls.renderer);
+                    ls.renderer.render = function (scene, cam) {
+                        if (window.__skyDemoLookUp && cam && cam.quaternion) {
+                            const Euler = cam.rotation.constructor;
+                            const Quat = cam.quaternion.constructor;
+                            // Pitch up 30°, yaw 7° west of north.
+                            const eul = new Euler(
+                                Math.PI / 6,
+                                -7 * Math.PI / 180,
+                                0,
+                                "YXZ"
+                            );
+                            const q = new Quat().setFromEuler(eul);
+                            cam.quaternion.copy(q);
+                            cam.updateMatrixWorld(true);
+                        }
+                        return origRender(scene, cam);
+                    };
+                }
+            }, !!shot.lookUp);
+
             await page.waitForTimeout(OVERRIDE_SETTLE_MS);
 
-            // Read current sky state for the manifest.
+            // Read current sky state for the manifest. Sky-I-C: wasm-bindgen
+            // exports use camelCase (timeOfDayNormalized, dirColorArgb,
+            // etc.), not snake_case. Prior captures wrote `state: null`
+            // because the snake_case access returned `undefined`.
             const state = await page.evaluate(() => {
                 const h = window.__sessionHandle;
                 try {
                     const s = h?.getSkyState?.();
                     return s
                         ? {
-                              t: s.time_of_day_normalized,
-                              dg: s.day_group_index,
-                              dir: "0x" + s.dir_color_argb.toString(16).padStart(8, "0"),
-                              amb: "0x" + s.amb_color_argb.toString(16).padStart(8, "0"),
-                              fog: "0x" + s.fog_color_argb.toString(16).padStart(8, "0"),
+                              t: s.timeOfDayNormalized,
+                              dg: s.dayGroupIndex,
+                              dir: "0x" + (s.dirColorArgb >>> 0).toString(16).padStart(8, "0"),
+                              amb: "0x" + (s.ambColorArgb >>> 0).toString(16).padStart(8, "0"),
+                              fog: "0x" + (s.fogColorArgb >>> 0).toString(16).padStart(8, "0"),
+                              dirHeading: s.dirHeading,
+                              dirPitch: s.dirPitch,
                           }
                         : null;
                 } catch (_) {

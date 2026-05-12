@@ -373,12 +373,47 @@ const DAWN_WINDOW_T = 0.05;
                 // Teleport to Holtburg so we're outdoor (the sky is
                 // pointless inside the Academy). Same flow as the 3D
                 // movement capture.
+                //
+                // Sky-I-C (2026-05-11): the prior 3-second post-teleport
+                // wait was racing the LB transition. Click order: client
+                // clicks #teleport-button → ACE processes server-side →
+                // UpdatePosition fires with the new Holtburg landblockId
+                // → client's Phase 6 cell-graph publishes a fresh cell
+                // snapshot with `is_indoor=false`. At 3s the player was
+                // still inside Academy with the sky cell hidden by the
+                // indoor flip, so bullets that depend on sampling visible
+                // sky pixels (especially bullet 15's pixel-hue histogram)
+                // read Academy interior. Poll on `getCurrentCellId() > 0`
+                // AND `isCurrentCellIndoor() === false` — the cellId
+                // gate proves the recv-loop has published at least one
+                // snapshot (pre-snapshot defaults read `is_indoor=false`
+                // with cellId=0, which is a false-positive).
                 try {
                     await page.click('#teleport-button', { timeout: 5_000 });
                     console.log("clicked Teleport to Holtburg");
-                    await page.waitForTimeout(3_000);
+                    const teleportStartMs = Date.now();
+                    await page.waitForFunction(
+                        () => {
+                            const h = window.__sessionHandle;
+                            try {
+                                if (!h
+                                    || typeof h.getCurrentCellId !== "function"
+                                    || typeof h.isCurrentCellIndoor !== "function") {
+                                    return false;
+                                }
+                                const cellId = h.getCurrentCellId() >>> 0;
+                                if (cellId === 0) return false;
+                                return h.isCurrentCellIndoor() === false;
+                            } catch (_) {
+                                return false;
+                            }
+                        },
+                        { timeout: 60_000 }
+                    );
+                    const teleportMs = Date.now() - teleportStartMs;
+                    console.log(`outdoor after ${teleportMs} ms`);
                 } catch (e) {
-                    console.warn(`teleport-button click failed (continuing): ${e.message}`);
+                    console.warn(`teleport-button + outdoor-wait failed (continuing): ${e.message}`);
                 }
 
                 // Wait for init3D to fully resolve. init3D awaits the

@@ -1,0 +1,248 @@
+{
+  "run_tag": "skyic50854",
+  "account": "skyic50854",
+  "char": "Democ50854",
+  "shots": [
+    {
+      "name": "01-midnight-default",
+      "t": 0,
+      "day": null,
+      "year": null,
+      "desc": "midnight — dim purple ambient, near-black fog, base sky shells only",
+      "state": {
+        "t": 0,
+        "dg": 9,
+        "dir": "0xffdcdcdc",
+        "amb": "0xffc864ff",
+        "fog": "0xff171728",
+        "dirHeading": 90,
+        "dirPitch": 0.8999999761581421
+      },
+      "file": "01-midnight-default.png"
+    },
+    {
+      "name": "02-foredawn-sun-rising",
+      "t": 0.05,
+      "day": null,
+      "year": null,
+      "desc": "foredawn t=0.05 — sun begin=0.04 window opens; moon (begin=0) still visible",
+      "state": {
+        "t": 0.05000000074505806,
+        "dg": 9,
+        "dir": "0xffdcdcdc",
+        "amb": "0xffc864ff",
+        "fog": "0xff171724",
+        "dirHeading": 90,
+        "dirPitch": 0.8999999761581421
+      },
+      "file": "02-foredawn-sun-rising.png"
+    },
+    {
+      "name": "03-dawn",
+      "t": 0.18,
+      "day": null,
+      "year": null,
+      "desc": "dawn — sun arcing toward end_angle, dramatic horizon color",
+      "state": {
+        "t": 0.18000000715255737,
+        "dg": 9,
+        "dir": "0xffeae0bc",
+        "amb": "0xffc084ff",
+        "fog": "0xff262638",
+        "dirHeading": 90,
+        "dirPitch": 4.540002346038818
+      },
+      "file": "03-dawn.png"
+    },
+    {
+      "name": "04-mid-morning",
+      "t": 0.35,
+      "day": null,
+      "year": null,
+      "desc": "mid-morning — sun + moon SkyObjects offscreen, lighting from SkyTimeOfDay only",
+      "state": {
+        "t": 0.3499999940395355,
+        "dg": 9,
+        "dir": "0xfffff1b4",
+        "amb": "0xffe6e6ff",
+        "fog": "0xffc3c8dc",
+        "dirHeading": 90,
+        "dirPitch": 32.06896209716797
+      },
+      "file": "04-mid-morning.png"
+    },
+    {
+      "name": "05-noon",
+      "t": 0.5,
+      "day": null,
+      "year": null,
+      "desc": "noon — brightest amb_color, light cyan-blue sky, fog pushed far",
+      "state": {
+        "t": 0.5,
+        "dg": 9,
+        "dir": "0xfffff1b4",
+        "amb": "0xffe6e6ff",
+        "fog": "0xffc3c8dc",
+        "dirHeading": 90,
+        "dirPitch": 68.27586364746094
+      },
+      "file": "05-noon.png"
+    },
+    {
+      "name": "06-afternoon",
+      "t": 0.65,
+      "day": null,
+      "year": null,
+      "desc": "mid-afternoon — fog warming, ambient cooling toward dusk",
+      "state": {
+        "t": 0.6499999761581421,
+        "dg": 9,
+        "dir": "0xffffe7b4",
+        "amb": "0xffe1d0ff",
+        "fog": "0xffc4c8d9",
+        "dirHeading": 270,
+        "dirPitch": 78.07861328125
+      },
+      "file": "06-afternoon.png"
+    },
+    {
+      "name": "07-dusk",
+      "t": 0.8,
+      "day": null,
+      "year": null,
+      "desc": "dusk — warm orange/red horizon, fog close, stars about to engage",
+      "state": {
+        "t": 0.800000011920929,
+        "dg": 9,
+        "dir": "0xffffc3b4",
+        "amb": "0xffcd7bff",
+        "fog": "0xffc7c8cb",
+        "dirHeading": 270,
+        "dirPitch": 32.22706604003906
+      },
+      "file": "07-dusk.png"
+    },
+    {
+      "name": "08-late-evening",
+      "t": 0.92,
+      "day": null,
+      "year": null,
+      "desc": "late evening — stars (begin=0.16 end=0.94) still visible, ambient deepening",
+      "state": {
+        "t": 0.9200000166893005,
+        "dg": 9,
+        "dir": "0xfff3adb4",
+        "amb": "0xffc864ff",
+        "fog": "0xff443034",
+        "dirHeading": 270,
+        "dirPitch": 6.966660499572754
+      },
+      "file": "08-late-evening.png"
+    },
+    {
+      "name": "09-noon-dgA-day000",
+      "t": 0.5,
+      "day": 0,
+      "year": 10,
+      "desc": "noon, DayGroup via day=0,year=10 — alternative SkyObject set",
+      "state": {
+        "t": 0.5,
+        "dg": 16,
+        "dir": "0xfffff1b4",
+        "amb": "0xffe6e6ff",
+        "fog": "0xffc3c8dc",
+        "dirHeading": 90,
+        "dirPitch": 68.27586364746094
+      },
+      "file": "09-noon-dgA-day000.png"
+    },
+    {
+      "name": "10-noon-dgB-day120",
+      "t": 0.5,
+      "day": 120,
+      "year": 10,
+      "desc": "noon, DayGroup via day=120,year=10 — alternative weather",
+      "state": {
+        "t": 0.5,
+        "dg": 13,
+        "dir": "0xfffff1b4",
+        "amb": "0xffe6e6ff",
+        "fog": "0xffc3c8dc",
+        "dirHeading": 90,
+        "dirPitch": 67.35293579101562
+      },
+      "file": "10-noon-dgB-day120.png"
+    },
+    {
+      "name": "11-noon-dgC-day240",
+      "t": 0.5,
+      "day": 240,
+      "year": 10,
+      "desc": "noon, DayGroup via day=240,year=10 — alternative weather",
+      "state": {
+        "t": 0.5,
+        "dg": 9,
+        "dir": "0xfffff1b4",
+        "amb": "0xffe6e6ff",
+        "fog": "0xffc3c8dc",
+        "dirHeading": 90,
+        "dirPitch": 68.27586364746094
+      },
+      "file": "11-noon-dgC-day240.png"
+    },
+    {
+      "name": "12-sun-arc-rising-look-up",
+      "t": 0.07,
+      "day": null,
+      "year": null,
+      "lookUp": true,
+      "desc": "Sky-I-C eye-test: t=0.07 + camera tilt up 30° — sun visible upper-right at compass ~40° east of north",
+      "state": {
+        "t": 0.07000000029802322,
+        "dg": 9,
+        "dir": "0xffdcdcdc",
+        "amb": "0xffc864ff",
+        "fog": "0xff171725",
+        "dirHeading": 90,
+        "dirPitch": 0.8999999761581421
+      },
+      "file": "12-sun-arc-rising-look-up.png"
+    },
+    {
+      "name": "13-sun-overhead-look-up",
+      "t": 0.1,
+      "day": null,
+      "year": null,
+      "lookUp": true,
+      "desc": "Sky-I-C eye-test: t=0.10 + camera tilt up — sun directly overhead (NDC -0.1, 0.35); definitive sun-visible shot",
+      "state": {
+        "t": 0.10000000149011612,
+        "dg": 9,
+        "dir": "0xffdcdcdc",
+        "amb": "0xffc864ff",
+        "fog": "0xff171726",
+        "dirHeading": 90,
+        "dirPitch": 0.8999999761581421
+      },
+      "file": "13-sun-overhead-look-up.png"
+    },
+    {
+      "name": "14-sun-arc-setting-look-up",
+      "t": 0.13,
+      "day": null,
+      "year": null,
+      "lookUp": true,
+      "desc": "Sky-I-C eye-test: t=0.13 + camera tilt up — sun upper-left passing through zenith",
+      "state": {
+        "t": 0.12999999523162842,
+        "dg": 9,
+        "dir": "0xffdcdcdc",
+        "amb": "0xffc864ff",
+        "fog": "0xff171727",
+        "dirHeading": 90,
+        "dirPitch": 0.8999999761581421
+      },
+      "file": "14-sun-arc-setting-look-up.png"
+    }
+  ]
+}

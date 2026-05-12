@@ -387,15 +387,28 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // to the original perspective camera so the Phase 7.0 hello-cube
     // capture path keeps working.
     const activeCam = liveScene3dRef?.cameraSwitcher?.activeCamera ?? camera;
-    renderer.render(scene, activeCam);
-    // Workstream Sky-I-B — separate sky-pass render. After the main
-    // scene renders, the sky cell paints into the framebuffer wherever
-    // the world didn't write a depth value. Skipped indoors (saves
-    // clearDepth + the second render call). No-op pre-construction
-    // (the optional-chaining gates everything).
+    // Workstream Sky-I-C (2026-05-11) — render the sky pass FIRST,
+    // then the world OVER it. The sky pass clears the framebuffer
+    // (color+depth) and paints the dome + celestials. We then clear
+    // ONLY depth (preserving sky color) and render the world with
+    // `autoClear=false` so its color paint is additive on top of the
+    // sky. World geometry naturally overpaints the sky wherever
+    // depth-test wins.
+    //
+    // Sky-I-B's original "world first, then sky" attempt had a
+    // load-bearing bug: after the world render, the depth buffer
+    // held world depths; the sky pass cleared depth and rendered
+    // the dome with `depthTest=false`, which OVERPAINTED every
+    // world pixel because the dome is drawn at every fragment.
+    // Reversing the call order is the cleanest minimal fix — no
+    // shader depth gymnastics, no per-material depthTest mutations,
+    // and the celestial bodies sit naturally "behind" the world
+    // like the rest of the sky.
+    let skyRendered = false;
     if (liveScene3dRef?.skyDome) {
       try {
         liveScene3dRef.skyDome.renderSkyPass(renderer, activeCam);
+        skyRendered = liveScene3dRef.skyDome.wasSkyRenderedLastFrame();
       } catch (e) {
         // eslint-disable-next-line no-console
         if (!liveScene3dRef._skyPassRenderWarned) {
@@ -403,6 +416,21 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
           console.warn("[sky-i-b] skyDome.renderSkyPass threw:", e);
         }
       }
+    }
+    if (skyRendered) {
+      // Preserve sky color paint across the world render. Clear ONLY
+      // the depth buffer so the world's depth-test starts fresh; the
+      // sky's color stays in the color buffer where the world doesn't
+      // overpaint it.
+      const prevAutoClear = renderer.autoClear;
+      renderer.autoClear = false;
+      renderer.clearDepth();
+      renderer.render(scene, activeCam);
+      renderer.autoClear = prevAutoClear;
+    } else {
+      // No sky pass this frame (indoor or pre-construction). Normal
+      // autoClear-true render clears color+depth as usual.
+      renderer.render(scene, activeCam);
     }
     requestAnimationFrame(tick);
   }
