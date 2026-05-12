@@ -83,35 +83,40 @@ function isLocalPlayerGuid(g) {
 // happens INSIDE the wasm integrator silently — this layer just
 // short-circuits the user-visible flash from late-arriving server
 // poses landing as KIND_POSITION events on the local guid.
-// Cohere-B follow-on (2026-05-12): rate-limit how far the local rig
-// can move per rAF in response to integrator pose changes. The wasm
-// integrator periodically reconciles against ACE
-// `force_position_sequence` advances; when the server pose is behind
-// the client-integrated pose (e.g. Run skill=0 → server walking pace
-// vs client run prediction), the reconcile snaps the integrator's
-// pose backward ~0.5-1 m. Rendering that snap directly produces the
-// visible "jutting back every 0.5-2 s" the user reported even with
-// `em.setPose` short-circuited for the local guid (which only fixed
-// the server-broadcast snap path; the integrator's internal reconcile
-// flows through `getLocalPlayerPose()` and is the actual source).
+// Cohere-B follow-on v2 (2026-05-12): drive the local-player rig from
+// Workstream B's `cameraSwitcher.predictedPlayerPos` instead of the
+// wasm integrator's `getLocalPlayerPose()`. Mirrors the 2D path's
+// architecture (`index.html:6353-6420` per-rAF prediction owns
+// `sprite.x/.y`; the integrator pose is never read for the local
+// sprite).
 //
-// The fix: cap the per-rAF position delta at `LOCAL_RIG_MAX_DELTA_M`.
-// Normal walking (4.5 m/s × 1/60 s = 0.075 m/frame) is well under
-// the cap and applied directly. A 1 m flash-back gets rate-limited
-// across ~4-5 frames (~70 ms) — perceptually a smooth glide instead
-// of a snap. Legitimate large jumps (teleports, @teleloc, respawn,
-// rubberband > 10 m) bypass the cap via `LOCAL_RIG_SNAP_THRESHOLD_M`
-// so portal-out / death-recovery / true server overrides still feel
-// instant.
+// Why the integrator-driven approach (v1) wasn't enough: ACE
+// broadcasts `PublicUpdatePosition` at 5-10 Hz with the server's
+// authoritative pose, which always lags client integration by a small
+// amount (network latency + the server's slower physics tick + Run
+// skill differences). The wasm integrator's internal reconcile pulls
+// its pose backward on every broadcast and re-advances forward
+// between broadcasts. `getLocalPlayerPose()` faithfully reports the
+// oscillation; rendering it directly produces ~5-10 Hz visible jitter.
+// A per-rAF rate limit (v1) can't smooth events arriving faster than
+// the rate-limit horizon.
 //
-// Heading is applied directly (not rate-limited) — turn-rate at
-// ~1.5 rad/s × 1/60 s = 0.025 rad/frame is already smooth.
-const LOCAL_RIG_MAX_DELTA_M = 0.25;
-const LOCAL_RIG_SNAP_THRESHOLD_M = 10.0;
-
+// `predictedPlayerPos` is exactly the smoothed alternative:
+//   - Camera advances it by JS-side keystate × heading × dt (no
+//     server-pose blend per frame).
+//   - On fresh server pose arrival (via `__lastEntityWorldPos` ts
+//     change), it starts a 150 ms lerp toward server pose. The lerp
+//     completes well before the next broadcast lands, so the rendered
+//     pose smoothly tracks server reality without visible per-
+//     broadcast jitter.
+//   - On large deltas (> 5 m), it snaps — preserves teleport feel.
+//
+// Heading is still sourced from the integrator's `getLocalPlayerPose`:
+// turn rate is small (~1.5 rad/s × dt = 0.025 rad/frame) and doesn't
+// oscillate visibly, so we don't need a prediction layer for it.
 function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
   if (!scene3d?.entityManager) return;
-  if (!sessionHandle || typeof sessionHandle.getLocalPlayerPose !== "function") return;
+  if (!scene3d?.cameraSwitcher) return;
   if (typeof window === "undefined") return;
   const fn = window.getLocalPlayerGuid;
   if (typeof fn !== "function") return;
@@ -121,52 +126,53 @@ function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
   const guid = lpg >>> 0;
   const inst = scene3d.entityManager.entityMap.get(guid);
   if (!inst || !inst.root) return;
-  let pose;
-  try { pose = sessionHandle.getLocalPlayerPose(); } catch (_) { return; }
-  if (!pose) return;
-  const lbId = (pose.landblockId ?? pose.landblock_id) >>> 0;
-  if (lbId === 0) return;
-  const lbX = (lbId >>> 24) & 0xff;
-  const lbY = (lbId >>> 16) & 0xff;
-  const tgtX = lbX * 192.0 + pose.x;
-  const tgtY = lbY * 192.0 + pose.y;
-  const tgtZ = pose.z;
 
-  // Compute delta vs current rendered position. `inst.root.position` is
-  // the last value we wrote here (the local-guid path is the only
-  // writer post-Cohere-B follow-on).
-  const curX = inst.root.position.x;
-  const curY = inst.root.position.y;
-  const curZ = inst.root.position.z;
-  const dx = tgtX - curX;
-  const dy = tgtY - curY;
-  const dz = tgtZ - curZ;
-  const distSq = dx * dx + dy * dy + dz * dz;
-  let outX = tgtX;
-  let outY = tgtY;
-  let outZ = tgtZ;
-  if (distSq > LOCAL_RIG_SNAP_THRESHOLD_M * LOCAL_RIG_SNAP_THRESHOLD_M) {
-    // Big jump (teleport / rubberband / respawn) — snap through. The
-    // integrator's intentional re-anchoring shouldn't be smoothed; the
-    // user wants to be where the server says they are immediately.
-    outX = tgtX; outY = tgtY; outZ = tgtZ;
-  } else if (distSq > LOCAL_RIG_MAX_DELTA_M * LOCAL_RIG_MAX_DELTA_M) {
-    // Within reconcile range — rate-limit so flash-back is invisible.
-    const dist = Math.sqrt(distSq);
-    const scale = LOCAL_RIG_MAX_DELTA_M / dist;
-    outX = curX + dx * scale;
-    outY = curY + dy * scale;
-    outZ = curZ + dz * scale;
+  // Position source: X/Y from Workstream B predicted pose, Z from the
+  // wasm integrator. Pre-spawn the predicted pose is null (no server-
+  // pose anchor yet); the rig stays at its last applied position
+  // until the first server pose lands — matches Workstream B's
+  // camera behaviour, which falls through to a three-tier fallback
+  // during the same window.
+  //
+  // Why split X/Y from Z: the reconcile flash that v1 was fighting is
+  // a LATERAL phenomenon (server's slower run speed pulling the X/Y
+  // pose backward along the heading axis). Z doesn't oscillate the
+  // same way — terrain-following + gravity produces monotonic vertical
+  // motion that the server-client integration agrees on. But
+  // Workstream B's `_advancePrediction` only advances X and Y on WASD
+  // (camera.js:953-954); predicted.z only updates via the 150 ms
+  // reconcile lerp from each fresh server pose, so on hilly terrain
+  // it LAGS the actual altitude. A lagging predicted.z would render
+  // the rig (and its follow camera) below the terrain mesh on uphill
+  // walks → terrain back-faced from below → INVISIBLE. Sourcing Z
+  // straight from `getLocalPlayerPose().z` keeps the rig on the
+  // ground at the integrator's authoritative altitude while X/Y still
+  // benefit from the smoothed prediction.
+  const predicted = scene3d.cameraSwitcher.predictedPlayerPos;
+  if (!predicted) return;
+
+  let posZ = predicted.z;
+  let heading = 0;
+  if (sessionHandle && typeof sessionHandle.getLocalPlayerPose === "function") {
+    try {
+      const pose = sessionHandle.getLocalPlayerPose();
+      if (pose) {
+        if (typeof pose.z === "number" && Number.isFinite(pose.z)) {
+          posZ = pose.z;
+        }
+        if (typeof pose.heading === "number" && Number.isFinite(pose.heading)) {
+          heading = pose.heading;
+        }
+      }
+    } catch (_) {}
   }
-
-  // Yaw-only quaternion around AC's Z-up axis. heading=0 → +Y north
-  // (matches the camera's compass-bearing convention). AC stores
-  // quaternions as (qw, qx, qy, qz); the integrator's heading is a
-  // float radian, so we compose (cos(h/2), 0, 0, sin(h/2)).
-  const h = pose.heading;
-  const qw = Math.cos(h * 0.5);
-  const qz = Math.sin(h * 0.5);
-  scene3d.entityManager.setPose(guid, outX, outY, outZ, qw, 0.0, 0.0, qz);
+  const qw = Math.cos(heading * 0.5);
+  const qz = Math.sin(heading * 0.5);
+  scene3d.entityManager.setPose(
+    guid,
+    predicted.x, predicted.y, posZ,
+    qw, 0.0, 0.0, qz
+  );
 }
 
 /**
