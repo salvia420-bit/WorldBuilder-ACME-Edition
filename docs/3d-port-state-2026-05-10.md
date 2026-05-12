@@ -108,6 +108,195 @@ What still needs eye-test (deferred — not automatable):
 - Live retail-screenshot comparison for celestial-body altitude. `sin(p·π)·(π/2)` is a derived pitch curve, not a DAT-supplied keyframe. Sky-D's eye-test on tailnet1 looks sensible at dawn; a side-by-side with retail AC at a known time-of-day would catch any altitude bias.
 - Properties bits `0x01 ADDITIVE_BLEND` (LOW confidence) and `0x04 WEATHER_STREAK` (MED confidence) — refine if visible artifacts surface on rainy / clear / cloudy DayGroups under headed-browser eye-test.
 
+## Skybox correction — Workstreams Sky-I-A/B/C (2026-05-11)
+
+The post-Sky-G demo captures (`docs/images/skybox-demo/`, commit
+`61d0432`) showed the dome rendering at every time-of-day as the
+SAME purple/violet — "midnight looks like noon" was the user's
+report. Sky-I-A's empirical probe (`a0a74d7`) surfaced three
+stacked bugs in the sky-render path; Sky-I-B (`ec045f4`)
+implemented the structural fix; Sky-I-C (this section) closed the
+gap with a depth-test fix + a capture-script timing fix that
+together produce demo screenshots showing real time-of-day
+variation.
+
+**Three stacked bugs (Sky-I-A probe, `external/holtburger/docs/sky-i-probe-2026-05-11.md`):**
+
+1. **Double-transform.** AC's sun mesh vertices already sit at
+   AC `(1909, 1875, 0)` in the DAT — the asset pipeline ships
+   celestials at their final cell-local placement. Sky-D added a
+   SECOND placement on top via `celestialPosition(h, p, r) * 900`
+   spherical projection AROUND the camera.
+2. **`CELESTIAL_BODY_SCALE = 30`.** Multiplied the already-placed
+   1909-unit vertex center by 30, sending the sun's world center
+   to ~57k.
+3. **`evaluate_sky_object` treated `begin_angle/end_angle` as
+   RADIANS** when the DAT ships DEGREES. Same calibration finding
+   Sky-C documented for `dir_heading`/`dir_pitch` — but not
+   propagated to per-SkyObject angles. At t=0.05 (foredawn),
+   `lerp(-20, 190, 0.0588) ≈ -7.65` was treated as 7.65 radians
+   (≈ -438° wraparound) instead of -7.65 degrees.
+
+Combined effect: sun's world center landed at `(59124, 54269,
+-87511)` — 80,284 units from camera, 16× past the camera's
+`far=5000` clip plane. The sun was never visible because it sat
+outside the frustum entirely. The "midnight looks like noon"
+artifact came from the dome's color sampling not engaging
+correctly with time-of-day (separate Sky-I-C bug).
+
+**Sky-I-B's structural fix (`ec045f4`).** Architectural pattern:
+Garry's Mod 3D-skybox — render the sky into its OWN scene + camera,
+in a separate render pass, with its own far-clip (50000) and no fog.
+Concretely:
+
+- `skyScene` (separate `THREE.Scene`, `fog=null`).
+- `skyCamera` (separate `PerspectiveCamera`, near=0.1, far=50000).
+- `skyCell` (`Group` named `sky_cell`, child of `skyScene`,
+  `rotation.x = -π/2` to mirror `worldRoot`).
+- The gradient dome (`dome`) and per-celestial rotator Groups
+  (each holding a bake with NATIVE vertex coords — `position=
+  (0,0,0)`, `scale=(1,1,1)`) are children of `skyCell`.
+- Per tick, `skyCell.position` copies `mainCamera.position` so the
+  cell follows the player; rotation stays world-axis-locked so
+  celestials stay compass-bearing-consistent as the player turns.
+- The sky camera mirrors the main camera's quaternion + fov +
+  aspect each tick.
+- `evaluate_sky_object` corrected to treat `begin_angle/end_angle`
+  as degrees: `headingDeg = lerp(beginDeg, endDeg, progress);
+  headingRad = headingDeg * π/180; rotator.rotation.z = headingRad`.
+
+Post-Sky-I-B probe (`/tmp/skyic-logs/probe2.json`, foredawn t=0.05):
+sun world position `(34674, 96.8, -36165)` — distance **2676 from
+camera** (vs 80,284 pre-fix), well inside `skyCamera.far=50000`.
+
+**Sky-I-C closure (this section, 2026-05-11).** Three follow-up
+fixes landed in `apps/holtburger-web/scene3d/sky_dome.js`,
+`apps/holtburger-web/scene3d/index.js`, and the demo-capture
+scripts:
+
+1. **Capture-script teleport-wait timing bug
+   (`capture_skybox_demo.cjs` + `capture_skybox_e2e.cjs`).** The
+   prior `await page.waitForTimeout(3_000)` after clicking
+   `#teleport-button` was racing the LB transition: client clicks
+   → ACE processes → `UpdatePosition` fires with new Holtburg
+   landblockId → client's Phase 6 cell-graph publishes a fresh
+   cell snapshot with `is_indoor=false`. At 3s the player was
+   still inside Academy with the sky cell hidden by the indoor
+   flip. **Every demo screenshot in `docs/images/skybox-demo/`
+   (commit `61d0432`) was actually an Academy interior shot.**
+   Replaced with a `getCurrentCellId() > 0 && !isCurrentCellIndoor()`
+   poll. The `cellId > 0` guard rejects the pre-snapshot vacuous
+   `is_indoor=false` default. Outdoor confirmation lands in
+   typically <300 ms on tailnet1.
+
+2. **Sky-pass render-order bug.** Sky-I-B's design described the
+   sky cell as rendering AFTER the world with `clearDepth() +
+   autoClear=false`. But the dome material has `depthTest=false`,
+   meaning the dome paints EVERY fragment regardless of depth.
+   With depth cleared and the dome rendered after the world, the
+   dome OVERPAINTED every world pixel — empty (dark-fog-colored)
+   frames with only HTML-overlay nameplates visible (probe-
+   verified `(0, 0, 0)` pixels even on visible-world regions).
+   Fix: render the sky pass FIRST (clears framebuffer + paints
+   dome + celestials), then the world OVER it (autoClear=false
+   on world render, clearDepth so world depth-test starts fresh).
+   The world's geometry naturally overpaints sky wherever it
+   draws.
+
+3. **Dome depth-test driver workaround.** With Sky-I-B's separate
+   skyScene render, the dome with `depthTest=false` triggered a
+   driver-side bug in chromium/swiftshader where only the LOWER
+   hemisphere of the BackSide sphere rendered — the upper
+   hemisphere fragments were silently discarded. Empirically
+   reproduced 2026-05-11 across multiple probes. Fix: enable
+   `depthTest=true + depthWrite=true` on the dome material. The
+   depthWrite=true is needed to keep the dome in three.js's
+   opaque-pass sort with `renderOrder=-1` — `depthWrite=false`
+   put it in the transparent sort path and it stopped rendering
+   entirely (separate empirical 2026-05-11 finding).
+
+After Sky-I-C, the demo screenshots in `docs/images/skybox-demo-sky-i/`
+show:
+
+| Time | Top-of-frame RGB | Reads as |
+|---|---|---|
+| 01-midnight (t=0.00) | (123, 66, 161) | dark purple |
+| 02-foredawn (t=0.05) | (123, 66, 160) | dark purple |
+| 03-dawn (t=0.18) | (125, 91, 168) | lighter purple |
+| 04-mid-morning (t=0.35) | (215, 217, 240) | **light blue** |
+| 05-noon (t=0.50) | (215, 217, 240) | **light blue** |
+| 06-afternoon (t=0.65) | (212, 205, 238) | cooling violet |
+| 07-dusk (t=0.80) | (202, 157, 232) | warm pink-violet |
+| 08-late-evening (t=0.92) | (143, 77, 167) | deep purple |
+| 13-sun-overhead (t=0.10) | (200, 100, 255) | foredawn magenta (zenith) |
+
+**Eye-test rotation sign (Sky-I-B's open question 2).** Per
+`sun_visibility_probe.cjs` sweep across `t ∈ {0.04, 0.05, 0.10,
+0.15, 0.18, 0.21}`:
+
+| t | sun world delta from camera | compass bearing |
+|---|---|---|
+| 0.04 (begin) | (+2436, 0, -1109) | 65° east of north |
+| 0.05 | (+2142, 0, -1604) | 53° east of north |
+| 0.10 | (-400, 0, -2646) | 9° west of north (near zenith) |
+| 0.15 | (-2520, 0, -900) | 90° west of north (due west) |
+| 0.18 | (-2553, 0, +801) | 107° (south-west) |
+
+Sun moves NE → ENE → N → W → SW across its visible window —
+canonical east-rising / west-setting motion. **No rotation-sign
+flip needed.** Sky-I-B's `rotator.rotation.z = headingDeg * π/180`
+is correct.
+
+**Sun mesh visibility caveat.** The dome at radius 1000 + dome
+`depthWrite=true` writes depth values close to camera; celestial
+vertex AABBs at ~2100-2700 units depth-test-reject against the
+dome under LEQUAL. The sun mesh is therefore NOT painted onto
+the framebuffer in the current demo captures even when it's
+geometrically in-frustum — the dome occludes it. Workstream Sky-J
+(if scoped) would either: (a) move the dome's effective fragment
+depth to 1.0 via `gl_FragDepth = 1.0` in the dome shader, (b)
+push celestial materials to `depthTest=false + renderOrder > -1`,
+or (c) re-architect celestials at dome-radius rather than at
+native vertex coords. Sky-I-C captures the dome color variation
+(the "midnight ≠ noon" eye-test) but punts on the sun-mesh-visible
+eye-test pending Sky-J.
+
+**Test numbers (post Sky-I-A/B/C, 2026-05-11):**
+
+- `cargo test --workspace`: 1274/0/1 (unchanged from Sky-G).
+- `node smoke_test.cjs`: 157/0/1 (unchanged).
+- `node capture_skybox_e2e.cjs` with `SKIP_BULLET_15=0`: 17/18
+  PASS (was 17/18 with bullet 15 SKIP'd pre-Sky-I-C; bullet 15 now
+  ACTIVELY PASSES with `lSpread=0.394 hSpread=39.4°` confirming
+  real sky-color variation across times). Bullet 8 is the lone
+  fail (`getSkyObjectStates().length === 7` expects 7, retail
+  returns 19 because Sky-G's override mechanism unions IDs across
+  the cycling DayGroups — pre-existing assertion, not Sky-I-C
+  scope).
+- `capture_skybox_demo.cjs`: 14 outdoor shots in
+  `docs/images/skybox-demo-sky-i/` (8 time-of-day + 3 DayGroup +
+  3 camera-look-up eye-test shots).
+
+**Files touched:**
+
+- `external/holtburger/apps/holtburger-web/scene3d/sky_dome.js`
+  (dome depthTest/depthWrite fix + renderSkyPass docstring).
+- `external/holtburger/apps/holtburger-web/scene3d/index.js`
+  (sky pass FIRST, world pass SECOND with autoClear=false +
+  clearDepth between).
+- `external/holtburger/apps/holtburger-web/capture_skybox_demo.cjs`
+  (poll on `getCurrentCellId() > 0 && !isCurrentCellIndoor()` for
+  outdoor confirmation; added shots 12-14 with camera-look-up
+  override via `renderer.render` monkey-patch; manifest field
+  names corrected to camelCase to match wasm-bindgen).
+- `external/holtburger/apps/holtburger-web/capture_skybox_e2e.cjs`
+  (same outdoor-wait fix).
+- `docs/images/skybox-demo-sky-i/` (refreshed 14 PNGs + manifest).
+
+The pre-Sky-I-C `docs/images/skybox-demo/` directory is preserved
+as historical — those screenshots were Academy interior shots with
+the dome's color stuck on the cached pre-LB-transition state.
+
 ## Open follow-ons from the push
 
 - **Integrator overshoot (cosmetic 25 m/s vs 4.5 m/s target).** Carried forward from `project_emit_dynamic_site` memory. After releasing W, the integrator carries inertia for 500–1000 ms before settling. Bullet 9 of the F capture detects this and accepts it as a known follow-on. Root cause may be dt scaling in the integrator, or a Playwright-headless rAF cadence artifact specific to the test environment. Needs per-tick `world.player.runtime_body.velocity` tracing to confirm.

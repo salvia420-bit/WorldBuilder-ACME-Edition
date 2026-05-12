@@ -1,3 +1,51 @@
+# Handoff — 2026-05-11 (post Sky-I correction)
+
+## Sky-I correction — Workstreams Sky-I-A/B/C (2026-05-11)
+
+Three commits landed AFTER the original Sky-A–Sky-G push closed
+out the dome+celestials gap and fixed the demo-capture timing
+bug that produced the "midnight looks like noon" report.
+
+- **`a0a74d7` — Sky-I-A probe + memo.** New `external/holtburger/docs/sky-i-probe-2026-05-11.md` (~280 lines) surfaced three stacked bugs in the sky-render path: double-transform (asset pipeline already pre-places celestials; Sky-D adds a second spherical projection), `CELESTIAL_BODY_SCALE=30` multiplying the pre-placed 1909-unit vertex center, and `begin_angle/end_angle` treated as RADIANS when DAT ships DEGREES. Combined effect: sun world center at `(59124, 54269, -87511)`, 80,284 units from camera — 16× past camera.far=5000.
+- **`ec045f4` — Sky-I-B render refactor.** `apps/holtburger-web/scene3d/sky_dome.js` rebuilt as a separate `skyScene` + `skyCamera` (far=50000) with camera-anchored `skyCell` Group. Celestials sit at native vertex coords (no double-placement, no scale). `evaluate_sky_object` corrected to deg→rad conversion. Post-Sky-I-B probe: sun world position `(34674, 96.8, -36165)`, distance 2676 from camera — well inside far-clip.
+- **Sky-I-C closure (this handoff section).** Three follow-up fixes landed in `sky_dome.js` + `scene3d/index.js` + the demo-capture scripts:
+  - **Capture-script teleport-wait** (`capture_skybox_demo.cjs` + `capture_skybox_e2e.cjs`): replaced `waitForTimeout(3000)` with `getCurrentCellId() > 0 && !isCurrentCellIndoor()` poll. Prior 3s wait was racing the LB transition; every shot in `docs/images/skybox-demo/` was an Academy interior shot.
+  - **Sky-pass render-order** (`scene3d/index.js`): render sky FIRST then world OVER it. Sky-I-B's original "world first, then sky" had the dome (`depthTest=false`) overpainting every world pixel because depth-cleared sky drew unconditionally.
+  - **Dome depth-test driver workaround** (`sky_dome.js`): `depthTest=true + depthWrite=true` on the dome. With Sky-I-B's separate skyScene, `depthTest=false` triggered a chromium/swiftshader bug discarding the upper-hemisphere fragments of the BackSide sphere — empirically only the lower hemisphere rendered.
+
+**Post-Sky-I-C test numbers (2026-05-11):**
+
+| Test | Number | Delta from pre-Sky-I-C |
+|---|---|---|
+| `cargo test --workspace` | **1274 / 0 / 1** | unchanged |
+| `node smoke_test.cjs` | **157 / 0 / 1** | unchanged |
+| `node capture_skybox_e2e.cjs` w/ `SKIP_BULLET_15=0` | **17 / 18** | **bullet 15 now PASSES** (was SKIP'd; `lSpread=0.394 hSpread=39.4°` confirms real sky-color variation across times) |
+| `node capture_skybox_demo.cjs` | **14 outdoor shots in `docs/images/skybox-demo-sky-i/`** | was 11 indoor-Academy shots in `docs/images/skybox-demo/` |
+
+**Eye-test outcomes:**
+
+- **Dome time-of-day variation (the "midnight ≠ noon" eye-test):** PASS. Top-of-frame sample at (x=800, y=30):
+  - midnight: RGB (123, 66, 161) — dark purple
+  - mid-morning/noon: RGB (215, 217, 240) — light blue
+  - dusk: RGB (202, 157, 232) — warm pink-violet
+  - look-up shots at foredawn: RGB (200, 100, 255) — vibrant magenta zenith
+- **Rotation-sign eye-test (Sky-I-B's open question 2):** NO FLIP NEEDED. `sun_visibility_probe.cjs` sweep shows the sun moving NE → ENE → N → W → SW across `t∈[0.04, 0.18]` — canonical east-rising / west-setting motion. `rotator.rotation.z = headingDeg * π/180` is correct.
+- **Sun-mesh-visible eye-test:** PARTIALLY MET. The math says sun is at compass-bearing arc in-frustum at t=0.10. But the dome at radius 1000 with `depthWrite=true` writes depth values close-to-camera; celestials at vertex distance 2700 depth-test-reject (LEQUAL) against the dome. **The sun is geometrically in-frame but not painted onto the framebuffer** — open question for a hypothetical Sky-J workstream (options: `gl_FragDepth=1.0` in dome shader; celestial `depthTest=false + renderOrder>-1`; celestial re-architecture to dome-radius).
+
+**Files touched:**
+
+- `apps/holtburger-web/scene3d/sky_dome.js` (dome material depthTest/depthWrite; renderSkyPass docstring updated for Sky-I-C call order).
+- `apps/holtburger-web/scene3d/index.js` (sky pass first, world pass second).
+- `apps/holtburger-web/capture_skybox_demo.cjs` (outdoor-wait fix; 3 sun-arc shots; renderer.render override for camera-look-up; manifest field-name fix).
+- `apps/holtburger-web/capture_skybox_e2e.cjs` (outdoor-wait fix).
+- `docs/3d-port-state-2026-05-10.md` ("Skybox correction" section appended).
+- Memory `project_holtburger_skybox_done_2026-05-11.md` (Sky-I-A/B/C extension).
+- `docs/images/skybox-demo-sky-i/` (14 fresh PNGs + manifest.json).
+
+The pre-Sky-I-C `docs/images/skybox-demo/` directory is preserved as historical comparison.
+
+---
+
 # Handoff — 2026-05-11 (post skybox push)
 
 Seven commits landed on `external/holtburger` master between
