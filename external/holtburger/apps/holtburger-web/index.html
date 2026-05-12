@@ -535,6 +535,10 @@
         populateBuildingAabbsForLandblock,
         populateSkyDescFromRegion,
         fetchEnvCellsInLandblock,
+        // Sky-J P3 + H3-C: PhysicsScript / ParticleEmitter / Wave fetch.
+        fetchPhysicsScript,
+        fetchParticleEmitter,
+        fetchWave,
         init_cell_containers,
         start_session,
         init_resource_source,
@@ -542,7 +546,7 @@
         skillName,
         attributeName,
         vitalName,
-      } from "./pkg/holtburger_web.js";
+      } from "./pkg/holtburger_web.js?v=h3-e1";
 
       import * as PIXI from "pixi.js";
 
@@ -4852,6 +4856,16 @@ void main() {
             fetchSetupModelLights,
             populateBuildingAabbsForLandblock,
             fetchEnvCellsInLandblock,
+            // Sky-J P3 + H3-C — wire the PhysicsScript/ParticleEmitter/
+            // Wave fetch through to scene3d so:
+            //   - sky_dome.js can walk SkyObject -> PhysicsScript -> emitters
+            //     (Sky-J P5 chain walker; the moon's three crimson stars)
+            //   - entities.js can walk Entity.physicsScriptDid -> emitters
+            //     + Sound hooks (H2 + H3-E1)
+            //   - scene3d/index.js can construct the AudioManager (H3-D)
+            fetchPhysicsScript,
+            fetchParticleEmitter,
+            fetchWave,
           });
           // Free the meshes/objects views the 3D path doesn't consume
           // yet (Phase 7.1 will read them via wasmExports directly).
