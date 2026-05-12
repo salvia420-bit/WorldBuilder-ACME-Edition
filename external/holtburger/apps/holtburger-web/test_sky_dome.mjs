@@ -1,29 +1,40 @@
-// Workstream Sky-D — standalone ESM test for `scene3d/sky_dome.js`.
+// Workstream Sky-D + Sky-I-B — standalone ESM test for
+// `scene3d/sky_dome.js`.
 //
-// Stands up a synthetic THREE.Scene + a mocked session-handle accessor
-// that returns hand-built SkyObjectState shapes, then drives the
-// `SkyDome` controller through:
+// **Updated for Sky-I-B (2026-05-11)** — the renderer was refactored
+// from the camera-parented "everything-in-the-main-scene" pattern to a
+// separate-render-pass + camera-anchored Group pattern. The new
+// invariants this test exercises:
 //
-//   1. Construction adds a Mesh named "sky_dome" to scene.children
-//      (capture-script bullet 11 contract).
-//   2. The dome's ShaderMaterial carries `uHorizonColor` + `uZenithColor`
-//      uniforms initialised to the Sky-C fallback defaults.
+//   1. SkyDome construction populates `skyDome.skyScene` (a separate
+//      `THREE.Scene`) with a `sky_cell` Group; the gradient dome is a
+//      child of `sky_cell` (NOT the main scene). The main scene is
+//      passed in for indoor-flip discovery only.
+//   2. `skyDome.skyCamera` is a `THREE.PerspectiveCamera` with
+//      `far = SKY_CAMERA_FAR (50000)`.
 //   3. `populateCelestialBodies` with a 7-entry mock skyAssets Map adds
-//      7 children to scene.children, each carrying `userData.sky_object_id`
-//      (capture-script bullet 12 contract).
-//   4. `tick(dt, camera)` translates the dome + every celestial body
-//      to follow the camera (camera-parented contract).
-//   5. With a mock session reporting `isCurrentCellIndoor() === true`,
-//      tick flips `dome.visible = false` + every celestial body's
-//      `.visible = false`.
-//   6. With a mock session reporting `isCurrentCellIndoor() === false`,
-//      tick restores `dome.visible = true` AND per-body visibility
-//      follows the SkyObjectState `.visible` flag.
-//   7. The `argbToColor` helper decodes 0xAARRGGBB → RGB unit triple.
-//   8. `celestialPosition(heading=0, pitch=0)` lands at (0, 0, -R)
-//      (south horizon — AC north 0° heading → three.js -z).
-//   9. `celestialPosition(heading=π/2, pitch=π/2)` lands at (0, R, 0)
-//      (zenith) — verifies pitch convention (radians).
+//      6 rotator Groups to `skyCell.children` — the `0x02xxxxxx`
+//      SetupModel proxy is SKIPPED per the Sky-I-A finding that retail
+//      Dereth's only 0x02 SkyObject (0x02000714) is a 6cm physics-script
+//      anchor, not a visible celestial.
+//   4. Each rotator carries `userData.sky_object_id` so capture scripts
+//      can discover them by walking the cell.
+//   5. `tick(dt, camera)` anchors `skyCell.position` at `camera.position`
+//      — celestial bodies move with the camera (Garry's Mod 3D-skybox
+//      pattern).
+//   6. With `getSkyObjectStates` reporting a per-object
+//      `currentProgress` lerp parameter + `beginAngleDeg/endAngleDeg`,
+//      tick sets `rotator.rotation.z` to `lerp(begin, end, progress) *
+//      π/180`.
+//   7. `argbToColor` helper still decodes 0xAARRGGBB → RGB unit triple.
+//   8. `lerpDeg(beginDeg, endDeg, p)` is the new heading-lerp helper
+//      (degrees, NOT radians — the Sky-I-A probe surfaced the unit
+//      bug; the JS-side renderer now owns deg→rad conversion).
+//   9. `renderSkyPass(renderer, mainCamera)` is a no-op when indoor;
+//      otherwise it issues `renderer.render(skyScene, skyCamera)` after
+//      `clearDepth()`.
+//  10. `dispose` empties `skyObjectMeshes` + removes the dome from
+//      skyCell.
 //
 // Run with:
 //   cd apps/holtburger-web/
@@ -77,7 +88,7 @@ function locateThree() {
 
 const threePath = locateThree();
 if (!threePath) {
-    console.log("Sky-D sky-dome ESM test: SKIP (three not located).");
+    console.log("Sky-D/Sky-I-B sky-dome ESM test: SKIP (three not located).");
     console.log("  hint: `THREE_PATH=/abs/path/to/three.module.js node test_sky_dome.mjs`");
     process.exit(0);
 }
@@ -85,17 +96,11 @@ if (!threePath) {
 const threeUrl = "file://" + threePath;
 const THREE = await import(threeUrl);
 
-console.log("Workstream Sky-D — sky dome standalone ESM test");
+console.log("Workstream Sky-D/Sky-I-B — sky cell standalone ESM test");
 console.log(`three loaded from: ${threePath}`);
 console.log("=========================");
 
 // ---- Load sky_dome.js + sky_assets.js + adapter.js + materials.js ----
-//
-// Same closure-captured-THREE pattern as test_sky_lighting.mjs +
-// test_sky_assets.mjs. The dome module imports `buildSkyObjectGroup`
-// from sky_assets.js and `acToThree` from adapter.js — we splice all
-// three (plus materials.js for MaterialCache type-checks) into one
-// composite source then `new Function`-it with THREE pre-bound.
 
 function loadModule(relPath) {
     const full = resolvePath(__dirname, relPath);
@@ -125,13 +130,8 @@ const skyAssetsSrc = loadModule("scene3d/sky_assets.js");
 const skyDomeSrc = loadModule("scene3d/sky_dome.js");
 
 // Both `adapter.js` and `materials.js` declare `const FALLBACK_SURFACE_DID
-// = 0` at module scope (the JS sentinel for an unresolved surface DID).
-// In the real ES-modules path they live in separate module records; here
-// we splice all four into one `new Function` body, which collapses their
-// scopes and triggers `SyntaxError: Identifier already declared`. Rename
-// the second occurrence to `FALLBACK_SURFACE_DID_MAT` for the test
-// composite — the binding is private to each module and not referenced
-// across them, so the rename is purely cosmetic for this scope-collapse.
+// = 0` at module scope. Rename one for the test composite (same trick
+// as the pre-Sky-I-B test).
 function renameInMaterials(src) {
     return src.replace(/\bFALLBACK_SURFACE_DID\b/g, "FALLBACK_SURFACE_DID_MAT");
 }
@@ -147,9 +147,9 @@ const composite =
 const factory = new Function("THREE", "window", composite);
 const windowShim = {};
 const mod = factory(THREE, windowShim);
-const { SkyDome, __internals, MaterialCache, buildSkyObjectGroup } = mod;
+const { SkyDome, __internals, MaterialCache } = mod;
 
-// ---- Test 1: SkyDome construction adds "sky_dome" to scene ----------
+// ---- Test 1: SkyDome construction — sky scene + sky cell + dome ----
 
 console.log("\nConstruction:");
 const scene = new THREE.Scene();
@@ -169,15 +169,52 @@ const skyDome = new SkyDome({
     liveScene3dRef,
 });
 check(
-    "scene.children grew by one (sky_dome)",
-    scene.children.length === 1,
-    `got ${scene.children.length}`
+    "main scene.children NOT polluted (was 0, still 0)",
+    scene.children.length === 0,
+    `got ${scene.children.length} — sky cell should live in skyScene`
 );
-const domeNode = scene.children[0];
 check(
-    "scene.children[0].name === 'sky_dome'",
+    "skyDome.skyScene is a THREE.Scene",
+    skyDome.skyScene instanceof THREE.Scene,
+    `got ${skyDome.skyScene?.constructor?.name}`
+);
+check(
+    "skyDome.skyScene.fog === null (sky exempt from world fog)",
+    skyDome.skyScene.fog === null,
+    `got ${skyDome.skyScene.fog}`
+);
+check(
+    "skyDome.skyCamera.far === 50000 (sky-cell clipping volume)",
+    Math.abs(skyDome.skyCamera.far - __internals.SKY_CAMERA_FAR) < 0.001,
+    `got far=${skyDome.skyCamera.far}, expected ${__internals.SKY_CAMERA_FAR}`
+);
+check(
+    "skyDome.skyCell is a Group named 'sky_cell'",
+    skyDome.skyCell.name === "sky_cell" && skyDome.skyCell.isGroup === true,
+    `got name=${skyDome.skyCell.name} isGroup=${skyDome.skyCell.isGroup}`
+);
+check(
+    "skyDome.skyCell.rotation.x === -π/2 (AC-Z-up → three-Y-up)",
+    Math.abs(skyDome.skyCell.rotation.x + Math.PI / 2) < 1e-6,
+    `got ${skyDome.skyCell.rotation.x}`
+);
+check(
+    "skyCell is a child of skyScene",
+    skyDome.skyScene.children.includes(skyDome.skyCell),
+    `skyScene.children.length=${skyDome.skyScene.children.length}`
+);
+const domeNode = skyDome.dome;
+check(
+    "skyDome.dome.name === 'sky_dome'",
     domeNode.name === "sky_dome",
     `got name=${domeNode.name}`
+);
+check(
+    "dome is a child of skyCell (NOT main scene)",
+    skyDome.skyCell.children.includes(domeNode) &&
+        !scene.children.includes(domeNode),
+    `inCell=${skyDome.skyCell.children.includes(domeNode)} ` +
+        `inMainScene=${scene.children.includes(domeNode)}`
 );
 check(
     "dome is a THREE.Mesh",
@@ -210,20 +247,12 @@ check(
     domeNode.material.depthWrite === false,
     `got depthWrite=${domeNode.material.depthWrite}`
 );
-check(
-    "dome renderOrder is -1 (drawn first)",
-    domeNode.renderOrder === -1,
-    `got renderOrder=${domeNode.renderOrder}`
-);
 
-// ---- Test 2: populateCelestialBodies adds 7 children ----------------
+// ---- Test 2: populateCelestialBodies adds rotators + skips 0x02 -----
 
 console.log("\npopulateCelestialBodies:");
 
-// Build a 7-entry skyAssets Map. Each bake has 1 part with 1 surface
-// group (a flat triangle); we don't need geometry correctness here,
-// just enough to exercise buildSkyObjectGroup.
-function makeBake(skyObjectId, prefix) {
+function makeBake(skyObjectId) {
     const positions = new Float32Array([
         0, 0, 0,
         1, 0, 0,
@@ -239,7 +268,7 @@ function makeBake(skyObjectId, prefix) {
     return {
         skyObjectId,
         setupId: skyObjectId,
-        prefix,
+        prefix: (skyObjectId >>> 24) & 0xff,
         parts: [{
             partIndex: 0,
             groups: [{ geometry, surfaceDid: 0x08000048 + skyObjectId }],
@@ -253,171 +282,215 @@ const SKY_OBJECT_IDS = [
     0x010015ee, 0x010015ef, 0x01001f67, 0x01001f6a,
     0x01004c36, 0x01001348, 0x02000714,
 ];
+const VISIBLE_IDS = SKY_OBJECT_IDS.filter((id) => (id >>> 24) !== 0x02);
+const SETUP_MODEL_IDS = SKY_OBJECT_IDS.filter((id) => (id >>> 24) === 0x02);
+
 const skyAssets = new Map();
 for (const id of SKY_OBJECT_IDS) {
-    const prefix = (id >>> 24) & 0xff;
-    skyAssets.set(id, makeBake(id, prefix));
+    skyAssets.set(id, makeBake(id));
 }
 
 const materialCache = new MaterialCache();
 const added = skyDome.populateCelestialBodies(skyAssets, materialCache);
 check(
-    "populateCelestialBodies returns 7",
-    added === 7,
-    `got ${added}`
+    "populateCelestialBodies returns 6 (skips 1 SetupModel 0x02)",
+    added === VISIBLE_IDS.length,
+    `got ${added}, expected ${VISIBLE_IDS.length}`
 );
 check(
-    "scene.children grew to 8 (dome + 7 bodies)",
-    scene.children.length === 8,
-    `got ${scene.children.length}`
+    "skyObjectMeshes has 6 entries",
+    skyDome.skyObjectMeshes.size === VISIBLE_IDS.length,
+    `got ${skyDome.skyObjectMeshes.size}`
+);
+check(
+    "0x02000714 SetupModel was skipped (not in skyObjectMeshes)",
+    SETUP_MODEL_IDS.every((id) => !skyDome.skyObjectMeshes.has(id)),
+    `0x02xxx still present: ${SETUP_MODEL_IDS.filter((id) => skyDome.skyObjectMeshes.has(id)).map((id) => "0x" + id.toString(16))}`
 );
 
-// Per-body checks: each is a Group, carries userData.sky_object_id.
-const skyObjectChildren = scene.children.filter(
-    (c) => c.userData?.sky_object_id !== undefined
+// skyCell children: 1 dome + 6 rotators = 7.
+check(
+    "skyCell.children.length === 7 (1 dome + 6 rotators)",
+    skyDome.skyCell.children.length === 7,
+    `got ${skyDome.skyCell.children.length}`
+);
+const rotators = skyDome.skyCell.children.filter(
+    (c) => c.userData?.sky_object_rotator === true
 );
 check(
-    "7 scene children carry userData.sky_object_id (capture bullet 12)",
-    skyObjectChildren.length === 7,
-    `got ${skyObjectChildren.length}`
-);
-const ids = skyObjectChildren.map((c) => c.userData.sky_object_id);
-const idSet = new Set(ids);
-check(
-    "all 7 SkyObject IDs are unique",
-    idSet.size === 7,
-    `got ${idSet.size} unique`
+    "6 children carry userData.sky_object_rotator === true",
+    rotators.length === VISIBLE_IDS.length,
+    `got ${rotators.length}`
 );
 check(
-    "every SkyObject ID matches an input ID",
-    SKY_OBJECT_IDS.every((id) => idSet.has(id)),
-    `missing: ${SKY_OBJECT_IDS.filter((id) => !idSet.has(id)).map((id) => "0x" + id.toString(16)).join(", ")}`
+    "every rotator carries userData.sky_object_id",
+    rotators.every((c) => typeof c.userData.sky_object_id === "number"),
+    `bad: ${rotators.filter((c) => typeof c.userData.sky_object_id !== "number").length}`
+);
+const rotatorIdSet = new Set(rotators.map((c) => c.userData.sky_object_id));
+check(
+    "every visible SkyObject ID has a rotator",
+    VISIBLE_IDS.every((id) => rotatorIdSet.has(id)),
+    `missing: ${VISIBLE_IDS.filter((id) => !rotatorIdSet.has(id)).map((id) => "0x" + id.toString(16)).join(", ")}`
 );
 
-// ---- Test 3: tick(dt, camera) translates dome + bodies to camera ----
+// Each rotator's child should be the bake group; the bake's transform
+// should be identity (native vertex coords preserved).
+for (const rotator of rotators) {
+    const bake = rotator.userData?.bake;
+    if (!bake) continue;
+    check(
+        `bake[0x${rotator.userData.sky_object_id.toString(16)}] transform is identity (native AC vertex coords)`,
+        bake.position.x === 0 && bake.position.y === 0 && bake.position.z === 0 &&
+            bake.scale.x === 1 && bake.scale.y === 1 && bake.scale.z === 1 &&
+            bake.rotation.x === 0 && bake.rotation.y === 0 && bake.rotation.z === 0,
+        `pos=(${bake.position.x},${bake.position.y},${bake.position.z}) ` +
+            `scale=(${bake.scale.x},${bake.scale.y},${bake.scale.z})`
+    );
+    // Just check the first to avoid huge log spam.
+    break;
+}
 
-console.log("\ntick() translates with camera:");
+// ---- Test 3: tick anchors skyCell at camera --------------------------
+
+console.log("\ntick() anchors skyCell at camera:");
 
 const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 5000);
 camera.position.set(42, 13, -7);
 
-// Default tick with isCurrentCellIndoor=false + empty SkyObjectStates.
 mockIndoor = false;
 mockSkyObjectStates = [];
 skyDome.tick(0.016, camera);
 
 check(
-    "dome.position === camera.position",
-    domeNode.position.x === 42 &&
-        domeNode.position.y === 13 &&
-        domeNode.position.z === -7,
-    `got (${domeNode.position.x}, ${domeNode.position.y}, ${domeNode.position.z})`
+    "skyCell.position === camera.position",
+    skyDome.skyCell.position.x === 42 &&
+        skyDome.skyCell.position.y === 13 &&
+        skyDome.skyCell.position.z === -7,
+    `got (${skyDome.skyCell.position.x}, ${skyDome.skyCell.position.y}, ${skyDome.skyCell.position.z})`
 );
 check(
-    "dome.visible === true (outdoor)",
-    domeNode.visible === true,
-    `got ${domeNode.visible}`
+    "skyCell.rotation.x stays at -π/2 (NOT yawed with camera)",
+    Math.abs(skyDome.skyCell.rotation.x + Math.PI / 2) < 1e-6 &&
+        skyDome.skyCell.rotation.y === 0 &&
+        skyDome.skyCell.rotation.z === 0,
+    `got rot=(${skyDome.skyCell.rotation.x}, ${skyDome.skyCell.rotation.y}, ${skyDome.skyCell.rotation.z})`
 );
 
-// Bodies follow the camera too (when getSkyObjectStates is empty the
-// bodies still translate with camera but don't get pose updates —
-// scoped to step A in the tick).
-// (We don't assert per-body position because step D is short-circuited
-// with empty states, so the bodies are at `camera.position + (0,0,0)`
-// which is camera position exactly.)
-const firstBody = skyObjectChildren[0];
-check(
-    "celestial body position === camera position (no pose update)",
-    firstBody.position.x === 42 &&
-        firstBody.position.y === 13 &&
-        firstBody.position.z === -7,
-    `got (${firstBody.position.x}, ${firstBody.position.y}, ${firstBody.position.z})`
-);
+// ---- Test 4: tick applies per-rotator heading ------------------------
 
-// ---- Test 4: tick() with non-empty SkyObjectStates ------------------
+console.log("\ntick() with SkyObjectStates applies rotator heading:");
 
-console.log("\ntick() with SkyObjectStates applies pose + visibility:");
-
-mockSkyObjectStates = SKY_OBJECT_IDS.map((id, idx) => ({
-    gfxObjectId: id,
-    heading: 0.0,                // due north
-    pitch: Math.PI / 2.0,        // zenith
-    texOffsetX: 0.0,
-    texOffsetY: 0.0,
-    transparent: -1.0,
-    luminosity: -1.0,
-    maxBright: -1.0,
-    visible: idx !== 0,          // first one invisible
-    properties: 0,
-}));
-// Tick with the same camera; bodies should move to camera.pos + (0, R, 0)
-camera.position.set(0, 0, 0);
+// Sun: progress=0.5 (midday-ish), begin=-20, end=190 → headingDeg=85 → ~1.484 rad.
+// Star: progress=0.0, begin=0, end=0 (always-visible) → headingDeg=0.
+mockSkyObjectStates = VISIBLE_IDS.map((id) => {
+    if (id === 0x01001f67) {
+        // sun-like: arc bounded
+        return {
+            gfxObjectId: id,
+            heading: 0, pitch: 0,
+            beginAngleDeg: -20, endAngleDeg: 190,
+            beginTime: 0.04, endTime: 0.21,
+            currentProgress: 0.5,
+            texOffsetX: 0, texOffsetY: 0,
+            transparent: -1, luminosity: -1, maxBright: -1,
+            visible: true, properties: 0,
+        };
+    }
+    // others: always-visible
+    return {
+        gfxObjectId: id,
+        heading: 0, pitch: 0,
+        beginAngleDeg: 0, endAngleDeg: 0,
+        beginTime: 0, endTime: 0,
+        currentProgress: 0,
+        texOffsetX: 0, texOffsetY: 0,
+        transparent: -1, luminosity: -1, maxBright: -1,
+        visible: true, properties: 0,
+    };
+});
 skyDome.tick(0.016, camera);
 
-const bodyById = new Map();
-for (const c of skyObjectChildren) bodyById.set(c.userData.sky_object_id, c);
-
+const sunRotator = skyDome.skyObjectMeshes.get(0x01001f67);
 check(
-    "first SkyObject (visible=false) has .visible=false",
-    bodyById.get(SKY_OBJECT_IDS[0]).visible === false,
-    `got ${bodyById.get(SKY_OBJECT_IDS[0]).visible}`
-);
-check(
-    "second SkyObject (visible=true) has .visible=true",
-    bodyById.get(SKY_OBJECT_IDS[1]).visible === true,
-    `got ${bodyById.get(SKY_OBJECT_IDS[1]).visible}`
+    "sun-like SkyObject rotator.rotation.z ≈ lerp(-20,190,0.5)*π/180 = 85° in rad",
+    sunRotator && Math.abs(sunRotator.rotation.z - 85 * Math.PI / 180) < 1e-4,
+    `got rotation.z=${sunRotator?.rotation.z}, expected ${85 * Math.PI / 180}`
 );
 
-// Zenith pose: at h=0, p=π/2 the body should land at (0, R, 0)
-// (camera at origin + offset).
-const secondBody = bodyById.get(SKY_OBJECT_IDS[1]);
+const staticRotator = skyDome.skyObjectMeshes.get(0x01001348);
 check(
-    "zenith pose: y ≈ CELESTIAL_SPHERE_RADIUS",
-    Math.abs(secondBody.position.y - __internals.CELESTIAL_SPHERE_RADIUS) < 0.001,
-    `got y=${secondBody.position.y}, expected ~${__internals.CELESTIAL_SPHERE_RADIUS}`
-);
-check(
-    "zenith pose: x ≈ 0 and z ≈ 0",
-    Math.abs(secondBody.position.x) < 0.001 &&
-        Math.abs(secondBody.position.z) < 0.001,
-    `got x=${secondBody.position.x}, z=${secondBody.position.z}`
+    "always-visible SkyObject rotator.rotation.z === 0",
+    staticRotator && Math.abs(staticRotator.rotation.z) < 1e-9,
+    `got rotation.z=${staticRotator?.rotation.z}`
 );
 
-// ---- Test 5: indoor flip hides dome + bodies ------------------------
+// ---- Test 5: 0x02xxxxxx state is skipped without throwing ----------
+
+console.log("\nticking with 0x02 SetupModel state:");
+
+mockSkyObjectStates = [
+    ...mockSkyObjectStates,
+    {
+        gfxObjectId: 0x02000714,
+        heading: 0, pitch: 0,
+        beginAngleDeg: 0, endAngleDeg: 0,
+        beginTime: 0, endTime: 0, currentProgress: 0,
+        texOffsetX: 0, texOffsetY: 0,
+        transparent: -1, luminosity: -1, maxBright: -1,
+        visible: true, properties: 0,
+    },
+];
+let threw = false;
+try {
+    skyDome.tick(0.016, camera);
+} catch (_) {
+    threw = true;
+}
+check(
+    "tick does NOT throw when receiving a 0x02 SetupModel state",
+    !threw,
+    `threw=${threw}`
+);
+
+// ---- Test 6: indoor flip short-circuits tick + renderSkyPass --------
 
 console.log("\nIndoor flip:");
 
 mockIndoor = true;
 skyDome.tick(0.016, camera);
 check(
-    "dome.visible === false (indoor)",
-    domeNode.visible === false,
-    `got ${domeNode.visible}`
+    "indoor: _lastIsIndoor === true",
+    skyDome._lastIsIndoor === true,
+    `got ${skyDome._lastIsIndoor}`
 );
+
+// Mock renderer for renderSkyPass.
+let renderCount = 0;
+let lastSceneRendered = null;
+const mockRenderer = {
+    autoClear: true,
+    clearDepth: () => {},
+    render: (s, c) => { renderCount += 1; lastSceneRendered = s; },
+};
+skyDome.renderSkyPass(mockRenderer, camera);
 check(
-    "all celestial bodies .visible === false (indoor)",
-    skyObjectChildren.every((c) => c.visible === false),
-    `visible counts: ${skyObjectChildren.filter((c) => c.visible).length} still visible`
+    "indoor: renderSkyPass does NOT call renderer.render",
+    renderCount === 0,
+    `got renderCount=${renderCount}`
 );
 
 // Flip back to outdoor.
 mockIndoor = false;
 skyDome.tick(0.016, camera);
+skyDome.renderSkyPass(mockRenderer, camera);
 check(
-    "dome.visible === true (outdoor restored)",
-    domeNode.visible === true,
-    `got ${domeNode.visible}`
-);
-// First body's per-state .visible=false; the rest should be true.
-check(
-    "outdoor restored: per-body visibility tracks state.visible",
-    bodyById.get(SKY_OBJECT_IDS[0]).visible === false &&
-        bodyById.get(SKY_OBJECT_IDS[1]).visible === true,
-    `body[0]=${bodyById.get(SKY_OBJECT_IDS[0]).visible} ` +
-        `body[1]=${bodyById.get(SKY_OBJECT_IDS[1]).visible}`
+    "outdoor: renderSkyPass calls renderer.render(skyScene, skyCamera)",
+    renderCount === 1 && lastSceneRendered === skyDome.skyScene,
+    `got renderCount=${renderCount}, scene match=${lastSceneRendered === skyDome.skyScene}`
 );
 
-// ---- Test 6: argbToColor decode -------------------------------------
+// ---- Test 7: argbToColor decode -------------------------------------
 
 console.log("\nargbToColor decode:");
 const c1 = __internals.argbToColor(0xff9cb3d9);
@@ -429,57 +502,55 @@ check(
     `got r=${c1.r.toFixed(3)}, g=${c1.g.toFixed(3)}, b=${c1.b.toFixed(3)}`
 );
 
-// ---- Test 7: celestialPosition convention ---------------------------
+// ---- Test 8: lerpDeg helper -----------------------------------------
 
-console.log("\ncelestialPosition convention:");
-const R = __internals.CELESTIAL_SPHERE_RADIUS;
-// h=0 (AC north), p=0 (horizon) → three.js -z (AC north → three -z).
-const [hx, hy, hz] = __internals.celestialPosition(0, 0, R);
+console.log("\nlerpDeg helper:");
 check(
-    "h=0, p=0 → (0, 0, -R) (north horizon)",
-    Math.abs(hx) < 1e-3 && Math.abs(hy) < 1e-3 && Math.abs(hz + R) < 1e-3,
-    `got (${hx.toFixed(2)}, ${hy.toFixed(2)}, ${hz.toFixed(2)})`
+    "lerpDeg(-20, 190, 0.0) === -20",
+    Math.abs(__internals.lerpDeg(-20, 190, 0.0) - (-20)) < 1e-9,
+    `got ${__internals.lerpDeg(-20, 190, 0.0)}`
 );
-// h=π/2 (AC east), p=0 (horizon) → three.js +x.
-const [ex, ey, ez] = __internals.celestialPosition(Math.PI / 2, 0, R);
 check(
-    "h=π/2, p=0 → (+R, 0, 0) (east horizon)",
-    Math.abs(ex - R) < 1e-3 && Math.abs(ey) < 1e-3 && Math.abs(ez) < 1e-3,
-    `got (${ex.toFixed(2)}, ${ey.toFixed(2)}, ${ez.toFixed(2)})`
+    "lerpDeg(-20, 190, 1.0) === 190",
+    Math.abs(__internals.lerpDeg(-20, 190, 1.0) - 190) < 1e-9,
+    `got ${__internals.lerpDeg(-20, 190, 1.0)}`
 );
-// h=anything, p=π/2 (zenith) → three.js +y.
-const [zx, zy, zz] = __internals.celestialPosition(1.234, Math.PI / 2, R);
 check(
-    "p=π/2 (any heading) → (0, +R, 0) (zenith)",
-    Math.abs(zx) < 1e-3 && Math.abs(zy - R) < 1e-3 && Math.abs(zz) < 1e-3,
-    `got (${zx.toFixed(2)}, ${zy.toFixed(2)}, ${zz.toFixed(2)})`
+    "lerpDeg(-20, 190, 0.5) === 85 (sun midday heading)",
+    Math.abs(__internals.lerpDeg(-20, 190, 0.5) - 85) < 1e-9,
+    `got ${__internals.lerpDeg(-20, 190, 0.5)}`
+);
+// Sky-I-A's load-bearing case: sun at t=0.05 with begin_time=0.04,
+// end_time=0.21 → progress = (0.05-0.04)/(0.21-0.04) ≈ 0.0588;
+// lerpDeg(-20, 190, 0.0588) ≈ -7.65.
+const sunProgressFoeDawn = (0.05 - 0.04) / (0.21 - 0.04);
+const sunHeadingFoeDawn = __internals.lerpDeg(-20, 190, sunProgressFoeDawn);
+check(
+    "sun heading at t=0.05 lerpDeg ≈ -7.65° (Sky-I-A foredawn benchmark)",
+    Math.abs(sunHeadingFoeDawn - (-7.647)) < 0.01,
+    `got ${sunHeadingFoeDawn.toFixed(4)}°`
 );
 
-// ---- Test 8: idempotent re-populate ---------------------------------
+// ---- Test 9: idempotent re-populate ---------------------------------
 
 console.log("\nIdempotent re-populate:");
-const childCountBefore = scene.children.length;
+const cellChildCountBefore = skyDome.skyCell.children.length;
 const added2 = skyDome.populateCelestialBodies(skyAssets, materialCache);
 check(
-    "re-populate returns same count",
-    added2 === 7,
+    "re-populate returns 6 (excludes SetupModel)",
+    added2 === VISIBLE_IDS.length,
     `got ${added2}`
 );
 check(
-    "scene.children count unchanged after re-populate",
-    scene.children.length === childCountBefore,
-    `was ${childCountBefore}, now ${scene.children.length}`
+    "skyCell.children count unchanged after re-populate",
+    skyDome.skyCell.children.length === cellChildCountBefore,
+    `was ${cellChildCountBefore}, now ${skyDome.skyCell.children.length}`
 );
 
-// ---- Test 9: dispose cleans up --------------------------------------
+// ---- Test 10: dispose cleans up -------------------------------------
 
 console.log("\nDispose:");
 skyDome.dispose();
-check(
-    "after dispose: dome no longer in scene.children",
-    !scene.children.includes(domeNode),
-    `still includes dome: ${scene.children.includes(domeNode)}`
-);
 check(
     "after dispose: skyObjectMeshes is empty",
     skyDome.skyObjectMeshes.size === 0,
@@ -487,6 +558,6 @@ check(
 );
 
 console.log("\n=========================");
-console.log(`Sky-D sky_dome test: passed=${passed} failed=${failed}`);
+console.log(`Sky-D/Sky-I-B sky_dome test: passed=${passed} failed=${failed}`);
 if (failed > 0) process.exit(1);
 else process.exit(0);

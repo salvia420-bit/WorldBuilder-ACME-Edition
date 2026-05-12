@@ -1,92 +1,143 @@
-// Workstream Sky-D (2026-05-11) — sky-dome geometry + celestial body
-// rendering.
+// Workstream Sky-D + Sky-I-B (2026-05-11) — sky-cell render path.
 //
-// Two pieces:
+// **Sky-I-B refactor (2026-05-11).** This file used to render the sky
+// dome + celestial bodies as direct children of the main `THREE.Scene`,
+// with each celestial body positioned via a `celestialPosition(h, p, r)
+// = (sin(h)*cos(p), sin(p), -cos(h)*cos(p)) * 900` spherical projection
+// AROUND the camera, plus a global `CELESTIAL_BODY_SCALE = 30` applied
+// to each mesh. The Sky-I-A empirical probe (see
+// `external/holtburger/docs/sky-i-probe-2026-05-11.md`) surfaced three
+// stacked bugs that conspired to put the sun's world position at
+// (59124, 54269, -87511) — 80,284 units from camera, 16× past
+// camera.far=5000:
 //
-//   1. **Gradient sky dome.** A camera-parented large sphere (radius
-//      `DOME_RADIUS = 1000` world units, BackSide so we render the
-//      inside-facing surface, depthWrite=false so it never occludes
-//      world geometry). The fragment shader vertically lerps between
-//      `uHorizonColor` (Sky-C's `liveScene3d.skyBackgroundColor`, an
-//      ARGB u32 derived from `fog_color_argb`) and `uZenithColor`
-//      (Sky-C's `_lastState.ambColorArgb`, the ambient light tint,
-//      typically darker / cooler at the top of the dome). The
-//      world-up direction `vWorldNormal.y` drives a `smoothstep(0, 0.5,
-//      y)` blend so the gradient compresses into the lower half of the
-//      sky (matching Dereth's atmospheric tint — most of the action
-//      is in the bottom 30° of the dome; the upper 60° is dominated
-//      by ambient sky color).
+//   1. **Double-transform.** AC's sun mesh's vertices already sit at
+//      x∈[1844, 1974] (center ~1909) in the DAT — the asset pipeline
+//      ships the celestials at their final cell-local placement.
+//      Sky-D added a SECOND placement on top via `celestialPosition`.
+//   2. **CELESTIAL_BODY_SCALE = 30.** Multiplied the already-placed
+//      1909-unit vertex center by 30, sending the worldCenter to ~57k.
+//   3. **`evaluate_sky_object` treated `begin_angle`/`end_angle` as
+//      RADIANS** when the DAT ships DEGREES. Same calibration finding
+//      Sky-C already documented for `dir_heading`/`dir_pitch` — but
+//      not propagated to per-SkyObject angles. At t=0.05 (foredawn),
+//      `lerp(-20, 190, 0.0588) ≈ -7.65` was treated as 7.65 radians of
+//      heading (≈ -438° wraparound) instead of -7.65 degrees.
 //
-//   2. **Per-SkyObject celestial bodies.** For each SkyObject in
-//      `getSkyObjectStates()`, instantiate its bake (from Sky-E's
-//      `liveScene3d.skyAssets`) as a child of `celestialGroup` placed
-//      on a virtual sky-sphere at radius `CELESTIAL_SPHERE_RADIUS = 900`
-//      (inside the dome shell). Each body's mesh is positioned via
-//      `(sin(h)*cos(p), sin(p), -cos(h)*cos(p))` after worldRoot
-//      rotation — same formula `sunPositionFromHeadingPitch` in
-//      `sky_lighting.js` uses for the directional-light position.
+// **Sky-I-B fix.** Architectural pattern: Garry's Mod 3D-skybox — render
+// the sky into its own scene+camera, in a separate render pass, with
+// its own far-clip (50000) and no fog. The sky cell is anchored at the
+// main camera position per frame (so celestials never recede as the
+// player walks), but its **rotation stays world-axis-locked** (so the
+// sun stays at its compass bearing as the player turns). Concretely:
 //
-// **Coordinate system.** The dome + celestial bodies live as DIRECT
-// children of `scene.children` (NOT under `worldRoot`). This is
-// load-bearing because:
-//   - The capture script's bullet 11 walks `scene.children` looking
-//     for `name === "sky_dome"`.
-//   - The capture script's bullet 12 walks `scene.children` looking
-//     for `userData.sky_object_id !== undefined`.
-//   - Avoiding `worldRoot.rotation.x = -π/2` lets us apply the
-//     SkyObject heading/pitch math directly in three.js space without
-//     a double-rotation that would tilt the dome onto its side.
+//   - `this.skyScene` — separate `THREE.Scene`.
+//   - `this.skyCamera` — separate `THREE.PerspectiveCamera`, near=0.1,
+//     far=50000 (comfortably contains the ~20km cloud-band cylinder
+//     + the ~2700-unit sun/moon vertex AABBs).
+//   - `this.skyCell` — `THREE.Group` named `sky_cell`, child of
+//     `skyScene`. Rotation `x = -π/2` (mirrors `worldRoot` so AC-Z up
+//     lands in three.js Y up — same convention the world scene uses).
+//   - The gradient dome (`this.dome`) and each celestial body's
+//     rotator-Group are children of `skyCell`. Celestial body meshes
+//     keep their NATIVE vertex coords (no `position.set`, no `scale`
+//     — `position=(0,0,0), scale=(1,1,1)`); rotation around the cell's
+//     AC-Z axis (= the rotator's three-Y axis, since the parent
+//     `skyCell` already rotated to land AC-Z = three-Y) is applied at
+//     the rotator level.
 //
-// **Per-frame chain.** `loop.js::tickPerFrame` calls
-// `skyLightingController.tick(dt)` FIRST (Sky-C writes
-// `liveScene3d.skyBackgroundColor`), then `skyDome.tick(dt, camera)`
-// reads the freshly-written sink. Order matters; reversing it would
-// give the dome a stale fog color for one frame.
+//   - **Render pass.** `init3D`'s tick calls `skyDome.tick(dt,
+//     activeCam)` first (for per-frame updates), then calls
+//     `skyDome.renderSkyPass(renderer, activeCam)` AFTER the main
+//     `renderer.render(scene, activeCam)`. The sky pass does:
 //
-// **Indoor flip.** Phase 7.6's `tickLightingForCellState` flips
-// `sun.visible = false` when `isCurrentCellIndoor()` returns true.
-// We mirror that: when indoor, `skyDome.dome.visible = false` AND
-// `skyDome.celestialGroup.visible = false`. The check is local to
-// the tick (reads `sessionHandle.isCurrentCellIndoor()` directly) so
-// we don't depend on a side-effect-ordering quirk with Phase 7.6.
+//         renderer.autoClear = false;
+//         renderer.clearDepth();                       // clean depth
+//         skyCamera.position.copy(activeCam.position); // anchor
+//         skyCamera.quaternion.copy(activeCam.quaternion);
+//         skyCamera.fov = activeCam.fov;
+//         skyCamera.aspect = activeCam.aspect;
+//         skyCamera.updateProjectionMatrix();
+//         renderer.render(skyScene, skyCamera);
+//         renderer.autoClear = true;
 //
-// **RGB-as-ARGB note** (Sky-E's deferred Part 2): the cloud band
-// (`0x01004C36`) is alpha-blended via its Translucent surface flag in
-// `materials.js::_materialFromFlags`. The DataTexture upload in
-// `surfacePixelsToTexture` flips `flipY = false` + uses RGBAFormat +
-// `SRGBColorSpace` for albedo. We DON'T set `premultiplyAlpha = true`
-// here — the wasm RGBA8 is straight alpha, not pre-multiplied. With
-// `THREE.NormalBlending` (the default) the alpha math is correct.
-// If the cloud band's edges show a black halo, that's the indicator
-// the wasm pixels ARE pre-multiplied and we need to flip the flag.
-// Eye-test result is documented in the commit body.
+//     The world scene renders first WITH its own depth buffer; we then
+//     clear depth and render the sky cell INTO the framebuffer
+//     wherever the world didn't already write. Sky-cell pixels appear
+//     ONLY where the world geometry wasn't visible — i.e. always
+//     "behind" the world by construction. Sky is exempt from world fog
+//     by construction (separate scene).
+//
+//   - **Indoor flip.** When `isCurrentCellIndoor()` returns true,
+//     `renderSkyPass` short-circuits (skipping clearDepth + the second
+//     render call). EnvCells already render their own
+//     ceiling/floor/walls; no sky-cell overlay needed inside.
+//
+// **What this preserves:**
+//   - Sky-A/B's wasm-side SkyEval + per-keyframe lerp.
+//   - Sky-C's directional/ambient lighting + scene.fog (main scene only).
+//   - Sky-E's resolved `skyAssets` Map.
+//   - Sky-G's SkyObjectReplace mesh-swap + UV scroll (`tex_offset_x/y`
+//     still wires through to `material.map.offset`).
+//   - The gradient-dome shader (now rendered in skyScene).
+//   - The capture-script bullets (11/12) — bullet detection updated
+//     to walk both `scene.children` AND `liveScene3d.skyDome.skyScene
+//     .children`.
+//
+// **Coordinate-system note.** The native AC vertex layout has the sun's
+// AABB center at ~(1909, 1875, 0) in AC coords (X-right, Y-north,
+// Z-up). After the skyCell's `rotation.x = -π/2`, that maps to three.js
+// (1909, 0, -1875) — sitting on the horizon (Z=0 in three-space-Y) to
+// the player's east-and-slightly-north (positive X is east, negative Z
+// is north after the rotation). The per-tick `rotation.z` on the
+// rotator group is applied IN AC-coord space (before the skyCell's
+// X-rotation), so a rotation around AC's Z-up axis is exactly what we
+// want — it swings the sun from east toward south toward west across
+// the visible day.
+//
+// **Open questions surfaced by Sky-I-A** (and our judgment calls):
+//   - **Compass-bearing yaw**: world-axis-locked (skyCell rotates only
+//     by its own `-π/2` X to match worldRoot; the skyCamera follows
+//     the main camera's quaternion to render from the player's POV).
+//   - **Pitch synthesis**: KEPT in the wasm-side `pitch` field but
+//     NOT consumed by this renderer. Celestials trace a horizontal arc
+//     at native vertex altitude (vertex Z spans -130..130 for the sun,
+//     so the apparent "rising" comes from the angular sweep of the
+//     vertex AABB across the visible arc; no pitch axis applied). If
+//     the eye-test shows the sun never rises, re-add `rotator.rotation
+//     .x = pitchSyntheticRad` and revisit.
+//   - **`SkyObject.properties` bitfield**: bit 0x02 (cloud band) still
+//     drives Sky-G's UV scroll; bits 0x01/0x04/0x08 untouched (defer).
+//   - **`0x02xxxxxx` SetupModel proxies**: SKIPPED — the only
+//     0x02xxxxxx in retail Dereth's Sunny DayGroup is `0x02000714`
+//     (6 cm physics-script anchor for the moon, not a visible
+//     celestial). Skipped in `populateCelestialBodies`.
 
 import * as THREE from "three";
 
 import { buildSkyObjectGroup } from "./sky_assets.js";
-import { acToThree } from "./adapter.js";
 
 // ---- Constants -----------------------------------------------------
 //
 // `DOME_RADIUS` — large enough to feel "infinite" relative to the 9-LB
-// Holtburg view (576 m square) but small enough that the depth buffer
-// stays sensible (we draw the dome BEFORE world geometry with
-// depthWrite=false, so the choice is largely cosmetic). 1000 m matches
-// `sky_lighting.js::SUN_POSITION_DISTANCE`.
+// Holtburg view. Drawn with `depthWrite=false` so it never occludes
+// world geometry; rendered in the separate sky pass where depth is
+// cleared before, so no depth ordering against world content.
 const DOME_RADIUS = 1000.0;
-// `CELESTIAL_SPHERE_RADIUS` — celestial bodies sit inside the dome
-// shell. 900 m gives ~100 m of headroom so the bodies never z-fight
-// the dome surface. (z-fight wouldn't be visible anyway with the
-// dome's depthTest=false, but a clean ordering helps eye-test
-// debugging.)
-const CELESTIAL_SPHERE_RADIUS = 900.0;
-// Scale per celestial body. AC's meshes are authored in world-metres;
-// at radius 900 m a typical 5-m moon mesh is ~0.3° of arc, too small.
-// We scale UP so the sun + moon read as ~5° on the sky dome — about
-// what AC's retail client showed (validated against PhatSDK
-// `SkyDesc::display_radius`, retained here as a constant the eye-test
-// tunes).
-const CELESTIAL_BODY_SCALE = 30.0;
+// `SKY_CAMERA_FAR` — the sky cell's clipping volume. Must comfortably
+// contain (a) sun + moon vertex AABBs (center ~1909 + half-extent ~225
+// = ~2200 from cell origin), (b) the cloud-band's ~10,000-unit
+// horizontal-cylinder geometry, (c) the always-visible base shells at
+// ~1500 native distance, and (d) any future region that might place
+// celestials further out. 50000 is the Sky-I-A memo's recommendation;
+// the depth buffer stays well-conditioned because depth-test inside
+// the skyScene is between sky-internal elements only (the world's
+// depth has been cleared before the pass).
+const SKY_CAMERA_FAR = 50000.0;
+// `SKY_CAMERA_NEAR` matches the main camera so coplanar sky geometry
+// isn't clipped. Sky-dome at radius 1000 + celestials at vertex
+// distance ~1900 are both well beyond 0.1.
+const SKY_CAMERA_NEAR = 0.1;
 
 // ---- Gradient shader -----------------------------------------------
 //
@@ -147,68 +198,52 @@ function argbToColor(u32, target) {
 }
 
 /**
- * Project (heading, pitch) into three.js world-space at radius `r`.
- * Heading and pitch are in RADIANS (the wasm `SkyObjectState` getters
- * return radians per `crates/holtburger-world/src/sky.rs:117-121`).
- * AC convention: heading on the world XY plane measured from +Y north,
- * CW; pitch above horizon. After AC→three rotation:
- *
- *     x = r * cos(pitch) * sin(heading)        // east
- *     y = r * sin(pitch)                       // up
- *     z = -r * cos(pitch) * cos(heading)       // south (AC north → three -z)
- *
- * Returns `[x, y, z]`. Identical to `sun_lighting.js`'s
- * `sunPositionFromHeadingPitch` but takes radians directly (instead
- * of degrees) because the wasm side already pre-converts.
+ * Sky-I-B: degrees lerp. Linear — sky headings progress monotonically
+ * (sun goes E→W the long way through south; not shortest-arc), so
+ * `lerp(beginDeg, endDeg, p)` is the right shape for the per-object
+ * rotation. Matches `lerp_angle_radians` in `crates/holtburger-world/
+ * src/sky.rs`'s comment — same parametric, different unit.
  */
-function celestialPosition(headingRad, pitchRad, r) {
-  const cp = Math.cos(pitchRad);
-  const sp = Math.sin(pitchRad);
-  const x = r * cp * Math.sin(headingRad);
-  const y = r * sp;
-  const z = -r * cp * Math.cos(headingRad);
-  return [x, y, z];
+function lerpDeg(a, b, p) {
+  return a + (b - a) * p;
 }
 
 /**
- * Build a sky dome — large back-side sphere with a vertical-gradient
- * ShaderMaterial — plus a celestial-body group seeded from Sky-E's
- * resolved `skyAssets`.
+ * Build a sky cell — separate render pass + camera-anchored Group
+ * containing the gradient dome and per-SkyObject rotator subgroups.
  *
  * Inputs:
- *   - `scene` — root THREE.Scene. The dome wrapper + each celestial
- *     body group are added as direct children of this scene (NOT
- *     under `worldRoot`). The capture script's bullet 11 + 12 walks
- *     scene.children, so the top-level placement is load-bearing.
+ *   - `scene` — root `THREE.Scene` (the WORLD scene). Used only for
+ *     the indoor-flip query path and for capture-script discovery: the
+ *     dome itself + celestial bodies live in `this.skyScene`, NOT
+ *     under `scene`. Capture scripts that walk `scene.children` for
+ *     `sky_dome` or `sky_object_id` should be updated to walk both
+ *     `scene.children` AND `skyDome.skyScene.children`.
  *   - `skyAssets` — `Map<sky_object_id, bake>` from
  *     `resolveSkyAssets`. May be null/empty at construction time;
- *     the celestial group is populated lazily by `populateCelestialBodies`
- *     once Sky-E completes.
+ *     the celestial bodies are populated lazily by
+ *     `populateCelestialBodies` once Sky-E completes.
  *   - `materialCache` — shared `MaterialCache` for surface textures.
  *   - `sessionHandleAccessor` — `() => SessionHandle | null`. Read on
  *     every `tick(dt, camera)` to fetch the latest
- *     `getSkyObjectStates()` + `isCurrentCellIndoor()`. Lazy-accessor
- *     style matches `SkyLightingController`.
+ *     `getSkyObjectStates()` + `isCurrentCellIndoor()`.
  *   - `liveScene3dRef` — reference back to the `liveScene3d` object;
- *     the controller reads `skyBackgroundColor` (Sky-C's sink) +
- *     `skyLightingController._lastState.ambColorArgb` (Sky-C's zenith
- *     color source). Falls back to defaults when these aren't
- *     populated.
- *
- * Construction is synchronous — the dome mesh + uniforms come up
- * immediately. The celestial group starts empty if `skyAssets` is
- * null; call `controller.populateCelestialBodies(skyAssets,
- * materialCache)` once Sky-E completes (typically a few frames after
- * `populateSkyDescFromRegion` resolves).
+ *     used to read Sky-C's `skyBackgroundColor` (horizon-gradient
+ *     sink) and `skyLightingController._lastState.ambColorArgb`
+ *     (zenith).
  *
  * **Public state.**
- *   - `controller.dome` — `THREE.Mesh` for the gradient sphere.
- *   - `controller.celestialGroup` — `THREE.Group` parent for celestial
- *     bodies; ALSO each body is added DIRECTLY to scene.children with
- *     `userData.sky_object_id` set, so the capture script's bullet 12
- *     finds them at scene-root.
- *   - `controller.skyObjectMeshes` — Map<sky_object_id, THREE.Group>
- *     for the per-frame `setPositionAndPose` loop.
+ *   - `controller.dome` — `THREE.Mesh` for the gradient sphere
+ *     (resident in `skyScene`).
+ *   - `controller.skyScene` — `THREE.Scene` containing the sky cell.
+ *   - `controller.skyCamera` — `THREE.PerspectiveCamera` for the sky
+ *     pass.
+ *   - `controller.skyCell` — `THREE.Group` holding the dome +
+ *     rotators (camera-anchored each tick).
+ *   - `controller.skyObjectMeshes` — `Map<sky_object_id, THREE.Group>`
+ *     of per-object rotator Groups. The keys are `sky_object_id`
+ *     (post-Sky-G mesh-swap-aware via `s.gfxObjectId`); the values are
+ *     rotator Groups whose `rotation.z` is updated per tick.
  */
 export class SkyDome {
   constructor(opts) {
@@ -219,7 +254,6 @@ export class SkyDome {
       skyAssets = null,
       materialCache = null,
       domeRadius = DOME_RADIUS,
-      celestialRadius = CELESTIAL_SPHERE_RADIUS,
     } = opts || {};
     if (!scene) {
       throw new Error("SkyDome: opts.scene required");
@@ -231,9 +265,44 @@ export class SkyDome {
         : () => null;
     this.liveScene3dRef = liveScene3dRef;
     this.domeRadius = domeRadius;
-    this.celestialRadius = celestialRadius;
 
-    // === 1. Gradient sky dome ========================================
+    // === Sky scene + camera (separate render pass) ====================
+    //
+    // The sky pass runs AFTER the main render in `index.js`'s rAF tick.
+    // It clears depth so the sky always lands behind world geometry,
+    // then renders this scene with this camera (which mirrors the main
+    // camera's orientation each tick but with its own far=50000 +
+    // no-fog).
+    this.skyScene = new THREE.Scene();
+    this.skyScene.name = "sky_scene";
+    // Stash the scene's reference fog policy explicitly so it's
+    // obvious to readers: `null` means three.js will NOT apply fog
+    // when rendering this scene. The sky is exempt from world fog by
+    // construction.
+    this.skyScene.fog = null;
+    this.skyCamera = new THREE.PerspectiveCamera(
+      60,        // fov - re-synced from main camera each tick
+      1,         // aspect - re-synced from main camera each tick
+      SKY_CAMERA_NEAR,
+      SKY_CAMERA_FAR
+    );
+    this.skyCamera.name = "sky_camera";
+
+    // === Sky cell (camera-anchored Group) =============================
+    //
+    // The cell is the anchor for all sky-internal geometry. Per tick
+    // we copy the main camera's position into `skyCell.position` — the
+    // cell follows the player. Rotation stays at `x = -π/2` (mirroring
+    // `worldRoot`'s AC-Z-up → three-Y-up correction) so AC-coord
+    // vertex data lands the right way up; the cell is NOT yawed with
+    // the camera, which means celestial bodies stay compass-locked
+    // (sun's compass bearing doesn't change as the player turns).
+    this.skyCell = new THREE.Group();
+    this.skyCell.name = "sky_cell";
+    this.skyCell.rotation.x = -Math.PI / 2;
+    this.skyScene.add(this.skyCell);
+
+    // === Gradient sky dome ============================================
     //
     // BackSide so we render the inside of the sphere (we're inside
     // looking out). 32×16 segments is enough to keep the gradient
@@ -244,10 +313,6 @@ export class SkyDome {
     // boundingSphere so three.js's frustum culling can decide whether
     // to draw it. Three's primitive constructors don't pre-compute
     // boundingSphere by default (verified in r184); call it explicitly.
-    // The dome is camera-parented (re-positioned every frame) so the
-    // bounding sphere is in local space — three.js applies the dome's
-    // world matrix to the sphere center automatically during the
-    // frustum check.
     domeGeom.computeBoundingSphere();
     // Default fallback colors before Sky-C populates the sink.
     // 0x9CB3D9 is `SkyLightingController`'s `DEFAULT_FOG_COLOR_ARGB`
@@ -271,39 +336,40 @@ export class SkyDome {
       glslVersion: THREE.GLSL3,
       // Inside of sphere — render back faces.
       side: THREE.BackSide,
-      // Sky dome doesn't write into depth — it must never occlude
-      // world geometry. The dome is drawn first with `renderOrder = -1`
-      // and depthTest off so it always lands at the back.
+      // Dome doesn't write depth — every sky-internal mesh paints over
+      // it as needed. In the separate render pass with `clearDepth()`
+      // run before, this is mostly cosmetic, but keeps the ordering
+      // sensible if a future fog/water mesh joins skyScene.
       depthWrite: false,
       depthTest: false,
-      fog: false, // exempt from scene.fog so the dome reads cleanly
+      fog: false, // exempt from fog (and skyScene.fog is null anyway)
     });
     domeMat.name = "sky-dome-gradient";
     this.dome = new THREE.Mesh(domeGeom, domeMat);
     this.dome.name = "sky_dome";
     this.dome.renderOrder = -1;
     this.dome.userData = { sky_dome: true };
-    // Attach to scene root, NOT under worldRoot. Capture script's
-    // bullet 11 walks `scene.children` looking for `name === "sky_dome"`.
-    this.scene.add(this.dome);
+    // The dome lives in skyCell — but since skyCell carries the
+    // `-π/2` rotation around X (matching worldRoot's AC-Z-up
+    // correction), the dome rotates with it. That's fine — the dome
+    // is rotationally symmetric. Setting `frustumCulled = false`
+    // because the dome is always the surrounding ball — the frustum
+    // check after the cell anchor moves is sometimes wrong with
+    // floating origin.
+    this.dome.frustumCulled = false;
+    this.skyCell.add(this.dome);
 
-    // === 2. Celestial body group ====================================
+    // === Celestial body bookkeeping ===================================
     //
-    // The celestialGroup wrapper exists for tick-time bulk operations
-    // (e.g. .visible = false for the indoor flip). Each individual
-    // body Group is ADDED TWICE: once as a child of celestialGroup
-    // for transformation, and once... actually no — three.js does NOT
-    // allow a node to live under two parents. So we use a different
-    // approach: the celestial body groups live as DIRECT children of
-    // scene.children (so bullet 12 sees them), and we keep a
-    // `skyObjectMeshes` Map for per-frame iteration.
+    // Each entry is a per-object rotator Group; each rotator's child
+    // is the actual SkyObject mesh (with identity transform — native
+    // vertex coords). Per tick, the rotator's `.rotation.z` is set
+    // from `lerp(beginAngleDeg, endAngleDeg, currentProgress) * π/180`.
     //
-    // For the indoor visibility flip we iterate that Map and set
-    // `.visible = false` on each, plus flip `this.dome.visible`
-    // separately. The `celestialGroup` exists purely as a JS-side
-    // bookkeeping handle (NOT added to the scene tree).
-    this.celestialGroup = new THREE.Group();
-    this.celestialGroup.name = "sky_celestial_bodies"; // not in tree
+    // The `_lastActiveIdPerObjectIndex` Map tracks which gfx_obj_id was
+    // active for each SkyObject index across consecutive ticks, so
+    // Sky-G's SkyObjectReplace mesh-swap can hide the previously-
+    // active mesh when the swap fires.
     this.skyObjectMeshes = new Map();
 
     // If skyAssets are already populated, build celestial bodies now.
@@ -319,19 +385,9 @@ export class SkyDome {
     this._lastSkyObjectCount = 0;
     this._lastIsIndoor = false;
     // Workstream Sky-G: per-SkyObject-index → last-active gfx_obj_id.
-    // When a SkyObjectReplace swaps the target mesh, we hide the
-    // previously-active one and un-hide the new target.
     this._lastActiveIdPerObjectIndex = new Map();
-    // Capture-script bullet 18 introspection: count of mesh-swap
-    // events this session (how many times a SkyObject's active
-    // gfx_obj_id changed across consecutive ticks).
     this._meshSwapCount = 0;
-    // Workstream Sky-I-A: optional `?skydebug=1` URL flag. When set,
-    // `tick()` writes a per-frame dump to `window.__skyDebugLastDump`
-    // (object, mesh, camera, fog details). The capture script's
-    // `?skydebug=1` probe reads this once per second at four
-    // time-of-day overrides and writes JSON to disk. Pure measurement
-    // — no behaviour change when flag is unset.
+    // Workstream Sky-I-A: `?skydebug=1` URL flag.
     this._skyDebug = false;
     try {
       if (typeof window !== "undefined" && window.location?.search) {
@@ -341,7 +397,10 @@ export class SkyDome {
     } catch (_) { /* no-window in worker context */ }
     if (this._skyDebug && typeof window !== "undefined") {
       // eslint-disable-next-line no-console
-      console.log("[sky-i-a] ?skydebug=1 — installing per-tick state dump on window.__skyDebugLastDump");
+      console.log(
+        "[sky-i-a] ?skydebug=1 — installing per-tick state dump on " +
+        "window.__skyDebugLastDump"
+      );
       window.__skyDebugLastDump = null;
     }
   }
@@ -353,12 +412,16 @@ export class SkyDome {
    * is a no-op; with a different skyAssets, replaces the existing
    * meshes.
    *
-   * Workstream Sky-G: every bake in `skyAssets` becomes a mesh added
-   * to the scene root. The renderer keys lookups by the post-replace
-   * `s.gfxObjectId` — so if `skyAssets` includes both a SkyObject's
-   * default mesh AND a SkyObjectReplace override mesh, the renderer
-   * naturally swaps in the override on keyframe transitions (no
-   * runtime bake; zero network).
+   * **Sky-I-B**: each SkyObject bake is wrapped in a per-object
+   * **rotator Group** (child of `skyCell`) so the per-tick rotation
+   * can be applied at the Group level WITHOUT touching the mesh's
+   * own transform (which stays identity — native vertex coords).
+   *
+   * **Sky-I-B**: `0x02xxxxxx` SetupModel proxies are SKIPPED. In
+   * retail Dereth's Sunny DayGroup the only `0x02xxxxxx` is
+   * `0x02000714` — a 6.5cm physics-script anchor for the moon's
+   * particle emitter, not a visible celestial. See Sky-I-A probe
+   * memo for the AABB measurement (sub-centimeter dimensions).
    */
   populateCelestialBodies(skyAssets, materialCache) {
     if (!(skyAssets instanceof Map) || skyAssets.size === 0) {
@@ -370,20 +433,32 @@ export class SkyDome {
       return 0;
     }
 
-    // Tear down any existing meshes (idempotent re-bake path).
-    for (const mesh of this.skyObjectMeshes.values()) {
-      this.scene.remove(mesh);
+    // Tear down any existing rotators (idempotent re-bake path).
+    for (const rotator of this.skyObjectMeshes.values()) {
+      this.skyCell.remove(rotator);
     }
     this.skyObjectMeshes.clear();
 
     let added = 0;
+    let skippedSetupModel = 0;
     for (const [skyObjectId, bake] of skyAssets) {
       if (!bake || !Array.isArray(bake.parts) || bake.parts.length === 0) {
         continue;
       }
-      let group;
+      // Sky-I-B: skip 0x02xxxxxx SetupModel proxies. The only one in
+      // retail Dereth Sunny is 0x02000714 (moon physics-script anchor,
+      // ~6cm — not a visible celestial). If a future region uses
+      // SetupModel celestials that DO have visible geometry, the
+      // `bake.parts.length > 0` check above + a per-part vertex-count
+      // probe would let us distinguish; for now the prefix check is
+      // sufficient for retail.
+      if ((skyObjectId >>> 24) === 0x02) {
+        skippedSetupModel += 1;
+        continue;
+      }
+      let bakeGroup;
       try {
-        group = buildSkyObjectGroup(bake, materialCache);
+        bakeGroup = buildSkyObjectGroup(bake, materialCache);
       } catch (e) {
         // eslint-disable-next-line no-console
         console.warn(
@@ -392,50 +467,59 @@ export class SkyDome {
         );
         continue;
       }
-      // Tag so capture-script bullet 12 (which walks scene.children
-      // for `userData.sky_object_id !== undefined`) counts this body.
-      group.userData = {
-        ...(group.userData || {}),
+      // Sky-I-B: wrap the bake in a per-object rotator Group. The
+      // rotator is the child of `skyCell` (so it inherits the cell's
+      // camera-anchored position + AC-Z-up rotation); the bake (with
+      // native AC vertex coords) is the child of the rotator. The
+      // per-tick `rotator.rotation.z = headingDeg * π/180` swings the
+      // bake around AC's Z axis (the world's up axis) — exactly the
+      // east-to-west arc retail behaviour wants.
+      const rotator = new THREE.Group();
+      rotator.name = `sky_object_${skyObjectId.toString(16).padStart(8, "0")}`;
+      // Tag so capture scripts walking skyScene.children (or the
+      // descendants of skyCell) can identify per-object groups. The
+      // rotator IS the addressable handle for the SkyObject — the
+      // wrapped bake's children are private rendering detail.
+      rotator.userData = {
         sky_object_id: skyObjectId,
+        sky_object_rotator: true,
       };
-      // Scale up celestial bodies so they read as ~5° of arc on the
-      // sky-dome (see `CELESTIAL_BODY_SCALE` constant note).
-      group.scale.setScalar(CELESTIAL_BODY_SCALE);
-      // Sky-D's celestial bodies render BEFORE world geometry (with
-      // depthWrite=false) so they're always behind. renderOrder=-0.5
-      // places them between the dome (renderOrder=-1) and the world
-      // (default 0).
-      group.renderOrder = -0.5;
-      // Each surface mesh inside the bake already has its material
-      // baked from `MaterialCache` (with the Translucent/Additive/
-      // Luminous flags decoded from the surface_type bitfield). For
-      // celestial bodies specifically we want depthWrite=false so they
-      // don't occlude foreground world content — patch each material
-      // mesh's `.material` in-place. Note: this mutates the shared
-      // MaterialCache material; safe because the dome is the only
-      // consumer for sky-specific surface DIDs (they're not used by
-      // buildings or EnvCells per Sky-E's diagnostic dump).
-      group.traverse((child) => {
+      // Each surface mesh inside the bake has its material baked from
+      // `MaterialCache`. Patch each material in-place for sky-specific
+      // rendering policy:
+      //   - depthWrite=false: never occlude foreground content.
+      //   - fog=false: skyScene.fog is null anyway, but be explicit.
+      // The shared MaterialCache mutation is safe because sky-specific
+      // surface DIDs aren't used by buildings/EnvCells per Sky-E's
+      // diagnostic.
+      bakeGroup.traverse((child) => {
         if (child.isMesh && child.material) {
           child.material.depthWrite = false;
-          // Sky meshes don't receive shadows or interact with fog.
           child.material.fog = false;
         }
       });
-      // Sky-G: start every override mesh hidden — the tick() pass will
-      // un-hide whichever ID is currently the active one for any
-      // SkyObject. Without this every mesh would render on top of
-      // every other one.
-      group.visible = false;
-      // Add directly to scene root (NOT to celestialGroup which is
-      // bookkeeping-only). Bullet 12 walks scene.children.
-      this.scene.add(group);
-      this.skyObjectMeshes.set(skyObjectId, group);
+      // Sky-G: every mesh starts hidden — the tick() pass un-hides
+      // whichever is the active one for each SkyObject's window.
+      bakeGroup.visible = false;
+      // Bake's own transform stays identity — native AC vertex coords.
+      bakeGroup.position.set(0, 0, 0);
+      bakeGroup.scale.set(1, 1, 1);
+      bakeGroup.rotation.set(0, 0, 0);
+      rotator.add(bakeGroup);
+      // Add rotator to the skyCell.
+      this.skyCell.add(rotator);
+      // Track the rotator (NOT the bake) — the per-tick visibility
+      // flag goes on the bake, but the rotation goes on the rotator.
+      // Stash both on the rotator's userData so the tick can find the
+      // bake without traversing.
+      rotator.userData.bake = bakeGroup;
+      this.skyObjectMeshes.set(skyObjectId, rotator);
       added += 1;
     }
     // eslint-disable-next-line no-console
     console.log(
-      `[sky-d] populated ${added}/${skyAssets.size} celestial bodies on scene root`
+      `[sky-d] populated ${added}/${skyAssets.size} celestial bodies in ` +
+      `skyCell (skipped ${skippedSetupModel} SetupModel proxies)`
     );
     return added;
   }
@@ -447,48 +531,35 @@ export class SkyDome {
    *   3. sky_lighting.js::SkyLightingController.tick(dt)
    *   4. <THIS>::SkyDome.tick(dt, camera)
    *
-   * We read:
-   *   - `liveScene3d.skyBackgroundColor` — Sky-C's sink (fog_color tint;
-   *     horizon color).
-   *   - `liveScene3d.skyLightingController._lastState.ambColorArgb` —
-   *     the ambient color (zenith tint).
-   *   - `sessionHandle.getSkyObjectStates()` — per-object heading,
-   *     pitch, visibility, UV scroll.
-   *   - `sessionHandle.isCurrentCellIndoor()` — for the dome/celestial
-   *     visibility flip.
+   * After all tick functions complete, `init3D`'s render loop:
+   *   a. `renderer.render(scene, activeCam)` — main world pass.
+   *   b. `skyDome.renderSkyPass(renderer, activeCam)` — sky pass.
    *
-   * We write:
-   *   - Dome + celestial bodies follow camera position.
-   *   - Dome's gradient uniforms.
-   *   - Each celestial body's position (sphere projection), visibility,
-   *     transparent/luminosity/emissive overrides.
-   *   - Per-material UV offset for tex_velocity scrolling.
+   * This method handles per-frame updates (skyCell anchoring, per-
+   * object rotation, material updates); `renderSkyPass` handles the
+   * actual draw call.
    */
   tick(_dt, camera) {
     this._tickCount += 1;
 
-    // === A. Translate dome + celestial bodies with the camera =======
+    // === A. Anchor skyCell at camera =================================
     //
-    // Camera-parented means: dome position = camera position. This is
-    // a translation only — we do NOT copy the camera's rotation
-    // (otherwise the celestial bodies would never appear to move).
+    // Cell follows player position but NOT player rotation. The
+    // skyCamera will copy the main camera's quaternion in
+    // renderSkyPass — that's where the "render from the player's
+    // POV" effect comes from. By only copying translation here, the
+    // cell's contents stay compass-locked (sun's compass bearing is
+    // independent of where the player faces).
     if (camera && camera.position) {
-      this.dome.position.copy(camera.position);
-      for (const mesh of this.skyObjectMeshes.values()) {
-        // The mesh itself gets a celestial-sphere position computed
-        // below — but the position is RELATIVE to the camera; we
-        // express that by computing `camera.position + offset`.
-        // (Setting `mesh.position = camera.position + cel_offset` is
-        // simpler than introducing an intermediate Group parent.)
-        mesh.position.copy(camera.position);
-      }
+      this.skyCell.position.copy(camera.position);
     }
 
     // === B. Indoor flip ==============================================
     //
-    // When the player is inside an EnvCell, hide the dome + every
-    // celestial body. Phase 7.6 already flips the sun's `.visible`;
-    // we do the same here for the sky-rendering pieces.
+    // Read indoor flag once per tick. `renderSkyPass` checks
+    // `_lastIsIndoor` to decide whether to issue the second render
+    // call — when indoor we skip the sky pass entirely (saves
+    // clearDepth + render).
     const session = this.sessionHandleAccessor();
     let isIndoor = false;
     if (session && typeof session.isCurrentCellIndoor === "function") {
@@ -501,18 +572,11 @@ export class SkyDome {
     this._lastIsIndoor = isIndoor;
     if (isIndoor) {
       this._indoorTickCount += 1;
-    }
-    const wantSkyVisible = !isIndoor;
-    if (this.dome.visible !== wantSkyVisible) {
-      this.dome.visible = wantSkyVisible;
-    }
-    for (const mesh of this.skyObjectMeshes.values()) {
-      // Per-body visibility is overridden by the SkyObjectState's
-      // own `visible` flag below. The indoor flip applies first as a
-      // hard gate; the per-body flag refines it on a per-tick basis.
-      if (!wantSkyVisible && mesh.visible) {
-        mesh.visible = false;
-      }
+      // Even when we'll skip rendering, walking the rotators is cheap
+      // and lets the next outdoor frame see fresh visibility. Most of
+      // the work below is wasted in that case; we short-circuit
+      // anyway because the wasm round-trip is the expensive part.
+      return;
     }
 
     // === C. Update dome gradient uniforms from Sky-C's sink ==========
@@ -538,10 +602,8 @@ export class SkyDome {
 
     // === D. Per-SkyObject pose + visibility + material updates =======
     //
-    // Skip if we're indoor (the bodies are hidden; saves the per-frame
-    // wasm round-trip + the per-body matrix math) OR if we have no
-    // meshes yet (Sky-E hasn't completed).
-    if (isIndoor || this.skyObjectMeshes.size === 0) {
+    // Skip if we have no meshes yet (Sky-E hasn't completed).
+    if (this.skyObjectMeshes.size === 0) {
       return;
     }
     if (!session || typeof session.getSkyObjectStates !== "function") {
@@ -563,50 +625,100 @@ export class SkyDome {
     for (let i = 0; i < states.length; i += 1) {
       const s = states[i];
       const skyObjectId = (s.gfxObjectId >>> 0);
-      const mesh = this.skyObjectMeshes.get(skyObjectId);
-      if (!mesh) continue;
+
+      // Skip 0x02xxxxxx SetupModel proxies — they don't have rotators.
+      if ((skyObjectId >>> 24) === 0x02) {
+        continue;
+      }
+
+      const rotator = this.skyObjectMeshes.get(skyObjectId);
+      if (!rotator) continue;
+      const bake = rotator.userData?.bake;
+      if (!bake) continue;
 
       // Workstream Sky-G: SkyObjectReplace mesh-swap handling. If the
       // SkyObject at index `i` was previously rendering with a
-      // different gfx_obj_id, we need to:
-      //   1. Hide the previously-active mesh for this object index.
-      //   2. Increment the mesh-swap counter (bullet 18).
-      // The new mesh's visibility is then set by `s.visible` below.
+      // different gfx_obj_id, we need to hide the previously-active
+      // bake + increment the mesh-swap counter (bullet 18).
       const lastActive = this._lastActiveIdPerObjectIndex.get(i);
       if (lastActive !== undefined && lastActive !== skyObjectId) {
-        const lastMesh = this.skyObjectMeshes.get(lastActive);
-        if (lastMesh && lastMesh.visible) {
-          lastMesh.visible = false;
+        const lastRotator = this.skyObjectMeshes.get(lastActive);
+        const lastBake = lastRotator?.userData?.bake;
+        if (lastBake && lastBake.visible) {
+          lastBake.visible = false;
         }
         this._meshSwapCount += 1;
       }
       this._lastActiveIdPerObjectIndex.set(i, skyObjectId);
 
-      // Per-state visibility. Indoor flip already gates the parent
-      // dome; this is the per-body day-of-arc flag.
-      if (mesh.visible !== s.visible) {
-        mesh.visible = !!s.visible;
+      // Per-state visibility. Toggle the BAKE's visible (not the
+      // rotator's) so capture scripts that walk for rotators still
+      // see all of them even when only some are visible.
+      if (bake.visible !== s.visible) {
+        bake.visible = !!s.visible;
       }
       if (!s.visible) continue;
 
-      // Project (heading, pitch) onto the celestial sphere, offset
-      // from the camera position (which we already wrote above).
-      const [ox, oy, oz] = celestialPosition(
-        s.heading,
-        s.pitch,
-        this.celestialRadius
+      // === Sky-I-B: per-object rotation =============================
+      //
+      // The DAT ships `begin_angle` / `end_angle` in degrees (raw f32,
+      // no conversion in the parser). The wasm-side `SkyObjectState`
+      // surfaces them verbatim as `beginAngleDeg` / `endAngleDeg`.
+      // `currentProgress` is the lerp parameter `[0, 1]` across the
+      // visible window. We compute:
+      //
+      //     headingDeg = lerp(beginAngleDeg, endAngleDeg, progress);
+      //     headingRad = headingDeg * (π / 180);
+      //     rotator.rotation.z = headingRad;
+      //
+      // The rotator sits inside `skyCell` which has `rotation.x =
+      // -π/2`, so rotating the rotator around its three-Z axis is
+      // equivalent to rotating around AC's Y axis (since the cell's
+      // rotation maps AC-Z→three-Y and AC-Y→three-Z; AC-X stays
+      // three-X). Wait — let me re-derive: the cell rotates AC-coord
+      // children by -π/2 around three-X, which maps AC-vec
+      // (ax,ay,az) → three-vec (ax,az,-ay). The rotator's own local
+      // rotation is applied in its parent's local frame. The parent is
+      // skyCell. skyCell's local frame is post-rotation; so a rotation
+      // around the rotator's three-Z axis is around the (0,0,1)
+      // direction in skyCell's pre-rotation frame, which maps to
+      // (0,-1,0) in three-space — i.e. around the -three-Y axis after
+      // skyCell's rotation. That's "around world-down" — which IS
+      // "around world-up but reversed sign." So a positive
+      // rotation.z spins the bake clockwise (looking down from
+      // world-up = +three-Y after skyCell rotation). Retail AC: sun
+      // sweeps east→south→west, i.e. CCW when viewed from world-up;
+      // so we negate the rotation. Actually — wait. Let me re-examine:
+      // AC convention is "heading measured from +Y north, clockwise"
+      // (per scene3d/sky_lighting.js:31 + GameSky.cpp). heading=0 → +Y
+      // north; heading=90° → +X east; heading=180° → -Y south. That's
+      // CW when looking DOWN from +Z. After the world-axis remap
+      // (AC→three via `acToThree = (ax,az,-ay)`), the +Z up becomes
+      // +three-Y up. CW-from-above (AC) is CCW-from-above (three,
+      // since +Y is the same direction). So the heading angle is
+      // simply applied AS-IS: rotate around the rotator's local Z by
+      // headingRad. Wait — the rotator is INSIDE skyCell whose
+      // rotation.x = -π/2 was already applied. The rotator's local Z
+      // axis (pre-skyCell-rotation) IS AC's Z, which is what we want
+      // to rotate around. The rotator's local Z (in its own
+      // pre-skyCell frame) is the AC Z axis. So set rotation.z =
+      // headingRad and we're done. The angle sign convention (CW from
+      // +Y north) — applying rotation.z = +heading rotates the bake's
+      // local X axis FROM toward whichever direction three.js's
+      // right-hand rule says. With AC convention being "rotate from +Y
+      // toward +X going CW" = three.js's negative-Z direction (after
+      // mapping), but we're rotating in the LOCAL pre-mapped frame so
+      // CW from +Y is the +X direction. three.js rotation.z is CCW
+      // from +X around +Z. Hmm — this could go either way; the
+      // eye-test will tell. If the sun moves backward (W→E instead of
+      // E→W), flip the sign. For now: apply heading directly.
+      const headingDeg = lerpDeg(
+        s.beginAngleDeg,
+        s.endAngleDeg,
+        s.currentProgress
       );
-      mesh.position.x += ox;
-      mesh.position.y += oy;
-      mesh.position.z += oz;
-      // Billboard-style: orient the body so it faces the camera. Use
-      // `lookAt(camera.position)` — for flat-quad skyobjects this is
-      // the standard sprite-billboard behaviour; for 3D meshes (the
-      // moon SetupModel 0x02000714) it's still sensible because their
-      // visually-interesting face is the camera-facing one.
-      if (camera) {
-        mesh.lookAt(camera.position);
-      }
+      const headingRad = headingDeg * (Math.PI / 180.0);
+      rotator.rotation.set(0, 0, headingRad);
 
       // Per-material overrides: transparent / luminosity / max_bright.
       //
@@ -619,15 +731,13 @@ export class SkyDome {
       //
       // `luminosity` * `max_bright` drives an emissive boost so the
       // sun + moon "glow" rather than just sitting flat against the
-      // dome. Pre-multiplied with the directional-light color (per
-      // Sky-C's dir_color_argb) so dawn/dusk's red-tinted bodies
-      // match the ambient atmosphere.
+      // dome.
       const t = s.transparent;
       const lum = s.luminosity;
       const mb = s.maxBright;
       const tx = s.texOffsetX;
       const ty = s.texOffsetY;
-      mesh.traverse((child) => {
+      bake.traverse((child) => {
         if (!child.isMesh || !child.material) return;
         const mat = child.material;
         if (t >= 0.0 && t <= 1.0) {
@@ -637,21 +747,14 @@ export class SkyDome {
             mat.opacity = opacity;
           }
         }
-        // Emissive boost when the SkyObjectReplace has set luminosity.
         if (lum >= 0.0 && mb >= 0.0 && mat.emissive) {
-          // luminosity * max_bright is a flat scalar in [0, ~2]; we
-          // map to emissive intensity directly. Don't tint here —
-          // material's own emissive color comes from the surface
-          // bitfield's Luminous flag (or stays white for sky-default).
           const intensity = lum * mb;
           if (Math.abs((mat.emissiveIntensity ?? 0) - intensity) > 1e-3) {
             mat.emissiveIntensity = intensity;
           }
         }
-        // UV scroll for cloud band + stars (tex_velocity from the DAT
-        // accumulates into tex_offset_x/y per Sky-B). Applied to
-        // material.map.offset; the texture's wrapS/wrapT are already
-        // RepeatWrapping via `surfacePixelsToTexture`.
+        // Sky-G UV scroll. Applied to material.map.offset; texture's
+        // wrapS/wrapT are RepeatWrapping via `surfacePixelsToTexture`.
         if (mat.map) {
           mat.map.offset.set(tx, ty);
         }
@@ -659,12 +762,6 @@ export class SkyDome {
     }
 
     // === E. Sky-I-A debug dump =======================================
-    //
-    // When `?skydebug=1`, capture per-frame state including each
-    // celestial body's world-space center (after the position offsets
-    // applied above), distance from camera, and the camera/fog frustum
-    // bounds — for the Sky-I-A probe. No behaviour change when flag
-    // unset. Updates `window.__skyDebugLastDump` once per tick.
     if (this._skyDebug && typeof window !== "undefined" && camera) {
       try {
         window.__skyDebugLastDump = this._buildSkyDebugDump(states, camera);
@@ -676,16 +773,65 @@ export class SkyDome {
   }
 
   /**
-   * Sky-I-A: build a JSON-friendly debug dump describing each visible
+   * Sky-I-B: render the sky pass. Called from `init3D`'s rAF tick
+   * AFTER the main `renderer.render(scene, mainCamera)` finishes.
+   *
+   * Pipeline:
+   *   - Skip entirely when indoor (saves clearDepth + the second
+   *     render call).
+   *   - Otherwise: clearDepth → sync skyCamera with mainCamera
+   *     (position + quaternion + fov + aspect) → render skyScene.
+   *
+   * `renderer.autoClear` is toggled around the pass so the main
+   * scene's color/depth aren't clobbered. After the pass, autoClear
+   * is restored to `true` so the NEXT frame's `renderer.render(scene,
+   * mainCamera)` clears as usual.
+   */
+  renderSkyPass(renderer, mainCamera) {
+    if (!renderer || !mainCamera) return;
+    if (this._lastIsIndoor) return;
+
+    // Sync the sky camera with the main camera. Position is critical
+    // for proper rendering of any sky-internal vertex data that's not
+    // exactly at the cell origin (the celestials are at ~1900 units
+    // from cell origin — but the skyCell ALSO sits at camera.position,
+    // so the sky-camera-relative position of the sun is `~1900 +
+    // (skyCell - skyCamera)` ≈ ~1900 since both are at the main
+    // camera). Quaternion + fov + aspect mirror the main camera so
+    // the projection matrices align.
+    this.skyCamera.position.copy(mainCamera.position);
+    this.skyCamera.quaternion.copy(mainCamera.quaternion);
+    if (typeof mainCamera.fov === "number") {
+      this.skyCamera.fov = mainCamera.fov;
+    }
+    if (typeof mainCamera.aspect === "number") {
+      this.skyCamera.aspect = mainCamera.aspect;
+    }
+    this.skyCamera.updateProjectionMatrix();
+
+    // Disable autoClear so the main scene's color+depth aren't wiped.
+    // Then clearDepth() resets the depth buffer to "far" — every sky
+    // pixel passes depth-test against world-painted pixels (sky is
+    // ALWAYS behind by construction). The color buffer keeps the
+    // world's paint, and the sky paints over wherever the world
+    // didn't write a pixel.
+    const prevAutoClear = renderer.autoClear;
+    renderer.autoClear = false;
+    renderer.clearDepth();
+    renderer.render(this.skyScene, this.skyCamera);
+    renderer.autoClear = prevAutoClear;
+  }
+
+  /**
+   * Sky-I-A: build a JSON-friendly debug dump describing each
    * SkyObject's geometry in world space + the camera + fog bounds.
-   * Pure read-only — no mutation of scene-graph state. Called once
-   * per tick when `?skydebug=1`.
+   * Updated for Sky-I-B: now reads the rotator + bake hierarchy.
+   * Pure read-only — no mutation of scene-graph state.
    */
   _buildSkyDebugDump(states, camera) {
-    // World-matrix needs to reflect the position writes done above.
-    // Force update before reading worldMatrix on each body.
-    for (const mesh of this.skyObjectMeshes.values()) {
-      mesh.updateMatrixWorld(true);
+    // World-matrix needs to reflect the position writes done in tick().
+    for (const rotator of this.skyObjectMeshes.values()) {
+      rotator.updateMatrixWorld(true);
     }
 
     const camPos = camera.position;
@@ -695,11 +841,15 @@ export class SkyDome {
       near: typeof camera.near === "number" ? camera.near : null,
       far: typeof camera.far === "number" ? camera.far : null,
     };
+    const skyCameraInfo = {
+      position: { x: this.skyCamera.position.x, y: this.skyCamera.position.y, z: this.skyCamera.position.z },
+      fovDeg: this.skyCamera.fov,
+      near: this.skyCamera.near,
+      far: this.skyCamera.far,
+    };
     const fogInfo = (() => {
       const f = this.scene?.fog;
       if (!f) return null;
-      // Fog has `near`/`far` (linear) OR `density` (exp). Capture both
-      // shapes so the consumer can distinguish.
       return {
         near: typeof f.near === "number" ? f.near : null,
         far: typeof f.far === "number" ? f.far : null,
@@ -715,28 +865,30 @@ export class SkyDome {
         stateById.set(s.gfxObjectId >>> 0, s);
       }
     }
-    for (const [skyObjectId, mesh] of this.skyObjectMeshes.entries()) {
+    for (const [skyObjectId, rotator] of this.skyObjectMeshes.entries()) {
       const state = stateById.get(skyObjectId);
-      // Compute the union AABB across child meshes — that's the
-      // "native" vertex-space AABB before the celestial-sphere offset.
-      // Aggregate per-mesh boundingBox under the group's LOCAL transform.
+      const bake = rotator.userData?.bake;
+      // Aggregate per-mesh boundingBox under the bake's LOCAL transform
+      // (which is identity, so this is the native vertex AABB).
       let lmin = null;
       let lmax = null;
       let totalVerts = 0;
-      mesh.traverse((child) => {
-        if (!child.isMesh || !child.geometry) return;
-        if (!child.geometry.boundingBox) child.geometry.computeBoundingBox();
-        const bb = child.geometry.boundingBox;
-        if (!bb) return;
-        totalVerts += (child.geometry.attributes?.position?.count || 0);
-        if (lmin === null) {
-          lmin = bb.min.clone();
-          lmax = bb.max.clone();
-        } else {
-          lmin.min(bb.min);
-          lmax.max(bb.max);
-        }
-      });
+      if (bake) {
+        bake.traverse((child) => {
+          if (!child.isMesh || !child.geometry) return;
+          if (!child.geometry.boundingBox) child.geometry.computeBoundingBox();
+          const bb = child.geometry.boundingBox;
+          if (!bb) return;
+          totalVerts += (child.geometry.attributes?.position?.count || 0);
+          if (lmin === null) {
+            lmin = bb.min.clone();
+            lmax = bb.max.clone();
+          } else {
+            lmin.min(bb.min);
+            lmax.max(bb.max);
+          }
+        });
+      }
       const nativeAabb = lmin && lmax ? {
         min: { x: lmin.x, y: lmin.y, z: lmin.z },
         max: { x: lmax.x, y: lmax.y, z: lmax.z },
@@ -744,9 +896,9 @@ export class SkyDome {
         verts: totalVerts,
       } : null;
 
-      // The world center: transform the local-aabb center by the
-      // mesh's worldMatrix. That answers the headline "where does the
-      // sun actually end up after all the transforms".
+      // World center: transform the local-aabb center by the rotator's
+      // worldMatrix. Bake transform is identity, so rotator's matrix
+      // IS the effective transform on the vertex AABB.
       let worldCenter = null;
       let distanceFromCamera = null;
       if (nativeAabb) {
@@ -755,7 +907,7 @@ export class SkyDome {
           nativeAabb.center.y,
           nativeAabb.center.z
         );
-        v.applyMatrix4(mesh.matrixWorld);
+        v.applyMatrix4(rotator.matrixWorld);
         worldCenter = { x: v.x, y: v.y, z: v.z };
         distanceFromCamera = v.distanceTo(camPos);
       }
@@ -767,6 +919,11 @@ export class SkyDome {
           headingDeg: state.heading * (180 / Math.PI),
           pitch: state.pitch,
           pitchDeg: state.pitch * (180 / Math.PI),
+          beginAngleDeg: state.beginAngleDeg,
+          endAngleDeg: state.endAngleDeg,
+          beginTime: state.beginTime,
+          endTime: state.endTime,
+          currentProgress: state.currentProgress,
           visible: !!state.visible,
           transparent: state.transparent,
           luminosity: state.luminosity,
@@ -776,11 +933,10 @@ export class SkyDome {
           texOffsetY: state.texOffsetY,
         } : null,
         mesh: {
-          visible: mesh.visible,
+          visible: bake?.visible ?? false,
           nativeAabb,
-          positionApplied: { x: mesh.position.x, y: mesh.position.y, z: mesh.position.z },
-          scaleApplied: { x: mesh.scale.x, y: mesh.scale.y, z: mesh.scale.z },
-          worldMatrix: Array.from(mesh.matrixWorld.elements),
+          rotationApplied: { x: rotator.rotation.x, y: rotator.rotation.y, z: rotator.rotation.z },
+          rotatorWorldMatrix: Array.from(rotator.matrixWorld.elements),
           worldCenter,
           distanceFromCamera,
         },
@@ -792,9 +948,15 @@ export class SkyDome {
       timeUnixMs: Date.now(),
       isIndoor: this._lastIsIndoor,
       domeRadius: this.domeRadius,
-      celestialRadius: this.celestialRadius,
+      skyCameraFar: SKY_CAMERA_FAR,
       objectCount: objects.length,
       camera: cameraInfo,
+      skyCamera: skyCameraInfo,
+      skyCellPosition: {
+        x: this.skyCell.position.x,
+        y: this.skyCell.position.y,
+        z: this.skyCell.position.z,
+      },
       fog: fogInfo,
       objects,
     };
@@ -809,12 +971,15 @@ export class SkyDome {
     if (this.dome) {
       this.dome.geometry?.dispose();
       this.dome.material?.dispose();
-      this.scene.remove(this.dome);
+      this.skyCell.remove(this.dome);
     }
-    for (const mesh of this.skyObjectMeshes.values()) {
-      this.scene.remove(mesh);
+    for (const rotator of this.skyObjectMeshes.values()) {
+      this.skyCell.remove(rotator);
     }
     this.skyObjectMeshes.clear();
+    if (this.skyCell) {
+      this.skyScene.remove(this.skyCell);
+    }
   }
 }
 
@@ -822,9 +987,9 @@ export class SkyDome {
 // assert the geometry math directly without standing up a full
 // SkyDome). NOT part of the public API.
 export const __internals = Object.freeze({
-  celestialPosition,
   argbToColor,
+  lerpDeg,
   DOME_RADIUS,
-  CELESTIAL_SPHERE_RADIUS,
-  CELESTIAL_BODY_SCALE,
+  SKY_CAMERA_FAR,
+  SKY_CAMERA_NEAR,
 });

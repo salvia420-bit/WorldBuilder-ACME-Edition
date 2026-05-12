@@ -175,11 +175,22 @@ const SHOTS = [
         await page.waitForFunction(
             () => {
                 const ls = window.liveScene3d;
-                if (!ls?.scene?.children) return false;
+                if (!ls) return false;
+                // Sky-I-B: celestial bodies live in skyDome.skyScene.
                 let n = 0;
-                for (const c of ls.scene.children) {
-                    if (c.userData?.sky_object_id !== undefined) n += 1;
-                }
+                const walk = (root) => {
+                    if (!root?.children) return;
+                    for (const c of root.children) {
+                        if (c.userData?.sky_object_id !== undefined) n += 1;
+                        if (c.children?.length) {
+                            for (const gc of c.children) {
+                                if (gc.userData?.sky_object_id !== undefined) n += 1;
+                            }
+                        }
+                    }
+                };
+                walk(ls.scene);
+                walk(ls.skyDome?.skyScene);
                 return n > 0;
             },
             { timeout: 60_000 }

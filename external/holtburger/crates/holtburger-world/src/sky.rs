@@ -207,6 +207,20 @@ pub struct SkyStateSnapshot {
 }
 
 /// Per-SkyObject evaluated state for one frame.
+///
+/// **Workstream Sky-I-B (2026-05-11):** the `heading` / `pitch` fields
+/// retain the Sky-B/D cooked-radians shape for backward compatibility,
+/// but the **raw degree/window fields** (`begin_angle_deg`,
+/// `end_angle_deg`, `begin_time`, `end_time`, `current_progress`) are
+/// the load-bearing values for the new sky-cell render path
+/// (`scene3d/sky_dome.js`). The renderer constructs its rotation
+/// matrix from `lerp(begin_angle_deg, end_angle_deg, current_progress) *
+/// (π / 180)` directly — degrees→radians ownership now sits on the JS
+/// side. The cooked `heading` continues to honor the historical
+/// `lerp_angle_radians` arithmetic (incorrectly treating degrees as
+/// radians) and is deprecated; the JS side may safely ignore it. See
+/// `external/holtburger/docs/sky-i-probe-2026-05-11.md` for the
+/// empirical probe that surfaced the unit bug.
 #[derive(Debug, Clone, Copy)]
 pub struct SkyObjectSnapshot {
     /// `0x01xxxxxx` (GfxObj) OR `0x02xxxxxx` (SetupModel). Renderer
@@ -214,14 +228,53 @@ pub struct SkyObjectSnapshot {
     /// `gfx_obj_id` override when the surrounding SkyTimeOfDay swaps
     /// the mesh for this index.
     pub gfx_object_id: u32,
-    /// Heading on the sky dome (radians). Lerped between
-    /// `begin_angle` and `end_angle` over the visible window.
+    /// **DEPRECATED (Sky-I-B).** Cooked heading on the sky dome
+    /// (radians) — the historical Sky-B/D output. Lerped between
+    /// `begin_angle` and `end_angle` over the visible window via
+    /// `lerp_angle_radians`, which treats the DAT-provided angles as
+    /// radians even though they are actually DEGREES. Retained for
+    /// backward compatibility; the Sky-I-B render path consumes the
+    /// raw `begin_angle_deg` / `end_angle_deg` / `current_progress`
+    /// fields instead and performs the deg→rad conversion JS-side.
     pub heading: f32,
-    /// Pitch off horizon (radians). Derived as `sin(p * pi)` where
-    /// `p = (t - begin_time) / (end_time - begin_time)` — so the
-    /// object rises from horizon, peaks at midday, and sets at
-    /// horizon. Static for always-visible objects (begin == end).
+    /// **DEPRECATED (Sky-I-B).** Cooked pitch off horizon (radians).
+    /// Derived as `sin(p * pi) * (pi/2)` so the object rises from
+    /// horizon, peaks at midday, and sets at horizon. Static for
+    /// always-visible objects (begin == end). The Sky-I-B render path
+    /// elides pitch synthesis entirely (celestials trace a horizontal
+    /// arc at native vertex altitude — see the open-question note in
+    /// the probe memo); this field is preserved so the historical
+    /// Sky-D path can read it.
     pub pitch: f32,
+    /// **Sky-I-B.** Raw `SkyObject.begin_angle` in DEGREES (verbatim
+    /// from the DAT — no conversion). The JS-side render path consumes
+    /// this directly: `headingRad = lerp(beginAngleDeg, endAngleDeg,
+    /// currentProgress) * (π / 180)`. Retail Dereth ships
+    /// `begin_angle ∈ {-20, -23}` (just east of north) for sun / moon /
+    /// stars; `0.0` for always-visible base shells and the cloud band.
+    pub begin_angle_deg: f32,
+    /// **Sky-I-B.** Raw `SkyObject.end_angle` in DEGREES. Retail Dereth
+    /// ships `end_angle ∈ {190, 203}` (just west of north going CW).
+    pub end_angle_deg: f32,
+    /// **Sky-I-B.** Raw `SkyObject.begin_time` in normalized day
+    /// fraction `[0, 1)`. Retail Dereth: sun=0.04, moon=0, stars=0.16,
+    /// base shells / cloud band / SetupModel proxy = 0.0.
+    pub begin_time: f32,
+    /// **Sky-I-B.** Raw `SkyObject.end_time`. Retail Dereth: sun=0.21,
+    /// moon=0.23, stars=0.94, base shells / cloud band / SetupModel
+    /// proxy = 0.0. The `begin_time == end_time` case is the
+    /// always-visible sentinel.
+    pub end_time: f32,
+    /// **Sky-I-B.** Lerp parameter `[0, 1]` across the visible window:
+    /// - Always-visible (`begin == end`): `0.0`.
+    /// - Forward arc (`begin < end`, t in `[begin, end)`): `(t - begin)
+    ///   / (end - begin)`.
+    /// - Wrap-around (`end < begin`, e.g. stars 0.875..0.125): the same
+    ///   re-anchored math the cooked `heading` path uses, so the JS
+    ///   side can lerp `begin_angle_deg → end_angle_deg` linearly with
+    ///   this parameter and get the same arc.
+    /// `0.0` when the object is not currently visible.
+    pub current_progress: f32,
     /// Accumulated UV scroll-x offset. Modulo'd to `[0, 1)`.
     pub tex_offset_x: f32,
     /// Accumulated UV scroll-y offset.
@@ -708,10 +761,19 @@ fn evaluate_sky_object(
     let end = sky_object.end_time;
     let always_visible = begin == end;
 
-    let (visible, heading, pitch) = if always_visible {
+    // Sky-I-B: compute the lerp parameter `current_progress` once, then
+    // derive both the raw-degree heading the JS render path uses AND
+    // the historical cooked-radians `heading` / `pitch` for backward
+    // compatibility. The two are intentionally separate because the
+    // cooked `heading` carries the legacy degrees-as-radians bug
+    // (see `lerp_angle_radians` doc + the Sky-I-A probe memo).
+    let (visible, current_progress, heading, pitch) = if always_visible {
         // Always-visible: static heading at begin_angle, no pitch arc.
         // Stars / base-sky shell / milky-way fall here.
-        (true, sky_object.begin_angle, 0.0_f32)
+        // current_progress=0 — the JS renderer reads begin_angle_deg
+        // directly via `lerp(begin, end, 0) = begin` so the static
+        // arc lands at the authored heading.
+        (true, 0.0_f32, sky_object.begin_angle, 0.0_f32)
     } else if begin < end {
         // Forward arc within the day: visible when t in [begin, end).
         let visible_now = (begin..end).contains(&t);
@@ -726,9 +788,9 @@ fn evaluate_sky_object(
             // 0 again at opposite horizon (p=1). Multiplied by pi/2 to
             // express in radians [0, pi/2].
             let pitch = (p * std::f32::consts::PI).sin() * (std::f32::consts::PI / 2.0);
-            (true, heading, pitch)
+            (true, p, heading, pitch)
         } else {
-            (false, sky_object.begin_angle, 0.0)
+            (false, 0.0, sky_object.begin_angle, 0.0)
         }
     } else {
         // Wrap-around: object visible across midnight (end < begin in
@@ -745,9 +807,9 @@ fn evaluate_sky_object(
                 p,
             );
             let pitch = (p * std::f32::consts::PI).sin() * (std::f32::consts::PI / 2.0);
-            (true, heading, pitch)
+            (true, p, heading, pitch)
         } else {
-            (false, sky_object.begin_angle, 0.0)
+            (false, 0.0, sky_object.begin_angle, 0.0)
         }
     };
 
@@ -775,6 +837,11 @@ fn evaluate_sky_object(
         gfx_object_id,
         heading,
         pitch,
+        begin_angle_deg: sky_object.begin_angle,
+        end_angle_deg: sky_object.end_angle,
+        begin_time: sky_object.begin_time,
+        end_time: sky_object.end_time,
+        current_progress,
         tex_offset_x,
         tex_offset_y,
         transparent,

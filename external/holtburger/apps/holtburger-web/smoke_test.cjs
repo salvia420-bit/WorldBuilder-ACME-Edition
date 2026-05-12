@@ -3578,7 +3578,17 @@ check(
         const hasGradientUniforms = /uHorizonColor[\s\S]*uZenithColor/.test(src);
         const hasShaderMat = /ShaderMaterial/.test(src);
         const hasBackSide = /BackSide/.test(src);
-        const hasCelestialPosition = /celestialPosition\s*\(/.test(src);
+        // Sky-I-B (2026-05-11) — sky cell render refactor. The old
+        // `celestialPosition(h, p, r) = (sin(h)*cos(p), ...) * r` math
+        // was deleted; celestial bodies now live in a per-object rotator
+        // group inside `skyCell` with the bake mesh keeping its NATIVE
+        // AC vertex coords. The new shape is `lerpDeg(begin, end,
+        // progress)` + a `renderSkyPass(renderer, camera)` method.
+        const hasLerpDeg = /lerpDeg\s*\(/.test(src);
+        const hasRenderSkyPass = /renderSkyPass\s*\(/.test(src);
+        const hasSkyCell = /this\.skyCell\b/.test(src);
+        const hasSkyScene = /this\.skyScene\b/.test(src);
+        const hasSkyCamera = /this\.skyCamera\b/.test(src);
         const readsSkyObjectStates = /getSkyObjectStates\s*\(/.test(src);
         const readsIndoor = /isCurrentCellIndoor\s*\(/.test(src);
         const readsSkyBgColor = /skyBackgroundColor/.test(src);
@@ -3588,21 +3598,29 @@ check(
         const wiredInLoop = /skyDome\s*\.\s*tick/.test(loopSrc);
         const wiredInIndex = /new\s+SkyDome/.test(indexSrc);
         const wiredResolveAssets = /resolveSkyAssets/.test(indexSrc);
+        // Sky-I-B: the renderSkyPass method must be invoked from the
+        // main render loop in index.js so the celestial bodies actually
+        // make it to the framebuffer.
+        const skyPassWired = /skyDome\.renderSkyPass/.test(indexSrc);
         check(
-            "Workstream Sky-D: sky_dome.js SkyDome class + gradient dome + celestial bodies + indoor flip",
+            "Workstream Sky-D/Sky-I-B: sky_dome.js SkyDome + sky-cell render pass + lerpDeg + indoor flip",
             present && hasClass && hasDomeName && hasUserDataTag &&
                 hasPopulate && hasGradientUniforms && hasShaderMat &&
-                hasBackSide && hasCelestialPosition &&
+                hasBackSide && hasLerpDeg && hasRenderSkyPass &&
+                hasSkyCell && hasSkyScene && hasSkyCamera &&
                 readsSkyObjectStates && readsIndoor && readsSkyBgColor &&
-                wiredInLoop && wiredInIndex && wiredResolveAssets,
+                wiredInLoop && wiredInIndex && wiredResolveAssets &&
+                skyPassWired,
             `present=${present} class=${hasClass} domeName=${hasDomeName} ` +
                 `userData=${hasUserDataTag} populate=${hasPopulate} ` +
                 `uniforms=${hasGradientUniforms} shaderMat=${hasShaderMat} ` +
-                `backSide=${hasBackSide} celPos=${hasCelestialPosition} ` +
+                `backSide=${hasBackSide} lerpDeg=${hasLerpDeg} ` +
+                `renderSkyPass=${hasRenderSkyPass} skyCell=${hasSkyCell} ` +
+                `skyScene=${hasSkyScene} skyCamera=${hasSkyCamera} ` +
                 `readsStates=${readsSkyObjectStates} readsIndoor=${readsIndoor} ` +
                 `readsBg=${readsSkyBgColor} loopWired=${wiredInLoop} ` +
                 `indexWired=${wiredInIndex} resolveWired=${wiredResolveAssets} ` +
-                `bytes=${src.length}`
+                `skyPassWired=${skyPassWired} bytes=${src.length}`
         );
     } catch (e) {
         check("Workstream Sky-D: sky_dome.js SkyDome class + gradient dome + celestial bodies + indoor flip",

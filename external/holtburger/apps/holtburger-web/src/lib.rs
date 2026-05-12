@@ -4426,8 +4426,16 @@ impl SkyState {
     }
 }
 
-/// Workstream Sky-B: wasm-bindgen-friendly mirror of
+/// Workstream Sky-B / Sky-I-B: wasm-bindgen-friendly mirror of
 /// [`holtburger_world::SkyObjectSnapshot`].
+///
+/// **Sky-I-B (2026-05-11):** the historical `heading` / `pitch` getters
+/// are preserved for backward compatibility, but the new sky-cell
+/// render path in `scene3d/sky_dome.js` consumes the **raw degree /
+/// window getters** (`beginAngleDeg`, `endAngleDeg`, `beginTime`,
+/// `endTime`, `currentProgress`) instead. The deg→rad conversion now
+/// lives JS-side. See `docs/sky-i-probe-2026-05-11.md` for the probe
+/// that motivated the move.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 #[derive(Clone, Copy)]
@@ -4435,6 +4443,11 @@ pub struct SkyObjectState {
     gfx_object_id: u32,
     heading: f32,
     pitch: f32,
+    begin_angle_deg: f32,
+    end_angle_deg: f32,
+    begin_time: f32,
+    end_time: f32,
+    current_progress: f32,
     tex_offset_x: f32,
     tex_offset_y: f32,
     transparent: f32,
@@ -4455,17 +4468,63 @@ impl SkyObjectState {
         self.gfx_object_id
     }
 
-    /// Heading on the sky dome (radians, world XY plane).
+    /// **DEPRECATED (Sky-I-B).** Cooked heading on the sky dome
+    /// (radians, but produced by treating DAT-degree fields as
+    /// radians — see the Sky-I-A probe memo). The new render path uses
+    /// `beginAngleDeg` / `endAngleDeg` / `currentProgress` and does the
+    /// deg→rad conversion itself.
     #[wasm_bindgen(getter)]
     pub fn heading(&self) -> f32 {
         self.heading
     }
 
-    /// Pitch (radians off horizon). Synthesized via `sin(p * pi)` arc;
-    /// see [`holtburger_world::SkyObjectSnapshot`] for the derivation.
+    /// **DEPRECATED (Sky-I-B).** Cooked pitch (radians off horizon),
+    /// synthesized via `sin(p * pi) * (pi/2)`. The new render path
+    /// elides pitch synthesis (celestials trace a horizontal arc at
+    /// native vertex altitude).
     #[wasm_bindgen(getter)]
     pub fn pitch(&self) -> f32 {
         self.pitch
+    }
+
+    /// **Sky-I-B.** Raw `SkyObject.begin_angle` in DEGREES verbatim
+    /// from the DAT. Retail Dereth sun/moon ship `-20`, stars `-23`,
+    /// always-visible objects `0`.
+    #[wasm_bindgen(getter, js_name = beginAngleDeg)]
+    pub fn begin_angle_deg(&self) -> f32 {
+        self.begin_angle_deg
+    }
+
+    /// **Sky-I-B.** Raw `SkyObject.end_angle` in DEGREES. Retail Dereth
+    /// sun/moon ship `190`, stars `203`, always-visible objects `0`.
+    #[wasm_bindgen(getter, js_name = endAngleDeg)]
+    pub fn end_angle_deg(&self) -> f32 {
+        self.end_angle_deg
+    }
+
+    /// **Sky-I-B.** Raw `SkyObject.begin_time` (normalized day fraction
+    /// `[0, 1)`). Renderer uses this to detect always-visible vs
+    /// arc-bounded SkyObjects (`beginTime == endTime` → always
+    /// visible).
+    #[wasm_bindgen(getter, js_name = beginTime)]
+    pub fn begin_time(&self) -> f32 {
+        self.begin_time
+    }
+
+    /// **Sky-I-B.** Raw `SkyObject.end_time`.
+    #[wasm_bindgen(getter, js_name = endTime)]
+    pub fn end_time(&self) -> f32 {
+        self.end_time
+    }
+
+    /// **Sky-I-B.** Lerp parameter `[0, 1]` across the visible window:
+    /// renderer computes `headingDeg = lerp(beginAngleDeg, endAngleDeg,
+    /// currentProgress); rotation_z_rad = headingDeg * (π / 180)`.
+    /// `0.0` for always-visible objects + for the frames when an
+    /// arc-bounded object is off-window.
+    #[wasm_bindgen(getter, js_name = currentProgress)]
+    pub fn current_progress(&self) -> f32 {
+        self.current_progress
     }
 
     /// Accumulated UV scroll-x offset, modulo'd to `[0, 1)`.
@@ -4549,6 +4608,11 @@ fn evaluate_sky_now() -> Option<(SkyState, Vec<SkyObjectState>)> {
                 gfx_object_id: o.gfx_object_id,
                 heading: o.heading,
                 pitch: o.pitch,
+                begin_angle_deg: o.begin_angle_deg,
+                end_angle_deg: o.end_angle_deg,
+                begin_time: o.begin_time,
+                end_time: o.end_time,
+                current_progress: o.current_progress,
                 tex_offset_x: o.tex_offset_x,
                 tex_offset_y: o.tex_offset_y,
                 transparent: o.transparent,

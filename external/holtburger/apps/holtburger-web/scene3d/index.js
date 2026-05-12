@@ -388,6 +388,22 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // capture path keeps working.
     const activeCam = liveScene3dRef?.cameraSwitcher?.activeCamera ?? camera;
     renderer.render(scene, activeCam);
+    // Workstream Sky-I-B — separate sky-pass render. After the main
+    // scene renders, the sky cell paints into the framebuffer wherever
+    // the world didn't write a depth value. Skipped indoors (saves
+    // clearDepth + the second render call). No-op pre-construction
+    // (the optional-chaining gates everything).
+    if (liveScene3dRef?.skyDome) {
+      try {
+        liveScene3dRef.skyDome.renderSkyPass(renderer, activeCam);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        if (!liveScene3dRef._skyPassRenderWarned) {
+          liveScene3dRef._skyPassRenderWarned = true;
+          console.warn("[sky-i-b] skyDome.renderSkyPass threw:", e);
+        }
+      }
+    }
     requestAnimationFrame(tick);
   }
   requestAnimationFrame(tick);

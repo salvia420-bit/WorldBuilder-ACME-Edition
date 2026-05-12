@@ -411,11 +411,26 @@ const DAWN_WINDOW_T = 0.05;
                     await page.waitForFunction(
                         () => {
                             const ls = window.liveScene3d;
-                            if (!ls?.scene?.children) return false;
+                            if (!ls) return false;
+                            // Sky-I-B (2026-05-11): celestial bodies moved
+                            // into liveScene3d.skyDome.skyScene (separate
+                            // render pass). Search BOTH scenes so this
+                            // bullet works against pre-Sky-I-B and
+                            // post-Sky-I-B builds.
                             let n = 0;
-                            for (const c of ls.scene.children) {
-                                if (c.userData?.sky_object_id !== undefined) n += 1;
-                            }
+                            const walk = (root) => {
+                                if (!root?.children) return;
+                                for (const c of root.children) {
+                                    if (c.userData?.sky_object_id !== undefined) n += 1;
+                                }
+                            };
+                            walk(ls.scene);
+                            walk(ls.skyDome?.skyScene);
+                            // Also walk skyCell directly (rotators may be
+                            // immediate children of skyCell, which is a
+                            // child of skyScene; skyScene.children
+                            // includes skyCell which is a Group).
+                            walk(ls.skyDome?.skyCell);
                             return n > 0;
                         },
                         { timeout: 60_000 }
@@ -609,18 +624,38 @@ const DAWN_WINDOW_T = 0.05;
                                 if (ls.scene.fog && ls.scene.fog.color && typeof ls.scene.fog.color.getHex === "function") {
                                     threeFogHex = ls.scene.fog.color.getHex();
                                 }
-                                // Sky-D will mount a Group named "sky_dome"
-                                // — check by name. (Some Sky-D designs use
-                                // userData.sky_dome instead; check both.)
-                                const children = ls.scene.children || [];
-                                for (const c of children) {
-                                    if (c.name === "sky_dome" || c.userData?.sky_dome === true) {
-                                        sceneSummary.hasSkyDome = true;
+                                // Sky-I-B (2026-05-11): the dome + celestial
+                                // bodies live in liveScene3d.skyDome.skyScene
+                                // (separate render pass). Walk BOTH the main
+                                // scene and skyScene so this works against
+                                // pre-Sky-I-B and post-Sky-I-B builds.
+                                const walk = (root) => {
+                                    if (!root?.children) return;
+                                    for (const c of root.children) {
+                                        if (c.name === "sky_dome" || c.userData?.sky_dome === true) {
+                                            sceneSummary.hasSkyDome = true;
+                                        }
+                                        if (c.userData?.sky_object_id !== undefined) {
+                                            sceneSummary.skyObjectCount++;
+                                        }
+                                        // Recurse: rotators live inside skyCell
+                                        // inside skyScene. Walk down one level
+                                        // — enough to find rotator children of
+                                        // skyCell.
+                                        if (c.children?.length) {
+                                            for (const gc of c.children) {
+                                                if (gc.name === "sky_dome" || gc.userData?.sky_dome === true) {
+                                                    sceneSummary.hasSkyDome = true;
+                                                }
+                                                if (gc.userData?.sky_object_id !== undefined) {
+                                                    sceneSummary.skyObjectCount++;
+                                                }
+                                            }
+                                        }
                                     }
-                                    if (c.userData?.sky_object_id !== undefined) {
-                                        sceneSummary.skyObjectCount++;
-                                    }
-                                }
+                                };
+                                walk(ls.scene);
+                                walk(ls.skyDome?.skyScene);
                             }
                         } catch (_) { /* swallow */ }
 
@@ -685,11 +720,20 @@ const DAWN_WINDOW_T = 0.05;
                         const dawnSample = await page.evaluate(() => {
                             const ls = window.liveScene3d;
                             let count = 0;
-                            if (ls && ls.scene && ls.scene.children) {
-                                for (const c of ls.scene.children) {
+                            // Sky-I-B: walk both scene + skyScene + skyCell.
+                            const walk = (root) => {
+                                if (!root?.children) return;
+                                for (const c of root.children) {
                                     if (c.userData?.sky_object_id !== undefined) count++;
+                                    if (c.children?.length) {
+                                        for (const gc of c.children) {
+                                            if (gc.userData?.sky_object_id !== undefined) count++;
+                                        }
+                                    }
                                 }
-                            }
+                            };
+                            walk(ls?.scene);
+                            walk(ls?.skyDome?.skyScene);
                             return { count };
                         });
                         bullets[12].passed = dawnSample.count > 0;
