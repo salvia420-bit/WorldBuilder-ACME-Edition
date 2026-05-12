@@ -15,6 +15,7 @@ pub mod physics_script_table;
 pub mod region;
 pub mod setup_model;
 pub mod skill_table;
+pub mod sound_table;
 pub mod spell_table;
 pub mod surface;
 pub mod surface_texture;
@@ -43,6 +44,7 @@ pub use region::{
 };
 pub use setup_model::SetupModel;
 pub use skill_table::SkillTable;
+pub use sound_table::{SoundData, SoundEntry, SoundHashData, SoundTable};
 pub use spell_table::SpellTable;
 pub use surface::{Surface, TextureRefs as SurfaceTextureRefs};
 pub use surface_texture::SurfaceTexture;
@@ -72,6 +74,7 @@ pub enum DatFileType {
     Clothing = 0x10,
     Scene = 0x12,
     Region = 0x13,
+    SoundTable = 0x20,
     CombatManeuverTable = 0x30,
     ParticleEmitter = 0x32,
     PhysicsScript = 0x33,
@@ -100,6 +103,7 @@ impl DatFileType {
                 | DatFileType::EnvCell
                 | DatFileType::Table
                 | DatFileType::Region
+                | DatFileType::SoundTable
                 | DatFileType::CombatManeuverTable
                 | DatFileType::PhysicsScript
                 | DatFileType::PhysicsScriptTable
@@ -141,6 +145,7 @@ impl DatFileType {
             0x10 => DatFileType::Clothing,
             0x12 => DatFileType::Scene,
             0x13 => DatFileType::Region,
+            0x20 => DatFileType::SoundTable,
             0x30 => DatFileType::CombatManeuverTable,
             0x32 => DatFileType::ParticleEmitter,
             0x33 => DatFileType::PhysicsScript,
@@ -173,6 +178,7 @@ impl DatFileType {
             0x10 => DatFileType::Clothing,
             0x12 => DatFileType::Scene,
             0x13 => DatFileType::Region,
+            0x20 => DatFileType::SoundTable,
             0x30 => DatFileType::CombatManeuverTable,
             0x31 => DatFileType::LanguageString,
             0x32 => DatFileType::ParticleEmitter,
@@ -207,6 +213,7 @@ impl fmt::Display for DatFileType {
             DatFileType::Clothing => "Clothing (CLO)",
             DatFileType::Scene => "Scene (SCN)",
             DatFileType::Region => "Region (RGN)",
+            DatFileType::SoundTable => "SoundTable (STB)",
             DatFileType::CombatManeuverTable => "CombatManeuverTable",
             DatFileType::ParticleEmitter => "ParticleEmitter",
             DatFileType::PhysicsScript => "PhysicsScript",

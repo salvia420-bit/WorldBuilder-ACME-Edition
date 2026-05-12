@@ -33,6 +33,7 @@ impl StripperManifest {
             DatFileType::ParticleEmitter,
             DatFileType::PhysicsScript,
             DatFileType::PhysicsScriptTable,
+            DatFileType::SoundTable,
             DatFileType::Landblock,
             DatFileType::LandblockInfo,
             DatFileType::IndoorCell,

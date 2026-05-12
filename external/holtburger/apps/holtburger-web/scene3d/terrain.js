@@ -399,6 +399,14 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
     );
     // Stash height range on the userData so the capture can verify
     // terrain isn't flat-zero without a wasm round-trip.
+    //
+    // Task D (2026-05-12) — `terrainCodes` is the wasm column-major
+    // 81-byte block (vertex `i` has gridX = i/9, gridY = i%9; see
+    // `adapter.js::buildVertexTypesDataTexture` for the transpose note).
+    // The ambient-runtime sampler reads this per tick to look up the
+    // player's terrain type for the Region → AmbientSTB chain. Storing
+    // the raw bytes (not the DataTexture) keeps the runtime free of
+    // GPU readback — sampling is a single byte fetch per tick.
     lbMesh.userData = {
       lbX,
       lbY,
@@ -406,6 +414,7 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
       heightMin,
       heightMax,
       vertexTypesTexture: vertexTypesTex,
+      terrainCodes: terrainCodesCopy,
     };
 
     // Group keeps the road overlay parented under the same lbMesh

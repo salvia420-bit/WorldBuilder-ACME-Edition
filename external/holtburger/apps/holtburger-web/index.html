@@ -539,6 +539,19 @@
         fetchPhysicsScript,
         fetchParticleEmitter,
         fetchWave,
+        // Task B (ambient-sounds-chain) — SoundTable (0x20) fetch.
+        // Resolves Sound enum → Wave DID list for Region ambient STBs
+        // (Task D) and entity-anchored Sound/SoundTable hooks (Task E).
+        // CRITICAL: this MUST appear in the init3D opts object below
+        // AND in any window.* console-test exposure — same plumb-through
+        // failure mode that blocked Sky-J / H2 / H3 for hours before db2abfa.
+        fetchSoundTable,
+        // Task D (ambient-sounds-chain) — Region (0x13) fetch + chain
+        // walker. Wraps `Region.terrain_info → SceneType → SoundDesc`
+        // server-side so JS just calls `region.ambientStbForTerrainCode(code, 0)`.
+        // Same plumb-through requirement as fetchSoundTable above — listed
+        // here AND in the init3D opts block below.
+        fetchRegion,
         init_cell_containers,
         start_session,
         init_resource_source,
@@ -2666,6 +2679,11 @@ void main() {
             // H2: entity's PhysicsScript DID (0x33xxxxxx) for in-world
             // particle effects (fireworks, lantern flames, etc.).
             physicsScriptDid: (upd.physicsScriptDid ?? 0) >>> 0,
+            // Task E (2026-05-12): entity's SoundTable DID (0x20xxxxxx)
+            // for animation-hook-driven sound playback. Plumbed parallel
+            // to physicsScriptDid; consumed by entities.js::_spawnImpl
+            // (prewarm) + tick() hook executor.
+            soundTableDid: (upd.soundTableDid ?? 0) >>> 0,
           };
         } catch (e) {
           // wasm-bindgen handle was freed between forward + clone —
@@ -2736,6 +2754,10 @@ void main() {
           subPalettes: upd.subPalettes,
           // H2: entity's PhysicsScript DID for in-world particle effects.
           physicsScriptDid: upd.physicsScriptDid,
+          // Task E (2026-05-12): entity's SoundTable DID. Plumbed parallel
+          // to physicsScriptDid through the deferred-spawn clone pipe so
+          // the 2D drainEvents → ensureEntitySprite flow doesn't lose it.
+          soundTableDid: upd.soundTableDid,
         };
       }
 
@@ -4866,6 +4888,21 @@ void main() {
             fetchPhysicsScript,
             fetchParticleEmitter,
             fetchWave,
+            // Task B (ambient-sounds-chain) — wire fetchSoundTable
+            // through to scene3d so the (forthcoming) sound_table_cache
+            // (Task C) can fan out Region STBs and entity SoundTables
+            // into Wave-DID resolution. Without listing it here the
+            // export is invisible to init3D opts and the cache silently
+            // sees undefined — same failure mode as Sky-J / H2 / H3
+            // before db2abfa.
+            fetchSoundTable,
+            // Task D (ambient-sounds-chain) — wire fetchRegion through
+            // so AmbientRuntime can walk Region 0x13000000's
+            // terrain_info → SceneType → SoundDesc chain. Without this
+            // line the runtime is constructed but its `getRegion`
+            // resolver returns undefined and ticks no-op via
+            // `skippedNoRegion++`.
+            fetchRegion,
           });
           // Free the meshes/objects views the 3D path doesn't consume
           // yet (Phase 7.1 will read them via wasmExports directly).
@@ -6232,6 +6269,150 @@ void main() {
                   `[phase6.E] door 0x${doorGuid.toString(16).toUpperCase().padStart(8, "0")} → ${doorState}`
                   + (matchedPart ? ` (building part rotated)` : ` (no building part match)`),
                 );
+              } else if (evt.kind === 16) {
+                // Task F (ambient-sounds-chain 2026-05-12):
+                // SoundTriggered — ACE broadcast `GameMessageSound`
+                // (opcode 0xF750) for a server-triggered audio cue:
+                // lifestone bind, switch activation, hotspot trigger,
+                // craft event, etc.
+                //
+                // Payload (set by the recv-loop `GameMessage::PlaySound`
+                // arm in `src/lib.rs`):
+                //   u32Payload  = entity GUID (the sound's source)
+                //   u32Payload2 = `Sound` enum value (lookup key into
+                //                 the entity's SoundTable)
+                //   f32Payload  = scale (server-side volume multiplier,
+                //                 typically 1.0)
+                //
+                // Resolution chain (mirrors Task E's SoundTable hook
+                // dispatch in `scene3d/entities.js::_fireHook`):
+                //   1. window.liveScene3d.entityManager.entityMap[guid]
+                //      → EntityInstance (Task E plumbing — inst exposes
+                //      `soundTableDid` + `root.position`).
+                //   2. resolveSound(soundTableDid, soundEnum) picks a
+                //      `SoundEntry` weighted by `probability`.
+                //   3. audioManager.play(waveDid, pos, { gain: vol*scale })
+                //      mixes through the same PannerNode path as Task E.
+                //
+                // Soft cases (each logs debug + skips):
+                //   - entity unknown (despawn race between ACE send +
+                //     client recv); 2D-only renderer (no entityManager)
+                //   - inst.soundTableDid == 0 (entity has no SoundTable
+                //     on its weenie — normal for many statics)
+                //   - resolveSound returns null (Sound enum absent from
+                //     the SoundTable's `Sounds` dictionary)
+                //   - scale <= 0 (treated as 1.0; logs a one-shot warn
+                //     so the bug surfaces without spamming the console)
+                const sndGuid = evt.u32Payload >>> 0;
+                const sndEnum = evt.u32Payload2 >>> 0;
+                let sndScale = (typeof evt.f32Payload === "number")
+                  ? +evt.f32Payload
+                  : 1.0;
+                if (!(sndScale > 0)) {
+                  if (!window.__soundTriggeredScaleWarned) {
+                    window.__soundTriggeredScaleWarned = true;
+                    // eslint-disable-next-line no-console
+                    console.warn(
+                      `[task-F/gms] non-positive scale=${evt.f32Payload} for `
+                      + `guid=0x${sndGuid.toString(16).padStart(8, "0")} `
+                      + `enum=0x${sndEnum.toString(16)}; treating as 1.0 `
+                      + `(further occurrences silenced this session)`,
+                    );
+                  }
+                  sndScale = 1.0;
+                }
+                // Capture-script telemetry counters — accumulate
+                // outcomes so a diag can assert (a) the event was
+                // observed, (b) the resolve path was taken, (c) the
+                // audio play call landed (or fell into a documented
+                // soft skip). Live on window so they survive
+                // hot-reloads of the drain block.
+                if (!window.__soundTriggeredStats) {
+                  window.__soundTriggeredStats = {
+                    received: 0,
+                    entityMissing: 0,
+                    noSoundTable: 0,
+                    enumMissing: 0,
+                    played: 0,
+                    scaleClamped: 0,
+                    lastError: null,
+                  };
+                }
+                const stats = window.__soundTriggeredStats;
+                stats.received += 1;
+                if (sndScale === 1.0 && (typeof evt.f32Payload === "number") && !(evt.f32Payload > 0)) {
+                  stats.scaleClamped += 1;
+                }
+                const scene3d = window.liveScene3d;
+                const emgr = scene3d?.entityManager ?? null;
+                const inst = emgr?.entityMap?.get(sndGuid) ?? null;
+                if (!inst) {
+                  stats.entityMissing += 1;
+                  // eslint-disable-next-line no-console
+                  console.debug(
+                    `[task-F/gms] entity 0x${sndGuid.toString(16).padStart(8, "0")} `
+                    + `not in registry — skip`,
+                  );
+                } else if (!(inst.soundTableDid >>> 0)) {
+                  stats.noSoundTable += 1;
+                  // eslint-disable-next-line no-console
+                  console.debug(
+                    `[task-F/gms] entity 0x${sndGuid.toString(16).padStart(8, "0")} `
+                    + `has no SoundTable — skip`,
+                  );
+                } else {
+                  const stbDid = inst.soundTableDid >>> 0;
+                  const cache = scene3d?.soundTableCache ?? null;
+                  const audioMgr = scene3d?.audioManager ?? null;
+                  if (!cache || !audioMgr) {
+                    // 3D scene not initialised (renderer=2d or pre-
+                    // init). Silent no-op — the event isn't actionable
+                    // without the 3D audio runtime.
+                    stats.lastError = "no_cache_or_audio_mgr";
+                  } else {
+                    cache.resolveSound(stbDid, sndEnum)
+                      .then((entry) => {
+                        if (!entry) {
+                          stats.enumMissing += 1;
+                          // eslint-disable-next-line no-console
+                          console.debug(
+                            `[task-F/gms] no SoundTable entry for enum=0x`
+                            + `${sndEnum.toString(16)} on stb=0x`
+                            + `${stbDid.toString(16)} (guid=0x`
+                            + `${sndGuid.toString(16).padStart(8, "0")}) — skip`,
+                          );
+                          return;
+                        }
+                        // Snapshot position at resolve-time so a
+                        // moving entity's audio lands at its current
+                        // location (matches Task E's snapshot pattern).
+                        const pos = inst.root?.position;
+                        if (!pos) {
+                          stats.lastError = "no_position";
+                          return;
+                        }
+                        const baseVol = entry.volume > 0 ? entry.volume : 1.0;
+                        const gain = baseVol * sndScale;
+                        return audioMgr.play(
+                          entry.waveDid,
+                          { x: pos.x, y: pos.y, z: pos.z },
+                          { gain },
+                        ).then(() => {
+                          stats.played += 1;
+                        });
+                      })
+                      .catch((e) => {
+                        stats.lastError = String(e?.message ?? e);
+                        // eslint-disable-next-line no-console
+                        console.warn(
+                          `[task-F/gms] resolve/play threw for `
+                          + `guid=0x${sndGuid.toString(16).padStart(8, "0")} `
+                          + `enum=0x${sndEnum.toString(16)}:`,
+                          e,
+                        );
+                      });
+                  }
+                }
               } else if (evt.kind === 0) {
                 // Re-fired CharacterListReceived (e.g. after CharacterCreate
                 // / CharacterDelete round-trip). Step 2a doesn't act on

@@ -360,6 +360,12 @@ function toMeta(upd) {
     // effects. Used by entities.js::_spawnImpl to walk the Sky-J chain
     // and attach a per-entity ParticleManager emitter.
     physicsScriptDid: (upd.physicsScriptDid ?? 0) >>> 0,
+    // Task E (2026-05-12): entity's SoundTable DID (0x20xxxxxx). Used
+    // by entities.js::_spawnImpl to prewarm the SoundTableCache AND
+    // by the per-frame hook executor to resolve SoundTable (hookType
+    // 2) hooks via `soundTableCache.resolveSound(soundTableDid,
+    // soundEnum)`. `0` for entities without a SoundTable property.
+    soundTableDid: (upd.soundTableDid ?? 0) >>> 0,
   };
 }
 

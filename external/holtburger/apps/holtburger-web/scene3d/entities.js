@@ -144,6 +144,39 @@ class EntityInstance {
     // were applied — fresh DataTextures, not shared with materialCache).
     this.ownedTextures = [];
     this.ownedMaterials = [];
+    // Task E (2026-05-12) — AnimationMixer hook execution state.
+    // The wasm `EntityAnimationData.takeHooks()` returns a
+    // sorted-by-time list of `(time_in_clip_s, hook_type, hook_data)`
+    // entries per resolved cycle (e.g. forge idle anim). We bake it on
+    // first cache-miss for an action and re-bake on cache eviction.
+    //
+    // `hookTimelines`: cacheKey → Array<{time, hookType, soundWaveId,
+    //   soundEnum, soundProbability, soundVolume, direction}>.
+    //   Hooks beyond Sound (1) and SoundTable (2) are kept in the
+    //   timeline so the per-frame executor can debug-log them, but
+    //   only Sound/SoundTable land audio playback today (Task E
+    //   scope — CreateParticle/SoundTweaked/etc. are follow-ons).
+    // `actionLastHookTime`: actionKey → seconds-into-clip the
+    //   per-tick executor last advanced past. Initialized to 0 on
+    //   first play; reset to 0 when an action is .reset()'d. On wrap
+    //   (currentTime < lastTime) the executor fires hooks in
+    //   `[lastTime, clipDuration)` AND `[0, currentTime]`.
+    /** @type {Map<string, Array<object>>} */
+    this.hookTimelines = new Map();
+    /** @type {Map<string, number>} */
+    this.actionLastHookTime = new Map();
+    // Cached SoundTable DID — read on spawn, used by every SoundTable
+    // (hookType 2) hook fire. `0` when the entity has no SoundTable on
+    // its weenie (most static placements + vanilla creatures). The
+    // value is also propagated to `meta.soundTableDid` for spawn-meta
+    // consumers, but kept in a flat field too so the executor doesn't
+    // walk `this.meta` on every fire.
+    this.soundTableDid = 0;
+    // Bookkeeping for the diag-script's prewarm assertion. Counts how
+    // many times `soundTableCache.get(soundTableDid)` was called from
+    // this entity's spawn — should be exactly 1 for entities with a
+    // non-zero SoundTable. Capture-script reads via inst._prewarmCount.
+    this._prewarmCount = 0;
   }
 
   registerGeometry(geom) {
@@ -290,6 +323,11 @@ class EntityInstance {
     }
     this.actions.delete(oldestKey);
     this.actionLastUsedMs.delete(oldestKey);
+    // Task E (2026-05-12): drop the evicted action's hook timeline +
+    // last-fire state. If the same (cmd, stance) is re-fetched later,
+    // setMotion's cache-miss path will repopulate from the AnimationCache.
+    this.hookTimelines.delete(oldestKey);
+    this.actionLastHookTime.delete(oldestKey);
   }
 
   dispose() {
@@ -315,6 +353,10 @@ class EntityInstance {
     }
     this.actions.clear();
     this.actionLastUsedMs.clear();
+    // Task E (2026-05-12): drop hook timeline state alongside the
+    // mixer + actions.
+    this.hookTimelines.clear();
+    this.actionLastHookTime.clear();
     this.currentAction = null;
     this.currentActionKey = null;
   }
@@ -651,6 +693,16 @@ export class EntityManager {
     // Step D: AnimationMixer + initial action.
     const mixer = new THREE.AnimationMixer(root);
     inst.mixer = mixer;
+    // Task E (2026-05-12): cache the entity's SoundTable DID on the
+    // instance. The wire field is `EntityUpdate.soundTableDid` (backed
+    // by `ObjectDescription.stable_id` = `PropertyDataId::SoundTable`
+    // (3)). Used by the per-frame hook executor when a SoundTable
+    // (hookType 2) hook fires; the executor resolves the carried
+    // Sound enum via `soundTableCache.resolveSound(inst.soundTableDid,
+    // soundEnum)`. `0` means "entity has no SoundTable" — SoundTable
+    // hooks fired on such an entity silently no-op (not an error;
+    // many static placements have animation hooks but no SoundTable).
+    inst.soundTableDid = (meta.soundTableDid ?? 0) >>> 0;
     if (initialClip) {
       const cacheKey = AnimationCache.makeKey(
         setupId,
@@ -664,6 +716,16 @@ export class EntityManager {
       action.enabled = true;
       inst.actions.set(cacheKey, action);
       inst.actionLastUsedMs.set(cacheKey, performance.now());
+      // Task E (2026-05-12): stash the cycle's hook timeline alongside
+      // the action. The animation cache already snapshotted hooks to
+      // plain POJOs and `animEntry.hooks` is sorted-by-time-asc.
+      // Reused across mixers (multiple entities sharing this clip see
+      // the same timeline array — safe, the executor's state lives
+      // per-entity in `actionLastHookTime`).
+      if (Array.isArray(animEntry.hooks) && animEntry.hooks.length > 0) {
+        inst.hookTimelines.set(cacheKey, animEntry.hooks);
+        inst.actionLastHookTime.set(cacheKey, 0);
+      }
       // Only auto-play if the spawned motion is a locomotion command.
       // Spawning an entity in idle (motion=0) leaves the rig at rest
       // pose; the first kind=5 walk/run will start the clip.
@@ -680,6 +742,36 @@ export class EntityManager {
       this.scene3d.entitiesGroup.add(root);
     }
     this.entityMap.set(guid, inst);
+
+    // Task E (2026-05-12): prewarm the SoundTableCache for this entity.
+    // The first cache.get() per DID kicks the wasm fetchSoundTable; we
+    // do it now (spawn time, off the rAF tick) so that when a
+    // SoundTable hook fires, `cache.resolveSound(...)` is already a
+    // synchronous-in-practice (await on a settled Promise) operation.
+    // Fire-and-forget — failures here are logged inside the cache
+    // implementation; the per-hook executor falls through silently when
+    // resolveSound returns null.
+    //
+    // Pattern choice rationale: the alternative is fire-and-forget per
+    // hook with no prewarm. That makes first-hit per entity stutter
+    // (wasm fetch + parse on a tick boundary) while subsequent hooks
+    // are immediate. Prewarming amortizes the fetch onto the spawn
+    // path where the entity is already async, and from-then-on every
+    // hook fires through a warm cache. Spawn-time prewarm is the
+    // documented choice in `docs/ambient-sounds-chain-2026-05-12.md`
+    // task-E section "Pick prewarm-on-spawn."
+    const stbDid = inst.soundTableDid;
+    if (stbDid !== 0 && this.scene3d?.soundTableCache) {
+      inst._prewarmCount += 1;
+      this.scene3d.soundTableCache.get(stbDid).catch((e) => {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[entities/task-E] prewarm SoundTable 0x${stbDid.toString(16)} ` +
+          `for entity 0x${guid.toString(16)} failed:`,
+          e
+        );
+      });
+    }
 
     // Step E.5 — H2 (2026-05-12): if the entity carries a PhysicsScript
     // DID, walk the CreateParticleHook chain and attach emitters
@@ -842,6 +934,15 @@ export class EntityManager {
       action.clampWhenFinished = false;
       action.enabled = true;
       inst.actions.set(cacheKey, action);
+      // Task E (2026-05-12): same hook-timeline stash as the spawn
+      // path. The cache entry already has hooks drained + snapshotted
+      // to plain JS POJOs; multiple entities sharing this clip share
+      // the same timeline array (per-entity firing state in
+      // `actionLastHookTime` keeps them independent).
+      if (Array.isArray(entry.hooks) && entry.hooks.length > 0) {
+        inst.hookTimelines.set(cacheKey, entry.hooks);
+        inst.actionLastHookTime.set(cacheKey, 0);
+      }
     }
     inst.crossFadeTo(action, cacheKey, CROSSFADE_S);
   }
@@ -1291,6 +1392,22 @@ export class EntityManager {
           console.warn("[phase7.4b] mixer.update threw:", e);
         }
       }
+      // Task E (2026-05-12): AnimationMixer hook execution.
+      // After advancing the mixer, fire any baked-cycle hooks whose
+      // time-in-clip we crossed this tick. Wrapped in try/catch so a
+      // bad single-entity hook doesn't tank the whole tick.
+      try {
+        this._tickAnimationHooks(inst);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        if (!this._hookTickWarned) {
+          this._hookTickWarned = true;
+          console.warn(
+            `[entities/task-E] hook tick failed for entity 0x${inst.guid.toString(16)}:`,
+            e
+          );
+        }
+      }
     }
     // H2 (2026-05-12): advance the world-side particle runtime. The
     // ParticleManager is lazily created on the first attach; tick is
@@ -1306,6 +1423,190 @@ export class EntityManager {
         }
       }
     }
+  }
+
+  /**
+   * Task E (2026-05-12) — fire any AnimationHook entries whose
+   * time-in-clip the current action just crossed.
+   *
+   * Algorithm:
+   *   1. Resolve the currently-playing action + its cacheKey.
+   *      Bail if no action (rest pose) or no timeline registered for
+   *      the current action.
+   *   2. Read `action.time` (three.js's per-action playback time,
+   *      seconds since the action started or was last `.reset()`'d;
+   *      monotonically increasing within a loop pass, wraps to 0
+   *      when the clip loops).
+   *   3. Read `lastTime = inst.actionLastHookTime.get(cacheKey)` —
+   *      where we left off last tick. Initialised to 0 in
+   *      `_spawnImpl` / `setMotion` when the timeline is first
+   *      stashed.
+   *   4. Walk the sorted hook list:
+   *      - Normal case (`currentTime >= lastTime`): fire each hook
+   *        with `lastTime < hook.time <= currentTime`.
+   *      - Wrap case (`currentTime < lastTime`): the clip looped.
+   *        Fire hooks in `(lastTime, clipDuration]` AND `[0, currentTime]`.
+   *        Both branches respect the sorted order; the wrap branch
+   *        walks the tail of the list then the head.
+   *   5. Save `currentTime` as the new `lastTime`.
+   *
+   * Hook handlers (this task lands Sound + SoundTable only):
+   *   - hookType 1 (Sound): hook.soundWaveId is the Wave DID to play.
+   *     Call `audioManager.play(waveId, entity.position)`.
+   *   - hookType 2 (SoundTable): hook.soundEnum is the Sound enum to
+   *     resolve through the entity's SoundTable.
+   *     `await soundTableCache.resolveSound(inst.soundTableDid,
+   *     soundEnum)` returns `{waveDid, ...}` or null. Fire-and-forget
+   *     — the prewarm in `_spawnImpl` makes the await effectively
+   *     synchronous after the first frame.
+   *   - hookType 13 (CreateParticle), 21 (SoundTweaked), others —
+   *     TODO debug-stub. Counts via `inst._unhandledHookFires` so
+   *     the diag script can verify the handler reaches them.
+   */
+  _tickAnimationHooks(inst) {
+    const action = inst.currentAction;
+    if (!action) return;
+    const key = inst.currentActionKey;
+    if (!key) return;
+    const timeline = inst.hookTimelines.get(key);
+    if (!timeline || timeline.length === 0) return;
+
+    // three.js exposes `AnimationAction.time` as time-in-clip
+    // (seconds within the action's clip; for LoopRepeat actions, it
+    // wraps to 0 at duration each pass). Clip duration is on the
+    // bound AnimationClip.
+    let currentTime = 0;
+    let clipDuration = 0;
+    try {
+      currentTime = +action.time;
+      const clip = action.getClip();
+      clipDuration = clip ? +clip.duration : 0;
+    } catch (_) {
+      return;
+    }
+    if (!(clipDuration > 0)) return;
+
+    let lastTime = inst.actionLastHookTime.get(key);
+    if (lastTime === undefined) lastTime = 0;
+
+    const audioMgr = this.scene3d?.audioManager ?? null;
+    const cache = this.scene3d?.soundTableCache ?? null;
+
+    if (currentTime >= lastTime) {
+      // Common case: monotonic advance within one loop pass.
+      this._fireHooksInRange(inst, timeline, lastTime, currentTime, audioMgr, cache);
+    } else {
+      // Wrap-around: the clip looped. Fire [lastTime, clipDuration)
+      // then [0, currentTime]. We use clipDuration as the upper bound
+      // (inclusive of hooks AT clipDuration — three.js's loop semantics
+      // mean a hook at exactly duration would have been baked at the
+      // last frame's time, but we include it to be safe; idempotent
+      // since hook times come from `frame_index * (1/fps)` and the
+      // last frame is at `(numFrames - 1) / fps < duration`).
+      this._fireHooksInRange(inst, timeline, lastTime, clipDuration, audioMgr, cache);
+      this._fireHooksInRange(inst, timeline, -Infinity, currentTime, audioMgr, cache);
+    }
+
+    inst.actionLastHookTime.set(key, currentTime);
+  }
+
+  /**
+   * Walk a sorted-by-time hook list and fire those in
+   * `(lowExclusive, highInclusive]`. Sound (1) + SoundTable (2)
+   * land audio playback; other hook types increment a debug counter
+   * so the diag-script can assert the executor reached them.
+   *
+   * Called by `_tickAnimationHooks` — split out so the wrap-around
+   * branch can reuse the same range walker for both halves of the
+   * looped range.
+   */
+  _fireHooksInRange(inst, timeline, lowExclusive, highInclusive, audioMgr, cache) {
+    // Binary search would be faster for very long timelines, but
+    // retail clips have 0-20 hooks max so linear scan is fine and
+    // simpler to verify.
+    for (let i = 0; i < timeline.length; i += 1) {
+      const h = timeline[i];
+      const t = h.time;
+      if (t <= lowExclusive) continue;
+      if (t > highInclusive) break; // sorted asc — no later entries match
+      this._fireHook(inst, h, audioMgr, cache);
+    }
+  }
+
+  /**
+   * Dispatch one hook to the appropriate handler.
+   * Sound (1) + SoundTable (2) play audio via the AudioManager;
+   * CreateParticle (13) + SoundTweaked (21) + others are debug-counted
+   * (Task E scope is Sound + SoundTable; the rest are follow-ons).
+   */
+  _fireHook(inst, hook, audioMgr, cache) {
+    const hookType = hook.hookType | 0;
+    const pos = inst.root.position;
+    if (hookType === 1) {
+      // Sound — payload is a Wave DID. Play directly.
+      const waveId = hook.soundWaveId >>> 0;
+      if (waveId === 0 || !audioMgr) return;
+      // Position is read at fire-time so the panner pans to the
+      // entity's current location (matches PhatSDK retail behaviour
+      // — sound positions update with the body during animation).
+      audioMgr
+        .play(waveId, { x: pos.x, y: pos.y, z: pos.z })
+        .catch(() => {});
+      this._soundHookFires = (this._soundHookFires | 0) + 1;
+      return;
+    }
+    if (hookType === 2) {
+      // SoundTable — payload is a Sound enum. Resolve via the entity's
+      // SoundTable to get a Wave DID + per-row volume.
+      const soundEnum = hook.soundEnum >>> 0;
+      if (soundEnum === 0 || !cache || !audioMgr) return;
+      const stbDid = inst.soundTableDid >>> 0;
+      if (stbDid === 0) {
+        // No SoundTable on this entity's weenie. Silent no-op — this
+        // is a normal outcome for entities whose animations carry
+        // SoundTable hooks but whose weenie has no SoundTable property
+        // (e.g. shared rig + non-vocal subclass). No log spam.
+        return;
+      }
+      // Fire-and-forget: the prewarm in `_spawnImpl` warms the cache
+      // by the second frame, so by the time hooks fire (cycle frame
+      // count typically > 1) the await on `resolveSound` is on a
+      // settled Promise.
+      cache
+        .resolveSound(stbDid, soundEnum)
+        .then((entry) => {
+          if (!entry) return; // soft null — Sound enum not in this STB
+          const gain = entry.volume > 0 ? entry.volume : 1.0;
+          // Snapshot pos again at await-resolution time so a moving
+          // entity's audio lands at its current location, not where
+          // it was at hook-fire time. (For instant-resolve from a
+          // warm cache the two are identical.)
+          const px = inst.root.position.x;
+          const py = inst.root.position.y;
+          const pz = inst.root.position.z;
+          audioMgr.play(entry.waveDid, { x: px, y: py, z: pz }, { gain }).catch(() => {});
+        })
+        .catch(() => {});
+      this._soundTableHookFires = (this._soundTableHookFires | 0) + 1;
+      return;
+    }
+    // Other hook types — debug-log + count, leave handler as TODO.
+    // The user will likely want CreateParticle (13) on entity idle
+    // animations to land particle attaches (forge embers, lantern
+    // sparks). The current path through `_attachParticleChainForEntity`
+    // walks `physicsScriptDid` — animation-anchored particle hooks are
+    // a follow-on item.
+    if (hookType === 13 || hookType === 21) {
+      // eslint-disable-next-line no-console
+      if (!inst._unhandledHookDebugged) {
+        inst._unhandledHookDebugged = true;
+        console.debug(
+          `[entities/task-E] TODO: hookType=${hookType} fired on entity ` +
+          `0x${inst.guid.toString(16)} — handler not implemented yet`
+        );
+      }
+    }
+    this._unhandledHookFires = (this._unhandledHookFires | 0) + 1;
   }
 
   /**

@@ -97,6 +97,98 @@ mod tests {
         assert_eq!(*msg, expected);
     }
 
+    /// Task F (ambient-sounds-chain 2026-05-12): explicit round-trip
+    /// for the `GameMessageSound` wire shape ACE actually sends.
+    ///
+    /// Wire layout per
+    /// `ace-server/Source/ACE.Server/Network/GameMessages/Messages/GameMessageSound.cs`:
+    ///   `[u32 opcode = 0xF750][u32 guid][u32 sound_id][f32 volume]`
+    /// (16 bytes total — matches the `base(..., messageSize: 16)` arg).
+    ///
+    /// Fixture values mirror ACE's `Lifestone.cs:58`
+    /// (`new GameMessageSound(player.Guid, Sound.LifestoneOn, 1.0f)`)
+    /// — Sound enum `0x51` per `ACE.Entity/Enum/Sound.cs:86`. This
+    /// is the load-bearing in-Holtburg surface for the Lifestone
+    /// (one of three lifestones in Holtburg per the
+    /// holtburg-coverage-survey-2026-05-12.md count).
+    #[test]
+    fn test_play_sound_lifestone_on() {
+        let expected = PlaySoundData {
+            // Player GUID — ACE's 0x50000001..0x60000000 player range.
+            target: Guid(0x50000042),
+            // `Sound.LifestoneOn` per ACE Sound.cs.
+            sound_id: 0x51,
+            // ACE's literal `1.0f` for lifestone bind.
+            volume: 1.0,
+        };
+
+        // Synthesize the wire bytes the way ACE writes them:
+        //   `writer.Write(guid.Full)`        → u32 LE
+        //   `writer.Write((uint)soundId)`    → u32 LE
+        //   `writer.Write(volume)`           → f32 LE
+        let mut bytes = Vec::with_capacity(12);
+        bytes.extend_from_slice(&0x50000042u32.to_le_bytes());
+        bytes.extend_from_slice(&0x51u32.to_le_bytes());
+        bytes.extend_from_slice(&1.0f32.to_le_bytes());
+
+        assert_pack_unpack_parity::<PlaySoundData>(&bytes, &expected);
+    }
+
+    /// Task F round-trip with scale<1.0 (combat hit cases — see
+    /// ACE `Player_Combat.cs:168`,
+    /// `Session.Network.EnqueueSend(new GameMessageSound(target.Guid, Sound.HitFlesh1, 0.5f))`).
+    /// Verifies the f32 scale field round-trips cleanly at non-unit
+    /// values, since the JS-side handler multiplies it by the per-
+    /// SoundEntry volume.
+    #[test]
+    fn test_play_sound_combat_hit_half_scale() {
+        let expected = PlaySoundData {
+            target: Guid(0x10001234),
+            // `Sound.HitFlesh1 = 0x30` per
+            // ACE.Entity/Enum/Sound.cs:53. Distinct enum from
+            // Ambient1 0x46 (line 75).
+            sound_id: 0x30,
+            volume: 0.5,
+        };
+
+        let mut bytes = Vec::with_capacity(12);
+        bytes.extend_from_slice(&0x10001234u32.to_le_bytes());
+        bytes.extend_from_slice(&0x30u32.to_le_bytes());
+        bytes.extend_from_slice(&0.5f32.to_le_bytes());
+
+        assert_pack_unpack_parity::<PlaySoundData>(&bytes, &expected);
+    }
+
+    /// Task F: synthesize a full 16-byte `GameMessageSound` packet
+    /// (opcode + payload) and dispatch through `GameMessage::unpack`
+    /// to confirm the recv-loop's `match message { GameMessage::PlaySound(data) => ... }`
+    /// arm sees the same bytes ACE writes. The opcode is `0xF750` per
+    /// `ACE.Server/Network/GameMessages/GameMessageOpcode.cs:60`.
+    #[test]
+    fn test_play_sound_full_packet_dispatch() {
+        let mut packet = Vec::with_capacity(16);
+        // Opcode 0xF750 — `GameMessageOpcode.Sound`.
+        packet.extend_from_slice(&0xF750u32.to_le_bytes());
+        // Lifestone case again, since it's the most-likely
+        // first-observed in-Holtburg occurrence.
+        packet.extend_from_slice(&0x50000042u32.to_le_bytes());
+        packet.extend_from_slice(&0x51u32.to_le_bytes()); // LifestoneOn
+        packet.extend_from_slice(&1.0f32.to_le_bytes());
+
+        let mut offset = 0;
+        let msg = GameMessage::unpack(&packet, &mut offset)
+            .expect("PlaySound packet must unpack");
+        match msg {
+            GameMessage::PlaySound(data) => {
+                assert_eq!(data.target, Guid(0x50000042));
+                assert_eq!(data.sound_id, 0x51);
+                assert_eq!(data.volume, 1.0);
+            }
+            other => panic!("Expected PlaySound dispatch, got {:?}", other),
+        }
+        assert_eq!(offset, 16, "Full packet must consume all 16 bytes");
+    }
+
     #[test]
     fn test_play_effect_fixture() {
         let expected = PlayEffectData {

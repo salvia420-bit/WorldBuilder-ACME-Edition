@@ -6814,6 +6814,133 @@ pub async fn fetch_entity_cycle_frames(
 /// `fetchEntitySurfacesPixels` with these args separately). The
 /// accept-and-validate gate prevents a future caller-mismatch bug
 /// from manifesting as silent texture corruption.
+/// **Task E (2026-05-12).** JS-side mirror of one
+/// `AnimationFrame.hooks[i]` entry, with its time-in-clip already
+/// computed so JS doesn't need the framerate to schedule it.
+///
+/// Carries the SAME `(hook_type, hook_data)` byte representation as
+/// `PhysicsScriptEntryJs` (the close cousin used by the Sky-J + H2
+/// chain walkers for PhysicsScript-driven hooks). The decoder helpers
+/// — `soundWaveId`, `soundProbability`, `soundVolume`, `soundEnum` —
+/// follow the same hook_type typeswitch documented in
+/// `setup_model::AnimationHook::read`:
+///
+/// - `hook_type = 1` (Sound): 4-byte payload = Wave DID.
+/// - `hook_type = 2` (SoundTable): 4-byte payload = Sound enum (u32).
+/// - `hook_type = 13` (CreateParticle): 40-byte payload —
+///   reuse the PhysicsScript `createParticle*` getters via raw
+///   `hookData`. The Task E executor only handles 1/2 today;
+///   CreateParticle on entity animations is left as a TODO.
+/// - `hook_type = 21` (SoundTweaked): 16-byte payload =
+///   `[u32 wave_did, f32 priority, f32 probability, f32 volume]`.
+///   Currently TODO in entity-animation handler.
+///
+/// The `time_in_clip_s` field is `(frame_index / clip_fps)` — the
+/// position of this hook in the cycle, in seconds. JS arms a
+/// per-action sorted timeline and fires hooks as the
+/// `AnimationAction.time` crosses each one.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Debug, Clone)]
+pub struct AnimationHookJs {
+    time_in_clip_s: f64,
+    hook_type: u32,
+    direction: i32,
+    hook_data: Vec<u8>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl AnimationHookJs {
+    /// Time within the clip, in seconds: `frame_index / clip_fps`. The
+    /// JS executor schedules each hook to fire when
+    /// `AnimationAction.time` crosses this value.
+    #[wasm_bindgen(getter, js_name = timeInClipS)]
+    pub fn time_in_clip_s(&self) -> f64 { self.time_in_clip_s }
+    /// AC `AnimationHookType` value — 1 = Sound, 2 = SoundTable,
+    /// 13 = CreateParticle, 21 = SoundTweaked, etc. See
+    /// `setup_model::AnimationHook::read` for the full enum.
+    #[wasm_bindgen(getter, js_name = hookType)]
+    pub fn hook_type(&self) -> u32 { self.hook_type }
+    /// Hook direction (forward/reverse playback gate). `0` for most
+    /// hooks; `1`/`-1` for hooks that should only fire in one
+    /// playback direction. The JS executor currently fires regardless
+    /// of direction (cycles loop forward in three.js).
+    #[wasm_bindgen(getter)]
+    pub fn direction(&self) -> i32 { self.direction }
+    /// Raw payload bytes — the typeswitch body per
+    /// `setup_model::AnimationHook::read`. JS decodes per
+    /// `hookType` via the getters below or the raw bytes.
+    #[wasm_bindgen(getter, js_name = hookData)]
+    pub fn hook_data(&self) -> Vec<u8> { self.hook_data.clone() }
+
+    /// **Sound (1) / SoundTweaked (21)**: Wave DID the hook plays
+    /// directly. `0` for other hook types or malformed payloads.
+    /// Mirrors `PhysicsScriptEntryJs::sound_wave_id`.
+    #[wasm_bindgen(getter, js_name = soundWaveId)]
+    pub fn sound_wave_id(&self) -> u32 {
+        match self.hook_type {
+            1 if self.hook_data.len() >= 4 => {
+                u32::from_le_bytes(self.hook_data[0..4].try_into().unwrap())
+            }
+            21 if self.hook_data.len() >= 16 => {
+                u32::from_le_bytes(self.hook_data[0..4].try_into().unwrap())
+            }
+            _ => 0,
+        }
+    }
+
+    /// **SoundTable (2)**: Sound enum value (u32) the hook fires.
+    /// Look this up in the entity's `soundTableDid` via the
+    /// SoundTableCache to get one or more `(waveDid, priority,
+    /// probability, volume)` rows. `0` for other hook types or
+    /// malformed payloads.
+    #[wasm_bindgen(getter, js_name = soundEnum)]
+    pub fn sound_enum(&self) -> u32 {
+        if self.hook_type == 2 && self.hook_data.len() >= 4 {
+            u32::from_le_bytes(self.hook_data[0..4].try_into().unwrap())
+        } else {
+            0
+        }
+    }
+
+    /// **SoundTweaked (21)** priority. `0.0` for other types.
+    #[wasm_bindgen(getter, js_name = soundPriority)]
+    pub fn sound_priority(&self) -> f32 {
+        if self.hook_type == 21 && self.hook_data.len() == 16 {
+            f32::from_le_bytes(self.hook_data[4..8].try_into().unwrap())
+        } else {
+            0.0
+        }
+    }
+
+    /// **SoundTweaked (21)** probability. `1.0` for plain Sound (1)
+    /// (always plays); `0.0` for other types.
+    #[wasm_bindgen(getter, js_name = soundProbability)]
+    pub fn sound_probability(&self) -> f32 {
+        match self.hook_type {
+            1 => 1.0,
+            21 if self.hook_data.len() == 16 => {
+                f32::from_le_bytes(self.hook_data[8..12].try_into().unwrap())
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// **SoundTweaked (21)** per-hook gain multiplier. `1.0` for plain
+    /// Sound (1); `0.0` for other types.
+    #[wasm_bindgen(getter, js_name = soundVolume)]
+    pub fn sound_volume(&self) -> f32 {
+        match self.hook_type {
+            1 => 1.0,
+            21 if self.hook_data.len() == 16 => {
+                f32::from_le_bytes(self.hook_data[12..16].try_into().unwrap())
+            }
+            _ => 0.0,
+        }
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub struct EntityAnimationData {
@@ -6826,6 +6953,18 @@ pub struct EntityAnimationData {
     /// `[(x, y, z, qw, qx, qy, qz) per part] per frame`. Empty when
     /// no cycle resolved. See struct doc for layout invariants.
     part_frames: Vec<f32>,
+    /// **Task E (2026-05-12).** Sorted-by-`time_in_clip_s` list of
+    /// `AnimationHookJs` entries baked from each `AnimationFrame.hooks`
+    /// in the resolved cycle. Frame `i` contributes its hooks at time
+    /// `i / framerate`. Empty when:
+    ///   - no cycle resolved (raw GfxObj setup, missing MotionTable entry, etc.)
+    ///   - the cycle has zero hooks across all frames (common — most
+    ///     locomotion cycles have no audio; idle cycles for forges /
+    ///     NPCs / props are where most hooks live)
+    ///
+    /// One-shot: drained via `takeHooks()` (frees the Rust side after
+    /// JS consumes it).
+    hooks: Vec<AnimationHookJs>,
     /// Cohere-B (2026-05-12): per-part rest-pose origins. Flat `part_count * 3`
     /// f32s, `[x, y, z]` per part in DAT order. JS sets each `partGroup.position`
     /// to its rest origin at spawn; the `AnimationMixer` overwrites these
@@ -6915,6 +7054,26 @@ impl EntityAnimationData {
     pub fn rest_orientations(&self) -> Vec<f32> {
         self.rest_orientations.clone()
     }
+
+    /// **Task E (2026-05-12).** Drain the per-cycle `AnimationHookJs`
+    /// timeline across the wasm boundary. Each entry carries
+    /// `(time_in_clip_s, hook_type, direction, hook_data)`; hook_type
+    /// 1 = Sound, 2 = SoundTable, 13 = CreateParticle, 21 = SoundTweaked
+    /// per `setup_model::AnimationHook::read`'s typeswitch.
+    ///
+    /// Entries are sorted by `time_in_clip_s` ascending (stable across
+    /// hooks at the same time — DAT order preserved). JS bakes this
+    /// into a per-action sorted timeline and fires hooks as the
+    /// `AnimationAction.time` crosses each one (with a wrap-around
+    /// branch for looped clips).
+    ///
+    /// One-shot — second call returns an empty Vec. Cheap to call once
+    /// per spawn: a typical retail cycle has 0–10 hooks; the forge's
+    /// idle animation we audit in the Task E doc has 2 Sound hooks.
+    #[wasm_bindgen(js_name = takeHooks)]
+    pub fn take_hooks(&mut self) -> Vec<AnimationHookJs> {
+        std::mem::take(&mut self.hooks)
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -6940,6 +7099,9 @@ impl EntityAnimationData {
             part_frames: Vec::new(),
             rest_origins,
             rest_orientations,
+            // Task E (2026-05-12): no cycle resolved → no hooks. JS keeps
+            // an empty timeline and the per-frame executor is a no-op.
+            hooks: Vec::new(),
         }
     }
 }
@@ -7138,6 +7300,9 @@ pub async fn fetch_entity_animation_keyframes(
                     part_frames: Vec::new(),
                     rest_origins,
                     rest_orientations,
+                    // Task E (2026-05-12): no cycle → no hooks. JS sees
+                    // an empty timeline and the executor is a no-op.
+                    hooks: Vec::new(),
                 });
             }
         };
@@ -7154,9 +7319,19 @@ pub async fn fetch_entity_animation_keyframes(
     // and truncate when it's long. Either case is rare in retail
     // assets but we keep the buffer shape strictly `numFrames *
     // partCount * 7` so JS's stride math stays simple.
+    //
+    // **Task E (2026-05-12).** While we're already walking `frames`,
+    // also project each frame's `hooks: Vec<AnimationHook>` into a
+    // sorted-by-`time_in_clip_s` list of `AnimationHookJs` entries.
+    // Frame `i` contributes its hooks at time `i / framerate`. The
+    // JS-side EntityManager bakes this into a per-action timeline and
+    // fires hooks as the AnimationAction.time crosses each one. Hooks
+    // within the same frame stay in DAT order (stable sort).
     let num_frames = frames.len();
     let mut part_frames: Vec<f32> = Vec::with_capacity(num_frames * part_count * 7);
-    for af in &frames {
+    let mut hooks_out: Vec<AnimationHookJs> = Vec::new();
+    let inv_fps: f64 = if framerate > 0.0 { 1.0 / framerate as f64 } else { 0.0 };
+    for (frame_idx, af) in frames.iter().enumerate() {
         for pi in 0..part_count {
             if let Some(f) = af.frames.get(pi) {
                 part_frames.push(f.origin.x);
@@ -7172,7 +7347,29 @@ pub async fn fetch_entity_animation_keyframes(
                 part_frames.extend_from_slice(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
             }
         }
+        // Task E: hook timeline projection. Frame `i` fires at
+        // `i * inv_fps` seconds into the clip. If `inv_fps == 0` (no
+        // framerate — shouldn't happen here since we already gated on
+        // `framerate > 0.0` in `try_resolve_cycle_frames`, but keep the
+        // guard for safety), every hook lands at t=0 and the executor
+        // will fire them at frame 0 of every loop pass.
+        let frame_time = frame_idx as f64 * inv_fps;
+        for h in &af.hooks {
+            hooks_out.push(AnimationHookJs {
+                time_in_clip_s: frame_time,
+                hook_type: h.hook_type,
+                direction: h.direction,
+                hook_data: h.data.clone(),
+            });
+        }
     }
+    // Stable sort by time (preserves DAT order within a frame). Vec's
+    // `sort_by` is stable per Rust std docs.
+    hooks_out.sort_by(|a, b| {
+        a.time_in_clip_s
+            .partial_cmp(&b.time_in_clip_s)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     Ok(EntityAnimationData {
         part_meshes,
@@ -7183,6 +7380,7 @@ pub async fn fetch_entity_animation_keyframes(
         part_frames,
         rest_origins,
         rest_orientations,
+        hooks: hooks_out,
     })
 }
 
@@ -7576,6 +7774,38 @@ const CLIENT_EVENT_KIND_USE_DONE: u32 = 14;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_DOOR_STATE_CHANGED: u32 = 15;
 
+/// Task F (ambient-sounds-chain, 2026-05-12): ACE pushed a
+/// `GameMessageSound(guid, Sound enum, scale)` for a server-triggered
+/// action — lifestone bind, switch activation, hotspot trigger, craft
+/// event, etc. The opcode is `0xF750` (`GameMessageOpcode.Sound` in
+/// `external/ace-server/Source/ACE.Server/Network/GameMessages/GameMessageOpcode.cs`).
+/// Wire format (16 bytes, matching the ACE `GameMessageSound`
+/// constructor's `messageSize: 16` arg):
+///
+/// ```text
+/// [u32 opcode = 0xF750]
+/// [u32 guid]        // ObjectGuid.Full (32-bit)
+/// [u32 sound_id]    // cast from `Sound` enum
+/// [f32 volume]      // server-side per-call multiplier (1.0 default)
+/// ```
+///
+/// JS-side handler in `index.html`'s `drainEvents` block:
+///   1. Look up the entity in `liveScene3d.entityManager.entityMap`
+///      (guid → `EntityInstance`).
+///   2. Read `inst.soundTableDid` (plumbed by Task E from
+///      `ObjectDescription.stable_id` aka `PropertyDataId::SoundTable`).
+///   3. Call `soundTableCache.resolveSound(stbDid, soundEnum)` to
+///      pick a `SoundEntry` (weighted by `probability`).
+///   4. Play the resolved Wave at the entity's world position via
+///      `audioManager.play(waveDid, pos, { gain: entry.volume * scale })`.
+///
+/// `u32Payload` = entity GUID; `u32Payload2` = `Sound` enum value;
+/// `f32Payload` = scale (volume multiplier from the wire). Drops
+/// silently when the entity is unknown, has no SoundTable, or the
+/// SoundTable has no entries for the requested enum.
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_SOUND_TRIGGERED: u32 = 16;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -7769,6 +7999,16 @@ enum SessionCommand {
 ///   rotate the door's GfxObj sprite around its hinge frame, and
 ///   toggle the matching `building_aabb_index` entry's `active`
 ///   flag via `set_door_aabb_active`.
+/// - `kind = 16` — SoundTriggered (Task F, ambient-sounds-chain
+///   2026-05-12). Fired when ACE broadcasts `GameMessageSound`
+///   (opcode `0xF750`) — server-triggered audio for lifestone bind,
+///   switch activation, hotspot trigger, craft event, etc.
+///   `u32Payload` = entity GUID; `u32Payload2` = `Sound` enum value;
+///   `f32Payload` = scale (server-side volume multiplier; typically
+///   `1.0`). JS resolves the entity's `soundTableDid` through
+///   `soundTableCache.resolveSound(stbDid, soundEnum)` and plays the
+///   resulting Wave via `audioManager.play(...)` at the entity's
+///   world position with `gain = entry.volume * scale`.
 ///
 /// Entity spawn / position / remove events do NOT flow through
 /// this stream — they live on the parallel high-frequency channel
@@ -7783,6 +8023,7 @@ pub struct ClientEvent {
     string_payload: Option<String>,
     u32_payload: Option<u32>,
     u32_payload_2: Option<u32>,
+    f32_payload: Option<f32>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -7821,6 +8062,17 @@ impl ClientEvent {
     #[wasm_bindgen(getter, js_name = u32Payload2)]
     pub fn u32_payload_2(&self) -> Option<u32> {
         self.u32_payload_2
+    }
+
+    /// Task F (2026-05-12): optional f32 payload. For `kind = 16`
+    /// (SoundTriggered) holds the `scale` / volume multiplier the
+    /// server passed in `GameMessageSound`. JS multiplies the
+    /// resolved `SoundEntry.volume` by this scale before passing
+    /// `audioManager.play(..., { gain })`. `None` for every other
+    /// event kind today.
+    #[wasm_bindgen(getter, js_name = f32Payload)]
+    pub fn f32_payload(&self) -> Option<f32> {
+        self.f32_payload
     }
 }
 
@@ -8078,6 +8330,16 @@ pub struct EntityUpdate {
     /// `0` when the entity has no script (most static placements +
     /// vanilla creatures) and for non-Spawn updates.
     physics_script_did: u32,
+    /// **Task E (2026-05-12).** Entity's SoundTable DID
+    /// (`ObjectDescription.stable_id`, 0x20xxxxxx when set; backed by
+    /// the weenie's `PropertyDataId::SoundTable` = 3). The 3D
+    /// EntityManager.spawn() reads this to prewarm the SoundTableCache
+    /// AND to resolve SoundTable hooks (AnimationHook hook_type 2 carries
+    /// a `Sound` enum value; the executor looks it up in
+    /// `entity.soundTableDid` to get the Wave DID to play). `0` when the
+    /// entity has no SoundTable (most non-sound-emitting placements) and
+    /// for non-Spawn updates.
+    sound_table_did: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -8253,6 +8515,19 @@ impl EntityUpdate {
     #[wasm_bindgen(getter, js_name = physicsScriptDid)]
     pub fn physics_script_did(&self) -> u32 {
         self.physics_script_did
+    }
+
+    /// **Task E (2026-05-12).** Entity's SoundTable DID (`0x20xxxxxx`)
+    /// from `ObjectDescription.stable_id` (the wire field carrying
+    /// `PropertyDataId::SoundTable` = 3 for sound-emitting weenies).
+    /// JS-side AnimationHook executor in `entities.js::tick` resolves
+    /// SoundTable hooks (`hook_type = 2`, payload = Sound enum) by
+    /// looking up `entity.soundTableDid` in `soundTableCache`. `0` when
+    /// the entity has no SoundTable (most static placements + vanilla
+    /// NPCs without voice/footstep tables) and for non-Spawn updates.
+    #[wasm_bindgen(getter, js_name = soundTableDid)]
+    pub fn sound_table_did(&self) -> u32 {
+        self.sound_table_did
     }
 
     /// Velocity-hint x component (m/s, world frame). Meaningful only
@@ -10887,6 +11162,7 @@ async fn recv_loop(
                             string_payload: Some(msg),
                             u32_payload: None,
                             u32_payload_2: None,
+                            f32_payload: None,
                         });
                         return;
                     }
@@ -11017,6 +11293,7 @@ async fn recv_loop(
                                                 motion_command: 0,
                                                 motion_stance: 0,
                                                 physics_script_did: 0,
+                                                sound_table_did: 0,
                                             });
                                         }
                                     }
@@ -11046,6 +11323,7 @@ async fn recv_loop(
                                         string_payload: None,
                                         u32_payload: Some(u32::from(*guid)),
                                         u32_payload_2: Some(state_u32),
+                                        f32_payload: None,
                                     });
                                 }
                                 _ => {}
@@ -11095,6 +11373,7 @@ async fn recv_loop(
                             string_payload: None,
                             u32_payload: None,
                             u32_payload_2: None,
+                            f32_payload: None,
                         });
                     }
                     if inventory_changed && let Some(w) = world.as_ref() {
@@ -11104,6 +11383,7 @@ async fn recv_loop(
                             string_payload: None,
                             u32_payload: None,
                             u32_payload_2: None,
+                            f32_payload: None,
                         });
                     }
 
@@ -11136,6 +11416,7 @@ async fn recv_loop(
                                     string_payload: Some(account_name.clone()),
                                     u32_payload: Some(count),
                                     u32_payload_2: None,
+                                    f32_payload: None,
                                 });
                             }
                         }
@@ -11166,6 +11447,7 @@ async fn recv_loop(
                                     string_payload: Some(name),
                                     u32_payload: Some(guid),
                                     u32_payload_2: None,
+                                    f32_payload: None,
                                 });
                             } else {
                                 let code = data.response as u32;
@@ -11175,6 +11457,7 @@ async fn recv_loop(
                                     string_payload: Some(label),
                                     u32_payload: Some(code),
                                     u32_payload_2: None,
+                                    f32_payload: None,
                                 });
                             }
                         }
@@ -11284,6 +11567,7 @@ async fn recv_loop(
                                         )),
                                         u32_payload: None,
                                         u32_payload_2: None,
+                                        f32_payload: None,
                                     });
                                     return;
                                 }
@@ -11325,6 +11609,7 @@ async fn recv_loop(
                                     string_payload: None,
                                     u32_payload: Some(player_guid_raw),
                                     u32_payload_2: None,
+                                    f32_payload: None,
                                 });
                                 local_player_kind1_emitted = true;
                             }
@@ -11339,6 +11624,7 @@ async fn recv_loop(
                                     string_payload: Some(format!("LoginComplete: {e}")),
                                     u32_payload: None,
                                     u32_payload_2: None,
+                                    f32_payload: None,
                                 });
                                 return;
                             }
@@ -11351,6 +11637,7 @@ async fn recv_loop(
                                 string_payload: None,
                                 u32_payload: Some(player_guid_raw),
                                 u32_payload_2: None,
+                                f32_payload: None,
                             });
 
                             // Phase 4 step 3.6: construct the
@@ -11659,6 +11946,7 @@ async fn recv_loop(
                                 motion_command: 0,
                                 motion_stance: 0,
                                 physics_script_did: 0,
+                                sound_table_did: 0,
                             });
                         }
                         GameMessage::PrivateUpdatePosition(data) => {
@@ -11786,6 +12074,7 @@ async fn recv_loop(
                                     motion_command: 0,
                                     motion_stance: 0,
                                     physics_script_did: 0,
+                                    sound_table_did: 0,
                                 });
                             }
                         }
@@ -11830,6 +12119,7 @@ async fn recv_loop(
                                 motion_command: 0,
                                 motion_stance: 0,
                                 physics_script_did: 0,
+                                sound_table_did: 0,
                             });
                         }
                         GameMessage::ObjectCreate(data) => {
@@ -12096,6 +12386,17 @@ async fn recv_loop(
                                     // PhysicsScript DID through to JS so
                                     // entities.js can walk the chain.
                                     physics_script_did: data.default_script_id.unwrap_or(0),
+                                    // Task E (2026-05-12): plumb the entity's
+                                    // SoundTable DID. The wire field is
+                                    // `stable_id` (PhysicsDescriptionFlag::STABLE),
+                                    // backed server-side by the weenie's
+                                    // `PropertyDataId::SoundTable` (= 3) — see
+                                    // `holtburger_common::properties::world_object::stable_id()`.
+                                    // JS-side EntityManager prewarms its
+                                    // `SoundTableCache` with this DID on spawn so
+                                    // animation Sound/SoundTable hooks resolve
+                                    // synchronously after the first frame.
+                                    sound_table_did: data.stable_id.unwrap_or(0),
                                 });
                                 if is_local_player {
                                     local_player_spawn_emitted = true;
@@ -12221,6 +12522,7 @@ async fn recv_loop(
                                 motion_command: 0,
                                 motion_stance: 0,
                                 physics_script_did: 0,
+                                sound_table_did: 0,
                             });
                         }
                         GameMessage::UpdateMotion(data) => {
@@ -12306,6 +12608,7 @@ async fn recv_loop(
                                 motion_command: u32::from(motion_command_u16),
                                 motion_stance: u32::from(data.current_style),
                                 physics_script_did: 0,
+                                sound_table_did: 0,
                             });
                         }
                         GameMessage::VectorUpdate(data) => {
@@ -12361,6 +12664,7 @@ async fn recv_loop(
                                 motion_command: 0,
                                 motion_stance: 0,
                                 physics_script_did: 0,
+                                sound_table_did: 0,
                             });
                         }
                         // Phase 4 step 4: chat-bearing surfaces. Each
@@ -12388,6 +12692,7 @@ async fn recv_loop(
                                 string_payload: Some(format!("[Server] {}", data.message)),
                                 u32_payload: Some(data.chat_type),
                                 u32_payload_2: Some(category),
+                                f32_payload: None,
                             });
                         }
                         GameMessage::HearSpeech(data) => {
@@ -12406,6 +12711,7 @@ async fn recv_loop(
                                 )),
                                 u32_payload: Some(data.chat_type),
                                 u32_payload_2: Some(category),
+                                f32_payload: None,
                             });
                         }
                         GameMessage::HearRangedSpeech(data) => {
@@ -12421,6 +12727,7 @@ async fn recv_loop(
                                 )),
                                 u32_payload: Some(data.chat_type),
                                 u32_payload_2: Some(category),
+                                f32_payload: None,
                             });
                         }
                         GameMessage::EmoteText(data) => {
@@ -12433,6 +12740,7 @@ async fn recv_loop(
                                 string_payload: Some(data.text.clone()),
                                 u32_payload: Some(0),
                                 u32_payload_2: Some(CHAT_CATEGORY_EMOTE),
+                                f32_payload: None,
                             });
                         }
                         GameMessage::SoulEmote(data) => {
@@ -12444,6 +12752,7 @@ async fn recv_loop(
                                 string_payload: Some(data.text.clone()),
                                 u32_payload: Some(0),
                                 u32_payload_2: Some(CHAT_CATEGORY_EMOTE),
+                                f32_payload: None,
                             });
                         }
                         GameMessage::PlayerKilled(data) => {
@@ -12459,6 +12768,7 @@ async fn recv_loop(
                                 string_payload: Some(data.death_message.clone()),
                                 u32_payload: Some(u32::from(data.killer_id)),
                                 u32_payload_2: Some(CHAT_CATEGORY_DEATH),
+                                f32_payload: None,
                             });
                         }
                         GameMessage::TurbineChat(data) => {
@@ -12488,6 +12798,7 @@ async fn recv_loop(
                                         )),
                                         u32_payload: Some(chat_type_raw),
                                         u32_payload_2: Some(category),
+                                        f32_payload: None,
                                     });
                                 }
                                 TurbineChatPayload::RequestSendToRoomById { .. }
@@ -12522,6 +12833,7 @@ async fn recv_loop(
                                         )),
                                         u32_payload: Some(data.chat_type),
                                         u32_payload_2: Some(category),
+                                        f32_payload: None,
                                     });
                                 }
                                 holtburger_protocol::messages::GameEvent::ChannelBroadcast(
@@ -12539,6 +12851,7 @@ async fn recv_loop(
                                         )),
                                         u32_payload: Some(data.channel.raw()),
                                         u32_payload_2: Some(category),
+                                        f32_payload: None,
                                     });
                                 }
                                 holtburger_protocol::messages::GameEvent::CommunicationTransientString(
@@ -12549,6 +12862,7 @@ async fn recv_loop(
                                         string_payload: Some(data.message.clone()),
                                         u32_payload: Some(0),
                                         u32_payload_2: Some(CHAT_CATEGORY_TRANSIENT),
+                                        f32_payload: None,
                                     });
                                 }
                                 holtburger_protocol::messages::GameEvent::PopupString(data) => {
@@ -12557,6 +12871,7 @@ async fn recv_loop(
                                         string_payload: Some(format!("[Popup] {}", data.message)),
                                         u32_payload: Some(0),
                                         u32_payload_2: Some(CHAT_CATEGORY_POPUP),
+                                        f32_payload: None,
                                     });
                                 }
                                 holtburger_protocol::messages::GameEvent::AttackerNotification(
@@ -12587,6 +12902,7 @@ async fn recv_loop(
                                         string_payload: Some(line),
                                         u32_payload: Some(0),
                                         u32_payload_2: Some(CHAT_CATEGORY_COMBAT),
+                                        f32_payload: None,
                                     });
                                 }
                                 holtburger_protocol::messages::GameEvent::DefenderNotification(
@@ -12615,6 +12931,7 @@ async fn recv_loop(
                                         string_payload: Some(line),
                                         u32_payload: Some(0),
                                         u32_payload_2: Some(CHAT_CATEGORY_COMBAT),
+                                        f32_payload: None,
                                     });
                                 }
                                 holtburger_protocol::messages::GameEvent::EvasionAttackerNotification(
@@ -12628,6 +12945,7 @@ async fn recv_loop(
                                         )),
                                         u32_payload: Some(0),
                                         u32_payload_2: Some(CHAT_CATEGORY_COMBAT),
+                                        f32_payload: None,
                                     });
                                 }
                                 holtburger_protocol::messages::GameEvent::EvasionDefenderNotification(
@@ -12641,6 +12959,7 @@ async fn recv_loop(
                                         )),
                                         u32_payload: Some(0),
                                         u32_payload_2: Some(CHAT_CATEGORY_COMBAT),
+                                        f32_payload: None,
                                     });
                                 }
                                 holtburger_protocol::messages::GameEvent::VictimNotification(
@@ -12655,6 +12974,7 @@ async fn recv_loop(
                                         string_payload: Some(data.death_message.clone()),
                                         u32_payload: Some(0),
                                         u32_payload_2: Some(CHAT_CATEGORY_DEATH),
+                                        f32_payload: None,
                                     });
                                 }
                                 holtburger_protocol::messages::GameEvent::KillerNotification(
@@ -12667,6 +12987,7 @@ async fn recv_loop(
                                         string_payload: Some(data.death_message.clone()),
                                         u32_payload: Some(0),
                                         u32_payload_2: Some(CHAT_CATEGORY_DEATH),
+                                        f32_payload: None,
                                     });
                                 }
                                 holtburger_protocol::messages::GameEvent::PlayerDescription(
@@ -12853,6 +13174,7 @@ async fn recv_loop(
                                         string_payload: Some(vendor_name.clone()),
                                         u32_payload: Some(vendor_guid),
                                         u32_payload_2: Some(item_count),
+                                        f32_payload: None,
                                     });
                                     // Also surface as a chat line so
                                     // the user sees something even
@@ -12865,6 +13187,7 @@ async fn recv_loop(
                                         )),
                                         u32_payload: Some(0),
                                         u32_payload_2: Some(CHAT_CATEGORY_TRADE),
+                                        f32_payload: None,
                                     });
                                 }
                                 holtburger_protocol::messages::GameEvent::UseDone(data) => {
@@ -12882,6 +13205,7 @@ async fn recv_loop(
                                             string_payload: None,
                                             u32_payload: None,
                                             u32_payload_2: None,
+                                            f32_payload: None,
                                         });
                                     } else {
                                         let label = format!("{:?}", data.error);
@@ -12890,6 +13214,7 @@ async fn recv_loop(
                                             string_payload: Some(label.clone()),
                                             u32_payload: Some(data.error as u32),
                                             u32_payload_2: None,
+                                            f32_payload: None,
                                         });
                                         queued_events.borrow_mut().push(ClientEvent {
                                             kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
@@ -12898,6 +13223,7 @@ async fn recv_loop(
                                             )),
                                             u32_payload: Some(0),
                                             u32_payload_2: Some(CHAT_CATEGORY_SYSTEM),
+                                            f32_payload: None,
                                         });
                                     }
                                 }
@@ -12926,6 +13252,7 @@ async fn recv_loop(
                                         string_payload: Some(label),
                                         u32_payload: Some(code),
                                         u32_payload_2: Some(CHAT_CATEGORY_SYSTEM),
+                                        f32_payload: None,
                                     });
                                 }
                                 holtburger_protocol::messages::GameEvent::WeenieErrorWithString(
@@ -12942,6 +13269,7 @@ async fn recv_loop(
                                         string_payload: Some(label),
                                         u32_payload: Some(code),
                                         u32_payload_2: Some(CHAT_CATEGORY_SYSTEM),
+                                        f32_payload: None,
                                     });
                                 }
                                 _ => {
@@ -12953,6 +13281,53 @@ async fn recv_loop(
                                     // arms.
                                 }
                             }
+                        }
+                        GameMessage::PlaySound(data) => {
+                            // Task F (ambient-sounds-chain, 2026-05-12):
+                            // ACE broadcast `GameMessageSound` (opcode
+                            // 0xF750) — server-triggered audio for
+                            // lifestone bind, switch activation, hotspot
+                            // trigger, craft event, etc. Wire layout:
+                            // `[u32 guid, u32 sound_id, f32 volume]`
+                            // (16 bytes total incl. the 4-byte opcode).
+                            //
+                            // The parser is `PlaySoundData` in
+                            // `crates/holtburger-protocol/src/messages/
+                            // effects/types.rs` — pre-existing from the
+                            // protocol-crate buildout; the `target` /
+                            // `sound_id` / `volume` field names track
+                            // ACE's GameMessageSound constructor 1:1.
+                            //
+                            // Forward to JS as a kind=16 SoundTriggered
+                            // ClientEvent. JS-side (`index.html`'s
+                            // `drainEvents` block) looks up the entity
+                            // in `liveScene3d.entityManager.entityMap`,
+                            // reads `inst.soundTableDid` (Task E
+                            // plumbing), resolves the Sound enum via
+                            // `soundTableCache.resolveSound(...)`, and
+                            // plays the resulting Wave at the entity's
+                            // current world position via
+                            // `audioManager.play(...)` scaled by
+                            // `entry.volume * scale`.
+                            //
+                            // Soft cases handled JS-side (each logs
+                            // debug + skips, never errors):
+                            //   - entity GUID unknown (despawned mid-
+                            //     flight between ACE send and client
+                            //     recv)
+                            //   - entity has no SoundTable
+                            //     (`inst.soundTableDid == 0`)
+                            //   - Sound enum has no entry in the
+                            //     resolved SoundTable
+                            //   - `scale <= 0` (treated as 1.0 with a
+                            //     one-shot warn)
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_SOUND_TRIGGERED,
+                                string_payload: None,
+                                u32_payload: Some(u32::from(data.target)),
+                                u32_payload_2: Some(data.sound_id),
+                                f32_payload: Some(data.volume),
+                            });
                         }
                         _ => {
                             // Other GameMessages are dropped silently —
@@ -13070,6 +13445,7 @@ async fn recv_loop(
                                 string_payload: None,
                                 u32_payload: Some(u32::from(guid)),
                                 u32_payload_2: None,
+                                f32_payload: None,
                             });
                             local_player_kind1_emitted = true;
                             console_log_str(&format!(
@@ -13092,6 +13468,7 @@ async fn recv_loop(
                                 )),
                                 u32_payload: None,
                                 u32_payload_2: None,
+                                f32_payload: None,
                             });
                             return;
                         }
@@ -13111,6 +13488,7 @@ async fn recv_loop(
                                 string_payload: Some(format!("CharacterCreate: {e}")),
                                 u32_payload: None,
                                 u32_payload_2: None,
+                                f32_payload: None,
                             });
                             return;
                         }
@@ -13134,6 +13512,7 @@ async fn recv_loop(
                                 string_payload: Some(format!("send_chat: {e}")),
                                 u32_payload: None,
                                 u32_payload_2: None,
+                                f32_payload: None,
                             });
                             return;
                         }
@@ -13162,6 +13541,7 @@ async fn recv_loop(
                                 string_payload: Some(format!("use_object: {e}")),
                                 u32_payload: None,
                                 u32_payload_2: None,
+                                f32_payload: None,
                             });
                             return;
                         }
@@ -13255,6 +13635,7 @@ async fn recv_loop(
                                 string_payload: Some(format!("toggle_combat_mode: {e}")),
                                 u32_payload: None,
                                 u32_payload_2: None,
+                                f32_payload: None,
                             });
                             return;
                         }
@@ -13509,6 +13890,7 @@ async fn recv_loop(
                                     motion_command: 0,
                                     motion_stance: 0,
                                     physics_script_did: 0,
+                                    sound_table_did: 0,
                                 });
                             }
                         }
@@ -13674,6 +14056,7 @@ async fn recv_loop(
                                     string_payload: Some(format!("tick: {e}")),
                                     u32_payload: None,
                                     u32_payload_2: None,
+                                    f32_payload: None,
                                 });
                                 return;
                             }
@@ -14153,6 +14536,462 @@ pub async fn fetch_wave(did: u32) -> Result<WaveJs, JsValue> {
         num_channels: fmt.map(|f| f.num_channels).unwrap_or(0),
         bits_per_sample: fmt.map(|f| f.bits_per_sample).unwrap_or(0),
         riff_bytes: riff,
+    })
+}
+
+// ============================================================
+// Task B — SoundTable (0x20) fetch + JS-side resolver.
+// ============================================================
+//
+// Mirrors the H3-C `fetchWave` / Sky-J P3 `fetchPhysicsScript`
+// pattern. The Rust parser ships a `HashMap<u32 sound_enum,
+// SoundData>` (see `crates/holtburger-dat/src/file_type/sound_table.rs`);
+// the JS side typically only cares about `entriesForSound(enum)`
+// (look up Sound.Ambient1 etc. on demand) plus a few summary
+// counters for cache logging. We surface those — not the full
+// HashMap — to keep the wasm-bindgen surface boring and
+// `Copy`-friendly per entry.
+//
+// JS-side flow:
+//   const stb = await fetchSoundTable(0x20000081);
+//   const entries = stb.entriesForSound(0x46);  // Sound.Ambient1
+//   for (const e of entries) {
+//     audioManager.play(e.waveDid, listenerPos, { gain: e.volume });
+//   }
+
+/// Task B: JS-side mirror of one `SoundEntry` row from a SoundTable's
+/// `Sounds[enum].Entries` list. Plain copyable scalars — one wave
+/// reference plus per-row weight metadata.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy)]
+pub struct SoundEntryJs {
+    wave_did: u32,
+    priority: f32,
+    probability: f32,
+    volume: f32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SoundEntryJs {
+    /// Wave DAT ID (`0x0Axxxxxx`). Pass directly to `fetchWave` /
+    /// `audioManager.play`.
+    #[wasm_bindgen(getter, js_name = waveDid)]
+    pub fn wave_did(&self) -> u32 { self.wave_did }
+    #[wasm_bindgen(getter)]
+    pub fn priority(&self) -> f32 { self.priority }
+    #[wasm_bindgen(getter)]
+    pub fn probability(&self) -> f32 { self.probability }
+    #[wasm_bindgen(getter)]
+    pub fn volume(&self) -> f32 { self.volume }
+}
+
+/// Task B: JS-side mirror of `holtburger_dat::file_type::SoundTable`.
+/// Carries the parsed id + counts plus the resolved Sound-enum keyset
+/// so the JS cache can know which lookups will succeed without
+/// scanning the full sound map per query.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct SoundTableJs {
+    id: u32,
+    hash_key: i32,
+    num_hashes: u32,
+    num_sounds: u32,
+    /// Sorted (for stable JS iteration) list of `Sound` enum keys
+    /// present in `sounds`. Used by `soundKeys()` getter to surface
+    /// the keyset without copying the value side.
+    sound_keys: Vec<u32>,
+    /// Owned copy of the parsed `Sounds[enum] → Vec<SoundEntry>` map.
+    /// Held server-side (Rust) so `entriesForSound(enum)` is O(1)
+    /// without re-parsing the DAT bytes. Memory cost: ~20 bytes per
+    /// SoundEntry × `total_entries` (probe_all sweep reported tens of
+    /// thousands of entries across 190 retail tables → well under 4 MB).
+    sounds: std::collections::HashMap<u32, Vec<SoundEntryJs>>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SoundTableJs {
+    /// SoundTable file ID (matches the DAT directory key).
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> u32 { self.id }
+    /// Schema field `HashKey` — see Task A module docs; semantics
+    /// undocumented but stable across retail records.
+    #[wasm_bindgen(getter, js_name = hashKey)]
+    pub fn hash_key(&self) -> i32 { self.hash_key }
+    /// Count of entries in the auxiliary `Hashes` dictionary.
+    /// Useful for cache budgeting and diagnostic logging.
+    #[wasm_bindgen(getter, js_name = numHashes)]
+    pub fn num_hashes(&self) -> u32 { self.num_hashes }
+    /// Count of entries in the `Sounds` dictionary — i.e. how many
+    /// `Sound` enum keys this table resolves.
+    #[wasm_bindgen(getter, js_name = numSounds)]
+    pub fn num_sounds(&self) -> u32 { self.num_sounds }
+    /// Sorted list of `Sound` enum keys present in this table. The
+    /// JS cache uses this to know what's queryable without iterating
+    /// or probing — e.g. `if (stb.soundKeys().includes(0x46)) { ... }`.
+    /// Returns a fresh `Vec` each call (cheap — under 200 u32s per
+    /// table in retail).
+    #[wasm_bindgen(js_name = soundKeys)]
+    pub fn sound_keys(&self) -> Vec<u32> { self.sound_keys.clone() }
+    /// Resolve a `Sound` enum value (e.g. `0x46` for `Sound.Ambient1`)
+    /// to the list of weighted Wave references attached to it.
+    /// Returns an empty array if no mapping exists for this enum.
+    /// Each returned `SoundEntryJs` exposes `waveDid`, `priority`,
+    /// `probability`, `volume` getters; the JS-side resolver picks
+    /// one by `probability`-weighted random.
+    #[wasm_bindgen(js_name = entriesForSound)]
+    pub fn entries_for_sound(&self, sound_enum: u32) -> Vec<SoundEntryJs> {
+        match self.sounds.get(&sound_enum) {
+            Some(v) => v.clone(),
+            None => Vec::new(),
+        }
+    }
+}
+
+/// Task B: fetch + parse a SoundTable (0x20xxxxxx) from the global
+/// resource source. Same prefetch + parse pattern as
+/// [`fetch_wave`] / [`fetch_physics_script`].
+///
+/// Callers:
+///   - the Task-C `sound_table_cache.js` (per-DID memoization layer)
+///   - the Task-D ambient roller (Region-attached STB → Wave lookup
+///     per AmbientSoundDesc tick)
+///   - the Task-E entity AnimationHook executor (Sound + SoundTable
+///     hooks on entity idle clips)
+///   - the Task-F ACE `GameMessageSound` handler
+///
+/// JS-side flow:
+///   const stb = await fetchSoundTable(0x20000081);  // Region STB
+///   const entries = stb.entriesForSound(0x46);      // Sound.Ambient1
+///   if (entries.length) {
+///     const pick = entries[0];  // or weighted-random
+///     audioManager.play(pick.waveDid, pos, { gain: pick.volume });
+///   }
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchSoundTable)]
+pub async fn fetch_sound_table(did: u32) -> Result<SoundTableJs, JsValue> {
+    use holtburger_dat::file_type::SoundTable;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    let source = global_source::global_source();
+    let key = ResourceKey::new("eor/portal", did);
+    prefetch::ensure_walk_prefetched(&source, &[key], |_| {}).await?;
+    let bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", did))
+        .map_err(|e| {
+            JsValue::from_str(&format!(
+                "fetchSoundTable 0x{did:08X}: fetch failed: {e:?}"
+            ))
+        })?;
+    let st = SoundTable::unpack(&bytes).map_err(|e| {
+        JsValue::from_str(&format!(
+            "fetchSoundTable 0x{did:08X}: parse failed: {e:?}"
+        ))
+    })?;
+    // Project SoundData → Vec<SoundEntryJs> per key for cheap JS
+    // resolution. The trailing `SoundData::unknown` i32 is dropped —
+    // its semantics are unmapped (see Task A module docs) and no
+    // downstream task reads it.
+    let num_hashes = st.hashes.len() as u32;
+    let num_sounds = st.sounds.len() as u32;
+    let mut sound_keys: Vec<u32> = st.sounds.keys().copied().collect();
+    sound_keys.sort_unstable();
+    let mut sounds = std::collections::HashMap::with_capacity(st.sounds.len());
+    for (k, sd) in st.sounds.into_iter() {
+        let rows: Vec<SoundEntryJs> = sd
+            .entries
+            .into_iter()
+            .map(|e| SoundEntryJs {
+                wave_did: e.wave_did,
+                priority: e.priority,
+                probability: e.probability,
+                volume: e.volume,
+            })
+            .collect();
+        sounds.insert(k, rows);
+    }
+    Ok(SoundTableJs {
+        id: st.id,
+        hash_key: st.hash_key,
+        num_hashes,
+        num_sounds,
+        sound_keys,
+        sounds,
+    })
+}
+
+// ============================================================
+// Task D — Region (0x13xxxxxx) fetch + ambient STB chain accessors
+// ============================================================
+//
+// The Task D ambient roller (`scene3d/audio/ambient_runtime.js`)
+// walks `Region.terrain_info → terrain_types[code].scene_types[k] →
+// scene_info.scene_types[scene_index] → sound_info.stb_descs[stb_index]`
+// at runtime, keyed on the local player's terrain code. Rather than
+// expose the entire Region structure to JS (huge surface, lots of
+// wasm-bindgen plumbing for Sky/Scene/Texmerge sub-objects), we expose
+// ONE accessor — `RegionJs::ambientStbForTerrainCode(code)` — that
+// performs the chain walk server-side and returns the resolved
+// AmbientSTB (stb_id + ambient sound descs) directly.
+//
+// This mirrors how `SoundTableJs` projects the `Sounds` HashMap into
+// flat `entriesForSound(enum)` queries — the wasm side owns the
+// parsed Region data and JS pulls only the rows it needs.
+
+/// Task D: JS-side mirror of one `AmbientSoundDesc` row from a
+/// Region's `AmbientSTBDesc.ambient_sounds`. Plain copyable scalars.
+/// `is_continuous` is the PhatSDK-derived flag (`base_chance == 0.0`)
+/// surfaced so JS doesn't have to re-derive it per tick.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy)]
+pub struct AmbientSoundDescJs {
+    s_type: u32,
+    volume: f32,
+    base_chance: f32,
+    min_rate: f32,
+    max_rate: f32,
+    is_continuous: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl AmbientSoundDescJs {
+    /// AC `Sound` enum value (e.g. `0x46` for Sound.Ambient1).
+    /// Look up via `soundTableCache.resolveSound(stb_id, sType)` to
+    /// find the Wave DID to play.
+    #[wasm_bindgen(getter, js_name = sType)]
+    pub fn s_type(&self) -> u32 { self.s_type }
+    /// Per-entry volume multiplier (0..1).
+    #[wasm_bindgen(getter)]
+    pub fn volume(&self) -> f32 { self.volume }
+    /// Per-timer-fire probability (0..1). 0.0 means "continuous loop"
+    /// — start once, never roll. Non-zero means "roll the dice each
+    /// rate-window".
+    #[wasm_bindgen(getter, js_name = baseChance)]
+    pub fn base_chance(&self) -> f32 { self.base_chance }
+    /// Lower bound of the timer window between rolls (seconds).
+    #[wasm_bindgen(getter, js_name = minRate)]
+    pub fn min_rate(&self) -> f32 { self.min_rate }
+    /// Upper bound of the timer window between rolls (seconds).
+    #[wasm_bindgen(getter, js_name = maxRate)]
+    pub fn max_rate(&self) -> f32 { self.max_rate }
+    /// PhatSDK-derived flag: `base_chance == 0.0`. Surfaced so JS
+    /// doesn't have to re-compare against a float-zero literal.
+    #[wasm_bindgen(getter, js_name = isContinuous)]
+    pub fn is_continuous(&self) -> bool { self.is_continuous }
+}
+
+/// Task D: JS-side mirror of `AmbientSTBDesc`. `stbId` is the
+/// `0x20xxxxxx` SoundTable DID; `ambientSounds()` returns the list of
+/// per-sound rows (sType, volume, base_chance, min_rate, max_rate).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct AmbientStbJs {
+    stb_id: u32,
+    ambient_sounds: Vec<AmbientSoundDescJs>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl AmbientStbJs {
+    /// SoundTable DID (`0x20xxxxxx`) — pass to `fetchSoundTable` /
+    /// `soundTableCache.resolveSound` to get Wave DIDs.
+    #[wasm_bindgen(getter, js_name = stbId)]
+    pub fn stb_id(&self) -> u32 { self.stb_id }
+    /// Number of AmbientSoundDesc rows under this STB.
+    #[wasm_bindgen(getter, js_name = numSounds)]
+    pub fn num_sounds(&self) -> u32 { self.ambient_sounds.len() as u32 }
+    /// Snapshot of the AmbientSoundDesc rows. Cheap clone — each row
+    /// is 24 bytes; STBs typically carry 1-8 rows in retail.
+    #[wasm_bindgen(js_name = ambientSounds)]
+    pub fn ambient_sounds(&self) -> Vec<AmbientSoundDescJs> {
+        self.ambient_sounds.clone()
+    }
+}
+
+/// Task D: JS-side mirror of `holtburger_dat::file_type::Region`. Holds
+/// the parsed Region data Rust-side so JS can query the ambient STB
+/// chain at runtime without re-parsing per tick.
+///
+/// The runtime hot path is `ambientStbForTerrainCode(code) → AmbientStbJs`.
+/// All other Region data (sky, scene, surfaces) is reachable via
+/// existing paths (`populateSkyDescFromRegion`, `fetch_terrain_textures`),
+/// so we don't surface it here.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct RegionJs {
+    id: u32,
+    region_name: String,
+    /// Owned by Rust — JS calls accessors that walk this on demand.
+    /// Cost is ~30 KB for retail Region 0x13000000 (38 STBs +
+    /// 33 terrain types + ~80 scene types).
+    region: holtburger_dat::file_type::Region,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl RegionJs {
+    /// Region file ID (matches the DAT directory key, e.g. 0x13000000).
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> u32 { self.id }
+    /// Schema field — typically `"Dereth"` for retail.
+    #[wasm_bindgen(getter, js_name = regionName)]
+    pub fn region_name(&self) -> String { self.region_name.clone() }
+    /// Count of TerrainType entries (typically 33 for retail).
+    #[wasm_bindgen(getter, js_name = numTerrainTypes)]
+    pub fn num_terrain_types(&self) -> u32 {
+        self.region.terrain_info.terrain_types.len() as u32
+    }
+    /// Count of SceneType entries (typically ~80 for retail).
+    #[wasm_bindgen(getter, js_name = numSceneTypes)]
+    pub fn num_scene_types(&self) -> u32 {
+        self.region
+            .scene_info
+            .as_ref()
+            .map(|s| s.scene_types.len() as u32)
+            .unwrap_or(0)
+    }
+    /// Count of AmbientSTBDesc entries (typically ~38 for retail).
+    #[wasm_bindgen(getter, js_name = numStbDescs)]
+    pub fn num_stb_descs(&self) -> u32 {
+        self.region
+            .sound_info
+            .as_ref()
+            .map(|s| s.stb_descs.len() as u32)
+            .unwrap_or(0)
+    }
+
+    /// Task D hot path: resolve a terrain code (0..31) to its active
+    /// AmbientSTB via the PhatSDK chain:
+    ///
+    /// ```text
+    /// terrain_info.terrain_types[code]
+    ///   .scene_types[scene_pick]       (u32 index into scene_info)
+    ///     → scene_info.scene_types[scene_index]
+    ///       .stb_index (i32; -1 = no ambient)
+    ///         → sound_info.stb_descs[stb_index]
+    /// ```
+    ///
+    /// `scenePick` is the index into `terrain_types[code].scene_types`
+    /// — typically 0 since the PhatSDK `CTerrainDesc::GetScene` hash
+    /// function isn't decompiled (the doc plan endorses picking 0
+    /// universally as a Task D simplification; a position-hash refiner
+    /// is a follow-on).
+    ///
+    /// Returns `None` (JS `undefined`) when:
+    /// - `code` is out of bounds for `terrain_types`,
+    /// - `scenePick` is out of bounds for that terrain's
+    ///   `scene_types`,
+    /// - The resolved scene_index is out of bounds for `scene_info`,
+    /// - The scene type's `stb_index == -1` (sentinel for "no
+    ///   ambient"),
+    /// - The Region has no `sound_info` / `scene_info`.
+    ///
+    /// Cost: O(1) array indexing + small clone of `Vec<AmbientSoundDescJs>`.
+    #[wasm_bindgen(js_name = ambientStbForTerrainCode)]
+    pub fn ambient_stb_for_terrain_code(
+        &self,
+        code: u32,
+        scene_pick: u32,
+    ) -> Option<AmbientStbJs> {
+        let tt = self.region.terrain_info.terrain_types.get(code as usize)?;
+        let scene_idx_for_terrain = tt.scene_types.get(scene_pick as usize)?;
+        let scene_info = self.region.scene_info.as_ref()?;
+        let scene_type = scene_info
+            .scene_types
+            .get(*scene_idx_for_terrain as usize)?;
+        if scene_type.stb_index < 0 {
+            return None;
+        }
+        let sound_info = self.region.sound_info.as_ref()?;
+        let stb = sound_info
+            .stb_descs
+            .get(scene_type.stb_index as usize)?;
+        let ambient_sounds: Vec<AmbientSoundDescJs> = stb
+            .ambient_sounds
+            .iter()
+            .map(|a| AmbientSoundDescJs {
+                s_type: a.s_type,
+                volume: a.volume,
+                base_chance: a.base_chance,
+                min_rate: a.min_rate,
+                max_rate: a.max_rate,
+                is_continuous: a.is_continuous(),
+            })
+            .collect();
+        Some(AmbientStbJs {
+            stb_id: stb.stb_id,
+            ambient_sounds,
+        })
+    }
+
+    /// Diagnostic: how many scene types does this terrain code list?
+    /// Used by capture scripts to verify the chain has data before
+    /// expecting `ambientStbForTerrainCode` to be non-null.
+    #[wasm_bindgen(js_name = sceneTypeCountForTerrain)]
+    pub fn scene_type_count_for_terrain(&self, code: u32) -> u32 {
+        self.region
+            .terrain_info
+            .terrain_types
+            .get(code as usize)
+            .map(|t| t.scene_types.len() as u32)
+            .unwrap_or(0)
+    }
+
+    /// Diagnostic: human-readable terrain name (e.g. "Grassland",
+    /// "LushGrass"). Used by capture scripts + dev tools to verify
+    /// terrain sampling against the known Holtburg landscape.
+    #[wasm_bindgen(js_name = terrainNameForCode)]
+    pub fn terrain_name_for_code(&self, code: u32) -> Option<String> {
+        self.region
+            .terrain_info
+            .terrain_types
+            .get(code as usize)
+            .map(|t| t.terrain_name.clone())
+    }
+}
+
+/// Task D: fetch + parse a Region (`0x13xxxxxx`). Mirrors
+/// `fetchSoundTable` / `fetchPhysicsScript` — same prefetch + parse
+/// pattern, returns a JS-bindable handle with chain-walker accessors.
+///
+/// Retail ships only `0x13000000` (Dereth); the API takes a DID so
+/// custom realms / future Region overlays can be queried.
+///
+/// JS-side flow:
+///   const region = await fetchRegion(0x13000000);
+///   const stb = region.ambientStbForTerrainCode(3, 0); // LushGrass
+///   for (const a of stb.ambientSounds()) {
+///     // schedule a per-tick roll or start a continuous loop
+///   }
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchRegion)]
+pub async fn fetch_region(did: u32) -> Result<RegionJs, JsValue> {
+    use holtburger_dat::file_type::Region;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    let source = global_source::global_source();
+    let key = ResourceKey::new("eor/portal", did);
+    prefetch::ensure_walk_prefetched(&source, &[key], |_| {}).await?;
+    let bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", did))
+        .map_err(|e| {
+            JsValue::from_str(&format!(
+                "fetchRegion 0x{did:08X}: fetch failed: {e:?}"
+            ))
+        })?;
+    let region = Region::unpack(&mut std::io::Cursor::new(&bytes)).map_err(|e| {
+        JsValue::from_str(&format!(
+            "fetchRegion 0x{did:08X}: parse failed: {e}"
+        ))
+    })?;
+    let id = region.id;
+    let region_name = region.region_name.clone();
+    Ok(RegionJs {
+        id,
+        region_name,
+        region,
     })
 }
 

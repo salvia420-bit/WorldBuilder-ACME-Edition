@@ -309,6 +309,43 @@ export class AnimationCache {
                 }
             }
 
+            // Task E (2026-05-12) — AnimationHook timeline drain.
+            // The wasm `EntityAnimationData.takeHooks()` returns a
+            // sorted-by-time list of `AnimationHookJs` entries baked
+            // from each `AnimationFrame.hooks` in the resolved cycle.
+            // Snapshot to plain JS POJOs IMMEDIATELY so the cache
+            // doesn't hold stale wasm-bindgen handles past `.free()`
+            // (the same lifetime hazard `EntityUpdate` has — see
+            // `__scene3dCloneEntityUpdate` in index.html). Empty
+            // fallback handles old wasm bundles without the getter
+            // (callers see `hooks.length === 0` and the per-frame
+            // executor skips this action's timeline entirely).
+            let hooks = [];
+            if (typeof animData.takeHooks === "function") {
+                const raw = animData.takeHooks();
+                hooks = new Array(raw.length);
+                for (let i = 0; i < raw.length; i += 1) {
+                    const h = raw[i];
+                    // Snapshot each field through the wasm getter into
+                    // a plain object — the wasm-bindgen handle gets
+                    // freed below.
+                    hooks[i] = {
+                        time: +h.timeInClipS,
+                        hookType: h.hookType >>> 0,
+                        direction: h.direction | 0,
+                        // Sound (1) + SoundTweaked (21) decoded fields.
+                        soundWaveId: h.soundWaveId >>> 0,
+                        soundEnum: h.soundEnum >>> 0,
+                        soundProbability: +h.soundProbability,
+                        soundVolume: +h.soundVolume,
+                        soundPriority: +h.soundPriority,
+                    };
+                    if (typeof h.free === "function") {
+                        try { h.free(); } catch (_) {}
+                    }
+                }
+            }
+
             return {
                 clip,
                 partMeshes,
@@ -317,6 +354,7 @@ export class AnimationCache {
                 resolvedStance,
                 restOrigins,
                 restOrientations,
+                hooks,
             };
         })();
         this.entries.set(key, promise);

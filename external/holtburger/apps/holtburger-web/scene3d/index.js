@@ -28,6 +28,8 @@ import { resolveSkyAssets } from "./sky_assets.js";
 import { acToThree } from "./adapter.js";
 import { createNameplateOverlay } from "./hud.js";
 import { AudioManager } from "./audio/audio_manager.js";
+import { SoundTableCache } from "./audio/sound_table_cache.js";
+import { AmbientRuntime } from "./audio/ambient_runtime.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
@@ -402,6 +404,23 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
         // Don't let a listener-sync failure kill the frame.
       }
     }
+    // Task D (ambient-sounds-chain, 2026-05-12): per-tick ambient
+    // roller. Drives the Region.SoundDesc-keyed ambient chain
+    // (terrain code → SceneType → AmbientSTB → SoundTable → Wave).
+    // Wrapped in try/catch + one-shot warn so a thrown tick never
+    // kills the frame. Indoor short-circuit + region-pending no-op
+    // are handled inside the runtime; we just drive the timer.
+    if (liveScene3dRef?.ambientRuntime) {
+      try {
+        liveScene3dRef.ambientRuntime.tick(dt);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        if (!liveScene3dRef._ambientTickWarned) {
+          liveScene3dRef._ambientTickWarned = true;
+          console.warn("[task-d/ambient] ambientRuntime.tick threw:", e);
+        }
+      }
+    }
     // Phase 7.5 — render with the camera switcher's active camera so
     // toggling C between follow/orbit/topDown flips the render target.
     // Pre-7.5 (or if the switcher hasn't constructed yet) we fall back
@@ -615,6 +634,11 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // populateSkyDescFromRegion lands. Sky-D reads through this when
     // populating celestial bodies.
     skyAssets: null,
+    // Task D (ambient-sounds-chain, 2026-05-12) — per-tick ambient
+    // roller. Constructed below; `null` here so capture scripts can
+    // sanity-check `liveScene3d.ambientRuntime` exists as a field
+    // before the construction block runs.
+    ambientRuntime: null,
     // Stop hook — future phases use this for renderer hot-swap.
     stop() { running = false; },
     // Reference back to the wasm exports the caller passed in. Phases
@@ -742,6 +766,16 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
           const pos = { x: x ?? 0, y: y ?? 0, z: z ?? 0 };
           return audioManager.play(did >>> 0, pos);
         };
+        // Task B (ambient-sounds-chain): console test hook for
+        // SoundTable resolution. `await window.__fetchSoundTable(0x20000081)`
+        // returns a SoundTableJs whose `entriesForSound(0x46)` resolves
+        // Sound.Ambient1 → Wave-DID rows. Useful for ear-checking the
+        // Region-attached ambient STB chain before Task C's cache /
+        // Task D's roller / Task E's entity hooks land.
+        if (typeof wasmExports.fetchSoundTable === "function") {
+          window.__fetchSoundTable = (did) =>
+            wasmExports.fetchSoundTable(did >>> 0);
+        }
       }
       // eslint-disable-next-line no-console
       console.log(
@@ -752,6 +786,134 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
       // eslint-disable-next-line no-console
       console.warn("[H3/audio] AudioManager init failed:", e);
     }
+  }
+
+  // Task C (ambient-sounds-chain, 2026-05-12) — SoundTableCache.
+  // Sits alongside AudioManager and shares the same wasm-exports gate.
+  // Tasks D/E/F will read this via liveScene3d.soundTableCache (or
+  // scene3dForBuilders.soundTableCache for subsystems built earlier).
+  let soundTableCache = null;
+  if (wasmExports && typeof wasmExports.fetchSoundTable === "function") {
+    try {
+      soundTableCache = new SoundTableCache({
+        fetchSoundTable: (did) => wasmExports.fetchSoundTable(did),
+      });
+      liveScene3d.soundTableCache = soundTableCache;
+      scene3dForBuilders.soundTableCache = soundTableCache;
+      // eslint-disable-next-line no-undef
+      if (typeof window !== "undefined") {
+        // Capture-script hook — mirrors `window.__playWave` /
+        // `window.__fetchSoundTable`. Playwright captures inspect
+        // cache state via `await window.__soundTableCache.get(did)`,
+        // `window.__soundTableCache.stats()`, etc.
+        window.__soundTableCache = soundTableCache;
+      }
+      // eslint-disable-next-line no-console
+      console.log(
+        "[H3/sound-cache] SoundTableCache attached; ready for Task D " +
+          "ambient roller + Task E animation hooks"
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[H3/sound-cache] SoundTableCache init failed:", e);
+    }
+  }
+
+  // Task D (ambient-sounds-chain, 2026-05-12) — AmbientRuntime.
+  // Drives per-tick Region-attached ambient sound playback. Needs:
+  //
+  //   - SoundTableCache (Task C) for resolving (stb_id, sType) → Wave.
+  //   - AudioManager (H3-D) for playing the resolved Wave.
+  //   - fetchRegion wasm export for the Region 0x13000000 → terrain
+  //     → STB chain.
+  //
+  // The Region is fetched lazily on the first AmbientRuntime tick
+  // (`getRegion` returns a Promise the runtime awaits once). Until
+  // it resolves, ticks no-op via `skippedNoRegion`. Same fail-soft
+  // pattern as SoundTableCache: if any of the prerequisites are
+  // missing, the runtime simply isn't constructed and `tick(dt)` is
+  // never called.
+  let ambientRuntime = null;
+  let _regionFetchPromise = null;
+  if (
+    audioManager &&
+    soundTableCache &&
+    wasmExports &&
+    typeof wasmExports.fetchRegion === "function"
+  ) {
+    try {
+      ambientRuntime = new AmbientRuntime({
+        soundTableCache,
+        audioManager,
+        getPlayerPos: () => {
+          // Mirror the cameraSwitcher's resolver — prefer the
+          // EntityManager local-player rig (kind=1 spawn lands it),
+          // fall back to null pre-spawn.
+          const p = entityManager.getLocalPlayerWorldPos?.();
+          return p || null;
+        },
+        getRegion: () => {
+          // Lazy fetch of Region 0x13000000. Cache the in-flight
+          // Promise so subsequent ticks don't refire the fetch while
+          // the first attempt is still pending.
+          if (!_regionFetchPromise) {
+            _regionFetchPromise = wasmExports
+              .fetchRegion(0x13000000)
+              .catch((e) => {
+                // eslint-disable-next-line no-console
+                console.warn(
+                  "[task-d/ambient] fetchRegion(0x13000000) failed:",
+                  e
+                );
+                // Reset so the runtime can retry on a future tick.
+                _regionFetchPromise = null;
+                return null;
+              });
+          }
+          return _regionFetchPromise;
+        },
+        isCurrentCellIndoor: () => {
+          // eslint-disable-next-line no-undef
+          const handle =
+            (typeof window !== "undefined" ? window.__sessionHandle : null) ??
+            sessionHandle ??
+            null;
+          if (!handle || typeof handle.isCurrentCellIndoor !== "function") {
+            return false;
+          }
+          try {
+            return !!handle.isCurrentCellIndoor();
+          } catch (_) {
+            return false;
+          }
+        },
+        // Terrain-mesh source: walk the scene3d terrainGroup. Each
+        // child Mesh has `userData.terrainCodes` (Uint8Array, 81
+        // entries, column-major) — see terrain.js for the stash and
+        // adapter.js::buildVertexTypesDataTexture for the layout.
+        getTerrainMeshes: () => terrainGroup.children,
+      });
+      liveScene3d.ambientRuntime = ambientRuntime;
+      scene3dForBuilders.ambientRuntime = ambientRuntime;
+      // eslint-disable-next-line no-undef
+      if (typeof window !== "undefined") {
+        window.__ambientRuntime = ambientRuntime;
+      }
+      // eslint-disable-next-line no-console
+      console.log(
+        "[task-d/ambient] AmbientRuntime attached; first tick fetches " +
+          "Region 0x13000000 lazily"
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[task-d/ambient] AmbientRuntime init failed:", e);
+    }
+  } else if (audioManager && soundTableCache && wasmExports) {
+    // eslint-disable-next-line no-console
+    console.log(
+      "[task-d/ambient] fetchRegion wasm export missing — " +
+        "skipping AmbientRuntime construction"
+    );
   }
 
   // Workstream Sky-E + Sky-D bridge — poll for `hasSkyDesc() === true`

@@ -320,6 +320,26 @@ impl SkyObjectReplace {
 }
 
 /// Ambient sound bank reference (one STB entry).
+///
+/// Note: PhatSDK's `AmbientSoundDesc` struct (`SoundDesc.h:5-13`) has a
+/// sixth field `int is_continuous` that is **derived client-side, not
+/// read from the wire**. `SoundDesc.cpp`'s UnPack does:
+///
+/// ```cpp
+/// sound->stype       = (SoundType) pReader->Read<int>();
+/// sound->volume      = pReader->Read<float>();
+/// sound->base_chance = pReader->Read<float>();
+/// sound->is_continuous = sound->base_chance == 0.0f;   // ← DERIVED
+/// sound->min_rate    = pReader->Read<float>();
+/// sound->max_rate    = pReader->Read<float>();
+/// ```
+///
+/// Semantically `is_continuous` means "loop forever; start once and
+/// never stop while this STB is active". `base_chance == 0` is the
+/// flag; non-zero means "roll the dice every `(min_rate, max_rate)`
+/// seconds and fire if `random() < base_chance`". Exposed via
+/// [`AmbientSoundDesc::is_continuous`] so consumers don't have to
+/// re-derive the rule.
 #[derive(Debug, Clone)]
 pub struct AmbientSoundDesc {
     /// Sound type enum (`uint`).
@@ -339,6 +359,17 @@ impl AmbientSoundDesc {
             min_rate: f32::read_le(reader)?,
             max_rate: f32::read_le(reader)?,
         })
+    }
+
+    /// Derived "continuous loop" flag — `true` iff `base_chance` is
+    /// exactly `0.0`. Mirrors PhatSDK's
+    /// `sound->is_continuous = sound->base_chance == 0.0f` in
+    /// `SoundDesc.cpp`'s `AmbientSoundDesc::UnPack`. Continuous
+    /// entries should be started once when their STB becomes active
+    /// and stopped when it deactivates; non-continuous entries roll
+    /// per `(min_rate, max_rate)`-window timers.
+    pub fn is_continuous(&self) -> bool {
+        self.base_chance == 0.0
     }
 }
 
@@ -381,16 +412,24 @@ impl SoundDesc {
 
 /// One scene category (e.g. "GrassPlains"). Each carries a flat list of Scene
 /// DIDs (`0x12xxxxxx`) — terrain landblocks sample these to scatter props.
+///
+/// `stb_index` is read as `i32` because retail wire data carries `-1` as
+/// the "no ambient sounds for this scene type" sentinel. PhatSDK's
+/// `RegionDesc.cpp:276-289` does `int stb_index = reader.Read<int>(); ...
+/// if (stb_index != -1) sound_table_desc = sound_info->stb_desc.array_data[stb_index]`
+/// — i.e. the index is signed and `-1` is meaningful. Reading as `u32`
+/// would wrap `-1` to `0xFFFFFFFF` and either OOB-panic any consumer or
+/// silently mis-index the SoundDesc array.
 #[derive(Debug, Clone)]
 pub struct SceneType {
-    pub stb_index: u32,
+    pub stb_index: i32,
     /// `0x12xxxxxx` Scene DIDs.
     pub scenes: Vec<u32>,
 }
 
 impl SceneType {
     pub fn unpack<R: Read + Seek>(reader: &mut R) -> BinResult<Self> {
-        let stb_index = u32::read_le(reader)?;
+        let stb_index = i32::read_le(reader)?;
         let num = u32::read_le(reader)?;
         let mut scenes = Vec::with_capacity(num as usize);
         for _ in 0..num {
@@ -1412,29 +1451,242 @@ mod sound_probe {
     use crate::DatDatabase;
     use std::io::Cursor;
 
-    #[test]
-    fn probe_region_1_ambient_sounds() {
-        let path = if let Some(p) = crate::utils::get_portal_dat_path() { p }
-        else {
-            let c = std::path::PathBuf::from("/home/wbterminal/ac_base_dats/client_portal.dat");
-            if c.exists() { c } else { eprintln!("[probe_region_1_ambient_sounds] SKIP"); return; }
+    fn open_retail_region_1() -> Option<Region> {
+        let path = if let Some(p) = crate::utils::get_portal_dat_path() {
+            p
+        } else {
+            let retail = std::path::PathBuf::from(
+                "/home/wbterminal/projects/RetailSmoke/dats/base/client_portal.dat",
+            );
+            if retail.exists() {
+                retail
+            } else {
+                let alt =
+                    std::path::PathBuf::from("/home/wbterminal/ac_base_dats/client_portal.dat");
+                if alt.exists() {
+                    alt
+                } else {
+                    eprintln!("SKIP — no retail client_portal.dat available");
+                    return None;
+                }
+            }
         };
         let dat = DatDatabase::new(&path).expect("dat");
         let bytes = dat.get_file(0x13000000).expect("region");
-        let region = Region::unpack(&mut Cursor::new(&bytes)).expect("parse");
-        eprintln!("Region: name={:?}, parts_mask=0x{:04X}", region.region_name, region.parts_mask);
+        Some(Region::unpack(&mut Cursor::new(&bytes)).expect("parse"))
+    }
+
+    #[test]
+    fn probe_region_1_ambient_sounds() {
+        let Some(region) = open_retail_region_1() else {
+            return;
+        };
+        eprintln!(
+            "Region: name={:?}, parts_mask=0x{:04X}",
+            region.region_name, region.parts_mask
+        );
         if let Some(sd) = &region.sound_info {
             eprintln!("SoundDesc: {} STBs", sd.stb_descs.len());
             for (i, stb) in sd.stb_descs.iter().enumerate() {
-                eprintln!("  STB[{}] id={} (0x{:08X}) sounds={}",
-                    i, stb.stb_id, stb.stb_id, stb.ambient_sounds.len());
+                eprintln!(
+                    "  STB[{}] id={} (0x{:08X}) sounds={}",
+                    i,
+                    stb.stb_id,
+                    stb.stb_id,
+                    stb.ambient_sounds.len()
+                );
                 for s in &stb.ambient_sounds {
-                    eprintln!("    type={} (0x{:08X}) vol={:.2} chance={:.2} rate=[{:.1},{:.1}]",
-                        s.s_type, s.s_type, s.volume, s.base_chance, s.min_rate, s.max_rate);
+                    eprintln!(
+                        "    type={} (0x{:08X}) vol={:.2} chance={:.2} rate=[{:.1},{:.1}] cont={}",
+                        s.s_type,
+                        s.s_type,
+                        s.volume,
+                        s.base_chance,
+                        s.min_rate,
+                        s.max_rate,
+                        s.is_continuous()
+                    );
                 }
             }
         } else {
             eprintln!("Region has no sound_info");
+        }
+    }
+
+    /// End-to-end-ish smoke for Task A: Region 0x13000000 carries N
+    /// STBs (the doc plan claims 37); enumerate them and assert every
+    /// STB's `stb_id` is parseable as a `SoundTable` via the new
+    /// `sound_table.rs` parser. This is the cross-cut that proves
+    /// the SoundDesc → SoundTable chain works end to end against
+    /// retail bytes.
+    #[test]
+    fn probe_region_sound_desc_stbs() {
+        let Some(region) = open_retail_region_1() else {
+            return;
+        };
+        let sd = region.sound_info.as_ref().expect("region has SoundDesc");
+        let path = if let Some(p) = crate::utils::get_portal_dat_path() {
+            p
+        } else {
+            let retail = std::path::PathBuf::from(
+                "/home/wbterminal/projects/RetailSmoke/dats/base/client_portal.dat",
+            );
+            if retail.exists() {
+                retail
+            } else {
+                std::path::PathBuf::from("/home/wbterminal/ac_base_dats/client_portal.dat")
+            }
+        };
+        let dat = DatDatabase::new(&path).expect("dat");
+
+        let total = sd.stb_descs.len();
+        eprintln!(
+            "[probe_region_sound_desc_stbs] Region 0x13000000 SoundDesc has {} STBs",
+            total
+        );
+        let mut parsed = 0usize;
+        let mut missing = 0usize;
+        for (i, stb) in sd.stb_descs.iter().enumerate() {
+            let bytes = match dat.get_file(stb.stb_id) {
+                Ok(b) => b,
+                Err(_) => {
+                    eprintln!(
+                        "  STB[{}] id=0x{:08X} MISSING from DAT (stb_not_found)",
+                        i, stb.stb_id
+                    );
+                    missing += 1;
+                    continue;
+                }
+            };
+            let st = crate::file_type::sound_table::SoundTable::unpack(&bytes)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "STB[{}] id=0x{:08X} parse failed: {:?}",
+                        i, stb.stb_id, e
+                    )
+                });
+            assert_eq!(st.id, stb.stb_id, "STB[{i}] id mismatch");
+            parsed += 1;
+        }
+        eprintln!(
+            "[probe_region_sound_desc_stbs] parsed {}/{} STBs cleanly ({} missing in DAT)",
+            parsed, total, missing
+        );
+        // Doc plan asserts the count is 37; record the actual count
+        // so any deviation surfaces in test output.
+        eprintln!(
+            "[probe_region_sound_desc_stbs] doc-claim=37, actual={}",
+            total
+        );
+        // Soft assertion: at least most STBs should parse. Allow
+        // some retail records to be missing from the DAT (the
+        // `stb_not_found` diagnostic in PhatSDK confirms it can
+        // happen) but require zero parse failures.
+        assert!(parsed > 0, "expected at least one SoundTable to parse");
+    }
+
+    /// Verify the `is_continuous()` derived flag — at least one
+    /// retail entry on Region 0x13000000 should have `base_chance == 0.0`
+    /// (continuous loop). If none exist, report that as a finding.
+    #[test]
+    fn region_is_continuous_derived() {
+        let Some(region) = open_retail_region_1() else {
+            return;
+        };
+        let sd = region.sound_info.as_ref().expect("region has SoundDesc");
+        let mut total_entries = 0usize;
+        let mut continuous_count = 0usize;
+        let mut first_continuous: Option<(usize, AmbientSoundDesc)> = None;
+        for (i, stb) in sd.stb_descs.iter().enumerate() {
+            for s in &stb.ambient_sounds {
+                total_entries += 1;
+                if s.is_continuous() {
+                    continuous_count += 1;
+                    if first_continuous.is_none() {
+                        first_continuous = Some((i, s.clone()));
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "[region_is_continuous_derived] {} continuous / {} total ambient entries",
+            continuous_count, total_entries
+        );
+        if let Some((stb_idx, s)) = &first_continuous {
+            eprintln!(
+                "  first continuous: STB[{stb_idx}] s_type=0x{:08X} vol={:.2} \
+                 rate=[{:.1},{:.1}] base_chance={}",
+                s.s_type, s.volume, s.min_rate, s.max_rate, s.base_chance
+            );
+            assert!(s.is_continuous(), "derived flag must return true for base_chance == 0");
+            assert_eq!(s.base_chance, 0.0, "continuous entries have base_chance == 0");
+        } else {
+            // Per the agent prompt: if none exist, weaken to a "no
+            // continuous entries in retail Region 13" finding rather
+            // than failing the test. Print the finding clearly.
+            eprintln!(
+                "[region_is_continuous_derived] FINDING: zero continuous \
+                 (base_chance == 0.0) entries across {} ambient entries in \
+                 retail Region 0x13000000 SoundDesc; every entry is a \
+                 probability-rolled trigger.",
+                total_entries
+            );
+        }
+    }
+
+    /// Verify the `stb_index: i32` fix — at least one SceneType on
+    /// Region 0x13000000 should carry `stb_index == -1` (no ambient
+    /// for that scene type), proving the i32 change preserves the
+    /// sentinel. If every SceneType has a valid index, report it as
+    /// a no-op safety improvement.
+    #[test]
+    fn region_stb_index_negative_sentinel() {
+        let Some(region) = open_retail_region_1() else {
+            return;
+        };
+        let scene_info = region
+            .scene_info
+            .as_ref()
+            .expect("region has SceneDesc");
+        let total_scene_types = scene_info.scene_types.len();
+        let mut neg_count = 0usize;
+        let mut max_valid: i32 = -1;
+        let mut min_valid: i32 = i32::MAX;
+        for st in &scene_info.scene_types {
+            if st.stb_index == -1 {
+                neg_count += 1;
+            } else if st.stb_index >= 0 {
+                max_valid = max_valid.max(st.stb_index);
+                min_valid = min_valid.min(st.stb_index);
+            }
+        }
+        eprintln!(
+            "[region_stb_index_negative_sentinel] {} of {} SceneTypes have stb_index == -1 \
+             (valid range: {}..={})",
+            neg_count, total_scene_types, min_valid, max_valid
+        );
+        if neg_count > 0 {
+            eprintln!(
+                "[region_stb_index_negative_sentinel] CONFIRMED: i32 fix preserves \
+                 {} retail '-1' sentinels that would have wrapped to 0xFFFFFFFF as u32",
+                neg_count
+            );
+        } else {
+            eprintln!(
+                "[region_stb_index_negative_sentinel] FINDING: retail Region 0x13000000 \
+                 has no SceneType with stb_index == -1; every SceneType is bound to a \
+                 valid SoundDesc STB. The i32 change is still a safety improvement (the \
+                 wire field is signed per PhatSDK) but has no observable effect on retail."
+            );
+        }
+        // Also bound-check that no valid index goes off the end of
+        // SoundDesc.stb_descs — defensive consistency check.
+        if let Some(sd) = &region.sound_info {
+            assert!(
+                max_valid < sd.stb_descs.len() as i32 || neg_count == total_scene_types,
+                "max stb_index {max_valid} out of bounds for {} STBs",
+                sd.stb_descs.len()
+            );
         }
     }
 }
