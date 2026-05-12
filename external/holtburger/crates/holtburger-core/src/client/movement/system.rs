@@ -604,6 +604,15 @@ impl MovementSystem {
             Err(_) => return,
         };
         let velocity = local_velocity_for_state(heading, state, &capabilities);
+        // Phase 2 (Cohere-D, 2026-05-12): also compute angular velocity
+        // from the manual drive state so we can apply local rotation
+        // prediction below. Prior to this, the manual integrator only
+        // updated `pose.coords` — `pose.rotation` was left server-
+        // authoritative, so Q/E felt dead until the next
+        // `UpdateMotion` broadcast roundtrip (50-200 ms latency).
+        // Mirrors how the 2D path's per-rAF prediction tick locally
+        // integrates heading at `index.html:6388-6395`.
+        let omega = local_omega_for_state(state, &capabilities);
         let dt_s = dt.as_secs_f32();
         let raw_delta = Vector3::new(velocity.x * dt_s, velocity.y * dt_s, velocity.z * dt_s);
         // Lateral (X/Y) clamp. Two paths:
@@ -800,6 +809,22 @@ impl MovementSystem {
                 }
             }
         }
+        // Phase 2 (Cohere-D, 2026-05-12): apply local rotation
+        // prediction so Q/E feels responsive without waiting for the
+        // server's UpdateMotion broadcast roundtrip. `omega.z` is the
+        // yaw rate (rad/s) from `local_omega_for_state` —
+        // `base_turn_right_omega = (0, 0, +1.5)` for Run, scaled by
+        // any `turn_speed` override on the MotionState. Server still
+        // owns the canonical heading (UpdateMotion overrides this
+        // when it arrives); the local update is purely a "show the
+        // user something now" prediction. No-op when the player
+        // isn't turning (omega.z near zero), matching the existing
+        // forward/strafe path that no-ops on zero velocity.
+        if omega.z.abs() > f32::EPSILON {
+            let new_heading = normalize_heading(heading + omega.z * dt_s);
+            pose.rotation = Quaternion::from_heading(new_heading);
+        }
+
         // Phase 4 step 3.7 — re-bucket coords if we crossed a 192 m
         // landblock boundary. Without this, the AutonomousPosition
         // packet reports e.g. (94, 200, 94) inside the seeded
