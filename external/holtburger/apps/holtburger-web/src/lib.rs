@@ -13786,6 +13786,66 @@ impl PhysicsScriptEntryJs {
             0
         }
     }
+
+    // -------------- H3-E1: Sound + SoundTweaked decoders --------------
+    //
+    // SoundHook (hookType 1, body=4 bytes): `[u32 sound_id]`
+    // SoundTweakedHook (hookType 21, body=16 bytes):
+    //   `[u32 sound_id, f32 priority, f32 probability, f32 volume]`
+    //
+    // Both reference a Wave (0x0A) DID. The Sky-J P5 + H2 chain walkers
+    // call these getters to schedule playback via the AudioManager.
+
+    /// Wave DID this hook plays. Non-zero for Sound (hook_type 1) or
+    /// SoundTweaked (hook_type 21); 0 otherwise.
+    #[wasm_bindgen(getter, js_name = soundWaveId)]
+    pub fn sound_wave_id(&self) -> u32 {
+        match self.hook_type {
+            1 if self.hook_data.len() >= 4 => {
+                u32::from_le_bytes(self.hook_data[0..4].try_into().unwrap())
+            }
+            21 if self.hook_data.len() >= 16 => {
+                u32::from_le_bytes(self.hook_data[0..4].try_into().unwrap())
+            }
+            _ => 0,
+        }
+    }
+
+    /// SoundTweaked priority (hook_type 21 only). 0.0 otherwise.
+    #[wasm_bindgen(getter, js_name = soundPriority)]
+    pub fn sound_priority(&self) -> f32 {
+        if self.hook_type == 21 && self.hook_data.len() == 16 {
+            f32::from_le_bytes(self.hook_data[4..8].try_into().unwrap())
+        } else {
+            0.0
+        }
+    }
+
+    /// SoundTweaked probability `[0, 1]` (hook_type 21 only). 1.0 for
+    /// the plain Sound hook (always plays) and 0.0 otherwise.
+    #[wasm_bindgen(getter, js_name = soundProbability)]
+    pub fn sound_probability(&self) -> f32 {
+        match self.hook_type {
+            1 => 1.0,
+            21 if self.hook_data.len() == 16 => {
+                f32::from_le_bytes(self.hook_data[8..12].try_into().unwrap())
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// SoundTweaked volume (hook_type 21 only). 1.0 for the plain
+    /// Sound hook (no per-hook volume) and 0.0 otherwise.
+    #[wasm_bindgen(getter, js_name = soundVolume)]
+    pub fn sound_volume(&self) -> f32 {
+        match self.hook_type {
+            1 => 1.0,
+            21 if self.hook_data.len() == 16 => {
+                f32::from_le_bytes(self.hook_data[12..16].try_into().unwrap())
+            }
+            _ => 0.0,
+        }
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

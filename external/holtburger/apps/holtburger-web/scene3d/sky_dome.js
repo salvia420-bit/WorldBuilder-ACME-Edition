@@ -1019,9 +1019,38 @@ export class SkyDome {
       quaternion: new THREE.Quaternion(),
     };
     for (const e of entries) {
+      // H3-E1 (2026-05-12): Sound + SoundTweaked hooks fire WAVE
+      // playback at start_time via the AudioManager. For sky-anchored
+      // PhysicsScripts the parent is sky-cell origin (effectively
+      // co-located with the camera), so positional panning is
+      // minimal but still applies as the listener turns.
+      const audioMgr = this.liveScene3dRef?.audioManager;
+      if ((e.hookType === 1 || e.hookType === 21) && audioMgr) {
+        const waveId = e.soundWaveId >>> 0;
+        if (waveId !== 0) {
+          const probability = e.soundProbability;
+          const volume = e.soundVolume > 0 ? e.soundVolume : 1.0;
+          const delayMs = Math.max(0, e.startTime * 1000);
+          if (probability >= 1.0 || Math.random() < probability) {
+            setTimeout(() => {
+              // Sky parent is the sky cell — anchored at the camera.
+              // Read its position at fire-time so audio pans correctly
+              // even if the player has moved.
+              const pos = {
+                x: this.skyCell.position.x,
+                y: this.skyCell.position.y,
+                z: this.skyCell.position.z,
+              };
+              audioMgr.play(waveId, pos, { gain: volume }).catch(() => {});
+            }, delayMs);
+          }
+        }
+        continue;
+      }
+
       // Only CreateParticle (13) + CreateBlockingParticle (26) hooks
-      // spawn emitters. Other hook types (SoundTweaked, CallPES,
-      // SetOmega, etc.) are not handled in P5 — defer to P6 if needed.
+      // spawn emitters. Other hook types (CallPES, SetOmega, etc.)
+      // are not handled — defer to H4.
       if (e.hookType !== 13 && e.hookType !== 26) continue;
       const emitterId = (e.createParticleEmitterId >>> 0);
       if (emitterId === 0) continue;

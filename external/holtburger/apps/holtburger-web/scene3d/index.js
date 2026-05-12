@@ -722,6 +722,10 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
         masterGain: 1.0,
       });
       liveScene3d.audioManager = audioManager;
+      // Also stash on scene3dForBuilders so subsystems constructed
+      // earlier (e.g. EntityManager) can read it lazily via
+      // `this.scene3d.audioManager` once it lands.
+      scene3dForBuilders.audioManager = audioManager;
       // eslint-disable-next-line no-undef
       if (typeof window !== "undefined") {
         const gestureHandler = () => {

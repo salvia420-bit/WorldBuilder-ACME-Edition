@@ -356,6 +356,10 @@ export class EntityManager {
     // re-Spawn / META_REFRESH flows).
     /** @type {Map<number, number[]>} */
     this._particleEmittersForGuid = new Map();
+    /** H3-E1: pending sound-hook setTimeout IDs per entity GUID, so
+     * the timers can be canceled when the entity despawns. */
+    /** @type {Map<number, number[]>} */
+    this._soundTimeoutsForGuid = new Map();
     /** @type {Set<number>} */
     this._particleChainsAttached = new Set();
     this._worldParticleManager = null;
@@ -891,6 +895,16 @@ export class EntityManager {
       }
       this._particleEmittersForGuid.delete(g);
     }
+    // H3-E1 (2026-05-12): cancel any pending Sound / SoundTweaked
+    // setTimeout schedules. If we didn't, a sound queued at start_time
+    // = 30s would fire 30s after the rocket already despawned.
+    const timeouts = this._soundTimeoutsForGuid.get(g);
+    if (timeouts) {
+      for (const tid of timeouts) {
+        try { clearTimeout(tid); } catch (_) {}
+      }
+      this._soundTimeoutsForGuid.delete(g);
+    }
     this._particleChainsAttached.delete(g);
   }
 
@@ -983,7 +997,37 @@ export class EntityManager {
     const Quaternion = THREE.Quaternion;
 
     const emitterIds = [];
+    const timeoutIds = [];
     for (const e of entries) {
+      // H3-E1 (2026-05-12): Sound + SoundTweaked hooks fire WAVE
+      // playback at `start_time` seconds after script attach. Wired
+      // via the AudioManager when one is attached to scene3d.
+      const audioMgr = this.scene3d?.audioManager;
+      if ((e.hookType === 1 || e.hookType === 21) && audioMgr) {
+        const waveId = e.soundWaveId >>> 0;
+        if (waveId !== 0) {
+          const probability = e.soundProbability;
+          const volume = e.soundVolume > 0 ? e.soundVolume : 1.0;
+          const delayMs = Math.max(0, e.startTime * 1000);
+          // Coin-flip on probability (only SoundTweaked has !=1.0).
+          if (probability >= 1.0 || Math.random() < probability) {
+            const tid = setTimeout(() => {
+              // Read the entity's current world position at fire-time.
+              // The rig was passed in; .position tracks the entity if
+              // it has moved between attach + fire.
+              const pos = {
+                x: rig.position.x,
+                y: rig.position.y,
+                z: rig.position.z,
+              };
+              audioMgr.play(waveId, pos, { gain: volume }).catch(() => {});
+            }, delayMs);
+            timeoutIds.push(tid);
+          }
+        }
+        continue; // hook handled; don't fall through to emitter check
+      }
+
       if (e.hookType !== 13 && e.hookType !== 26) continue;
       const emitterId = (e.createParticleEmitterId >>> 0);
       if (emitterId === 0) continue;
@@ -1039,6 +1083,14 @@ export class EntityManager {
       // eslint-disable-next-line no-console
       console.log(
         `[entities/H2] attached ${emitterIds.length} particle emitters ` +
+          `for entity 0x${guid.toString(16)} (PES 0x${pesId.toString(16)})`
+      );
+    }
+    if (timeoutIds.length > 0) {
+      this._soundTimeoutsForGuid.set(guid, timeoutIds);
+      // eslint-disable-next-line no-console
+      console.log(
+        `[entities/H3-E1] scheduled ${timeoutIds.length} sound hooks ` +
           `for entity 0x${guid.toString(16)} (PES 0x${pesId.toString(16)})`
       );
     }
