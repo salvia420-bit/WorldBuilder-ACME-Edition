@@ -81,10 +81,18 @@ const CMD_LOW_RUN_FORWARD = 0x0007;
 // least-recently-used to bound memory.
 const MAX_ACTIONS_PER_SETUP = 4;
 
-// Crossfade duration (seconds) when switching from one action to
-// another. 0.2 s is short enough to feel snappy and long enough to
-// avoid pose-pop on tightly-cycled stance flips.
-const CROSSFADE_S = 0.2;
+// Cohere-B (2026-05-12): retail AC never crossfaded between motions.
+// Each motion command (stance change, walk/run cycle swap, attack
+// one-shot) was a hard cut — the next AnimSet's frame 0 replaced the
+// previous AnimSet's last frame on the very next tick. PhatSDK
+// PartArray.cpp:337-405 `advance_to_next_animation()` does an
+// unconditional pointer swap with no blend state. Setting this to 0
+// makes `crossFadeTo` and `fadeOutCurrent` short-circuit to a hard
+// stop+play swap below, matching that retail behaviour. Per the dev
+// dev chat 2026-05-12, "rotational interpolation never existed in
+// retail. not on release, not at end of retail." — and the same is
+// true of cycle-to-cycle blends.
+const CROSSFADE_S = 0;
 
 // Convert AC's full motion command (u32) to a coarse category for
 // cycle selection. Returns one of "walk", "run", "stop", or null
@@ -162,11 +170,41 @@ class EntityInstance {
    */
   crossFadeTo(nextAction, nextActionKey, durationS) {
     if (this.currentAction === nextAction) return;
-    if (this.currentAction) {
+    if (durationS <= 0) {
+      // Cohere-B (2026-05-12): hard-cut path — retail had no blend
+      // between motions. Stop the current action (drops it to weight 0
+      // immediately) and start `nextAction` from wherever it was when
+      // last stopped. Same shape as the catch-block fallback below,
+      // but unconditional.
+      //
+      // Cohere-B follow-on (2026-05-12, "cycle-rewind"): deliberately
+      // SKIP `nextAction.reset()`. three.js's `action.stop()`
+      // preserves `.time`; `.reset()` zeroes it. The wasm integrator
+      // currently overshoots the run target (Perf-B follow-on:
+      // "25 m/s vs 4.5 m/s") and emits motion oscillation —
+      // Walk → Stop → Walk → ... at sub-second cadence — even when
+      // the player is holding W steady. Each transition hits this
+      // hard-cut path; if we reset() the walk action's time on every
+      // re-entry, the visible rig keeps rewinding to walk-cycle
+      // frame 0, producing the "jutting back every 0.5-2 s" the user
+      // reported. By preserving `.time`, a re-played action resumes
+      // mid-cycle and the rig walks continuously across the
+      // integrator's stutter. Brand-new actions have `.time = 0` by
+      // construction so first-play is unaffected.
+      if (this.currentAction) {
+        try { this.currentAction.stop(); } catch (_) {}
+      }
+      nextAction.setEffectiveWeight(1.0);
+      nextAction.setEffectiveTimeScale(1.0);
+      nextAction.enabled = true;
+      nextAction.play();
+    } else if (this.currentAction) {
       // Live crossfade — fades current → new over `durationS`. Both
       // actions stay scheduled so the mixer interpolates between them
       // until the fade completes; then `currentAction` is .stop()'d
-      // implicitly by its weight reaching 0.
+      // implicitly by its weight reaching 0. Retained for any future
+      // caller that overrides the duration; current production path
+      // uses `CROSSFADE_S = 0` and takes the hard-cut branch above.
       try {
         nextAction.reset();
         nextAction.setEffectiveWeight(1.0);
@@ -182,9 +220,14 @@ class EntityInstance {
         nextAction.play();
       }
     } else {
-      // No action was playing — fade-in only.
-      nextAction.reset();
-      nextAction.fadeIn(durationS);
+      // No action was playing — start fresh. Cohere-B follow-on:
+      // skip `.reset()` for the same reason as the hard-cut path
+      // above. Brand-new AnimationActions construct with `.time = 0`;
+      // re-played actions resume from where they stopped, preventing
+      // the walk-cycle rewind during integrator motion oscillation.
+      if (durationS > 0) {
+        nextAction.fadeIn(durationS);
+      }
       nextAction.play();
     }
     this.currentAction = nextAction;
@@ -197,16 +240,25 @@ class EntityInstance {
    */
   fadeOutCurrent(durationS) {
     if (!this.currentAction) return;
-    try {
-      this.currentAction.fadeOut(durationS);
-      // Don't .stop() yet — fadeOut needs the mixer to keep the
-      // action scheduled until weight hits 0. The mixer's tick will
-      // implicitly stop it. Future reset() in crossFadeTo will reuse
-      // the action.
-    } catch (e) {
+    if (durationS <= 0) {
+      // Cohere-B (2026-05-12): hard-cut stop. Retail STOP commands
+      // ended the current motion's cycle and held the rig at the
+      // next-applicable default pose immediately. The PhatSDK
+      // equivalent is to call `advance_to_next_animation()` to the
+      // default (no fade-out state).
+      try { this.currentAction.stop(); } catch (_) {}
+    } else {
       try {
-        this.currentAction.stop();
-      } catch (_) {}
+        this.currentAction.fadeOut(durationS);
+        // Don't .stop() yet — fadeOut needs the mixer to keep the
+        // action scheduled until weight hits 0. The mixer's tick will
+        // implicitly stop it. Future reset() in crossFadeTo will reuse
+        // the action.
+      } catch (e) {
+        try {
+          this.currentAction.stop();
+        } catch (_) {}
+      }
     }
     this.currentAction = null;
     this.currentActionKey = null;
@@ -392,6 +444,15 @@ export class EntityManager {
     const partCount = animEntry.partCount;
     const initialClip = animEntry.clip;
     const resolvedStance = animEntry.resolvedStance >>> 0;
+    // Cohere-B (2026-05-12): per-part rest-pose offset + orientation.
+    // partMeshes are now part-LOCAL (placement NOT baked into vertices);
+    // these arrays carry the resolved rest frame so the static pose
+    // composes correctly. Empty fallback for old wasm bundles.
+    const restOrigins = animEntry.restOrigins ?? new Float32Array(0);
+    const restOrientations = animEntry.restOrientations ?? new Float32Array(0);
+    const hasRestPose =
+      restOrigins.length === partCount * 3 &&
+      restOrientations.length === partCount * 4;
 
     // Step B: build the rig. Root holds the entity's world transform;
     // per-part children hold the rig-local transforms the AnimationClip
@@ -510,9 +571,29 @@ export class EntityManager {
     for (let p = 0; p < partCount; p += 1) {
       const partGroup = new THREE.Group();
       partGroup.name = `part_${p}`;
-      // Place the part at the rest-pose origin. The AnimationClip's
-      // first frame may overwrite this immediately, but if no clip is
-      // playing the rest pose IS the visual.
+      // Cohere-B (2026-05-12): apply the resolved rest-pose frame to
+      // the partGroup. partMeshes ship part-LOCAL (no placement baked
+      // in); the rest frame composes against the entity root the same
+      // way PhatSDK's `CPartArray::UpdateParts` composes
+      // `entity_world.combine(anim_frame[i])`. During cycle playback
+      // the AnimationMixer overrides these values frame-by-frame with
+      // the model-space cycle keyframes. With hasRestPose=false (old
+      // wasm bundle without the getters), partGroup stays at identity
+      // — matches pre-fix behaviour.
+      if (hasRestPose) {
+        partGroup.position.set(
+          restOrigins[p * 3 + 0],
+          restOrigins[p * 3 + 1],
+          restOrigins[p * 3 + 2]
+        );
+        // AC wire order is (qw, qx, qy, qz); three.js wants
+        // (qx, qy, qz, qw). Reorder at apply.
+        const qw = restOrientations[p * 4 + 0];
+        const qx = restOrientations[p * 4 + 1];
+        const qy = restOrientations[p * 4 + 2];
+        const qz = restOrientations[p * 4 + 3];
+        partGroup.quaternion.set(qx, qy, qz, qw);
+      }
       const conv = partGroups[p];
       for (const g of conv.groups) {
         const did = g.surfaceDid >>> 0;

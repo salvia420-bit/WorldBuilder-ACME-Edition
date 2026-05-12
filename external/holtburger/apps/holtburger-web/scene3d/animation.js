@@ -136,18 +136,30 @@ export function buildAnimationClip(animData, partNames) {
             quatValues[f * 4 + 3] = qw;
         }
         const partName = partNames[p];
+        // Cohere-B (2026-05-12): `InterpolateDiscrete` makes the mixer
+        // snap to the latest authored frame rather than LERP/SLERP
+        // between consecutive keys. AC animations are baked at the
+        // canonical 30 Hz with every frame as an explicit key (Joe
+        // Angell's AllKeyer workflow); retail snapped at runtime and
+        // never interpolated. Without this flag, three.js's default
+        // linear/SLERP fills intermediate poses the animators never
+        // authored — visible as rig decoherence in motion. See
+        // PhatSDK PartArray.cpp:56-59 (`(long)floor(frame_number)`)
+        // for the retail snap path.
         tracks.push(
             new THREE.VectorKeyframeTrack(
                 `${partName}.position`,
                 times,
-                posValues
+                posValues,
+                THREE.InterpolateDiscrete
             )
         );
         tracks.push(
             new THREE.QuaternionKeyframeTrack(
                 `${partName}.quaternion`,
                 times,
-                quatValues
+                quatValues,
+                THREE.InterpolateDiscrete
             )
         );
     }
@@ -204,7 +216,17 @@ export class AnimationCache {
      *   `paletteId`, `paletteSubsFlat`).
      * @returns {Promise<{ clip: THREE.AnimationClip|null,
      *   partMeshes: any[], partCount: number, framerate: number,
-     *   resolvedStance: number }>}
+     *   resolvedStance: number, restOrigins: Float32Array,
+     *   restOrientations: Float32Array }>}
+     *
+     * Cohere-B (2026-05-12): `restOrigins` is `partCount * 3` floats
+     * (x, y, z per part) and `restOrientations` is `partCount * 4`
+     * floats in AC w-first order (qw, qx, qy, qz). The entity-rig
+     * builder applies these to each `partGroup` at spawn so static
+     * pose matches retail; the AnimationMixer overrides during cycle
+     * playback with the model-space keyframe values from `clip`.
+     * Part meshes are part-LOCAL (no placement baked in) — see
+     * EntityAnimationData's struct doc in lib.rs.
      */
     async get(setupId, mtableId, motionCommand, stance, fetchKeyframes, opts = {}) {
         const key = AnimationCache.makeKey(setupId, mtableId, motionCommand, stance);
@@ -259,6 +281,23 @@ export class AnimationCache {
                     ? animData.partFrames
                     : (animData.partFrames ?? new Float32Array(0));
 
+            // Cohere-B (2026-05-12): clone the per-part rest pose
+            // alongside partFrames. Cached together because rest pose
+            // is a function of (setupId, mtableId, stance) — same
+            // lifecycle as the clip. Empty fallback handles old wasm
+            // builds without the new getters (callers see
+            // length-0 typed arrays and skip the apply step).
+            const restOrigins =
+                typeof animData.restOrigins === "object" &&
+                animData.restOrigins !== null
+                    ? animData.restOrigins
+                    : new Float32Array(0);
+            const restOrientations =
+                typeof animData.restOrientations === "object" &&
+                animData.restOrientations !== null
+                    ? animData.restOrientations
+                    : new Float32Array(0);
+
             let clip = null;
             if (numFrames > 0 && framerate > 0) {
                 clip = buildAnimationClip(
@@ -270,7 +309,15 @@ export class AnimationCache {
                 }
             }
 
-            return { clip, partMeshes, partCount, framerate, resolvedStance };
+            return {
+                clip,
+                partMeshes,
+                partCount,
+                framerate,
+                resolvedStance,
+                restOrigins,
+                restOrientations,
+            };
         })();
         this.entries.set(key, promise);
         return promise;

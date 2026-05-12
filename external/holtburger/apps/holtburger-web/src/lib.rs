@@ -1717,6 +1717,90 @@ fn triangulate_setup_model_per_part<S: holtburger_dat::ResourceSource + ?Sized>(
     Some(buckets)
 }
 
+/// Cohere-B (2026-05-12): per-part variant that returns part-LOCAL
+/// vertices (no rest-pose frame baked in) AND the resolved rest-pose
+/// `(origin, orientation)` per part as a side channel. Used by the
+/// entity-animation path (`fetch_entity_animation_keyframes`) so JS
+/// can set `partGroup.position` + `.quaternion` to the rest pose at
+/// spawn and let the AnimationMixer overwrite with model-space cycle
+/// keyframes during motion. Mirrors PhatSDK's `CPartArray::UpdateParts`
+/// where `Frame::combine(entity_world, anim_frame[i])` produces each
+/// part's world transform from raw part-local GfxObj vertices.
+///
+/// Distinct from [`triangulate_setup_model_per_part`] which BAKES the
+/// rest-pose into vertex positions — that's correct for static
+/// rendering (buildings, signs, AABB collision) where no AnimationMixer
+/// will apply additional per-part transforms. For an animated entity
+/// rig, baked-in placement double-composes against the mixer's
+/// keyframe values and the rig falls apart in motion (the
+/// user-reported symptom).
+///
+/// Returns `(per_part_tris, rest_poses)` where `rest_poses[pi]` is the
+/// `(offset, rot)` that `walk_setup_parts`'s pose-priority chain
+/// resolved (idle anim → placement → identity). When no rest pose
+/// exists (raw GfxObj, naked setup without MotionTable), the slot
+/// holds identity — caller can still apply it harmlessly.
+#[cfg(any(target_arch = "wasm32", test))]
+fn triangulate_setup_model_per_part_with_rest_pose<
+    S: holtburger_dat::ResourceSource + ?Sized,
+>(
+    source: &S,
+    setup_id: u32,
+    model_changes: &[(u8, u32)],
+    texture_changes: &[(u8, u32, u32)],
+) -> Option<(
+    Vec<Vec<Tri>>,
+    Vec<(holtburger_common::Vector3, holtburger_common::Quaternion)>,
+)> {
+    use holtburger_dat::file_type::SetupModel;
+    use holtburger_dat::ResourceKey;
+    let bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", setup_id))
+        .ok()?;
+    let setup = SetupModel::unpack(&mut std::io::Cursor::new(&bytes)).ok()?;
+    let part_count = setup.parts.len();
+    let mut buckets: Vec<Vec<Tri>> = (0..part_count).map(|_| Vec::new()).collect();
+    let mut rest_poses: Vec<(holtburger_common::Vector3, holtburger_common::Quaternion)> =
+        (0..part_count)
+            .map(|_| {
+                (
+                    holtburger_common::Vector3::zero(),
+                    holtburger_common::Quaternion::identity(),
+                )
+            })
+            .collect();
+    walk_setup_parts(
+        source,
+        setup_id,
+        model_changes,
+        texture_changes,
+        None,
+        None,
+        |pi, gfx, offset, rot, swaps| {
+            if let Some(slot) = buckets.get_mut(pi) {
+                // Capture the pose-priority-resolved rest frame for this
+                // part as a side channel. Caller threads it into
+                // EntityAnimationData so JS can set partGroup transforms
+                // at spawn — matching PhatSDK's per-frame model-space
+                // composition semantics.
+                if let Some(rest_slot) = rest_poses.get_mut(pi) {
+                    *rest_slot = (offset, rot);
+                }
+                // Append with identity so vertices stay part-local; the
+                // rest pose travels separately above.
+                append_gfx_tris_with_tex_swaps(
+                    slot,
+                    gfx,
+                    holtburger_common::Vector3::zero(),
+                    holtburger_common::Quaternion::identity(),
+                    swaps,
+                );
+            }
+        },
+    )?;
+    Some((buckets, rest_poses))
+}
+
 /// Shared inner loop for the SetupModel part walk. Loads the setup,
 /// resolves pose priority (`pose_override` → idle → placement →
 /// identity), and invokes `on_part(part_index, &gfx, offset, rot, &tex_swaps)`
@@ -6728,6 +6812,20 @@ pub struct EntityAnimationData {
     /// `[(x, y, z, qw, qx, qy, qz) per part] per frame`. Empty when
     /// no cycle resolved. See struct doc for layout invariants.
     part_frames: Vec<f32>,
+    /// Cohere-B (2026-05-12): per-part rest-pose origins. Flat `part_count * 3`
+    /// f32s, `[x, y, z]` per part in DAT order. JS sets each `partGroup.position`
+    /// to its rest origin at spawn; the `AnimationMixer` overwrites these
+    /// during cycle playback with the model-space keyframe values. Decoupled
+    /// from `part_meshes` (now part-local geometry) so the model-space
+    /// AnimationFrame composition matches PhatSDK's `CPartArray::UpdateParts`
+    /// rather than double-composing against placement-baked vertices.
+    rest_origins: Vec<f32>,
+    /// Cohere-B (2026-05-12): per-part rest-pose orientations. Flat
+    /// `part_count * 4` f32s, `[qw, qx, qy, qz]` per part — AC w-first
+    /// order (same as `part_frames`); JS reorders to `(qx, qy, qz, qw)`
+    /// for three.js's quaternion layout in `entities.js`'s rest-pose
+    /// apply step.
+    rest_orientations: Vec<f32>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -6786,12 +6884,39 @@ impl EntityAnimationData {
     pub fn part_frames(&self) -> Vec<f32> {
         self.part_frames.clone()
     }
+
+    /// Cohere-B (2026-05-12): clone per-part rest-pose origins.
+    /// `partCount * 3` floats — `[x, y, z]` per part. JS reads at
+    /// spawn to set each `partGroup.position` before the
+    /// AnimationMixer starts driving keyframe overrides.
+    #[wasm_bindgen(getter, js_name = restOrigins)]
+    pub fn rest_origins(&self) -> Vec<f32> {
+        self.rest_origins.clone()
+    }
+
+    /// Cohere-B (2026-05-12): clone per-part rest-pose orientations.
+    /// `partCount * 4` floats — `[qw, qx, qy, qz]` per part (AC w-first
+    /// order; JS reorders to three.js's xyzw at apply time).
+    #[wasm_bindgen(getter, js_name = restOrientations)]
+    pub fn rest_orientations(&self) -> Vec<f32> {
+        self.rest_orientations.clone()
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
 impl EntityAnimationData {
     fn empty(part_meshes: Vec<ModelMesh>, resolved_stance: u32) -> Self {
         let part_count = part_meshes.len() as u32;
+        // Identity rest pose per part: origin (0,0,0), orientation (1,0,0,0)
+        // in AC w-first order. JS-side apply is a no-op visually — matches
+        // the prior "no rest pose info" default behaviour where partGroup
+        // sat at identity.
+        let mut rest_origins = Vec::with_capacity(part_count as usize * 3);
+        let mut rest_orientations = Vec::with_capacity(part_count as usize * 4);
+        for _ in 0..part_count {
+            rest_origins.extend_from_slice(&[0.0, 0.0, 0.0]);
+            rest_orientations.extend_from_slice(&[1.0, 0.0, 0.0, 0.0]);
+        }
         Self {
             part_meshes,
             part_count,
@@ -6799,6 +6924,8 @@ impl EntityAnimationData {
             framerate: 0.0,
             resolved_stance,
             part_frames: Vec::new(),
+            rest_origins,
+            rest_orientations,
         }
     }
 }
@@ -6929,19 +7056,35 @@ pub async fn fetch_entity_animation_keyframes(
     })
     .await?;
 
-    // Rest-pose per-part bake. Substitutions applied via
-    // triangulate_setup_model_per_part — same path
-    // fetchBuildingPlacement uses (Phase 6 step A), extended with
-    // model_changes / texture_changes so clothing + armor land on
-    // the right parts without a re-walk.
-    let parts_tris = triangulate_setup_model_per_part(source.as_ref(), setup_id, &mc, &tc)
-        .ok_or_else(|| {
-            JsValue::from_str(&format!(
-                "fetch_entity_animation_keyframes: triangulate setup 0x{setup_id:08X} failed"
-            ))
-        })?;
+    // Cohere-B (2026-05-12): per-part PART-LOCAL bake + side-channel
+    // rest pose. The mesh vertices we hand to JS are now in the
+    // GfxObj's raw vertex frame (no placement baked in); the resolved
+    // rest pose (idle anim → placement → identity) travels separately
+    // in `rest_poses` and gets packed into `rest_origins` /
+    // `rest_orientations` for JS to apply to each `partGroup` at
+    // spawn. This matches PhatSDK's `CPartArray::UpdateParts` where
+    // `Frame::combine(entity_world, anim_frame[i])` composes against
+    // PART-LOCAL geometry — preventing the double-composition that
+    // makes the rig fall apart in motion.
+    //
+    // Substitutions ride the same path (`model_changes` / `texture_changes`)
+    // so clothing + armor land on the right parts without a re-walk.
+    let (parts_tris, rest_poses) =
+        triangulate_setup_model_per_part_with_rest_pose(source.as_ref(), setup_id, &mc, &tc)
+            .ok_or_else(|| {
+                JsValue::from_str(&format!(
+                    "fetch_entity_animation_keyframes: triangulate setup 0x{setup_id:08X} failed"
+                ))
+            })?;
     let part_count = parts_tris.len();
     let part_meshes: Vec<ModelMesh> = parts_tris.into_iter().map(pack_model_mesh).collect();
+    let mut rest_origins: Vec<f32> = Vec::with_capacity(part_count * 3);
+    let mut rest_orientations: Vec<f32> = Vec::with_capacity(part_count * 4);
+    for (origin, orient) in &rest_poses {
+        rest_origins.extend_from_slice(&[origin.x, origin.y, origin.z]);
+        // AC w-first order; JS reorders to (x, y, z, w) at apply time.
+        rest_orientations.extend_from_slice(&[orient.w, orient.x, orient.y, orient.z]);
+    }
 
     // Cycle resolution. `setup` is reloaded once; cheap relative to
     // the per-frame mesh bake `fetchEntityCycleFrames` does.
@@ -6966,11 +7109,22 @@ pub async fn fetch_entity_animation_keyframes(
             Some(triple) => triple,
             None => {
                 // No cycle under this (stance, command). JS gets the
-                // rest-pose meshes + empty keyframes; renderer plays
-                // a static pose until it can fall back to default
-                // stance / command.
+                // part-local meshes + the resolved rest pose + empty
+                // keyframes; renderer holds at rest pose until it can
+                // fall back to default stance / command. Constructed
+                // inline (not via `empty()`) so the captured rest pose
+                // survives — `empty()` would zero it back to identity.
                 let fallback_stance = if stance != 0 { stance } else { 0 };
-                return Ok(EntityAnimationData::empty(part_meshes, fallback_stance));
+                return Ok(EntityAnimationData {
+                    part_meshes,
+                    part_count: part_count as u32,
+                    num_frames: 0,
+                    framerate: 0.0,
+                    resolved_stance: fallback_stance,
+                    part_frames: Vec::new(),
+                    rest_origins,
+                    rest_orientations,
+                });
             }
         };
 
@@ -7013,6 +7167,8 @@ pub async fn fetch_entity_animation_keyframes(
         framerate,
         resolved_stance,
         part_frames,
+        rest_origins,
+        rest_orientations,
     })
 }
 
@@ -14136,6 +14292,131 @@ mod tests_substitution {
         // the same locations (overlap at origin).
         let max_x = tris.iter().flat_map(|t| t.pos.iter().map(|p| p[0])).fold(f32::MIN, f32::max);
         assert!(max_x <= 1.5, "naked setup at identity: max x ≤ 1.5, got {max_x}");
+    }
+
+    /// Cohere-B (2026-05-12): `triangulate_setup_model_per_part_with_rest_pose`
+    /// returns part-LOCAL vertices (placement frame NOT baked in) AND
+    /// the resolved per-part `(offset, rot)` as a side channel. This is
+    /// the load-bearing test for the rig-falls-apart-in-motion fix —
+    /// the entity-animation path needs raw vertices so JS-side
+    /// AnimationMixer keyframes (model-space) don't double-compose
+    /// against placement-baked geometry.
+    ///
+    /// Setup: 2 parts, placement_frames[0] puts part 1 at +7 on x.
+    /// Expected: rest_poses[1] = (+7, identity), AND part 1's tri
+    /// vertices stay in x in [0, 1] (UNLIKE the
+    /// `triangulate_setup_model_at_frame_applies_pose_override` test
+    /// which would put part 1's tri in x in [5, 6] under the same
+    /// placement).
+    #[test]
+    fn triangulate_setup_model_per_part_with_rest_pose_keeps_vertices_local() {
+        use holtburger_dat::file_type::setup_model::{AnimationFrame, PlacementType};
+        let setup_id: u32 = 0x02000099;
+        let part_a: u32 = 0x0100000A;
+        let part_b: u32 = 0x0100000B;
+
+        // Synth a setup with a placement frame at key=0 (the primary
+        // placement). Part 0 at identity; part 1 displaced (+7, 0, 0).
+        let mut placement_frames = HashMap::new();
+        placement_frames.insert(
+            0,
+            PlacementType {
+                anim_frame: AnimationFrame {
+                    frames: vec![
+                        Frame {
+                            origin: Vector3::zero(),
+                            orientation: Quaternion::identity(),
+                        },
+                        Frame {
+                            origin: Vector3 { x: 7.0, y: 0.0, z: 0.0 },
+                            orientation: Quaternion::identity(),
+                        },
+                    ],
+                    hooks: vec![],
+                },
+            },
+        );
+        let setup = SetupModel {
+            id: setup_id,
+            flags: 0,
+            parts: vec![part_a, part_b],
+            parent_index: vec![],
+            default_scale: vec![],
+            holding_locations: HashMap::new(),
+            connection_points: HashMap::new(),
+            placement_frames,
+            cyl_spheres: vec![],
+            spheres: vec![],
+            height: 1.0,
+            radius: 1.0,
+            step_up: 0.1,
+            step_down: 0.1,
+            sorting_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+            selection_sphere: Sphere { center: Vector3::zero(), radius: 1.0 },
+            lights: HashMap::new(),
+            default_animation: None,
+            default_script: None,
+            default_motion_table: None,
+            default_sound_table: None,
+            default_script_table: None,
+        };
+        let mut setup_bytes = Vec::new();
+        setup.pack(&mut Cursor::new(&mut setup_bytes)).unwrap();
+
+        let mut files: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        files.insert(("eor/portal".into(), setup_id), setup_bytes);
+        files.insert(
+            ("eor/portal".into(), part_a),
+            synth_gfx_obj_one_triangle(part_a, 0xAAAAAAAA, 0.0),
+        );
+        files.insert(
+            ("eor/portal".into(), part_b),
+            synth_gfx_obj_one_triangle(part_b, 0xBBBBBBBB, 0.0),
+        );
+        let source = MockSource { files };
+
+        let (per_part_tris, rest_poses) =
+            triangulate_setup_model_per_part_with_rest_pose(&source, setup_id, &[], &[])
+                .expect("triangulate per-part with rest pose");
+
+        // Rest poses captured the placement frame even though the
+        // vertices weren't shifted by it.
+        assert_eq!(rest_poses.len(), 2, "one rest pose per part");
+        assert!(
+            (rest_poses[0].0.x - 0.0).abs() < 1e-5
+                && (rest_poses[0].0.y - 0.0).abs() < 1e-5
+                && (rest_poses[0].0.z - 0.0).abs() < 1e-5,
+            "part 0 rest origin should be (0,0,0), got ({}, {}, {})",
+            rest_poses[0].0.x,
+            rest_poses[0].0.y,
+            rest_poses[0].0.z,
+        );
+        assert!(
+            (rest_poses[1].0.x - 7.0).abs() < 1e-5,
+            "part 1 rest origin x should be 7.0, got {}",
+            rest_poses[1].0.x,
+        );
+
+        // Vertices are part-local: part 1's triangle vertices stay in
+        // x ∈ [0, 1], NOT shifted to [7, 8]. Compare to the existing
+        // `_applies_pose_override` test where part 1 ended up at [5..6].
+        assert_eq!(per_part_tris.len(), 2, "two parts -> two tri buckets");
+        let part_a_max_x = per_part_tris[0]
+            .iter()
+            .flat_map(|t| t.pos.iter().map(|p| p[0]))
+            .fold(f32::MIN, f32::max);
+        let part_b_max_x = per_part_tris[1]
+            .iter()
+            .flat_map(|t| t.pos.iter().map(|p| p[0]))
+            .fold(f32::MIN, f32::max);
+        assert!(
+            part_a_max_x <= 1.5,
+            "part 0 vertices part-local: max x ≤ 1.5, got {part_a_max_x}"
+        );
+        assert!(
+            part_b_max_x <= 1.5,
+            "part 1 vertices part-local (NOT placement-shifted): max x ≤ 1.5, got {part_b_max_x}"
+        );
     }
 
     /// Out-of-range overlay slice — defensive clamp prevents panic

@@ -48,6 +48,127 @@ const KIND_META_REFRESH = 3;
 const KIND_VELOCITY = 4;
 const KIND_MOTION = 5;
 
+// Cohere-B follow-on (2026-05-12): the 2D path's academy-rubberband
+// fix (`index.html:4191-4214`) explicitly skips syncing the local
+// sprite to server `PublicUpdatePosition` / `PrivateUpdatePosition`
+// broadcasts — the wasm integrator + JS prediction own the local
+// sprite, and re-syncing on every UpdatePosition produces the visible
+// "snaps back to starting spot when I move" the user reported (server
+// pose lags client integration when, e.g., Run skill = 0). The 3D
+// path was missing the equivalent guard at `em.setPose(localGuid,
+// ...)` below. This helper centralises the local-player GUID lookup
+// so both call sites (drainEntityEvents3D direct + dispatchOne shared
+// hook) skip the snap consistently.
+function isLocalPlayerGuid(g) {
+  if (typeof window === "undefined") return false;
+  try {
+    const fn = window.getLocalPlayerGuid;
+    if (typeof fn !== "function") return false;
+    const lpg = fn();
+    if (lpg === null || lpg === undefined) return false;
+    return (g >>> 0) === (lpg >>> 0);
+  } catch (_) {
+    return false;
+  }
+}
+
+// Cohere-B follow-on (2026-05-12): drive the local-player rig from the
+// wasm integrator's `getLocalPlayerPose()` rather than from
+// KIND_POSITION events. Mirrors the 2D path's per-rAF prediction tick
+// (`index.html:6353-6420`) which writes `localEntry.sprite.x/.y`
+// directly from keystate + dt; the 3D analogue reads the wasm
+// integrator's authoritative pose (already integrator-smoothed; no
+// server-pose blend that fights client prediction) and applies it to
+// `inst.root.position/.quaternion`. Server-side reconciliation still
+// happens INSIDE the wasm integrator silently — this layer just
+// short-circuits the user-visible flash from late-arriving server
+// poses landing as KIND_POSITION events on the local guid.
+// Cohere-B follow-on (2026-05-12): rate-limit how far the local rig
+// can move per rAF in response to integrator pose changes. The wasm
+// integrator periodically reconciles against ACE
+// `force_position_sequence` advances; when the server pose is behind
+// the client-integrated pose (e.g. Run skill=0 → server walking pace
+// vs client run prediction), the reconcile snaps the integrator's
+// pose backward ~0.5-1 m. Rendering that snap directly produces the
+// visible "jutting back every 0.5-2 s" the user reported even with
+// `em.setPose` short-circuited for the local guid (which only fixed
+// the server-broadcast snap path; the integrator's internal reconcile
+// flows through `getLocalPlayerPose()` and is the actual source).
+//
+// The fix: cap the per-rAF position delta at `LOCAL_RIG_MAX_DELTA_M`.
+// Normal walking (4.5 m/s × 1/60 s = 0.075 m/frame) is well under
+// the cap and applied directly. A 1 m flash-back gets rate-limited
+// across ~4-5 frames (~70 ms) — perceptually a smooth glide instead
+// of a snap. Legitimate large jumps (teleports, @teleloc, respawn,
+// rubberband > 10 m) bypass the cap via `LOCAL_RIG_SNAP_THRESHOLD_M`
+// so portal-out / death-recovery / true server overrides still feel
+// instant.
+//
+// Heading is applied directly (not rate-limited) — turn-rate at
+// ~1.5 rad/s × 1/60 s = 0.025 rad/frame is already smooth.
+const LOCAL_RIG_MAX_DELTA_M = 0.25;
+const LOCAL_RIG_SNAP_THRESHOLD_M = 10.0;
+
+function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
+  if (!scene3d?.entityManager) return;
+  if (!sessionHandle || typeof sessionHandle.getLocalPlayerPose !== "function") return;
+  if (typeof window === "undefined") return;
+  const fn = window.getLocalPlayerGuid;
+  if (typeof fn !== "function") return;
+  let lpg;
+  try { lpg = fn(); } catch (_) { return; }
+  if (lpg === null || lpg === undefined) return;
+  const guid = lpg >>> 0;
+  const inst = scene3d.entityManager.entityMap.get(guid);
+  if (!inst || !inst.root) return;
+  let pose;
+  try { pose = sessionHandle.getLocalPlayerPose(); } catch (_) { return; }
+  if (!pose) return;
+  const lbId = (pose.landblockId ?? pose.landblock_id) >>> 0;
+  if (lbId === 0) return;
+  const lbX = (lbId >>> 24) & 0xff;
+  const lbY = (lbId >>> 16) & 0xff;
+  const tgtX = lbX * 192.0 + pose.x;
+  const tgtY = lbY * 192.0 + pose.y;
+  const tgtZ = pose.z;
+
+  // Compute delta vs current rendered position. `inst.root.position` is
+  // the last value we wrote here (the local-guid path is the only
+  // writer post-Cohere-B follow-on).
+  const curX = inst.root.position.x;
+  const curY = inst.root.position.y;
+  const curZ = inst.root.position.z;
+  const dx = tgtX - curX;
+  const dy = tgtY - curY;
+  const dz = tgtZ - curZ;
+  const distSq = dx * dx + dy * dy + dz * dz;
+  let outX = tgtX;
+  let outY = tgtY;
+  let outZ = tgtZ;
+  if (distSq > LOCAL_RIG_SNAP_THRESHOLD_M * LOCAL_RIG_SNAP_THRESHOLD_M) {
+    // Big jump (teleport / rubberband / respawn) — snap through. The
+    // integrator's intentional re-anchoring shouldn't be smoothed; the
+    // user wants to be where the server says they are immediately.
+    outX = tgtX; outY = tgtY; outZ = tgtZ;
+  } else if (distSq > LOCAL_RIG_MAX_DELTA_M * LOCAL_RIG_MAX_DELTA_M) {
+    // Within reconcile range — rate-limit so flash-back is invisible.
+    const dist = Math.sqrt(distSq);
+    const scale = LOCAL_RIG_MAX_DELTA_M / dist;
+    outX = curX + dx * scale;
+    outY = curY + dy * scale;
+    outZ = curZ + dz * scale;
+  }
+
+  // Yaw-only quaternion around AC's Z-up axis. heading=0 → +Y north
+  // (matches the camera's compass-bearing convention). AC stores
+  // quaternions as (qw, qx, qy, qz); the integrator's heading is a
+  // float radian, so we compose (cos(h/2), 0, 0, sin(h/2)).
+  const h = pose.heading;
+  const qw = Math.cos(h * 0.5);
+  const qz = Math.sin(h * 0.5);
+  scene3d.entityManager.setPose(guid, outX, outY, outZ, qw, 0.0, 0.0, qz);
+}
+
 /**
  * Per-rAF tick. Called from `init3D`'s render loop with the live
  * `scene3d` shape, the wasm `SessionHandle` (may be null pre-spawn),
@@ -133,6 +254,22 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
   if (scene3d?.entityManager) {
     scene3d.entityManager.tick(dt);
     drainEntityEvents3D(scene3d, sessionHandle);
+    // Cohere-B follow-on (2026-05-12): drive the local-player rig
+    // from the wasm integrator's authoritative pose each rAF. Runs
+    // AFTER drainEntityEvents3D so any KIND_SPAWN for the local guid
+    // has had a chance to build the rig (which the helper guards on
+    // via `entityMap.has`). The KIND_POSITION snap for the local guid
+    // is disabled inside drainEntityEvents3D + the shared-hook
+    // dispatchOne — this is the replacement source.
+    try {
+      applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      if (!scene3d._localPlayerPoseTickWarned) {
+        scene3d._localPlayerPoseTickWarned = true;
+        console.warn("[cohere-b] applyLocalPlayerPoseFromIntegrator threw:", e);
+      }
+    }
   }
   // Follow-on #10 (3D port state doc) — DOM-projected nameplate overlay
   // tick. Runs AFTER entity tick so the per-rAF mixer.update has
@@ -285,16 +422,25 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
         const lbY = (lbId >>> 16) & 0xff;
         const wx = lbX * 192.0 + (upd.x ?? 0);
         const wy = lbY * 192.0 + (upd.y ?? 0);
-        em.setPose(
-          upd.guid >>> 0,
-          wx,
-          wy,
-          upd.z ?? 0,
-          upd.qw ?? 1,
-          upd.qx ?? 0,
-          upd.qy ?? 0,
-          upd.qz ?? 0
-        );
+        const g = upd.guid >>> 0;
+        // Cohere-B follow-on (2026-05-12): skip the snap-to-server for
+        // the local player. `applyLocalPlayerPoseFromIntegrator` runs
+        // every rAF and reads the wasm integrator's pose directly, so
+        // KIND_POSITION events for the local guid would just fight that
+        // (the server pose lags client integration when, e.g., Run skill
+        // is low). Non-local entities still snap as authoritative.
+        if (!isLocalPlayerGuid(g)) {
+          em.setPose(
+            g,
+            wx,
+            wy,
+            upd.z ?? 0,
+            upd.qw ?? 1,
+            upd.qx ?? 0,
+            upd.qy ?? 0,
+            upd.qz ?? 0
+          );
+        }
       } else if (kind === KIND_VELOCITY) {
         // Keep velocity hints around for future extrapolation; not
         // currently consumed.
@@ -397,11 +543,20 @@ export function installSharedDrainHook(scene3d) {
               ? performance.now()
               : Date.now(),
           });
-          em.setPose(
-            g,
-            wx, wy, wz,
-            upd.qw ?? 1, upd.qx ?? 0, upd.qy ?? 0, upd.qz ?? 0
-          );
+          // Cohere-B follow-on (2026-05-12): skip the snap-to-server
+          // for the local player here too — the per-rAF integrator
+          // sync in `applyLocalPlayerPoseFromIntegrator` owns the
+          // local rig's pose. KIND_POSITION still updates
+          // `__lastEntityWorldPos` (above) so the camera's Workstream
+          // B reconciliation gate sees the fresh `ts` and behaves
+          // correctly.
+          if (!isLocalPlayerGuid(g)) {
+            em.setPose(
+              g,
+              wx, wy, wz,
+              upd.qw ?? 1, upd.qx ?? 0, upd.qy ?? 0, upd.qz ?? 0
+            );
+          }
         } else if (kind === KIND_VELOCITY) {
           em.setVelocity({
             guid: upd.guid >>> 0,
