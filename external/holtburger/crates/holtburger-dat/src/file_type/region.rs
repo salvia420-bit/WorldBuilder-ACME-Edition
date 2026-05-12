@@ -1405,3 +1405,36 @@ mod tests {
         eprintln!();
     }
 }
+
+#[cfg(test)]
+mod sound_probe {
+    use super::*;
+    use crate::DatDatabase;
+    use std::io::Cursor;
+
+    #[test]
+    fn probe_region_1_ambient_sounds() {
+        let path = if let Some(p) = crate::utils::get_portal_dat_path() { p }
+        else {
+            let c = std::path::PathBuf::from("/home/wbterminal/ac_base_dats/client_portal.dat");
+            if c.exists() { c } else { eprintln!("[probe_region_1_ambient_sounds] SKIP"); return; }
+        };
+        let dat = DatDatabase::new(&path).expect("dat");
+        let bytes = dat.get_file(0x13000000).expect("region");
+        let region = Region::unpack(&mut Cursor::new(&bytes)).expect("parse");
+        eprintln!("Region: name={:?}, parts_mask=0x{:04X}", region.region_name, region.parts_mask);
+        if let Some(sd) = &region.sound_info {
+            eprintln!("SoundDesc: {} STBs", sd.stb_descs.len());
+            for (i, stb) in sd.stb_descs.iter().enumerate() {
+                eprintln!("  STB[{}] id={} (0x{:08X}) sounds={}",
+                    i, stb.stb_id, stb.stb_id, stb.ambient_sounds.len());
+                for s in &stb.ambient_sounds {
+                    eprintln!("    type={} (0x{:08X}) vol={:.2} chance={:.2} rate=[{:.1},{:.1}]",
+                        s.s_type, s.s_type, s.volume, s.base_chance, s.min_rate, s.max_rate);
+                }
+            }
+        } else {
+            eprintln!("Region has no sound_info");
+        }
+    }
+}
