@@ -943,48 +943,60 @@ export class EntityManager {
     // doesn't need the particles module in its composite source.
     if (!this._worldParticleManager) {
       const { ParticleManager } = await import("./particles/index.js");
+      const adapter = await import("./adapter.js");
+      const meshToGeometryGroups = adapter.meshToGeometryGroups;
       const materialCache = this.materialCache;
+      const ents_wasm = this.wasmExports;
+      // H3-bugfix (2026-05-12): same fix as sky_dome.js — must run
+      // wasm-side mesh through meshToGeometryGroups to get a real
+      // THREE.BufferGeometry. Otherwise new THREE.Mesh crashes with
+      // "Cannot read properties of null (reading 'morphAttributes')".
+      const resolveGfxObj = async (hwGfxObjId) => {
+        if (!ents_wasm || typeof ents_wasm.fetchBuildingPlacement !== "function") {
+          return null;
+        }
+        let bundle;
+        try {
+          bundle = await ents_wasm.fetchBuildingPlacement(hwGfxObjId);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[entities/H2] fetchBuildingPlacement(0x${hwGfxObjId.toString(16)}) failed:`,
+            e
+          );
+          return null;
+        }
+        if ((bundle.partCount | 0) === 0) {
+          if (typeof bundle.free === "function") bundle.free();
+          return null;
+        }
+        const meshes = bundle.takePartMeshes();
+        if (typeof bundle.free === "function") bundle.free();
+        const wasmMesh = meshes[0];
+        if (!wasmMesh) return null;
+        const { groups, surfaceDids } = meshToGeometryGroups(wasmMesh);
+        if (typeof wasmMesh.free === "function") wasmMesh.free();
+        if (!groups || groups.length === 0) return null;
+        return {
+          geometry: groups[0].geometry,
+          surfaceDid: groups[0].surfaceDid || surfaceDids[0] || 0,
+        };
+      };
       this._worldParticleManager = new ParticleManager({
         scene: this.scene3d?.entitiesGroup ?? rig.parent,
         geometryFactory: async (hwGfxObjId) => {
-          let bundle;
-          try {
-            bundle = await this.wasmExports.fetchBuildingPlacement(hwGfxObjId);
-          } catch (e) {
-            // eslint-disable-next-line no-console
-            console.warn(
-              `[entities/H2] geometryFactory fetchBuildingPlacement(0x${hwGfxObjId.toString(16)}) failed:`,
-              e
-            );
-            return null;
-          }
-          if ((bundle.partCount | 0) === 0) {
-            if (typeof bundle.free === "function") bundle.free();
-            return null;
-          }
-          const meshes = bundle.takePartMeshes();
-          if (typeof bundle.free === "function") bundle.free();
-          const m = meshes[0];
-          return m?.groups?.[0]?.geometry ?? null;
+          const r = await resolveGfxObj(hwGfxObjId);
+          return r?.geometry ?? null;
         },
         materialFactory: async (hwGfxObjId) => {
           if (!materialCache) return null;
-          let bundle;
+          const r = await resolveGfxObj(hwGfxObjId);
+          if (!r?.surfaceDid) return null;
           try {
-            bundle = await this.wasmExports.fetchBuildingPlacement(hwGfxObjId);
-          } catch (_) {
-            return null;
-          }
-          if ((bundle.partCount | 0) === 0) {
-            if (typeof bundle.free === "function") bundle.free();
-            return null;
-          }
-          const meshes = bundle.takePartMeshes();
-          if (typeof bundle.free === "function") bundle.free();
-          const surfaceDid = meshes[0]?.groups?.[0]?.surfaceDid;
-          if (!surfaceDid) return null;
-          try {
-            return materialCache.get(surfaceDid);
+            return await materialCache.get(
+              r.surfaceDid,
+              ents_wasm.fetch_surfaces_pixels
+            );
           } catch (_) {
             return null;
           }

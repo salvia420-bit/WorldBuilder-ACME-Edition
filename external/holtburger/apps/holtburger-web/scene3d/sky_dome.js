@@ -117,6 +117,7 @@ import * as THREE from "three";
 
 import { buildSkyObjectGroup } from "./sky_assets.js";
 import { ParticleManager } from "./particles/index.js";
+import { meshToGeometryGroups } from "./adapter.js";
 
 // ---- Constants -----------------------------------------------------
 //
@@ -286,6 +287,13 @@ export class SkyDome {
     // ParticleManager's addEmitter return). Lets us drive visibility
     // and stop/destroy at the per-SkyObject grain.
     this._particleEmittersForSkyObject = new Map();
+    // H3-fix (2026-05-12): serialize chain attach attempts via a
+    // promise chain. Concurrent attempts (e.g. 4 setupmodels visible
+    // at once after a DayGroup switch) deadlock in the manifest
+    // prefetch layer — the moon's chain hangs forever in `pending`.
+    // The diag proved a single sequential attempt always completes.
+    // `_attachQueue` is the chain we append onto.
+    this._attachQueue = Promise.resolve();
 
     // === Sky scene + camera (separate render pass) ====================
     //
@@ -491,75 +499,68 @@ export class SkyDome {
       typeof this.wasmExports.fetchParticleEmitter === "function" &&
       typeof this.wasmExports.fetchBuildingPlacement === "function"
     ) {
+      // H3-bugfix (2026-05-12): the wasm-side `takePartMeshes()`
+      // returns wrapper objects holding raw triangle data; to get a
+      // THREE.BufferGeometry the JS-side must run them through
+      // `meshToGeometryGroups`. Without this, `new THREE.Mesh()`
+      // crashes with "Cannot read properties of null (reading
+      // 'morphAttributes')" because the wasm wrapper has no
+      // `morphAttributes` field. Discovered via Playwright probe
+      // 2026-05-12 forcing the moon's DayGroup.
+      const skyDomeWasm = this.wasmExports;
+      const resolveGfxObj = async (hwGfxObjId) => {
+        if (!skyDomeWasm || typeof skyDomeWasm.fetchBuildingPlacement !== "function") {
+          return null;
+        }
+        let bundle;
+        try {
+          bundle = await skyDomeWasm.fetchBuildingPlacement(hwGfxObjId);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[sky-d/p5] fetchBuildingPlacement(0x${hwGfxObjId.toString(16)}) failed:`,
+            e
+          );
+          return null;
+        }
+        const partCount = bundle.partCount | 0;
+        if (partCount === 0) {
+          if (typeof bundle.free === "function") bundle.free();
+          return null;
+        }
+        const meshes = bundle.takePartMeshes();
+        if (typeof bundle.free === "function") bundle.free();
+        const wasmMesh = meshes[0];
+        if (!wasmMesh) return null;
+        const { groups, surfaceDids } = meshToGeometryGroups(wasmMesh);
+        if (typeof wasmMesh.free === "function") wasmMesh.free();
+        if (!groups || groups.length === 0) return null;
+        return {
+          geometry: groups[0].geometry,
+          surfaceDid: groups[0].surfaceDid || surfaceDids[0] || 0,
+        };
+      };
       this.particleManager = new ParticleManager({
         scene: this.skyCell,
         geometryFactory: async (hwGfxObjId) => {
-          if (!this.wasmExports || typeof this.wasmExports.fetchBuildingPlacement !== "function") {
-            // eslint-disable-next-line no-console
-            console.warn("[sky-d/p5] geometryFactory: fetchBuildingPlacement missing");
-            return null;
-          }
-          let bundle;
-          try {
-            bundle = await this.wasmExports.fetchBuildingPlacement(hwGfxObjId);
-          } catch (e) {
-            // eslint-disable-next-line no-console
-            console.warn(
-              `[sky-d/p5] fetchBuildingPlacement(0x${hwGfxObjId.toString(16)}) failed:`,
-              e
-            );
-            return null;
-          }
-          const partCount = bundle.partCount | 0;
-          if (partCount === 0) {
-            if (typeof bundle.free === "function") bundle.free();
-            return null;
-          }
-          const meshes = bundle.takePartMeshes();
-          if (typeof bundle.free === "function") bundle.free();
-          // Particle billboards are typically single-part single-group
-          // GfxObjs (e.g. 0x01001A62 is 1 part / 1 poly / 4 verts). Pick
-          // the first part's first group geometry. (If a particle ever
-          // references a multi-surface mesh, P5 punts — we'll see in
-          // logs.)
-          const firstMesh = meshes[0];
-          if (!firstMesh || !Array.isArray(firstMesh.groups) || firstMesh.groups.length === 0) {
-            return null;
-          }
-          return firstMesh.groups[0].geometry || null;
+          const r = await resolveGfxObj(hwGfxObjId);
+          return r?.geometry ?? null;
         },
         materialFactory: async (hwGfxObjId) => {
-          // Re-walk the GfxObj's surfaces to discover the surface DID.
-          // The bake is cached by wasmExports.fetchBuildingPlacement on
-          // the resource side, so calling it twice is cheap.
-          if (!this.wasmExports || typeof this.wasmExports.fetchBuildingPlacement !== "function") {
-            return null;
-          }
-          let bundle;
+          const r = await resolveGfxObj(hwGfxObjId);
+          if (!r?.surfaceDid) return null;
           try {
-            bundle = await this.wasmExports.fetchBuildingPlacement(hwGfxObjId);
-          } catch (_) {
-            return null;
-          }
-          const partCount = bundle.partCount | 0;
-          if (partCount === 0) {
-            if (typeof bundle.free === "function") bundle.free();
-            return null;
-          }
-          const meshes = bundle.takePartMeshes();
-          if (typeof bundle.free === "function") bundle.free();
-          const surfaceDid = meshes[0]?.groups?.[0]?.surfaceDid;
-          if (!surfaceDid) return null;
-          // MaterialCache.get() may need to preload; the cache's
-          // preload-on-resolveSkyAssets path covers the moon's surface
-          // 0x08000040 already (it's referenced by GfxObj 0x01001A62
-          // which is reachable via the PhysicsScript chain).
-          try {
-            return materialCache.get(surfaceDid);
+            // H3-bugfix (2026-05-12): MaterialCache.get takes
+            // `fetchSurfacesPixels` as a parameter, not a closure. The
+            // wasm subset's snake_case name is `fetch_surfaces_pixels`.
+            return await materialCache.get(
+              r.surfaceDid,
+              skyDomeWasm.fetch_surfaces_pixels
+            );
           } catch (e) {
             // eslint-disable-next-line no-console
             console.warn(
-              `[sky-d/p5] materialCache.get(0x${surfaceDid.toString(16)}) failed:`,
+              `[sky-d/p5] materialCache.get(0x${r.surfaceDid.toString(16)}) failed:`,
               e
             );
             return null;
@@ -656,7 +657,63 @@ export class SkyDome {
       `[sky-d] populated ${added}/${skyAssets.size} celestial bodies in ` +
       `skyCell (skipped ${skippedSetupModel} SetupModel proxies)`
     );
+
+    // H3-fix (2026-05-12): eagerly walk every 0x02 SetupModel's
+    // PhysicsScript chain SERIALLY here, rather than relying on the
+    // per-tick walker's fire-and-forget attach. The per-tick walker
+    // races (4 concurrent attempts → one of them silently hangs in
+    // manifest prefetch when its surface DIDs aren't yet cached).
+    // Doing it once at init, serially, is deterministic and
+    // matches the FORCE-CALL path the diag proved works.
+    this._attachAllSetupModelChainsSerial().catch((e) => {
+      // eslint-disable-next-line no-console
+      console.warn("[sky-d/p5] serial chain attach threw:", e);
+    });
+
     return added;
+  }
+
+  async _attachAllSetupModelChainsSerial() {
+    if (!this.particleManager) return;
+    const session = this.sessionHandleAccessor();
+    if (!session || typeof session.getSkyObjectStates !== "function") return;
+    let states;
+    try { states = session.getSkyObjectStates(); } catch (_) { return; }
+    if (!states || states.length === 0) return;
+    // Filter to 0x02 SetupModels with pesObjectId != 0. Deduplicate by
+    // skyObjectId since states can contain multiple entries with the
+    // same gfxObjectId (different keyframe windows).
+    const seen = new Set();
+    const targets = [];
+    for (const s of states) {
+      const id = (s.gfxObjectId >>> 0);
+      if ((id >>> 24) !== 0x02) continue;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      if ((s.pesObjectId >>> 0) === 0) continue;
+      targets.push({ id, state: s });
+    }
+    // eslint-disable-next-line no-console
+    console.log(`[sky-d/p5] serial chain attach: ${targets.length} 0x02 setupmodels`);
+    for (const t of targets) {
+      if (this._particleChainsAttached.has(t.id)) continue;
+      if (this._particleChainsPending.has(t.id)) continue;
+      this._particleChainsPending.add(t.id);
+      // eslint-disable-next-line no-console
+      console.log(`[sky-d/p5] serial: starting 0x${t.id.toString(16)}`);
+      try {
+        await this._attachParticleChainFromState(t.id, t.state);
+        // eslint-disable-next-line no-console
+        console.log(`[sky-d/p5] serial: completed 0x${t.id.toString(16)}`);
+      } catch (e) {
+        this._particleChainsPending.delete(t.id);
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[sky-d/p5] serial attach for 0x${t.id.toString(16)} threw:`,
+          e
+        );
+      }
+    }
   }
 
   /**
@@ -770,6 +827,26 @@ export class SkyDome {
       // every active particle each frame.
       if ((skyObjectId >>> 24) === 0x02) {
         const pesId = (s.pesObjectId >>> 0);
+        // H3 debug: log every 0x02 with PES the per-tick walker sees,
+        // throttled to one print per (skyObjectId, gate-state) pair.
+        if (pesId !== 0 && !this._dbgLogged) {
+          this._dbgLogged = new Set();
+        }
+        if (pesId !== 0 && this._dbgLogged) {
+          const dbgKey = `${skyObjectId}|${this._particleChainsAttached.has(skyObjectId)}|${this._particleChainsPending.has(skyObjectId)}|${!!this.particleManager}|${typeof this.wasmExports?.fetchPhysicsScript}`;
+          if (!this._dbgLogged.has(dbgKey)) {
+            this._dbgLogged.add(dbgKey);
+            // eslint-disable-next-line no-console
+            console.log(
+              `[sky-d/dbg] tick 0x02 ` +
+              `sky=0x${skyObjectId.toString(16)} pes=0x${pesId.toString(16)} ` +
+              `attached=${this._particleChainsAttached.has(skyObjectId)} ` +
+              `pending=${this._particleChainsPending.has(skyObjectId)} ` +
+              `pm=${!!this.particleManager} ` +
+              `fps=${typeof this.wasmExports?.fetchPhysicsScript}`
+            );
+          }
+        }
         if (
           pesId !== 0 &&
           this.particleManager &&
@@ -779,10 +856,13 @@ export class SkyDome {
           !this._particleChainsPending.has(skyObjectId)
         ) {
           this._particleChainsPending.add(skyObjectId);
-          // Fire-and-forget the async chain walk. The first frame after
-          // it lands, the emitter is in `this.particleManager` and its
-          // visibility follows the `s.visible` flag we update below.
-          this._attachParticleChainFromState(skyObjectId, s).catch((e) => {
+          // H3-fix: serialize chain attempts. Concurrent attaches
+          // deadlock the moon's chain (silent hang in manifest
+          // prefetch) despite individual attempts succeeding via
+          // direct call. Append this attempt onto the global queue.
+          this._attachQueue = this._attachQueue.then(
+            () => this._attachParticleChainFromState(skyObjectId, s)
+          ).catch((e) => {
             this._particleChainsPending.delete(skyObjectId);
             // eslint-disable-next-line no-console
             console.warn(
