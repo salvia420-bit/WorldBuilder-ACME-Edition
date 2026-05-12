@@ -27,6 +27,7 @@ import { SkyDome } from "./sky_dome.js";
 import { resolveSkyAssets } from "./sky_assets.js";
 import { acToThree } from "./adapter.js";
 import { createNameplateOverlay } from "./hud.js";
+import { AudioManager } from "./audio/audio_manager.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
@@ -381,6 +382,26 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
         console.warn("[scene3d.loop] tickPerFrame threw:", e);
       }
     }
+    // H3 (2026-05-12): per-tick audio listener sync. PannerNode HRTF
+    // panning uses the listener's world-space position + forward/up
+    // to pan each in-flight source. We anchor the listener at the
+    // active camera so audio swings naturally when the player turns.
+    if (liveScene3dRef?.audioManager) {
+      const cam = liveScene3dRef.cameraSwitcher?.activeCamera ?? camera;
+      try {
+        liveScene3dRef.audioManager.setListener(
+          { x: cam.position.x, y: cam.position.y, z: cam.position.z },
+          {
+            w: cam.quaternion.w,
+            x: cam.quaternion.x,
+            y: cam.quaternion.y,
+            z: cam.quaternion.z,
+          }
+        );
+      } catch (_) {
+        // Don't let a listener-sync failure kill the frame.
+      }
+    }
     // Phase 7.5 — render with the camera switcher's active camera so
     // toggling C between follow/orbit/topDown flips the render target.
     // Pre-7.5 (or if the switcher hasn't constructed yet) we fall back
@@ -686,6 +707,47 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn("[sky-d] SkyDome init failed:", e);
+  }
+
+  // H3 (2026-05-12): AudioManager. AudioContext creation is deferred
+  // to the first user gesture (browser autoplay policy); we hook
+  // window-level pointerdown/keydown to call notifyUserGesture once.
+  // play() is a no-op until then. Per-tick listener sync happens in
+  // the rAF tick below.
+  let audioManager = null;
+  if (wasmExports && typeof wasmExports.fetchWave === "function") {
+    try {
+      audioManager = new AudioManager({
+        fetchWave: (did) => wasmExports.fetchWave(did),
+        masterGain: 1.0,
+      });
+      liveScene3d.audioManager = audioManager;
+      // eslint-disable-next-line no-undef
+      if (typeof window !== "undefined") {
+        const gestureHandler = () => {
+          audioManager.notifyUserGesture();
+          window.removeEventListener("pointerdown", gestureHandler);
+          window.removeEventListener("keydown", gestureHandler);
+        };
+        window.addEventListener("pointerdown", gestureHandler);
+        window.addEventListener("keydown", gestureHandler);
+        // Console test hook — `window.__playWave(0x0A000002)` plays a
+        // sound at the camera's current position. Useful for verifying
+        // the audio path lit up before any hook integration lands.
+        window.__playWave = (did, x, y, z) => {
+          const pos = { x: x ?? 0, y: y ?? 0, z: z ?? 0 };
+          return audioManager.play(did >>> 0, pos);
+        };
+      }
+      // eslint-disable-next-line no-console
+      console.log(
+        "[H3/audio] AudioManager attached; waiting for first user " +
+          "gesture to unlock the AudioContext"
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[H3/audio] AudioManager init failed:", e);
+    }
   }
 
   // Workstream Sky-E + Sky-D bridge — poll for `hasSkyDesc() === true`

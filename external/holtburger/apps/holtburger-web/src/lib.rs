@@ -14014,6 +14014,89 @@ pub async fn fetch_particle_emitter(did: u32) -> Result<ParticleEmitterJs, JsVal
 }
 
 // ============================================================
+// H3 — Wave (0x0A) audio file fetch + RIFF wrap.
+// ============================================================
+//
+// JS-side AudioManager calls fetchWave(did), reads
+// `wave.riffBytes` (already wrapped as a standard RIFF/WAV blob),
+// and passes that to `AudioContext.decodeAudioData` which returns
+// an `AudioBuffer` for positional playback via `AudioBufferSourceNode
+// + PannerNode`. The decoded sample-rate / channels / bits getters
+// surface metadata for logging + capacity planning; the actual
+// decode lives in the browser.
+
+/// H3: JS-side mirror of `holtburger_dat::file_type::Wave`.
+/// Carries the wrapped RIFF/WAV blob ready for
+/// `AudioContext.decodeAudioData` plus decoded WAVEFORMATEX metadata.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct WaveJs {
+    id: u32,
+    sample_rate: u32,
+    num_channels: u16,
+    bits_per_sample: u16,
+    riff_bytes: Vec<u8>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl WaveJs {
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> u32 { self.id }
+    #[wasm_bindgen(getter, js_name = sampleRate)]
+    pub fn sample_rate(&self) -> u32 { self.sample_rate }
+    #[wasm_bindgen(getter, js_name = numChannels)]
+    pub fn num_channels(&self) -> u16 { self.num_channels }
+    #[wasm_bindgen(getter, js_name = bitsPerSample)]
+    pub fn bits_per_sample(&self) -> u16 { self.bits_per_sample }
+    /// One-shot drain — returns the wrapped RIFF/WAV blob as a
+    /// `Uint8Array` that can be passed directly to
+    /// `AudioContext.decodeAudioData`. Subsequent calls return empty.
+    #[wasm_bindgen(js_name = takeRiffBytes)]
+    pub fn take_riff_bytes(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.riff_bytes)
+    }
+    /// Length of the wrapped RIFF/WAV blob in bytes. Useful for
+    /// budgeting (Holtburg's ambient track set is ~50 wave files
+    /// at 5-20 KB each = ~500 KB total).
+    #[wasm_bindgen(getter, js_name = riffByteLength)]
+    pub fn riff_byte_length(&self) -> u32 { self.riff_bytes.len() as u32 }
+}
+
+/// H3: fetch + parse a Wave (0x0Axxxxxx) audio record. Wraps the
+/// (header, data) pair in a RIFF/WAV blob the browser's
+/// `AudioContext.decodeAudioData` understands.
+///
+/// JS-side flow:
+///   const wave = await fetchWave(0x0A000002);
+///   const riff = wave.takeRiffBytes();
+///   const audioBuf = await audioCtx.decodeAudioData(riff.buffer);
+///   // play via AudioBufferSourceNode + PannerNode at a world position
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchWave)]
+pub async fn fetch_wave(did: u32) -> Result<WaveJs, JsValue> {
+    use holtburger_dat::file_type::Wave;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    let source = global_source::global_source();
+    let key = ResourceKey::new("eor/portal", did);
+    prefetch::ensure_walk_prefetched(&source, &[key], |_| {}).await?;
+    let bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", did))
+        .map_err(|e| JsValue::from_str(&format!("fetchWave 0x{did:08X}: fetch failed: {e:?}")))?;
+    let wave = Wave::unpack(&bytes)
+        .map_err(|e| JsValue::from_str(&format!("fetchWave 0x{did:08X}: parse failed: {e:?}")))?;
+    let fmt = wave.pcm_format();
+    let riff = wave.to_riff_wav();
+    Ok(WaveJs {
+        id: wave.id,
+        sample_rate: fmt.map(|f| f.sample_rate).unwrap_or(0),
+        num_channels: fmt.map(|f| f.num_channels).unwrap_or(0),
+        bits_per_sample: fmt.map(|f| f.bits_per_sample).unwrap_or(0),
+        riff_bytes: riff,
+    })
+}
+
+// ============================================================
 // Phase 4 step 6 Phase A — substitution-aware triangulator tests
 // ============================================================
 //

@@ -19,6 +19,7 @@ pub mod spell_table;
 pub mod surface;
 pub mod surface_texture;
 pub mod texture;
+pub mod wave;
 pub mod xp_table;
 
 pub use animation::Animation;
@@ -46,6 +47,7 @@ pub use spell_table::SpellTable;
 pub use surface::{Surface, TextureRefs as SurfaceTextureRefs};
 pub use surface_texture::SurfaceTexture;
 pub use texture::{SurfacePixelFormat, Texture, TextureDecodeError};
+pub use wave::{PcmFormat, Wave, WAVEFORMATEX_SIZE};
 pub use xp_table::XpTable;
 
 use std::fmt;

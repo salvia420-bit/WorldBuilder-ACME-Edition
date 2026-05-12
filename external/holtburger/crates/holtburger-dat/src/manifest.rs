@@ -26,6 +26,7 @@ impl StripperManifest {
         for file_type in [
             DatFileType::Model,
             DatFileType::SetupModel,
+            DatFileType::Audio,
             DatFileType::EnvCell,
             DatFileType::Table,
             DatFileType::Region,
@@ -182,7 +183,15 @@ mod tests {
 
         assert!(manifest.should_keep(DatFileType::Table));
         assert!(manifest.should_keep_file(0x0E00ABCD, DatFileType::Table));
-        assert!(!manifest.should_keep_file(0x0A000001, DatFileType::Audio));
+        // H3 (2026-05-12): Wave/Audio (0x0A) is now kept in the
+        // logic_only manifest so the JS-side AudioManager can fetch
+        // ambient + entity sounds at runtime. Pre-H3 this assertion
+        // read `!should_keep_file(...)` since audio wasn't shipped.
+        assert!(manifest.should_keep_file(0x0A000001, DatFileType::Audio));
+        // A type that's actively excluded — `Clothing` (0x10) is not
+        // in logic_only — preserves the "negative" half of the original
+        // invariant (catches accidental keep-all bugs).
+        assert!(!manifest.should_keep_file(0x10000001, DatFileType::Clothing));
     }
 
     #[test]

@@ -663,7 +663,15 @@ mod tests {
 
         assert!(manifest.should_keep_entry(EOR_PORTAL_NAMESPACE, 0x01000001, DatFileType::Model));
         assert!(manifest.should_keep_entry(EOR_PORTAL_NAMESPACE, 0x0E000099, DatFileType::Table));
-        assert!(!manifest.should_keep_entry(EOR_PORTAL_NAMESPACE, 0x0A000001, DatFileType::Audio));
+        // H3 (2026-05-12): Audio (0x0A) is now part of `logic_only`'s
+        // keep-set so Wave records ship in pruned HBA bundles. The
+        // browser AudioManager fetches these for ambient + entity
+        // sounds. Pre-H3 this assertion was `!should_keep_entry(...)`.
+        assert!(manifest.should_keep_entry(EOR_PORTAL_NAMESPACE, 0x0A000001, DatFileType::Audio));
+        // Replacement negative: Clothing (0x10) is NOT in logic_only,
+        // preserves the "this manifest is selective, not keep-all"
+        // invariant the prior assertion was guarding.
+        assert!(!manifest.should_keep_entry(EOR_PORTAL_NAMESPACE, 0x10000001, DatFileType::Clothing));
     }
 
     #[test]
