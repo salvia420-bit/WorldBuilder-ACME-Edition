@@ -1124,90 +1124,39 @@ export class CameraSwitcher {
       };
     }
 
-    // Follow mode — camera-relative WASD math, restored from Phase 7.5
-    // (`88ed71a`) with the heading source now driven by Workstream A's
-    // `__sessionHandle.getLocalPlayerPose().heading` instead of the
-    // always-zero quaternion fallback that triggered the 2026-05-11
-    // revert. See the camera.js header for the math derivation + sanity
-    // checks; in short:
-    //   - Rotate (inputForward, inputStrafe) by `followYaw` → world-frame
-    //     intent (worldDx along +X east, worldDy along +Y north).
-    //   - Rotate world-frame intent by `-playerHeading` → player-local
-    //     intent (forward, strafe in the player's body frame, which is
-    //     what ACE's MovementSystem consumes).
-    //   - Auto-turn: while WASD is held and |headingError| > dead zone,
-    //     emit `turn = sign(followYaw - playerHeading)` to drive ACE's
-    //     rotational integrator toward camera-facing alignment
-    //     (1.5 rad/s when running; convergence time = |error| / 1.5 s).
-    //   - Manual Q/E takes precedence — when Q or E is held, the user's
-    //     intent overrides the auto-turn for that tick.
-    const yaw = this.followYaw;
-    const sinY = Math.sin(yaw);
-    const cosY = Math.cos(yaw);
-    // Camera-frame intent → world-axis direction:
-    //   worldDx = inputForward * sin(yaw) + inputStrafe * cos(yaw) → +X east
-    //   worldDy = inputForward * cos(yaw) - inputStrafe * sin(yaw) → +Y north
-    const worldDx = inputForward * sinY + inputStrafe * cosY;
-    const worldDy = inputForward * cosY - inputStrafe * sinY;
-
-    // Heading source priority (see header for full rationale):
-    //   1. __sessionHandle.getLocalPlayerPose().heading (Workstream A)
-    //   2. this.getPlayerHeading() (3D rig quaternion fallback)
-    //   3. 0 (north) — sensible pre-spawn default
-    let playerHeading = null;
-    const handle = this._getSessionHandle?.();
-    if (handle && typeof handle.getLocalPlayerPose === "function") {
-      try {
-        const pose = handle.getLocalPlayerPose();
-        if (pose && typeof pose.heading === "number"
-            && Number.isFinite(pose.heading)) {
-          playerHeading = pose.heading;
-        }
-      } catch (_) {
-        // Defensive: never let a bad wasm read break movement.
-        playerHeading = null;
-      }
-    }
-    if (playerHeading === null && typeof this.getPlayerHeading === "function") {
-      try {
-        const h = this.getPlayerHeading();
-        if (typeof h === "number" && Number.isFinite(h)) playerHeading = h;
-      } catch (_) {
-        playerHeading = null;
-      }
-    }
-    if (playerHeading === null) playerHeading = 0.0;
-
-    // World-frame intent → player-local-frame:
-    //   localF = worldDx * sin(h) + worldDy * cos(h)
-    //   localS = worldDx * cos(h) - worldDy * sin(h)
-    const sinH = Math.sin(playerHeading);
-    const cosH = Math.cos(playerHeading);
-    const localForward = worldDx * sinH + worldDy * cosH;
-    const localStrafe = worldDx * cosH - worldDy * sinH;
-
-    // Auto-turn: drive player heading toward `followYaw` while WASD is
-    // held. Sign of the wrapped heading error → ±1 turn delta (ACE
-    // rotates at RUN_HELD_TURN_SPEED_RAD_PER_SEC = 1.5 rad/s when
-    // run-held; convergence time = |headingError| / 1.5 s; e.g. 90°
-    // settles in ≈1 s, 180° in ≈2 s).
-    const wasdHeld = k.w || k.a || k.s || k.d;
-    let autoTurn = 0;
-    if (wasdHeld) {
-      const headingError = wrapAngle(this.followYaw - playerHeading);
-      if (Math.abs(headingError) > TURN_DEAD_ZONE) {
-        autoTurn = headingError > 0 ? 1 : -1;
-      }
-    }
-    // Manual Q/E overrides auto-turn: when the user actively holds Q
-    // or E, they win for that tick (spec rule #5). Inside the dead
-    // zone the auto-turn is 0 anyway, so Q/E flows through unchanged.
-    const turnOut = qeTurn !== 0 ? clampSign(qeTurn) : autoTurn;
-
+    // Follow mode — Phase 1 (Cohere-D follow-on, 2026-05-12):
+    // hard-disabled mouse-influence-on-movement. WASD now drives in
+    // the player's local body frame; mouse moves the camera only. The
+    // character does not auto-turn to face the camera, and the
+    // camera's yaw does NOT redirect the W/A/S/D intent vector.
+    //
+    // Removed (vs Workstream D's original 2026-05-11 implementation):
+    //   - Camera-yaw rotation of (inputForward, inputStrafe) to a
+    //     world-axis intent vector (`worldDx`, `worldDy`).
+    //   - Player-heading rotation to a player-local frame.
+    //   - Auto-turn-to-align (driving player heading toward
+    //     `followYaw` while WASD held).
+    //
+    // ACE's `setMovementInput(forward, strafe, turn, run)` consumes
+    // player-local-frame intent directly — forward=+1 means "walk
+    // forward in the player's facing direction" regardless of camera
+    // angle. The keystate (k.w/k.a/k.s/k.d/k.q/k.e) IS that intent;
+    // no transform needed.
+    //
+    // Restore reference if mouse-influenced movement comes back as a
+    // deliberate feature later: commit f7c4ae4 (last camera.js
+    // touching this) carried the camera-relative + auto-turn math at
+    // approximately camera.js:1144-1212.
+    //
+    // Phase 2 / Cohere-D will fix the wasm integrator gate that
+    // currently drops strafe + turn inputs — at that point A/D and
+    // Q/E start producing visible motion. This Phase 1 change is
+    // forward-compatible: the keystate is already shaped correctly,
+    // it just doesn't reach the integrator's strafe/turn paths.
     return {
-      forward: clampSign(localForward),
-      strafe: clampSign(localStrafe),
-      turn: turnOut,
+      forward: clampSign(inputForward),
+      strafe: clampSign(inputStrafe),
+      turn: clampSign(qeTurn),
       run,
     };
   }
