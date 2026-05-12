@@ -670,6 +670,12 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
         sessionHandle ??
         null,
       liveScene3dRef: liveScene3d,
+      // Sky-J P5: hand wasmExports to SkyDome for the PhysicsScript
+      // chain walker (fetchPhysicsScript / fetchParticleEmitter /
+      // fetchBuildingPlacement). When null/missing, the chain walker
+      // no-ops and 0x02 SetupModel skyobjects render as nothing (same
+      // as pre-P5 behavior).
+      wasmExports: wasmExports || null,
     });
     liveScene3d.skyDome = skyDome;
     // eslint-disable-next-line no-console

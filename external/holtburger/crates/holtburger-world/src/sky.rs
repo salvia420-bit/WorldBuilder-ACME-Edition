@@ -291,6 +291,15 @@ pub struct SkyObjectSnapshot {
     /// Pass-through of `SkyObject.properties` flag bitmask for downstream
     /// renderer dispatch (rotation, billboard mode, etc.).
     pub properties: u32,
+    /// **Sky-J P5.** Pass-through of `SkyObject.default_pes_object_id`
+    /// — a `QualifiedDataId<PhysicsScript>` (0x33xxxxxx) when non-zero.
+    /// Used by the JS sky renderer to walk the
+    /// `SkyObject → PhysicsScript → CreateParticleHook → ParticleEmitter`
+    /// chain for 0x02 SetupModel sky objects (retail moon
+    /// `0x02000714` → `0x330007DB`; weather SetupModels likewise).
+    /// `0` means "no physics script attached" — typical for 0x01
+    /// GfxObj sky objects (sun, moon mesh, cloud bands, stars).
+    pub pes_object_id: u32,
 }
 
 /// Sky evaluator state. Owns the time-driver bookkeeping (anchor,
@@ -849,6 +858,7 @@ fn evaluate_sky_object(
         max_bright,
         visible,
         properties: sky_object.properties,
+        pes_object_id: sky_object.default_pes_object_id,
     }
 }
 

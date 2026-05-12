@@ -4539,6 +4539,7 @@ pub struct SkyObjectState {
     max_bright: f32,
     visible: bool,
     properties: u32,
+    pes_object_id: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -4654,6 +4655,18 @@ impl SkyObjectState {
     pub fn properties(&self) -> u32 {
         self.properties
     }
+
+    /// **Sky-J P5.** Pass-through of `SkyObject.default_pes_object_id`
+    /// — a PhysicsScript DID (0x33xxxxxx) when non-zero, 0 otherwise.
+    /// JS-side `sky_dome.js` reads this to decide whether to walk the
+    /// PhysicsScript → CreateParticleHook → ParticleEmitter chain for
+    /// 0x02 SetupModel sky objects (retail moon's 0x02000714 carries
+    /// 0x330007DB here). Returns 0 for 0x01 GfxObj sky objects (sun /
+    /// moon mesh / cloud bands / stars — they have no physics script).
+    #[wasm_bindgen(getter, js_name = pesObjectId)]
+    pub fn pes_object_id(&self) -> u32 {
+        self.pes_object_id
+    }
 }
 
 /// Workstream Sky-B: read `Date.now()` from JS, normalize to Unix
@@ -4704,6 +4717,7 @@ fn evaluate_sky_now() -> Option<(SkyState, Vec<SkyObjectState>)> {
                 max_bright: o.max_bright,
                 visible: o.visible,
                 properties: o.properties,
+                pes_object_id: o.pes_object_id,
             })
             .collect();
         Some((sky_state, mapped))

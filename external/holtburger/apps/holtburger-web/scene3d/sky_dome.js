@@ -116,6 +116,7 @@
 import * as THREE from "three";
 
 import { buildSkyObjectGroup } from "./sky_assets.js";
+import { ParticleManager } from "./particles/index.js";
 
 // ---- Constants -----------------------------------------------------
 //
@@ -254,6 +255,7 @@ export class SkyDome {
       skyAssets = null,
       materialCache = null,
       domeRadius = DOME_RADIUS,
+      wasmExports = null,
     } = opts || {};
     if (!scene) {
       throw new Error("SkyDome: opts.scene required");
@@ -265,6 +267,25 @@ export class SkyDome {
         : () => null;
     this.liveScene3dRef = liveScene3dRef;
     this.domeRadius = domeRadius;
+    // Sky-J P5: wasm exports used by the chain walker
+    // (`fetchPhysicsScript`, `fetchParticleEmitter`, `fetchBuildingPlacement`).
+    // May be null at construction (e.g. test fixtures) — the chain
+    // walker no-ops when missing.
+    this.wasmExports = wasmExports;
+    // Sky-J P5: lazily created in `populateCelestialBodies` once we
+    // have both wasmExports + a materialCache. `null` until then.
+    this.particleManager = null;
+    // Sky-J P5: track which 0x02 SkyObjects have had their PhysicsScript
+    // chain walked. Keyed by sky_object_id (the DID, e.g. 0x02000714).
+    this._particleChainsAttached = new Set();
+    // Sky-J P5: per-attach in-flight tracker so we don't double-fire
+    // the async chain walk when a SkyObject is repeatedly visible in
+    // back-to-back ticks before the first walk completes.
+    this._particleChainsPending = new Set();
+    // Sky-J P5: map from sky_object_id → emitter ID list (per the
+    // ParticleManager's addEmitter return). Lets us drive visibility
+    // and stop/destroy at the per-SkyObject grain.
+    this._particleEmittersForSkyObject = new Map();
 
     // === Sky scene + camera (separate render pass) ====================
     //
@@ -451,6 +472,102 @@ export class SkyDome {
       return 0;
     }
 
+    // Sky-J P5: stash materialCache for the per-tick chain walker
+    // (`_attachParticleChainFromState`). Without this, the lazy
+    // ParticleManager instantiation would have to re-discover the
+    // material cache through other paths.
+    this._materialCache = materialCache;
+
+    // Sky-J P5: lazily instantiate ParticleManager once we have both
+    // a materialCache AND wasmExports. Without wasmExports the chain
+    // walker can't fetch PhysicsScripts / ParticleEmitters, so the
+    // manager has nothing to drive — skip construction entirely. Test
+    // fixtures that don't pass wasmExports get the pre-P5 behavior
+    // (0x02 SetupModels silently skipped) for free.
+    if (
+      !this.particleManager &&
+      this.wasmExports &&
+      typeof this.wasmExports.fetchPhysicsScript === "function" &&
+      typeof this.wasmExports.fetchParticleEmitter === "function" &&
+      typeof this.wasmExports.fetchBuildingPlacement === "function"
+    ) {
+      this.particleManager = new ParticleManager({
+        scene: this.skyCell,
+        geometryFactory: async (hwGfxObjId) => {
+          if (!this.wasmExports || typeof this.wasmExports.fetchBuildingPlacement !== "function") {
+            // eslint-disable-next-line no-console
+            console.warn("[sky-d/p5] geometryFactory: fetchBuildingPlacement missing");
+            return null;
+          }
+          let bundle;
+          try {
+            bundle = await this.wasmExports.fetchBuildingPlacement(hwGfxObjId);
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[sky-d/p5] fetchBuildingPlacement(0x${hwGfxObjId.toString(16)}) failed:`,
+              e
+            );
+            return null;
+          }
+          const partCount = bundle.partCount | 0;
+          if (partCount === 0) {
+            if (typeof bundle.free === "function") bundle.free();
+            return null;
+          }
+          const meshes = bundle.takePartMeshes();
+          if (typeof bundle.free === "function") bundle.free();
+          // Particle billboards are typically single-part single-group
+          // GfxObjs (e.g. 0x01001A62 is 1 part / 1 poly / 4 verts). Pick
+          // the first part's first group geometry. (If a particle ever
+          // references a multi-surface mesh, P5 punts — we'll see in
+          // logs.)
+          const firstMesh = meshes[0];
+          if (!firstMesh || !Array.isArray(firstMesh.groups) || firstMesh.groups.length === 0) {
+            return null;
+          }
+          return firstMesh.groups[0].geometry || null;
+        },
+        materialFactory: async (hwGfxObjId) => {
+          // Re-walk the GfxObj's surfaces to discover the surface DID.
+          // The bake is cached by wasmExports.fetchBuildingPlacement on
+          // the resource side, so calling it twice is cheap.
+          if (!this.wasmExports || typeof this.wasmExports.fetchBuildingPlacement !== "function") {
+            return null;
+          }
+          let bundle;
+          try {
+            bundle = await this.wasmExports.fetchBuildingPlacement(hwGfxObjId);
+          } catch (_) {
+            return null;
+          }
+          const partCount = bundle.partCount | 0;
+          if (partCount === 0) {
+            if (typeof bundle.free === "function") bundle.free();
+            return null;
+          }
+          const meshes = bundle.takePartMeshes();
+          if (typeof bundle.free === "function") bundle.free();
+          const surfaceDid = meshes[0]?.groups?.[0]?.surfaceDid;
+          if (!surfaceDid) return null;
+          // MaterialCache.get() may need to preload; the cache's
+          // preload-on-resolveSkyAssets path covers the moon's surface
+          // 0x08000040 already (it's referenced by GfxObj 0x01001A62
+          // which is reachable via the PhysicsScript chain).
+          try {
+            return materialCache.get(surfaceDid);
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[sky-d/p5] materialCache.get(0x${surfaceDid.toString(16)}) failed:`,
+              e
+            );
+            return null;
+          }
+        },
+      });
+    }
+
     // Tear down any existing rotators (idempotent re-bake path).
     for (const rotator of this.skyObjectMeshes.values()) {
       this.skyCell.remove(rotator);
@@ -463,13 +580,13 @@ export class SkyDome {
       if (!bake || !Array.isArray(bake.parts) || bake.parts.length === 0) {
         continue;
       }
-      // Sky-I-B: skip 0x02xxxxxx SetupModel proxies. The only one in
-      // retail Dereth Sunny is 0x02000714 (moon physics-script anchor,
-      // ~6cm — not a visible celestial). If a future region uses
-      // SetupModel celestials that DO have visible geometry, the
-      // `bake.parts.length > 0` check above + a per-part vertex-count
-      // probe would let us distinguish; for now the prefix check is
-      // sufficient for retail.
+      // Sky-J P5 (2026-05-12): 0x02xxxxxx SetupModels are physics-
+      // script anchors (sub-cm meshes). The "visible" content is the
+      // particles their PhysicsScript spawns via CreateParticleHook.
+      // Defer the chain walk to `tick()` — the per-SkyObject state
+      // (with `pesObjectId`) isn't available here; we just skip the
+      // rotator-Group creation since these anchor meshes aren't drawn
+      // directly.
       if ((skyObjectId >>> 24) === 0x02) {
         skippedSetupModel += 1;
         continue;
@@ -644,8 +761,42 @@ export class SkyDome {
       const s = states[i];
       const skyObjectId = (s.gfxObjectId >>> 0);
 
-      // Skip 0x02xxxxxx SetupModel proxies — they don't have rotators.
+      // Sky-J P5 (2026-05-12): 0x02xxxxxx SetupModels have no rotator
+      // (they're sub-cm physics-script anchors, not visible meshes).
+      // Instead, walk their PhysicsScript chain via `pesObjectId` to
+      // attach a particle emitter the first time we see this object,
+      // then keep its visibility in sync with the state. The
+      // particleManager.tick() call at the end of the D loop advances
+      // every active particle each frame.
       if ((skyObjectId >>> 24) === 0x02) {
+        const pesId = (s.pesObjectId >>> 0);
+        if (
+          pesId !== 0 &&
+          this.particleManager &&
+          this.wasmExports &&
+          typeof this.wasmExports.fetchPhysicsScript === "function" &&
+          !this._particleChainsAttached.has(skyObjectId) &&
+          !this._particleChainsPending.has(skyObjectId)
+        ) {
+          this._particleChainsPending.add(skyObjectId);
+          // Fire-and-forget the async chain walk. The first frame after
+          // it lands, the emitter is in `this.particleManager` and its
+          // visibility follows the `s.visible` flag we update below.
+          this._attachParticleChainFromState(skyObjectId, s).catch((e) => {
+            this._particleChainsPending.delete(skyObjectId);
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[sky-d/p5] particle chain walk for 0x${skyObjectId.toString(16)} (pes=0x${pesId.toString(16)}) threw:`,
+              e
+            );
+          });
+        }
+        // Visibility forwarding deferred: retail moon emitters have
+        // 900s+ lifespan + always-visible spawn windows (since the
+        // SetupModel anchor's begin==end==0 = always-visible sentinel).
+        // If a future region uses arc-bounded weather emitters,
+        // ParticleEmitter would need a `setVisible(bool)` API that
+        // gates spawning + drawing per slot.
         continue;
       }
 
@@ -788,6 +939,149 @@ export class SkyDome {
         console.warn("[sky-i-a] debug-dump build failed:", e?.message);
       }
     }
+
+    // === F. Sky-J P5 — particle runtime tick =========================
+    //
+    // After per-SkyObject pose updates have moved any parent anchors
+    // (none for sky-cell-anchored emitters, but we run this AFTER D
+    // anyway so future changes to the order don't desync). Advances
+    // every active particle by one frame: spawn-rate gating, A/B/C
+    // velocity composition, scale/trans lerp, kill expired.
+    if (this.particleManager) {
+      this.particleManager.tick();
+    }
+  }
+
+  /**
+   * Sky-J P5: walk the PhysicsScript chain for a 0x02 SetupModel
+   * SkyObject and attach a ParticleEmitter for each CreateParticleHook
+   * (hookType 13 or 26). Fire-and-forget — `tick()` invokes this once
+   * per skyObjectId, dedup'd by `_particleChainsAttached`.
+   *
+   * Chain: SkyObject (0x02..) -> default_pes_object_id (0x33..)
+   *        -> CreateParticleHook[].EmitterInfoId (0x32..)
+   *        -> ParticleEmitterInfo.HwGfxObjId (0x01..)
+   *
+   * Retail Dereth example (moon, verified 2026-05-12):
+   *   skyObjectId = 0x02000714
+   *   pesId       = 0x330007DB (3 entries)
+   *     [0] -> emitter 0x32000455 -> hwGfx 0x01001A61 (crimson star A)
+   *     [1] -> emitter 0x32000456 -> hwGfx 0x01001A62 (crimson star B, world-space)
+   *     [2] -> emitter 0x32000457 -> hwGfx 0x01001A63 (crimson star C)
+   *
+   * `parent` for the emitter is the sky-cell origin (the SetupModel
+   * proxy mesh is sub-cm and sits at origin in cell-local space per
+   * Sky-I-A probe). `parentOffset` is the per-hook Offset Frame.
+   *
+   * @param {number} skyObjectId  - The SetupModel DID (0x02xxxxxx).
+   * @param {object} state        - The current SkyObjectState from
+   *                                 getSkyObjectStates(). Must carry
+   *                                 `pesObjectId` (added Sky-J P5a).
+   */
+  async _attachParticleChainFromState(skyObjectId, state) {
+    const pesId = (state.pesObjectId >>> 0);
+    if (pesId === 0) {
+      this._particleChainsPending.delete(skyObjectId);
+      return;
+    }
+    if (
+      !this.wasmExports ||
+      typeof this.wasmExports.fetchPhysicsScript !== "function" ||
+      typeof this.wasmExports.fetchParticleEmitter !== "function"
+    ) {
+      this._particleChainsPending.delete(skyObjectId);
+      return;
+    }
+    if (!this.particleManager) {
+      this._particleChainsPending.delete(skyObjectId);
+      return;
+    }
+    let ps;
+    try {
+      ps = await this.wasmExports.fetchPhysicsScript(pesId);
+    } catch (e) {
+      this._particleChainsPending.delete(skyObjectId);
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[sky-d/p5] fetchPhysicsScript(0x${pesId.toString(16)}) failed:`,
+        e
+      );
+      return;
+    }
+    const entries = ps.takeEntries();
+    const emitterIds = [];
+    // The emitter "parent" is the sky-cell origin (Vector3 zero +
+    // identity quaternion). All offsets land within sky-cell-local
+    // space, which the camera-anchored skyCell rotates/translates as
+    // a single Group per tick.
+    const parent = {
+      position: new THREE.Vector3(0, 0, 0),
+      quaternion: new THREE.Quaternion(),
+    };
+    for (const e of entries) {
+      // Only CreateParticle (13) + CreateBlockingParticle (26) hooks
+      // spawn emitters. Other hook types (SoundTweaked, CallPES,
+      // SetOmega, etc.) are not handled in P5 — defer to P6 if needed.
+      if (e.hookType !== 13 && e.hookType !== 26) continue;
+      const emitterId = (e.createParticleEmitterId >>> 0);
+      if (emitterId === 0) continue;
+
+      let emitterInfo;
+      try {
+        emitterInfo = await this.wasmExports.fetchParticleEmitter(emitterId);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[sky-d/p5] fetchParticleEmitter(0x${emitterId.toString(16)}) failed:`,
+          err
+        );
+        continue;
+      }
+
+      const offset = {
+        position: new THREE.Vector3(
+          e.createParticleOffsetX,
+          e.createParticleOffsetY,
+          e.createParticleOffsetZ
+        ),
+        quaternion: new THREE.Quaternion(
+          e.createParticleOffsetQX,
+          e.createParticleOffsetQY,
+          e.createParticleOffsetQZ,
+          e.createParticleOffsetQW
+        ),
+      };
+
+      // PartIndex 0xFFFFFFFF means "whole object" — ACE uses -1 for
+      // this in the JS-side ParticleManager API.
+      const partIndex = (e.createParticlePartIndex === 0xffffffff)
+        ? -1
+        : (e.createParticlePartIndex | 0);
+
+      try {
+        const id = await this.particleManager.addEmitter({
+          emitterInfo,
+          parent,
+          partIndex,
+          parentOffset: offset,
+        });
+        if (id !== 0) emitterIds.push(id);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[sky-d/p5] addEmitter(0x${emitterId.toString(16)}) failed:`,
+          err
+        );
+      }
+    }
+    this._particleEmittersForSkyObject.set(skyObjectId, emitterIds);
+    this._particleChainsAttached.add(skyObjectId);
+    this._particleChainsPending.delete(skyObjectId);
+    // eslint-disable-next-line no-console
+    console.log(
+      `[sky-d/p5] attached ${emitterIds.length} particle emitters for ` +
+        `SkyObject 0x${skyObjectId.toString(16)} (PES 0x${pesId.toString(16)})`
+    );
   }
 
   /**
