@@ -8070,6 +8070,14 @@ pub struct EntityUpdate {
     /// `MotionStance` (HandCombat=0x003c, NonCombat=0x003d, etc.).
     /// `0` for kind != 5.
     motion_stance: u32,
+    /// **H2 (2026-05-12).** Entity's PhysicsScript DID
+    /// (`ObjectDescription.default_script_id`, 0x33xxxxxx when set).
+    /// JS-side `entities.js::_spawnImpl` walks this through
+    /// `fetchPhysicsScript → CreateParticleHook → fetchParticleEmitter`
+    /// (the same chain Sky-J P5 uses for sky-anchored particles).
+    /// `0` when the entity has no script (most static placements +
+    /// vanilla creatures) and for non-Spawn updates.
+    physics_script_did: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -8232,6 +8240,19 @@ impl EntityUpdate {
     #[wasm_bindgen(getter, js_name = motionStance)]
     pub fn motion_stance(&self) -> u32 {
         self.motion_stance
+    }
+
+    /// **H2 (2026-05-12).** PhysicsScript DID (0x33xxxxxx) carried by
+    /// the entity's `ObjectDescription.default_script_id`. Non-zero when
+    /// the entity has an in-world physics effect (fireworks rockets,
+    /// magical glows, lantern flames, portal swirls). JS-side spawn
+    /// flow walks this through the Sky-J chain (`fetchPhysicsScript →
+    /// CreateParticleHook → fetchParticleEmitter → addEmitter`) with
+    /// the entity rig as the emitter parent. `0` when no script (most
+    /// static placements + vanilla NPCs/creatures) and for non-Spawn.
+    #[wasm_bindgen(getter, js_name = physicsScriptDid)]
+    pub fn physics_script_did(&self) -> u32 {
+        self.physics_script_did
     }
 
     /// Velocity-hint x component (m/s, world frame). Meaningful only
@@ -10995,6 +11016,7 @@ async fn recv_loop(
                                                 omega_z: 0.0,
                                                 motion_command: 0,
                                                 motion_stance: 0,
+                                                physics_script_did: 0,
                                             });
                                         }
                                     }
@@ -11636,6 +11658,7 @@ async fn recv_loop(
                                 omega_z: 0.0,
                                 motion_command: 0,
                                 motion_stance: 0,
+                                physics_script_did: 0,
                             });
                         }
                         GameMessage::PrivateUpdatePosition(data) => {
@@ -11762,6 +11785,7 @@ async fn recv_loop(
                                     omega_z: 0.0,
                                     motion_command: 0,
                                     motion_stance: 0,
+                                    physics_script_did: 0,
                                 });
                             }
                         }
@@ -11805,6 +11829,7 @@ async fn recv_loop(
                                 omega_z: 0.0,
                                 motion_command: 0,
                                 motion_stance: 0,
+                                physics_script_did: 0,
                             });
                         }
                         GameMessage::ObjectCreate(data) => {
@@ -12067,6 +12092,10 @@ async fn recv_loop(
                                     omega_z: 0.0,
                                     motion_command: 0,
                                     motion_stance: 0,
+                                    // H2 (2026-05-12): plumb the entity's
+                                    // PhysicsScript DID through to JS so
+                                    // entities.js can walk the chain.
+                                    physics_script_did: data.default_script_id.unwrap_or(0),
                                 });
                                 if is_local_player {
                                     local_player_spawn_emitted = true;
@@ -12191,6 +12220,7 @@ async fn recv_loop(
                                 omega_z: 0.0,
                                 motion_command: 0,
                                 motion_stance: 0,
+                                physics_script_did: 0,
                             });
                         }
                         GameMessage::UpdateMotion(data) => {
@@ -12275,6 +12305,7 @@ async fn recv_loop(
                                 omega_z: 0.0,
                                 motion_command: u32::from(motion_command_u16),
                                 motion_stance: u32::from(data.current_style),
+                                physics_script_did: 0,
                             });
                         }
                         GameMessage::VectorUpdate(data) => {
@@ -12329,6 +12360,7 @@ async fn recv_loop(
                                 omega_z: data.omega.z,
                                 motion_command: 0,
                                 motion_stance: 0,
+                                physics_script_did: 0,
                             });
                         }
                         // Phase 4 step 4: chat-bearing surfaces. Each
@@ -13476,6 +13508,7 @@ async fn recv_loop(
                                     omega_z: 0.0,
                                     motion_command: 0,
                                     motion_stance: 0,
+                                    physics_script_did: 0,
                                 });
                             }
                         }

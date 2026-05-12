@@ -2659,6 +2659,9 @@ void main() {
               ? Uint32Array.from(upd.textureChanges) : new Uint32Array(0),
             subPalettes: upd.subPalettes && upd.subPalettes.length > 0
               ? Uint32Array.from(upd.subPalettes) : new Uint32Array(0),
+            // H2: entity's PhysicsScript DID (0x33xxxxxx) for in-world
+            // particle effects (fireworks, lantern flames, etc.).
+            physicsScriptDid: (upd.physicsScriptDid ?? 0) >>> 0,
           };
         } catch (e) {
           // wasm-bindgen handle was freed between forward + clone —
@@ -2727,6 +2730,8 @@ void main() {
           modelChanges: upd.modelChanges,
           textureChanges: upd.textureChanges,
           subPalettes: upd.subPalettes,
+          // H2: entity's PhysicsScript DID for in-world particle effects.
+          physicsScriptDid: upd.physicsScriptDid,
         };
       }
 

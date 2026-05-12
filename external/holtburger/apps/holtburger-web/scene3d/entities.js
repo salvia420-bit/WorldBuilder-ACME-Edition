@@ -345,6 +345,20 @@ export class EntityManager {
     this.removeCount = 0;
     this.motionSwitchCount = 0;
     this.lastError = null;
+    // H2 (2026-05-12): per-entity particle emitter bookkeeping. Each
+    // entry tracks `(guid → [emitterId, …])` so removal can stop the
+    // emitter(s) that belong to a despawning entity. The
+    // `_worldParticleManager` is the world-side counterpart to
+    // sky_dome's particle manager — it's lazily created on first
+    // chain walk in `_attachParticleChainForEntity` once we have
+    // both wasmExports + a materialCache. `_particleChainsAttached`
+    // dedups per-guid attach attempts (idempotent against
+    // re-Spawn / META_REFRESH flows).
+    /** @type {Map<number, number[]>} */
+    this._particleEmittersForGuid = new Map();
+    /** @type {Set<number>} */
+    this._particleChainsAttached = new Set();
+    this._worldParticleManager = null;
   }
 
   /**
@@ -662,6 +676,32 @@ export class EntityManager {
       this.scene3d.entitiesGroup.add(root);
     }
     this.entityMap.set(guid, inst);
+
+    // Step E.5 — H2 (2026-05-12): if the entity carries a PhysicsScript
+    // DID, walk the CreateParticleHook chain and attach emitters
+    // anchored on the entity's rig. Fire-and-forget — particle attach
+    // doesn't block the spawn return; the manager's `tick()` picks up
+    // emitters as they resolve. Reuses the Sky-J P4 ParticleManager
+    // runtime + Sky-J P3 wasm exports.
+    const pesId = (meta.physicsScriptDid >>> 0);
+    if (
+      pesId !== 0 &&
+      !this._particleChainsAttached.has(guid) &&
+      this.wasmExports &&
+      typeof this.wasmExports.fetchPhysicsScript === "function" &&
+      typeof this.wasmExports.fetchParticleEmitter === "function" &&
+      typeof this.wasmExports.fetchBuildingPlacement === "function"
+    ) {
+      this._particleChainsAttached.add(guid);
+      this._attachParticleChainForEntity(guid, root, pesId).catch((e) => {
+        this._particleChainsAttached.delete(guid);
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[entities/H2] particle chain walk for 0x${guid.toString(16)} (pes=0x${pesId.toString(16)}) threw:`,
+          e
+        );
+      });
+    }
     // Follow-on #10 (3D port state doc) — DOM nameplate overlay. Skip
     // the local player (matches the 2D path's `ensureNameplate` skip at
     // index.html:3467 — your own head doesn't need a tag above it). The
@@ -837,6 +877,170 @@ export class EntityManager {
       try {
         this.scene3d.nameplateLayer.removeNameplate(g);
       } catch (_) {}
+    }
+    // H2 (2026-05-12): stop + destroy any particle emitters attached
+    // to this entity. Without this, fireworks rocket emitters from
+    // despawned rockets would keep spawning particles for their full
+    // lifespan after the rocket disappeared.
+    const emitterIds = this._particleEmittersForGuid.get(g);
+    if (emitterIds && this._worldParticleManager) {
+      for (const eId of emitterIds) {
+        try {
+          this._worldParticleManager.destroyParticleEmitter(eId);
+        } catch (_) {}
+      }
+      this._particleEmittersForGuid.delete(g);
+    }
+    this._particleChainsAttached.delete(g);
+  }
+
+  /**
+   * H2 (2026-05-12): walk an entity's PhysicsScript chain and attach
+   * a ParticleManager emitter per CreateParticleHook (hookType 13 or
+   * 26). Mirrors `sky_dome.js::_attachParticleChainFromState` but
+   * anchors emitters on the entity's rig instead of the sky-cell
+   * origin, so particles follow the entity if it moves (e.g. firework
+   * rockets in flight).
+   *
+   * Chain: entity.physicsScriptDid (0x33..) → fetchPhysicsScript →
+   * each CreateParticleHook → fetchParticleEmitter → addEmitter with
+   * parent=entity.rig.
+   *
+   * Lazily creates `this._worldParticleManager` on first call. The
+   * manager's scene is `entitiesGroup` so per-particle THREE.Meshes
+   * are siblings of the entity rigs.
+   */
+  async _attachParticleChainForEntity(guid, rig, pesId) {
+    let ps;
+    try {
+      ps = await this.wasmExports.fetchPhysicsScript(pesId);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[entities/H2] fetchPhysicsScript(0x${pesId.toString(16)}) failed:`,
+        e
+      );
+      return;
+    }
+    const entries = ps.takeEntries();
+
+    // Lazy-create the world-side ParticleManager on first chain walk.
+    // Imported here (not at top of file) so the test_phase7_4* harness
+    // doesn't need the particles module in its composite source.
+    if (!this._worldParticleManager) {
+      const { ParticleManager } = await import("./particles/index.js");
+      const materialCache = this.materialCache;
+      this._worldParticleManager = new ParticleManager({
+        scene: this.scene3d?.entitiesGroup ?? rig.parent,
+        geometryFactory: async (hwGfxObjId) => {
+          let bundle;
+          try {
+            bundle = await this.wasmExports.fetchBuildingPlacement(hwGfxObjId);
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[entities/H2] geometryFactory fetchBuildingPlacement(0x${hwGfxObjId.toString(16)}) failed:`,
+              e
+            );
+            return null;
+          }
+          if ((bundle.partCount | 0) === 0) {
+            if (typeof bundle.free === "function") bundle.free();
+            return null;
+          }
+          const meshes = bundle.takePartMeshes();
+          if (typeof bundle.free === "function") bundle.free();
+          const m = meshes[0];
+          return m?.groups?.[0]?.geometry ?? null;
+        },
+        materialFactory: async (hwGfxObjId) => {
+          if (!materialCache) return null;
+          let bundle;
+          try {
+            bundle = await this.wasmExports.fetchBuildingPlacement(hwGfxObjId);
+          } catch (_) {
+            return null;
+          }
+          if ((bundle.partCount | 0) === 0) {
+            if (typeof bundle.free === "function") bundle.free();
+            return null;
+          }
+          const meshes = bundle.takePartMeshes();
+          if (typeof bundle.free === "function") bundle.free();
+          const surfaceDid = meshes[0]?.groups?.[0]?.surfaceDid;
+          if (!surfaceDid) return null;
+          try {
+            return materialCache.get(surfaceDid);
+          } catch (_) {
+            return null;
+          }
+        },
+      });
+    }
+
+    const THREE = (await import("three")).default ?? (await import("three"));
+    const Vector3 = THREE.Vector3;
+    const Quaternion = THREE.Quaternion;
+
+    const emitterIds = [];
+    for (const e of entries) {
+      if (e.hookType !== 13 && e.hookType !== 26) continue;
+      const emitterId = (e.createParticleEmitterId >>> 0);
+      if (emitterId === 0) continue;
+
+      let emitterInfo;
+      try {
+        emitterInfo = await this.wasmExports.fetchParticleEmitter(emitterId);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[entities/H2] fetchParticleEmitter(0x${emitterId.toString(16)}) failed:`,
+          err
+        );
+        continue;
+      }
+
+      const offset = {
+        position: new Vector3(
+          e.createParticleOffsetX,
+          e.createParticleOffsetY,
+          e.createParticleOffsetZ
+        ),
+        quaternion: new Quaternion(
+          e.createParticleOffsetQX,
+          e.createParticleOffsetQY,
+          e.createParticleOffsetQZ,
+          e.createParticleOffsetQW
+        ),
+      };
+
+      const partIndex = (e.createParticlePartIndex === 0xffffffff)
+        ? -1
+        : (e.createParticlePartIndex | 0);
+
+      try {
+        const id = await this._worldParticleManager.addEmitter({
+          emitterInfo,
+          parent: rig,  // <-- the entity rig (THREE.Group); .position + .quaternion track the entity
+          partIndex,
+          parentOffset: offset,
+        });
+        if (id !== 0) emitterIds.push(id);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[entities/H2] addEmitter(0x${emitterId.toString(16)}) failed:`,
+          err
+        );
+      }
+    }
+    if (emitterIds.length > 0) {
+      this._particleEmittersForGuid.set(guid, emitterIds);
+      // eslint-disable-next-line no-console
+      console.log(
+        `[entities/H2] attached ${emitterIds.length} particle emitters ` +
+          `for entity 0x${guid.toString(16)} (PES 0x${pesId.toString(16)})`
+      );
     }
   }
 
@@ -1021,6 +1225,20 @@ export class EntityManager {
         if (!this._mixerWarned) {
           this._mixerWarned = true;
           console.warn("[phase7.4b] mixer.update threw:", e);
+        }
+      }
+    }
+    // H2 (2026-05-12): advance the world-side particle runtime. The
+    // ParticleManager is lazily created on the first attach; tick is
+    // a no-op when null.
+    if (this._worldParticleManager) {
+      try {
+        this._worldParticleManager.tick();
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        if (!this._particleTickWarned) {
+          this._particleTickWarned = true;
+          console.warn("[entities/H2] worldParticleManager.tick threw:", e);
         }
       }
     }

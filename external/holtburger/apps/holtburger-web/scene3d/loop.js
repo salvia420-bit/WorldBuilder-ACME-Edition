@@ -356,6 +356,10 @@ function toMeta(upd) {
       subPalettes && subPalettes.length > 0
         ? Uint32Array.from(subPalettes)
         : new Uint32Array(0),
+    // H2 (2026-05-12): entity's PhysicsScript DID for in-world particle
+    // effects. Used by entities.js::_spawnImpl to walk the Sky-J chain
+    // and attach a per-entity ParticleManager emitter.
+    physicsScriptDid: (upd.physicsScriptDid ?? 0) >>> 0,
   };
 }
 
