@@ -136,8 +136,22 @@ import { acToThree } from "./adapter.js";
 export const CAMERA_MODES = ["follow", "orbit", "topDown"];
 
 /** Pitch clamp (radians) for follow camera. 0 = level horizon; +π/2 = straight down. */
-const FOLLOW_PITCH_MIN = 0.1;
+// Phase 3 (Cohere-D follow-on, 2026-05-12): widened pitch range so the
+// camera can angle upward. The prior `FOLLOW_PITCH_MIN = 0.1`
+// (≈ 5.7°) clamped the camera to always be above the player's eye —
+// user couldn't see sky or building tops. `-0.5` (≈ -29°) lets the
+// camera drop below the player; the new lookAt-with-pitch offset in
+// `positionCamera` redirects the view upward at the same time so the
+// user actually sees the sky.
+const FOLLOW_PITCH_MIN = -0.5;
 const FOLLOW_PITCH_MAX = 1.4;
+// LookAt distance for the camera-direction pitch offset (see
+// `positionCamera` follow branch). Controls how far in front of the
+// player the lookAt target sits at pitch=0, and how steeply it lifts
+// or drops with mouse-pitch. 4 m matches `followDistance` so the
+// view direction is parallel to the camera-position offset at most
+// pitches.
+const LOOK_LIFT_DIST_M = 4.0;
 
 /** Mouse-look sensitivity (radians per pixel) for follow PointerLock. */
 const POINTER_YAW_SENS = 0.0025;
@@ -547,8 +561,25 @@ export class CameraSwitcher {
       finalX = camera.x; finalY = camera.y; finalZ = camera.z;
 
       this.persp.position.set(...acToThree(finalX, finalY, finalZ));
-      // Look at the player's head (z + 1.6 ≈ eye height).
-      this.persp.lookAt(...acToThree(p.x, p.y, p.z + 1.6));
+      // Phase 3 (Cohere-D follow-on, 2026-05-12): lookAt moves with
+      // mouse-pitch so the view direction genuinely tilts up/down,
+      // not just orbits around a fixed head-height point.
+      //   - followPitch = 0  → lookAt at player's eye (1.6 m), view
+      //     horizontal.
+      //   - followPitch > 0 (looking down) → lookAt drops below the
+      //     eye, view tilts down at the ground.
+      //   - followPitch < 0 (looking up) → lookAt lifts above the
+      //     eye, view tilts up at the sky.
+      // The lift distance matches `LOOK_LIFT_DIST_M` so the
+      // camera-to-lookAt vector aligns roughly with the camera's
+      // negative-position offset at most pitches — view feels like
+      // a natural camera tilt.
+      //
+      // Pre-Phase-3 behaviour was lookAt fixed at
+      // `(p.x, p.y, p.z + 1.6)`; sky/building tops were unreachable
+      // because the view always pointed at the player's head.
+      const lookLift = -Math.sin(this.followPitch) * LOOK_LIFT_DIST_M;
+      this.persp.lookAt(...acToThree(p.x, p.y, p.z + 1.6 + lookLift));
     } else if (this.mode === "orbit") {
       // OrbitControls owns position. We only retarget. Damping in
       // .update() smooths the target slide. Target is in three.js
