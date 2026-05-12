@@ -673,6 +673,132 @@ export class SkyDome {
     return added;
   }
 
+  /**
+   * H3-fix2 (2026-05-12): for a 0x02 SetupModel SkyObject, find the
+   * adjacent 0x01 GfxObj sky mesh that's the "visible body" the
+   * SetupModel is supposed to anchor particles around (the moon's
+   * SetupModel 0x02000714 pairs with the moon mesh 0x01001F6A, etc).
+   *
+   * Heuristic: iterate `skyObjectMeshes` (only 0x01 entries) and pick
+   * the GfxObj whose vertex AABB center is OFF the cell origin
+   * (radius > 500 — base shells are huge cylinders centered at
+   * origin so they have center near 0; celestial bodies are flat
+   * billboards pre-positioned at the moon/sun celestial coords).
+   * Returns null if no suitable body found — caller falls back to
+   * sky-cell origin (legacy behavior).
+   *
+   * Returns `{ position: Vector3, quaternion: Quaternion }` in sky-
+   * cell-local coordinates. Particles will spawn at parent + Frame
+   * offset + OffsetDir scattering, landing visibly near the body.
+   */
+  _findCelestialBodyForSetupModel(setupModelId) {
+    if (!this.skyObjectMeshes || this.skyObjectMeshes.size === 0) return null;
+    // Retail Dereth explicit pairing — the only SetupModel anchor
+    // with CreateParticle hooks is 0x02000714 (moon, PES 0x330007DB).
+    // Pair it with the moon's visible GfxObj 0x01001F6A. No clean
+    // DAT-only heuristic exists for this — PhatSDK's GameSky source
+    // had the pairing hardcoded in `MakeObject`, but that code is
+    // wrapped in `#if 0 // UNFINISHED` so we can't crib from it.
+    // Future regions/mods that add new SetupModel anchors with
+    // CreateParticle hooks should be added to this table.
+    const EXPLICIT_PAIRINGS = new Map([
+      [0x02000714, 0x01001F6A],  // retail moon
+    ]);
+    const pairedGfxId = EXPLICIT_PAIRINGS.get(setupModelId);
+    if (pairedGfxId !== undefined) {
+      const rotator = this.skyObjectMeshes.get(pairedGfxId);
+      if (rotator) {
+        const bake = rotator.userData?.bake;
+        if (bake) {
+          let cx = 0, cy = 0, cz = 0, n = 0;
+          bake.traverse((child) => {
+            if (!child.isMesh || !child.geometry) return;
+            if (!child.geometry.boundingBox) {
+              try { child.geometry.computeBoundingBox(); } catch (_) {}
+            }
+            const box = child.geometry.boundingBox;
+            if (!box) return;
+            cx += (box.min.x + box.max.x) * 0.5;
+            cy += (box.min.y + box.max.y) * 0.5;
+            cz += (box.min.z + box.max.z) * 0.5;
+            n += 1;
+          });
+          if (n > 0) {
+            cx /= n; cy /= n; cz /= n;
+            // eslint-disable-next-line no-console
+            console.log(
+              `[sky-d/p5] anchor 0x${setupModelId.toString(16)} → paired body 0x${pairedGfxId.toString(16)} ` +
+              `at (${cx.toFixed(0)}, ${cy.toFixed(0)}, ${cz.toFixed(0)})`
+            );
+            return {
+              position: new THREE.Vector3(cx, cy, cz),
+              quaternion: new THREE.Quaternion(),
+              gfxId: pairedGfxId,
+            };
+          }
+        }
+      }
+    }
+    // Heuristic fallback for SetupModels not in the explicit table
+    // (no-op for retail since 0x02000714 is the only target). Walk
+    // 0x01 GfxObj rotators and find the one with off-origin XY +
+    // reasonable AABB size.
+    let best = null;
+    let bestDistSq = Infinity;
+    for (const [id, rotator] of this.skyObjectMeshes) {
+      if ((id >>> 24) !== 0x01) continue;
+      const bake = rotator.userData?.bake;
+      if (!bake) continue;
+      // Compute the union of all mesh boundingBox centers under this bake.
+      // Single-mesh celestial bodies (sun, moon, stars) have a single
+      // bake.children[0].geometry.boundingBox; multi-surface bakes
+      // (cloud bands with N surfaces) average them.
+      let cx = 0, cy = 0, cz = 0, n = 0;
+      let maxDim = 0;
+      bake.traverse((child) => {
+        if (!child.isMesh || !child.geometry) return;
+        if (!child.geometry.boundingBox) {
+          try { child.geometry.computeBoundingBox(); } catch (_) {}
+        }
+        const box = child.geometry.boundingBox;
+        if (!box) return;
+        cx += (box.min.x + box.max.x) * 0.5;
+        cy += (box.min.y + box.max.y) * 0.5;
+        cz += (box.min.z + box.max.z) * 0.5;
+        n += 1;
+        const dx = box.max.x - box.min.x;
+        const dy = box.max.y - box.min.y;
+        const dz = box.max.z - box.min.z;
+        const m = Math.max(dx, dy, dz);
+        if (m > maxDim) maxDim = m;
+      });
+      if (n === 0) continue;
+      cx /= n; cy /= n; cz /= n;
+      // Reject huge meshes — base sky shells (radius 7-15km) and
+      // cloud bands (~20km wide). Celestial billboards (sun/moon/
+      // stars) max-dimension is ~500-600 units.
+      if (maxDim > 2000) continue;
+      // Require off-origin XY (celestial billboards are pre-placed
+      // at their celestial coords — moon at (2066, 553), sun at
+      // (1909, 1875); shells centered at origin even with Z offset).
+      const distXY = cx * cx + cy * cy;
+      if (distXY < 250_000) continue;        // < 500 units in XY plane
+      const distSq = distXY + cz * cz;
+      if (distSq < bestDistSq) {
+        bestDistSq = distSq;
+        best = { position: new THREE.Vector3(cx, cy, cz), quaternion: new THREE.Quaternion(), gfxId: id };
+      }
+    }
+    if (best) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[sky-d/p5] anchor 0x${setupModelId.toString(16)} → celestial body 0x${best.gfxId.toString(16)} ` +
+        `at (${best.position.x.toFixed(0)}, ${best.position.y.toFixed(0)}, ${best.position.z.toFixed(0)})`
+      );
+    }
+    return best;
+  }
+
   async _attachAllSetupModelChainsSerial() {
     if (!this.particleManager) return;
     const session = this.sessionHandleAccessor();
@@ -1090,11 +1216,27 @@ export class SkyDome {
     }
     const entries = ps.takeEntries();
     const emitterIds = [];
-    // The emitter "parent" is the sky-cell origin (Vector3 zero +
-    // identity quaternion). All offsets land within sky-cell-local
-    // space, which the camera-anchored skyCell rotates/translates as
-    // a single Group per tick.
-    const parent = {
+    // H3-fix2 (2026-05-12): anchor particles at the visible mesh's
+    // vertex-AABB center, NOT at sky-cell origin. PhatSDK
+    // `GameSky::UseTime` (UNFINISHED in vendored source) was supposed
+    // to position the SetupModel anchor at the paired GfxObj's
+    // celestial location. Without that, particles at (0,0,0) +
+    // CreateParticleHook offset (0,0,250) + emitter MaxOffset 700
+    // along (0,0,1) landed at zenith — straight up from the camera,
+    // which the player camera can't pitch to. The user reported
+    // "can't look STRAIGHT up because the camera won't extend that
+    // far" 2026-05-12.
+    //
+    // The DAT doesn't carry a formal SetupModel→GfxObj pairing, but
+    // each DayGroup's SkyObjects appear ordered with the SetupModel
+    // anchor adjacent to its visible mesh. Heuristic: pair the
+    // SetupModel anchor with the LARGEST 0x01 GfxObj in the same
+    // skyAssets bake set (largest = ~moon's 153×529×518 vs cloud
+    // band's 20175× anything = too large to be a celestial body
+    // unless it's a base shell with no PES). Practical mapping for
+    // retail Dereth: 0x02000714 → 0x01001F6A (moon).
+    const moonAnchorParent = this._findCelestialBodyForSetupModel(skyObjectId);
+    const parent = moonAnchorParent ?? {
       position: new THREE.Vector3(0, 0, 0),
       quaternion: new THREE.Quaternion(),
     };
