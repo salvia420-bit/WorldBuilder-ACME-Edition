@@ -13639,6 +13639,334 @@ async fn recv_loop(
 }
 
 // ============================================================
+// Sky-J P3 — wasm exports for ParticleEmitter (0x32) +
+// PhysicsScript (0x33). Wire the parsers landed in Sky-J P1+P2
+// (commit b499411) across the wasm boundary so JS can fetch the
+// sky-particle chain at runtime. The cell-anchor logic + particle
+// runtime port (P4) + sky integration (P5) follow.
+// ============================================================
+//
+// Chain walked from JS side per
+// `docs/sky-particles-p4-port-spec.md`:
+//
+//   SkyObject(0x02 SetupModel) → fetchPhysicsScript(pesId 0x33xxx)
+//   → for each CreateParticleHook → fetchParticleEmitter(0x32xxx)
+//   → emitter.hwGfxObjId is the GfxObj billboard for that particle
+//
+// Both exports follow the [`fetch_building_placement`] pattern:
+// prefetch via ResourceKey + ensure_walk_prefetched, parse from
+// holtburger_dat, return a wasm_bindgen-exposed struct.
+
+/// Sky-J P3: per-script-entry view exposed to JS. Carries the
+/// `(start_time, hook)` pair from `PhysicsScriptData`. `hook_data` is
+/// the typeswitch body bytes (40 bytes for CreateParticle, ranges per
+/// `setup_model::AnimationHook::read`) — JS-side code interprets it
+/// based on `hook_type`. For convenience the most common case
+/// (CreateParticleHook = hook_type 13 or 26) exposes `emitterInfoId`,
+/// `partIndex`, `emitterId` + the `Offset` Frame fields directly.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Debug, Clone)]
+pub struct PhysicsScriptEntryJs {
+    start_time: f64,
+    hook_type: u32,
+    direction: i32,
+    hook_data: Vec<u8>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl PhysicsScriptEntryJs {
+    #[wasm_bindgen(getter, js_name = startTime)]
+    pub fn start_time(&self) -> f64 { self.start_time }
+    #[wasm_bindgen(getter, js_name = hookType)]
+    pub fn hook_type(&self) -> u32 { self.hook_type }
+    #[wasm_bindgen(getter)]
+    pub fn direction(&self) -> i32 { self.direction }
+    /// Raw type-body bytes (post-hook_type/Direction prefix). JS-side
+    /// code decodes per hook_type per dats.xml AnimationHook typeswitch.
+    #[wasm_bindgen(getter, js_name = hookData)]
+    pub fn hook_data(&self) -> Vec<u8> { self.hook_data.clone() }
+
+    /// CreateParticle / CreateBlockingParticle convenience: returns the
+    /// ParticleEmitter DID (0x32xxxxxx) if this entry's hook is one of
+    /// those two types and the body is the expected 40 bytes. Returns
+    /// 0 otherwise — JS can treat "0 = not a particle-spawn hook".
+    #[wasm_bindgen(getter, js_name = createParticleEmitterId)]
+    pub fn create_particle_emitter_id(&self) -> u32 {
+        if (self.hook_type == 13 || self.hook_type == 26) && self.hook_data.len() == 40 {
+            u32::from_le_bytes(self.hook_data[0..4].try_into().unwrap())
+        } else {
+            0
+        }
+    }
+
+    /// CreateParticle convenience: `PartIndex` field. 0xFFFFFFFF means
+    /// "whole object" per the retail-DAT bytes for the moon (verified
+    /// 2026-05-12, see [[project_holtburger_sky_particles_probe_2026-05-12]]).
+    #[wasm_bindgen(getter, js_name = createParticlePartIndex)]
+    pub fn create_particle_part_index(&self) -> u32 {
+        if (self.hook_type == 13 || self.hook_type == 26) && self.hook_data.len() == 40 {
+            u32::from_le_bytes(self.hook_data[4..8].try_into().unwrap())
+        } else {
+            0
+        }
+    }
+
+    /// CreateParticle convenience: Offset.Origin.x — the spawn anchor
+    /// translation in the parent SetupModel's local frame.
+    #[wasm_bindgen(getter, js_name = createParticleOffsetX)]
+    pub fn create_particle_offset_x(&self) -> f32 { self.cp_f32(8) }
+    #[wasm_bindgen(getter, js_name = createParticleOffsetY)]
+    pub fn create_particle_offset_y(&self) -> f32 { self.cp_f32(12) }
+    #[wasm_bindgen(getter, js_name = createParticleOffsetZ)]
+    pub fn create_particle_offset_z(&self) -> f32 { self.cp_f32(16) }
+    /// Quaternion w/x/y/z (AC order: w-first).
+    #[wasm_bindgen(getter, js_name = createParticleOffsetQW)]
+    pub fn create_particle_offset_qw(&self) -> f32 { self.cp_f32(20) }
+    #[wasm_bindgen(getter, js_name = createParticleOffsetQX)]
+    pub fn create_particle_offset_qx(&self) -> f32 { self.cp_f32(24) }
+    #[wasm_bindgen(getter, js_name = createParticleOffsetQY)]
+    pub fn create_particle_offset_qy(&self) -> f32 { self.cp_f32(28) }
+    #[wasm_bindgen(getter, js_name = createParticleOffsetQZ)]
+    pub fn create_particle_offset_qz(&self) -> f32 { self.cp_f32(32) }
+    /// EmitterId — the instance id (0 in retail moon script).
+    #[wasm_bindgen(getter, js_name = createParticleEmitterInstanceId)]
+    pub fn create_particle_emitter_instance_id(&self) -> u32 {
+        if (self.hook_type == 13 || self.hook_type == 26) && self.hook_data.len() == 40 {
+            u32::from_le_bytes(self.hook_data[36..40].try_into().unwrap())
+        } else {
+            0
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl PhysicsScriptEntryJs {
+    /// Internal: read an f32 at byte offset `off` from `hook_data`,
+    /// guarded by CreateParticle hook_type + length check. Returns 0.0
+    /// on mismatch.
+    fn cp_f32(&self, off: usize) -> f32 {
+        if (self.hook_type == 13 || self.hook_type == 26)
+            && self.hook_data.len() == 40
+            && off + 4 <= self.hook_data.len()
+        {
+            f32::from_le_bytes(self.hook_data[off..off + 4].try_into().unwrap())
+        } else {
+            0.0
+        }
+    }
+}
+
+/// Sky-J P3: PhysicsScript bake exposed to JS. `entries` is the
+/// list of `(start_time, hook)` pairs from the script. For the retail
+/// moon (`0x330007DB`), `entries.length == 3` and each is a
+/// CreateParticleHook emitting 0x32000455 / 0x32000456 / 0x32000457.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct PhysicsScriptJs {
+    id: u32,
+    entries: Vec<PhysicsScriptEntryJs>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl PhysicsScriptJs {
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> u32 { self.id }
+    #[wasm_bindgen(getter, js_name = entryCount)]
+    pub fn entry_count(&self) -> u32 { self.entries.len() as u32 }
+    /// Drain the entries vec across the wasm boundary. One-shot —
+    /// subsequent calls return empty.
+    #[wasm_bindgen(js_name = takeEntries)]
+    pub fn take_entries(&mut self) -> Vec<PhysicsScriptEntryJs> {
+        std::mem::take(&mut self.entries)
+    }
+}
+
+/// Sky-J P3: ParticleEmitter (0x32) descriptor exposed to JS.
+/// Mirrors `holtburger_dat::file_type::ParticleEmitter` fields with
+/// AC-style scalar Vector3s split into x/y/z components (avoids the
+/// wasm-bindgen `Vec<f32>`/`[f32;3]` arity-friction).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy)]
+pub struct ParticleEmitterJs {
+    id: u32,
+    emitter_type: u32,
+    particle_type: u32,
+    gfx_obj_id: u32,
+    hw_gfx_obj_id: u32,
+    birthrate: f64,
+    max_particles: i32,
+    initial_particles: i32,
+    total_particles: i32,
+    total_seconds: f64,
+    lifespan: f64,
+    lifespan_rand: f64,
+    offset_dir_x: f32, offset_dir_y: f32, offset_dir_z: f32,
+    min_offset: f32, max_offset: f32,
+    a_x: f32, a_y: f32, a_z: f32,
+    min_a: f32, max_a: f32,
+    b_x: f32, b_y: f32, b_z: f32,
+    min_b: f32, max_b: f32,
+    c_x: f32, c_y: f32, c_z: f32,
+    min_c: f32, max_c: f32,
+    start_scale: f32, final_scale: f32, scale_rand: f32,
+    start_trans: f32, final_trans: f32, trans_rand: f32,
+    is_parent_local: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl ParticleEmitterJs {
+    #[wasm_bindgen(getter)] pub fn id(&self) -> u32 { self.id }
+    #[wasm_bindgen(getter, js_name = emitterType)] pub fn emitter_type(&self) -> u32 { self.emitter_type }
+    #[wasm_bindgen(getter, js_name = particleType)] pub fn particle_type(&self) -> u32 { self.particle_type }
+    #[wasm_bindgen(getter, js_name = gfxObjId)] pub fn gfx_obj_id(&self) -> u32 { self.gfx_obj_id }
+    #[wasm_bindgen(getter, js_name = hwGfxObjId)] pub fn hw_gfx_obj_id(&self) -> u32 { self.hw_gfx_obj_id }
+    #[wasm_bindgen(getter)] pub fn birthrate(&self) -> f64 { self.birthrate }
+    #[wasm_bindgen(getter, js_name = maxParticles)] pub fn max_particles(&self) -> i32 { self.max_particles }
+    #[wasm_bindgen(getter, js_name = initialParticles)] pub fn initial_particles(&self) -> i32 { self.initial_particles }
+    #[wasm_bindgen(getter, js_name = totalParticles)] pub fn total_particles(&self) -> i32 { self.total_particles }
+    #[wasm_bindgen(getter, js_name = totalSeconds)] pub fn total_seconds(&self) -> f64 { self.total_seconds }
+    #[wasm_bindgen(getter)] pub fn lifespan(&self) -> f64 { self.lifespan }
+    #[wasm_bindgen(getter, js_name = lifespanRand)] pub fn lifespan_rand(&self) -> f64 { self.lifespan_rand }
+    #[wasm_bindgen(getter, js_name = offsetDirX)] pub fn offset_dir_x(&self) -> f32 { self.offset_dir_x }
+    #[wasm_bindgen(getter, js_name = offsetDirY)] pub fn offset_dir_y(&self) -> f32 { self.offset_dir_y }
+    #[wasm_bindgen(getter, js_name = offsetDirZ)] pub fn offset_dir_z(&self) -> f32 { self.offset_dir_z }
+    #[wasm_bindgen(getter, js_name = minOffset)] pub fn min_offset(&self) -> f32 { self.min_offset }
+    #[wasm_bindgen(getter, js_name = maxOffset)] pub fn max_offset(&self) -> f32 { self.max_offset }
+    #[wasm_bindgen(getter, js_name = aX)] pub fn a_x(&self) -> f32 { self.a_x }
+    #[wasm_bindgen(getter, js_name = aY)] pub fn a_y(&self) -> f32 { self.a_y }
+    #[wasm_bindgen(getter, js_name = aZ)] pub fn a_z(&self) -> f32 { self.a_z }
+    #[wasm_bindgen(getter, js_name = minA)] pub fn min_a(&self) -> f32 { self.min_a }
+    #[wasm_bindgen(getter, js_name = maxA)] pub fn max_a(&self) -> f32 { self.max_a }
+    #[wasm_bindgen(getter, js_name = bX)] pub fn b_x(&self) -> f32 { self.b_x }
+    #[wasm_bindgen(getter, js_name = bY)] pub fn b_y(&self) -> f32 { self.b_y }
+    #[wasm_bindgen(getter, js_name = bZ)] pub fn b_z(&self) -> f32 { self.b_z }
+    #[wasm_bindgen(getter, js_name = minB)] pub fn min_b(&self) -> f32 { self.min_b }
+    #[wasm_bindgen(getter, js_name = maxB)] pub fn max_b(&self) -> f32 { self.max_b }
+    #[wasm_bindgen(getter, js_name = cX)] pub fn c_x(&self) -> f32 { self.c_x }
+    #[wasm_bindgen(getter, js_name = cY)] pub fn c_y(&self) -> f32 { self.c_y }
+    #[wasm_bindgen(getter, js_name = cZ)] pub fn c_z(&self) -> f32 { self.c_z }
+    #[wasm_bindgen(getter, js_name = minC)] pub fn min_c(&self) -> f32 { self.min_c }
+    #[wasm_bindgen(getter, js_name = maxC)] pub fn max_c(&self) -> f32 { self.max_c }
+    #[wasm_bindgen(getter, js_name = startScale)] pub fn start_scale(&self) -> f32 { self.start_scale }
+    #[wasm_bindgen(getter, js_name = finalScale)] pub fn final_scale(&self) -> f32 { self.final_scale }
+    #[wasm_bindgen(getter, js_name = scaleRand)] pub fn scale_rand(&self) -> f32 { self.scale_rand }
+    #[wasm_bindgen(getter, js_name = startTrans)] pub fn start_trans(&self) -> f32 { self.start_trans }
+    #[wasm_bindgen(getter, js_name = finalTrans)] pub fn final_trans(&self) -> f32 { self.final_trans }
+    #[wasm_bindgen(getter, js_name = transRand)] pub fn trans_rand(&self) -> f32 { self.trans_rand }
+    #[wasm_bindgen(getter, js_name = isParentLocal)] pub fn is_parent_local(&self) -> bool { self.is_parent_local }
+}
+
+/// Sky-J P3: fetch + parse a PhysicsScript (0x33xxxxxx) from the
+/// global resource source. Follows the
+/// [`fetch_building_placement`] pattern: prefetch via ResourceKey
+/// + ensure_walk_prefetched, parse via the holtburger_dat
+/// `PhysicsScript::unpack`.
+///
+/// JS-side flow:
+///   const ps = await fetchPhysicsScript(0x330007DB);  // moon
+///   const entries = ps.takeEntries();
+///   for (const e of entries) {
+///     if (e.hookType === 13) {  // CreateParticle
+///       const emitterId = e.createParticleEmitterId;
+///       const pe = await fetchParticleEmitter(emitterId);
+///       // pe.hwGfxObjId is the GfxObj billboard
+///     }
+///   }
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchPhysicsScript)]
+pub async fn fetch_physics_script(did: u32) -> Result<PhysicsScriptJs, JsValue> {
+    use holtburger_dat::file_type::PhysicsScript;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    let source = global_source::global_source();
+    let key = ResourceKey::new("eor/portal", did);
+    prefetch::ensure_walk_prefetched(&source, &[key], |_| {}).await?;
+    let bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", did))
+        .map_err(|e| {
+            JsValue::from_str(&format!(
+                "fetchPhysicsScript 0x{did:08X}: fetch failed: {e:?}"
+            ))
+        })?;
+    let ps = PhysicsScript::unpack(&bytes).map_err(|e| {
+        JsValue::from_str(&format!("fetchPhysicsScript 0x{did:08X}: parse failed: {e:?}"))
+    })?;
+    let entries = ps
+        .script_data
+        .into_iter()
+        .map(|d| PhysicsScriptEntryJs {
+            start_time: d.start_time,
+            hook_type: d.hook.hook_type,
+            direction: d.hook.direction,
+            hook_data: d.hook.data,
+        })
+        .collect();
+    Ok(PhysicsScriptJs { id: ps.id, entries })
+}
+
+/// Sky-J P3: fetch + parse a ParticleEmitter (0x32xxxxxx) from the
+/// global resource source. Same prefetch + parse pattern as
+/// [`fetch_physics_script`]. Returns a flat scalar bundle JS can
+/// pass directly to the (P4) ParticleManager.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchParticleEmitter)]
+pub async fn fetch_particle_emitter(did: u32) -> Result<ParticleEmitterJs, JsValue> {
+    use holtburger_dat::file_type::ParticleEmitter;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+    let source = global_source::global_source();
+    let key = ResourceKey::new("eor/portal", did);
+    prefetch::ensure_walk_prefetched(&source, &[key], |_| {}).await?;
+    let bytes = source
+        .get_file_by_key(ResourceKey::new("eor/portal", did))
+        .map_err(|e| {
+            JsValue::from_str(&format!(
+                "fetchParticleEmitter 0x{did:08X}: fetch failed: {e:?}"
+            ))
+        })?;
+    let pe = ParticleEmitter::unpack(&bytes).map_err(|e| {
+        JsValue::from_str(&format!(
+            "fetchParticleEmitter 0x{did:08X}: parse failed: {e:?}"
+        ))
+    })?;
+    Ok(ParticleEmitterJs {
+        id: pe.id,
+        emitter_type: pe.emitter_type,
+        particle_type: pe.particle_type,
+        gfx_obj_id: pe.gfx_obj_id,
+        hw_gfx_obj_id: pe.hw_gfx_obj_id,
+        birthrate: pe.birthrate,
+        max_particles: pe.max_particles,
+        initial_particles: pe.initial_particles,
+        total_particles: pe.total_particles,
+        total_seconds: pe.total_seconds,
+        lifespan: pe.lifespan,
+        lifespan_rand: pe.lifespan_rand,
+        offset_dir_x: pe.offset_dir.x,
+        offset_dir_y: pe.offset_dir.y,
+        offset_dir_z: pe.offset_dir.z,
+        min_offset: pe.min_offset,
+        max_offset: pe.max_offset,
+        a_x: pe.a.x, a_y: pe.a.y, a_z: pe.a.z,
+        min_a: pe.min_a, max_a: pe.max_a,
+        b_x: pe.b.x, b_y: pe.b.y, b_z: pe.b.z,
+        min_b: pe.min_b, max_b: pe.max_b,
+        c_x: pe.c.x, c_y: pe.c.y, c_z: pe.c.z,
+        min_c: pe.min_c, max_c: pe.max_c,
+        start_scale: pe.start_scale,
+        final_scale: pe.final_scale,
+        scale_rand: pe.scale_rand,
+        start_trans: pe.start_trans,
+        final_trans: pe.final_trans,
+        trans_rand: pe.trans_rand,
+        is_parent_local: pe.is_parent_local,
+    })
+}
+
+// ============================================================
 // Phase 4 step 6 Phase A — substitution-aware triangulator tests
 // ============================================================
 //
