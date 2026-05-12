@@ -29,6 +29,7 @@ impl StripperManifest {
             DatFileType::EnvCell,
             DatFileType::Table,
             DatFileType::Region,
+            DatFileType::ParticleEmitter,
             DatFileType::PhysicsScript,
             DatFileType::PhysicsScriptTable,
             DatFileType::Landblock,

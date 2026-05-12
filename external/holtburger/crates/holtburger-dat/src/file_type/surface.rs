@@ -168,4 +168,151 @@ mod tests {
         assert_eq!(surf.surface_type, 0x11);
         assert_eq!(surf.solid_color(), Some(0x80FF0000));
     }
+
+    /// Probe retail surfaces 0x08000040 (target — used by GfxObj
+    /// 0x01001A62), 0x080000D5 (cloud-band reference), 0x080000C5
+    /// (weather-streak reference). Decodes the SurfaceType bitfield,
+    /// resolves the SurfaceTexture → highest-res Texture chain, and
+    /// dumps the pixel data to /tmp as a binary PPM (trivially
+    /// `convert` -able to PNG) when textured.
+    ///
+    /// Locates client_portal.dat via the same convention as
+    /// `region::tests::locate_portal_dat`.
+    #[test]
+    fn probe_retail_surface_chain_for_holtburger() {
+        use crate::DatDatabase;
+        use crate::file_type::palette::Palette;
+        use crate::file_type::surface_texture::SurfaceTexture;
+        use crate::file_type::texture::{SurfacePixelFormat, Texture};
+        use std::io::Write;
+
+        let path = if let Some(p) = crate::utils::get_portal_dat_path() {
+            p
+        } else {
+            let c = std::path::PathBuf::from("/home/wbterminal/ac_base_dats/client_portal.dat");
+            if c.exists() {
+                c
+            } else {
+                eprintln!("[probe_retail_surface_chain_for_holtburger] SKIP — no dat");
+                return;
+            }
+        };
+        let dat = DatDatabase::new(&path).expect("open client_portal.dat");
+
+        fn flags_string(t: u32) -> String {
+            let mut v = Vec::new();
+            if t & 0x1 != 0       { v.push("Base1Solid"); }
+            if t & 0x2 != 0       { v.push("Base1Image"); }
+            if t & 0x4 != 0       { v.push("Base1ClipMap"); }
+            if t & 0x10 != 0      { v.push("Translucent"); }
+            if t & 0x20 != 0      { v.push("Diffuse"); }
+            if t & 0x40 != 0      { v.push("Luminous"); }
+            if t & 0x100 != 0     { v.push("Alpha"); }
+            if t & 0x200 != 0     { v.push("InvAlpha"); }
+            if t & 0x10000 != 0   { v.push("Additive"); }
+            if t & 0x20000 != 0   { v.push("Detail"); }
+            if t & 0x10000000 != 0 { v.push("Gouraud"); }
+            if t & 0x40000000 != 0 { v.push("Stippled"); }
+            if t & 0x80000000 != 0 { v.push("Perspective"); }
+            v.join(" | ")
+        }
+
+        for &sid in &[0x08000040u32, 0x080000D5u32, 0x080000C5u32] {
+            eprintln!("\n========== Surface 0x{:08X} ==========", sid);
+            let raw = match dat.get_file(sid) {
+                Ok(b) => b,
+                Err(e) => { eprintln!("  NOT FOUND in dat: {:?}", e); continue; }
+            };
+            let n = raw.len().min(32);
+            let hex: String = raw[..n].iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
+            eprintln!("  raw bytes ({}B total): {}", raw.len(), hex);
+
+            let surf = match Surface::unpack(&raw) {
+                Ok(s) => s,
+                Err(e) => { eprintln!("  unpack error: {:?}", e); continue; }
+            };
+            eprintln!("  surface_type: 0x{:08X}  flags: [{}]", surf.surface_type, flags_string(surf.surface_type));
+            eprintln!("  translucency={} luminosity={} diffuse={}", surf.translucency, surf.luminosity, surf.diffuse);
+
+            if let Some((tex_id, pal_id)) = surf.textured() {
+                eprintln!("  TEXTURED: orig_texture_id=0x{:08X} (SurfaceTexture 0x05) orig_palette_id=0x{:08X}", tex_id, pal_id);
+
+                let st_raw = match dat.get_file(tex_id) {
+                    Ok(b) => b,
+                    Err(e) => { eprintln!("  SurfaceTexture not found: {:?}", e); continue; }
+                };
+                let st = match SurfaceTexture::unpack(&st_raw) {
+                    Ok(s) => s,
+                    Err(e) => { eprintln!("  SurfaceTexture unpack err: {:?}", e); continue; }
+                };
+                eprintln!("    SurfaceTexture 0x{:08X}: unknown_int={} unknown_byte={} mips={:?}",
+                    st.id, st.unknown_int, st.unknown_byte,
+                    st.textures.iter().map(|i| format!("0x{:08X}", i)).collect::<Vec<_>>());
+
+                let hr = match st.highest_res() {
+                    Some(h) => h,
+                    None => { eprintln!("    no mips!"); continue; }
+                };
+                let t_raw = match dat.get_file(hr) {
+                    Ok(b) => b,
+                    Err(e) => { eprintln!("    Texture not found: {:?}", e); continue; }
+                };
+                let tex = match Texture::unpack(&t_raw) {
+                    Ok(t) => t,
+                    Err(e) => { eprintln!("    Texture unpack err: {:?}", e); continue; }
+                };
+                eprintln!("    Texture 0x{:08X}: {}x{} format={:?} (raw={}) length={} default_palette_id={:?}",
+                    tex.id, tex.width, tex.height, tex.format(), tex.format_raw, tex.length, tex.default_palette_id);
+
+                // Decode pixels. For palettized, try Surface.orig_palette_id first, fall back to default_palette_id.
+                let pal_fetch = |pid: u32| -> std::result::Result<Palette, crate::file_type::texture::TextureDecodeError> {
+                    dat.get_file(pid)
+                        .map_err(|e| crate::file_type::texture::TextureDecodeError::PaletteFetch(format!("{:?}", e)))
+                        .and_then(|b| Palette::unpack(&b)
+                            .map_err(|e| crate::file_type::texture::TextureDecodeError::PaletteFetch(format!("{:?}", e))))
+                };
+
+                // For P8/Index16, Surface.orig_palette_id overrides default_palette_id.
+                let needs_pal = matches!(tex.format(), SurfacePixelFormat::P8 | SurfacePixelFormat::Index16);
+                let rgba_result = if needs_pal && pal_id != 0 {
+                    tex.to_rgba8(|_| pal_fetch(pal_id))
+                } else {
+                    tex.to_rgba8(pal_fetch)
+                };
+                let rgba = match rgba_result {
+                    Ok(p) => p,
+                    Err(e) => { eprintln!("    decode err: {}", e); continue; }
+                };
+
+                // Dump as a binary PPM (P6) — easy to convert with `convert in.ppm out.png`.
+                let out_path = format!("/tmp/probe_surface_{:08X}.ppm", sid);
+                let mut f = std::fs::File::create(&out_path).expect("create ppm");
+                writeln!(f, "P6\n{} {}\n255", tex.width, tex.height).unwrap();
+                // RGBA → RGB (strip alpha).
+                let mut rgb = Vec::with_capacity((tex.width * tex.height * 3) as usize);
+                for chunk in rgba.chunks_exact(4) {
+                    rgb.extend_from_slice(&chunk[..3]);
+                }
+                f.write_all(&rgb).unwrap();
+                eprintln!("    wrote {} ({}x{} RGB)", out_path, tex.width, tex.height);
+
+                // Compute average pixel color.
+                let mut r_sum = 0u64; let mut g_sum = 0u64; let mut b_sum = 0u64; let mut a_sum = 0u64;
+                let n = (tex.width * tex.height) as u64;
+                for chunk in rgba.chunks_exact(4) {
+                    r_sum += chunk[0] as u64;
+                    g_sum += chunk[1] as u64;
+                    b_sum += chunk[2] as u64;
+                    a_sum += chunk[3] as u64;
+                }
+                eprintln!("    avg RGBA: ({:>3}, {:>3}, {:>3}, {:>3})",
+                    r_sum/n, g_sum/n, b_sum/n, a_sum/n);
+            } else if let Some(c) = surf.solid_color() {
+                eprintln!("  SOLID ARGB: 0x{:08X}  (A={} R={} G={} B={})",
+                    c, (c >> 24) & 0xFF, (c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
+            }
+        }
+
+        // Done — this is a probe test, no assertion beyond the prints.
+    }
 }
