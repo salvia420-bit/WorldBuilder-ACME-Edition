@@ -30,12 +30,25 @@ import { createNameplateOverlay } from "./hud.js";
 import { AudioManager } from "./audio/audio_manager.js";
 import { SoundTableCache } from "./audio/sound_table_cache.js";
 import { AmbientRuntime } from "./audio/ambient_runtime.js";
+import { getQuality, installQualityOnWindow } from "./quality.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
 const HOLTBURG_Y = 0xb4;
 
 export async function init3D(canvas, sessionHandle, wasmExports) {
+  // Phase X.1 — resolve the visual-fidelity quality preset from URL +
+  // UA before any subsystem inits. Stored on `liveScene3d.quality` so
+  // each later phase (POM, SSAO, CSM, terrain subdiv, hero assets)
+  // can gate off the same single source of truth. This phase does
+  // not gate any feature itself — every gate lives in its own phase.
+  // Devtools: `window.__quality` mirrors the resolved object.
+  const quality = installQualityOnWindow(getQuality());
+  // eslint-disable-next-line no-console
+  console.log(
+    `[phase-x.1] quality preset=${quality.preset} source=${quality.source}`
+  );
+
   // Canvas sizing — index.html's <canvas> has width="512" height="512"
   // as an attribute fallback for the 2D path's pixel-art look. For
   // the 3D path we override to a viewport-relative size so the world
@@ -158,6 +171,10 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   // Construct a stub scene3d shape early so the per-phase builders
   // can share state (`materialCache`, `buildingMap3d`).
   const scene3dForBuilders = {
+    // Phase X.1 — resolved quality preset (`{ preset, flags, source }`)
+    // mirrored onto every builder's scene3d arg so per-phase gates can
+    // read `scene3d.quality.flags.<feature>` without re-parsing the URL.
+    quality,
     terrainGroup,
     buildingsGroup,
     staticsGroup,
@@ -557,6 +574,9 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   scene3dForBuilders.cameraSwitcher = cameraSwitcher;
 
   const liveScene3d = {
+    // Phase X.1 — resolved quality preset. `{ preset, flags, source }`.
+    // Each visual-fidelity phase reads its gate from `quality.flags.<flag>`.
+    quality,
     renderer,
     scene,
     worldRoot,
