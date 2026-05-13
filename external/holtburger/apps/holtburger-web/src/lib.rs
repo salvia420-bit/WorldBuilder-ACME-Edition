@@ -741,6 +741,131 @@ pub async fn fetch_landblock_objects(
     Ok(out)
 }
 
+/// Phase 1.4 diagnostic page support. Walks `LandblockInfo.objects` +
+/// `.buildings` + every EnvCell in the landblock's cell-id range,
+/// collects each model's referenced Surface DIDs (via the GfxObj
+/// `surfaces` array, or — for SetupModel — every part's GfxObj
+/// `surfaces`), and returns the sorted unique set. EnvCell `surfaces`
+/// (u16 wire indices) are OR'd with the 0x08000000 namespace prefix
+/// before emission.
+///
+/// `lb_cell_id` is the `0xXXYYFFFE` LandblockInfo cell key (Holtburg
+/// = 0xA9B4FFFE). For LBs with no LandblockInfo (ocean / sparse) we
+/// still scan the EnvCell range — most outdoor LBs will return an
+/// empty list in that case.
+///
+/// One HTTP fetch (the LB's shard); per-id walks are in-memory after
+/// the prefetch.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = fetchLandblockSurfaceDids)]
+pub async fn fetch_landblock_surface_dids(lb_cell_id: u32) -> Result<Vec<u32>, JsValue> {
+    use holtburger_dat::file_type::env_cell::surface_did_for_envcell_index;
+    use holtburger_dat::file_type::{EnvCell, GfxObj, SetupModel};
+    use holtburger_dat::landblock::LandblockInfo;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+
+    let source = global_source::global_source();
+    // Prefetch the landblock's cell shard so subsequent cell reads are
+    // in-memory. Portal reads (GfxObj / SetupModel) come from the
+    // portal shard which is already warm from index init.
+    let landblock_word = (lb_cell_id >> 16) & 0xFFFF;
+    let info_id = (landblock_word << 16) | 0xFFFE;
+    let initial = [ResourceKey::new("eor/cell", info_id)];
+    source
+        .prefetch(&initial)
+        .await
+        .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
+
+    // Helper: resolve a (Setup or Gfx) model_id to its surface DIDs.
+    fn surfaces_for_model<S: holtburger_dat::ResourceSource + ?Sized>(
+        source: &S,
+        model_id: u32,
+    ) -> Vec<u32> {
+        let top = (model_id >> 24) & 0xFF;
+        match top {
+            0x01 => {
+                let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", model_id))
+                else {
+                    return Vec::new();
+                };
+                let mut cursor = std::io::Cursor::new(&bytes);
+                let Ok(gfx) = GfxObj::unpack(&mut cursor) else {
+                    return Vec::new();
+                };
+                gfx.surfaces
+            }
+            0x02 => {
+                let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", model_id))
+                else {
+                    return Vec::new();
+                };
+                let Ok(setup) = SetupModel::unpack(&mut std::io::Cursor::new(&bytes)) else {
+                    return Vec::new();
+                };
+                let mut out = Vec::new();
+                for part in setup.parts {
+                    let Ok(pb) = source.get_file_by_key(ResourceKey::new("eor/portal", part))
+                    else {
+                        continue;
+                    };
+                    let mut pc = std::io::Cursor::new(&pb);
+                    if let Ok(g) = GfxObj::unpack(&mut pc) {
+                        out.extend(g.surfaces);
+                    }
+                }
+                out
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    use std::collections::BTreeSet;
+    let mut surfaces: BTreeSet<u32> = BTreeSet::new();
+
+    // LandblockInfo placements.
+    if let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/cell", info_id)) {
+        if let Ok(info) = LandblockInfo::unpack(&bytes) {
+            for stab in &info.objects {
+                for s in surfaces_for_model(source.as_ref(), stab.id) {
+                    surfaces.insert(s);
+                }
+            }
+            for b in &info.buildings {
+                for s in surfaces_for_model(source.as_ref(), b.model_id) {
+                    surfaces.insert(s);
+                }
+            }
+        }
+    }
+
+    // EnvCells. There's no enumerator on `ResourceSource` so the JS
+    // page must enumerate envcell ids it cares about. For the
+    // diagnostic page we just probe IDs 0xXXXX0001..0xXXXX01FF —
+    // any retail interior has < 512 cells (Holtburg has ~16).
+    let env_base = landblock_word << 16;
+    for envcell_idx in 0x0001u32..=0x01FFu32 {
+        let env_id = env_base | envcell_idx;
+        let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/cell", env_id)) else {
+            continue;
+        };
+        let mut cursor = std::io::Cursor::new(&bytes);
+        let Ok(envcell) = EnvCell::unpack(&mut cursor) else {
+            continue;
+        };
+        for wire_surf in &envcell.surfaces {
+            surfaces.insert(surface_did_for_envcell_index(*wire_surf));
+        }
+        for stab in &envcell.static_objects {
+            for s in surfaces_for_model(source.as_ref(), stab.stab_id) {
+                surfaces.insert(s);
+            }
+        }
+    }
+
+    surfaces.remove(&0);
+    Ok(surfaces.into_iter().collect())
+}
+
 /// Fetch all 33 retail terrain textures from `asset_url`, decoded to
 /// RGBA8. Returns one [`TerrainTexture`] per `TerrainTextureType`
 /// entry, in enum order (index = terrain code).
@@ -2493,6 +2618,13 @@ pub struct SurfacePixels {
     /// fallbacks so the JS material decoder treats it as opaque.
     /// (See `ACE.Entity.Enum.SurfaceType` for the canonical bit list.)
     surface_type: u32,
+    /// Phase 1.4 — heuristic surface category encoded as
+    /// `SurfaceCategory::as_u8()` (12 = Generic). The JS material
+    /// decoder maps this to category-aware roughness / metalness
+    /// defaults. See `holtburger_dat::surface_classify` for the
+    /// rule set and `apps/holtburger-web/scene3d/materials.js`
+    /// `_materialFromFlags` for the JS consumer.
+    category: u8,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2510,6 +2642,13 @@ impl SurfacePixels {
     /// treats 0 as "no flags set → fully opaque".
     #[wasm_bindgen(getter, js_name = surfaceType)]
     pub fn surface_type(&self) -> u32 { self.surface_type }
+    /// Phase 1.4 — heuristic surface category as a stable u8
+    /// (see `SurfaceCategory::as_u8`: Stone=0, Wood=1, Metal=2,
+    /// Sand=3, Lava=4, Water=5, Foliage=6, Cloth=7, Dirt=8,
+    /// Snow=9, Brick=10, Tile=11, Generic=12). 12 (Generic) for
+    /// the empty-fallback surface.
+    #[wasm_bindgen(getter)]
+    pub fn category(&self) -> u8 { self.category }
 }
 
 /// Walk Surface → SurfaceTexture → Texture → RGBA8 for one surface
@@ -2522,8 +2661,12 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     surface_did: u32,
 ) -> SurfacePixels {
     use holtburger_dat::file_type::{Palette, Surface, SurfaceTexture, Texture, TextureDecodeError};
+    use holtburger_dat::surface_classify::{classify, compute_stats, SurfaceCategory};
     use holtburger_dat::ResourceKey;
-    let empty = SurfacePixels { width: 0, height: 0, pixels: Vec::new(), surface_type: 0 };
+    // Generic (12) is the natural empty / "no opinion" fallback for
+    // the JS material decoder.
+    let generic_cat = SurfaceCategory::Generic.as_u8();
+    let empty = SurfacePixels { width: 0, height: 0, pixels: Vec::new(), surface_type: 0, category: generic_cat };
 
     let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else { return empty; };
     let Ok(surface) = Surface::unpack(&bytes) else { return empty; };
@@ -2540,7 +2683,12 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         let r = ((argb >> 16) & 0xFF) as u8;
         let g = ((argb >> 8) & 0xFF) as u8;
         let b = (argb & 0xFF) as u8;
-        return SurfacePixels { width: 1, height: 1, pixels: vec![r, g, b, a], surface_type };
+        let pixels = vec![r, g, b, a];
+        // Phase 1.4 — classify the 1x1 too (rare but legal: solid
+        // surfaces with the Luminous flag set should still hit Lava).
+        let stats = compute_stats(&pixels, 1, 1);
+        let category = classify(&stats, surface_type).as_u8();
+        return SurfacePixels { width: 1, height: 1, pixels, surface_type, category };
     }
     let Some((surf_tex_id, _)) = surface.textured() else { return empty; };
     let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else { return empty; };
@@ -2558,12 +2706,19 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             })
         });
     match rgba {
-        Ok(pixels) => SurfacePixels {
-            width: tex.width as u32,
-            height: tex.height as u32,
-            pixels,
-            surface_type,
-        },
+        Ok(pixels) => {
+            // Phase 1.4 — compute heuristic category at decode time
+            // (per §11 open question #1 — decode-time, not bake-time).
+            let stats = compute_stats(&pixels, tex.width as u32, tex.height as u32);
+            let category = classify(&stats, surface_type).as_u8();
+            SurfacePixels {
+                width: tex.width as u32,
+                height: tex.height as u32,
+                pixels,
+                surface_type,
+                category,
+            }
+        }
         Err(_) => empty,
     }
 }
@@ -2646,8 +2801,10 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     sub_palettes: &[(u32, u8, u8)],
 ) -> SurfacePixels {
     use holtburger_dat::file_type::{Palette, Surface, SurfaceTexture, Texture, TextureDecodeError};
+    use holtburger_dat::surface_classify::{classify, compute_stats, SurfaceCategory};
     use holtburger_dat::ResourceKey;
-    let empty = SurfacePixels { width: 0, height: 0, pixels: Vec::new(), surface_type: 0 };
+    let generic_cat = SurfaceCategory::Generic.as_u8();
+    let empty = SurfacePixels { width: 0, height: 0, pixels: Vec::new(), surface_type: 0, category: generic_cat };
 
     let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else { return empty; };
     let Ok(surface) = Surface::unpack(&bytes) else { return empty; };
@@ -2659,7 +2816,10 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         let r = ((argb >> 16) & 0xFF) as u8;
         let g = ((argb >> 8) & 0xFF) as u8;
         let b = (argb & 0xFF) as u8;
-        return SurfacePixels { width: 1, height: 1, pixels: vec![r, g, b, a], surface_type };
+        let pixels = vec![r, g, b, a];
+        let stats = compute_stats(&pixels, 1, 1);
+        let category = classify(&stats, surface_type).as_u8();
+        return SurfacePixels { width: 1, height: 1, pixels, surface_type, category };
     }
     let Some((surf_tex_id, _)) = surface.textured() else { return empty; };
     let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else { return empty; };
@@ -2698,12 +2858,17 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         Ok(composed)
     });
     match rgba {
-        Ok(pixels) => SurfacePixels {
-            width: tex.width as u32,
-            height: tex.height as u32,
-            pixels,
-            surface_type,
-        },
+        Ok(pixels) => {
+            let stats = compute_stats(&pixels, tex.width as u32, tex.height as u32);
+            let category = classify(&stats, surface_type).as_u8();
+            SurfacePixels {
+                width: tex.width as u32,
+                height: tex.height as u32,
+                pixels,
+                surface_type,
+                category,
+            }
+        }
         Err(_) => empty,
     }
 }

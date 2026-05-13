@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Phase 1.4 surface classifier diagnostic</title>
+<style>
+  body { font-family: -apple-system, sans-serif; background: #1a1a1a; color: #e0e0e0; margin: 16px; }
+  h1 { margin-top: 0; }
+  .controls { margin-bottom: 12px; }
+  .controls input { background: #222; color: #e0e0e0; border: 1px solid #444; padding: 4px 8px; width: 8em; }
+  .controls button { background: #333; color: #e0e0e0; border: 1px solid #555; padding: 4px 12px; cursor: pointer; }
+  .controls button:hover { background: #444; }
+  .legend { margin-bottom: 12px; font-size: 0.85em; display: flex; flex-wrap: wrap; gap: 12px; }
+  .legend span { padding: 2px 6px; border-radius: 3px; background: #2a2a2a; }
+  #status { font-family: monospace; white-space: pre-wrap; background: #111; padding: 8px; border-radius: 4px; max-height: 200px; overflow-y: auto; font-size: 0.85em; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; margin-top: 12px; }
+  .tile { background: #2a2a2a; border-radius: 4px; padding: 4px; text-align: center; font-size: 0.75em; }
+  .tile canvas { width: 96px; height: 96px; image-rendering: pixelated; display: block; margin: 0 auto 4px; border: 1px solid #444; }
+  .tile .did { color: #888; font-family: monospace; font-size: 0.7em; }
+  .tile .cat { font-weight: bold; padding: 2px 4px; border-radius: 2px; display: inline-block; margin-top: 2px; }
+  /* Category colour codes (matches scene3d/materials.js SURFACE_CATEGORY). */
+  .cat-Stone { background: #555; color: #fff; }
+  .cat-Wood { background: #5a3819; color: #fff; }
+  .cat-Metal { background: #c8c8d0; color: #000; }
+  .cat-Sand { background: #c8a060; color: #000; }
+  .cat-Lava { background: #c83820; color: #fff; }
+  .cat-Water { background: #2050a8; color: #fff; }
+  .cat-Foliage { background: #408030; color: #fff; }
+  .cat-Cloth { background: #903080; color: #fff; }
+  .cat-Dirt { background: #8a6240; color: #fff; }
+  .cat-Snow { background: #f0f0f0; color: #000; }
+  .cat-Brick { background: #804020; color: #fff; }
+  .cat-Tile { background: #6080a0; color: #fff; }
+  .cat-Generic { background: #444; color: #aaa; }
+  .filter-row { margin-top: 6px; }
+  .filter-row label { margin-right: 8px; font-size: 0.85em; }
+</style>
+</head>
+<body>
+<h1>Phase 1.4 surface classifier diagnostic</h1>
+<p>
+  Renders every Surface DID referenced by the requested landblock with the
+  heuristic <a href="https://github.com/holtburger/visual-fidelity-push#phase-14">classifier</a>'s
+  output. Defaults to Holtburg LB 0xA9B4. Used for visual audit / rule tuning.
+  Each tile shows the actual decoded surface texture plus its computed
+  <code>SurfaceCategory</code>.
+</p>
+
+<div class="controls">
+  <label>Landblock: <input id="lb-input" value="0xA9B4"></label>
+  <button id="reload-btn">Reload</button>
+  <span id="counts" style="margin-left:16px"></span>
+</div>
+
+<div class="legend" id="legend"></div>
+
+<div class="filter-row">
+  Filter:
+  <label><input type="checkbox" id="filter-all" checked> all</label>
+  <span id="filter-cats"></span>
+</div>
+
+<pre id="status">starting…</pre>
+
+<div class="grid" id="grid"></div>
+
+<script type="module">
+import init, * as wasmMod from "../pkg/holtburger_web.js";
+
+const statusEl = document.getElementById("status");
+function log(s) {
+  statusEl.textContent += s + "\n";
+  statusEl.scrollTop = statusEl.scrollHeight;
+  console.log("[classifier-diag]", s);
+}
+
+// Mirrors `SurfaceCategory::as_u8` in crates/holtburger-dat/src/surface_classify.rs.
+const CATEGORY_LABELS = [
+  "Stone", "Wood", "Metal", "Sand", "Lava", "Water",
+  "Foliage", "Cloth", "Dirt", "Snow", "Brick", "Tile", "Generic",
+];
+
+let lastTiles = []; // {did, category, canvas, surfaceType}
+let activeCategoryFilter = null; // null = all
+
+function buildLegend() {
+  const legend = document.getElementById("legend");
+  legend.innerHTML = "";
+  for (const lbl of CATEGORY_LABELS) {
+    const span = document.createElement("span");
+    span.className = "cat cat-" + lbl;
+    span.textContent = lbl;
+    legend.appendChild(span);
+  }
+}
+
+function buildFilterButtons() {
+  const wrap = document.getElementById("filter-cats");
+  wrap.innerHTML = "";
+  for (const lbl of CATEGORY_LABELS) {
+    const btn = document.createElement("button");
+    btn.textContent = lbl;
+    btn.style.marginRight = "4px";
+    btn.style.background = "#333";
+    btn.style.color = "#e0e0e0";
+    btn.style.border = "1px solid #555";
+    btn.style.padding = "2px 8px";
+    btn.style.cursor = "pointer";
+    btn.addEventListener("click", () => {
+      activeCategoryFilter = activeCategoryFilter === lbl ? null : lbl;
+      document.getElementById("filter-all").checked = activeCategoryFilter === null;
+      applyFilter();
+    });
+    wrap.appendChild(btn);
+  }
+  document.getElementById("filter-all").addEventListener("change", (e) => {
+    if (e.target.checked) {
+      activeCategoryFilter = null;
+      applyFilter();
+    }
+  });
+}
+
+function applyFilter() {
+  const grid = document.getElementById("grid");
+  for (const child of grid.children) {
+    const cat = child.dataset.category;
+    if (activeCategoryFilter === null || cat === activeCategoryFilter) {
+      child.style.display = "";
+    } else {
+      child.style.display = "none";
+    }
+  }
+}
+
+function renderTile(sp, did) {
+  const w = sp.width;
+  const h = sp.height;
+  if (w === 0 || h === 0) return null;
+  const pixels = sp.pixels;
+  const category = typeof sp.category === "number" ? sp.category : 12;
+  const surfaceType = (sp.surfaceType ?? 0) >>> 0;
+
+  // Render to a canvas. Tiles in real Dereth go up to 256x256; we
+  // pin canvas size at 96 via CSS so the browser scales.
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  const imgData = ctx.createImageData(w, h);
+  imgData.data.set(pixels);
+  ctx.putImageData(imgData, 0, 0);
+
+  const label = CATEGORY_LABELS[category] ?? "Generic";
+
+  const wrap = document.createElement("div");
+  wrap.className = "tile";
+  wrap.dataset.category = label;
+  wrap.dataset.did = `0x${did.toString(16).padStart(8, "0")}`;
+  wrap.appendChild(canvas);
+  const didEl = document.createElement("div");
+  didEl.className = "did";
+  didEl.textContent = `0x${did.toString(16).padStart(8, "0")}`;
+  wrap.appendChild(didEl);
+  const catEl = document.createElement("span");
+  catEl.className = "cat cat-" + label;
+  catEl.textContent = label;
+  wrap.appendChild(catEl);
+  // Hover: show surface-type bits + size as a title.
+  wrap.title = `flags=0x${surfaceType.toString(16)}  ${w}x${h}  ${label}`;
+  return { did, label, surfaceType, wrap, w, h };
+}
+
+async function reload() {
+  document.getElementById("grid").innerHTML = "";
+  document.getElementById("counts").textContent = "";
+  statusEl.textContent = "";
+
+  const lbStr = document.getElementById("lb-input").value.trim();
+  let lbKey;
+  try {
+    lbKey = parseInt(lbStr.startsWith("0x") ? lbStr : "0x" + lbStr, 16);
+    if (!Number.isFinite(lbKey)) throw new Error("nan");
+  } catch (_) {
+    log("invalid landblock — expected 0xAABB hex form");
+    return;
+  }
+  const lbCellId = (((lbKey & 0xFFFF) << 16) | 0xFFFE) >>> 0;
+  log(`landblock 0x${lbKey.toString(16).padStart(4, "0")} → LandblockInfo id 0x${lbCellId.toString(16).padStart(8, "0")}`);
+
+  log("fetching landblock surface DIDs…");
+  let dids;
+  try {
+    const t0 = performance.now();
+    dids = await wasmMod.fetchLandblockSurfaceDids(lbCellId >>> 0);
+    log(`fetchLandblockSurfaceDids: ${dids.length} unique surfaces (${(performance.now() - t0).toFixed(1)} ms)`);
+  } catch (e) {
+    log("FAIL: " + (e?.message ?? e));
+    return;
+  }
+  if (dids.length === 0) {
+    log("(no surfaces found — LB has no LandblockInfo and no EnvCells)");
+    return;
+  }
+
+  // Batch-fetch decoded pixels.
+  log("decoding pixels via fetch_surfaces_pixels…");
+  const t1 = performance.now();
+  // wasm-bindgen Vec<u32> exports → Uint32Array.
+  const idsArr = new Uint32Array(dids);
+  const sps = await wasmMod.fetch_surfaces_pixels(idsArr);
+  log(`fetch_surfaces_pixels: ${sps.length} results (${(performance.now() - t1).toFixed(1)} ms)`);
+
+  const counts = Object.create(null);
+  const grid = document.getElementById("grid");
+  lastTiles = [];
+  for (let i = 0; i < sps.length; i++) {
+    const sp = sps[i];
+    const did = idsArr[i];
+    const tile = renderTile(sp, did);
+    // Free the wasm-bindgen wrapper.
+    try { if (typeof sp.free === "function") sp.free(); } catch (_) {}
+    if (!tile) {
+      counts["Decode-fail"] = (counts["Decode-fail"] || 0) + 1;
+      continue;
+    }
+    counts[tile.label] = (counts[tile.label] || 0) + 1;
+    grid.appendChild(tile.wrap);
+    lastTiles.push(tile);
+  }
+  const histo = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `${k}=${v}`)
+    .join("  ");
+  document.getElementById("counts").textContent = histo;
+  log("done.");
+  document.title = `classifier — ${lbStr} — ${lastTiles.length}`;
+}
+
+(async () => {
+  try {
+    log("init wasm…");
+    await init();
+    log("wasm init ok");
+
+    if (typeof wasmMod.init_resource_source !== "function") {
+      log("FAIL: init_resource_source export missing");
+      return;
+    }
+    log("init resource source…");
+    const initRes = await wasmMod.init_resource_source("../../../dist/manifest.json");
+    log(`init_resource_source result: ${initRes}`);
+
+    if (typeof wasmMod.fetchLandblockSurfaceDids !== "function") {
+      log("FAIL: fetchLandblockSurfaceDids export missing — rebuild wasm with `wasm-pack build --target web`");
+      return;
+    }
+    if (typeof wasmMod.fetch_surfaces_pixels !== "function") {
+      log("FAIL: fetch_surfaces_pixels export missing");
+      return;
+    }
+
+    buildLegend();
+    buildFilterButtons();
+    document.getElementById("reload-btn").addEventListener("click", reload);
+    document.getElementById("lb-input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") reload();
+    });
+    await reload();
+  } catch (e) {
+    log("EXCEPTION: " + (e?.message ?? e));
+    console.error(e);
+  }
+})();
+</script>
+</body>
+</html>
