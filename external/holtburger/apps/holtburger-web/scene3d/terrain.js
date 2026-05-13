@@ -98,6 +98,22 @@ const TERRAIN_CODE_TO_DETAIL_SLICE = new Uint8Array([
 // height.
 const DEFAULT_DETAIL_SCALE = 16.0;
 
+// ----- Phase 1.3 — triplanar mapping on terrain slopes --------------
+//
+// Slope is computed in AC-space (Z-up): `slope = 1.0 - normal.z`.
+// Below `TRIPLANAR_SLOPE_LO`, pure grid-UV sampling. Above
+// `TRIPLANAR_SLOPE_HI`, pure triplanar. Between, `smoothstep` lerp.
+// 0.2 / 0.5 mirrors the hand-off-note recommendation; 0.2 ≈ 11° from
+// horizontal (treats gentle rises as flat), 0.5 ≈ 30° (point at which
+// stretching becomes objectionable).
+//
+// Triplanar sharpness 6.0 is the centre of the 4-8 sweet spot per the
+// hand-off note. Lower values produce muddy blends; higher values
+// produce hard seams at 45°.
+const TRIPLANAR_SLOPE_LO = 0.2;
+const TRIPLANAR_SLOPE_HI = 0.5;
+const DEFAULT_TRIPLANAR_SHARPNESS = 6.0;
+
 // ----- GLSL — bilinear-blend shader, three.js port ------------------
 //
 // Vertex shader: drops the PIXI mat3 chain in favour of three.js's
@@ -118,6 +134,14 @@ in float terrainCode;                 // Phase 1.2 — per-vertex (uint8→float
 
 out vec2 vGridUv;
 flat out int vTerrainCode;            // Phase 1.2 — passed flat-int to FS
+// Phase 1.3 — AC-space LB-local position + interpolated geometry
+// normal, used by the fragment shader for slope-gated triplanar
+// sampling. Both are in AC coords (Z-up); the worldRoot Y-up rotation
+// is applied to a parent transform that we deliberately bypass here
+// so the existing 'vGridUv = position.xy / 24.0' semantics extend
+// naturally to YZ + XZ planes.
+out vec3 vAcPos;
+out vec3 vAcNormal;
 
 void main() {
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
@@ -133,6 +157,8 @@ void main() {
   // disagree but we deliberately pick one per triangle rather than
   // blending (terrain codes are discrete categories).
   vTerrainCode = int(terrainCode + 0.5);
+  vAcPos = position;
+  vAcNormal = normal;
 }
 `;
 
@@ -160,9 +186,18 @@ uniform int uCodeToSlice[32];         // terrain-code → slice (255 = no detail
 uniform float uDetailScale;
 uniform vec2 uWindDir;                // unit vec2 (cos, sin) — sand UV rotation
 uniform float uDetailNormalEnabled;   // 0.0 OFF / 1.0 ON (quality gate)
+// Phase 1.3 — slope-gated triplanar sampling of the detail normal.
+// uTriplanarEnabled gates the whole block off when quality is low;
+// uTriplanarSharpness is the power applied to abs(normal) before
+// normalising the blend weights (4-8 is the sweet spot — see
+// DEFAULT_TRIPLANAR_SHARPNESS comment on the JS side).
+uniform float uTriplanarEnabled;
+uniform float uTriplanarSharpness;
 
 in vec2 vGridUv;
 flat in int vTerrainCode;             // provoking-vertex terrain code
+in vec3 vAcPos;                       // Phase 1.3 — LB-local AC pos (z=up)
+in vec3 vAcNormal;                    // Phase 1.3 — geometry normal (AC z-up)
 
 out vec4 fragColor;
 
@@ -245,17 +280,62 @@ void main() {
   if (uDetailNormalEnabled > 0.5) {
     int slice = uCodeToSlice[clamp(vTerrainCode, 0, 31)];
     if (slice < 5) {
-      vec2 detailUv = vGridUv * uDetailScale;
+      // ----- Phase 1.3 — slope-gated triplanar detail sampling. -----
+      //
+      // Existing grid-UV path (vGridUv * uDetailScale) is the XY-plane
+      // projection of the LB-local position scaled by uDetailScale (16).
+      // For triplanar we additionally sample YZ + XZ projections of the
+      // same world point and blend by abs(normal)^sharpness.
+      //
+      // Slope detection: vAcNormal is AC-space (Z-up before worldRoot
+      // rotation); flat ground points (0,0,1). slope = 1 - n.z is 0
+      // on flat ground, ~1 on vertical cliffs. We always use the
+      // normalised normal to keep weights stable across mesh edges.
+      vec3 n = normalize(vAcNormal);
+      float slope = 1.0 - n.z;
+      float triBlend = uTriplanarEnabled > 0.5
+        ? smoothstep(${TRIPLANAR_SLOPE_LO.toFixed(3)}, ${TRIPLANAR_SLOPE_HI.toFixed(3)}, slope)
+        : 0.0;
+      vec2 detailUvXy = vGridUv * uDetailScale;
       // Slice 2 = sand. Rotate the sample UV by uWindDir = (cos θ, sin θ)
-      // so the anisotropic drift pattern tracks the wind direction.
+      // so the anisotropic drift pattern tracks the wind direction. The
+      // rotation is applied to all three triplanar planes consistently
+      // so the wind-axis follows the dominant axis at the fragment.
       if (slice == 2) {
         float cw = uWindDir.x;
         float sw = uWindDir.y;
-        detailUv = vec2(cw * detailUv.x - sw * detailUv.y,
-                        sw * detailUv.x + cw * detailUv.y);
+        detailUvXy = vec2(cw * detailUvXy.x - sw * detailUvXy.y,
+                          sw * detailUvXy.x + cw * detailUvXy.y);
       }
       vec3 detailEncoded = texture(uTerrainDetailNormalArray,
-                                   vec3(detailUv, float(slice))).rgb;
+                                   vec3(detailUvXy, float(slice))).rgb;
+      if (triBlend > 0.0) {
+        // YZ + XZ samples at the same per-LB frequency as the existing
+        // XY path (position scaled by uDetailScale / 24.0).
+        float invCell = uDetailScale / 24.0;
+        vec2 detailUvYz = vAcPos.yz * invCell;
+        vec2 detailUvXz = vAcPos.xz * invCell;
+        if (slice == 2) {
+          float cw = uWindDir.x;
+          float sw = uWindDir.y;
+          detailUvYz = vec2(cw * detailUvYz.x - sw * detailUvYz.y,
+                            sw * detailUvYz.x + cw * detailUvYz.y);
+          detailUvXz = vec2(cw * detailUvXz.x - sw * detailUvXz.y,
+                            sw * detailUvXz.x + cw * detailUvXz.y);
+        }
+        vec3 detailYz = texture(uTerrainDetailNormalArray,
+                                vec3(detailUvYz, float(slice))).rgb;
+        vec3 detailXz = texture(uTerrainDetailNormalArray,
+                                vec3(detailUvXz, float(slice))).rgb;
+        // Triplanar blend weights from |normal| raised to sharpness.
+        // x-weight pairs with YZ (the plane perpendicular to +x), y with
+        // XZ, z with XY — the existing detailEncoded.
+        vec3 w = pow(abs(n), vec3(uTriplanarSharpness));
+        float wSum = max(w.x + w.y + w.z, 1e-4);
+        w /= wSum;
+        vec3 detailTri = detailYz * w.x + detailXz * w.y + detailEncoded * w.z;
+        detailEncoded = mix(detailEncoded, detailTri, triBlend);
+      }
       // RNM blend.
       vec3 t = baseN * vec3(2.0, 2.0, 2.0) + vec3(-1.0, -1.0, 0.0);
       vec3 u = detailEncoded * vec3(-2.0, -2.0, 2.0) + vec3(1.0, 1.0, -1.0);
@@ -465,6 +545,12 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
   const detailNormalArrayTex = detailNormalEnabled
     ? scene3d.terrainDetailNormalArray
     : null;
+  // Phase 1.3 — slope-gated triplanar mapping on the detail normal
+  // layer. Requires Phase 1.2's array texture to be loaded; off if
+  // either the triplanar flag is off OR the detail normal isn't
+  // wired (no point triplanar-sampling a no-op).
+  const triplanarEnabled =
+    !!scene3d.quality?.flags?.triplanar && detailNormalEnabled;
   // Per-instance codeToSlice uniform array — int[32] keyed by terrain
   // code. Built once and shared by reference across every LB material.
   const codeToSliceArr = Array.from(TERRAIN_CODE_TO_DETAIL_SLICE).map(
@@ -548,6 +634,11 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
         uDetailScale: { value: DEFAULT_DETAIL_SCALE },
         uWindDir: { value: new THREE.Vector2(1.0, 0.0) },
         uDetailNormalEnabled: { value: detailNormalEnabled ? 1.0 : 0.0 },
+        // Phase 1.3 — triplanar gate + sharpness. When the gate is
+        // 0.0 the fragment skips the YZ+XZ samples entirely and the
+        // detail-normal falls back to the XY-only Phase 1.2 path.
+        uTriplanarEnabled: { value: triplanarEnabled ? 1.0 : 0.0 },
+        uTriplanarSharpness: { value: DEFAULT_TRIPLANAR_SHARPNESS },
       },
       vertexShader: TERRAIN_VERTEX_GLSL,
       fragmentShader: TERRAIN_FRAGMENT_GLSL,
@@ -615,6 +706,14 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
       // normal patch is wired without a GL state pull.
       detailNormalEnabled,
       detailNormalSlice: detailNormalEnabled ? "array(5)" : "off",
+      // Phase 1.3 — same idea for triplanar wiring. `slopeLo`/`slopeHi`
+      // come from the JS-side constants the GLSL is interpolated with;
+      // captures use them to compute the expected smoothstep blend at
+      // any given fragment without re-reading the shader source.
+      triplanarEnabled,
+      triplanarSharpness: triplanarEnabled ? DEFAULT_TRIPLANAR_SHARPNESS : 0,
+      triplanarSlopeLo: TRIPLANAR_SLOPE_LO,
+      triplanarSlopeHi: TRIPLANAR_SLOPE_HI,
     };
 
     // Group keeps the road overlay parented under the same lbMesh
