@@ -331,6 +331,21 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // from scene3d at construction.
     detailTileCache,
     forceDetail,
+    // Visual-fidelity Phase 3.1 — POM gate, sourced from
+    // `quality.flags.pom` (high/ultra). Each MaterialCache reads this
+    // and installs the parallax shader patch on Stone/Brick/Tile
+    // surfaces. `?forcePom=on` URL override bypasses the category gate
+    // for visual smoke testing on real Holtburg surfaces.
+    pomEnabled: !!quality?.flags?.pom,
+    forcePom: (() => {
+      try {
+        if (typeof window === "undefined" || !window.location?.search) return false;
+        const params = new URLSearchParams(window.location.search);
+        return params.get("forcePom") === "on";
+      } catch (_) {
+        return false;
+      }
+    })(),
     // Phase 1.2 — terrain detail-normal array (DataArrayTexture,
     // depth=5). Null when `quality.flags.terrainDetailNormal` is off
     // OR the load failed. The terrain ShaderMaterial reads this off

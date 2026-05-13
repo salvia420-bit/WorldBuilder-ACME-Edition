@@ -115,6 +115,102 @@ fn sample_clamped(buf: &[f32], x: i32, y: i32, w: i32, h: i32) -> f32 {
     buf[cy * (w as usize) + cx]
 }
 
+/// Phase 3.1 — produce an R8 heightmap from RGBA8 diffuse pixels.
+///
+/// Same Sobel-X gradient that `normal_from_luminance` uses, integrated
+/// per row by horizontal scan (per §Phase 3.1 hand-off #1 — cheaper than
+/// a 2D Poisson solve, accurate enough for stone). Output is a single
+/// byte per pixel: `Vec<u8>` of length `w * h`, suitable for upload as a
+/// `THREE.RedFormat` texture for the POM ray-march.
+///
+/// `strength` mirrors the normal-map convention — higher values amplify
+/// the bumps before normalisation. Each row's integrated height is
+/// rescaled to span [0, 255] independently in the X axis, then the
+/// whole image is normalised to share one global [0, 255] mapping so
+/// adjacent rows don't drift (perpendicular variation is lost on a pure
+/// horizontal integrate; the global remap recovers some of it).
+///
+/// Returns an empty `Vec` on malformed input or when the luminance
+/// channel is constant (no gradient → no height). Callers should treat
+/// empty as "skip POM for this surface" — see `lib.rs` Phase 3.1 wire.
+pub fn height_from_luminance(rgba: &[u8], w: u32, h: u32, strength: f32) -> Vec<u8> {
+    let pixel_count = (w as usize).saturating_mul(h as usize);
+    let needed_rgba = pixel_count.saturating_mul(4);
+    if pixel_count == 0 || rgba.len() < needed_rgba {
+        return Vec::new();
+    }
+
+    let mut lum = vec![0.0f32; pixel_count];
+    for i in 0..pixel_count {
+        let r = rgba[i * 4] as f32 / 255.0;
+        let g = rgba[i * 4 + 1] as f32 / 255.0;
+        let b = rgba[i * 4 + 2] as f32 / 255.0;
+        lum[i] = 0.299 * r + 0.587 * g + 0.114 * b;
+    }
+
+    if w <= LOW_RES_THRESHOLD || h <= LOW_RES_THRESHOLD {
+        lum = gaussian_blur_3x3(&lum, w, h);
+    }
+
+    let width = w as i32;
+    let height = h as i32;
+
+    // First pass: per-pixel Sobel-X gradient (the horizontal derivative
+    // of luminance — what we integrate).
+    let mut gx_buf = vec![0.0f32; pixel_count];
+    for y in 0..height {
+        for x in 0..width {
+            let l00 = sample_clamped(&lum, x - 1, y - 1, width, height);
+            let l20 = sample_clamped(&lum, x + 1, y - 1, width, height);
+            let l01 = sample_clamped(&lum, x - 1, y, width, height);
+            let l21 = sample_clamped(&lum, x + 1, y, width, height);
+            let l02 = sample_clamped(&lum, x - 1, y + 1, width, height);
+            let l22 = sample_clamped(&lum, x + 1, y + 1, width, height);
+            let gx = (l20 + 2.0 * l21 + l22) - (l00 + 2.0 * l01 + l02);
+            gx_buf[(y as usize) * (w as usize) + x as usize] = gx * strength;
+        }
+    }
+
+    // Second pass: integrate each row by horizontal scan. `h[x,y] =
+    // h[x-1,y] + gx[x,y]`. Treat the leftmost pixel of each row as the
+    // anchor (height 0).
+    let mut height_buf = vec![0.0f32; pixel_count];
+    for y in 0..(h as usize) {
+        let row = y * (w as usize);
+        height_buf[row] = 0.0;
+        for x in 1..(w as usize) {
+            height_buf[row + x] = height_buf[row + x - 1] + gx_buf[row + x];
+        }
+    }
+
+    // Normalise across the whole image to [0, 255]. A global remap
+    // (instead of per-row) lets the JS-side POM compare heights between
+    // pixels in different rows — important so a mortar line between
+    // rows doesn't appear to "jump" depth.
+    let mut min_h = f32::INFINITY;
+    let mut max_h = f32::NEG_INFINITY;
+    for &v in &height_buf {
+        if v < min_h { min_h = v; }
+        if v > max_h { max_h = v; }
+    }
+    let span = max_h - min_h;
+    if !span.is_finite() || span.abs() < 1e-6 {
+        // Constant luminance → no height variation. Return empty so the
+        // JS side skips POM on this surface (renders flat normal map
+        // only).
+        return Vec::new();
+    }
+
+    let mut out = vec![0u8; pixel_count];
+    for i in 0..pixel_count {
+        let n = ((height_buf[i] - min_h) / span * 255.0)
+            .round()
+            .clamp(0.0, 255.0);
+        out[i] = n as u8;
+    }
+    out
+}
+
 /// 3x3 Gaussian blur over a single-channel f32 image.
 ///
 /// Kernel:
@@ -357,5 +453,95 @@ mod tests {
         assert_eq!(corner_00, &[80, 80, 216], "corner (0,0) drift");
         assert_eq!(center_33, &[128, 128, 255], "center (3,3) drift");
         assert_eq!(corner_77, &[175, 175, 216], "corner (7,7) drift");
+    }
+
+    // Phase 3.1 — heightmap-integration tests.
+
+    #[test]
+    fn height_empty_input_returns_empty() {
+        let h = height_from_luminance(&[], 0, 0, 1.0);
+        assert!(h.is_empty());
+    }
+
+    #[test]
+    fn height_malformed_input_returns_empty() {
+        let h = height_from_luminance(&[0u8; 8], 4, 4, 1.0);
+        assert!(h.is_empty());
+    }
+
+    #[test]
+    fn height_uniform_input_returns_empty() {
+        // Constant luminance → zero Sobel gradient → all-zero integrated
+        // heights → span=0 → return empty (caller skips POM on this surf).
+        let buf = solid(128, 128, 80, 80, 80);
+        let h = height_from_luminance(&buf, 128, 128, 1.0);
+        assert!(
+            h.is_empty(),
+            "constant luminance should produce empty heightmap"
+        );
+    }
+
+    #[test]
+    fn height_horizontal_gradient_steps() {
+        // A 128×128 left-to-right luminance ramp produces a constant
+        // Sobel-X gradient. Integrating row-by-row gives a monotonically
+        // increasing height — pixels on the right should have higher
+        // values than pixels on the left.
+        let w = 128u32;
+        let h_dim = 128u32;
+        let mut buf = Vec::with_capacity((w * h_dim * 4) as usize);
+        for _ in 0..h_dim {
+            for x in 0..w {
+                let v = (x as f32 / (w - 1) as f32 * 255.0).round() as u8;
+                buf.extend_from_slice(&[v, v, v, 0xFF]);
+            }
+        }
+        let height_buf = height_from_luminance(&buf, w, h_dim, 1.0);
+        assert_eq!(height_buf.len(), (w * h_dim) as usize);
+
+        // Pick a row well inside the texture (away from clamp edges).
+        let row = (h_dim / 2) as usize * (w as usize);
+        let h_left = height_buf[row + 10];
+        let h_mid = height_buf[row + 64];
+        let h_right = height_buf[row + (w as usize - 10)];
+        assert!(
+            h_left < h_mid && h_mid < h_right,
+            "horizontal gradient should produce monotonic height: left={h_left}, mid={h_mid}, right={h_right}"
+        );
+        // After normalisation the rightmost reachable pixel hits 255 (or
+        // very close — at least 200 to allow for the leftmost-cell-of-
+        // each-row anchor reset reducing the max slightly below 255).
+        assert!(
+            h_right > 200,
+            "rightmost pixel should be near max after normalisation: {h_right}"
+        );
+    }
+
+    #[test]
+    fn height_checkerboard_produces_step_pattern() {
+        // A black/white checkerboard has alternating bright/dark cells.
+        // The Sobel-X gradient flips sign at every transition; the
+        // horizontal integrate produces a "step" pattern that mostly
+        // oscillates. Just assert: (a) length is correct, (b) we get
+        // some variation (not all-zero), (c) the output is bounded
+        // [0, 255]. This matches the spec's "step pattern" wording.
+        let buf = checker(8, 8, [0, 0, 0], [255, 255, 255]);
+        let h_buf = height_from_luminance(&buf, 8, 8, 1.0);
+        assert_eq!(h_buf.len(), 8 * 8);
+        let min = *h_buf.iter().min().unwrap();
+        let max = *h_buf.iter().max().unwrap();
+        assert!(min < max, "checkerboard should produce non-flat heights");
+        // Both extremes should hit the bounds after normalisation.
+        assert_eq!(min, 0, "lowest height should be 0 after normalise");
+        assert_eq!(max, 255, "highest height should be 255 after normalise");
+    }
+
+    #[test]
+    fn height_determinism() {
+        // Same input → same output, byte-for-byte.
+        let buf = checker(16, 16, [10, 10, 10], [240, 240, 240]);
+        let a = height_from_luminance(&buf, 16, 16, 1.0);
+        let b = height_from_luminance(&buf, 16, 16, 1.0);
+        assert_eq!(a, b, "non-deterministic heightmap output");
     }
 }

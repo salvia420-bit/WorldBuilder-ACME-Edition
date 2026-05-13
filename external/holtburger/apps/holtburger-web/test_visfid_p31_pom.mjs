@@ -1,0 +1,408 @@
+// Visual-fidelity Phase 3.1 — Parallax Occlusion Mapping ESM test.
+//
+// Verifies that `MaterialCache._materialFromFlags` correctly wires the
+// POM shader patch when:
+//   - quality.flags.pom is enabled (constructor: pomEnabled=true)
+//   - category is Stone / Brick / Tile
+//   - heightTexture is non-null
+//   - normalTexture is non-null
+//   - surface is not Additive / not Translucent
+//
+// Also checks the gating:
+//   - pomEnabled=false → no patch (mid/low preset)
+//   - category=Wood    → no patch (stone-only)
+//   - heightTexture=null → no patch (Luminous/constant-lum surfaces)
+//   - forcePom=true    → patch applies even on Wood
+//
+// Run with:
+//   cd apps/holtburger-web/
+//   THREE_PATH=/tmp/three-test/node_modules/three/build/three.module.js \
+//     node test_visfid_p31_pom.mjs
+
+import { fileURLToPath } from "node:url";
+import { dirname, resolve as resolvePath } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+let failed = 0;
+let passed = 0;
+function check(name, ok, detail) {
+    const status = ok ? "OK" : "FAIL";
+    console.log(`  [${status}] ${name}${detail ? " — " + detail : ""}`);
+    if (!ok) failed += 1;
+    else passed += 1;
+}
+
+function locateThree() {
+    if (process.env.THREE_PATH && existsSync(process.env.THREE_PATH)) {
+        return process.env.THREE_PATH;
+    }
+    return null;
+}
+
+const threePath = locateThree();
+if (!threePath) {
+    console.log("Phase 3.1 POM ESM test: SKIP (three not located).");
+    console.log("  hint: `THREE_PATH=/tmp/three-test/node_modules/three/build/three.module.js node test_visfid_p31_pom.mjs`");
+    process.exit(0);
+}
+
+const threeUrl = "file://" + threePath;
+const THREE = await import(threeUrl);
+
+console.log("Phase 3.1 — POM standalone ESM test");
+console.log(`three loaded from: ${threePath}`);
+console.log("=========================");
+
+function loadModule(relPath) {
+    const full = resolvePath(__dirname, relPath);
+    return readFileSync(full, "utf8");
+}
+
+const matsSrc = loadModule("scene3d/materials.js");
+const matsPatched = matsSrc
+    .replace(
+        /^\s*import\s+\{[^}]+\}\s+from\s+["']\.\/adapter\.js["'];?\s*$/m,
+        ""
+    )
+    .replace(/^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m, "")
+    .replace(/^\s*export\s+function\s+/gm, "function ")
+    .replace(/^\s*export\s+class\s+/gm, "class ")
+    .replace(/^\s*export\s+const\s+/gm, "const ");
+// Stub the adapter import — _materialFromFlags doesn't call any of
+// these (the helpers are only used in get()/preload(), which we don't
+// exercise here).
+const matsStubbed =
+    "const surfacePixelsToTexture = () => null;\n" +
+    "const surfacePixelsToNormalTexture = () => null;\n" +
+    "const surfacePixelsToHeightTexture = () => null;\n" +
+    matsPatched;
+
+const matsFactory = new Function(
+    "THREE",
+    matsStubbed +
+        "\n; return { MaterialCache, SURFACE_TYPE, SURFACE_CATEGORY, installPomShaderPatch };"
+);
+const { MaterialCache, SURFACE_TYPE, SURFACE_CATEGORY, installPomShaderPatch } =
+    matsFactory(THREE);
+
+// ---- Stage 1: pomEnabled=false → no patch (low/mid preset) ----
+function makeStubTex(name) {
+    const t = new THREE.DataTexture(
+        new Uint8Array([128, 128, 255, 255]),
+        1, 1, THREE.RGBAFormat, THREE.UnsignedByteType
+    );
+    t.needsUpdate = true;
+    t.name = name;
+    return t;
+}
+function makeHeightTex(name) {
+    // RedFormat in three doesn't strictly require a single-channel
+    // typed buffer in this codepath (we don't render), so a simple
+    // DataTexture is enough for installation-only tests.
+    const t = new THREE.DataTexture(
+        new Uint8Array([128]),
+        1, 1, THREE.RedFormat, THREE.UnsignedByteType
+    );
+    t.needsUpdate = true;
+    t.name = name;
+    return t;
+}
+
+const diffuseTex = makeStubTex("diffuse");
+const normalTex = makeStubTex("normal");
+const heightTex = makeHeightTex("height");
+
+const cacheNoPom = new MaterialCache({ pomEnabled: false });
+const matNoPom = cacheNoPom._materialFromFlags(
+    SURFACE_TYPE.Base1Image,
+    diffuseTex,
+    SURFACE_CATEGORY.Stone,
+    normalTex,
+    null,
+    heightTex,
+);
+check(
+    "pomEnabled=false: no POM patch installed",
+    matNoPom.userData?.pomEnabled !== true,
+    `pomEnabled=${matNoPom.userData?.pomEnabled}`
+);
+
+// ---- Stage 2: pomEnabled=true + Stone + heightTex + normalTex → patch ----
+const cachePom = new MaterialCache({ pomEnabled: true });
+const matStone = cachePom._materialFromFlags(
+    SURFACE_TYPE.Base1Image,
+    diffuseTex,
+    SURFACE_CATEGORY.Stone,
+    normalTex,
+    null,
+    heightTex,
+);
+check(
+    "Stone + pomEnabled + height + normal: pomEnabled=true on material",
+    matStone.userData?.pomEnabled === true,
+    `pomEnabled=${matStone.userData?.pomEnabled}`
+);
+check(
+    "Stone + pomEnabled: onBeforeCompile installed",
+    typeof matStone.onBeforeCompile === "function",
+    `onBeforeCompile=${typeof matStone.onBeforeCompile}`
+);
+check(
+    "Stone + pomEnabled: pomUniforms recorded on userData",
+    matStone.userData?.pomUniforms &&
+        typeof matStone.userData.pomUniforms.steps === "number",
+    `pomUniforms=${JSON.stringify(matStone.userData?.pomUniforms)}`
+);
+
+// ---- Stage 3: Brick + Tile categories also get POM ----
+const matBrick = cachePom._materialFromFlags(
+    SURFACE_TYPE.Base1Image,
+    diffuseTex,
+    SURFACE_CATEGORY.Brick,
+    normalTex,
+    null,
+    heightTex,
+);
+check(
+    "Brick + pomEnabled: pomEnabled=true",
+    matBrick.userData?.pomEnabled === true,
+    `pomEnabled=${matBrick.userData?.pomEnabled}`
+);
+const matTile = cachePom._materialFromFlags(
+    SURFACE_TYPE.Base1Image,
+    diffuseTex,
+    SURFACE_CATEGORY.Tile,
+    normalTex,
+    null,
+    heightTex,
+);
+check(
+    "Tile + pomEnabled: pomEnabled=true",
+    matTile.userData?.pomEnabled === true,
+    `pomEnabled=${matTile.userData?.pomEnabled}`
+);
+
+// ---- Stage 4: Wood, Sand, Foliage do NOT get POM (category gate) ----
+for (const [name, cat] of [
+    ["Wood", SURFACE_CATEGORY.Wood],
+    ["Sand", SURFACE_CATEGORY.Sand],
+    ["Foliage", SURFACE_CATEGORY.Foliage],
+    ["Metal", SURFACE_CATEGORY.Metal],
+    ["Cloth", SURFACE_CATEGORY.Cloth],
+]) {
+    const m = cachePom._materialFromFlags(
+        SURFACE_TYPE.Base1Image,
+        diffuseTex,
+        cat,
+        normalTex,
+        null,
+        heightTex,
+    );
+    check(
+        `${name} + pomEnabled: pomEnabled stays false (stone-only)`,
+        m.userData?.pomEnabled !== true,
+        `pomEnabled=${m.userData?.pomEnabled}`
+    );
+}
+
+// ---- Stage 5: heightTex=null → no patch even on Stone ----
+const matStoneNoHeight = cachePom._materialFromFlags(
+    SURFACE_TYPE.Base1Image,
+    diffuseTex,
+    SURFACE_CATEGORY.Stone,
+    normalTex,
+    null,
+    null, // no heightTexture (e.g. Luminous or constant-lum surface)
+);
+check(
+    "Stone + heightTex=null: no POM patch (empty heightmap skip)",
+    matStoneNoHeight.userData?.pomEnabled !== true,
+    `pomEnabled=${matStoneNoHeight.userData?.pomEnabled}`
+);
+
+// ---- Stage 6: normalTex=null → no patch (POM needs normal map) ----
+const matStoneNoNormal = cachePom._materialFromFlags(
+    SURFACE_TYPE.Base1Image,
+    diffuseTex,
+    SURFACE_CATEGORY.Stone,
+    null,
+    null,
+    heightTex,
+);
+check(
+    "Stone + normalTex=null: no POM patch (POM needs normal map)",
+    matStoneNoNormal.userData?.pomEnabled !== true,
+    `pomEnabled=${matStoneNoNormal.userData?.pomEnabled}`
+);
+
+// ---- Stage 7: Additive / Translucent → no patch ----
+const matAdditive = cachePom._materialFromFlags(
+    SURFACE_TYPE.Additive | SURFACE_TYPE.Base1Image,
+    diffuseTex,
+    SURFACE_CATEGORY.Stone,
+    normalTex,
+    null,
+    heightTex,
+);
+check(
+    "Additive + Stone: no POM patch (additive blending unaffected)",
+    matAdditive.userData?.pomEnabled !== true,
+    `pomEnabled=${matAdditive.userData?.pomEnabled}`
+);
+const matTrans = cachePom._materialFromFlags(
+    SURFACE_TYPE.Translucent | SURFACE_TYPE.Base1Image,
+    diffuseTex,
+    SURFACE_CATEGORY.Stone,
+    normalTex,
+    null,
+    heightTex,
+);
+check(
+    "Translucent + Stone: no POM patch",
+    matTrans.userData?.pomEnabled !== true,
+    `pomEnabled=${matTrans.userData?.pomEnabled}`
+);
+
+// ---- Stage 8: forcePom=true → POM on Wood ----
+const cacheForce = new MaterialCache({ pomEnabled: true, forcePom: true });
+const matForcedWood = cacheForce._materialFromFlags(
+    SURFACE_TYPE.Base1Image,
+    diffuseTex,
+    SURFACE_CATEGORY.Wood,
+    normalTex,
+    null,
+    heightTex,
+);
+check(
+    "forcePom + Wood: POM patch applies anyway",
+    matForcedWood.userData?.pomEnabled === true,
+    `pomEnabled=${matForcedWood.userData?.pomEnabled}`
+);
+check(
+    "forcePom + Wood: userData records pomForced=true",
+    matForcedWood.userData?.pomForced === true,
+    `pomForced=${matForcedWood.userData?.pomForced}`
+);
+
+// ---- Stage 9: simulate onBeforeCompile → assert shader patches injected ----
+const stubShader = {
+    vertexShader:
+        "#include <common>\nvoid main() {\n#include <project_vertex>\n}\n",
+    fragmentShader:
+        "#include <common>\nvoid main() {\n#include <map_fragment>\n#include <dithering_fragment>\n}\n",
+    uniforms: {},
+};
+matStone.onBeforeCompile(stubShader);
+
+check(
+    "patched fragment shader declares uPomMap sampler",
+    /uniform sampler2D uPomMap/.test(stubShader.fragmentShader),
+    "uPomMap declared"
+);
+check(
+    "patched fragment shader declares uPomSteps / uPomDepth / uPomLodNear / uPomLodFar",
+    /uniform int uPomSteps/.test(stubShader.fragmentShader) &&
+        /uniform float uPomDepth/.test(stubShader.fragmentShader) &&
+        /uniform float uPomLodNear/.test(stubShader.fragmentShader) &&
+        /uniform float uPomLodFar/.test(stubShader.fragmentShader),
+    "all four scalars present"
+);
+check(
+    "patched fragment shader declares uPomShadowSteps + uPomShadowDarkness (self-shadow)",
+    /uniform int uPomShadowSteps/.test(stubShader.fragmentShader) &&
+        /uniform float uPomShadowDarkness/.test(stubShader.fragmentShader),
+    "self-shadow uniforms present"
+);
+check(
+    "patched fragment shader defines _pomPerturbedUv function",
+    /vec2\s+_pomPerturbedUv\s*\(/.test(stubShader.fragmentShader),
+    "function found"
+);
+check(
+    "patched fragment shader defines _pomShadow function (self-shadow)",
+    /float\s+_pomShadow\s*\(/.test(stubShader.fragmentShader),
+    "self-shadow function found"
+);
+check(
+    "patched fragment shader uses LOD ramp via smoothstep(uPomLodNear, uPomLodFar, vPomViewDepth)",
+    /smoothstep\(uPomLodNear,\s*uPomLodFar,\s*vPomViewDepth\)/.test(stubShader.fragmentShader),
+    "LOD ramp injection"
+);
+check(
+    "patched vertex shader declares vPomTangentViewDir + vPomViewDepth varyings",
+    /varying\s+vec3\s+vPomTangentViewDir/.test(stubShader.vertexShader) &&
+        /varying\s+float\s+vPomViewDepth/.test(stubShader.vertexShader),
+    "vertex varyings declared"
+);
+check(
+    "patched shader registers uPomMap into shader.uniforms",
+    stubShader.uniforms.uPomMap !== undefined &&
+        stubShader.uniforms.uPomSteps !== undefined,
+    `uniforms keys=${Object.keys(stubShader.uniforms).filter((k) => k.startsWith("uPom")).join(",")}`
+);
+
+// ---- Stage 10: default step count = 16 (POM_UNIFORM_DEFAULTS.steps) ----
+check(
+    "default POM step count = 16",
+    matStone.userData?.pomUniforms?.steps === 16,
+    `steps=${matStone.userData?.pomUniforms?.steps}`
+);
+
+// ---- Stage 11: ultra preset step count override = 32 ----
+const cacheUltra = new MaterialCache({
+    pomEnabled: true,
+    pomOpts: { steps: 32 },
+});
+const matUltra = cacheUltra._materialFromFlags(
+    SURFACE_TYPE.Base1Image,
+    diffuseTex,
+    SURFACE_CATEGORY.Stone,
+    normalTex,
+    null,
+    heightTex,
+);
+check(
+    "ultra preset POM step count = 32",
+    matUltra.userData?.pomUniforms?.steps === 32,
+    `steps=${matUltra.userData?.pomUniforms?.steps}`
+);
+
+// ---- Stage 12: chained patches — POM + CSM compose cleanly ----
+// (We don't construct a real csmState here — just verify that
+// installPomShaderPatch's chain wires another hook before our own.)
+const matBase = new THREE.MeshStandardMaterial({ color: 0xff8844 });
+let prevHookCalled = false;
+matBase.onBeforeCompile = function (shader) {
+    prevHookCalled = true;
+    shader.uniforms.uPreviousMarker = { value: 1 };
+};
+installPomShaderPatch(matBase, heightTex);
+const stubShader3 = {
+    vertexShader: "#include <common>\nvoid main() {\n#include <project_vertex>\n}\n",
+    fragmentShader: "#include <common>\nvoid main() {\n#include <map_fragment>\n#include <dithering_fragment>\n}\n",
+    uniforms: {},
+};
+matBase.onBeforeCompile(stubShader3);
+check(
+    "previous onBeforeCompile hook also runs (chain preserved)",
+    prevHookCalled,
+    "prev hook called"
+);
+check(
+    "chained: both uPreviousMarker AND uPomMap in shader.uniforms",
+    stubShader3.uniforms.uPreviousMarker !== undefined &&
+        stubShader3.uniforms.uPomMap !== undefined,
+    `keys=${Object.keys(stubShader3.uniforms).join(",")}`
+);
+
+// ---- Summary --------------------------------------------------------
+console.log("=========================");
+if (failed === 0) {
+    console.log(`PASS: ${passed}/${passed} Phase 3.1 POM checks green.`);
+    process.exit(0);
+} else {
+    console.log(`FAIL: ${failed} check(s) failed (${passed} passed).`);
+    process.exit(1);
+}
