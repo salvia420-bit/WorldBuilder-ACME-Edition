@@ -11,7 +11,7 @@ bake (10 views × 4 presets) is deferred to live-ACE per §7 of the plan.
 | `views.json` | 10 canonical view definitions (id, landblock, teleloc target, sky hour, description). |
 | `capture-all.cjs` | Playwright capture script. Two modes — laptop-safe `mockSession` (default), live-ACE `--live` (stub). |
 | `diff-vs-golden.cjs` | `pixelmatch` PNG diff vs the canonical `golden.png` in each `{view}/{quality}/` dir. |
-| `../../../../.github/workflows/visual-regression.yml` | Manual-dispatch CI workflow. |
+| `ci-workflow.example.yml` | Manual-dispatch CI workflow template. Copy to `.github/workflows/visual-regression.yml` (requires `workflow` scope on the pushing user — Claude Code's OAuth token does not have it). |
 
 ## Storage layout
 
