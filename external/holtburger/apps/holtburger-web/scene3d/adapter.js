@@ -546,6 +546,62 @@ export function surfacePixelsToTexture(rgba8, width, height) {
 }
 
 /**
+ * Phase 1.1 — wrap an RGB8 normal map (from
+ * `holtburger_dat::normal_gen::normal_from_luminance` exposed via
+ * `SurfacePixels.normalPixels`) into a `THREE.DataTexture`.
+ *
+ * Three.js r152+ removed `RGBFormat`; we pad the source RGB8 buffer
+ * into RGBA8 with `a = 255` and upload as `RGBAFormat`. The padding is
+ * a one-time cost at decode and the alpha channel is unread by the
+ * normal-map sampler anyway.
+ *
+ * Critical flags (differ from `surfacePixelsToTexture`):
+ *   - `colorSpace = NoColorSpace` — normals are NOT colour data.
+ *     sRGB would gamma-encode the bytes, corrupting the vector
+ *     direction.
+ *   - All other flags (wrap, filter, mipmaps, flipY) mirror the
+ *     diffuse path so the normal samples align pixel-for-pixel with
+ *     the albedo.
+ *
+ * Returns `null` if `normalRgb8` is empty (e.g. Luminous surfaces
+ * skipped on the wasm side); caller leaves `material.normalMap` unset.
+ */
+export function surfacePixelsToNormalTexture(normalRgb8, width, height) {
+  if (!normalRgb8 || normalRgb8.byteLength === 0 || width === 0 || height === 0) {
+    return null;
+  }
+  const expected = width * height * 3;
+  if (normalRgb8.byteLength < expected) {
+    return null;
+  }
+  // Pad RGB → RGBA. Allocating fresh also detaches from wasm memory.
+  const rgba = new Uint8Array(width * height * 4);
+  for (let i = 0; i < width * height; i += 1) {
+    rgba[i * 4 + 0] = normalRgb8[i * 3 + 0];
+    rgba[i * 4 + 1] = normalRgb8[i * 3 + 1];
+    rgba[i * 4 + 2] = normalRgb8[i * 3 + 2];
+    rgba[i * 4 + 3] = 255;
+  }
+  const tex = new THREE.DataTexture(
+    rgba,
+    width,
+    height,
+    THREE.RGBAFormat,
+    THREE.UnsignedByteType
+  );
+  // CRITICAL: NoColorSpace. sRGB would corrupt the normal vectors.
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.flipY = false;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/**
  * Convert AC quaternion ordering (qw, qx, qy, qz) to three.js's
  * (x, y, z, w) convention. AC stores w-first in wire and DAT formats;
  * three.js's `Quaternion` constructor takes w last.
