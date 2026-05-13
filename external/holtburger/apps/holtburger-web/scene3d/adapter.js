@@ -554,6 +554,91 @@ export function acQuatToThree(qw, qx, qy, qz) {
   return new THREE.Quaternion(qx, qy, qz, qw);
 }
 
+// =====================================================================
+// Phase 0.2 — detail-tile cache.
+// =====================================================================
+//
+// Loads the 5 grayscale 512² detail tiles under `assets/detail/` once
+// per scene and returns a `Map<key, THREE.Texture>` shared across every
+// `DetailMaterial` instance. Keys match the picker labels in
+// `materials.js::_pickDetailKey`:
+//
+//   "generic-rough" | "stone-grain" | "wood-grain"
+//                   | "fabric-weave" | "sand-grain"
+//
+// Textures use `linear` colour space (the tile is a luminance mask, not
+// colour data — wrong colour-space causes a visible darken when the
+// SRGB → linear pass fires on the diffuse path) and `RepeatWrapping`
+// (the shader samples at `vUv * uDetailScale`, default 8.0).
+//
+// `null` is returned for any tile that fails to load (offline / 404 /
+// captures with no asset server). The DetailMaterial picker treats a
+// missing tile as "fall through to opaque", so this is safe — the
+// material simply renders without the detail composite, matching the
+// pre-Phase-0.2 baseline.
+export const DETAIL_TILE_KEYS = Object.freeze([
+  "generic-rough",
+  "stone-grain",
+  "wood-grain",
+  "fabric-weave",
+  "sand-grain",
+]);
+
+function _detailTileUrl(key, baseUrl) {
+  const base = baseUrl ?? "scene3d/assets/detail";
+  return `${base}/${key}.png`;
+}
+
+/**
+ * Load every Phase 0.2 detail tile in parallel. Resolves to a Map of
+ * `key → THREE.Texture` (linear colour space, RepeatWrapping). Missing
+ * tiles are simply absent from the returned map so the caller can
+ * `cache.get("stone-grain") ?? cache.get("generic-rough")` fall-through
+ * cleanly.
+ *
+ * Idempotent in the trivial sense — calling twice issues two image
+ * loads. Callers should keep the resolved Map on `scene3d.detailTileCache`
+ * and not re-call.
+ *
+ * @param {{ baseUrl?: string, THREE?: object }} opts
+ * @returns {Promise<Map<string, THREE.Texture>>}
+ */
+export async function loadDetailTileCache(opts = {}) {
+  const { baseUrl, THREE: ThreeOverride } = opts;
+  // Allow the test harness to inject a mock three; default to the real
+  // import.
+  const T = ThreeOverride ?? THREE;
+  const loader = new T.TextureLoader();
+  const cache = new Map();
+
+  async function loadOne(key) {
+    const url = _detailTileUrl(key, baseUrl);
+    try {
+      const tex = await new Promise((resolve, reject) => {
+        loader.load(url, resolve, undefined, reject);
+      });
+      // Linear: this is a luminance mask, not colour data. If we left
+      // it on SRGBColorSpace the GPU would re-linearise it once more
+      // when sampling and darken the composite.
+      tex.colorSpace = T.NoColorSpace;
+      tex.wrapS = T.RepeatWrapping;
+      tex.wrapT = T.RepeatWrapping;
+      tex.minFilter = T.LinearMipmapLinearFilter;
+      tex.magFilter = T.LinearFilter;
+      tex.generateMipmaps = true;
+      tex.name = `scene3d-detail-${key}`;
+      tex.needsUpdate = true;
+      cache.set(key, tex);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn(`[phase-0.2] detail tile ${key} failed to load:`, e);
+    }
+  }
+
+  await Promise.all(DETAIL_TILE_KEYS.map(loadOne));
+  return cache;
+}
+
 /**
  * Compose a `THREE.Matrix4` from an `ObjectPlacement`-shaped object.
  *

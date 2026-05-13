@@ -413,8 +413,15 @@ export async function buildHoltburgBuildings(scene3d, wasmExports) {
   for (const bake of bakes.values()) {
     for (const did of bake.surfaceDids) allSurfaceDids.add(did);
   }
+  // Phase 0.2 — pass detail tile cache + forceDetail through to the
+  // MaterialCache so surfaces with the Detail (0x20000) bit composite
+  // a grayscale tile over the diffuse.
   const materialCache =
-    scene3d.materialCache || new MaterialCache();
+    scene3d.materialCache ||
+    new MaterialCache({
+      detailTileCache: scene3d.detailTileCache ?? null,
+      forceDetail: !!scene3d.forceDetail,
+    });
   if (allSurfaceDids.size > 0) {
     try {
       await materialCache.preload(
