@@ -173,7 +173,7 @@ Live stack (confirm before captures):
 - ACE Server: UDP `0.0.0.0:9000`
 - wsbridge: TCP `0.0.0.0:8080`
 - cloudflared tunnel: `drainage-eden-ahead-herbal.trycloudflare.com` → `127.0.0.1:7080`
-- Web proxy: `127.0.0.1:7080`
+- Web proxy: `127.0.0.1:7080` — run with `node scripts/proxy.cjs` (canonical source in repo; was previously `/tmp/holtburger_proxy.cjs` which didn't survive reboot)
 
 ## Skybox feature-level checklist
 
