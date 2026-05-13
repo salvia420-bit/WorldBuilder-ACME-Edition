@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "description": "Canonical view definitions for Phase X.2 visual regression suite. Each view defines a teleloc target + screenshot framing for a specific scene under test. Quality presets are run per-view; goldens land under /mnt/wbterminal1/holtburger-goldens/{view}/{quality}/golden.png.",
+  "viewport": { "width": 1280, "height": 1024 },
+  "qualityPresets": ["low", "mid", "high", "ultra"],
+  "views": [
+    {
+      "id": "holtburg_plaza_noon",
+      "landblock": "0xA9B4",
+      "cellHex": "0xA9B401B6",
+      "teleloc": { "cellHex": "0xA9B401B6", "origin": "60 70 78" },
+      "skyhour": 12,
+      "qualityPresets": ["low", "mid", "high", "ultra"],
+      "description": "Holtburg plaza centre at noon. Sun high — minimal building shadow length. Stresses overall composition + colour balance + sky dome at midday.",
+      "phase": "X.2"
+    },
+    {
+      "id": "holtburg_plaza_sunset",
+      "landblock": "0xA9B4",
+      "cellHex": "0xA9B401B6",
+      "teleloc": { "cellHex": "0xA9B401B6", "origin": "60 70 78" },
+      "skyhour": 18,
+      "qualityPresets": ["low", "mid", "high", "ultra"],
+      "description": "Holtburg plaza at sunset (long shadows). Validates shadow-map projection + lighting tick recenter (Phase 0.1) at low sun angle.",
+      "phase": "X.2"
+    },
+    {
+      "id": "academy_hilltop",
+      "landblock": "0x8602",
+      "cellHex": "0x86020100",
+      "teleloc": { "cellHex": "0x86020100", "origin": "0 0 0" },
+      "skyhour": 14,
+      "qualityPresets": ["low", "mid", "high", "ultra"],
+      "description": "AC Training Academy spawn point (LB 0x8602). Distance test — captures interior cell composition + visible PVS frustum.",
+      "phase": "X.2"
+    },
+    {
+      "id": "cottage_interior",
+      "landblock": "0xA9B4",
+      "cellHex": "0xA9B40134",
+      "teleloc": { "cellHex": "0xA9B40134", "origin": "0 0 0" },
+      "skyhour": 12,
+      "qualityPresets": ["low", "mid", "high", "ultra"],
+      "description": "Inside a Holtburg cottage. Interior lighting + EnvCell rendering (Phase 6C). Door state + interior shadow gating.",
+      "phase": "X.2"
+    },
+    {
+      "id": "forge_closeup",
+      "landblock": "0xA9B4",
+      "cellHex": "0xA9B401B6",
+      "teleloc": { "cellHex": "0xA9B401B6", "origin": "120 90 78" },
+      "skyhour": 12,
+      "qualityPresets": ["low", "mid", "high", "ultra"],
+      "description": "Holtburg forge close-up (wcid 0x20000014). Metal classifier (Phase 1.4) test — high luminance, low saturation surfaces.",
+      "phase": "X.2"
+    },
+    {
+      "id": "lifestone_closeup",
+      "landblock": "0xA9B4",
+      "cellHex": "0xA9B401B6",
+      "teleloc": { "cellHex": "0xA9B401B6", "origin": "40 100 78" },
+      "skyhour": 20,
+      "qualityPresets": ["low", "mid", "high", "ultra"],
+      "description": "Holtburg lifestone close-up (wcid 509). Emissive surface classifier test. Captured at dusk so emissive bloom is visible.",
+      "phase": "X.2"
+    },
+    {
+      "id": "holtburg_cliff_south",
+      "landblock": "0xA9B5",
+      "cellHex": "0xA9B501B6",
+      "teleloc": { "cellHex": "0xA9B501B6", "origin": "96 24 30" },
+      "skyhour": 10,
+      "qualityPresets": ["low", "mid", "high", "ultra"],
+      "description": "Cliff face south of Holtburg. Steep slope — triplanar mapping (Phase 1.3) validation. Captures UV stretching kill on cliffs.",
+      "phase": "X.2"
+    },
+    {
+      "id": "subdivided_hillside",
+      "landblock": "0xA9B4",
+      "cellHex": "0xA9B401B6",
+      "teleloc": { "cellHex": "0xA9B401B6", "origin": "180 30 80" },
+      "skyhour": 12,
+      "qualityPresets": ["low", "mid", "high", "ultra"],
+      "description": "Hillside east of Holtburg. Subdiv visual test (Phase 2.1) — heightfield interpolation at subdivLevel 1/2/4/8 across quality tiers.",
+      "phase": "X.2"
+    },
+    {
+      "id": "pom_cottage_wall",
+      "landblock": "0xA9B4",
+      "cellHex": "0xA9B401B6",
+      "teleloc": { "cellHex": "0xA9B401B6", "origin": "60 60 78" },
+      "skyhour": 12,
+      "qualityPresets": ["low", "mid", "high", "ultra"],
+      "description": "POM-enabled cottage wall close-up. Stone surface, gated on hero+pom in high/ultra (Phase 3.1).",
+      "phase": "X.2"
+    },
+    {
+      "id": "ssao_building_corner",
+      "landblock": "0xA9B4",
+      "cellHex": "0xA9B401B6",
+      "teleloc": { "cellHex": "0xA9B401B6", "origin": "80 50 78" },
+      "skyhour": 14,
+      "qualityPresets": ["low", "mid", "high", "ultra"],
+      "description": "SSAO-affected building corner — concave geometry near ground. Validates SSAO post pass (Phase 3.2) at high/ultra.",
+      "phase": "X.2"
+    }
+  ]
+}

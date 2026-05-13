@@ -1,0 +1,112 @@
+name: visual-regression
+
+# Manual-dispatch only. Auto-run on PR is intentionally OFF to save CI
+# minutes — the full bake takes ~10 captures × 4 presets × N seconds.
+# Triggered from the GitHub Actions UI with knobs for view + quality.
+on:
+  workflow_dispatch:
+    inputs:
+      view:
+        description: View id to capture (matches scripts/visual-regression/views.json). Leave blank for "all".
+        required: false
+        default: ""
+      quality:
+        description: Quality preset (low|mid|high|ultra). Leave blank for "all".
+        required: false
+        default: low
+      compare:
+        description: Run pixelmatch diff against stored goldens after capture.
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install playwright + pixelmatch + pngjs
+        run: |
+          npm install --no-save playwright pixelmatch pngjs
+          npx playwright install --with-deps chromium
+
+      - name: Start dev server
+        run: |
+          # CI uses the dist bake (manifest v2). For now we assume an
+          # external host provides the dat shards (Tailscale or a CI
+          # mirror); a self-hosted runner with the bake mounted is the
+          # real long-term home for this workflow.
+          (cd external/holtburger && python3 -m http.server 8765 --bind 127.0.0.1 &> /tmp/http.log &)
+          sleep 3
+          curl -s -o /dev/null -w "dev-server status: %{http_code}\n" \
+            http://127.0.0.1:8765/apps/holtburger-web/index.html
+
+      - name: Capture
+        env:
+          NODE_PATH: ${{ github.workspace }}/node_modules
+          VISREG_PAGE_BASE: http://127.0.0.1:8765/apps/holtburger-web/index.html
+        run: |
+          ARGS=""
+          if [ -n "${{ github.event.inputs.view }}" ]; then
+            ARGS="$ARGS --view ${{ github.event.inputs.view }}"
+          fi
+          if [ -n "${{ github.event.inputs.quality }}" ]; then
+            ARGS="$ARGS --quality ${{ github.event.inputs.quality }}"
+          else
+            # Default to --quality low on CI — anything higher needs
+            # a self-hosted runner with the full bake mounted. See
+            # scripts/visual-regression/README.md for the live-ACE
+            # path PK runs on the Tailscale box.
+            ARGS="$ARGS --quality low"
+          fi
+          # Goldens dir lives outside the checkout on the dev laptop;
+          # in CI we use the working dir so artifacts can upload.
+          ARGS="$ARGS --out $GITHUB_WORKSPACE/goldens"
+          echo "running: capture-all.cjs $ARGS"
+          node external/holtburger/scripts/visual-regression/capture-all.cjs $ARGS
+
+      - name: Diff vs goldens
+        if: ${{ github.event.inputs.compare == 'true' }}
+        env:
+          NODE_PATH: ${{ github.workspace }}/node_modules
+          PIXELMATCH_PREFIX: ${{ github.workspace }}/node_modules
+        run: |
+          VIEW="${{ github.event.inputs.view }}"
+          QUALITY="${{ github.event.inputs.quality }}"
+          if [ -z "$QUALITY" ]; then QUALITY="low"; fi
+          if [ -n "$VIEW" ]; then
+            node external/holtburger/scripts/visual-regression/diff-vs-golden.cjs \
+              --view "$VIEW" --quality "$QUALITY" \
+              --root "$GITHUB_WORKSPACE/goldens"
+          else
+            # Iterate all views from views.json
+            VIEWS=$(node -e "console.log(require('./external/holtburger/scripts/visual-regression/views.json').views.map(v => v.id).join('\n'))")
+            EXIT=0
+            for V in $VIEWS; do
+              if [ -f "$GITHUB_WORKSPACE/goldens/$V/$QUALITY/golden.png" ]; then
+                node external/holtburger/scripts/visual-regression/diff-vs-golden.cjs \
+                  --view "$V" --quality "$QUALITY" \
+                  --root "$GITHUB_WORKSPACE/goldens" || EXIT=1
+              else
+                echo "skip $V (no golden at \$root/$V/$QUALITY/golden.png)"
+              fi
+            done
+            exit $EXIT
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-regression-${{ github.run_id }}
+          path: |
+            goldens/**/*.png
+            goldens/**/*.json
+          retention-days: 14
