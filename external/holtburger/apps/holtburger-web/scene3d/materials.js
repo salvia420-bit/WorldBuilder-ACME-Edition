@@ -192,7 +192,7 @@ export class MaterialCache {
    * `surfaceTypeFlags === 0` (the empty-surface fallback) hits the
    * opaque path → standard albedo material with DoubleSide.
    */
-  _materialFromFlags(surfaceTypeFlags, texture, category) {
+  _materialFromFlags(surfaceTypeFlags, texture, category, overrides) {
     const flags = surfaceTypeFlags >>> 0;
     // Phase 1.4 — start from the category-aware default if the wasm
     // side classified the surface; otherwise stay on the generic
@@ -205,6 +205,16 @@ export class MaterialCache {
       if (defaults) {
         baseRoughness = defaults.roughness;
         baseMetalness = defaults.metalness;
+      }
+    }
+    // Phase 1.5 — per-DID overrides from `data/surface_overrides.json`
+    // override the category default. Either the wasm bundle passes
+    // `Number.isFinite(roughness)` (real override) or the value arrives
+    // as `NaN` / `undefined` (fall through to category default). Diffuse
+    // flag (below) still overrides this — explicit AC matte hint wins.
+    if (overrides) {
+      if (typeof overrides.roughness === "number" && Number.isFinite(overrides.roughness)) {
+        baseRoughness = overrides.roughness;
       }
     }
     const opts = {
@@ -255,7 +265,16 @@ export class MaterialCache {
       opts.roughness = 1.0; // matte — no specular highlight
       opts.metalness = 0.0;
     }
-    return new THREE.MeshStandardMaterial(opts);
+    const mat = new THREE.MeshStandardMaterial(opts);
+    // Phase 1.5 — stash the normal-scale override on userData; the
+    // Phase 1.1 procedural-normal pipeline (not yet shipped) will pick
+    // this up post-resolve to scale the bump strength per DID. Storing
+    // the value here keeps the override layer authoritative even
+    // before the consumer lands.
+    if (overrides && typeof overrides.normalScale === "number" && Number.isFinite(overrides.normalScale)) {
+      mat.userData = { ...(mat.userData || {}), normalScaleOverride: overrides.normalScale };
+    }
+    return mat;
   }
 
   /**
@@ -304,13 +323,23 @@ export class MaterialCache {
       // which case `_materialFromFlags` falls through to generic
       // 0.9 / 0.0 defaults.
       const category = typeof sp.category === "number" ? sp.category : undefined;
+      // Phase 1.5: per-DID overrides emitted by the wasm bundle. NaN
+      // sentinels from the Rust side surface as `Number.isFinite() === false`,
+      // which `_materialFromFlags` treats as "fall through to category
+      // defaults".
+      const overrides = {
+        roughness: typeof sp.roughnessOverride === "number" ? sp.roughnessOverride : undefined,
+        normalScale: typeof sp.normalScaleOverride === "number" ? sp.normalScaleOverride : undefined,
+      };
       if (typeof sp.free === "function") sp.free();
-      const mat = this._materialFromFlags(surfaceTypeFlags, tex, category);
+      const mat = this._materialFromFlags(surfaceTypeFlags, tex, category, overrides);
       mat.name = `scene3d-surface-${did.toString(16).padStart(8, "0")}`;
       mat.userData = {
         ...(mat.userData || {}),
         surfaceTypeFlags,
         surfaceCategory: category,
+        surfaceRoughnessOverride: overrides.roughness,
+        surfaceNormalScaleOverride: overrides.normalScale,
       };
       this.textures.set(did, tex);
       this.materials.set(did, mat);
@@ -393,7 +422,7 @@ export class MaterialCache {
     // a try/catch instead of an inline `sp.width === 0` check. A throw
     // here means the surface DID had no pixels — fall back to the
     // shared fallback material exactly as for the zero-dim case.
-    let w, h, pixels, surfaceType, category;
+    let w, h, pixels, surfaceType, category, roughnessOverride, normalScaleOverride;
     try {
       w = sp.width;
       h = sp.height;
@@ -410,6 +439,10 @@ export class MaterialCache {
       // Phase 1.4: heuristic category as u8. Missing getter on older
       // wasm builds → undefined → generic defaults in _materialFromFlags.
       category = typeof sp.category === "number" ? sp.category : undefined;
+      // Phase 1.5: per-DID overrides. NaN/undefined from wasm → no
+      // override, fall through to category defaults.
+      roughnessOverride = typeof sp.roughnessOverride === "number" ? sp.roughnessOverride : undefined;
+      normalScaleOverride = typeof sp.normalScaleOverride === "number" ? sp.normalScaleOverride : undefined;
     } catch (_) {
       return this.fallbackMaterial;
     }
@@ -417,12 +450,15 @@ export class MaterialCache {
     // Phase 7 follow-on #7+8: surface_type bitfield from the wasm side.
     const surfaceTypeFlags = surfaceType >>> 0;
     try { if (typeof sp.free === "function") sp.free(); } catch (_) {}
-    const mat = this._materialFromFlags(surfaceTypeFlags, tex, category);
+    const overrides = { roughness: roughnessOverride, normalScale: normalScaleOverride };
+    const mat = this._materialFromFlags(surfaceTypeFlags, tex, category, overrides);
     mat.name = `scene3d-surface-${did.toString(16).padStart(8, "0")}`;
     mat.userData = {
       ...(mat.userData || {}),
       surfaceTypeFlags,
       surfaceCategory: category,
+      surfaceRoughnessOverride: roughnessOverride,
+      surfaceNormalScaleOverride: normalScaleOverride,
     };
     this.textures.set(did, tex);
     this.materials.set(did, mat);

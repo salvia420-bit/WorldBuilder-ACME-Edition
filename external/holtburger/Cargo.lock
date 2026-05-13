@@ -1654,6 +1654,8 @@ dependencies = [
  "holtburger-transport-ws",
  "holtburger-world",
  "log",
+ "serde",
+ "serde_json",
  "tokio",
  "wasm-bindgen",
  "wasm-bindgen-futures",

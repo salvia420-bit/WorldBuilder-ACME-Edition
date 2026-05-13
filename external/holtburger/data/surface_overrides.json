@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "overrides": {
+    "0x080000DD": {
+      "category": "Generic",
+      "notes": "Wave-1 seed. Heuristic says Snow (uniform lum 0.78, sat 0.00, var 0.00). Visual: uniform light-grey wall/cloth fill. Snow rule fires on near-white smooth surfaces but this surface lacks any contextual snow signal."
+    },
+    "0x0800073E": {
+      "category": "Cloth",
+      "notes": "Wave-1 seed. Heuristic says Generic. Visual: bright red Translucent banner (lum 0.30, sat 1.00, hue 359, flags 0x11). No heuristic rule fires for saturated-red Translucent that isn't Lava-shaped."
+    },
+    "0x080008CA": {
+      "category": "Cloth",
+      "notes": "Wave-1 seed. Heuristic says Generic. Visual: bright red Translucent banner (lum 0.32, sat 0.96, hue 0, flags 0x11). Sibling to 0x0800073E."
+    },
+    "0x080008F3": {
+      "category": "Dirt",
+      "notes": "Wave-1 seed. Heuristic says Generic. Visual: olive/khaki ground (lum 0.38, sat 0.25, hue 56). Hue 56 sits just outside Rule 8's 15-55 band."
+    },
+    "0x08000914": {
+      "category": "Stone",
+      "notes": "Wave-1 seed. Heuristic says Generic. Visual: dark blue-grey stone (lum 0.24, sat 0.24, hue 213). Saturation 0.24 just over Stone-rough rule's 0.25 cap (Rule 11)."
+    },
+    "0x080001B5": {
+      "category": "Stone",
+      "notes": "Wave-2 audit. Heuristic says Generic. Visual: dark blue-grey patch (lum 0.15, sat 0.27, hue 200, flags 0x2). Manual audit verdict was 'close' — Stone is the natural pick but sat 0.27 trips the same Stone-rough cap as 0x08000914."
+    },
+    "0x08000262": {
+      "category": "Stone",
+      "notes": "Wave-2 audit. Heuristic says Generic. Visual: blue-tinted surface (mean 0.15/0.28/0.40, lum 0.25, sat 0.63, hue 211, flags 0x2). Not Translucent so Water rule doesn't fire; sat 0.63 too high for any Stone rule. Manual audit verdict 'close'."
+    },
+    "0x08000497": {
+      "category": "Stone",
+      "notes": "Wave-2 audit. Heuristic says Generic. Visual: very dark blue-grey (mean 0.05/0.12/0.17, lum 0.10, sat 0.69, hue 207, flags 0x2). Same pattern as 0x080001B5/0x08000262 — saturated dark blue stone."
+    },
+    "0x080006E2": {
+      "category": "Generic",
+      "roughness": 0.25,
+      "notes": "Wave-2 audit. Heuristic says Water (Translucent + nominally-blue mean 0.96/0.96/0.98). Visual: solid 1x1 near-white surface — looks like a glass/window pane, not water. Water rule fires on b > r and b > g but the deltas are tiny (0.98 vs 0.96). Roughness 0.25 expresses the glassy polish."
+    },
+    "0x080007E6": {
+      "category": "Generic",
+      "roughness": 0.3,
+      "notes": "Wave-2 audit. Heuristic says Foliage (Translucent solid bright green mean 0/0.92/0, flags 0x11). Visual: not a leafy surface — looks like a glass alchemy bottle or stained-glass green pane. Foliage rule fires on g > r and g > b + sat > 0.3 but Translucent + pure-saturated-green is closer to glass than grass."
+    }
+  }
+}
