@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Academy EnvCell bake probe</title>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<h1>Academy EnvCell bake probe</h1>
+<pre id="out">starting…</pre>
+<script type="module">
+import init, * as wasmMod from "./pkg/holtburger_web.js";
+import * as THREE from "three";
+import { buildEnvCellsForLandblock } from "./scene3d/cells.js";
+
+const out = document.getElementById("out");
+function log(s) {
+  out.textContent += s + "\n";
+  console.log("[probe-runner]", s);
+}
+
+(async () => {
+  try {
+    log("init wasm…");
+    await init();
+    log("wasm init ok");
+
+    if (typeof wasmMod.init_resource_source !== "function") {
+      log("FAIL: init_resource_source export missing");
+      document.title = "PROBE_FAIL";
+      return;
+    }
+    log("init resource source…");
+    const initRes = await wasmMod.init_resource_source("../../dist/manifest.json");
+    log(`init_resource_source result: ${initRes}`);
+
+    // -- Construct minimal mockScene3d for buildEnvCellsForLandblock.
+    //
+    // The bake reads these fields (per cells.js:77-99, 195-275):
+    //   scene3d.cellsGroup           — THREE.Group root
+    //   scene3d.cellContainers3d     — Map<cellId, Group> registry
+    //   scene3d.envCellLoadedLbs     — Set<u32 lbKey> idempotency guard
+    //   scene3d.materialCache:
+    //     .preload(dids, fetchFn)    — must call fetchFn(Uint32Array) and
+    //                                  await it (we discard textures
+    //                                  since this probe tests the bake,
+    //                                  not the renderer).
+    //     .getCached(did)            — returns a THREE.Material
+    //     .fallbackMaterial          — shared THREE.Material for missing
+    //                                  surface DIDs
+    const cellsGroup = new THREE.Group();
+    cellsGroup.name = "cellsGroup-probe";
+
+    const __cachedMat = new THREE.MeshBasicMaterial({ color: 0xff00ff });
+    const __fallbackMat = new THREE.MeshBasicMaterial({ color: 0x808080 });
+
+    const mockMaterialCache = {
+      fallbackMaterial: __fallbackMat,
+      async preload(dids, fetchFn) {
+        // Just round-trip the fetch and discard. Tests the wasm fetch
+        // pipeline but skips texture decode.
+        try {
+          await fetchFn(new Uint32Array(dids));
+        } catch (e) {
+          console.warn("[probe-runner] materialCache.preload fetchFn threw:", e?.message ?? e);
+        }
+      },
+      getCached(_did) {
+        return __cachedMat;
+      },
+    };
+
+    const mockScene3d = {
+      cellsGroup,
+      cellContainers3d: new Map(),
+      envCellLoadedLbs: new Set(),
+      materialCache: mockMaterialCache,
+    };
+
+    log("calling buildEnvCellsForLandblock(0x86020000)…");
+    const t0 = performance.now();
+    const result = await buildEnvCellsForLandblock(
+      mockScene3d,
+      0x86020000 >>> 0,
+      wasmMod
+    );
+    const dt = performance.now() - t0;
+    log(`buildEnvCellsForLandblock returned in ${dt.toFixed(1)} ms`);
+
+    log(`result.cellCount         = ${result.cellCount}`);
+    log(`result.surfaceCount      = ${result.surfaceCount}`);
+    log(`result.staticObjectCount = ${result.staticObjectCount}`);
+    log(`result.skippedZeroTri    = ${result.skippedZeroTri}`);
+    log(`result.skippedNoMesh     = ${result.skippedNoMesh}`);
+    log(`cellContainers3d.size    = ${mockScene3d.cellContainers3d.size}`);
+
+    // Diagnostic: dump the first 5 cellId keys verbatim to see the
+    // actual ID layout (the 0xFFFF0000 mask hypothesis turned up empty
+    // on first run — the wasm side may emit EnvCell IDs with the
+    // 0x0100/0xFEFE high bytes per AC dat convention rather than the
+    // raw landblockId).
+    {
+      let n = 0;
+      for (const [cellId, _c] of mockScene3d.cellContainers3d) {
+        if (n >= 5) break;
+        log(`raw-key[${n}] = 0x${(cellId >>> 0).toString(16).padStart(8, "0")}`);
+        n += 1;
+      }
+    }
+
+    // Count entries belonging to landblock 0x8602.
+    // AC convention: EnvCell IDs encode `<lb_hi16>:<index_lo16>` —
+    // the high 16 bits are the landblock identity (lb_x byte |
+    // lb_y byte), low 16 bits index in [0x0100..0x0100+N).
+    let academyCellCount = 0;
+    const academyLbHi16 = 0x8602;
+    for (const [cellId, _container] of mockScene3d.cellContainers3d) {
+      if (((cellId >>> 0) >>> 16) === academyLbHi16) {
+        academyCellCount += 1;
+      }
+    }
+    log(`academyCellCount (cellId >>> 16 === 0x8602) = ${academyCellCount}`);
+
+    // Sum vertex counts across ALL BufferGeometries in EVERY container
+    // (not filtered by academyLbKey, in case the cellId encoding is
+    // different from the mask we tried). Also count by name pattern.
+    let totalVerts = 0;
+    let staticMeshChildCount = 0;
+    let surfaceMeshCount = 0;
+    let anyMeshCount = 0;
+    let anyGroupCount = 0;
+    let containersInspected = 0;
+    for (const [_cellId, container] of mockScene3d.cellContainers3d) {
+      containersInspected += 1;
+      container.traverse((node) => {
+        if (node.isGroup) anyGroupCount += 1;
+        if (node.isMesh) {
+          anyMeshCount += 1;
+          if (node.geometry) {
+            const posAttr = node.geometry.getAttribute("position");
+            if (posAttr) totalVerts += posAttr.count;
+          }
+          if (node.name && node.name.startsWith("cellstatic-")) {
+            staticMeshChildCount += 1;
+          } else if (node.name && node.name.startsWith("surface-")) {
+            surfaceMeshCount += 1;
+          }
+        }
+      });
+    }
+    log(`totalVerts (sum across ALL ${containersInspected} containers) = ${totalVerts}`);
+    log(`surfaceMeshCount = ${surfaceMeshCount}`);
+    log(`staticMeshChildCount = ${staticMeshChildCount}`);
+    log(`anyMeshCount = ${anyMeshCount}`);
+    log(`anyGroupCount = ${anyGroupCount}`);
+
+    // First 5 cells from registry as samples (any cellId — task spec
+    // said "first 3 academy cellIds + their child counts" but until
+    // the encoding mismatch is understood, dump first 5 of whatever
+    // exists).
+    let sampleN = 0;
+    for (const [cellId, container] of mockScene3d.cellContainers3d) {
+      const cellHex = (cellId >>> 0).toString(16).padStart(8, "0");
+      const childCount = container.children.length;
+      let meshGroupChildren = 0;
+      let directStatics = 0;
+      for (const child of container.children) {
+        if (child.isGroup) {
+          meshGroupChildren = child.children.length;
+        } else if (child.isMesh) {
+          directStatics += 1;
+        }
+      }
+      log(
+        `sample[${sampleN}] cellId=0x${cellHex} children=${childCount} ` +
+        `meshGroupChildren=${meshGroupChildren} directStatics=${directStatics}`
+      );
+      sampleN += 1;
+      if (sampleN >= 5) break;
+    }
+
+    // Final pass/fail marker.
+    const ok = result.cellCount === 568 && academyCellCount === 568 && totalVerts > 0;
+    log(
+      `OVERALL: cellCount=${result.cellCount} (want 568), ` +
+      `academyCellCount=${academyCellCount} (want 568), ` +
+      `totalVerts=${totalVerts} (want >0)`
+    );
+    log(`__RESULT__ ${JSON.stringify({
+      cellCount: result.cellCount,
+      academyCellCount,
+      totalVerts,
+      surfaceMeshCount,
+      staticMeshChildCount,
+      anyMeshCount,
+      anyGroupCount,
+      surfaceCount: result.surfaceCount,
+      staticObjectCount: result.staticObjectCount,
+      skippedZeroTri: result.skippedZeroTri,
+      skippedNoMesh: result.skippedNoMesh,
+      cellContainers3dSize: mockScene3d.cellContainers3d.size,
+      ok,
+    })}`);
+
+    document.title = ok ? "PROBE_DONE" : "PROBE_FAIL";
+    log(`PROBE_${ok ? "DONE" : "FAIL"}`);
+  } catch (e) {
+    log("EXCEPTION: " + (e?.message ?? e));
+    console.error(e);
+    document.title = "PROBE_FAIL";
+  }
+})();
+</script>
+</body>
+</html>

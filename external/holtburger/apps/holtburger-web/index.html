@@ -4166,6 +4166,9 @@ void main() {
           if (lbId !== 0 && !cellContainersPopulatedLbs.has(lbId)) {
             ensureCellContainersForLandblock(lbId);
           }
+          if (lbId !== 0 && window.liveScene3d?.loadEnvCellsForLandblock) {
+            window.liveScene3d.loadEnvCellsForLandblock(lbId);
+          }
           // 2026-05-09 follow-up (open-world step 2/3 + 3/3): paint
           // building meshes + non-building object sprites for the
           // new LB so the player sees landmarks, not just textured

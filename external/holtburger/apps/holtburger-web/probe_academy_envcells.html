@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Academy EnvCells diag probe</title>
+</head>
+<body>
+<h1>Academy EnvCells diag probe</h1>
+<pre id="out">starting…</pre>
+<script type="module">
+import init, * as wasmMod from "./pkg/holtburger_web.js";
+
+const out = document.getElementById("out");
+function log(s) {
+  out.textContent += s + "\n";
+  console.log("[probe-runner]", s);
+}
+
+(async () => {
+  try {
+    log("init wasm…");
+    await init();
+    log("wasm init ok");
+
+    // Match the Phase 5.2 path: manifest-mode source initialised from
+    // ../../dist/manifest.json. The capture_academy_envcells smoke
+    // PASS depended on this same path; the wasm log line
+    // "[Phase 5.0/5.2] manifest-mode source initialized from
+    // ../../dist/manifest.json" comes from this flow.
+    if (typeof wasmMod.init_resource_source !== "function") {
+      log("FAIL: init_resource_source export missing");
+      return;
+    }
+    // The manifest URL must be reachable from the page. index.html
+    // sets it to ../../dist/manifest.json (relative to apps/holtburger-
+    // web/index.html). Same path works here since this file lives in
+    // the same dir.
+    log("init resource source…");
+    const manifestUrl = "../../dist/manifest.json";
+    const initRes = await wasmMod.init_resource_source(manifestUrl);
+    log(`init_resource_source result: ${initRes}`);
+
+    log("calling fetchEnvCellsInLandblock(0x86020000)…");
+    const t0 = performance.now();
+    const placements = await wasmMod.fetchEnvCellsInLandblock(0x86020000 >>> 0);
+    const dt = performance.now() - t0;
+    log(`returned in ${dt.toFixed(1)} ms`);
+    log(`placements.length = ${placements.length}`);
+    if (placements.length > 0) {
+      log(`first placement keys: ${Object.keys(placements[0]).slice(0, 10).join(",")}`);
+    }
+    log("PROBE_DONE");
+    document.title = "PROBE_DONE";
+  } catch (e) {
+    log("EXCEPTION: " + (e?.message ?? e));
+    console.error(e);
+    document.title = "PROBE_FAIL";
+  }
+})();
+</script>
+</body>
+</html>

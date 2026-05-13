@@ -641,6 +641,9 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     ambientRuntime: null,
     // Stop hook — future phases use this for renderer hot-swap.
     stop() { running = false; },
+    loadEnvCellsForLandblock(landblockId) {
+      return buildEnvCellsForLandblock(this, landblockId, this.wasmExports);
+    },
     // Reference back to the wasm exports the caller passed in. Phases
     // 7.1+ pull from this rather than re-importing.
     wasmExports,
