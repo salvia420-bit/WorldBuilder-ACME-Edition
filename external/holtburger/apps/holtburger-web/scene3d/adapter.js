@@ -695,6 +695,137 @@ export async function loadDetailTileCache(opts = {}) {
   return cache;
 }
 
+// =====================================================================
+// Phase 1.2 — terrain detail-normal array.
+// =====================================================================
+//
+// Loads the 5 RGB 1024² normal-map PNGs under `assets/terrain_detail/`
+// into a single `THREE.DataArrayTexture` (depth=5), indexed by terrain
+// category. Returned to the terrain shader so its fragment can sample
+// the correct slice per vertex without 5 separate texture units.
+//
+// Categories + slice order match `TERRAIN_DETAIL_KEYS`:
+//
+//   0 grass | 1 dirt | 2 sand | 3 stone | 4 snow
+//
+// Mapping from Region 0x13 terrain code → slice index lives in
+// `terrain.js` (TERRAIN_CODE_TO_DETAIL_SLICE) — see that file's
+// docstring for the per-code rationale.
+//
+// Texture is linear (`THREE.NoColorSpace`), `RepeatWrapping`, with
+// mipmaps. Returns `null` if any PNG fails — the terrain shader
+// branches on `uDetailNormalEnabled` and skips sampling when the
+// array is missing, matching the pre-Phase-1.2 baseline (flat
+// surface normal only).
+export const TERRAIN_DETAIL_KEYS = Object.freeze([
+  "terrain_grass_normal",
+  "terrain_dirt_normal",
+  "terrain_sand_normal",
+  "terrain_stone_normal",
+  "terrain_snow_normal",
+]);
+
+const TERRAIN_DETAIL_TILE_SIZE = 1024;
+
+function _terrainDetailUrl(key, baseUrl) {
+  const base = baseUrl ?? "scene3d/assets/terrain_detail";
+  return `${base}/${key}.png`;
+}
+
+/**
+ * Decode a PNG URL into a `Uint8ClampedArray` of RGBA pixels via a
+ * dom-canvas. Resolves to `{ width, height, rgba }`. Returns null on
+ * failure.
+ */
+async function _decodePngRgba(url) {
+  if (typeof Image === "undefined" || typeof document === "undefined") {
+    return null;
+  }
+  const img = await new Promise((resolve, reject) => {
+    const i = new Image();
+    i.crossOrigin = "anonymous";
+    i.onload = () => resolve(i);
+    i.onerror = (e) => reject(e);
+    i.src = url;
+  });
+  const canvas = document.createElement("canvas");
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0);
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  return { width: canvas.width, height: canvas.height, rgba: data.data };
+}
+
+/**
+ * Load all 5 Phase 1.2 terrain detail normal maps into a single
+ * `THREE.DataArrayTexture` (depth=5). Resolves to `{ texture, keys }`
+ * on success or `null` on any load/decode failure.
+ *
+ * Memory: 1024 × 1024 × 5 layers × 4 bytes (RGBA) = ~20 MB GPU.
+ *
+ * @param {{ baseUrl?: string, THREE?: object }} opts
+ * @returns {Promise<{ texture: THREE.DataArrayTexture, keys: string[] } | null>}
+ */
+export async function loadTerrainDetailNormalArray(opts = {}) {
+  const { baseUrl, THREE: ThreeOverride } = opts;
+  const T = ThreeOverride ?? THREE;
+  if (typeof T.DataArrayTexture !== "function") {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[phase-1.2] THREE.DataArrayTexture unavailable; terrain detail normal disabled"
+    );
+    return null;
+  }
+
+  const decoded = await Promise.all(
+    TERRAIN_DETAIL_KEYS.map((key) =>
+      _decodePngRgba(_terrainDetailUrl(key, baseUrl)).catch((e) => {
+        // eslint-disable-next-line no-console
+        console.warn(`[phase-1.2] terrain detail ${key} decode failed:`, e);
+        return null;
+      })
+    )
+  );
+  if (decoded.some((d) => !d)) return null;
+
+  const w = decoded[0].width;
+  const h = decoded[0].height;
+  if (decoded.some((d) => d.width !== w || d.height !== h)) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[phase-1.2] terrain detail tiles mismatched dimensions; expected uniform tile size"
+    );
+    return null;
+  }
+
+  // Pack RGBA byte plane into a single contiguous Uint8Array of size
+  // (w * h * 4) * depth. DataArrayTexture expects RGBAFormat + UnsignedByteType
+  // in three.js r0.184.
+  const layerStride = w * h * 4;
+  const data = new Uint8Array(layerStride * decoded.length);
+  for (let i = 0; i < decoded.length; i += 1) {
+    data.set(decoded[i].rgba, i * layerStride);
+  }
+
+  const tex = new T.DataArrayTexture(data, w, h, decoded.length);
+  tex.format = T.RGBAFormat;
+  tex.type = T.UnsignedByteType;
+  // Linear colour space — these are normal vectors, not sRGB-encoded
+  // colour data. Wrong colour-space causes a visible bias on the
+  // mid-tone (128) channel due to the sRGB de-gamma.
+  tex.colorSpace = T.NoColorSpace;
+  tex.wrapS = T.RepeatWrapping;
+  tex.wrapT = T.RepeatWrapping;
+  tex.magFilter = T.LinearFilter;
+  tex.minFilter = T.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.name = "scene3d-terrain-detail-normal-array";
+  tex.needsUpdate = true;
+
+  return { texture: tex, keys: [...TERRAIN_DETAIL_KEYS] };
+}
+
 /**
  * Compose a `THREE.Matrix4` from an `ObjectPlacement`-shaped object.
  *

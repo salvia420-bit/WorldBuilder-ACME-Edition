@@ -25,7 +25,11 @@ import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
 import { SkyLightingController } from "./sky_lighting.js";
 import { SkyDome } from "./sky_dome.js";
 import { resolveSkyAssets } from "./sky_assets.js";
-import { acToThree, loadDetailTileCache } from "./adapter.js";
+import {
+  acToThree,
+  loadDetailTileCache,
+  loadTerrainDetailNormalArray,
+} from "./adapter.js";
 import { createNameplateOverlay } from "./hud.js";
 import { AudioManager } from "./audio/audio_manager.js";
 import { SoundTableCache } from "./audio/sound_table_cache.js";
@@ -277,6 +281,35 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
       console.warn("[phase-0.2] detail tile load failed:", e);
     }
   }
+
+  // Phase 1.2 — terrain detail-normal array. Gated on
+  // `quality.flags.terrainDetailNormal` (mid/high/ultra by default, low
+  // off). Loaded once, shared by every per-LB terrain ShaderMaterial.
+  // When the load fails (offline / 404 / mock-canvas captures) the
+  // shader sees `null` + uDetailNormalEnabled=0 and branches around
+  // the sample — no degradation versus baseline.
+  const terrainDetailNormalEnabled = !!quality?.flags?.terrainDetailNormal;
+  let terrainDetailNormalArray = null;
+  if (terrainDetailNormalEnabled) {
+    try {
+      const r = await loadTerrainDetailNormalArray();
+      if (r) {
+        terrainDetailNormalArray = r.texture;
+        // eslint-disable-next-line no-console
+        console.log(
+          `[phase-1.2] terrain detail normal array loaded: ${r.keys.length} slices`
+        );
+      } else {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[phase-1.2] terrain detail normal array unavailable; shader will run baseline"
+        );
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[phase-1.2] terrain detail normal load failed:", e);
+    }
+  }
   // Construct a stub scene3d shape early so the per-phase builders
   // can share state (`materialCache`, `buildingMap3d`).
   const scene3dForBuilders = {
@@ -298,6 +331,11 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // from scene3d at construction.
     detailTileCache,
     forceDetail,
+    // Phase 1.2 — terrain detail-normal array (DataArrayTexture,
+    // depth=5). Null when `quality.flags.terrainDetailNormal` is off
+    // OR the load failed. The terrain ShaderMaterial reads this off
+    // scene3d directly in `buildHoltburgTerrain`.
+    terrainDetailNormalArray,
     terrainGroup,
     buildingsGroup,
     staticsGroup,
@@ -771,6 +809,11 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // liveScene3d so capture scripts can introspect tile-load state.
     detailTileCache: scene3dForBuilders.detailTileCache ?? null,
     forceDetail: !!scene3dForBuilders.forceDetail,
+    // Phase 1.2 — terrain detail-normal array (DataArrayTexture, depth=5).
+    // Surfaced on liveScene3d so capture scripts can verify load + slice
+    // count + the per-LB material has the wired uniform.
+    terrainDetailNormalArray:
+      scene3dForBuilders.terrainDetailNormalArray ?? null,
     buildingMap3d: scene3dForBuilders.buildingMap3d ?? null,
     buildingBakeCache: scene3dForBuilders.buildingBakeCache ?? null,
     // Phase 7.3 — EnvCell registry + per-LB load summaries. The Map
