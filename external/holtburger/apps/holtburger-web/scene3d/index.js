@@ -31,6 +31,7 @@ import { AudioManager } from "./audio/audio_manager.js";
 import { SoundTableCache } from "./audio/sound_table_cache.js";
 import { AmbientRuntime } from "./audio/ambient_runtime.js";
 import { getQuality, installQualityOnWindow } from "./quality.js";
+import { createSsaoPipeline } from "./postprocess.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
@@ -172,6 +173,12 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   camera.position.set(15, 15, 15);
   camera.lookAt(0, 0, 5);
 
+  // Visual-fidelity Phase 3.2 — SSAO pipeline (constructed below after
+  // SkyDome is initialised so the sky pass can wire into the composer).
+  // Forward-declared `let` so the resize handler below can null-check.
+  let ssaoPipeline = null;
+  const ssaoEnabled = !!quality?.flags?.ssao;
+
   // Keep the canvas + renderer in sync with viewport resizes (the
   // 2D path lives with the static 512×512 attribute size, but the 3D
   // path is set up to be a real game viewport). Debounce so resize-
@@ -190,6 +197,7 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
       renderer.setSize(newW, newH, false);
       camera.aspect = newW / newH;
       camera.updateProjectionMatrix();
+      if (ssaoPipeline) ssaoPipeline.setSize(newW, newH);
     }, 150);
   });
 
@@ -444,6 +452,7 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     orthoCamera.left = -halfW;
     orthoCamera.right = halfW;
     orthoCamera.updateProjectionMatrix();
+    if (ssaoPipeline) ssaoPipeline.setSize(cw, ch);
   };
   window.addEventListener("resize", onResize);
 
@@ -535,6 +544,32 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // shader depth gymnastics, no per-material depthTest mutations,
     // and the celestial bodies sit naturally "behind" the world
     // like the rest of the sky.
+    // Phase 3.2: composer path (sky + world + SSAO + output) — taken
+    // when `quality.flags.ssao === true` AND the pipeline constructed
+    // successfully (constructed AFTER SkyDome init below). The composer
+    // bundles sky-then-world in its own pass chain so the depth /
+    // color-preserve gymnastics from the direct path live inside the
+    // RenderPass `clear` / `clearDepth` flags, not here.
+    if (liveScene3dRef?.ssaoPipeline) {
+      try {
+        liveScene3dRef.ssaoPipeline.preFrameSkySync(
+          liveScene3dRef.skyDome,
+          activeCam
+        );
+        liveScene3dRef.ssaoPipeline.render(activeCam);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        if (!liveScene3dRef._ssaoRenderWarned) {
+          liveScene3dRef._ssaoRenderWarned = true;
+          console.warn("[phase-3.2] ssaoPipeline.render threw:", e);
+        }
+      }
+      requestAnimationFrame(tick);
+      return;
+    }
+
+    // Direct render path (SSAO off OR pipeline not yet constructed):
+    // pre-Phase-3.2 behavior verbatim.
     let skyRendered = false;
     if (liveScene3dRef?.skyDome) {
       try {
@@ -831,6 +866,36 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
       "[sky-d] SkyDome attached; horizon←skyBackgroundColor, " +
         "zenith←skyLightingController._lastState.ambColorArgb"
     );
+
+    // Visual-fidelity Phase 3.2 — wire the SSAO composer NOW that
+    // skyScene + skyCamera exist. Gated on `quality.flags.ssao`. The
+    // pipeline brings the existing sky-then-world render order into
+    // an `EffectComposer` (sky RenderPass → world RenderPass with
+    // clear=false/clearDepth=true → SSAOPass → OutputPass) and the
+    // per-frame `tick` swaps `composer.render()` in for the two
+    // direct `renderer.render` call sites. When `ssao=false`, this
+    // stays null and the render loop takes the original direct
+    // path verbatim.
+    if (ssaoEnabled) {
+      try {
+        ssaoPipeline = createSsaoPipeline(renderer, scene, camera, {
+          skyScene: skyDome.skyScene,
+          skyCamera: skyDome.skyCamera,
+        });
+        liveScene3d.ssaoPipeline = ssaoPipeline;
+        // eslint-disable-next-line no-console
+        console.log(
+          `[phase-3.2] SSAO on: kernelRadius=${ssaoPipeline.ssaoPass.kernelRadius} ` +
+            `kernelSize=${ssaoPipeline.ssaoPass.kernel?.length ?? "n/a"} ` +
+            `minDistance=${ssaoPipeline.ssaoPass.minDistance} ` +
+            `maxDistance=${ssaoPipeline.ssaoPass.maxDistance}`
+        );
+      } catch (ssaoErr) {
+        // eslint-disable-next-line no-console
+        console.warn("[phase-3.2] SSAO pipeline init failed:", ssaoErr);
+        ssaoPipeline = null;
+      }
+    }
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn("[sky-d] SkyDome init failed:", e);
