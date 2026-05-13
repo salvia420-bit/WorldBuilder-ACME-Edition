@@ -51,6 +51,7 @@ import {
   acQuatToThree,
 } from "./adapter.js";
 import { AnimationCache, buildAnimationClip } from "./animation.js";
+import { ensureNameplateForEntity } from "./nameplate_sprite.js";
 
 // AC InterpretedMotionCommand low-16 constants. The wasm export
 // returns the full u32 (`0x4500_xxxx` for forward locomotion, etc.),
@@ -830,6 +831,23 @@ export class EntityManager {
             console.warn("[follow-on#10] setNameplate threw:", e);
           }
         }
+      }
+    }
+    // Task #13 (2026-05-13) — in-world THREE.Sprite nameplate, parented
+    // to the entity's root Group so it auto-follows the rig via the
+    // standard matrixWorld walk. Coexists with the DOM overlay above
+    // (the DOM path is the fallback / capture-script-friendly overlay;
+    // the sprite path is the visible-in-3D layer that depth-tests
+    // against world geometry). The sprite module handles its own
+    // local-player + inventory-item skip + category-coloured text bake,
+    // so callers here pass through without further filtering.
+    try {
+      ensureNameplateForEntity(inst, this.scene3d);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      if (!this._nameplateSpriteWarned) {
+        this._nameplateSpriteWarned = true;
+        console.warn("[task-13] ensureNameplateForEntity threw:", e);
       }
     }
     return inst;
