@@ -287,6 +287,8 @@ export async function resolveSkyAssets(
     new MaterialCache({
       detailTileCache: scene3d.detailTileCache ?? null,
       forceDetail: !!scene3d.forceDetail,
+      pomEnabled: !!scene3d.pomEnabled,
+      forcePom: !!scene3d.forcePom,
     });
   if (allSurfaceDids.size > 0) {
     try {

@@ -602,6 +602,53 @@ export function surfacePixelsToNormalTexture(normalRgb8, width, height) {
 }
 
 /**
+ * Phase 3.1 — wrap an R8 heightmap (from
+ * `holtburger_dat::normal_gen::height_from_luminance` exposed via
+ * `SurfacePixels.heightPixels`) into a `THREE.DataTexture`.
+ *
+ * Single-channel red-only data — `THREE.RedFormat`, `LinearMipmapLinear`
+ * filtering so POM samples interpolate smoothly between texels.
+ * Color space is linear (NOT sRGB — heights are scalar depth, not
+ * colour data; sRGB would gamma-encode and corrupt the ray-march).
+ *
+ * Returns `null` if `heightR8` is empty (e.g. Luminous surfaces or
+ * constant-luminance surfaces — the wasm side returns an empty Vec in
+ * either case). The caller leaves the POM patch off when the texture
+ * is null, so the surface falls back to flat normal mapping only.
+ */
+export function surfacePixelsToHeightTexture(heightR8, width, height) {
+  if (!heightR8 || heightR8.byteLength === 0 || width === 0 || height === 0) {
+    return null;
+  }
+  const expected = width * height;
+  if (heightR8.byteLength < expected) {
+    return null;
+  }
+  // Copy off the wasm-bindgen view so a future memory growth doesn't
+  // detach the buffer the GPU is reading from.
+  const copy = new Uint8Array(width * height);
+  copy.set(heightR8.subarray(0, expected));
+
+  const tex = new THREE.DataTexture(
+    copy,
+    width,
+    height,
+    THREE.RedFormat,
+    THREE.UnsignedByteType
+  );
+  // CRITICAL: NoColorSpace. Heights are scalar depth, not colour.
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.flipY = false;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/**
  * Convert AC quaternion ordering (qw, qx, qy, qz) to three.js's
  * (x, y, z, w) convention. AC stores w-first in wire and DAT formats;
  * three.js's `Quaternion` constructor takes w last.

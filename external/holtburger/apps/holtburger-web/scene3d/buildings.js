@@ -419,12 +419,17 @@ export async function buildHoltburgBuildings(scene3d, wasmExports) {
   // Phase 3.3 — pass `csmState` so receivers get the Cascaded Shadow
   // Maps shader patch (sample 3 cascade shadow maps, blend at
   // boundaries, multiply sun's contribution by shadow factor).
+  // Phase 3.1 — pass `pomEnabled` + `forcePom` so Stone-category
+  // surfaces get the parallax occlusion shader patch on high/ultra
+  // quality presets.
   const materialCache =
     scene3d.materialCache ||
     new MaterialCache({
       detailTileCache: scene3d.detailTileCache ?? null,
       forceDetail: !!scene3d.forceDetail,
       csmState: scene3d.csmState ?? null,
+      pomEnabled: !!scene3d.pomEnabled,
+      forcePom: !!scene3d.forcePom,
     });
   if (allSurfaceDids.size > 0) {
     try {

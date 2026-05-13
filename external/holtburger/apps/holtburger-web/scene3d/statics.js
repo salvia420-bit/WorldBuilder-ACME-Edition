@@ -249,6 +249,8 @@ export async function buildHoltburgStatics(scene3d, wasmExports) {
       detailTileCache: scene3d.detailTileCache ?? null,
       forceDetail: !!scene3d.forceDetail,
       csmState: scene3d.csmState ?? null,
+      pomEnabled: !!scene3d.pomEnabled,
+      forcePom: !!scene3d.forcePom,
     });
   if (allSurfaceDids.size > 0) {
     try {

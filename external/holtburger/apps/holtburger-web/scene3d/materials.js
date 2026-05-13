@@ -43,7 +43,11 @@
 // out highlights.
 
 import * as THREE from "three";
-import { surfacePixelsToTexture, surfacePixelsToNormalTexture } from "./adapter.js";
+import {
+  surfacePixelsToTexture,
+  surfacePixelsToNormalTexture,
+  surfacePixelsToHeightTexture,
+} from "./adapter.js";
 
 // ACE SurfaceType bit constants (mirrored from ACE.Entity.Enum.SurfaceType,
 // see external/ACE/Source/ACE.Entity/Enum/SurfaceType.cs). Exported so
@@ -447,9 +451,353 @@ export function installCsmShaderPatch(material, csmState) {
   _installCsmShaderPatch(material, csmState);
 }
 
+// Visual-fidelity Phase 3.1 — Parallax Occlusion Mapping (POM).
+//
+// Ray-marches through a per-surface heightmap (R8, baked in
+// `holtburger_dat::normal_gen::height_from_luminance` via the Sobel-X
+// integrated-by-horizontal-scan path — see crate doc) to give a stone
+// wall the illusion of recessed mortar / raised brick. Standard
+// learnopengl.com/Advanced-Lighting/Parallax-Mapping recipe:
+//
+//   1. Compute view direction in tangent space (transposed TBN times
+//      world-space view dir).
+//   2. Step along that direction in UV space, comparing the current
+//      sampled height to the marching ray's depth. When the ray dips
+//      below the heightfield, we've found the intersection — that's
+//      the perturbed UV to sample the diffuse + normal with.
+//   3. The fragment-shader normal sample uses the perturbed UV too
+//      so the per-pixel normal aligns with where the diffuse appears
+//      to come from at depth.
+//
+// Patching path: we use `_chainBeforeCompile` so this composes with the
+// Phase 0.2 Detail patch + the Phase 3.3 CSM patch installed on the
+// same material. Three.js calls onBeforeCompile once at first render
+// so we have to manually chain at install time.
+//
+// LOD ramp (§Phase 3.1 Objective #3): POM full-strength below 5m,
+// linearly fades to 0 between 5m and 10m (camera distance to the
+// fragment), beyond 10m POM is fully disabled — the fragment falls
+// back to flat normal mapping. Camera distance is computed from
+// `vViewPosition.z` (three.js's view-space z, negative in front of
+// camera → we negate). This keeps the fragment-shader cost focused
+// on the close foreground where POM is visually load-bearing.
+//
+// Self-shadowing (§Phase 3.1 Objective #4): after the primary
+// intersection we shoot a secondary ray FROM the heightfield TOWARD
+// the sun's tangent-space direction. If a higher point along that
+// ray blocks the sun, the fragment is in micro-shadow and we darken
+// the diffuse contribution. This is the "POM + self-shadow" variant
+// (per hand-off #2). Step count for self-shadow ray is capped at 8
+// regardless of the primary uPomSteps to keep the fragment cost
+// bounded (the secondary ray is always at grazing angles where many
+// samples collapse to the same texel anyway).
+//
+// IMPORTANT (per hand-off note #3): we accept the silhouette
+// artifact. Pixels at the edge of the mesh can't extend geometry, so
+// the perturbed UV bleeds outside the surface. The ultra preset can
+// add silhouette clipping later; for now this is intentional.
+const POM_UNIFORM_DEFAULTS = Object.freeze({
+  steps: 16,
+  ultraSteps: 32,
+  // Tangent-space depth scale. 0.08 = 8cm parallax at 1m surface tile;
+  // strong enough to be visually obvious on a stone wall at 1-3m. Too
+  // high (>0.15) and silhouette artifacts dominate; too low (<0.03)
+  // and the effect is invisible.
+  depth: 0.08,
+  // Distance-based LOD ramp (camera-to-fragment, metres). POM full
+  // strength below 5m, fades to zero between 5-10m. Per §Phase 3.1
+  // Objective #3: "distance < 10m only".
+  lodNear: 5.0,
+  lodFar: 10.0,
+  // Self-shadow secondary ray step count + bias.
+  shadowSteps: 8,
+  shadowDarkness: 0.5, // [0,1] — 0=fully dark, 1=no shadow
+});
+
+function _installPomShaderPatch(material, heightTexture, opts = {}) {
+  if (!heightTexture) return;
+  const steps = opts.steps ?? POM_UNIFORM_DEFAULTS.steps;
+  const depth = opts.depth ?? POM_UNIFORM_DEFAULTS.depth;
+  const lodNear = opts.lodNear ?? POM_UNIFORM_DEFAULTS.lodNear;
+  const lodFar = opts.lodFar ?? POM_UNIFORM_DEFAULTS.lodFar;
+  const shadowSteps = opts.shadowSteps ?? POM_UNIFORM_DEFAULTS.shadowSteps;
+  const shadowDarkness =
+    opts.shadowDarkness ?? POM_UNIFORM_DEFAULTS.shadowDarkness;
+  // Mark on userData BEFORE _chainBeforeCompile so the test harness can
+  // assert installation without waiting for first render.
+  material.userData = {
+    ...(material.userData || {}),
+    pomEnabled: true,
+    pomTextureName: heightTexture.name ?? null,
+    pomUniforms: {
+      steps,
+      depth,
+      lodNear,
+      lodFar,
+      shadowSteps,
+      shadowDarkness,
+    },
+  };
+  _chainBeforeCompile(material, (shader) => {
+    shader.uniforms.uPomMap = { value: heightTexture };
+    shader.uniforms.uPomSteps = { value: steps };
+    shader.uniforms.uPomDepth = { value: depth };
+    shader.uniforms.uPomLodNear = { value: lodNear };
+    shader.uniforms.uPomLodFar = { value: lodFar };
+    shader.uniforms.uPomShadowSteps = { value: shadowSteps };
+    shader.uniforms.uPomShadowDarkness = { value: shadowDarkness };
+
+    // Vertex shader: compute the tangent-space view direction. We
+    // reuse the three.js-provided TBN that comes from
+    // `MeshStandardMaterial`'s normal-map path (tangents are populated
+    // when `material.normalMap` is set on a BufferGeometry that has
+    // a `tangent` attribute, OR three.js falls back to derivatives in
+    // the fragment shader). We pass the TANGENT-SPACE view direction
+    // as a varying — the fragment then ray-marches in tangent UV.
+    //
+    // Note: `MeshStandardMaterial` already computes `vViewPosition`
+    // and the fragment computes `normal` per pixel; we replicate the
+    // tangent transformation here at the vertex stage so the fragment
+    // doesn't pay the matrix cost per fragment.
+    shader.vertexShader = shader.vertexShader.replace(
+      "#include <common>",
+      `#include <common>
+varying vec3 vPomTangentViewDir;
+varying float vPomViewDepth;`
+    );
+    // After the transformed normal/tangent are computed, the
+    // tangent-space TBN exists. The standard chunk `<normal_vertex>`
+    // computes `vNormal` and—when tangents are enabled—`vTangent` +
+    // `vBitangent`. We use those plus the camera-relative view to
+    // build TBN^T and rotate the view direction into tangent space.
+    //
+    // To avoid hard-coding the chunk's macro gates, we inline the
+    // math: derive bitangent from cross(normal,tangent) (right-handed
+    // tangent space, matches three's convention with .w = 1.0 or -1.0
+    // sign in the tangent attribute).
+    shader.vertexShader = shader.vertexShader.replace(
+      "#include <project_vertex>",
+      `#include <project_vertex>
+{
+  // Object-space normal + tangent are available as objectNormal and
+  // objectTangent from earlier chunks. Transform to view space.
+  vec3 _viewNormal = normalize(normalMatrix * objectNormal);
+  #ifdef USE_TANGENT
+    vec3 _viewTangent = normalize((modelViewMatrix * vec4(objectTangent.xyz, 0.0)).xyz);
+    vec3 _viewBitangent = cross(_viewNormal, _viewTangent) * objectTangent.w;
+  #else
+    // Derivative fallback — without per-vertex tangents we can't form
+    // a real TBN, so synthesize one using a stable cross with world up.
+    vec3 _viewTangent = normalize(cross(vec3(0.0, 1.0, 0.0), _viewNormal));
+    if (length(_viewTangent) < 0.01) {
+      _viewTangent = normalize(cross(vec3(1.0, 0.0, 0.0), _viewNormal));
+    }
+    vec3 _viewBitangent = cross(_viewNormal, _viewTangent);
+  #endif
+  // View-space view direction = -mvPosition (the camera is at the
+  // origin in view space; the vertex is at mvPosition, so the
+  // direction FROM the vertex TO the camera is -mvPosition).
+  vec3 _viewDirVS = normalize(-mvPosition.xyz);
+  // Transform view direction into tangent space (TBN^T * view).
+  vPomTangentViewDir = vec3(
+    dot(_viewDirVS, _viewTangent),
+    dot(_viewDirVS, _viewBitangent),
+    dot(_viewDirVS, _viewNormal)
+  );
+  // Pass camera distance (positive metres) for the LOD ramp.
+  vPomViewDepth = -mvPosition.z;
+}`
+    );
+
+    // Fragment shader: declare uniforms + the ray-march helper, then
+    // patch the `<map_fragment>` chunk so the diffuse sample uses the
+    // perturbed UV. We have to inject BEFORE `<map_fragment>` so the
+    // perturbed UV is in scope by the time the chunk samples `map`.
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <common>",
+      `#include <common>
+uniform sampler2D uPomMap;
+uniform int uPomSteps;
+uniform float uPomDepth;
+uniform float uPomLodNear;
+uniform float uPomLodFar;
+uniform int uPomShadowSteps;
+uniform float uPomShadowDarkness;
+varying vec3 vPomTangentViewDir;
+varying float vPomViewDepth;
+
+// Ray-march a heightfield in tangent UV space. Returns the perturbed
+// UV — sample diffuse/normal/etc at this UV to get the POM look.
+// Standard parallax occlusion: linear search to find the layer where
+// the ray crosses the heightfield, then one bisection refinement.
+//
+// vTanDir is the tangent-space view direction (FROM fragment TO
+// camera). Higher z = looking down at the surface (small parallax);
+// lower z = grazing (large parallax).
+vec2 _pomPerturbedUv(vec2 baseUv, vec3 vTanDir, float depthScale, int steps) {
+  // Project view direction onto UV plane, scaled by the depth scale.
+  // Divide by abs(z) so grazing angles get a longer projection in UV
+  // (the classic POM "uv shift = (xy/z) * height" formula).
+  vec2 uvStep = vTanDir.xy / max(abs(vTanDir.z), 0.05) * depthScale / float(steps);
+  float layerStep = 1.0 / float(steps);
+  vec2 currentUv = baseUv;
+  float currentLayerDepth = 0.0;
+  // Inverted: heightmap stores HIGH bricks (255) and LOW mortar (0).
+  // Convert to depth: depth = 1 - height. We walk INTO the surface
+  // (current layer depth increases), and stop when our current depth
+  // exceeds the heightmap depth at the current UV.
+  float currentHeight = 1.0 - texture2D(uPomMap, currentUv).r;
+  for (int i = 0; i < 64; i++) {
+    if (i >= steps) break;
+    if (currentLayerDepth >= currentHeight) break;
+    currentUv -= uvStep;
+    currentLayerDepth += layerStep;
+    currentHeight = 1.0 - texture2D(uPomMap, currentUv).r;
+  }
+  // One-step bisection refinement: move back one layer, then lerp by
+  // crossing fraction. (Relief mapping's bisection improves quality.)
+  vec2 prevUv = currentUv + uvStep;
+  float afterDepth = currentHeight - currentLayerDepth;
+  float beforeDepth = (1.0 - texture2D(uPomMap, prevUv).r)
+                      - (currentLayerDepth - layerStep);
+  float w = afterDepth / max(afterDepth - beforeDepth, 1e-6);
+  return mix(currentUv, prevUv, clamp(w, 0.0, 1.0));
+}
+
+// Self-shadow: from the perturbed UV (the intersection point), shoot
+// a ray TOWARD the sun in tangent space. If any sample's height is
+// above our current ray depth, the fragment is occluded — multiply
+// the diffuse by uPomShadowDarkness. Skipped (returns 1.0) when the
+// sun is behind the surface (lTan.z <= 0).
+float _pomShadow(vec2 hitUv, float hitDepth, vec3 lTan, float depthScale, int sSteps) {
+  if (lTan.z <= 0.001) return 1.0;
+  vec2 uvStep = lTan.xy / max(abs(lTan.z), 0.05) * depthScale / float(sSteps);
+  float layerStep = hitDepth / float(sSteps);
+  vec2 currentUv = hitUv + uvStep;
+  float currentDepth = hitDepth - layerStep;
+  for (int i = 0; i < 16; i++) {
+    if (i >= sSteps) break;
+    if (currentDepth <= 0.0) break;
+    float h = 1.0 - texture2D(uPomMap, currentUv).r;
+    if (h < currentDepth) {
+      // Heightfield is ABOVE our ray (occluder blocking sun).
+      return uPomShadowDarkness;
+    }
+    currentUv += uvStep;
+    currentDepth -= layerStep;
+  }
+  return 1.0;
+}`
+    );
+
+    // Now patch `<map_fragment>`. The stock chunk reads `vMapUv` and
+    // samples `map`. We compute `_pomUv` from `vMapUv` + the tangent
+    // view direction first, then REPLACE the chunk with one that uses
+    // the perturbed UV. The replacement still calls `sampledDiffuseColor`
+    // and feeds `diffuseColor` so PBR downstream sees the right value.
+    //
+    // LOD ramp: blend the perturbed-UV diffuse toward the flat-UV
+    // diffuse over the [uPomLodNear, uPomLodFar] camera-distance band.
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <map_fragment>",
+      `// Phase 3.1 POM begin
+vec2 _pomBaseUv = vMapUv;
+vec2 _pomUv = _pomBaseUv;
+float _pomLod = 1.0 - smoothstep(uPomLodNear, uPomLodFar, vPomViewDepth);
+float _pomShadowFactor = 1.0;
+if (_pomLod > 0.001) {
+  vec3 _pomTanDir = normalize(vPomTangentViewDir);
+  _pomUv = _pomPerturbedUv(_pomBaseUv, _pomTanDir, uPomDepth, uPomSteps);
+  _pomUv = mix(_pomBaseUv, _pomUv, _pomLod);
+}
+#ifdef USE_MAP
+vec4 sampledDiffuseColor = texture2D(map, _pomUv);
+#ifdef DECODE_VIDEO_TEXTURE
+sampledDiffuseColor = sRGBTransferOETF(sampledDiffuseColor);
+#endif
+diffuseColor *= sampledDiffuseColor;
+#endif
+// Phase 3.1 POM end`
+    );
+
+    // Patch the normal-map sample too: use the perturbed UV so the
+    // per-pixel normal aligns with the perceived geometry. The stock
+    // `<normal_fragment_maps>` chunk reads `vMapUv` (or vNormalMapUv);
+    // we replace its `texture2D(normalMap, ...)` call to use `_pomUv`.
+    // Three.js's chunk uses `vNormalMapUv` when MAP and NORMAL_MAP
+    // texture transforms diverge; we cover both common patterns by
+    // pattern-replacing the `texture2D(normalMap, ...)` invocation.
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "texture2D( normalMap, vNormalMapUv )",
+      "texture2D( normalMap, _pomUv )"
+    );
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "texture2D( normalMap, vMapUv )",
+      "texture2D( normalMap, _pomUv )"
+    );
+
+    // Self-shadowing: apply the secondary ray-march once at the end.
+    // We treat the directional light's view-space direction as the
+    // sun direction; in three.js's lighting pipeline the directional
+    // light passes `directionalLights[i].direction` (view-space, FROM
+    // surface TO light source). We approximate the tangent-space
+    // direction by reusing the same TBN we built in vertex shader —
+    // but at this stage we only have access to the view-space normal
+    // (`normal` is in view space after `<normal_fragment_begin>`). For
+    // simplicity, we apply the shadow modulation in screen luminance
+    // by sampling the heightfield once more along the assumed light
+    // direction (using `vViewPosition` as a proxy). This is a coarse
+    // implementation — a precise version would carry a per-vertex
+    // tangent-space sun direction varying. For Phase 3.1's visual
+    // smoke it's close enough; ultra preset can replace it with a
+    // proper varying.
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <dithering_fragment>",
+      `{
+  // Self-shadow approximation: use the tangent view direction's
+  // negated XY as a proxy for the light's tangent direction (this is
+  // wrong in absolute terms but produces the right qualitative
+  // effect — mortar lines darken on the side away from the camera,
+  // brick faces brighten on the side toward the camera). True sun
+  // direction in tangent space is deferred — see Phase 3.1 hand-off
+  // #2 follow-on note.
+  if (_pomLod > 0.001) {
+    vec3 _pomLightTan = vec3(-vPomTangentViewDir.x, -vPomTangentViewDir.y, vPomTangentViewDir.z);
+    _pomLightTan = normalize(_pomLightTan);
+    float _pomHitDepth = 1.0 - texture2D(uPomMap, _pomUv).r;
+    _pomShadowFactor = _pomShadow(_pomUv, _pomHitDepth, _pomLightTan,
+                                   uPomDepth, uPomShadowSteps);
+    float _pomAtten = mix(1.0, _pomShadowFactor, _pomLod);
+    gl_FragColor.rgb *= _pomAtten;
+  }
+}
+#include <dithering_fragment>`
+    );
+
+    // Stash the patched shader handle so tests can read uniforms post-
+    // compile (three.js doesn't expose shader.uniforms otherwise).
+    material.userData.pomShaderUniforms = shader.uniforms;
+  });
+  material.needsUpdate = true;
+}
+
+// Public export: install the POM patch on an arbitrary material.
+// Phase 3.1 callers (MaterialCache) use this; tests import it
+// directly to assert the shader-patch wires up.
+export function installPomShaderPatch(material, heightTexture, opts) {
+  _installPomShaderPatch(material, heightTexture, opts);
+}
+
 export class MaterialCache {
   /**
-   * @param {{ detailTileCache?: Map<string, THREE.Texture>, forceDetail?: boolean }} [opts]
+   * @param {{
+   *   detailTileCache?: Map<string, THREE.Texture>,
+   *   forceDetail?: boolean,
+   *   csmState?: object,
+   *   pomEnabled?: boolean,
+   *   pomOpts?: object,
+   *   forcePom?: boolean,
+   * }} [opts]
    * `detailTileCache`: optional shared `Map<key, THREE.Texture>` (built
    * once at scene init via `loadDetailTileCache` from adapter.js). When
    * provided + a surface carries the `Detail (0x20000)` bit, the
@@ -464,6 +812,19 @@ export class MaterialCache {
    * `surface_type` bit. Used by the visual-smoke capture to render the
    * effect against real Holtburg surfaces even when the retail DAT
    * doesn't ship any Detail-flagged surfaces — see Phase 0.2 report.
+   *
+   * `pomEnabled`: Phase 3.1 gate. When `true`, surfaces classified as
+   * Stone/Brick/Tile get the parallax occlusion mapping shader patch
+   * (ray-marches a per-surface heightmap from
+   * `holtburger_dat::normal_gen::height_from_luminance`). Default
+   * `false` (low/mid quality presets); high/ultra flip this on via
+   * `quality.flags.pom`.
+   *
+   * `forcePom`: testing override. When `true`, POM applies to EVERY
+   * textured material regardless of category (subject to the heightmap
+   * being non-empty). Used by the visual-smoke capture to verify the
+   * patch installs on real Holtburg surfaces without requiring a
+   * specific Stone DID to be on-screen.
    */
   constructor(opts = {}) {
     /** @type {Map<number, THREE.MeshStandardMaterial>} */
@@ -472,6 +833,8 @@ export class MaterialCache {
     this.textures = new Map();
     /** @type {Map<number, THREE.DataTexture>} */
     this.normalTextures = new Map();
+    /** @type {Map<number, THREE.DataTexture>} */
+    this.heightTextures = new Map();
     /** @type {Map<number, Promise<THREE.MeshStandardMaterial>>} */
     this.pendingFetches = new Map();
 
@@ -490,6 +853,14 @@ export class MaterialCache {
     // quality preset). Mutually exclusive with single-shadow; the two
     // paths are gated by `quality.flags.csm` at the call site.
     this.csmState = opts.csmState ?? null;
+
+    // Visual-fidelity Phase 3.1 — POM gate. When `true`, stone-class
+    // surfaces (Stone/Brick/Tile) get the parallax shader patch +
+    // per-surface heightmap texture installed. Default false; high/
+    // ultra presets pass `pomEnabled: true` via the call site.
+    this.pomEnabled = !!opts.pomEnabled;
+    this.pomOpts = opts.pomOpts ?? null;
+    this.forcePom = !!opts.forcePom;
 
     // Shared fallback for the 0xFF "no surface" bucket and for any
     // surface DID that fails to resolve (zero-size SurfacePixels, etc).
@@ -563,7 +934,7 @@ export class MaterialCache {
    * `surfaceTypeFlags === 0` (the empty-surface fallback) hits the
    * opaque path → standard albedo material with DoubleSide.
    */
-  _materialFromFlags(surfaceTypeFlags, texture, category, normalTexture, overrides) {
+  _materialFromFlags(surfaceTypeFlags, texture, category, normalTexture, overrides, heightTexture) {
     const flags = surfaceTypeFlags >>> 0;
     // Phase 1.4 — start from the category-aware default if the wasm
     // side classified the surface; otherwise stay on the generic
@@ -684,6 +1055,39 @@ export class MaterialCache {
         };
       }
     }
+    // Visual-fidelity Phase 3.1 — parallax occlusion mapping. Gated
+    // by:
+    //   - this.pomEnabled (set from quality.flags.pom at construction)
+    //   - heightTexture present (empty for Luminous + constant-lum
+    //     surfaces — wasm returns empty heightPixels in either case,
+    //     adapter returns null DataTexture, we skip here)
+    //   - normalTexture present (POM needs the per-pixel normal map to
+    //     align with the perturbed UV; without it the bumps would
+    //     light incorrectly)
+    //   - category is Stone/Brick/Tile (the look-right surfaces — POM
+    //     on Wood/Cloth/Foliage produces unconvincing artefacts)
+    //   - not Additive / Translucent (same reasoning as CSM)
+    //   - texture present (POM samples the diffuse via perturbed UV)
+    // Force-POM bypasses the category gate for visual-smoke testing.
+    const stoneish =
+      category === SURFACE_CATEGORY.Stone ||
+      category === SURFACE_CATEGORY.Brick ||
+      category === SURFACE_CATEGORY.Tile;
+    const pomShouldApply =
+      this.pomEnabled &&
+      heightTexture &&
+      normalTexture &&
+      texture &&
+      !isAdditive &&
+      !isTranslucent &&
+      (stoneish || this.forcePom);
+    if (pomShouldApply) {
+      _installPomShaderPatch(mat, heightTexture, this.pomOpts || {});
+      mat.userData = {
+        ...(mat.userData || {}),
+        pomForced: !stoneish && this.forcePom,
+      };
+    }
     // Visual-fidelity Phase 3.3 — install the CSM cascade-sample
     // shader patch when the cache was constructed with a csmState
     // bundle. Skips Additive + Translucent materials (they're shadow-
@@ -746,6 +1150,12 @@ export class MaterialCache {
       // Phase 1.1: procedural normal pixels (RGB8). Empty for Luminous
       // surfaces and the empty-fallback surface.
       const normalTex = surfacePixelsToNormalTexture(sp.normalPixels, sp.width, sp.height);
+      // Phase 3.1: heightmap (R8). Empty for Luminous/constant-lum
+      // surfaces — adapter returns null and the POM patch is skipped.
+      // `sp.heightPixels` is missing on pre-3.1 wasm builds — guard.
+      const heightTex = typeof sp.heightPixels !== "undefined"
+        ? surfacePixelsToHeightTexture(sp.heightPixels, sp.width, sp.height)
+        : null;
       // Phase 1.5: per-DID overrides from the wasm bundle. Non-finite
       // sentinels → fall through to category defaults.
       const overrides = {
@@ -753,7 +1163,7 @@ export class MaterialCache {
         normalScale: typeof sp.normalScaleOverride === "number" ? sp.normalScaleOverride : undefined,
       };
       if (typeof sp.free === "function") sp.free();
-      const mat = this._materialFromFlags(surfaceTypeFlags, tex, category, normalTex, overrides);
+      const mat = this._materialFromFlags(surfaceTypeFlags, tex, category, normalTex, overrides, heightTex);
       mat.name = `scene3d-surface-${did.toString(16).padStart(8, "0")}`;
       mat.userData = {
         ...(mat.userData || {}),
@@ -764,6 +1174,7 @@ export class MaterialCache {
       };
       this.textures.set(did, tex);
       if (normalTex) this.normalTextures.set(did, normalTex);
+      if (heightTex) this.heightTextures.set(did, heightTex);
       this.materials.set(did, mat);
       return mat;
     })();
@@ -844,7 +1255,8 @@ export class MaterialCache {
     // a try/catch instead of an inline `sp.width === 0` check. A throw
     // here means the surface DID had no pixels — fall back to the
     // shared fallback material exactly as for the zero-dim case.
-    let w, h, pixels, surfaceType, category, normalPixels, roughnessOverride, normalScaleOverride;
+    let w, h, pixels, surfaceType, category, normalPixels, heightPixels,
+        roughnessOverride, normalScaleOverride;
     try {
       w = sp.width;
       h = sp.height;
@@ -864,6 +1276,9 @@ export class MaterialCache {
       // Phase 1.1: procedural normal map (RGB8). Empty Uint8Array for
       // Luminous surfaces, the 1x1 solid path, and the empty fallback.
       normalPixels = sp.normalPixels;
+      // Phase 3.1: heightmap (R8). Empty for Luminous + constant-lum
+      // + 1x1 solid + empty fallback. Missing on pre-3.1 wasm builds.
+      heightPixels = typeof sp.heightPixels !== "undefined" ? sp.heightPixels : null;
       // Phase 1.5: per-DID overrides. Non-finite → fall through to
       // category defaults.
       roughnessOverride = typeof sp.roughnessOverride === "number" ? sp.roughnessOverride : undefined;
@@ -873,11 +1288,12 @@ export class MaterialCache {
     }
     const tex = surfacePixelsToTexture(pixels, w, h);
     const normalTex = surfacePixelsToNormalTexture(normalPixels, w, h);
+    const heightTex = heightPixels ? surfacePixelsToHeightTexture(heightPixels, w, h) : null;
     // Phase 7 follow-on #7+8: surface_type bitfield from the wasm side.
     const surfaceTypeFlags = surfaceType >>> 0;
     try { if (typeof sp.free === "function") sp.free(); } catch (_) {}
     const overrides = { roughness: roughnessOverride, normalScale: normalScaleOverride };
-    const mat = this._materialFromFlags(surfaceTypeFlags, tex, category, normalTex, overrides);
+    const mat = this._materialFromFlags(surfaceTypeFlags, tex, category, normalTex, overrides, heightTex);
     mat.name = `scene3d-surface-${did.toString(16).padStart(8, "0")}`;
     mat.userData = {
       ...(mat.userData || {}),
@@ -888,6 +1304,7 @@ export class MaterialCache {
     };
     this.textures.set(did, tex);
     if (normalTex) this.normalTextures.set(did, normalTex);
+    if (heightTex) this.heightTextures.set(did, heightTex);
     this.materials.set(did, mat);
     return mat;
   }
@@ -901,11 +1318,13 @@ export class MaterialCache {
   dispose() {
     for (const tex of this.textures.values()) tex.dispose();
     for (const tex of this.normalTextures.values()) tex.dispose();
+    for (const tex of this.heightTextures.values()) tex.dispose();
     for (const mat of this.materials.values()) mat.dispose();
     this.fallbackMaterial.dispose();
     this.materials.clear();
     this.textures.clear();
     this.normalTextures.clear();
+    this.heightTextures.clear();
     this.pendingFetches.clear();
   }
 }

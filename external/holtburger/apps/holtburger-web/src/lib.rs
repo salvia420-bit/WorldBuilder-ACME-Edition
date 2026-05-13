@@ -2639,6 +2639,13 @@ pub struct SurfacePixels {
     /// diffuse luminance via a 3x3 Sobel kernel. Empty Vec for Luminous
     /// surfaces (per Phase 1.1 hand-off #3) and empty/fallback surfaces.
     normal_pixels: Vec<u8>,
+    /// Phase 3.1 — procedural heightmap (R8, length = w*h) for parallax
+    /// occlusion mapping. Sobel-X gradient integrated by horizontal
+    /// scan, then globally normalised to [0, 255]. Empty Vec for
+    /// Luminous surfaces (POM doesn't apply to emissive), constant-
+    /// luminance surfaces (no gradient → no depth), and the empty
+    /// fallback. JS skips POM patch installation when empty.
+    height_pixels: Vec<u8>,
     /// Phase 1.5 — roughness override sourced from
     /// `surface_overrides.json` (`f32::NAN` = "no override" — Vec<u8>
     /// can't carry an `Option<f32>` over wasm-bindgen).
@@ -2679,6 +2686,12 @@ impl SurfacePixels {
     /// with `(0.5, 0.5, 1.0)` = "flat up" in tangent space.
     #[wasm_bindgen(getter, js_name = normalPixels)]
     pub fn normal_pixels(&self) -> Vec<u8> { self.normal_pixels.clone() }
+    /// Phase 3.1 — procedural heightmap as R8 (length = w*h). Empty for
+    /// Luminous surfaces, constant-luminance surfaces, and the empty-
+    /// fallback surface; JS skips POM shader patch installation when
+    /// empty. See `holtburger_dat::normal_gen::height_from_luminance`.
+    #[wasm_bindgen(getter, js_name = heightPixels)]
+    pub fn height_pixels(&self) -> Vec<u8> { self.height_pixels.clone() }
     /// Phase 1.5 — roughness override (`NaN` = use category default).
     #[wasm_bindgen(getter, js_name = roughnessOverride)]
     pub fn roughness_override(&self) -> f32 { self.roughness_override }
@@ -2736,7 +2749,7 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     surface_did: u32,
 ) -> SurfacePixels {
     use holtburger_dat::file_type::{Palette, Surface, SurfaceTexture, Texture, TextureDecodeError};
-    use holtburger_dat::normal_gen::normal_from_luminance;
+    use holtburger_dat::normal_gen::{height_from_luminance, normal_from_luminance};
     use holtburger_dat::surface_classify::{compute_stats, surface_type_flags::LUMINOUS, SurfaceCategory};
     use holtburger_dat::ResourceKey;
     // Generic (12) is the natural empty / "no opinion" fallback for
@@ -2749,6 +2762,7 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         surface_type: 0,
         category: generic_cat,
         normal_pixels: Vec::new(),
+        height_pixels: Vec::new(),
         roughness_override: f32::NAN,
         normal_scale_override: f32::NAN,
     };
@@ -2778,6 +2792,8 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             classify_with_overrides(&stats, surface_type, surface_did);
         // Phase 1.1 — 1x1 has no gradient → empty normal_pixels → JS
         // skips normalMap assignment, leaving flat shading.
+        // Phase 3.1 — same applies to height_pixels; 1x1 has no
+        // gradient so POM is skipped.
         return SurfacePixels {
             width: 1,
             height: 1,
@@ -2785,6 +2801,7 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             surface_type,
             category,
             normal_pixels: Vec::new(),
+            height_pixels: Vec::new(),
             roughness_override,
             normal_scale_override,
         };
@@ -2816,10 +2833,15 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             // Phase 1.1 — Sobel normal map from luminance. Skip Luminous
             // (emissive) per hand-off #3 — bump shading on glowing
             // surfaces looks wrong.
-            let normal_pixels = if (surface_type & LUMINOUS) != 0 {
-                Vec::new()
+            // Phase 3.1 — same skip rule for the heightmap (POM doesn't
+            // make sense on emissive surfaces).
+            let (normal_pixels, height_pixels) = if (surface_type & LUMINOUS) != 0 {
+                (Vec::new(), Vec::new())
             } else {
-                normal_from_luminance(&pixels, tex.width as u32, tex.height as u32, 1.0)
+                (
+                    normal_from_luminance(&pixels, tex.width as u32, tex.height as u32, 1.0),
+                    height_from_luminance(&pixels, tex.width as u32, tex.height as u32, 1.0),
+                )
             };
             SurfacePixels {
                 width: tex.width as u32,
@@ -2828,6 +2850,7 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
                 surface_type,
                 category,
                 normal_pixels,
+                height_pixels,
                 roughness_override,
                 normal_scale_override,
             }
@@ -2914,7 +2937,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     sub_palettes: &[(u32, u8, u8)],
 ) -> SurfacePixels {
     use holtburger_dat::file_type::{Palette, Surface, SurfaceTexture, Texture, TextureDecodeError};
-    use holtburger_dat::normal_gen::normal_from_luminance;
+    use holtburger_dat::normal_gen::{height_from_luminance, normal_from_luminance};
     use holtburger_dat::surface_classify::{compute_stats, surface_type_flags::LUMINOUS, SurfaceCategory};
     use holtburger_dat::ResourceKey;
     let generic_cat = SurfaceCategory::Generic.as_u8();
@@ -2925,6 +2948,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         surface_type: 0,
         category: generic_cat,
         normal_pixels: Vec::new(),
+        height_pixels: Vec::new(),
         roughness_override: f32::NAN,
         normal_scale_override: f32::NAN,
     };
@@ -2951,6 +2975,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             surface_type,
             category,
             normal_pixels: Vec::new(),
+            height_pixels: Vec::new(),
             roughness_override,
             normal_scale_override,
         };
@@ -2998,10 +3023,14 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             let (category, roughness_override, normal_scale_override) =
                 classify_with_overrides(&stats, surface_type, surface_did);
             // Phase 1.1 — Sobel normal map; skip Luminous (emissive).
-            let normal_pixels = if (surface_type & LUMINOUS) != 0 {
-                Vec::new()
+            // Phase 3.1 — same skip rule for the heightmap.
+            let (normal_pixels, height_pixels) = if (surface_type & LUMINOUS) != 0 {
+                (Vec::new(), Vec::new())
             } else {
-                normal_from_luminance(&pixels, tex.width as u32, tex.height as u32, 1.0)
+                (
+                    normal_from_luminance(&pixels, tex.width as u32, tex.height as u32, 1.0),
+                    height_from_luminance(&pixels, tex.width as u32, tex.height as u32, 1.0),
+                )
             };
             SurfacePixels {
                 width: tex.width as u32,
@@ -3010,6 +3039,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
                 surface_type,
                 category,
                 normal_pixels,
+                height_pixels,
                 roughness_override,
                 normal_scale_override,
             }
