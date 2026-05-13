@@ -70,6 +70,49 @@ export const SURFACE_TYPE = Object.freeze({
 // Surface. Caller paints these with `materialCache.fallbackMaterial`.
 const FALLBACK_SURFACE_DID = 0;
 
+// Phase 1.4 — heuristic surface category mirror.
+// MUST match the `SurfaceCategory::as_u8` encoding in
+// `crates/holtburger-dat/src/surface_classify.rs`. See the JS-side
+// `_materialFromFlags` for category-aware roughness / metalness
+// defaults. The Rust-side classifier ships these as a single u8 on
+// `SurfacePixels.category`.
+export const SURFACE_CATEGORY = Object.freeze({
+  Stone: 0,
+  Wood: 1,
+  Metal: 2,
+  Sand: 3,
+  Lava: 4,
+  Water: 5,
+  Foliage: 6,
+  Cloth: 7,
+  Dirt: 8,
+  Snow: 9,
+  Brick: 10,
+  Tile: 11,
+  Generic: 12,
+});
+
+// Category-aware material defaults — applied AFTER the surface-type
+// flag decoder. Categories listed in §Phase 1.4 Objectives #4 get
+// concrete roughness / metalness values; the rest fall through to
+// the existing 0.9 / 0.0 defaults.
+//
+// normalScale defaults are intentionally left at the THREE default
+// (`new Vector2(1, 1)` once Phase 1.1's procedural normal maps land);
+// this phase only touches roughness + metalness. Documenting this so
+// Phase 1.1 doesn't accidentally double-set normalScale here.
+const CATEGORY_MATERIAL_DEFAULTS = Object.freeze({
+  [SURFACE_CATEGORY.Stone]: { roughness: 0.85, metalness: 0.0 },
+  [SURFACE_CATEGORY.Wood]: { roughness: 0.8, metalness: 0.0 },
+  [SURFACE_CATEGORY.Metal]: { roughness: 0.3, metalness: 0.9 },
+  [SURFACE_CATEGORY.Sand]: { roughness: 0.95, metalness: 0.0 },
+  [SURFACE_CATEGORY.Lava]: { roughness: 0.4, metalness: 0.0 },
+  [SURFACE_CATEGORY.Foliage]: { roughness: 0.85, metalness: 0.0 },
+  // Water, Cloth, Dirt, Snow, Brick, Tile, Generic — fall through
+  // to the existing 0.9 / 0.0 defaults until Phase 1.5 overrides
+  // tune them per real-DID survey.
+});
+
 export class MaterialCache {
   constructor() {
     /** @type {Map<number, THREE.MeshStandardMaterial>} */
@@ -148,12 +191,25 @@ export class MaterialCache {
    * `surfaceTypeFlags === 0` (the empty-surface fallback) hits the
    * opaque path → standard albedo material with DoubleSide.
    */
-  _materialFromFlags(surfaceTypeFlags, texture) {
+  _materialFromFlags(surfaceTypeFlags, texture, category) {
     const flags = surfaceTypeFlags >>> 0;
+    // Phase 1.4 — start from the category-aware default if the wasm
+    // side classified the surface; otherwise stay on the generic
+    // 0.9 / 0.0 fall-through. The Diffuse flag below can still
+    // override roughness to 1.0 (matte wins regardless of category).
+    let baseRoughness = 0.9;
+    let baseMetalness = 0.0;
+    if (typeof category === "number") {
+      const defaults = CATEGORY_MATERIAL_DEFAULTS[category];
+      if (defaults) {
+        baseRoughness = defaults.roughness;
+        baseMetalness = defaults.metalness;
+      }
+    }
     const opts = {
       map: texture,
-      roughness: 0.9,
-      metalness: 0.0,
+      roughness: baseRoughness,
+      metalness: baseMetalness,
       side: THREE.DoubleSide,
       transparent: false,
       alphaTest: 0,
@@ -186,11 +242,15 @@ export class MaterialCache {
       // multiplier on `emissive` lets the unmodulated texture pass
       // through. emissiveIntensity=0.6 keeps it bright but doesn't
       // saturate (1.0 looks blown-out under the default sun rig).
+      // Phase 1.4 — Lava category still sets roughness=0.4 above; the
+      // Luminous flag overlays emissive on top without overriding it.
       opts.emissive = new THREE.Color(0xffffff);
       opts.emissiveMap = texture;
       opts.emissiveIntensity = 0.6;
     }
     if (isDiffuse) {
+      // Diffuse flag wins over category-default roughness — AC's
+      // explicit matte hint should trump heuristic guesses.
       opts.roughness = 1.0; // matte — no specular highlight
       opts.metalness = 0.0;
     }
@@ -238,12 +298,18 @@ export class MaterialCache {
       // raw `Surface.surface_type` bitfield via `surfaceType`. Older
       // wasm builds without the getter fall through to `0` (opaque).
       const surfaceTypeFlags = (sp.surfaceType ?? 0) >>> 0;
+      // Phase 1.4: wasm classifier emits a u8 category on
+      // SurfacePixels.category — undefined on older builds, in
+      // which case `_materialFromFlags` falls through to generic
+      // 0.9 / 0.0 defaults.
+      const category = typeof sp.category === "number" ? sp.category : undefined;
       if (typeof sp.free === "function") sp.free();
-      const mat = this._materialFromFlags(surfaceTypeFlags, tex);
+      const mat = this._materialFromFlags(surfaceTypeFlags, tex, category);
       mat.name = `scene3d-surface-${did.toString(16).padStart(8, "0")}`;
       mat.userData = {
         ...(mat.userData || {}),
         surfaceTypeFlags,
+        surfaceCategory: category,
       };
       this.textures.set(did, tex);
       this.materials.set(did, mat);
@@ -326,7 +392,7 @@ export class MaterialCache {
     // a try/catch instead of an inline `sp.width === 0` check. A throw
     // here means the surface DID had no pixels — fall back to the
     // shared fallback material exactly as for the zero-dim case.
-    let w, h, pixels, surfaceType;
+    let w, h, pixels, surfaceType, category;
     try {
       w = sp.width;
       h = sp.height;
@@ -340,6 +406,9 @@ export class MaterialCache {
     try {
       pixels = sp.pixels;
       surfaceType = sp.surfaceType ?? 0;
+      // Phase 1.4: heuristic category as u8. Missing getter on older
+      // wasm builds → undefined → generic defaults in _materialFromFlags.
+      category = typeof sp.category === "number" ? sp.category : undefined;
     } catch (_) {
       return this.fallbackMaterial;
     }
@@ -347,11 +416,12 @@ export class MaterialCache {
     // Phase 7 follow-on #7+8: surface_type bitfield from the wasm side.
     const surfaceTypeFlags = surfaceType >>> 0;
     try { if (typeof sp.free === "function") sp.free(); } catch (_) {}
-    const mat = this._materialFromFlags(surfaceTypeFlags, tex);
+    const mat = this._materialFromFlags(surfaceTypeFlags, tex, category);
     mat.name = `scene3d-surface-${did.toString(16).padStart(8, "0")}`;
     mat.userData = {
       ...(mat.userData || {}),
       surfaceTypeFlags,
+      surfaceCategory: category,
     };
     this.textures.set(did, tex);
     this.materials.set(did, mat);
