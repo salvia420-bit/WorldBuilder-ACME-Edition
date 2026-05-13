@@ -805,6 +805,8 @@
       function applyConfirmedStance(motionStance) {
         if (!stanceLabelEl) return;
         const low = motionStance & 0xFFFF;
+        // ACE emits motion-only updates with stance=0; preserve last confirmed label.
+        if (low === 0) return;
         const label = STANCE_LABELS[low] ?? `0x${low.toString(16)}`;
         stanceLabelEl.textContent = label;
         stanceLabelEl.classList.remove("pending");
@@ -4244,6 +4246,28 @@ void main() {
           // symptom. Mirrors how the upstream cli's TUI map renders
           // off `world.local_player_runtime_pose()` (the integrator-
           // owned body.pose) — not off the raw server broadcast.
+          //
+          // 2026-05-13 teleport-snap follow-on: the no-snap policy is
+          // correct for same-LB heartbeats, but a server-issued
+          // PlayerTeleport (or @teleloc) crosses to a new landblock
+          // and the JS-side step-3.5 prediction has no concept of the
+          // teleport — it keeps integrating WASD on top of the OLD
+          // sprite position. Detect the LB crossing here (high 16
+          // bits of upd.landblockId) and snap sprite to the new
+          // (wx, wy), then reset the step-3.5 prediction
+          // bookkeeping so it restarts from the new pose. First
+          // PrivateUpdatePosition after spawn also snaps because
+          // entry.lastLocalLbId is undefined. Same-LB heartbeats
+          // leave the rubberband fix above intact.
+          const lbHigh = ((upd.landblockId >>> 16) << 16) >>> 0;
+          if (entry.lastLocalLbId !== lbHigh) {
+            entry.sprite.x = wx;
+            entry.sprite.y = wy;
+            window.__predLastPos = { x: wx, y: wy };
+            window.__predFirstPos = undefined;
+            window.__predLastTickMs = undefined;
+            entry.lastLocalLbId = lbHigh;
+          }
           entry.lerpStartMs = undefined;
           entry.lerpDurationMs = undefined;
         } else {
