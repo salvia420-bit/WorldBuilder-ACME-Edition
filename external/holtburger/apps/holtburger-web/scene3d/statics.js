@@ -35,7 +35,7 @@
 
 import * as THREE from "three";
 import { meshToFusedGeometry, placementToMatrix4 } from "./adapter.js";
-import { MaterialCache } from "./materials.js";
+import { MaterialCache, materialCanCastShadow } from "./materials.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
@@ -318,6 +318,13 @@ export async function buildHoltburgStatics(scene3d, wasmExports) {
     const degradedGeom = degradedGeomByModel.get(modelId) || null;
     const modelKey = (modelId >>> 0).toString(16).padStart(8, "0");
 
+    // Visual-fidelity Phase 0.1 — static-object shadow tagging. Statics
+    // (props, signs, posts) cast shadows on terrain + buildings; they
+    // also receive shadows from buildings. Translucent / additive
+    // surfaces are skipped via the material-flag check; the rest get
+    // both flags. Effectively a no-op when shadowsEnabled is false.
+    const staticsShadow = !!scene3d.shadowsEnabled;
+    const staticsMatCastsShadow = materialCanCastShadow(mat);
     if (group.length >= 2) {
       // === InstancedMesh path ===
       // One draw call per modelId, regardless of placement count.
@@ -328,6 +335,10 @@ export async function buildHoltburgStatics(scene3d, wasmExports) {
         isBuilding: false,
         instanceCount: group.length,
       };
+      if (staticsShadow) {
+        instanced.castShadow = staticsMatCastsShadow;
+        instanced.receiveShadow = true;
+      }
       for (let i = 0; i < group.length; i += 1) {
         const m4 = placementMatrix(group[i]);
         instanced.setMatrixAt(i, m4);
@@ -358,6 +369,10 @@ export async function buildHoltburgStatics(scene3d, wasmExports) {
           group.length
         );
         degradedInstanced.name = `static-instanced-degraded-${modelKey}`;
+        if (staticsShadow) {
+          degradedInstanced.castShadow = staticsMatCastsShadow;
+          degradedInstanced.receiveShadow = true;
+        }
         for (let i = 0; i < group.length; i += 1) {
           const m4 = placementMatrix(group[i]);
           degradedInstanced.setMatrixAt(i, m4);
@@ -404,12 +419,20 @@ export async function buildHoltburgStatics(scene3d, wasmExports) {
         placementKey,
         isBuilding: false,
       };
+      if (staticsShadow) {
+        mesh.castShadow = staticsMatCastsShadow;
+        mesh.receiveShadow = true;
+      }
       singletonCount += 1;
       objectCount += 1;
 
       if (degradedGeom) {
         const degradedMesh = new THREE.Mesh(degradedGeom, mat);
         degradedMesh.name = `static-degraded-${placementKey}`;
+        if (staticsShadow) {
+          degradedMesh.castShadow = staticsMatCastsShadow;
+          degradedMesh.receiveShadow = true;
+        }
         degradedMesh.position.copy(mesh.position);
         degradedMesh.quaternion.copy(mesh.quaternion);
         degradedMesh.userData = {

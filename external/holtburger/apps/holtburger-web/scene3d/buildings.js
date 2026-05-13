@@ -56,7 +56,7 @@ import {
   placementToMatrix4,
   acQuatToThree,
 } from "./adapter.js";
-import { MaterialCache } from "./materials.js";
+import { MaterialCache, materialCanCastShadow } from "./materials.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
@@ -180,7 +180,7 @@ async function bakeBuildingPlacement(modelId, fetchBuildingPlacement) {
  * so future phases can address by part for door rotation, AABB lookup,
  * etc.
  */
-function buildOneBuilding(placement, bake, materialCache, worldOffset) {
+function buildOneBuilding(placement, bake, materialCache, worldOffset, shadowsEnabled) {
   const placementKey =
     `${(placement.landblockId >>> 0).toString(16).padStart(8, "0")}_` +
     `${placement.x.toFixed(2)}_${placement.y.toFixed(2)}_` +
@@ -245,6 +245,17 @@ function buildOneBuilding(placement, bake, materialCache, worldOffset) {
         partIndex: part.partIndex,
         surfaceDid: g.surfaceDid,
       };
+      // Visual-fidelity Phase 0.1 — buildings cast AND receive shadows.
+      // Walls cast onto neighbouring buildings + terrain; walls also
+      // receive shadows from other buildings. `castShadow` is gated on
+      // the surface's translucent/additive flag because three.js's
+      // shadow pass renders depth-only (no alpha blending), so a
+      // translucent quad would cast a solid-rectangle shadow. The
+      // material-flag check is centralised in materials.js.
+      if (shadowsEnabled) {
+        mesh.castShadow = materialCanCastShadow(mat);
+        mesh.receiveShadow = true;
+      }
       hingeWrapper.add(mesh);
       partsAdded += 1;
     }
@@ -443,7 +454,8 @@ export async function buildHoltburgBuildings(scene3d, wasmExports) {
       placement,
       bake,
       materialCache,
-      worldOffset
+      worldOffset,
+      !!scene3d.shadowsEnabled
     );
     scene3d.buildingsGroup.add(group);
     partCount += bake.parts.length;

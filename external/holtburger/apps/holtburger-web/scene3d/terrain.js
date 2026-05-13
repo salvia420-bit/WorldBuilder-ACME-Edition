@@ -390,6 +390,20 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
 
     const lbMesh = new THREE.Mesh(geom, material);
     lbMesh.name = `terrain-lb-${lbX.toString(16)}-${lbY.toString(16)}`;
+    // Visual-fidelity Phase 0.1 — terrain receives shadows from
+    // buildings + statics + entities. Doesn't cast (it's the ground;
+    // shadow-casting a heightfield is expensive and doesn't read on
+    // distant terrain). Note: the terrain ShaderMaterial above is a
+    // custom GLSL3 shader, not MeshStandardMaterial — three.js's
+    // shadow-receive path requires the material to include
+    // <shadowmap_pars_fragment>/<shadowmap_fragment> chunks. Phase 0.1
+    // ships with the flag set; if the shader doesn't show shadow
+    // overlay yet, follow-up work (Phase 1.* / 2.*) will reweave the
+    // shader chunks. The flag is harmless when the shader doesn't
+    // honour it.
+    if (scene3d.shadowsEnabled) {
+      lbMesh.receiveShadow = true;
+    }
     // Per-LB world offset (xy in metres). The geometry is LB-local
     // (x,y in [0, 192]) so the world position is just (lbX*192, lbY*192).
     lbMesh.position.set(
