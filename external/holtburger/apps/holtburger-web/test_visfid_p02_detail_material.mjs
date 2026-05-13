@@ -78,7 +78,7 @@ const matSrc = readFileSync(matPath, "utf8");
 const patched = matSrc
   .replace(/^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m, "")
   .replace(
-    /^\s*import\s+\{\s*surfacePixelsToTexture\s*\}\s+from\s+["'].\/adapter\.js["'];?\s*$/m,
+    /^\s*import\s+\{[^}]+\}\s+from\s+["']\.\/adapter\.js["'];?\s*$/m,
     "",
   )
   .replace(/^\s*export\s+function\s+/gm, "function ")
