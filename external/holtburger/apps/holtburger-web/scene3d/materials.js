@@ -43,7 +43,7 @@
 // out highlights.
 
 import * as THREE from "three";
-import { surfacePixelsToTexture } from "./adapter.js";
+import { surfacePixelsToTexture, surfacePixelsToNormalTexture } from "./adapter.js";
 
 // ACE SurfaceType bit constants (mirrored from ACE.Entity.Enum.SurfaceType,
 // see external/ACE/Source/ACE.Entity/Enum/SurfaceType.cs). Exported so
@@ -120,6 +120,8 @@ export class MaterialCache {
     this.materials = new Map();
     /** @type {Map<number, THREE.DataTexture>} */
     this.textures = new Map();
+    /** @type {Map<number, THREE.DataTexture>} */
+    this.normalTextures = new Map();
     /** @type {Map<number, Promise<THREE.MeshStandardMaterial>>} */
     this.pendingFetches = new Map();
 
@@ -192,7 +194,7 @@ export class MaterialCache {
    * `surfaceTypeFlags === 0` (the empty-surface fallback) hits the
    * opaque path → standard albedo material with DoubleSide.
    */
-  _materialFromFlags(surfaceTypeFlags, texture, category) {
+  _materialFromFlags(surfaceTypeFlags, texture, category, normalTexture) {
     const flags = surfaceTypeFlags >>> 0;
     // Phase 1.4 — start from the category-aware default if the wasm
     // side classified the surface; otherwise stay on the generic
@@ -255,7 +257,16 @@ export class MaterialCache {
       opts.roughness = 1.0; // matte — no specular highlight
       opts.metalness = 0.0;
     }
-    return new THREE.MeshStandardMaterial(opts);
+    const mat = new THREE.MeshStandardMaterial(opts);
+    // Phase 1.1 — procedural normal map. Wasm side skips generation
+    // for Luminous surfaces (empty normal_pixels → null texture here),
+    // so the `!isLuminous` gate is belt-and-braces. normalScale=0.8 is
+    // the universal baseline; Phase 1.5 may tune per-category later.
+    if (normalTexture && !isLuminous) {
+      mat.normalMap = normalTexture;
+      mat.normalScale.setScalar(0.8);
+    }
+    return mat;
   }
 
   /**
@@ -304,8 +315,11 @@ export class MaterialCache {
       // which case `_materialFromFlags` falls through to generic
       // 0.9 / 0.0 defaults.
       const category = typeof sp.category === "number" ? sp.category : undefined;
+      // Phase 1.1: procedural normal pixels (RGB8). Empty for
+      // Luminous surfaces and the empty-fallback surface.
+      const normalTex = surfacePixelsToNormalTexture(sp.normalPixels, sp.width, sp.height);
       if (typeof sp.free === "function") sp.free();
-      const mat = this._materialFromFlags(surfaceTypeFlags, tex, category);
+      const mat = this._materialFromFlags(surfaceTypeFlags, tex, category, normalTex);
       mat.name = `scene3d-surface-${did.toString(16).padStart(8, "0")}`;
       mat.userData = {
         ...(mat.userData || {}),
@@ -313,6 +327,7 @@ export class MaterialCache {
         surfaceCategory: category,
       };
       this.textures.set(did, tex);
+      if (normalTex) this.normalTextures.set(did, normalTex);
       this.materials.set(did, mat);
       return mat;
     })();
@@ -393,7 +408,7 @@ export class MaterialCache {
     // a try/catch instead of an inline `sp.width === 0` check. A throw
     // here means the surface DID had no pixels — fall back to the
     // shared fallback material exactly as for the zero-dim case.
-    let w, h, pixels, surfaceType, category;
+    let w, h, pixels, surfaceType, category, normalPixels;
     try {
       w = sp.width;
       h = sp.height;
@@ -410,14 +425,18 @@ export class MaterialCache {
       // Phase 1.4: heuristic category as u8. Missing getter on older
       // wasm builds → undefined → generic defaults in _materialFromFlags.
       category = typeof sp.category === "number" ? sp.category : undefined;
+      // Phase 1.1: procedural normal map (RGB8). Empty Uint8Array for
+      // Luminous surfaces, the 1x1 solid path, and the empty fallback.
+      normalPixels = sp.normalPixels;
     } catch (_) {
       return this.fallbackMaterial;
     }
     const tex = surfacePixelsToTexture(pixels, w, h);
+    const normalTex = surfacePixelsToNormalTexture(normalPixels, w, h);
     // Phase 7 follow-on #7+8: surface_type bitfield from the wasm side.
     const surfaceTypeFlags = surfaceType >>> 0;
     try { if (typeof sp.free === "function") sp.free(); } catch (_) {}
-    const mat = this._materialFromFlags(surfaceTypeFlags, tex, category);
+    const mat = this._materialFromFlags(surfaceTypeFlags, tex, category, normalTex);
     mat.name = `scene3d-surface-${did.toString(16).padStart(8, "0")}`;
     mat.userData = {
       ...(mat.userData || {}),
@@ -425,6 +444,7 @@ export class MaterialCache {
       surfaceCategory: category,
     };
     this.textures.set(did, tex);
+    if (normalTex) this.normalTextures.set(did, normalTex);
     this.materials.set(did, mat);
     return mat;
   }
@@ -437,10 +457,12 @@ export class MaterialCache {
    */
   dispose() {
     for (const tex of this.textures.values()) tex.dispose();
+    for (const tex of this.normalTextures.values()) tex.dispose();
     for (const mat of this.materials.values()) mat.dispose();
     this.fallbackMaterial.dispose();
     this.materials.clear();
     this.textures.clear();
+    this.normalTextures.clear();
     this.pendingFetches.clear();
   }
 }

@@ -103,7 +103,9 @@ const matSrc = readFileSync(matPath, "utf8");
 const patched = matSrc
   .replace(/^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m, "")
   .replace(
-    /^\s*import\s+\{\s*surfacePixelsToTexture\s*\}\s+from\s+["'].\/adapter\.js["'];?\s*$/m,
+    // Phase 1.1 — materials.js now also imports surfacePixelsToNormalTexture;
+    // accept any combination of named imports from adapter.js.
+    /^\s*import\s+\{\s*[^}]*\s*\}\s+from\s+["'].\/adapter\.js["'];?\s*$/m,
     "",
   )
   .replace(/^\s*export\s+function\s+/gm, "function ")

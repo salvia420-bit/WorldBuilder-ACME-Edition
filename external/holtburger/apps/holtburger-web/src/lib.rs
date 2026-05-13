@@ -2625,6 +2625,12 @@ pub struct SurfacePixels {
     /// rule set and `apps/holtburger-web/scene3d/materials.js`
     /// `_materialFromFlags` for the JS consumer.
     category: u8,
+    /// Phase 1.1 — procedural normal map (RGB8, length = w*h*3) derived
+    /// from the diffuse luminance via a 3x3 Sobel kernel. Empty Vec for
+    /// Luminous surfaces (skip bump shading on emissive surfaces — see
+    /// Phase 1.1 hand-off note #3) and for empty/fallback surfaces.
+    /// See `holtburger_dat::normal_gen::normal_from_luminance`.
+    normal_pixels: Vec<u8>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2649,6 +2655,13 @@ impl SurfacePixels {
     /// the empty-fallback surface.
     #[wasm_bindgen(getter)]
     pub fn category(&self) -> u8 { self.category }
+    /// Phase 1.1 — procedural normal map as RGB8 (length = w*h*3).
+    /// Empty for Luminous (emissive) surfaces and for the empty-
+    /// fallback surface; JS consumers should skip `normalMap`
+    /// assignment when this is empty. Always packed `[r, g, b]` with
+    /// `(0.5, 0.5, 1.0)` representing "flat up" in tangent space.
+    #[wasm_bindgen(getter, js_name = normalPixels)]
+    pub fn normal_pixels(&self) -> Vec<u8> { self.normal_pixels.clone() }
 }
 
 /// Walk Surface → SurfaceTexture → Texture → RGBA8 for one surface
@@ -2661,12 +2674,20 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     surface_did: u32,
 ) -> SurfacePixels {
     use holtburger_dat::file_type::{Palette, Surface, SurfaceTexture, Texture, TextureDecodeError};
-    use holtburger_dat::surface_classify::{classify, compute_stats, SurfaceCategory};
+    use holtburger_dat::normal_gen::normal_from_luminance;
+    use holtburger_dat::surface_classify::{classify, compute_stats, surface_type_flags::LUMINOUS, SurfaceCategory};
     use holtburger_dat::ResourceKey;
     // Generic (12) is the natural empty / "no opinion" fallback for
     // the JS material decoder.
     let generic_cat = SurfaceCategory::Generic.as_u8();
-    let empty = SurfacePixels { width: 0, height: 0, pixels: Vec::new(), surface_type: 0, category: generic_cat };
+    let empty = SurfacePixels {
+        width: 0,
+        height: 0,
+        pixels: Vec::new(),
+        surface_type: 0,
+        category: generic_cat,
+        normal_pixels: Vec::new(),
+    };
 
     let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else { return empty; };
     let Ok(surface) = Surface::unpack(&bytes) else { return empty; };
@@ -2688,7 +2709,10 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         // surfaces with the Luminous flag set should still hit Lava).
         let stats = compute_stats(&pixels, 1, 1);
         let category = classify(&stats, surface_type).as_u8();
-        return SurfacePixels { width: 1, height: 1, pixels, surface_type, category };
+        // Phase 1.1 — no normal map for 1x1 solid surfaces (a single
+        // pixel has no gradient → always flat). Empty Vec → JS skips
+        // normalMap assignment, leaving the default flat shading.
+        return SurfacePixels { width: 1, height: 1, pixels, surface_type, category, normal_pixels: Vec::new() };
     }
     let Some((surf_tex_id, _)) = surface.textured() else { return empty; };
     let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else { return empty; };
@@ -2711,12 +2735,22 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             // (per §11 open question #1 — decode-time, not bake-time).
             let stats = compute_stats(&pixels, tex.width as u32, tex.height as u32);
             let category = classify(&stats, surface_type).as_u8();
+            // Phase 1.1 — generate procedural normal map from
+            // luminance, skipping Luminous (emissive) surfaces per
+            // hand-off note #3 — bump shading on glowing surfaces
+            // looks wrong. JS-side normalScale (0.8) tunes intensity.
+            let normal_pixels = if (surface_type & LUMINOUS) != 0 {
+                Vec::new()
+            } else {
+                normal_from_luminance(&pixels, tex.width as u32, tex.height as u32, 1.0)
+            };
             SurfacePixels {
                 width: tex.width as u32,
                 height: tex.height as u32,
                 pixels,
                 surface_type,
                 category,
+                normal_pixels,
             }
         }
         Err(_) => empty,
@@ -2801,10 +2835,18 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     sub_palettes: &[(u32, u8, u8)],
 ) -> SurfacePixels {
     use holtburger_dat::file_type::{Palette, Surface, SurfaceTexture, Texture, TextureDecodeError};
-    use holtburger_dat::surface_classify::{classify, compute_stats, SurfaceCategory};
+    use holtburger_dat::normal_gen::normal_from_luminance;
+    use holtburger_dat::surface_classify::{classify, compute_stats, surface_type_flags::LUMINOUS, SurfaceCategory};
     use holtburger_dat::ResourceKey;
     let generic_cat = SurfaceCategory::Generic.as_u8();
-    let empty = SurfacePixels { width: 0, height: 0, pixels: Vec::new(), surface_type: 0, category: generic_cat };
+    let empty = SurfacePixels {
+        width: 0,
+        height: 0,
+        pixels: Vec::new(),
+        surface_type: 0,
+        category: generic_cat,
+        normal_pixels: Vec::new(),
+    };
 
     let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else { return empty; };
     let Ok(surface) = Surface::unpack(&bytes) else { return empty; };
@@ -2819,7 +2861,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         let pixels = vec![r, g, b, a];
         let stats = compute_stats(&pixels, 1, 1);
         let category = classify(&stats, surface_type).as_u8();
-        return SurfacePixels { width: 1, height: 1, pixels, surface_type, category };
+        return SurfacePixels { width: 1, height: 1, pixels, surface_type, category, normal_pixels: Vec::new() };
     }
     let Some((surf_tex_id, _)) = surface.textured() else { return empty; };
     let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else { return empty; };
@@ -2861,12 +2903,20 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         Ok(pixels) => {
             let stats = compute_stats(&pixels, tex.width as u32, tex.height as u32);
             let category = classify(&stats, surface_type).as_u8();
+            // Phase 1.1 — procedural normal map, skipping Luminous
+            // surfaces (emissive characters/items glow uniformly).
+            let normal_pixels = if (surface_type & LUMINOUS) != 0 {
+                Vec::new()
+            } else {
+                normal_from_luminance(&pixels, tex.width as u32, tex.height as u32, 1.0)
+            };
             SurfacePixels {
                 width: tex.width as u32,
                 height: tex.height as u32,
                 pixels,
                 surface_type,
                 category,
+                normal_pixels,
             }
         }
         Err(_) => empty,
