@@ -1402,23 +1402,10 @@ export class SkyDome {
       return;
     }
 
-    // Sync the sky camera with the main camera. Position is critical
-    // for proper rendering of any sky-internal vertex data that's not
-    // exactly at the cell origin (the celestials are at ~1900 units
-    // from cell origin — but the skyCell ALSO sits at camera.position,
-    // so the sky-camera-relative position of the sun is `~1900 +
-    // (skyCell - skyCamera)` ≈ ~1900 since both are at the main
-    // camera). Quaternion + fov + aspect mirror the main camera so
-    // the projection matrices align.
-    this.skyCamera.position.copy(mainCamera.position);
-    this.skyCamera.quaternion.copy(mainCamera.quaternion);
-    if (typeof mainCamera.fov === "number") {
-      this.skyCamera.fov = mainCamera.fov;
-    }
-    if (typeof mainCamera.aspect === "number") {
-      this.skyCamera.aspect = mainCamera.aspect;
-    }
-    this.skyCamera.updateProjectionMatrix();
+    // Sync the sky camera with the main camera (extracted into
+    // `syncSkyCamera` so the SSAO composer path can call it without
+    // taking the render step).
+    this.syncSkyCamera(mainCamera);
 
     // Clear color + depth, then render the sky. After this call the
     // framebuffer has sky pixels and the depth buffer has sky depths.
@@ -1430,6 +1417,42 @@ export class SkyDome {
     renderer.render(this.skyScene, this.skyCamera);
     renderer.autoClear = prevAutoClear;
     this._lastSkyRendered = true;
+  }
+
+  /**
+   * Sync the sky camera's transform / projection with the main world
+   * camera. Position is critical for proper rendering of any sky-
+   * internal vertex data that's not exactly at the cell origin (the
+   * celestials are at ~1900 units from cell origin — but the skyCell
+   * ALSO sits at camera.position, so the sky-camera-relative position
+   * of the sun is `~1900 + (skyCell - skyCamera)` ≈ ~1900 since both
+   * are at the main camera). Quaternion + fov + aspect mirror the
+   * main camera so the projection matrices align.
+   *
+   * Extracted from `renderSkyPass` (Phase 3.2 SSAO) so the composer
+   * path can call sync-only (no render) — the sky pass is then a
+   * RenderPass inside the EffectComposer, and the composer drives
+   * the actual draw call.
+   *
+   * Indoor short-circuit: callers should check
+   * `wasSkyRenderedLastFrame()` (set after `renderSkyPass`) OR
+   * `_lastIsIndoor` (settled in tick) to decide whether to invoke
+   * this. Calling syncSkyCamera while indoor is harmless — the
+   * composer's sky pass is .enabled=false in that case.
+   *
+   * @param {THREE.Camera} mainCamera
+   */
+  syncSkyCamera(mainCamera) {
+    if (!mainCamera) return;
+    this.skyCamera.position.copy(mainCamera.position);
+    this.skyCamera.quaternion.copy(mainCamera.quaternion);
+    if (typeof mainCamera.fov === "number") {
+      this.skyCamera.fov = mainCamera.fov;
+    }
+    if (typeof mainCamera.aspect === "number") {
+      this.skyCamera.aspect = mainCamera.aspect;
+    }
+    this.skyCamera.updateProjectionMatrix();
   }
 
   /**
