@@ -242,11 +242,13 @@ export async function buildHoltburgStatics(scene3d, wasmExports) {
   // refinement. Reuse the same MaterialCache the buildings phase
   // installed so we share the cost.
   // Phase 0.2 — detail tile cache propagation. See buildings.js.
+  // Phase 3.3 — CSM bundle propagation. See buildings.js.
   const materialCache =
     scene3d.materialCache ||
     new MaterialCache({
       detailTileCache: scene3d.detailTileCache ?? null,
       forceDetail: !!scene3d.forceDetail,
+      csmState: scene3d.csmState ?? null,
     });
   if (allSurfaceDids.size > 0) {
     try {
@@ -329,7 +331,10 @@ export async function buildHoltburgStatics(scene3d, wasmExports) {
     // also receive shadows from buildings. Translucent / additive
     // surfaces are skipped via the material-flag check; the rest get
     // both flags. Effectively a no-op when shadowsEnabled is false.
-    const staticsShadow = !!scene3d.shadowsEnabled;
+    // Phase 3.3 — flip on for the CSM path too (mutually exclusive
+    // with the single-shadow path; either path needs caster/receiver
+    // tagging).
+    const staticsShadow = !!scene3d.shadowsEnabled || !!scene3d.csmEnabled;
     const staticsMatCastsShadow = materialCanCastShadow(mat);
     if (group.length >= 2) {
       // === InstancedMesh path ===

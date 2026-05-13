@@ -416,11 +416,15 @@ export async function buildHoltburgBuildings(scene3d, wasmExports) {
   // Phase 0.2 — pass detail tile cache + forceDetail through to the
   // MaterialCache so surfaces with the Detail (0x20000) bit composite
   // a grayscale tile over the diffuse.
+  // Phase 3.3 — pass `csmState` so receivers get the Cascaded Shadow
+  // Maps shader patch (sample 3 cascade shadow maps, blend at
+  // boundaries, multiply sun's contribution by shadow factor).
   const materialCache =
     scene3d.materialCache ||
     new MaterialCache({
       detailTileCache: scene3d.detailTileCache ?? null,
       forceDetail: !!scene3d.forceDetail,
+      csmState: scene3d.csmState ?? null,
     });
   if (allSurfaceDids.size > 0) {
     try {
@@ -462,7 +466,11 @@ export async function buildHoltburgBuildings(scene3d, wasmExports) {
       bake,
       materialCache,
       worldOffset,
-      !!scene3d.shadowsEnabled
+      // Phase 3.3 — flip castShadow + receiveShadow on when EITHER the
+      // Phase 0.1 single-shadow path OR the CSM path is active. The
+      // two paths share the same caster/receiver tagging — only the
+      // shadow-map projection differs.
+      !!scene3d.shadowsEnabled || !!scene3d.csmEnabled
     );
     scene3d.buildingsGroup.add(group);
     partCount += bake.parts.length;

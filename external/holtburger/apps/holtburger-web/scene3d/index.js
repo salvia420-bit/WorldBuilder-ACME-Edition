@@ -84,16 +84,36 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   // Default OFF so existing capture flows and the baseline visual
   // unchanged. Phase X.1 (quality presets) will gate this on
   // `quality>=mid` instead of a one-off URL param.
-  const shadowsEnabled = (() => {
+  // `?shadows=off` is an explicit kill-switch for BOTH the Phase 0.1
+  // single-shadow path AND the Phase 3.3 CSM path (the user-facing
+  // override beats the preset gating).
+  const shadowsParam = (() => {
     try {
-      if (typeof window === "undefined" || !window.location?.search) return false;
+      if (typeof window === "undefined" || !window.location?.search) return null;
       const params = new URLSearchParams(window.location.search);
-      return params.get("shadows") === "on";
+      const raw = params.get("shadows");
+      if (raw === "on") return "on";
+      if (raw === "off") return "off";
+      return null;
     } catch (_) {
-      return false;
+      return null;
     }
   })();
-  if (shadowsEnabled) {
+  const shadowsEnabled = shadowsParam === "on";
+  // Visual-fidelity Phase 3.3 — Cascaded Shadow Maps. When
+  // `quality.flags.csm` is true (high+ preset) AND `?shadows=off`
+  // hasn't been passed, CSM picks up. CSM and Phase 0.1's single-
+  // shadow path are mutually exclusive — `setupSceneLighting` forces
+  // the sun's `castShadow` off when CSM is active.
+  // - quality=high + no shadows param      → CSM on, Phase 0.1 off
+  // - quality=high + ?shadows=on           → CSM on (no conflict —
+  //     Phase 0.1's `shadowsEnabled` is ignored when csmEnabled=true)
+  // - quality=high + ?shadows=off          → BOTH off
+  // - quality=mid  + ?shadows=on           → Phase 0.1 on, CSM off
+  // - quality=mid  + no shadows param      → BOTH off (preserves the
+  //     pre-Phase-3.3 default)
+  const csmEnabled = !!quality?.flags?.csm && shadowsParam !== "off";
+  if (shadowsEnabled || csmEnabled) {
     renderer.shadowMap.enabled = true;
     // Plan doc requested `PCFSoftShadowMap`, but three.js r184 (the
     // version pinned in importmap at index.html:509) deprecated it
@@ -104,6 +124,10 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // If three.js re-introduces a proper soft-shadow filter (`VSMShadowMap`
     // or `PCFShadowMap.softness > 0`), we can swap here.
     renderer.shadowMap.type = THREE.PCFShadowMap;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[visfid] shadow path: ${csmEnabled ? "CSM (Phase 3.3)" : "single-shadow (Phase 0.1)"}`
+    );
   }
 
   const scene = new THREE.Scene();
@@ -162,8 +186,19 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // with `castShadow` / `receiveShadow` (per buildings.js,
     // statics.js, terrain.js, etc.).
     castShadow: shadowsEnabled,
+    // Visual-fidelity Phase 3.3 — when CSM is enabled, the sun's own
+    // shadow is OFF and three cascade shadow-only DirectionalLights are
+    // constructed inside `setupCsm`. Mutually exclusive with the Phase
+    // 0.1 single-shadow path; the resolved gating
+    // (csm > Phase-0.1 > off) lives above.
+    csm: csmEnabled,
   });
   const { sun, ambient, lightsGroup } = lighting;
+  // Visual-fidelity Phase 3.3 — surface the csm bundle for builders +
+  // capture scripts. Materials produced by `MaterialCache` will install
+  // the shader patch when this is non-null (gated by Phase 0.1's
+  // shadowsEnabled vs csmEnabled split).
+  const csmState = lighting.csmState ?? null;
 
   // Camera — perspective. Default framing for the Phase 7.0 hello-
   // world is back-and-up from the cube; Phase 7.1+ retargets it onto
@@ -244,6 +279,12 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // Phase 0.1 — `?shadows=on` URL toggle. Independent of `quality` for
     // now; follow-on collapses it into `quality.flags.shadows`.
     shadowsEnabled,
+    // Phase 3.3 — Cascaded Shadow Maps bundle. Null when CSM is gated
+    // off (low/mid quality OR `?shadows=off` explicit). Builders pick
+    // this up via `new MaterialCache({ csmState })` so receivers get
+    // the cascade-sample shader patch automatically.
+    csmEnabled,
+    csmState,
     // Phase 0.2 — detail tile cache (Map<key, THREE.Texture>) +
     // forceDetail override. Each MaterialCache instance reads these
     // from scene3d at construction.
@@ -653,6 +694,12 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     quality,
     // Phase 0.1 — `?shadows=on` URL toggle. See scene3dForBuilders comment.
     shadowsEnabled,
+    // Phase 3.3 — Cascaded Shadow Maps. `csmState` is null when CSM
+    // is gated off (low/mid quality OR `?shadows=off`). Capture scripts
+    // probe `liveScene3d.csmState?.lights.length === 3` to confirm
+    // 3-cascade setup.
+    csmEnabled,
+    csmState,
     renderer,
     scene,
     worldRoot,

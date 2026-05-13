@@ -272,6 +272,16 @@ export async function resolveSkyAssets(
 
   // Preload all referenced surfaces in one wasm round-trip.
   // Phase 0.2 — detail tile cache propagation. See buildings.js.
+  // Phase 3.3 — deliberately do NOT pass csmState here. SkyObjects
+  // (moons, weather streaks, cloud bands) render far past the
+  // 300 m cascade range; the CSM shader's `viewDepth > uCsmFar` early-
+  // return handles that, but creating a fresh MaterialCache without
+  // CSM keeps the sky's compiled shaders strictly smaller for the
+  // common case where sky_assets runs before the shared `materialCache`
+  // is set on scene3d. When the shared cache IS already on scene3d
+  // (the common case post-Phase-0.2), this branch is skipped and the
+  // skybox inherits CSM along with terrain + buildings — the shader
+  // path still draws correctly since sky meshes sit beyond uCsmFar.
   const materialCache =
     scene3d.materialCache ||
     new MaterialCache({

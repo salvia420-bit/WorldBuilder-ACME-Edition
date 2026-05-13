@@ -87,14 +87,22 @@ console.log(`three loaded from: ${threePath}`);
 console.log("=========================");
 
 // ---- load lighting.js with closure-captured THREE -------------------
-// scene3d/lighting.js imports `* as THREE from "three"`. We rewrite
-// that into a closure-captured reference — same pattern as
-// test_phase7_4b_entity_pipeline.mjs + test_phase7_5_camera.mjs.
+// scene3d/lighting.js imports `* as THREE from "three"` and (Phase 3.3)
+// `{ setupCsm, updateCsm, refreshCsmUniforms } from "./csm.js"`. We
+// rewrite both imports to closure-captured references and concatenate
+// csm.js's source ahead of lighting.js so the call sites resolve.
 function loadModule(relPath) {
     const full = resolvePath(__dirname, relPath);
     let src = readFileSync(full, "utf8");
     src = src.replace(
         /^\s*import\s+\*\s+as\s+THREE\s+from\s+["']three["'];?\s*$/m,
+        ""
+    );
+    // Strip relative `./csm.js` import (Phase 3.3); the csm.js source is
+    // prepended to the composite so the imported names are already in
+    // scope.
+    src = src.replace(
+        /^\s*import\s+\{[^}]+\}\s+from\s+["']\.\/csm\.js["'];?\s*$/m,
         ""
     );
     return src;
@@ -110,8 +118,10 @@ function stripExports(src) {
         .replace(/^\s*export\s+\{[^}]+\}[\s;]*$/gm, "");
 }
 
+const csmSrc = loadModule("scene3d/csm.js");
 const lightingSrc = loadModule("scene3d/lighting.js");
 const composite =
+    "// === csm.js ===\n" + stripExports(csmSrc) + "\n" +
     "// === lighting.js ===\n" + stripExports(lightingSrc) + "\n" +
     "; return { setupSceneLighting, tickLightingForCellState, attachSetupModelLights, LIGHTING_CONSTANTS };";
 
