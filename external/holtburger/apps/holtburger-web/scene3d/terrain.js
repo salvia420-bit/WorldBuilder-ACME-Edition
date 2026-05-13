@@ -32,6 +32,72 @@ const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
 const HOLTBURG_Y = 0xb4;
 
+// ----- Phase 1.2 — terrain detail normal mapping --------------------
+//
+// Region 0x13 ("Dereth") publishes 32 terrain types via `TerrainDesc`.
+// Names come from `get-region` against the retail portal.dat. Each code
+// maps to one of 5 detail-normal slices (grass / dirt / sand / stone /
+// snow) or to the sentinel UNKNOWN (255) for water + swamp + slime,
+// which we render flat at the detail layer.
+//
+// Slice ordering matches `TERRAIN_DETAIL_KEYS` in adapter.js:
+//   0 grass | 1 dirt | 2 sand | 3 stone | 4 snow
+//
+// Verified against Holtburg LB 0xA9B4 (`get-terrain-layers`):
+//   3 LushGrass (42%), 1 Grassland (22%), 14 SemiBarrenRock (22%),
+//   9 PatchyGrassland (14%) — all map to grass/stone, exercises the
+//   blend correctly.
+const DETAIL_SLICE_GRASS = 0;
+const DETAIL_SLICE_DIRT = 1;
+const DETAIL_SLICE_SAND = 2;
+const DETAIL_SLICE_STONE = 3;
+const DETAIL_SLICE_SNOW = 4;
+const DETAIL_SLICE_NONE = 255;
+
+// Indexed by terrain code 0..31. UNKNOWN codes (water, swamp, slime,
+// faux-water) get NONE; the shader branches and skips sampling.
+const TERRAIN_CODE_TO_DETAIL_SLICE = new Uint8Array([
+  /*  0 BarrenRock         */ DETAIL_SLICE_STONE,
+  /*  1 Grassland          */ DETAIL_SLICE_GRASS,
+  /*  2 Ice                */ DETAIL_SLICE_SNOW,
+  /*  3 LushGrass          */ DETAIL_SLICE_GRASS,
+  /*  4 MarshSparseSwamp   */ DETAIL_SLICE_NONE,
+  /*  5 MudRichDirt        */ DETAIL_SLICE_DIRT,
+  /*  6 ObsidianPlain      */ DETAIL_SLICE_STONE,
+  /*  7 PackedDirt         */ DETAIL_SLICE_DIRT,
+  /*  8 PatchyDirt         */ DETAIL_SLICE_DIRT,
+  /*  9 PatchyGrassland    */ DETAIL_SLICE_GRASS,
+  /* 10 sand-yellow        */ DETAIL_SLICE_SAND,
+  /* 11 sand-grey          */ DETAIL_SLICE_SAND,
+  /* 12 sand-rockStrewn    */ DETAIL_SLICE_SAND,
+  /* 13 SedimentaryRock    */ DETAIL_SLICE_STONE,
+  /* 14 SemiBarrenRock     */ DETAIL_SLICE_STONE,
+  /* 15 Snow               */ DETAIL_SLICE_SNOW,
+  /* 16 WaterRunning       */ DETAIL_SLICE_NONE,
+  /* 17 WaterStandingFresh */ DETAIL_SLICE_NONE,
+  /* 18 WaterShallowSea    */ DETAIL_SLICE_NONE,
+  /* 19 WaterShallowStillSea*/ DETAIL_SLICE_NONE,
+  /* 20 WaterDeepSea       */ DETAIL_SLICE_NONE,
+  /* 21 forestfloor        */ DETAIL_SLICE_GRASS,
+  /* 22 FauxWaterRunning   */ DETAIL_SLICE_NONE,
+  /* 23 SeaSlime           */ DETAIL_SLICE_NONE,
+  /* 24 Argila             */ DETAIL_SLICE_DIRT,
+  /* 25 Volcano1           */ DETAIL_SLICE_STONE,
+  /* 26 Volcano2           */ DETAIL_SLICE_STONE,
+  /* 27 BlueIce            */ DETAIL_SLICE_SNOW,
+  /* 28 Moss               */ DETAIL_SLICE_GRASS,
+  /* 29 DarkMoss           */ DETAIL_SLICE_GRASS,
+  /* 30 olthoi             */ DETAIL_SLICE_STONE,
+  /* 31 DesolateLands      */ DETAIL_SLICE_DIRT,
+]);
+
+// Detail-normal UV scale (tile repeats per landblock metre). The terrain
+// is a 192 m landblock with `vGridUv = position.xy / 24` (range [0, 8]).
+// uDetailScale of 16 → 8 * 16 = 128 detail-tile repeats per 192 m LB,
+// or one detail tile per ~1.5 m. Reads as sub-character-scale at eye
+// height.
+const DEFAULT_DETAIL_SCALE = 16.0;
+
 // ----- GLSL — bilinear-blend shader, three.js port ------------------
 //
 // Vertex shader: drops the PIXI mat3 chain in favour of three.js's
@@ -48,7 +114,10 @@ const HOLTBURG_Y = 0xb4;
 const TERRAIN_VERTEX_GLSL = `
 precision highp float;
 
+in float terrainCode;                 // Phase 1.2 — per-vertex (uint8→float)
+
 out vec2 vGridUv;
+flat out int vTerrainCode;            // Phase 1.2 — passed flat-int to FS
 
 void main() {
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
@@ -58,6 +127,12 @@ void main() {
   // from uVertexTypes, samples uAtlas at each corner, and blends by
   // bilinear weights.
   vGridUv = position.xy / 24.0;
+  // Pass terrain code as a flat int for the Phase 1.2 detail-normal
+  // slice lookup. Flat interpolation means every fragment of a
+  // triangle sees the provoking vertex's code — three corners may
+  // disagree but we deliberately pick one per triangle rather than
+  // blending (terrain codes are discrete categories).
+  vTerrainCode = int(terrainCode + 0.5);
 }
 `;
 
@@ -70,12 +145,24 @@ void main() {
 const TERRAIN_FRAGMENT_GLSL = `
 precision highp float;
 precision highp int;
+precision highp sampler2DArray;
 
 uniform sampler2D uAtlas;             // 6×6 grid of 256×256 retail terrain tiles
 uniform vec2 uAtlasGridSize;          // (cols, rows) — typically (6, 6)
 uniform sampler2D uVertexTypes;       // 9×9 RGBA8: R = terrain type byte, A = 255
 
+// Phase 1.2 — detail-normal array. 5 RGB normal maps (slice order:
+// 0 grass | 1 dirt | 2 sand | 3 stone | 4 snow). The shader looks up
+// the slice for the provoking vertex's terrain code from uCodeToSlice[]
+// then samples uTerrainDetailNormalArray at vGridUv * uDetailScale.
+uniform sampler2DArray uTerrainDetailNormalArray;
+uniform int uCodeToSlice[32];         // terrain-code → slice (255 = no detail)
+uniform float uDetailScale;
+uniform vec2 uWindDir;                // unit vec2 (cos, sin) — sand UV rotation
+uniform float uDetailNormalEnabled;   // 0.0 OFF / 1.0 ON (quality gate)
+
 in vec2 vGridUv;
+flat in int vTerrainCode;             // provoking-vertex terrain code
 
 out vec4 fragColor;
 
@@ -122,7 +209,67 @@ void main() {
 
   vec3 result = c00 * w00 + c10 * w10 + c01 * w01 + c11 * w11;
 
-  fragColor = vec4(result, 1.0);
+  // ---------------------------------------------------------------
+  // Phase 1.2 — detail-normal overlay via reoriented normal blending.
+  // ---------------------------------------------------------------
+  //
+  // Goal: a high-frequency tangent-space normal sampled per terrain
+  // category, blended into the surface normal so the sun's NdotL term
+  // picks up sub-cell detail (grass blades, sand drifts, pebbles).
+  //
+  // Reoriented normal mapping (RNM) — see
+  //   https://blog.selfshadow.com/publications/blending-in-detail/  §4
+  // takes a base tangent-space normal and a detail tangent-space normal
+  // and produces a single tangent-space normal that respects the base
+  // orientation. The 6 lines below are the standard formulation:
+  //   t = base * (2, 2, 2) + (-1, -1,  0)
+  //   u = detail * (-2, -2, 2) + (1, 1, -1)
+  //   r = normalize(t * dot(t, u) - u * t.z)
+  // Then r is treated as the combined tangent-space normal.
+
+  // Sun-direction approximation — we don't yet expose the skybox's
+  // dir_heading/dir_pitch driver here; phase 2.x sky_lighting work
+  // owns the unified sun uniform. For now, fix a light-from-above-and-
+  // slightly-southwest direction so NdotL is non-trivial against a
+  // (0, 0, 1) surface normal.
+  vec3 sunDir = normalize(vec3(-0.4, -0.3, 1.0));
+
+  // Base surface normal in tangent space — terrain is flat-Z-up at the
+  // grid level, so (0, 0, 1) is the canonical base. (Per-vertex
+  // varying normals could be derived from geometry, but at 24 m
+  // spacing they're barely non-vertical; the detail layer carries the
+  // sub-cell perturbation.)
+  vec3 baseN = vec3(0.5, 0.5, 1.0);   // pre-encoded base normal at [0.5, 0.5, 1]
+
+  float ndotl = 1.0;
+  if (uDetailNormalEnabled > 0.5) {
+    int slice = uCodeToSlice[clamp(vTerrainCode, 0, 31)];
+    if (slice < 5) {
+      vec2 detailUv = vGridUv * uDetailScale;
+      // Slice 2 = sand. Rotate the sample UV by uWindDir = (cos θ, sin θ)
+      // so the anisotropic drift pattern tracks the wind direction.
+      if (slice == 2) {
+        float cw = uWindDir.x;
+        float sw = uWindDir.y;
+        detailUv = vec2(cw * detailUv.x - sw * detailUv.y,
+                        sw * detailUv.x + cw * detailUv.y);
+      }
+      vec3 detailEncoded = texture(uTerrainDetailNormalArray,
+                                   vec3(detailUv, float(slice))).rgb;
+      // RNM blend.
+      vec3 t = baseN * vec3(2.0, 2.0, 2.0) + vec3(-1.0, -1.0, 0.0);
+      vec3 u = detailEncoded * vec3(-2.0, -2.0, 2.0) + vec3(1.0, 1.0, -1.0);
+      vec3 combinedN = normalize(t * dot(t, u) - u * t.z);
+      // Apply combined normal to the sun NdotL.
+      ndotl = clamp(dot(combinedN, sunDir), 0.0, 1.0);
+      // Wrap-lighting bias so unlit faces don't go pure black — terrain
+      // shading is otherwise unmodulated, so a pure cosine produces too
+      // much contrast at sunset orientations.
+      ndotl = mix(0.65, 1.0, ndotl);
+    }
+  }
+
+  fragColor = vec4(result * ndotl, 1.0);
 }
 `;
 
@@ -308,6 +455,22 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
     );
   }
 
+  // Phase 1.2 — terrain detail normal array. Loaded once in index.js
+  // and stashed on scene3d, gated behind `quality.flags.terrainDetailNormal`.
+  // When the flag is off, `terrainDetailNormalArray` is null and the
+  // ShaderMaterial uniforms get the fallback (uDetailNormalEnabled = 0).
+  const detailNormalEnabled =
+    !!scene3d.quality?.flags?.terrainDetailNormal &&
+    !!scene3d.terrainDetailNormalArray;
+  const detailNormalArrayTex = detailNormalEnabled
+    ? scene3d.terrainDetailNormalArray
+    : null;
+  // Per-instance codeToSlice uniform array — int[32] keyed by terrain
+  // code. Built once and shared by reference across every LB material.
+  const codeToSliceArr = Array.from(TERRAIN_CODE_TO_DETAIL_SLICE).map(
+    (slice) => (slice === DETAIL_SLICE_NONE ? 255 : slice)
+  );
+
   // 1. Compute the 9 cell ids.
   const { ids, coords } = holtburgNeighbourhoodCellIds();
 
@@ -375,6 +538,16 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
         uAtlas: { value: atlasTexture },
         uAtlasGridSize: { value: ATLAS_GRID_SIZE },
         uVertexTypes: { value: vertexTypesTex },
+        // Phase 1.2 — terrain detail-normal array + per-code slice
+        // table + per-frame wind direction + quality gate. When
+        // `detailNormalEnabled` is false the texture uniform is set
+        // to null (three.js skips the bind) and uDetailNormalEnabled
+        // = 0.0 makes the fragment shader branch around the sample.
+        uTerrainDetailNormalArray: { value: detailNormalArrayTex },
+        uCodeToSlice: { value: codeToSliceArr },
+        uDetailScale: { value: DEFAULT_DETAIL_SCALE },
+        uWindDir: { value: new THREE.Vector2(1.0, 0.0) },
+        uDetailNormalEnabled: { value: detailNormalEnabled ? 1.0 : 0.0 },
       },
       vertexShader: TERRAIN_VERTEX_GLSL,
       fragmentShader: TERRAIN_FRAGMENT_GLSL,
@@ -438,6 +611,10 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
       heightMax,
       vertexTypesTexture: vertexTypesTex,
       terrainCodes: terrainCodesCopy,
+      // Phase 1.2 — capture probes inspect this to verify the detail-
+      // normal patch is wired without a GL state pull.
+      detailNormalEnabled,
+      detailNormalSlice: detailNormalEnabled ? "array(5)" : "off",
     };
 
     // Group keeps the road overlay parented under the same lbMesh
