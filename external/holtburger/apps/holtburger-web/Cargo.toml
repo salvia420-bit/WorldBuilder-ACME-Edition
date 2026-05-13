@@ -18,6 +18,12 @@ holtburger-common = { workspace = true }
 holtburger-protocol = { workspace = true }
 holtburger-session = { workspace = true }
 wasm-bindgen = "0.2"
+# Phase 1.5 — surface override JSON parsing. Lives in [dependencies]
+# (not [target.cfg(wasm32)]) because `surface_overrides` is built on
+# both wasm32 and native test paths (cfg(any(target_arch="wasm32", test))),
+# mirroring `fetch_surface_pixels_impl`.
+serde = { workspace = true }
+serde_json = { workspace = true }
 # Phase 4 step 3.6 — wasm-friendly Instant. Already used by
 # holtburger-session (Session::last_send_time / last_recv_time) and the
 # cli's runtime keepalive comparisons; the web bundle adopts it as part

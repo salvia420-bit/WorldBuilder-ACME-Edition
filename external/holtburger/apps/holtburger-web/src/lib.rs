@@ -55,6 +55,12 @@ mod global_source;
 #[cfg(target_arch = "wasm32")]
 mod prefetch;
 
+// Phase 1.5 — surface override JSON. Gate mirrors
+// `fetch_surface_pixels_impl` (wasm32 OR test) so the native test target
+// can drive the loader without a separate path.
+#[cfg(any(target_arch = "wasm32", test))]
+mod surface_overrides;
+
 #[cfg(target_arch = "wasm32")]
 pub use global_source::{
     cached_shard_count, has_resource_source, init_resource_source,
@@ -2624,13 +2630,21 @@ pub struct SurfacePixels {
     /// defaults. See `holtburger_dat::surface_classify` for the
     /// rule set and `apps/holtburger-web/scene3d/materials.js`
     /// `_materialFromFlags` for the JS consumer.
+    ///
+    /// Phase 1.5 — if `data/surface_overrides.json` has a
+    /// `category:` entry for this DID, the override value is
+    /// substituted before the heuristic is consulted.
     category: u8,
-    /// Phase 1.1 — procedural normal map (RGB8, length = w*h*3) derived
-    /// from the diffuse luminance via a 3x3 Sobel kernel. Empty Vec for
-    /// Luminous surfaces (skip bump shading on emissive surfaces — see
-    /// Phase 1.1 hand-off note #3) and for empty/fallback surfaces.
-    /// See `holtburger_dat::normal_gen::normal_from_luminance`.
+    /// Phase 1.1 — procedural normal map (RGB8, length = w*h*3) from
+    /// diffuse luminance via a 3x3 Sobel kernel. Empty Vec for Luminous
+    /// surfaces (per Phase 1.1 hand-off #3) and empty/fallback surfaces.
     normal_pixels: Vec<u8>,
+    /// Phase 1.5 — roughness override sourced from
+    /// `surface_overrides.json` (`f32::NAN` = "no override" — Vec<u8>
+    /// can't carry an `Option<f32>` over wasm-bindgen).
+    roughness_override: f32,
+    /// Phase 1.5 — normal-scale override (same NaN sentinel).
+    normal_scale_override: f32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2653,15 +2667,63 @@ impl SurfacePixels {
     /// Sand=3, Lava=4, Water=5, Foliage=6, Cloth=7, Dirt=8,
     /// Snow=9, Brick=10, Tile=11, Generic=12). 12 (Generic) for
     /// the empty-fallback surface.
+    ///
+    /// Phase 1.5 — this getter already reflects the override-layer
+    /// substitution: if `data/surface_overrides.json` has a `category`
+    /// for this DID, the override value is returned here.
     #[wasm_bindgen(getter)]
     pub fn category(&self) -> u8 { self.category }
     /// Phase 1.1 — procedural normal map as RGB8 (length = w*h*3).
-    /// Empty for Luminous (emissive) surfaces and for the empty-
-    /// fallback surface; JS consumers should skip `normalMap`
-    /// assignment when this is empty. Always packed `[r, g, b]` with
-    /// `(0.5, 0.5, 1.0)` representing "flat up" in tangent space.
+    /// Empty for Luminous surfaces and the empty-fallback surface;
+    /// JS skips `normalMap` assignment when empty. Packed [r,g,b]
+    /// with `(0.5, 0.5, 1.0)` = "flat up" in tangent space.
     #[wasm_bindgen(getter, js_name = normalPixels)]
     pub fn normal_pixels(&self) -> Vec<u8> { self.normal_pixels.clone() }
+    /// Phase 1.5 — roughness override (`NaN` = use category default).
+    #[wasm_bindgen(getter, js_name = roughnessOverride)]
+    pub fn roughness_override(&self) -> f32 { self.roughness_override }
+    /// Phase 1.5 — normal-scale override (`NaN` = use category default).
+    /// Phase 1.1 reads this post-resolve to author custom bump strength.
+    #[wasm_bindgen(getter, js_name = normalScaleOverride)]
+    pub fn normal_scale_override(&self) -> f32 { self.normal_scale_override }
+}
+
+/// Phase 1.5 — cache the parsed `data/surface_overrides.json` for the
+/// life of the wasm bundle / native test process. First call parses;
+/// subsequent calls return the cached map. Resilient: parse failures
+/// are swallowed inside the loader (empty map fall-through).
+#[cfg(any(target_arch = "wasm32", test))]
+fn surface_overrides_map() -> &'static std::collections::HashMap<u32, surface_overrides::OverrideEntry> {
+    static MAP: std::sync::OnceLock<std::collections::HashMap<u32, surface_overrides::OverrideEntry>> = std::sync::OnceLock::new();
+    MAP.get_or_init(surface_overrides::load_overrides)
+}
+
+/// Phase 1.5 — compute the post-override `(category_u8, roughness, normal_scale)`
+/// triple for one surface. Consults the override map first (per §Phase 1.5
+/// Objective #3); if no `category` is set in the override, falls through
+/// to the Phase 1.4 heuristic in `classify`. The two material-parameter
+/// overrides are returned independently of the category override (so the
+/// glass-pane case at 0x080006E2 can stay `Generic` but pin roughness=0.25).
+///
+/// Roughness / normal-scale "no override" is encoded as `f32::NAN` for the
+/// wasm-bindgen ABI — JS-side `_materialFromFlags` runs the result through
+/// `Number.isFinite` to decide whether to apply it.
+#[cfg(any(target_arch = "wasm32", test))]
+fn classify_with_overrides(
+    stats: &holtburger_dat::surface_classify::SurfaceStats,
+    surface_type: u32,
+    surface_did: u32,
+) -> (u8, f32, f32) {
+    use holtburger_dat::surface_classify::classify;
+    let overrides = surface_overrides_map();
+    let entry = surface_overrides::lookup(overrides, surface_did);
+    let category = match entry.and_then(|e| e.category) {
+        Some(c) => c.as_u8(),
+        None => classify(stats, surface_type).as_u8(),
+    };
+    let roughness = entry.and_then(|e| e.roughness).unwrap_or(f32::NAN);
+    let normal_scale = entry.and_then(|e| e.normal_scale).unwrap_or(f32::NAN);
+    (category, roughness, normal_scale)
 }
 
 /// Walk Surface → SurfaceTexture → Texture → RGBA8 for one surface
@@ -2675,7 +2737,7 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
 ) -> SurfacePixels {
     use holtburger_dat::file_type::{Palette, Surface, SurfaceTexture, Texture, TextureDecodeError};
     use holtburger_dat::normal_gen::normal_from_luminance;
-    use holtburger_dat::surface_classify::{classify, compute_stats, surface_type_flags::LUMINOUS, SurfaceCategory};
+    use holtburger_dat::surface_classify::{compute_stats, surface_type_flags::LUMINOUS, SurfaceCategory};
     use holtburger_dat::ResourceKey;
     // Generic (12) is the natural empty / "no opinion" fallback for
     // the JS material decoder.
@@ -2687,6 +2749,8 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         surface_type: 0,
         category: generic_cat,
         normal_pixels: Vec::new(),
+        roughness_override: f32::NAN,
+        normal_scale_override: f32::NAN,
     };
 
     let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else { return empty; };
@@ -2707,12 +2771,23 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         let pixels = vec![r, g, b, a];
         // Phase 1.4 — classify the 1x1 too (rare but legal: solid
         // surfaces with the Luminous flag set should still hit Lava).
+        // Phase 1.5 — consult overrides first, then fall through to
+        // the heuristic.
         let stats = compute_stats(&pixels, 1, 1);
-        let category = classify(&stats, surface_type).as_u8();
-        // Phase 1.1 — no normal map for 1x1 solid surfaces (a single
-        // pixel has no gradient → always flat). Empty Vec → JS skips
-        // normalMap assignment, leaving the default flat shading.
-        return SurfacePixels { width: 1, height: 1, pixels, surface_type, category, normal_pixels: Vec::new() };
+        let (category, roughness_override, normal_scale_override) =
+            classify_with_overrides(&stats, surface_type, surface_did);
+        // Phase 1.1 — 1x1 has no gradient → empty normal_pixels → JS
+        // skips normalMap assignment, leaving flat shading.
+        return SurfacePixels {
+            width: 1,
+            height: 1,
+            pixels,
+            surface_type,
+            category,
+            normal_pixels: Vec::new(),
+            roughness_override,
+            normal_scale_override,
+        };
     }
     let Some((surf_tex_id, _)) = surface.textured() else { return empty; };
     let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else { return empty; };
@@ -2733,12 +2808,14 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         Ok(pixels) => {
             // Phase 1.4 — compute heuristic category at decode time
             // (per §11 open question #1 — decode-time, not bake-time).
+            // Phase 1.5 — consult `data/surface_overrides.json` first;
+            // fall through to the heuristic when no override applies.
             let stats = compute_stats(&pixels, tex.width as u32, tex.height as u32);
-            let category = classify(&stats, surface_type).as_u8();
-            // Phase 1.1 — generate procedural normal map from
-            // luminance, skipping Luminous (emissive) surfaces per
-            // hand-off note #3 — bump shading on glowing surfaces
-            // looks wrong. JS-side normalScale (0.8) tunes intensity.
+            let (category, roughness_override, normal_scale_override) =
+                classify_with_overrides(&stats, surface_type, surface_did);
+            // Phase 1.1 — Sobel normal map from luminance. Skip Luminous
+            // (emissive) per hand-off #3 — bump shading on glowing
+            // surfaces looks wrong.
             let normal_pixels = if (surface_type & LUMINOUS) != 0 {
                 Vec::new()
             } else {
@@ -2751,6 +2828,8 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
                 surface_type,
                 category,
                 normal_pixels,
+                roughness_override,
+                normal_scale_override,
             }
         }
         Err(_) => empty,
@@ -2836,7 +2915,7 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
 ) -> SurfacePixels {
     use holtburger_dat::file_type::{Palette, Surface, SurfaceTexture, Texture, TextureDecodeError};
     use holtburger_dat::normal_gen::normal_from_luminance;
-    use holtburger_dat::surface_classify::{classify, compute_stats, surface_type_flags::LUMINOUS, SurfaceCategory};
+    use holtburger_dat::surface_classify::{compute_stats, surface_type_flags::LUMINOUS, SurfaceCategory};
     use holtburger_dat::ResourceKey;
     let generic_cat = SurfaceCategory::Generic.as_u8();
     let empty = SurfacePixels {
@@ -2846,6 +2925,8 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         surface_type: 0,
         category: generic_cat,
         normal_pixels: Vec::new(),
+        roughness_override: f32::NAN,
+        normal_scale_override: f32::NAN,
     };
 
     let Ok(bytes) = source.get_file_by_key(ResourceKey::new("eor/portal", surface_did)) else { return empty; };
@@ -2859,9 +2940,20 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
         let g = ((argb >> 8) & 0xFF) as u8;
         let b = (argb & 0xFF) as u8;
         let pixels = vec![r, g, b, a];
+        // Phase 1.5 — overrides apply to entity surfaces too.
         let stats = compute_stats(&pixels, 1, 1);
-        let category = classify(&stats, surface_type).as_u8();
-        return SurfacePixels { width: 1, height: 1, pixels, surface_type, category, normal_pixels: Vec::new() };
+        let (category, roughness_override, normal_scale_override) =
+            classify_with_overrides(&stats, surface_type, surface_did);
+        return SurfacePixels {
+            width: 1,
+            height: 1,
+            pixels,
+            surface_type,
+            category,
+            normal_pixels: Vec::new(),
+            roughness_override,
+            normal_scale_override,
+        };
     }
     let Some((surf_tex_id, _)) = surface.textured() else { return empty; };
     let Ok(stb) = source.get_file_by_key(ResourceKey::new("eor/portal", surf_tex_id)) else { return empty; };
@@ -2901,10 +2993,11 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
     });
     match rgba {
         Ok(pixels) => {
+            // Phase 1.5 — overrides applied via classify_with_overrides.
             let stats = compute_stats(&pixels, tex.width as u32, tex.height as u32);
-            let category = classify(&stats, surface_type).as_u8();
-            // Phase 1.1 — procedural normal map, skipping Luminous
-            // surfaces (emissive characters/items glow uniformly).
+            let (category, roughness_override, normal_scale_override) =
+                classify_with_overrides(&stats, surface_type, surface_did);
+            // Phase 1.1 — Sobel normal map; skip Luminous (emissive).
             let normal_pixels = if (surface_type & LUMINOUS) != 0 {
                 Vec::new()
             } else {
@@ -2917,6 +3010,8 @@ fn fetch_entity_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
                 surface_type,
                 category,
                 normal_pixels,
+                roughness_override,
+                normal_scale_override,
             }
         }
         Err(_) => empty,
