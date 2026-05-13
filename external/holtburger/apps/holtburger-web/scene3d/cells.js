@@ -43,6 +43,7 @@ import {
   placementToMatrix4,
   acQuatToThree,
 } from "./adapter.js";
+import { materialCanCastShadow } from "./materials.js";
 
 /**
  * Top-level: load every EnvCell for a single landblock and add the
@@ -301,6 +302,7 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       )
     );
 
+    const cellsShadow = !!scene3d.shadowsEnabled;
     for (const g of snap.surfaceGroups) {
       const mat = scene3d.materialCache.getCached(g.surfaceDid);
       const m = new THREE.Mesh(g.geometry, mat);
@@ -309,6 +311,13 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
         cellId: snap.cellId,
         surfaceDid: g.surfaceDid,
       };
+      // Visual-fidelity Phase 0.1 — interior walls / floors / ceilings
+      // cast AND receive shadows from each other. Translucent /
+      // additive surfaces (windows, magical glows) skip casting.
+      if (cellsShadow) {
+        m.castShadow = materialCanCastShadow(mat);
+        m.receiveShadow = true;
+      }
       meshGroup.add(m);
     }
     cellContainer.add(meshGroup);
@@ -319,6 +328,11 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       const mat = staticMatByDid.get(so.did) || scene3d.materialCache.fallbackMaterial;
       const m = new THREE.Mesh(geom, mat);
       m.name = `cellstatic-${snap.cellId.toString(16).padStart(8, "0")}-${so.did.toString(16).padStart(8, "0")}`;
+      // Cell-static props (furniture, lanterns, decorations).
+      if (cellsShadow) {
+        m.castShadow = materialCanCastShadow(mat);
+        m.receiveShadow = true;
+      }
       const xform = placementToMatrix4(so);
       const p = new THREE.Vector3();
       const q = new THREE.Quaternion();

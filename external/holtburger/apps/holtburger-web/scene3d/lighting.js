@@ -145,10 +145,15 @@ export function setupSceneLighting(scene, opts = {}) {
 
   if (castShadow) {
     sun.castShadow = true;
-    // Shadow camera spans the scene's outer radius. The frustum is
-    // an orthographic box centred on the sun's target (origin by
-    // default); halfSize == sceneSize covers the 9-LB neighbourhood
-    // without clipping at the edges.
+    // Visual-fidelity Phase 0.1 — shadow camera frustum sized so its
+    // half-extent equals `sceneSize`. At the default sceneSize=600,
+    // the frustum is a 1200 m square (sceneSize each direction from
+    // the centre); per-frame `updateShadowCameraTarget` recentres
+    // that box on the player so the 3x3 LB ring (~576 m square)
+    // stays well inside. Texel size at 2048^2 / 1200 m ≈ 0.59 m,
+    // which renders building-scale shadows cleanly; sub-meter detail
+    // (NPC armour creases) blurs but never disappears. Phase 3.3
+    // swaps this for CSM if shadow resolution becomes a complaint.
     const halfSize = sceneSize;
     const shadowCam = sun.shadow.camera;
     shadowCam.left = -halfSize;
@@ -160,6 +165,11 @@ export function setupSceneLighting(scene, opts = {}) {
     shadowCam.updateProjectionMatrix();
     sun.shadow.mapSize.set(2048, 2048);
     sun.shadow.bias = -0.0005;
+    // Soft-shadow bleed reduction — PCFSoftShadowMap reads radius=4
+    // texels by default; nudging the normalBias keeps the shadow
+    // tight against the caster's silhouette so building corners don't
+    // float over their own shadow.
+    sun.shadow.normalBias = 0.05;
   }
 
   // Ambient — outdoor baseline. `tickLightingForCellState` raises
@@ -188,6 +198,73 @@ export function setupSceneLighting(scene, opts = {}) {
   }
 
   return { sun, ambient, hemisphere, lightsGroup, dispose };
+}
+
+/**
+ * Visual-fidelity Phase 0.1 — recentre the directional light's shadow
+ * camera frustum on a follow point each frame. The orthographic
+ * shadow frustum is configured with extent `[-sceneSize, +sceneSize]`
+ * in each axis, so a fixed target at world origin would lose any
+ * caster more than `sceneSize` metres away from origin. Holtburg's
+ * LB is at AC world (0xA9 * 192, 0xB4 * 192) ≈ (32,448, 34,560) — vastly
+ * outside the default frustum. Recentring the sun's `target` on the
+ * player's three.js-world position keeps the frustum tracking
+ * wherever the player goes.
+ *
+ * The sun's `position` is also translated by the same delta so the
+ * light direction stays constant (translating both the source and the
+ * target by the same vector preserves the direction unit vector). For
+ * an orthographic shadow camera, only the direction matters for
+ * shadow projection; preserving direction means shadow angles match
+ * across the world.
+ *
+ * @param {{sun: THREE.DirectionalLight}} lighting - the bundle from
+ *   setupSceneLighting. Caller is responsible for ensuring `sun
+ *   .castShadow === true` before calling.
+ * @param {{x: number, y: number, z: number} | null | undefined} targetThreePos -
+ *   the recenter point in three.js world space (Y-up). The sun's
+ *   target moves to (x, 0, z) ignoring the input y — we keep the
+ *   target at ground level so the shadow frustum's near/far slice
+ *   is always anchored on the terrain plane.
+ */
+export function updateShadowCameraTarget(lighting, targetThreePos) {
+  if (!lighting || !targetThreePos) return;
+  const sun = lighting.sun;
+  if (!sun || !sun.castShadow) return;
+  const target = sun.target;
+  if (!target) return;
+  // Cache the original light direction (computed lazily once; the
+  // sun's initial position vs. its target.position is the direction
+  // vector we want to preserve as the target slides under the player).
+  if (!lighting._shadowSunDir) {
+    const dx = sun.position.x - target.position.x;
+    const dy = sun.position.y - target.position.y;
+    const dz = sun.position.z - target.position.z;
+    lighting._shadowSunDir = { x: dx, y: dy, z: dz };
+  }
+  const tx = targetThreePos.x;
+  const tz = targetThreePos.z;
+  // Snap the target to texel-aligned increments to reduce shimmer as
+  // the player walks. PCF reads ±2 texels; an integer-texel-rounded
+  // target keeps the depth lookup stable frame-to-frame. Texel size
+  // is (frustum width) / mapSize.
+  const frustumW = sun.shadow.camera.right - sun.shadow.camera.left;
+  const mapW = sun.shadow.mapSize.x || 2048;
+  const texelM = frustumW / mapW;
+  const snapTx = Math.round(tx / texelM) * texelM;
+  const snapTz = Math.round(tz / texelM) * texelM;
+  if (target.position.x !== snapTx || target.position.z !== snapTz) {
+    target.position.set(snapTx, 0, snapTz);
+    // Translate the sun source by the same delta so the direction
+    // stays fixed. Re-anchor by re-applying the cached dir to the
+    // (new) target.
+    const dir = lighting._shadowSunDir;
+    sun.position.set(snapTx + dir.x, dir.y, snapTz + dir.z);
+    // three.js needs `target.updateMatrixWorld` so the shadow camera
+    // re-derives its view matrix this frame.
+    target.updateMatrixWorld();
+    sun.shadow.camera.updateProjectionMatrix();
+  }
 }
 
 // Maximum number of per-SetupModel lights allowed to render in any
@@ -270,11 +347,62 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
     }
   }
 
+  // Visual-fidelity Phase 0.1 — recentre the sun's shadow frustum on
+  // the player each frame so casters near the player are always
+  // covered. Reads the local player world pos from the entity manager
+  // (post-AC→three transform). No-op when the lighting bundle's sun
+  // isn't shadow-casting (the common case pre-Phase-0.1).
+  if (lighting && lighting.sun?.castShadow) {
+    const playerThreePos = resolvePlayerThreePos(scene3d);
+    if (playerThreePos) {
+      updateShadowCameraTarget(lighting, playerThreePos);
+    }
+  }
+
   // === Per-SetupModel light cap (top-32 by squared distance) ==========
   // We cap regardless of whether the indoor toggle ran (capture scripts
   // can validate the cap with a sessionHandle that has no
   // isCurrentCellIndoor — the cap exists on its own merits).
   capActiveLightsByDistance(scene3d);
+}
+
+/**
+ * Resolve the local player's three.js-world XYZ for the shadow-frustum
+ * tick. Reads through `entityManager.getLocalPlayerWorldPos()` (which
+ * returns AC-coords), then applies the same AC→three transform that
+ * worldRoot's `rotation.x = -π/2` applies to scene geometry.
+ *
+ * Falls back to the active camera's world position when no player is
+ * spawned. Pre-spawn flows (capture scripts, login screen idle, dev
+ * harness with mock session) need a reasonable shadow frustum centre
+ * or the shadow map captures empty space at world origin while the
+ * camera sits 32 km away over Holtburg. The camera is always a valid
+ * three.js-world point and the player will inevitably land near where
+ * the camera is looking (init3D frames the camera on the Holtburg LB
+ * centre), so this is a safe default.
+ *
+ * Returns `null` only when neither path resolves (truly headless
+ * harness with no camera at all) — caller skips the recentre.
+ */
+function resolvePlayerThreePos(scene3d) {
+  if (!scene3d) return null;
+  const em = scene3d.entityManager;
+  if (em && typeof em.getLocalPlayerWorldPos === "function") {
+    let acPos = null;
+    try { acPos = em.getLocalPlayerWorldPos(); } catch (_) { acPos = null; }
+    if (acPos) {
+      // AC (x, y, z) maps to three.js (x, z, -y) under the worldRoot
+      // rotation. Mirrors `adapter.js#acToThree`.
+      return { x: acPos.x, y: acPos.z, z: -acPos.y };
+    }
+  }
+  // Fallback: active camera position. Already in three.js world space.
+  const cam =
+    scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera ?? null;
+  if (cam?.position) {
+    return { x: cam.position.x, y: cam.position.y, z: cam.position.z };
+  }
+  return null;
 }
 
 /**

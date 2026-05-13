@@ -52,6 +52,7 @@ import {
 } from "./adapter.js";
 import { AnimationCache, buildAnimationClip } from "./animation.js";
 import { ensureNameplateForEntity } from "./nameplate_sprite.js";
+import { materialCanCastShadow } from "./materials.js";
 
 // AC InterpretedMotionCommand low-16 constants. The wasm export
 // returns the full u32 (`0x4500_xxxx` for forward locomotion, etc.),
@@ -669,6 +670,16 @@ export class EntityManager {
         const m = new THREE.Mesh(g.geometry, mat);
         m.name = `part_${p}_surface_${did.toString(16)}`;
         m.userData = { guid, partIndex: p, surfaceDid: did };
+        // Visual-fidelity Phase 0.1 — entities cast shadows (NPCs +
+        // local player rig). receiveShadow is false because the
+        // entity rig is animated per-frame; receiving shadows on a
+        // moving rig adds shimmer that's distracting without buying
+        // much (entities are mostly self-shadowing internally).
+        // Translucent / additive surfaces (ghosts, ethereal effects)
+        // are skipped via the material-flag check.
+        if (this.scene3d?.shadowsEnabled) {
+          m.castShadow = materialCanCastShadow(mat);
+        }
         partGroup.add(m);
         inst.registerGeometry(g.geometry);
       }

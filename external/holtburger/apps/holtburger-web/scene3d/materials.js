@@ -70,6 +70,21 @@ export const SURFACE_TYPE = Object.freeze({
 // Surface. Caller paints these with `materialCache.fallbackMaterial`.
 const FALLBACK_SURFACE_DID = 0;
 
+// Phase 0.1 (visual-fidelity push) — shadow casting gate. Translucent
+// (true alpha blend) and Additive surfaces should NOT cast shadows:
+// three.js's shadow pass renders depth-only (no alpha blending), so a
+// translucent quad casts a solid-rectangle shadow which is visually
+// wrong, and three.js will log warnings about it. Opaque + ClipMap
+// (binary alpha mask) surfaces cast shadows correctly because the
+// depth pass honours alphaTest.
+export function materialCanCastShadow(material) {
+  if (!material) return false;
+  const flags = (material.userData?.surfaceTypeFlags ?? 0) >>> 0;
+  if (flags & SURFACE_TYPE.Translucent) return false;
+  if (flags & SURFACE_TYPE.Additive) return false;
+  return true;
+}
+
 export class MaterialCache {
   constructor() {
     /** @type {Map<number, THREE.MeshStandardMaterial>} */

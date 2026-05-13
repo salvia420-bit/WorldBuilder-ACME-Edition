@@ -80,6 +80,32 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   renderer.setSize(cssW, cssH, false);
   renderer.setClearColor(0x101418, 1);
 
+  // Visual-fidelity Phase 0.1 — opt-in shadow maps via `?shadows=on`.
+  // Default OFF so existing capture flows and the baseline visual
+  // unchanged. Phase X.1 (quality presets) will gate this on
+  // `quality>=mid` instead of a one-off URL param.
+  const shadowsEnabled = (() => {
+    try {
+      if (typeof window === "undefined" || !window.location?.search) return false;
+      const params = new URLSearchParams(window.location.search);
+      return params.get("shadows") === "on";
+    } catch (_) {
+      return false;
+    }
+  })();
+  if (shadowsEnabled) {
+    renderer.shadowMap.enabled = true;
+    // Plan doc requested `PCFSoftShadowMap`, but three.js r184 (the
+    // version pinned in importmap at index.html:509) deprecated it
+    // and falls back to `PCFShadowMap` with a one-shot console warn
+    // the first frame the renderer renders shadows. Setting
+    // `PCFShadowMap` directly silences the warn and keeps the
+    // shipped output identical (the runtime falls back regardless).
+    // If three.js re-introduces a proper soft-shadow filter (`VSMShadowMap`
+    // or `PCFShadowMap.softness > 0`), we can swap here.
+    renderer.shadowMap.type = THREE.PCFShadowMap;
+  }
+
   const scene = new THREE.Scene();
 
   // worldRoot carries the AC-Z-up→three-Y-up correction. Every
@@ -128,7 +154,15 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   // BFS reports indoor. `sceneSize: 600` covers Holtburg's 9-LB
   // neighbourhood for shadow camera framing (shadows opt-in,
   // disabled by default in Phase 7.6).
-  const lighting = setupSceneLighting(scene, { sceneSize: 600 });
+  const lighting = setupSceneLighting(scene, {
+    sceneSize: 600,
+    // Visual-fidelity Phase 0.1 — opt in to shadow casting on the
+    // sun when `?shadows=on`. Caller is responsible for flipping
+    // `renderer.shadowMap.enabled` (done above) and tagging meshes
+    // with `castShadow` / `receiveShadow` (per buildings.js,
+    // statics.js, terrain.js, etc.).
+    castShadow: shadowsEnabled,
+  });
   const { sun, ambient, lightsGroup } = lighting;
 
   // Camera — perspective. Default framing for the Phase 7.0 hello-
@@ -175,6 +209,9 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // mirrored onto every builder's scene3d arg so per-phase gates can
     // read `scene3d.quality.flags.<feature>` without re-parsing the URL.
     quality,
+    // Phase 0.1 — `?shadows=on` URL toggle. Independent of `quality` for
+    // now; follow-on collapses it into `quality.flags.shadows`.
+    shadowsEnabled,
     terrainGroup,
     buildingsGroup,
     staticsGroup,
@@ -577,6 +614,8 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // Phase X.1 — resolved quality preset. `{ preset, flags, source }`.
     // Each visual-fidelity phase reads its gate from `quality.flags.<flag>`.
     quality,
+    // Phase 0.1 — `?shadows=on` URL toggle. See scene3dForBuilders comment.
+    shadowsEnabled,
     renderer,
     scene,
     worldRoot,
