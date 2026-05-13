@@ -55,6 +55,7 @@
 // produce, this is sub-microsecond.
 
 import * as THREE from "three";
+import { setupCsm, updateCsm, refreshCsmUniforms } from "./csm.js";
 
 // Default sun direction in three.js world space (Y-up). 45° down +
 // east-ish so hillshading on the south-facing slopes of Holtburg
@@ -124,6 +125,13 @@ export function setupSceneLighting(scene, opts = {}) {
     sceneSize = 600,
     includeHemisphere = true,
     sunPos = DEFAULT_SUN_POS,
+    // Visual-fidelity Phase 3.3 — opt into Cascaded Shadow Maps. When
+    // true, the sun light's own `castShadow` is forced OFF and three
+    // shadow-only DirectionalLights are constructed via `setupCsm` to
+    // render per-cascade shadow maps. The two paths are mutually
+    // exclusive: when csm:true is passed, the Phase 0.1 single-shadow
+    // wiring (sun.castShadow=true) is bypassed entirely.
+    csm = false,
   } = opts;
 
   if (!scene || typeof scene.add !== "function") {
@@ -143,7 +151,13 @@ export function setupSceneLighting(scene, opts = {}) {
   sun.target.position.set(0, 0, 0);
   sun.name = "sun";
 
-  if (castShadow) {
+  // CSM mode: the sun's own shadow is OFF; the 3 cascade lights
+  // (constructed below) generate shadow maps. CSM and the Phase 0.1
+  // single-shadow path are mutually exclusive — picking CSM here means
+  // we do NOT run the Phase 0.1 single-shadow setup, regardless of
+  // `castShadow` opt-in.
+  const csmEnabled = !!csm;
+  if (castShadow && !csmEnabled) {
     sun.castShadow = true;
     // Visual-fidelity Phase 0.1 — shadow camera frustum sized so its
     // half-extent equals `sceneSize`. At the default sceneSize=600,
@@ -190,14 +204,31 @@ export function setupSceneLighting(scene, opts = {}) {
 
   scene.add(lightsGroup);
 
+  // Visual-fidelity Phase 3.3 — when caller opts into CSM, instantiate
+  // the three cascade shadow lights. They share the sun's direction
+  // (derived from sunPos.minus(target=origin) = sunPos itself, since
+  // the sun targets world origin by default). The bundle's
+  // `patchedMaterials` Set tracks every material that subsequently
+  // installs the CSM shader patch — `refreshCsmUniforms` walks it each
+  // tick to push fresh shadow-map textures + matrices.
+  let csmState = null;
+  if (csmEnabled) {
+    csmState = setupCsm(scene, {
+      sunDir: { x: sunPos.x, y: sunPos.y, z: sunPos.z },
+    });
+  }
+
   function dispose() {
     if (sun.shadow && sun.shadow.map && typeof sun.shadow.map.dispose === "function") {
       sun.shadow.map.dispose();
     }
+    if (csmState && typeof csmState.dispose === "function") {
+      csmState.dispose();
+    }
     scene.remove(lightsGroup);
   }
 
-  return { sun, ambient, hemisphere, lightsGroup, dispose };
+  return { sun, ambient, hemisphere, lightsGroup, csmState, dispose };
 }
 
 /**
@@ -356,6 +387,29 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
     const playerThreePos = resolvePlayerThreePos(scene3d);
     if (playerThreePos) {
       updateShadowCameraTarget(lighting, playerThreePos);
+    }
+  }
+
+  // Visual-fidelity Phase 3.3 — when the lighting bundle carries a
+  // csmState, fit each cascade's shadow frustum to the camera's view
+  // sub-slice for this frame, then push fresh shadow-map textures +
+  // matrices into every patched receiver's uniforms. Runs AFTER
+  // Phase 0.1's `updateShadowCameraTarget` so the two paths share the
+  // same player-position resolver (they're mutually exclusive in
+  // practice — `setupSceneLighting` only attaches one or the other).
+  if (lighting && lighting.csmState) {
+    const cam = scene3d?.cameraSwitcher?.activeCamera ?? scene3d?.camera ?? null;
+    if (cam) {
+      try {
+        updateCsm(lighting.csmState, cam);
+        refreshCsmUniforms(lighting.csmState);
+      } catch (e) {
+        if (!scene3d._csmTickWarned) {
+          scene3d._csmTickWarned = true;
+          // eslint-disable-next-line no-console
+          console.warn("[visfid-p33] CSM tick failed:", e);
+        }
+      }
     }
   }
 

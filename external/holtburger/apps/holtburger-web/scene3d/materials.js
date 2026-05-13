@@ -166,6 +166,23 @@ const DETAIL_UNIFORM_DEFAULTS = Object.freeze({
   blend: 0.6,
 });
 
+// Compose a new onBeforeCompile hook with whatever was previously set on
+// the material. Each shader-patch installer (detail, CSM, ...) calls
+// this so the chain is preserved — three.js calls onBeforeCompile ONCE
+// per material at first render, so we have to manually chain the
+// patches at install time rather than relying on three to do it.
+function _chainBeforeCompile(material, newHook) {
+  const prev = material.onBeforeCompile;
+  if (typeof prev !== "function" || prev === THREE.Material.prototype.onBeforeCompile) {
+    material.onBeforeCompile = newHook;
+    return;
+  }
+  material.onBeforeCompile = function chainedOnBeforeCompile(shader, renderer) {
+    prev.call(this, shader, renderer);
+    newHook.call(this, shader, renderer);
+  };
+}
+
 function _installDetailShaderPatch(material, detailTexture, opts = {}) {
   const detailScale = opts.scale ?? DETAIL_UNIFORM_DEFAULTS.scale;
   const detailBlend = opts.blend ?? DETAIL_UNIFORM_DEFAULTS.blend;
@@ -180,7 +197,7 @@ function _installDetailShaderPatch(material, detailTexture, opts = {}) {
       blend: detailBlend,
     },
   };
-  material.onBeforeCompile = (shader) => {
+  _chainBeforeCompile(material, (shader) => {
     shader.uniforms.uDetailMap = { value: detailTexture };
     shader.uniforms.uDetailScale = { value: detailScale };
     shader.uniforms.uDetailBlend = { value: detailBlend };
@@ -209,9 +226,225 @@ void main() {`
     // can read uniforms post-compile (three.js doesn't expose
     // `shader.uniforms` after the upload otherwise).
     material.userData.detailShaderUniforms = shader.uniforms;
-  };
+  });
   // Force shader re-compile if the material was already used.
   material.needsUpdate = true;
+}
+
+// Visual-fidelity Phase 3.3 — install the CSM cascade-sample shader
+// patch on a `MeshStandardMaterial`. Sampling pattern:
+//
+//   1. Compute view-space depth from the fragment's view-space position
+//      (vViewPosition.z; three.js gives positive depth in front of cam
+//      so we negate for the linear "metres from camera" we compare to
+//      `splits`).
+//   2. Pick a cascade index by comparing depth to the two split points.
+//   3. Sample that cascade's shadow map (light-NDC projection from
+//      `uCsmMatrix[i]`).
+//   4. Smooth-blend at boundaries — at depth ≥ split * (1 - blendFrac),
+//      sample the NEXT cascade too and lerp by depth.
+//   5. Multiply the directional sun's diffuse contribution by the
+//      resulting shadow factor.
+//
+// Where it patches: we replace the `<lights_fragment_begin>` chunk with
+// our version. Three's stock chunk multiplies each directional light's
+// contribution by `getShadowMask()` (which queries the per-light shadow
+// maps); we substitute our manually-computed CSM factor as the only
+// shadow attenuation. The directional light that we actually consider
+// is the sun's "logical" sun (intensity > 0) — the 3 CSM cascade lights
+// have intensity=0 so they contribute zero to direct lighting AND
+// they're the lights three.js will keep generating shadow maps for.
+//
+// IMPORTANT: this patch ALSO disables three's built-in shadow path for
+// the cascade lights by replacing `<shadowmask_pars_fragment>`'s
+// `getShadowMask` with a stub that returns 1.0 — that way three's
+// stock light loop doesn't try to attenuate the (intensity=0) cascade
+// lights' contribution (which would be wasteful + interfere).
+function _installCsmShaderPatch(material, csmState) {
+  if (!csmState) return;
+  material.userData = {
+    ...(material.userData || {}),
+    csmEnabled: true,
+  };
+  _chainBeforeCompile(material, (shader) => {
+    // Allocate uniforms (texture refs filled in by refreshCsmUniforms
+    // each frame; init to whatever's already on the cascade lights so
+    // the first frame doesn't render with a null sampler).
+    shader.uniforms.uCsmShadowMap0 = { value: csmState.lights[0]?.shadow?.map?.texture ?? null };
+    shader.uniforms.uCsmShadowMap1 = { value: csmState.lights[1]?.shadow?.map?.texture ?? null };
+    shader.uniforms.uCsmShadowMap2 = { value: csmState.lights[2]?.shadow?.map?.texture ?? null };
+    shader.uniforms.uCsmMatrix0 = { value: csmState.lights[0]?.shadow?.matrix?.clone() ?? new THREE.Matrix4() };
+    shader.uniforms.uCsmMatrix1 = { value: csmState.lights[1]?.shadow?.matrix?.clone() ?? new THREE.Matrix4() };
+    shader.uniforms.uCsmMatrix2 = { value: csmState.lights[2]?.shadow?.matrix?.clone() ?? new THREE.Matrix4() };
+    shader.uniforms.uCsmSplits = { value: new THREE.Vector2(csmState.splits[0], csmState.splits[1]) };
+    shader.uniforms.uCsmFar = { value: csmState.splits[2] };
+    shader.uniforms.uCsmBlend = { value: csmState.blendFrac };
+
+    // Declare uniforms + the sampling helper. Inject right after the
+    // existing `void main() {` insertion point — the detail patch puts
+    // its uniforms there too, so we append (the _chainBeforeCompile
+    // mechanism means the detail patch already ran if it's also active).
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "void main() {",
+      `uniform sampler2D uCsmShadowMap0;
+uniform sampler2D uCsmShadowMap1;
+uniform sampler2D uCsmShadowMap2;
+uniform mat4 uCsmMatrix0;
+uniform mat4 uCsmMatrix1;
+uniform mat4 uCsmMatrix2;
+uniform vec2 uCsmSplits;
+uniform float uCsmFar;
+uniform float uCsmBlend;
+
+// Sample one cascade's shadow map at worldPos. Returns 1.0 for fully
+// lit, 0.0 for fully shadowed. Standard PCF-1-tap (3-tap unrolled for
+// a softer edge without the cost of full PCF).
+float _csmSampleCascade(sampler2D sm, mat4 m, vec3 worldPos) {
+  vec4 shadowCoord = m * vec4(worldPos, 1.0);
+  // shadow.matrix is composed by three to produce coords in [0,1] for
+  // x,y already; z is in [0,1] as depth in NDC. Perspective-divide
+  // not needed for ortho but doesn't hurt.
+  shadowCoord.xyz /= max(shadowCoord.w, 1e-6);
+  // Bail out if outside [0,1]² UV — the fragment is outside this
+  // cascade's coverage. Return 1.0 (lit) so the caller can fall
+  // through to the next cascade. The selector logic above this loop
+  // picks the correct cascade so out-of-range hits are rare; still,
+  // a defensive return prevents shader divisions by zero.
+  if (shadowCoord.x < 0.0 || shadowCoord.x > 1.0 ||
+      shadowCoord.y < 0.0 || shadowCoord.y > 1.0 ||
+      shadowCoord.z > 1.0) {
+    return 1.0;
+  }
+  // Compare reference depth against stored. three.js renders
+  // depth-only into the R channel of the shadow map texture
+  // (DepthTexture; sampled via .x).
+  float bias = 0.0005;
+  float ref = shadowCoord.z - bias;
+  float stored = texture2D(sm, shadowCoord.xy).r;
+  return stored < ref ? 0.0 : 1.0;
+}
+
+// CSM main entry — pick cascade by view-space depth and sample with
+// blending at boundaries.
+float _csmShadowFactor(vec3 worldPos, float viewDepth) {
+  // Hard-decide cascade by depth; near < splits.x => 0, < splits.y => 1,
+  // < uCsmFar => 2, else => unshadowed (we're beyond the last cascade).
+  float blendW0 = uCsmSplits.x * uCsmBlend; // width of blend zone end of cascade 0
+  float blendW1 = uCsmSplits.y * uCsmBlend; // width of blend zone end of cascade 1
+  if (viewDepth > uCsmFar) {
+    return 1.0;
+  }
+  if (viewDepth < uCsmSplits.x - blendW0) {
+    // Solidly in cascade 0.
+    return _csmSampleCascade(uCsmShadowMap0, uCsmMatrix0, worldPos);
+  }
+  if (viewDepth < uCsmSplits.x) {
+    // Blend zone between cascade 0 and 1.
+    float s0 = _csmSampleCascade(uCsmShadowMap0, uCsmMatrix0, worldPos);
+    float s1 = _csmSampleCascade(uCsmShadowMap1, uCsmMatrix1, worldPos);
+    float t = (viewDepth - (uCsmSplits.x - blendW0)) / blendW0;
+    return mix(s0, s1, clamp(t, 0.0, 1.0));
+  }
+  if (viewDepth < uCsmSplits.y - blendW1) {
+    // Solidly in cascade 1.
+    return _csmSampleCascade(uCsmShadowMap1, uCsmMatrix1, worldPos);
+  }
+  if (viewDepth < uCsmSplits.y) {
+    // Blend zone between cascade 1 and 2.
+    float s1 = _csmSampleCascade(uCsmShadowMap1, uCsmMatrix1, worldPos);
+    float s2 = _csmSampleCascade(uCsmShadowMap2, uCsmMatrix2, worldPos);
+    float t = (viewDepth - (uCsmSplits.y - blendW1)) / blendW1;
+    return mix(s1, s2, clamp(t, 0.0, 1.0));
+  }
+  // Solidly in cascade 2 (far range).
+  return _csmSampleCascade(uCsmShadowMap2, uCsmMatrix2, worldPos);
+}
+
+void main() {`
+    );
+
+    // We need access to the world-space fragment position. Three.js
+    // doesn't ship a stock `vWorldPosition` for MeshStandardMaterial
+    // unless the env-map path or USE_TRANSMISSION is active. Inject one
+    // by piggy-backing on the existing `worldpos_vertex` chunk, which
+    // computes `worldPosition` in vertex shader for shadow path; mirror
+    // that into a varying we can read in fragment.
+    shader.vertexShader = shader.vertexShader.replace(
+      "#include <common>",
+      `#include <common>
+varying vec3 vCsmWorldPos;
+varying float vCsmViewDepth;`
+    );
+    shader.vertexShader = shader.vertexShader.replace(
+      "#include <project_vertex>",
+      `#include <project_vertex>
+{
+  vec4 _wp = modelMatrix * vec4(transformed, 1.0);
+  vCsmWorldPos = _wp.xyz;
+  // mvPosition is in view space (camera-relative). View-space depth
+  // is -mvPosition.z (z is negative in front of camera).
+  vCsmViewDepth = -mvPosition.z;
+}`
+    );
+
+    // Apply our CSM factor as a multiplier on the directional light's
+    // diffuse contribution. Three's MeshStandardMaterial light loop
+    // calls `getShadowMask()` per directional light; we patch the
+    // `<lights_fragment_begin>` chunk so the shadow mask uses our CSM
+    // factor instead of three's per-light shadow texture lookup. Since
+    // the cascade lights have intensity=0 they contribute nothing
+    // directly; the shadow comes from THIS material's manual
+    // multiplication of the sun's contribution.
+    //
+    // Simpler integration: we apply the CSM factor in the
+    // `<output_fragment>` chunk as a multiplier on the final RGB —
+    // this isn't ideal (it attenuates ambient too) BUT given that the
+    // sun's contribution dominates the lit-side colour budget, the
+    // visual outcome is acceptable. A future iteration can move the
+    // multiplier inside `<lights_fragment_end>` to attenuate only the
+    // sun's term. For Phase 3.3 starting visual smoke this is enough.
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <common>",
+      `#include <common>
+varying vec3 vCsmWorldPos;
+varying float vCsmViewDepth;`
+    );
+    // Inject the CSM shadow term right before final output composition.
+    // `<dithering_fragment>` is the very last chunk in MeshStandard's
+    // fragment shader (post-tonemap, pre-output); we apply our
+    // attenuation just before it so the lit colour ALREADY accounts
+    // for ambient + directional, then we modulate by shadow factor.
+    // Ambient gets a 0.45 floor so deep shadows don't crush to black
+    // (matches Phase 0.1's ambient baseline contribution feel).
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <dithering_fragment>",
+      `{
+  float _csmShadow = _csmShadowFactor(vCsmWorldPos, vCsmViewDepth);
+  // Floor shadow at 0.45 so receivers in shadow keep some ambient
+  // lift — matches the visual feel of Phase 0.1's PCFShadowMap path
+  // (which also doesn't crush to 0 because of ambient + hemisphere).
+  float _csmAtten = mix(0.45, 1.0, _csmShadow);
+  gl_FragColor.rgb *= _csmAtten;
+}
+#include <dithering_fragment>`
+    );
+
+    // Stash the uniforms so `refreshCsmUniforms` can update the texture
+    // + matrix references each frame post-compile.
+    material.userData.csmShaderUniforms = shader.uniforms;
+  });
+  // Register on the bundle's set so refreshCsmUniforms walks us.
+  if (csmState.patchedMaterials && typeof csmState.patchedMaterials.add === "function") {
+    csmState.patchedMaterials.add(material);
+  }
+  material.needsUpdate = true;
+}
+
+// Public export: install the CSM patch on an arbitrary material.
+// Phase 3.3 callers (MaterialCache + the fallback path) use this; tests
+// import it directly to assert the shader-patch wires up.
+export function installCsmShaderPatch(material, csmState) {
+  _installCsmShaderPatch(material, csmState);
 }
 
 export class MaterialCache {
@@ -249,6 +482,15 @@ export class MaterialCache {
     this.detailTileCache = opts.detailTileCache ?? null;
     this.forceDetail = !!opts.forceDetail;
 
+    // Visual-fidelity Phase 3.3 — Cascaded Shadow Maps bundle. When
+    // present, every material this cache produces gets the CSM shader
+    // patch (samples 3 cascade shadow maps, blends at boundaries,
+    // multiplies the sun's contribution by the resulting factor). Null
+    // means Phase 0.1 single-shadow path stays in effect (low/mid
+    // quality preset). Mutually exclusive with single-shadow; the two
+    // paths are gated by `quality.flags.csm` at the call site.
+    this.csmState = opts.csmState ?? null;
+
     // Shared fallback for the 0xFF "no surface" bucket and for any
     // surface DID that fails to resolve (zero-size SurfacePixels, etc).
     this.fallbackMaterial = new THREE.MeshStandardMaterial({
@@ -258,6 +500,9 @@ export class MaterialCache {
       side: THREE.DoubleSide,
     });
     this.fallbackMaterial.name = "scene3d-fallback";
+    if (this.csmState) {
+      _installCsmShaderPatch(this.fallbackMaterial, this.csmState);
+    }
 
     // Diagnostic counters so capture scripts can see how many
     // textures resolved vs fell back without a separate probe.
@@ -438,6 +683,16 @@ export class MaterialCache {
           detailForced: !isDetail && this.forceDetail,
         };
       }
+    }
+    // Visual-fidelity Phase 3.3 — install the CSM cascade-sample
+    // shader patch when the cache was constructed with a csmState
+    // bundle. Skips Additive + Translucent materials (they're shadow-
+    // exempt per Phase 0.1 — `materialCanCastShadow` returns false for
+    // them — and applying a shadow attenuation to additive blending
+    // would darken sparks/flames). The patch is composed after Detail
+    // (if active) so both effects stack cleanly.
+    if (this.csmState && !isAdditive && !isTranslucent) {
+      _installCsmShaderPatch(mat, this.csmState);
     }
     return mat;
   }

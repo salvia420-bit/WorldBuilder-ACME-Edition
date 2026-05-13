@@ -677,7 +677,8 @@ export class EntityManager {
         // much (entities are mostly self-shadowing internally).
         // Translucent / additive surfaces (ghosts, ethereal effects)
         // are skipped via the material-flag check.
-        if (this.scene3d?.shadowsEnabled) {
+        // Phase 3.3 — CSM path enables casting on the same meshes.
+        if (this.scene3d?.shadowsEnabled || this.scene3d?.csmEnabled) {
           m.castShadow = materialCanCastShadow(mat);
         }
         partGroup.add(m);

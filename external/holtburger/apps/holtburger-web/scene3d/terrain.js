@@ -401,7 +401,16 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
     // overlay yet, follow-up work (Phase 1.* / 2.*) will reweave the
     // shader chunks. The flag is harmless when the shader doesn't
     // honour it.
-    if (scene3d.shadowsEnabled) {
+    // Phase 0.1 + 3.3 — flag the terrain mesh as a shadow receiver
+    // under EITHER the single-shadow path (shadowsEnabled) OR the CSM
+    // path (csmEnabled). Note: the terrain's custom GLSL3 ShaderMaterial
+    // does NOT currently honour the flag (it skips three's shadow
+    // chunks); this is documented in the Phase 0.1 plan as deferred to
+    // Phase 1.* / 2.*. Phase 3.3 inherits the same gap — to render
+    // shadows on terrain, the custom shader needs explicit CSM
+    // sampling injected. Out of scope for the initial Phase 3.3 push;
+    // tracked in the report doc.
+    if (scene3d.shadowsEnabled || scene3d.csmEnabled) {
       lbMesh.receiveShadow = true;
     }
     // Per-LB world offset (xy in metres). The geometry is LB-local

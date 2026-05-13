@@ -302,7 +302,9 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       )
     );
 
-    const cellsShadow = !!scene3d.shadowsEnabled;
+    // Phase 3.3 — CSM and Phase 0.1 are mutually exclusive paths but
+    // share the caster/receiver tagging. Flip on for either.
+    const cellsShadow = !!scene3d.shadowsEnabled || !!scene3d.csmEnabled;
     for (const g of snap.surfaceGroups) {
       const mat = scene3d.materialCache.getCached(g.surfaceDid);
       const m = new THREE.Mesh(g.geometry, mat);
