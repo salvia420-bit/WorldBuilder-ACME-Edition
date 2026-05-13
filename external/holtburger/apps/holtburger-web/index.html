@@ -1762,6 +1762,12 @@ void main() {
             } else {
               dropped += 1;
             }
+            // Suppress empty fallback buildingContainers (per-part bake
+            // missed AND no fused fallback) — they have nothing to
+            // draw. buildingMap skip is safe: door-state rotation
+            // matches against buildings with renderable parts, and a
+            // building with zero parts has no doors to rotate.
+            if (buildingContainer.children.length === 0) continue;
             container.addChild(buildingContainer);
             buildingMap.set(buildingKey, buildingContainer);
           }
@@ -1954,6 +1960,14 @@ void main() {
               totalStatics += 1;
             }
           }
+          // Suppress empty cellContainers (no baked mesh AND no
+          // statics) — they're scene-graph waste with nothing to draw.
+          // Most empties come from `bakeCellTextures` skipping cells
+          // with `triCount === 0` while no static objects fill in. The
+          // registry skip is safe: `tickCellVisibility` only toggles
+          // entries it finds in the registry, and there's nothing to
+          // show for these cells anyway.
+          if (cellContainer.children.length === 0) continue;
           container.addChild(cellContainer);
           cellContainers.set(cellId, cellContainer);
           // Phase 6 step D: cells start invisible; the per-frame

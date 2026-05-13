@@ -62,6 +62,14 @@ function isCacheable(url) {
   return false;
 }
 
+// Coalesce concurrent fetches for the same URL. Without this, two
+// JS-side fetches that arrive while the SW's cache.match is still
+// pending both miss → both go to network. Observed in 2026-05-13
+// perf audit: 11 distinct shards fetched 2–3× per session, ~4 MB
+// wasted. Single-flight by URL collapses races onto one network
+// request; the clone() lets each consumer read its own body.
+const inflight = new Map();
+
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
@@ -74,19 +82,28 @@ self.addEventListener("fetch", (event) => {
       if (cached) {
         return cached;
       }
-      const network = await fetch(event.request);
-      // Only cache successful, basic-type responses. Opaque
-      // (cross-origin, no-CORS) responses can't be inspected for
-      // status and would fill the cache with phantom entries on
-      // failure. Same-origin assets always come back as `basic`.
-      if (network.ok && network.type === "basic") {
-        // `Response` bodies can only be read once; clone before
-        // caching so the page still sees the body downstream.
-        cache.put(event.request, network.clone()).catch((e) => {
-          console.warn("[holtburger-sw] cache.put failed:", e);
-        });
+      const key = event.request.url;
+      let promise = inflight.get(key);
+      if (!promise) {
+        promise = (async () => {
+          const network = await fetch(event.request);
+          // Only cache successful, basic-type responses. Opaque
+          // (cross-origin, no-CORS) responses can't be inspected for
+          // status and would fill the cache with phantom entries on
+          // failure. Same-origin assets always come back as `basic`.
+          if (network.ok && network.type === "basic") {
+            // `Response` bodies can only be read once; clone before
+            // caching so the page still sees the body downstream.
+            cache.put(event.request, network.clone()).catch((e) => {
+              console.warn("[holtburger-sw] cache.put failed:", e);
+            });
+          }
+          return network;
+        })().finally(() => inflight.delete(key));
+        inflight.set(key, promise);
       }
-      return network;
+      const shared = await promise;
+      return shared.clone();
     })()
   );
 });
