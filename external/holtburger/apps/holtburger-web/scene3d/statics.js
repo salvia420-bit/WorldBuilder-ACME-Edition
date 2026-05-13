@@ -241,7 +241,13 @@ export async function buildHoltburgStatics(scene3d, wasmExports) {
   // material per model for now, the cache is warm for Phase 7.3+
   // refinement. Reuse the same MaterialCache the buildings phase
   // installed so we share the cost.
-  const materialCache = scene3d.materialCache || new MaterialCache();
+  // Phase 0.2 — detail tile cache propagation. See buildings.js.
+  const materialCache =
+    scene3d.materialCache ||
+    new MaterialCache({
+      detailTileCache: scene3d.detailTileCache ?? null,
+      forceDetail: !!scene3d.forceDetail,
+    });
   if (allSurfaceDids.size > 0) {
     try {
       await materialCache.preload(

@@ -114,14 +114,138 @@ const CATEGORY_MATERIAL_DEFAULTS = Object.freeze({
   // the 0.9 / 0.0 defaults until Phase 1.5 overrides tune per DID.
 });
 
+// Phase 0.2 — surface category → detail tile key. The picker stays a
+// one-liner so the branch in `_materialFromFlags` is trivial:
+//   Stone/Brick/Tile/Lava/Metal → stone-grain  (hard granular)
+//   Wood → wood-grain  (anisotropic)
+//   Sand/Snow → sand-grain  (fine grain)
+//   Foliage/Cloth → fabric-weave  (warp+weft)
+//   Water/Dirt/Generic/unset → generic-rough  (fallback)
+const DETAIL_KEY_BY_CATEGORY = Object.freeze({
+  [SURFACE_CATEGORY.Stone]: "stone-grain",
+  [SURFACE_CATEGORY.Brick]: "stone-grain",
+  [SURFACE_CATEGORY.Tile]: "stone-grain",
+  [SURFACE_CATEGORY.Lava]: "stone-grain",
+  [SURFACE_CATEGORY.Metal]: "stone-grain",
+  [SURFACE_CATEGORY.Wood]: "wood-grain",
+  [SURFACE_CATEGORY.Sand]: "sand-grain",
+  [SURFACE_CATEGORY.Snow]: "sand-grain",
+  [SURFACE_CATEGORY.Foliage]: "fabric-weave",
+  [SURFACE_CATEGORY.Cloth]: "fabric-weave",
+});
+
+export function pickDetailTileKey(category) {
+  if (typeof category === "number") {
+    const key = DETAIL_KEY_BY_CATEGORY[category];
+    if (key) return key;
+  }
+  return "generic-rough";
+}
+
+// Phase 0.2 — composite a tiled grayscale detail texture over the
+// diffuse via `MeshStandardMaterial.onBeforeCompile`. The PBR pipeline
+// stays intact — we only patch the fragment shader's `map_fragment`
+// chunk to do
+//
+//     diffuseColor.rgb = mix(diffuseColor.rgb,
+//                            diffuseColor.rgb * (2.0 * detail),
+//                            uDetailBlend);
+//
+// AFTER the texture sample, BEFORE lighting. `detail` is grayscale in
+// [0, 1] (mean ~0.5) so `2.0 * detail` re-centres at 1.0 — surfaces
+// don't darken or lighten on average, only modulate locally.
+// `uDetailBlend = 0.6` keeps the effect visible without overpowering
+// the original artwork. `vMapUv * uDetailScale` ties tile frequency to
+// surface UV (default 8 → ~12.5 cm grain on a 1 m² wall).
+//
+// Per plan-doc hand-off: keep this an `onBeforeCompile` patch, NOT a
+// custom `ShaderMaterial`. PBR lighting/normal/light-probe chunks then
+// pick up every three.js upgrade for free.
+const DETAIL_UNIFORM_DEFAULTS = Object.freeze({
+  scale: 8.0,
+  blend: 0.6,
+});
+
+function _installDetailShaderPatch(material, detailTexture, opts = {}) {
+  const detailScale = opts.scale ?? DETAIL_UNIFORM_DEFAULTS.scale;
+  const detailBlend = opts.blend ?? DETAIL_UNIFORM_DEFAULTS.blend;
+  // Track injected uniforms on the material itself so tests + capture
+  // scripts can introspect them without re-compiling the shader.
+  material.userData = {
+    ...(material.userData || {}),
+    detailEnabled: true,
+    detailTextureName: detailTexture?.name ?? null,
+    detailUniforms: {
+      scale: detailScale,
+      blend: detailBlend,
+    },
+  };
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uDetailMap = { value: detailTexture };
+    shader.uniforms.uDetailScale = { value: detailScale };
+    shader.uniforms.uDetailBlend = { value: detailBlend };
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "void main() {",
+      `uniform sampler2D uDetailMap;
+uniform float uDetailScale;
+uniform float uDetailBlend;
+void main() {`
+    );
+    // `#include <map_fragment>` is the MeshStandard chunk that folds
+    // the diffuse texture (`map`) into `diffuseColor`. We append the
+    // detail composite right after so PBR shading downstream sees the
+    // modulated diffuse.
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <map_fragment>",
+      `#include <map_fragment>
+{
+  vec2 _dUv = vMapUv * uDetailScale;
+  float _d = texture2D(uDetailMap, _dUv).r;
+  vec3 _modulated = diffuseColor.rgb * (2.0 * _d);
+  diffuseColor.rgb = mix(diffuseColor.rgb, _modulated, uDetailBlend);
+}`
+    );
+    // Stash the patched shader handle back on the material so tests
+    // can read uniforms post-compile (three.js doesn't expose
+    // `shader.uniforms` after the upload otherwise).
+    material.userData.detailShaderUniforms = shader.uniforms;
+  };
+  // Force shader re-compile if the material was already used.
+  material.needsUpdate = true;
+}
+
 export class MaterialCache {
-  constructor() {
+  /**
+   * @param {{ detailTileCache?: Map<string, THREE.Texture>, forceDetail?: boolean }} [opts]
+   * `detailTileCache`: optional shared `Map<key, THREE.Texture>` (built
+   * once at scene init via `loadDetailTileCache` from adapter.js). When
+   * provided + a surface carries the `Detail (0x20000)` bit, the
+   * generated material wires the matching tile via an `onBeforeCompile`
+   * shader patch. `null` / undefined → the cache simply skips the patch
+   * (legacy capture flows + Node tests where no GPU is around). Phase
+   * X.1 gates this behind `quality.flags.detailFlag` at the call site
+   * by passing `null` for `low` preset.
+   *
+   * `forceDetail`: testing override. When `true`, the Detail composite
+   * is applied to every textured material regardless of the
+   * `surface_type` bit. Used by the visual-smoke capture to render the
+   * effect against real Holtburg surfaces even when the retail DAT
+   * doesn't ship any Detail-flagged surfaces — see Phase 0.2 report.
+   */
+  constructor(opts = {}) {
     /** @type {Map<number, THREE.MeshStandardMaterial>} */
     this.materials = new Map();
     /** @type {Map<number, THREE.DataTexture>} */
     this.textures = new Map();
     /** @type {Map<number, Promise<THREE.MeshStandardMaterial>>} */
     this.pendingFetches = new Map();
+
+    // Phase 0.2 — shared detail-tile cache. `null` means "Detail flag
+    // is decoded but the composite is not wired" (preserves Phase 7.2
+    // baseline). All MaterialCache instances in one scene share the
+    // same Map so each tile is uploaded to GPU exactly once.
+    this.detailTileCache = opts.detailTileCache ?? null;
+    this.forceDetail = !!opts.forceDetail;
 
     // Shared fallback for the 0xFF "no surface" bucket and for any
     // surface DID that fails to resolve (zero-size SurfacePixels, etc).
@@ -255,7 +379,45 @@ export class MaterialCache {
       opts.roughness = 1.0; // matte — no specular highlight
       opts.metalness = 0.0;
     }
-    return new THREE.MeshStandardMaterial(opts);
+    const mat = new THREE.MeshStandardMaterial(opts);
+
+    // Phase 0.2 — Detail (0x20000) flag composites a tiled grayscale
+    // overlay over the diffuse. Picker uses Phase 1.4 SurfaceCategory
+    // (Stone → stone-grain, Wood → wood-grain, etc), with a generic
+    // fall-through for unset/Generic. Gated on:
+    //   1. caller supplied a detailTileCache (scene init wired it).
+    //   2. either the bit is set, OR `forceDetail` is on (capture
+    //      override — retail portal.dat ships 0 Detail-flagged surfaces
+    //      per Phase 0.2 probe, so we need this to validate the path).
+    const isDetail = (flags & SURFACE_TYPE.Detail) !== 0;
+    if (this.detailTileCache && (isDetail || this.forceDetail) && texture) {
+      const key = pickDetailTileKey(category);
+      const detailTex =
+        this.detailTileCache.get(key) ??
+        this.detailTileCache.get("generic-rough") ??
+        null;
+      if (detailTex) {
+        _installDetailShaderPatch(mat, detailTex, {
+          // Per plan-doc hand-off: default vUv * 8.0. Sand/Snow get a
+          // slightly tighter scale so the grain reads as fine; Wood
+          // gets a looser scale so the stripes stay readable.
+          scale:
+            category === SURFACE_CATEGORY.Sand ||
+            category === SURFACE_CATEGORY.Snow
+              ? 12.0
+              : category === SURFACE_CATEGORY.Wood
+              ? 4.0
+              : 8.0,
+          blend: 0.6,
+        });
+        mat.userData = {
+          ...(mat.userData || {}),
+          detailKey: key,
+          detailForced: !isDetail && this.forceDetail,
+        };
+      }
+    }
+    return mat;
   }
 
   /**

@@ -25,7 +25,7 @@ import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
 import { SkyLightingController } from "./sky_lighting.js";
 import { SkyDome } from "./sky_dome.js";
 import { resolveSkyAssets } from "./sky_assets.js";
-import { acToThree } from "./adapter.js";
+import { acToThree, loadDetailTileCache } from "./adapter.js";
 import { createNameplateOverlay } from "./hud.js";
 import { AudioManager } from "./audio/audio_manager.js";
 import { SoundTableCache } from "./audio/sound_table_cache.js";
@@ -202,6 +202,38 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   let terrainSummary = null;
   let buildingsSummary = null;
   let staticsSummary = null;
+  // Phase 0.2 — load the detail-tile cache once at scene init, before
+  // any builder runs. The MaterialCache constructor reads it from
+  // `scene3dForBuilders.detailTileCache` (via buildings.js / statics.js
+  // / sky_assets.js / cells.js lazy `new MaterialCache(...)`). Gated on
+  // `quality.flags.detailFlag` so the `low` preset doesn't pay the
+  // ~150 KB asset cost. `?forceDetail=on` URL override applies the
+  // composite to every textured material so the visual smoke can show
+  // the effect on real Holtburg surfaces — retail portal.dat ships 0
+  // Detail-flagged surfaces per the Phase 0.2 audit.
+  const forceDetail = (() => {
+    try {
+      if (typeof window === "undefined" || !window.location?.search) return false;
+      const params = new URLSearchParams(window.location.search);
+      return params.get("forceDetail") === "on";
+    } catch (_) {
+      return false;
+    }
+  })();
+  const detailEnabled = !!quality?.flags?.detailFlag || forceDetail;
+  let detailTileCache = null;
+  if (detailEnabled) {
+    try {
+      detailTileCache = await loadDetailTileCache();
+      // eslint-disable-next-line no-console
+      console.log(
+        `[phase-0.2] detail tiles loaded: ${detailTileCache.size}/5 (forceDetail=${forceDetail})`
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[phase-0.2] detail tile load failed:", e);
+    }
+  }
   // Construct a stub scene3d shape early so the per-phase builders
   // can share state (`materialCache`, `buildingMap3d`).
   const scene3dForBuilders = {
@@ -212,6 +244,11 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // Phase 0.1 — `?shadows=on` URL toggle. Independent of `quality` for
     // now; follow-on collapses it into `quality.flags.shadows`.
     shadowsEnabled,
+    // Phase 0.2 — detail tile cache (Map<key, THREE.Texture>) +
+    // forceDetail override. Each MaterialCache instance reads these
+    // from scene3d at construction.
+    detailTileCache,
+    forceDetail,
     terrainGroup,
     buildingsGroup,
     staticsGroup,
@@ -648,6 +685,10 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     statics: staticsSummary,
     // Shared MaterialCache (built lazily by buildings + statics).
     materialCache: scene3dForBuilders.materialCache ?? null,
+    // Phase 0.2 — detail tile cache + forceDetail flag, surfaced on
+    // liveScene3d so capture scripts can introspect tile-load state.
+    detailTileCache: scene3dForBuilders.detailTileCache ?? null,
+    forceDetail: !!scene3dForBuilders.forceDetail,
     buildingMap3d: scene3dForBuilders.buildingMap3d ?? null,
     buildingBakeCache: scene3dForBuilders.buildingBakeCache ?? null,
     // Phase 7.3 — EnvCell registry + per-LB load summaries. The Map
