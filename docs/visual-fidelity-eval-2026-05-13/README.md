@@ -22,6 +22,10 @@ laptop-safe capture scripts (`capture_visfid_p21_subdiv.cjs`,
 | `holtburg_slope_low.png` | Phase 1.3 capture | Cliff-face close-up, quality=low |
 | `holtburg_slope_mid.png` | Phase 1.3 capture | Cliff-face close-up, quality=mid |
 | `holtburg_slope_high.png` | Phase 1.3 capture | Cliff-face close-up, quality=high |
+| `water_displacement_mid-subdiv2_t0.png` | Phase 2.2 capture | **Synthetic**-water terrain (Holtburg has none); centre LB code forced to 17 (WaterStandingFresh). Frame at t=35.22s, wave amplitude −0.183m. |
+| `water_displacement_mid-subdiv2_t2s.png` | Phase 2.2 capture | Same, t=37.46s, wave amplitude −0.012m. 0.17m vertical motion over 2s confirms displacement runs. |
+| `water_displacement_low-subdiv1_t0.png` | Phase 2.2 capture | Quality=low (subdivLevel=1) — displacement gate OFF |
+| `water_displacement_low-subdiv1_t2s.png` | Phase 2.2 capture | Same, t=2s — byte-identical to t=0 (quality gate confirmed working) |
 
 ## Honest evaluation
 
