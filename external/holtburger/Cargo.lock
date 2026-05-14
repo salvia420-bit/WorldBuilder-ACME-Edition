@@ -1614,6 +1614,7 @@ dependencies = [
  "holtburger-content",
  "holtburger-dat",
  "holtburger-manifest",
+ "holtburger-scenery-bake",
  "indicatif",
  "log",
  "rayon",

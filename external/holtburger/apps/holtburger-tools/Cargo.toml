@@ -10,6 +10,7 @@ holtburger-common = { workspace = true }
 holtburger-content = { path = "../../crates/holtburger-content" }
 holtburger-dat = { path = "../../crates/holtburger-dat" }
 holtburger-manifest = { workspace = true }
+holtburger-scenery-bake = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 anyhow = { workspace = true }
