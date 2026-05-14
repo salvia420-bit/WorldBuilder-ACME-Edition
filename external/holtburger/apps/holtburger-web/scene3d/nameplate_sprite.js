@@ -62,20 +62,48 @@ import * as THREE from "three";
 // to +Y in three-world after the worldRoot rotation.
 const NAMEPLATE_AC_Z_OFFSET = 2.2;
 
-// Sprite scale in world units. Combined with a 256x64 canvas texture,
-// this gives a 2 m × 0.5 m on-screen rectangle in the world — at a
-// typical 5 m third-person camera distance, the text reads roughly
-// 24 px tall on a 1280 px viewport. The aspect ratio 4:1 must match
-// the canvas aspect or text will stretch.
-const NAMEPLATE_WORLD_WIDTH = 2.0;
+// Sprite world-space height. The canvas-pixel width is now computed
+// per-name via `ctx.measureText` (Follow-on Task 33 — Bug A fix), and
+// the world-space width derives from that measurement so the sprite's
+// aspect ratio always matches the canvas's. Constant height preserves
+// the familiar "label band sits this far above the head" tuning.
+//
+// History: this used to be `NAMEPLATE_WORLD_WIDTH = 2.0` paired with a
+// fixed `CANVAS_WIDTH = 256`. Long names like "Hudriffa the Shopkeeper"
+// (≈ 25 chars × 18px ≈ 450 px at 32 px bold monospace) overflowed the
+// 256-px canvas. centre-aligned text drew at canvas-x = 128, so both
+// ends clipped (visible in `docs/world-completeness-demo-2026-05-14/
+// 01-hudriffa-shopkeeper.png` as "ffa the Shopk").
 const NAMEPLATE_WORLD_HEIGHT = 0.5;
 
-// Canvas dimensions for the baked text. Power-of-two on width keeps
-// WebGL filtering happy. 256x64 is the smallest size that renders
-// 32 px bold text without subpixel aliasing — measured against the
-// 2D PIXI path's 13 px monospace.
-const CANVAS_WIDTH = 256;
+// Pixels-per-world-metre conversion at the bake font size. With a 32 px
+// bold monospace cap-height and `NAMEPLATE_WORLD_HEIGHT = 0.5 m`, the
+// world-to-canvas scale is 128 px/m on the height axis. Apply the same
+// ratio horizontally so the text reads at the same density along both
+// axes (no horizontal stretch / squish).
+const NAMEPLATE_PX_PER_METRE = 128;
+
+// Canvas height stays fixed — the font baseline is centred at canvas
+// midline and the cap-height + 4 px outline + 4 px padding tuck into
+// 64 px cleanly. Width is computed per-name.
 const CANVAS_HEIGHT = 64;
+
+// Minimum canvas width so single-character names (rare; default-name
+// fallbacks like "?") still get a readable rounded-rect background.
+// 64 px = ≈ 0.5 m of world width at the 128 px/m scale.
+const CANVAS_WIDTH_MIN = 64;
+
+// Maximum canvas width — caps the GPU resource size for pathological
+// names. 1024 px = ≈ 8 m world-space. The 2D PIXI path's max viewport
+// is ≈ 1280 px wide; a label wider than 8 m would dominate the screen
+// regardless of camera distance. Names exceeding this cap shrink the
+// font to fit (with the post-shrink width pinned at the cap).
+const CANVAS_WIDTH_MAX = 1024;
+
+// Horizontal padding either side of the measured text. 16 px keeps the
+// rounded-rect background visually balanced and gives the stroke
+// outline a few pixels of breathing room before the texture edge.
+const CANVAS_PADDING_X = 16;
 
 // Per-name texture cache. Two NPCs with the same display name share one
 // CanvasTexture / SpriteMaterial — saves an allocation per entity in
@@ -142,11 +170,23 @@ export function nameplateColorForCategory(category) {
  * Bake a name string + colour into a CanvasTexture + SpriteMaterial.
  * Cached by (name, colour) tuple so repeat names reuse one GPU resource.
  *
- * Layout: black 50%-alpha rounded rectangle background filling the
+ * Layout: black 55%-alpha rounded rectangle background filling the
  * canvas, white-or-coloured text centred. 32 px bold monospace + 4 px
  * black outline (the 2D path uses a 3 px stroke at 13 px font — the
  * sprite's larger canvas means we scale the stroke proportionally so
  * the rendered text matches readability when downscaled).
+ *
+ * Follow-on Task 33 (Bug A fix): canvas width is computed per-name via
+ * `ctx.measureText(name).width + 2 × CANVAS_PADDING_X`. Previously a
+ * fixed 256 px width truncated long names ("Hudriffa the Shopkeeper"
+ * rendered as "ffa the Shopk" in the world-completeness demo). The
+ * returned entry now carries `canvasWidth` so callers can scale the
+ * sprite proportionally and keep the on-screen pixel density consistent
+ * across all names (no horizontal stretch).
+ *
+ * The returned `{ texture, material, canvasWidth }` is cached on first
+ * bake; repeated calls for the same `(name, colour)` reuse the entry
+ * verbatim so we don't reallocate the GPU resource on every spawn.
  */
 function getOrBakeNameplateMaterial(name, colorHex) {
   const cacheKey = `${name}|${colorHex}`;
@@ -159,42 +199,78 @@ function getOrBakeNameplateMaterial(name, colorHex) {
   if (typeof document === "undefined") return null;
 
   const canvas = document.createElement("canvas");
-  canvas.width = CANVAS_WIDTH;
-  canvas.height = CANVAS_HEIGHT;
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
 
+  // Bug A — Follow-on Task 33 — measure the name's pixel width at the
+  // bake font BEFORE sizing the canvas so long names ("Hudriffa the
+  // Shopkeeper", "Scrawed Grievver") don't clip at the centre-aligned
+  // draw call. The measurement reads the same font we draw with, so
+  // there's no "measure-then-draw mismatch" risk.
+  //
+  // measureText is a one-call canvas2d API present on every browser
+  // that supports `getContext("2d")` — three.js 0.184 implies modern
+  // browsers, so we don't feature-detect. If the host lacks measureText
+  // entirely, the `.width` read below would throw and the whole bake
+  // path would surface the failure as a console warning via the caller.
+  ctx.font = "bold 32px monospace";
+  const measured = ctx.measureText(name).width;
+  // Clamp width to [MIN, MAX] and round up to even pixels so the
+  // power-of-two-ish CanvasTexture upload aligns cleanly. The MAX cap
+  // protects GPU memory for pathological long names; if a name's
+  // measured width exceeds the cap, we shrink the font to fit (so the
+  // sprite stays at the cap width without stretching). Shrinking the
+  // font is the lesser-evil compared to clipping or stretching — names
+  // remain readable, just smaller, and the on-screen footprint stays
+  // bounded.
+  let canvasWidth =
+    Math.ceil(Math.max(CANVAS_WIDTH_MIN, measured + CANVAS_PADDING_X * 2));
+  let fontPx = 32;
+  if (canvasWidth > CANVAS_WIDTH_MAX) {
+    // Reduce the font size proportionally so the text fits inside the
+    // capped width. Re-measure after the resize to get the exact
+    // post-shrink width.
+    const shrinkRatio = (CANVAS_WIDTH_MAX - CANVAS_PADDING_X * 2) / measured;
+    fontPx = Math.max(12, Math.floor(32 * shrinkRatio));
+    canvasWidth = CANVAS_WIDTH_MAX;
+    ctx.font = `bold ${fontPx}px monospace`;
+  }
+  canvas.width = canvasWidth;
+  canvas.height = CANVAS_HEIGHT;
+
   // Background. Rounded rectangle filling the canvas with 8 px corner
-  // radius and a thin 1px stroke for definition. Drawn first so text
-  // composites on top.
+  // radius. Drawn first so text composites on top.
   const padding = 4;
   ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
   // roundRect is r166+ on canvas2d; three.js 0.184 implies a modern
   // browser, but feature-detect anyway in case of an unusual host.
   if (typeof ctx.roundRect === "function") {
     ctx.beginPath();
-    ctx.roundRect(padding, padding, CANVAS_WIDTH - padding * 2, CANVAS_HEIGHT - padding * 2, 8);
+    ctx.roundRect(padding, padding, canvasWidth - padding * 2, CANVAS_HEIGHT - padding * 2, 8);
     ctx.fill();
   } else {
-    ctx.fillRect(padding, padding, CANVAS_WIDTH - padding * 2, CANVAS_HEIGHT - padding * 2);
+    ctx.fillRect(padding, padding, canvasWidth - padding * 2, CANVAS_HEIGHT - padding * 2);
   }
 
-  // Text. Bold 32 px monospace per task brief, centre-aligned with a
-  // black outline so it stays legible on bright backgrounds (sky,
-  // snow, lit interiors). Text fill colour comes from caller (category-
-  // coded).
-  ctx.font = "bold 32px monospace";
+  // Text. Bold N px monospace (N = 32 by default; smaller when the
+  // shrink-to-fit branch fired), centre-aligned with a black outline so
+  // it stays legible on bright backgrounds (sky, snow, lit interiors).
+  // Re-set the font AFTER canvas.width is assigned — Chrome resets
+  // canvas2d state on width-change so the earlier `ctx.font = ...` is
+  // wiped. The pre-resize measureText call still gives valid metrics
+  // because the font was set at that time.
+  ctx.font = `bold ${fontPx}px monospace`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.lineWidth = 4;
+  ctx.lineWidth = Math.max(2, Math.round(fontPx / 8));
   ctx.strokeStyle = "#000000";
   ctx.lineJoin = "round";
   // Outline first, fill second — that's the standard "knockout"
   // pattern that gets you a clean stroke without the half-pixel
   // antialiasing of a fill-then-stroke order.
-  ctx.strokeText(name, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
+  ctx.strokeText(name, canvasWidth / 2, CANVAS_HEIGHT / 2);
   ctx.fillStyle = colorHex;
-  ctx.fillText(name, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
+  ctx.fillText(name, canvasWidth / 2, CANVAS_HEIGHT / 2);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.needsUpdate = true;
@@ -212,11 +288,27 @@ function getOrBakeNameplateMaterial(name, colorHex) {
   const material = new THREE.SpriteMaterial({
     map: texture,
     transparent: true,
-    // depthTest=true makes the sprite hide behind world geometry that's
-    // in front of it (a wall, a building corner). depthWrite=false so
-    // overlapping nameplates don't z-fight each other. This is the
-    // standard "labels on a 3D scene" recipe.
-    depthTest: true,
+    // Follow-on Task 33 (2026-05-14) — depthTest flipped from true →
+    // false. With the per-name dynamic canvas width (Bug A fix), wide
+    // labels for long names like "Novedion the Gem Seller" span across
+    // the NPC's own body geometry. depthTest=true was rejecting the
+    // sprite pixels behind the NPC torso, producing a visible "missing
+    // middle" effect (verified in capture-run-1 vs the original 256-px
+    // truncated build — see `/mnt/wbterminal1/tmp/claude-scratch/
+    // scenery-bake/f33-34/`). depthTest=false matches the 2D PIXI
+    // nameplate path (`index.html:3624 ensureNameplate` draws to a
+    // sibling PIXI.Container that's NOT depth-sorted against world
+    // geometry).
+    //
+    // depthWrite stays false so overlapping nameplates don't z-fight.
+    // The cost is that nameplates now punch through walls (the camera
+    // sees a nameplate for an entity around the corner). That matches
+    // the 2D path's behavior exactly — players who depended on the 2D
+    // experience already see this; the 3D path's old "depth-cull
+    // through walls" was inconsistent with the 2D and arguably worse
+    // for player situational awareness (you couldn't see the name of a
+    // vendor through a wall before walking in).
+    depthTest: false,
     depthWrite: false,
     // sizeAttenuation=true (default) — sprite gets smaller in the
     // distance, like a real billboard. Keeps the nameplate's apparent
@@ -228,7 +320,7 @@ function getOrBakeNameplateMaterial(name, colorHex) {
   });
   material.name = `nameplate-${cacheKey}`;
 
-  const entry = { texture, material };
+  const entry = { texture, material, canvasWidth };
   _nameplateCache.set(cacheKey, entry);
   return entry;
 }
@@ -258,10 +350,19 @@ export function createNameplateSprite(name, options = {}) {
   if (!baked) return null;
   const sprite = new THREE.Sprite(baked.material);
   sprite.name = `nameplate_${name}`;
-  // World-space size. The same Sprite reused across the scene will
-  // render at this metre-size at every camera distance (modulo
-  // perspective shrink with `sizeAttenuation: true`).
-  sprite.scale.set(NAMEPLATE_WORLD_WIDTH, NAMEPLATE_WORLD_HEIGHT, 1);
+  // World-space size. Width is derived from the baked canvas width so
+  // long names stay readable at the same px/m density as short names
+  // (Follow-on Task 33 — Bug A fix). The same Sprite reused across the
+  // scene will render at this metre-size at every camera distance
+  // (modulo perspective shrink with `sizeAttenuation: true`).
+  //
+  // canvasWidth = measured-text + padding (from getOrBakeNameplateMaterial);
+  // dividing by NAMEPLATE_PX_PER_METRE = 128 px/m gives the world
+  // width. Height stays at 0.5 m so the on-screen "label band" height
+  // is consistent across the scene — only width grows with name length.
+  const canvasWidth = baked.canvasWidth || CANVAS_WIDTH_MIN;
+  const worldWidth = canvasWidth / NAMEPLATE_PX_PER_METRE;
+  sprite.scale.set(worldWidth, NAMEPLATE_WORLD_HEIGHT, 1);
   // Render order: high enough to win against the world-geometry pass
   // when depthTest is true and the geometry passes. Doesn't matter for
   // depthTest=true rendering against opaque, but is the right knob to
@@ -270,7 +371,7 @@ export function createNameplateSprite(name, options = {}) {
   // Stash the source name on userData so capture scripts can read it
   // back without parsing canvas pixels. The capture asserts
   // `sprite.userData.nameplateText === entity.meta.name`.
-  sprite.userData = { nameplateText: name, color: colorHex };
+  sprite.userData = { nameplateText: name, color: colorHex, canvasWidth };
   return sprite;
 }
 
@@ -323,7 +424,22 @@ export function ensureNameplateForEntity(inst, scene3d) {
   const lbHigh = ((meta.landblockId >>> 0) & 0xffff0000) >>> 0;
   if (lbHigh === 0) return null;
 
-  // Re-bake check: was a sprite already attached?
+  // Re-bake check (dedupe-by-guid via the EntityInstance.root tree):
+  // was a sprite already attached?
+  //
+  // Follow-on Task 34 (Bug B fix) — there are two ways a duplicate
+  // could land:
+  //   1. `_spawnImpl` re-entry for the same guid (already guarded by
+  //      `EntityManager.spawnInFlight` + `remove(guid)` at entities.js:
+  //      438-445; verified idempotent).
+  //   2. An unrelated code path attaching another Sprite to inst.root
+  //      whose name matches "nameplate_<X>". We defensively scan
+  //      inst.root.children for any pre-existing nameplate sprite (not
+  //      just the cached `_nameplateSprite` pointer) so a stale
+  //      attachment from a previous code path / hot-reload gets cleaned
+  //      up here too. This is "dedupe-at-registration-time" keyed on
+  //      the inst.guid: there is at most ONE nameplate sprite per
+  //      EntityInstance after this function returns.
   const existing = inst._nameplateSprite || null;
   if (existing) {
     const prevText = existing.userData && existing.userData.nameplateText;
@@ -338,6 +454,28 @@ export function ensureNameplateForEntity(inst, scene3d) {
       existing.parent && existing.parent.remove(existing);
     } catch (_) {}
     inst._nameplateSprite = null;
+  }
+  // Defensive cleanup: walk the root's children and drop any orphan
+  // nameplate sprites (children whose name starts with "nameplate_"
+  // but whose userData.nameplateText is set — the on-disk-sprite
+  // signature). Without this, a hot-reload that re-runs `_spawnImpl`
+  // before the previous sprite tear-down ran would leave a ghost
+  // nameplate parented to the same root. Cheap O(children) — typical
+  // entity has 0-19 part-children.
+  if (inst.root && Array.isArray(inst.root.children)) {
+    const stale = [];
+    for (const child of inst.root.children) {
+      if (
+        child &&
+        child.userData &&
+        typeof child.userData.nameplateText === "string"
+      ) {
+        stale.push(child);
+      }
+    }
+    for (const s of stale) {
+      try { inst.root.remove(s); } catch (_) {}
+    }
   }
 
   const sprite = createNameplateSprite(name, { itemType: meta.itemType >>> 0 });

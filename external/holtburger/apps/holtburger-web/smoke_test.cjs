@@ -4125,6 +4125,97 @@ check(
         );
     }
 
+    // === Follow-on Task 33 (2026-05-14) — Bug A: nameplate canvas =====
+    // sizing via ctx.measureText so long names ("Hudriffa the
+    // Shopkeeper", "Scrawed Grievver") don't truncate.
+    //
+    // Before the fix, `nameplate_sprite.js` allocated a fixed 256-px
+    // canvas and drew text centre-aligned at canvas-x = 128. Names
+    // wider than 256 px clipped on BOTH ends — the world-completeness-
+    // demo screenshot at docs/world-completeness-demo-2026-05-14/
+    // 01-hudriffa-shopkeeper.png shows "Hudriffa the Shopkeeper" as
+    // "ffa the Shopk". The fix replaces the constant with a per-name
+    // measureText pass that sizes the canvas to fit, then scales the
+    // sprite's world width proportionally so px/m density is stable
+    // across all names. Source-pattern guards:
+    //   - `ctx.measureText(name)` is the load-bearing API call.
+    //   - The bake entry now carries `canvasWidth` so the sprite
+    //     constructor reads back the dynamic width.
+    //   - The shrink-to-fit branch (for pathological-length names) is
+    //     bounded by `CANVAS_WIDTH_MAX` to cap GPU memory.
+    try {
+        const fs = require("fs");
+        const npSrc = fs.readFileSync(
+            __dirname + "/scene3d/nameplate_sprite.js",
+            "utf8"
+        );
+        const hasMeasureText = /\bctx\.measureText\(/.test(npSrc);
+        const hasCanvasWidthField = /\bcanvasWidth\b/.test(npSrc);
+        const hasMaxCap = /\bCANVAS_WIDTH_MAX\b/.test(npSrc);
+        const hasDynamicScale =
+            /sprite\.scale\.set\([^)]*worldWidth/.test(npSrc);
+        check(
+            "Follow-on Task 33: nameplate canvas uses measureText + dynamic width",
+            hasMeasureText && hasCanvasWidthField && hasMaxCap && hasDynamicScale,
+            `measureText=${hasMeasureText}, canvasWidth=${hasCanvasWidthField}, ` +
+                `maxCap=${hasMaxCap}, dynamicScale=${hasDynamicScale}`
+        );
+    } catch (e) {
+        check(
+            "Follow-on Task 33: nameplate canvas uses measureText + dynamic width",
+            false,
+            String(e).slice(0, 160)
+        );
+    }
+
+    // === Follow-on Task 34 (2026-05-14) — Bug B: nameplate registration
+    // dedupes by guid so a re-entered spawn or a stale prior attachment
+    // can't leave a "ghost" nameplate parented to the same entity root.
+    //
+    // The visible "3 nameplates around the Scrawed Grievver" in the
+    // world-completeness demo turned out to be 3 separate entities with
+    // 1 nameplate each (the LB at 0xA3AE has 3 Grievver spawns, all
+    // visible from the demo camera). But the dedupe-by-guid guarantee
+    // is still load-bearing: without it, a hot-reload or a re-entered
+    // _spawnImpl could leave a stale Sprite parented to inst.root.
+    // Source-pattern guards:
+    //   - `hud.js#setNameplate` keys on the u32-coerced GUID via
+    //     `this.nodes.get(key)` and returns early when the entry
+    //     already exists (cross-call idempotency).
+    //   - `nameplate_sprite.js#ensureNameplateForEntity` checks
+    //     `inst._nameplateSprite` AND defensively scans inst.root.
+    //     children for any orphan nameplate sprites (defence against
+    //     a duplicate attachment from a different code path).
+    try {
+        const fs = require("fs");
+        const hudSrc = fs.readFileSync(__dirname + "/scene3d/hud.js", "utf8");
+        const npSrc = fs.readFileSync(
+            __dirname + "/scene3d/nameplate_sprite.js",
+            "utf8"
+        );
+        const hudDedupesByGuid =
+            /this\.nodes\.get\(\s*key\s*\)/.test(hudSrc) &&
+            /const\s+key\s*=\s*\(\s*guid\s*>>>\s*0\s*\)/.test(hudSrc);
+        const spriteDedupesByInst =
+            /inst\._nameplateSprite/.test(npSrc) &&
+            /prevText\s*===\s*name/.test(npSrc);
+        const spriteCleansStale =
+            /(?:stale|orphan).*nameplate/i.test(npSrc) ||
+            /child\.userData\.nameplateText/.test(npSrc);
+        check(
+            "Follow-on Task 34: nameplate registration dedupes by guid (DOM + sprite)",
+            hudDedupesByGuid && spriteDedupesByInst && spriteCleansStale,
+            `hudByGuid=${hudDedupesByGuid}, spriteByInst=${spriteDedupesByInst}, ` +
+                `staleCleanup=${spriteCleansStale}`
+        );
+    } catch (e) {
+        check(
+            "Follow-on Task 34: nameplate registration dedupes by guid (DOM + sprite)",
+            false,
+            String(e).slice(0, 160)
+        );
+    }
+
     // === Follow-on #3 (2026-05-10) — live ACE 8765 reachable =========
     // Infra probe only — verifies the live tailnet1 stack at
     // http://100.116.47.66:8765 (the page-serving HTTP server) is

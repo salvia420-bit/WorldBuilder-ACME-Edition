@@ -132,6 +132,13 @@ export class NameplateLayer {
    *
    * Empty / null `name` removes the nameplate (mirrors 2D's
    * `ensureNameplate` skip on missing meta.name at `index.html:3466`).
+   *
+   * Follow-on Task 34 (Bug B fix) — dedupe-by-guid: `this.nodes` is
+   * keyed on the u32-coerced GUID. A second `setNameplate` call for
+   * the same GUID is a no-op when the name + follow match; it updates
+   * text in place when the name changes; it relabels the follow object
+   * when the entity rig is rebuilt (re-spawn). At most ONE DOM
+   * `<div>` exists per GUID at any time.
    */
   setNameplate(guid, name, followObj3d) {
     const key = (guid >>> 0);
@@ -141,6 +148,10 @@ export class NameplateLayer {
       return;
     }
     if (!followObj3d) return;
+    // Dedupe-by-guid: if a node already exists for this key, reuse it.
+    // This is the cross-call idempotency the smoke check relies on —
+    // two calls in a row with the same (guid, name) result in one DOM
+    // `<div>`, not two.
     const existing = this.nodes.get(key);
     if (existing) {
       if (existing.name !== name) {
