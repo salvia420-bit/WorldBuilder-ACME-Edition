@@ -268,38 +268,95 @@ function buildOneBuilding(placement, bake, materialCache, worldOffset, shadowsEn
 }
 
 /**
- * Top-level builder for Holtburg's building set. Mirrors the 2D
- * path's load flow:
- *   1. fetch_landblock_objects(NEIGHBOURHOOD ids, suffix 0xfffe).
- *   2. Filter `isBuilding === true` → unique modelIds.
- *   3. bakeBuildingPlacement() each in parallel.
- *   4. Preload all surface DIDs in one wasm round-trip via
- *      `materialCache.preload()`.
- *   5. For each building placement, `buildOneBuilding()` → add to
- *      `scene3d.buildingsGroup`.
- *   6. Stash `window.buildingMap3d = Map<placementKey, Group>` mirroring
- *      the 2D `window.buildingMap`.
+ * Resolve the once-per-ring opts used by `bakeBuildingsForLandblock`.
+ * The driver calls this once; the per-LB baker re-reads the resolved
+ * fields without re-allocating.
  *
- * Returns:
- *   {
- *     buildingCount: number,           // placements rendered
- *     uniqueModelCount: number,        // unique modelIds baked
- *     partCount: number,               // sum of per-building part wrappers
- *     surfaceMeshCount: number,        // sum of surface-group meshes
- *     surfaceCount: number,            // unique surface DIDs in cache
- *     resolvedMaterials: number,       // materialCache.materials.size
- *     fallbackHits: number,            // materialCache.fallbackHits at end
- *     realHits: number                 // materialCache.realHits at end
- *   }
- *
- * Required wasmExports keys: `fetch_landblock_objects`,
- * `fetchBuildingPlacement`, `fetch_surfaces_pixels`. If any are
- * missing the function throws.
+ * `bakeCache: Map<modelId, bake>` is the shared per-Setup-model bake
+ * cache — populated lazily as LBs are baked. Holtburg's 14 unique
+ * modelIds across 16 placements means a 13×13 ring (~46 buildings)
+ * still hits the cache for the majority of placements. Without the
+ * shared cache the lazy hook would re-fetch each modelId per LB
+ * entry — at 169 LBs that's ~169 × O(unique-models) wasm calls.
  */
-export async function buildHoltburgBuildings(scene3d, wasmExports) {
+function resolveBuildingsOpts(scene3d) {
+  const materialCache =
+    scene3d.materialCache ||
+    new MaterialCache({
+      detailTileCache: scene3d.detailTileCache ?? null,
+      forceDetail: !!scene3d.forceDetail,
+      csmState: scene3d.csmState ?? null,
+      pomEnabled: !!scene3d.pomEnabled,
+      forcePom: !!scene3d.forcePom,
+    });
+  // Stash on scene3d so subsequent ring calls (and the lazy hook in
+  // Objective 6) share the same MaterialCache. Phase 7.3 EnvCells +
+  // Phase 7.2 statics also share this cache — the very first ring
+  // bake to install it wins; subsequent installs are no-ops.
+  scene3d.materialCache = materialCache;
+
+  return {
+    bakeCache: scene3d.buildingBakeCache instanceof Map
+      ? scene3d.buildingBakeCache
+      : new Map(),
+    buildingMap3d: scene3d.buildingMap3d instanceof Map
+      ? scene3d.buildingMap3d
+      : new Map(),
+    materialCache,
+    // Phase 3.3 — flip castShadow + receiveShadow on when EITHER the
+    // Phase 0.1 single-shadow path OR the CSM path is active. The
+    // two paths share the same caster/receiver tagging — only the
+    // shadow-map projection differs. Captured once at ring entry.
+    shadowsEnabled: !!scene3d.shadowsEnabled || !!scene3d.csmEnabled,
+  };
+}
+
+/**
+ * Bake ONE landblock's buildings. Idempotent via
+ * `scene3d.buildingsBakedLbs: Set<u32>` keyed by
+ * `(lbX << 24) | (lbY << 16)`.
+ *
+ * Pipeline (mirrors the legacy `buildHoltburgBuildings` body but
+ * scoped to a single LB):
+ *   1. `fetch_landblock_objects(new Uint32Array([cellId]))` for this
+ *      LB only (cellId = `lbKey | 0xfffe` selects LandblockInfo).
+ *   2. Filter `isBuilding === true`.
+ *   3. For each unique modelId in THIS LB, hit-check `opts.bakeCache`;
+ *      on miss, call `bakeBuildingPlacement` and populate the cache.
+ *      This is the per-Setup-model fused-mesh bake — across a 169-LB
+ *      ring with ~14 unique Aluvian cottage / shop models, the cache
+ *      hit rate is high.
+ *   4. Preload referenced surface DIDs through `opts.materialCache`.
+ *      MaterialCache.preload is idempotent on already-loaded DIDs so
+ *      cross-LB redundancy is a cheap dedupe.
+ *   5. Instantiate each placement (per-placement `THREE.Group` with
+ *      per-part hinge wrappers — door rotation contract is preserved
+ *      verbatim from the legacy body).
+ *   6. Stash each Group in `opts.buildingMap3d` AND mirror to
+ *      `scene3d.buildingMap3d` + `window.buildingMap3d` so the
+ *      door-rotation `findClosestBuildingPart` spatial-match path
+ *      (index.html:4367) keeps working at ring scope.
+ *
+ * Returns this LB's contribution:
+ *   {
+ *     idempotent: bool,       // true if LB was already baked
+ *     placementCount: number, // placements rendered in this LB
+ *     modelCount: number,     // unique modelIds in this LB (cache hit + miss)
+ *     surfaceCount: number,   // unique surface DIDs in this LB
+ *     partCount: number,      // sum of per-building part wrappers
+ *     surfaceMeshCount: number, // sum of surface-group meshes
+ *   }
+ */
+export async function bakeBuildingsForLandblock(
+  scene3d,
+  lbX,
+  lbY,
+  opts,
+  wasmExports
+) {
   if (!scene3d || !scene3d.buildingsGroup) {
     throw new Error(
-      "buildHoltburgBuildings: scene3d.buildingsGroup missing"
+      "bakeBuildingsForLandblock: scene3d.buildingsGroup missing"
     );
   }
   if (
@@ -309,36 +366,42 @@ export async function buildHoltburgBuildings(scene3d, wasmExports) {
     typeof wasmExports.fetch_surfaces_pixels !== "function"
   ) {
     throw new Error(
-      "buildHoltburgBuildings: wasmExports missing fetch_landblock_objects / fetchBuildingPlacement / fetch_surfaces_pixels"
+      "bakeBuildingsForLandblock: wasmExports missing fetch_landblock_objects / fetchBuildingPlacement / fetch_surfaces_pixels"
+    );
+  }
+  if (!opts || !(opts.bakeCache instanceof Map) || !opts.materialCache) {
+    throw new Error(
+      "bakeBuildingsForLandblock: opts missing bakeCache / materialCache — call resolveBuildingsOpts first"
     );
   }
 
-  // Build the 9-LB neighbourhood cell-id list. `0xfffe` suffix selects
-  // LandblockInfo (objects + buildings) — `0xffff` is the terrain
-  // CellLandblock and won't return placements.
-  const neighbourhood = [];
-  for (let dy = 1; dy >= -1; dy -= 1) {
-    for (let dx = -1; dx <= 1; dx += 1) {
-      const lbX = HOLTBURG_X + dx;
-      const lbY = HOLTBURG_Y + dy;
-      neighbourhood.push({
-        x: lbX,
-        y: lbY,
-        cellId: ((lbX << 24) | (lbY << 16) | 0xfffe) >>> 0,
-      });
-    }
+  if (!(scene3d.buildingsBakedLbs instanceof Set)) {
+    scene3d.buildingsBakedLbs = new Set();
   }
-  const cellIds = new Uint32Array(neighbourhood.map((n) => n.cellId));
+  const lbKey = (((lbX & 0xff) << 24) | ((lbY & 0xff) << 16)) >>> 0;
+  if (scene3d.buildingsBakedLbs.has(lbKey)) {
+    return {
+      idempotent: true,
+      placementCount: 0,
+      modelCount: 0,
+      surfaceCount: 0,
+      partCount: 0,
+      surfaceMeshCount: 0,
+    };
+  }
+  scene3d.buildingsBakedLbs.add(lbKey);
 
-  // Fetch all placements (buildings + objects). Filter buildings
-  // here; the statics path filters !isBuilding from the same list.
-  // Rather than call wasm twice, the caller (buildHoltburgStatics)
-  // can re-fetch — but if they share, that doubles the wasm call.
-  // We'll have buildings call wasm once; statics calls wasm once.
-  // (Caching across the two calls is a Phase 7.7 polish; for now the
-  // wasm side caches its own DAT shard reads, so the cost is the
-  // marshalling of placement records, ~1ms per LB.)
-  const allPlacements = await wasmExports.fetch_landblock_objects(cellIds);
+  // Step 1 — fetch this LB's placements. The `0xfffe` suffix selects
+  // LandblockInfo (objects + buildings); `0xffff` is the terrain
+  // CellLandblock and won't return placements.
+  const cellId = (lbKey | 0xfffe) >>> 0;
+  const allPlacements = await wasmExports.fetch_landblock_objects(
+    new Uint32Array([cellId])
+  );
+
+  // Step 2 — filter buildings, snapshot to JS-owned plain objects,
+  // and free the wasm side. The statics path filters !isBuilding from
+  // a separate wasm call (no shared state across the two readers).
   const buildings = [];
   for (const p of allPlacements) {
     if (p.isBuilding) {
@@ -355,39 +418,205 @@ export async function buildHoltburgBuildings(scene3d, wasmExports) {
     if (typeof p.free === "function") p.free();
   }
 
-  // Bake every unique model id in parallel.
+  if (buildings.length === 0) {
+    // Empty LB (most of the 13×13 ring's outer LBs are wilderness).
+    // Still counts as baked so the idempotency set holds.
+    return {
+      idempotent: false,
+      placementCount: 0,
+      modelCount: 0,
+      surfaceCount: 0,
+      partCount: 0,
+      surfaceMeshCount: 0,
+    };
+  }
+
+  // Step 3 — bake unique modelIds for this LB, hit-checking the
+  // ring-shared cache. Holtburg ground truth: 14 unique modelIds
+  // across 16 placements (memory note at top of file). Across a
+  // larger ring most LBs hit the cache for every building.
   const uniqueModelIds = [...new Set(buildings.map((b) => b.modelId))];
-  const bakes = new Map();
-  const bakeResults = await Promise.all(
-    uniqueModelIds.map((id) =>
-      bakeBuildingPlacement(id, wasmExports.fetchBuildingPlacement)
-    )
-  );
-  for (let i = 0; i < uniqueModelIds.length; i += 1) {
-    if (bakeResults[i]) {
-      bakes.set(uniqueModelIds[i], bakeResults[i]);
+  const toBake = uniqueModelIds.filter((id) => !opts.bakeCache.has(id));
+  if (toBake.length > 0) {
+    const bakeResults = await Promise.all(
+      toBake.map((id) =>
+        bakeBuildingPlacement(id, wasmExports.fetchBuildingPlacement)
+      )
+    );
+    for (let i = 0; i < toBake.length; i += 1) {
+      if (bakeResults[i]) {
+        opts.bakeCache.set(toBake[i], bakeResults[i]);
+      }
     }
   }
 
-  // F#5 (LOD) — query the `did_degrade` chain for each unique building
-  // modelId. The buildings path uses `fetchBuildingPlacement` (not
-  // `fetch_model_meshes`) and `BuildingPlacement` doesn't carry
-  // `didDegrade` on its own, so we look it up via the lightweight
-  // `fetchModelDidDegrades` wasm export.
+  // Step 4 — preload referenced surface DIDs for this LB's bakes.
+  // MaterialCache.preload is idempotent on already-loaded DIDs, so
+  // cross-LB redundancy is filtered at the cache layer (see
+  // materials.js:1207 `if (this.materials.has(d)) continue`).
+  const lbSurfaceDids = new Set();
+  for (const id of uniqueModelIds) {
+    const bake = opts.bakeCache.get(id);
+    if (!bake) continue;
+    for (const did of bake.surfaceDids) lbSurfaceDids.add(did);
+  }
+  if (lbSurfaceDids.size > 0) {
+    try {
+      await opts.materialCache.preload(
+        [...lbSurfaceDids],
+        wasmExports.fetch_surfaces_pixels
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[scene3d.buildings] materialCache.preload failed for lb 0x${lbKey.toString(16)}:`,
+        e
+      );
+    }
+  }
+
+  // Step 5 — instantiate each building placement in this LB. The
+  // per-placement Group → hinge wrapper → per-surface Mesh topology
+  // is the door-rotation contract (Phase 7.3+); preserved verbatim
+  // by routing through `buildOneBuilding`.
+  let partCount = 0;
+  let surfaceMeshCount = 0;
+  for (const placement of buildings) {
+    const placementLbX = (placement.landblockId >>> 24) & 0xff;
+    const placementLbY = (placement.landblockId >>> 16) & 0xff;
+    const worldOffset = {
+      x: placementLbX * METERS_PER_LANDBLOCK,
+      y: placementLbY * METERS_PER_LANDBLOCK,
+    };
+    const bake = opts.bakeCache.get(placement.modelId);
+    if (!bake) {
+      // No bake for this modelId — the bake call failed earlier;
+      // skip with a warning rather than crash. The 2D path falls
+      // back to a fused single-sprite here; the 3D fallback is
+      // Phase 7.7 polish (out of scope for the world-expand step 1
+      // refactor).
+      continue;
+    }
+    const { group, surfaceMeshCount: smc } = buildOneBuilding(
+      placement,
+      bake,
+      opts.materialCache,
+      worldOffset,
+      opts.shadowsEnabled
+    );
+    scene3d.buildingsGroup.add(group);
+    partCount += bake.parts.length;
+    surfaceMeshCount += smc;
+    opts.buildingMap3d.set(group.userData.placementKey, group);
+  }
+
+  return {
+    idempotent: false,
+    placementCount: buildings.length,
+    modelCount: uniqueModelIds.length,
+    surfaceCount: lbSurfaceDids.size,
+    partCount,
+    surfaceMeshCount,
+  };
+}
+
+/**
+ * Ring driver: bakes every LB in `[centreLbX-radius, centreLbX+radius]
+ * × [centreLbY-radius, centreLbY+radius]` (clamped to `[0, 255]^2`)
+ * via `bakeBuildingsForLandblock`. Returns the aggregated summary in
+ * the legacy `buildHoltburgBuildings` shape so existing callers
+ * (capture scripts, init3D summary log line) keep working.
+ *
+ * The ring-shared `bakeCache` is created here and threaded through
+ * `opts` to each per-LB call — across a 169-LB ring with ~14-100
+ * unique building models, this collapses what would otherwise be
+ * 169 × O(unique) wasm fetches into one fetch per truly-unique model.
+ *
+ * After the ring bakes:
+ *   - F#5 LOD didDegrade audit runs once on the union of unique
+ *     modelIds (cache keys). Reporting only; the per-placement Group
+ *     contract still wins over LOD swap for buildings.
+ *   - `scene3d.materialCache` / `scene3d.buildingMap3d` /
+ *     `scene3d.buildingBakeCache` are stashed so subsequent ring
+ *     bakes (or the Objective 6 lazy hook) share state.
+ *   - `window.buildingMap3d` mirrors `scene3d.buildingMap3d` so the
+ *     door-rotation `findClosestBuildingPart` lookup in index.html
+ *     keeps working at ring scope.
+ */
+export async function bakeBuildingsRing(
+  scene3d,
+  centreLbX,
+  centreLbY,
+  radius,
+  wasmExports
+) {
+  if (!scene3d || !scene3d.buildingsGroup) {
+    throw new Error("bakeBuildingsRing: scene3d.buildingsGroup missing");
+  }
+  if (
+    !wasmExports ||
+    typeof wasmExports.fetch_landblock_objects !== "function" ||
+    typeof wasmExports.fetchBuildingPlacement !== "function" ||
+    typeof wasmExports.fetch_surfaces_pixels !== "function"
+  ) {
+    throw new Error(
+      "bakeBuildingsRing: wasmExports missing fetch_landblock_objects / fetchBuildingPlacement / fetch_surfaces_pixels"
+    );
+  }
+
+  const opts = resolveBuildingsOpts(scene3d);
+
+  // Fan out the per-LB bakes. Each call is independent (per-LB wasm
+  // fetch + per-LB instantiation); the shared bakeCache is read-then-
+  // populate so concurrent misses on the same modelId can race —
+  // tolerable because `bakeBuildingPlacement` is deterministic and
+  // the second write wins (a harmless replace of identical data).
+  // At radius=1 (9 LBs) the cost is 9 sequential-ish wasm calls
+  // instead of one batched 9-LB call; at radius=6 (169 LBs) it's
+  // 169 small fetches. The wasm side caches its own DAT shard reads,
+  // so the marginal cost is the marshalling per call.
+  const perLbSummaries = [];
+  const promises = [];
+  for (let dy = radius; dy >= -radius; dy -= 1) {
+    for (let dx = -radius; dx <= radius; dx += 1) {
+      const lbX = centreLbX + dx;
+      const lbY = centreLbY + dy;
+      if (lbX < 0 || lbX > 0xff || lbY < 0 || lbY > 0xff) continue;
+      promises.push(
+        bakeBuildingsForLandblock(scene3d, lbX, lbY, opts, wasmExports).then(
+          (s) => {
+            perLbSummaries.push(s);
+            return s;
+          }
+        )
+      );
+    }
+  }
+  await Promise.all(promises);
+
+  // F#5 (LOD) — query the `did_degrade` chain for each unique
+  // building modelId baked into the ring. The buildings path uses
+  // `fetchBuildingPlacement` (not `fetch_model_meshes`) and
+  // `BuildingPlacement` doesn't carry `didDegrade` on its own, so we
+  // look it up via the lightweight `fetchModelDidDegrades` wasm
+  // export. The audit is once-per-ring (not once-per-LB) because the
+  // wasm call is batched on unique modelIds.
   //
   // **Holtburg ground-truth**: Holtburg buildings are mostly `0x01`
-  // raw GfxObjs, and inspecting the DAT reveals very few of them carry
-  // the `HAS_DID_DEGRADE` flag — the typical Holtburg load returns all
-  // zeros here. This is the honest measurement, not a faked savings:
-  // see the `buildingDidDegradeCount` field in the returned summary.
-  // The LOD wrapping itself isn't applied to buildings because the
-  // per-placement Group → hinge-wrapper → per-surface-Mesh tree carries
-  // per-placement door rotation state that a `THREE.LOD` swap would
-  // disturb. We measure the chain count so a future agent porting LOD
-  // to a denser city (or to dungeons) sees the data.
-  let didDegradeByModel = new Map();
+  // raw GfxObjs, and inspecting the DAT reveals very few of them
+  // carry the `HAS_DID_DEGRADE` flag — the typical Holtburg load
+  // returns all zeros here. This is the honest measurement, not a
+  // faked savings: see `buildingDidDegradeCount` in the returned
+  // summary. The LOD wrapping itself isn't applied to buildings
+  // because the per-placement Group → hinge-wrapper →
+  // per-surface-Mesh tree carries per-placement door rotation state
+  // that a `THREE.LOD` swap would disturb.
+  const uniqueModelIds = [...opts.bakeCache.keys()];
   let buildingDidDegradeCount = 0;
-  if (typeof wasmExports.fetchModelDidDegrades === "function" && uniqueModelIds.length > 0) {
+  if (
+    typeof wasmExports.fetchModelDidDegrades === "function" &&
+    uniqueModelIds.length > 0
+  ) {
     try {
       const ddResults = await wasmExports.fetchModelDidDegrades(
         new Uint32Array(uniqueModelIds)
@@ -395,7 +624,6 @@ export async function buildHoltburgBuildings(scene3d, wasmExports) {
       for (let i = 0; i < uniqueModelIds.length; i += 1) {
         const dd = (ddResults[i] ?? 0) >>> 0;
         if (dd !== 0) {
-          didDegradeByModel.set(uniqueModelIds[i], dd);
           buildingDidDegradeCount += 1;
         }
       }
@@ -408,108 +636,102 @@ export async function buildHoltburgBuildings(scene3d, wasmExports) {
     }
   }
 
-  // Preload every referenced surface DID in one wasm round-trip.
-  const allSurfaceDids = new Set();
-  for (const bake of bakes.values()) {
-    for (const did of bake.surfaceDids) allSurfaceDids.add(did);
-  }
-  // Phase 0.2 — pass detail tile cache + forceDetail through to the
-  // MaterialCache so surfaces with the Detail (0x20000) bit composite
-  // a grayscale tile over the diffuse.
-  // Phase 3.3 — pass `csmState` so receivers get the Cascaded Shadow
-  // Maps shader patch (sample 3 cascade shadow maps, blend at
-  // boundaries, multiply sun's contribution by shadow factor).
-  // Phase 3.1 — pass `pomEnabled` + `forcePom` so Stone-category
-  // surfaces get the parallax occlusion shader patch on high/ultra
-  // quality presets.
-  const materialCache =
-    scene3d.materialCache ||
-    new MaterialCache({
-      detailTileCache: scene3d.detailTileCache ?? null,
-      forceDetail: !!scene3d.forceDetail,
-      csmState: scene3d.csmState ?? null,
-      pomEnabled: !!scene3d.pomEnabled,
-      forcePom: !!scene3d.forcePom,
-    });
-  if (allSurfaceDids.size > 0) {
-    try {
-      await materialCache.preload(
-        [...allSurfaceDids],
-        wasmExports.fetch_surfaces_pixels
-      );
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        "[scene3d.buildings] materialCache.preload failed:",
-        e
-      );
-    }
-  }
-
-  // Instantiate each building placement.
-  const buildingMap3d = new Map();
+  // Aggregate the per-LB summaries into the legacy shape.
+  let buildingCount = 0;
   let partCount = 0;
   let surfaceMeshCount = 0;
-  for (const placement of buildings) {
-    const lbX = (placement.landblockId >>> 24) & 0xff;
-    const lbY = (placement.landblockId >>> 16) & 0xff;
-    const worldOffset = {
-      x: lbX * METERS_PER_LANDBLOCK,
-      y: lbY * METERS_PER_LANDBLOCK,
-    };
-    const bake = bakes.get(placement.modelId);
-    if (!bake) {
-      // No bake for this modelId — the bake call failed earlier;
-      // skip with a warning rather than crash. (The 2D path
-      // falls back to a fused single-sprite here; for 3D we'd need
-      // to fetch_model_meshes to do the same, which is Phase 7.7
-      // polish.)
-      continue;
-    }
-    const { group, surfaceMeshCount: smc } = buildOneBuilding(
-      placement,
-      bake,
-      materialCache,
-      worldOffset,
-      // Phase 3.3 — flip castShadow + receiveShadow on when EITHER the
-      // Phase 0.1 single-shadow path OR the CSM path is active. The
-      // two paths share the same caster/receiver tagging — only the
-      // shadow-map projection differs.
-      !!scene3d.shadowsEnabled || !!scene3d.csmEnabled
-    );
-    scene3d.buildingsGroup.add(group);
-    partCount += bake.parts.length;
-    surfaceMeshCount += smc;
-    buildingMap3d.set(group.userData.placementKey, group);
+  // Surface DID union across the ring is the materialCache's resolved
+  // set size after preload. (Per-LB `surfaceCount` overlaps across LBs;
+  // the cache-resolved size is the de-duplicated truth.)
+  for (const s of perLbSummaries) {
+    buildingCount += s.placementCount;
+    partCount += s.partCount;
+    surfaceMeshCount += s.surfaceMeshCount;
   }
+  const allSurfaceDids = new Set();
+  for (const bake of opts.bakeCache.values()) {
+    for (const did of bake.surfaceDids) allSurfaceDids.add(did);
+  }
+
+  // F#6 — number of duplicate building modelIds. At Holtburg radius=1
+  // this is 16 - 14 = 2 (the 0x01 cottage and shop models repeat).
+  // At larger rings the duplicate count grows roughly linearly with
+  // placement count while uniqueModels grows sub-linearly (most
+  // Aluvian-region buildings reuse the same dozen-or-so cottage
+  // models). InstancedMesh would have saved at most these draw calls
+  // and would have broken the per-placement door-rotation contract.
+  // Reported for honesty, NOT for any actual instancing here.
+  const buildingDuplicateModelCount =
+    buildingCount - uniqueModelIds.length;
 
   // Stash on window mirroring the 2D path's `window.buildingMap`.
   // Capture scripts and Phase 7.3+ door logic both look here.
-  window.buildingMap3d = buildingMap3d;
-  scene3d.materialCache = materialCache;
-  scene3d.buildingMap3d = buildingMap3d;
-  scene3d.buildingBakeCache = bakes;
+  window.buildingMap3d = opts.buildingMap3d;
+  scene3d.materialCache = opts.materialCache;
+  scene3d.buildingMap3d = opts.buildingMap3d;
+  scene3d.buildingBakeCache = opts.bakeCache;
 
   return {
-    buildingCount: buildingMap3d.size,
-    uniqueModelCount: bakes.size,
+    buildingCount,
+    uniqueModelCount: opts.bakeCache.size,
     partCount,
     surfaceMeshCount,
     surfaceCount: allSurfaceDids.size,
-    resolvedMaterials: materialCache.materials.size,
-    fallbackHits: materialCache.fallbackHits,
-    realHits: materialCache.realHits,
-    // F#5 — count of unique building modelIds that report a non-zero
-    // `did_degrade` chain entry (typically 0 for Holtburg; see the
-    // comment-block header for why LOD isn't wired into the building
-    // path itself). Capture script reads this to report the grounded
-    // measurement.
+    resolvedMaterials: opts.materialCache.materials.size,
+    fallbackHits: opts.materialCache.fallbackHits,
+    realHits: opts.materialCache.realHits,
+    // F#5 — count of unique building modelIds in the ring that report
+    // a non-zero `did_degrade` chain entry (typically 0 for Holtburg).
     buildingDidDegradeCount,
-    // F#6 — number of duplicate building modelIds (buildings −
-    // uniqueModelIds). For Holtburg this is 16 - 14 = 2; InstancedMesh
-    // would have saved at most 2 draw calls and would have broken the
-    // per-placement door-rotation contract. Reported for honesty, NOT
-    // for any actual instancing here.
-    buildingDuplicateModelCount: buildings.length - uniqueModelIds.length,
+    // F#6 — see comment above.
+    buildingDuplicateModelCount,
+    // Ring topology — useful for capture-script assertions at larger
+    // radii. At radius=1 this is `lbCount=9`; the back-compat caller
+    // can ignore it.
+    lbCount: scene3d.buildingsBakedLbs.size,
   };
+}
+
+/**
+ * Back-compat wrapper: bakes the radius-1 (3×3) ring around Holtburg.
+ *
+ * Existing capture scripts (`capture_phase7_2_buildings.cjs`) and the
+ * `init3D` summary-log call site rely on this entry point; preserving
+ * it keeps those callers green during world-expand step 1. The
+ * radius-flip to 6 (13×13) lives at the init3D call site (Objective 8)
+ * and re-targets to `bakeBuildingsRing` directly there.
+ *
+ * Top-level builder for Holtburg's building set. Mirrors the 2D
+ * path's load flow:
+ *   1. fetch_landblock_objects(NEIGHBOURHOOD ids, suffix 0xfffe).
+ *   2. Filter `isBuilding === true` → unique modelIds.
+ *   3. bakeBuildingPlacement() each in parallel (cached across the
+ *      ring via the shared bakeCache on opts).
+ *   4. Preload all surface DIDs through `materialCache.preload()`.
+ *   5. For each building placement, `buildOneBuilding()` → add to
+ *      `scene3d.buildingsGroup`.
+ *   6. Stash `window.buildingMap3d = Map<placementKey, Group>`
+ *      mirroring the 2D `window.buildingMap`.
+ *
+ * Returns:
+ *   {
+ *     buildingCount: number,             // placements rendered
+ *     uniqueModelCount: number,          // unique modelIds baked
+ *     partCount: number,                 // sum of per-building part wrappers
+ *     surfaceMeshCount: number,          // sum of surface-group meshes
+ *     surfaceCount: number,              // unique surface DIDs in cache
+ *     resolvedMaterials: number,         // materialCache.materials.size
+ *     fallbackHits: number,              // materialCache.fallbackHits at end
+ *     realHits: number,                  // materialCache.realHits at end
+ *     buildingDidDegradeCount: number,   // F#5 audit
+ *     buildingDuplicateModelCount: number, // F#6 audit
+ *     lbCount: number,                   // total LBs baked into ring
+ *   }
+ *
+ * Required wasmExports keys: `fetch_landblock_objects`,
+ * `fetchBuildingPlacement`, `fetch_surfaces_pixels`. If any are
+ * missing the function throws.
+ */
+export async function buildHoltburgBuildings(scene3d, wasmExports) {
+  return bakeBuildingsRing(scene3d, HOLTBURG_X, HOLTBURG_Y, 1, wasmExports);
 }

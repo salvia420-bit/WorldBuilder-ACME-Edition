@@ -2736,6 +2736,49 @@ check(
         );
     }
 
+    // === World-expand step 1 obj 3 — bakeBuildingsForLandblock =========
+    // Source-text symbol-presence assertion for the per-LB buildings
+    // baker + ring driver introduced in world-expand step 1 Objective 3.
+    // Mirrors the Phase 7.1 / Phase 7.2 export checks below. Preserves
+    // the per-placement Group + per-part hinge wrapper tree (door
+    // rotation contract); the back-compat `buildHoltburgBuildings`
+    // becomes a one-line wrapper calling `bakeBuildingsRing(scene3d,
+    // 0xa9, 0xb4, 1, wasmExports)`. Browser-side per-LB idempotency +
+    // 169-LB ring assertions live in `capture_world_expand_e2e.cjs`
+    // (Objective 10).
+    try {
+        const buildingsPath = path.resolve(
+            __dirname,
+            "scene3d",
+            "buildings.js"
+        );
+        const present = fs.existsSync(buildingsPath);
+        const buildingsSrc = present
+            ? fs.readFileSync(buildingsPath, "utf8")
+            : "";
+        const hasBakeForLb =
+            /export\s+async\s+function\s+bakeBuildingsForLandblock\s*\(/.test(
+                buildingsSrc
+            );
+        const hasBakeRing =
+            /export\s+async\s+function\s+bakeBuildingsRing\s*\(/.test(
+                buildingsSrc
+            );
+        const hasBakedLbsSet = /buildingsBakedLbs/.test(buildingsSrc);
+        check(
+            "world-expand step 1 obj 3: buildings.js exports bakeBuildingsForLandblock + bakeBuildingsRing",
+            present && hasBakeForLb && hasBakeRing && hasBakedLbsSet,
+            `present=${present}, perLb=${hasBakeForLb}, ring=${hasBakeRing}, ` +
+                `bakedSet=${hasBakedLbsSet}`
+        );
+    } catch (e) {
+        check(
+            "world-expand step 1 obj 3: buildings.js exports bakeBuildingsForLandblock + bakeBuildingsRing",
+            false,
+            String(e?.message ?? e).slice(0, 160)
+        );
+    }
+
     // === Phase 7.2 — buildings + statics + material cache ==============
     // File-presence + export-shape regex check on the three new modules.
     // The browser-side "16 buildings + 100+ statics + materials.size > 0"
