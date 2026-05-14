@@ -70,12 +70,27 @@ the screenshots + this README.)
 
 ## Visual notes
 
-The renderer at `quality=high` uses the AC-DAT terrain texture atlas
-with Region 0x13 32-terrain-code mapping (grass / dirt / sand / stone /
-snow). The bright-blue and white-streaked patches across some LBs
-(visible in 01, 05, 06, 07) are the renderer's snow/stone terrain
-codes, not artifacts. Buildings are rendered as per-part GfxObj
-geometry via the Phase 6A fetchBuildingPlacement path; statics
-(barrels, signs, NPC anchors) appear as small dark sprites in the
-overview shots. Fog far is 2500 m per Objective 9, which is why the
-ring is visible from the elevated cameras in shots 1, 9, 10.
+These PNGs were re-shot 2026-05-14 against commit `53bcbdf` which
+fixed the `CanvasTexture.flipY=true` default for the terrain atlas +
+road overlay. The first round of screenshots (also at commit
+`8269e4b` / `dbea563` upstream) showed cyan/grey/black patches across
+most LBs — that was the bug, not retail data: the GPU was sampling
+slot `(5 - C/6) * 6 + C%6` instead of slot `C` for every terrain
+code, so Grassland (1) painted as DesolateLands (31, grey-brown),
+LushGrass (3) as the empty slot 33 (black), PatchyGrassland (9) as
+BlueIce (27, cyan), and SemiBarrenRock (14) as WaterDeepSea (20, dark
+blue).
+
+The corrected paint matches the WorldBuilder.Terminal oracle
+(`terrain_paint_ring.jsonl`): the 13×13 ring is 83 % grass (codes 1
+Grassland, 3 LushGrass, 9 PatchyGrassland), 9 % water (codes 16
+WaterRunning + 17 WaterStandingFresh), 7 % dirt/marsh/forestfloor
+(codes 4 / 5 / 21), 0.6 % rock (codes 6 / 13 / 14), and **0 %
+snow/ice/sand/packed-dirt** — none of those tile types appear in
+Aluvian Heartlands.
+
+Buildings render as per-part GfxObj geometry via the Phase 6A
+`fetchBuildingPlacement` path; statics (barrels, signs, NPC anchors)
+appear as small dark shapes in the overview shots. Fog far is 2500 m
+per Objective 9, which is why the ring extent is visible from the
+elevated cameras in shots 1, 9, 10.
