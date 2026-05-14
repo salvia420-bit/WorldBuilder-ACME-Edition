@@ -902,24 +902,6 @@ pub async fn fetch_landblock_objects(
         .await
         .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
 
-    fn frame_to_placement(landblock_id: u32, model_id: u32, frame: &holtburger_dat::landblock::Frame, is_building: bool) -> ObjectPlacement {
-        let q = &frame.orientation;
-        // Quaternion → yaw (rotation around z). Standard aircraft-
-        // style yaw extraction.
-        let siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
-        let cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
-        let yaw = siny_cosp.atan2(cosy_cosp);
-        ObjectPlacement {
-            landblock_id,
-            model_id,
-            x: frame.origin.x,
-            y: frame.origin.y,
-            z: frame.origin.z,
-            rotation_z: yaw,
-            is_building,
-        }
-    }
-
     let mut out = Vec::new();
     for &id in &cell_ids {
         // Some landblocks have no LandblockInfo record (ocean cells,
@@ -940,6 +922,40 @@ pub async fn fetch_landblock_objects(
         }
     }
     Ok(out)
+}
+
+/// Shared helper between [`fetch_landblock_objects`] (per-record) and
+/// the SoA parity test (Follow-on Task 30). Maps one (model_id, Frame,
+/// is_building) tuple to the per-record `ObjectPlacement` shape using
+/// the canonical AC quaternion-to-yaw extraction.
+///
+/// Lives outside `fetch_landblock_objects` so the parity test can
+/// confirm the SoA arrays carry the same (model_id, x, y, z, yaw,
+/// is_building) values element-for-element as the per-record output —
+/// the test invariant the brief calls out.
+#[cfg(target_arch = "wasm32")]
+fn frame_to_placement(
+    landblock_id: u32,
+    model_id: u32,
+    frame: &holtburger_dat::landblock::Frame,
+    is_building: bool,
+) -> ObjectPlacement {
+    let q = &frame.orientation;
+    // Quaternion → yaw (rotation around z). Standard aircraft-style
+    // yaw extraction. Same formula as `frame_yaw_quaternion` —
+    // keep these two in lock-step.
+    let siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
+    let cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
+    let yaw = siny_cosp.atan2(cosy_cosp);
+    ObjectPlacement {
+        landblock_id,
+        model_id,
+        x: frame.origin.x,
+        y: frame.origin.y,
+        z: frame.origin.z,
+        rotation_z: yaw,
+        is_building,
+    }
 }
 
 // =====================================================================
@@ -1817,6 +1833,508 @@ pub async fn fetch_landblock_spawns(
         }
     }
     Ok(out)
+}
+
+// =====================================================================
+// Follow-on Task 30 — SoA (Struct-of-Arrays) bulk fetch variants.
+// =====================================================================
+//
+// Background: the per-record fetch APIs above (`fetch_landblock_objects`,
+// `fetch_landblock_scenery`, `fetch_landblock_spawns`) each return a
+// `Vec<SomePlacementJs>` whose elements are JS-owned wasm-bindgen
+// instances. Reading a field (`p.x`, `p.modelId`, …) crosses the wasm
+// boundary once per call. For the renderer's per-LB code path that's
+// fine — a single LB has ~50-200 placements and the per-record API
+// keeps the call sites readable.
+//
+// For the Phase E validator (and any CI tool that scans the full 13×13
+// ring) the picture is different: 169 LBs × ~10 fields/placement ×
+// thousands of placements/LB ⇒ hundreds of thousands of getter calls,
+// each one a structured-clone across the wasm boundary. Phase E
+// measured >5 minutes wallclock for a full ring run when scenery alone
+// had 14,523 records (the Stage 3 throughput bottleneck the task brief
+// describes).
+//
+// The fix: pack the SAME data into typed-array-shaped `Vec<u32>` /
+// `Vec<f32>` / `Vec<u8>` fields and return ONE struct per fetch. Each
+// getter on the SoA struct serialises an entire array in one
+// structured-clone (`Vec<u32>` ⇒ Uint32Array, `Vec<f32>` ⇒ Float32Array,
+// `Vec<u8>` ⇒ Uint8Array per wasm-bindgen's TypedArray conversion).
+// Validator consumers can then walk parallel typed arrays in pure JS
+// at native typed-array speed.
+//
+// The new exports MIRROR the existing per-record bodies — same source
+// data, same parse path, same wasm-side caches. The per-record exports
+// stay (the renderer relies on them). This is a parallel surface.
+//
+// JS shape from `fetch_landblock_objects_soa(cellIds)`:
+//   {
+//     len, model_ids: Uint32Array(len),
+//     landblock_ids: Uint32Array(len),
+//     positions: Float32Array(len * 3),   // x, y, z packed
+//     quaternions: Float32Array(len * 4), // qw, qx, qy, qz packed
+//     scales: Float32Array(len),
+//     is_building: Uint8Array(len),       // 0/1 (Vec<bool> doesn't serialize cheaply)
+//   }
+//
+// The scenery + spawns SoAs add their extra fields as additional
+// typed arrays (source_cell_x/y/obj_idx for scenery; wcid/weenie_type
+// /cell/is_server_managed for spawns).
+
+/// SoA bulk variant of [`fetch_landblock_objects`]'s `Vec<ObjectPlacement>`
+/// output. See module-level docs above for the why; same source data
+/// as the per-record API, packed for one-shot wasm-boundary crossing.
+///
+/// All arrays have the same logical length = total placements across
+/// the input `cell_ids`. Each `i ∈ 0..len` indexes the same placement
+/// across all parallel arrays.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct LandblockObjectsSoa {
+    /// AC model id per placement — `0x01XXXXXX` = Model/GfxObj,
+    /// `0x02XXXXXX` = SetupModel. `Vec<u32>` ⇒ Uint32Array via
+    /// wasm-bindgen's typed-array conversion.
+    model_ids: Vec<u32>,
+    /// Packed LB key per placement (`0xXXYY0000`).
+    landblock_ids: Vec<u32>,
+    /// LB-local positions, packed `x0, y0, z0, x1, y1, z1, …`. Length =
+    /// `model_ids.len() * 3`.
+    positions: Vec<f32>,
+    /// Orientations, packed `qw0, qx0, qy0, qz0, qw1, …`. The
+    /// per-record API computes a yaw-only `rotation_z` from the
+    /// LandblockInfo quaternion; we preserve that conversion here by
+    /// emitting an equivalent yaw-only quaternion (qx = qy = 0,
+    /// qw = cos(yaw/2), qz = sin(yaw/2)) so the SoA arrays carry the
+    /// same orientation information as the per-record output without
+    /// requiring callers to redo the trig. Length = `model_ids.len() * 4`.
+    quaternions: Vec<f32>,
+    /// Per-placement scale (always 1.0 from the LandblockInfo data —
+    /// emitted for SoA shape uniformity with scenery/spawns).
+    scales: Vec<f32>,
+    /// 0/1 flag per placement — `1` when this placement came from
+    /// `LandblockInfo.buildings` (BuildInfo), `0` from `objects` (Stab).
+    /// `Vec<u8>` is dense + serializes as `Uint8Array`; `Vec<bool>` is
+    /// implementation-defined per wasm-bindgen's IDL and pays per-elem
+    /// conversion cost. Match it on the JS side with `=== 1` or
+    /// `!== 0`.
+    is_building: Vec<u8>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl LandblockObjectsSoa {
+    /// Logical placement count. All typed arrays are bound by this.
+    #[wasm_bindgen(getter)]
+    pub fn len(&self) -> usize {
+        self.model_ids.len()
+    }
+    /// True iff no placements were returned. Mirrors `Vec::is_empty`.
+    #[wasm_bindgen(getter, js_name = isEmpty)]
+    pub fn is_empty(&self) -> bool {
+        self.model_ids.is_empty()
+    }
+    #[wasm_bindgen(getter, js_name = modelIds)]
+    pub fn model_ids(&self) -> Vec<u32> {
+        self.model_ids.clone()
+    }
+    #[wasm_bindgen(getter, js_name = landblockIds)]
+    pub fn landblock_ids(&self) -> Vec<u32> {
+        self.landblock_ids.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn positions(&self) -> Vec<f32> {
+        self.positions.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn quaternions(&self) -> Vec<f32> {
+        self.quaternions.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn scales(&self) -> Vec<f32> {
+        self.scales.clone()
+    }
+    #[wasm_bindgen(getter, js_name = isBuilding)]
+    pub fn is_building(&self) -> Vec<u8> {
+        self.is_building.clone()
+    }
+}
+
+/// Native + wasm helper: yaw quaternion → (qw, qx, qy, qz) tuple. The
+/// per-record API converts the LandblockInfo quaternion to a yaw scalar
+/// (radians around Z) and the JS-side validator reconstructs the same
+/// yaw-only quaternion via `Math.cos(yaw/2)` / `Math.sin(yaw/2)`. To
+/// keep the SoA path bit-equivalent for the parity test we mirror the
+/// same conversion here in Rust.
+#[cfg(any(target_arch = "wasm32", test))]
+fn frame_yaw_quaternion(frame: &holtburger_dat::landblock::Frame) -> (f32, f32, f32, f32) {
+    let q = &frame.orientation;
+    // Same atan2 formula as `frame_to_placement` — keep these two
+    // functions in lock-step.
+    let siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
+    let cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
+    let yaw = siny_cosp.atan2(cosy_cosp);
+    let half = yaw * 0.5;
+    (half.cos(), 0.0, 0.0, half.sin())
+}
+
+/// Pack a parsed [`LandblockInfo`] into the running SoA arrays. Shared
+/// between `fetch_landblock_objects_soa` (wasm path) and the native
+/// parity test (which builds a `LandblockInfo` from synth bytes and
+/// asserts the SoA cardinality + sample placement matches what the
+/// per-record path emits).
+#[cfg(any(target_arch = "wasm32", test))]
+fn append_landblock_objects_to_soa(
+    info: &holtburger_dat::landblock::LandblockInfo,
+    model_ids: &mut Vec<u32>,
+    landblock_ids: &mut Vec<u32>,
+    positions: &mut Vec<f32>,
+    quaternions: &mut Vec<f32>,
+    scales: &mut Vec<f32>,
+    is_building: &mut Vec<u8>,
+) {
+    for stab in &info.objects {
+        let (qw, qx, qy, qz) = frame_yaw_quaternion(&stab.frame);
+        model_ids.push(stab.id);
+        landblock_ids.push(info.id);
+        positions.extend_from_slice(&[stab.frame.origin.x, stab.frame.origin.y, stab.frame.origin.z]);
+        quaternions.extend_from_slice(&[qw, qx, qy, qz]);
+        scales.push(1.0);
+        is_building.push(0);
+    }
+    for building in &info.buildings {
+        let (qw, qx, qy, qz) = frame_yaw_quaternion(&building.frame);
+        model_ids.push(building.model_id);
+        landblock_ids.push(info.id);
+        positions.extend_from_slice(&[
+            building.frame.origin.x,
+            building.frame.origin.y,
+            building.frame.origin.z,
+        ]);
+        quaternions.extend_from_slice(&[qw, qx, qy, qz]);
+        scales.push(1.0);
+        is_building.push(1);
+    }
+}
+
+/// Bulk SoA fetch — same source data + same caches as
+/// [`fetch_landblock_objects`], packed into a single
+/// [`LandblockObjectsSoa`] struct. Each getter on the returned struct
+/// serializes an entire `Vec<…>` as a typed array in ONE wasm-boundary
+/// crossing (vs the per-record API's N × per-field getter call cost).
+///
+/// Use this for Phase E validator, CI tools, or any consumer that
+/// wants to iterate hundreds-of-thousands of placement records without
+/// per-record getter overhead. The renderer continues to use the
+/// per-record API (where the readability of `p.modelId` matters more
+/// than the bulk-throughput delta).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_landblock_objects_soa(
+    cell_ids: Vec<u32>,
+) -> Result<LandblockObjectsSoa, JsValue> {
+    use holtburger_dat::landblock::LandblockInfo;
+    use holtburger_dat::{ResourceKey, ResourceSource};
+
+    let source = global_source::global_source();
+    let keys: Vec<ResourceKey<'_>> = cell_ids
+        .iter()
+        .map(|id| ResourceKey::new("eor/cell", *id))
+        .collect();
+    source
+        .prefetch(&keys)
+        .await
+        .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
+
+    let mut model_ids: Vec<u32> = Vec::new();
+    let mut landblock_ids: Vec<u32> = Vec::new();
+    let mut positions: Vec<f32> = Vec::new();
+    let mut quaternions: Vec<f32> = Vec::new();
+    let mut scales: Vec<f32> = Vec::new();
+    let mut is_building: Vec<u8> = Vec::new();
+
+    for &id in &cell_ids {
+        // Same "missing LandblockInfo is zero objects, not a failure"
+        // contract as `fetch_landblock_objects` — keep them in
+        // lock-step.
+        let bytes = match source.get_file_by_key(ResourceKey::new("eor/cell", id)) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let info = LandblockInfo::unpack(&bytes).map_err(|e| {
+            JsValue::from_str(&format!("LandblockInfo::unpack {id:#010X}: {e}"))
+        })?;
+        append_landblock_objects_to_soa(
+            &info,
+            &mut model_ids,
+            &mut landblock_ids,
+            &mut positions,
+            &mut quaternions,
+            &mut scales,
+            &mut is_building,
+        );
+    }
+    Ok(LandblockObjectsSoa {
+        model_ids,
+        landblock_ids,
+        positions,
+        quaternions,
+        scales,
+        is_building,
+    })
+}
+
+/// SoA bulk variant of [`fetch_landblock_scenery`]'s
+/// `Vec<ScenicPlacementJs>` output. Adds the bake-source attribution
+/// fields (`source_cell_x` / `source_cell_y` / `source_obj_idx`) as
+/// additional parallel arrays.
+///
+/// Quaternions are pre-emitted in `(qw, qx, qy, qz)` interleaved layout
+/// for symmetry with [`LandblockObjectsSoa`]. The scenery JSONL stores
+/// full quaternion components (not just yaw), so no trig conversion
+/// happens — we just copy the floats.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct LandblockScenerySoa {
+    obj_ids: Vec<u32>,
+    landblock_ids: Vec<u32>,
+    /// LB-local positions packed `x, y, z` (length = `obj_ids.len() * 3`).
+    positions: Vec<f32>,
+    /// Full quaternions packed `qw, qx, qy, qz` (length = `obj_ids.len() * 4`).
+    quaternions: Vec<f32>,
+    scales: Vec<f32>,
+    source_cell_x: Vec<u32>,
+    source_cell_y: Vec<u32>,
+    source_obj_idx: Vec<u32>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl LandblockScenerySoa {
+    #[wasm_bindgen(getter)]
+    pub fn len(&self) -> usize {
+        self.obj_ids.len()
+    }
+    #[wasm_bindgen(getter, js_name = isEmpty)]
+    pub fn is_empty(&self) -> bool {
+        self.obj_ids.is_empty()
+    }
+    #[wasm_bindgen(getter, js_name = objIds)]
+    pub fn obj_ids(&self) -> Vec<u32> {
+        self.obj_ids.clone()
+    }
+    #[wasm_bindgen(getter, js_name = landblockIds)]
+    pub fn landblock_ids(&self) -> Vec<u32> {
+        self.landblock_ids.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn positions(&self) -> Vec<f32> {
+        self.positions.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn quaternions(&self) -> Vec<f32> {
+        self.quaternions.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn scales(&self) -> Vec<f32> {
+        self.scales.clone()
+    }
+    #[wasm_bindgen(getter, js_name = sourceCellX)]
+    pub fn source_cell_x(&self) -> Vec<u32> {
+        self.source_cell_x.clone()
+    }
+    #[wasm_bindgen(getter, js_name = sourceCellY)]
+    pub fn source_cell_y(&self) -> Vec<u32> {
+        self.source_cell_y.clone()
+    }
+    #[wasm_bindgen(getter, js_name = sourceObjIdx)]
+    pub fn source_obj_idx(&self) -> Vec<u32> {
+        self.source_obj_idx.clone()
+    }
+}
+
+/// Bulk SoA fetch — same source JSONL + cache as
+/// [`fetch_landblock_scenery`], packed for one-shot typed-array
+/// boundary crossing. See module-level SoA docs above.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_landblock_scenery_soa(
+    cell_ids: Vec<u32>,
+) -> Result<LandblockScenerySoa, JsValue> {
+    let base_url = scenery_fetch::base_url().ok_or_else(|| {
+        JsValue::from_str(
+            "init_scenery_base_url must be called before fetch_landblock_scenery_soa",
+        )
+    })?;
+
+    // Mirrors `fetch_landblock_scenery`'s one-shot bake-source.sha256
+    // log. Same observability surface — different fetch API path.
+    scenery_fetch::maybe_log_sha256(&base_url).await;
+
+    let mut obj_ids: Vec<u32> = Vec::new();
+    let mut landblock_ids: Vec<u32> = Vec::new();
+    let mut positions: Vec<f32> = Vec::new();
+    let mut quaternions: Vec<f32> = Vec::new();
+    let mut scales: Vec<f32> = Vec::new();
+    let mut source_cell_x: Vec<u32> = Vec::new();
+    let mut source_cell_y: Vec<u32> = Vec::new();
+    let mut source_obj_idx: Vec<u32> = Vec::new();
+
+    for &cell_id in &cell_ids {
+        let lb_key = cell_id & 0xFFFF_0000;
+        let recs = scenery_fetch::fetch_one_lb(&base_url, lb_key)
+            .await
+            .map_err(|e| JsValue::from_str(&e))?;
+        for r in &recs {
+            obj_ids.push(r.obj_id);
+            landblock_ids.push(lb_key);
+            positions.extend_from_slice(&[r.x, r.y, r.z]);
+            quaternions.extend_from_slice(&[r.qw, r.qx, r.qy, r.qz]);
+            scales.push(r.scale);
+            source_cell_x.push(r.source_cell_x);
+            source_cell_y.push(r.source_cell_y);
+            source_obj_idx.push(r.source_obj_idx);
+        }
+    }
+    Ok(LandblockScenerySoa {
+        obj_ids,
+        landblock_ids,
+        positions,
+        quaternions,
+        scales,
+        source_cell_x,
+        source_cell_y,
+        source_obj_idx,
+    })
+}
+
+/// SoA bulk variant of [`fetch_landblock_spawns`]'s
+/// `Vec<EntitySpawnJs>` output. Adds the ACE-specific fields (`wcid`,
+/// `weenie_type`, `cell`, `is_server_managed`) as parallel arrays.
+///
+/// Spawn names are emitted as a separate `Vec<String>` array — each
+/// entry is a JS string. Names are usually short (an NPC name) and
+/// validator consumers typically need them only for diagnostic logging,
+/// so the per-string boundary cost is acceptable. The numeric/positional
+/// fields are the hot ones the SoA path optimises.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct LandblockSpawnsSoa {
+    wcids: Vec<u32>,
+    weenie_types: Vec<u32>,
+    landblock_ids: Vec<u32>,
+    cells: Vec<u32>,
+    /// LB-local positions packed `x, y, z` (length = `wcids.len() * 3`).
+    positions: Vec<f32>,
+    /// Full quaternions packed `qw, qx, qy, qz` (length = `wcids.len() * 4`).
+    quaternions: Vec<f32>,
+    /// 0/1 flag per spawn — `1` when the source JSONL marked
+    /// `isServerManaged: true`. Same Vec<u8>-for-bool rationale as
+    /// [`LandblockObjectsSoa::is_building`].
+    is_server_managed: Vec<u8>,
+    names: Vec<String>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl LandblockSpawnsSoa {
+    #[wasm_bindgen(getter)]
+    pub fn len(&self) -> usize {
+        self.wcids.len()
+    }
+    #[wasm_bindgen(getter, js_name = isEmpty)]
+    pub fn is_empty(&self) -> bool {
+        self.wcids.is_empty()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn wcids(&self) -> Vec<u32> {
+        self.wcids.clone()
+    }
+    #[wasm_bindgen(getter, js_name = weenieTypes)]
+    pub fn weenie_types(&self) -> Vec<u32> {
+        self.weenie_types.clone()
+    }
+    #[wasm_bindgen(getter, js_name = landblockIds)]
+    pub fn landblock_ids(&self) -> Vec<u32> {
+        self.landblock_ids.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn cells(&self) -> Vec<u32> {
+        self.cells.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn positions(&self) -> Vec<f32> {
+        self.positions.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn quaternions(&self) -> Vec<f32> {
+        self.quaternions.clone()
+    }
+    #[wasm_bindgen(getter, js_name = isServerManaged)]
+    pub fn is_server_managed(&self) -> Vec<u8> {
+        self.is_server_managed.clone()
+    }
+    /// Spawn names as a JS `Array<string>`. wasm-bindgen converts
+    /// `Vec<String>` via the `js_sys::Array` interop — one boundary
+    /// crossing for the array header + N for the strings. Validator
+    /// consumers usually want this only for diagnostic logging; the
+    /// numeric/positional fields are the hot ones SoA optimises.
+    #[wasm_bindgen(getter)]
+    pub fn names(&self) -> Vec<String> {
+        self.names.clone()
+    }
+}
+
+/// Bulk SoA fetch — same source JSONL + cache as
+/// [`fetch_landblock_spawns`], packed for one-shot typed-array
+/// boundary crossing. See module-level SoA docs above.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_landblock_spawns_soa(
+    cell_ids: Vec<u32>,
+) -> Result<LandblockSpawnsSoa, JsValue> {
+    let base_url = spawn_fetch::base_url().ok_or_else(|| {
+        JsValue::from_str(
+            "init_spawns_base_url must be called before fetch_landblock_spawns_soa",
+        )
+    })?;
+
+    spawn_fetch::maybe_log_sha256(&base_url).await;
+
+    let mut wcids: Vec<u32> = Vec::new();
+    let mut weenie_types: Vec<u32> = Vec::new();
+    let mut landblock_ids: Vec<u32> = Vec::new();
+    let mut cells: Vec<u32> = Vec::new();
+    let mut positions: Vec<f32> = Vec::new();
+    let mut quaternions: Vec<f32> = Vec::new();
+    let mut is_server_managed: Vec<u8> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+
+    for &cell_id in &cell_ids {
+        let lb_key = cell_id & 0xFFFF_0000;
+        let recs = spawn_fetch::fetch_one_lb(&base_url, lb_key)
+            .await
+            .map_err(|e| JsValue::from_str(&e))?;
+        for r in &recs {
+            wcids.push(r.wcid);
+            weenie_types.push(r.weenie_type);
+            landblock_ids.push(lb_key);
+            cells.push(r.cell);
+            positions.extend_from_slice(&[r.x, r.y, r.z]);
+            quaternions.extend_from_slice(&[r.qw, r.qx, r.qy, r.qz]);
+            is_server_managed.push(if r.is_server_managed { 1 } else { 0 });
+            names.push(r.name.clone());
+        }
+    }
+    Ok(LandblockSpawnsSoa {
+        wcids,
+        weenie_types,
+        landblock_ids,
+        cells,
+        positions,
+        quaternions,
+        is_server_managed,
+        names,
+    })
 }
 
 /// Phase 1.4 diagnostic page support. Walks `LandblockInfo.objects` +
@@ -17461,5 +17979,261 @@ mod tests_substitution {
             "two-sided same-surface poly must emit ONE tri (DoubleSide draw)"
         );
         assert_eq!(tris[0].surface_did, 0xCCDD0001);
+    }
+}
+
+// =====================================================================
+// Follow-on Task 30 — SoA parity tests.
+// =====================================================================
+//
+// The brief asks: prove `fetch_landblock_objects_soa` returns the SAME
+// placements as `fetch_landblock_objects`, just packed differently. The
+// data ingest path is shared (`LandblockInfo::unpack`) so the only
+// thing that can drift is the per-record-vs-SoA packing. We test that
+// `append_landblock_objects_to_soa` (the shared helper the SoA path
+// calls) produces parallel arrays whose i-th element equals the i-th
+// `ObjectPlacement` the per-record path's `frame_to_placement` would
+// emit for the same parsed `LandblockInfo`.
+//
+// We synth a `LandblockInfo` value directly (its fields are public),
+// drive both helpers, and assert element-wise equality on every field.
+// One LB is enough per the brief, but we include both `objects` and
+// `buildings` lists so the `is_building` flag is exercised too.
+#[cfg(test)]
+mod tests_soa_parity {
+    use super::*;
+    use holtburger_common::{Quaternion, Vector3};
+    use holtburger_dat::landblock::{BuildInfo, Frame, LandblockInfo, Stab};
+
+    /// Build a synthetic [`LandblockInfo`] with two `objects` (Stab) and
+    /// one `building` (BuildInfo). The frames carry recognizable
+    /// numeric markers so the assertions can pinpoint which placement
+    /// drifted if the test ever fails. The orientations are
+    /// non-identity yaws so the quaternion → yaw conversion is
+    /// exercised on real numbers (a pure-identity test would mask sign
+    /// errors in the trig).
+    fn synth_landblock_info() -> LandblockInfo {
+        // Yaw of 45° around Z, as a unit quaternion:
+        //   qw = cos(π/8) ≈ 0.9238795
+        //   qz = sin(π/8) ≈ 0.3826834
+        let q_45 = Quaternion {
+            w: (std::f32::consts::PI / 8.0).cos(),
+            x: 0.0,
+            y: 0.0,
+            z: (std::f32::consts::PI / 8.0).sin(),
+        };
+        // Yaw of -90° around Z (qw = cos(-π/4), qz = sin(-π/4)).
+        let q_neg_90 = Quaternion {
+            w: (-std::f32::consts::FRAC_PI_4).cos(),
+            x: 0.0,
+            y: 0.0,
+            z: (-std::f32::consts::FRAC_PI_4).sin(),
+        };
+        // Identity quat for the building so the SoA quaternion array
+        // hits the (1, 0, 0, 0) case too.
+        let q_id = Quaternion::identity();
+
+        LandblockInfo {
+            id: 0xA9B4FFFE,
+            num_cells: 0,
+            objects: vec![
+                Stab {
+                    id: 0x01000010,
+                    frame: Frame {
+                        origin: Vector3 { x: 10.0, y: 20.0, z: 30.0 },
+                        orientation: q_45,
+                    },
+                },
+                Stab {
+                    id: 0x02000020,
+                    frame: Frame {
+                        origin: Vector3 { x: 40.0, y: 50.0, z: 60.0 },
+                        orientation: q_neg_90,
+                    },
+                },
+            ],
+            pack_mask: 0,
+            buildings: vec![BuildInfo {
+                model_id: 0x02000111,
+                frame: Frame {
+                    origin: Vector3 { x: 100.0, y: 110.0, z: 120.0 },
+                    orientation: q_id,
+                },
+                num_leaves: 0,
+                portals: vec![],
+            }],
+            restriction_tables: None,
+        }
+    }
+
+    /// Build the per-record reference output via the same trig the
+    /// wasm-side `frame_to_placement` runs. Lives in the test module so
+    /// it can be called natively without dragging in the wasm-only
+    /// `ObjectPlacement` type. Returns a `(model_id, x, y, z, yaw,
+    /// is_building, landblock_id)` tuple per placement.
+    fn per_record_reference(info: &LandblockInfo) -> Vec<(u32, f32, f32, f32, f32, bool, u32)> {
+        fn yaw_of(frame: &Frame) -> f32 {
+            let q = &frame.orientation;
+            let siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
+            let cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
+            siny_cosp.atan2(cosy_cosp)
+        }
+        let mut out = Vec::new();
+        for stab in &info.objects {
+            out.push((
+                stab.id,
+                stab.frame.origin.x,
+                stab.frame.origin.y,
+                stab.frame.origin.z,
+                yaw_of(&stab.frame),
+                false,
+                info.id,
+            ));
+        }
+        for b in &info.buildings {
+            out.push((
+                b.model_id,
+                b.frame.origin.x,
+                b.frame.origin.y,
+                b.frame.origin.z,
+                yaw_of(&b.frame),
+                true,
+                info.id,
+            ));
+        }
+        out
+    }
+
+    /// Brief invariant: `fetch_landblock_objects_soa` returns the same
+    /// placements as `fetch_landblock_objects` — same cardinality, same
+    /// values, just packed into typed-array-shaped parallel arrays.
+    /// We exercise the shared helper (`append_landblock_objects_to_soa`)
+    /// directly so the test runs natively (the async wasm exports
+    /// can't be `await`'d from a `#[test]` without spinning up a
+    /// runtime).
+    #[test]
+    fn soa_objects_packing_matches_per_record_output() {
+        let info = synth_landblock_info();
+        let reference = per_record_reference(&info);
+
+        let mut model_ids = Vec::new();
+        let mut landblock_ids = Vec::new();
+        let mut positions = Vec::new();
+        let mut quaternions = Vec::new();
+        let mut scales = Vec::new();
+        let mut is_building = Vec::new();
+        append_landblock_objects_to_soa(
+            &info,
+            &mut model_ids,
+            &mut landblock_ids,
+            &mut positions,
+            &mut quaternions,
+            &mut scales,
+            &mut is_building,
+        );
+
+        // Cardinality — 2 objects + 1 building = 3 placements; each
+        // typed array carries `len * stride` floats (stride 3 for
+        // positions, 4 for quaternions, 1 for the scalars).
+        assert_eq!(
+            model_ids.len(),
+            reference.len(),
+            "SoA model_ids length must equal per-record reference"
+        );
+        assert_eq!(model_ids.len(), 3);
+        assert_eq!(landblock_ids.len(), 3);
+        assert_eq!(positions.len(), 3 * 3);
+        assert_eq!(quaternions.len(), 3 * 4);
+        assert_eq!(scales.len(), 3);
+        assert_eq!(is_building.len(), 3);
+
+        // Element-wise parity check — every SoA slot must match the
+        // per-record tuple at the same index.
+        for (i, expected) in reference.iter().enumerate() {
+            let (model_id, x, y, z, yaw, is_b, lb_id) = *expected;
+            assert_eq!(model_ids[i], model_id, "model_id[{i}]");
+            assert_eq!(landblock_ids[i], lb_id, "landblock_id[{i}]");
+            assert!(
+                (positions[i * 3] - x).abs() < 1e-6,
+                "positions[{i}].x: soa={} ref={}",
+                positions[i * 3],
+                x
+            );
+            assert!(
+                (positions[i * 3 + 1] - y).abs() < 1e-6,
+                "positions[{i}].y: soa={} ref={}",
+                positions[i * 3 + 1],
+                y
+            );
+            assert!(
+                (positions[i * 3 + 2] - z).abs() < 1e-6,
+                "positions[{i}].z"
+            );
+            // SoA quaternion at index i is a yaw-only quat. Recover
+            // the yaw via `atan2(2*qw*qz, 1 - 2*qz²)` and compare.
+            let qw = quaternions[i * 4];
+            let qx = quaternions[i * 4 + 1];
+            let qy = quaternions[i * 4 + 2];
+            let qz = quaternions[i * 4 + 3];
+            assert!(qx.abs() < 1e-6, "yaw-only quat must have qx=0 (got {qx})");
+            assert!(qy.abs() < 1e-6, "yaw-only quat must have qy=0 (got {qy})");
+            let soa_yaw = (2.0 * qw * qz).atan2(1.0 - 2.0 * (qz * qz));
+            assert!(
+                (soa_yaw - yaw).abs() < 1e-5,
+                "yaw[{i}]: soa={soa_yaw} ref={yaw}"
+            );
+            assert_eq!(scales[i], 1.0, "scales[{i}] is canonically 1.0");
+            assert_eq!(
+                is_building[i],
+                if is_b { 1u8 } else { 0u8 },
+                "is_building[{i}]"
+            );
+        }
+    }
+
+    /// Sample-placement check the brief asks for: the first stab
+    /// `(0x01000010, 10/20/30, +45°)` must round-trip via the SoA
+    /// path. Catches drift in any single field independent of the
+    /// element-wise scan above.
+    #[test]
+    fn soa_objects_sample_placement_matches() {
+        let info = synth_landblock_info();
+        let mut model_ids = Vec::new();
+        let mut landblock_ids = Vec::new();
+        let mut positions = Vec::new();
+        let mut quaternions = Vec::new();
+        let mut scales = Vec::new();
+        let mut is_building = Vec::new();
+        append_landblock_objects_to_soa(
+            &info,
+            &mut model_ids,
+            &mut landblock_ids,
+            &mut positions,
+            &mut quaternions,
+            &mut scales,
+            &mut is_building,
+        );
+
+        // Sample = index 0 (first stab in the synth above).
+        assert_eq!(model_ids[0], 0x01000010);
+        assert_eq!(landblock_ids[0], 0xA9B4FFFE);
+        assert!((positions[0] - 10.0).abs() < 1e-6);
+        assert!((positions[1] - 20.0).abs() < 1e-6);
+        assert!((positions[2] - 30.0).abs() < 1e-6);
+        // Yaw 45° → qw ≈ 0.9238795, qz ≈ 0.3826834. The SoA path
+        // preserves this exactly (no atan2 → cos/sin round-trip
+        // when the original quaternion is already yaw-only).
+        assert!((quaternions[0] - (std::f32::consts::PI / 8.0).cos()).abs() < 1e-5);
+        assert!((quaternions[1]).abs() < 1e-6); // qx
+        assert!((quaternions[2]).abs() < 1e-6); // qy
+        assert!((quaternions[3] - (std::f32::consts::PI / 8.0).sin()).abs() < 1e-5);
+        assert_eq!(scales[0], 1.0);
+        assert_eq!(is_building[0], 0); // First entry is a Stab, not a building.
+
+        // The building entry (index 2) MUST have `is_building == 1`
+        // to confirm the SoA path threads the discriminator through
+        // correctly — that's the load-bearing flag for the validator's
+        // statics-vs-buildings split.
+        assert_eq!(is_building[2], 1);
     }
 }

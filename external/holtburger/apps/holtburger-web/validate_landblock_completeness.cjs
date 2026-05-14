@@ -400,6 +400,12 @@ function hexU32(v) {
             `fetch_landblock_scenery=${typeof wasmMod.fetch_landblock_scenery}, ` +
             `fetch_landblock_spawns=${typeof wasmMod.fetch_landblock_spawns}`
         );
+        // Follow-on Task 30: SoA bulk exports for Stage 3 throughput.
+        out.steps.push(
+          `wasm: fetch_landblock_objects_soa=${typeof wasmMod.fetch_landblock_objects_soa}, ` +
+            `fetch_landblock_scenery_soa=${typeof wasmMod.fetch_landblock_scenery_soa}, ` +
+            `fetch_landblock_spawns_soa=${typeof wasmMod.fetch_landblock_spawns_soa}`
+        );
 
         const scene3d = await import("./scene3d/index.js");
         out.steps.push(`scene3d module: init3D=${typeof scene3d.init3D}`);
@@ -554,45 +560,80 @@ function hexU32(v) {
         // calls during stage 4 spawn injection hit the cache. The
         // wasm-side fetch loops are sequential internally, but the
         // three Promise.all'd top-level fetches run concurrently
-        // across the async runtime. We extract fields via wasm-
-        // bindgen getters which is the slow part (each placement
-        // record ≈ 10 cross-boundary calls × 14523 scenery = ~145k
-        // getter calls). Logging per-chunk progress so a stall is
-        // visible.
+        // across the async runtime.
+        //
+        // Follow-on Task 30 (Phase E throughput): switched from
+        // per-record `fetch_landblock_{objects,scenery,spawns}` to the
+        // SoA bulk variants `fetch_landblock_{...}_soa`. The per-record
+        // path was ~145k wasm-boundary getter calls (each placement
+        // record ≈ 10 cross-boundary calls × 14523 scenery records) and
+        // pegged Stage 3 at >5 min wallclock. The SoA path pulls each
+        // typed-array field (Uint32Array model_ids, Float32Array
+        // positions, …) in ONE structured-clone per array — 21 arrays
+        // total ⇒ <50 cross-boundary crossings for the whole ring.
+        // We iterate the parallel arrays in pure JS at native typed-
+        // array speed. The downstream diff logic (Stage 6) is
+        // UNCHANGED — only the data-ingest path differs.
+        //
+        // The per-record exports are still in the bundle and used by
+        // the renderer's per-LB code path (where readability of
+        // `p.modelId` matters more than bulk throughput). The SoA
+        // variants are the validator/CI-friendly parallel API.
         const tFetch = performance.now();
         out.steps = [];
-        const fetchObjects = wasmMod
-          .fetch_landblock_objects(cellU32All)
+        const useSoa =
+          typeof wasmMod.fetch_landblock_objects_soa === "function" &&
+          typeof wasmMod.fetch_landblock_scenery_soa === "function" &&
+          typeof wasmMod.fetch_landblock_spawns_soa === "function";
+        out.steps.push(`SoA bulk fetch path: ${useSoa ? "enabled" : "FALLBACK to per-record"}`);
+
+        // Fallback to per-record getters when the SoA exports aren't
+        // available (older bundle, hand-rolled wasm, etc.) — keeps the
+        // validator usable across bundle revisions even if it's slower.
+        const fetchObjects = (
+          useSoa
+            ? wasmMod.fetch_landblock_objects_soa(cellU32All)
+            : wasmMod.fetch_landblock_objects(cellU32All)
+        )
           .then((objects) => {
             const dt = ((performance.now() - tFetch) | 0);
-            out.steps.push(`fetch_landblock_objects: ${objects.length} placements in ${dt}ms`);
+            const n = useSoa ? objects.len : objects.length;
+            out.steps.push(`fetch_landblock_objects${useSoa ? "_soa" : ""}: ${n} placements in ${dt}ms`);
             return objects;
           })
           .catch((e) => {
-            out.fetchErrors.push(`fetch_landblock_objects: ${e?.message ?? e}`);
-            return [];
+            out.fetchErrors.push(`fetch_landblock_objects${useSoa ? "_soa" : ""}: ${e?.message ?? e}`);
+            return null;
           });
-        const fetchScenery = wasmMod
-          .fetch_landblock_scenery(cellU32All)
+        const fetchScenery = (
+          useSoa
+            ? wasmMod.fetch_landblock_scenery_soa(cellU32All)
+            : wasmMod.fetch_landblock_scenery(cellU32All)
+        )
           .then((scenery) => {
             const dt = ((performance.now() - tFetch) | 0);
-            out.steps.push(`fetch_landblock_scenery: ${scenery.length} placements in ${dt}ms`);
+            const n = useSoa ? scenery.len : scenery.length;
+            out.steps.push(`fetch_landblock_scenery${useSoa ? "_soa" : ""}: ${n} placements in ${dt}ms`);
             return scenery;
           })
           .catch((e) => {
-            out.fetchErrors.push(`fetch_landblock_scenery: ${e?.message ?? e}`);
-            return [];
+            out.fetchErrors.push(`fetch_landblock_scenery${useSoa ? "_soa" : ""}: ${e?.message ?? e}`);
+            return null;
           });
-        const fetchSpawns = wasmMod
-          .fetch_landblock_spawns(cellU32All)
+        const fetchSpawns = (
+          useSoa
+            ? wasmMod.fetch_landblock_spawns_soa(cellU32All)
+            : wasmMod.fetch_landblock_spawns(cellU32All)
+        )
           .then((spawns) => {
             const dt = ((performance.now() - tFetch) | 0);
-            out.steps.push(`fetch_landblock_spawns: ${spawns.length} placements in ${dt}ms`);
+            const n = useSoa ? spawns.len : spawns.length;
+            out.steps.push(`fetch_landblock_spawns${useSoa ? "_soa" : ""}: ${n} placements in ${dt}ms`);
             return spawns;
           })
           .catch((e) => {
-            out.fetchErrors.push(`fetch_landblock_spawns: ${e?.message ?? e}`);
-            return [];
+            out.fetchErrors.push(`fetch_landblock_spawns${useSoa ? "_soa" : ""}: ${e?.message ?? e}`);
+            return null;
           });
 
         const [objects, scenery, spawns] = await Promise.all([
@@ -603,79 +644,196 @@ function hexU32(v) {
         const tExtract = performance.now();
 
         // 1) DAT explicit (LandblockInfo objects + buildings).
-        for (const p of objects) {
-          const lbId = p.landblockId >>> 0;
-          const lbX = (lbId >>> 24) & 0xff;
-          const lbY = (lbId >>> 16) & 0xff;
-          const wx = lbX * 192.0 + p.x;
-          const wy = lbY * 192.0 + p.y;
-          const rec = {
-            source: p.isBuilding ? "buildings" : "statics",
-            modelOrWcid: p.modelId >>> 0,
-            lbX, lbY,
-            x: wx, y: wy, z: p.z,
-            qw: Math.cos((p.rotationZ ?? 0) / 2),
-            qx: 0, qy: 0,
-            qz: Math.sin((p.rotationZ ?? 0) / 2),
-            scale: 1,
-            isBuilding: p.isBuilding,
-            originSource: "landblockinfo",
-          };
-          if (p.isBuilding) out.buildings.push(rec);
-          else out.statics.push(rec);
-          if (typeof p.free === "function") p.free();
+        if (useSoa && objects) {
+          // One structured-clone per typed array — 6 boundary crossings
+          // for the entire ring (was len*7 in the per-record path).
+          // Parallel arrays: i-th element across all arrays is one
+          // placement (positions stride 3, quaternions stride 4).
+          const modelIds = objects.modelIds;
+          const landblockIds = objects.landblockIds;
+          const positions = objects.positions;
+          const quaternions = objects.quaternions;
+          const isBuilding = objects.isBuilding;
+          const n = objects.len;
+          for (let i = 0; i < n; i++) {
+            const lbId = landblockIds[i] >>> 0;
+            const lbX = (lbId >>> 24) & 0xff;
+            const lbY = (lbId >>> 16) & 0xff;
+            const px = positions[i * 3];
+            const py = positions[i * 3 + 1];
+            const pz = positions[i * 3 + 2];
+            const wx = lbX * 192.0 + px;
+            const wy = lbY * 192.0 + py;
+            const isB = isBuilding[i] === 1;
+            const rec = {
+              source: isB ? "buildings" : "statics",
+              modelOrWcid: modelIds[i] >>> 0,
+              lbX, lbY,
+              x: wx, y: wy, z: pz,
+              // SoA quaternions are already (qw, qx, qy, qz) — no
+              // trig reconstruction needed (the per-record path used
+              // cos/sin from yaw_rad; SoA emits the same yaw-only
+              // quaternion shape directly).
+              qw: quaternions[i * 4],
+              qx: quaternions[i * 4 + 1],
+              qy: quaternions[i * 4 + 2],
+              qz: quaternions[i * 4 + 3],
+              scale: 1,
+              isBuilding: isB,
+              originSource: "landblockinfo",
+            };
+            if (isB) out.buildings.push(rec);
+            else out.statics.push(rec);
+          }
+          if (typeof objects.free === "function") objects.free();
+          out.steps.push(
+            `extract objects (soa): ${n} in ${(performance.now() - tExtract) | 0}ms`
+          );
+        } else if (objects) {
+          // Per-record fallback path — unchanged from the original.
+          for (const p of objects) {
+            const lbId = p.landblockId >>> 0;
+            const lbX = (lbId >>> 24) & 0xff;
+            const lbY = (lbId >>> 16) & 0xff;
+            const wx = lbX * 192.0 + p.x;
+            const wy = lbY * 192.0 + p.y;
+            const rec = {
+              source: p.isBuilding ? "buildings" : "statics",
+              modelOrWcid: p.modelId >>> 0,
+              lbX, lbY,
+              x: wx, y: wy, z: p.z,
+              qw: Math.cos((p.rotationZ ?? 0) / 2),
+              qx: 0, qy: 0,
+              qz: Math.sin((p.rotationZ ?? 0) / 2),
+              scale: 1,
+              isBuilding: p.isBuilding,
+              originSource: "landblockinfo",
+            };
+            if (p.isBuilding) out.buildings.push(rec);
+            else out.statics.push(rec);
+            if (typeof p.free === "function") p.free();
+          }
+          out.steps.push(
+            `extract objects: ${objects.length} in ${(performance.now() - tExtract) | 0}ms`
+          );
         }
-        out.steps.push(
-          `extract objects: ${objects.length} in ${(performance.now() - tExtract) | 0}ms`
-        );
         const tScenery = performance.now();
         // 2) DAT baked (scenery JSONL).
-        for (const p of scenery) {
-          const lbId = p.landblockId >>> 0;
-          const lbX = (lbId >>> 24) & 0xff;
-          const lbY = (lbId >>> 16) & 0xff;
-          const wx = lbX * 192.0 + p.x;
-          const wy = lbY * 192.0 + p.y;
-          out.scenery.push({
-            source: "statics",
-            modelOrWcid: p.objId >>> 0,
-            lbX, lbY,
-            x: wx, y: wy, z: p.z,
-            qw: p.qw, qx: p.qx, qy: p.qy, qz: p.qz,
-            scale: p.scale,
-            isBuilding: false,
-            originSource: "scenery",
-          });
-          if (typeof p.free === "function") p.free();
+        if (useSoa && scenery) {
+          const objIds = scenery.objIds;
+          const landblockIds = scenery.landblockIds;
+          const positions = scenery.positions;
+          const quaternions = scenery.quaternions;
+          const scales = scenery.scales;
+          const n = scenery.len;
+          for (let i = 0; i < n; i++) {
+            const lbId = landblockIds[i] >>> 0;
+            const lbX = (lbId >>> 24) & 0xff;
+            const lbY = (lbId >>> 16) & 0xff;
+            const wx = lbX * 192.0 + positions[i * 3];
+            const wy = lbY * 192.0 + positions[i * 3 + 1];
+            out.scenery.push({
+              source: "statics",
+              modelOrWcid: objIds[i] >>> 0,
+              lbX, lbY,
+              x: wx, y: wy, z: positions[i * 3 + 2],
+              qw: quaternions[i * 4],
+              qx: quaternions[i * 4 + 1],
+              qy: quaternions[i * 4 + 2],
+              qz: quaternions[i * 4 + 3],
+              scale: scales[i],
+              isBuilding: false,
+              originSource: "scenery",
+            });
+          }
+          if (typeof scenery.free === "function") scenery.free();
+          out.steps.push(
+            `extract scenery (soa): ${n} in ${(performance.now() - tScenery) | 0}ms`
+          );
+        } else if (scenery) {
+          for (const p of scenery) {
+            const lbId = p.landblockId >>> 0;
+            const lbX = (lbId >>> 24) & 0xff;
+            const lbY = (lbId >>> 16) & 0xff;
+            const wx = lbX * 192.0 + p.x;
+            const wy = lbY * 192.0 + p.y;
+            out.scenery.push({
+              source: "statics",
+              modelOrWcid: p.objId >>> 0,
+              lbX, lbY,
+              x: wx, y: wy, z: p.z,
+              qw: p.qw, qx: p.qx, qy: p.qy, qz: p.qz,
+              scale: p.scale,
+              isBuilding: false,
+              originSource: "scenery",
+            });
+            if (typeof p.free === "function") p.free();
+          }
+          out.steps.push(
+            `extract scenery: ${scenery.length} in ${(performance.now() - tScenery) | 0}ms`
+          );
         }
-        out.steps.push(
-          `extract scenery: ${scenery.length} in ${(performance.now() - tScenery) | 0}ms`
-        );
         const tSpawns = performance.now();
         // 3) ACE spawns (synthetic JSONL).
-        for (const p of spawns) {
-          const lbId = p.landblockId >>> 0;
-          const lbX = (lbId >>> 24) & 0xff;
-          const lbY = (lbId >>> 16) & 0xff;
-          const wx = lbX * 192.0 + p.x;
-          const wy = lbY * 192.0 + p.y;
-          out.spawns.push({
-            source: "entities",
-            modelOrWcid: p.wcid >>> 0,
-            lbX, lbY,
-            x: wx, y: wy, z: p.z,
-            qw: p.qw, qx: p.qx, qy: p.qy, qz: p.qz,
-            scale: 1,
-            isBuilding: false,
-            originSource: "spawns",
-            name: p.name,
-            isServerManaged: p.isServerManaged,
-          });
-          if (typeof p.free === "function") p.free();
+        if (useSoa && spawns) {
+          const wcids = spawns.wcids;
+          const landblockIds = spawns.landblockIds;
+          const positions = spawns.positions;
+          const quaternions = spawns.quaternions;
+          const isServerManaged = spawns.isServerManaged;
+          const names = spawns.names; // JS Array<string>
+          const n = spawns.len;
+          for (let i = 0; i < n; i++) {
+            const lbId = landblockIds[i] >>> 0;
+            const lbX = (lbId >>> 24) & 0xff;
+            const lbY = (lbId >>> 16) & 0xff;
+            const wx = lbX * 192.0 + positions[i * 3];
+            const wy = lbY * 192.0 + positions[i * 3 + 1];
+            out.spawns.push({
+              source: "entities",
+              modelOrWcid: wcids[i] >>> 0,
+              lbX, lbY,
+              x: wx, y: wy, z: positions[i * 3 + 2],
+              qw: quaternions[i * 4],
+              qx: quaternions[i * 4 + 1],
+              qy: quaternions[i * 4 + 2],
+              qz: quaternions[i * 4 + 3],
+              scale: 1,
+              isBuilding: false,
+              originSource: "spawns",
+              name: names[i],
+              isServerManaged: isServerManaged[i] === 1,
+            });
+          }
+          if (typeof spawns.free === "function") spawns.free();
+          out.steps.push(
+            `extract spawns (soa): ${n} in ${(performance.now() - tSpawns) | 0}ms`
+          );
+        } else if (spawns) {
+          for (const p of spawns) {
+            const lbId = p.landblockId >>> 0;
+            const lbX = (lbId >>> 24) & 0xff;
+            const lbY = (lbId >>> 16) & 0xff;
+            const wx = lbX * 192.0 + p.x;
+            const wy = lbY * 192.0 + p.y;
+            out.spawns.push({
+              source: "entities",
+              modelOrWcid: p.wcid >>> 0,
+              lbX, lbY,
+              x: wx, y: wy, z: p.z,
+              qw: p.qw, qx: p.qx, qy: p.qy, qz: p.qz,
+              scale: 1,
+              isBuilding: false,
+              originSource: "spawns",
+              name: p.name,
+              isServerManaged: p.isServerManaged,
+            });
+            if (typeof p.free === "function") p.free();
+          }
+          out.steps.push(
+            `extract spawns: ${spawns.length} in ${(performance.now() - tSpawns) | 0}ms`
+          );
         }
-        out.steps.push(
-          `extract spawns: ${spawns.length} in ${(performance.now() - tSpawns) | 0}ms`
-        );
 
         out.elapsedMs = (performance.now() - tStart) | 0;
         return out;

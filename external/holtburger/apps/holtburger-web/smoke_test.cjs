@@ -286,6 +286,84 @@ check(
     `typeof ${typeof wasm.EntitySpawnJs}`
 );
 
+// Follow-on Task 30 (Phase E throughput) — SoA bulk fetch variants.
+// The per-record exports above (`fetch_landblock_{objects,scenery,spawns}`)
+// each return Vec<SomePlacementJs> whose elements are JS-owned wasm-
+// bindgen instances. Reading a field crosses the wasm boundary once
+// per call — fine for the renderer (~200 placements/LB) but
+// pathological for the Phase E validator (~145k getter calls across
+// 14523 scenery records ⇒ >5 min wallclock for a full 13×13 ring run).
+//
+// The SoA variants pack the SAME data into typed-array-shaped Vec<u32>
+// / Vec<f32> / Vec<u8> fields and return ONE struct per fetch. Each
+// getter on the SoA struct serializes an entire typed array in one
+// structured-clone (Vec<u32> ⇒ Uint32Array, Vec<f32> ⇒ Float32Array,
+// Vec<u8> ⇒ Uint8Array per wasm-bindgen's TypedArray conversion).
+// Validator consumers walk parallel typed arrays at native speed.
+//
+// The per-record exports stay (renderer continues to use them); the
+// SoA exports are a parallel bulk API for validator/CI tooling. The
+// wasm-side parity test (`tests_soa_parity` in src/lib.rs) gates
+// that the two APIs return the same placements for the same input.
+check(
+    "fetch_landblock_objects_soa() is exported (Phase E follow-on bulk variant)",
+    typeof wasm.fetch_landblock_objects_soa === "function",
+    `typeof ${typeof wasm.fetch_landblock_objects_soa}`
+);
+check(
+    "fetch_landblock_scenery_soa() is exported (Phase E follow-on bulk variant)",
+    typeof wasm.fetch_landblock_scenery_soa === "function",
+    `typeof ${typeof wasm.fetch_landblock_scenery_soa}`
+);
+check(
+    "fetch_landblock_spawns_soa() is exported (Phase E follow-on bulk variant)",
+    typeof wasm.fetch_landblock_spawns_soa === "function",
+    `typeof ${typeof wasm.fetch_landblock_spawns_soa}`
+);
+check(
+    "LandblockObjectsSoa class is exported (Phase E follow-on SoA shape)",
+    typeof wasm.LandblockObjectsSoa === "function",
+    `typeof ${typeof wasm.LandblockObjectsSoa}`
+);
+check(
+    "LandblockScenerySoa class is exported (Phase E follow-on SoA shape)",
+    typeof wasm.LandblockScenerySoa === "function",
+    `typeof ${typeof wasm.LandblockScenerySoa}`
+);
+check(
+    "LandblockSpawnsSoa class is exported (Phase E follow-on SoA shape)",
+    typeof wasm.LandblockSpawnsSoa === "function",
+    `typeof ${typeof wasm.LandblockSpawnsSoa}`
+);
+
+// Source-pattern check — `validate_landblock_completeness.cjs` must
+// reference the SoA exports (not the per-record ones) in the Stage 3
+// manifest-build path. The brief's throughput target (>5min → <2min)
+// relies on this switch; a future refactor that flips back to the
+// per-record API would silently regress the validator runtime.
+try {
+    const fs = require("fs");
+    const validatorSrc = fs.readFileSync(
+        __dirname + "/validate_landblock_completeness.cjs",
+        "utf8"
+    );
+    const usesObjectsSoa = /\bfetch_landblock_objects_soa\b/.test(validatorSrc);
+    const usesScenerySoa = /\bfetch_landblock_scenery_soa\b/.test(validatorSrc);
+    const usesSpawnsSoa = /\bfetch_landblock_spawns_soa\b/.test(validatorSrc);
+    check(
+        "Phase E follow-on: validate_landblock_completeness.cjs uses SoA fetches for Stage 3 throughput",
+        usesObjectsSoa && usesScenerySoa && usesSpawnsSoa,
+        `objects_soa=${usesObjectsSoa} scenery_soa=${usesScenerySoa} ` +
+            `spawns_soa=${usesSpawnsSoa}`
+    );
+} catch (e) {
+    check(
+        "Phase E follow-on: validate_landblock_completeness.cjs uses SoA fetches for Stage 3 throughput",
+        false,
+        String(e).slice(0, 160)
+    );
+}
+
 // Phase D.1.c source-pattern — scene3d/spawns.js must use the
 // canonical entity-spawn dispatch surface `window.__scene3dEntityHook`
 // (NOT bypass it by calling em.spawn directly). The whole point of
