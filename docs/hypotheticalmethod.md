@@ -1,6 +1,6 @@
 # hypotheticalmethod.md
 
-A grounding doc for the renderer-completeness work. Status: **draft, pending verification.** Once the user verifies the method looks right, this gets rewritten as the canonical method doc and used to finish all of Dereth.
+A grounding doc for the renderer-completeness work. Status: **historical — superseded by [`world-completeness-method.md`](world-completeness-method.md) once the method shipped end-to-end on 2026-05-14.** This file is retained as the original planning record; the canonical reference for what the method actually does + how to use it lives in the as-shipped doc.
 
 ## The problem
 
