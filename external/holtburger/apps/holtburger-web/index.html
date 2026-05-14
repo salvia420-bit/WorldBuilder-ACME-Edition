@@ -4192,6 +4192,41 @@ void main() {
           if (lbId !== 0 && window.liveScene3d?.loadEnvCellsForLandblock) {
             window.liveScene3d.loadEnvCellsForLandblock(lbId);
           }
+          // World-expand step 1 Objective 6 (2026-05-14): mirror the
+          // wasm-side terrain/building/cell prefetch ring for the 3D
+          // mesh layers. Each baker is idempotent via its respective
+          // `Set<lbKey>` (terrainBakedLbs / buildingsBakedLbs /
+          // staticsBakedLbs) so walking back into an already-baked LB
+          // is an O(1) hash hit. Without these hooks the 3D renderer
+          // stays clamped to the initial ring (13×13 at init via
+          // Objective 8) and the player sees void tiles when stepping
+          // outside it. Scope split matches the wasm-side hooks:
+          // terrain warrants a 3×3 ring (LOD + edge stitching);
+          // buildings + statics are 1-LB (no cross-LB dependency).
+          if (lbId !== 0 && window.liveScene3d?.loadTerrainForLandblock) {
+            const cx = (lbId >>> 24) & 0xff;
+            const cy = (lbId >>> 16) & 0xff;
+            for (let dy = -1; dy <= 1; dy += 1) {
+              for (let dx = -1; dx <= 1; dx += 1) {
+                const nx = cx + dx;
+                const ny = cy + dy;
+                if (nx < 0 || nx > 0xff || ny < 0 || ny > 0xff) continue;
+                // Fire-and-forget; per-LB baker is idempotent via
+                // terrainBakedLbs.
+                window.liveScene3d.loadTerrainForLandblock(nx, ny);
+              }
+            }
+          }
+          if (lbId !== 0 && window.liveScene3d?.loadBuildingsForLandblock) {
+            const cx = (lbId >>> 24) & 0xff;
+            const cy = (lbId >>> 16) & 0xff;
+            window.liveScene3d.loadBuildingsForLandblock(cx, cy);
+          }
+          if (lbId !== 0 && window.liveScene3d?.loadStaticsForLandblock) {
+            const cx = (lbId >>> 24) & 0xff;
+            const cy = (lbId >>> 16) & 0xff;
+            window.liveScene3d.loadStaticsForLandblock(cx, cy);
+          }
           // 2026-05-09 follow-up (open-world step 2/3 + 3/3): paint
           // building meshes + non-building object sprites for the
           // new LB so the player sees landmarks, not just textured
