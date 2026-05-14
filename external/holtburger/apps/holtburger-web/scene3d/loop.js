@@ -190,8 +190,49 @@ function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
  *      The async ones get scheduled on a microtask and apply on the
  *      next tick.
  */
+/**
+ * Phase 2.2 — push the shared wall-clock seconds onto every terrain
+ * ShaderMaterial's `uTime` uniform. Single time source means matched
+ * wave motion across LB seams (water animations stay phase-locked at
+ * neighbouring landblock boundaries). Driven by `performance.now()`
+ * (or `Date.now()` fallback) so the displacement is consistent across
+ * tab-throttled rAF deltas.
+ *
+ * No-op when the registry is empty (pre-buildHoltburgTerrain) or when
+ * subdivLevel < 2 (the material was built with uDisplacementEnabled=0
+ * already, but pushing uTime is still safe — non-water cells gate on
+ * the same uniform inside the shader).
+ */
+function tickTerrainUTime(scene3d) {
+  if (!scene3d?.terrainMaterials || scene3d.terrainMaterials.length === 0) {
+    return;
+  }
+  const tSec =
+    (typeof performance !== "undefined" && performance.now)
+      ? performance.now() * 0.001
+      : Date.now() * 0.001;
+  for (const mat of scene3d.terrainMaterials) {
+    if (mat?.uniforms?.uTime) {
+      mat.uniforms.uTime.value = tSec;
+    }
+  }
+}
+
 export function tickPerFrame(scene3d, sessionHandle, dt) {
   tickCellVisibility3D(scene3d, sessionHandle);
+  // Phase 2.2 — water/lava vertex displacement clock. Runs FIRST so the
+  // displacement is current before any code reads terrain positions
+  // this frame (e.g. nameplate projection sampling terrain Y). Wrapped
+  // in try/catch + one-shot warn so a thrown push never kills the tick.
+  try {
+    tickTerrainUTime(scene3d);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    if (!scene3d._terrainUTimeTickWarned) {
+      scene3d._terrainUTimeTickWarned = true;
+      console.warn("[phase2.2] tickTerrainUTime threw:", e);
+    }
+  }
   // Phase 7.6 — lighting tick AFTER cell visibility so it reads the
   // freshly-flipped indoor/outdoor state on the same frame. Wraps in
   // try/catch so a thrown isCurrentCellIndoor() never kills the tick.
