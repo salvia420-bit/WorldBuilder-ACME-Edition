@@ -4154,6 +4154,82 @@ check(
         );
     }
 
+    // === World-expand step 1 obj 10 — capture_world_expand_e2e.cjs ====
+    // Source-pattern check that the capture script lands at the canonical
+    // path and contains the key assertions the brief calls for. The
+    // runtime end-to-end assertion lives in the capture itself (run
+    // with `node capture_world_expand_e2e.cjs`); this smoke check is
+    // the merge-gate floor that prevents the capture from being
+    // accidentally removed or gutted in a future commit.
+    //
+    // What we look for:
+    //   - File exists at apps/holtburger-web/capture_world_expand_e2e.cjs
+    //   - Loads the WorldBuilder.Terminal oracle from
+    //     /mnt/wbterminal1/tmp/claude-scratch/world-expand/ring_13x13_inventory.jsonl
+    //   - Asserts the 169-LB ring count (EXPECTED_RING_LB_COUNT = 169
+    //     OR equivalent literal `169` in an assertion targeting
+    //     `terrainGroup.children.length`).
+    //   - Probes liveScene3d.{terrain,buildings,statics}BakedLbs.size
+    //     (even though the renderer-gap means these may FAIL — see the
+    //     capture comments for the field-aliasing follow-on).
+    //   - Asserts the oracle's `766` total placement count.
+    //   - Includes a lazy walk-out drill (loadXForLandblock for an LB
+    //     outside the ring + idempotency re-fire).
+    //   - Drills 0xA9B0 (South Holtburg Outpost) per the brief.
+    //   - Asserts fog.far >= 2500 (Objective 9 floor).
+    try {
+        const fs = require("fs");
+        const capturePath = __dirname + "/capture_world_expand_e2e.cjs";
+        const present = fs.existsSync(capturePath);
+        const src = present ? fs.readFileSync(capturePath, "utf8") : "";
+        const hasOracleLoad =
+            /ring_13x13_inventory\.jsonl/.test(src) &&
+            /list-objects/.test(src);
+        const hasRingCount = /\b169\b/.test(src);
+        const hasTerrainBakedLbsAssert =
+            /liveScene3d\.terrainBakedLbs|terrainBakedLbsSize/.test(src);
+        const hasBuildingsBakedLbsAssert =
+            /liveScene3d\.buildingsBakedLbs|buildingsBakedLbsSize/.test(src);
+        const hasStaticsBakedLbsAssert =
+            /liveScene3d\.staticsBakedLbs|staticsBakedLbsSize/.test(src);
+        const hasOraclePlacementCount = /\b766\b/.test(src);
+        const hasLazyWalkOut =
+            /loadTerrainForLandblock|loadBuildingsForLandblock|loadStaticsForLandblock/.test(
+                src
+            ) && /idempotency/i.test(src);
+        const hasA9b0Drill = /0xA9B0|0xa9b0/.test(src);
+        const hasFogFarCheck = /fog\.far|fogFar/.test(src) && /2500/.test(src);
+        check(
+            "World-expand step 1 Objective 10: capture_world_expand_e2e.cjs exists + asserts oracle parity (169 LBs, 766 placements, lazy walk-out, 0xA9B0 drill, fog.far >= 2500)",
+            present &&
+                hasOracleLoad &&
+                hasRingCount &&
+                hasTerrainBakedLbsAssert &&
+                hasBuildingsBakedLbsAssert &&
+                hasStaticsBakedLbsAssert &&
+                hasOraclePlacementCount &&
+                hasLazyWalkOut &&
+                hasA9b0Drill &&
+                hasFogFarCheck,
+            `present=${present} ` +
+                `oracleLoad=${hasOracleLoad} ` +
+                `ringCount=${hasRingCount} ` +
+                `terrainBakedLbs=${hasTerrainBakedLbsAssert} ` +
+                `buildingsBakedLbs=${hasBuildingsBakedLbsAssert} ` +
+                `staticsBakedLbs=${hasStaticsBakedLbsAssert} ` +
+                `oraclePlacements=${hasOraclePlacementCount} ` +
+                `lazyWalkOut=${hasLazyWalkOut} ` +
+                `a9b0Drill=${hasA9b0Drill} ` +
+                `fogFar=${hasFogFarCheck}`
+        );
+    } catch (e) {
+        check(
+            "World-expand step 1 Objective 10: capture_world_expand_e2e.cjs exists + asserts oracle parity",
+            false,
+            String(e?.message ?? e).slice(0, 160)
+        );
+    }
+
     // === Workstream Sky-D (2026-05-11) — sky dome + celestial bodies =
     // Verifies `scene3d/sky_dome.js` is present, exports `SkyDome` class,
     // references the expected shape (gradient ShaderMaterial uniforms +
