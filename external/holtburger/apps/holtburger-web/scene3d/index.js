@@ -920,6 +920,21 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     cellContainers3d: scene3dForBuilders.cellContainers3d,
     envCellLoadedLbs: scene3dForBuilders.envCellLoadedLbs,
     envCellsLoaded,
+    // World-expand step 1 follow-on (2026-05-14): alias the per-LB
+    // baker idempotency Sets + once-per-ring opts bags from the build
+    // stub onto the live object so `liveScene3d.loadTerrainForLandblock`
+    // / `loadBuildingsForLandblock` / `loadStaticsForLandblock` can
+    // read both (Set membership for short-circuit, opts for the wasm-
+    // export wiring). Objective 10's capture (commit 81482de) surfaced
+    // that without the aliasing `this.terrainOpts` was undefined inside
+    // the load* hooks → bakeTerrainForLandblock threw. Mirrors the
+    // existing cellContainers3d/envCellLoadedLbs aliasing pattern above.
+    terrainBakedLbs: scene3dForBuilders.terrainBakedLbs,
+    buildingsBakedLbs: scene3dForBuilders.buildingsBakedLbs,
+    staticsBakedLbs: scene3dForBuilders.staticsBakedLbs,
+    terrainOpts: scene3dForBuilders.terrainOpts,
+    buildingsOpts: scene3dForBuilders.buildingsOpts,
+    staticsOpts: scene3dForBuilders.staticsOpts,
     // Phase 7.6.1 (follow-on #1) — per-SetupModel light registry +
     // summary. `activeLights` is the Array<THREE.PointLight |
     // THREE.SpotLight> that `tickLightingForCellState` sorts by
