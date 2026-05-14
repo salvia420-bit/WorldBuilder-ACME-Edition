@@ -384,6 +384,201 @@ pub async fn fetch_landblock_heightmaps(
     Ok(out)
 }
 
+// ---------- Phase 2.1 — terrain mesh subdivision -------------------
+//
+// `fetch_subdivided_landblock` produces a denser visual-only mesh from
+// the 9×9 control grid. Collision still uses the 9×9 via
+// `SessionHandle::populateTerrain` — see `crates/holtburger-dat/src/
+// terrain_subdiv.rs` doc comment for the visual-vs-collision split.
+
+/// Subdivided landblock geometry — Phase 2.1 visual-fidelity mesh.
+///
+/// Output of [`fetch_subdivided_landblock`]. Carries the same per-vertex
+/// payload as [`LandblockMesh`] but at `(subdiv_factor * 8 + 1)²`
+/// vertex density instead of the fixed 9×9.
+///
+/// Buffer layout:
+/// - `positions`: flat xyz `Float32Array`, length `3 × vertex_count`.
+/// - `normals`: flat xyz `Float32Array`, length `3 × vertex_count`.
+///   Pre-computed via finite-difference of the combined (bicubic + noise)
+///   heightfield so lighting matches the rendered surface.
+/// - `terrainCodes`: `Uint8Array`, length `vertex_count`. Per-vertex
+///   base terrain type, picked from the nearest control point.
+/// - `roadCodes`: `Uint8Array`, length `vertex_count`. Per-vertex road
+///   overlay code, same nearest-control-point pick.
+/// - `indices`: `Uint32Array`, length `6 × (gridSize - 1)²`. SW-last
+///   winding identical to [`LandblockMesh`] so the existing adapter
+///   reversal pass produces conventional CCW for FrontSide rendering
+///   post-`worldRoot` rotation.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct SubdividedLandblockMesh {
+    positions: Vec<f32>,
+    normals: Vec<f32>,
+    terrain_codes: Vec<u8>,
+    road_codes: Vec<u8>,
+    indices: Vec<u32>,
+    grid_size: u32,
+    height_min: f32,
+    height_max: f32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl SubdividedLandblockMesh {
+    #[wasm_bindgen(getter)]
+    pub fn positions(&self) -> Vec<f32> {
+        self.positions.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn normals(&self) -> Vec<f32> {
+        self.normals.clone()
+    }
+
+    #[wasm_bindgen(getter, js_name = terrainCodes)]
+    pub fn terrain_codes(&self) -> Vec<u8> {
+        self.terrain_codes.clone()
+    }
+
+    #[wasm_bindgen(getter, js_name = roadCodes)]
+    pub fn road_codes(&self) -> Vec<u8> {
+        self.road_codes.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn indices(&self) -> Vec<u32> {
+        self.indices.clone()
+    }
+
+    /// Side length of the subdivided grid (e.g. 33 for factor=4).
+    #[wasm_bindgen(getter, js_name = gridSize)]
+    pub fn grid_size(&self) -> u32 {
+        self.grid_size
+    }
+
+    /// Total vertex count, `gridSize * gridSize`.
+    #[wasm_bindgen(getter, js_name = vertexCount)]
+    pub fn vertex_count(&self) -> u32 {
+        self.grid_size * self.grid_size
+    }
+
+    #[wasm_bindgen(getter, js_name = heightMin)]
+    pub fn height_min(&self) -> f32 {
+        self.height_min
+    }
+
+    #[wasm_bindgen(getter, js_name = heightMax)]
+    pub fn height_max(&self) -> f32 {
+        self.height_max
+    }
+}
+
+/// Seed used to derive the deterministic noise pattern. Picked so
+/// reload-after-reload produces the same noise. If a future feature
+/// (e.g. seasonal variation) wants to rotate the noise, add a setter
+/// here and bump the lattice mixer.
+#[cfg(target_arch = "wasm32")]
+const TERRAIN_NOISE_SEED: u64 = 0xAC_5EED_C0FFEE;
+
+/// Phase 2.1 — fetch one or more landblock heightmaps and subdivide
+/// them with bicubic Catmull-Rom + per-category clamped noise.
+///
+/// `subdiv_factor` of 1 returns the original 9×9 (no interpolation).
+/// 2 → 17×17, 4 → 33×33, 8 → 65×65. Visual-only — the collision
+/// path stays on the 9×9 grid via `SessionHandle::populateTerrain`.
+///
+/// `cell_ids` is the same `XXYYFFFF` cell id list as
+/// [`fetch_landblock_heightmaps`]. Adjacent-LB heights are NOT yet
+/// stitched here — the bicubic uses mirror-boundary at LB edges.
+/// Stitching is a deferred follow-on; the visible seam at the loaded-
+/// ring edge is acceptable per the Phase 2.1 hand-off note.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_subdivided_landblock(
+    cell_id: u32,
+    subdiv_factor: u32,
+) -> Result<SubdividedLandblockMesh, JsValue> {
+    let mut meshes = fetch_subdivided_landblocks(vec![cell_id], subdiv_factor).await?;
+    Ok(meshes.remove(0))
+}
+
+/// Batch variant of [`fetch_subdivided_landblock`] — same as
+/// [`fetch_landblock_heightmaps`] in spirit, amortising the HBA open
+/// across many ids.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_subdivided_landblocks(
+    cell_ids: Vec<u32>,
+    subdiv_factor: u32,
+) -> Result<Vec<SubdividedLandblockMesh>, JsValue> {
+    use holtburger_dat::landblock::CellLandblock;
+    use holtburger_dat::terrain_subdiv::{AdjacentHeights, subdivide_landblock};
+    use holtburger_dat::{ResourceKey, ResourceSource};
+
+    if subdiv_factor == 0 {
+        return Err(JsValue::from_str(
+            "fetch_subdivided_landblocks: subdiv_factor must be >= 1",
+        ));
+    }
+
+    let source = global_source::global_source();
+    let keys: Vec<ResourceKey<'_>> = cell_ids
+        .iter()
+        .map(|id| ResourceKey::new("eor/cell", *id))
+        .collect();
+    source
+        .prefetch(&keys)
+        .await
+        .map_err(|e| JsValue::from_str(&format!("prefetch: {e}")))?;
+
+    let mut out = Vec::with_capacity(cell_ids.len());
+    for id in &cell_ids {
+        let bytes = source
+            .get_file_by_key(ResourceKey::new("eor/cell", *id))
+            .map_err(|e| JsValue::from_str(&format!("get_file_by_key {id:#010X}: {e}")))?;
+        let cell = CellLandblock::unpack(&bytes)
+            .map_err(|e| JsValue::from_str(&format!("CellLandblock::unpack {id:#010X}: {e}")))?;
+
+        // Project the CellLandblock's 1D arrays into the 2D `[x][y]`
+        // grids expected by `subdivide_landblock`.
+        let mut heights = [[0.0f32; 9]; 9];
+        let mut codes = [[0u8; 9]; 9];
+        let mut roads = [[0u8; 9]; 9];
+        for x in 0..9 {
+            for y in 0..9 {
+                heights[x][y] = cell.get_height(x, y);
+                codes[x][y] = cell.terrain_type(x, y);
+                roads[x][y] = cell.road_type(x, y);
+            }
+        }
+
+        let adjacent = AdjacentHeights::default();
+        let sub = subdivide_landblock(
+            &heights,
+            &adjacent,
+            subdiv_factor,
+            &codes,
+            &roads,
+            *id & 0xFFFF_0000,
+            // Stable seed mixed with the LB id inside subdivide_landblock.
+            TERRAIN_NOISE_SEED,
+        );
+
+        out.push(SubdividedLandblockMesh {
+            positions: sub.positions,
+            normals: sub.normals,
+            terrain_codes: sub.terrain_codes,
+            road_codes: sub.road_codes,
+            indices: sub.indices,
+            grid_size: sub.grid_size,
+            height_min: sub.height_min,
+            height_max: sub.height_max,
+        });
+    }
+    Ok(out)
+}
+
 /// Retail Dereth terrain_type → SurfaceTexture ID (bottom mip-level
 /// index). Extracted by signature-scanning `eor/portal:0x13000000`
 /// (Region) for the `[count=33][type=0]...[type=32]` pattern of

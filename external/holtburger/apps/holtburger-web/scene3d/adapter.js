@@ -116,6 +116,56 @@ export function landblockMeshToGeometry(wasmMesh) {
 }
 
 /**
+ * Phase 2.1 — convert a wasm `SubdividedLandblockMesh` into a
+ * `THREE.BufferGeometry`.
+ *
+ * Drop-in sibling of [`landblockMeshToGeometry`] above. The mesh is
+ * `(gridSize)² = (subdiv * 8 + 1)²` vertices with Catmull-Rom bicubic
+ * heights + per-category clamped noise (≤ ±0.3 m). Indices are 32-bit
+ * (4225 verts at subdiv=8 fits in u16 but 16641 at subdiv=8 does not —
+ * we always use Uint32Array for headroom).
+ *
+ * The Phase 7.1 F#27 winding-reversal is applied identically here so
+ * `THREE.FrontSide` rendering matches the legacy 9×9 path.
+ */
+export function subdividedLandblockMeshToGeometry(wasmSub) {
+  const positions = Float32Array.from(wasmSub.positions);
+  const normals = Float32Array.from(wasmSub.normals);
+  const terrainCodes = Uint8Array.from(wasmSub.terrainCodes);
+  const roadCodes = Uint8Array.from(wasmSub.roadCodes);
+  const rawIndices = Uint32Array.from(wasmSub.indices);
+
+  // Mirror the F#27 winding-reversal pass — the wasm emits SW-last
+  // winding (CW from AC +Z, matching `build_mesh`), and the worldRoot
+  // rotation flips CCW expectations in screen space. Reverse per-triangle
+  // so FrontSide culling sees front faces.
+  const indices = new Uint32Array(rawIndices.length);
+  for (let i = 0; i < rawIndices.length; i += 3) {
+    indices[i + 0] = rawIndices[i + 0];
+    indices[i + 1] = rawIndices[i + 2];
+    indices[i + 2] = rawIndices[i + 1];
+  }
+
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute(
+    "position",
+    new THREE.BufferAttribute(positions, 3, false)
+  );
+  geom.setAttribute("normal", new THREE.BufferAttribute(normals, 3, false));
+  geom.setAttribute(
+    "terrainCode",
+    new THREE.BufferAttribute(terrainCodes, 1, false)
+  );
+  geom.setAttribute(
+    "roadCode",
+    new THREE.BufferAttribute(roadCodes, 1, false)
+  );
+  geom.setIndex(new THREE.BufferAttribute(indices, 1));
+  geom.computeBoundingSphere();
+  return geom;
+}
+
+/**
  * Build a 6×6 RGBA8 terrain atlas + the standalone road tile from a
  * wasm `TerrainTexture[]` (33 entries, terrainType 0..32).
  *

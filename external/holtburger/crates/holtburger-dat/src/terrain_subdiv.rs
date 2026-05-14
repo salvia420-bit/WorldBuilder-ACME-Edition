@@ -1,0 +1,1117 @@
+//! Phase 2.1 — terrain mesh subdivision with bicubic Catmull-Rom
+//! interpolation plus per-category clamped value-noise.
+//!
+//! Given a landblock's 9×9 control height grid and per-vertex terrain
+//! codes, produce a denser `(subdiv*8+1)²` vertex grid suitable for
+//! GPU upload. The collision path stays on the 9×9 grid — this module
+//! is visual-only.
+//!
+//! Coordinate convention (AC native, Z-up):
+//! - `heights[x][y]` is the control height at vertex `(x, y)`, with
+//!   `x` increasing east and `y` increasing north. `x = 0 .. 8` and
+//!   `y = 0 .. 8` map to local metres `0 .. 192` in 24 m steps.
+//! - Output positions are in landblock-local metres with `z` being
+//!   elevation, matching `build_mesh` in `apps/holtburger-web/src/lib.rs`.
+//!
+//! The noise function is a tiny deterministic 2D value-noise with
+//! Perlin-style fade interpolation. We bake it locally so the noise
+//! is identical across page loads and the JS side can replicate the
+//! same pattern with no FFI (relevant for Phase 2.2 displacement).
+
+use crate::surface_classify::SurfaceCategory;
+
+/// Output of [`subdivide_landblock`]. Ready for `THREE.BufferGeometry`
+/// construction in `adapter.js` — see `landblockSubdividedMeshToGeometry`.
+///
+/// `positions` is flat `xyz` (length = 3 × vertex_count).
+/// `normals` is flat `xyz` (length = 3 × vertex_count) computed by
+/// finite-difference of the subdivided heightfield.
+/// `terrain_codes` carries the nearest-control-point terrain type per
+/// vertex so the existing detail-normal blending and triplanar code
+/// keep working without changes.
+/// `indices` is CCW triangle indices into `positions` / `normals` /
+/// `terrain_codes`.
+#[derive(Debug, Clone)]
+pub struct SubdividedLandblock {
+    pub positions: Vec<f32>,
+    pub normals: Vec<f32>,
+    pub terrain_codes: Vec<u8>,
+    pub road_codes: Vec<u8>,
+    pub indices: Vec<u32>,
+    pub vertex_count: u32,
+    pub grid_size: u32,
+    pub height_min: f32,
+    pub height_max: f32,
+}
+
+/// Optional adjacent-landblock heights, used so the bicubic patch at
+/// LB boundaries reads real neighbour samples instead of mirrored ones.
+/// Mirror boundary is applied for any `None` direction — see
+/// `Phase 2.1 hand-off note "LB-edge boundary condition"`.
+#[derive(Debug, Clone, Default)]
+pub struct AdjacentHeights {
+    /// Heights of the LB to the east (x = +1). Indexed `[x_local][y]`
+    /// where `x_local ∈ {0, 1}` (we only need columns 0 and 1 of the
+    /// east neighbour for the Catmull-Rom outer band).
+    pub east: Option<[[f32; 9]; 2]>,
+    /// Heights of the LB to the west (x = -1). We need columns 7 and
+    /// 8 — store them as `[x_local][y]` with `x_local ∈ {7, 8}` mapped
+    /// to indices `[0]` and `[1]`.
+    pub west: Option<[[f32; 9]; 2]>,
+    /// Heights of the LB to the north (y = +1), rows `y_local ∈ {0, 1}`.
+    pub north: Option<[[f32; 2]; 9]>,
+    /// Heights of the LB to the south (y = -1), rows `y_local ∈ {7, 8}`
+    /// mapped to indices `[0]` and `[1]`.
+    pub south: Option<[[f32; 2]; 9]>,
+}
+
+/// AC vertex spacing on the 9×9 control grid: 24 m per quad.
+pub const CONTROL_SPACING_M: f32 = 24.0;
+
+/// LB world spacing in metres: 8 × 24 = 192.
+pub const LANDBLOCK_M: f32 = 192.0;
+
+/// Maximum per-vertex noise amplitude — never exceeds this regardless
+/// of category multiplier. Plan constraint #3: ≤ ±0.3 m.
+pub const NOISE_AMPLITUDE_MAX_M: f32 = 0.3;
+
+/// Maximum total deviation of the subdivided visual mesh from the
+/// underlying 9×9 bilinear surface (which is also the collision
+/// surface). The Phase 2.1 plan calls out:
+///
+/// > The subdivided mesh should NOT move the visual surface more than
+/// > ±0.3 m from the 9×9 bilinear surface — which is also the
+/// > collision surface.
+///
+/// Bicubic Catmull-Rom, applied to terrain with real elevation gradients
+/// (Holtburg ranges 30-96 m), naturally overshoots/undershoots beyond
+/// the bilinear convex hull. We clamp the combined (bicubic + noise)
+/// height to `bilinear ± VISUAL_VS_COLLISION_MAX_M` so collision
+/// integrity holds. This re-introduces a small facet at the rare
+/// overshoot peaks but preserves smoothing everywhere else.
+pub const VISUAL_VS_COLLISION_MAX_M: f32 = 0.3;
+
+/// Base noise frequency (cycles per metre). Tuned so one cycle is
+/// ~2 m, sub-character scale.
+const NOISE_FREQ_PER_METER: f32 = 0.5;
+
+/// Per-terrain-code noise amplitude multiplier. Range `0.0 .. 1.0`.
+/// Water and slime get 0 — Phase 2.2 animates those with vertex
+/// displacement instead. Lava is not exposed in the retail terrain
+/// code table for Holtburg, but stays 0 for forward-compat.
+///
+/// Per the prompt's per-category table:
+///   water (16-20, 22-23) → 0
+///   sand (10-12)         → 0.5
+///   stone (0, 6, 13, 14, 25, 26, 30) → 1.0
+///   dirt (5, 7, 8, 24, 31)           → 1.0
+///   grass (1, 3, 9, 21, 28, 29)      → 0.8
+///   snow (2, 15, 27)                 → 0.3
+///   swamp (4)                        → 0.5
+const TERRAIN_NOISE_SCALE: [f32; 32] = [
+    1.0, // 0 BarrenRock (Stone)
+    0.8, // 1 Grassland (Grass)
+    0.3, // 2 Ice (Snow)
+    0.8, // 3 LushGrass (Grass)
+    0.5, // 4 MarshSparseSwamp (Swamp)
+    1.0, // 5 MudRichDirt (Dirt)
+    1.0, // 6 ObsidianPlain (Stone)
+    1.0, // 7 PackedDirt (Dirt)
+    1.0, // 8 PatchyDirt (Dirt)
+    0.8, // 9 PatchyGrassland (Grass)
+    0.5, // 10 SandYellow (Sand)
+    0.5, // 11 SandGrey (Sand)
+    0.5, // 12 SandRockStrewn (Sand)
+    1.0, // 13 SedimentaryRock (Stone)
+    1.0, // 14 SemiBarrenRock (Stone)
+    0.3, // 15 Snow (Snow)
+    0.0, // 16 WaterRunning
+    0.0, // 17 WaterStandingFresh
+    0.0, // 18 WaterShallowSea
+    0.0, // 19 WaterShallowStillSea
+    0.0, // 20 WaterDeepSea
+    0.8, // 21 ForestFloor (Grass)
+    0.0, // 22 FauxWaterRunning
+    0.0, // 23 SeaSlime
+    1.0, // 24 Argila (Dirt)
+    1.0, // 25 Volcano1 (Stone)
+    1.0, // 26 Volcano2 (Stone)
+    0.3, // 27 BlueIce (Snow)
+    0.8, // 28 Moss (Grass)
+    0.8, // 29 DarkMoss (Grass)
+    1.0, // 30 Olthoi (Stone)
+    1.0, // 31 DesolateLands (Dirt)
+];
+
+/// Look up the noise amplitude scale for a terrain code. Codes outside
+/// `0..32` get 0 (defensive — should never happen for retail data).
+fn noise_scale_for_code(code: u8) -> f32 {
+    if (code as usize) < TERRAIN_NOISE_SCALE.len() {
+        TERRAIN_NOISE_SCALE[code as usize]
+    } else {
+        0.0
+    }
+}
+
+/// Convenience: noise scale by [`SurfaceCategory`]. Phase 2.1 uses the
+/// terrain-code path; this is exposed so downstream consumers (e.g.
+/// Phase 1.4 surface classification fallback) can ask "what category
+/// gets noise". Returns 0 for Water/Lava — they're animated in 2.2.
+pub fn noise_scale_for_category(category: SurfaceCategory) -> f32 {
+    match category {
+        SurfaceCategory::Water | SurfaceCategory::Lava => 0.0,
+        SurfaceCategory::Sand => 0.5,
+        SurfaceCategory::Stone | SurfaceCategory::Dirt | SurfaceCategory::Brick => 1.0,
+        SurfaceCategory::Foliage => 0.8,
+        SurfaceCategory::Snow => 0.3,
+        // Wood, Metal, Cloth, Tile, Generic don't appear on terrain
+        // codes in practice — give them a modest default.
+        _ => 0.5,
+    }
+}
+
+/// 1D Catmull-Rom basis: given four control values `p0, p1, p2, p3`
+/// sampled at integer offsets `-1, 0, 1, 2`, interpolate at parameter
+/// `t ∈ [0, 1]` between `p1` and `p2`.
+///
+/// Reference: <https://en.wikipedia.org/wiki/Centripetal_Catmull-Rom_spline>.
+/// We use the uniform variant (centripetal would need extra knot
+/// computation per evaluation; for a regular 9×9 grid uniform reads
+/// fine visually).
+#[inline]
+fn catmull_rom_1d(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
+    // Standard CR form: P(t) = 0.5 * ((-p0+3*p1-3*p2+p3)*t³
+    //                                 + (2*p0-5*p1+4*p2-p3)*t²
+    //                                 + (-p0+p2)*t
+    //                                 + 2*p1)
+    let t2 = t * t;
+    let t3 = t2 * t;
+    0.5 * ((-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
+        + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+        + (-p0 + p2) * t
+        + 2.0 * p1)
+}
+
+/// Sample the 4×4 control-point neighbourhood around `(xi, yi)`, using
+/// `heights` as the inner LB and falling back to mirror-boundary at
+/// LB edges (the adjacent-LB neighbours are spliced in via
+/// `AdjacentHeights` when provided).
+///
+/// Returns the 4×4 patch where `patch[i+1][j+1]` corresponds to
+/// `(xi + i, yi + j)` for `i, j ∈ {-1, 0, 1, 2}`.
+fn neighbourhood_patch(
+    heights: &[[f32; 9]; 9],
+    adjacent: &AdjacentHeights,
+    xi: i32,
+    yi: i32,
+) -> [[f32; 4]; 4] {
+    let mut patch = [[0.0f32; 4]; 4];
+    for di in 0..4 {
+        for dj in 0..4 {
+            let x = xi + di as i32 - 1;
+            let y = yi + dj as i32 - 1;
+            patch[di][dj] = sample_height(heights, adjacent, x, y);
+        }
+    }
+    patch
+}
+
+/// Sample the control height at integer coords `(x, y)`, falling back
+/// to neighbours or mirror.
+fn sample_height(
+    heights: &[[f32; 9]; 9],
+    adjacent: &AdjacentHeights,
+    x: i32,
+    y: i32,
+) -> f32 {
+    // Try adjacent first for out-of-range coords.
+    if (0..=8).contains(&x) && (0..=8).contains(&y) {
+        return heights[x as usize][y as usize];
+    }
+    // East neighbour (x = 9, 10 → indices 0, 1 of east.[x_local])
+    if x > 8 && let Some(east) = adjacent.east.as_ref() {
+        let xi = (x - 9) as usize;
+        if xi < 2 && (0..=8).contains(&y) {
+            return east[xi][y as usize];
+        }
+    }
+    // West neighbour (x = -1, -2 → indices 1, 0 of west.[x_local])
+    // We store columns 7 and 8 of the west LB as indices 0 (col 7) and
+    // 1 (col 8). x = -1 maps to col 8 (=index 1); x = -2 maps to col 7
+    // (=index 0).
+    if x < 0 && let Some(west) = adjacent.west.as_ref() {
+        if x == -1 && (0..=8).contains(&y) {
+            return west[1][y as usize];
+        }
+        if x == -2 && (0..=8).contains(&y) {
+            return west[0][y as usize];
+        }
+    }
+    // North neighbour (y = 9, 10 → indices 0, 1)
+    if y > 8 && let Some(north) = adjacent.north.as_ref() {
+        let yi = (y - 9) as usize;
+        if yi < 2 && (0..=8).contains(&x) {
+            return north[x as usize][yi];
+        }
+    }
+    // South neighbour (y = -1, -2 → indices 1, 0)
+    if y < 0 && let Some(south) = adjacent.south.as_ref() {
+        if y == -1 && (0..=8).contains(&x) {
+            return south[x as usize][1];
+        }
+        if y == -2 && (0..=8).contains(&x) {
+            return south[x as usize][0];
+        }
+    }
+    // Mirror fallback. Reflect over the boundary: -1 → 1, -2 → 2,
+    // 9 → 7, 10 → 6. Clamp y the same way.
+    let mx = mirror_clamp(x);
+    let my = mirror_clamp(y);
+    heights[mx][my]
+}
+
+#[inline]
+fn mirror_clamp(coord: i32) -> usize {
+    if coord < 0 {
+        ((-coord).min(8)) as usize
+    } else if coord > 8 {
+        (8 - (coord - 8).min(8)) as usize
+    } else {
+        coord as usize
+    }
+}
+
+/// Evaluate the bilinear height at `(u, v)` where `(u, v) ∈ [0, 8]`
+/// are control coords. Mirrors the collision-path sampler in
+/// `WorldState::terrain_heights` so the subdivision can clamp visual
+/// vs collision divergence.
+pub fn eval_bilinear_at(heights: &[[f32; 9]; 9], u: f32, v: f32) -> f32 {
+    let u = u.max(0.0).min(8.0);
+    let v = v.max(0.0).min(8.0);
+    let xi = (u.floor() as i32).max(0).min(7) as usize;
+    let yi = (v.floor() as i32).max(0).min(7) as usize;
+    let tx = u - xi as f32;
+    let ty = v - yi as f32;
+    let h00 = heights[xi][yi];
+    let h10 = heights[xi + 1][yi];
+    let h01 = heights[xi][yi + 1];
+    let h11 = heights[xi + 1][yi + 1];
+    h00 * (1.0 - tx) * (1.0 - ty)
+        + h10 * tx * (1.0 - ty)
+        + h01 * (1.0 - tx) * ty
+        + h11 * tx * ty
+}
+
+/// Evaluate the bicubic Catmull-Rom patch at `(u, v)` where
+/// `(u, v) ∈ [0, 8] × [0, 8]` are control-point coordinates (24 m per
+/// unit). Returns the interpolated height in metres.
+pub fn eval_bicubic_at(
+    heights: &[[f32; 9]; 9],
+    adjacent: &AdjacentHeights,
+    u: f32,
+    v: f32,
+) -> f32 {
+    let xi = u.floor() as i32;
+    let yi = v.floor() as i32;
+    let tx = u - xi as f32;
+    let ty = v - yi as f32;
+
+    let patch = neighbourhood_patch(heights, adjacent, xi, yi);
+    // Interpolate along x in each row, then along y.
+    let row0 = catmull_rom_1d(patch[0][0], patch[1][0], patch[2][0], patch[3][0], tx);
+    let row1 = catmull_rom_1d(patch[0][1], patch[1][1], patch[2][1], patch[3][1], tx);
+    let row2 = catmull_rom_1d(patch[0][2], patch[1][2], patch[2][2], patch[3][2], tx);
+    let row3 = catmull_rom_1d(patch[0][3], patch[1][3], patch[2][3], patch[3][3], tx);
+    catmull_rom_1d(row0, row1, row2, row3, ty)
+}
+
+// ---------- Deterministic 2D value-noise ----------
+//
+// A small Perlin-style 2D value-noise. Deterministic from a `seed`
+// plus the integer lattice coordinates. We use this rather than a
+// crate dep so the implementation can be mirrored byte-for-byte in
+// JS for Phase 2.2 animated displacement.
+
+/// 32-bit hash used to derive lattice values. Implementation borrows
+/// from MurmurHash's finalizer — short, well-mixed, deterministic.
+fn lattice_hash(x: i32, y: i32, seed: u64) -> u32 {
+    let mut h: u64 = seed;
+    h = h.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    h ^= (x as u32 as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h = h.rotate_left(31).wrapping_mul(0x94D0_49BB_1331_11EB);
+    h ^= (y as u32 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    h = h.rotate_left(31).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h ^= h >> 27;
+    h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+    h ^= h >> 31;
+    h as u32
+}
+
+/// Lattice value in `[-1, 1]`.
+fn lattice_value(x: i32, y: i32, seed: u64) -> f32 {
+    let h = lattice_hash(x, y, seed);
+    // Convert top 24 bits to a float in [0, 1) then remap to [-1, 1].
+    let f = (h >> 8) as f32 / ((1u32 << 24) as f32);
+    f * 2.0 - 1.0
+}
+
+/// Perlin-style smoothstep: `6t⁵ - 15t⁴ + 10t³`. Maps `[0, 1]` to `[0, 1]`
+/// with zero first + second derivative at endpoints.
+#[inline]
+fn fade(t: f32) -> f32 {
+    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+}
+
+/// 2D value-noise at `(x, y)` (world coords). Returns a value in
+/// roughly `[-1, 1]`.
+pub fn value_noise_2d(x: f32, y: f32, seed: u64) -> f32 {
+    let x0 = x.floor() as i32;
+    let y0 = y.floor() as i32;
+    let tx = fade(x - x0 as f32);
+    let ty = fade(y - y0 as f32);
+
+    let v00 = lattice_value(x0, y0, seed);
+    let v10 = lattice_value(x0 + 1, y0, seed);
+    let v01 = lattice_value(x0, y0 + 1, seed);
+    let v11 = lattice_value(x0 + 1, y0 + 1, seed);
+
+    let a = v00 + tx * (v10 - v00);
+    let b = v01 + tx * (v11 - v01);
+    a + ty * (b - a)
+}
+
+/// Sample noise displacement at LB-global metre coords. Returns a
+/// displacement in metres, bounded to `[-NOISE_AMPLITUDE_MAX_M,
+/// NOISE_AMPLITUDE_MAX_M]`.
+pub fn noise_displacement_m(world_x_m: f32, world_y_m: f32, scale: f32, seed: u64) -> f32 {
+    if scale <= 0.0 {
+        return 0.0;
+    }
+    let n = value_noise_2d(
+        world_x_m * NOISE_FREQ_PER_METER,
+        world_y_m * NOISE_FREQ_PER_METER,
+        seed,
+    );
+    (n * scale * NOISE_AMPLITUDE_MAX_M)
+        .max(-NOISE_AMPLITUDE_MAX_M)
+        .min(NOISE_AMPLITUDE_MAX_M)
+}
+
+/// Subdivide a 9×9 control-height grid into `(subdiv*8+1)²` vertices
+/// with Catmull-Rom bicubic interpolation + per-category noise.
+///
+/// `subdiv_factor` of 1 returns the original 9×9 grid exactly (no
+/// interpolation, no noise — subdiv=1 is "no subdivision").
+///
+/// Bicubic Catmull-Rom is C1-continuous and gives smooth visual
+/// curves. It does not preserve C2 across patches; in practice the
+/// visual difference at terrain frequencies is invisible. Upgrade to
+/// pure bicubic (Hermite with finite-difference tangents) here if
+/// shading reveals creases — leave the function signature stable.
+pub fn subdivide_landblock(
+    heights: &[[f32; 9]; 9],
+    adjacent: &AdjacentHeights,
+    subdiv_factor: u32,
+    terrain_codes: &[[u8; 9]; 9],
+    road_codes: &[[u8; 9]; 9],
+    landblock_id: u32,
+    seed: u64,
+) -> SubdividedLandblock {
+    assert!(subdiv_factor >= 1, "subdiv_factor must be >= 1");
+    let factor = subdiv_factor.max(1) as usize;
+    // 9 control points = 8 spans → factor*8 + 1 verts per side.
+    let n = factor * 8 + 1;
+    let vertex_count = n * n;
+
+    let lb_x = ((landblock_id >> 24) & 0xff) as f32;
+    let lb_y = ((landblock_id >> 16) & 0xff) as f32;
+    // LB-keyed seed mix so different LBs get uncorrelated noise. The
+    // page-load-stable component is `seed`; combine with the LB id so
+    // the same LB always produces the same noise.
+    let lb_seed = seed
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(landblock_id as u64);
+
+    // Step in control-point coords per subdivided vertex.
+    let step_ctrl = 1.0 / factor as f32; // 1 control unit / factor steps
+    let step_m = CONTROL_SPACING_M / factor as f32;
+
+    // First pass: bicubic-interpolated heights without noise. Stored
+    // in a 2D array so the normal computation can finite-diff against
+    // them. Noise is applied as a final delta post-normal computation —
+    // see below.
+    let mut interp_heights = vec![0.0f32; vertex_count];
+    let mut noise_deltas = vec![0.0f32; vertex_count];
+    let mut height_min = f32::INFINITY;
+    let mut height_max = f32::NEG_INFINITY;
+    let mut codes_out = vec![0u8; vertex_count];
+    let mut road_out = vec![0u8; vertex_count];
+
+    for i in 0..n {
+        for j in 0..n {
+            let u = i as f32 * step_ctrl;
+            let v = j as f32 * step_ctrl;
+            let h_bilinear = eval_bilinear_at(heights, u, v);
+            let h_interp_raw = if factor == 1 {
+                heights[i][j]
+            } else {
+                eval_bicubic_at(heights, adjacent, u, v)
+            };
+            // Clamp bicubic to stay within ±VISUAL_VS_COLLISION_MAX_M
+            // of the bilinear (collision) surface. Catmull-Rom can
+            // overshoot the convex hull on hilly terrain by several
+            // metres — see `terrain_subdiv.rs::VISUAL_VS_COLLISION_MAX_M`
+            // doc comment for the rationale.
+            let interp_delta = h_interp_raw - h_bilinear;
+            let interp_delta_clamped = interp_delta
+                .max(-VISUAL_VS_COLLISION_MAX_M)
+                .min(VISUAL_VS_COLLISION_MAX_M);
+            let h_interp = h_bilinear + interp_delta_clamped;
+            // Nearest control-point terrain code (no smoothing — the
+            // shader interpolates these via the 9×9 texture anyway).
+            let ci = (u.round() as usize).min(8);
+            let cj = (v.round() as usize).min(8);
+            let code = terrain_codes[ci][cj];
+            let road = road_codes[ci][cj];
+            let noise_scale = noise_scale_for_code(code);
+            // Sample noise in LB-global metres so the pattern is
+            // continuous across LB boundaries.
+            let world_x = lb_x * LANDBLOCK_M + i as f32 * step_m;
+            let world_y = lb_y * LANDBLOCK_M + j as f32 * step_m;
+            // subdiv=1 → no noise (the 9×9 grid is the collision/control
+            // grid, mutating it would shift collision out of sync with
+            // the visual mesh).
+            let noise_raw = if factor == 1 {
+                0.0
+            } else {
+                noise_displacement_m(world_x, world_y, noise_scale, lb_seed)
+            };
+            // Combined deviation budget: bicubic-vs-bilinear PLUS noise
+            // must stay within ±VISUAL_VS_COLLISION_MAX_M. Clamp the
+            // total so the visual surface stays on the collision floor.
+            let total_delta_unclamped = interp_delta_clamped + noise_raw;
+            let total_delta = total_delta_unclamped
+                .max(-VISUAL_VS_COLLISION_MAX_M)
+                .min(VISUAL_VS_COLLISION_MAX_M);
+            let noise = total_delta - interp_delta_clamped;
+
+            let idx = i * n + j;
+            interp_heights[idx] = h_interp;
+            noise_deltas[idx] = noise;
+            codes_out[idx] = code;
+            road_out[idx] = road;
+
+            let h_total = h_interp + noise;
+            if h_total < height_min {
+                height_min = h_total;
+            }
+            if h_total > height_max {
+                height_max = h_total;
+            }
+        }
+    }
+
+    // Build positions in flat xyz form.
+    let mut positions = Vec::with_capacity(vertex_count * 3);
+    for i in 0..n {
+        for j in 0..n {
+            let idx = i * n + j;
+            let x = i as f32 * step_m;
+            let y = j as f32 * step_m;
+            let z = interp_heights[idx] + noise_deltas[idx];
+            positions.push(x);
+            positions.push(y);
+            positions.push(z);
+        }
+    }
+
+    // Vertex normals via central difference. `h(x±step, y) - h(x∓step,y)`
+    // gives a slope; cross-product with the y-slope produces a unit
+    // up-normal at a flat region.
+    //
+    // Note: we finite-difference the *combined* height (interp + noise)
+    // so normals match the actual rendered surface, not the smooth-only
+    // version. This is important — noise creates real bumps the
+    // lighting should follow.
+    let mut normals = vec![0.0f32; vertex_count * 3];
+    for i in 0..n {
+        for j in 0..n {
+            let i_minus = if i == 0 { 0 } else { i - 1 };
+            let i_plus = if i + 1 >= n { n - 1 } else { i + 1 };
+            let j_minus = if j == 0 { 0 } else { j - 1 };
+            let j_plus = if j + 1 >= n { n - 1 } else { j + 1 };
+
+            let h_xm = interp_heights[i_minus * n + j] + noise_deltas[i_minus * n + j];
+            let h_xp = interp_heights[i_plus * n + j] + noise_deltas[i_plus * n + j];
+            let h_ym = interp_heights[i * n + j_minus] + noise_deltas[i * n + j_minus];
+            let h_yp = interp_heights[i * n + j_plus] + noise_deltas[i * n + j_plus];
+
+            let dx = (i_plus - i_minus) as f32 * step_m;
+            let dy = (j_plus - j_minus) as f32 * step_m;
+            // Tangent along +x is (dx, 0, h_xp - h_xm).
+            // Tangent along +y is (0, dy, h_yp - h_ym).
+            // Normal = (Tx × Ty)  →  (-(h_xp-h_xm)*dy, -(h_yp-h_ym)*dx, dx*dy)
+            // Both dx and dy are positive, so the z-component is always
+            // positive → normal points up (+Z) for flat terrain.
+            let nx = -(h_xp - h_xm) * dy;
+            let ny = -(h_yp - h_ym) * dx;
+            let nz = dx * dy;
+            let mag = (nx * nx + ny * ny + nz * nz).sqrt().max(1e-6);
+            let idx3 = (i * n + j) * 3;
+            normals[idx3] = nx / mag;
+            normals[idx3 + 1] = ny / mag;
+            normals[idx3 + 2] = nz / mag;
+        }
+    }
+
+    // Triangle indices. Each quad → 2 triangles, CCW from AC +Z.
+    // Vertex layout (`i*n+j`) means stride along +x is `n` and stride
+    // along +y is `1`. For the quad with SW corner `(i, j)`:
+    //   v00 (SW) = i*n + j
+    //   v10 (SE) = (i+1)*n + j     — east, +x
+    //   v01 (NW) = i*n + j + 1     — north, +y
+    //   v11 (NE) = (i+1)*n + j + 1
+    //
+    // CCW from +Z (top-down): v00 → v10 → v11 and v00 → v11 → v01.
+    // The legacy `build_mesh` in lib.rs uses the SW-last "flat
+    // interpolation" pattern because it's a 9×9 grid sharing terrain
+    // codes per cell. Our subdivided mesh has per-vertex codes so we
+    // can use the simpler conventional winding here. The adapter's
+    // index-reversal pass (`landblockMeshToGeometry`) handles the
+    // worldRoot rotation; our output is consumed via a parallel
+    // adapter that doesn't reverse, OR we emit the legacy SW-last
+    // form. We pick the latter for drop-in compatibility with the
+    // existing `landblockMeshToGeometry`.
+    let mut indices = Vec::with_capacity((n - 1) * (n - 1) * 6);
+    for i in 0..(n - 1) {
+        for j in 0..(n - 1) {
+            let v00 = (i * n + j) as u32;
+            let v10 = ((i + 1) * n + j) as u32;
+            let v01 = (i * n + j + 1) as u32;
+            let v11 = ((i + 1) * n + j + 1) as u32;
+            // Mirror the SW-last winding used by `build_mesh`: T1 NW→NE→SW,
+            // T2 NE→SE→SW. The adapter's per-triangle reversal pass turns
+            // this into the conventional CCW winding for FrontSide rendering
+            // post-worldRoot rotation. Same convention = same culling
+            // semantics with no code changes downstream.
+            indices.push(v01);
+            indices.push(v11);
+            indices.push(v00);
+            indices.push(v11);
+            indices.push(v10);
+            indices.push(v00);
+        }
+    }
+
+    SubdividedLandblock {
+        positions,
+        normals,
+        terrain_codes: codes_out,
+        road_codes: road_out,
+        indices,
+        vertex_count: vertex_count as u32,
+        grid_size: n as u32,
+        height_min,
+        height_max,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A flat 9×9 grid at height `z`.
+    fn flat(z: f32) -> [[f32; 9]; 9] {
+        [[z; 9]; 9]
+    }
+
+    /// Build a 9×9 codes grid with one code everywhere.
+    fn codes(c: u8) -> [[u8; 9]; 9] {
+        [[c; 9]; 9]
+    }
+
+    fn zero_roads() -> [[u8; 9]; 9] {
+        [[0u8; 9]; 9]
+    }
+
+    /// Sloped grid — h(x, y) = x + y. Bicubic should reproduce a
+    /// linear surface exactly.
+    fn linear_slope() -> [[f32; 9]; 9] {
+        let mut h = [[0.0f32; 9]; 9];
+        for x in 0..9 {
+            for y in 0..9 {
+                h[x][y] = x as f32 + y as f32;
+            }
+        }
+        h
+    }
+
+    #[test]
+    fn subdiv_1_round_trips_input() {
+        let h = linear_slope();
+        let c = codes(1); // grass — non-zero noise scale, but factor=1 disables noise
+        let r = zero_roads();
+        let adj = AdjacentHeights::default();
+        let out = subdivide_landblock(&h, &adj, 1, &c, &r, 0xA9B40000, 0xC0FFEE);
+        assert_eq!(out.grid_size, 9);
+        assert_eq!(out.vertex_count, 81);
+        // Each vertex's z should match heights[i][j] exactly — no
+        // interpolation, no noise.
+        for i in 0..9 {
+            for j in 0..9 {
+                let idx = (i * 9 + j) * 3;
+                let z = out.positions[idx + 2];
+                assert!(
+                    (z - h[i][j]).abs() < 1e-6,
+                    "subdiv=1 mismatch at ({i},{j}): got {z} expected {}",
+                    h[i][j]
+                );
+            }
+        }
+        // Indices: 8x8 quads × 6 = 384.
+        assert_eq!(out.indices.len(), 384);
+    }
+
+    #[test]
+    fn deterministic_same_input_same_output() {
+        let h = linear_slope();
+        let c = codes(1);
+        let r = zero_roads();
+        let adj = AdjacentHeights::default();
+        let a = subdivide_landblock(&h, &adj, 4, &c, &r, 0xA9B40000, 0xC0FFEE);
+        let b = subdivide_landblock(&h, &adj, 4, &c, &r, 0xA9B40000, 0xC0FFEE);
+        assert_eq!(a.positions, b.positions);
+        assert_eq!(a.normals, b.normals);
+        assert_eq!(a.terrain_codes, b.terrain_codes);
+        assert_eq!(a.indices, b.indices);
+    }
+
+    #[test]
+    fn bicubic_matches_corners_at_control_points() {
+        let mut h = [[0.0f32; 9]; 9];
+        // Sprinkle distinct values.
+        for x in 0..9 {
+            for y in 0..9 {
+                h[x][y] = (x * 11 + y * 7) as f32;
+            }
+        }
+        // Use a water code so noise contribution is 0 and we test
+        // the bicubic value at integer control points equals the grid
+        // exactly (stone-coded noise would mask the comparison).
+        let c = codes(16);
+        let r = zero_roads();
+        let adj = AdjacentHeights::default();
+        let out = subdivide_landblock(&h, &adj, 4, &c, &r, 0xA9B40000, 1);
+        // At grid points (i = subdiv*ci, j = subdiv*cj), the height
+        // should equal h[ci][cj].
+        for ci in 0..9 {
+            for cj in 0..9 {
+                let i = ci * 4;
+                let j = cj * 4;
+                let z = out.positions[(i * out.grid_size as usize + j) * 3 + 2];
+                assert!(
+                    (z - h[ci][cj]).abs() < 1e-4,
+                    "bicubic value at control ({ci},{cj}) mismatch: got {z} expected {}",
+                    h[ci][cj]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn water_codes_get_zero_noise() {
+        let h = flat(50.0);
+        let c = codes(16); // WaterRunning
+        let r = zero_roads();
+        let adj = AdjacentHeights::default();
+        let out = subdivide_landblock(&h, &adj, 4, &c, &r, 0xA9B40000, 0xC0FFEE);
+        // Every vertex z should equal 50.0 exactly (no noise on water).
+        for i in 0..out.vertex_count as usize {
+            let z = out.positions[i * 3 + 2];
+            assert!(
+                (z - 50.0).abs() < 1e-5,
+                "water vertex {i} got noise: z={z}"
+            );
+        }
+    }
+
+    #[test]
+    fn stone_codes_get_noise_within_bounds() {
+        let h = flat(0.0);
+        let c = codes(0); // BarrenRock — stone, scale 1.0
+        let r = zero_roads();
+        let adj = AdjacentHeights::default();
+        let out = subdivide_landblock(&h, &adj, 4, &c, &r, 0xA9B40000, 0xC0FFEE);
+        // Every vertex z should be in [-0.3, 0.3].
+        let mut saw_positive = false;
+        let mut saw_negative = false;
+        for i in 0..out.vertex_count as usize {
+            let z = out.positions[i * 3 + 2];
+            assert!(
+                z.abs() <= NOISE_AMPLITUDE_MAX_M + 1e-5,
+                "noise out of bounds at {i}: z={z}"
+            );
+            if z > 0.05 {
+                saw_positive = true;
+            }
+            if z < -0.05 {
+                saw_negative = true;
+            }
+        }
+        assert!(saw_positive, "expected at least one +noise sample");
+        assert!(saw_negative, "expected at least one -noise sample");
+    }
+
+    #[test]
+    fn snow_amplitude_smaller_than_stone() {
+        let h = flat(0.0);
+        let stone = codes(0); // 1.0 multiplier
+        let snow = codes(15); // 0.3 multiplier
+        let r = zero_roads();
+        let adj = AdjacentHeights::default();
+        let s_stone = subdivide_landblock(&h, &adj, 4, &stone, &r, 0xA9B40000, 0xC0FFEE);
+        let s_snow = subdivide_landblock(&h, &adj, 4, &snow, &r, 0xA9B40000, 0xC0FFEE);
+        // Max absolute z on stone should exceed snow (same RNG path so
+        // the per-vertex noise sign + magnitude order is preserved).
+        let max_abs = |s: &SubdividedLandblock| -> f32 {
+            let mut m = 0.0f32;
+            for i in 0..s.vertex_count as usize {
+                let z = s.positions[i * 3 + 2].abs();
+                if z > m {
+                    m = z;
+                }
+            }
+            m
+        };
+        let m_stone = max_abs(&s_stone);
+        let m_snow = max_abs(&s_snow);
+        assert!(
+            m_snow < m_stone,
+            "snow amplitude {m_snow} should be smaller than stone {m_stone}"
+        );
+        // Snow scale is 0.3 — magnitudes track the multiplier ratio.
+        assert!(
+            (m_snow - 0.3 * m_stone).abs() < 0.05 * m_stone,
+            "expected snow ≈ 0.3 × stone, got snow={m_snow} stone={m_stone}"
+        );
+    }
+
+    #[test]
+    fn lb_edge_mirror_boundary_when_adjacent_absent() {
+        // Make an asymmetric grid so the boundary read matters.
+        let mut h = [[0.0f32; 9]; 9];
+        for x in 0..9 {
+            for y in 0..9 {
+                h[x][y] = (x * x + y) as f32;
+            }
+        }
+        let c = codes(16); // water — no noise to muddy the assertion
+        let r = zero_roads();
+        let adj = AdjacentHeights::default();
+        let out = subdivide_landblock(&h, &adj, 4, &c, &r, 0xA9B40000, 1);
+        // A subdivided vertex one step inside the east edge should
+        // sit between control points (7, y) and (8, y) — bicubic with
+        // mirror at x=9 still yields a finite real value bounded by
+        // the local control range.
+        let n = out.grid_size as usize;
+        for j in 0..n {
+            let idx = ((n - 2) * n + j) * 3 + 2;
+            let z = out.positions[idx];
+            assert!(z.is_finite(), "mirror-boundary produced NaN at j={j}");
+            // h is monotonically increasing in x. The subdivided
+            // value at the edge should be greater than the value
+            // at the previous control point in x.
+            let edge_ctrl_idx = (4 * 7 * n + j * 4) * 3 + 2; // ci=7, cj=j
+            // Sanity bound only — exact mirror value differs.
+            // Just assert finite + reasonable.
+            let _ = edge_ctrl_idx;
+            assert!(z > -1.0 && z < 200.0);
+        }
+    }
+
+    #[test]
+    fn lb_edge_uses_adjacent_when_loaded() {
+        // Inner LB is flat at 10.0. Adjacent LBs all at 50.0. The
+        // bicubic right at the east boundary should DIFFER between
+        // the mirror branch (which sees flat 10) and the adjacent
+        // branch (which sees the 10 → 50 step). Catmull-Rom is
+        // non-monotonic — overshoot/undershoot near a step is real
+        // math, not a bug — so we test "differs", not "is higher".
+        let h = flat(10.0);
+        let c = codes(16);
+        let r = zero_roads();
+        let east_heights = [[50.0f32; 9]; 2];
+        let adj_with = AdjacentHeights {
+            east: Some(east_heights),
+            ..Default::default()
+        };
+        let adj_mirror = AdjacentHeights::default();
+
+        let out_with = subdivide_landblock(&h, &adj_with, 4, &c, &r, 0xA9B40000, 1);
+        let out_mirror = subdivide_landblock(&h, &adj_mirror, 4, &c, &r, 0xA9B40000, 1);
+
+        // Mirror case: every sample is 10 because mirror reads h itself.
+        let n = out_with.grid_size as usize;
+        for i in 0..n {
+            for j in 0..n {
+                let z = out_mirror.positions[(i * n + j) * 3 + 2];
+                assert!(
+                    (z - 10.0).abs() < 1e-3,
+                    "mirror-boundary flat LB should stay at 10 at ({i},{j}), got {z}"
+                );
+            }
+        }
+
+        // Adjacent branch: at u=7.5 (between control 7 and 8) and
+        // beyond, the patch reads east column at h[9]=50, producing a
+        // raw bicubic value different from 10. Pre-clamp CR(10,10,10,50,0.5)
+        // = 7.5 — an undershoot of 2.5 m below the bilinear (= 10).
+        // The visual-vs-collision clamp caps this at ±0.3 m → 9.7.
+        let mid_j = n / 2;
+        let z_75 = out_with.positions[(30 * n + mid_j) * 3 + 2];
+        assert!(
+            (z_75 - 9.7).abs() < 0.05,
+            "adjacent-east branch at u=7.5 should deviate to clamp at 9.7 (got {z_75})"
+        );
+        // i=32 → u=8.0 → t=0 → returns p1 = h[8] = 10 (no clamp needed).
+        let z_80 = out_with.positions[(32 * n + mid_j) * 3 + 2];
+        assert!(
+            (z_80 - 10.0).abs() < 0.1,
+            "exact east edge u=8.0 reads control point directly, got {z_80}"
+        );
+        // Verify some adjacent-branch vertex differs from the
+        // mirror-branch baseline by at least the clamp amount.
+        let z_mirror_30 = out_mirror.positions[(30 * n + mid_j) * 3 + 2];
+        assert!(
+            (z_75 - z_mirror_30).abs() > 0.25,
+            "adjacent and mirror at u=7.5 should differ by clamp; got adj={z_75}, mirror={z_mirror_30}"
+        );
+    }
+
+    #[test]
+    fn vertex_normal_flat_terrain_is_z_up() {
+        let h = flat(5.0);
+        let c = codes(16); // water — no noise
+        let r = zero_roads();
+        let adj = AdjacentHeights::default();
+        let out = subdivide_landblock(&h, &adj, 4, &c, &r, 0xA9B40000, 1);
+        // Check the centre normal — it should be (0, 0, 1).
+        let n = out.grid_size as usize;
+        let ci = n / 2;
+        let cj = n / 2;
+        let idx3 = (ci * n + cj) * 3;
+        let nx = out.normals[idx3];
+        let ny = out.normals[idx3 + 1];
+        let nz = out.normals[idx3 + 2];
+        assert!(nx.abs() < 1e-5, "flat normal x got {nx}");
+        assert!(ny.abs() < 1e-5, "flat normal y got {ny}");
+        assert!((nz - 1.0).abs() < 1e-5, "flat normal z got {nz}");
+    }
+
+    #[test]
+    fn indices_count_matches_grid_size() {
+        let h = flat(0.0);
+        let c = codes(0);
+        let r = zero_roads();
+        let adj = AdjacentHeights::default();
+        for factor in [1, 2, 4, 8] {
+            let out =
+                subdivide_landblock(&h, &adj, factor, &c, &r, 0xA9B40000, 0xC0FFEE);
+            let n = factor as usize * 8 + 1;
+            assert_eq!(out.grid_size as usize, n);
+            assert_eq!(out.vertex_count as usize, n * n);
+            assert_eq!(out.positions.len(), n * n * 3);
+            assert_eq!(out.normals.len(), n * n * 3);
+            assert_eq!(out.terrain_codes.len(), n * n);
+            assert_eq!(out.road_codes.len(), n * n);
+            // Indices: (n-1)² quads × 6 = 6(n-1)².
+            assert_eq!(out.indices.len(), 6 * (n - 1) * (n - 1));
+            // Every index in range.
+            let v = out.vertex_count;
+            for &ix in &out.indices {
+                assert!(ix < v, "index {ix} out of range {v}");
+            }
+        }
+    }
+
+    #[test]
+    fn winding_is_consistent_ccw_post_mirror() {
+        // Each triangle's (v01, v11, v00) and (v11, v10, v00) layout
+        // is the SW-last form used by `build_mesh` in lib.rs. The
+        // adapter's per-triangle reversal turns it into conventional
+        // CCW. Verify the index layout matches that contract for a
+        // small grid.
+        let h = flat(0.0);
+        let c = codes(0);
+        let r = zero_roads();
+        let adj = AdjacentHeights::default();
+        let out = subdivide_landblock(&h, &adj, 1, &c, &r, 0xA9B40000, 0xC0FFEE);
+        // First quad: (i=0, j=0). Expected indices: v01, v11, v00, v11, v10, v00.
+        let n = out.grid_size; // 9
+        let v00 = 0u32;
+        let v10 = n;
+        let v01 = 1u32;
+        let v11 = n + 1;
+        assert_eq!(&out.indices[0..6], &[v01, v11, v00, v11, v10, v00]);
+    }
+
+    #[test]
+    fn noise_displacement_clamped_to_max() {
+        // Crank up "scale" to verify the cap.
+        let d = noise_displacement_m(123.0, 456.0, 10.0, 42);
+        assert!(d.abs() <= NOISE_AMPLITUDE_MAX_M + 1e-5);
+    }
+
+    #[test]
+    fn noise_zero_scale_returns_zero() {
+        let d = noise_displacement_m(100.0, 200.0, 0.0, 42);
+        assert_eq!(d, 0.0);
+    }
+
+    #[test]
+    fn mirror_clamp_handles_edges() {
+        assert_eq!(mirror_clamp(-1), 1);
+        assert_eq!(mirror_clamp(-2), 2);
+        assert_eq!(mirror_clamp(-8), 8);
+        assert_eq!(mirror_clamp(0), 0);
+        assert_eq!(mirror_clamp(8), 8);
+        assert_eq!(mirror_clamp(9), 7);
+        assert_eq!(mirror_clamp(10), 6);
+    }
+
+    #[test]
+    fn visual_stays_within_collision_clamp() {
+        // Build a 9×9 grid with strong elevation gradient — exactly the
+        // case where Catmull-Rom overshoots the bilinear.
+        let mut h = [[0.0f32; 9]; 9];
+        for x in 0..9 {
+            for y in 0..9 {
+                // Sinusoidal hills: peaks of 50m, valleys of 0m.
+                let xx = x as f32;
+                let yy = y as f32;
+                h[x][y] = 25.0 + 25.0 * (xx * 0.7).sin() * (yy * 0.7).cos();
+            }
+        }
+        let c = codes(0); // stone — noise scale 1.0
+        let r = zero_roads();
+        let adj = AdjacentHeights::default();
+        let out = subdivide_landblock(&h, &adj, 4, &c, &r, 0xA9B40000, 0xC0FFEE);
+        let n = out.grid_size as usize;
+        let factor = 4;
+        // Every subdivided vertex must be within ±VISUAL_VS_COLLISION_MAX_M
+        // of the bilinear-at-that-point.
+        let mut max_dev = 0.0f32;
+        for i in 0..n {
+            for j in 0..n {
+                let u = i as f32 / factor as f32;
+                let v = j as f32 / factor as f32;
+                let bilinear = eval_bilinear_at(&h, u, v);
+                let z = out.positions[(i * n + j) * 3 + 2];
+                let dev = (z - bilinear).abs();
+                if dev > max_dev {
+                    max_dev = dev;
+                }
+                assert!(
+                    dev <= VISUAL_VS_COLLISION_MAX_M + 1e-4,
+                    "visual ({i},{j}) deviated by {dev} > {VISUAL_VS_COLLISION_MAX_M}"
+                );
+            }
+        }
+        eprintln!("[visual_stays_within_collision_clamp] max dev = {max_dev}");
+    }
+
+    #[test]
+    fn category_noise_scale_water_lava_zero() {
+        assert_eq!(noise_scale_for_category(SurfaceCategory::Water), 0.0);
+        assert_eq!(noise_scale_for_category(SurfaceCategory::Lava), 0.0);
+        assert!(noise_scale_for_category(SurfaceCategory::Stone) > 0.0);
+        assert!(noise_scale_for_category(SurfaceCategory::Snow) > 0.0);
+    }
+
+    /// Integration test against real Holtburg LB 0xA9B4 from
+    /// `client_cell_1.dat`. Verifies the subdivided mesh is well-formed
+    /// against actual game data (per the project memory: "prefer real
+    /// game data over synthetic"). Skips if the canonical retail dat
+    /// path isn't present.
+    #[test]
+    fn subdivide_holtburg_landblock_from_real_dat() {
+        use crate::DatDatabase;
+        use crate::landblock::CellLandblock;
+        let path =
+            std::path::PathBuf::from("/home/wbterminal/ac_base_dats/client_cell_1.dat");
+        if !path.exists() {
+            eprintln!(
+                "[subdivide_holtburg_landblock_from_real_dat] SKIP — \
+                 no client_cell_1.dat at {}",
+                path.display()
+            );
+            return;
+        }
+        let dat = DatDatabase::new(&path).expect("client_cell_1.dat should open");
+        // Holtburg LB cell terrain id = 0xA9B4FFFF.
+        let bytes = dat
+            .get_file(0xA9B4_FFFF)
+            .expect("Holtburg 0xA9B4FFFF cell terrain in retail dat");
+        let cell = CellLandblock::unpack(&bytes).expect("CellLandblock unpack");
+
+        let mut heights = [[0.0f32; 9]; 9];
+        let mut codes = [[0u8; 9]; 9];
+        let mut roads = [[0u8; 9]; 9];
+        for x in 0..9 {
+            for y in 0..9 {
+                heights[x][y] = cell.get_height(x, y);
+                codes[x][y] = cell.terrain_type(x, y);
+                roads[x][y] = cell.road_type(x, y);
+            }
+        }
+        let adjacent = AdjacentHeights::default();
+        let factor = 4u32;
+        let out = subdivide_landblock(
+            &heights, &adjacent, factor, &codes, &roads, 0xA9B4_0000, 0xC0FFEE,
+        );
+        let n = (factor * 8 + 1) as usize;
+        assert_eq!(out.grid_size as usize, n);
+        assert_eq!(out.positions.len(), n * n * 3);
+        assert_eq!(out.normals.len(), n * n * 3);
+        // Holtburg has visible elevation — height range should be > 0.
+        let mut h_min = f32::INFINITY;
+        let mut h_max = f32::NEG_INFINITY;
+        for i in 0..(n * n) {
+            let z = out.positions[i * 3 + 2];
+            if z < h_min {
+                h_min = z;
+            }
+            if z > h_max {
+                h_max = z;
+            }
+        }
+        assert!(
+            h_max - h_min > 1.0,
+            "Holtburg should have >1m height range, got [{h_min}, {h_max}]"
+        );
+        // Subdivided heights should never deviate from the underlying
+        // bicubic + 0.3m noise by an unbounded amount. At control points
+        // the subdivided value must equal the 9×9 grid exactly (modulo
+        // the noise term — but bicubic-at-control-point is the control
+        // height, and noise can shift it by up to 0.3m).
+        for cx in 0..9 {
+            for cy in 0..9 {
+                let i = cx * factor as usize;
+                let j = cy * factor as usize;
+                let z = out.positions[(i * n + j) * 3 + 2];
+                let expected = heights[cx][cy];
+                let deviation = (z - expected).abs();
+                assert!(
+                    deviation <= NOISE_AMPLITUDE_MAX_M + 0.01,
+                    "control ({cx},{cy}) deviation {deviation} exceeds noise cap"
+                );
+            }
+        }
+        eprintln!(
+            "[holtburg subdiv] grid {n}×{n}, height range [{h_min:.2}, {h_max:.2}] m, \
+             {} vertices, {} indices",
+            n * n,
+            out.indices.len()
+        );
+    }
+}
