@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>SceneryCrossCheck</RootNamespace>
+    <AssemblyName>scenery-cross-check</AssemblyName>
+    <Nullable>disable</Nullable>
+    <Description>Phase B.4 — runs ACE's Scenery.Load against retail DATs, emits JSONL for cross-check against Rust scenery-bake.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="/home/wbterminal/ace-server/Source/ACE.DatLoader/ACE.DatLoader.csproj" />
+  </ItemGroup>
+
+</Project>
