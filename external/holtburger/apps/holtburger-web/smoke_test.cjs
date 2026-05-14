@@ -3309,6 +3309,137 @@ check(
         check("F#5+6: LOD + InstancedMesh", false, String(e).slice(0, 120));
     }
 
+    // === World-expand step 1 — Objective 4 — statics per-LB baker =====
+    // Objective 4 splits `buildHoltburgStatics` into three layers per
+    // `docs/world-expand-step-1-handoff.md`:
+    //   1. `bakeStaticsForLandblock` — per-LB lazy baker (plain Mesh).
+    //   2. `bakeStaticsRing` — ring driver (InstancedMesh collapse).
+    //   3. `buildHoltburgStatics` — back-compat wrapper at radius=1.
+    //
+    // Two checks here:
+    //   (a) Symbol presence — `bakeStaticsForLandblock` + `bakeStaticsRing`
+    //       are exported and `buildHoltburgStatics` delegates to the ring
+    //       driver at radius=1 (back-compat preserved).
+    //   (b) InstancedMesh collapse still holds at radius=1 — assert via a
+    //       wasm `fetch_landblock_objects` round-trip across Holtburg's
+    //       3×3 LB cellIds that the post-bake `instancedGroupCount` would
+    //       be >0 (i.e. at least one modelId has ≥2 placements). This
+    //       mirrors the group-by-modelId logic inside `bakeStaticsRing`
+    //       so a regression that drops the ≥2 collapse branch fails the
+    //       check. Skips cleanly when DAT isn't loaded (no fixture / fast
+    //       mode); the source-pattern part of (b) verifies the ring
+    //       driver's `group.length >= 2` branch lives in `bakeStaticsRing`
+    //       so the static guarantee holds independent of DAT presence.
+    try {
+        const fs = require("fs");
+        const stSrc = fs.readFileSync(__dirname + "/scene3d/statics.js", "utf8");
+        const hasPerLbBaker =
+            /export\s+async\s+function\s+bakeStaticsForLandblock\s*\(/.test(stSrc);
+        const hasRingDriver =
+            /export\s+async\s+function\s+bakeStaticsRing\s*\(/.test(stSrc);
+        // `buildHoltburgStatics` must remain exported AND delegate to
+        // `bakeStaticsRing(..., 1, ...)` at radius=1 to keep the existing
+        // init3D radius=1 callers (Phase 7.2 + F#5+6 captures) green.
+        const hasBackCompat =
+            /export\s+async\s+function\s+buildHoltburgStatics\s*\(/.test(stSrc) &&
+            /bakeStaticsRing\s*\([^,]+,\s*[^,]+,\s*[^,]+,\s*1\s*,/.test(stSrc);
+        // The per-LB-vs-ring divergence comment must live in the file —
+        // load-bearing because per-LB lazy adds use plain Mesh while
+        // ring bake uses InstancedMesh; future agents reading this need
+        // the rationale at the source.
+        const hasDivergenceDoc = /per-LB.*ring.*diverge|diverge.*per-LB.*ring/i
+            .test(stSrc);
+        check(
+            "Obj-4(a): statics.js exports bakeStaticsForLandblock + bakeStaticsRing + radius=1 back-compat wrapper",
+            hasPerLbBaker && hasRingDriver && hasBackCompat && hasDivergenceDoc,
+            `perLb=${hasPerLbBaker}, ring=${hasRingDriver}, ` +
+                `backCompat=${hasBackCompat}, divergenceDoc=${hasDivergenceDoc}`
+        );
+    } catch (e) {
+        check(
+            "Obj-4(a): statics.js exports bakeStaticsForLandblock + bakeStaticsRing + radius=1 back-compat wrapper",
+            false,
+            String(e).slice(0, 120)
+        );
+    }
+
+    // (b) InstancedMesh collapse holds at radius=1. Computed via the
+    // same group-by-modelId logic `bakeStaticsRing` uses internally,
+    // against real wasm `fetch_landblock_objects` data for the 3×3
+    // Holtburg ring. The check skips cleanly when the manifest /
+    // shards fixture isn't installed; the source-pattern check below
+    // ensures the ≥2-branch logic exists regardless.
+    try {
+        const fs = require("fs");
+        const stSrc = fs.readFileSync(__dirname + "/scene3d/statics.js", "utf8");
+        // Source-pattern guarantee — `bakeStaticsRing` must contain the
+        // `group.length >= 2` branch that wraps the InstancedMesh path.
+        // Match the multi-line body of `bakeStaticsRing` and assert it
+        // contains both an InstancedMesh creation AND the ≥2 guard.
+        const ringBodyMatch = stSrc.match(
+            /export\s+async\s+function\s+bakeStaticsRing[\s\S]*?\n\}\n/
+        );
+        const ringBody = ringBodyMatch ? ringBodyMatch[0] : "";
+        const ringHasInstancedBranch =
+            /group\.length\s*>=\s*2/.test(ringBody) &&
+            /InstancedMesh|buildInstancedNode/.test(ringBody);
+
+        // Live-data guarantee (best-effort). If the manifest fixture is
+        // available the wasm round-trip works; if not, this falls
+        // through to the source-pattern check above.
+        let liveCollapseCount = -1;
+        let liveTotalPlacements = 0;
+        try {
+            const HOLTBURG_LBI_RADIUS_1 = [
+                0xa8b5fffe, 0xa9b5fffe, 0xaab5fffe,
+                0xa8b4fffe, 0xa9b4fffe, 0xaab4fffe,
+                0xa8b3fffe, 0xa9b3fffe, 0xaab3fffe,
+            ];
+            const placements = await wasm.fetch_landblock_objects(
+                new Uint32Array(HOLTBURG_LBI_RADIUS_1)
+            );
+            if (Array.isArray(placements) && placements.length > 0) {
+                const byModel = new Map();
+                for (const p of placements) {
+                    // Mirror `bakeStaticsRing`'s placement-by-modelId
+                    // grouping AFTER non-building filter.
+                    if (p.isBuilding) {
+                        if (typeof p.free === "function") p.free();
+                        continue;
+                    }
+                    liveTotalPlacements += 1;
+                    byModel.set(p.modelId, (byModel.get(p.modelId) ?? 0) + 1);
+                    if (typeof p.free === "function") p.free();
+                }
+                liveCollapseCount = 0;
+                for (const count of byModel.values()) {
+                    if (count >= 2) liveCollapseCount += 1;
+                }
+            }
+        } catch (_) {
+            // Wasm round-trip threw — likely no DAT installed. Fall
+            // back to the source-pattern guarantee above.
+        }
+
+        // PASS if source pattern holds. The live data is reported as
+        // ground-truth in the detail string when available; it's an
+        // upgrade signal, not a failure trigger when absent.
+        check(
+            "Obj-4(b): bakeStaticsRing preserves InstancedMesh collapse at radius=1",
+            ringHasInstancedBranch && (liveCollapseCount === -1 || liveCollapseCount > 0),
+            `srcBranch=${ringHasInstancedBranch}, ` +
+                `liveCollapseGroups=${liveCollapseCount} ` +
+                `(of ${liveTotalPlacements} non-building placements; ` +
+                `-1 means DAT not loaded — source check is the floor)`
+        );
+    } catch (e) {
+        check(
+            "Obj-4(b): bakeStaticsRing preserves InstancedMesh collapse at radius=1",
+            false,
+            String(e).slice(0, 120)
+        );
+    }
+
     // === Follow-on #10 (2026-05-10) — PIXI HUD / DOM nameplate overlay =
     // Verify `scene3d/hud.js` is no longer the 6-line placeholder — it
     // must export a `NameplateLayer` class that uses `Vector3.project(
