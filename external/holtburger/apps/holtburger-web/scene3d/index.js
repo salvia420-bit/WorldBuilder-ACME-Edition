@@ -14,17 +14,24 @@
 // any winding orders. See migration plan §"Strategic decisions" item 4.
 
 import * as THREE from "three";
+// World-expand step 1 Objective 8 — `bakeXRing` are imported here +
+// called at radius=6 below; `bakeXForLandblock` are exposed via
+// `liveScene3d.loadXForLandblock` (Objective 5) and used by the lazy
+// LB-entry hook (Objective 6). The radius=1 back-compat wrappers
+// (`buildHoltburgX`) are NOT imported here any longer — they remain
+// exported from their source files for the Phase 7.1 + visual-fidelity
+// wave 1-6 captures that still call them directly.
 import {
-  buildHoltburgTerrain,
   bakeTerrainForLandblock,
+  bakeTerrainRing,
 } from "./terrain.js";
 import {
-  buildHoltburgBuildings,
   bakeBuildingsForLandblock,
+  bakeBuildingsRing,
 } from "./buildings.js";
 import {
-  buildHoltburgStatics,
   bakeStaticsForLandblock,
+  bakeStaticsRing,
 } from "./statics.js";
 import { buildEnvCellsForLandblock } from "./cells.js";
 import { tickPerFrame, installSharedDrainHook } from "./loop.js";
@@ -49,6 +56,29 @@ import { createSsaoPipeline } from "./postprocess.js";
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
 const HOLTBURG_Y = 0xb4;
+// World-expand step 1 Objective 8 (2026-05-14) — initial ring radius
+// around Holtburg flipped from 1 (3×3 = 9 LBs) to 6 (13×13 = 169 LBs).
+// Per `docs/world-expand-step-1-handoff.md` §Intent / §Objective 8 the
+// new ring covers ~2.5 km × 2.5 km of Aluvian Heartlands (Holtburg in
+// the centre plus 168 surrounding LBs — 51 populated, 118 wilderness
+// per the WorldBuilder.Terminal oracle at
+// `/mnt/wbterminal1/tmp/claude-scratch/world-expand/ring_13x13_inventory.jsonl`).
+//
+// init-time impact: terrain bake ~6× slower at radius=6 vs radius=1
+// (oracle reports 169/9 ≈ 19× more LBs but 118 are empty so buildings/
+// statics are sub-linear); cold-fetch through manifest+shards adds
+// ~5-15 s of HTTP fetches for non-boot LBs. Total init jumps from ~3 s
+// to ~10-30 s (per brief, acceptable). Phase 6's lazy LB-entry pipeline
+// + Objective 6's per-LB hooks keep the walk-out path efficient (LBs
+// past the initial ring still lazy-load on player movement).
+//
+// The `buildHoltburgX` exports in terrain.js / buildings.js /
+// statics.js remain radius=1 back-compat wrappers for the existing
+// Phase 7.1 capture + visual-fidelity wave 1-6 captures. Objective 8
+// flips ONLY the init3D call site; per-capture follow-ons are
+// out-of-scope (radius=1-hardcoded assertions move forward in their
+// own PR via Objective 10's `capture_world_expand_e2e.cjs`).
+const HOLTBURG_RING_RADIUS = 6;
 
 export async function init3D(canvas, sessionHandle, wasmExports) {
   // Phase X.1 — resolve the visual-fidelity quality preset from URL +
@@ -377,14 +407,36 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // flips the rest off.
     activeLights: [],
   };
+  // World-expand step 1 Objective 8 (2026-05-14) — record the ring's
+  // centre + spawn LB on scene3d so Objective 7's
+  // `pickSubdivLevelForLb` can compute Chebyshev distance correctly at
+  // bake time. `initialCentreLbKey` is the ring centre (Holtburg);
+  // `playerLbKey` starts equal to it (spawn = centre) and is updated
+  // by Objective 6's `handlePositionUpdate` lazy hook as the player
+  // walks. Both are packed `((lbX << 24) | (lbY << 16)) >>> 0` per
+  // the docs/world-expand-step-1-handoff.md §Sketch — distance-keyed
+  // LOD shape.
+  scene3dForBuilders.initialCentreLbKey =
+    ((HOLTBURG_X << 24) | (HOLTBURG_Y << 16)) >>> 0;
+  scene3dForBuilders.playerLbKey = scene3dForBuilders.initialCentreLbKey;
   if (
     wasmExports &&
     typeof wasmExports.fetch_landblock_heightmaps === "function" &&
     typeof wasmExports.fetch_terrain_textures === "function"
   ) {
     try {
-      terrainSummary = await buildHoltburgTerrain(
+      // World-expand step 1 Objective 8 — flip the initial ring from
+      // radius=1 (3×3, 9 LBs) to radius=6 (13×13, 169 LBs) by calling
+      // `bakeTerrainRing` directly instead of the radius=1 back-compat
+      // wrapper `buildHoltburgTerrain`. Same call shape as the wrapper
+      // forwards to, but with the explicit `HOLTBURG_RING_RADIUS`
+      // constant (defined near `HOLTBURG_X` / `HOLTBURG_Y` above) so a
+      // future radius bump is a one-line edit.
+      terrainSummary = await bakeTerrainRing(
         scene3dForBuilders,
+        HOLTBURG_X,
+        HOLTBURG_Y,
+        HOLTBURG_RING_RADIUS,
         wasmExports
       );
       // Move the hello-cube 100 m off-axis so it doesn't sit in the
@@ -415,7 +467,7 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
       // loop) still ships. The Phase 7.1 capture will catch it via
       // the per-LB assertions.
       // eslint-disable-next-line no-console
-      console.error("[scene3d] buildHoltburgTerrain failed:", e);
+      console.error("[scene3d] bakeTerrainRing failed:", e);
     }
   }
 
@@ -429,27 +481,41 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     typeof wasmExports.fetch_surfaces_pixels === "function"
   ) {
     try {
-      buildingsSummary = await buildHoltburgBuildings(
+      // World-expand step 1 Objective 8 — buildings ring flip 1 → 6.
+      // Calling `bakeBuildingsRing` directly (skipping the radius=1
+      // back-compat wrapper `buildHoltburgBuildings`) so the same
+      // `HOLTBURG_RING_RADIUS` constant gates all three layers.
+      buildingsSummary = await bakeBuildingsRing(
         scene3dForBuilders,
+        HOLTBURG_X,
+        HOLTBURG_Y,
+        HOLTBURG_RING_RADIUS,
         wasmExports
       );
       // eslint-disable-next-line no-console
       console.log("[phase7.2] buildings:", buildingsSummary);
     } catch (e) {
       // eslint-disable-next-line no-console
-      console.error("[scene3d] buildHoltburgBuildings failed:", e);
+      console.error("[scene3d] bakeBuildingsRing failed:", e);
     }
     if (typeof wasmExports.fetch_model_meshes === "function") {
       try {
-        staticsSummary = await buildHoltburgStatics(
+        // World-expand step 1 Objective 8 — statics ring flip 1 → 6.
+        // Calling `bakeStaticsRing` directly (skipping the radius=1
+        // back-compat wrapper `buildHoltburgStatics`) so the same
+        // `HOLTBURG_RING_RADIUS` constant gates all three layers.
+        staticsSummary = await bakeStaticsRing(
           scene3dForBuilders,
+          HOLTBURG_X,
+          HOLTBURG_Y,
+          HOLTBURG_RING_RADIUS,
           wasmExports
         );
         // eslint-disable-next-line no-console
         console.log("[phase7.2] statics:", staticsSummary);
       } catch (e) {
         // eslint-disable-next-line no-console
-        console.error("[scene3d] buildHoltburgStatics failed:", e);
+        console.error("[scene3d] bakeStaticsRing failed:", e);
       }
     }
 

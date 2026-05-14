@@ -4052,6 +4052,108 @@ check(
         );
     }
 
+    // === World-expand step 1 Objective 8 (2026-05-14) — initial ring
+    // === flip 1 → 6 (3×3 → 13×13) at init3D ============================
+    // Source-pattern check that `scene3d/index.js` defines the
+    // `HOLTBURG_RING_RADIUS = 6` constant and that the three `bakeXRing`
+    // call sites in `init3D` both (a) import the ring driver export,
+    // (b) call it with the constant as the radius argument, and
+    // (c) set `initialCentreLbKey` + `playerLbKey` on the scene3d stub
+    // before the ring bakes run so Objective 7's `pickSubdivLevelForLb`
+    // can pick the right reference LB.
+    //
+    // The live verification (`terrainGroup.children.length === 169`,
+    // building/statics counts, oracle parity) lives in
+    // `capture_world_expand_e2e.cjs` (Objective 10). Here we just
+    // assert the source-level wiring per the brief's verification gate:
+    // "Smoke 171 → 172: +1 check asserting `HOLTBURG_RING_RADIUS === 6`
+    //  or the three `bakeXRing` calls pass `6` (a source-pattern grep
+    //  on scene3d/index.js)."
+    try {
+        const fs = require("fs");
+        const path = require("path");
+        const indexPath = path.resolve(__dirname, "scene3d", "index.js");
+        const src = fs.readFileSync(indexPath, "utf8");
+
+        // (a) The constant must be defined at module scope and equal 6.
+        const hasRadiusConst =
+            /\bconst\s+HOLTBURG_RING_RADIUS\s*=\s*6\s*;/.test(src);
+
+        // (b) All three ring drivers must be imported from their source
+        // modules.
+        const importsTerrainRing =
+            /\bbakeTerrainRing\b[\s\S]{0,300}from\s*["']\.\/terrain\.js["']/.test(
+                src
+            );
+        const importsBuildingsRing =
+            /\bbakeBuildingsRing\b[\s\S]{0,300}from\s*["']\.\/buildings\.js["']/.test(
+                src
+            );
+        const importsStaticsRing =
+            /\bbakeStaticsRing\b[\s\S]{0,300}from\s*["']\.\/statics\.js["']/.test(
+                src
+            );
+
+        // (c) Each ring driver must be called with the
+        // `HOLTBURG_RING_RADIUS` constant as the fourth argument
+        // (`(scene3d, lbX, lbY, radius, wasmExports)`).
+        // Match across whitespace + line breaks; the call shape is
+        // multi-line per the existing init3D formatting.
+        const callsTerrainAtRadius =
+            /bakeTerrainRing\s*\(\s*\w+\s*,\s*HOLTBURG_X\s*,\s*HOLTBURG_Y\s*,\s*HOLTBURG_RING_RADIUS\s*,/.test(
+                src
+            );
+        const callsBuildingsAtRadius =
+            /bakeBuildingsRing\s*\(\s*\w+\s*,\s*HOLTBURG_X\s*,\s*HOLTBURG_Y\s*,\s*HOLTBURG_RING_RADIUS\s*,/.test(
+                src
+            );
+        const callsStaticsAtRadius =
+            /bakeStaticsRing\s*\(\s*\w+\s*,\s*HOLTBURG_X\s*,\s*HOLTBURG_Y\s*,\s*HOLTBURG_RING_RADIUS\s*,/.test(
+                src
+            );
+
+        // (d) `initialCentreLbKey` + `playerLbKey` seeded on the
+        // scene3dForBuilders stub before the ring bakes fire — Objective
+        // 7's `pickSubdivLevelForLb` reads these to compute Chebyshev
+        // distance from the ring centre.
+        const setsInitialCentreLbKey =
+            /scene3dForBuilders\.initialCentreLbKey\s*=\s*\(\s*\(\s*HOLTBURG_X\s*<<\s*24\s*\)\s*\|\s*\(\s*HOLTBURG_Y\s*<<\s*16\s*\)\s*\)\s*>>>\s*0\s*;/.test(
+                src
+            );
+        const setsPlayerLbKey =
+            /scene3dForBuilders\.playerLbKey\s*=\s*scene3dForBuilders\.initialCentreLbKey\s*;/.test(
+                src
+            );
+
+        check(
+            "World-expand step 1 Objective 8: HOLTBURG_RING_RADIUS=6 + three bakeXRing calls + initialCentreLbKey/playerLbKey seeded in init3D",
+            hasRadiusConst &&
+                importsTerrainRing &&
+                importsBuildingsRing &&
+                importsStaticsRing &&
+                callsTerrainAtRadius &&
+                callsBuildingsAtRadius &&
+                callsStaticsAtRadius &&
+                setsInitialCentreLbKey &&
+                setsPlayerLbKey,
+            `radiusConst=${hasRadiusConst} ` +
+                `importsTerrainRing=${importsTerrainRing} ` +
+                `importsBuildingsRing=${importsBuildingsRing} ` +
+                `importsStaticsRing=${importsStaticsRing} ` +
+                `callsTerrainAtRadius=${callsTerrainAtRadius} ` +
+                `callsBuildingsAtRadius=${callsBuildingsAtRadius} ` +
+                `callsStaticsAtRadius=${callsStaticsAtRadius} ` +
+                `setsInitialCentreLbKey=${setsInitialCentreLbKey} ` +
+                `setsPlayerLbKey=${setsPlayerLbKey}`
+        );
+    } catch (e) {
+        check(
+            "World-expand step 1 Objective 8: HOLTBURG_RING_RADIUS=6 + three bakeXRing calls + initialCentreLbKey/playerLbKey seeded in init3D",
+            false,
+            String(e?.message ?? e).slice(0, 160)
+        );
+    }
+
     // === Workstream Sky-D (2026-05-11) — sky dome + celestial bodies =
     // Verifies `scene3d/sky_dome.js` is present, exports `SkyDome` class,
     // references the expected shape (gradient ShaderMaterial uniforms +
