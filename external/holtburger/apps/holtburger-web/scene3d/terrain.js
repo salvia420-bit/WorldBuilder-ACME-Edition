@@ -765,6 +765,17 @@ async function resolveTerrainRingOpts(
     atlasTexture.magFilter = THREE.LinearFilter;
     atlasTexture.minFilter = THREE.LinearMipmapLinearFilter;
     atlasTexture.generateMipmaps = true;
+    // THREE.CanvasTexture defaults flipY=true so the GPU vertically
+    // mirrors the canvas at upload. The fragment shader's
+    // `atlasUvFor(code, ...)` packs slots as `row = code/6`; with
+    // flipY=true every code C ends up sampling slot `(5 - C/6)*6 +
+    // C%6` instead of slot C — e.g. Grassland (1) → DesolateLands (31),
+    // LushGrass (3) → empty slot 33 (black), PatchyGrassland (9) →
+    // BlueIce (27, cyan). Matches adapter.js's surface-texture pattern
+    // (flipY=false at lines 588 / 644 / 691). Latent since the initial
+    // Phase 7.1 3D port; surfaced visually once the 13×13 ring (commit
+    // 2bbb0ad) exposed enough non-water LBs to show the discrepancy.
+    atlasTexture.flipY = false;
     atlasTexture.needsUpdate = true;
 
     if (roadCanvas) {
@@ -775,6 +786,11 @@ async function resolveTerrainRingOpts(
       roadTexture.magFilter = THREE.LinearFilter;
       roadTexture.minFilter = THREE.LinearMipmapLinearFilter;
       roadTexture.generateMipmaps = true;
+      // Same flipY=false as the atlas above — the road tile is a single
+      // sub-image with RepeatWrapping; flipY=true would vertically
+      // mirror the tile and rotate any directional road art (arrows /
+      // gravel direction) 180°. Matches adapter.js convention.
+      roadTexture.flipY = false;
       roadTexture.needsUpdate = true;
     }
   }
