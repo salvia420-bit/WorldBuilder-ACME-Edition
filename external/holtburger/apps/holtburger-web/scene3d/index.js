@@ -34,6 +34,11 @@ import {
   bakeStaticsRing,
 } from "./statics.js";
 import { buildEnvCellsForLandblock } from "./cells.js";
+// Phase D.1 — synthetic ACE entity-spawn injector. The third
+// placement stream (after `fetch_landblock_objects` DAT-explicit and
+// `fetch_landblock_scenery` DAT-baked). See `scene3d/spawns.js`'s
+// header for the dispatch-surface contract.
+import { ensureSpawnsForLandblock } from "./spawns.js";
 import { tickPerFrame, installSharedDrainHook } from "./loop.js";
 import { EntityManager } from "./entities.js";
 import { CameraSwitcher, createOrthoCamera } from "./camera.js";
@@ -1028,6 +1033,24 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
         this.staticsOpts,
         this.wasmExports
       );
+    },
+    // === Phase D.1 — per-LB lazy ACE spawn injector ===
+    // Third placement stream (per `docs/hypotheticalmethod.md`'s
+    // three-stream merge contract). Fetches pre-staged JSONL from
+    // `/dist/spawns/<lb_hex>.spawns.jsonl` via `fetch_landblock_spawns`,
+    // resolves each record's wcid to a SetupModel DID via the staged
+    // `wcid_to_setup.json` lookup, and replays each through
+    // `window.__scene3dEntityHook` (the SAME entry point a live ACE
+    // would use). Idempotent — re-firing for an already-injected LB
+    // is a no-op. See `scene3d/spawns.js` for the full contract.
+    //
+    // Called by the lazy LB-entry hook in `index.html`
+    // (`handlePositionUpdate`) sitting alongside loadTerrain /
+    // loadBuildings / loadStatics. No ring-bake equivalent: ACE
+    // spawns are intentionally lazy (the wire's KIND_SPAWN on a live
+    // server arrives per-LB-radius, not in bulk at boot).
+    loadSpawnsForLandblock(lbX, lbY) {
+      return ensureSpawnsForLandblock(lbX, lbY, this, this.wasmExports);
     },
     // Reference back to the wasm exports the caller passed in. Phases
     // 7.1+ pull from this rather than re-importing.

@@ -259,6 +259,142 @@ check(
     `typeof ${typeof wasm.ScenicPlacementJs}`
 );
 
+// Phase D.1: fetch_landblock_spawns + companion helpers must be
+// present. The third placement stream (after fetch_landblock_objects
+// DAT-explicit + fetch_landblock_scenery DAT-baked). End-to-end
+// round-trip against the staged JSONL is in the capture script
+// `capture_phase_d_spawns.cjs` — symbol presence here is the
+// wasm-side bundle-shape gate.
+check(
+    "fetch_landblock_spawns() is exported (Phase D.1 ACE spawn fetch)",
+    typeof wasm.fetch_landblock_spawns === "function",
+    `typeof ${typeof wasm.fetch_landblock_spawns}`
+);
+check(
+    "init_spawns_base_url() is exported (Phase D.1 spawns base URL)",
+    typeof wasm.init_spawns_base_url === "function",
+    `typeof ${typeof wasm.init_spawns_base_url}`
+);
+check(
+    "spawns_cache_size() is exported (Phase D.1 cache probe)",
+    typeof wasm.spawns_cache_size === "function",
+    `typeof ${typeof wasm.spawns_cache_size}`
+);
+check(
+    "EntitySpawnJs class is exported (Phase D.1 record type)",
+    typeof wasm.EntitySpawnJs === "function",
+    `typeof ${typeof wasm.EntitySpawnJs}`
+);
+
+// Phase D.1.c source-pattern — scene3d/spawns.js must use the
+// canonical entity-spawn dispatch surface `window.__scene3dEntityHook`
+// (NOT bypass it by calling em.spawn directly). The whole point of
+// Phase D is verifying THAT entry point handles the full ACE-DB
+// roster. Without this gate a future refactor could silently rewire
+// to `em.spawn(meta)` and the synthetic injector would no longer
+// validate the live-ACE dispatch path.
+//
+// Also assert the injector calls fetch_landblock_spawns + the
+// staged wcid_to_setup.json lookup. The 2D path is also routed
+// through (window.handleEntitySpawn for symmetry with the wire
+// dispatch at index.html:6529-6540).
+try {
+    const fs = require("fs");
+    const spawnsSrc = fs.readFileSync(
+        __dirname + "/scene3d/spawns.js",
+        "utf8"
+    );
+    const hasFetchSpawns =
+        /\bwasmExports\.fetch_landblock_spawns\s*\(/.test(spawnsSrc);
+    const hasEntityHook =
+        /\bwindow\.__scene3dEntityHook\s*\(/.test(spawnsSrc);
+    const hasHandleSpawn =
+        /\bwindow\.handleEntitySpawn\s*\(/.test(spawnsSrc);
+    const hasWcidLookup =
+        /wcid_to_setup\.json/.test(spawnsSrc) ||
+        /loadWcidToSetupMap/.test(spawnsSrc);
+    const hasPlaceholderFallback =
+        /PLACEHOLDER_SETUP_DID/.test(spawnsSrc);
+    const hasDeterministicGuid =
+        /\bderiveSyntheticGuid\b/.test(spawnsSrc);
+    check(
+        "Phase D.1.c: scene3d/spawns.js dispatches through __scene3dEntityHook + handleEntitySpawn",
+        hasFetchSpawns &&
+            hasEntityHook &&
+            hasHandleSpawn &&
+            hasWcidLookup &&
+            hasPlaceholderFallback &&
+            hasDeterministicGuid,
+        `fetchSpawns=${hasFetchSpawns} hook=${hasEntityHook} ` +
+            `handleSpawn=${hasHandleSpawn} wcidLookup=${hasWcidLookup} ` +
+            `placeholder=${hasPlaceholderFallback} ` +
+            `deterministicGuid=${hasDeterministicGuid}`
+    );
+} catch (e) {
+    check(
+        "Phase D.1.c: scene3d/spawns.js dispatches through __scene3dEntityHook + handleEntitySpawn",
+        false,
+        String(e).slice(0, 160)
+    );
+}
+
+// Phase D.1.c source-pattern — scene3d/index.js wires
+// loadSpawnsForLandblock onto liveScene3d (mirrors
+// loadStaticsForLandblock / loadBuildingsForLandblock / etc.). Without
+// this, the lazy LB-entry hook in index.html can't fire the injector.
+try {
+    const fs = require("fs");
+    const idxSrc = fs.readFileSync(
+        __dirname + "/scene3d/index.js",
+        "utf8"
+    );
+    const importsSpawns =
+        /from\s+["']\.\/spawns\.js["']/.test(idxSrc) &&
+        /\bensureSpawnsForLandblock\b/.test(idxSrc);
+    const loadHook =
+        /loadSpawnsForLandblock\s*\(\s*lbX\s*,\s*lbY\s*\)/.test(idxSrc);
+    check(
+        "Phase D.1.c: scene3d/index.js exposes liveScene3d.loadSpawnsForLandblock",
+        importsSpawns && loadHook,
+        `importsSpawns=${importsSpawns} loadHook=${loadHook}`
+    );
+} catch (e) {
+    check(
+        "Phase D.1.c: scene3d/index.js exposes liveScene3d.loadSpawnsForLandblock",
+        false,
+        String(e).slice(0, 160)
+    );
+}
+
+// Phase D.1.c source-pattern — index.html fires loadSpawnsForLandblock
+// from handlePositionUpdate alongside loadTerrain / loadBuildings /
+// loadStatics. Without this, the 13×13 ring's spawns never get
+// injected — Phase D capture would see entitiesGroup.children=0.
+try {
+    const fs = require("fs");
+    const idxHtmlSrc = fs.readFileSync(
+        __dirname + "/index.html",
+        "utf8"
+    );
+    const positionHook =
+        /window\.liveScene3d\?\.loadSpawnsForLandblock/.test(idxHtmlSrc) &&
+        /window\.liveScene3d\.loadSpawnsForLandblock\s*\(/.test(idxHtmlSrc);
+    const init3dImport =
+        /\bfetch_landblock_spawns\b/.test(idxHtmlSrc) &&
+        /\binit_spawns_base_url\b/.test(idxHtmlSrc);
+    check(
+        "Phase D.1.c: index.html handlePositionUpdate fires loadSpawnsForLandblock + imports fetch_landblock_spawns",
+        positionHook && init3dImport,
+        `positionHook=${positionHook} init3dImport=${init3dImport}`
+    );
+} catch (e) {
+    check(
+        "Phase D.1.c: index.html handlePositionUpdate fires loadSpawnsForLandblock + imports fetch_landblock_spawns",
+        false,
+        String(e).slice(0, 160)
+    );
+}
+
 // Phase 4 step 1: start_session + SessionHandle (with .poll_events()
 // and .characterList()) must be present. The `start_session` round-trip
 // itself is browser-only — ACE login synthesis in Node would require

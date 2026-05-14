@@ -530,6 +530,16 @@
         // fetch_terrain_alpha_masks — kept exported in pkg for a
         // future TexMerge mode; not used by the bilinear path.
         fetch_landblock_objects,
+        // Phase D.1 (2026-05-14) — synthetic ACE entity-spawn channel.
+        // Reads pre-staged JSONL at `dist/spawns/<lb_hex>.spawns.jsonl`
+        // and returns one `EntitySpawnJs` per record. The renderer's
+        // `scene3d/spawns.js` consumes the result, resolves each
+        // record's wcid to a SetupModel via `dist/spawns/wcid_to_setup.json`,
+        // and replays each through `window.__scene3dEntityHook`. See
+        // `docs/hypotheticalmethod.md` §"The renderer's view" for the
+        // three-stream merge contract.
+        fetch_landblock_spawns,
+        init_spawns_base_url,
         fetch_object_colours,
         fetch_model_meshes,
         fetch_surfaces_pixels,
@@ -4227,6 +4237,19 @@ void main() {
             const cy = (lbId >>> 16) & 0xff;
             window.liveScene3d.loadStaticsForLandblock(cx, cy);
           }
+          // === Phase D.1 (2026-05-14) — synthetic ACE entity-spawn
+          // injection for the new LB. Third placement stream alongside
+          // loadTerrain / loadBuildings / loadStatics. Reads pre-staged
+          // JSONL via `fetch_landblock_spawns`, resolves wcid →
+          // setupDid via `wcid_to_setup.json`, then replays each
+          // record through `window.__scene3dEntityHook` (the SAME
+          // dispatcher a live ACE wire feeds). Idempotent per LB.
+          // See `scene3d/spawns.js` for the contract.
+          if (lbId !== 0 && window.liveScene3d?.loadSpawnsForLandblock) {
+            const cx = (lbId >>> 24) & 0xff;
+            const cy = (lbId >>> 16) & 0xff;
+            window.liveScene3d.loadSpawnsForLandblock(cx, cy);
+          }
           // 2026-05-09 follow-up (open-world step 2/3 + 3/3): paint
           // building meshes + non-building object sprites for the
           // new LB so the player sees landmarks, not just textured
@@ -4955,6 +4978,13 @@ void main() {
             fetch_subdivided_landblocks,
             fetch_terrain_textures,
             fetch_landblock_objects,
+            // Phase D.1 (2026-05-14) — ACE entity-spawn channel.
+            // Without this listed in init3D opts the export is
+            // invisible to `scene3d/spawns.js` and the lazy LB-entry
+            // injector silently skips (same failure mode the Sky-J /
+            // H2 / H3 plumb-through bug had before db2abfa).
+            fetch_landblock_spawns,
+            init_spawns_base_url,
             fetch_model_meshes,
             fetch_surfaces_pixels,
             fetchEntityModelRender,

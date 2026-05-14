@@ -1393,6 +1393,432 @@ pub async fn fetch_landblock_scenery(
     Ok(out)
 }
 
+// =====================================================================
+// Phase D.1 — synthetic ACE entity-spawn fetch (`fetch_landblock_spawns`).
+// =====================================================================
+//
+// Third placement stream in the world-completeness method (after the
+// DAT-explicit `fetch_landblock_objects` and the DAT-baked
+// `fetch_landblock_scenery`). This one reads the ACE
+// `landblock_instance` table — pre-staged per-LB as JSONL under
+// `/dist/spawns/<lb_hex>.spawns.jsonl` by
+// `scripts/world-completeness/stage-ring-spawns.py`. The renderer's
+// JS-side synthetic injector at `scene3d/spawns.js` calls
+// [`fetch_landblock_spawns`] for each new LB the player enters,
+// resolves each record to a SetupModel DID via the staged
+// `wcid_to_setup.json`, and replays each record through
+// `window.__scene3dEntityHook` (the SAME entry point a live ACE
+// would use over the wire).
+//
+// Why this fetch lives in wasm and not just JS:
+//   - Mirrors the scenery + objects fetch ergonomics (one wasm round-
+//     trip per LB; cached thread-local-side).
+//   - Keeps the per-LB JSONL parsing in Rust where it already lives
+//     for scenery; the JS-side just walks the returned
+//     `EntitySpawnJs[]`.
+//   - Phase E's validator will eventually want to diff
+//     `rendered_placements` vs `wasm.fetch_landblock_*` for every
+//     LB; uniform fetch APIs make that simpler.
+//
+// 404 / empty body = "queried, zero spawns this LB". The empty-file
+// invariant the bake stage upholds means missing-file is unambiguous:
+// 404 ⇒ LB outside the staged ring; 0-byte body ⇒ LB in the ring,
+// zero spawns.
+
+/// One ACE entity-spawn record — JS-facing mirror of the staged
+/// JSONL. Coordinates `(x, y, z)` are LB-local metres (the renderer
+/// adds `lbX * 192, lbY * 192` for world coords). The quaternion is
+/// always identity today (the source JSONL drops per-axis components
+/// — only `orientation.isIdentity` is present). When the source
+/// dumper is upgraded to emit full quats, the parser absorbs the
+/// new fields and the renderer reads them via the same getters.
+///
+/// `wcid` is the ACE weenie classification ID. The renderer resolves
+/// it to a SetupModel DID via the staged `wcid_to_setup.json` lookup
+/// in JS (not in wasm — keeps the wasm export pure-fetch).
+///
+/// `landblock_id` is the packed `0xXXYY0000` LB key (top 16 bits of
+/// the input `cell_id`, low 16 cleared), mirroring the
+/// `ScenicPlacementJs` field shape so JS can group placements by LB
+/// without re-deriving from the JSONL filename.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct EntitySpawnJs {
+    wcid: u32,
+    weenie_type: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+    qw: f32,
+    qx: f32,
+    qy: f32,
+    qz: f32,
+    landblock_id: u32,
+    cell: u32,
+    is_server_managed: bool,
+    name: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl EntitySpawnJs {
+    #[wasm_bindgen(getter)]
+    pub fn wcid(&self) -> u32 {
+        self.wcid
+    }
+    #[wasm_bindgen(getter, js_name = weenieType)]
+    pub fn weenie_type(&self) -> u32 {
+        self.weenie_type
+    }
+    #[wasm_bindgen(getter)]
+    pub fn x(&self) -> f32 {
+        self.x
+    }
+    #[wasm_bindgen(getter)]
+    pub fn y(&self) -> f32 {
+        self.y
+    }
+    #[wasm_bindgen(getter)]
+    pub fn z(&self) -> f32 {
+        self.z
+    }
+    #[wasm_bindgen(getter)]
+    pub fn qw(&self) -> f32 {
+        self.qw
+    }
+    #[wasm_bindgen(getter)]
+    pub fn qx(&self) -> f32 {
+        self.qx
+    }
+    #[wasm_bindgen(getter)]
+    pub fn qy(&self) -> f32 {
+        self.qy
+    }
+    #[wasm_bindgen(getter)]
+    pub fn qz(&self) -> f32 {
+        self.qz
+    }
+    #[wasm_bindgen(getter, js_name = landblockId)]
+    pub fn landblock_id(&self) -> u32 {
+        self.landblock_id
+    }
+    #[wasm_bindgen(getter)]
+    pub fn cell(&self) -> u32 {
+        self.cell
+    }
+    #[wasm_bindgen(getter, js_name = isServerManaged)]
+    pub fn is_server_managed(&self) -> bool {
+        self.is_server_managed
+    }
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+}
+
+/// Raw JSONL line shape for spawns. The orientation field in the
+/// source dump only carries `{isIdentity: bool}` today — full
+/// quaternion components (`w`, `x`, `y`, `z`) are absent. We absorb
+/// the optional full-quat fields via `#[serde(default)]` so a future
+/// dumper upgrade lands here without a schema break; identity-quat
+/// is the default until then.
+///
+/// `landblockId` is a decimal int in the source JSONL (e.g. 43444 for
+/// Holtburg) — NOT a hex string like the scenery `obj_id`. No
+/// post-parse decode needed.
+#[cfg(target_arch = "wasm32")]
+#[derive(serde::Deserialize)]
+struct EntitySpawnJsonRaw {
+    wcid: u32,
+    #[serde(default)]
+    name: String,
+    #[serde(default, rename = "weenieType")]
+    weenie_type: u32,
+    #[serde(rename = "landblockId")]
+    landblock_id: u32,
+    #[serde(default)]
+    cell: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+    #[serde(default, rename = "isServerManaged")]
+    is_server_managed: bool,
+    /// Optional explicit quaternion (future-proof — today's dumper
+    /// only emits `orientationIsIdentity`). When absent the parser
+    /// emits identity (qw=1).
+    #[serde(default)]
+    qw: Option<f32>,
+    #[serde(default)]
+    qx: Option<f32>,
+    #[serde(default)]
+    qy: Option<f32>,
+    #[serde(default)]
+    qz: Option<f32>,
+}
+
+#[cfg(target_arch = "wasm32")]
+mod spawn_fetch {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    use wasm_bindgen::prelude::*;
+
+    use super::{EntitySpawnJs, EntitySpawnJsonRaw};
+
+    thread_local! {
+        /// Spawns base URL, set once by `init_spawns_base_url`.
+        static BASE_URL: RefCell<Option<String>> = const { RefCell::new(None) };
+
+        /// Per-LB cache. Key = packed LB id (`0xXXYY0000`), value =
+        /// vector of pure-data spawn records. JS materialises a fresh
+        /// `EntitySpawnJs` per call (wasm-bindgen `pub struct`
+        /// instances are JS-owned — different JsValues point at
+        /// different wasm pages).
+        #[allow(clippy::type_complexity)]
+        static CACHE: RefCell<HashMap<u32, Vec<CachedSpawn>>> =
+            RefCell::new(HashMap::new());
+
+        /// Whether we've fetched + logged the `source.sha256` sidecar
+        /// yet this page-init. One-shot side effect on first
+        /// `fetch_landblock_spawns` call.
+        static SHA_LOGGED: RefCell<bool> = const { RefCell::new(false) };
+    }
+
+    /// Cached parsed primitives. Materialised into JS-facing
+    /// `EntitySpawnJs` instances per call so JS owns each entity-spawn
+    /// object independently.
+    #[derive(Debug, Clone)]
+    pub struct CachedSpawn {
+        pub wcid: u32,
+        pub weenie_type: u32,
+        pub x: f32,
+        pub y: f32,
+        pub z: f32,
+        pub qw: f32,
+        pub qx: f32,
+        pub qy: f32,
+        pub qz: f32,
+        pub cell: u32,
+        pub is_server_managed: bool,
+        pub name: String,
+    }
+
+    /// Set the base URL for `/spawns/...` fetches. Mirrors
+    /// `init_scenery_base_url`'s shape. Trailing slash is added when
+    /// missing. Safe to call multiple times — overwrites.
+    #[wasm_bindgen]
+    pub fn init_spawns_base_url(url: String) {
+        let mut normalised = url;
+        if !normalised.ends_with('/') {
+            normalised.push('/');
+        }
+        BASE_URL.with(|cell| {
+            *cell.borrow_mut() = Some(normalised);
+        });
+    }
+
+    /// Number of LBs currently cached (positive entries — empties
+    /// count too). Smoke / hand-smoke tests use this as a "did the
+    /// cache populate?" probe.
+    #[wasm_bindgen]
+    pub fn spawns_cache_size() -> usize {
+        CACHE.with(|cell| cell.borrow().len())
+    }
+
+    /// Clear the spawns cache. Useful for unit / smoke tests that
+    /// want to verify cache miss vs hit behaviour. Not used in
+    /// normal page flow.
+    #[wasm_bindgen]
+    pub fn clear_spawns_cache() {
+        CACHE.with(|cell| cell.borrow_mut().clear());
+        SHA_LOGGED.with(|cell| *cell.borrow_mut() = false);
+    }
+
+    /// Fetch + parse one LB's spawns JSONL. Returns `Ok(Vec<...>)`
+    /// of cached records (may be empty for empty-staged LBs or 404).
+    /// Errors only on JSON-parse failure (real bake corruption).
+    pub async fn fetch_one_lb(
+        base_url: &str,
+        lb_key: u32,
+    ) -> Result<Vec<CachedSpawn>, String> {
+        // Cache hit?
+        let cached = CACHE.with(|cell| cell.borrow().get(&lb_key).cloned());
+        if let Some(hit) = cached {
+            return Ok(hit);
+        }
+
+        let lb_hex = format!("0x{:04X}", (lb_key >> 16) & 0xFFFF);
+        let url = format!("{base_url}{lb_hex}.spawns.jsonl");
+
+        let body = match holtburger_resource_http::fetch_bytes(&url).await {
+            Ok(b) => b,
+            // 404 → "outside staged ring" — render no spawns here.
+            Err(holtburger_resource_http::HttpError::Http { status: 404, .. }) => {
+                CACHE.with(|cell| cell.borrow_mut().insert(lb_key, Vec::new()));
+                return Ok(Vec::new());
+            }
+            Err(e) => return Err(format!("fetch {url}: {e}")),
+        };
+
+        // Empty body = "queried, zero spawns" (the staging script
+        // emits an empty file for every ring LB, including the 125
+        // with no spawns).
+        if body.is_empty() {
+            CACHE.with(|cell| cell.borrow_mut().insert(lb_key, Vec::new()));
+            return Ok(Vec::new());
+        }
+
+        let text =
+            std::str::from_utf8(&body).map_err(|e| format!("{url}: body not utf-8: {e}"))?;
+        let mut out: Vec<CachedSpawn> = Vec::new();
+        for (lineno, line) in text.lines().enumerate() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let raw: EntitySpawnJsonRaw = serde_json::from_str(trimmed)
+                .map_err(|e| format!("{url} line {}: {e}", lineno + 1))?;
+            // Identity quaternion when the source doesn't ship per-axis
+            // components (today's dumper). Future-proof for when it does.
+            let qw = raw.qw.unwrap_or(1.0);
+            let qx = raw.qx.unwrap_or(0.0);
+            let qy = raw.qy.unwrap_or(0.0);
+            let qz = raw.qz.unwrap_or(0.0);
+            out.push(CachedSpawn {
+                wcid: raw.wcid,
+                weenie_type: raw.weenie_type,
+                x: raw.x,
+                y: raw.y,
+                z: raw.z,
+                qw,
+                qx,
+                qy,
+                qz,
+                cell: raw.cell,
+                is_server_managed: raw.is_server_managed,
+                name: raw.name,
+            });
+        }
+
+        CACHE.with(|cell| cell.borrow_mut().insert(lb_key, out.clone()));
+        Ok(out)
+    }
+
+    /// One-shot: fetch + log `source.sha256` next to the JSONL
+    /// files. Logged at info level. Failures are debug-logged and
+    /// non-blocking — the optional verification gate is Phase E.
+    pub async fn maybe_log_sha256(base_url: &str) {
+        let already = SHA_LOGGED.with(|cell| {
+            let was = *cell.borrow();
+            *cell.borrow_mut() = true;
+            was
+        });
+        if already {
+            return;
+        }
+        let url = format!("{base_url}source.sha256");
+        match holtburger_resource_http::fetch_bytes(&url).await {
+            Ok(bytes) => {
+                let text = std::str::from_utf8(&bytes)
+                    .map(|s| s.to_owned())
+                    .unwrap_or_else(|_| "(invalid utf-8)".to_owned());
+                super::console_log_str(&format!(
+                    "fetch_landblock_spawns: source.sha256:\n{text}"
+                ));
+            }
+            Err(e) => {
+                super::console_log_str(&format!(
+                    "fetch_landblock_spawns: source.sha256 fetch failed ({e}); \
+                     proceeding (Phase E will gate)"
+                ));
+            }
+        }
+    }
+
+    pub fn base_url() -> Option<String> {
+        BASE_URL.with(|cell| cell.borrow().clone())
+    }
+
+    /// Materialise a cached primitive into a JS-facing
+    /// `EntitySpawnJs` for return. Each call produces a fresh
+    /// wasm-bindgen instance so JS gets independent objects.
+    pub fn to_js(rec: &CachedSpawn, landblock_id: u32) -> EntitySpawnJs {
+        EntitySpawnJs {
+            wcid: rec.wcid,
+            weenie_type: rec.weenie_type,
+            x: rec.x,
+            y: rec.y,
+            z: rec.z,
+            qw: rec.qw,
+            qx: rec.qx,
+            qy: rec.qy,
+            qz: rec.qz,
+            landblock_id,
+            cell: rec.cell,
+            is_server_managed: rec.is_server_managed,
+            name: rec.name.clone(),
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub use spawn_fetch::{clear_spawns_cache, init_spawns_base_url, spawns_cache_size};
+
+/// Fetch per-landblock ACE entity-spawn records for a list of
+/// `XXYYFFFE` LandblockInfo cell IDs. Mirrors
+/// [`fetch_landblock_scenery`]'s call shape so the renderer's
+/// per-LB-entry path can call all three streams and concatenate.
+///
+/// # Behaviour
+///
+/// For each input `cell_id`:
+/// 1. Compute the LB key `(cell_id & 0xFFFF_0000)` and the hex name
+///    `0x{:04X}` from the top 16 bits.
+/// 2. Fetch `<spawns_base_url>/0xXXXX.spawns.jsonl` over HTTP.
+/// 3. On 404 OR empty body: zero spawns for that LB. Empty body =
+///    LB in the staged ring with no spawns; 404 = LB outside the
+///    staged ring.
+/// 4. On JSON-parse failure: return error (real bake corruption,
+///    fail loud).
+/// 5. Records are cached per-LB in a thread-local so repeat calls
+///    for the same LB are in-memory after the first fetch.
+///
+/// Each returned [`EntitySpawnJs`] carries `landblock_id =
+/// (cell_id & 0xFFFF_0000)` so JS can group placements by LB
+/// without re-deriving from the placement's position.
+///
+/// # Init order
+///
+/// JS must call [`init_spawns_base_url`] once at page-init time
+/// before any `fetch_landblock_spawns` call. The default path in
+/// the live page is `../../dist/spawns/` (relative to
+/// `apps/holtburger-web/index.html`).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_landblock_spawns(
+    cell_ids: Vec<u32>,
+) -> Result<Vec<EntitySpawnJs>, JsValue> {
+    let base_url = spawn_fetch::base_url().ok_or_else(|| {
+        JsValue::from_str(
+            "init_spawns_base_url must be called before fetch_landblock_spawns",
+        )
+    })?;
+
+    spawn_fetch::maybe_log_sha256(&base_url).await;
+
+    let mut out: Vec<EntitySpawnJs> = Vec::new();
+    for &cell_id in &cell_ids {
+        let lb_key = cell_id & 0xFFFF_0000;
+        let recs = spawn_fetch::fetch_one_lb(&base_url, lb_key)
+            .await
+            .map_err(|e| JsValue::from_str(&e))?;
+        for r in &recs {
+            out.push(spawn_fetch::to_js(r, lb_key));
+        }
+    }
+    Ok(out)
+}
+
 /// Phase 1.4 diagnostic page support. Walks `LandblockInfo.objects` +
 /// `.buildings` + every EnvCell in the landblock's cell-id range,
 /// collects each model's referenced Surface DIDs (via the GfxObj
