@@ -8,11 +8,13 @@ pub mod game_time;
 pub mod gfx_obj;
 pub mod motion_kinematics;
 pub mod motion_table;
+pub mod object_desc;
 pub mod palette;
 pub mod particle_emitter;
 pub mod physics_script;
 pub mod physics_script_table;
 pub mod region;
+pub mod scene;
 pub mod setup_model;
 pub mod skill_table;
 pub mod sound_table;
@@ -32,6 +34,7 @@ pub use game_time::{GameTime, Season, TimeOfDay};
 pub use gfx_obj::GfxObj;
 pub use motion_kinematics::{MotionKinematics, MotionKinematicsTable};
 pub use motion_table::{MotionCommandKinematics, MotionTable, MotionTableMovementProfile};
+pub use object_desc::ObjectDesc;
 pub use palette::Palette;
 pub use particle_emitter::ParticleEmitter;
 pub use physics_script::{PhysicsScript, PhysicsScriptData};
@@ -42,6 +45,7 @@ pub use region::{
     DayGroup, LandDefs, Region, RegionMisc, SceneDesc, SkyDesc, SkyObject, SkyObjectReplace,
     SkyTimeOfDay, SoundDesc, TerrainDesc,
 };
+pub use scene::Scene;
 pub use setup_model::SetupModel;
 pub use skill_table::SkillTable;
 pub use sound_table::{SoundData, SoundEntry, SoundHashData, SoundTable};
