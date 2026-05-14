@@ -473,6 +473,123 @@ try {
     );
 }
 
+// Phase F.B source-pattern — `holtburger-event-bake` crate must exist
+// at `external/holtburger/crates/holtburger-event-bake/` and expose
+// the three sub-bake APIs (`bake_ambient_manifest` +
+// `bake_anim_sound_manifest` + `bake_particle_manifest`). Without this
+// the per-LB event manifests can't be produced and Phase F.D's
+// validator has nothing to diff against.
+try {
+    const fs = require("fs");
+    const libSrc = fs.readFileSync(
+        __dirname +
+            "/../../crates/holtburger-event-bake/src/lib.rs",
+        "utf8"
+    );
+    const hasAmbient = /\bbake_ambient_manifest\b/.test(libSrc);
+    const hasAnimSound = /\bbake_anim_sound_manifest\b/.test(libSrc);
+    const hasParticle = /\bbake_particle_manifest\b/.test(libSrc);
+    const hasAmbientMod = /\bmod ambient\b/.test(libSrc);
+    const hasAnimSoundMod = /\bmod anim_sound\b/.test(libSrc);
+    const hasParticleMod = /\bmod particle\b/.test(libSrc);
+    check(
+        "Phase F.B: holtburger-event-bake exposes bake_ambient_manifest + bake_anim_sound_manifest + bake_particle_manifest",
+        hasAmbient &&
+            hasAnimSound &&
+            hasParticle &&
+            hasAmbientMod &&
+            hasAnimSoundMod &&
+            hasParticleMod,
+        `ambient=${hasAmbient} anim_sound=${hasAnimSound} ` +
+            `particle=${hasParticle} ambient_mod=${hasAmbientMod} ` +
+            `anim_sound_mod=${hasAnimSoundMod} particle_mod=${hasParticleMod}`
+    );
+} catch (e) {
+    check(
+        "Phase F.B: holtburger-event-bake exposes bake_ambient_manifest + bake_anim_sound_manifest + bake_particle_manifest",
+        false,
+        String(e).slice(0, 160)
+    );
+}
+
+// Phase F.B source-pattern — `event-bake` CLI binary must exist at
+// `apps/holtburger-tools/src/bin/event-bake.rs` and enforce the same
+// base-DAT integrity pre-flight as `scenery-bake` (no defaults for
+// `--dat-dir` or `--out`). The determinism contract relies on this:
+// running against an `iter-*/` or `custom_textures/` dir must hard-error,
+// not silently produce a bake against modder DATs.
+try {
+    const fs = require("fs");
+    const binSrc = fs.readFileSync(
+        __dirname +
+            "/../../apps/holtburger-tools/src/bin/event-bake.rs",
+        "utf8"
+    );
+    const hasDatDir = /#\[arg\(long, value_name = "PATH"\)\]\s*dat_dir/.test(
+        binSrc
+    );
+    const hasModderCheck = /first_modder_allocated_id/.test(binSrc);
+    const hasCustomTextureCheck = /custom_textures/.test(binSrc);
+    const hasIterCheck = /iter-/.test(binSrc);
+    const hasWbprojCheck = /\.wbproj/.test(binSrc);
+    const hasSha256Sidecar = /event-bake-source\.sha256/.test(binSrc);
+    const callsAllThreeBakes =
+        /bake_ambient_manifest/.test(binSrc) &&
+        /bake_anim_sound_manifest/.test(binSrc) &&
+        /bake_particle_manifest/.test(binSrc);
+    check(
+        "Phase F.B: event-bake CLI enforces base-DAT preflight + sha256 sidecar + calls all three bakes",
+        hasDatDir &&
+            hasModderCheck &&
+            hasCustomTextureCheck &&
+            hasIterCheck &&
+            hasWbprojCheck &&
+            hasSha256Sidecar &&
+            callsAllThreeBakes,
+        `datDir=${hasDatDir} modder=${hasModderCheck} customTex=${hasCustomTextureCheck} ` +
+            `iter=${hasIterCheck} wbproj=${hasWbprojCheck} sha=${hasSha256Sidecar} ` +
+            `allBakes=${callsAllThreeBakes}`
+    );
+} catch (e) {
+    check(
+        "Phase F.B: event-bake CLI enforces base-DAT preflight + sha256 sidecar + calls all three bakes",
+        false,
+        String(e).slice(0, 160)
+    );
+}
+
+// Phase F.B source-pattern — workspace Cargo.toml + holtburger-tools
+// Cargo.toml must include the new event-bake crate. Without this, the
+// CLI binary can't link and `cargo test --workspace` doesn't pick up
+// the new crate's tests.
+try {
+    const fs = require("fs");
+    const wsToml = fs.readFileSync(
+        __dirname + "/../../Cargo.toml",
+        "utf8"
+    );
+    const toolsToml = fs.readFileSync(
+        __dirname + "/../../apps/holtburger-tools/Cargo.toml",
+        "utf8"
+    );
+    const wsMember = /"crates\/holtburger-event-bake"/.test(wsToml);
+    const wsDep = /holtburger-event-bake\s*=\s*\{\s*path\s*=\s*"crates\/holtburger-event-bake"\s*\}/.test(
+        wsToml
+    );
+    const toolsDep = /holtburger-event-bake/.test(toolsToml);
+    check(
+        "Phase F.B: workspace + holtburger-tools Cargo.toml include holtburger-event-bake",
+        wsMember && wsDep && toolsDep,
+        `wsMember=${wsMember} wsDep=${wsDep} toolsDep=${toolsDep}`
+    );
+} catch (e) {
+    check(
+        "Phase F.B: workspace + holtburger-tools Cargo.toml include holtburger-event-bake",
+        false,
+        String(e).slice(0, 160)
+    );
+}
+
 // Phase 4 step 1: start_session + SessionHandle (with .poll_events()
 // and .characterList()) must be present. The `start_session` round-trip
 // itself is browser-only — ACE login synthesis in Node would require

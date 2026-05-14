@@ -5,6 +5,7 @@ members = [
     "crates/holtburger-core",
     "crates/holtburger-common",
     "crates/holtburger-dat",
+    "crates/holtburger-event-bake",
     "crates/holtburger-protocol",
     "crates/holtburger-manifest",
     "crates/holtburger-resource-http",
@@ -34,6 +35,7 @@ holtburger-world = { path = "crates/holtburger-world" }
 holtburger-session = { path = "crates/holtburger-session" }
 holtburger-common = { path = "crates/holtburger-common" }
 holtburger-dat = { path = "crates/holtburger-dat" }
+holtburger-event-bake = { path = "crates/holtburger-event-bake" }
 holtburger-protocol = { path = "crates/holtburger-protocol" }
 holtburger-manifest = { path = "crates/holtburger-manifest" }
 holtburger-resource-http = { path = "crates/holtburger-resource-http" }

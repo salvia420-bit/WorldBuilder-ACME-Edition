@@ -1,0 +1,13 @@
+[package]
+name = "holtburger-event-bake"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+holtburger-dat.workspace = true
+holtburger-common.workspace = true
+
+[dev-dependencies]

@@ -1515,6 +1515,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "holtburger-event-bake"
+version = "0.1.0"
+dependencies = [
+ "holtburger-common",
+ "holtburger-dat",
+]
+
+[[package]]
 name = "holtburger-manifest"
 version = "0.1.0"
 dependencies = [
@@ -1613,6 +1621,7 @@ dependencies = [
  "holtburger-common",
  "holtburger-content",
  "holtburger-dat",
+ "holtburger-event-bake",
  "holtburger-manifest",
  "holtburger-scenery-bake",
  "indicatif",

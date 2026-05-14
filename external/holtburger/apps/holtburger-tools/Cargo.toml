@@ -9,6 +9,7 @@ default-run = "dat2hba"
 holtburger-common = { workspace = true }
 holtburger-content = { path = "../../crates/holtburger-content" }
 holtburger-dat = { path = "../../crates/holtburger-dat" }
+holtburger-event-bake = { workspace = true }
 holtburger-manifest = { workspace = true }
 holtburger-scenery-bake = { workspace = true }
 sha2 = { workspace = true }
