@@ -519,6 +519,13 @@
         session_smoke_test_packet_sequence,
         fetch_landblock_heightmap,
         fetch_landblock_heightmaps,
+        // Phase 2.1 — bicubic-subdivided terrain meshes for higher
+        // visual fidelity gated on `quality.flags.subdivLevel`. The
+        // batch form is consumed by `scene3d/terrain.js`; the singular
+        // form is currently driven per-LB inside buildHoltburgTerrain
+        // but exposed at the top level for forward use.
+        fetch_subdivided_landblock,
+        fetch_subdivided_landblocks,
         fetch_terrain_textures,
         // fetch_terrain_alpha_masks — kept exported in pkg for a
         // future TexMerge mode; not used by the bilinear path.
@@ -4907,6 +4914,10 @@ void main() {
           // the same handle the 2D path consumes via the global.
           await init3D(canvas, window.__sessionHandle, {
             fetch_landblock_heightmaps,
+            // Phase 2.1 — visual-only subdivided mesh. Read by
+            // scene3d/terrain.js when quality.flags.subdivLevel > 1.
+            fetch_subdivided_landblock,
+            fetch_subdivided_landblocks,
             fetch_terrain_textures,
             fetch_landblock_objects,
             fetch_model_meshes,

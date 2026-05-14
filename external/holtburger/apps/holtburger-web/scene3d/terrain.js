@@ -23,6 +23,7 @@
 import * as THREE from "three";
 import {
   landblockMeshToGeometry,
+  subdividedLandblockMeshToGeometry,
   buildVertexTypesDataTexture,
   buildTerrainAtlasCanvas,
 } from "./adapter.js";
@@ -362,6 +363,20 @@ void main() {
  * `meshes[i]` aligns with `coords[i]` after the parallel
  * `fetch_landblock_heightmaps` call.
  */
+/**
+ * Read `subdivLevel` from `scene3d.quality.flags`, defaulting to 1 if
+ * the flag is missing or out of range. Quality preset values are 1, 2,
+ * 4, or 8; we coerce any other value to the nearest power-of-two bound.
+ */
+function pickSubdivLevel(scene3d) {
+  const raw = scene3d?.quality?.flags?.subdivLevel;
+  if (!Number.isFinite(raw) || raw <= 1) return 1;
+  if (raw >= 8) return 8;
+  if (raw >= 4) return 4;
+  if (raw >= 2) return 2;
+  return 1;
+}
+
 function holtburgNeighbourhoodCellIds() {
   const coords = [];
   for (let dy = 1; dy >= -1; dy -= 1) {
@@ -557,10 +572,21 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
     (slice) => (slice === DETAIL_SLICE_NONE ? 255 : slice)
   );
 
+  // Phase 2.1 — read subdivision level from the resolved quality preset.
+  // The flag is `subdivLevel: 1|2|4|8`. Default to 1 (no subdivision) if
+  // the flag is missing or the wasm export hasn't been built yet (e.g.
+  // tests stubbing wasmExports).
+  const subdivLevel = pickSubdivLevel(scene3d);
+  const canSubdivide =
+    subdivLevel > 1 &&
+    typeof wasmExports.fetch_subdivided_landblocks === "function";
+
   // 1. Compute the 9 cell ids.
   const { ids, coords } = holtburgNeighbourhoodCellIds();
 
-  // 2. Fetch heightmaps + terrain textures in parallel.
+  // 2. Fetch heightmaps + terrain textures in parallel. The base 9×9
+  // mesh is still fetched (cheap) because the road overlay walks the
+  // 9×9 grid and the shader's `uVertexTypes` is a 9×9 texture.
   const [meshes, terrainTextures] = await Promise.all([
     wasmExports.fetch_landblock_heightmaps(ids),
     wasmExports.fetch_terrain_textures(),
@@ -569,6 +595,32 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
     throw new Error(
       `buildHoltburgTerrain: expected ${coords.length} meshes, got ${meshes.length}`
     );
+  }
+
+  // 2b. If subdivision is on, fetch the subdivided mesh in parallel
+  // per-LB. LOD ramp: central LB (the player's, Holtburg 0xA9 0xB4) gets
+  // full subdivLevel, the 8 surrounding LBs get half (min 1). With the
+  // 9-LB neighbourhood the "central 3×3" is just the one Holtburg LB —
+  // the surrounding 8 form the outer ring.
+  let subdivMeshes = null;
+  if (canSubdivide) {
+    const centreLevel = subdivLevel;
+    const outerLevel = Math.max(1, Math.floor(subdivLevel / 2));
+    const promises = coords.map((c) => {
+      const level =
+        c.x === HOLTBURG_X && c.y === HOLTBURG_Y ? centreLevel : outerLevel;
+      return wasmExports
+        .fetch_subdivided_landblock(c.id, level)
+        .then((m) => ({ mesh: m, level }))
+        .catch((err) => {
+          console.warn(
+            `[terrain] subdivide failed for (${c.x},${c.y}) @ level=${level}:`,
+            err
+          );
+          return null;
+        });
+    });
+    subdivMeshes = await Promise.all(promises);
   }
 
   // 3. Build the shared atlas + road canvases, wrap as three textures.
@@ -613,7 +665,21 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
     const heightMin = wasmMesh.heightMin;
     const heightMax = wasmMesh.heightMax;
 
-    const geom = landblockMeshToGeometry(wasmMesh);
+    // Phase 2.1 — if the LB has a subdivided mesh, build geometry from
+    // it. Otherwise fall back to the 9×9 path. The 9×9 vertex-types
+    // texture (`uVertexTypes`) is always the 9×9 control grid — the
+    // subdivided mesh's per-vertex `terrainCode` attribute is unused by
+    // the current shader (kept on the geometry for forward compat).
+    const subdivEntry = subdivMeshes ? subdivMeshes[i] : null;
+    let geom;
+    let effectiveSubdiv = 1;
+    if (subdivEntry && subdivEntry.mesh) {
+      geom = subdividedLandblockMeshToGeometry(subdivEntry.mesh);
+      effectiveSubdiv = subdivEntry.level;
+      if (typeof subdivEntry.mesh.free === "function") subdivEntry.mesh.free();
+    } else {
+      geom = landblockMeshToGeometry(wasmMesh);
+    }
     const vertexTypesTex = buildVertexTypesDataTexture(terrainCodesCopy);
 
     const material = new THREE.ShaderMaterial({
@@ -714,6 +780,9 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
       triplanarSharpness: triplanarEnabled ? DEFAULT_TRIPLANAR_SHARPNESS : 0,
       triplanarSlopeLo: TRIPLANAR_SLOPE_LO,
       triplanarSlopeHi: TRIPLANAR_SLOPE_HI,
+      // Phase 2.1 — actual subdivision factor used for this LB.
+      // 1 = no subdivision (legacy 9×9 path); 2/4/8 = subdivided.
+      subdivLevel: effectiveSubdiv,
     };
 
     // Group keeps the road overlay parented under the same lbMesh
