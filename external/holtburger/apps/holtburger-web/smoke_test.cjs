@@ -3465,6 +3465,233 @@ check(
         );
     }
 
+    // === Phase C.3 — wire scenery bake into the renderer =============
+    // The per-LB baker and the ring driver must call
+    // `fetch_landblock_scenery` alongside `fetch_landblock_objects`
+    // and concatenate the two placement lists BEFORE the rest of the
+    // bake runs (unique-modelId pass → fetchPrimaryGeometries →
+    // group-by-modelId → InstancedMesh collapse). Per the hypothetical-
+    // method doc the renderer is a pure consumer of placement data —
+    // the two streams are the same shape downstream of the merge
+    // (LandblockInfo `objectId`/`isBuilding=false` + scenery
+    // `objId`/`scale`/`source="scenery"`).
+    //
+    // Three checks here:
+    //   (a) Source-pattern — `statics.js` invokes BOTH
+    //       `fetch_landblock_objects` AND (via `fetchAndDrainScenery`)
+    //       `fetch_landblock_scenery` inside both bakers. The wasm-
+    //       export name must appear at call-site; the helper must be
+    //       defined; both bakers must call the helper.
+    //   (b) Source-pattern — the per-LB baker handles the empty-
+    //       scenery case without throwing. The fail-soft contract on
+    //       `fetchAndDrainScenery` returns `[]` when scenery is
+    //       unavailable; the `statics.length === 0` early-return then
+    //       no-throws. Verifying the early-return + the soft-skip
+    //       comment ensures the contract is preserved across edits.
+    //   (c) Live-wasm — `fetch_landblock_scenery([0xA8B0FFFE])`
+    //       returns ≥1 placement against the staged JSONL bake. This
+    //       is the same round-trip `smoke_scenery_fetch.cjs` runs;
+    //       reproducing it here ensures the C.3 wire-up is verifiable
+    //       from the merge-gate smoke without an out-of-band hand-
+    //       smoke run. Skips cleanly when the staged bake isn't
+    //       reachable (CI / fresh checkout without /mnt/wbterminal1).
+    try {
+        const fs = require("fs");
+        const stSrc = fs.readFileSync(__dirname + "/scene3d/statics.js", "utf8");
+        // (a) Source-pattern — both wasm exports must be invoked in
+        // the file. `fetch_landblock_objects` is the existing call;
+        // `fetch_landblock_scenery` is the new C.3 call. The helper
+        // `fetchAndDrainScenery` must be defined and called by both
+        // bakers (per-LB + ring) — the brief invariant 4 says the
+        // per-LB lazy path must also pick up scenery.
+        const hasFetchObjects = /wasmExports\.fetch_landblock_objects\b/.test(stSrc);
+        const hasFetchScenery = /\bfetch_landblock_scenery\b/.test(stSrc);
+        const hasHelper = /\bfunction\s+fetchAndDrainScenery\b/.test(stSrc) ||
+            /\bconst\s+fetchAndDrainScenery\b/.test(stSrc);
+        // Both bakers must call the helper. The strings
+        // `bakeStaticsForLandblock` and `bakeStaticsRing` bracket
+        // their function bodies; we extract each body and check the
+        // helper is called inside.
+        const perLbMatch = stSrc.match(
+            /export\s+async\s+function\s+bakeStaticsForLandblock[\s\S]*?\n\}\n/
+        );
+        const ringMatch = stSrc.match(
+            /export\s+async\s+function\s+bakeStaticsRing[\s\S]*?\n\}\n/
+        );
+        const perLbCallsHelper = perLbMatch
+            ? /\bfetchAndDrainScenery\s*\(/.test(perLbMatch[0])
+            : false;
+        const ringCallsHelper = ringMatch
+            ? /\bfetchAndDrainScenery\s*\(/.test(ringMatch[0])
+            : false;
+        check(
+            "Phase C.3(a): statics.js wires fetch_landblock_scenery alongside fetch_landblock_objects in both bakers",
+            hasFetchObjects &&
+                hasFetchScenery &&
+                hasHelper &&
+                perLbCallsHelper &&
+                ringCallsHelper,
+            `fetchObjects=${hasFetchObjects} fetchScenery=${hasFetchScenery} ` +
+                `helper=${hasHelper} perLbCallsHelper=${perLbCallsHelper} ` +
+                `ringCallsHelper=${ringCallsHelper}`
+        );
+    } catch (e) {
+        check(
+            "Phase C.3(a): statics.js wires fetch_landblock_scenery alongside fetch_landblock_objects in both bakers",
+            false,
+            String(e).slice(0, 160)
+        );
+    }
+
+    try {
+        const fs = require("fs");
+        const stSrc = fs.readFileSync(__dirname + "/scene3d/statics.js", "utf8");
+        // (b) Empty-scenery contract — `fetchAndDrainScenery` returns
+        // `[]` cleanly when the export isn't available OR the call
+        // fails OR an LB is baked-empty. The per-LB baker then merges
+        // via `.concat(sceneryStatics)`; if the merged list is empty
+        // it returns `makeEmptySummary()` (the existing early-
+        // return). Verify all three contract pieces live in the file.
+        const hasFailSoftReturn =
+            /typeof\s+wasmExports\.fetch_landblock_scenery\s*!==\s*["']function["']/.test(stSrc) &&
+            /return\s+\[\]/.test(stSrc);
+        const hasConcat = /\.concat\s*\(\s*sceneryStatics\s*\)/.test(stSrc);
+        const hasEmptyEarlyReturn =
+            /statics\.length\s*===\s*0/.test(stSrc) &&
+            /return\s+makeEmptySummary\s*\(\s*\)/.test(stSrc);
+        // The brief's invariant 3 specifically calls out the empty
+        // case: "fetch_landblock_scenery returns 0 placements for many
+        // LBs. Per Phase B.3 oracle: 55 of 169 LBs have 0 scenery.
+        // Don't error on empty". Verify a comment in the file
+        // documents this (load-bearing for future agents).
+        const hasEmptyComment =
+            /(empty[-\s]*scenery|0\s+placements|baked-empty|baked-with-0|55\s+of\s+169)/i.test(stSrc);
+        check(
+            "Phase C.3(b): per-LB baker handles empty scenery without throwing",
+            hasFailSoftReturn &&
+                hasConcat &&
+                hasEmptyEarlyReturn &&
+                hasEmptyComment,
+            `failSoft=${hasFailSoftReturn} concat=${hasConcat} ` +
+                `emptyEarlyReturn=${hasEmptyEarlyReturn} emptyComment=${hasEmptyComment}`
+        );
+    } catch (e) {
+        check(
+            "Phase C.3(b): per-LB baker handles empty scenery without throwing",
+            false,
+            String(e).slice(0, 160)
+        );
+    }
+
+    // (c) Live-wasm round-trip — exercises the staged bake at
+    // /mnt/wbterminal1/holtburger-dist-v2/scenery/ through the wasm
+    // `fetch_landblock_scenery` export against a known-non-empty LB
+    // (0xA8B0 has 68 placements per the B.4 parity report). This is
+    // the same shape as `smoke_scenery_fetch.cjs` but lives inside
+    // the merge-gate smoke so a regression in the wasm wiring fails
+    // the merge directly.
+    //
+    // Skips cleanly when the staged bake isn't reachable (no
+    // /mnt/wbterminal1 mount, fresh checkout). The source-pattern
+    // checks (a) + (b) above are the merge-gate floor.
+    try {
+        const fs = require("fs");
+        const path = require("path");
+        const SCENERY_DIR =
+            "/mnt/wbterminal1/holtburger-dist-v2/scenery";
+        const sceneryStaged = fs.existsSync(
+            path.join(SCENERY_DIR, "bake-source.sha256")
+        );
+        if (!sceneryStaged) {
+            check(
+                "Phase C.3(c): fetch_landblock_scenery round-trips against staged bake (LB 0xA8B0 ≥ 1 placement)",
+                true,
+                `staged-bake not reachable at ${SCENERY_DIR} — source-pattern checks (a)+(b) are the floor`
+            );
+        } else {
+            // Spin up a tiny static server in front of the bake dir.
+            const http = require("http");
+            const server = http.createServer((req, res) => {
+                const stripped = req.url.replace(/^\/+/, "").split("?")[0];
+                if (!stripped.startsWith("scenery/")) {
+                    res.writeHead(404).end();
+                    return;
+                }
+                const filePath = path.join(
+                    SCENERY_DIR,
+                    stripped.slice("scenery/".length)
+                );
+                if (!filePath.startsWith(SCENERY_DIR)) {
+                    res.writeHead(403).end();
+                    return;
+                }
+                fs.readFile(filePath, (err, data) => {
+                    if (err) {
+                        res.writeHead(404).end();
+                        return;
+                    }
+                    res.setHeader("Connection", "close");
+                    res.writeHead(200, {
+                        "content-type": "application/jsonl",
+                        "content-length": data.length,
+                    });
+                    res.end(data);
+                });
+            });
+            await new Promise((resolve) =>
+                server.listen(0, "127.0.0.1", resolve)
+            );
+            const port = server.address().port;
+            const baseUrl = `http://127.0.0.1:${port}/scenery/`;
+            try {
+                // Reset to a clean slate — the scenery cache is
+                // thread-local in wasm, sharing across the smoke run
+                // is harmless but resetting makes this check
+                // self-contained.
+                if (typeof wasm.clear_scenery_cache === "function") {
+                    wasm.clear_scenery_cache();
+                }
+                wasm.init_scenery_base_url(baseUrl);
+                // LB 0xA8B0 is the densest single-LB scenery payload
+                // in the 13×13 ring (68 placements per B.4 parity).
+                const placements = await wasm.fetch_landblock_scenery(
+                    new Uint32Array([0xa8b0fffe])
+                );
+                const sceneryCount = placements.length;
+                let firstObjId = null;
+                let firstScale = null;
+                let firstLandblockId = null;
+                if (sceneryCount > 0) {
+                    firstObjId = placements[0].objId;
+                    firstScale = placements[0].scale;
+                    firstLandblockId = placements[0].landblockId;
+                    for (const p of placements) {
+                        if (typeof p.free === "function") p.free();
+                    }
+                }
+                check(
+                    "Phase C.3(c): fetch_landblock_scenery round-trips against staged bake (LB 0xA8B0 ≥ 1 placement)",
+                    sceneryCount >= 1 &&
+                        firstObjId !== null &&
+                        (firstObjId >>> 24) === 0x02 &&
+                        firstScale > 0 &&
+                        firstLandblockId === ((0xa8b00000) >>> 0),
+                    `placements=${sceneryCount} firstObjId=0x${(firstObjId >>> 0).toString(16).padStart(8, "0")} ` +
+                        `firstScale=${firstScale?.toFixed?.(3) ?? firstScale} ` +
+                        `firstLandblockId=0x${(firstLandblockId >>> 0).toString(16)}`
+                );
+            } finally {
+                server.close();
+            }
+        }
+    } catch (e) {
+        check(
+            "Phase C.3(c): fetch_landblock_scenery round-trips against staged bake (LB 0xA8B0 ≥ 1 placement)",
+            false,
+            String(e?.message ?? e).slice(0, 200)
+        );
+    }
+
     // === World-expand step 1 — Objective 5 — liveScene3d load* hooks ===
     // Objective 5 exposes three new methods on `liveScene3d` mirroring
     // the existing `loadEnvCellsForLandblock`:

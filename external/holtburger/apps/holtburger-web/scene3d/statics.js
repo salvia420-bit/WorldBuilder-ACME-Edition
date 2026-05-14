@@ -76,6 +76,52 @@ const HOLTBURG_Y = 0xb4;
 // mesh, anything farther gets the lower-detail variant.
 const LOD_DISTANCE_M = 100.0;
 
+// Phase C.3 — base URL for the baked scenery JSONL files. Mirrors
+// index.html's `MANIFEST_URL = "../../dist/manifest.json"`; scenery
+// files live at `../../dist/scenery/0xXXXX.scenery.jsonl`. Init is
+// idempotent + module-local so the second baker call (per-LB lazy +
+// ring driver overlap) doesn't re-call `init_scenery_base_url`.
+const SCENERY_BASE_URL = "../../dist/scenery/";
+let _sceneryBaseUrlInitialized = false;
+
+/**
+ * Phase C.3 — fail-soft scenery base-URL init. Called once per page
+ * by the first scenery-fetching baker. If `init_scenery_base_url`
+ * is not in wasmExports (older bundle, unit-test stub) OR the call
+ * throws, we mark "tried" and move on — `fetch_landblock_scenery`
+ * will reject, and the per-baker call wraps that in a soft skip so
+ * the rest of the bake (LandblockInfo path) still lands.
+ */
+function ensureSceneryInit(wasmExports) {
+  if (_sceneryBaseUrlInitialized) return;
+  _sceneryBaseUrlInitialized = true;
+  if (
+    !wasmExports ||
+    typeof wasmExports.init_scenery_base_url !== "function"
+  ) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[scene3d.statics] init_scenery_base_url not in wasmExports; " +
+        "scenery placements will be skipped"
+    );
+    return;
+  }
+  try {
+    wasmExports.init_scenery_base_url(SCENERY_BASE_URL);
+    // eslint-disable-next-line no-console
+    console.log(
+      "[scene3d.statics] scenery base URL initialized:",
+      SCENERY_BASE_URL
+    );
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[scene3d.statics] init_scenery_base_url threw; scenery placements will be skipped:",
+      String(e).slice(0, 120)
+    );
+  }
+}
+
 /**
  * Encode an `(lbX, lbY)` pair as the `Set<u32>` key used by
  * `scene3d.staticsBakedLbs`. Matches the shape used by Phase 6's
@@ -114,6 +160,14 @@ function getOrCreateMaterialCache(scene3d) {
  * freed in the same loop; keeping them around through subsequent
  * model + surface fetches risks detached buffers if linear memory
  * grows. Returns `{ statics: PlainPlacement[] }`.
+ *
+ * Each emitted record carries `source = "landblockinfo"` so post-bake
+ * code can distinguish DAT-explicit placements from
+ * `fetchAndDrainScenery`'s `source = "scenery"` placements without
+ * inspecting the wasm-side type. `scale = 1` is the implicit
+ * LandblockInfo convention (the DAT `Frame` doesn't carry per-object
+ * scale; only `LandblockInfo.objects` scales come through the building
+ * pipeline). Scenery's `placement.scale` carries the baked value.
  */
 function drainPlacements(allPlacements) {
   const statics = [];
@@ -127,11 +181,94 @@ function drainPlacements(allPlacements) {
         z: p.z,
         rotationZ: p.rotationZ,
         isBuilding: false,
+        scale: 1,
+        source: "landblockinfo",
       });
     }
     if (typeof p.free === "function") p.free();
   }
   return statics;
+}
+
+/**
+ * Phase C.3 — fetch baked scenery placements for `cellIds` and convert
+ * each `ScenicPlacementJs` into the same shape as
+ * `drainPlacements`-output records, so the rest of the baker can
+ * treat both streams identically.
+ *
+ * Conversion details:
+ *   - `objId` → `modelId` (top byte 0x01 = GfxObj, 0x02 = SetupModel —
+ *     matches LandblockInfo's `modelId` namespace).
+ *   - Yaw-only quaternion → `rotationZ`. The bake emits
+ *     `Quaternion.CreateFromYawPitchRoll(0, 0, rot)` so the quaternion
+ *     is z-axis-only: `qw = cos(yaw/2)`, `qz = sin(yaw/2)`, xy zero.
+ *     We extract yaw via the same `atan2(2(qw·qz + qx·qy), 1 - 2(qy² +
+ *     qz²))` formula `fetch_landblock_objects` uses on its way out.
+ *   - `scale` is preserved (baked, may be 0.5 – 3.0 across retail
+ *     scenery).
+ *   - `isBuilding` is always false (scenery is never a building).
+ *   - `source = "scenery"` distinguishes from LandblockInfo placements.
+ *
+ * `wasmExports.fetch_landblock_scenery` returns `Vec<ScenicPlacementJs>`
+ * with the wasm-bindgen camelCased field names (`objId`, `qw`, …,
+ * `landblockId`). The ScenicPlacementJs objects are freed inline so
+ * their wasm-side bookkeeping doesn't leak.
+ *
+ * Fail-soft contract:
+ *   - If `fetch_landblock_scenery` is not in `wasmExports` (older bundle,
+ *     unit-test stub), returns `[]`.
+ *   - If the call rejects (init not done, HTTP error, JSON-parse fail),
+ *     returns `[]` after logging a warning. The bake continues with
+ *     LandblockInfo-only placements.
+ *   - Empty result (LB has 0 baked scenery, 55 of 169 ring LBs per
+ *     Phase B.3 oracle) returns `[]` cleanly — no logging.
+ */
+async function fetchAndDrainScenery(cellIds, wasmExports) {
+  if (
+    !wasmExports ||
+    typeof wasmExports.fetch_landblock_scenery !== "function"
+  ) {
+    return [];
+  }
+  ensureSceneryInit(wasmExports);
+  let scenery;
+  try {
+    scenery = await wasmExports.fetch_landblock_scenery(cellIds);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[scene3d.statics] fetch_landblock_scenery failed; " +
+        "skipping baked scenery for this batch:",
+      String(e).slice(0, 200)
+    );
+    return [];
+  }
+  const out = [];
+  for (const p of scenery) {
+    const qw = p.qw;
+    const qx = p.qx;
+    const qy = p.qy;
+    const qz = p.qz;
+    // Standard yaw extraction. Matches the formula in
+    // lib.rs:`frame_to_placement` used by `fetch_landblock_objects`
+    // so LandblockInfo + scenery rotations agree on convention.
+    const sinyCosp = 2.0 * (qw * qz + qx * qy);
+    const cosyCosp = 1.0 - 2.0 * (qy * qy + qz * qz);
+    const yaw = Math.atan2(sinyCosp, cosyCosp);
+    out.push({
+      landblockId: p.landblockId,
+      modelId: p.objId,
+      x: p.x,
+      y: p.y,
+      z: p.z,
+      rotationZ: yaw,
+      isBuilding: false,
+      scale: p.scale && p.scale > 0 ? p.scale : 1,
+      source: "scenery",
+    });
+    if (typeof p.free === "function") p.free();
+  }
+  return out;
 }
 
 /**
@@ -290,6 +427,16 @@ function makePlacementMatrixHelper() {
     const worldY = lbY * METERS_PER_LANDBLOCK + placement.y;
     tmpPos.set(worldX, worldY, placement.z);
     tmpQuat.setFromAxisAngle(tmpAxis, placement.rotationZ ?? 0);
+    // Phase C.3 — honour per-placement scale. LandblockInfo placements
+    // arrive with `scale = 1` (set by `drainPlacements`); scenery
+    // placements carry the baked value (0.5 – 3.0 typical for retail
+    // trees/rocks). Uniform-scale only; AC's `ObjectDesc` uses a
+    // single float.
+    const s =
+      typeof placement.scale === "number" && placement.scale > 0
+        ? placement.scale
+        : 1;
+    tmpScale.set(s, s, s);
     tmpMat.compose(tmpPos, tmpQuat, tmpScale);
     return tmpMat;
   };
@@ -328,6 +475,16 @@ function buildSingletonNode({
     `${(placement.landblockId >>> 0).toString(16).padStart(8, "0")}_` +
     `${placement.x.toFixed(2)}_${placement.y.toFixed(2)}_${modelKey}`;
 
+  // Phase C.3 — uniform per-placement scale. LandblockInfo placements
+  // arrive with `scale = 1` (set by `drainPlacements`); scenery
+  // placements carry the baked value. AC's `ObjectDesc.scale` is a
+  // single float — uniform across xyz.
+  const placementScale =
+    typeof placement.scale === "number" && placement.scale > 0
+      ? placement.scale
+      : 1;
+  const source = placement.source || "landblockinfo";
+
   const mesh = new THREE.Mesh(geom, mat);
   mesh.name = `static-${placementKey}`;
   mesh.position.set(worldX, worldY, placement.z);
@@ -337,11 +494,15 @@ function buildSingletonNode({
     placement.rotationZ ?? 0
   );
   mesh.quaternion.copy(yawQuat);
+  if (placementScale !== 1) {
+    mesh.scale.set(placementScale, placementScale, placementScale);
+  }
   mesh.userData = {
     modelId,
     landblockId: placement.landblockId,
     placementKey,
     isBuilding: false,
+    source,
   };
   if (staticsShadow) {
     mesh.castShadow = staticsMatCastsShadow;
@@ -360,17 +521,24 @@ function buildSingletonNode({
   }
   degradedMesh.position.copy(mesh.position);
   degradedMesh.quaternion.copy(mesh.quaternion);
+  if (placementScale !== 1) {
+    degradedMesh.scale.set(placementScale, placementScale, placementScale);
+  }
   degradedMesh.userData = {
     modelId,
     landblockId: placement.landblockId,
     placementKey,
     isBuilding: false,
     isDegraded: true,
+    source,
   };
   const lod = new THREE.LOD();
   lod.name = `static-lod-${placementKey}`;
   lod.position.copy(mesh.position);
   lod.quaternion.copy(mesh.quaternion);
+  if (placementScale !== 1) {
+    lod.scale.set(placementScale, placementScale, placementScale);
+  }
   // Children of LOD inherit no transform unless explicitly applied —
   // three.js LOD positions its children at the LOD's own transform,
   // and the per-child mesh's position becomes a local offset. Reset
@@ -378,8 +546,10 @@ function buildSingletonNode({
   // places the cluster.
   mesh.position.set(0, 0, 0);
   mesh.quaternion.identity();
+  mesh.scale.set(1, 1, 1);
   degradedMesh.position.set(0, 0, 0);
   degradedMesh.quaternion.identity();
+  degradedMesh.scale.set(1, 1, 1);
   lod.addLevel(mesh, 0);
   lod.addLevel(degradedMesh, LOD_DISTANCE_M);
   lod.userData = {
@@ -387,6 +557,7 @@ function buildSingletonNode({
     landblockId: placement.landblockId,
     placementKey,
     isBuilding: false,
+    source,
   };
   return { node: lod, isLod: true };
 }
@@ -412,12 +583,33 @@ function buildInstancedNode({
   staticsMatCastsShadow,
 }) {
   const modelKey = (modelId >>> 0).toString(16).padStart(8, "0");
+  // Phase C.3 — track per-source counts so post-bake queries can
+  // distinguish "this instanced group is 30% LandblockInfo + 70%
+  // scenery" without walking every matrix. Single-source groups (the
+  // common case — a tree modelId only appears in scenery, a sign only
+  // in LandblockInfo) get a single string; mixed groups get an
+  // object.
+  let sceneryCount = 0;
+  let landblockInfoCount = 0;
+  for (const p of group) {
+    if (p.source === "scenery") sceneryCount += 1;
+    else landblockInfoCount += 1;
+  }
+  const source =
+    sceneryCount === 0
+      ? "landblockinfo"
+      : landblockInfoCount === 0
+      ? "scenery"
+      : "mixed";
   const instanced = new THREE.InstancedMesh(geom, mat, group.length);
   instanced.name = `static-instanced-${modelKey}-x${group.length}`;
   instanced.userData = {
     modelId,
     isBuilding: false,
     instanceCount: group.length,
+    source,
+    sceneryCount,
+    landblockInfoCount,
   };
   if (staticsShadow) {
     instanced.castShadow = staticsMatCastsShadow;
@@ -461,7 +653,14 @@ function buildInstancedNode({
   lod.name = `static-lod-${modelKey}`;
   lod.addLevel(instanced, 0);
   lod.addLevel(degradedInstanced, LOD_DISTANCE_M);
-  lod.userData = { modelId, isBuilding: false, isInstancedLod: true };
+  lod.userData = {
+    modelId,
+    isBuilding: false,
+    isInstancedLod: true,
+    source,
+    sceneryCount,
+    landblockInfoCount,
+  };
   return { node: lod, isLod: true };
 }
 
@@ -480,6 +679,11 @@ function makeEmptySummary() {
     singletonCount: 0,
     lodCount: 0,
     drawCallReductionEstimate: 0,
+    // Phase C.3 — per-source counts so capture scripts / smoke can
+    // assert "the scenery wire-up landed non-zero placements". Sum to
+    // `objectCount` (sceneryObjectCount + landblockInfoObjectCount).
+    sceneryObjectCount: 0,
+    landblockInfoObjectCount: 0,
   };
 }
 
@@ -551,10 +755,29 @@ export async function bakeStaticsForLandblock(
   // + buildings). `0xffff` is the terrain CellLandblock and won't
   // return placements.
   const cellId = (((lbX & 0xff) << 24) | ((lbY & 0xff) << 16) | 0xfffe) >>> 0;
-  const allPlacements = await wasmExports.fetch_landblock_objects(
-    new Uint32Array([cellId])
-  );
-  const statics = drainPlacements(allPlacements);
+  const cellIds = new Uint32Array([cellId]);
+  const allPlacements = await wasmExports.fetch_landblock_objects(cellIds);
+  const landblockInfoStatics = drainPlacements(allPlacements);
+  // Phase C.3 — fetch baked scenery placements in parallel-ish (after
+  // the LandblockInfo drain so the wasm `ObjectPlacement` linear-memory
+  // free-loop completes first; scenery's `ScenicPlacementJs` records are
+  // a separate wasm pool and don't interfere). The result is the
+  // SCENERY placement stream with `source = "scenery"`; LandblockInfo
+  // is tagged `source = "landblockinfo"` by `drainPlacements`. Both
+  // arrays carry the same shape so the rest of the bake (group-by-
+  // modelId, materialCache.preload, buildSingletonNode) treats them
+  // identically.
+  //
+  // Many LBs have 0 baked scenery (55 of 169 ring LBs per Phase B.3
+  // oracle — buildings collide all candidates out, or the terrain
+  // codes don't reference any scene). Empty-scenery is the common
+  // case; we treat it as "nothing to add" and continue with whatever
+  // LandblockInfo placements survived.
+  const sceneryStatics = await fetchAndDrainScenery(cellIds, wasmExports);
+  // Concatenate. The merged array is the single source of truth for
+  // the rest of the per-LB bake. Order is LandblockInfo first then
+  // scenery — purely for log-readability; the renderer doesn't care.
+  const statics = landblockInfoStatics.concat(sceneryStatics);
   if (statics.length === 0) {
     return makeEmptySummary();
   }
@@ -612,6 +835,8 @@ export async function bakeStaticsForLandblock(
   let singletonCount = 0;
   let lodCount = 0;
   let skippedNoMesh = 0;
+  let sceneryObjectCount = 0;
+  let landblockInfoObjectCount = 0;
   for (const placement of statics) {
     const geom = primary.geomByModel.get(placement.modelId);
     if (!geom) {
@@ -635,6 +860,8 @@ export async function bakeStaticsForLandblock(
     objectCount += 1;
     singletonCount += 1;
     if (isLod) lodCount += 1;
+    if (placement.source === "scenery") sceneryObjectCount += 1;
+    else landblockInfoObjectCount += 1;
   }
 
   // Draw-call savings for the per-LB path: every placement becomes
@@ -652,6 +879,8 @@ export async function bakeStaticsForLandblock(
     singletonCount,
     lodCount,
     drawCallReductionEstimate: 0,
+    sceneryObjectCount,
+    landblockInfoObjectCount,
   };
 }
 
@@ -781,8 +1010,33 @@ export async function bakeStaticsRing(
   const cellIds = new Uint32Array(neighbourhood.map((n) => n.cellId));
 
   // ── Stage 1: drain placements across the full ring ──────────────────
+  // Phase C.3 — TWO parallel sources merge into one placement stream:
+  //   (a) LandblockInfo.objects (props, signs, named statics) via
+  //       `fetch_landblock_objects` — DAT-determined, baked into
+  //       `client_cell_1.dat` at retail-bake-time.
+  //   (b) Procedural scenery (trees, rocks, bushes) via
+  //       `fetch_landblock_scenery` — the JSONL files emitted by
+  //       `holtburger-scenery-bake` at C.2 close. ACE-Scenery.Load
+  //       algorithm parity, ~14k placements across the 169-LB ring
+  //       (~83 per LB average; 55 of 169 LBs have 0 due to building-
+  //       collision rejection or zero scene_type codes).
+  //
+  // The two are concatenated BEFORE the unique-modelId pass so the
+  // F#5+6 InstancedMesh collapse spans BOTH streams — a tree modelId
+  // shared between LandblockInfo (rare) and scenery (common) batches
+  // into a single InstancedMesh, single draw call. Per-placement
+  // attribution lives in `placement.source = "landblockinfo" |
+  // "scenery"` (also forwarded into emitted `userData.source`).
+  //
+  // Empty-scenery is the common case for many LBs and is NOT an
+  // error — `fetchAndDrainScenery` returns [] cleanly. The merged
+  // `statics` array still drives the bake; if it's also empty,
+  // nothing renders for this LB (expected for ocean / terrain-only
+  // LBs).
   const allPlacements = await wasmExports.fetch_landblock_objects(cellIds);
-  const statics = drainPlacements(allPlacements);
+  const landblockInfoStatics = drainPlacements(allPlacements);
+  const sceneryStatics = await fetchAndDrainScenery(cellIds, wasmExports);
+  const statics = landblockInfoStatics.concat(sceneryStatics);
   // Mark every newly-baked LB in the set BEFORE instantiation runs
   // so a concurrent caller observing mid-instantiation state sees the
   // bake-in-progress LBs as baked. Matches the per-LB baker's
@@ -864,11 +1118,32 @@ export async function bakeStaticsRing(
   let instancedGroupCount = 0;
   let singletonCount = 0;
   let lodCount = 0;
+  // Phase C.3 — per-source attribution. Group-level counts (across all
+  // grouped placements) feed the summary; per-instance counting works
+  // for both branches because the inner `group` array carries each
+  // placement's `source`.
+  let sceneryObjectCount = 0;
+  let landblockInfoObjectCount = 0;
+  // Track InstancedMesh groups that contain at least one scenery
+  // placement — this is the headline metric the C.3 brief asks for
+  // ("instancedGroupCount should jump significantly when scenery is
+  // wired in"). A group is scenery-bearing if any of its placements
+  // carry `source === "scenery"`.
+  let sceneryBearingInstancedGroupCount = 0;
   for (const [modelId, group] of placementsByModel) {
     const geom = primary.geomByModel.get(modelId);
     const mat = matByModel.get(modelId) || materialCache.fallbackMaterial;
     const degradedGeom = degradedGeomByModel.get(modelId) || null;
     const staticsMatCastsShadow = materialCanCastShadow(mat);
+
+    // Count scenery vs LandblockInfo placements within this group.
+    let groupSceneryCount = 0;
+    for (const p of group) {
+      if (p.source === "scenery") groupSceneryCount += 1;
+    }
+    const groupLandblockInfoCount = group.length - groupSceneryCount;
+    sceneryObjectCount += groupSceneryCount;
+    landblockInfoObjectCount += groupLandblockInfoCount;
 
     if (group.length >= 2) {
       // === InstancedMesh path ===
@@ -887,6 +1162,7 @@ export async function bakeStaticsRing(
       instancedGroupCount += 1;
       objectCount += group.length;
       if (isLod) lodCount += 1;
+      if (groupSceneryCount > 0) sceneryBearingInstancedGroupCount += 1;
     } else {
       // === Singleton Mesh path ===
       // Only one placement; InstancedMesh has no draw-call advantage
@@ -935,6 +1211,9 @@ export async function bakeStaticsRing(
     singletonCount,
     lodCount,
     drawCallReductionEstimate,
+    sceneryObjectCount,
+    landblockInfoObjectCount,
+    sceneryBearingInstancedGroupCount,
   };
 }
 
@@ -953,7 +1232,11 @@ export async function bakeStaticsRing(
  *     instancedGroupCount: number,      // unique models rendered as InstancedMesh (>=2 instances)
  *     singletonCount: number,           // unique models rendered as plain Mesh (1 instance)
  *     lodCount: number,                 // models wrapped in THREE.LOD (didDegrade resolved)
- *     drawCallReductionEstimate: number // placements − (instancedGroups + singletons)
+ *     drawCallReductionEstimate: number,// placements − (instancedGroups + singletons)
+ *     // Phase C.3 additions:
+ *     sceneryObjectCount: number,       // placements from fetch_landblock_scenery
+ *     landblockInfoObjectCount: number, // placements from fetch_landblock_objects
+ *     sceneryBearingInstancedGroupCount: number // InstancedMesh groups with ≥1 scenery placement (ring only)
  *   }
  *
  * Preserved so existing init3D callers, the Phase 7.2 capture, and the
