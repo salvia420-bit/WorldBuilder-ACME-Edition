@@ -98,6 +98,53 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     `[phase-x.1] quality preset=${quality.preset} source=${quality.source}`
   );
 
+  // Phase F.C — runtime event log probe. Opt-in via `?eventLog=on` so
+  // production users don't pay the cost; the F.D validator flips the
+  // flag during its capture. When enabled, each audio/particle call
+  // site appends an `EventRecord` (see docs/event-completeness-method.md).
+  // Ring buffer at EVENT_LOG_CAP records; overflow count tracked
+  // separately so the validator can detect a busy session that lost
+  // history. `_pushEventRecord` is the shared push helper — wired
+  // through `scene3dForBuilders` + `liveScene3d` so subsystems
+  // (AmbientRuntime, EntityManager, ParticleManager-callers, SkyDome,
+  // GameMessageSound recv arm in index.html) can append uniformly.
+  // When disabled, `_pushEventRecord` is a no-op stub so the call-site
+  // guard is just an unconditional function call.
+  const EVENT_LOG_CAP = 50000;
+  const eventLogEnabled = (() => {
+    try {
+      if (typeof window === "undefined" || !window.location?.search) return false;
+      return new URLSearchParams(window.location.search).get("eventLog") === "on";
+    } catch (_) {
+      return false;
+    }
+  })();
+  /** @type {Array<object>} */
+  const eventLog = [];
+  let eventLogOverflow = 0;
+  // Ring-buffer write index; only used in cap-reached mode.
+  let eventLogRingHead = 0;
+  const pushEventRecord = eventLogEnabled
+    ? (record) => {
+        if (!record) return;
+        if (eventLog.length < EVENT_LOG_CAP) {
+          eventLog.push(record);
+          return;
+        }
+        // Ring-buffer overwrite of oldest.
+        eventLog[eventLogRingHead] = record;
+        eventLogRingHead = (eventLogRingHead + 1) % EVENT_LOG_CAP;
+        eventLogOverflow += 1;
+      }
+    : (_record) => {};
+  if (eventLogEnabled) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[phase-f.c] eventLog probe ENABLED (cap=${EVENT_LOG_CAP}); ` +
+        "validator can read via liveScene3d.snapshotEventLog()"
+    );
+  }
+
   // Canvas sizing — index.html's <canvas> has width="512" height="512"
   // as an attribute fallback for the 2D path's pixel-art look. For
   // the 3D path we override to a viewport-relative size so the world
@@ -411,6 +458,13 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // `.visible = true` on the closest MAX_ACTIVE_LIGHTS (32) and
     // flips the rest off.
     activeLights: [],
+    // Phase F.C — runtime event log probe. Shared push helper +
+    // gating flag exposed on scene3dForBuilders so subsystems built
+    // BEFORE liveScene3d exists (EntityManager) can append uniformly.
+    // Aliased onto liveScene3d below; the function identity is shared
+    // so both refs point at the same closure over `eventLog`.
+    eventLogEnabled,
+    _pushEventRecord: pushEventRecord,
   };
   // World-expand step 1 Objective 8 (2026-05-14) — record the ring's
   // centre + spawn LB on scene3d so Objective 7's
@@ -980,6 +1034,28 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // sanity-check `liveScene3d.ambientRuntime` exists as a field
     // before the construction block runs.
     ambientRuntime: null,
+    // Phase F.C — runtime event log probe. The validator in F.D
+    // reads via `snapshotEventLog()`. When `?eventLog=on` is absent,
+    // `eventLogEnabled` is false and `_pushEventRecord` is a no-op
+    // (every wire-in point still calls it; the if-guard is cheap).
+    // Cap defends a long session from unbounded memory growth — once
+    // EVENT_LOG_CAP records are present, the buffer ring-overwrites
+    // and bumps `eventLogOverflow` so the validator knows history was
+    // truncated.
+    eventLogEnabled,
+    eventLog,
+    get eventLogOverflow() { return eventLogOverflow; },
+    snapshotEventLog() {
+      // Defensive copy so the validator can iterate without races
+      // against ongoing rAF appends. Records themselves are plain
+      // POJOs (no wasm-bindgen handles); JSON-stringifiable.
+      return {
+        records: eventLog.slice(),
+        overflow: eventLogOverflow,
+        capped_at: EVENT_LOG_CAP,
+      };
+    },
+    _pushEventRecord: pushEventRecord,
     // Stop hook — future phases use this for renderer hot-swap.
     stop() { running = false; },
     loadEnvCellsForLandblock(landblockId) {
@@ -1205,6 +1281,18 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
         // the audio path lit up before any hook integration lands.
         window.__playWave = (did, x, y, z) => {
           const pos = { x: x ?? 0, y: y ?? 0, z: z ?? 0 };
+          // Phase F.C — log OneOff plays so the F.D capture can drive
+          // the validator's synthetic sound injection through the same
+          // log path as the genuine sources. No-op when probe is off.
+          pushEventRecord({
+            type: "sound",
+            wave_did: (did >>> 0),
+            parent_entity_guid: null,
+            world_pos: [+pos.x, +pos.y, +pos.z],
+            t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
+            source: "OneOff",
+            source_meta: { via: "window.__playWave" },
+          });
           return audioManager.play(did >>> 0, pos);
         };
         // Task B (ambient-sounds-chain): console test hook for
@@ -1333,6 +1421,12 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
         // entries, column-major) — see terrain.js for the stash and
         // adapter.js::buildVertexTypesDataTexture for the layout.
         getTerrainMeshes: () => terrainGroup.children,
+        // Phase F.C — runtime event log probe. The runtime appends one
+        // record per `audioManager.play` it fires (continuous + prob);
+        // the F.D validator diffs against the F.B-baked manifest. The
+        // helper is the same `pushEventRecord` closure shared by every
+        // source — a no-op when `?eventLog=on` is absent.
+        pushEventRecord,
       });
       liveScene3d.ambientRuntime = ambientRuntime;
       scene3dForBuilders.ambientRuntime = ambientRuntime;

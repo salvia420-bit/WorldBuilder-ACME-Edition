@@ -1141,6 +1141,9 @@ export class EntityManager {
 
     const emitterIds = [];
     const timeoutIds = [];
+    // Phase F.C — runtime event log probe (shared across the H2 walker's
+    // Sound hook + CreateParticle hook arms).
+    const pushEventRecord = this.scene3d?._pushEventRecord;
     for (const e of entries) {
       // H3-E1 (2026-05-12): Sound + SoundTweaked hooks fire WAVE
       // playback at `start_time` seconds after script attach. Wired
@@ -1152,6 +1155,7 @@ export class EntityManager {
           const probability = e.soundProbability;
           const volume = e.soundVolume > 0 ? e.soundVolume : 1.0;
           const delayMs = Math.max(0, e.startTime * 1000);
+          const hookStartTime = +e.startTime;
           // Coin-flip on probability (only SoundTweaked has !=1.0).
           if (probability >= 1.0 || Math.random() < probability) {
             const tid = setTimeout(() => {
@@ -1163,6 +1167,27 @@ export class EntityManager {
                 y: rig.position.y,
                 z: rig.position.z,
               };
+              // Phase F.C — record the actual fire moment (after the
+              // setTimeout delay), not the schedule moment. F.D's
+              // validator time-correlates against the PhysicsScript
+              // start_time + the attach instant.
+              if (pushEventRecord) {
+                pushEventRecord({
+                  type: "sound",
+                  wave_did: waveId,
+                  parent_entity_guid: (guid >>> 0),
+                  world_pos: [+pos.x, +pos.y, +pos.z],
+                  t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
+                  source: "PhysicsScriptHook",
+                  source_meta: {
+                    entity_guid: (guid >>> 0),
+                    script_did: (pesId >>> 0),
+                    start_time_s: hookStartTime,
+                    hook_type: (e.hookType | 0),
+                    gain: volume,
+                  },
+                });
+              }
               audioMgr.play(waveId, pos, { gain: volume }).catch(() => {});
             }, delayMs);
             timeoutIds.push(tid);
@@ -1212,7 +1237,33 @@ export class EntityManager {
           partIndex,
           parentOffset: offset,
         });
-        if (id !== 0) emitterIds.push(id);
+        if (id !== 0) {
+          emitterIds.push(id);
+          // Phase F.C — record successful emitter spawn. Position is
+          // the rig's current world coord at add-time; offset is the
+          // hook's createParticleOffset (applied by ParticleEmitter
+          // internally — recorded in source_meta for the validator).
+          if (pushEventRecord) {
+            pushEventRecord({
+              type: "particle",
+              emitter_did: (emitterId >>> 0),
+              parent_entity_guid: (guid >>> 0),
+              world_pos: [+rig.position.x, +rig.position.y, +rig.position.z],
+              t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
+              source: "PhysicsScriptHook",
+              source_meta: {
+                entity_guid: (guid >>> 0),
+                script_did: (pesId >>> 0),
+                start_time_s: +e.startTime,
+                hook_type: (e.hookType | 0),
+                part_index: partIndex,
+                offset_x: +e.createParticleOffsetX,
+                offset_y: +e.createParticleOffsetY,
+                offset_z: +e.createParticleOffsetZ,
+              },
+            });
+          }
+        }
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn(
@@ -1572,6 +1623,9 @@ export class EntityManager {
   _fireHook(inst, hook, audioMgr, cache) {
     const hookType = hook.hookType | 0;
     const pos = inst.root.position;
+    // Phase F.C — runtime event log probe. Same no-op stub shape as
+    // every other source; reading via the scene3d ref is cheap.
+    const pushEventRecord = this.scene3d?._pushEventRecord;
     if (hookType === 1) {
       // Sound — payload is a Wave DID. Play directly.
       const waveId = hook.soundWaveId >>> 0;
@@ -1579,6 +1633,24 @@ export class EntityManager {
       // Position is read at fire-time so the panner pans to the
       // entity's current location (matches PhatSDK retail behaviour
       // — sound positions update with the body during animation).
+      if (pushEventRecord) {
+        pushEventRecord({
+          type: "sound",
+          wave_did: waveId,
+          parent_entity_guid: (inst.guid >>> 0),
+          world_pos: [+pos.x, +pos.y, +pos.z],
+          t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
+          source: "AnimationHook",
+          source_meta: {
+            entity_guid: (inst.guid >>> 0),
+            motion_command: (inst.currentActionKey ?? null),
+            // stance is folded into currentActionKey; no separate field
+            // on EntityInstance (the (cmd, stance) tuple is the cache key).
+            hook_type: 1,
+            hook_time: +hook.time,
+          },
+        });
+      }
       audioMgr
         .play(waveId, { x: pos.x, y: pos.y, z: pos.z })
         .catch(() => {});
@@ -1614,6 +1686,30 @@ export class EntityManager {
           const px = inst.root.position.x;
           const py = inst.root.position.y;
           const pz = inst.root.position.z;
+          // Phase F.C — emit event log record BEFORE play(). Source
+          // is still "AnimationHook" (the hook is the trigger; the
+          // SoundTable resolve is just the lookup mechanism). The
+          // hookType field disambiguates from raw Sound (1) hooks.
+          if (pushEventRecord) {
+            pushEventRecord({
+              type: "sound",
+              wave_did: (entry.waveDid >>> 0),
+              parent_entity_guid: (inst.guid >>> 0),
+              world_pos: [+px, +py, +pz],
+              t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
+              source: "AnimationHook",
+              source_meta: {
+                entity_guid: (inst.guid >>> 0),
+                motion_command: (inst.currentActionKey ?? null),
+                // stance is folded into currentActionKey; no separate field
+            // on EntityInstance (the (cmd, stance) tuple is the cache key).
+                hook_type: 2,
+                sound_enum: soundEnum,
+                stb_did: stbDid,
+                gain,
+              },
+            });
+          }
           audioMgr.play(entry.waveDid, { x: px, y: py, z: pz }, { gain }).catch(() => {});
         })
         .catch(() => {});

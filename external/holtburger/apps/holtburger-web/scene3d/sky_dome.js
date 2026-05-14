@@ -1240,6 +1240,9 @@ export class SkyDome {
       position: new THREE.Vector3(0, 0, 0),
       quaternion: new THREE.Quaternion(),
     };
+    // Phase F.C — runtime event log probe (shared across the Sky-J P5
+    // walker's Sound hook + CreateParticle hook arms).
+    const pushEventRecord = this.liveScene3dRef?._pushEventRecord;
     for (const e of entries) {
       // H3-E1 (2026-05-12): Sound + SoundTweaked hooks fire WAVE
       // playback at start_time via the AudioManager. For sky-anchored
@@ -1253,6 +1256,7 @@ export class SkyDome {
           const probability = e.soundProbability;
           const volume = e.soundVolume > 0 ? e.soundVolume : 1.0;
           const delayMs = Math.max(0, e.startTime * 1000);
+          const hookStartTime = +e.startTime;
           if (probability >= 1.0 || Math.random() < probability) {
             setTimeout(() => {
               // Sky parent is the sky cell — anchored at the camera.
@@ -1263,6 +1267,26 @@ export class SkyDome {
                 y: this.skyCell.position.y,
                 z: this.skyCell.position.z,
               };
+              // Phase F.C — record sky-anchored sound fire. Source is
+              // "SkyChain" since the trigger is the Region 0x13 sky
+              // physics chain (DayGroup → SkyObject → PhysicsScript).
+              if (pushEventRecord) {
+                pushEventRecord({
+                  type: "sound",
+                  wave_did: waveId,
+                  parent_entity_guid: null,
+                  world_pos: [+pos.x, +pos.y, +pos.z],
+                  t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
+                  source: "SkyChain",
+                  source_meta: {
+                    sky_object_id: (skyObjectId >>> 0),
+                    script_did: (pesId >>> 0),
+                    start_time_s: hookStartTime,
+                    hook_type: (e.hookType | 0),
+                    gain: volume,
+                  },
+                });
+              }
               audioMgr.play(waveId, pos, { gain: volume }).catch(() => {});
             }, delayMs);
           }
@@ -1316,7 +1340,37 @@ export class SkyDome {
           partIndex,
           parentOffset: offset,
         });
-        if (id !== 0) emitterIds.push(id);
+        if (id !== 0) {
+          emitterIds.push(id);
+          // Phase F.C — record successful sky-anchored emitter spawn.
+          // The parent here is the celestial-body group (moonAnchorParent)
+          // or sky-cell origin — record the parent's world position at
+          // fire-time so F.D's validator can spatial-correlate.
+          if (pushEventRecord) {
+            pushEventRecord({
+              type: "particle",
+              emitter_did: (emitterId >>> 0),
+              parent_entity_guid: null,
+              world_pos: [
+                +(parent?.position?.x ?? 0),
+                +(parent?.position?.y ?? 0),
+                +(parent?.position?.z ?? 0),
+              ],
+              t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
+              source: "SkyChain",
+              source_meta: {
+                sky_object_id: (skyObjectId >>> 0),
+                script_did: (pesId >>> 0),
+                start_time_s: +e.startTime,
+                hook_type: (e.hookType | 0),
+                part_index: partIndex,
+                offset_x: +e.createParticleOffsetX,
+                offset_y: +e.createParticleOffsetY,
+                offset_z: +e.createParticleOffsetZ,
+              },
+            });
+          }
+        }
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn(

@@ -6510,6 +6510,32 @@ void main() {
                         }
                         const baseVol = entry.volume > 0 ? entry.volume : 1.0;
                         const gain = baseVol * sndScale;
+                        // Phase F.C — runtime event log probe. Source
+                        // is "GameMessageSound" — the ACE wire-pushed
+                        // 0xF750 SoundTriggered; F.D's validator
+                        // matches against server_sound_messages in the
+                        // F.B manifest's S3 channel (which is a
+                        // "synthetic injection" path for the probe
+                        // scenario — the actual server hasn't been
+                        // captured yet).
+                        const pushEventRecord = scene3d?._pushEventRecord;
+                        if (pushEventRecord) {
+                          pushEventRecord({
+                            type: "sound",
+                            wave_did: (entry.waveDid >>> 0),
+                            parent_entity_guid: (sndGuid >>> 0),
+                            world_pos: [+pos.x, +pos.y, +pos.z],
+                            t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
+                            source: "GameMessageSound",
+                            source_meta: {
+                              server_object_guid: (sndGuid >>> 0),
+                              sound_enum: sndEnum,
+                              stb_did: stbDid,
+                              scale: sndScale,
+                              gain,
+                            },
+                          });
+                        }
                         return audioMgr.play(
                           entry.waveDid,
                           { x: pos.x, y: pos.y, z: pos.z },

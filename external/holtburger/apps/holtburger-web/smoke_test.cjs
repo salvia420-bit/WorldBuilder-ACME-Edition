@@ -590,6 +590,148 @@ try {
     );
 }
 
+// Phase F.C source-pattern — `scene3d/index.js` initialises the runtime
+// event-log probe + push helper + snapshot accessor on liveScene3d.
+// Without these the F.D validator has no API to read from. The gate
+// MUST be `?eventLog=on` (off by default per the brief; production
+// users shouldn't pay the cost).
+try {
+    const fs = require("fs");
+    const idxSrc = fs.readFileSync(
+        __dirname + "/scene3d/index.js",
+        "utf8"
+    );
+    const hasGate = /eventLog\s*===\s*"on"|getParam\(["']eventLog["']\)|get\(["']eventLog["']\)/.test(idxSrc);
+    const hasEventLogField = /\beventLog\b\s*[:,]/.test(idxSrc) && /eventLog,/.test(idxSrc);
+    const hasPushHelper = /pushEventRecord|_pushEventRecord/.test(idxSrc);
+    const hasCap = /EVENT_LOG_CAP\s*=\s*50_?000/.test(idxSrc);
+    const hasSnapshot = /\bsnapshotEventLog\s*\(\s*\)/.test(idxSrc);
+    const hasOverflow = /eventLogOverflow/.test(idxSrc);
+    const hasOneOffHook = /source\s*:\s*["']OneOff["']/.test(idxSrc);
+    check(
+        "Phase F.C: scene3d/index.js initialises eventLog probe (gate + cap + snapshotEventLog + OneOff hook)",
+        hasGate && hasEventLogField && hasPushHelper && hasCap && hasSnapshot && hasOverflow && hasOneOffHook,
+        `gate=${hasGate} field=${hasEventLogField} push=${hasPushHelper} cap=${hasCap} snapshot=${hasSnapshot} overflow=${hasOverflow} oneOff=${hasOneOffHook}`
+    );
+} catch (e) {
+    check(
+        "Phase F.C: scene3d/index.js initialises eventLog probe (gate + cap + snapshotEventLog + OneOff hook)",
+        false,
+        String(e).slice(0, 160)
+    );
+}
+
+// Phase F.C source-pattern — AmbientRuntime accepts `pushEventRecord`
+// opt + calls it in BOTH continuous + probabilistic fire paths with
+// `source: "AmbientRuntime"`. The validator distinguishes the two
+// flavours by `source_meta.continuous`.
+try {
+    const fs = require("fs");
+    const amSrc = fs.readFileSync(
+        __dirname + "/scene3d/audio/ambient_runtime.js",
+        "utf8"
+    );
+    const hasOpt = /opts\.pushEventRecord/.test(amSrc);
+    const hasField = /this\._pushEventRecord/.test(amSrc);
+    const hasAmbientSource = /source\s*:\s*["']AmbientRuntime["']/.test(amSrc);
+    const continuousMatches = amSrc.match(/continuous\s*:\s*true/g) || [];
+    const probMatches = amSrc.match(/continuous\s*:\s*false/g) || [];
+    const hasContinuous = continuousMatches.length >= 1;
+    const hasProb = probMatches.length >= 1;
+    check(
+        "Phase F.C: AmbientRuntime accepts pushEventRecord + appends source='AmbientRuntime' on continuous + probabilistic fires",
+        hasOpt && hasField && hasAmbientSource && hasContinuous && hasProb,
+        `opt=${hasOpt} field=${hasField} sourceTag=${hasAmbientSource} continuous=${hasContinuous} prob=${hasProb}`
+    );
+} catch (e) {
+    check(
+        "Phase F.C: AmbientRuntime accepts pushEventRecord + appends source='AmbientRuntime' on continuous + probabilistic fires",
+        false,
+        String(e).slice(0, 160)
+    );
+}
+
+// Phase F.C source-pattern — entities.js wires the event-log push into
+// `_fireHook` (AnimationHook source — types 1 + 2) AND
+// `_attachParticleChainForEntity` (PhysicsScriptHook source — both
+// sound + particle hook arms). Without this the entity-anchored half
+// of the F.D validator's correlation set is empty.
+try {
+    const fs = require("fs");
+    const entSrc = fs.readFileSync(
+        __dirname + "/scene3d/entities.js",
+        "utf8"
+    );
+    const hasAnimSource = /source\s*:\s*["']AnimationHook["']/.test(entSrc);
+    const hasPhysScriptSource = /source\s*:\s*["']PhysicsScriptHook["']/.test(entSrc);
+    const hasParticleType = /type\s*:\s*["']particle["']/.test(entSrc);
+    const hasSoundType = /type\s*:\s*["']sound["']/.test(entSrc);
+    const hasParentGuid = /parent_entity_guid/.test(entSrc);
+    check(
+        "Phase F.C: entities.js wires eventLog into AnimationHook (sound) + PhysicsScriptHook (sound + particle)",
+        hasAnimSource && hasPhysScriptSource && hasParticleType && hasSoundType && hasParentGuid,
+        `anim=${hasAnimSource} physScript=${hasPhysScriptSource} partType=${hasParticleType} sndType=${hasSoundType} parentGuid=${hasParentGuid}`
+    );
+} catch (e) {
+    check(
+        "Phase F.C: entities.js wires eventLog into AnimationHook (sound) + PhysicsScriptHook (sound + particle)",
+        false,
+        String(e).slice(0, 160)
+    );
+}
+
+// Phase F.C source-pattern — sky_dome.js wires the event-log push into
+// the Sky-J P5 walker for both sound + particle hooks, tagged
+// `source: "SkyChain"`. Without this the sky-particle half (P2 in the
+// method doc) of the F.D validator's correlation set is empty.
+try {
+    const fs = require("fs");
+    const skSrc = fs.readFileSync(
+        __dirname + "/scene3d/sky_dome.js",
+        "utf8"
+    );
+    const hasSkySource = /source\s*:\s*["']SkyChain["']/.test(skSrc);
+    const hasPushHelper = /_pushEventRecord/.test(skSrc);
+    const hasSkyObjectId = /sky_object_id/.test(skSrc);
+    check(
+        "Phase F.C: sky_dome.js wires eventLog into SkyChain (Sky-J P5 walker) for sound + particle hooks",
+        hasSkySource && hasPushHelper && hasSkyObjectId,
+        `skySource=${hasSkySource} push=${hasPushHelper} skyObjId=${hasSkyObjectId}`
+    );
+} catch (e) {
+    check(
+        "Phase F.C: sky_dome.js wires eventLog into SkyChain (Sky-J P5 walker) for sound + particle hooks",
+        false,
+        String(e).slice(0, 160)
+    );
+}
+
+// Phase F.C source-pattern — index.html's GameMessageSound (kind=16)
+// drain arm pushes a `source: "GameMessageSound"` record before the
+// audioMgr.play call. F.D's validator's S3 channel diff against the
+// F.B server-sound-message baseline depends on this being wired.
+try {
+    const fs = require("fs");
+    const htmlSrc = fs.readFileSync(
+        __dirname + "/index.html",
+        "utf8"
+    );
+    const hasGmsSource = /source\s*:\s*["']GameMessageSound["']/.test(htmlSrc);
+    const hasKind16 = /evt\.kind\s*===\s*16/.test(htmlSrc);
+    const hasPushBeforePlay = /_pushEventRecord[\s\S]{0,2000}audioMgr\.play\(\s*entry\.waveDid/m.test(htmlSrc);
+    check(
+        "Phase F.C: index.html's kind=16 GameMessageSound arm pushes eventLog record before audioMgr.play()",
+        hasGmsSource && hasKind16 && hasPushBeforePlay,
+        `gmsSource=${hasGmsSource} kind16=${hasKind16} pushBeforePlay=${hasPushBeforePlay}`
+    );
+} catch (e) {
+    check(
+        "Phase F.C: index.html's kind=16 GameMessageSound arm pushes eventLog record before audioMgr.play()",
+        false,
+        String(e).slice(0, 160)
+    );
+}
+
 // Phase 4 step 1: start_session + SessionHandle (with .poll_events()
 // and .characterList()) must be present. The `start_session` round-trip
 // itself is browser-only — ACE login synthesis in Node would require

@@ -127,6 +127,14 @@ export class AmbientRuntime {
    *        plan endorses 0 universally as a Task D simplification
    *        (the PhatSDK `CTerrainDesc::GetScene` position-hash isn't
    *        decompiled).
+   * @param {(record: object) => void} [opts.pushEventRecord]
+   *        Phase F.C runtime event log probe. Called with one record
+   *        per `audioManager.play` fire (continuous + probabilistic).
+   *        No-op stub when `?eventLog=on` is absent. Records carry
+   *        `{type:"sound", source:"AmbientRuntime", source_meta:
+   *        {terrain_code, stb_index, s_type, continuous}, wave_did,
+   *        world_pos, t_wall_ms, ...}` — see
+   *        `docs/event-completeness-method.md` for the schema.
    */
   constructor(opts) {
     if (!opts || !opts.soundTableCache || !opts.audioManager) {
@@ -154,6 +162,11 @@ export class AmbientRuntime {
         : null;
     this._rng = typeof opts.rng === "function" ? opts.rng : Math.random;
     this._scenePick = Number.isFinite(opts.scenePick) ? opts.scenePick | 0 : 0;
+    // Phase F.C — runtime event log probe (no-op when disabled).
+    this._pushEventRecord =
+      typeof opts.pushEventRecord === "function"
+        ? opts.pushEventRecord
+        : (_record) => {};
 
     // Resolver state.
     this._region = null;
@@ -591,6 +604,26 @@ export class AmbientRuntime {
       // Play at the listener position so HRTF panning lands
       // centred — non-positional "town-wide hum" per the doc plan.
       const gain = clamp01(ambientVolume * resolved.volume);
+      // Phase F.C — emit event log record BEFORE play() so the
+      // record always lands even if play() rejects. Source-meta
+      // carries the terrain code + STB id + Sound enum + continuous
+      // flag — enough for F.D's validator to time-correlate
+      // against the F.B-baked ambient manifest.
+      this._pushEventRecord({
+        type: "sound",
+        wave_did: resolved.waveDid >>> 0,
+        parent_entity_guid: null,
+        world_pos: [+listenerPos.x, +listenerPos.y, +listenerPos.z],
+        t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
+        source: "AmbientRuntime",
+        source_meta: {
+          terrain_code: this._activeTerrainCode | 0,
+          stb_id: stbId >>> 0,
+          s_type: sType >>> 0,
+          continuous: true,
+          gain,
+        },
+      });
       const audio = await this._audioManager.play(
         resolved.waveDid >>> 0,
         listenerPos,
@@ -637,6 +670,27 @@ export class AmbientRuntime {
       );
       if (!resolved) return;
       const gain = clamp01(entry.volume * resolved.volume);
+      // Phase F.C — emit event log record BEFORE play() so the
+      // record always lands even if play() rejects. `continuous:
+      // false` distinguishes from the looped-loop path; source_meta
+      // mirrors the continuous record's shape so F.D's validator
+      // treats both uniformly.
+      this._pushEventRecord({
+        type: "sound",
+        wave_did: resolved.waveDid >>> 0,
+        parent_entity_guid: null,
+        world_pos: [+listenerPos.x, +listenerPos.y, +listenerPos.z],
+        t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
+        source: "AmbientRuntime",
+        source_meta: {
+          terrain_code: this._activeTerrainCode | 0,
+          stb_id: stbId >>> 0,
+          s_type: entry.sType >>> 0,
+          continuous: false,
+          base_chance: entry.baseChance,
+          gain,
+        },
+      });
       await this._audioManager.play(
         resolved.waveDid >>> 0,
         listenerPos,
