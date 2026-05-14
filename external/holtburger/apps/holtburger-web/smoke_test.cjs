@@ -234,6 +234,31 @@ check(
     `typeof ${typeof wasm.fetch_model_meshes}`
 );
 
+// Phase C.1 + C.2: fetch_landblock_scenery + companion helpers must be
+// present. End-to-end round-trip against the staged JSONL bake is in the
+// hand-smoke script `smoke_scenery_fetch.cjs` — symbol presence here
+// is the wasm-side bundle-shape gate.
+check(
+    "fetch_landblock_scenery() is exported (Phase C.2 scenery fetch)",
+    typeof wasm.fetch_landblock_scenery === "function",
+    `typeof ${typeof wasm.fetch_landblock_scenery}`
+);
+check(
+    "init_scenery_base_url() is exported (Phase C.2 scenery base URL)",
+    typeof wasm.init_scenery_base_url === "function",
+    `typeof ${typeof wasm.init_scenery_base_url}`
+);
+check(
+    "scenery_cache_size() is exported (Phase C.2 cache probe)",
+    typeof wasm.scenery_cache_size === "function",
+    `typeof ${typeof wasm.scenery_cache_size}`
+);
+check(
+    "ScenicPlacementJs class is exported (Phase C.2 record type)",
+    typeof wasm.ScenicPlacementJs === "function",
+    `typeof ${typeof wasm.ScenicPlacementJs}`
+);
+
 // Phase 4 step 1: start_session + SessionHandle (with .poll_events()
 // and .characterList()) must be present. The `start_session` round-trip
 // itself is browser-only — ACE login synthesis in Node would require

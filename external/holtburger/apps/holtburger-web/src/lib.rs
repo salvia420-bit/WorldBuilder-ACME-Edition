@@ -942,6 +942,457 @@ pub async fn fetch_landblock_objects(
     Ok(out)
 }
 
+// =====================================================================
+// Phase C.1 + C.2 — scenery bake fetch (`fetch_landblock_scenery`).
+// =====================================================================
+//
+// The DAT-determined procedural-scenery placements (trees, rocks,
+// bushes, foliage) are baked OFFLINE by `holtburger-scenery-bake` into
+// per-LB JSONL files and staged under `/dist/scenery/<lb_hex>.scenery.jsonl`.
+// This export reads those JSONL files over HTTP and returns the
+// placements as `ScenicPlacementJs` records for the JS-side renderer to
+// merge with the `fetch_landblock_objects` (DAT explicit) and ACE
+// entity-spawn (server explicit) streams. The renderer never knows or
+// cares which stream a placement came from — it's the same render API
+// surface either way. See `docs/hypotheticalmethod.md` §"The renderer's
+// view" for the three-stream merge contract.
+//
+// The base URL is set once at page-init time via
+// [`init_scenery_base_url`] (mirrors [`init_resource_source`]); each
+// LB's JSONL is fetched lazily by [`fetch_landblock_scenery`] and
+// cached in a thread-local so repeat calls for the same LB are
+// in-memory. 404 / empty body / no LandblockInfo cell are all treated
+// as "zero placements for this LB" — distinguishes "baked-but-empty"
+// (LB has no scenery codes set, e.g. a city interior) from "not yet
+// baked" only at the disk level. The wasm-side surface is the same
+// either way: the LB returns an empty vector.
+
+/// One baked scenic placement — JS-facing mirror of
+/// `holtburger_scenery_bake::ScenicPlacement`. Coordinates `(x, y, z)`
+/// are LB-local metres (the renderer adds `lbX * 192, lbY * 192` for
+/// global world coords, matching the existing `ObjectPlacement` /
+/// `fetch_landblock_objects` contract). The quaternion is yaw-only-
+/// about-Z (`qw = cos(rad/2)`, `qz = sin(rad/2)`, XY always zero) per
+/// the bake's `Quaternion.CreateFromYawPitchRoll(0, 0, rot)` shape.
+///
+/// `source_*` fields are debug-only attribution from the bake — useful
+/// for "this tree exists because vertex (cell_x, cell_y) was
+/// scene_type N, ObjectDesc[idx] hit at noise=…". They're not used by
+/// the renderer.
+///
+/// `landblock_id` is the packed `0xXXYY0000` LB key (top 16 bits of
+/// the input `cell_id`, low 16 cleared) — lets JS group placements by
+/// LB without re-deriving from the JSONL filename.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct ScenicPlacementJs {
+    obj_id: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+    qw: f32,
+    qx: f32,
+    qy: f32,
+    qz: f32,
+    scale: f32,
+    source_cell_x: u32,
+    source_cell_y: u32,
+    source_obj_idx: u32,
+    landblock_id: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl ScenicPlacementJs {
+    #[wasm_bindgen(getter, js_name = objId)]
+    pub fn obj_id(&self) -> u32 {
+        self.obj_id
+    }
+    #[wasm_bindgen(getter)]
+    pub fn x(&self) -> f32 {
+        self.x
+    }
+    #[wasm_bindgen(getter)]
+    pub fn y(&self) -> f32 {
+        self.y
+    }
+    #[wasm_bindgen(getter)]
+    pub fn z(&self) -> f32 {
+        self.z
+    }
+    #[wasm_bindgen(getter)]
+    pub fn qw(&self) -> f32 {
+        self.qw
+    }
+    #[wasm_bindgen(getter)]
+    pub fn qx(&self) -> f32 {
+        self.qx
+    }
+    #[wasm_bindgen(getter)]
+    pub fn qy(&self) -> f32 {
+        self.qy
+    }
+    #[wasm_bindgen(getter)]
+    pub fn qz(&self) -> f32 {
+        self.qz
+    }
+    #[wasm_bindgen(getter)]
+    pub fn scale(&self) -> f32 {
+        self.scale
+    }
+    #[wasm_bindgen(getter, js_name = sourceCellX)]
+    pub fn source_cell_x(&self) -> u32 {
+        self.source_cell_x
+    }
+    #[wasm_bindgen(getter, js_name = sourceCellY)]
+    pub fn source_cell_y(&self) -> u32 {
+        self.source_cell_y
+    }
+    #[wasm_bindgen(getter, js_name = sourceObjIdx)]
+    pub fn source_obj_idx(&self) -> u32 {
+        self.source_obj_idx
+    }
+    #[wasm_bindgen(getter, js_name = landblockId)]
+    pub fn landblock_id(&self) -> u32 {
+        self.landblock_id
+    }
+}
+
+/// Raw JSONL line shape. `obj_id` is emitted as a 0xXXXXXXXX hex
+/// string by the bake CLI (mirrors `format!("0x{:08X}")`); we parse it
+/// back to u32 via the `obj_id_hex_to_u32` helper. The float fields
+/// are emitted as `{:.6}` (six decimal places) — well within serde_json's
+/// default `f64` precision.
+///
+/// Pure-data struct (no wasm-bindgen) — only used inside
+/// `fetch_landblock_scenery` to deserialize one line at a time.
+#[cfg(target_arch = "wasm32")]
+#[derive(serde::Deserialize)]
+struct ScenicPlacementJsonRaw {
+    obj_id: String,
+    x: f32,
+    y: f32,
+    z: f32,
+    qw: f32,
+    qx: f32,
+    qy: f32,
+    qz: f32,
+    scale: f32,
+    source_cell_x: u32,
+    source_cell_y: u32,
+    source_obj_idx: u32,
+}
+
+/// Parse a `0xXXXXXXXX` hex string back to u32. The bake CLI emits
+/// `format!("0x{:08X}")` so we accept the `0x` / `0X` prefix and
+/// strict 8-digit hex; anything else is a bake-format violation.
+#[cfg(target_arch = "wasm32")]
+fn obj_id_hex_to_u32(s: &str) -> Result<u32, String> {
+    let stripped = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"));
+    match stripped {
+        Some(hex) => u32::from_str_radix(hex, 16)
+            .map_err(|e| format!("obj_id `{s}` not valid hex: {e}")),
+        None => Err(format!("obj_id `{s}` missing 0x prefix")),
+    }
+}
+
+// Per-page state for the scenery fetch path. Mirrors
+// `global_source`'s thread-local pattern. Single-threaded wasm32
+// makes `RefCell` sound; the cache is unbounded but bounded in
+// practice by the LB count (169 for the 13×13 ring, ~65k for full
+// Dereth — still under a megabyte at retail JSONL sizes).
+#[cfg(target_arch = "wasm32")]
+mod scenery_fetch {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    use wasm_bindgen::prelude::*;
+
+    use super::{ScenicPlacementJs, ScenicPlacementJsonRaw, obj_id_hex_to_u32};
+
+    thread_local! {
+        /// Scenery base URL, set once by `init_scenery_base_url`.
+        /// Trailing slash is normalised in. `None` until init.
+        static BASE_URL: RefCell<Option<String>> = const { RefCell::new(None) };
+
+        /// Per-LB cache. Key = packed LB id (`0xXXYY0000`), value =
+        /// vector of `(parsed-record, landblock_id)` tuples (we store
+        /// the parsed primitives so each `fetch_landblock_scenery`
+        /// call materialises a fresh `Vec<ScenicPlacementJs>` for JS
+        /// — JS owns the records, the cache owns the data).
+        ///
+        /// An empty `Vec` is a positive cache entry (this LB has 0
+        /// scenery placements, baked, confirmed). The `bool` is
+        /// `true` if the cache entry came from a successful fetch
+        /// (even of an empty body or 404); always `true` post-insert
+        /// in the current impl — kept as a field for future
+        /// "negative-cache pending refetch" extensions.
+        #[allow(clippy::type_complexity)]
+        static CACHE: RefCell<HashMap<u32, Vec<CachedRecord>>> =
+            RefCell::new(HashMap::new());
+
+        /// Whether we've fetched + logged the `bake-source.sha256`
+        /// sidecar yet this page-init. One-shot side effect on first
+        /// `fetch_landblock_scenery` call.
+        static SHA_LOGGED: RefCell<bool> = const { RefCell::new(false) };
+    }
+
+    /// Cached parsed primitives. We materialise a fresh
+    /// `ScenicPlacementJs` per call (wasm-bindgen `pub struct`
+    /// instances are JS-owned and can't be safely shared across
+    /// calls — different `JsValue`s point at different wasm pages).
+    #[derive(Debug, Clone, Copy)]
+    pub struct CachedRecord {
+        pub obj_id: u32,
+        pub x: f32,
+        pub y: f32,
+        pub z: f32,
+        pub qw: f32,
+        pub qx: f32,
+        pub qy: f32,
+        pub qz: f32,
+        pub scale: f32,
+        pub source_cell_x: u32,
+        pub source_cell_y: u32,
+        pub source_obj_idx: u32,
+    }
+
+    /// Set the base URL for `/scenery/...` fetches. Mirrors the
+    /// `init_resource_source` shape. Trailing slash is added if
+    /// missing. Safe to call multiple times — overwrites.
+    #[wasm_bindgen]
+    pub fn init_scenery_base_url(url: String) {
+        let mut normalised = url;
+        if !normalised.ends_with('/') {
+            normalised.push('/');
+        }
+        BASE_URL.with(|cell| {
+            *cell.borrow_mut() = Some(normalised);
+        });
+    }
+
+    /// Number of LBs currently cached (positive entries — empties
+    /// count too). Smoke / hand-smoke tests use this as a "did the
+    /// cache populate?" probe.
+    #[wasm_bindgen]
+    pub fn scenery_cache_size() -> usize {
+        CACHE.with(|cell| cell.borrow().len())
+    }
+
+    /// Clear the scenery cache. Useful for unit / smoke tests that
+    /// want to verify cache miss vs hit behaviour. Not used in
+    /// normal page flow.
+    #[wasm_bindgen]
+    pub fn clear_scenery_cache() {
+        CACHE.with(|cell| cell.borrow_mut().clear());
+        SHA_LOGGED.with(|cell| *cell.borrow_mut() = false);
+    }
+
+    /// Fetch + parse one LB's scenery JSONL. Returns `Ok(Vec<...>)`
+    /// of cached records (may be empty for baked-empty LBs or 404).
+    /// Errors only on JSON-parse failure (which indicates a real
+    /// bake corruption — surfacing the error lets the renderer fail
+    /// loud rather than silently render fewer trees).
+    pub async fn fetch_one_lb(
+        base_url: &str,
+        lb_key: u32,
+    ) -> Result<Vec<CachedRecord>, String> {
+        // Cache hit?
+        let cached = CACHE.with(|cell| cell.borrow().get(&lb_key).cloned());
+        if let Some(hit) = cached {
+            return Ok(hit);
+        }
+
+        let lb_hex = format!("0x{:04X}", (lb_key >> 16) & 0xFFFF);
+        let url = format!("{base_url}{lb_hex}.scenery.jsonl");
+
+        let body = match holtburger_resource_http::fetch_bytes(&url).await {
+            Ok(b) => b,
+            // 404 → "baked-with-zero-placements OR not-yet-baked". Both
+            // mean "render no scenery here" — see the C.1+C.2 brief's
+            // empty-JSONL invariant. The bake CLI always emits an empty
+            // file for 0-placement LBs so 404 should only happen for
+            // unbaked LBs (outside the 13×13 ring today).
+            Err(holtburger_resource_http::HttpError::Http { status: 404, .. }) => {
+                CACHE.with(|cell| cell.borrow_mut().insert(lb_key, Vec::new()));
+                return Ok(Vec::new());
+            }
+            Err(e) => return Err(format!("fetch {url}: {e}")),
+        };
+
+        // Empty body is also "zero placements" — the bake CLI emits
+        // an empty JSONL for 0-placement LBs to distinguish from
+        // "not yet baked".
+        if body.is_empty() {
+            CACHE.with(|cell| cell.borrow_mut().insert(lb_key, Vec::new()));
+            return Ok(Vec::new());
+        }
+
+        // Parse line-by-line. Strict mode — any failing line is a
+        // real bake bug, surface it.
+        let text =
+            std::str::from_utf8(&body).map_err(|e| format!("{url}: body not utf-8: {e}"))?;
+        let mut out: Vec<CachedRecord> = Vec::new();
+        for (lineno, line) in text.lines().enumerate() {
+            // Skip blank trailing lines (the bake CLI's `writeln!`
+            // adds a final \n; the last `lines()` chunk may be
+            // empty depending on platform — harmless).
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let raw: ScenicPlacementJsonRaw = serde_json::from_str(trimmed)
+                .map_err(|e| format!("{url} line {}: {e}", lineno + 1))?;
+            let obj_id = obj_id_hex_to_u32(&raw.obj_id)
+                .map_err(|e| format!("{url} line {}: {e}", lineno + 1))?;
+            out.push(CachedRecord {
+                obj_id,
+                x: raw.x,
+                y: raw.y,
+                z: raw.z,
+                qw: raw.qw,
+                qx: raw.qx,
+                qy: raw.qy,
+                qz: raw.qz,
+                scale: raw.scale,
+                source_cell_x: raw.source_cell_x,
+                source_cell_y: raw.source_cell_y,
+                source_obj_idx: raw.source_obj_idx,
+            });
+        }
+
+        // Insert into cache. Clone is shallow (CachedRecord is Copy)
+        // but rustc still needs the explicit `.clone()` for the
+        // signature.
+        CACHE.with(|cell| cell.borrow_mut().insert(lb_key, out.clone()));
+        Ok(out)
+    }
+
+    /// One-shot: fetch + log `bake-source.sha256` next to the JSONL
+    /// files. Logged at info level (`console_log_str` via the
+    /// `extern "C"` glue). On failure (404, parse error, whatever)
+    /// we log a debug line and move on — the optional verification
+    /// gate is a Phase E concern; here we only need the manifest to
+    /// land in the page log for human inspection. Never gates
+    /// `fetch_landblock_scenery`.
+    pub async fn maybe_log_sha256(base_url: &str) {
+        let already = SHA_LOGGED.with(|cell| {
+            let was = *cell.borrow();
+            *cell.borrow_mut() = true;
+            was
+        });
+        if already {
+            return;
+        }
+        let url = format!("{base_url}bake-source.sha256");
+        match holtburger_resource_http::fetch_bytes(&url).await {
+            Ok(bytes) => {
+                let text = std::str::from_utf8(&bytes)
+                    .map(|s| s.to_owned())
+                    .unwrap_or_else(|_| "(invalid utf-8)".to_owned());
+                super::console_log_str(&format!(
+                    "fetch_landblock_scenery: bake-source.sha256:\n{text}"
+                ));
+            }
+            Err(e) => {
+                super::console_log_str(&format!(
+                    "fetch_landblock_scenery: bake-source.sha256 fetch failed ({e}); \
+                     proceeding (Phase E will gate)"
+                ));
+            }
+        }
+    }
+
+    pub fn base_url() -> Option<String> {
+        BASE_URL.with(|cell| cell.borrow().clone())
+    }
+
+    /// Materialise a cached primitive record into a JS-facing
+    /// `ScenicPlacementJs` for return. Each call produces a fresh
+    /// wasm-bindgen instance so JS gets independent objects.
+    pub fn to_js(rec: &CachedRecord, landblock_id: u32) -> ScenicPlacementJs {
+        ScenicPlacementJs {
+            obj_id: rec.obj_id,
+            x: rec.x,
+            y: rec.y,
+            z: rec.z,
+            qw: rec.qw,
+            qx: rec.qx,
+            qy: rec.qy,
+            qz: rec.qz,
+            scale: rec.scale,
+            source_cell_x: rec.source_cell_x,
+            source_cell_y: rec.source_cell_y,
+            source_obj_idx: rec.source_obj_idx,
+            landblock_id,
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub use scenery_fetch::{clear_scenery_cache, init_scenery_base_url, scenery_cache_size};
+
+/// Fetch per-landblock baked scenery placements for a list of
+/// `XXYYFFFE` LandblockInfo cell IDs. Mirrors
+/// [`fetch_landblock_objects`]'s call shape so the renderer's
+/// per-LB-entry path can call both and concatenate.
+///
+/// # Behaviour
+///
+/// For each input `cell_id`:
+/// 1. Compute the LB key `(cell_id & 0xFFFF_0000)` and the hex name
+///    `0x{:04X}` from the top 16 bits.
+/// 2. Fetch `<scenery_base_url>/0xXXXX.scenery.jsonl` over HTTP.
+/// 3. On 404 OR empty body: zero placements for that LB (no error —
+///    "baked-with-0-placements" or "not yet baked" are both valid
+///    "render no scenery here" results).
+/// 4. On JSON-parse failure: return error (real bake corruption,
+///    fail loud).
+/// 5. Records are cached per-LB in a thread-local so repeat calls
+///    for the same LB are in-memory after the first fetch — same
+///    pattern as `fetch_landblock_objects`'s implicit
+///    `ManifestResourceSource` shard cache.
+///
+/// Each returned [`ScenicPlacementJs`] carries `landblock_id =
+/// (cell_id & 0xFFFF_0000)` so JS can group by LB without
+/// re-deriving from the placement's position.
+///
+/// # Init order
+///
+/// JS must call [`init_scenery_base_url`] once at page-init time
+/// before any `fetch_landblock_scenery` call. The default path in
+/// the live page is `../../dist/scenery/` (relative to
+/// `apps/holtburger-web/index.html`), which the dev-server's
+/// `/dist/...` → `/mnt/wbterminal1/holtburger-dist-v2/...` mapping
+/// resolves to the staged bake output.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn fetch_landblock_scenery(
+    cell_ids: Vec<u32>,
+) -> Result<Vec<ScenicPlacementJs>, JsValue> {
+    let base_url = scenery_fetch::base_url().ok_or_else(|| {
+        JsValue::from_str(
+            "init_scenery_base_url must be called before fetch_landblock_scenery",
+        )
+    })?;
+
+    // One-shot bake-source.sha256 log (debug observability — never
+    // gates the fetch path; Phase E gates).
+    scenery_fetch::maybe_log_sha256(&base_url).await;
+
+    let mut out: Vec<ScenicPlacementJs> = Vec::new();
+    for &cell_id in &cell_ids {
+        let lb_key = cell_id & 0xFFFF_0000;
+        let recs = scenery_fetch::fetch_one_lb(&base_url, lb_key)
+            .await
+            .map_err(|e| JsValue::from_str(&e))?;
+        for r in &recs {
+            out.push(scenery_fetch::to_js(r, lb_key));
+        }
+    }
+    Ok(out)
+}
+
 /// Phase 1.4 diagnostic page support. Walks `LandblockInfo.objects` +
 /// `.buildings` + every EnvCell in the landblock's cell-id range,
 /// collects each model's referenced Surface DIDs (via the GfxObj
