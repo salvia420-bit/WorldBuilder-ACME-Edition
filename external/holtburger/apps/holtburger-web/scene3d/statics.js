@@ -737,6 +737,22 @@ export async function bakeStaticsRing(
     scene3d.staticsBakedLbs = new Set();
   }
 
+  // World-expand step 1 Objective 5 — persist a marker opts bag on
+  // scene3d so `liveScene3d.loadStaticsForLandblock(lbX, lbY)` has a
+  // non-undefined value to forward into `bakeStaticsForLandblock`.
+  // Set up-front (not after the bake) so the lazy hook can fire
+  // concurrently with the initial ring bake — both call paths see a
+  // populated field. The per-LB baker currently reads shared state
+  // (materialCache, shadowsEnabled, staticsBakedLbs) directly off
+  // `scene3d` rather than `opts`, so the payload is a stub today.
+  // See the matching terrain.js (`scene3d.terrainOpts`) and
+  // buildings.js (`scene3d.buildingsOpts`) persists.
+  scene3d.staticsOpts = {
+    centreLbX,
+    centreLbY,
+    radius,
+  };
+
   // Collect every LB in the ring that hasn't already been baked.
   // Phase 7.2-era code unconditionally walked the 3×3; the new shape
   // honours the per-LB bake gate so the lazy-walk path's prior bakes

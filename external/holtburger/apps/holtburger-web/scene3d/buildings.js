@@ -565,6 +565,17 @@ export async function bakeBuildingsRing(
   }
 
   const opts = resolveBuildingsOpts(scene3d);
+  // World-expand step 1 Objective 5 — persist the resolved ring opts
+  // on scene3d so the `liveScene3d.loadBuildingsForLandblock(lbX, lbY)`
+  // lazy hook in `scene3d/index.js` can call `bakeBuildingsForLandblock`
+  // without redoing the MaterialCache / bakeCache wiring. Persist
+  // BEFORE the per-LB fan-out runs so a concurrent caller observing
+  // mid-ring state (e.g. an early `handlePositionUpdate` fired by a
+  // login-flow position event arriving before the ring resolves) sees
+  // a populated opts bag. The bag carries references to the SAME
+  // `bakeCache` / `materialCache` / `buildingMap3d` maps — not copies
+  // — so lazy adds extend the same caches the ring populates.
+  scene3d.buildingsOpts = opts;
 
   // Fan out the per-LB bakes. Each call is independent (per-LB wasm
   // fetch + per-LB instantiation); the shared bakeCache is read-then-

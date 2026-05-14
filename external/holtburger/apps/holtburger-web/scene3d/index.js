@@ -14,9 +14,18 @@
 // any winding orders. See migration plan §"Strategic decisions" item 4.
 
 import * as THREE from "three";
-import { buildHoltburgTerrain } from "./terrain.js";
-import { buildHoltburgBuildings } from "./buildings.js";
-import { buildHoltburgStatics } from "./statics.js";
+import {
+  buildHoltburgTerrain,
+  bakeTerrainForLandblock,
+} from "./terrain.js";
+import {
+  buildHoltburgBuildings,
+  bakeBuildingsForLandblock,
+} from "./buildings.js";
+import {
+  buildHoltburgStatics,
+  bakeStaticsForLandblock,
+} from "./statics.js";
 import { buildEnvCellsForLandblock } from "./cells.js";
 import { tickPerFrame, installSharedDrainHook } from "./loop.js";
 import { EntityManager } from "./entities.js";
@@ -889,6 +898,55 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     stop() { running = false; },
     loadEnvCellsForLandblock(landblockId) {
       return buildEnvCellsForLandblock(this, landblockId, this.wasmExports);
+    },
+    // === World-expand step 1 — Objective 5 — per-LB lazy 3D loaders ===
+    // Sibling hooks to `loadEnvCellsForLandblock` for the three other
+    // 3D layers (terrain / buildings / statics). The Objective 6 lazy
+    // `handlePositionUpdate` hook in `index.html` reads these three
+    // symbols off `window.liveScene3d` and fires them when the player
+    // crosses an LB boundary. Each delegates to the same per-LB baker
+    // the ring driver uses, so the lazy-walk path and the initial-bake
+    // path share the same code-path (matching the cells.js pattern).
+    //
+    // Idempotency lives in the baker (`scene3d.{terrain,buildings,
+    // statics}BakedLbs: Set<u32>`); a second call for an already-baked
+    // LB short-circuits with `null` (mirrors `loadEnvCellsForLandblock`
+    // which returns `idempotent:true` for already-loaded LBs).
+    //
+    // `this.{terrain,buildings,statics}Opts` is set by the
+    // corresponding ring driver (`bakeTerrainRing`, `bakeBuildingsRing`,
+    // `bakeStaticsRing`) on first call — see commits 7145f11 / 9ea1601
+    // / 11eb8f6 (terrain stashes via `scene3d.terrainOpts = opts`;
+    // buildings + statics stash via the small follow-ons in this same
+    // commit). The lazy hook is fail-soft when the field is missing
+    // (init3D failed early or wasm exports are absent) because the
+    // bakers raise an explicit error if `opts` is required but unset.
+    loadTerrainForLandblock(lbX, lbY) {
+      return bakeTerrainForLandblock(
+        this,
+        lbX,
+        lbY,
+        this.terrainOpts,
+        this.wasmExports
+      );
+    },
+    loadBuildingsForLandblock(lbX, lbY) {
+      return bakeBuildingsForLandblock(
+        this,
+        lbX,
+        lbY,
+        this.buildingsOpts,
+        this.wasmExports
+      );
+    },
+    loadStaticsForLandblock(lbX, lbY) {
+      return bakeStaticsForLandblock(
+        this,
+        lbX,
+        lbY,
+        this.staticsOpts,
+        this.wasmExports
+      );
     },
     // Reference back to the wasm exports the caller passed in. Phases
     // 7.1+ pull from this rather than re-importing.

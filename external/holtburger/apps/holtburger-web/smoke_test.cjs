@@ -3440,6 +3440,162 @@ check(
         );
     }
 
+    // === World-expand step 1 — Objective 5 — liveScene3d load* hooks ===
+    // Objective 5 exposes three new methods on `liveScene3d` mirroring
+    // the existing `loadEnvCellsForLandblock`:
+    //   - loadTerrainForLandblock(lbX, lbY)
+    //   - loadBuildingsForLandblock(lbX, lbY)
+    //   - loadStaticsForLandblock(lbX, lbY)
+    // Each delegates to its respective `bakeXForLandblock(this, lbX,
+    // lbY, this.XOpts, this.wasmExports)` so the lazy-walk path
+    // (Objective 6's `handlePositionUpdate` hook) and the initial
+    // ring-bake path (Objective 8's `bakeXRing`) share the same code.
+    //
+    // Six checks here per `docs/world-expand-step-1-handoff.md`
+    // Objective 5 verification block:
+    //   (a) Symbol presence — three method definitions on the
+    //       liveScene3d object literal in `scene3d/index.js`.
+    //   (b) Idempotency — three source-pattern assertions that each
+    //       baker short-circuits with `return null` when the LB is
+    //       already in its `XBakedLbs` Set. The browser-side runtime
+    //       idempotency assertion (call twice → second call no-ops)
+    //       lives in `capture_world_expand_e2e.cjs` (Objective 10).
+    //       The source pattern is the merge-gate floor.
+    //
+    // Plus a tighter check: each load* method must read its opts off
+    // `this.XOpts` (not a fresh resolve), matching the
+    // `loadEnvCellsForLandblock` pattern. Objective 6's `index.html`
+    // hook depends on this — if a future commit reverts to a fresh
+    // resolve per call, the lazy walk becomes O(LBs²) work.
+    try {
+        const fs = require("fs");
+        const indexSrc = fs.readFileSync(
+            __dirname + "/scene3d/index.js",
+            "utf8"
+        );
+        const hasLoadTerrain =
+            /loadTerrainForLandblock\s*\(\s*lbX\s*,\s*lbY\s*\)\s*\{[\s\S]*?bakeTerrainForLandblock\s*\(\s*this\s*,\s*lbX\s*,\s*lbY\s*,\s*this\.terrainOpts/m.test(
+                indexSrc
+            );
+        const hasLoadBuildings =
+            /loadBuildingsForLandblock\s*\(\s*lbX\s*,\s*lbY\s*\)\s*\{[\s\S]*?bakeBuildingsForLandblock\s*\(\s*this\s*,\s*lbX\s*,\s*lbY\s*,\s*this\.buildingsOpts/m.test(
+                indexSrc
+            );
+        const hasLoadStatics =
+            /loadStaticsForLandblock\s*\(\s*lbX\s*,\s*lbY\s*\)\s*\{[\s\S]*?bakeStaticsForLandblock\s*\(\s*this\s*,\s*lbX\s*,\s*lbY\s*,\s*this\.staticsOpts/m.test(
+                indexSrc
+            );
+        check(
+            "Obj-5(a-1): liveScene3d.loadTerrainForLandblock(lbX, lbY) → bakeTerrainForLandblock(this, lbX, lbY, this.terrainOpts)",
+            hasLoadTerrain,
+            `pattern present: ${hasLoadTerrain}`
+        );
+        check(
+            "Obj-5(a-2): liveScene3d.loadBuildingsForLandblock(lbX, lbY) → bakeBuildingsForLandblock(this, lbX, lbY, this.buildingsOpts)",
+            hasLoadBuildings,
+            `pattern present: ${hasLoadBuildings}`
+        );
+        check(
+            "Obj-5(a-3): liveScene3d.loadStaticsForLandblock(lbX, lbY) → bakeStaticsForLandblock(this, lbX, lbY, this.staticsOpts)",
+            hasLoadStatics,
+            `pattern present: ${hasLoadStatics}`
+        );
+    } catch (e) {
+        check(
+            "Obj-5(a): liveScene3d.load{Terrain,Buildings,Statics}ForLandblock methods exposed",
+            false,
+            String(e).slice(0, 120)
+        );
+    }
+
+    // Idempotency: each baker must have a `scene3d.XBakedLbs.has(lbKey)`
+    // → `return null` short-circuit. This is what gives the lazy-walk
+    // path its O(1) cost when walking back into an already-baked LB.
+    // Cells.js's `buildEnvCellsForLandblock` set the pattern; the three
+    // new bakers must preserve it for `loadXForLandblock` to behave the
+    // same way as `loadEnvCellsForLandblock` (which returns an
+    // `idempotent: true` summary instead of `null`, but the gate's
+    // effect is identical — a single set-lookup).
+    try {
+        const fs = require("fs");
+        const terrainSrc = fs.readFileSync(
+            __dirname + "/scene3d/terrain.js",
+            "utf8"
+        );
+        // Match the body of `bakeTerrainForLandblock` and assert it
+        // contains both the `terrainBakedLbs.has(lbKey)` guard AND a
+        // `return null` immediately following. Same shape Obj-4(b)
+        // uses for matching `bakeStaticsRing`'s body.
+        const terrainBodyMatch = terrainSrc.match(
+            /export\s+async\s+function\s+bakeTerrainForLandblock[\s\S]*?\n\}\n/
+        );
+        const terrainBody = terrainBodyMatch ? terrainBodyMatch[0] : "";
+        const hasGuard =
+            /terrainBakedLbs\.has\s*\(\s*lbKey\s*\)/.test(terrainBody) &&
+            /return\s+null/.test(terrainBody);
+        check(
+            "Obj-5(b-1): bakeTerrainForLandblock idempotency short-circuit (terrainBakedLbs.has(lbKey) → return null)",
+            hasGuard,
+            `guard+return: ${hasGuard}`
+        );
+    } catch (e) {
+        check(
+            "Obj-5(b-1): bakeTerrainForLandblock idempotency short-circuit",
+            false,
+            String(e).slice(0, 120)
+        );
+    }
+    try {
+        const fs = require("fs");
+        const buildingsSrc = fs.readFileSync(
+            __dirname + "/scene3d/buildings.js",
+            "utf8"
+        );
+        const buildingsBodyMatch = buildingsSrc.match(
+            /export\s+async\s+function\s+bakeBuildingsForLandblock[\s\S]*?\n\}\n/
+        );
+        const buildingsBody = buildingsBodyMatch ? buildingsBodyMatch[0] : "";
+        const hasGuard =
+            /buildingsBakedLbs\.has\s*\(\s*lbKey\s*\)/.test(buildingsBody) &&
+            /return\s+(?:null|\{\s*idempotent)/.test(buildingsBody);
+        check(
+            "Obj-5(b-2): bakeBuildingsForLandblock idempotency short-circuit (buildingsBakedLbs.has(lbKey) → return null/idempotent)",
+            hasGuard,
+            `guard+return: ${hasGuard}`
+        );
+    } catch (e) {
+        check(
+            "Obj-5(b-2): bakeBuildingsForLandblock idempotency short-circuit",
+            false,
+            String(e).slice(0, 120)
+        );
+    }
+    try {
+        const fs = require("fs");
+        const staticsSrc = fs.readFileSync(
+            __dirname + "/scene3d/statics.js",
+            "utf8"
+        );
+        const staticsBodyMatch = staticsSrc.match(
+            /export\s+async\s+function\s+bakeStaticsForLandblock[\s\S]*?\n\}\n/
+        );
+        const staticsBody = staticsBodyMatch ? staticsBodyMatch[0] : "";
+        const hasGuard =
+            /staticsBakedLbs\.has\s*\(\s*lbKey\s*\)/.test(staticsBody) &&
+            /return\s+null/.test(staticsBody);
+        check(
+            "Obj-5(b-3): bakeStaticsForLandblock idempotency short-circuit (staticsBakedLbs.has(lbKey) → return null)",
+            hasGuard,
+            `guard+return: ${hasGuard}`
+        );
+    } catch (e) {
+        check(
+            "Obj-5(b-3): bakeStaticsForLandblock idempotency short-circuit",
+            false,
+            String(e).slice(0, 120)
+        );
+    }
+
     // === Follow-on #10 (2026-05-10) — PIXI HUD / DOM nameplate overlay =
     // Verify `scene3d/hud.js` is no longer the 6-line placeholder — it
     // must export a `NameplateLayer` class that uses `Vector3.project(
