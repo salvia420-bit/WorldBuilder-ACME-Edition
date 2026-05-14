@@ -491,15 +491,6 @@ void main() {
 `;
 
 /**
- * Compute the Holtburg 9-LB neighbourhood cell ids (matches the
- * `NEIGHBOURHOOD` const at `index.html:802-811`). Returned as a flat
- * `{ ids: Uint32Array, coords: Array<{x, y, id}> }` for symmetry with
- * the 2D path's `n.x / n.y / n.id` layout. The traversal order
- * (`dy: +1 → -1, dx: -1 → +1`) matches the 2D path exactly so
- * `meshes[i]` aligns with `coords[i]` after the parallel
- * `fetch_landblock_heightmaps` call.
- */
-/**
  * Read `subdivLevel` from `scene3d.quality.flags`, defaulting to 1 if
  * the flag is missing or out of range. Quality preset values are 1, 2,
  * 4, or 8; we coerce any other value to the nearest power-of-two bound.
@@ -538,23 +529,6 @@ export function computeCodeBitmask(codeSet) {
 // Phase 2.2 — exported for tests + capture-script probes.
 export const PHASE_2_2_WATER_CODES = TERRAIN_WATER_CODES;
 export const PHASE_2_2_LAVA_CODES = TERRAIN_LAVA_CODES;
-
-function holtburgNeighbourhoodCellIds() {
-  const coords = [];
-  for (let dy = 1; dy >= -1; dy -= 1) {
-    for (let dx = -1; dx <= 1; dx += 1) {
-      const x = HOLTBURG_X + dx;
-      const y = HOLTBURG_Y + dy;
-      coords.push({
-        x,
-        y,
-        id: ((x << 24) | (y << 16) | 0xffff) >>> 0,
-      });
-    }
-  }
-  const ids = new Uint32Array(coords.map((c) => c.id >>> 0));
-  return { ids, coords };
-}
 
 /**
  * Build a thin triangle-strip road overlay mesh for one landblock.
@@ -700,31 +674,36 @@ function buildRoadOverlayMesh(positions, roadCodes, roadTexture) {
   return mesh;
 }
 
-/**
- * Build the Holtburg 9-LB terrain (heightfield meshes + bilinear-blend
- * shader + per-LB vertex-types texture + road overlays) and add it to
- * `scene3d.terrainGroup`.
- *
- * Returns a summary `{ atlasTexture, roadTexture, lbCount, atlasCanvas,
- * roadCanvas }` with the shared atlas / road textures stashed for later
- * phases (Phase 7.5 camera, Phase 7.7 cleanup) to reuse.
- */
-export async function buildHoltburgTerrain(scene3d, wasmExports) {
-  if (!scene3d || !scene3d.terrainGroup) {
-    throw new Error(
-      "buildHoltburgTerrain: scene3d.terrainGroup missing (call init3D first)"
-    );
-  }
-  if (
-    !wasmExports ||
-    typeof wasmExports.fetch_landblock_heightmaps !== "function" ||
-    typeof wasmExports.fetch_terrain_textures !== "function"
-  ) {
-    throw new Error(
-      "buildHoltburgTerrain: wasmExports missing fetch_landblock_heightmaps / fetch_terrain_textures"
-    );
-  }
+// ----- world-expand step 1 — once-per-ring shader uniform constants
+//
+// Shared by every per-LB material the ring bakes. Lifted out of the
+// inner loop so the ring driver builds them once and threads them via
+// `opts` to `bakeTerrainForLandblock` rather than recomputing per LB.
+const ATLAS_GRID_SIZE = new THREE.Vector2(6, 6);
 
+/**
+ * Resolve the once-per-ring opts the per-LB baker consumes. Reads
+ * quality flags / detail-normal array off `scene3d`, computes the
+ * shared bitmasks, and (optionally) builds the atlas + road textures
+ * from the wasm `fetch_terrain_textures()` payload.
+ *
+ * Callers that already have an atlas/road texture pair (e.g. the lazy
+ * hook reusing a previously baked ring's textures) should pass them via
+ * `existing.atlasTexture` / `existing.roadTexture` / `existing.atlasCanvas`
+ * / `existing.roadCanvas` to skip the canvas + texture build.
+ *
+ * `centreLbX` / `centreLbY` are used by the centre-vs-outer subdivision
+ * LOD rule preserved from the prior `buildHoltburgTerrain` body. The
+ * distance-keyed LOD generalisation is Objective 7's job, not this
+ * objective's.
+ */
+async function resolveTerrainRingOpts(
+  scene3d,
+  wasmExports,
+  centreLbX,
+  centreLbY,
+  existing
+) {
   // Phase 1.2 — terrain detail normal array. Loaded once in index.js
   // and stashed on scene3d, gated behind `quality.flags.terrainDetailNormal`.
   // When the flag is off, `terrainDetailNormalArray` is null and the
@@ -741,7 +720,7 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
   // wired (no point triplanar-sampling a no-op).
   const triplanarEnabled =
     !!scene3d.quality?.flags?.triplanar && detailNormalEnabled;
-  // Per-instance codeToSlice uniform array — int[32] keyed by terrain
+  // Per-ring codeToSlice uniform array — int[32] keyed by terrain
   // code. Built once and shared by reference across every LB material.
   const codeToSliceArr = Array.from(TERRAIN_CODE_TO_DETAIL_SLICE).map(
     (slice) => (slice === DETAIL_SLICE_NONE ? 255 : slice)
@@ -765,34 +744,461 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
   const waterCodeMask = computeCodeBitmask(TERRAIN_WATER_CODES);
   const lavaCodeMask = computeCodeBitmask(TERRAIN_LAVA_CODES);
 
-  // 1. Compute the 9 cell ids.
-  const { ids, coords } = holtburgNeighbourhoodCellIds();
+  // Atlas + road textures. Built from `fetch_terrain_textures()` when
+  // the caller didn't pass a previously-baked pair. The lazy LB-entry
+  // path (added in Objective 5/6) will pass the previously-baked
+  // textures here so we don't redo the canvas work.
+  let atlasTexture = existing?.atlasTexture ?? null;
+  let roadTexture = existing?.roadTexture ?? null;
+  let atlasCanvas = existing?.atlasCanvas ?? null;
+  let roadCanvas = existing?.roadCanvas ?? null;
+  if (!atlasTexture) {
+    const terrainTextures = await wasmExports.fetch_terrain_textures();
+    const canvases = buildTerrainAtlasCanvas(terrainTextures);
+    atlasCanvas = canvases.atlasCanvas;
+    roadCanvas = canvases.roadCanvas;
 
-  // 2. Fetch heightmaps + terrain textures in parallel. The base 9×9
-  // mesh is still fetched (cheap) because the road overlay walks the
-  // 9×9 grid and the shader's `uVertexTypes` is a 9×9 texture.
-  const [meshes, terrainTextures] = await Promise.all([
-    wasmExports.fetch_landblock_heightmaps(ids),
-    wasmExports.fetch_terrain_textures(),
-  ]);
-  if (meshes.length !== coords.length) {
+    atlasTexture = new THREE.CanvasTexture(atlasCanvas);
+    // Atlas tiles are colour data — sRGB so three's renderer linearises
+    // them before the fragment shader does its bilinear blend.
+    atlasTexture.colorSpace = THREE.SRGBColorSpace;
+    atlasTexture.magFilter = THREE.LinearFilter;
+    atlasTexture.minFilter = THREE.LinearMipmapLinearFilter;
+    atlasTexture.generateMipmaps = true;
+    atlasTexture.needsUpdate = true;
+
+    if (roadCanvas) {
+      roadTexture = new THREE.CanvasTexture(roadCanvas);
+      roadTexture.colorSpace = THREE.SRGBColorSpace;
+      roadTexture.wrapS = THREE.RepeatWrapping;
+      roadTexture.wrapT = THREE.RepeatWrapping;
+      roadTexture.magFilter = THREE.LinearFilter;
+      roadTexture.minFilter = THREE.LinearMipmapLinearFilter;
+      roadTexture.generateMipmaps = true;
+      roadTexture.needsUpdate = true;
+    }
+  }
+
+  return {
+    centreLbX,
+    centreLbY,
+    detailNormalEnabled,
+    detailNormalArrayTex,
+    triplanarEnabled,
+    codeToSliceArr,
+    subdivLevel,
+    canSubdivide,
+    displacementEnabled,
+    waterCodeMask,
+    lavaCodeMask,
+    atlasTexture,
+    roadTexture,
+    atlasCanvas,
+    roadCanvas,
+  };
+}
+
+/**
+ * Pick the subdivision level for a single LB given the ring's centre.
+ *
+ * Centre = full level; everything else = half (floor, min 1). Mirrors
+ * the rule from the prior `buildHoltburgTerrain` body verbatim:
+ * the central LB (the player's, Holtburg 0xA9 0xB4 at radius=1) gets
+ * full subdivLevel, the 8 surrounding LBs get half.
+ *
+ * Distance-keyed LOD (Chebyshev distance from `scene3d.playerLbKey`) is
+ * Objective 7's job; this stays a centre/outer flip for now.
+ */
+function pickSubdivLevelForLb(opts, lbX, lbY) {
+  const centreLevel = opts.subdivLevel;
+  const outerLevel = Math.max(1, Math.floor(opts.subdivLevel / 2));
+  return lbX === opts.centreLbX && lbY === opts.centreLbY
+    ? centreLevel
+    : outerLevel;
+}
+
+/**
+ * world-expand step 1 — per-LB terrain baker.
+ *
+ * Bakes ONE landblock's terrain mesh (heightfield + bilinear-blend
+ * shader + per-LB vertex-types texture + Phase 2.1 subdivision +
+ * Phase 2.2 displacement + road overlay) and adds it to
+ * `scene3d.terrainGroup`. Idempotent via `scene3d.terrainBakedLbs:
+ * Set<u32>` keyed by `((lbX << 24) | (lbY << 16)) >>> 0`.
+ *
+ * `opts` is the once-per-ring bag built by `resolveTerrainRingOpts`.
+ * For the lazy LB-entry path (called from outside a ring driver, e.g.
+ * the `handlePositionUpdate` hook Objective 6 will wire), callers can
+ * either (a) reuse the previously-baked ring's `opts` straight off
+ * `scene3d.terrainOpts` (set by `bakeTerrainRing`) or (b) call
+ * `resolveTerrainRingOpts(scene3d, wasmExports, lbX, lbY, scene3d)` to
+ * get a fresh one centred on the new LB.
+ *
+ * `opts.prefetchedMesh` / `opts.prefetchedSubdiv` short-circuit the
+ * wasm round-trip when the ring driver has already batched the fetch
+ * for this LB. Solo callers leave both unset and the baker fetches via
+ * single-element `fetch_landblock_heightmaps` / per-LB
+ * `fetch_subdivided_landblock`.
+ *
+ * Returns the added `THREE.Mesh`, or `null` if the LB was already baked.
+ */
+export async function bakeTerrainForLandblock(
+  scene3d,
+  lbX,
+  lbY,
+  opts,
+  wasmExports
+) {
+  if (!scene3d || !scene3d.terrainGroup) {
     throw new Error(
-      `buildHoltburgTerrain: expected ${coords.length} meshes, got ${meshes.length}`
+      "bakeTerrainForLandblock: scene3d.terrainGroup missing (call init3D first)"
+    );
+  }
+  if (
+    !wasmExports ||
+    typeof wasmExports.fetch_landblock_heightmaps !== "function"
+  ) {
+    throw new Error(
+      "bakeTerrainForLandblock: wasmExports missing fetch_landblock_heightmaps"
+    );
+  }
+  if (!opts) {
+    throw new Error(
+      "bakeTerrainForLandblock: opts missing (call resolveTerrainRingOpts or pass scene3d.terrainOpts)"
     );
   }
 
-  // 2b. If subdivision is on, fetch the subdivided mesh in parallel
-  // per-LB. LOD ramp: central LB (the player's, Holtburg 0xA9 0xB4) gets
-  // full subdivLevel, the 8 surrounding LBs get half (min 1). With the
-  // 9-LB neighbourhood the "central 3×3" is just the one Holtburg LB —
-  // the surrounding 8 form the outer ring.
+  // Idempotency: short-circuit if this LB is already in the baked set.
+  // Initialise both the bake set + the per-rAF terrainMaterials registry
+  // lazily so solo callers (the future lazy LB-entry hook) work even if
+  // the ring driver hasn't run yet.
+  if (!(scene3d.terrainBakedLbs instanceof Set)) {
+    scene3d.terrainBakedLbs = new Set();
+  }
+  if (!Array.isArray(scene3d.terrainMaterials)) {
+    scene3d.terrainMaterials = [];
+  }
+  const lbKey = (((lbX & 0xff) << 24) | ((lbY & 0xff) << 16)) >>> 0;
+  if (scene3d.terrainBakedLbs.has(lbKey)) {
+    return null;
+  }
+
+  // 1. Fetch base mesh. Ring drivers pass a prefetched mesh via opts;
+  // solo callers (lazy hook) issue a single-element batch call to the
+  // same wasm export the ring driver uses.
+  const cellId = (lbKey | 0xffff) >>> 0;
+  let wasmMesh = opts.prefetchedMesh ?? null;
+  if (!wasmMesh) {
+    const meshes = await wasmExports.fetch_landblock_heightmaps(
+      new Uint32Array([cellId])
+    );
+    if (!meshes || meshes.length === 0) {
+      throw new Error(
+        `bakeTerrainForLandblock: fetch_landblock_heightmaps returned 0 meshes for (${lbX.toString(
+          16
+        )},${lbY.toString(16)})`
+      );
+    }
+    wasmMesh = meshes[0];
+  }
+
+  // 2. Subdivided mesh (visual-fidelity Phase 2.1). Either passed in by
+  // the ring driver (it batched the per-LB subdiv fetch in parallel) or
+  // fetched here for the solo path. The level is the centre-vs-outer
+  // pick — same rule as the prior `buildHoltburgTerrain` body.
+  let subdivEntry = opts.prefetchedSubdiv ?? null;
+  if (!subdivEntry && opts.canSubdivide) {
+    const level = pickSubdivLevelForLb(opts, lbX, lbY);
+    try {
+      const mesh = await wasmExports.fetch_subdivided_landblock(cellId, level);
+      subdivEntry = { mesh, level };
+    } catch (err) {
+      console.warn(
+        `[terrain] subdivide failed for (${lbX},${lbY}) @ level=${level}:`,
+        err
+      );
+      subdivEntry = null;
+    }
+  }
+
+  // Mark baked AFTER successful base fetch but BEFORE building geometry
+  // so any in-flight concurrent call for the same LB short-circuits
+  // immediately. Three.js mesh construction is sync from here on.
+  scene3d.terrainBakedLbs.add(lbKey);
+
+  // 3. Snapshot what we need from the wasm mesh BEFORE freeing it. The
+  // adapter copies the buffers into BufferAttributes, but the road
+  // overlay needs raw `positions` + `roadCodes` to walk neighbours;
+  // copy those once here so we can free the wasm struct safely.
+  const positionsCopy = Float32Array.from(wasmMesh.positions);
+  const roadCodesCopy = Uint8Array.from(wasmMesh.roadCodes);
+  const terrainCodesCopy = Uint8Array.from(wasmMesh.terrainCodes);
+  const heightMin = wasmMesh.heightMin;
+  const heightMax = wasmMesh.heightMax;
+
+  // 4. Phase 2.1 — if the LB has a subdivided mesh, build geometry from
+  // it. Otherwise fall back to the 9×9 path. The 9×9 vertex-types
+  // texture (`uVertexTypes`) is always the 9×9 control grid — the
+  // subdivided mesh's per-vertex `terrainCode` attribute is unused by
+  // the current shader (kept on the geometry for forward compat).
+  let geom;
+  let effectiveSubdiv = 1;
+  if (subdivEntry && subdivEntry.mesh) {
+    geom = subdividedLandblockMeshToGeometry(subdivEntry.mesh);
+    effectiveSubdiv = subdivEntry.level;
+    if (typeof subdivEntry.mesh.free === "function") subdivEntry.mesh.free();
+  } else {
+    geom = landblockMeshToGeometry(wasmMesh);
+  }
+  const vertexTypesTex = buildVertexTypesDataTexture(terrainCodesCopy);
+
+  // 5. ShaderMaterial — verbatim port from the prior in-loop body.
+  // Per-LB uniforms (uVertexTypes, uLbOriginXy) are bound here; the
+  // once-per-ring uniforms (uAtlas, uTerrainDetailNormalArray,
+  // uCodeToSlice, uWaterCodeMask, etc.) come straight off `opts`.
+  const material = new THREE.ShaderMaterial({
+    // three.js auto-injects `projectionMatrix`, `modelViewMatrix`,
+    // and the `position` attribute. We just supply the user
+    // uniforms.
+    uniforms: {
+      uAtlas: { value: opts.atlasTexture },
+      uAtlasGridSize: { value: ATLAS_GRID_SIZE },
+      uVertexTypes: { value: vertexTypesTex },
+      // Phase 1.2 — terrain detail-normal array + per-code slice
+      // table + per-frame wind direction + quality gate. When
+      // `detailNormalEnabled` is false the texture uniform is set
+      // to null (three.js skips the bind) and uDetailNormalEnabled
+      // = 0.0 makes the fragment shader branch around the sample.
+      uTerrainDetailNormalArray: { value: opts.detailNormalArrayTex },
+      uCodeToSlice: { value: opts.codeToSliceArr },
+      uDetailScale: { value: DEFAULT_DETAIL_SCALE },
+      uWindDir: { value: new THREE.Vector2(1.0, 0.0) },
+      uDetailNormalEnabled: {
+        value: opts.detailNormalEnabled ? 1.0 : 0.0,
+      },
+      // Phase 1.3 — triplanar gate + sharpness. When the gate is
+      // 0.0 the fragment skips the YZ+XZ samples entirely and the
+      // detail-normal falls back to the XY-only Phase 1.2 path.
+      uTriplanarEnabled: { value: opts.triplanarEnabled ? 1.0 : 0.0 },
+      uTriplanarSharpness: { value: DEFAULT_TRIPLANAR_SHARPNESS },
+      // Phase 2.2 — animated displacement uniforms. uTime is pushed
+      // from `loop.js::tickPerFrame` once per rAF via the shared
+      // `scene3d.terrainMaterials` registry below. uWaterCodeMask /
+      // uLavaCodeMask are packed bitmasks (bit i = code i). Gate is
+      // 1.0 only when subdivLevel >= 2. uLbOriginXy lets the wave
+      // phase stay continuous across LB seams (world-frame XY).
+      uTime: { value: 0.0 },
+      uWaterCodeMask: { value: opts.waterCodeMask },
+      uLavaCodeMask: { value: opts.lavaCodeMask },
+      uDisplacementEnabled: {
+        value: opts.displacementEnabled ? 1.0 : 0.0,
+      },
+      uLbOriginXy: {
+        value: new THREE.Vector2(
+          lbX * METERS_PER_LANDBLOCK,
+          lbY * METERS_PER_LANDBLOCK
+        ),
+      },
+    },
+    vertexShader: TERRAIN_VERTEX_GLSL,
+    fragmentShader: TERRAIN_FRAGMENT_GLSL,
+    glslVersion: THREE.GLSL3,
+    // Heightfield is single-sided: backfaces are looking at the
+    // world from below the terrain — never the player's vantage.
+    // The F#27 fix in `landblockMeshToGeometry` reverses the wasm's
+    // CW-from-AC-+Z index winding so FrontSide is correct post-
+    // worldRoot rotation. Don't flip back to DoubleSide without
+    // also reverting the adapter's index reversal.
+    side: THREE.FrontSide,
+  });
+
+  // Phase 2.2 — register the material so the per-rAF tick can push
+  // the shared wall-clock `uTime`. Single shared time source means
+  // matched wave motion across LB seams (objective #4). The registry
+  // entry retains the ShaderMaterial handle directly; on
+  // disposal/rebuild the caller should null out scene3d.terrainMaterials.
+  scene3d.terrainMaterials.push(material);
+
+  const lbMesh = new THREE.Mesh(geom, material);
+  lbMesh.name = `terrain-lb-${lbX.toString(16)}-${lbY.toString(16)}`;
+  // Visual-fidelity Phase 0.1 + 3.3 — flag the terrain mesh as a shadow
+  // receiver under EITHER the single-shadow path (shadowsEnabled) OR
+  // the CSM path (csmEnabled). Note: the terrain's custom GLSL3
+  // ShaderMaterial does NOT currently honour the flag (it skips three's
+  // shadow chunks); this is documented in the Phase 0.1 plan as
+  // deferred to Phase 1.* / 2.*. Phase 3.3 inherits the same gap — to
+  // render shadows on terrain, the custom shader needs explicit CSM
+  // sampling injected. Out of scope for the initial Phase 3.3 push;
+  // tracked in the report doc.
+  if (scene3d.shadowsEnabled || scene3d.csmEnabled) {
+    lbMesh.receiveShadow = true;
+  }
+  // Per-LB world offset (xy in metres). The geometry is LB-local
+  // (x,y in [0, 192]) so the world position is just (lbX*192, lbY*192).
+  lbMesh.position.set(
+    lbX * METERS_PER_LANDBLOCK,
+    lbY * METERS_PER_LANDBLOCK,
+    0
+  );
+  // Stash height range on the userData so the capture can verify
+  // terrain isn't flat-zero without a wasm round-trip.
+  //
+  // Task D (2026-05-12) — `terrainCodes` is the wasm column-major
+  // 81-byte block (vertex `i` has gridX = i/9, gridY = i%9; see
+  // `adapter.js::buildVertexTypesDataTexture` for the transpose note).
+  // The ambient-runtime sampler reads this per tick to look up the
+  // player's terrain type for the Region → AmbientSTB chain. Storing
+  // the raw bytes (not the DataTexture) keeps the runtime free of
+  // GPU readback — sampling is a single byte fetch per tick.
+  lbMesh.userData = {
+    lbX,
+    lbY,
+    lbId: ((lbX << 24) | (lbY << 16) | 0xffff) >>> 0,
+    heightMin,
+    heightMax,
+    vertexTypesTexture: vertexTypesTex,
+    terrainCodes: terrainCodesCopy,
+    // Phase 1.2 — capture probes inspect this to verify the detail-
+    // normal patch is wired without a GL state pull.
+    detailNormalEnabled: opts.detailNormalEnabled,
+    detailNormalSlice: opts.detailNormalEnabled ? "array(5)" : "off",
+    // Phase 1.3 — same idea for triplanar wiring. `slopeLo`/`slopeHi`
+    // come from the JS-side constants the GLSL is interpolated with;
+    // captures use them to compute the expected smoothstep blend at
+    // any given fragment without re-reading the shader source.
+    triplanarEnabled: opts.triplanarEnabled,
+    triplanarSharpness: opts.triplanarEnabled ? DEFAULT_TRIPLANAR_SHARPNESS : 0,
+    triplanarSlopeLo: TRIPLANAR_SLOPE_LO,
+    triplanarSlopeHi: TRIPLANAR_SLOPE_HI,
+    // Phase 2.1 — actual subdivision factor used for this LB.
+    // 1 = no subdivision (legacy 9×9 path); 2/4/8 = subdivided.
+    subdivLevel: effectiveSubdiv,
+    // Phase 2.2 — capture probes inspect these to verify the
+    // displacement patch is wired. uTime is mutated each rAF by
+    // `loop.js::tickPerFrame`; the snapshot here records the wiring
+    // state at build time.
+    displacementEnabled: opts.displacementEnabled,
+    waterCodeMask: opts.waterCodeMask,
+    lavaCodeMask: opts.lavaCodeMask,
+  };
+
+  // Group keeps the road overlay parented under the same lbMesh
+  // transform — simpler than a sibling group, and toggling
+  // `lbMesh.visible` still hides both atomically.
+  scene3d.terrainGroup.add(lbMesh);
+
+  const roadMesh = buildRoadOverlayMesh(
+    positionsCopy,
+    roadCodesCopy,
+    opts.roadTexture
+  );
+  if (roadMesh) {
+    lbMesh.add(roadMesh);
+  }
+
+  // Free the wasm mesh now that all needed data is copied. Skip if the
+  // mesh came from the prefetch batch — the ring driver owns those and
+  // will free them when its loop completes (avoids double-free).
+  if (!opts.prefetchedMesh && typeof wasmMesh.free === "function") {
+    wasmMesh.free();
+  }
+
+  return lbMesh;
+}
+
+/**
+ * world-expand step 1 — terrain ring driver.
+ *
+ * Bakes every LB in the `(dx, dy) ∈ [-radius, +radius]² ∩ [0, 255]²`
+ * ring around `(centreLbX, centreLbY)`. Resolves once-per-ring shader
+ * uniforms / textures (atlas, road, codeToSliceArr, etc.) up front, then
+ * batches the per-LB heightmap + subdiv fetches and fans out
+ * `bakeTerrainForLandblock` via `Promise.all`.
+ *
+ * Returns the same summary shape `buildHoltburgTerrain` returned before
+ * the refactor, plus `lbCount` reflecting the actual number of LBs in
+ * the ring (radius=1 → 9; radius=6 → 169 at full ring, fewer at world
+ * edges). The lbCount is the **ring size**, not necessarily the number
+ * of LBs added in this call — re-bakes of an already-baked LB
+ * short-circuit in `bakeTerrainForLandblock` and don't change the
+ * children count of `terrainGroup`.
+ *
+ * Note on child order: prior `buildHoltburgTerrain` added children in
+ * coord-traversal order (`dy:+1→-1, dx:-1→+1`). The ring driver still
+ * issues the bakes in that order, but the `Promise.all` fan-out means
+ * the actual `terrainGroup.children` order is microtask-resolution
+ * order, not coord order. No caller relies on a specific index
+ * (capture_phase7_1_terrain asserts only count; capture_visfid_p21_subdiv
+ * finds the centre LB via `find(c => c.userData.lbX === 0xa9)`).
+ */
+export async function bakeTerrainRing(
+  scene3d,
+  centreLbX,
+  centreLbY,
+  radius,
+  wasmExports
+) {
+  if (!scene3d || !scene3d.terrainGroup) {
+    throw new Error(
+      "bakeTerrainRing: scene3d.terrainGroup missing (call init3D first)"
+    );
+  }
+  if (
+    !wasmExports ||
+    typeof wasmExports.fetch_landblock_heightmaps !== "function" ||
+    typeof wasmExports.fetch_terrain_textures !== "function"
+  ) {
+    throw new Error(
+      "bakeTerrainRing: wasmExports missing fetch_landblock_heightmaps / fetch_terrain_textures"
+    );
+  }
+
+  // 1. Build the coord list. Order matches the prior
+  // `holtburgNeighbourhoodCellIds` traversal at radius=1 so the
+  // batch-fetch input array stays bit-identical to today's call.
+  const coords = [];
+  for (let dy = radius; dy >= -radius; dy -= 1) {
+    for (let dx = -radius; dx <= radius; dx += 1) {
+      const x = centreLbX + dx;
+      const y = centreLbY + dy;
+      if (x < 0 || x > 0xff || y < 0 || y > 0xff) continue;
+      coords.push({
+        x,
+        y,
+        id: ((x << 24) | (y << 16) | 0xffff) >>> 0,
+      });
+    }
+  }
+
+  // 2. Resolve once-per-ring opts (atlas/road textures, detail-normal
+  // wiring, subdivision flags, water/lava bitmasks) BEFORE the
+  // heightmap batch fetch so the per-LB baker can consume them straight
+  // off `opts` without further async work.
+  const opts = await resolveTerrainRingOpts(
+    scene3d,
+    wasmExports,
+    centreLbX,
+    centreLbY,
+    null
+  );
+
+  // 3. Batch-fetch heightmaps for the whole ring in a single call —
+  // matches today's `fetch_landblock_heightmaps(ids)` shape.
+  const ids = new Uint32Array(coords.map((c) => c.id >>> 0));
+  const meshes = await wasmExports.fetch_landblock_heightmaps(ids);
+  if (meshes.length !== coords.length) {
+    throw new Error(
+      `bakeTerrainRing: expected ${coords.length} meshes, got ${meshes.length}`
+    );
+  }
+
+  // 4. Batch-fetch subdivided meshes per LB (still per-call because the
+  // wasm export is per-(cellId, level)). Centre LB gets full level;
+  // outer LBs get half. Distance-keyed LOD is Objective 7's job.
   let subdivMeshes = null;
-  if (canSubdivide) {
-    const centreLevel = subdivLevel;
-    const outerLevel = Math.max(1, Math.floor(subdivLevel / 2));
+  if (opts.canSubdivide) {
     const promises = coords.map((c) => {
-      const level =
-        c.x === HOLTBURG_X && c.y === HOLTBURG_Y ? centreLevel : outerLevel;
+      const level = pickSubdivLevelForLb(opts, c.x, c.y);
       return wasmExports
         .fetch_subdivided_landblock(c.id, level)
         .then((m) => ({ mesh: m, level }))
@@ -807,239 +1213,86 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
     subdivMeshes = await Promise.all(promises);
   }
 
-  // 3. Build the shared atlas + road canvases, wrap as three textures.
-  const { atlasCanvas, roadCanvas } =
-    buildTerrainAtlasCanvas(terrainTextures);
-
-  const atlasTexture = new THREE.CanvasTexture(atlasCanvas);
-  // Atlas tiles are colour data — sRGB so three's renderer linearises
-  // them before the fragment shader does its bilinear blend.
-  atlasTexture.colorSpace = THREE.SRGBColorSpace;
-  atlasTexture.magFilter = THREE.LinearFilter;
-  atlasTexture.minFilter = THREE.LinearMipmapLinearFilter;
-  atlasTexture.generateMipmaps = true;
-  atlasTexture.needsUpdate = true;
-
-  let roadTexture = null;
-  if (roadCanvas) {
-    roadTexture = new THREE.CanvasTexture(roadCanvas);
-    roadTexture.colorSpace = THREE.SRGBColorSpace;
-    roadTexture.wrapS = THREE.RepeatWrapping;
-    roadTexture.wrapT = THREE.RepeatWrapping;
-    roadTexture.magFilter = THREE.LinearFilter;
-    roadTexture.minFilter = THREE.LinearMipmapLinearFilter;
-    roadTexture.generateMipmaps = true;
-    roadTexture.needsUpdate = true;
-  }
-
-  // 4 + 5. Per-LB heightfield + road overlay.
-  const ATLAS_GRID_SIZE = new THREE.Vector2(6, 6);
-  let lbWithRoads = 0;
-  // Phase 2.2 — terrain ShaderMaterial registry. The per-rAF tick in
-  // `loop.js::tickPerFrame` iterates this array and pushes the shared
-  // wall-clock `uTime` into every entry's uniform. Single shared time
-  // source → matched motion across LB seams (objective #4). Initialise
-  // as a fresh array per init3D call so a rebuild (capture-script hot
-  // reload) doesn't accumulate stale handles.
-  if (!Array.isArray(scene3d.terrainMaterials)) {
-    scene3d.terrainMaterials = [];
-  }
-  for (let i = 0; i < coords.length; i += 1) {
-    const wasmMesh = meshes[i];
-    const { x: lbX, y: lbY } = coords[i];
-
-    // Snapshot what we need from the wasm mesh BEFORE freeing it. The
-    // adapter copies the buffers into BufferAttributes, but the road
-    // overlay needs raw `positions` + `roadCodes` to walk neighbours;
-    // copy those once here so we can free the wasm struct safely.
-    const positionsCopy = Float32Array.from(wasmMesh.positions);
-    const roadCodesCopy = Uint8Array.from(wasmMesh.roadCodes);
-    const terrainCodesCopy = Uint8Array.from(wasmMesh.terrainCodes);
-    const heightMin = wasmMesh.heightMin;
-    const heightMax = wasmMesh.heightMax;
-
-    // Phase 2.1 — if the LB has a subdivided mesh, build geometry from
-    // it. Otherwise fall back to the 9×9 path. The 9×9 vertex-types
-    // texture (`uVertexTypes`) is always the 9×9 control grid — the
-    // subdivided mesh's per-vertex `terrainCode` attribute is unused by
-    // the current shader (kept on the geometry for forward compat).
-    const subdivEntry = subdivMeshes ? subdivMeshes[i] : null;
-    let geom;
-    let effectiveSubdiv = 1;
-    if (subdivEntry && subdivEntry.mesh) {
-      geom = subdividedLandblockMeshToGeometry(subdivEntry.mesh);
-      effectiveSubdiv = subdivEntry.level;
-      if (typeof subdivEntry.mesh.free === "function") subdivEntry.mesh.free();
-    } else {
-      geom = landblockMeshToGeometry(wasmMesh);
-    }
-    const vertexTypesTex = buildVertexTypesDataTexture(terrainCodesCopy);
-
-    const material = new THREE.ShaderMaterial({
-      // three.js auto-injects `projectionMatrix`, `modelViewMatrix`,
-      // and the `position` attribute. We just supply the user
-      // uniforms.
-      uniforms: {
-        uAtlas: { value: atlasTexture },
-        uAtlasGridSize: { value: ATLAS_GRID_SIZE },
-        uVertexTypes: { value: vertexTypesTex },
-        // Phase 1.2 — terrain detail-normal array + per-code slice
-        // table + per-frame wind direction + quality gate. When
-        // `detailNormalEnabled` is false the texture uniform is set
-        // to null (three.js skips the bind) and uDetailNormalEnabled
-        // = 0.0 makes the fragment shader branch around the sample.
-        uTerrainDetailNormalArray: { value: detailNormalArrayTex },
-        uCodeToSlice: { value: codeToSliceArr },
-        uDetailScale: { value: DEFAULT_DETAIL_SCALE },
-        uWindDir: { value: new THREE.Vector2(1.0, 0.0) },
-        uDetailNormalEnabled: { value: detailNormalEnabled ? 1.0 : 0.0 },
-        // Phase 1.3 — triplanar gate + sharpness. When the gate is
-        // 0.0 the fragment skips the YZ+XZ samples entirely and the
-        // detail-normal falls back to the XY-only Phase 1.2 path.
-        uTriplanarEnabled: { value: triplanarEnabled ? 1.0 : 0.0 },
-        uTriplanarSharpness: { value: DEFAULT_TRIPLANAR_SHARPNESS },
-        // Phase 2.2 — animated displacement uniforms. uTime is pushed
-        // from `loop.js::tickPerFrame` once per rAF via the shared
-        // `scene3d.terrainMaterials` registry below. uWaterCodeMask /
-        // uLavaCodeMask are packed bitmasks (bit i = code i). Gate is
-        // 1.0 only when subdivLevel >= 2. uLbOriginXy lets the wave
-        // phase stay continuous across LB seams (world-frame XY).
-        uTime: { value: 0.0 },
-        uWaterCodeMask: { value: waterCodeMask },
-        uLavaCodeMask: { value: lavaCodeMask },
-        uDisplacementEnabled: { value: displacementEnabled ? 1.0 : 0.0 },
-        uLbOriginXy: {
-          value: new THREE.Vector2(
-            lbX * METERS_PER_LANDBLOCK,
-            lbY * METERS_PER_LANDBLOCK
-          ),
-        },
-      },
-      vertexShader: TERRAIN_VERTEX_GLSL,
-      fragmentShader: TERRAIN_FRAGMENT_GLSL,
-      glslVersion: THREE.GLSL3,
-      // Heightfield is single-sided: backfaces are looking at the
-      // world from below the terrain — never the player's vantage.
-      // The F#27 fix in `landblockMeshToGeometry` reverses the wasm's
-      // CW-from-AC-+Z index winding so FrontSide is correct post-
-      // worldRoot rotation. Don't flip back to DoubleSide without
-      // also reverting the adapter's index reversal.
-      side: THREE.FrontSide,
-    });
-
-    // Phase 2.2 — register the material so the per-rAF tick can push
-    // the shared wall-clock `uTime`. Single shared time source means
-    // matched wave motion across LB seams (objective #4). The registry
-    // entry retains the ShaderMaterial handle directly; on
-    // disposal/rebuild the caller should null out scene3d.terrainMaterials.
-    scene3d.terrainMaterials.push(material);
-
-    const lbMesh = new THREE.Mesh(geom, material);
-    lbMesh.name = `terrain-lb-${lbX.toString(16)}-${lbY.toString(16)}`;
-    // Visual-fidelity Phase 0.1 — terrain receives shadows from
-    // buildings + statics + entities. Doesn't cast (it's the ground;
-    // shadow-casting a heightfield is expensive and doesn't read on
-    // distant terrain). Note: the terrain ShaderMaterial above is a
-    // custom GLSL3 shader, not MeshStandardMaterial — three.js's
-    // shadow-receive path requires the material to include
-    // <shadowmap_pars_fragment>/<shadowmap_fragment> chunks. Phase 0.1
-    // ships with the flag set; if the shader doesn't show shadow
-    // overlay yet, follow-up work (Phase 1.* / 2.*) will reweave the
-    // shader chunks. The flag is harmless when the shader doesn't
-    // honour it.
-    // Phase 0.1 + 3.3 — flag the terrain mesh as a shadow receiver
-    // under EITHER the single-shadow path (shadowsEnabled) OR the CSM
-    // path (csmEnabled). Note: the terrain's custom GLSL3 ShaderMaterial
-    // does NOT currently honour the flag (it skips three's shadow
-    // chunks); this is documented in the Phase 0.1 plan as deferred to
-    // Phase 1.* / 2.*. Phase 3.3 inherits the same gap — to render
-    // shadows on terrain, the custom shader needs explicit CSM
-    // sampling injected. Out of scope for the initial Phase 3.3 push;
-    // tracked in the report doc.
-    if (scene3d.shadowsEnabled || scene3d.csmEnabled) {
-      lbMesh.receiveShadow = true;
-    }
-    // Per-LB world offset (xy in metres). The geometry is LB-local
-    // (x,y in [0, 192]) so the world position is just (lbX*192, lbY*192).
-    lbMesh.position.set(
-      lbX * METERS_PER_LANDBLOCK,
-      lbY * METERS_PER_LANDBLOCK,
-      0
-    );
-    // Stash height range on the userData so the capture can verify
-    // terrain isn't flat-zero without a wasm round-trip.
-    //
-    // Task D (2026-05-12) — `terrainCodes` is the wasm column-major
-    // 81-byte block (vertex `i` has gridX = i/9, gridY = i%9; see
-    // `adapter.js::buildVertexTypesDataTexture` for the transpose note).
-    // The ambient-runtime sampler reads this per tick to look up the
-    // player's terrain type for the Region → AmbientSTB chain. Storing
-    // the raw bytes (not the DataTexture) keeps the runtime free of
-    // GPU readback — sampling is a single byte fetch per tick.
-    lbMesh.userData = {
-      lbX,
-      lbY,
-      lbId: ((lbX << 24) | (lbY << 16) | 0xffff) >>> 0,
-      heightMin,
-      heightMax,
-      vertexTypesTexture: vertexTypesTex,
-      terrainCodes: terrainCodesCopy,
-      // Phase 1.2 — capture probes inspect this to verify the detail-
-      // normal patch is wired without a GL state pull.
-      detailNormalEnabled,
-      detailNormalSlice: detailNormalEnabled ? "array(5)" : "off",
-      // Phase 1.3 — same idea for triplanar wiring. `slopeLo`/`slopeHi`
-      // come from the JS-side constants the GLSL is interpolated with;
-      // captures use them to compute the expected smoothstep blend at
-      // any given fragment without re-reading the shader source.
-      triplanarEnabled,
-      triplanarSharpness: triplanarEnabled ? DEFAULT_TRIPLANAR_SHARPNESS : 0,
-      triplanarSlopeLo: TRIPLANAR_SLOPE_LO,
-      triplanarSlopeHi: TRIPLANAR_SLOPE_HI,
-      // Phase 2.1 — actual subdivision factor used for this LB.
-      // 1 = no subdivision (legacy 9×9 path); 2/4/8 = subdivided.
-      subdivLevel: effectiveSubdiv,
-      // Phase 2.2 — capture probes inspect these to verify the
-      // displacement patch is wired. uTime is mutated each rAF by
-      // `loop.js::tickPerFrame`; the snapshot here records the wiring
-      // state at build time.
-      displacementEnabled,
-      waterCodeMask,
-      lavaCodeMask,
+  // 5. Fan out per-LB bakes. Each baker receives its prefetched
+  // wasmMesh + subdivEntry via a shallow-copied `opts` so the once-
+  // per-ring fields stay shared by reference and the per-LB prefetch
+  // is the only per-call payload variation.
+  const bakePromises = coords.map((c, i) => {
+    const perLbOpts = {
+      ...opts,
+      prefetchedMesh: meshes[i],
+      prefetchedSubdiv: subdivMeshes ? subdivMeshes[i] : null,
     };
+    return bakeTerrainForLandblock(scene3d, c.x, c.y, perLbOpts, wasmExports);
+  });
+  const lbMeshes = await Promise.all(bakePromises);
 
-    // Group keeps the road overlay parented under the same lbMesh
-    // transform — simpler than a sibling group, and toggling
-    // `lbMesh.visible` still hides both atomically.
-    scene3d.terrainGroup.add(lbMesh);
-
-    const roadMesh = buildRoadOverlayMesh(
-      positionsCopy,
-      roadCodesCopy,
-      roadTexture
-    );
-    if (roadMesh) {
-      lbMesh.add(roadMesh);
-      lbWithRoads += 1;
+  // Free the prefetched base wasm meshes the ring driver owns. The
+  // per-LB baker skips freeing prefetched meshes specifically so this
+  // loop is the single owner and avoids double-free.
+  for (const wasmMesh of meshes) {
+    if (wasmMesh && typeof wasmMesh.free === "function") {
+      try {
+        wasmMesh.free();
+      } catch (_) {
+        // Already-freed wasm structs throw; swallow because we own
+        // single-free here and the alternative is leaking memory if a
+        // future refactor stops returning fresh handles per call.
+      }
     }
-
-    // Free the wasm mesh now that all needed data is copied.
-    if (typeof wasmMesh.free === "function") wasmMesh.free();
   }
 
-  // Stash on the scene3d for later phases.
-  scene3d.terrainAtlasTexture = atlasTexture;
-  scene3d.terrainRoadTexture = roadTexture;
-  scene3d.terrainAtlasCanvas = atlasCanvas;
-  scene3d.terrainRoadCanvas = roadCanvas;
+  // Count roads after the bake so the summary stays in sync with the
+  // prior `buildHoltburgTerrain` return shape.
+  let lbWithRoads = 0;
+  for (const m of lbMeshes) {
+    if (!m) continue;
+    for (const child of m.children) {
+      if (child?.name === "road-overlay") {
+        lbWithRoads += 1;
+        break;
+      }
+    }
+  }
+
+  // Stash on the scene3d for later phases (Phase 7.5 camera, Phase 7.7
+  // cleanup, and the lazy LB-entry path that Objective 6 will wire).
+  scene3d.terrainAtlasTexture = opts.atlasTexture;
+  scene3d.terrainRoadTexture = opts.roadTexture;
+  scene3d.terrainAtlasCanvas = opts.atlasCanvas;
+  scene3d.terrainRoadCanvas = opts.roadCanvas;
   scene3d.terrainLbCount = coords.length;
+  // Persist the resolved ring opts so the lazy LB-entry hook (Objective
+  // 6) can call `bakeTerrainForLandblock` without redoing the canvas /
+  // detail-normal / bitmask work. The lazy hook should rebuild only the
+  // per-LB prefetch fields (`prefetchedMesh`, `prefetchedSubdiv`) before
+  // calling the baker.
+  scene3d.terrainOpts = opts;
 
   return {
-    atlasTexture,
-    roadTexture,
-    atlasCanvas,
-    roadCanvas,
+    atlasTexture: opts.atlasTexture,
+    roadTexture: opts.roadTexture,
+    atlasCanvas: opts.atlasCanvas,
+    roadCanvas: opts.roadCanvas,
     lbCount: coords.length,
     lbWithRoads,
   };
+}
+
+/**
+ * Build the Holtburg 9-LB terrain (heightfield meshes + bilinear-blend
+ * shader + per-LB vertex-types texture + road overlays) and add it to
+ * `scene3d.terrainGroup`.
+ *
+ * Returns a summary `{ atlasTexture, roadTexture, lbCount, atlasCanvas,
+ * roadCanvas }` with the shared atlas / road textures stashed for later
+ * phases (Phase 7.5 camera, Phase 7.7 cleanup) to reuse.
+ *
+ * world-expand step 1 (Objective 2): preserved as a thin radius=1
+ * wrapper around `bakeTerrainRing`. Existing captures + smoke tests
+ * call this directly and rely on the 9-LB Holtburg behaviour; the lazy
+ * LB-entry / per-LB-baker symbol is the new `bakeTerrainForLandblock`.
+ */
+export async function buildHoltburgTerrain(scene3d, wasmExports) {
+  return bakeTerrainRing(scene3d, HOLTBURG_X, HOLTBURG_Y, 1, wasmExports);
 }

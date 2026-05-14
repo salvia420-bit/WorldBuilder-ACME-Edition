@@ -2736,6 +2736,38 @@ check(
         );
     }
 
+    // === World-expand step 1 obj 2 — bakeTerrainForLandblock ===========
+    // Source-text symbol-presence assertion for the per-LB terrain baker
+    // + ring driver introduced in world-expand step 1 Objective 2. The
+    // browser-side per-LB idempotency + 169-LB ring assertion lives in
+    // `capture_world_expand_e2e.cjs` (added in Objective 10). Mirrors the
+    // Phase 7.1 export check above — bare specifier `import * as THREE
+    // from "three"` won't resolve in Node here, so we file-read + regex.
+    try {
+        const terrainPath = path.resolve(__dirname, "scene3d", "terrain.js");
+        const present = fs.existsSync(terrainPath);
+        const terrainSrc = present ? fs.readFileSync(terrainPath, "utf8") : "";
+        const hasBakeForLb =
+            /export\s+async\s+function\s+bakeTerrainForLandblock\s*\(/.test(
+                terrainSrc
+            );
+        const hasBakeRing =
+            /export\s+async\s+function\s+bakeTerrainRing\s*\(/.test(terrainSrc);
+        const hasBakedLbsSet = /terrainBakedLbs/.test(terrainSrc);
+        check(
+            "world-expand step 1 obj 2: terrain.js exports bakeTerrainForLandblock + bakeTerrainRing",
+            present && hasBakeForLb && hasBakeRing && hasBakedLbsSet,
+            `present=${present}, perLb=${hasBakeForLb}, ring=${hasBakeRing}, ` +
+                `bakedSet=${hasBakedLbsSet}`
+        );
+    } catch (e) {
+        check(
+            "world-expand step 1 obj 2: terrain.js exports bakeTerrainForLandblock + bakeTerrainRing",
+            false,
+            String(e?.message ?? e).slice(0, 160)
+        );
+    }
+
     // === World-expand step 1 obj 3 — bakeBuildingsForLandblock =========
     // Source-text symbol-presence assertion for the per-LB buildings
     // baker + ring driver introduced in world-expand step 1 Objective 3.
