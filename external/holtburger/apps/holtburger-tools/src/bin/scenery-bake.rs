@@ -40,7 +40,7 @@ use holtburger_dat::file_type::{GfxObj, Region, Scene, SetupModel};
 use holtburger_dat::graphics::Frame;
 use holtburger_dat::landblock::{CellLandblock, LandblockInfo};
 use holtburger_scenery_bake::{
-    Aabb2D, LocalBounds, ScenicPlacement, bake_landblock, transform_local_aabb,
+    Aabb2D, BakeMode, LocalBounds, ScenicPlacement, bake_landblock, transform_local_aabb,
 };
 use log::{debug, info, warn};
 use sha2::{Digest, Sha256};
@@ -98,6 +98,16 @@ struct Cli {
     /// only WARN + ERROR surface.
     #[arg(long)]
     verbose: bool,
+
+    /// Bake mode. `ace-compat` (default) replays today's ACE
+    /// `Scenery.Load` bit-for-bit — triangle-plane Z + no slope check
+    /// — for 1:1 client/server agreement with an ACE-derivative server
+    /// (Coldeve etc.). `strict` is the renderer-friendly variant:
+    /// bilinear Z (matches `holtburger-world`'s player physics) and
+    /// slope rejection ON. The mode appears in `bake-source.sha256` so
+    /// downstream consumers can refuse a mode they don't expect.
+    #[arg(long, value_name = "MODE", default_value = "ace-compat")]
+    mode: String,
 }
 
 fn parse_hex_u32(s: &str) -> Result<u32> {
@@ -630,6 +640,7 @@ fn bake_one(
     scene_cache: &mut SceneCache,
     lb_key: u16,
     out_dir: &Path,
+    mode: BakeMode,
 ) -> Result<Option<usize>> {
     let lb_word = (lb_key as u32) << 16;
     let cell_id = lb_word | 0xFFFF;
@@ -674,6 +685,7 @@ fn bake_one(
             fetch_scene,
             fetch_obj_bounds,
             &building_aabbs,
+            mode,
         )
     };
 
@@ -728,13 +740,18 @@ fn main() -> Result<()> {
 
     let region_did = parse_hex_u32(&cli.region_did)?;
     let landblocks = parse_landblock_spec(&cli.landblocks)?;
+    let mode: BakeMode = cli
+        .mode
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!("--mode parse error: {e}"))?;
 
     info!(
-        "scenery-bake: --dat-dir={} --landblocks={} ({} LBs) --region-did=0x{:08X} --out={}",
+        "scenery-bake: --dat-dir={} --landblocks={} ({} LBs) --region-did=0x{:08X} --mode={} --out={}",
         cli.dat_dir.display(),
         cli.landblocks,
         landblocks.len(),
         region_did,
+        mode.as_str(),
         cli.out.display()
     );
 
@@ -774,6 +791,7 @@ fn main() -> Result<()> {
             &mut scene_cache,
             lb_key,
             &cli.out,
+            mode,
         )? {
             Some(n) => counts.push(n),
             None => skipped += 1,
@@ -801,6 +819,7 @@ fn main() -> Result<()> {
         region_did,
         counts.len(),
         skipped,
+        mode,
     );
     fs::write(&manifest_path, manifest)
         .with_context(|| format!("write {}", manifest_path.display()))?;
@@ -833,15 +852,17 @@ fn format_manifest(
     region_did: u32,
     baked: usize,
     skipped: usize,
+    mode: BakeMode,
 ) -> String {
     format!(
-        "client_portal.dat\t{}\nclient_cell_1.dat\t{}\nclient_local_English.dat\t{}\nbake-tool-version\t{} + {}\nregion-did\t0x{:08X}\nlandblocks\t{} baked, {} skipped\n",
+        "client_portal.dat\t{}\nclient_cell_1.dat\t{}\nclient_local_English.dat\t{}\nbake-tool-version\t{} + {}\nregion-did\t0x{:08X}\nbake-mode\t{}\nlandblocks\t{} baked, {} skipped\n",
         portal_hash,
         cell_hash,
         local_hash,
         SCENERY_BAKE_LIB_VERSION,
         SCENERY_BAKE_CLI_VERSION,
         region_did,
+        mode.as_str(),
         baked,
         skipped,
     )
@@ -907,16 +928,48 @@ mod tests {
             0x13000000,
             169,
             0,
+            BakeMode::AceCompat,
         );
         assert!(m.contains("client_portal.dat\t"));
         assert!(m.contains("client_cell_1.dat\t"));
         assert!(m.contains("client_local_English.dat\t"));
         assert!(m.contains("region-did\t0x13000000"));
+        assert!(m.contains("bake-mode\tace-compat"));
         assert!(m.contains("169 baked, 0 skipped"));
         assert!(m.contains(SCENERY_BAKE_LIB_VERSION));
         assert!(m.contains(SCENERY_BAKE_CLI_VERSION));
-        // Six-line format.
-        assert_eq!(m.lines().count(), 6);
+        // Seven-line format (now includes `bake-mode`).
+        assert_eq!(m.lines().count(), 7);
+    }
+
+    #[test]
+    fn format_manifest_strict_mode_label() {
+        let m = format_manifest(
+            &"0".repeat(64),
+            &"0".repeat(64),
+            &"0".repeat(64),
+            0x13000000,
+            1,
+            0,
+            BakeMode::Strict,
+        );
+        assert!(m.contains("bake-mode\tstrict"));
+    }
+
+    #[test]
+    fn bake_mode_parse_round_trip() {
+        // Spelling variants accepted.
+        let ac: BakeMode = "ace-compat".parse().unwrap();
+        assert_eq!(ac, BakeMode::AceCompat);
+        let ac2: BakeMode = "ace_compat".parse().unwrap();
+        assert_eq!(ac2, BakeMode::AceCompat);
+        let ac3: BakeMode = "acecompat".parse().unwrap();
+        assert_eq!(ac3, BakeMode::AceCompat);
+        let st: BakeMode = "strict".parse().unwrap();
+        assert_eq!(st, BakeMode::Strict);
+        // Unknown rejects.
+        let bad: Result<BakeMode, _> = "loose".parse();
+        assert!(bad.is_err());
     }
 
     #[test]

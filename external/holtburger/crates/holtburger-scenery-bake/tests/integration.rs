@@ -17,8 +17,8 @@ use holtburger_dat::graphics::Frame;
 use holtburger_dat::landblock::CellLandblock;
 use holtburger_common::{Quaternion, Vector3};
 use holtburger_scenery_bake::{
-    Aabb2D, LocalBounds, ScenicPlacement, bake_landblock, bilinear_height_from_grid,
-    vertex_heights,
+    Aabb2D, BakeMode, LocalBounds, ScenicPlacement, bake_landblock, bilinear_height_from_grid,
+    triangle_plane_height_from_grid, vertex_heights,
 };
 use std::path::PathBuf;
 
@@ -186,6 +186,7 @@ fn determinism_repeat() {
         |id| if id == SCENE_DID { Some(scene.clone()) } else { None },
         |_| Some(fixed_local_bounds()),
         &[],
+        BakeMode::AceCompat,
     );
 
     // Sanity — baseline should be non-empty.
@@ -202,6 +203,7 @@ fn determinism_repeat() {
             |id| if id == SCENE_DID { Some(scene.clone()) } else { None },
             |_| Some(fixed_local_bounds()),
             &[],
+            BakeMode::AceCompat,
         );
         assert_eq!(
             v.len(),
@@ -406,6 +408,7 @@ fn real_holtburg_bake_smoke() {
             },
             |_obj_id| Some(fixed_local_bounds()),
             &[],
+            BakeMode::AceCompat,
         );
         Some(placements)
     };
@@ -497,6 +500,132 @@ fn real_holtburg_bake_smoke() {
     assert_eq!(p1.len(), p2.len(), "real bake should be deterministic");
     for (a, b) in p1.iter().zip(p2.iter()) {
         assert_eq!(placement_to_bits(a), placement_to_bits(b));
+    }
+}
+
+/// BakeMode::AceCompat is the default and must round-trip through
+/// `as_str` / `FromStr`.
+#[test]
+fn bake_mode_default_and_round_trip() {
+    let default: BakeMode = BakeMode::default();
+    assert_eq!(default, BakeMode::AceCompat);
+    let s = default.as_str();
+    assert_eq!(s, "ace-compat");
+    let back: BakeMode = s.parse().unwrap();
+    assert_eq!(back, default);
+    // Strict also round-trips.
+    let s2 = BakeMode::Strict.as_str();
+    let back2: BakeMode = s2.parse().unwrap();
+    assert_eq!(back2, BakeMode::Strict);
+}
+
+/// AceCompat vs Strict: on a synthetic LB built from `synth_landblock`
+/// where every vertex's slope is well inside `[min_slope, max_slope]`
+/// of the test ObjectDesc, AceCompat ≡ Strict in placement COUNT (the
+/// only delta is Z). On a synthetic LB designed to fail the slope check
+/// for AT LEAST one placement, AceCompat ⊃ Strict — the slope-rejected
+/// placements survive in AceCompat.
+#[test]
+fn ace_compat_is_strict_superset_on_steep_terrain() {
+    const SCENE_DID: u32 = 0x1200_0001;
+
+    // Build a 9×9 with a steep ramp: vertex (vx, vy) → height byte
+    // 2 * vx (capped at 255). table[i] = i as f32, so the actual
+    // Z = 2 * vx → slope along X is atan(2 * CELL_SIZE / CELL_SIZE)
+    // = atan(2) ≈ 1.107 rad ≈ 63°. That's well above our test scene's
+    // 1.5 rad max_slope BUT below π/2 (1.5708). Wait, 1.107 < 1.5 so
+    // it WOULD pass — we need a steeper ramp.
+    //
+    // Solve for slope > 1.5 rad: dz/dx > tan(1.5) ≈ 14.1. So height
+    // byte step per cell ≥ 15. Use step = 16 → Z = 16*vx → dz/dx =
+    // 16/24 → wait that's < 1. The scale matters: table[i]=i*4 with
+    // height bytes = vx*8 gives Z = 32*vx, dz/dx = 32/24 = 1.33,
+    // atan(1.33) = 0.927 rad. Need much steeper.
+    //
+    // Easier: build heights so dz/dx = 30 → atan(30) ≈ 1.538 rad
+    // (just over 1.5). Use table[i]=i*4 with heights so consecutive
+    // vertices differ by enough that dz/dx ≥ 30:
+    //   vx 0 → byte 0 → Z 0
+    //   vx 1 → byte ~180 → Z 720; dz over CELL_SIZE=24 is 720/24=30
+    let table: Vec<f32> = (0..256).map(|i| (i as f32) * 4.0).collect();
+    let mut heights = vec![0u8; 81];
+    for vx in 0..9 {
+        for vy in 0..9 {
+            let b = ((vx as u16 * 180).min(255)) as u8;
+            heights[vx * 9 + vy] = b;
+        }
+    }
+    let lb = CellLandblock {
+        id: 0xA9B4_FFFF,
+        has_objects: 0,
+        terrain: vec![0u16; 81],
+        height: heights,
+        _align: (),
+    };
+    let region = synth_region_with_table(SCENE_DID, table);
+    let scene = synth_scene(SCENE_DID);
+
+    let bake = |mode| {
+        bake_landblock(
+            &region,
+            &lb,
+            0xA9B4_0000,
+            |id| if id == SCENE_DID { Some(scene.clone()) } else { None },
+            |_| Some(fixed_local_bounds()),
+            &[],
+            mode,
+        )
+    };
+    let ac = bake(BakeMode::AceCompat);
+    let st = bake(BakeMode::Strict);
+
+    assert!(
+        ac.len() >= st.len(),
+        "AceCompat ({}) must be ≥ Strict ({}) on slope-rejecting terrain",
+        ac.len(),
+        st.len()
+    );
+    // And for THIS fixture the slope-rejected set must be non-empty —
+    // otherwise we're not actually testing the slope branch.
+    assert!(
+        ac.len() > st.len(),
+        "fixture failed to trigger slope rejection: ac={} st={}",
+        ac.len(),
+        st.len()
+    );
+}
+
+/// Helper used by the slope-superset test — same as synth_region but
+/// with a caller-supplied land_height_table for steeper ramps.
+fn synth_region_with_table(scene_did: u32, table: Vec<f32>) -> Region {
+    let mut r = synth_region(scene_did);
+    r.land_defs.land_height_table = table;
+    r
+}
+
+/// AceCompat Z (triangle-plane) and Strict Z (bilinear) agree at cell
+/// CORNERS — both methods evaluate to the raw vertex height there. So
+/// any placement that lands exactly on a corner must have identical Z
+/// between the two modes.
+#[test]
+fn ace_and_strict_z_agree_at_corners() {
+    let mut grid = [0.0f32; 81];
+    for vx in 0..9 {
+        for vy in 0..9 {
+            grid[vx * 9 + vy] = (vx * 10 + vy) as f32;
+        }
+    }
+    for cx in 0..9 {
+        for cy in 0..9 {
+            let lx = cx as f32 * 24.0;
+            let ly = cy as f32 * 24.0;
+            let zb = bilinear_height_from_grid(&grid, lx, ly);
+            let zt = triangle_plane_height_from_grid(&grid, 0xA9B4, lx, ly);
+            assert!(
+                (zb - zt).abs() < 1e-3,
+                "corner ({cx},{cy}): bilinear={zb} triangle={zt}"
+            );
+        }
     }
 }
 

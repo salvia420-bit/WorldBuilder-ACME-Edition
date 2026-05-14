@@ -50,8 +50,8 @@ pub mod noise;
 
 pub use aabb::{Aabb2D, LocalBounds, transform_local_aabb};
 pub use height::{
-    CELL_SIZE, LANDBLOCK_SIZE, VERTEX_DIM, bilinear_height, bilinear_height_from_grid, slope_at,
-    vertex_heights,
+    CELL_SIZE, LANDBLOCK_SIZE, VERTEX_DIM, bilinear_height, bilinear_height_from_grid,
+    get_split_dir, slope_at, triangle_plane_height_from_grid, vertex_heights,
 };
 pub use noise::{
     NOISE_SCALE, cell_mat_scene, cell_mats_per_object, displace, object_noise, rotate_obj,
@@ -61,6 +61,67 @@ pub use noise::{
 use holtburger_dat::file_type::Region;
 use holtburger_dat::file_type::Scene;
 use holtburger_dat::landblock::CellLandblock;
+
+/// Bake-mode toggle for two deliberately-different placement contracts.
+///
+/// The B.2 / B.3 implementation diverged from ACE in two places. For
+/// each divergence the ACE behaviour is one mode and the
+/// renderer-friendly behaviour is the other:
+///
+/// | Concern | `AceCompat` (default) | `Strict` |
+/// |---|---|---|
+/// | Z snap | Triangle-plane via [`triangle_plane_height_from_grid`] — mirrors `LandblockMesh.GetZ` per-cell triangulation. | Bilinear via [`bilinear_height_from_grid`] — matches `holtburger_world` and the live renderer. |
+/// | Slope rejection | Skipped — `Scenery.cs:69` has it as `TODO: ensure walkable slope` so ACE doesn't reject. | Implemented — rejects placements outside `[min_slope, max_slope]`. |
+///
+/// `AceCompat` is the **1:1 Coldeve compatibility** target — what the
+/// brief calls the load-bearing requirement. Even when ACE has a TODO or
+/// a bug, ACE-compat replays that exact behaviour so that the bake and
+/// a live ACE server agree placement-for-placement.
+///
+/// `Strict` is the **renderer-aligned** target — what we'd want if we
+/// were running a clean-slate server with no ACE compatibility needs.
+/// It produces a STRICT SUBSET of `AceCompat`'s output (slope rejection
+/// removes placements; Z is the only other delta and it doesn't
+/// add/remove placements, just shifts them).
+///
+/// The mode appears in the bake's `bake-source.sha256` sidecar so
+/// downstream consumers can refuse to honour a mode they don't expect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BakeMode {
+    /// **Default.** Match today's ACE behaviour bit-exactly:
+    /// triangle-plane Z, no slope check. Use this for ACE-derivative
+    /// servers (Coldeve etc.) that want client/server agreement.
+    #[default]
+    AceCompat,
+    /// Renderer-friendly: bilinear Z, slope-rejection ON. Use this for
+    /// non-ACE consumers or when you want scenery to land on the same
+    /// terrain Z the player physics integrator uses.
+    Strict,
+}
+
+impl BakeMode {
+    /// Stable lowercase identifier for CLI parsing and the
+    /// `bake-source.sha256` sidecar.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BakeMode::AceCompat => "ace-compat",
+            BakeMode::Strict => "strict",
+        }
+    }
+}
+
+impl std::str::FromStr for BakeMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ace-compat" | "ace_compat" | "acecompat" => Ok(BakeMode::AceCompat),
+            "strict" => Ok(BakeMode::Strict),
+            other => Err(format!(
+                "unknown BakeMode `{other}` (expected `ace-compat` or `strict`)"
+            )),
+        }
+    }
+}
 
 /// One baked scenery placement. Emitted by `bake_landblock`.
 ///
@@ -127,13 +188,39 @@ pub fn bake_landblock(
     region: &Region,
     landblock: &CellLandblock,
     landblock_id: u32,
+    fetch_scene: impl FnMut(u32) -> Option<Scene>,
+    fetch_obj_bounds: impl FnMut(u32) -> Option<LocalBounds>,
+    building_aabbs: &[Aabb2D],
+    mode: BakeMode,
+) -> Vec<ScenicPlacement> {
+    bake_landblock_impl(
+        region,
+        landblock,
+        landblock_id,
+        fetch_scene,
+        fetch_obj_bounds,
+        building_aabbs,
+        mode,
+    )
+}
+
+fn bake_landblock_impl(
+    region: &Region,
+    landblock: &CellLandblock,
+    landblock_id: u32,
     mut fetch_scene: impl FnMut(u32) -> Option<Scene>,
     mut fetch_obj_bounds: impl FnMut(u32) -> Option<LocalBounds>,
     building_aabbs: &[Aabb2D],
+    mode: BakeMode,
 ) -> Vec<ScenicPlacement> {
     // Scenery.cs:21-22: get landblock cell offsets.
     let block_x: u32 = (landblock_id >> 24).wrapping_mul(8);
     let block_y: u32 = ((landblock_id >> 16) & 0xFF).wrapping_mul(8);
+    // For triangle-plane Z (AceCompat): pre-pack the LB-id top half
+    // exactly the way `LandblockId.LandblockX/Y` reads it. `landblock_id`
+    // is `(lb_x << 24) | (lb_y << 16)` so the top 16 bits packed back
+    // as `(lb_x << 8) | lb_y` is `landblock_id >> 16`.
+    let landblock_id_top_16 = (landblock_id >> 16) as u16;
 
     // SceneInfo is optional in our schema (only present if
     // PARTS_MASK_HAS_SCENE_INFO is set). Real Region 0x13 has it, but
@@ -234,16 +321,32 @@ pub fn bake_landblock(
                 continue;
             }
 
-            // Slope rejection — Scenery.cs has a `TODO: ensure
-            // walkable slope` here. We implement it; min_slope and
-            // max_slope are in radians per ObjectDesc.cs.
-            let slope = height::slope_at(&heights, lx, ly);
-            if slope < obj.min_slope || slope > obj.max_slope {
-                continue;
+            // Slope rejection — `BakeMode::Strict` enforces it (ACE's
+            // `TODO: ensure walkable slope` at Scenery.cs:69 is treated
+            // as "fix that someday"); `BakeMode::AceCompat` mirrors ACE
+            // verbatim, including the TODO, so the rejection is OFF.
+            //
+            // min_slope and max_slope are in radians per ObjectDesc.cs.
+            if matches!(mode, BakeMode::Strict) {
+                let slope = height::slope_at(&heights, lx, ly);
+                if slope < obj.min_slope || slope > obj.max_slope {
+                    continue;
+                }
             }
 
-            // Scenery.cs:76 — Z-snap to bilinear-interpolated terrain.
-            let z = height::bilinear_height_from_grid(&heights, lx, ly);
+            // Scenery.cs:76 — Z-snap. ACE uses `LandblockMesh.GetZ`
+            // (triangle-plane per-cell, see `height::triangle_plane_height_from_grid`).
+            // `BakeMode::Strict` instead uses bilinear so scenery lands
+            // on the same Z the renderer's physics integrator uses.
+            let z = match mode {
+                BakeMode::AceCompat => height::triangle_plane_height_from_grid(
+                    &heights,
+                    landblock_id_top_16,
+                    lx,
+                    ly,
+                ),
+                BakeMode::Strict => height::bilinear_height_from_grid(&heights, lx, ly),
+            };
 
             // Scenery.cs:77 — rotation about Z.
             let rotation_rad = rotate_obj(obj, global_cell_x, global_cell_y, j_u32);
