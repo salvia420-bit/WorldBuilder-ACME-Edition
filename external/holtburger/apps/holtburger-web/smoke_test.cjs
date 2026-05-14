@@ -3922,6 +3922,35 @@ check(
             false, String(e).slice(0, 120));
     }
 
+    // === World-expand step 1 Objective 9 (2026-05-14) — fog far floor =
+    // Source-pattern check (the smoke harness is JS-AST-static and the
+    // live `_lastState.fog.far` value only exists after a wasm SkyState
+    // ticks through, which requires the full Playwright stack). Asserts
+    // that `scene3d/sky_lighting.js` defines a `FOG_FAR_FLOOR = 2500.0`
+    // constant near `DEFAULT_FOG_MAX`, that `DEFAULT_FOG_MAX` itself is
+    // raised to 2500.0, and that the per-tick `fog.far = Math.max(...)`
+    // clamp at `_applyState` uses `FOG_FAR_FLOOR` as a third argument.
+    // This guarantees the 13×13 ring is visible even at midnight when
+    // Region 0x13's DayGroup `max_world_fog` lerps low.
+    try {
+        const fs = require("fs");
+        const skyLightingPath = __dirname + "/scene3d/sky_lighting.js";
+        const src = fs.readFileSync(skyLightingPath, "utf8");
+        const hasFogFarFloorConst = /\bconst\s+FOG_FAR_FLOOR\s*=\s*2500(\.0)?\s*;/.test(src);
+        const hasDefaultFogMax2500 = /\bconst\s+DEFAULT_FOG_MAX\s*=\s*2500(\.0)?\s*;/.test(src);
+        // Match the clamp at line ~388 — `Math.max(... , state.fogMax,
+        // FOG_FAR_FLOOR)`. Tolerate whitespace + reordering of args.
+        const hasFloorInClamp = /this\.fog\.far\s*=\s*Math\.max\([^)]*\bFOG_FAR_FLOOR\b[^)]*\)/.test(src);
+        check(
+            "World-expand step 1 Objective 9: FOG_FAR_FLOOR = 2500 m raises DEFAULT_FOG_MAX + floors per-tick fog.far so the 13×13 ring is visible",
+            hasFogFarFloorConst && hasDefaultFogMax2500 && hasFloorInClamp,
+            `floorConst=${hasFogFarFloorConst} defaultMax2500=${hasDefaultFogMax2500} floorInClamp=${hasFloorInClamp}`
+        );
+    } catch (e) {
+        check("World-expand step 1 Objective 9: FOG_FAR_FLOOR = 2500 m raises DEFAULT_FOG_MAX + floors per-tick fog.far so the 13×13 ring is visible",
+            false, String(e).slice(0, 120));
+    }
+
     // === Workstream Sky-D (2026-05-11) — sky dome + celestial bodies =
     // Verifies `scene3d/sky_dome.js` is present, exports `SkyDome` class,
     // references the expected shape (gradient ShaderMaterial uniforms +

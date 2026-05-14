@@ -88,7 +88,18 @@ const DEFAULT_AMB_COLOR_ARGB = 0xff808080; // mid gray
 const DEFAULT_AMB_BRIGHT = 0.4;
 const DEFAULT_FOG_COLOR_ARGB = 0xff9cb3d9; // sky blue
 const DEFAULT_FOG_MIN = 200.0;
-const DEFAULT_FOG_MAX = 800.0;
+// World-expand step 1 Objective 9 (2026-05-14): raised from 800.0 to
+// 2500.0 to cover the 13×13 LB ring's corner-to-centre diagonal
+// (~1.77 km) when no wasm SkyState has landed yet. Region 0x13's
+// per-DayGroup `max_world_fog` lerp still drives colour + density
+// curves once a SkyState arrives; we only floor the draw distance.
+const DEFAULT_FOG_MAX = 2500.0;
+// Per-tick floor on `fog.far`. Applied in `_applyState` so even at
+// midnight (typically low `max_world_fog` per DayGroup) the ring is
+// still visible. The upstream `state.fogMax` is intentionally NOT
+// mutated — only the resulting `fog.far` is clamped — so the colour /
+// density curves driven by Region 0x13 remain authoritative.
+const FOG_FAR_FLOOR = 2500.0;
 
 // Distance from world origin at which to position the directional
 // light. three.js DirectionalLight is a parallel light — distance
@@ -385,7 +396,12 @@ export class SkyLightingController {
       // Clamp negatives — `Fog.near < 0` doesn't error but is
       // physically meaningless; max(0, ...) is a defensive floor.
       this.fog.near = Math.max(0, state.fogMin);
-      this.fog.far = Math.max(this.fog.near + 1.0, state.fogMax);
+      // World-expand step 1 Objective 9 (2026-05-14): floor at
+      // FOG_FAR_FLOOR (2500 m) so the 13×13 ring stays visible even at
+      // night when Region 0x13's DayGroup `max_world_fog` lerps low.
+      // `state.fogMax` itself is unchanged so colour / density curves
+      // still drive correctly upstream.
+      this.fog.far = Math.max(this.fog.near + 1.0, state.fogMax, FOG_FAR_FLOOR);
     }
 
     // 4. skyBackgroundColor sink for Sky-D.

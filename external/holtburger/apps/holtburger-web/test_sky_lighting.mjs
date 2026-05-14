@@ -286,10 +286,15 @@ check(
   Math.abs(scene.fog.near - STATE_NOON.fogMin) < 1e-4,
   `fog.near=${scene.fog.near}, expected=${STATE_NOON.fogMin}`
 );
+// World-expand step 1 Objective 9 (2026-05-14): a FOG_FAR_FLOOR of
+// 2500 m is applied in `_applyState`, so `fog.far` is the max of
+// `state.fogMax` and 2500. STATE_NOON.fogMax (800) < 2500 → floor
+// wins. `state.fogMax` upstream is unchanged.
+const NOON_EXPECTED_FOG_FAR = Math.max(STATE_NOON.fogMax, 2500.0);
 check(
-  "Sky-C: scene.fog.far matches state.fog_max at noon (= 800)",
-  Math.abs(scene.fog.far - STATE_NOON.fogMax) < 1e-4,
-  `fog.far=${scene.fog.far}, expected=${STATE_NOON.fogMax}`
+  `Sky-C: scene.fog.far floored at FOG_FAR_FLOOR=2500 (state.fogMax=${STATE_NOON.fogMax}, expected fog.far=${NOON_EXPECTED_FOG_FAR})`,
+  Math.abs(scene.fog.far - NOON_EXPECTED_FOG_FAR) < 1e-4,
+  `fog.far=${scene.fog.far}, expected=${NOON_EXPECTED_FOG_FAR}`
 );
 
 // ---- Assert 5: CALIBRATION PROBE — at noon, sun y > 0 ---------------
