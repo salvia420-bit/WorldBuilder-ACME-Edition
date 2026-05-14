@@ -8,6 +8,7 @@ members = [
     "crates/holtburger-protocol",
     "crates/holtburger-manifest",
     "crates/holtburger-resource-http",
+    "crates/holtburger-scenery-bake",
     "crates/holtburger-scripting",
     "crates/holtburger-session",
     "crates/holtburger-transport-ws",
@@ -36,6 +37,7 @@ holtburger-dat = { path = "crates/holtburger-dat" }
 holtburger-protocol = { path = "crates/holtburger-protocol" }
 holtburger-manifest = { path = "crates/holtburger-manifest" }
 holtburger-resource-http = { path = "crates/holtburger-resource-http" }
+holtburger-scenery-bake = { path = "crates/holtburger-scenery-bake" }
 holtburger-scripting = { path = "crates/holtburger-scripting" }
 holtburger-transport-ws = { path = "crates/holtburger-transport-ws" }
 tokio = { version = "1", default-features = false }
