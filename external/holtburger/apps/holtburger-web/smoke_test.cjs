@@ -4782,6 +4782,123 @@ check(
             false, String(e).slice(0, 120));
     }
 
+    // === Phase E — validate-landblock-completeness =====================
+    // The production validation gate. Source-pattern check only —
+    // running the actual Playwright validator takes 5+ min and lives
+    // outside the smoke loop. We verify the tool exists and contains
+    // the load-bearing logic that distinguishes it from a stub:
+    //   1. Walks InstancedMesh via getMatrixAt / instanceMatrix.array
+    //      + decompose into per-instance placements (the F#5+6 collapse
+    //      means staticsGroup.children.length ≠ placement count).
+    //   2. Walks LOD nodes at their highest-detail child (level 0).
+    //   3. Builds the expected manifest by calling all three wasm
+    //      `fetch_landblock_*` exports (objects, scenery, spawns) —
+    //      the union of the three streams from the
+    //      `docs/hypotheticalmethod.md` contract.
+    //   4. Diffs by (modelOrWcid, lbX, lbY, x±0.05, y±0.05, z±0.10)
+    //      and surfaces both missing-render AND invented-placement
+    //      findings (NOT just absolute counts).
+    //   5. Writes machine + human reports at
+    //      <out>/completeness-report.{json,md}.
+    //
+    // Without these checks a future refactor could quietly rip out the
+    // InstancedMesh-expansion walk (turning the validator into a
+    // "child count" comparator that ignores 90% of the scene) without
+    // failing CI.
+    try {
+        const fs = require("fs");
+        const validatorPath = __dirname + "/validate_landblock_completeness.cjs";
+        const exists = fs.existsSync(validatorPath);
+        let srcOk = false, detail = "";
+        if (exists) {
+            const src = fs.readFileSync(validatorPath, "utf8");
+            const walksInstanced =
+                /obj\.isInstancedMesh/.test(src) &&
+                /instanceMatrix\.array/.test(src) &&
+                /decomposeMat4\s*\(/.test(src);
+            const walksLod =
+                /obj\.isLOD\b/.test(src) &&
+                /highest-detail child/i.test(src);
+            const fetchesAllThreeStreams =
+                /\bfetch_landblock_objects\s*\(/.test(src) &&
+                /\bfetch_landblock_scenery\s*\(/.test(src) &&
+                /\bfetch_landblock_spawns\s*\(/.test(src);
+            const diffsWithTolerance =
+                /POS_XY_TOLERANCE_M\s*=\s*0\.05/.test(src) &&
+                /POS_Z_TOLERANCE_M\s*=\s*0\.10/.test(src);
+            const surfacesBothFindings =
+                /missing-render/.test(src) &&
+                /invented-placement|inventedPlacement/.test(src);
+            const writesBothReports =
+                /completeness-report\.json/.test(src) &&
+                /completeness-report\.md/.test(src);
+            const supportsRingArg = /--ring/.test(src) && /\bringLbList\b/.test(src);
+            const supportsStrictArg = /--strict/.test(src);
+            srcOk = walksInstanced &&
+                walksLod &&
+                fetchesAllThreeStreams &&
+                diffsWithTolerance &&
+                surfacesBothFindings &&
+                writesBothReports &&
+                supportsRingArg &&
+                supportsStrictArg;
+            detail =
+                `walksInstanced=${walksInstanced} walksLod=${walksLod} ` +
+                `fetches3=${fetchesAllThreeStreams} tolerance=${diffsWithTolerance} ` +
+                `findings=${surfacesBothFindings} reports=${writesBothReports} ` +
+                `ringArg=${supportsRingArg} strictArg=${supportsStrictArg}`;
+        } else {
+            detail = `missing at ${validatorPath}`;
+        }
+        check(
+            "Phase E: validate_landblock_completeness.cjs exists at apps/holtburger-web/",
+            exists,
+            exists ? `bytes=${fs.statSync(validatorPath).size}` : detail
+        );
+        check(
+            "Phase E: validator expands InstancedMesh + LOD + fetches all 3 streams + diffs with tolerance",
+            srcOk,
+            detail
+        );
+    } catch (e) {
+        check(
+            "Phase E: validate_landblock_completeness.cjs exists at apps/holtburger-web/",
+            false,
+            String(e).slice(0, 120)
+        );
+        check(
+            "Phase E: validator expands InstancedMesh + LOD + fetches all 3 streams + diffs with tolerance",
+            false,
+            String(e).slice(0, 120)
+        );
+    }
+
+    // Phase E.b — validator must be wired so Phase E's "validation
+    // gate" can run against a green ring. The validator depends on
+    // the three placement streams being already shipped (Phase B/C/D)
+    // and on the `liveScene3d` exposing the three placement groups
+    // (statics, buildings, entities). This check enforces the
+    // downstream contracts the validator depends on, so a regression
+    // upstream surfaces here first.
+    try {
+        const fs = require("fs");
+        const idxSrc = fs.readFileSync(__dirname + "/scene3d/index.js", "utf8");
+        const exposesStaticsGroup = /\bstaticsGroup\b/.test(idxSrc);
+        const exposesBuildingsGroup = /\bbuildingsGroup\b/.test(idxSrc);
+        const exposesEntitiesGroup = /\bentitiesGroup\b/.test(idxSrc);
+        check(
+            "Phase E: liveScene3d still exposes the three placement groups validator walks",
+            exposesStaticsGroup && exposesBuildingsGroup && exposesEntitiesGroup,
+            `statics=${exposesStaticsGroup} buildings=${exposesBuildingsGroup} entities=${exposesEntitiesGroup}`
+        );
+    } catch (e) {
+        check(
+            "Phase E: liveScene3d still exposes the three placement groups validator walks",
+            false,
+            String(e).slice(0, 120)
+        );
+    }
+
     console.log("=========================");
     if (failed === 0) {
         console.log("PASS: all smoke checks green.");
