@@ -3596,6 +3596,41 @@ check(
         );
     }
 
+    // === World-expand step 1 — Objective 6 — handlePositionUpdate lazy hook =
+    // Source-pattern assert that `index.html`'s `handlePositionUpdate`
+    // local-player branch wires the three new `liveScene3d.loadX*` calls
+    // landed in Objective 5. The actual lazy walk-and-bake behavior is
+    // verified end-to-end by `capture_world_expand_e2e.cjs` (Objective
+    // 10); this check is the merge-gate floor against the symbols
+    // disappearing from the recv path. Without it the 3D renderer
+    // stays clamped to whatever ring init3D baked (13×13 at Obj-8) and
+    // walking outside the ring renders void terrain.
+    try {
+        const fs = require("fs");
+        const indexHtmlSrc = fs.readFileSync(
+            __dirname + "/index.html",
+            "utf8"
+        );
+        const hasLoadTerrain = /window\.liveScene3d\?\.loadTerrainForLandblock/.test(
+            indexHtmlSrc
+        );
+        const hasLoadBuildings =
+            /window\.liveScene3d\?\.loadBuildingsForLandblock/.test(indexHtmlSrc);
+        const hasLoadStatics =
+            /window\.liveScene3d\?\.loadStaticsForLandblock/.test(indexHtmlSrc);
+        check(
+            "Obj-6: handlePositionUpdate wires liveScene3d.load{Terrain,Buildings,Statics}ForLandblock",
+            hasLoadTerrain && hasLoadBuildings && hasLoadStatics,
+            `terrain=${hasLoadTerrain}, buildings=${hasLoadBuildings}, statics=${hasLoadStatics}`
+        );
+    } catch (e) {
+        check(
+            "Obj-6: handlePositionUpdate wires liveScene3d.load{Terrain,Buildings,Statics}ForLandblock",
+            false,
+            String(e).slice(0, 120)
+        );
+    }
+
     // === Follow-on #10 (2026-05-10) — PIXI HUD / DOM nameplate overlay =
     // Verify `scene3d/hud.js` is no longer the 6-line placeholder — it
     // must export a `NameplateLayer` class that uses `Vector3.project(
@@ -3949,6 +3984,72 @@ check(
     } catch (e) {
         check("World-expand step 1 Objective 9: FOG_FAR_FLOOR = 2500 m raises DEFAULT_FOG_MAX + floors per-tick fog.far so the 13×13 ring is visible",
             false, String(e).slice(0, 120));
+    }
+
+    // === World-expand step 1 Objective 7 (2026-05-14) — distance-keyed
+    // === subdivision LOD =============================================
+    // Source-pattern check that `pickSubdivLevelForLb` (terrain.js:812,
+    // established in commit 7145f11 as Objective 2's centre-vs-outer
+    // flip) now computes a Chebyshev-distance cascade and returns the
+    // unsubdivided `1` floor for any LB ≥ 2 LBs away from the reference
+    // LB. Pre-Objective-7 the function compared lbX/lbY against
+    // `opts.centreLbX/Y` and returned only `centreLevel` or
+    // `outerLevel` — there was no distance≥2 branch. After the flip,
+    // any 13×13 ring's outer two rings (44 LBs at radius=2, plus the
+    // 60+76 at radius=3 / radius=4 / radius=5 / radius=6) collapse to
+    // subdivLevel=1 so triangle counts stay sane at radius=6
+    // (Objective 8). At radius=1 the cascade is bit-identical to the
+    // prior centre-vs-outer rule.
+    //
+    // The browser-side live check (per-LB userData.subdivLevel for an
+    // outer-ring LB after Objective 8's radius bump) lives in
+    // `capture_world_expand_e2e.cjs` (Objective 10). Here we just
+    // assert the source has the cascade shape — Math.max(Math.abs(...))
+    // for Chebyshev distance + an explicit `return 1` for distance ≥ 2.
+    try {
+        const fs = require("fs");
+        const path = require("path");
+        const terrainPath = path.resolve(__dirname, "scene3d", "terrain.js");
+        const terrainSrc = fs.readFileSync(terrainPath, "utf8");
+        // Capture the body of `pickSubdivLevelForLb` (regex anchored
+        // on the export-less helper declaration `function
+        // pickSubdivLevelForLb(opts, lbX, lbY)`; non-greedy match up
+        // to the closing brace on its own line).
+        const bodyMatch = terrainSrc.match(
+            /function\s+pickSubdivLevelForLb\s*\(\s*opts\s*,\s*lbX\s*,\s*lbY\s*\)[\s\S]*?\n\}\n/
+        );
+        const body = bodyMatch ? bodyMatch[0] : "";
+        // Chebyshev distance computation: max(abs(lbX - pX), abs(lbY - pY)).
+        // The reference variables may be named pX/pY / px/py / refX/refY;
+        // tolerate any single-letter or short prefix as long as the
+        // arithmetic is `abs(lbX - <ref>)` paired with `abs(lbY - <ref>)`.
+        const hasChebyshev =
+            /Math\.max\s*\(\s*Math\.abs\s*\(\s*lbX\s*-\s*\w+\s*\)\s*,\s*Math\.abs\s*\(\s*lbY\s*-\s*\w+\s*\)\s*\)/.test(
+                body
+            );
+        // distance ≥ 2 explicit `return 1` branch. The cascade is
+        // distance-0 → full, distance-1 → half, distance ≥ 2 → 1.
+        // The final fall-through must be `return 1` (no further
+        // arithmetic, no return of a variable that could be > 1).
+        const hasReturnOne = /\breturn\s+1\s*;/.test(body);
+        // playerLbKey OR initialCentreLbKey is read off opts (or a
+        // sensible fallback chain). The brief says playerLbKey is the
+        // preferred reference; document the fallback chain inline.
+        const readsPlayerLb =
+            /opts\.playerLbKey/.test(body) ||
+            /opts\.initialCentreLbKey/.test(body);
+        check(
+            "World-expand step 1 Objective 7: pickSubdivLevelForLb uses Chebyshev distance + flattens outer rings (≥2) to subdivLevel=1",
+            !!body && hasChebyshev && hasReturnOne && readsPlayerLb,
+            `bodyFound=${!!body} chebyshev=${hasChebyshev} ` +
+                `returnOne=${hasReturnOne} readsPlayerLb=${readsPlayerLb}`
+        );
+    } catch (e) {
+        check(
+            "World-expand step 1 Objective 7: pickSubdivLevelForLb uses Chebyshev distance + flattens outer rings (≥2) to subdivLevel=1",
+            false,
+            String(e?.message ?? e).slice(0, 160)
+        );
     }
 
     // === Workstream Sky-D (2026-05-11) — sky dome + celestial bodies =

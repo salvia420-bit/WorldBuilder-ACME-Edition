@@ -779,9 +779,23 @@ async function resolveTerrainRingOpts(
     }
   }
 
+  // world-expand step 1 Objective 7 — distance-keyed subdivision LOD
+  // reads its reference LB off `playerLbKey` (preferred) or
+  // `initialCentreLbKey` (fallback), both optional fields on scene3d.
+  // Threaded through opts so `pickSubdivLevelForLb` stays a pure fn of
+  // its inputs (easier to unit-test from outside a ring driver).
+  const playerLbKey =
+    typeof scene3d?.playerLbKey === "number" ? scene3d.playerLbKey : null;
+  const initialCentreLbKey =
+    typeof scene3d?.initialCentreLbKey === "number"
+      ? scene3d.initialCentreLbKey
+      : null;
+
   return {
     centreLbX,
     centreLbY,
+    playerLbKey,
+    initialCentreLbKey,
     detailNormalEnabled,
     detailNormalArrayTex,
     triplanarEnabled,
@@ -799,22 +813,51 @@ async function resolveTerrainRingOpts(
 }
 
 /**
- * Pick the subdivision level for a single LB given the ring's centre.
+ * Pick the subdivision level for a single LB using Chebyshev-distance
+ * cascade from the reference LB (world-expand step 1 Objective 7).
  *
- * Centre = full level; everything else = half (floor, min 1). Mirrors
- * the rule from the prior `buildHoltburgTerrain` body verbatim:
- * the central LB (the player's, Holtburg 0xA9 0xB4 at radius=1) gets
- * full subdivLevel, the 8 surrounding LBs get half.
+ *   - distance 0 (the reference LB itself): full `opts.subdivLevel`.
+ *   - distance 1 (the 8 LBs immediately around): `max(1, floor(level/2))`.
+ *   - distance ≥ 2 (outer rings at radius≥2): `1` (no subdivision).
  *
- * Distance-keyed LOD (Chebyshev distance from `scene3d.playerLbKey`) is
- * Objective 7's job; this stays a centre/outer flip for now.
+ * The reference LB is `scene3d.playerLbKey` when set, otherwise
+ * `scene3d.initialCentreLbKey`, otherwise the ring driver's centre
+ * (`opts.centreLbX` / `opts.centreLbY`). We do NOT plumb a runtime
+ * `playerLbKey` updater in step 1: the brief notes that lazy adds
+ * compute distance at bake time from whatever centre was provided, and
+ * already-baked LBs do not re-bake on player movement (re-bake-on-LOD-
+ * shift is step 2 scope per docs/world-expand-step-1-handoff.md). So
+ * in practice, every LB picks its level from the centre passed to
+ * `bakeTerrainRing` — which is the spawn LB at init and the lazy-walk
+ * centre on subsequent loads.
+ *
+ * At radius=1 this is IDENTICAL to the prior centre-vs-outer flip:
+ *   distance 0 → full, distance 1 → half (no distance ≥ 2 in a 3×3).
+ * At radius≥2 (Objective 8 flips to radius=6) the cascade flattens
+ * the outer rings to subdivLevel=1 so triangle counts don't explode.
  */
 function pickSubdivLevelForLb(opts, lbX, lbY) {
-  const centreLevel = opts.subdivLevel;
-  const outerLevel = Math.max(1, Math.floor(opts.subdivLevel / 2));
-  return lbX === opts.centreLbX && lbY === opts.centreLbY
-    ? centreLevel
-    : outerLevel;
+  const fullLevel = opts.subdivLevel;
+  const halfLevel = Math.max(1, Math.floor(opts.subdivLevel / 2));
+  // Resolve the distance reference. The scene3d ref is threaded through
+  // `opts` by `resolveTerrainRingOpts` (which captures the scene3d at
+  // ring-bake start). If neither dynamic key is present, fall back to
+  // the centre LB passed to the ring driver — preserves radius=1
+  // behaviour for callers that never touch the player position.
+  const playerLb = opts.playerLbKey ?? opts.initialCentreLbKey ?? null;
+  let pX;
+  let pY;
+  if (playerLb != null) {
+    pX = (playerLb >>> 24) & 0xff;
+    pY = (playerLb >>> 16) & 0xff;
+  } else {
+    pX = opts.centreLbX;
+    pY = opts.centreLbY;
+  }
+  const distLb = Math.max(Math.abs(lbX - pX), Math.abs(lbY - pY));
+  if (distLb <= 0) return fullLevel;
+  if (distLb === 1) return halfLevel;
+  return 1;
 }
 
 /**
