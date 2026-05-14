@@ -115,6 +115,34 @@ const TRIPLANAR_SLOPE_LO = 0.2;
 const TRIPLANAR_SLOPE_HI = 0.5;
 const DEFAULT_TRIPLANAR_SHARPNESS = 6.0;
 
+// ----- Phase 2.2 — animated vertex displacement (water + lava) -----
+//
+// Per-vertex Y-axis (AC Z-axis) displacement driven by `uTime` in the
+// vertex shader. Branches on `vTerrainCode` (provoking-vertex code from
+// the Phase 1.2 per-vertex attribute).
+//
+// Codes for Region 0x13 ("Dereth") from the terrain code table in this
+// file:
+//   water: 16, 17, 18, 19, 20, 22, 23
+//   lava:  none — retail Holtburg has no lava terrain (lava is in
+//          dungeons via SetupModel floors, not landblock terrain).
+//          A region-aware extension would add lava codes for the
+//          Volcanic Hills region, etc. The lava branch is present but
+//          inactive (no codes match).
+//
+// Total amplitude ≤ 0.4 m per plan §4 constraint #3 — small enough that
+// the player never feels they're walking through visible ridges. Water
+// uses two sines summed (~0.25 m envelope); lava (future) would use
+// 2D value-noise at 0.4 m.
+//
+// Quality gate: only installed when `liveScene3d.quality.flags.subdivLevel
+// >= 2`. At subdivLevel=1, terrain verts are 24 m apart — the wavelength
+// would be larger than the screen and the wave would be invisible.
+const TERRAIN_WATER_CODES = new Set([16, 17, 18, 19, 20, 22, 23]);
+// Region 0x13 lava codes: none (see comment above). Future region-aware
+// extension would populate this for, e.g., Volcanic Hills.
+const TERRAIN_LAVA_CODES = new Set([]);
+
 // ----- GLSL — bilinear-blend shader, three.js port ------------------
 //
 // Vertex shader: drops the PIXI mat3 chain in favour of three.js's
@@ -133,6 +161,12 @@ precision highp float;
 
 in float terrainCode;                 // Phase 1.2 — per-vertex (uint8→float)
 
+uniform float uTime;                  // Phase 2.2 — shared wall-clock seconds
+uniform int uWaterCodeMask;           // Phase 2.2 — bitmask of water terrain codes (bit i = code i)
+uniform int uLavaCodeMask;            // Phase 2.2 — bitmask of lava terrain codes (Region 0x13 = 0)
+uniform float uDisplacementEnabled;   // Phase 2.2 — 0.0 OFF / 1.0 ON (quality gate; off when subdivLevel < 2)
+uniform vec2 uLbOriginXy;             // Phase 2.2 — per-LB world-frame origin (lbX*192, lbY*192); ensures wave-phase continuity across LB seams
+
 out vec2 vGridUv;
 flat out int vTerrainCode;            // Phase 1.2 — passed flat-int to FS
 // Phase 1.3 — AC-space LB-local position + interpolated geometry
@@ -143,9 +177,71 @@ flat out int vTerrainCode;            // Phase 1.2 — passed flat-int to FS
 // naturally to YZ + XZ planes.
 out vec3 vAcPos;
 out vec3 vAcNormal;
+// Phase 2.2 — 1.0 if the vertex is water, 0.0 otherwise. The fragment
+// shader uses this to decide whether to apply UV scroll + tint shift.
+// Flat-interpolated alongside vTerrainCode so the fragment sees the
+// same provoking-vertex classification.
+flat out int vIsWater;
+
+// Phase 2.2 — 2D value-noise (Perlin-fade interp). Tiny port from
+// Phase 2.1's Rust impl at terrain_subdiv.rs::value_noise_2d. Reserved
+// for the lava displacement branch (Region 0x13 has no lava terrain
+// codes — branch never executes for retail Holtburg).
+float fade(float t) { return t * t * t * (t * (t * 6.0 - 15.0) + 10.0); }
+float hash21(vec2 p) {
+  // Cheap deterministic hash — same period as the Rust impl. Stable
+  // across LB seams because input is world-frame AC coords.
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+float valueNoise2D(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  float a = hash21(i);
+  float b = hash21(i + vec2(1.0, 0.0));
+  float c = hash21(i + vec2(0.0, 1.0));
+  float d = hash21(i + vec2(1.0, 1.0));
+  float u = fade(f.x);
+  float v = fade(f.y);
+  return mix(mix(a, b, u), mix(c, d, u), v) * 2.0 - 1.0;
+}
 
 void main() {
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  vec3 displacedPos = position;
+  int code = int(terrainCode + 0.5);
+  int isWater = 0;
+  // Phase 2.2 — quality-gated time-varying displacement on water + lava
+  // terrain. uDisplacementEnabled is 0.0 when subdivLevel < 2 (the
+  // vertices are 24 m apart at level 1 and the wave wavelength would
+  // exceed the screen). The bitmask lookups are 32-bit shifts; both
+  // masks are constructed JS-side from the TERRAIN_WATER_CODES /
+  // TERRAIN_LAVA_CODES sets so the GLSL stays free of per-code if/elif
+  // chains.
+  if (uDisplacementEnabled > 0.5 && code >= 0 && code < 32) {
+    int bit = 1 << code;
+    // World-frame XY = per-LB origin + LB-local position. Using the
+    // world frame (not LB-local) is what makes the wave continuous
+    // across LB seams when paired with the shared uTime: matching
+    // world coords on either side of the seam evaluate to the same
+    // wave phase.
+    vec2 worldXy = uLbOriginXy + position.xy;
+    if ((uWaterCodeMask & bit) != 0) {
+      // Two-wavelet sine sum at different frequencies + phases. Total
+      // envelope ~0.25 m, well under the 0.4 m plan-doc cap.
+      float wave = sin(uTime * 0.5 + worldXy.x * 0.1) * 0.15
+                 + sin(uTime * 0.7 + worldXy.y * 0.13) * 0.10;
+      displacedPos.z += wave;
+      isWater = 1;
+    } else if ((uLavaCodeMask & bit) != 0) {
+      // Slow chunky 2D value-noise — 0.4 m max amplitude. Inactive for
+      // Region 0x13 (no lava codes in the mask); kept here for forward
+      // compat with region-aware extensions.
+      float n = valueNoise2D(worldXy * 0.05 + vec2(uTime * 0.2, 0.0));
+      displacedPos.z += n * 0.4;
+    }
+  }
+  vIsWater = isWater;
+
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(displacedPos, 1.0);
   // Per-vertex grid coordinate in [0, 8] across the 192 m landblock
   // (8 cells × 24 m each). Fragment splits into integer cell index
   // + intra-cell UV, looks up the cell's 4 corner terrain types
@@ -157,7 +253,11 @@ void main() {
   // triangle sees the provoking vertex's code — three corners may
   // disagree but we deliberately pick one per triangle rather than
   // blending (terrain codes are discrete categories).
-  vTerrainCode = int(terrainCode + 0.5);
+  vTerrainCode = code;
+  // vAcPos passes the UNDISPLACED position so the Phase 1.3 triplanar
+  // sampler reads consistent values across frames (displacement is
+  // visual-only; collision math + detail-normal projections stay
+  // anchored to the bilinear-on-control 24 m surface).
   vAcPos = position;
   vAcNormal = normal;
 }
@@ -194,11 +294,17 @@ uniform float uDetailNormalEnabled;   // 0.0 OFF / 1.0 ON (quality gate)
 // DEFAULT_TRIPLANAR_SHARPNESS comment on the JS side).
 uniform float uTriplanarEnabled;
 uniform float uTriplanarSharpness;
+// Phase 2.2 — shared wall-clock seconds + water flag for UV scroll +
+// tint modulation. uDisplacementEnabled gates both effects so they
+// stay quiet at subdivLevel=1 (matches the vertex-shader gate).
+uniform float uTime;
+uniform float uDisplacementEnabled;
 
 in vec2 vGridUv;
 flat in int vTerrainCode;             // provoking-vertex terrain code
 in vec3 vAcPos;                       // Phase 1.3 — LB-local AC pos (z=up)
 in vec3 vAcNormal;                    // Phase 1.3 — geometry normal (AC z-up)
+flat in int vIsWater;                 // Phase 2.2 — 1 if water, 0 otherwise
 
 out vec4 fragColor;
 
@@ -228,15 +334,36 @@ void main() {
   float fv = grid.y - float(iv);
   vec2 cellUv = vec2(fu, fv);
 
+  // Phase 2.2 — water UV scroll. Apply a per-frame offset to the
+  // intra-cell UV so the water texture pattern drifts. The scroll is
+  // small enough to stay within a tile each frame; fract() wraps
+  // cleanly inside the per-tile slot via atlasUvFor's modular indexing
+  // because the slot only sees the fractional part. Gated by both the
+  // displacement quality flag AND the per-vertex water flag so
+  // non-water cells (and low quality) keep their static UV.
+  vec2 waterCellUv = cellUv;
+  if (uDisplacementEnabled > 0.5 && vIsWater == 1) {
+    waterCellUv = fract(cellUv + vec2(uTime * 0.05, uTime * 0.02));
+  }
+
   int t00 = vertexTypeAt(iu,     iv    );  // SW
   int t10 = vertexTypeAt(iu + 1, iv    );  // SE
   int t01 = vertexTypeAt(iu,     iv + 1);  // NW
   int t11 = vertexTypeAt(iu + 1, iv + 1);  // NE
 
-  vec3 c00 = texture(uAtlas, atlasUvFor(clamp(t00, 0, 32), cellUv)).rgb;
-  vec3 c10 = texture(uAtlas, atlasUvFor(clamp(t10, 0, 32), cellUv)).rgb;
-  vec3 c01 = texture(uAtlas, atlasUvFor(clamp(t01, 0, 32), cellUv)).rgb;
-  vec3 c11 = texture(uAtlas, atlasUvFor(clamp(t11, 0, 32), cellUv)).rgb;
+  // Per-corner cellUv: water-typed corners get the scrolled UV, others
+  // stay on the static path. This keeps the blend across the water /
+  // land seam continuous because non-water corners contribute their
+  // unscrolled tile while the water corners drift.
+  vec2 uv00 = (t00 >= 16 && t00 <= 23 && t00 != 21) ? waterCellUv : cellUv;
+  vec2 uv10 = (t10 >= 16 && t10 <= 23 && t10 != 21) ? waterCellUv : cellUv;
+  vec2 uv01 = (t01 >= 16 && t01 <= 23 && t01 != 21) ? waterCellUv : cellUv;
+  vec2 uv11 = (t11 >= 16 && t11 <= 23 && t11 != 21) ? waterCellUv : cellUv;
+
+  vec3 c00 = texture(uAtlas, atlasUvFor(clamp(t00, 0, 32), uv00)).rgb;
+  vec3 c10 = texture(uAtlas, atlasUvFor(clamp(t10, 0, 32), uv10)).rgb;
+  vec3 c01 = texture(uAtlas, atlasUvFor(clamp(t01, 0, 32), uv01)).rgb;
+  vec3 c11 = texture(uAtlas, atlasUvFor(clamp(t11, 0, 32), uv11)).rgb;
 
   float w00 = (1.0 - fu) * (1.0 - fv);
   float w10 = fu * (1.0 - fv);
@@ -244,6 +371,15 @@ void main() {
   float w11 = fu * fv;
 
   vec3 result = c00 * w00 + c10 * w10 + c01 * w01 + c11 * w11;
+
+  // Phase 2.2 — water tint shift. Subtle bluish modulation that breathes
+  // over time (period ~21 s at uTime * 0.3). Only applied on water-
+  // flagged provoking vertices; non-water surfaces stay colour-stable.
+  if (uDisplacementEnabled > 0.5 && vIsWater == 1) {
+    vec3 tint = mix(vec3(0.9, 0.95, 1.05), vec3(1.0, 1.0, 1.0),
+                    0.5 + 0.5 * sin(uTime * 0.3));
+    result *= tint;
+  }
 
   // ---------------------------------------------------------------
   // Phase 1.2 — detail-normal overlay via reoriented normal blending.
@@ -377,6 +513,32 @@ function pickSubdivLevel(scene3d) {
   return 1;
 }
 
+/**
+ * Phase 2.2 — pack a Set<int> of terrain codes into a 32-bit bitmask.
+ * Bit `i` is set if code `i` is in the set. Used by the vertex shader's
+ * displacement branch (`(uWaterCodeMask & (1 << code)) != 0`) so the
+ * GLSL stays free of per-code if/elif chains.
+ *
+ * Exported for direct unit testing; the production caller is
+ * `buildHoltburgTerrain`.
+ */
+export function computeCodeBitmask(codeSet) {
+  let mask = 0;
+  for (const code of codeSet) {
+    if (Number.isInteger(code) && code >= 0 && code < 32) {
+      mask = (mask | (1 << code)) >>> 0;
+    }
+  }
+  // GLSL `int` is signed 32-bit; convert via >>> 0 then |0 so the
+  // top bit, if ever set, round-trips correctly through three.js's
+  // setUniform path.
+  return mask | 0;
+}
+
+// Phase 2.2 — exported for tests + capture-script probes.
+export const PHASE_2_2_WATER_CODES = TERRAIN_WATER_CODES;
+export const PHASE_2_2_LAVA_CODES = TERRAIN_LAVA_CODES;
+
 function holtburgNeighbourhoodCellIds() {
   const coords = [];
   for (let dy = 1; dy >= -1; dy -= 1) {
@@ -414,7 +576,20 @@ function holtburgNeighbourhoodCellIds() {
  */
 function buildRoadOverlayMesh(positions, roadCodes, roadTexture) {
   const halfWidth = 0.75; // 1.5 m total — matches 2D `width: 1.5`.
-  const liftZ = 0.1;
+  // Phase 2.1 carry-over + Phase 2.2 follow-on (2026-05-13): the road
+  // overlay walks the 9×9 control grid (NOT the subdivided heights), so
+  // when subdivLevel>=2 raises terrain vertices up to ±0.3 m via clamped
+  // noise (`terrain_subdiv.rs::VISUAL_VS_COLLISION_MAX_M`), the original
+  // 0.1 m lift was insufficient to clear z-fight on hilly LBs. Raised
+  // to 0.4 m so the road stays cleanly above the subdivision noise (the
+  // road is also rendered with polygonOffset as a belt-and-braces
+  // safety). Phase 2.2 water displacement adds another ±0.25 m envelope
+  // but only on water-typed cells; Holtburg roads don't cross water
+  // cells in retail, so the 0.4 m road lift suffices. Routing the road
+  // overlay THROUGH the subdivided heights would be cleaner (no fixed
+  // lift) but non-trivial — no per-grid-vertex correspondence in the
+  // subdivided mesh — and is deferred to a future phase.
+  const liftZ = 0.4;
   const ROAD_DIRS = [
     [1, 0],
     [0, 1],
@@ -581,6 +756,15 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
     subdivLevel > 1 &&
     typeof wasmExports.fetch_subdivided_landblocks === "function";
 
+  // Phase 2.2 — animated water/lava displacement. Only enabled at
+  // subdivLevel >= 2 per plan hand-off note #3 (level=1 has 24 m vertex
+  // spacing; the wave wavelength would be larger than the screen).
+  // Materials still bind `uTime` / `uDisplacementEnabled` so the JS
+  // tick can flip the gate later without rebuilding the shader.
+  const displacementEnabled = subdivLevel >= 2;
+  const waterCodeMask = computeCodeBitmask(TERRAIN_WATER_CODES);
+  const lavaCodeMask = computeCodeBitmask(TERRAIN_LAVA_CODES);
+
   // 1. Compute the 9 cell ids.
   const { ids, coords } = holtburgNeighbourhoodCellIds();
 
@@ -651,6 +835,15 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
   // 4 + 5. Per-LB heightfield + road overlay.
   const ATLAS_GRID_SIZE = new THREE.Vector2(6, 6);
   let lbWithRoads = 0;
+  // Phase 2.2 — terrain ShaderMaterial registry. The per-rAF tick in
+  // `loop.js::tickPerFrame` iterates this array and pushes the shared
+  // wall-clock `uTime` into every entry's uniform. Single shared time
+  // source → matched motion across LB seams (objective #4). Initialise
+  // as a fresh array per init3D call so a rebuild (capture-script hot
+  // reload) doesn't accumulate stale handles.
+  if (!Array.isArray(scene3d.terrainMaterials)) {
+    scene3d.terrainMaterials = [];
+  }
   for (let i = 0; i < coords.length; i += 1) {
     const wasmMesh = meshes[i];
     const { x: lbX, y: lbY } = coords[i];
@@ -705,6 +898,22 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
         // detail-normal falls back to the XY-only Phase 1.2 path.
         uTriplanarEnabled: { value: triplanarEnabled ? 1.0 : 0.0 },
         uTriplanarSharpness: { value: DEFAULT_TRIPLANAR_SHARPNESS },
+        // Phase 2.2 — animated displacement uniforms. uTime is pushed
+        // from `loop.js::tickPerFrame` once per rAF via the shared
+        // `scene3d.terrainMaterials` registry below. uWaterCodeMask /
+        // uLavaCodeMask are packed bitmasks (bit i = code i). Gate is
+        // 1.0 only when subdivLevel >= 2. uLbOriginXy lets the wave
+        // phase stay continuous across LB seams (world-frame XY).
+        uTime: { value: 0.0 },
+        uWaterCodeMask: { value: waterCodeMask },
+        uLavaCodeMask: { value: lavaCodeMask },
+        uDisplacementEnabled: { value: displacementEnabled ? 1.0 : 0.0 },
+        uLbOriginXy: {
+          value: new THREE.Vector2(
+            lbX * METERS_PER_LANDBLOCK,
+            lbY * METERS_PER_LANDBLOCK
+          ),
+        },
       },
       vertexShader: TERRAIN_VERTEX_GLSL,
       fragmentShader: TERRAIN_FRAGMENT_GLSL,
@@ -717,6 +926,13 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
       // also reverting the adapter's index reversal.
       side: THREE.FrontSide,
     });
+
+    // Phase 2.2 — register the material so the per-rAF tick can push
+    // the shared wall-clock `uTime`. Single shared time source means
+    // matched wave motion across LB seams (objective #4). The registry
+    // entry retains the ShaderMaterial handle directly; on
+    // disposal/rebuild the caller should null out scene3d.terrainMaterials.
+    scene3d.terrainMaterials.push(material);
 
     const lbMesh = new THREE.Mesh(geom, material);
     lbMesh.name = `terrain-lb-${lbX.toString(16)}-${lbY.toString(16)}`;
@@ -783,6 +999,13 @@ export async function buildHoltburgTerrain(scene3d, wasmExports) {
       // Phase 2.1 — actual subdivision factor used for this LB.
       // 1 = no subdivision (legacy 9×9 path); 2/4/8 = subdivided.
       subdivLevel: effectiveSubdiv,
+      // Phase 2.2 — capture probes inspect these to verify the
+      // displacement patch is wired. uTime is mutated each rAF by
+      // `loop.js::tickPerFrame`; the snapshot here records the wiring
+      // state at build time.
+      displacementEnabled,
+      waterCodeMask,
+      lavaCodeMask,
     };
 
     // Group keeps the road overlay parented under the same lbMesh

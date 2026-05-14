@@ -814,6 +814,12 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // populated, carries the shared atlas/road textures + lb count
     // for the 7.1 capture's assertions.
     terrain: terrainSummary,
+    // Phase 2.2 — terrain ShaderMaterial registry (one entry per LB).
+    // `loop.js::tickPerFrame` iterates this each rAF and pushes the
+    // shared `uTime` uniform for the water/lava displacement animation.
+    // Surfaced on liveScene3d so capture scripts can probe per-LB
+    // uniform state without walking `terrainGroup.children`.
+    terrainMaterials: scene3dForBuilders.terrainMaterials ?? [],
     // Phase 7.2 — buildings + statics summaries (null when the Phase
     // 7.2 wasm exports aren't supplied).
     buildings: buildingsSummary,
