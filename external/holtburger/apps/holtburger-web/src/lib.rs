@@ -55,6 +55,13 @@ mod global_source;
 #[cfg(target_arch = "wasm32")]
 mod prefetch;
 
+// F.37 walk-result dedup primitive. Native test target needs the
+// `walk_dedup` module too (the unit tests live in it) — gated
+// `wasm32 OR test` so `cargo test` can exercise the dedup primitive
+// without standing up the full wasm-bindgen stack.
+#[cfg(any(target_arch = "wasm32", test))]
+mod walk_dedup;
+
 // Phase 1.5 — surface override JSON. Gate mirrors
 // `fetch_surface_pixels_impl` (wasm32 OR test) so the native test target
 // can drive the loader without a separate path.
@@ -4480,7 +4487,15 @@ pub async fn fetch_surfaces_pixels(
         .map(|id| ResourceKey::new("eor/portal", *id))
         .collect();
     let dids_for_walk = surface_dids.clone();
-    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+    // F.37 walk-result dedup. Two entities with the same setup
+    // requesting the same DID-set in the same tick (via
+    // `materialCache.preload`) now share a single prefetch loop.
+    // The cache key fully captures the DID list — distinct
+    // overlapping sets (e.g. [A,B,C] vs [B,C,D]) still each get
+    // their own loop, but identical sets latch.
+    let cache_key = prefetch::WalkCacheKey::new("fetch_surfaces_pixels")
+        .with_u32_slice(&surface_dids);
+    prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, move |s| {
         for &id in &dids_for_walk {
             let _ = fetch_surface_pixels_impl(s, id);
         }
@@ -4922,7 +4937,14 @@ pub async fn fetch_building_placement(model_id: u32) -> Result<BuildingPlacement
     use holtburger_dat::ResourceKey;
     let source = global_source::global_source();
     let initial = [ResourceKey::new("eor/portal", model_id)];
-    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+    // F.37 walk-result dedup. Two concurrent
+    // `fetchBuildingPlacement(0x02000123)` calls (e.g. when two
+    // adjacent LBs share a model_id and load near-simultaneously)
+    // now share a single prefetch loop instead of each spinning up
+    // its own RecordingSource + re-walking the SetupModel.
+    let cache_key = prefetch::WalkCacheKey::new("fetchBuildingPlacement")
+        .with_u32(model_id);
+    prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, move |s| {
         let _ = triangulate_model_per_part_buckets(s, model_id);
     })
     .await?;
@@ -6018,9 +6040,24 @@ async fn populate_building_aabbs_for_landblock_impl(
                     // children referenced by this Setup mirrors
                     // `fetch_building_placement`'s prefetch shape.
                     let initial = [ResourceKey::new("eor/portal", model_id)];
-                    if let Err(e) = prefetch::ensure_walk_prefetched(&source, &initial, |s| {
-                        let _ = walk_setup_parts_with_geom_and_physics(s, model_id);
-                    })
+                    // F.37 walk-result dedup. Building model_ids are
+                    // shared across LBs in retail (e.g. the standard
+                    // cottage model appears in dozens of LBs); two
+                    // concurrent `populateBuildingAabbsForLandblock`
+                    // calls on adjacent LBs now share a single
+                    // prefetch loop per overlapping model_id.
+                    let cache_key = prefetch::WalkCacheKey::new(
+                        "populateBuildingAabbsForLandblock:0x02",
+                    )
+                    .with_u32(model_id);
+                    if let Err(e) = prefetch::ensure_walk_prefetched_keyed(
+                        cache_key,
+                        &source,
+                        &initial,
+                        move |s| {
+                            let _ = walk_setup_parts_with_geom_and_physics(s, model_id);
+                        },
+                    )
                     .await
                     {
                         log::warn!(
@@ -9100,10 +9137,9 @@ pub async fn fetch_entity_animation_keyframes(
     // layer — the per-surface palette overlay path lives in
     // fetchEntitySurfacesPixels. Touching the args here ensures any
     // future palette-aware bake step sees them without a signature
-    // change. Use a `let _` dance so wasm-bindgen doesn't trim them
-    // from the export and the borrow-checker doesn't warn.
-    let _palette_id = palette_id;
-    let _palette_subs_flat = palette_subs_flat;
+    // change. F.37 (2026-05-14): both args now also flow into the
+    // F.37 walk-cache key below so palette-distinct invocations
+    // don't share a cache slot.
 
     let mc: Vec<(u8, u32)> = model_changes
         .chunks_exact(2)
@@ -9120,7 +9156,14 @@ pub async fn fetch_entity_animation_keyframes(
     let source = global_source::global_source();
     if (setup_id >> 24) as u8 != 0x02 {
         let initial = [ResourceKey::new("eor/portal", setup_id)];
-        prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+        // F.37 walk-result dedup. Two concurrent
+        // `fetchEntityAnimationKeyframes` calls with the same raw
+        // `setup_id` (0x01-prefix GfxObj) now share the
+        // single-shot prefetch loop.
+        let cache_key =
+            prefetch::WalkCacheKey::new("fetchEntityAnimationKeyframes:raw")
+                .with_u32(setup_id);
+        prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, move |s| {
             let _ = triangulate_model_per_part_buckets(s, setup_id);
         })
         .await?;
@@ -9148,7 +9191,27 @@ pub async fn fetch_entity_animation_keyframes(
     }
     let mc_for_walk = mc.clone();
     let tc_for_walk = tc.clone();
-    prefetch::ensure_walk_prefetched(&source, &initial, move |s| {
+    // F.37 walk-result dedup. The cache key folds setup_id +
+    // motion + stance + every byte of model_changes/texture_changes
+    // so two NPCs spawned in the same tick with the same clothing
+    // template share a single prefetch loop. JS-side
+    // `AnimationCache.get(setup, mt, cmd, stance)` already dedups
+    // by the same coarse tuple, but F.37 captures the FULL
+    // discriminating arg set including substitutions — covering
+    // any caller bypassing the JS cache.
+    let mc_flat: Vec<u32> = mc.iter().flat_map(|(p, g)| [*p as u32, *g]).collect();
+    let tc_flat: Vec<u32> =
+        tc.iter().flat_map(|(p, o, n)| [*p as u32, *o, *n]).collect();
+    let cache_key = prefetch::WalkCacheKey::new("fetchEntityAnimationKeyframes")
+        .with_u32(setup_id)
+        .with_u32(mtable_id)
+        .with_u32(motion_command)
+        .with_u32(stance)
+        .with_u32(palette_id)
+        .with_u32_slice(&mc_flat)
+        .with_u32_slice(&tc_flat)
+        .with_u32_slice(&palette_subs_flat);
+    prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, move |s| {
         // Touch rest-pose triangulation (warms substituted GfxObjs)
         // and the cycle frames (warms Animation + chained Anim parts).
         let _ = triangulate_setup_model_per_part(

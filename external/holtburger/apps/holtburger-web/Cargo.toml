@@ -89,3 +89,13 @@ wasm-bindgen-futures = "0.4"
 [dev-dependencies]
 holtburger-dat = { workspace = true }
 holtburger-common = { workspace = true }
+# F.37 (2026-05-14) — native tests for `walk_dedup::WalkDedupMapT`
+# need a tokio runtime + the `futures` join_all combinator. The
+# wasm32 build already pulls these via the cfg(wasm32)
+# `[target.cfg(wasm32)].dependencies` block above; dev-dependencies
+# is the native-test mirror. `time` enables `tokio::time::sleep`
+# for the overlap-window proof; `rt-multi-thread` is required for
+# `#[tokio::test]`'s default runtime, though our tests are
+# single-task by design (RefCell-backed dedup map is `!Send`).
+tokio = { workspace = true, features = ["rt", "macros", "time", "sync"] }
+futures = { workspace = true }
