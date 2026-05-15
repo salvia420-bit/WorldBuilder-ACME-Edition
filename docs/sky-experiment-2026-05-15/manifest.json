@@ -1,0 +1,93 @@
+{
+  "run_tag": "skyexpmp6fvs88",
+  "date": "2026-05-15T04:52:06.047Z",
+  "time_of_day": 0.1,
+  "camera_pitch_deg": 30,
+  "camera_yaw_deg": 0,
+  "shots": [
+    {
+      "name": "01-baseline.png",
+      "opacity": 1,
+      "transparent": false,
+      "depthWrite": true,
+      "skyMode": "default",
+      "desc": "baseline — dome opaque (uOpacity=1.0, transparent=false). Default sky rendering preserved.",
+      "domeState": {
+        "skyMode": "default",
+        "skyOpacity": 1,
+        "transparent": false,
+        "depthWrite": true,
+        "uOpacityUniform": 1,
+        "celestialBakes": 0,
+        "celestialMeshCount": 0
+      },
+      "debugState": {
+        "clearAlpha": 1,
+        "autoClear": true,
+        "wasSkyRenderedLastFrame": true,
+        "domeMatTransparent": false,
+        "domeMatVisible": true,
+        "domeMatOpacity": 1,
+        "domeMatUOpacity": 1,
+        "skySceneChildCount": 1
+      },
+      "bytes": 314332
+    },
+    {
+      "name": "02-experiment-50pct.png",
+      "opacity": 0.5,
+      "transparent": true,
+      "depthWrite": false,
+      "skyMode": "experiment",
+      "desc": "experiment — gradient dome at 50% alpha. Equivalent to ?skyMode=experiment URL flag. Celestials overlay through the now-translucent dome onto the sky pass's framebuffer-clear color.",
+      "domeState": {
+        "skyMode": "experiment",
+        "skyOpacity": 0.5,
+        "transparent": true,
+        "depthWrite": false,
+        "uOpacityUniform": 0.5,
+        "celestialBakes": 17,
+        "celestialMeshCount": 30
+      },
+      "debugState": {
+        "clearAlpha": 1,
+        "autoClear": true,
+        "wasSkyRenderedLastFrame": true,
+        "domeMatTransparent": true,
+        "domeMatVisible": true,
+        "domeMatOpacity": 1,
+        "domeMatUOpacity": 0.5,
+        "skySceneChildCount": 1
+      },
+      "bytes": 165356
+    },
+    {
+      "name": "03-experiment-25pct.png",
+      "opacity": 0.25,
+      "transparent": true,
+      "depthWrite": false,
+      "skyMode": "experiment",
+      "desc": "experiment — gradient dome at 25% alpha. Equivalent to ?skyMode=experiment&skyAlpha=0.25. Stronger see-through.",
+      "domeState": {
+        "skyMode": "experiment",
+        "skyOpacity": 0.25,
+        "transparent": true,
+        "depthWrite": false,
+        "uOpacityUniform": 0.25,
+        "celestialBakes": 17,
+        "celestialMeshCount": 30
+      },
+      "debugState": {
+        "clearAlpha": 1,
+        "autoClear": true,
+        "wasSkyRenderedLastFrame": true,
+        "domeMatTransparent": true,
+        "domeMatVisible": true,
+        "domeMatOpacity": 1,
+        "domeMatUOpacity": 0.25,
+        "skySceneChildCount": 1
+      },
+      "bytes": 165356
+    }
+  ]
+}
