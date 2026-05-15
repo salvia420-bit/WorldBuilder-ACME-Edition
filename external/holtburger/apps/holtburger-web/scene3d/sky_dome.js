@@ -172,6 +172,7 @@ out vec4 outColor;
 
 uniform vec3 uHorizonColor;
 uniform vec3 uZenithColor;
+uniform float uOpacity;
 
 void main() {
   // World-up component of the inside-facing normal. y=0 → horizon,
@@ -180,7 +181,7 @@ void main() {
   float h = clamp(vWorldNormal.y, 0.0, 1.0);
   float t = smoothstep(0.0, 0.5, h);
   vec3 c = mix(uHorizonColor, uZenithColor, t);
-  outColor = vec4(c, 1.0);
+  outColor = vec4(c, uOpacity);
 }
 `;
 
@@ -355,10 +356,37 @@ export class SkyDome {
     const zenithColor = new THREE.Color(0x60 / 255, 0x70 / 255, 0x80 / 255);
     this._horizonColor = horizonColor;
     this._zenithColor = zenithColor;
+    // Phase Sky-K experiment (2026-05-15): parse `?skyMode=experiment`
+    // + `?skyAlpha=<0..1>` to drive the dome's fragment-shader alpha
+    // for the moon-overlay eye-test. When `skyMode` is absent or not
+    // "experiment", the dome renders opaque (uOpacity=1.0) and
+    // material.transparent stays false — preserving every existing
+    // capture's pixel output. When set, the dome reads `skyAlpha`
+    // (default 0.5), enables transparent + disables depthWrite so the
+    // sky pass shows the framebuffer-clear color through the dome.
+    let initialOpacity = 1.0;
+    let experimentMode = false;
+    try {
+      if (typeof window !== "undefined" && window.location?.search) {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("skyMode") === "experiment") {
+          experimentMode = true;
+          const rawAlpha = parseFloat(params.get("skyAlpha") || "0.5");
+          if (Number.isFinite(rawAlpha)) {
+            initialOpacity = Math.min(1.0, Math.max(0.0, rawAlpha));
+          } else {
+            initialOpacity = 0.5;
+          }
+        }
+      }
+    } catch (_) { /* no-window in worker context */ }
+    this._skyMode = experimentMode ? "experiment" : "default";
+    this._skyOpacity = initialOpacity;
     const domeMat = new THREE.ShaderMaterial({
       uniforms: {
         uHorizonColor: { value: horizonColor.clone() },
         uZenithColor: { value: zenithColor.clone() },
+        uOpacity: { value: initialOpacity },
       },
       vertexShader: DOME_VERTEX_GLSL,
       fragmentShader: DOME_FRAGMENT_GLSL,
@@ -392,10 +420,26 @@ export class SkyDome {
       fog: false, // exempt from fog (and skyScene.fog is null anyway)
     });
     domeMat.name = "sky-dome-gradient";
+    // Phase Sky-K experiment (2026-05-15): when `?skyMode=experiment`
+    // is active, flip the dome into alpha-blended mode. Without this
+    // the rasterizer ignores the fragment shader's alpha output (a
+    // ShaderMaterial with `transparent=false` discards the alpha
+    // channel during framebuffer blend). The dome already has
+    // `depthTest=true + depthWrite=true` for the Sky-I-C swiftshader
+    // workaround — flip depthWrite OFF so the celestials behind the
+    // dome aren't depth-occluded by the now-translucent gradient.
+    if (experimentMode) {
+      domeMat.transparent = true;
+      domeMat.depthWrite = false;
+    }
     this.dome = new THREE.Mesh(domeGeom, domeMat);
     this.dome.name = "sky_dome";
     this.dome.renderOrder = -1;
-    this.dome.userData = { sky_dome: true };
+    this.dome.userData = {
+      sky_dome: true,
+      sky_mode: this._skyMode,
+      sky_opacity: this._skyOpacity,
+    };
     // The dome lives in skyCell — but since skyCell carries the
     // `-π/2` rotation around X (matching worldRoot's AC-Z-up
     // correction), the dome rotates with it. That's fine — the dome
@@ -449,6 +493,49 @@ export class SkyDome {
         "window.__skyDebugLastDump"
       );
       window.__skyDebugLastDump = null;
+    }
+    // Phase Sky-K experiment (2026-05-15): announce experiment mode +
+    // expose a runtime setter on window for capture-driven A/B alpha
+    // sweeps. The setter is no-op when the dome was built without
+    // experiment mode (we don't retro-flip `transparent` / `depthWrite`
+    // — that's a deliberate construction-time decision so default
+    // captures stay pixel-identical).
+    if (experimentMode && typeof window !== "undefined") {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[sky-k/experiment] ?skyMode=experiment active — dome opacity = ${initialOpacity.toFixed(2)} ` +
+        `(transparent=true, depthWrite=false). ?skyAlpha=<0..1> to override.`
+      );
+      // Capture scripts can call window.__setSkyOpacity(0.25) etc to
+      // re-shoot without reloading the page.
+      const self = this;
+      window.__setSkyOpacity = (alpha) => {
+        const clamped = Math.min(1.0, Math.max(0.0, Number(alpha) || 0));
+        self.setExperimentOpacity(clamped);
+        return clamped;
+      };
+    }
+  }
+
+  /**
+   * Phase Sky-K experiment (2026-05-15): runtime setter for the
+   * gradient dome's fragment-shader alpha. Only effective when
+   * the dome was constructed with `?skyMode=experiment` — otherwise
+   * the dome's material has `transparent=false` and the alpha
+   * channel is discarded at framebuffer blend. No-op in default
+   * mode so the production capture pixel budget stays intact.
+   *
+   * @param {number} alpha - clamped to [0, 1]
+   */
+  setExperimentOpacity(alpha) {
+    if (this._skyMode !== "experiment") return;
+    const a = Math.min(1.0, Math.max(0.0, Number(alpha) || 0));
+    this._skyOpacity = a;
+    if (this.dome?.material?.uniforms?.uOpacity) {
+      this.dome.material.uniforms.uOpacity.value = a;
+    }
+    if (this.dome?.userData) {
+      this.dome.userData.sky_opacity = a;
     }
   }
 

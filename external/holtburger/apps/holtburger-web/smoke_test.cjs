@@ -5618,6 +5618,50 @@ try {
         );
     }
 
+    // Phase Sky-K experimental source-pattern — `?skyMode=experiment`
+    // URL flag must be parsed in `sky_dome.js` and must wire to a
+    // `uOpacity` uniform on the gradient dome's ShaderMaterial. A
+    // separate `?skyAlpha=<0..1>` overrides the default 0.5 opacity.
+    // The flag is OPT-IN; default rendering (uOpacity=1.0, dome
+    // transparent=false) is preserved so existing capture pixel
+    // outputs stay byte-stable.
+    try {
+        const fs = require("fs");
+        const skySrc = fs.readFileSync(
+            __dirname + "/scene3d/sky_dome.js",
+            "utf8"
+        );
+        const parsesSkyMode = /skyMode["']\s*\)\s*===\s*["']experiment/.test(skySrc);
+        const parsesSkyAlpha = /skyAlpha/.test(skySrc) && /parseFloat/.test(skySrc);
+        const hasUOpacityUniform = /uOpacity\s*:\s*\{\s*value\s*:/.test(skySrc);
+        const fragShaderReadsOpacity = /uniform\s+float\s+uOpacity/.test(skySrc)
+            && /outColor\s*=\s*vec4\([^)]*uOpacity/.test(skySrc);
+        const hasRuntimeSetter = /setExperimentOpacity\s*\(/.test(skySrc)
+            && /window\.__setSkyOpacity\s*=/.test(skySrc);
+        const flipsTransparentOnExperiment =
+            /experimentMode/.test(skySrc) &&
+            /domeMat\.transparent\s*=\s*true/.test(skySrc) &&
+            /domeMat\.depthWrite\s*=\s*false/.test(skySrc);
+        check(
+            "Phase Sky-K: sky_dome.js parses ?skyMode=experiment + ?skyAlpha + drives uOpacity uniform",
+            parsesSkyMode &&
+                parsesSkyAlpha &&
+                hasUOpacityUniform &&
+                fragShaderReadsOpacity &&
+                hasRuntimeSetter &&
+                flipsTransparentOnExperiment,
+            `skyMode=${parsesSkyMode} skyAlpha=${parsesSkyAlpha} ` +
+                `uniform=${hasUOpacityUniform} shader=${fragShaderReadsOpacity} ` +
+                `setter=${hasRuntimeSetter} flips=${flipsTransparentOnExperiment}`
+        );
+    } catch (e) {
+        check(
+            "Phase Sky-K: sky_dome.js parses ?skyMode=experiment + ?skyAlpha + drives uOpacity uniform",
+            false,
+            String(e).slice(0, 160)
+        );
+    }
+
     console.log("=========================");
     if (failed === 0) {
         console.log("PASS: all smoke checks green.");
