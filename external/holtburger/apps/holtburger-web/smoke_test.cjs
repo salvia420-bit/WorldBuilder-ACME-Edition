@@ -5662,6 +5662,78 @@ try {
         );
     }
 
+    // Clouds-D — `?clouds=on` URL flag must construct a CloudOverlay
+    // alongside SkyDome and wire it for per-frame tick + render. Source
+    // patterns:
+    //   - index.html importmap points @takram/three-clouds at the local
+    //     build (so brunetonStubs.glsl is active, not the CDN bundle)
+    //   - scene3d/index.js imports CloudOverlay + parses `?clouds=on`
+    //     + calls `skyDome.setCloudOverlay(...)` when on
+    //   - scene3d/sky_dome.js has `setCloudOverlay`, calls
+    //     `cloudOverlay.tick()` in tick, and `preRender` + `renderOverlay`
+    //     in renderSkyPass
+    //   - scene3d/cloud_overlay.js + cloud_volume.js exist with the
+    //     expected exports
+    //
+    // Plumbing is the load-bearing gate for swiftshader CI. Visible
+    // clouds need a real GPU eye-test — see Clouds-D-mini memory for
+    // the swiftshader 3D-texture zero-bake caveat.
+    try {
+        const fs = require("fs");
+        const idxHtml = fs.readFileSync(__dirname + "/index.html", "utf8");
+        const idxJs = fs.readFileSync(__dirname + "/scene3d/index.js", "utf8");
+        const sdJs = fs.readFileSync(__dirname + "/scene3d/sky_dome.js", "utf8");
+        const coExists = fs.existsSync(__dirname + "/scene3d/cloud_overlay.js");
+        const cvExists = fs.existsSync(__dirname + "/scene3d/cloud_volume.js");
+
+        const importmapLocal = /["']@takram\/three-clouds["']\s*:\s*["']\.\/vendor\/takram-three-clouds\/build\/index\.js/.test(idxHtml);
+        const idxImportsCO = /import\s*\{\s*CloudOverlay\s*\}\s*from\s*["']\.\/cloud_overlay\.js/.test(idxJs);
+        const idxParsesFlag = /URLSearchParams\(window\.location\.search\)\.get\(["']clouds["']\)/.test(idxJs)
+            && /cloudsFlag\s*===\s*["']on["']/.test(idxJs);
+        const idxConstructsCO = /new\s+CloudOverlay\s*\(\s*\{/.test(idxJs)
+            && /skyDome\.setCloudOverlay\(/.test(idxJs);
+
+        const sdHasSetter = /setCloudOverlay\s*\(/.test(sdJs);
+        const sdTickCalls = /this\.cloudOverlay\.tick\(\)/.test(sdJs);
+        const sdRenderPreCalls = /this\.cloudOverlay\.preRender\(renderer\)/.test(sdJs);
+        const sdRenderOverlayCalls = /this\.cloudOverlay\.renderOverlay\(renderer\)/.test(sdJs);
+
+        let coExportsOK = false;
+        let cvExportsOK = false;
+        if (coExists) {
+            const coSrc = fs.readFileSync(__dirname + "/scene3d/cloud_overlay.js", "utf8");
+            coExportsOK = /export\s+class\s+CloudOverlay/.test(coSrc)
+                && /preRender\s*\(/.test(coSrc)
+                && /renderOverlay\s*\(/.test(coSrc)
+                && /setSize\s*\(/.test(coSrc)
+                && /dispose\s*\(\)\s*\{/.test(coSrc);
+        }
+        if (cvExists) {
+            const cvSrc = fs.readFileSync(__dirname + "/scene3d/cloud_volume.js", "utf8");
+            cvExportsOK = /export\s+class\s+CloudVolume/.test(cvSrc)
+                && /tick\s*\(state/.test(cvSrc)
+                && /snapshotUniforms\s*\(/.test(cvSrc);
+        }
+
+        check(
+            "Clouds-D: importmap local build + ?clouds=on URL flag + CloudOverlay wired into SkyDome",
+            importmapLocal && idxImportsCO && idxParsesFlag && idxConstructsCO
+                && sdHasSetter && sdTickCalls && sdRenderPreCalls && sdRenderOverlayCalls
+                && coExportsOK && cvExportsOK,
+            `importmapLocal=${importmapLocal} idxImports=${idxImportsCO} ` +
+                `idxFlag=${idxParsesFlag} idxConstructs=${idxConstructsCO} ` +
+                `sdSetter=${sdHasSetter} sdTick=${sdTickCalls} ` +
+                `sdPre=${sdRenderPreCalls} sdOverlay=${sdRenderOverlayCalls} ` +
+                `coExports=${coExportsOK} cvExports=${cvExportsOK}`
+        );
+    } catch (e) {
+        check(
+            "Clouds-D: importmap local build + ?clouds=on URL flag + CloudOverlay wired into SkyDome",
+            false,
+            String(e).slice(0, 200)
+        );
+    }
+
     console.log("=========================");
     if (failed === 0) {
         console.log("PASS: all smoke checks green.");

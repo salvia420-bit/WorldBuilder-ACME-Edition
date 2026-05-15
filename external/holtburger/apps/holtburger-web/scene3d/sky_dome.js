@@ -944,6 +944,18 @@ export class SkyDome {
    * object rotation, material updates); `renderSkyPass` handles the
    * actual draw call.
    */
+  /**
+   * Clouds-D: attach a CloudOverlay so the per-frame tick + render
+   * passes drive cloud raymarch and composite. Null is fine — the
+   * cloud-volume integration is opt-in via `?clouds=on` in
+   * scene3d/index.js.
+   *
+   * @param {import('./cloud_overlay.js').CloudOverlay|null} cloudOverlay
+   */
+  setCloudOverlay(cloudOverlay) {
+    this.cloudOverlay = cloudOverlay;
+  }
+
   tick(_dt, camera) {
     this._tickCount += 1;
 
@@ -975,6 +987,14 @@ export class SkyDome {
       }
     }
     this._lastIsIndoor = isIndoor;
+
+    // Clouds-D: pull a fresh SkyState into cloud uniforms even when
+    // indoor (no GPU work, just object copies). renderSkyPass already
+    // gates the actual cloud raymarch + composite on `!isIndoor`.
+    if (this.cloudOverlay) {
+      this.cloudOverlay.tick();
+    }
+
     if (isIndoor) {
       this._indoorTickCount += 1;
       // Even when we'll skip rendering, walking the rotators is cheap
@@ -1548,6 +1568,15 @@ export class SkyDome {
     // taking the render step).
     this.syncSkyCamera(mainCamera);
 
+    // Clouds-D: bake the cloud raymarch into the CloudsPass output
+    // buffer BEFORE clearing the framebuffer. The bake renders into
+    // its own RTs (procedural noise + shadow + cloud) so the main
+    // framebuffer is untouched. preRender saves/restores the
+    // renderer's render-target binding.
+    if (this.cloudOverlay) {
+      this.cloudOverlay.preRender(renderer);
+    }
+
     // Clear color + depth, then render the sky. After this call the
     // framebuffer has sky pixels and the depth buffer has sky depths.
     // The caller will then clear depth (preserving sky color paint)
@@ -1557,6 +1586,17 @@ export class SkyDome {
     renderer.autoClear = true; // clears color+depth at render start
     renderer.render(this.skyScene, this.skyCamera);
     renderer.autoClear = prevAutoClear;
+
+    // Clouds-D: composite the cloud buffer over the just-painted sky
+    // pixels via a fullscreen overlay quad. Runs with depthTest=false
+    // + transparent so cloud-free pixels keep the underlying sky
+    // color, and depth-aware-occlusion of clouds by world geometry
+    // happens implicitly when the caller's world pass overpaints
+    // with depthTest=LEQUAL (clouds at sky-depth lose to closer world).
+    if (this.cloudOverlay) {
+      this.cloudOverlay.renderOverlay(renderer);
+    }
+
     this._lastSkyRendered = true;
   }
 
@@ -1765,6 +1805,10 @@ export class SkyDome {
     this.skyObjectMeshes.clear();
     if (this.skyCell) {
       this.skyScene.remove(this.skyCell);
+    }
+    if (this.cloudOverlay) {
+      this.cloudOverlay.dispose();
+      this.cloudOverlay = null;
     }
   }
 }

@@ -45,6 +45,7 @@ import { CameraSwitcher, createOrthoCamera } from "./camera.js";
 import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
 import { SkyLightingController } from "./sky_lighting.js";
 import { SkyDome } from "./sky_dome.js";
+import { CloudOverlay } from "./cloud_overlay.js";
 import { resolveSkyAssets } from "./sky_assets.js";
 import {
   acToThree,
@@ -681,6 +682,12 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     orthoCamera.right = halfW;
     orthoCamera.updateProjectionMatrix();
     if (ssaoPipeline) ssaoPipeline.setSize(cw, ch);
+    // Clouds-D: keep the cloud effect's internal RTs in sync with the
+    // canvas. The CloudsEffect resolution-scale machinery handles the
+    // ratio internally.
+    if (liveScene3d?.cloudOverlay) {
+      liveScene3d.cloudOverlay.setSize(cw, ch);
+    }
   };
   window.addEventListener("resize", onResize);
 
@@ -1024,6 +1031,11 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // and `skyLightingController._lastState.ambColorArgb` through
     // this ref).
     skyDome: null,
+    // Clouds-D — volumetric cloud overlay (opt-in via ?clouds=on).
+    // Owns the takram CloudsEffect + fullscreen composite quad.
+    // null unless the URL flag is set; see CloudOverlay construction
+    // block after SkyDome init below.
+    cloudOverlay: null,
     // Workstream Sky-E — resolved SkyObject bakes (Map<id, bake>).
     // Populated by `resolveSkyAssets` kicked off below once Sky-B's
     // populateSkyDescFromRegion lands. Sky-D reads through this when
@@ -1215,6 +1227,41 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
       "[sky-d] SkyDome attached; horizon←skyBackgroundColor, " +
         "zenith←skyLightingController._lastState.ambColorArgb"
     );
+
+    // Clouds-D — opt-in volumetric clouds via `?clouds=on`. Default
+    // off so the existing parametric skybox is the baseline. When on,
+    // construct a CloudOverlay that wraps `CloudsEffect` + the
+    // fullscreen overlay scene, and hand it to SkyDome for per-frame
+    // tick + render integration.
+    //
+    // Visible clouds need a real GPU — headless swiftshader silently
+    // zero-bakes the 3D textures the cloud raymarch samples (see
+    // project_holtburger_clouds_d_mini_done_2026-05-15). Plumbing is
+    // testable in CI; visual output requires hardware.
+    try {
+      // eslint-disable-next-line no-undef
+      const cloudsFlag = new URLSearchParams(window.location.search).get("clouds");
+      if (cloudsFlag === "on") {
+        const cloudOverlay = new CloudOverlay({
+          camera,
+          sessionHandleAccessor: () =>
+            // eslint-disable-next-line no-undef
+            (typeof window !== "undefined" ? window.__sessionHandle : null) ??
+            sessionHandle ??
+            null,
+        });
+        skyDome.setCloudOverlay(cloudOverlay);
+        liveScene3d.cloudOverlay = cloudOverlay;
+        // eslint-disable-next-line no-console
+        console.log(
+          "[clouds-d] CloudOverlay wired into SkyDome (?clouds=on). " +
+            "Visible clouds require a real GPU — swiftshader output is uniform."
+        );
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[clouds-d] CloudOverlay init failed:", e);
+    }
 
     // Visual-fidelity Phase 3.2 — wire the SSAO composer NOW that
     // skyScene + skyCamera exist. Gated on `quality.flags.ssao`. The
