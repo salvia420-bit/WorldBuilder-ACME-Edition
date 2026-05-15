@@ -4692,7 +4692,19 @@ pub async fn fetch_entity_surfaces_pixels(
     }
     let dids_for_walk = surface_dids.clone();
     let sp_for_walk = sp.clone();
-    prefetch::ensure_walk_prefetched(&source, &initial, |s| {
+    // F.37 walk-result dedup. Two entities sharing the same
+    // (DID-set, base_palette_id, sub_palettes) tuple now share a
+    // single prefetch loop. The sub-palette triples are folded
+    // into the cache key alongside the DID list.
+    let sp_flat: Vec<u32> = sp
+        .iter()
+        .flat_map(|(id, off, len)| [*id, *off as u32, *len as u32])
+        .collect();
+    let cache_key = prefetch::WalkCacheKey::new("fetchEntitySurfacesPixels")
+        .with_u32(base_palette_id)
+        .with_u32_slice(&surface_dids)
+        .with_u32_slice(&sp_flat);
+    prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, move |s| {
         for &id in &dids_for_walk {
             let _ = fetch_entity_surface_pixels_impl(s, id, base_palette_id, &sp_for_walk);
         }
