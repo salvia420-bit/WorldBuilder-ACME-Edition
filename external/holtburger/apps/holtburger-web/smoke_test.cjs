@@ -2046,6 +2046,126 @@ check(
 
 // === end Phase 6 Step F =============================================
 
+// === Phase F.D — validate-event-completeness =====================
+// Source-pattern gate. Mirrors the Phase E pattern: we don't run
+// the Playwright validator inside the smoke (it takes ~30 s), we
+// just assert the validator exists and contains the load-bearing
+// logic that distinguishes it from a stub:
+//   1. Calls `liveScene3d.snapshotEventLog()` (Phase F.C contract
+//      — the validator reads through THIS path).
+//   2. Reads `/dist/events/*.events.jsonl` (Phase F.E staged
+//      manifests, frozen at commit 0d2de4b).
+//   3. Diffs with method-doc tolerances: continuous 1:1, prob
+//      ±50%, oneoff exact, physics ±50ms.
+//   4. Surfaces per-source `missing` + `spurious` + `matched`
+//      counts (NOT just absolute totals).
+//   5. Writes machine + human reports at
+//      <out>/event-completeness-report.{json,md}.
+//
+// Without these checks a future refactor could rip out the
+// snapshotEventLog read-path or flip the diff to absolute totals
+// and silently regress the channel-by-channel attribution.
+//
+// Placement: BEFORE the async IIFE so this lands even when --fast
+// mode skips manifest setup + the deeper wasm-driven smoke checks
+// trip the init_resource_source panic. The F.D source-pattern
+// gates are pure file reads — no wasm dependency.
+try {
+    const validatorPath = __dirname + "/validate_event_completeness.cjs";
+    const exists = fs.existsSync(validatorPath);
+    let srcOk = false, detail = "";
+    if (exists) {
+        const src = fs.readFileSync(validatorPath, "utf8");
+        const callsSnapshotLog =
+            /\bsnapshotEventLog\s*\(\s*\)/.test(src);
+        const readsEventsDist =
+            /\/dist\/events\//.test(src) ||
+            /['"]events['"]\s*,\s*[`'"]/.test(src);
+        const usesPhysicsToleranceMs =
+            /\b50\b.*tolerance|tolerance.*\b50\b|\b50\s*ms/.test(src) &&
+            /±50/.test(src);
+        const usesProbabilisticTolerance =
+            /\b0\.5\b/.test(src) && /\b1\.5\b/.test(src) &&
+            /probabilistic/i.test(src);
+        const surfacesPerSourceCounts =
+            /\bmatched\b/.test(src) &&
+            /\bmissing\b/.test(src) &&
+            /\bspurious\b/.test(src);
+        const writesBothReports =
+            /event-completeness-report\.json/.test(src) &&
+            /event-completeness-report\.md/.test(src);
+        const supportsProbeArg =
+            /--probe-s/.test(src) || /probeSeconds/.test(src);
+        const supportsStrictArg = /--strict/.test(src);
+        const exercisesFourSources =
+            /OneOff/.test(src) &&
+            /AmbientRuntime/.test(src) &&
+            /PhysicsScriptHook/.test(src) &&
+            /GameMessageSound/.test(src);
+        srcOk = callsSnapshotLog &&
+            readsEventsDist &&
+            usesPhysicsToleranceMs &&
+            usesProbabilisticTolerance &&
+            surfacesPerSourceCounts &&
+            writesBothReports &&
+            supportsProbeArg &&
+            supportsStrictArg &&
+            exercisesFourSources;
+        detail =
+            `snapshotLog=${callsSnapshotLog} eventsDist=${readsEventsDist} ` +
+            `physTol=${usesPhysicsToleranceMs} probTol=${usesProbabilisticTolerance} ` +
+            `counts=${surfacesPerSourceCounts} reports=${writesBothReports} ` +
+            `probeArg=${supportsProbeArg} strictArg=${supportsStrictArg} ` +
+            `4sources=${exercisesFourSources}`;
+    } else {
+        detail = `missing at ${validatorPath}`;
+    }
+    check(
+        "Phase F.D: validate_event_completeness.cjs exists at apps/holtburger-web/",
+        exists,
+        exists ? `bytes=${fs.statSync(validatorPath).size}` : detail
+    );
+    check(
+        "Phase F.D: validator calls snapshotEventLog() + reads /dist/events/ + diffs with method-doc tolerances",
+        srcOk,
+        detail
+    );
+} catch (e) {
+    check(
+        "Phase F.D: validate_event_completeness.cjs exists at apps/holtburger-web/",
+        false,
+        String(e).slice(0, 120)
+    );
+    check(
+        "Phase F.D: validator calls snapshotEventLog() + reads /dist/events/ + diffs with method-doc tolerances",
+        false,
+        String(e).slice(0, 120)
+    );
+}
+
+// Phase F.D.b — the validator depends on the F.E staged event
+// manifests being present. If a future refactor relocates the
+// `events/` dir under `dist/` (without updating the validator's
+// path), this gate surfaces the regression at smoke time.
+try {
+    const DIST_V2 = "/mnt/wbterminal1/holtburger-dist-v2";
+    const stagedManifest = path.join(DIST_V2, "events", "0xA9B4.events.jsonl");
+    const stagedSha = path.join(DIST_V2, "events", "event-bake-source.sha256");
+    const manifestOk = fs.existsSync(stagedManifest);
+    const shaOk = fs.existsSync(stagedSha);
+    check(
+        "Phase F.D dep: F.E staged event manifest present at dist/events/0xA9B4.events.jsonl + event-bake-source.sha256",
+        manifestOk && shaOk,
+        `manifest=${manifestOk} sha256=${shaOk}`
+    );
+} catch (e) {
+    check(
+        "Phase F.D dep: F.E staged event manifest present at dist/events/0xA9B4.events.jsonl + event-bake-source.sha256",
+        false,
+        String(e).slice(0, 120)
+    );
+}
+
 
 (async () => {
     // Phase 5.0b — pre-bake a manifest+shards+boot tree from the
