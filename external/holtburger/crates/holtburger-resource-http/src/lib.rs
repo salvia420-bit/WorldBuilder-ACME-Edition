@@ -31,15 +31,27 @@
 //! methods — same approach as the spike doc §8 step 4 "default to
 //! (b) for the spike if the choice isn't obvious."
 
-#![cfg(target_arch = "wasm32")]
+// The bulk of this crate is wasm32-only because every HTTP path goes
+// through `web_sys::fetch`. The `inflight` URL-fetch dedup primitive
+// (F.35) is target-agnostic so its unit tests can run natively under
+// `cargo test`. Everything else is gated below.
 
+pub(crate) mod inflight;
+
+#[cfg(target_arch = "wasm32")]
 pub(crate) mod http;
+#[cfg(target_arch = "wasm32")]
 mod manifest_source;
+#[cfg(target_arch = "wasm32")]
 mod manifest_source_v1;
+#[cfg(target_arch = "wasm32")]
 mod source;
 
+#[cfg(target_arch = "wasm32")]
 pub use http::{HttpError, fetch_bytes, join_url};
+#[cfg(target_arch = "wasm32")]
 pub use manifest_source::{
     ManifestConnectError, ManifestResourceSource, PrefetchError, RecordingSource,
 };
+#[cfg(target_arch = "wasm32")]
 pub use source::{ConnectError, HttpResourceSource};

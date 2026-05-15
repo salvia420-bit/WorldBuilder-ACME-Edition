@@ -16,13 +16,23 @@ description = "HTTP-backed ResourceSource for holtburger-dat — wasm32-only. Fe
 [dependencies]
 holtburger-dat = { workspace = true }
 holtburger-manifest = { workspace = true }
+# `futures` is needed unconditionally because the `inflight` URL-fetch
+# dedup primitive (F.35) uses `futures::future::Shared` and is
+# target-agnostic so its native tests run under cargo test. Browser
+# `fetch_bytes` futures still only compile under wasm32 — see the
+# target-gated `[target.'cfg(target_arch="wasm32")'.dependencies]`
+# block below for the web-sys/wasm-bindgen deps.
+futures = { workspace = true }
+
+[dev-dependencies]
+# Native test runner for `inflight` dedup tests.
+tokio = { workspace = true, features = ["rt", "macros", "time", "rt-multi-thread", "sync"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 log = { workspace = true }
-futures = { workspace = true }
 serde_json = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]

@@ -21,9 +21,10 @@ use holtburger_dat::{
 };
 use holtburger_manifest::{Manifest, key_for_resource, sha256_hex};
 
-use crate::http::{fetch_bytes, join_url};
+use crate::http::{HttpError, fetch_bytes, join_url};
+use crate::inflight::InflightMap;
 use crate::manifest_source::{
-    ManifestConnectError, OwnedKey, PrefetchError, owned, url_dirname,
+    ManifestConnectError, OwnedKey, PrefetchError, arc_to_http_error, owned, url_dirname,
 };
 
 /// v1 manifest source. Reads the full `shards` map at connect time
@@ -35,6 +36,11 @@ pub struct ManifestResourceSourceV1 {
     boot: HbaReader<Vec<u8>>,
     shards: Arc<Mutex<HashMap<OwnedKey, Vec<u8>>>>,
     base_url: String,
+    /// F.35: in-flight URL-fetch dedup map. See V2Source for
+    /// rationale; the wiring is the same on v1's prefetch path
+    /// even though v1 is deprecated, to keep behaviour consistent
+    /// across the one-release-cycle drain window.
+    inflight: Arc<InflightMap<HttpError>>,
 }
 
 impl ManifestResourceSourceV1 {
@@ -65,6 +71,7 @@ impl ManifestResourceSourceV1 {
             boot,
             shards: Arc::new(Mutex::new(HashMap::new())),
             base_url,
+            inflight: Arc::new(InflightMap::new()),
         })
     }
 
@@ -95,9 +102,22 @@ impl ManifestResourceSourceV1 {
             return Ok(());
         }
 
+        // F.35: dedup via the in-flight URL map. Concurrent prefetch
+        // calls overlapping on a shard URL latch onto a single
+        // underlying `fetch_bytes` resolution.
         let fetches = to_fetch.iter().map(|(_, _, url)| {
             let url = url.clone();
-            async move { fetch_bytes(&url).await }
+            let inflight = self.inflight.clone();
+            async move {
+                let url_for_fetch = url.clone();
+                let result = inflight
+                    .get_or_fetch(&url, move || {
+                        let u = url_for_fetch.clone();
+                        async move { fetch_bytes(&u).await }
+                    })
+                    .await;
+                result.map_err(arc_to_http_error)
+            }
         });
         let bytes_vec = futures::future::try_join_all(fetches)
             .await

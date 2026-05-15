@@ -56,6 +56,7 @@ use holtburger_manifest::{
 };
 
 use crate::http::{HttpError, fetch_bytes, join_url};
+use crate::inflight::InflightMap;
 use crate::manifest_source_v1::ManifestResourceSourceV1;
 
 /// Failure surfaces for [`ManifestResourceSource::connect`].
@@ -194,6 +195,18 @@ pub struct V2Source {
     catalogs: Arc<Mutex<HashMap<String, NamespaceCatalog>>>,
     shards: Arc<Mutex<HashMap<OwnedKey, Vec<u8>>>>,
     base_url: String,
+    /// F.35: in-flight URL-fetch dedup map. When N concurrent
+    /// `prefetch(keys)` calls overlap on a shard URL or catalog URL,
+    /// all waiters latch onto a single underlying `fetch_bytes`
+    /// resolution. Eliminates the 13-second-spawn drain (D-polish /
+    /// Phase E / F.D) caused by 119 callers each independently
+    /// firing redundant copies of ~50 shared URLs through the
+    /// browser's 6-connection cap.
+    ///
+    /// `Arc<InflightMap>` so the underlying map outlives any single
+    /// `prefetch` call (multiple concurrent `prefetch` invocations
+    /// can be in flight simultaneously, each holding a reference).
+    inflight: Arc<InflightMap<HttpError>>,
 }
 
 impl ManifestResourceSource {
@@ -321,6 +334,7 @@ impl V2Source {
             catalogs: Arc::new(Mutex::new(HashMap::new())),
             shards: Arc::new(Mutex::new(HashMap::new())),
             base_url,
+            inflight: Arc::new(InflightMap::new()),
         })
     }
 
@@ -372,22 +386,44 @@ impl V2Source {
                         .expect("template present; checked above");
                     let full_url = join_url(&self.base_url_with_slash(), &url);
                     let ns = ns.clone();
+                    let inflight = self.inflight.clone();
                     async move {
-                        match fetch_bytes(&full_url).await {
+                        // F.35: dedup via the per-URL in-flight map.
+                        // Concurrent prefetch calls for the same
+                        // namespace catalog all latch onto a single
+                        // fetch resolution.
+                        let result = {
+                            let full_url_for_fetch = full_url.clone();
+                            inflight
+                                .get_or_fetch(&full_url, move || {
+                                    let u = full_url_for_fetch.clone();
+                                    async move { fetch_bytes(&u).await }
+                                })
+                                .await
+                        };
+                        match result {
                             Ok(bytes) => Ok::<(String, Option<Vec<u8>>), PrefetchError>((
                                 ns,
                                 Some(bytes),
                             )),
-                            // 404 on a declared namespace's catalog
-                            // means the namespace is empty after
-                            // bake-time pruning — treat as
-                            // "no catalog, fall through to
-                            // convention URLs".
-                            Err(HttpError::Http { status: 404, .. }) => Ok((ns, None)),
-                            Err(e) => Err(PrefetchError::CatalogFetch {
-                                namespace: ns,
-                                source: e,
-                            }),
+                            Err(arc_err) => {
+                                // 404 on a declared namespace's catalog
+                                // means the namespace is empty after
+                                // bake-time pruning — treat as
+                                // "no catalog, fall through to
+                                // convention URLs".
+                                if matches!(
+                                    arc_err.as_ref(),
+                                    HttpError::Http { status: 404, .. }
+                                ) {
+                                    Ok((ns, None))
+                                } else {
+                                    Err(PrefetchError::CatalogFetch {
+                                        namespace: ns,
+                                        source: arc_to_http_error(arc_err),
+                                    })
+                                }
+                            }
                         }
                     }
                 });
@@ -475,16 +511,34 @@ impl V2Source {
             return Ok(());
         }
 
-        // Step D: parallel shard fetch. 404 maps to None for
-        // tolerate_404 tasks; other errors propagate.
+        // Step D: parallel shard fetch via the in-flight URL dedup
+        // map (F.35). 404 maps to None for tolerate_404 tasks; other
+        // errors propagate.
         let fetches = shard_tasks.iter().map(|task| {
             let url = task.url.clone();
             let tolerate_404 = task.tolerate_404;
+            let inflight = self.inflight.clone();
             async move {
-                match fetch_bytes(&url).await {
+                let result = {
+                    let url_for_fetch = url.clone();
+                    inflight
+                        .get_or_fetch(&url, move || {
+                            let u = url_for_fetch.clone();
+                            async move { fetch_bytes(&u).await }
+                        })
+                        .await
+                };
+                match result {
                     Ok(bytes) => Ok::<Option<Vec<u8>>, HttpError>(Some(bytes)),
-                    Err(HttpError::Http { status: 404, .. }) if tolerate_404 => Ok(None),
-                    Err(e) => Err(e),
+                    Err(arc_err) => {
+                        if matches!(arc_err.as_ref(), HttpError::Http { status: 404, .. })
+                            && tolerate_404
+                        {
+                            Ok(None)
+                        } else {
+                            Err(arc_to_http_error(arc_err))
+                        }
+                    }
                 }
             }
         });
@@ -590,6 +644,22 @@ pub(crate) fn url_dirname(url: &str) -> String {
     url.rsplit_once('/')
         .map(|(d, _)| d.to_owned())
         .unwrap_or_default()
+}
+
+/// Unwrap an `Arc<HttpError>` produced by the dedup primitive back
+/// into an owned `HttpError`. When this is the sole remaining strong
+/// reference (common case at error-propagation time), `try_unwrap`
+/// returns the inner error directly. When other waiters still hold
+/// clones, we fall back to a stringified representation via
+/// `HttpError::Network` so the structural variant of `PrefetchError`
+/// stays unchanged at the caller. The fallback path is rare in
+/// practice — concurrent waiters typically resolve and drop their
+/// `Arc` clones before any one of them propagates an error.
+pub(crate) fn arc_to_http_error(arc: Arc<HttpError>) -> HttpError {
+    match Arc::try_unwrap(arc) {
+        Ok(e) => e,
+        Err(arc) => HttpError::Network(format!("{}", arc)),
+    }
 }
 
 /// Encode a 16-byte buffer as 32 lowercase hex chars. Inline impl
