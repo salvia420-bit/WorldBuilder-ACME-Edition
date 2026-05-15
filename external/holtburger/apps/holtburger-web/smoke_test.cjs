@@ -3545,6 +3545,74 @@ try {
                 `takePartMeshes=${typeof proto.takePartMeshes}`,
         );
     }
+    // === F.40 (2026-05-14) — batched fetchEntityAnimationKeyframes ===
+    // The batch export + class. Pre-warms N setups' wasm-side
+    // `shards` cache in ONE prefetch loop; spawns.js calls it
+    // before dispatching synthetic ACE-spawn events so each
+    // entityManager.spawn(meta) hits a warm cache.
+    check(
+        "F.40: fetchEntityAnimationKeyframesBatch() exposed (batched export)",
+        typeof wasm.fetchEntityAnimationKeyframesBatch === "function",
+        `fetchEntityAnimationKeyframesBatch=${typeof wasm.fetchEntityAnimationKeyframesBatch}`,
+    );
+    {
+        const batchProto = wasm.EntityAnimationKeyframesBatch?.prototype || {};
+        const lenDescr = Object.getOwnPropertyDescriptor(batchProto, "len");
+        const setupIdsDescr = Object.getOwnPropertyDescriptor(batchProto, "setupIds");
+        const errIdxDescr = Object.getOwnPropertyDescriptor(batchProto, "errorIndices");
+        check(
+            "F.40: EntityAnimationKeyframesBatch class + getters + methods exposed",
+            typeof wasm.EntityAnimationKeyframesBatch === "function" &&
+                typeof lenDescr?.get === "function" &&
+                typeof setupIdsDescr?.get === "function" &&
+                typeof errIdxDescr?.get === "function" &&
+                typeof batchProto.payloadAt === "function" &&
+                typeof batchProto.wasError === "function",
+            `class=${typeof wasm.EntityAnimationKeyframesBatch}, ` +
+                `len=${typeof lenDescr?.get}, ` +
+                `setupIds=${typeof setupIdsDescr?.get}, ` +
+                `errorIndices=${typeof errIdxDescr?.get}, ` +
+                `payloadAt=${typeof batchProto.payloadAt}, ` +
+                `wasError=${typeof batchProto.wasError}`,
+        );
+    }
+    // F.40 source-pattern: AnimationCache.getBatch is wired.
+    try {
+        const animPath = path.resolve(__dirname, "scene3d", "animation.js");
+        const animSrc = fs.readFileSync(animPath, "utf8");
+        const hasGetBatch =
+            /async\s+getBatch\s*\(\s*setupIds\s*,\s*fetchKeyframesBatch/.test(animSrc) &&
+            /this\.prewarmedSetupIds/.test(animSrc);
+        check(
+            "F.40: AnimationCache.getBatch + prewarmedSetupIds wired in animation.js",
+            hasGetBatch,
+            `getBatch=${hasGetBatch}, bytes=${animSrc.length}`,
+        );
+    } catch (e) {
+        check(
+            "F.40: AnimationCache.getBatch + prewarmedSetupIds wired in animation.js",
+            false,
+            String(e?.message ?? e).slice(0, 160),
+        );
+    }
+    // F.40 source-pattern: spawns.js calls getBatch before dispatching.
+    try {
+        const spawnsPath = path.resolve(__dirname, "scene3d", "spawns.js");
+        const spawnsSrc = fs.readFileSync(spawnsPath, "utf8");
+        const hasPreWarm =
+            /animCache\.getBatch\s*\(\s*uniqueSetupIds\s*,\s*fetchBatch\s*\)/.test(spawnsSrc);
+        check(
+            "F.40: spawns.js pre-warms AnimationCache via getBatch before dispatch",
+            hasPreWarm,
+            `prewarm=${hasPreWarm}, bytes=${spawnsSrc.length}`,
+        );
+    } catch (e) {
+        check(
+            "F.40: spawns.js pre-warms AnimationCache via getBatch before dispatch",
+            false,
+            String(e?.message ?? e).slice(0, 160),
+        );
+    }
     // 2. JS-side adapter: scene3d/animation.js exists + exports
     //    `buildAnimationClip` + `AnimationCache`. Same Node-only
     //    constraint as Phase 7.0/7.2 — bare `import * as THREE from

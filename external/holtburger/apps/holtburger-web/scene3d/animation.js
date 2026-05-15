@@ -187,6 +187,26 @@ export class AnimationCache {
         // setupId → string[] (computed on first bake; reused for every
         // future stance/command on the same setup).
         this.partNames = new Map();
+        // F.40 (2026-05-14) — set of setupIds whose wasm-side `shards`
+        // cache has been pre-warmed via `getBatch`. The batched
+        // wasm call walks Setup → MotionTable → default Animations
+        // for each setupId in ONE prefetch loop; subsequent
+        // single-call `fetchEntityAnimationKeyframes` invocations hit
+        // the warm cache and complete sync-fast. The JS-side cache
+        // entries fill in lazily via the normal `get(...)` path on
+        // first spawn — `getBatch` does NOT populate per-cache-key
+        // entries because the batch's mt=0/motion=0/stance=0
+        // semantics don't carry walk/run clip data (the wasm side
+        // returns rest-pose-only payloads); only specific
+        // `(setupId, mt, motion, stance)` tuples have those, and
+        // those land via `get(...)` after motion arrives on the wire.
+        this.prewarmedSetupIds = new Set();
+        // In-flight batch promise dedup. Concurrent `getBatch` calls
+        // for overlapping setup sets share a single
+        // `fetchEntityAnimationKeyframesBatch` round-trip via a small
+        // request-coalescing window keyed on the sorted union of
+        // requested setupIds.
+        this._batchInFlight = new Map();
     }
 
     /**
@@ -362,6 +382,139 @@ export class AnimationCache {
     }
 
     /**
+     * F.40 (2026-05-14) — batch-prewarm the wasm-side `shards`
+     * cache for `setupIds`. ONE
+     * `fetchEntityAnimationKeyframesBatch(union_of_unique_setupIds)`
+     * call walks each Setup → default MotionTable → default
+     * Animations in a single iterative prefetch loop, populating
+     * `ManifestResourceSource::shards` for every transitive record.
+     * Subsequent single-call `AnimationCache.get(...)` invocations
+     * for those setupIds hit a warm cache and complete sync-fast
+     * (no further HTTP round-trips).
+     *
+     * **Use case.** The spawn pipeline (`scene3d/spawns.js`'s
+     * `ensureSpawnsForLandblock`) calls `getBatch` BEFORE dispatching
+     * the N synthetic-spawn events. Each subsequent
+     * `entityManager.spawn(meta)` then hits a warm cache. F.36 measured
+     * 25 unique setups × 4-19s per cold walk = 100-475s; F.40's
+     * batched walk drops the wall-clock to one prefetch loop's worth
+     * of round-trips total.
+     *
+     * @param {number[]|Uint32Array} setupIds - the union of setupIds
+     *   to pre-warm. Duplicates + already-prewarmed IDs are filtered
+     *   out internally. Empty input is a no-op.
+     * @param {Function} fetchKeyframesBatch - the wasm-exported
+     *   `fetchEntityAnimationKeyframesBatch` (or a JS shim with the
+     *   same shape). Called as `fetchKeyframesBatch(Uint32Array)`,
+     *   resolves to an `EntityAnimationKeyframesBatch` wasm handle.
+     * @returns {Promise<{prewarmedCount: number, skippedCount: number}>}
+     *   resolves after the batch call completes. `prewarmedCount`
+     *   is the number of newly-warmed setupIds; `skippedCount` is
+     *   how many requested IDs were already in `prewarmedSetupIds`
+     *   (no-op on those — they were warm from a prior batch).
+     *
+     * **Idempotency.** Re-calling for the same setupIds is cheap —
+     * `prewarmedSetupIds` filters them out and the wasm batch sees
+     * an empty Uint32Array (early-return on its side too).
+     *
+     * **Lifetime.** The batch's `EntityAnimationData` payloads are
+     * drained and `.free()`'d here — JS doesn't hold wasm handles
+     * past this call. The cache entries themselves still get
+     * populated lazily via the normal `get(...)` path; the win is
+     * that those `get(...)` calls now hit a warm wasm-side cache.
+     */
+    async getBatch(setupIds, fetchKeyframesBatch) {
+        if (typeof fetchKeyframesBatch !== "function") {
+            // eslint-disable-next-line no-console
+            console.warn(
+                "[scene3d.animation] getBatch: fetchEntityAnimationKeyframesBatch missing; falling back to lazy single-call path"
+            );
+            return { prewarmedCount: 0, skippedCount: 0 };
+        }
+        // Dedup + filter already-warmed IDs.
+        const requested = new Set();
+        for (const raw of setupIds || []) {
+            const id = (raw >>> 0);
+            if (id !== 0) requested.add(id);
+        }
+        let skippedCount = 0;
+        const fresh = [];
+        for (const id of requested) {
+            if (this.prewarmedSetupIds.has(id)) {
+                skippedCount += 1;
+            } else {
+                fresh.push(id);
+            }
+        }
+        if (fresh.length === 0) {
+            return { prewarmedCount: 0, skippedCount };
+        }
+
+        // Sorted-union key for in-flight dedup. Two concurrent
+        // getBatch calls with the SAME fresh set share one wasm
+        // round-trip; with overlapping sets the second call still
+        // hits the dedup map if every element is already in flight
+        // (else, the partial overlap proceeds with the freshly-not-
+        // in-flight slice — the prewarmedSetupIds set ensures we
+        // never double-count finished entries).
+        fresh.sort((a, b) => a - b);
+        const dedupKey = fresh.join(",");
+        let inFlight = this._batchInFlight.get(dedupKey);
+        if (!inFlight) {
+            inFlight = (async () => {
+                // Mark BEFORE the await — concurrent getBatch calls
+                // for the same setupIds skip rather than re-fire.
+                // On the (rare) error path we rollback below.
+                for (const id of fresh) {
+                    this.prewarmedSetupIds.add(id);
+                }
+                let batch;
+                try {
+                    batch = await fetchKeyframesBatch(new Uint32Array(fresh));
+                } catch (e) {
+                    // Roll back so a retry can re-attempt.
+                    for (const id of fresh) {
+                        this.prewarmedSetupIds.delete(id);
+                    }
+                    throw e;
+                }
+                // Drain + free each payload. The wasm-side `shards`
+                // cache is already populated by the batch's
+                // prefetch loop; we don't need the EntityAnimationData
+                // structs to live past this drain. The actual
+                // cache entries land lazily via subsequent get(...)
+                // calls on the now-warm shards.
+                try {
+                    const len = batch.len >>> 0;
+                    for (let i = 0; i < len; i += 1) {
+                        const payload = batch.payloadAt(i);
+                        if (payload && typeof payload.free === "function") {
+                            try { payload.free(); } catch (_) {}
+                        }
+                    }
+                } finally {
+                    if (typeof batch.free === "function") {
+                        try { batch.free(); } catch (_) {}
+                    }
+                }
+                return { prewarmedCount: fresh.length, skippedCount };
+            })();
+            this._batchInFlight.set(dedupKey, inFlight);
+            // Clean up the dedup map after settle (success or fail)
+            // so a future getBatch for the same set after a flake
+            // can retry. The prewarmedSetupIds set is the
+            // authoritative warm-state cache — _batchInFlight is
+            // purely the concurrent-call coalescer.
+            inFlight.finally(() => {
+                if (this._batchInFlight.get(dedupKey) === inFlight) {
+                    this._batchInFlight.delete(dedupKey);
+                }
+            });
+        }
+        return inFlight;
+    }
+
+    /**
      * Drop every cached clip. Call when the renderer tears down the
      * scene (page navigation, ?renderer flip, etc.). The
      * AnimationClips are owned by mixers across multiple entities
@@ -372,5 +525,7 @@ export class AnimationCache {
     dispose() {
         this.entries.clear();
         this.partNames.clear();
+        this.prewarmedSetupIds.clear();
+        this._batchInFlight.clear();
     }
 }

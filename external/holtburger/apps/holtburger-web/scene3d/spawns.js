@@ -469,22 +469,28 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
     let placeholdersCount = 0;
     const dispatchedGuids = [];
 
+    // F.40 (2026-05-14) — collect per-record snapshots + resolved
+    // setupDids first, then run a SINGLE batched
+    // fetchEntityAnimationKeyframes pre-warm before dispatching
+    // any spawn events. The animation cache's `getBatch` pre-warms
+    // the wasm-side `shards` cache for every unique setupDid in
+    // ONE prefetch loop instead of N independent loops (one per
+    // entityManager.spawn). F.36 measured the per-entity rig-build
+    // serialization at 4-19s per cold walk × 25 unique setups in a
+    // populated Holtburg LB = 100-475s sequential drain. Batched
+    // walk drops that to one prefetch loop's worth of round-trips
+    // total (~3 rounds × ~1 RTT) — the JS-side cache fills lazily
+    // via the existing AnimationCache.get path on first spawn.
+    const pendingDispatches = [];
     for (const rec of records || []) {
-      // Read fields off the wasm-bindgen EntitySpawnJs object.
       const wcid = rec.wcid >>> 0;
       const resolved = resolveSetup(wcidToSetup, wcid);
       if (resolved.placeholder) placeholdersCount += 1;
-      // Capture wasm-side values into a plain JS record (the wasm
-      // EntitySpawnJs handle gets .free()'d after this loop iteration;
-      // we need a stable snapshot for upd construction).
       const snapshot = {
         wcid,
         weenieType: rec.weenieType >>> 0,
         name: rec.name || "",
         category: rec.isServerManaged ? "Object" : "Object",
-        // `landblockId` on EntitySpawnJs is the LB key (high 16 bits
-        // in slot 31:16, low 16 = 0). The packed wire form recombines
-        // it with `cell` inside buildUpd.
         landblockId: (rec.landblockId >>> 16) & 0xffff,
         cell: rec.cell >>> 0,
         x: rec.x,
@@ -496,11 +502,62 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
         qz: rec.qz,
         isServerManaged: !!rec.isServerManaged,
       };
-      // Free the wasm handle now that we've snapshotted.
+      // Free the wasm EntitySpawnJs handle now that we've snapshotted.
       if (typeof rec.free === "function") {
         try { rec.free(); } catch (_) { /* ignore */ }
       }
-      const upd = buildUpd(snapshot, resolved.setupDid, resolved.placeholder);
+      pendingDispatches.push({ snapshot, setupDid: resolved.setupDid, placeholder: resolved.placeholder });
+    }
+
+    // F.40 pre-warm: collect unique setupDids and call the batched
+    // wasm fetcher through the AnimationCache. Idempotent across
+    // re-entries for the same LB (the cache filters already-warmed
+    // setupIds) and across adjacent LBs that share weenies. We tolerate
+    // missing prerequisites (no entityManager, no wasm export, etc.)
+    // — the pre-warm is a pure perf optimisation; correctness still
+    // holds via the per-spawn lazy fetch in entities.js::_spawnImpl.
+    const animCache = scene3d?.entityManager?.animationCache;
+    const fetchBatch = wasmExports?.fetchEntityAnimationKeyframesBatch;
+    if (
+      animCache &&
+      typeof animCache.getBatch === "function" &&
+      typeof fetchBatch === "function" &&
+      pendingDispatches.length > 0
+    ) {
+      const uniqueSetupIds = [
+        ...new Set(pendingDispatches.map((d) => d.setupDid >>> 0)),
+      ];
+      const tPrewarmStart =
+        typeof performance !== "undefined" ? performance.now() : 0;
+      try {
+        const summary = await animCache.getBatch(uniqueSetupIds, fetchBatch);
+        const tPrewarmMs =
+          (typeof performance !== "undefined" ? performance.now() : 0) -
+          tPrewarmStart;
+        if (summary && summary.prewarmedCount > 0) {
+          // eslint-disable-next-line no-console
+          console.log(
+            `[scene3d.spawns] LB 0x${((lbKey >>> 16) & 0xffff).toString(16).toUpperCase().padStart(4, "0")}: ` +
+              `F.40 pre-warm ${summary.prewarmedCount} setups ` +
+              `(${summary.skippedCount} already warm) in ${tPrewarmMs.toFixed(1)}ms`
+          );
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[scene3d.spawns] F.40 pre-warm threw (${String(e).slice(0, 200)}); ` +
+            `continuing with per-spawn lazy fetch`
+        );
+      }
+    }
+
+    // Dispatch every spawn through the canonical __scene3dEntityHook
+    // path. Each entityManager.spawn(meta) → _spawnImpl runs its own
+    // `fetchEntityAnimationKeyframes` (lazy single-call) which now
+    // hits the warm wasm-side shards cache (F.40) and short-circuits
+    // its prefetch loop.
+    for (const pending of pendingDispatches) {
+      const upd = buildUpd(pending.snapshot, pending.setupDid, pending.placeholder);
       const result = dispatchSpawnUpd(upd);
       if (result?.injected) {
         injected += 1;

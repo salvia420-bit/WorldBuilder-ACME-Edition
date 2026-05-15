@@ -546,6 +546,15 @@
         fetchEntityModelRender,
         fetchEntityCycleFrames,
         fetchEntityAnimationKeyframes,
+        // F.40 (2026-05-14) — batched fetchEntityAnimationKeyframes.
+        // ONE wasm call walks N setups in a single prefetch loop;
+        // `scene3d/spawns.js` pre-warms the AnimationCache via this
+        // before dispatching synthetic ACE-spawn events so each
+        // entityManager.spawn(meta) hits a warm wasm-side `shards`
+        // cache instead of opening its own prefetch loop. Same
+        // plumb-through requirement as the other entity-render
+        // exports — listed here AND in the init3D opts block below.
+        fetchEntityAnimationKeyframesBatch,
         fetchEntitySurfacesPixels,
         fetchBuildingPlacement,
         fetchSetupModelLights,
@@ -4990,6 +4999,12 @@ void main() {
             fetchEntityModelRender,
             fetchEntityCycleFrames,
             fetchEntityAnimationKeyframes,
+            // F.40 (2026-05-14) — batched fetchEntityAnimationKeyframes.
+            // The animationCache's `getBatch` pre-warms N setups in
+            // ONE wasm prefetch loop; spawns.js calls it before
+            // dispatching synthetic spawn events so subsequent
+            // entityManager.spawn(meta) hits a warm shard cache.
+            fetchEntityAnimationKeyframesBatch,
             fetchEntitySurfacesPixels,
             fetchBuildingPlacement,
             fetchSetupModelLights,
