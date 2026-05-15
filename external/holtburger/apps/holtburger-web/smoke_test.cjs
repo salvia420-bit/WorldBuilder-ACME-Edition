@@ -5688,7 +5688,11 @@ try {
 
         const importmapLocal = /["']@takram\/three-clouds["']\s*:\s*["']\.\/vendor\/takram-three-clouds\/build\/index\.js/.test(idxHtml);
         const idxImportsCO = /import\s*\{\s*CloudOverlay\s*\}\s*from\s*["']\.\/cloud_overlay\.js/.test(idxJs);
-        const idxParsesFlag = /URLSearchParams\(window\.location\.search\)\.get\(["']clouds["']\)/.test(idxJs)
+        // Match either `URLSearchParams(...).get("clouds")` (inlined)
+        // or `params.get("clouds")` after a separate URLSearchParams
+        // construct — both are valid patterns. The flag-value comparison
+        // is the load-bearing assertion.
+        const idxParsesFlag = /\.get\(["']clouds["']\)/.test(idxJs)
             && /cloudsFlag\s*===\s*["']on["']/.test(idxJs);
         const idxConstructsCO = /new\s+CloudOverlay\s*\(\s*\{/.test(idxJs)
             && /skyDome\.setCloudOverlay\(/.test(idxJs);

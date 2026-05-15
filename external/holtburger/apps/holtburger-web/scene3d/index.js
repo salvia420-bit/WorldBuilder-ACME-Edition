@@ -791,7 +791,30 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
           liveScene3dRef.skyDome,
           activeCam
         );
+        // Clouds-D: the SSAO composer bypasses skyDome.renderSkyPass,
+        // so the cloudOverlay's preRender/renderOverlay don't fire
+        // automatically here. Drive them at the tick level instead.
+        // Pre-bake runs BEFORE composer.render (writes to its own RTs,
+        // doesn't touch the canvas). renderOverlay runs AFTER (composites
+        // onto the final tone-mapped canvas).
+        //
+        // Depth limitation: in the SSAO path the overlay composites AFTER
+        // OutputPass, so clouds appear OVER world geometry regardless of
+        // depth. The direct path (no SSAO) does it right by rendering
+        // clouds between sky + world passes. For the eye-test, use
+        // `?renderer=3d&clouds=on` and turn SSAO off (default off via
+        // quality flag) to see depth-correct occlusion.
+        const cloudOverlay = liveScene3dRef?.cloudOverlay;
+        const cloudActive =
+          cloudOverlay &&
+          !liveScene3dRef?.skyDome?._lastIsIndoor;
+        if (cloudActive) {
+          cloudOverlay.preRender(renderer);
+        }
         liveScene3dRef.ssaoPipeline.render(activeCam);
+        if (cloudActive) {
+          cloudOverlay.renderOverlay(renderer);
+        }
       } catch (e) {
         // eslint-disable-next-line no-console
         if (!liveScene3dRef._ssaoRenderWarned) {
@@ -1240,8 +1263,15 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // testable in CI; visual output requires hardware.
     try {
       // eslint-disable-next-line no-undef
-      const cloudsFlag = new URLSearchParams(window.location.search).get("clouds");
+      const params = new URLSearchParams(window.location.search);
+      const cloudsFlag = params.get("clouds");
       if (cloudsFlag === "on") {
+        // Optional URL knobs for the eye-test on real GPU. Allow the
+        // user to crank coverage / quality without reloading + opening
+        // dev console.
+        const coverageParam = parseFloat(params.get("cloudCoverage") ?? "");
+        const qualityParam = params.get("cloudQuality"); // 'low'|'medium'|'high'|'ultra'
+
         const cloudOverlay = new CloudOverlay({
           camera,
           sessionHandleAccessor: () =>
@@ -1250,12 +1280,48 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
             sessionHandle ??
             null,
         });
+
+        // Apply URL knobs post-construction so the CloudOverlay's
+        // default-defaults are in place first.
+        const effect = cloudOverlay.volume.effect;
+        if (Number.isFinite(coverageParam)) {
+          effect.clouds.coverage = Math.max(0, Math.min(1, coverageParam));
+        }
+        if (qualityParam && ["low", "medium", "high", "ultra"].includes(qualityParam)) {
+          effect.qualityPreset = qualityParam;
+        }
+
         skyDome.setCloudOverlay(cloudOverlay);
         liveScene3d.cloudOverlay = cloudOverlay;
+
+        // Runtime ergonomics — let the user tweak from devtools without
+        // re-navigating. Mirrors Sky-K's `__setSkyOpacity` pattern.
+        // eslint-disable-next-line no-undef
+        if (typeof window !== "undefined") {
+          // eslint-disable-next-line no-undef
+          window.__cloudOverlay = cloudOverlay;
+          // eslint-disable-next-line no-undef
+          window.__setCloudCoverage = (v) => {
+            const c = Math.max(0, Math.min(1, +v));
+            effect.clouds.coverage = c;
+            return effect.clouds.coverage;
+          };
+          // eslint-disable-next-line no-undef
+          window.__setCloudQuality = (p) => {
+            if (["low", "medium", "high", "ultra"].includes(p)) {
+              effect.qualityPreset = p;
+              return p;
+            }
+            return null;
+          };
+        }
+
         // eslint-disable-next-line no-console
         console.log(
           "[clouds-d] CloudOverlay wired into SkyDome (?clouds=on). " +
-            "Visible clouds require a real GPU — swiftshader output is uniform."
+            `coverage=${effect.clouds.coverage} qualityPreset=${effect.qualityPreset ?? "default"}. ` +
+            "Visible clouds require a real GPU — swiftshader output is uniform. " +
+            "Live tweak: __setCloudCoverage(0..1), __setCloudQuality('low'|'medium'|'high'|'ultra')."
         );
       }
     } catch (e) {
