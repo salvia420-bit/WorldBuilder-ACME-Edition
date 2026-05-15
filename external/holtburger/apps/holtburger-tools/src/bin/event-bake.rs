@@ -33,11 +33,13 @@ use anyhow::{Context, Result, bail};
 use binrw::io::Cursor;
 use clap::Parser;
 use holtburger_dat::DatDatabase;
+use holtburger_dat::file_type::particle_emitter::ParticleEmitter;
 use holtburger_dat::file_type::{Animation, MotionTable, PhysicsScript, Region, SetupModel};
 use holtburger_dat::landblock::CellLandblock;
 use holtburger_event_bake::{
-    AmbientTrigger, AnimSoundTrigger, PhysicsScriptParticleTrigger, bake_ambient_manifest,
-    bake_anim_sound_manifest, bake_particle_manifest,
+    AmbientTrigger, AnimSoundTrigger, PhysicsScriptParticleTrigger, SkyParticleTrigger,
+    bake_ambient_manifest, bake_anim_sound_manifest, bake_particle_manifest,
+    enumerate_sky_particle_chain,
 };
 use log::{debug, info, warn};
 use sha2::{Digest, Sha256};
@@ -90,6 +92,16 @@ struct Cli {
     /// `event-bake-source.sha256` sidecar.
     #[arg(long, value_name = "DIR")]
     out: PathBuf,
+
+    /// **F.B.4** — also bake the sky particle chain (P2). One
+    /// `region.sky-events.jsonl` is written alongside the per-LB
+    /// events files, containing one record per `(day_group_idx,
+    /// sky_object_idx, hook_idx)` tuple for every SkyObject in
+    /// `Region.sky_info.day_groups` that has a resolvable
+    /// PhysicsScript chain. The bake is region-scoped (not per-LB) —
+    /// sky triggers depend on time-of-day rather than landblock.
+    #[arg(long, default_value_t = false)]
+    sky: bool,
 
     /// Emit progress logs (INFO level) to stderr.
     #[arg(long)]
@@ -532,6 +544,48 @@ fn write_particle_line<W: Write>(
     Ok(())
 }
 
+/// F.B.4 — sky particle chain JSONL row. Single-line JSON per record;
+/// region-scoped (not per-LB) so the writer lives outside the per-LB
+/// loop. `hw_gfx_obj_id` is the ParticleEmitter's `hw_gfx_obj_id`
+/// resolved via the caller-supplied lookup; passed in explicitly so the
+/// writer has no `DatDatabase` dependency.
+#[allow(clippy::too_many_arguments)]
+fn write_sky_particle_line<W: Write>(
+    mut w: W,
+    t: &SkyParticleTrigger,
+    hw_gfx_obj_id: u32,
+) -> Result<()> {
+    // String fields are pre-escaped via the static `day_group_name`
+    // from the DAT — same Region 0x13 names that already flow through
+    // the existing `eprintln!` test reports (`Sunny`, `PartlyCloudy`,
+    // etc.) — none contain quote/backslash. Defensive replace is
+    // applied below for forward-compat in case a future Region carries
+    // a name with embedded specials.
+    let escaped_name = t
+        .day_group_name
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    writeln!(
+        w,
+        "{{\"source\":\"sky_chain\",\"trigger\":\"time_of_day\",\"day_group_idx\":{},\"day_group_name\":\"{}\",\"day_group_chance\":{},\"active_fraction_start\":{},\"active_fraction_end\":{},\"sky_object_idx\":{},\"sky_object_id\":\"0x{:08X}\",\"physics_script_id\":\"0x{:08X}\",\"physics_script_source\":\"{}\",\"hook_idx\":{},\"start_time_s\":{},\"emitter_id\":\"0x{:08X}\",\"hw_gfx_obj_id\":\"0x{:08X}\",\"blocking\":{},\"anchor\":\"sky_cell_origin\"}}",
+        t.day_group_idx,
+        escaped_name,
+        fmt_f32(t.day_group_chance),
+        fmt_f32(t.active_fraction_start),
+        fmt_f32(t.active_fraction_end),
+        t.sky_object_idx,
+        t.sky_object_id,
+        t.physics_script_id,
+        t.physics_script_source.as_str(),
+        t.hook_idx,
+        fmt_f64(t.start_time_s),
+        t.emitter_id,
+        hw_gfx_obj_id,
+        t.blocking,
+    )?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Per-LB bake driver
 // ---------------------------------------------------------------------------
@@ -687,6 +741,132 @@ fn bake_one_lb(
     }))
 }
 
+// ---------------------------------------------------------------------------
+// F.B.4 — sky particle chain bake
+// ---------------------------------------------------------------------------
+
+struct SkyBakeCounts {
+    total: usize,
+    skipped_emitter_resolve: usize,
+}
+
+/// Resolve a ParticleEmitter's `hw_gfx_obj_id` for the JSONL writer.
+/// Memoised across all hooks; one cache per bake invocation.
+fn fetch_emitter_hw_gfx_obj_id(
+    portal: &DatDatabase,
+    cache: &mut HashMap<u32, Option<u32>>,
+    emitter_id: u32,
+) -> Option<u32> {
+    if let Some(c) = cache.get(&emitter_id) {
+        return *c;
+    }
+    let r = portal
+        .get_file(emitter_id)
+        .ok()
+        .and_then(|b| ParticleEmitter::unpack(&b).ok())
+        .map(|pe| pe.hw_gfx_obj_id);
+    cache.insert(emitter_id, r);
+    r
+}
+
+/// Bake the region-scoped sky particle chain (F.B.4). Writes one
+/// `region.sky-events.jsonl` to `out_dir`; the file is region-keyed
+/// rather than per-LB because sky triggers depend on time-of-day, not
+/// landblock.
+fn bake_sky_chain(
+    region: &Region,
+    portal: &DatDatabase,
+    cache: &mut ResourceCache,
+    out_dir: &Path,
+) -> Result<SkyBakeCounts> {
+    // The enumerator borrows `cache` mutably via two closures; rather
+    // than fight the borrow checker, materialise the script + setup
+    // lookups eagerly via the cache's own helpers. The enumerator
+    // calls each closure at most once per (script_did, setup_did) so
+    // this is the same number of cache lookups it would have done.
+    //
+    // Build a closure-friendly wrapper: each closure does `cache.…(portal, did)`
+    // which only touches one cache field, so the two closures never
+    // alias.
+    let mut sky_cache_ps: HashMap<u32, Option<PhysicsScript>> = HashMap::new();
+    let mut sky_cache_setup: HashMap<u32, Option<SetupModel>> = HashMap::new();
+
+    // Pre-seed both caches by walking the SkyObjects once to know
+    // which DIDs to fetch. This way the actual `enumerate_sky_…`
+    // closures are pure lookups against in-memory maps.
+    if let Some(sky_info) = region.sky_info.as_ref() {
+        for dg in &sky_info.day_groups {
+            for so in &dg.sky_objects {
+                if so.default_pes_object_id != 0 {
+                    if !sky_cache_ps.contains_key(&so.default_pes_object_id) {
+                        let r = cache.physics_script(portal, so.default_pes_object_id);
+                        sky_cache_ps.insert(so.default_pes_object_id, r);
+                    }
+                } else if (so.default_gfx_object_id >> 24) == 0x02 {
+                    if !sky_cache_setup.contains_key(&so.default_gfx_object_id) {
+                        let r = cache.setup(portal, so.default_gfx_object_id);
+                        sky_cache_setup.insert(so.default_gfx_object_id, r.clone());
+                        if let Some(setup) = r {
+                            if let Some(script_did) = setup.default_script {
+                                if (script_did >> 24) == 0x33
+                                    && !sky_cache_ps.contains_key(&script_did)
+                                {
+                                    let ps = cache.physics_script(portal, script_did);
+                                    sky_cache_ps.insert(script_did, ps);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let triggers = enumerate_sky_particle_chain(
+        region,
+        |did| sky_cache_ps.get(&did).cloned().flatten(),
+        |did| sky_cache_setup.get(&did).cloned().flatten(),
+    );
+
+    let mut emitter_hw_cache: HashMap<u32, Option<u32>> = HashMap::new();
+    let out_path = out_dir.join("region.sky-events.jsonl");
+    let f = File::create(&out_path)
+        .with_context(|| format!("create {}", out_path.display()))?;
+    let mut w = BufWriter::new(f);
+    let mut skipped_emitter_resolve = 0usize;
+    for t in &triggers {
+        // hw_gfx_obj_id resolution can fail when the bake runs against
+        // a DAT that has the SkyObject + PhysicsScript but a missing
+        // ParticleEmitter (would indicate a broken chain — defensive).
+        let hw = match fetch_emitter_hw_gfx_obj_id(portal, &mut emitter_hw_cache, t.emitter_id) {
+            Some(h) => h,
+            None => {
+                skipped_emitter_resolve += 1;
+                warn!(
+                    "sky-chain: ParticleEmitter 0x{:08X} (day_group={} sky_object={}) failed to resolve — emitting hw_gfx_obj_id=0x00000000",
+                    t.emitter_id, t.day_group_idx, t.sky_object_idx
+                );
+                0
+            }
+        };
+        write_sky_particle_line(&mut w, t, hw)?;
+    }
+    w.flush()?;
+
+    debug!(
+        "sky-chain: {} triggers (skipped_emitter_resolve={}) → {}",
+        triggers.len(),
+        skipped_emitter_resolve,
+        out_path.display()
+    );
+
+    Ok(SkyBakeCounts {
+        total: triggers.len(),
+        skipped_emitter_resolve,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 fn format_manifest(
     portal_hash: &str,
     cell_hash: &str,
@@ -698,17 +878,35 @@ fn format_manifest(
     total_ambient: usize,
     total_anim_sound: usize,
     total_particle: usize,
+    sky_counts: Option<&SkyBakeCounts>,
 ) -> String {
     let spawns_line = match spawns_index_hash {
         Some(h) => format!("wcid_to_setup.json\t{h}\n"),
         None => String::new(),
     };
+    // F.B.4 — sky chain produces one region-keyed JSONL alongside the
+    // per-LB files. The hash sidecar pins the file's presence via a
+    // line; bake-source.sha256 consumers verify by re-running the bake
+    // and diffing the JSONL byte-for-byte (same shape the per-LB files
+    // already use).
+    let sky_line = match sky_counts {
+        Some(c) => format!(
+            "region.sky-events.jsonl\tsky_chain triggers={} (skipped_emitter_resolve={})\n",
+            c.total, c.skipped_emitter_resolve
+        ),
+        None => String::new(),
+    };
+    let sky_count_field = match sky_counts {
+        Some(c) => format!(" sky_chain={}", c.total),
+        None => String::new(),
+    };
     format!(
-        "client_portal.dat\t{}\nclient_cell_1.dat\t{}\nclient_local_English.dat\t{}\n{}bake-tool-version\t{} + {}\nregion-did\t0x{:08X}\nlandblocks\t{} baked, {} skipped\nevent-counts\tambient={} anim_sound={} particle={}\n",
+        "client_portal.dat\t{}\nclient_cell_1.dat\t{}\nclient_local_English.dat\t{}\n{}{}bake-tool-version\t{} + {}\nregion-did\t0x{:08X}\nlandblocks\t{} baked, {} skipped\nevent-counts\tambient={} anim_sound={} particle={}{}\n",
         portal_hash,
         cell_hash,
         local_hash,
         spawns_line,
+        sky_line,
         EVENT_BAKE_LIB_VERSION,
         EVENT_BAKE_CLI_VERSION,
         region_did,
@@ -717,6 +915,7 @@ fn format_manifest(
         total_ambient,
         total_anim_sound,
         total_particle,
+        sky_count_field,
     )
 }
 
@@ -827,6 +1026,21 @@ fn main() -> Result<()> {
         }
     }
 
+    // F.B.4 — opt-in sky particle chain bake. Region-scoped (one
+    // `region.sky-events.jsonl` rather than per-LB). Counts are folded
+    // into the manifest sidecar so consumers can diff sky+per-LB
+    // totals atomically.
+    let sky_counts = if cli.sky {
+        let counts = bake_sky_chain(&region, &check.portal_db, &mut cache, &cli.out)?;
+        info!(
+            "sky-chain: {} triggers baked (skipped_emitter_resolve={})",
+            counts.total, counts.skipped_emitter_resolve
+        );
+        Some(counts)
+    } else {
+        None
+    };
+
     let manifest_path = cli.out.join("event-bake-source.sha256");
     let manifest = format_manifest(
         &check.portal_hash,
@@ -839,18 +1053,25 @@ fn main() -> Result<()> {
         total_ambient,
         total_anim_sound,
         total_particle,
+        sky_counts.as_ref(),
     );
     fs::write(&manifest_path, manifest)
         .with_context(|| format!("write {}", manifest_path.display()))?;
 
+    let sky_msg = match sky_counts.as_ref() {
+        Some(c) => format!(" sky_chain={}", c.total),
+        None => String::new(),
+    };
     eprintln!(
-        "event-bake done: {} LBs baked, {} skipped — ambient={} anim_sound={} particle={} (total events = {})",
+        "event-bake done: {} LBs baked, {} skipped — ambient={} anim_sound={} particle={}{} (total events = {})",
         baked,
         skipped,
         total_ambient,
         total_anim_sound,
         total_particle,
-        total_ambient + total_anim_sound + total_particle,
+        sky_msg,
+        total_ambient + total_anim_sound + total_particle
+            + sky_counts.as_ref().map(|c| c.total).unwrap_or(0),
     );
 
     Ok(())
@@ -907,14 +1128,48 @@ mod tests {
             42,
             13,
             7,
+            None,
         );
         assert!(m.contains("client_portal.dat\t"));
         assert!(m.contains("wcid_to_setup.json\t"));
         assert!(m.contains("region-did\t0x13000000"));
         assert!(m.contains("169 baked, 0 skipped"));
         assert!(m.contains("ambient=42 anim_sound=13 particle=7"));
+        assert!(
+            !m.contains("sky_chain="),
+            "sky line is omitted when sky_counts is None"
+        );
+        assert!(
+            !m.contains("region.sky-events.jsonl"),
+            "sky JSONL line is omitted when sky_counts is None"
+        );
         assert!(m.contains(EVENT_BAKE_LIB_VERSION));
         assert!(m.contains(EVENT_BAKE_CLI_VERSION));
+    }
+
+    #[test]
+    fn format_manifest_with_sky_counts_includes_sky_line() {
+        let sky = SkyBakeCounts {
+            total: 60,
+            skipped_emitter_resolve: 2,
+        };
+        let m = format_manifest(
+            &"a".repeat(64),
+            &"b".repeat(64),
+            &"c".repeat(64),
+            Some(&"d".repeat(64)),
+            0x13000000,
+            169,
+            0,
+            42,
+            13,
+            7,
+            Some(&sky),
+        );
+        assert!(m.contains("region.sky-events.jsonl\tsky_chain triggers=60"));
+        assert!(m.contains("skipped_emitter_resolve=2"));
+        assert!(m.contains("sky_chain=60"));
+        assert!(m.contains("ambient=42 anim_sound=13 particle=7 sky_chain=60"));
     }
 
     #[test]
@@ -1002,5 +1257,72 @@ mod tests {
         assert!(s.contains("\"default_script_id\":\"0x33000789\""));
         assert!(s.contains("\"emitter_id\":\"0x32000ABC\""));
         assert!(s.contains("\"anchor\":\"entity_origin\""));
+    }
+
+    #[test]
+    fn write_sky_particle_line_format_is_jsonl_one_line() {
+        // Mirrors the brief's example record — moon middle crimson-star
+        // chain: Sunny DayGroup[0] / SkyObject 0x02000714 /
+        // PhysicsScript 0x330007DB / hook 1 / emitter 0x32000456 /
+        // HwGfxObjId 0x01001A62.
+        let t = SkyParticleTrigger {
+            day_group_idx: 0,
+            day_group_name: "Sunny".to_string(),
+            day_group_chance: 0.25,
+            active_fraction_start: 0.0,
+            active_fraction_end: 1.0,
+            sky_object_idx: 6,
+            sky_object_id: 0x02000714,
+            physics_script_id: 0x330007DB,
+            physics_script_source: holtburger_event_bake::ScriptSource::SkyObject,
+            hook_idx: 1,
+            start_time_s: 0.0,
+            emitter_id: 0x32000456,
+            blocking: false,
+        };
+        let mut buf = Vec::new();
+        write_sky_particle_line(&mut buf, &t, 0x01001A62).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert_eq!(s.matches('\n').count(), 1);
+        assert!(s.starts_with("{\"source\":\"sky_chain\""));
+        assert!(s.contains("\"trigger\":\"time_of_day\""));
+        assert!(s.contains("\"day_group_idx\":0"));
+        assert!(s.contains("\"day_group_name\":\"Sunny\""));
+        assert!(s.contains("\"sky_object_id\":\"0x02000714\""));
+        assert!(s.contains("\"physics_script_id\":\"0x330007DB\""));
+        assert!(s.contains("\"physics_script_source\":\"sky_object\""));
+        assert!(s.contains("\"hook_idx\":1"));
+        assert!(s.contains("\"emitter_id\":\"0x32000456\""));
+        assert!(s.contains("\"hw_gfx_obj_id\":\"0x01001A62\""));
+        assert!(s.contains("\"anchor\":\"sky_cell_origin\""));
+        assert!(s.contains("\"blocking\":false"));
+    }
+
+    #[test]
+    fn write_sky_particle_line_escapes_day_name_specials() {
+        // Defensive: day names with `"` or `\` must round-trip through
+        // JSONL parsing. None of retail Region 0x13's 20 day names
+        // contain specials but a future region might.
+        let t = SkyParticleTrigger {
+            day_group_idx: 0,
+            day_group_name: "Stormy\"\\Day".to_string(),
+            day_group_chance: 0.1,
+            active_fraction_start: 0.0,
+            active_fraction_end: 1.0,
+            sky_object_idx: 0,
+            sky_object_id: 0x02000714,
+            physics_script_id: 0x330007DB,
+            physics_script_source: holtburger_event_bake::ScriptSource::SkyObject,
+            hook_idx: 0,
+            start_time_s: 0.0,
+            emitter_id: 0x32000456,
+            blocking: false,
+        };
+        let mut buf = Vec::new();
+        write_sky_particle_line(&mut buf, &t, 0x01001A62).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains("\"day_group_name\":\"Stormy\\\"\\\\Day\""));
+        // Confirm the embedded specials are not the unescaped form.
+        assert!(!s.contains("\"day_group_name\":\"Stormy\"\\Day\""));
     }
 }

@@ -37,11 +37,14 @@
 //! | S2      | `AnimationHook.cs` + motion table walk    | `anim_sound::bake_anim_sound_manifest` |
 //! | P1      | `PhysicsScript.cs` (`CreateParticle`)     | `particle::bake_particle_manifest` |
 //!
-//! S3 (`GameMessageSound` 0xF750) and P2 (sky chain via Region
-//! SkyObject SetupModel → PhysicsScript) are out of scope for F.B —
-//! the former is server-pushed (no DAT enumeration possible), the
-//! latter requires SetupModel-to-PhysicsScript resolution that's
-//! tracked as F.B.4. See module docs for both modules for the gaps.
+//! S3 (`GameMessageSound` 0xF750) is out of scope for F.B — server-
+//! pushed, no DAT enumeration possible. P2 (sky chain via Region
+//! SkyObject → PhysicsScript) shipped as F.B.4; see
+//! [`sky_chain`] for the enumerator. The remaining gap is the Sound /
+//! SoundTweaked hook arm inside sky-anchored PhysicsScripts — fired at
+//! runtime by `sky_dome.js::_attachParticleChainFromState`'s Sound arm
+//! but not yet enumerated in the static bake (tracked alongside the
+//! validator's sky-Sound expectation list).
 //!
 //! # Caller contract for closures
 //!
@@ -54,7 +57,9 @@
 pub mod ambient;
 pub mod anim_sound;
 pub mod particle;
+pub mod sky_chain;
 
 pub use ambient::{AmbientSoundRecord, AmbientTrigger, bake_ambient_manifest};
 pub use anim_sound::{AnimSoundTrigger, bake_anim_sound_manifest};
 pub use particle::{PhysicsScriptParticleTrigger, bake_particle_manifest};
+pub use sky_chain::{ScriptSource, SkyParticleTrigger, enumerate_sky_particle_chain};
