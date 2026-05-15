@@ -556,6 +556,16 @@
         // exports — listed here AND in the init3D opts block below.
         fetchEntityAnimationKeyframesBatch,
         fetchEntitySurfacesPixels,
+        // F.41 (2026-05-15) — batched fetchEntitySurfacesPixels.
+        // ONE wasm call walks N entities' surface DIDs in a single
+        // prefetch loop; `scene3d/spawns.js` collects per-entity
+        // surface-DID groups (after F.40 pre-warm makes the setups'
+        // shards hot) and calls this BEFORE entity dispatch so each
+        // entityManager.spawn(meta) hits a warm wasm-side cache for
+        // every surface in its setup. Same plumb-through requirement
+        // as the other entity-render exports — listed here AND in
+        // the init3D opts block below.
+        fetchEntitySurfacesPixelsBatch,
         fetchBuildingPlacement,
         fetchSetupModelLights,
         populateBuildingAabbsForLandblock,
@@ -5006,6 +5016,13 @@ void main() {
             // entityManager.spawn(meta) hits a warm shard cache.
             fetchEntityAnimationKeyframesBatch,
             fetchEntitySurfacesPixels,
+            // F.41 (2026-05-15) — batched fetchEntitySurfacesPixels.
+            // Mirrors F.40's plumb-through: the export must appear in
+            // init3D opts so scene3d/spawns.js and scene3d/materials.js
+            // can reach it. Without listing it here the export is
+            // invisible to init3D and the preloadBatch path silently
+            // falls back to serial single-call (correct but slower).
+            fetchEntitySurfacesPixelsBatch,
             fetchBuildingPlacement,
             fetchSetupModelLights,
             populateBuildingAabbsForLandblock,

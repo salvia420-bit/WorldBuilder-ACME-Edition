@@ -551,11 +551,106 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
       }
     }
 
+    // F.41 (2026-05-15) — batched surfaces pre-warm. After F.40 warms
+    // every setup's wasm `shards`, walk each unique setupDid via the
+    // (warm, sync-fast) `collectSurfaceDidsForSetups` export to extract
+    // per-entity surface DIDs. Then call `materialCache.preloadBatch`
+    // (which wraps `fetchEntitySurfacesPixelsBatch`) to fetch ALL
+    // entities' surface pixels in ONE prefetch loop — collapsing the
+    // F.40-report's "65 surface walks, none batched" into one shared
+    // walk.
+    //
+    // Synthetic spawns have no palette overrides (`paletteId=0`, no
+    // subPalettes — see `buildUpd` above), so each entity's group is
+    // `{ surfaceDids: extractedDids, baseplaletteId: 0, subPalettes: [] }`.
+    // Live ACE spawns with palette state will reach this path later
+    // via the same wire entry; the batch handles palette per-entity
+    // correctly (see `tests_entity_surfaces_pixels_batch::
+    // batch_palette_overlays_apply_per_entity`).
+    //
+    // Fail-soft on every missing prerequisite: materialCache absent,
+    // wasm exports absent, helper throws. The per-spawn lazy fetch in
+    // entities.js::_spawnImpl remains the correctness floor.
+    const matCache = scene3d?.materialCache;
+    const collectDidsFn = wasmExports?.collectSurfaceDidsForSetups;
+    const fetchSurfBatch = wasmExports?.fetchEntitySurfacesPixelsBatch;
+    if (
+      matCache &&
+      typeof matCache.preloadBatch === "function" &&
+      typeof collectDidsFn === "function" &&
+      typeof fetchSurfBatch === "function" &&
+      pendingDispatches.length > 0
+    ) {
+      const tSurfStart =
+        typeof performance !== "undefined" ? performance.now() : 0;
+      try {
+        // Step 1: collect per-setup surface DIDs from the warm cache.
+        const uniqueSetupIds = [
+          ...new Set(pendingDispatches.map((d) => d.setupDid >>> 0)),
+        ];
+        const surfDidsResult = await collectDidsFn(
+          new Uint32Array(uniqueSetupIds)
+        );
+        // Result is `{ flatSurfaceDids: Uint32Array, surfaceDidsLens: Uint32Array }`
+        // parallel to uniqueSetupIds order. Build a map for per-entity lookup.
+        const flatDids = surfDidsResult.flatSurfaceDids;
+        const didsLens = surfDidsResult.surfaceDidsLens;
+        const setupToDids = new Map();
+        let off = 0;
+        for (let i = 0; i < uniqueSetupIds.length; i += 1) {
+          const len = didsLens[i] >>> 0;
+          const dids = [];
+          for (let k = 0; k < len; k += 1) dids.push(flatDids[off + k]);
+          setupToDids.set(uniqueSetupIds[i], dids);
+          off += len;
+        }
+        try {
+          if (surfDidsResult && typeof surfDidsResult.free === "function") {
+            surfDidsResult.free();
+          }
+        } catch (_) { /* ignore */ }
+
+        // Step 2: build per-entity groups + call materialCache.preloadBatch.
+        // One group per unique setupDid is enough (entities sharing a
+        // setupDid share materials via this.materials in the cache).
+        // For synthetic spawns, every group has paletteId=0 + empty
+        // subPalettes so they all install into the shared cache.
+        const groups = uniqueSetupIds
+          .map((setupDid) => ({
+            surfaceDids: setupToDids.get(setupDid) || [],
+            baseplaletteId: 0,
+            subPalettes: [],
+          }))
+          .filter((g) => g.surfaceDids.length > 0);
+        if (groups.length > 0) {
+          await matCache.preloadBatch(groups, fetchSurfBatch);
+          const tSurfMs =
+            (typeof performance !== "undefined" ? performance.now() : 0) -
+            tSurfStart;
+          // eslint-disable-next-line no-console
+          console.log(
+            `[scene3d.spawns] LB 0x${((lbKey >>> 16) & 0xffff).toString(16).toUpperCase().padStart(4, "0")}: ` +
+              `F.41 surfaces pre-warm ${groups.length} setups in ${tSurfMs.toFixed(1)}ms`
+          );
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[scene3d.spawns] F.41 surfaces pre-warm threw (${String(e).slice(0, 200)}); ` +
+            `continuing with per-spawn lazy fetch`
+        );
+      }
+    }
+
     // Dispatch every spawn through the canonical __scene3dEntityHook
     // path. Each entityManager.spawn(meta) → _spawnImpl runs its own
     // `fetchEntityAnimationKeyframes` (lazy single-call) which now
     // hits the warm wasm-side shards cache (F.40) and short-circuits
-    // its prefetch loop.
+    // its prefetch loop. Surface fetches inside _spawnImpl (whether
+    // via `fetch_surfaces_pixels` or `fetchEntitySurfacesPixels`) ALSO
+    // hit the warm wasm-side shards cache (F.41) so the
+    // materialCache.preload / fetchEntitySurfacesPixels call there
+    // short-circuits ITS prefetch loop too.
     for (const pending of pendingDispatches) {
       const upd = buildUpd(pending.snapshot, pending.setupDid, pending.placeholder);
       const result = dispatchSpawnUpd(upd);

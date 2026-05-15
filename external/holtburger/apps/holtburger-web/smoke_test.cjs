@@ -3613,6 +3613,109 @@ try {
             String(e?.message ?? e).slice(0, 160),
         );
     }
+    // === F.41 (2026-05-15) — batched fetchEntitySurfacesPixels ===
+    // Same plumb-through gauntlet as F.40: wasm export + companion
+    // helper + JS materials.preloadBatch + spawns.js call site.
+    check(
+        "F.41: fetchEntitySurfacesPixelsBatch() exposed (batched surfaces export)",
+        typeof wasm.fetchEntitySurfacesPixelsBatch === "function",
+        `fetchEntitySurfacesPixelsBatch=${typeof wasm.fetchEntitySurfacesPixelsBatch}`,
+    );
+    {
+        const batchProto = wasm.EntitySurfacesPixelsBatch?.prototype || {};
+        const lenDescr = Object.getOwnPropertyDescriptor(batchProto, "len");
+        check(
+            "F.41: EntitySurfacesPixelsBatch class + len getter + payloadAt method exposed",
+            typeof wasm.EntitySurfacesPixelsBatch === "function" &&
+                typeof lenDescr?.get === "function" &&
+                typeof batchProto.payloadAt === "function" &&
+                typeof batchProto.wasDrained === "function",
+            `class=${typeof wasm.EntitySurfacesPixelsBatch}, ` +
+                `len=${typeof lenDescr?.get}, ` +
+                `payloadAt=${typeof batchProto.payloadAt}, ` +
+                `wasDrained=${typeof batchProto.wasDrained}`,
+        );
+    }
+    // F.41 companion helper — `collectSurfaceDidsForSetups` walks warm
+    // setup-shards (post-F.40) to extract per-setup surface DIDs without
+    // re-walking via the full entity-keyframes path.
+    check(
+        "F.41: collectSurfaceDidsForSetups() exposed (companion DID-extractor)",
+        typeof wasm.collectSurfaceDidsForSetups === "function",
+        `collectSurfaceDidsForSetups=${typeof wasm.collectSurfaceDidsForSetups}`,
+    );
+    {
+        const proto = wasm.SurfaceDidsForSetups?.prototype || {};
+        const flatDescr = Object.getOwnPropertyDescriptor(proto, "flatSurfaceDids");
+        const lensDescr = Object.getOwnPropertyDescriptor(proto, "surfaceDidsLens");
+        check(
+            "F.41: SurfaceDidsForSetups class + flatSurfaceDids + surfaceDidsLens getters exposed",
+            typeof wasm.SurfaceDidsForSetups === "function" &&
+                typeof flatDescr?.get === "function" &&
+                typeof lensDescr?.get === "function",
+            `class=${typeof wasm.SurfaceDidsForSetups}, ` +
+                `flatSurfaceDids=${typeof flatDescr?.get}, ` +
+                `surfaceDidsLens=${typeof lensDescr?.get}`,
+        );
+    }
+    // F.41 source-pattern: MaterialCache.preloadBatch is wired.
+    try {
+        const matPath = path.resolve(__dirname, "scene3d", "materials.js");
+        const matSrc = fs.readFileSync(matPath, "utf8");
+        const hasPreloadBatch =
+            /async\s+preloadBatch\s*\(\s*groups\s*,\s*fetchEntitySurfacesPixelsBatch/.test(matSrc) &&
+            /_buildEntityOwnedFromPixels/.test(matSrc);
+        check(
+            "F.41: MaterialCache.preloadBatch + _buildEntityOwnedFromPixels wired in materials.js",
+            hasPreloadBatch,
+            `preloadBatch=${hasPreloadBatch}, bytes=${matSrc.length}`,
+        );
+    } catch (e) {
+        check(
+            "F.41: MaterialCache.preloadBatch + _buildEntityOwnedFromPixels wired in materials.js",
+            false,
+            String(e?.message ?? e).slice(0, 160),
+        );
+    }
+    // F.41 source-pattern: spawns.js calls preloadBatch after F.40 warm.
+    try {
+        const spawnsPath = path.resolve(__dirname, "scene3d", "spawns.js");
+        const spawnsSrc = fs.readFileSync(spawnsPath, "utf8");
+        const hasSurfPreWarm =
+            /matCache\.preloadBatch\s*\(\s*groups\s*,\s*fetchSurfBatch\s*\)/.test(spawnsSrc) &&
+            /collectSurfaceDidsForSetups/.test(spawnsSrc);
+        check(
+            "F.41: spawns.js pre-warms surfaces via materialCache.preloadBatch after F.40",
+            hasSurfPreWarm,
+            `prewarm=${hasSurfPreWarm}, bytes=${spawnsSrc.length}`,
+        );
+    } catch (e) {
+        check(
+            "F.41: spawns.js pre-warms surfaces via materialCache.preloadBatch after F.40",
+            false,
+            String(e?.message ?? e).slice(0, 160),
+        );
+    }
+    // F.41 index.html plumb-through: both import + init3D opts must
+    // reference fetchEntitySurfacesPixelsBatch. Same failure-mode gate
+    // as F.40's check (and like Sky-J / H2 / H3 before db2abfa).
+    try {
+        const idxPath = path.resolve(__dirname, "index.html");
+        const idxSrc = fs.readFileSync(idxPath, "utf8");
+        // Count occurrences — must appear at LEAST twice (import + init3D).
+        const matches = idxSrc.match(/fetchEntitySurfacesPixelsBatch/g) || [];
+        check(
+            "F.41: index.html plumb-through (>= 2 references for import + init3D opts)",
+            matches.length >= 2,
+            `references=${matches.length} (expected >= 2)`,
+        );
+    } catch (e) {
+        check(
+            "F.41: index.html plumb-through (>= 2 references for import + init3D opts)",
+            false,
+            String(e?.message ?? e).slice(0, 160),
+        );
+    }
     // 2. JS-side adapter: scene3d/animation.js exists + exports
     //    `buildAnimationClip` + `AnimationCache`. Same Node-only
     //    constraint as Phase 7.0/7.2 — bare `import * as THREE from

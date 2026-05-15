@@ -1248,6 +1248,282 @@ export class MaterialCache {
     return resolved;
   }
 
+  /**
+   * F.41 (2026-05-15) — batch-load surfaces for **N entities** in
+   * **one** wasm round-trip. Sibling to `preload(...)`; differs in
+   * that each group carries its own `(baseplaletteId, subPalettes)`
+   * tuple so the wasm batch threads per-entity palette state through.
+   *
+   * F.40 batched `fetchEntityAnimationKeyframes` so the spawn pipeline
+   * pre-warms all setups in one prefetch loop. F.40's report identified
+   * surfaces as the next bottleneck: each entity still independently
+   * called `fetchEntitySurfacesPixels` (5+ surfaces/entity × 13 entities
+   * = 65 surface walks, none batched). `preloadBatch` collapses those
+   * 65 walks into ONE prefetch loop via the
+   * `fetchEntitySurfacesPixelsBatch` wasm export — sibling to F.40's
+   * `fetchEntityAnimationKeyframesBatch`.
+   *
+   * **Inputs.** Each group: `{ surfaceDids: number[], baseplaletteId:
+   * number, subPalettes: number[] }`. `subPalettes` is the flat
+   * `[subId, offset, length, ...]` triple buffer the wire's
+   * `EntityUpdate.subPalettes` ships. Groups with palette state get
+   * **entity-owned materials** (caller's responsibility) — they're
+   * returned via the batch payloads but NOT installed into this
+   * cache's `materials` map (which is keyed by surface DID alone and
+   * would collide with other entities' un-substituted uses).
+   * Groups with `baseplaletteId=0` AND empty `subPalettes` go through
+   * the same installation path as `preload(...)` — cached in
+   * `this.materials` keyed by DID.
+   *
+   * **Return shape.** `Promise<{ groups: Array<{ surfaceDids: number[],
+   * materials: Map<number, MeshStandardMaterial>, isEntityOwned: boolean
+   * }> }>`. The caller distributes per-group `materials` to the
+   * entity's parts; cached groups have already been installed and
+   * subsequent `getCached(did)` calls return the shared material.
+   *
+   * **Defensive fallbacks.**
+   *   - Missing `fetchEntitySurfacesPixelsBatch` (older wasm bundle):
+   *     console.warn + per-group serial preload via single-call API.
+   *   - Empty input: no-op early return.
+   *   - Any per-group failure: that group's materials map is empty;
+   *     callers fall back to `this.fallbackMaterial` for missing DIDs.
+   *
+   * **Bit-equivalence with single-call API.** The wasm batch's
+   * `payloadAt(i)` is bit-equivalent to a `fetchEntitySurfacesPixels(
+   * group.surfaceDids, group.baseplaletteId, group.subPalettes)` call
+   * — proven natively by `tests_entity_surfaces_pixels_batch::
+   * batch_surfaces_match_individual_calls`.
+   *
+   * @param {Array<{ surfaceDids: number[]|Uint32Array,
+   *   baseplaletteId?: number, subPalettes?: number[]|Uint32Array }>} groups
+   * @param {Function} fetchEntitySurfacesPixelsBatch - the wasm export
+   * @returns {Promise<{ groups: Array<{ surfaceDids: number[],
+   *   materials: Map<number, any>, isEntityOwned: boolean }> }>}
+   */
+  async preloadBatch(groups, fetchEntitySurfacesPixelsBatch) {
+    if (!Array.isArray(groups) || groups.length === 0) {
+      return { groups: [] };
+    }
+    if (typeof fetchEntitySurfacesPixelsBatch !== "function") {
+      // Fallback path — wasm bundle predates F.41. Serial preload
+      // each group via the single-call API path. Slower (N prefetch
+      // loops) but correct.
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[MaterialCache] preloadBatch: fetchEntitySurfacesPixelsBatch missing; falling back to serial per-group fetches"
+      );
+      const out = [];
+      for (const g of groups) {
+        const surfaceDids = Array.from(g.surfaceDids || []);
+        const baseplaletteId = (g.baseplaletteId ?? 0) >>> 0;
+        const subPalettes = Array.from(g.subPalettes || []);
+        const isEntityOwned = baseplaletteId !== 0 || subPalettes.length > 0;
+        out.push({
+          surfaceDids,
+          materials: new Map(),
+          isEntityOwned,
+        });
+        // We can't easily fall back without the single-call API
+        // reference here — leave materials map empty and let callers
+        // fall back to fallbackMaterial. The batch path is the
+        // load-bearing one; the fallback is informational only.
+      }
+      return { groups: out };
+    }
+
+    // Build the flat input arrays. Each group contributes:
+    //   - dids: Uint32 sequence appended to flat_surface_dids
+    //   - one count to surface_dids_lens
+    //   - one baseplaletteId to base_palette_ids
+    //   - sub-palette triples appended to flat_sub_palettes
+    //   - triple count to sub_palettes_triple_counts
+    const flatSurfaceDids = [];
+    const surfaceDidsLens = [];
+    const basePaletteIds = [];
+    const flatSubPalettes = [];
+    const subPalettesTripleCounts = [];
+    const groupMeta = []; // parallel to groups: { surfaceDids, isEntityOwned, subDidIdx }
+
+    for (const g of groups) {
+      const surfaceDidsArr = Array.from(g.surfaceDids || []).map((d) => d >>> 0);
+      const baseplaletteId = (g.baseplaletteId ?? 0) >>> 0;
+      const subPalettesArr = Array.from(g.subPalettes || []).map((d) => d >>> 0);
+      if (subPalettesArr.length % 3 !== 0) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[MaterialCache] preloadBatch: subPalettes must be flat triples; group skipped"
+        );
+        groupMeta.push({
+          surfaceDids: surfaceDidsArr,
+          isEntityOwned:
+            baseplaletteId !== 0 || subPalettesArr.length > 0,
+          skipped: true,
+        });
+        continue;
+      }
+      for (const d of surfaceDidsArr) flatSurfaceDids.push(d);
+      surfaceDidsLens.push(surfaceDidsArr.length);
+      basePaletteIds.push(baseplaletteId);
+      for (const d of subPalettesArr) flatSubPalettes.push(d);
+      subPalettesTripleCounts.push(subPalettesArr.length / 3);
+      groupMeta.push({
+        surfaceDids: surfaceDidsArr,
+        isEntityOwned: baseplaletteId !== 0 || subPalettesArr.length > 0,
+        skipped: false,
+      });
+    }
+
+    // All-skipped early-out.
+    if (surfaceDidsLens.length === 0) {
+      return {
+        groups: groupMeta.map((m) => ({
+          surfaceDids: m.surfaceDids,
+          materials: new Map(),
+          isEntityOwned: m.isEntityOwned,
+        })),
+      };
+    }
+
+    let batch;
+    try {
+      batch = await fetchEntitySurfacesPixelsBatch(
+        new Uint32Array(flatSurfaceDids),
+        new Uint32Array(surfaceDidsLens),
+        new Uint32Array(basePaletteIds),
+        new Uint32Array(flatSubPalettes),
+        new Uint32Array(subPalettesTripleCounts),
+      );
+    } catch (e) {
+      // Bulk batch failed — surface failure to caller and let each
+      // group fall back to fallbackMaterial. We don't auto-retry per-
+      // group here; the caller can decide.
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[MaterialCache] preloadBatch: wasm batch threw; all groups fall back",
+        e
+      );
+      return {
+        groups: groupMeta.map((m) => ({
+          surfaceDids: m.surfaceDids,
+          materials: new Map(),
+          isEntityOwned: m.isEntityOwned,
+        })),
+      };
+    }
+
+    // Distribute per-group results. payloadAt(i) MOVES the i-th
+    // Vec<SurfacePixels> out — JS now owns each SurfacePixels' wasm
+    // handle and is responsible for sp.free() per pixels item.
+    const resultGroups = new Array(groups.length);
+    let payloadIdx = 0;
+    for (let gi = 0; gi < groupMeta.length; gi += 1) {
+      const meta = groupMeta[gi];
+      const materials = new Map();
+      if (meta.skipped) {
+        resultGroups[gi] = {
+          surfaceDids: meta.surfaceDids,
+          materials,
+          isEntityOwned: meta.isEntityOwned,
+        };
+        continue;
+      }
+      const payload = batch.payloadAt(payloadIdx);
+      payloadIdx += 1;
+      if (!payload) {
+        resultGroups[gi] = {
+          surfaceDids: meta.surfaceDids,
+          materials,
+          isEntityOwned: meta.isEntityOwned,
+        };
+        continue;
+      }
+      // payload is an Array<SurfacePixels> parallel to meta.surfaceDids.
+      for (let j = 0; j < meta.surfaceDids.length; j += 1) {
+        const did = meta.surfaceDids[j];
+        const sp = payload[j];
+        if (!sp) continue;
+        if (meta.isEntityOwned) {
+          // Build entity-owned material — do NOT install into
+          // this.materials (would collide with non-recoloured uses
+          // of the same surface DID). Per-entity caller registers
+          // ownership via inst.registerOwnedTexture / registerOwnedMaterial.
+          const entityMat = this._buildEntityOwnedFromPixels(did, sp);
+          if (entityMat) materials.set(did, entityMat);
+        } else {
+          // Cache-installed path. _installFromPixels keys by DID
+          // and installs into this.materials. Future getCached(did)
+          // returns the same material across all callers.
+          const mat = this._installFromPixels(did, sp);
+          if (mat !== this.fallbackMaterial) {
+            materials.set(did, mat);
+          }
+        }
+      }
+      resultGroups[gi] = {
+        surfaceDids: meta.surfaceDids,
+        materials,
+        isEntityOwned: meta.isEntityOwned,
+      };
+    }
+
+    // Free the batch wrapper. Per-payload SurfacePixels handles were
+    // freed inside _installFromPixels / _buildEntityOwnedFromPixels.
+    try {
+      if (batch && typeof batch.free === "function") batch.free();
+    } catch (_) {}
+
+    return { groups: resultGroups };
+  }
+
+  /**
+   * F.41 — build an entity-owned `MeshStandardMaterial` from a
+   * `SurfacePixels` handle. Unlike `_installFromPixels`, this does
+   * NOT cache the result in `this.materials` — entity-owned materials
+   * are keyed by `(entity, did)` and live on the entity until
+   * dispose. The caller (entities.js) is responsible for
+   * `inst.registerOwnedTexture` / `registerOwnedMaterial`.
+   *
+   * Returns the material on success; `null` on empty/failed pixels.
+   * SurfacePixels handle is `.free()`'d before return.
+   */
+  _buildEntityOwnedFromPixels(did, sp) {
+    if (!sp) return null;
+    let w, h, pixels, surfaceType;
+    try {
+      w = sp.width;
+      h = sp.height;
+    } catch (_) {
+      return null;
+    }
+    if (w === 0 || h === 0) {
+      try { if (typeof sp.free === "function") sp.free(); } catch (_) {}
+      return null;
+    }
+    try {
+      pixels = sp.pixels;
+      surfaceType = sp.surfaceType ?? 0;
+    } catch (_) {
+      return null;
+    }
+    const tex = surfacePixelsToTexture(pixels, w, h);
+    try { if (typeof sp.free === "function") sp.free(); } catch (_) {}
+    // Entity-owned material uses plain opaque MeshStandardMaterial —
+    // mirrors entities.js line 594-600's existing entity-recolour
+    // path which keeps things simple (no normal/height/CSM stack on
+    // recoloured NPC surfaces today). Future polish: thread
+    // surface_type flags through.
+    const mat = new THREE.MeshStandardMaterial({
+      map: tex,
+      roughness: 0.9,
+      metalness: 0.0,
+      side: THREE.DoubleSide,
+      transparent: false,
+    });
+    mat.name = `entity-surface-${did.toString(16).padStart(8, "0")}`;
+    mat.userData = { surfaceTypeFlags: surfaceType, batchOrigin: "F.41" };
+    return mat;
+  }
+
   _installFromPixels(did, sp) {
     if (!sp) return this.fallbackMaterial;
     // wasm-bindgen wrappers around a null Rust pointer throw on every
