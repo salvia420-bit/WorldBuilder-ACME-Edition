@@ -1294,6 +1294,13 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
         skyDome.setCloudOverlay(cloudOverlay);
         liveScene3d.cloudOverlay = cloudOverlay;
 
+        // Clouds-D follow-up: when volumetric clouds are on, the
+        // retail parametric SkyObjects (cloud bands, moon mesh,
+        // weather streaks) clash visually. Hide them by default;
+        // opt back in with `?retroSky=on` for a "retro look".
+        const retroSky = params.get("retroSky") === "on";
+        skyDome.setParametricSkyObjectsVisible(retroSky);
+
         // Runtime ergonomics — let the user tweak from devtools without
         // re-navigating. Mirrors Sky-K's `__setSkyOpacity` pattern.
         // eslint-disable-next-line no-undef
@@ -1319,10 +1326,25 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
         // eslint-disable-next-line no-console
         console.log(
           "[clouds-d] CloudOverlay wired into SkyDome (?clouds=on). " +
-            `coverage=${effect.clouds.coverage} qualityPreset=${effect.qualityPreset ?? "default"}. ` +
+            `coverage=${effect.clouds.coverage} qualityPreset=${effect.qualityPreset ?? "default"} ` +
+            `retroSky=${retroSky}. ` +
             "Visible clouds require a real GPU — swiftshader output is uniform. " +
-            "Live tweak: __setCloudCoverage(0..1), __setCloudQuality('low'|'medium'|'high'|'ultra')."
+            "Live tweak: __setCloudCoverage(0..1), __setCloudQuality('low'|'medium'|'high'|'ultra'). " +
+            "Parametric sky toggle: liveScene3d.skyDome.setParametricSkyObjectsVisible(true/false)."
         );
+        // Heads-up if SSAO is on: in the SSAO composer path, my cloud
+        // overlay composites AFTER OutputPass (depth-unaware), so
+        // clouds appear OVER world geometry. For depth-correct
+        // occlusion, add `?ssao=off` (default for `?quality=mid`).
+        if (quality?.flags?.ssao) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            "[clouds-d] SSAO is on (quality=high/ultra). Cloud composite " +
+              "is depth-UNAWARE on this path — clouds will appear over world " +
+              "geometry regardless of depth. Add `?ssao=off` to the URL for " +
+              "depth-correct clouds."
+          );
+        }
       }
     } catch (e) {
       // eslint-disable-next-line no-console

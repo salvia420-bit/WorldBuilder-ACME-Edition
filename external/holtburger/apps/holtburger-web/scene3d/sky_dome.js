@@ -737,6 +737,12 @@ export class SkyDome {
       // bake without traversing.
       rotator.userData.bake = bakeGroup;
       this.skyObjectMeshes.set(skyObjectId, rotator);
+      // Clouds-D follow-up: if the parametric sky has been suppressed
+      // (volumetric clouds active), new rotators are born invisible.
+      // Restored when setParametricSkyObjectsVisible(true) is called.
+      if (this._suppressParametricObjects) {
+        rotator.visible = false;
+      }
       added += 1;
     }
     // eslint-disable-next-line no-console
@@ -954,6 +960,30 @@ export class SkyDome {
    */
   setCloudOverlay(cloudOverlay) {
     this.cloudOverlay = cloudOverlay;
+  }
+
+  /**
+   * Clouds-D follow-up: toggle visibility of the parametric SkyObject
+   * meshes (scrolling cloud bands, moon, weather streaks, etc.) as a
+   * single switch. When clouds=on, the user prefers the volumetric
+   * skybox alone; the parametric meshes can clash visually. A future
+   * "retro look" mode can re-enable them via setParametricSkyObjectsVisible(true).
+   *
+   * Setting `visible=false` walks all current rotators in
+   * `skyObjectMeshes` and sets `rotator.visible = false`, which
+   * cascades to the bake mesh + any child particles (the moon's
+   * crimson-star chain is parented under the moon rotator per
+   * Sky-J P5 — `_findCelestialBodyForSetupModel`). Future rotators
+   * added by populateCelestialBodies pick up the suppression via the
+   * `_suppressParametricObjects` flag.
+   *
+   * @param {boolean} visible
+   */
+  setParametricSkyObjectsVisible(visible) {
+    this._suppressParametricObjects = !visible;
+    for (const rotator of this.skyObjectMeshes.values()) {
+      rotator.visible = !!visible;
+    }
   }
 
   tick(_dt, camera) {

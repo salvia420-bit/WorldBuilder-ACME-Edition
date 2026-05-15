@@ -334,6 +334,13 @@ The handoff prescribed full TS-side decoupling (drop AtmosphereMaterialBase / At
 
 These keep Clouds-B as a tight, reversible chunk while still meeting the stated gate. The cleaner full-decouple stays available as a Clouds-B-extended task if/when it becomes load-bearing.
 
+## Clouds-D follow-ups landed 2026-05-15 (post-426e8e9 + edf7d7a)
+
+Two more refinements before the user's 1070 Ti eye-test:
+
+1. **Parametric SkyObjects hidden by default when `?clouds=on`** (user feedback: "scrolling clouds, moon, etc are weird"). `SkyDome.setParametricSkyObjectsVisible(visible)` walks every rotator in `skyObjectMeshes` and toggles `rotator.visible` — cascades to bake + child particles (the moon's crimson-star chain is parented under the moon rotator per Sky-J P5). `populateCelestialBodies` honors the suppression for late-arriving rotators. Opt back in via `?retroSky=on` ("retro look" for users that prefer the original parametric skybox).
+2. **SSAO depth-correctness trade-off documented.** Default quality is `mid` (SSAO off), so my direct-render path handles depth correctly for the default eye-test. On `?quality=high` or `?quality=ultra`, SSAO is on and my SSAO-path cloud composite is depth-UNAWARE (clouds appear over world). A console.warn nudges the user toward `?ssao=off` for depth-correct rendering. Full fix (custom DepthTexture-attached RT + ShaderPass) deferred — non-trivial three-addons-composer surgery for a rarely-default-active case.
+
 ## How to eye-test Clouds-D (real GPU)
 
 After the Clouds-D commit, this is the user-facing flow for the 1070 Ti eye-test:
