@@ -72,6 +72,10 @@ export class CloudOverlay {
         : () => null;
 
     // The bridge. Owns the CloudsEffect + the 5 DayGroup uniforms.
+    // CloudVolume's constructor sets the load-bearing ECEF transform
+    // (worldToECEFMatrix translates world +Y by bottomRadius so the
+    // player's world position lands at Earth's surface) — without it,
+    // rays miss the cloud volume entirely.
     this.volume = new CloudVolume({ camera, cloudOptions });
 
     // Procedural textures need a one-time bake (or per-frame for the

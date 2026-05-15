@@ -137,9 +137,53 @@
         appendDetail(`rendered 5 frames; render errors: ${renderErrors.length}`);
         window.__cloudLoadSmoke.steps.render = renderErrors.length === 0;
 
-        // Sample pixels and check for non-uniformity (proves the cloud
-        // composite ran and added detail over the clear color).
+        // Cloud-presence detection.
+        //
+        // Earlier this test sampled 7 fixed pixels and compared their
+        // spread — but takram-clouds with default coverage produces
+        // <1% cloud-pixel coverage on a typical view, so 7 samples
+        // routinely miss every cloud pixel and read "FAIL" while the
+        // RT actually has correct cloud data.
+        //
+        // The real check: sample the cloud RT directly. Blit the
+        // effect.cloudsPass.outputBuffer (a Texture) into a temp RT,
+        // count non-zero-alpha pixels. Clouds present = >0 alpha
+        // pixels. Verified working via cloud_debug.html on GTX 1070.
         const gl = renderer.getContext();
+        let cloudPixels = 0;
+        let rtUniqueColors = 0;
+        try {
+          const rtTex = effect.cloudsPass?.outputBuffer;
+          if (rtTex) {
+            const probeRT = new THREE.WebGLRenderTarget(canvas.width, canvas.height);
+            const blitMat = new THREE.ShaderMaterial({
+              uniforms: { t: { value: rtTex }, res: { value: new THREE.Vector2(canvas.width, canvas.height) } },
+              vertexShader: 'void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }',
+              fragmentShader: 'precision highp float; uniform sampler2D t; uniform vec2 res; void main() { vec2 uv = gl_FragCoord.xy / res; gl_FragColor = texture2D(t, uv); }',
+            });
+            const blitScene = new THREE.Scene();
+            blitScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), blitMat));
+            const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+            renderer.setRenderTarget(probeRT);
+            renderer.render(blitScene, ortho);
+            const rtPx = new Uint8Array(canvas.width * canvas.height * 4);
+            renderer.readRenderTargetPixels(probeRT, 0, 0, canvas.width, canvas.height, rtPx);
+            const colors = new Set();
+            for (let i = 0; i < rtPx.length; i += 4) {
+              if (rtPx[i+3] > 0) cloudPixels++;
+              colors.add(`${rtPx[i]},${rtPx[i+1]},${rtPx[i+2]},${rtPx[i+3]}`);
+              if (colors.size > 200) break;
+            }
+            rtUniqueColors = colors.size;
+            // restore default render target
+            renderer.setRenderTarget(null);
+          }
+        } catch (e) {
+          appendDetail(`cloud RT probe failed: ${e.message}`);
+        }
+        appendDetail(`cloud RT: ${cloudPixels} nonzero-alpha pixels, ${rtUniqueColors} unique colors`);
+
+        // canvas histogram for diagnostic continuity
         const pixels = new Uint8Array(canvas.width * canvas.height * 4);
         gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
         let rSum = 0, gSum = 0, bSum = 0, n = 0;
@@ -154,7 +198,7 @@
         const avg = [rSum/n, gSum/n, bSum/n];
         const spread = [rMax - rMin, gMax - gMin, bMax - bMin];
         const maxSpread = Math.max(...spread);
-        appendDetail(`pixels: avg=[${avg.map(v => v.toFixed(1)).join(', ')}], spread=[${spread.join(', ')}], maxSpread=${maxSpread}`);
+        appendDetail(`canvas: avg=[${avg.map(v => v.toFixed(1)).join(', ')}], spread=[${spread.join(', ')}], maxSpread=${maxSpread}`);
 
         // Filter out benign-uniform-warning noise; surface only real
         // shader/buffer errors.
@@ -169,29 +213,32 @@
 
         // Two gates, reported separately:
         //   - plumbing: composer + EffectPass + procedural-texture
-        //     wiring runs without errors. This is the load-bearing
-        //     Clouds-D-mini gate.
-        //   - visualClouds: output has per-pixel variation (proves
-        //     the raymarch produced non-uniform density). Requires a
-        //     real GPU — swiftshader's 3D-texture procedural bake
-        //     silently produces zero density, so this fails under
-        //     swiftshader even when plumbing is correct.
+        //     wiring runs without errors. Load-bearing.
+        //   - visualClouds: cloud RT has non-zero-alpha pixels (proves
+        //     the raymarch produced visible cloud density). Sampling
+        //     the RT directly avoids the "7 fixed pixels miss <1%
+        //     cloud coverage" trap that the earlier maxSpread check
+        //     fell into.
         //
-        // PASS = plumbing OK. visualClouds is informational under
-        // swiftshader; it's the gate for Clouds-D's real-GPU eye-test.
+        // Real-GPU eye-test (GTX 1070, ANGLE/D3D11) confirmed working
+        // 2026-05-15 via cloud_debug.html — see project_holtburger
+        // memories for screenshot. Swiftshader still produces zero
+        // alpha because its 3D-texture sampling silently zeroes.
         const plumbingOk = renderErrors.length === 0 && blockingErrors.length === 0;
-        const visualClouds = maxSpread > 8;
+        const visualClouds = cloudPixels > 50;  // >50 cloud-alpha pixels = clouds present
         const outputChangedFromClear = avg[0] !== 0x20 || avg[1] !== 0x28 || avg[2] !== 0x40;
 
         window.__cloudLoadSmoke.ok = plumbingOk;
         window.__cloudLoadSmoke.visualClouds = visualClouds;
+        window.__cloudLoadSmoke.cloudPixels = cloudPixels;
+        window.__cloudLoadSmoke.rtUniqueColors = rtUniqueColors;
         window.__cloudLoadSmoke.outputChangedFromClear = outputChangedFromClear;
 
         if (plumbingOk) {
           if (visualClouds) {
-            setStatus('ok', `OK — plumbing valid + visible clouds (maxSpread=${maxSpread})`);
+            setStatus('ok', `OK — plumbing valid + visible clouds (${cloudPixels} cloud-alpha pixels, ${rtUniqueColors} unique RT colors)`);
           } else if (outputChangedFromClear) {
-            setStatus('ok', `OK — plumbing valid; uniform output (swiftshader 3D-tex bake limit) — needs real GPU for visible clouds`);
+            setStatus('ok', `OK — plumbing valid; cloud RT empty (swiftshader 3D-tex bake limit OR no ECEF transform) — needs real GPU + worldToECEFMatrix`);
           } else {
             setStatus('ok', `OK — plumbing valid; output unchanged from clear (cloud effect didn't write)`);
           }

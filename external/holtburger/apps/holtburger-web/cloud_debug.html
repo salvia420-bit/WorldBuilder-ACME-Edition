@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>cloud_debug — deep probe of cloud effect state</title>
+    <style>
+      body { font-family: ui-monospace, monospace; margin: 1rem; }
+      canvas { border: 1px solid #ccc; }
+      pre { background: #f7f7f7; padding: 0.5rem; max-height: 50vh; overflow-y: auto; }
+    </style>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/",
+          "@takram/three-clouds": "./vendor/takram-three-clouds/build/index.js",
+          "@takram/three-atmosphere": "https://cdn.jsdelivr.net/npm/@takram/three-atmosphere@0.19.1/build/index.js",
+          "@takram/three-atmosphere/shaders/bruneton": "https://cdn.jsdelivr.net/npm/@takram/three-atmosphere@0.19.1/build/shaders/bruneton.js",
+          "@takram/three-geospatial": "https://cdn.jsdelivr.net/npm/@takram/three-geospatial@0.9.1/build/index.js",
+          "@takram/three-geospatial/shaders": "https://cdn.jsdelivr.net/npm/@takram/three-geospatial@0.9.1/build/shaders.js",
+          "postprocessing": "https://cdn.jsdelivr.net/npm/postprocessing@6.39.1/build/index.js",
+          "tiny-invariant": "https://cdn.jsdelivr.net/npm/tiny-invariant@1.3.3/dist/esm/tiny-invariant.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <h1>cloud_debug — deep probe</h1>
+    <canvas id="stage" width="512" height="384"></canvas>
+    <pre id="log">starting…</pre>
+    <pre id="result">awaiting…</pre>
+
+    <script type="module">
+      import * as THREE from 'three';
+      import { CloudsEffect, CloudShape, CloudShapeDetail, LocalWeather, Turbulence } from '@takram/three-clouds';
+      import { AtmosphereParameters } from '@takram/three-atmosphere';
+      import { EffectComposer, EffectPass, RenderPass } from 'postprocessing';
+
+      const log = (s) => { document.getElementById('log').textContent += '\n' + s; console.log('[cloud_debug]', s); };
+      const result = (obj) => { document.getElementById('result').textContent = JSON.stringify(obj, null, 2); };
+
+      window.__debug = { ready: false };
+
+      try {
+        const canvas = document.getElementById('stage');
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+        renderer.setSize(canvas.width, canvas.height, false);
+        renderer.setClearColor(0x223344, 1);
+        log('renderer: WebGL' + (renderer.capabilities.isWebGL2 ? '2' : '1'));
+
+        const gl = renderer.getContext();
+        const ext = gl.getExtension('WEBGL_debug_renderer_info');
+        log('renderer string: ' + (ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : 'unknown'));
+
+        const scene = new THREE.Scene();
+        // takram-clouds is ECEF-based. Without setting worldToECEFMatrix etc,
+        // the cloud layer "spheres" sit at Earth radius (~6371km from world
+        // origin). Camera at world (0, 500, 0) would be 6,370,500m BELOW the
+        // cloud-layer sphere — rays miss it entirely (cloud RT = all zeros).
+        //
+        // Cheapest fix: pretend world IS ECEF. Place camera at world position
+        // close to Earth's surface (Y = bottomRadius + 500m), keep all
+        // matrices at identity.
+        const atm = AtmosphereParameters.DEFAULT;
+        const camera = new THREE.PerspectiveCamera(60, canvas.width / canvas.height, 1, 100000);
+        const earthY = atm.bottomRadius;
+        camera.position.set(0, earthY + 500, 0);
+        camera.lookAt(5000, earthY + 1500, 5000);
+        log('bottomRadius=' + atm.bottomRadius + ' (units?)');
+        log('camera Y=' + camera.position.y);
+
+        const effect = new CloudsEffect(camera);
+        window.__effect = effect;
+        window.__renderer = renderer;
+        log('CloudsEffect constructed');
+
+        // === Load PRE-BAKED textures from CDN (bypass procedural bake) ===
+        log('THREE.RedFormat=' + THREE.RedFormat + ' RGBAFormat=' + THREE.RGBAFormat + ' RGFormat=' + THREE.RGFormat);
+        async function loadBin3D(url, size, format = THREE.RedFormat) {
+          const r = await fetch(url);
+          log(`fetch ${url.split("/").pop()} status=${r.status} clen=${r.headers.get("content-length")}`);
+          const buf = await r.arrayBuffer();
+          const u8 = new Uint8Array(buf);
+          const channels = format === THREE.RGBAFormat ? 4 : format === THREE.RGFormat ? 2 : 1;
+          const expected = size * size * size * channels;
+          log(`loaded ${url.split("/").pop()}: ${u8.length} bytes (expected ${expected})`);
+          // sample some bytes to confirm content
+          let nonzero = 0;
+          for (let i = 0; i < Math.min(u8.length, 10000); i++) if (u8[i] !== 0) nonzero++;
+          log(`  first 10k bytes nonzero count: ${nonzero}`);
+          const tex = new THREE.Data3DTexture(u8, size, size, size);
+          tex.format = format;
+          tex.type = THREE.UnsignedByteType;
+          tex.minFilter = THREE.LinearFilter;
+          tex.magFilter = THREE.LinearFilter;
+          tex.wrapS = tex.wrapT = tex.wrapR = THREE.RepeatWrapping;
+          tex.colorSpace = THREE.NoColorSpace;
+          tex.generateMipmaps = false;
+          tex.unpackAlignment = 1;
+          tex.flipY = false;
+          tex.needsUpdate = true;
+          return tex;
+        }
+        async function loadPng2D(url) {
+          const img = new Image();
+          img.crossOrigin = "anonymous";
+          await new Promise((r, rj) => { img.onload = r; img.onerror = rj; img.src = url; });
+          const tex = new THREE.CanvasTexture(img);
+          tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+          tex.needsUpdate = true;
+          log(`loaded ${url.split("/").pop()}: ${img.width}x${img.height}`);
+          return tex;
+        }
+
+        const BASE = "https://cdn.jsdelivr.net/npm/@takram/three-clouds@0.7.6/assets/";
+        const [shapeTex, detailTex, weatherTex, turbTex] = await Promise.all([
+          loadBin3D(BASE + "shape.bin", 128, THREE.RedFormat),
+          loadBin3D(BASE + "shape_detail.bin", 32, THREE.RedFormat),
+          loadPng2D(BASE + "local_weather.png"),
+          loadPng2D(BASE + "turbulence.png"),
+        ]);
+        effect.shapeTexture = shapeTex;
+        effect.shapeDetailTexture = detailTex;
+        effect.localWeatherTexture = weatherTex;
+        effect.turbulenceTexture = turbTex;
+        log('pre-baked textures assigned');
+
+        // CRANK coverage
+        if (effect.clouds) effect.clouds.coverage = 0.9;
+        log('coverage set to ' + effect.clouds.coverage);
+
+        const composer = new EffectComposer(renderer);
+        composer.addPass(new RenderPass(scene, camera));
+        composer.addPass(new EffectPass(camera, effect));
+        log('composer wired');
+
+        // Render 10 frames
+        for (let i = 0; i < 10; i++) {
+          composer.render(1 / 60);
+        }
+        log('rendered 10 frames');
+
+        // === BLIT cloud RT to canvas + sample histogram ===
+        // outputBuffer IS the texture (not a render target). Render it to
+        // a regular WebGLRenderTarget so we can readPixels.
+        const rtTex = effect.cloudsPass?.outputBuffer;
+        log('cloud RT texture: ' + (rtTex ? rtTex.constructor.name + ' ' + (rtTex.image?.width || '?') + 'x' + (rtTex.image?.height || '?') : 'missing'));
+
+        if (rtTex) {
+          const probeRT = new THREE.WebGLRenderTarget(canvas.width, canvas.height);
+          const blitMat = new THREE.ShaderMaterial({
+            uniforms: { t: { value: rtTex } },
+            vertexShader: `void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+            fragmentShader: `
+              precision highp float;
+              uniform sampler2D t;
+              uniform vec2 res;
+              void main() {
+                vec2 uv = gl_FragCoord.xy / res;
+                vec4 c = texture2D(t, uv);
+                gl_FragColor = c;
+              }`,
+          });
+          blitMat.uniforms.res = { value: new THREE.Vector2(canvas.width, canvas.height) };
+          const blitScene = new THREE.Scene();
+          blitScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), blitMat));
+          const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+          // Render to our probe RT
+          renderer.setRenderTarget(probeRT);
+          renderer.render(blitScene, ortho);
+
+          // Read pixels
+          const px = new Uint8Array(canvas.width * canvas.height * 4);
+          renderer.readRenderTargetPixels(probeRT, 0, 0, canvas.width, canvas.height, px);
+
+          const colors = new Set();
+          let rMin=255,rMax=0,gMin=255,gMax=0,bMin=255,bMax=0,aMin=255,aMax=0;
+          let nonzeroAlpha = 0;
+          for (let i = 0; i < px.length; i += 4) {
+            colors.add(`${px[i]},${px[i+1]},${px[i+2]},${px[i+3]}`);
+            if (colors.size > 200) break;
+            if (px[i]<rMin)rMin=px[i]; if (px[i]>rMax)rMax=px[i];
+            if (px[i+1]<gMin)gMin=px[i+1]; if (px[i+1]>gMax)gMax=px[i+1];
+            if (px[i+2]<bMin)bMin=px[i+2]; if (px[i+2]>bMax)bMax=px[i+2];
+            if (px[i+3]<aMin)aMin=px[i+3]; if (px[i+3]>aMax)aMax=px[i+3];
+            if (px[i+3] > 0) nonzeroAlpha++;
+          }
+          log(`CLOUD RT histogram: ${colors.size} unique colors`);
+          log(`  R[${rMin}-${rMax}] G[${gMin}-${gMax}] B[${bMin}-${bMax}] A[${aMin}-${aMax}]`);
+          log(`  nonzero-alpha pixels: ${nonzeroAlpha} / ${px.length/4}`);
+          // Also paint the blit to the canvas so we SEE the cloud RT
+          renderer.setRenderTarget(null);
+          renderer.autoClear = false;
+          renderer.render(blitScene, ortho);
+          log('cloud RT visualized on canvas');
+        }
+
+        // === full canvas histogram to detect any variation ===
+        const fullPixels = new Uint8Array(canvas.width * canvas.height * 4);
+        gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, fullPixels);
+        const uniqueColors = new Set();
+        let rMin = 255, rMax = 0, gMin = 255, gMax = 0, bMin = 255, bMax = 0;
+        for (let i = 0; i < fullPixels.length; i += 4) {
+          uniqueColors.add(`${fullPixels[i]},${fullPixels[i+1]},${fullPixels[i+2]}`);
+          if (uniqueColors.size > 100) break;
+          if (fullPixels[i] < rMin) rMin = fullPixels[i];
+          if (fullPixels[i] > rMax) rMax = fullPixels[i];
+          if (fullPixels[i+1] < gMin) gMin = fullPixels[i+1];
+          if (fullPixels[i+1] > gMax) gMax = fullPixels[i+1];
+          if (fullPixels[i+2] < bMin) bMin = fullPixels[i+2];
+          if (fullPixels[i+2] > bMax) bMax = fullPixels[i+2];
+        }
+        const totalUnique = uniqueColors.size;
+        log(`canvas histogram: totalUnique=${totalUnique} rMin=${rMin} rMax=${rMax} gMin=${gMin} gMax=${gMax} bMin=${bMin} bMax=${bMax}`);
+
+        // === Inspect canvas pixels ===
+        const canvasSamples = [];
+        for (const [x, y] of [[20, 20], [256, 192], [490, 360], [128, 100], [400, 280], [200, 50], [50, 350]]) {
+          const px = new Uint8Array(4);
+          gl.readPixels(x, canvas.height - 1 - y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+          canvasSamples.push({ x, y, rgba: Array.from(px) });
+        }
+
+        // === Inspect cloud RT directly ===
+        const buf = effect.cloudsPass?.outputBuffer;
+        let cloudRT = { exists: !!buf, width: buf?.width, height: buf?.height };
+        if (buf) {
+          try {
+            const pixels = new Uint8Array(buf.width * buf.height * 4);
+            renderer.readRenderTargetPixels(buf, 0, 0, buf.width, buf.height, pixels);
+            const rtSamples = [];
+            const w = buf.width, h = buf.height;
+            for (const [x, y] of [[10, 10], [w / 2 | 0, h / 2 | 0], [w - 10, h - 10], [w / 4 | 0, h / 3 | 0]]) {
+              const i = (y * w + x) * 4;
+              rtSamples.push({ x, y, rgba: [pixels[i], pixels[i+1], pixels[i+2], pixels[i+3]] });
+            }
+            const colors = new Set();
+            for (let i = 0; i < pixels.length; i += 4) {
+              colors.add(`${pixels[i]},${pixels[i+1]},${pixels[i+2]},${pixels[i+3]}`);
+              if (colors.size > 50) break;
+            }
+            cloudRT.samples = rtSamples;
+            cloudRT.uniqueColors = Array.from(colors).slice(0, 20);
+            cloudRT.totalUnique = colors.size;
+          } catch (e) {
+            cloudRT.error = e.message;
+          }
+        }
+
+        const dump = {
+          renderer: ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : 'unknown',
+          coverage: effect.clouds?.coverage,
+          shapeRepeat: effect.shapeRepeat?.toArray?.(),
+          shapeOffset: effect.shapeOffset?.toArray?.(),
+          localWeatherRepeat: effect.localWeatherRepeat?.toArray?.(),
+          layerCount: effect.cloudLayers?.length,
+          layers: effect.cloudLayers?.map((l, i) => ({
+            i, channel: l.channel, altitude: l.altitude, height: l.height, densityScale: l.densityScale,
+          })),
+          canvasSamples,
+          cloudRT,
+        };
+        result(dump);
+        window.__debug = { ready: true, dump };
+      } catch (err) {
+        log('ERROR: ' + err.message);
+        result({ error: err.message, stack: err.stack });
+        window.__debug = { ready: true, error: err.message };
+      }
+    </script>
+  </body>
+</html>

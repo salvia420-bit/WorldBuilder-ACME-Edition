@@ -32,6 +32,7 @@
 
 import * as THREE from 'three';
 import { CloudsEffect } from '@takram/three-clouds';
+import { AtmosphereParameters } from '@takram/three-atmosphere';
 
 // Match sky_lighting.js's defaults so the cloud volume's initial
 // uniforms are sane even before the first SkyState arrives.
@@ -109,6 +110,38 @@ export class CloudVolume {
     if (!camera) throw new Error('CloudVolume: camera is required');
 
     this.effect = new CloudsEffect(camera, cloudOptions);
+
+    // ECEF transform — LOAD-BEARING.
+    //
+    // takram-clouds raymarches in ECEF (Earth-Centered Earth-Fixed)
+    // coordinates. Cloud layers sit at fixed altitudes above Earth's
+    // surface — layer R at altitude 750m = ECEF radius bottomRadius +
+    // 750 = 6,360,750m. If the camera's world position maps to ECEF
+    // radius 0 (i.e. Earth center, the identity-matrix default), rays
+    // travel ~6,371km before hitting the cloud volume — well past
+    // `maxRayDistance`, every ray misses, cloud RT is empty.
+    //
+    // Without this, clouds are invisible regardless of how well the
+    // rest of the integration is wired. Discovered via cloud_debug.html
+    // on real GPU 2026-05-15 — see [[project_holtburger_clouds_d_done]]
+    // notes for the "200 unique colors, 280 cloud-alpha pixels" finding.
+    //
+    // Strategy: pretend world IS ECEF, plus a vertical offset so the
+    // player's world position lands at Earth's surface:
+    //   worldToECEFMatrix = translate world +Y by `bottomRadius`
+    //   ecefToWorldMatrix = inverse
+    //   altitudeCorrection = (0, 0, 0)
+    //
+    // Camera at world (x, y, z) maps to ECEF (x, bottomRadius + y, z).
+    // For an AC player at world Y = 50, ECEF radius ≈ 6,360,050 — 50m
+    // above Earth's surface, below the cloud-layer base at 750m. Rays
+    // going up hit the cloud volume at the expected distance.
+    const atm = AtmosphereParameters.DEFAULT;
+    const bottomRadius = atm.bottomRadius;
+    this.effect.worldToECEFMatrix.makeTranslation(0, bottomRadius, 0);
+    this.effect.ecefToWorldMatrix.copy(this.effect.worldToECEFMatrix).invert();
+    this.effect.altitudeCorrection.set(0, 0, 0);
+    this._bottomRadius = bottomRadius;
     this.material = this.effect.cloudsPass.currentMaterial;
 
     // Scratch vec3 so tick() doesn't allocate per-frame.
