@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>cloud_test — Clouds-B Bruneton-stub render gate</title>
+    <style>
+      body { font-family: ui-monospace, monospace; margin: 1.5rem; line-height: 1.4; }
+      #status { padding: 0.5rem 0.75rem; border-radius: 4px; font-weight: bold; }
+      #status.pending { background: #f4f4f4; color: #888; }
+      #status.ok      { background: #e7f5e7; color: #1a7f1a; }
+      #status.fail    { background: #fae8e8; color: #b30000; }
+      pre { background: #f7f7f7; padding: 0.5rem; border-radius: 4px; font-size: 0.85rem; max-height: 30vh; overflow-y: auto; }
+      canvas { border: 1px solid #ccc; image-rendering: pixelated; margin: 0.5rem 0; }
+      .scene-strip { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+      .scene-strip > div { text-align: center; font-size: 0.8rem; }
+    </style>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/",
+          "@takram/three-clouds": "./vendor/takram-three-clouds/build/index.js",
+          "@takram/three-atmosphere": "https://cdn.jsdelivr.net/npm/@takram/three-atmosphere@0.19.1/build/index.js",
+          "@takram/three-atmosphere/shaders/bruneton": "https://cdn.jsdelivr.net/npm/@takram/three-atmosphere@0.19.1/build/shaders/bruneton.js",
+          "@takram/three-geospatial": "https://cdn.jsdelivr.net/npm/@takram/three-geospatial@0.9.1/build/index.js",
+          "@takram/three-geospatial/shaders": "https://cdn.jsdelivr.net/npm/@takram/three-geospatial@0.9.1/build/shaders.js",
+          "postprocessing": "https://cdn.jsdelivr.net/npm/postprocessing@6.39.1/build/index.js",
+          "tiny-invariant": "https://cdn.jsdelivr.net/npm/tiny-invariant@1.3.3/dist/esm/tiny-invariant.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <h1>Clouds-B render gate — Bruneton-stub validation</h1>
+    <p>
+      Instantiates <code>CloudsEffect</code> three times with different
+      synthetic <code>uSunColor</code> / <code>uAmbientColor</code> /
+      <code>uHorizonColor</code> / sun-direction uniforms (dawn, noon,
+      dusk), forces shader compilation via
+      <code>renderer.compile()</code>, and reports the readback. PASS
+      if the modified Bruneton-stub shader compiles without errors and
+      the new uniforms are present on the material.
+    </p>
+
+    <div id="status" class="pending">pending</div>
+    <div class="scene-strip" id="strip"></div>
+    <pre id="details">starting…</pre>
+
+    <script type="module">
+      import * as THREE from 'three';
+      import { CloudsEffect } from '@takram/three-clouds';
+
+      const statusEl  = document.getElementById('status');
+      const detailsEl = document.getElementById('details');
+      const stripEl   = document.getElementById('strip');
+      const setStatus = (cls, msg) => { statusEl.className = cls; statusEl.textContent = msg; };
+      const appendDetail = (line) => { detailsEl.textContent += '\n' + line; };
+
+      // Three reference configs mirroring handoff's described inputs +
+      // two more for visual variety. The handoff specifies one config
+      // (`sun_dir=[0.5, 0.7, 0.3], sunColor=#ffeecc, ambientColor=#88aaff,
+      // horizonColor=#dddddd, fogDensity=0.002`) — we run three so we
+      // can verify uniform-driven variation.
+      const CONFIGS = [
+        {
+          name: 'dawn',
+          sunDir: new THREE.Vector3(0.05, 0.15, -0.99).normalize(),
+          sunColor:     new THREE.Vector3(1.0, 0.68, 0.48),
+          ambientColor: new THREE.Vector3(0.40, 0.30, 0.45),
+          horizonColor: new THREE.Vector3(0.95, 0.62, 0.42),
+          fogDensity:   0.0030,
+          sunIntensity: 0.9,
+        },
+        {
+          name: 'noon (handoff config)',
+          sunDir: new THREE.Vector3(0.5, 0.7, 0.3).normalize(),
+          sunColor:     new THREE.Vector3(1.0, 0.93, 0.80),   // #ffeecc
+          ambientColor: new THREE.Vector3(0.53, 0.67, 1.0),   // #88aaff
+          horizonColor: new THREE.Vector3(0.87, 0.87, 0.87),  // #dddddd
+          fogDensity:   0.002,
+          sunIntensity: 1.0,
+        },
+        {
+          name: 'dusk',
+          sunDir: new THREE.Vector3(-0.6, 0.12, -0.79).normalize(),
+          sunColor:     new THREE.Vector3(1.0, 0.55, 0.28),
+          ambientColor: new THREE.Vector3(0.35, 0.28, 0.50),
+          horizonColor: new THREE.Vector3(0.92, 0.48, 0.30),
+          fogDensity:   0.0035,
+          sunIntensity: 0.7,
+        },
+      ];
+
+      window.__cloudLoadSmoke = { ok: false, error: null, names: [], perConfig: [] };
+      const consoleErrors = [];
+      const _origErr = console.error;
+      console.error = (...args) => { consoleErrors.push(args.map(String).join(' ')); _origErr.apply(console, args); };
+
+      try {
+        appendDetail('CloudsEffect import ok');
+
+        for (const cfg of CONFIGS) {
+          // Fresh renderer per config so shader-state doesn't carry.
+          const canvas = document.createElement('canvas');
+          canvas.width = 256;
+          canvas.height = 144;
+          const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false });
+          renderer.setClearColor(0x101418, 1);
+
+          const camera = new THREE.PerspectiveCamera(60, canvas.width / canvas.height, 1, 10000);
+          camera.position.set(0, 200, 0);
+
+          const effect = new CloudsEffect(camera);
+
+          // The cloud material's uniforms live on cloudsPass.currentMaterial.
+          // Set our synthetic DayGroup-driven Bruneton-stub inputs.
+          const mat = effect.cloudsPass.currentMaterial;
+          const u = mat.uniforms;
+          const present = {
+            uSunColor:    u.uSunColor    != null,
+            uAmbientColor:u.uAmbientColor!= null,
+            uHorizonColor:u.uHorizonColor!= null,
+            uFogDensity:  u.uFogDensity  != null,
+            uSunIntensity:u.uSunIntensity!= null,
+          };
+          if (!Object.values(present).every(Boolean)) {
+            throw new Error(`config "${cfg.name}": uniforms missing: ${JSON.stringify(present)}`);
+          }
+          u.uSunColor.value.copy(cfg.sunColor);
+          u.uAmbientColor.value.copy(cfg.ambientColor);
+          u.uHorizonColor.value.copy(cfg.horizonColor);
+          u.uFogDensity.value = cfg.fogDensity;
+          u.uSunIntensity.value = cfg.sunIntensity;
+
+          // Sun direction goes through the atmosphere-side uniform that
+          // brunetonStubs.glsl reads via the function arg. The takram
+          // code mirrors `sunDirection` into the atmosphereUniforms; we
+          // can set it via effect.sunDirection accessor.
+          if (effect.sunDirection?.copy) {
+            effect.sunDirection.copy(cfg.sunDir);
+          } else if (effect.cloudsPass.currentMaterial.uniforms.sunDirection) {
+            effect.cloudsPass.currentMaterial.uniforms.sunDirection.value.copy(cfg.sunDir);
+          }
+
+          // Force shader compile. compile(scene, camera) walks scene's
+          // materials and compiles each. We use an empty scene because
+          // the cloud material isn't attached to any mesh — that's
+          // owned by CloudsPass internally. Instead invoke setShader()
+          // via the cloudsPass's own initialization if available.
+          let compileOk = false;
+          let compileError = null;
+          try {
+            const scene = new THREE.Scene();
+            renderer.compile(scene, camera);
+            // Also force compilation of cloud material specifically.
+            const dummy = new THREE.Mesh(new THREE.PlaneGeometry(1,1), mat);
+            scene.add(dummy);
+            renderer.compile(scene, camera);
+            scene.remove(dummy);
+            compileOk = true;
+          } catch (err) {
+            compileError = String(err);
+          }
+
+          // Read canvas pixels (one-frame render is implicit in compile?
+          // Actually no — compile only prepares programs. Render to get
+          // pixels. Best-effort: try render, catch.
+          let renderError = null;
+          try {
+            const scene = new THREE.Scene();
+            const dummy = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
+            scene.add(dummy);
+            renderer.render(scene, camera);
+          } catch (err) {
+            renderError = String(err);
+          }
+
+          const pixels = new Uint8Array(canvas.width * canvas.height * 4);
+          const gl = renderer.getContext();
+          gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+          // Crude "is something rendered" check: average non-black pixel value.
+          let sum = 0, nonBlack = 0;
+          for (let i = 0; i < pixels.length; i += 4) {
+            const r = pixels[i], g = pixels[i+1], b = pixels[i+2];
+            sum += r + g + b;
+            if (r > 20 || g > 20 || b > 20) nonBlack++;
+          }
+          const avgRgb = sum / (pixels.length / 4 * 3);
+
+          // Display the canvas in the strip for visual eye-test
+          const wrap = document.createElement('div');
+          wrap.append(canvas);
+          const lab = document.createElement('div');
+          lab.textContent = cfg.name;
+          wrap.append(lab);
+          stripEl.append(wrap);
+
+          window.__cloudLoadSmoke.perConfig.push({
+            name: cfg.name,
+            uniformsPresent: present,
+            compileOk,
+            compileError,
+            renderError,
+            avgRgb: avgRgb.toFixed(2),
+            nonBlackFraction: (nonBlack / (canvas.width * canvas.height)).toFixed(3),
+          });
+          appendDetail(`${cfg.name}: compile=${compileOk} render=${!renderError} avgRgb=${avgRgb.toFixed(1)} nonBlackFrac=${(nonBlack/(canvas.width*canvas.height)).toFixed(3)}`);
+
+          renderer.dispose();
+        }
+
+        // Filter shader-related console errors (matches "WebGL: ERROR:",
+        // "Shader compile error", etc. but ignore "uniform not in use"
+        // warnings which are noise).
+        const blockingErrors = consoleErrors.filter(e =>
+          /ERROR:|GL_INVALID|shader compile|Could not link|VALIDATE_STATUS|FRAGMENT_SHADER/i.test(e)
+        );
+
+        const allCompiled = window.__cloudLoadSmoke.perConfig.every(c => c.compileOk);
+        const ok = allCompiled && blockingErrors.length === 0;
+        window.__cloudLoadSmoke.ok = ok;
+        window.__cloudLoadSmoke.consoleErrors = consoleErrors.slice(-20);
+        window.__cloudLoadSmoke.blockingErrors = blockingErrors;
+        window.__cloudLoadSmoke.names = Object.keys({ CloudsEffect });
+        if (ok) {
+          setStatus('ok', `OK — Bruneton-stub shader compiles in 3 configs; uniforms wired`);
+        } else {
+          setStatus('fail', `FAIL — compileAll=${allCompiled}, blocking console errors=${blockingErrors.length}`);
+        }
+      } catch (err) {
+        window.__cloudLoadSmoke = { ok: false, error: String(err), names: [], perConfig: [], consoleErrors };
+        setStatus('fail', 'FAIL — ' + err.message);
+        appendDetail('FAIL: ' + (err.stack ?? err));
+      }
+    </script>
+  </body>
+</html>

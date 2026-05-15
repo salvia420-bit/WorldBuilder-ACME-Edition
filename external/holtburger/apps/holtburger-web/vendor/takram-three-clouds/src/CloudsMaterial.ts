@@ -25,9 +25,13 @@ import {
 } from '@takram/three-atmosphere'
 import {
   common,
-  definitions,
-  runtime
+  definitions
 } from '@takram/three-atmosphere/shaders/bruneton'
+// Clouds-B: replace Bruneton's precomputed-atmosphere runtime block
+// with our AC-DayGroup-driven stub. See brunetonStubs.glsl for the 3
+// short-form lighting fns + the new uSunColor / uAmbientColor /
+// uHorizonColor / uFogDensity / uSunIntensity uniforms they read.
+import runtime from './shaders/brunetonStubs.glsl?raw'
 import {
   define,
   defineExpression,
@@ -207,6 +211,16 @@ export class CloudsMaterial extends AtmosphereMaterialBase {
           targetUvScale: new Uniform(new Vector2()),
           mipLevelScale: new Uniform(1),
           stbnTexture: new Uniform(null),
+
+          // DayGroup lighting (Clouds-B). Replaces the precomputed-
+          // Bruneton irradiance path. Drives brunetonStubs.glsl's
+          // GetSun*Irradiance / GetSkyRadianceToPoint stubs. Wired
+          // from skyLightingController._lastState in Clouds-C.
+          uSunColor: new Uniform(new Vector3(1, 0.95, 0.85)),
+          uAmbientColor: new Uniform(new Vector3(0.55, 0.62, 0.78)),
+          uHorizonColor: new Uniform(new Vector3(0.85, 0.87, 0.94)),
+          uFogDensity: new Uniform(0.002),
+          uSunIntensity: new Uniform(1.0),
 
           // Scattering
           skyLightScale: new Uniform(1),

@@ -318,6 +318,27 @@ Each phase is **independent enough to be a single parallel team-agent workstream
 **Status**:
 - 2026-05-15 — handoff doc written; no code work started. Ready for team-agent pickup.
 - 2026-05-15 — **Clouds-A foundation shipped.** Vendor `vendor/takram-three-clouds/` (TS source + assets, ~424 KB, r3f/ kept but unused), peer-dep CDN importmap entries (postprocessing@**6.39.1** not 6.36.7 — see below), browser-side load smoke at `cloud_load_smoke.{html,cjs}` PASS under swiftshader. `node smoke_test.cjs` 224/0/0 (no regression). See "Corrections & deltas vs original plan" below.
+- 2026-05-15 — **Clouds-B Bruneton decouple shipped.** esbuild-based local build pipeline (`vendor/takram-three-clouds/build.mjs`) handles `?raw` GLSL imports + legacy-TS decorators + tiny-invariant inlining + NODE_ENV substitution. Bruneton runtime swap via JS-side `resolveIncludes()` substitution — `CloudsMaterial.ts` imports `runtime` from local `brunetonStubs.glsl` (95 LoC) instead of `@takram/three-atmosphere/shaders/bruneton`; clouds.frag/vert source untouched. 5 new uniforms (`uSunColor`, `uAmbientColor`, `uHorizonColor`, `uFogDensity`, `uSunIntensity`) wired into the material. Synthetic-input gate at `cloud_test.html` PASS under swiftshader: shader compiles in 3 configs (dawn/noon/dusk) with our new uniforms; the 3 short-form lighting fns (GetSunAndSkyIrradiance / GetSunAndSkyScalarIrradiance / GetSkyRadianceToPoint) bind to our stubs. Visible clouds NOT yet rendered (needs texture-bake + EffectComposer wiring — that's Clouds-D). `node smoke_test.cjs` 224/0/0 (no regression). Tactical deviations from the handoff's surgery plan in "Clouds-B deviations" below.
+
+## Clouds-B deviations from the handoff plan
+
+The handoff prescribed full TS-side decoupling (drop AtmosphereMaterialBase / AtmosphereParameters / AtmosphereUniforms wholesale). The actual surgery was more surgical:
+
+1. **AtmosphereMaterialBase parent class kept on `CloudsMaterial`.** Not replaced with `ShaderMaterial`. The base class adds atmosphere-aware setup that's inert without `<Atmosphere date={...}>` driver — but doesn't break either. Replacing the parent is a Clouds-B-extended chore for clean decouple; deferred.
+2. **`AtmosphereUniforms` struct kept in `uniforms.ts`** (inert). New `DayGroupUniforms`-equivalent uniforms live alongside it inside `CloudsMaterial.ts`'s uniforms map (not as a struct in uniforms.ts). The 5 names: `uSunColor`, `uAmbientColor`, `uHorizonColor`, `uFogDensity`, `uSunIntensity`. Wire-up from `skyLightingController._lastState` is Clouds-C's job.
+3. **GLSL `#include "atmosphere/bruneton/runtime"` literally unchanged** in clouds.frag/vert. The swap happens at the JS-side `resolveIncludes()` call in `CloudsMaterial.ts`: the imported `runtime` symbol now points at our `brunetonStubs.glsl` instead of takram's atmosphere package. Same functional effect with less shader-source churn.
+4. **`ACCURATE_SUN_SKY_LIGHT` macro disabling NOT explicitly forced.** It's already inactive by default (qualityPresets don't define it). If a future config sets `accurateSunSkyLight=true`, the precomputed-varying path is taken — and our stubs already fill those varyings via the vertex-stage call to `GetSunAndSkyScalarIrradiance`. So it should still work, but eye-test before enabling.
+
+These keep Clouds-B as a tight, reversible chunk while still meeting the stated gate. The cleaner full-decouple stays available as a Clouds-B-extended task if/when it becomes load-bearing.
+
+## Clouds-B build pipeline ergonomics
+
+- Source-edit → `cd vendor/takram-three-clouds && node build.mjs` → 60-80 ms rebuild
+- `node build.mjs --watch` for hot iteration
+- Output: `vendor/takram-three-clouds/build/{index.js, index.js.map}` (~170 KB minified-ish)
+- Externals: `three`, `three/addons/*`, `postprocessing`, `@takram/three-atmosphere` (+ shaders/bruneton subpath), `@takram/three-geospatial` (+ shaders subpath). `tiny-invariant` inlined to avoid its top-level `process.env.NODE_ENV` ref.
+- Importmap to local build: see `cloud_build_smoke.html` for the pattern. `index.html` still uses the CDN bundle (un-modified) — point it at the local build when Clouds-D wires the actual integration. CDN smoke (`cloud_load_smoke.html`) stays as a regression check for upstream parity.
+- Decorators: takram source uses legacy TS decorators (`experimentalDecorators: true` + `emitDecoratorMetadata: true` per `tsconfig.base.json`). `build.mjs` passes `tsconfigRaw` with those flags.
 
 ## Corrections & deltas vs original plan (Clouds-A grounding)
 
