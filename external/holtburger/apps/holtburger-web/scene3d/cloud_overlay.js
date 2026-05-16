@@ -113,6 +113,13 @@ export class CloudOverlay {
       A.weatherExponent = 1.0;
       A.shapeAlteringBias = 0.35;
       A.coverageFilterWidth = 0.5;
+
+      // Bump default coverage from takram's 0.3 → 0.5 so there's more
+      // cloud overhead in the default ?clouds=on view. Live tune via
+      // `__setCloudCoverage(v)` in devtools (already exposed).
+      if (effect.clouds && 'coverage' in effect.clouds) {
+        effect.clouds.coverage = 0.5;
+      }
     }
 
     // STBN (Spatial Temporal Blue Noise) substitute. The cloud shader's

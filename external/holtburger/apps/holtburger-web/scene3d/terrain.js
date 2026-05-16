@@ -168,6 +168,7 @@ uniform float uDisplacementEnabled;   // Phase 2.2 — 0.0 OFF / 1.0 ON (quality
 uniform vec2 uLbOriginXy;             // Phase 2.2 — per-LB world-frame origin (lbX*192, lbY*192); ensures wave-phase continuity across LB seams
 
 out vec2 vGridUv;
+out vec3 vWorldPos;  // Clouds-L: terrain world-space position for cloud-shadow projection
 flat out int vTerrainCode;            // Phase 1.2 — passed flat-int to FS
 // Phase 1.3 — AC-space LB-local position + interpolated geometry
 // normal, used by the fragment shader for slope-gated triplanar
@@ -241,6 +242,7 @@ void main() {
   }
   vIsWater = isWater;
 
+  vWorldPos = (modelMatrix * vec4(displacedPos, 1.0)).xyz;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(displacedPos, 1.0);
   // Per-vertex grid coordinate in [0, 8] across the 192 m landblock
   // (8 cells × 24 m each). Fragment splits into integer cell index
@@ -300,7 +302,19 @@ uniform float uTriplanarSharpness;
 uniform float uTime;
 uniform float uDisplacementEnabled;
 
+// Clouds-L — sample the cloud effect's cascade-0 shadow buffer to dim
+// terrain ambient + diffuse where clouds occlude the sun. takram's
+// cloud raymarch already produces these as a side effect of its
+// self-shadowing pass; we piggyback rather than running a second
+// raymarch. uCloudShadowEnabled gates the whole block off when no
+// CloudOverlay is wired (e.g. ?clouds=off).
+uniform float uCloudShadowEnabled;
+uniform sampler2DArray uCloudShadowMap;
+uniform mat4 uCloudShadowMatrix0;
+uniform float uCloudShadowStrength;
+
 in vec2 vGridUv;
+in vec3 vWorldPos;
 flat in int vTerrainCode;             // provoking-vertex terrain code
 in vec3 vAcPos;                       // Phase 1.3 — LB-local AC pos (z=up)
 in vec3 vAcNormal;                    // Phase 1.3 — geometry normal (AC z-up)
@@ -486,7 +500,27 @@ void main() {
     }
   }
 
-  fragColor = vec4(result * ndotl, 1.0);
+  // Clouds-L — cloud-shadow modulation. Project world pos into cascade
+  // 0's shadow space; sample the R channel (cloud optical depth along
+  // sun ray); attenuate. Cascade 0 covers the closest ~10% of view
+  // distance so terrain near the camera gets the highest-detail
+  // shadow. Outside cascade 0 (UV outside [0,1]) → no shadow. Real
+  // cascade selection by distance is Clouds-L-extended.
+  float cloudShadow = 1.0;
+  if (uCloudShadowEnabled > 0.5) {
+    vec4 sclip = uCloudShadowMatrix0 * vec4(vWorldPos, 1.0);
+    sclip /= sclip.w;
+    vec2 suv = sclip.xy * 0.5 + 0.5;
+    if (suv.x >= 0.0 && suv.x <= 1.0 && suv.y >= 0.0 && suv.y <= 1.0) {
+      float density = texture(uCloudShadowMap, vec3(suv, 0.0)).r;
+      // Beer-Lambert: transmittance = exp(-density * strength).
+      // Clamp to 0.3 so shadowed terrain never goes pure black (sky
+      // ambient still fills in even under thick cloud).
+      cloudShadow = max(0.3, exp(-density * uCloudShadowStrength));
+    }
+  }
+
+  fragColor = vec4(result * ndotl * cloudShadow, 1.0);
 }
 `;
 
@@ -1058,6 +1092,14 @@ export async function bakeTerrainForLandblock(
           lbY * METERS_PER_LANDBLOCK
         ),
       },
+      // Clouds-L — cloud shadow uniforms. Updated each frame from
+      // cloud_volume.js when CloudOverlay is wired. Default off
+      // (uCloudShadowEnabled=0) so terrain renders correctly when
+      // clouds=on isn't set.
+      uCloudShadowEnabled: { value: 0.0 },
+      uCloudShadowMap: { value: null },
+      uCloudShadowMatrix0: { value: new THREE.Matrix4() },
+      uCloudShadowStrength: { value: 2.0 },
     },
     vertexShader: TERRAIN_VERTEX_GLSL,
     fragmentShader: TERRAIN_FRAGMENT_GLSL,

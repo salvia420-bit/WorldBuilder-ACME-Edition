@@ -275,6 +275,29 @@ export class CloudVolume {
     // altitudes (R cumulus 750m, G cumulus 1000m, B cirrus 7500m,
     // A unused) gave the visually-correct soft cloud appearance.
     // Opt-in via window.__applyCloudWeather() to experiment.
+
+    // Clouds-L — push the cloud effect's cascade-0 shadow buffer +
+    // matrix into all terrain materials so the terrain shader can
+    // sample cloud occlusion. takram's cloud raymarch already
+    // produces these for self-shadowing; we just borrow them.
+    this._pushCloudShadowsToTerrain();
+  }
+
+  _pushCloudShadowsToTerrain() {
+    const ls = typeof window !== 'undefined' ? window.liveScene3d : null;
+    const terrainMats = ls?.terrainMaterials;
+    if (!Array.isArray(terrainMats) || terrainMats.length === 0) return;
+    const cp = this.effect?.cloudsPass;
+    const shadowTex = cp?.shadowBuffer;
+    const mats = this.material?.uniforms?.shadowMatrices?.value;
+    if (!shadowTex || !mats || !mats[0]) return;
+    for (const m of terrainMats) {
+      const u = m?.uniforms;
+      if (!u?.uCloudShadowEnabled) continue;
+      u.uCloudShadowEnabled.value = 1.0;
+      u.uCloudShadowMap.value = shadowTex;
+      u.uCloudShadowMatrix0.value.copy(mats[0]);
+    }
   }
 
   /**
@@ -428,6 +451,19 @@ if (typeof window !== 'undefined') {
     co.volume.effect.cloudLayers.copy(CloudLayers.DEFAULT);
     co.volume.effect.clouds.coverage = 0.3;
     return true;
+  };
+  // Clouds-L knob: live tune cloud shadow darkness on terrain.
+  // window.__setCloudShadowStrength(2.5) — higher = darker shadows.
+  // Default 2.0 from terrain.js. Pass 0 to effectively disable.
+  // eslint-disable-next-line no-undef
+  window.__setCloudShadowStrength = (s) => {
+    const mats = window.liveScene3d?.terrainMaterials || [];
+    for (const m of mats) {
+      if (m?.uniforms?.uCloudShadowStrength) {
+        m.uniforms.uCloudShadowStrength.value = s;
+      }
+    }
+    return s;
   };
 }
 
