@@ -13,6 +13,15 @@
 // three.js world coordinates (x east, z south, y up) without inverting
 // any winding orders. See migration plan §"Strategic decisions" item 4.
 
+// Sky-K post-RIC-shim (2026-05-16) — MUST be the first import. Installs
+// a microtask-driven shim for `window.requestIdleCallback` before any
+// downstream module evaluates @takram/three-atmosphere's shared bundle,
+// which snapshots `window.requestIdleCallback` into a private const at
+// module-load time. Without the shim, takram's PrecomputedTextures
+// generator hangs in-game (the busy render loop never goes idle, so
+// the snapshot's rIC never fires, so the bake never resolves).
+// See scene3d/_ric_shim.js header for the full rationale.
+import "./_ric_shim.js";
 import * as THREE from "three";
 // World-expand step 1 Objective 8 — `bakeXRing` are imported here +
 // called at radius=6 below; `bakeXForLandblock` are exposed via
