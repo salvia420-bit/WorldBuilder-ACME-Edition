@@ -2,17 +2,32 @@
 //!
 //! The bake walks every candidate `ObjectDesc` placement and rejects
 //! those whose XY bounds intersect either a building (from
-//! `LandblockInfo.objects`) or an already-placed scenery item.
+//! `LandblockInfo.Buildings`) or an already-placed scenery item.
 //!
 //! ACE Scenery.cs:177-184 (`Collision`) uses 3D `BoundingBox.Intersect2D`
 //! — but the comparison is XY-only. We collapse the storage to a 2D
 //! min/max pair because the height axis is irrelevant to the rejection
 //! test and we want the smallest possible per-placement record.
 //!
-//! `LocalBounds` is the 3D mesh-local bounds for an `ObjectDesc`'s
-//! `obj_id`; the caller supplies these via the `fetch_obj_bounds`
-//! closure. We project them to 2D via `transform_local_aabb` (rotation
-//! + translation + uniform scale) before testing intersection.
+//! ## AABB construction (bake-side caller responsibility)
+//!
+//! The bake's `compute_world_aabb` closure is asked for an already-
+//! transformed world-frame XY AABB per candidate placement. ACE's
+//! `BoundingBox.BuildBox` walks each mesh vertex through
+//! `scale * rotate * cellTranslate * cellTranslateInner` and takes
+//! per-axis min/max — see [`transform_mesh_to_aabb`] for the bake-
+//! crate helper that matches that behaviour bit-for-bit.
+//!
+//! ## Legacy 4-corner approximation
+//!
+//! Earlier revisions of the bake used [`LocalBounds`] + the rotated-
+//! corner approximation in [`transform_local_aabb`]. That diverged from
+//! ACE for rotated objects (corner-rotation produces a strictly LARGER
+//! AABB than vertex-rotation) and SetupModel multi-part assemblies
+//! (callers were applying per-part `PlacementFrames`, which ACE does
+//! NOT — see `BoundingBox.GetTransform` reference in lib.rs). The types
+//! survive as compatibility shims for diag tooling; production callers
+//! should use [`transform_mesh_to_aabb`].
 
 use holtburger_common::Vector3;
 
@@ -117,6 +132,52 @@ pub fn transform_local_aabb(
     Aabb2D::new(min_x, min_y, max_x, max_y)
 }
 
+/// Build a world-frame XY AABB from a placement's transformed mesh
+/// vertices. Mirrors ACE `BoundingBox.BuildBox` (`BoundingBox.cs:57-81`)
+/// bit-for-bit: each vertex passes through
+/// `scale * yaw_about_z(rotation_rad) * translate(tx, ty, tz)` and the
+/// per-axis min/max accumulator collapses to an XY AABB.
+///
+/// The Z axis is dropped — `Intersect2D` only reads XY. We still take
+/// `tz` so the caller can pass the full world position and we transform
+/// vertices in the same coordinate frame ACE does (which matters if a
+/// future variant ever wants the Z extent).
+///
+/// This is the bake's canonical AABB builder. The legacy
+/// [`transform_local_aabb`] uses a coarser 4-corner approximation and
+/// is retained only for diag tooling.
+pub fn transform_mesh_to_aabb(
+    verts: &[Vector3],
+    tx: f32,
+    ty: f32,
+    tz: f32,
+    rotation_rad: f32,
+    scale: f32,
+) -> Aabb2D {
+    let (s, c) = rotation_rad.sin_cos();
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for v in verts {
+        let sx = v.x * scale;
+        let sy = v.y * scale;
+        let rx = sx * c - sy * s;
+        let ry = sx * s + sy * c;
+        let wx = rx + tx;
+        let wy = ry + ty;
+        if wx < min_x { min_x = wx; }
+        if wy < min_y { min_y = wy; }
+        if wx > max_x { max_x = wx; }
+        if wy > max_y { max_y = wy; }
+    }
+    // tz consumed for signature symmetry with ACE's 3D BuildBox; the
+    // 2D collision check doesn't need it but plumbing it keeps the
+    // call shape honest.
+    let _ = tz;
+    Aabb2D::new(min_x, min_y, max_x, max_y)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +229,61 @@ mod tests {
         let local = LocalBounds::new(Vector3::new(-1.0, -1.0, 0.0), Vector3::new(1.0, 1.0, 0.0));
         let w = transform_local_aabb(local, 0.0, 0.0, 0.0, 2.0);
         assert_eq!(w, Aabb2D::new(-2.0, -2.0, 2.0, 2.0));
+    }
+
+    // transform_mesh_to_aabb tests — the production AABB builder that
+    // matches ACE BoundingBox.BuildBox bit-for-bit.
+
+    #[test]
+    fn transform_mesh_to_aabb_no_rotation() {
+        let verts = vec![
+            Vector3::new(-1.0, -2.0, 0.0),
+            Vector3::new(1.0, -2.0, 0.0),
+            Vector3::new(-1.0, 2.0, 0.0),
+            Vector3::new(1.0, 2.0, 0.0),
+        ];
+        let w = transform_mesh_to_aabb(&verts, 10.0, 20.0, 0.0, 0.0, 1.0);
+        assert_eq!(w, Aabb2D::new(9.0, 18.0, 11.0, 22.0));
+    }
+
+    #[test]
+    fn transform_mesh_to_aabb_is_tighter_than_corner_form_on_octagon() {
+        // An octagon-of-radius-1 — half its vertices are diagonals
+        // shorter than the 4-corner bounding rectangle would suggest.
+        // Rotating 22.5° demonstrates the divergence: corner-form
+        // rotation produces an AABB looser than the true rotated mesh.
+        let n = 8;
+        let r: f32 = 1.0;
+        let verts: Vec<Vector3> = (0..n)
+            .map(|i| {
+                let a = (i as f32) * std::f32::consts::TAU / (n as f32);
+                Vector3::new(r * a.cos(), r * a.sin(), 0.0)
+            })
+            .collect();
+        let mesh_aabb = transform_mesh_to_aabb(&verts, 0.0, 0.0, 0.0, std::f32::consts::FRAC_PI_8, 1.0);
+        // Octagon is rotation-symmetric mod 45° so the AABB is the
+        // bounding box of the vertex set: the vertex farthest from
+        // origin along ±X / ±Y after rotation.
+        // Loose corner-form bounds would inflate this — confirm by
+        // comparing with the legacy transform.
+        let legacy = transform_local_aabb(
+            LocalBounds::new(Vector3::new(-1.0, -1.0, 0.0), Vector3::new(1.0, 1.0, 0.0)),
+            0.0, 0.0, std::f32::consts::FRAC_PI_8, 1.0,
+        );
+        let mesh_width = mesh_aabb.max_x - mesh_aabb.min_x;
+        let legacy_width = legacy.max_x - legacy.min_x;
+        assert!(mesh_width < legacy_width,
+            "mesh-vertex AABB ({mesh_width}) should be tighter than corner-rotation AABB ({legacy_width})");
+    }
+
+    #[test]
+    fn transform_mesh_to_aabb_empty_returns_inf_sentinels() {
+        // No vertices → AABB stays at +/-infinity sentinels. Caller
+        // should treat None-mesh specifically (skip placement) before
+        // ever calling this function. Documented so a future regression
+        // surfaces in the test.
+        let w = transform_mesh_to_aabb(&[], 0.0, 0.0, 0.0, 0.0, 1.0);
+        assert!(w.min_x.is_infinite() && w.min_x > 0.0);
+        assert!(w.max_x.is_infinite() && w.max_x < 0.0);
     }
 }

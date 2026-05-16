@@ -28,10 +28,9 @@ use anyhow::{Context, Result, bail};
 use holtburger_common::Vector3;
 use holtburger_dat::DatDatabase;
 use holtburger_dat::file_type::{GfxObj, Region, Scene, SetupModel};
-use holtburger_dat::graphics::Frame;
 use holtburger_dat::landblock::{CellLandblock, LandblockInfo};
 use holtburger_scenery_bake::{
-    Aabb2D, BakeMode, LocalBounds, ScenicPlacement, bake_landblock, transform_local_aabb,
+    Aabb2D, BakeMode, PlacementXform, ScenicPlacement, bake_landblock, transform_mesh_to_aabb,
 };
 
 fn locate_dats() -> Result<(PathBuf, PathBuf)> {
@@ -80,137 +79,85 @@ fn holtburg_ring() -> Vec<u16> {
     out
 }
 
-/// Hand-coded mesh-local AABB lookup for the bake's `fetch_obj_bounds`
-/// closure. Mirrors `scenery-bake.rs::BoundsCache`.
-struct BoundsCache {
-    inner: HashMap<u32, Option<LocalBounds>>,
+/// Mesh-local vertex-list cache. Mirrors scenery-bake.rs::MeshCache —
+/// each obj_id resolves to its flattened mesh vertex list (no per-part
+/// PlacementFrames, matching ACE BoundingBox.BuildBox).
+struct MeshCache {
+    inner: HashMap<u32, Option<Vec<Vector3>>>,
 }
 
-impl BoundsCache {
+impl MeshCache {
     fn new() -> Self {
         Self { inner: HashMap::new() }
     }
-    fn lookup(&mut self, portal: &DatDatabase, obj_id: u32) -> Option<LocalBounds> {
-        if let Some(c) = self.inner.get(&obj_id) {
-            return *c;
+    fn lookup(&mut self, portal: &DatDatabase, obj_id: u32) -> Option<&Vec<Vector3>> {
+        if !self.inner.contains_key(&obj_id) {
+            let r = compute_local_mesh(portal, obj_id);
+            self.inner.insert(obj_id, r);
         }
-        let r = compute_local_bounds(portal, obj_id);
-        self.inner.insert(obj_id, r);
-        r
+        self.inner.get(&obj_id)?.as_ref()
     }
 }
 
-fn compute_local_bounds(portal: &DatDatabase, obj_id: u32) -> Option<LocalBounds> {
+fn compute_local_mesh(portal: &DatDatabase, obj_id: u32) -> Option<Vec<Vector3>> {
     let top = (obj_id >> 24) & 0xFF;
     match top {
-        0x01 => gfx_local_bounds(portal, obj_id),
-        0x02 => setup_local_bounds(portal, obj_id),
+        0x01 => gfx_local_mesh(portal, obj_id),
+        0x02 => setup_local_mesh(portal, obj_id),
         _ => None,
     }
 }
 
-fn gfx_local_bounds(portal: &DatDatabase, gfx_id: u32) -> Option<LocalBounds> {
+fn gfx_local_mesh(portal: &DatDatabase, gfx_id: u32) -> Option<Vec<Vector3>> {
     let bytes = portal.get_file(gfx_id).ok()?;
     let mut cursor = Cursor::new(&bytes);
     let gfx = GfxObj::unpack(&mut cursor).ok()?;
     if gfx.vertex_array.vertices.is_empty() {
         return None;
     }
-    let mut min = Vector3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
-    let mut max = Vector3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
-    for v in gfx.vertex_array.vertices.values() {
-        let p = v.origin;
-        if p.x < min.x { min.x = p.x; }
-        if p.y < min.y { min.y = p.y; }
-        if p.z < min.z { min.z = p.z; }
-        if p.x > max.x { max.x = p.x; }
-        if p.y > max.y { max.y = p.y; }
-        if p.z > max.z { max.z = p.z; }
-    }
-    if !min.x.is_finite() || !max.x.is_finite() {
-        return None;
-    }
-    Some(LocalBounds::new(min, max))
+    Some(gfx.vertex_array.vertices.values().map(|v| v.origin).collect())
 }
 
-fn setup_local_bounds(portal: &DatDatabase, setup_id: u32) -> Option<LocalBounds> {
+fn setup_local_mesh(portal: &DatDatabase, setup_id: u32) -> Option<Vec<Vector3>> {
     let bytes = portal.get_file(setup_id).ok()?;
     let mut cursor = Cursor::new(&bytes);
     let setup = SetupModel::read(&mut cursor).ok()?;
     if setup.parts.is_empty() {
         return None;
     }
-    let placement = setup
-        .placement_frames
-        .get(&0)
-        .or_else(|| setup.placement_frames.iter().min_by_key(|(k, _)| **k).map(|(_, v)| v));
-
-    let mut min = Vector3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
-    let mut max = Vector3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
-    let mut any = false;
-
-    for (idx, part_id) in setup.parts.iter().enumerate() {
-        let Some(part_bounds) = gfx_local_bounds(portal, *part_id) else { continue; };
-        let part_frame: Frame = placement
-            .and_then(|p| p.anim_frame.frames.get(idx).cloned())
-            .unwrap_or_default();
-        for &(px, py, pz) in &[
-            (part_bounds.min.x, part_bounds.min.y, part_bounds.min.z),
-            (part_bounds.max.x, part_bounds.min.y, part_bounds.min.z),
-            (part_bounds.min.x, part_bounds.max.y, part_bounds.min.z),
-            (part_bounds.max.x, part_bounds.max.y, part_bounds.min.z),
-            (part_bounds.min.x, part_bounds.min.y, part_bounds.max.z),
-            (part_bounds.max.x, part_bounds.min.y, part_bounds.max.z),
-            (part_bounds.min.x, part_bounds.max.y, part_bounds.max.z),
-            (part_bounds.max.x, part_bounds.max.y, part_bounds.max.z),
-        ] {
-            let local = Vector3::new(px, py, pz);
-            let rotated = part_frame.orientation.rotate_vector(local);
-            let w = Vector3::new(
-                rotated.x + part_frame.origin.x,
-                rotated.y + part_frame.origin.y,
-                rotated.z + part_frame.origin.z,
-            );
-            if w.x < min.x { min.x = w.x; }
-            if w.y < min.y { min.y = w.y; }
-            if w.z < min.z { min.z = w.z; }
-            if w.x > max.x { max.x = w.x; }
-            if w.y > max.y { max.y = w.y; }
-            if w.z > max.z { max.z = w.z; }
-            any = true;
+    let mut all = Vec::new();
+    for part_id in &setup.parts {
+        if let Some(part_verts) = gfx_local_mesh(portal, *part_id) {
+            all.extend(part_verts);
         }
     }
-    if !any {
-        return None;
-    }
-    Some(LocalBounds::new(min, max))
+    if all.is_empty() { return None; }
+    Some(all)
 }
 
 fn placement_aabb(
     portal: &DatDatabase,
-    bounds_cache: &mut BoundsCache,
+    mesh_cache: &mut MeshCache,
     obj_id: u32,
     frame: &holtburger_dat::landblock::Frame,
 ) -> Option<Aabb2D> {
-    let local = bounds_cache.lookup(portal, obj_id)?;
+    let verts = mesh_cache.lookup(portal, obj_id)?;
     let q = frame.orientation;
     let yaw = 2.0 * q.z.atan2(q.w);
-    Some(transform_local_aabb(local, frame.origin.x, frame.origin.y, yaw, 1.0))
+    Some(transform_mesh_to_aabb(verts, frame.origin.x, frame.origin.y, frame.origin.z, yaw, 1.0))
 }
 
+// Matches ACE Scenery.cs:83 / Landblock.cs:438 — collide against
+// Info.Buildings only, never Info.Objects. See scenery-bake.rs for the
+// full reasoning.
 fn collect_building_aabbs(
     portal: &DatDatabase,
-    bounds_cache: &mut BoundsCache,
+    mesh_cache: &mut MeshCache,
     info: &LandblockInfo,
 ) -> Vec<Aabb2D> {
     let mut out: Vec<Aabb2D> = Vec::new();
-    for stab in &info.objects {
-        if let Some(a) = placement_aabb(portal, bounds_cache, stab.id, &stab.frame) {
-            out.push(a);
-        }
-    }
     for b in &info.buildings {
-        if let Some(a) = placement_aabb(portal, bounds_cache, b.model_id, &b.frame) {
+        if let Some(a) = placement_aabb(portal, mesh_cache, b.model_id, &b.frame) {
             out.push(a);
         }
     }
@@ -256,7 +203,7 @@ fn bake_one(
     region: &Region,
     portal: &DatDatabase,
     cell_db: &DatDatabase,
-    bounds_cache: &mut BoundsCache,
+    mesh_cache: &mut MeshCache,
     scene_cache: &mut SceneCache,
     lb_key: u16,
 ) -> Option<Vec<ScenicPlacement>> {
@@ -267,20 +214,25 @@ fn bake_one(
     let landblock = CellLandblock::unpack(&bytes).ok()?;
     let building_aabbs: Vec<Aabb2D> = match cell_db.get_file(info_id) {
         Ok(b) => match LandblockInfo::unpack(&b) {
-            Ok(info) => collect_building_aabbs(portal, bounds_cache, &info),
+            Ok(info) => collect_building_aabbs(portal, mesh_cache, &info),
             Err(_) => Vec::new(),
         },
         Err(_) => Vec::new(),
     };
-    let (sc_ref, bc_ref) = (scene_cache, bounds_cache);
+    let (sc_ref, mc_ref) = (scene_cache, mesh_cache);
     let fetch_scene = |id: u32| sc_ref.lookup(portal, id);
-    let fetch_obj_bounds = |id: u32| bc_ref.lookup(portal, id);
+    let compute_world_aabb = |px: PlacementXform| -> Option<Aabb2D> {
+        let verts = mc_ref.lookup(portal, px.obj_id)?;
+        Some(transform_mesh_to_aabb(
+            verts, px.lx, px.ly, px.lz, px.rotation_rad, px.scale,
+        ))
+    };
     Some(bake_landblock(
         region,
         &landblock,
         lb_word,
         fetch_scene,
-        fetch_obj_bounds,
+        compute_world_aabb,
         &building_aabbs,
         BakeMode::AceCompat,
     ))
@@ -292,11 +244,11 @@ fn bake_ring_to_lines(
     cell_db: &DatDatabase,
     lbs: &[u16],
 ) -> Vec<(u16, Vec<String>)> {
-    let mut bounds_cache = BoundsCache::new();
+    let mut mesh_cache = MeshCache::new();
     let mut scene_cache = SceneCache::new();
     let mut out = Vec::with_capacity(lbs.len());
     for &lb in lbs {
-        let lines = match bake_one(region, portal, cell_db, &mut bounds_cache, &mut scene_cache, lb) {
+        let lines = match bake_one(region, portal, cell_db, &mut mesh_cache, &mut scene_cache, lb) {
             Some(v) => v.iter().map(placement_line).collect(),
             None => Vec::new(),
         };

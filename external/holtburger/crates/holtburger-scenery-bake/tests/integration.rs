@@ -17,8 +17,8 @@ use holtburger_dat::graphics::Frame;
 use holtburger_dat::landblock::CellLandblock;
 use holtburger_common::{Quaternion, Vector3};
 use holtburger_scenery_bake::{
-    Aabb2D, BakeMode, LocalBounds, ScenicPlacement, bake_landblock, bilinear_height_from_grid,
-    triangle_plane_height_from_grid, vertex_heights,
+    Aabb2D, BakeMode, PlacementXform, ScenicPlacement, bake_landblock, bilinear_height_from_grid,
+    transform_mesh_to_aabb, triangle_plane_height_from_grid, vertex_heights,
 };
 use std::path::PathBuf;
 
@@ -158,11 +158,30 @@ fn synth_scene(scene_did: u32) -> Scene {
     }
 }
 
-fn fixed_local_bounds() -> LocalBounds {
-    LocalBounds::new(
+/// Synthetic mesh vertex list — a unit cube's 8 corners. Matches the
+/// extents of the legacy `LocalBounds::new(-0.5, 0.5)` fixture so any
+/// downstream collision-rejection counts the same way.
+fn fixed_local_mesh() -> Vec<Vector3> {
+    vec![
         Vector3::new(-0.5, -0.5, 0.0),
-        Vector3::new(0.5, 0.5, 1.0),
-    )
+        Vector3::new( 0.5, -0.5, 0.0),
+        Vector3::new(-0.5,  0.5, 0.0),
+        Vector3::new( 0.5,  0.5, 0.0),
+        Vector3::new(-0.5, -0.5, 1.0),
+        Vector3::new( 0.5, -0.5, 1.0),
+        Vector3::new(-0.5,  0.5, 1.0),
+        Vector3::new( 0.5,  0.5, 1.0),
+    ]
+}
+
+/// Build the bake's `compute_world_aabb` closure backed by a fixed
+/// mesh. Returns a closure that resolves any obj_id to the fixed cube
+/// mesh's transformed AABB — sufficient for synthetic tests.
+fn fixed_world_aabb_fn() -> impl FnMut(PlacementXform) -> Option<Aabb2D> {
+    let verts = fixed_local_mesh();
+    move |px: PlacementXform| {
+        Some(transform_mesh_to_aabb(&verts, px.lx, px.ly, px.lz, px.rotation_rad, px.scale))
+    }
 }
 
 /// 1. Determinism stress test — bake the same synthetic fixture 100×
@@ -184,7 +203,7 @@ fn determinism_repeat() {
         &lb,
         landblock_id,
         |id| if id == SCENE_DID { Some(scene.clone()) } else { None },
-        |_| Some(fixed_local_bounds()),
+        fixed_world_aabb_fn(),
         &[],
         BakeMode::AceCompat,
     );
@@ -201,7 +220,7 @@ fn determinism_repeat() {
             &lb,
             landblock_id,
             |id| if id == SCENE_DID { Some(scene.clone()) } else { None },
-            |_| Some(fixed_local_bounds()),
+            fixed_world_aabb_fn(),
             &[],
             BakeMode::AceCompat,
         );
@@ -406,7 +425,7 @@ fn real_holtburg_bake_smoke() {
                 let bytes = portal.get_file(scene_id).ok()?;
                 Scene::unpack(&mut std::io::Cursor::new(&bytes)).ok()
             },
-            |_obj_id| Some(fixed_local_bounds()),
+            fixed_world_aabb_fn(),
             &[],
             BakeMode::AceCompat,
         );
@@ -571,7 +590,7 @@ fn ace_compat_is_strict_superset_on_steep_terrain() {
             &lb,
             0xA9B4_0000,
             |id| if id == SCENE_DID { Some(scene.clone()) } else { None },
-            |_| Some(fixed_local_bounds()),
+            fixed_world_aabb_fn(),
             &[],
             mode,
         )

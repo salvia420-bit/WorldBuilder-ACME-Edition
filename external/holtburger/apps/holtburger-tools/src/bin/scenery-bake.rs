@@ -37,10 +37,9 @@ use clap::Parser;
 use holtburger_common::Vector3;
 use holtburger_dat::DatDatabase;
 use holtburger_dat::file_type::{GfxObj, Region, Scene, SetupModel};
-use holtburger_dat::graphics::Frame;
 use holtburger_dat::landblock::{CellLandblock, LandblockInfo};
 use holtburger_scenery_bake::{
-    Aabb2D, BakeMode, LocalBounds, ScenicPlacement, bake_landblock, transform_local_aabb,
+    Aabb2D, BakeMode, PlacementXform, ScenicPlacement, bake_landblock, transform_mesh_to_aabb,
 };
 use log::{debug, info, warn};
 use sha2::{Digest, Sha256};
@@ -347,16 +346,20 @@ fn sha256_file(path: &Path) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-/// Mesh-local AABB cache. Memoised per `obj_id` (whether
-/// `0x01xxxxxx` GfxObj or `0x02xxxxxx` SetupModel). The bake's
-/// `fetch_obj_bounds` closure also asks for these — by going through
-/// this cache we de-duplicate the work between scenery (the closure)
-/// and buildings (this binary's AABB precompute).
-struct BoundsCache {
-    inner: HashMap<u32, Option<LocalBounds>>,
+/// Mesh-local vertex-list cache. Memoised per `obj_id` (whether
+/// `0x01xxxxxx` GfxObj or `0x02xxxxxx` SetupModel). Holds the
+/// flattened concatenation of every GfxObj part's `vertex_array`
+/// `origin` field — exactly what ACE's `BoundingBox.BuildBox` walks.
+///
+/// Replaces the older `BoundsCache`, which stored only the
+/// mesh-local AABB and reconstructed an over-conservative
+/// world AABB via 4-corner rotation. ACE walks each vertex
+/// individually — see `~/ace-server/Source/ACE.Server/Physics/BoundingBox.cs:57`.
+struct MeshCache {
+    inner: HashMap<u32, Option<Vec<Vector3>>>,
 }
 
-impl BoundsCache {
+impl MeshCache {
     fn new() -> Self {
         Self {
             inner: HashMap::new(),
@@ -364,196 +367,120 @@ impl BoundsCache {
     }
 
     /// Resolve a placement obj_id (GfxObj or SetupModel) to its
-    /// mesh-local AABB. Returns `None` if the record can't be loaded
-    /// or has no geometry — caller treats that as "skip placement".
-    fn lookup(&mut self, portal: &DatDatabase, obj_id: u32) -> Option<LocalBounds> {
-        if let Some(cached) = self.inner.get(&obj_id) {
-            return *cached;
+    /// flattened mesh-local vertex list. Returns `None` if the record
+    /// can't be loaded or has no geometry — caller treats that as
+    /// "skip placement".
+    fn lookup(&mut self, portal: &DatDatabase, obj_id: u32) -> Option<&Vec<Vector3>> {
+        if !self.inner.contains_key(&obj_id) {
+            let result = compute_local_mesh(portal, obj_id);
+            self.inner.insert(obj_id, result);
         }
-        let result = compute_local_bounds(portal, obj_id);
-        self.inner.insert(obj_id, result);
-        result
+        self.inner.get(&obj_id)?.as_ref()
     }
 }
 
-/// Compute the mesh-local AABB for a placement `obj_id`. Dispatches
-/// on the top byte: `0x01` → GfxObj (read vertex_array), `0x02` →
-/// SetupModel (walk each part's GfxObj and transform by the per-part
-/// `Frame` from `placement_frames[0]`, if present; else identity).
-fn compute_local_bounds(portal: &DatDatabase, obj_id: u32) -> Option<LocalBounds> {
+/// Load the mesh-local vertex list for a placement `obj_id`. Dispatches
+/// on the top byte: `0x01` → one GfxObj (read vertex_array), `0x02` →
+/// SetupModel (concat all Parts' vertices, WITHOUT applying per-part
+/// PlacementFrames — ACE's `BoundingBox.BuildBox` doesn't apply them
+/// either; parts sit at the SetupModel origin for collision purposes).
+fn compute_local_mesh(portal: &DatDatabase, obj_id: u32) -> Option<Vec<Vector3>> {
     let top = (obj_id >> 24) & 0xFF;
     match top {
-        0x01 => gfx_local_bounds(portal, obj_id),
-        0x02 => setup_local_bounds(portal, obj_id),
+        0x01 => gfx_local_mesh(portal, obj_id),
+        0x02 => setup_local_mesh(portal, obj_id),
         _ => None,
     }
 }
 
-/// Compute the mesh-local AABB for a raw GfxObj by min/max of its
-/// vertex.origin values.
-fn gfx_local_bounds(portal: &DatDatabase, gfx_id: u32) -> Option<LocalBounds> {
+/// Load a single GfxObj's vertex.origin list.
+fn gfx_local_mesh(portal: &DatDatabase, gfx_id: u32) -> Option<Vec<Vector3>> {
     let bytes = portal.get_file(gfx_id).ok()?;
     let mut cursor = Cursor::new(&bytes);
     let gfx = GfxObj::unpack(&mut cursor).ok()?;
     if gfx.vertex_array.vertices.is_empty() {
         return None;
     }
-    let mut min = Vector3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
-    let mut max = Vector3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
-    for v in gfx.vertex_array.vertices.values() {
-        let p = v.origin;
-        if p.x < min.x { min.x = p.x; }
-        if p.y < min.y { min.y = p.y; }
-        if p.z < min.z { min.z = p.z; }
-        if p.x > max.x { max.x = p.x; }
-        if p.y > max.y { max.y = p.y; }
-        if p.z > max.z { max.z = p.z; }
-    }
-    if !min.x.is_finite() || !max.x.is_finite() {
-        return None;
-    }
-    Some(LocalBounds::new(min, max))
+    let verts: Vec<Vector3> = gfx
+        .vertex_array
+        .vertices
+        .values()
+        .map(|v| v.origin)
+        .collect();
+    Some(verts)
 }
 
-/// Compute the mesh-local AABB for a SetupModel: union of each
-/// part's GfxObj AABB, transformed by the part's placement frame.
-/// SetupModels publish per-part frames via `placement_frames[key]`
-/// where each `PlacementType` carries one `Frame` per part. Retail
-/// SetupModels include `key=0` as the canonical "default" placement
-/// (mirrors the ACE-Server `SetupModel.Setup_VTABLE_BASE`); we use
-/// that and fall back to the lowest available key if absent — both
-/// are deterministic given the DAT, which is what we need.
-fn setup_local_bounds(portal: &DatDatabase, setup_id: u32) -> Option<LocalBounds> {
+/// Load a SetupModel's flattened vertex list — concatenation of all
+/// `Parts` GfxObj vertices, with NO per-part `PlacementFrames`
+/// transform. This matches ACE: `BoundingBox.BuildBox` iterates
+/// `model.StaticMesh.GfxObjs` and treats each part as rooted at the
+/// SetupModel origin (the per-part frame is applied later by the
+/// rendering pipeline but NOT by the collision-box construction).
+fn setup_local_mesh(portal: &DatDatabase, setup_id: u32) -> Option<Vec<Vector3>> {
     let bytes = portal.get_file(setup_id).ok()?;
     let mut cursor = Cursor::new(&bytes);
     let setup = SetupModel::read(&mut cursor).ok()?;
     if setup.parts.is_empty() {
         return None;
     }
-    // Pick the default placement (key=0), falling back to the
-    // lowest-keyed placement if the model doesn't expose 0. Both
-    // paths are deterministic.
-    let placement = setup
-        .placement_frames
-        .get(&0)
-        .or_else(|| {
-            setup
-                .placement_frames
-                .iter()
-                .min_by_key(|(k, _)| **k)
-                .map(|(_, v)| v)
-        });
-
-    let mut min = Vector3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
-    let mut max = Vector3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
-    let mut any = false;
-
-    for (idx, part_id) in setup.parts.iter().enumerate() {
-        let Some(part_bounds) = gfx_local_bounds(portal, *part_id) else {
-            continue;
-        };
-        // Per-part frame, if available. Default to identity if the
-        // placement table is missing entries for this part index (rare
-        // but mirrors ACE — if no placement record exists, parts sit
-        // at the SetupModel origin).
-        let part_frame: Frame = placement
-            .and_then(|p| p.anim_frame.frames.get(idx).cloned())
-            .unwrap_or_default();
-        for (px, py, pz) in corners_of(&part_bounds) {
-            let local = Vector3::new(px, py, pz);
-            let rotated = part_frame.orientation.rotate_vector(local);
-            let w = Vector3::new(
-                rotated.x + part_frame.origin.x,
-                rotated.y + part_frame.origin.y,
-                rotated.z + part_frame.origin.z,
-            );
-            if w.x < min.x { min.x = w.x; }
-            if w.y < min.y { min.y = w.y; }
-            if w.z < min.z { min.z = w.z; }
-            if w.x > max.x { max.x = w.x; }
-            if w.y > max.y { max.y = w.y; }
-            if w.z > max.z { max.z = w.z; }
-            any = true;
+    let mut all = Vec::new();
+    for part_id in &setup.parts {
+        if let Some(part_verts) = gfx_local_mesh(portal, *part_id) {
+            all.extend(part_verts);
         }
     }
-    if !any {
+    if all.is_empty() {
         return None;
     }
-    Some(LocalBounds::new(min, max))
-}
-
-/// Enumerate the 8 corners of a mesh-local AABB. Used when reducing
-/// SetupModel parts under a transform.
-fn corners_of(b: &LocalBounds) -> [(f32, f32, f32); 8] {
-    [
-        (b.min.x, b.min.y, b.min.z),
-        (b.max.x, b.min.y, b.min.z),
-        (b.min.x, b.max.y, b.min.z),
-        (b.max.x, b.max.y, b.min.z),
-        (b.min.x, b.min.y, b.max.z),
-        (b.max.x, b.min.y, b.max.z),
-        (b.min.x, b.max.y, b.max.z),
-        (b.max.x, b.max.y, b.max.z),
-    ]
+    Some(all)
 }
 
 /// Compute the world-frame XY AABB for one LandblockInfo placement
-/// (building or static object). Looks up the placement's mesh-local
-/// AABB via `bounds_cache`, transforms by the placement frame +
-/// rotation about Z via `transform_local_aabb`. Returns `None` if the
-/// mesh's bounds can't be resolved.
+/// (building) by walking the mesh's vertices through ACE's transform
+/// stack: `scale * yaw(rotation_rad) * translate(origin)`.
+/// Returns `None` if the mesh can't be loaded.
 fn placement_aabb(
     portal: &DatDatabase,
-    bounds_cache: &mut BoundsCache,
+    mesh_cache: &mut MeshCache,
     obj_id: u32,
     frame: &holtburger_dat::landblock::Frame,
 ) -> Option<Aabb2D> {
-    let local = bounds_cache.lookup(portal, obj_id)?;
-    // Extract yaw about Z from the placement quaternion. `to_heading`
-    // returns AC heading convention (0=W, 90=N). We need the
-    // mathematical rotation angle the corners get rotated by — i.e.
-    // `2 * atan2(qz, qw)` for a yaw-only quat. Most retail
-    // LandblockInfo frames ARE yaw-only-about-Z, so this is exact.
-    // For non-yaw-only frames the result is conservative-but-not-tight,
-    // matching ACE's `BoundingBox` 4-corner reduction in
-    // `Scenery.Collision`.
+    let verts = mesh_cache.lookup(portal, obj_id)?;
+    // Yaw extracted from the placement quaternion. Buildings are
+    // overwhelmingly yaw-only-about-Z in retail, so this is exact.
     let q = frame.orientation;
     let yaw = 2.0 * q.z.atan2(q.w);
-    // No per-placement scale exposed on LandblockInfo stabs;
-    // buildings/objects ship at native scale. Scale=1 here.
-    Some(transform_local_aabb(
-        local,
+    Some(transform_mesh_to_aabb(
+        verts,
         frame.origin.x,
         frame.origin.y,
+        frame.origin.z,
         yaw,
-        1.0,
+        1.0, // No per-placement scale on LBI Stabs/BuildInfo
     ))
 }
 
-/// Build the world-frame AABB list for all buildings + static
-/// objects on a landblock. Walks `info.objects` (Stab entries — these
-/// are static props like signs, well-heads, sometimes mature trees
-/// that retail decided to hand-place) plus `info.buildings`
-/// (BuildInfo entries — town houses, shops, the meeting hall).
+/// Build the world-frame AABB list of collision-blockers for the
+/// scenery bake. Walks `info.buildings` ONLY — matching ACE's
+/// `Scenery.cs:83` which collides against `_landblock.Buildings`, and
+/// ACE's `Landblock.init_buildings` (line 438) which populates that
+/// field exclusively from `Info.Buildings`. `info.objects` (the Stab
+/// list of hand-placed signs, well-heads, etc.) is NOT a
+/// collision-blocker in ACE's algorithm and must not be one here.
 ///
-/// The `is_building` flag the brief mentions doesn't actually exist on
-/// `Stab` — `LandblockInfo` already separates the two: `objects` is a
-/// `Vec<Stab>` of hand-placed statics and `buildings` is a
-/// `Vec<BuildInfo>` of building entries. Both are treated as
-/// collision-blockers for scenery placement.
+/// Why: the parity gate is "Rust bake = ACE Scenery.Load bit-for-bit".
+/// Including `info.objects` AS WELL over-rejects procedural scenery
+/// near hand-placed props (signs, lampposts, fences). On Holtburg
+/// approach LBs it removed up to 60% of upper-bound placements that
+/// retail would have rendered.
 fn collect_building_aabbs(
     portal: &DatDatabase,
-    bounds_cache: &mut BoundsCache,
+    mesh_cache: &mut MeshCache,
     info: &LandblockInfo,
 ) -> Vec<Aabb2D> {
     let mut out: Vec<Aabb2D> = Vec::new();
-    for stab in &info.objects {
-        if let Some(a) = placement_aabb(portal, bounds_cache, stab.id, &stab.frame) {
-            out.push(a);
-        }
-    }
     for b in &info.buildings {
-        if let Some(a) = placement_aabb(portal, bounds_cache, b.model_id, &b.frame) {
+        if let Some(a) = placement_aabb(portal, mesh_cache, b.model_id, &b.frame) {
             out.push(a);
         }
     }
@@ -636,7 +563,7 @@ fn bake_one(
     region: &Region,
     portal: &DatDatabase,
     cell_db: &DatDatabase,
-    bounds_cache: &mut BoundsCache,
+    mesh_cache: &mut MeshCache,
     scene_cache: &mut SceneCache,
     lb_key: u16,
     out_dir: &Path,
@@ -657,7 +584,7 @@ fn bake_one(
     // buildings. Absent record = zero building AABBs.
     let building_aabbs: Vec<Aabb2D> = match cell_db.get_file(info_id) {
         Ok(info_bytes) => match LandblockInfo::unpack(&info_bytes) {
-            Ok(info) => collect_building_aabbs(portal, bounds_cache, &info),
+            Ok(info) => collect_building_aabbs(portal, mesh_cache, &info),
             Err(e) => {
                 warn!("LB 0x{lb_key:04X}: LandblockInfo {info_id:#010X} parse failed: {e}");
                 Vec::new()
@@ -670,20 +597,30 @@ fn bake_one(
     // Bake calls back through our closures + caches. Splitting the
     // two caches lets us hold portal + cell DBs read-only inside both.
     let placements = {
-        // We need to wrap portal in the closures separately — Rust
-        // can't share `&DatDatabase` to two `FnMut` closures via the
-        // same outer `&mut`. So both closures hold their own `&DatDatabase`
-        // and own a `&mut` to their respective cache.
-        let (scene_cache_ref, bounds_cache_ref) = (scene_cache, bounds_cache);
+        // Both closures hold their own `&DatDatabase` and a `&mut` to
+        // their respective cache. The AABB closure resolves the mesh
+        // and applies ACE's per-vertex transform — see
+        // `placement_aabb` for the equivalent building-side helper.
+        let (scene_cache_ref, mesh_cache_ref) = (scene_cache, mesh_cache);
         let fetch_scene = |scene_id: u32| scene_cache_ref.lookup(portal, scene_id);
-        let fetch_obj_bounds = |obj_id: u32| bounds_cache_ref.lookup(portal, obj_id);
+        let compute_world_aabb = |px: PlacementXform| -> Option<Aabb2D> {
+            let verts = mesh_cache_ref.lookup(portal, px.obj_id)?;
+            Some(transform_mesh_to_aabb(
+                verts,
+                px.lx,
+                px.ly,
+                px.lz,
+                px.rotation_rad,
+                px.scale,
+            ))
+        };
 
         bake_landblock(
             region,
             &cell_landblock,
             landblock_id,
             fetch_scene,
-            fetch_obj_bounds,
+            compute_world_aabb,
             &building_aabbs,
             mode,
         )
@@ -777,7 +714,7 @@ fn main() -> Result<()> {
             .with_context(|| format!("parse Region {region_did:#010X}"))?
     };
 
-    let mut bounds_cache = BoundsCache::new();
+    let mut mesh_cache = MeshCache::new();
     let mut scene_cache = SceneCache::new();
     let mut counts: Vec<usize> = Vec::with_capacity(landblocks.len());
     let mut skipped: usize = 0;
@@ -787,7 +724,7 @@ fn main() -> Result<()> {
             &region,
             &check.portal_db,
             &check.cell_db,
-            &mut bounds_cache,
+            &mut mesh_cache,
             &mut scene_cache,
             lb_key,
             &cli.out,

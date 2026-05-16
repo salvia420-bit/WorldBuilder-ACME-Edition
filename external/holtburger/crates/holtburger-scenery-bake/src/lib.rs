@@ -33,14 +33,20 @@
 //! - `fetch_scene(scene_id)` — must return the `Scene` for the given
 //!   `0x12xxxxxx` DID, or `None` if the scene isn't found. The bake
 //!   skips vertices whose scene can't be loaded.
-//! - `fetch_obj_bounds(obj_id)` — must return the mesh-local AABB for
-//!   the placement's mesh, or `None` if bounds aren't known. The bake
-//!   skips placements without bounds (no collision basis).
+//! - `compute_world_aabb(params)` — must return the world-frame XY
+//!   AABB for the placement, computed by transforming the mesh's
+//!   vertices through ACE's `scale * yaw * cellTranslate * inner`
+//!   stack (see [`aabb::transform_mesh_to_aabb`] for the canonical
+//!   helper). Returns `None` when the mesh can't be loaded; the bake
+//!   skips placements without a usable AABB (no collision basis).
 //!
 //! `building_aabbs` is supplied by the caller; the bake doesn't load
-//! `LandblockInfo.objects` itself. Caller is responsible for
-//! pre-computing the world-frame XY AABB of every building on the LB
-//! using the same transform we apply to scenery (`transform_local_aabb`).
+//! `LandblockInfo` itself. Caller is responsible for pre-computing the
+//! world-frame XY AABB of every entry in `LandblockInfo.Buildings`
+//! (NOT `Objects` — ACE's `Landblock.init_buildings` populates the
+//! collision-blocker list from Buildings alone; see
+//! `~/ace-server/Source/ACE.Server/Physics/Common/Landblock.cs:438`
+//! and `Scenery.cs:83`) using the same per-vertex transform.
 
 #![forbid(unsafe_code)]
 
@@ -48,7 +54,7 @@ pub mod aabb;
 pub mod height;
 pub mod noise;
 
-pub use aabb::{Aabb2D, LocalBounds, transform_local_aabb};
+pub use aabb::{Aabb2D, LocalBounds, transform_local_aabb, transform_mesh_to_aabb};
 pub use height::{
     CELL_SIZE, LANDBLOCK_SIZE, VERTEX_DIM, bilinear_height, bilinear_height_from_grid,
     get_split_dir, slope_at, triangle_plane_height_from_grid, vertex_heights,
@@ -161,12 +167,34 @@ pub struct ScenicPlacement {
     pub source_obj_idx: u32,
 }
 
+/// Per-candidate placement transform parameters passed to the bake's
+/// AABB-building closure. The closure is expected to load the mesh
+/// for `obj_id`, run each vertex through
+/// `scale * yaw(rotation_rad) * cellTranslate * translate(lx, ly, lz)`,
+/// and return the world-frame XY min/max — exactly what ACE's
+/// `BoundingBox.BuildBox` does.
+#[derive(Debug, Clone, Copy)]
+pub struct PlacementXform {
+    /// GfxObj (`0x01xxxxxx`) or SetupModel (`0x02xxxxxx`) DID.
+    pub obj_id: u32,
+    /// LB-local X (the displaced X in [0, 192]).
+    pub lx: f32,
+    /// LB-local Y (the displaced Y in [0, 192]).
+    pub ly: f32,
+    /// World Z snapped to terrain.
+    pub lz: f32,
+    /// Yaw about Z, in radians.
+    pub rotation_rad: f32,
+    /// Uniform scale.
+    pub scale: f32,
+}
+
 /// Run the scenery bake for one landblock.
 ///
 /// # Determinism
 ///
 /// Output is deterministic in the inputs. The closures `fetch_scene`
-/// and `fetch_obj_bounds` MUST themselves be deterministic — i.e.
+/// and `compute_world_aabb` MUST themselves be deterministic — i.e.
 /// repeated calls with the same arguments must return identical
 /// results. Otherwise downstream determinism is lost.
 ///
@@ -178,18 +206,22 @@ pub struct ScenicPlacement {
 /// - `landblock_id` — packed `(lbX << 24) | (lbY << 16)`.
 /// - `fetch_scene` — closure to resolve a `0x12xxxxxx` Scene DID to
 ///   its parsed `Scene`. Caller owns DAT access.
-/// - `fetch_obj_bounds` — closure to resolve a placement mesh's
-///   local-frame AABB. Used for collision rejection.
-/// - `building_aabbs` — world-frame XY AABBs of all buildings on this
-///   LB (from `LandblockInfo.objects`). Caller is responsible for
-///   transforming each building's mesh-local AABB into the LB-local
-///   2D frame before passing.
+/// - `compute_world_aabb` — closure to return the placement's
+///   world-frame XY AABB. Use [`transform_mesh_to_aabb`] inside the
+///   closure to match ACE bit-for-bit. Return `None` when the mesh
+///   can't be resolved — the bake will skip the placement.
+/// - `building_aabbs` — world-frame XY AABBs of all entries in
+///   `LandblockInfo.Buildings` on this LB. Caller is responsible for
+///   computing each one via the same per-vertex transform. **Do not
+///   include `LandblockInfo.Objects`** — ACE's Scenery.Load collides
+///   against Buildings only (`Scenery.cs:83` /
+///   `Landblock.cs:438`).
 pub fn bake_landblock(
     region: &Region,
     landblock: &CellLandblock,
     landblock_id: u32,
     fetch_scene: impl FnMut(u32) -> Option<Scene>,
-    fetch_obj_bounds: impl FnMut(u32) -> Option<LocalBounds>,
+    compute_world_aabb: impl FnMut(PlacementXform) -> Option<Aabb2D>,
     building_aabbs: &[Aabb2D],
     mode: BakeMode,
 ) -> Vec<ScenicPlacement> {
@@ -198,7 +230,7 @@ pub fn bake_landblock(
         landblock,
         landblock_id,
         fetch_scene,
-        fetch_obj_bounds,
+        compute_world_aabb,
         building_aabbs,
         mode,
     )
@@ -209,7 +241,7 @@ fn bake_landblock_impl(
     landblock: &CellLandblock,
     landblock_id: u32,
     mut fetch_scene: impl FnMut(u32) -> Option<Scene>,
-    mut fetch_obj_bounds: impl FnMut(u32) -> Option<LocalBounds>,
+    mut compute_world_aabb: impl FnMut(PlacementXform) -> Option<Aabb2D>,
     building_aabbs: &[Aabb2D],
     mode: BakeMode,
 ) -> Vec<ScenicPlacement> {
@@ -361,11 +393,22 @@ fn bake_landblock_impl(
             let scale = scale_obj(obj, global_cell_x, global_cell_y, j_u32);
 
             // Scenery.cs:80 + 83-84 — bounding box + collision reject.
-            let local_bounds = match fetch_obj_bounds(obj.obj_id) {
-                Some(b) => b,
+            // AABB construction matches ACE BoundingBox.BuildBox: walk
+            // each mesh vertex through `scale * rotate * cellTranslate
+            // * cellTranslateInner` and take XY min/max. Closure owns
+            // the mesh cache + the transform — see
+            // `apps/holtburger-tools/src/bin/scenery-bake.rs::compute_world_aabb_for`.
+            let world_aabb = match compute_world_aabb(PlacementXform {
+                obj_id: obj.obj_id,
+                lx,
+                ly,
+                lz: z,
+                rotation_rad,
+                scale,
+            }) {
+                Some(a) => a,
                 None => continue,
             };
-            let world_aabb = transform_local_aabb(local_bounds, lx, ly, rotation_rad, scale);
 
             if noise::intersects_any(&world_aabb, building_aabbs) {
                 continue;

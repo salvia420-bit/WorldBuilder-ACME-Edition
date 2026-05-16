@@ -64,6 +64,7 @@ namespace SceneryCrossCheck
             string datDir = null;
             string lbSpec = null;
             string outDir = null;
+            bool withCollision = false;
             for (int i = 0; i < args.Length; i++)
             {
                 switch (args[i])
@@ -71,6 +72,7 @@ namespace SceneryCrossCheck
                     case "--dat-dir": datDir = args[++i]; break;
                     case "--landblocks": lbSpec = args[++i]; break;
                     case "--out": outDir = args[++i]; break;
+                    case "--with-collision": withCollision = true; break;
                     default:
                         Console.Error.WriteLine($"unknown arg `{args[i]}`");
                         return 2;
@@ -79,7 +81,7 @@ namespace SceneryCrossCheck
             if (datDir == null || lbSpec == null || outDir == null)
             {
                 Console.Error.WriteLine(
-                    "usage: scenery-cross-check --dat-dir <PATH> --landblocks <SPEC> --out <DIR>");
+                    "usage: scenery-cross-check --dat-dir <PATH> --landblocks <SPEC> --out <DIR> [--with-collision]");
                 return 2;
             }
 
@@ -104,9 +106,10 @@ namespace SceneryCrossCheck
 
             var landblocks = ParseLandblockSpec(lbSpec);
             Console.Error.WriteLine(
-                $"scenery-cross-check: {landblocks.Count} LBs, region=0x13000000, out={outDir}");
+                $"scenery-cross-check: {landblocks.Count} LBs, region=0x13000000, with-collision={withCollision}, out={outDir}");
             Directory.CreateDirectory(outDir);
 
+            var meshCache = new MeshVertexCache();
             int total = 0;
             int skipped = 0;
             foreach (var lbKey in landblocks)
@@ -124,7 +127,36 @@ namespace SceneryCrossCheck
                     continue;
                 }
                 var landblockId = (uint)lbKey << 16;
-                var placements = BakeLandblock(region, cellLb, landblockId);
+
+                // ACE's collision filter (Scenery.cs:83) tests scenery
+                // candidates against `Entity.Landblock.Buildings`, which
+                // `Entity.Landblock.LoadBuildings` populates exclusively
+                // from `LandblockInfo.Buildings` (NOT `Objects`). So we
+                // load the LBI here, walk Buildings only, and feed those
+                // AABBs into the bake.
+                var buildingBoxes = new List<BoundingBox2D>();
+                if (withCollision)
+                {
+                    var infoId = ((uint)lbKey << 16) | 0xFFFE;
+                    try
+                    {
+                        var info = DatManager.CellDat.ReadFromDat<LandblockInfo>(infoId);
+                        foreach (var b in info.Buildings)
+                        {
+                            var bb = BuildBoxForPlacement(meshCache, b.ModelId, b.Frame,
+                                cellX: 0, cellY: 0, scale: 1.0f);
+                            if (bb.HasValue) buildingBoxes.Add(bb.Value);
+                        }
+                    }
+                    catch
+                    {
+                        // No LBI for this LB → no buildings → no
+                        // building-side collision rejections.
+                    }
+                }
+
+                var placements = BakeLandblock(region, cellLb, landblockId,
+                    withCollision, buildingBoxes, meshCache);
                 WriteJsonl(Path.Combine(outDir, $"0x{lbKey:X4}.scenery.jsonl"), placements);
                 total += placements.Count;
             }
@@ -177,12 +209,23 @@ namespace SceneryCrossCheck
         }
 
         /// <summary>
-        /// Verbatim port of ACE.Server.Entity.Scenery.Load,
-        /// minus the Collision() rejection step (see file header).
+        /// Verbatim port of ACE.Server.Entity.Scenery.Load.
+        /// When <paramref name="withCollision"/> is true, also runs the
+        /// Collision() rejection step against
+        /// <paramref name="buildingBoxes"/> (the LB's Info.Buildings,
+        /// transformed) and against previously-emitted scenery this LB.
+        /// When false, this is the historical upper-bound mode.
         /// Returns one Placement per emitted scenery object.
         /// </summary>
-        private static List<Placement> BakeLandblock(RegionDesc region, CellLandblock landblock, uint landblockId)
+        private static List<Placement> BakeLandblock(
+            RegionDesc region,
+            CellLandblock landblock,
+            uint landblockId,
+            bool withCollision,
+            List<BoundingBox2D> buildingBoxes,
+            MeshVertexCache meshCache)
         {
+            var sceneryBoxes = withCollision ? new List<BoundingBox2D>() : null;
             var output = new List<Placement>();
 
             // Pre-resolve the 9x9 vertex height grid the same way
@@ -262,7 +305,32 @@ namespace SceneryCrossCheck
                         float qw = (float)Math.Cos(half);
                         float qz = (float)Math.Sin(half);
 
-                        // **Collision skipped** (see file header).
+                        // Collision: ACE Scenery.cs:80-84 builds a
+                        // ModelMesh, computes BoundingBox.BuildBox (over
+                        // transformed mesh vertices, XY axis-aligned),
+                        // then rejects if it Intersect2D's any building
+                        // or any previously-emitted scenery this LB.
+                        // Skip the candidate when withCollision and a hit.
+                        if (withCollision)
+                        {
+                            var rotQ = new Quaternion(0f, 0f, qz, qw);
+                            // ACE's Scenery.Load uses Position=(disp.X, disp.Y, z)
+                            // and Cell=(cellX, cellY); the transform stack in
+                            // BoundingBox.GetTransform combines them as
+                            // cellTranslate*(cellX*24, cellY*24, 0) +
+                            // cellTranslateInner*(Position.X, Position.Y, Position.Z).
+                            // So we pass the displaced (disp.X, disp.Y) as
+                            // inner translation alongside cellX/cellY.
+                            var candBox = BuildBoxForScenery(
+                                meshCache, obj.ObjId,
+                                innerX: disp.X, innerY: disp.Y, innerZ: z,
+                                cellX: cellX, cellY: cellY,
+                                rotation: rotQ, scale: scale);
+                            if (!candBox.HasValue) continue;
+                            if (Intersect2DAny(candBox.Value, buildingBoxes)) continue;
+                            if (Intersect2DAny(candBox.Value, sceneryBoxes)) continue;
+                            sceneryBoxes.Add(candBox.Value);
+                        }
 
                         output.Add(new Placement
                         {
@@ -428,6 +496,154 @@ namespace SceneryCrossCheck
                     ObjId, F(X), F(Y), F(Z), F(Qw), F(Qx), F(Qy), F(Qz), F(Scale),
                     SourceCellX, SourceCellY, SourceObjIdx);
             }
+        }
+
+        // =====================================================================
+        // Collision-mode plumbing — ACE BoundingBox.BuildBox + Intersect2D port
+        // =====================================================================
+        //
+        // Why we port instead of referencing ACE.Server: ACE.Server drags in
+        // MySqlConnector, log4net, Lifestoned, etc. The 80 lines of geometry
+        // we actually need (BuildBox, Intersect2D, the transform stack) are
+        // self-contained — porting them is a smaller blast radius than
+        // pulling the whole server crate.
+        //
+        // Fidelity: the bake gets vertices straight from ACE.DatLoader
+        // (`GfxObj.VertexArray.Vertices.Values.Origin`) so vertex data is
+        // canonical. The transform stack matches
+        // `ACE.Server.Physics.BoundingBox.GetTransform`
+        // (scale * rotate * cellTranslate * cellTranslateInner) verbatim.
+        // `Intersect2D` is the same `Min.X<=B.Max.X && Max.X>=B.Min.X && ...`
+        // axis-aligned overlap test.
+        //
+        // Known caveat — multi-part Setup placement frames: ACE's BuildBox
+        // walks each GfxObj part as if rooted at the model origin, without
+        // applying `SetupModel.PlacementFrames[default].AnimFrame.Frames[i]`.
+        // We mirror that behavior so the AABB matches ACE bit-for-bit, even
+        // though it's a "Setup-bug-faithfulness" (multi-part scenery models
+        // typically have one big part and many small attached parts; for
+        // collision purposes the rooted union is close enough to the union
+        // of properly-placed parts that real-world deltas are rare).
+
+        private readonly struct BoundingBox2D
+        {
+            public readonly float MinX, MinY, MaxX, MaxY;
+            public BoundingBox2D(float minX, float minY, float maxX, float maxY)
+            { MinX = minX; MinY = minY; MaxX = maxX; MaxY = maxY; }
+        }
+
+        private static bool Intersect2D(BoundingBox2D a, BoundingBox2D b)
+        {
+            return a.MinX <= b.MaxX && a.MaxX >= b.MinX
+                && a.MinY <= b.MaxY && a.MaxY >= b.MinY;
+        }
+
+        private static bool Intersect2DAny(BoundingBox2D cand, List<BoundingBox2D> others)
+        {
+            if (others == null) return false;
+            for (int i = 0; i < others.Count; i++)
+            {
+                if (Intersect2D(cand, others[i])) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Vertex-list cache: modelId → flat list of mesh-local vertex Vector3s.
+        /// SetupModel (0x02) walks Parts (each is a GfxObj id) and concatenates;
+        /// GfxObj (0x01) is loaded directly. Returns null + caches null on any
+        /// failure so retry attempts don't re-throw.
+        /// </summary>
+        private sealed class MeshVertexCache
+        {
+            private readonly Dictionary<uint, List<Vector3>> _cache = new();
+
+            public List<Vector3> Get(uint modelId)
+            {
+                if (_cache.TryGetValue(modelId, out var cached)) return cached;
+                List<Vector3> vs = null;
+                try
+                {
+                    uint kind = modelId >> 24;
+                    vs = new List<Vector3>();
+                    if (kind == 0x01)
+                    {
+                        var gfx = DatManager.PortalDat.ReadFromDat<GfxObj>(modelId);
+                        foreach (var v in gfx.VertexArray.Vertices.Values)
+                            vs.Add(v.Origin);
+                    }
+                    else if (kind == 0x02)
+                    {
+                        var setup = DatManager.PortalDat.ReadFromDat<SetupModel>(modelId);
+                        foreach (var part in setup.Parts)
+                        {
+                            var gfx = DatManager.PortalDat.ReadFromDat<GfxObj>(part);
+                            foreach (var v in gfx.VertexArray.Vertices.Values)
+                                vs.Add(v.Origin);
+                        }
+                    }
+                    else
+                    {
+                        vs = null;
+                    }
+                }
+                catch
+                {
+                    vs = null;
+                }
+                _cache[modelId] = vs;
+                return vs;
+            }
+        }
+
+        /// <summary>
+        /// Build the XY AABB of a placement's transformed mesh vertices.
+        /// Mirrors ACE BoundingBox.BuildBox + GetTransform exactly:
+        ///   transform = scale * rotate * cellTranslate * cellTranslateInner
+        /// where cellTranslate = (cellX * 24, cellY * 24, 0) and
+        /// cellTranslateInner = (innerX, innerY, innerZ).
+        /// Returns null if the mesh can't be loaded (caller skips).
+        /// </summary>
+        private static BoundingBox2D? BuildBoxForScenery(
+            MeshVertexCache cache, uint modelId,
+            float innerX, float innerY, float innerZ,
+            int cellX, int cellY,
+            Quaternion rotation, float scale)
+        {
+            var vs = cache.Get(modelId);
+            if (vs == null || vs.Count == 0) return null;
+            var mScale = Matrix4x4.CreateScale(scale);
+            var mRot = Matrix4x4.CreateFromQuaternion(rotation);
+            var mCell = Matrix4x4.CreateTranslation(cellX * (float)CellSize, cellY * (float)CellSize, 0);
+            var mInner = Matrix4x4.CreateTranslation(innerX, innerY, innerZ);
+            var t = mScale * mRot * mCell * mInner;
+            float minX = float.MaxValue, minY = float.MaxValue;
+            float maxX = float.MinValue, maxY = float.MinValue;
+            foreach (var v in vs)
+            {
+                var w = Vector3.Transform(v, t);
+                if (w.X < minX) minX = w.X;
+                if (w.Y < minY) minY = w.Y;
+                if (w.X > maxX) maxX = w.X;
+                if (w.Y > maxY) maxY = w.Y;
+            }
+            return new BoundingBox2D(minX, minY, maxX, maxY);
+        }
+
+        /// <summary>
+        /// Build a placement AABB for a BuildInfo or generic Frame. For
+        /// buildings the cell offset is zero and the frame's origin acts
+        /// as the inner translation (ACE creates these via `new ModelMesh(modelId,
+        /// frame)` so Position = Frame.Origin, Cell = Vector2.Zero, Scale = 1).
+        /// </summary>
+        private static BoundingBox2D? BuildBoxForPlacement(
+            MeshVertexCache cache, uint modelId, Frame frame,
+            int cellX, int cellY, float scale)
+        {
+            return BuildBoxForScenery(cache, modelId,
+                innerX: frame.Origin.X, innerY: frame.Origin.Y, innerZ: frame.Origin.Z,
+                cellX: cellX, cellY: cellY,
+                rotation: frame.Orientation, scale: scale);
         }
     }
 }

@@ -61,11 +61,15 @@ pub fn bake_landblock(
 
 **CLI:** `scenery-bake` binary at `apps/holtburger-tools/src/bin/scenery-bake.rs` (commit `068ea9a`). Required arg: `--dat-dir <PATH>`. Pre-flight rejects modder-allocated `0x__FFxxxx` records and sibling `custom_textures/` / `iter-*/` / `*.wbproj` markers. Emits per-LB `<lbHex>.scenery.jsonl` + `bake-source.sha256`.
 
-**Parity with retail:** **100.000 % match** vs C# `Scenery.Load` at strict tolerance (`|Δxyz| < 1e-4`, `|Δscale| < 1e-5`, `quat·quat' > 0.9999`) across 14,523 placements in the 13×13 ring (commit `3340fb6` parity report at `docs/scenery-bake-b4-parity-report.md`).
+**Parity with retail:** **100.000 % match** vs C# `Scenery.Load` at strict tolerance (`|Δxyz| < 1e-4`, `|Δscale| < 1e-5`, `quat·quat' > 0.9999`) across **16,700** placements in the 13×13 ring. See `docs/scenery-bake-b5-collision-parity-report.md` (current — covers the full algorithm including ACE's Collision() filter) and `docs/scenery-bake-b4-parity-report.md` (predecessor — collision-disabled upper bound).
+
+The B.5 gate proves the bake is a 1:1 substitute for what an ACE server's `Scenery.Load` would compute on the same DATs. Two divergences from earlier revisions had to be fixed:
+- **`info.objects` was treated as a collision-blocker.** ACE's `Landblock.init_buildings` populates the field that `Scenery.Load` tests against from `Info.Buildings` only, not `Info.Objects`. Fix: walk `info.buildings` exclusively in `scenery-bake::collect_building_aabbs`.
+- **The bake used 4-corner rotation of the mesh-local AABB.** ACE's `BoundingBox.BuildBox` walks each mesh vertex through the placement transform individually. The corner-form is strictly looser, causing over-rejection on rotated objects. Fix: replace `LocalBounds` + `transform_local_aabb` with `transform_mesh_to_aabb` (vertex-by-vertex). The bake's closure API now takes `compute_world_aabb(PlacementXform) -> Option<Aabb2D>`, putting mesh-loading in the caller (`MeshCache` in `scenery-bake.rs`).
 
 **Wasm export:** `fetch_landblock_scenery(cell_ids) -> Vec<ScenicPlacementJs>` + `fetch_landblock_scenery_soa(...)` (commits `65c11a1` + `8d4794a`).
 
-**Per-ring count (13×13, ace-compat):** 14,523 placements across 114 of 169 LBs.
+**Per-ring count (13×13, ace-compat):** **16,700** placements across 168 of 169 LBs (post-B.5). Holtburg 0xA9B4 itself is the only zero-placement LB in the ring — the town's CellLandblock decodes to scene_info buckets that are deliberately empty in retail.
 
 ### 3. ACE explicit — `landblock_instance`
 
@@ -233,7 +237,8 @@ The method as shipped:
 | F.30 | `8d4794a` | SoA bulk wasm exports for validator throughput |
 | F.31 | (none — diagnosed wasm-side; tracked as F.35) | Spawn pipeline serialization root cause analysis |
 | F.33+34 | `ad26b39` | Nameplate text-truncation fix + dedupe-by-guid |
-| Method doc | this commit | Canonical reference |
+| Method doc | (initial commit) | Canonical reference |
+| B.5 | 2026-05-16 | **Collision-parity gate.** Closed the divergence between Rust bake and ACE `Scenery.Load` Collision(): `info.objects` no longer counted as collision-blocker; `transform_local_aabb` (4-corner approximation) replaced by `transform_mesh_to_aabb` (per-vertex, matches ACE `BoundingBox.BuildBox`); `scenery-cross-check --with-collision` ports ACE's BoundingBox + Intersect2D as the C# oracle. Result: 16,700 placements, 100.000 % strict-tolerance match, 0 missing / 0 extra. Report: `docs/scenery-bake-b5-collision-parity-report.md`. **This is the gate that unblocks whole-Dereth `generate-world`.** |
 
 ---
 
