@@ -86,6 +86,32 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   });
   composer.setSize(width, height);
 
+  // 2026-05-16 cloud z-order fix — attach a DepthTexture to both of
+  // the composer's ping-pong render targets so the cloud overlay's
+  // fragment shader (which runs AFTER `composer.render()` writes the
+  // tone-mapped image to screen) can sample the world's depth and
+  // discard fragments where geometry occludes the cloud.
+  //
+  // Without this, the cloud overlay quad ran with `depthTest=false`
+  // and painted cloud RGB unconditionally, so buildings / NPCs in
+  // front of the sky were over-painted by clouds. The legacy comment
+  // at the top of this file ("overlay quad draws after the composer's
+  // final pass — depth-correct cloud occlusion is a follow-on
+  // cleanup") was that follow-on.
+  //
+  // We share ONE DepthTexture between the two RTs because the
+  // composer ping-pongs reads/writes but the depth buffer is updated
+  // by both world-write passes — sharing avoids stale depth from the
+  // "other" buffer during the chain. setSize below rebuilds it at the
+  // new dimensions.
+  const sceneDepthTexture = new THREE.DepthTexture(width, height);
+  sceneDepthTexture.format = THREE.DepthFormat;
+  sceneDepthTexture.type = THREE.UnsignedIntType;
+  composer.inputBuffer.depthTexture = sceneDepthTexture;
+  composer.outputBuffer.depthTexture = sceneDepthTexture;
+  composer.inputBuffer.depthBuffer = true;
+  composer.outputBuffer.depthBuffer = true;
+
   let skyRenderPass = null;
   if (skyScene && skyCamera) {
     skyRenderPass = new RenderPass(skyScene, skyCamera);
@@ -198,6 +224,31 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
 
     setSize(w, h) {
       composer.setSize(w, h);
+      // Rebuild the shared depth texture at the new size — Three.js
+      // doesn't auto-resize DepthTextures attached to composer RTs.
+      // Dispose the old one to release GPU memory.
+      const old = sceneDepthTexture;
+      const next = new THREE.DepthTexture(w, h);
+      next.format = THREE.DepthFormat;
+      next.type = THREE.UnsignedIntType;
+      composer.inputBuffer.depthTexture = next;
+      composer.outputBuffer.depthTexture = next;
+      // Mutate the cached reference so getSceneDepthTexture stays valid.
+      // (We can't `sceneDepthTexture = next` from inside this closure
+      // because it's a `const` in the enclosing scope, so the API hands
+      // out the live `composer.inputBuffer.depthTexture` instead.)
+      old.dispose();
+    },
+
+    /**
+     * Live handle to the depth texture the composer's world pass
+     * writes. Used by `cloud_overlay.js` to discard cloud fragments
+     * behind world geometry. Always returns the current texture —
+     * `setSize` swaps the underlying object, but the consumer reads
+     * through this accessor each frame.
+     */
+    getSceneDepthTexture() {
+      return composer.inputBuffer.depthTexture;
     },
 
     setCamera(cam) {

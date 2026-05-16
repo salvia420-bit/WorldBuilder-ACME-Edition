@@ -23,6 +23,15 @@
 // `apps/holtburger-web/test_phase7_4a_animation_clip.mjs`.
 
 import * as THREE from "three";
+// 2026-05-16 fix for the "second spawn of same setup_id renders no body"
+// race. We convert the wasm-side `partMeshes` to three.js BufferGeometry
+// + surfaceDid arrays INSIDE this cache so the conversion + wasm-side
+// `.free()` happens exactly once per (setupId, mtable, cmd, stance).
+// Prior behaviour: every consuming `_spawnImpl` converted then freed,
+// but the cache stored a SHARED `partMeshes` array — second consumer's
+// converter got null-ptr wrappers and silently returned empty groups,
+// so all-but-one NPCs of a shared setup spawned bodyless.
+import { meshToGeometryGroups } from "./adapter.js";
 
 // Per-part keyframe stride in `partFrames`: 3 (position) + 4
 // (quaternion) = 7 floats.
@@ -293,6 +302,42 @@ export class AnimationCache {
                     ? animData.takePartMeshes()
                     : [];
 
+            // 2026-05-16 — convert each wasm `ModelMesh` to three.js
+            // `{ groups: [{ geometry, surfaceDid }], surfaceDids: [] }`
+            // and free the wasm handle. Doing this ONCE per cache entry
+            // (instead of per-spawn in entities.js::_spawnImpl) means:
+            //   1. Multiple spawns of the same setupId share the SAME
+            //      BufferGeometry objects (THREE.Mesh tolerates shared
+            //      geometry — N meshes with the same geometry render
+            //      correctly, each with its own transform/material).
+            //   2. The race that caused "second spawn = bodyless NPC"
+            //      (first spawn `.free()`'d the wasm handles, second
+            //      spawn's `meshToGeometryGroups` returned empty)
+            //      is gone — the wasm handles never leak past this
+            //      cache promise.
+            //   3. Per-setup work moves from O(spawnCount) to O(1).
+            // Empty / null partMesh slots (raw GfxObjs whose Setup
+            // declared a part the GfxObj wasn't actually present in,
+            // or wasm bundles without `takePartMeshes`) yield an
+            // empty `{ groups: [], surfaceDids: [] }` shim — entities.js
+            // already handles that path.
+            const partGroups = new Array(partMeshes.length);
+            for (let p = 0; p < partMeshes.length; p += 1) {
+                const partMesh = partMeshes[p];
+                if (!partMesh) {
+                    partGroups[p] = { groups: [], surfaceDids: [] };
+                    continue;
+                }
+                try {
+                    partGroups[p] = meshToGeometryGroups(partMesh);
+                } catch (_) {
+                    partGroups[p] = { groups: [], surfaceDids: [] };
+                }
+                if (typeof partMesh.free === "function") {
+                    try { partMesh.free(); } catch (_) {}
+                }
+            }
+
             // Read partFrames once (clones from wasm). After this,
             // animData is dead weight.
             const partFrames =
@@ -368,7 +413,16 @@ export class AnimationCache {
 
             return {
                 clip,
-                partMeshes,
+                // Pre-converted three.js groups (one per part). Each
+                // entry: `{ groups: [{geometry, surfaceDid}], surfaceDids: [] }`.
+                // Shared across all consumers — see comment block above.
+                partGroups,
+                // Legacy field — present but always empty post-2026-05-16.
+                // Kept so older capture scripts that destructure
+                // `partMeshes` don't crash; production code uses
+                // `partGroups`. The wasm handles are freed in the
+                // conversion loop above.
+                partMeshes: [],
                 partCount,
                 framerate,
                 resolvedStance,

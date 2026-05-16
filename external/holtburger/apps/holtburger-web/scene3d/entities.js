@@ -502,14 +502,24 @@ export class EntityManager {
         paletteSubsFlat: subPalettes,
       }
     );
-    const partMeshes = animEntry.partMeshes;
+    // 2026-05-16 — `AnimationCache.get()` now returns `partGroups`
+    // pre-converted to `{ groups: [{geometry, surfaceDid}], surfaceDids }`
+    // and frees its wasm partMesh handles inside the cache. Multiple
+    // spawns of the same setupId all see the SAME BufferGeometry refs
+    // (THREE.Mesh tolerates shared geometry — N meshes with the same
+    // geometry render correctly, each with its own transform/material).
+    // Pre-2026-05-16 this loop did the conversion + free per spawn,
+    // which caused the second-and-later spawns of any shared setupId
+    // to render bodyless: the cached `partMeshes` array was shared, the
+    // first spawn freed each handle, the next spawn's
+    // meshToGeometryGroups got null-ptr wrappers + returned empty.
+    // Back-compat: older animation.js builds (or wasm bundles) without
+    // `partGroups` fall back to the legacy per-spawn convert+free path
+    // for the SINGLE spawn of that key — the second-spawn race still
+    // happens against an old cache, but doesn't crash.
     const partCount = animEntry.partCount;
     const initialClip = animEntry.clip;
     const resolvedStance = animEntry.resolvedStance >>> 0;
-    // Cohere-B (2026-05-12): per-part rest-pose offset + orientation.
-    // partMeshes are now part-LOCAL (placement NOT baked into vertices);
-    // these arrays carry the resolved rest frame so the static pose
-    // composes correctly. Empty fallback for old wasm bundles.
     const restOrigins = animEntry.restOrigins ?? new Float32Array(0);
     const restOrientations = animEntry.restOrientations ?? new Float32Array(0);
     const hasRestPose =
@@ -525,24 +535,26 @@ export class EntityManager {
 
     // Resolve materials — first preload all unique surface DIDs across
     // all parts in one wasm round-trip, then synchronously paint via
-    // getCached. Without this preload, every per-part part walk would
-    // serialize its own fetch_surfaces_pixels round-trip.
+    // getCached.
     const allSurfaceDids = new Set();
-    const partGroups = []; // parallel to partMeshes — { groups, surfaceDids }
-    for (let p = 0; p < partCount; p += 1) {
-      const partMesh = partMeshes[p];
-      if (!partMesh) {
-        partGroups.push({ groups: [], surfaceDids: [] });
-        continue;
+    let partGroups;
+    if (Array.isArray(animEntry.partGroups)) {
+      partGroups = animEntry.partGroups;
+      for (const conv of partGroups) {
+        if (!conv) continue;
+        for (const did of conv.surfaceDids) allSurfaceDids.add(did >>> 0);
       }
-      const conv = meshToGeometryGroups(partMesh);
-      partGroups.push(conv);
-      for (const did of conv.surfaceDids) allSurfaceDids.add(did >>> 0);
-      // Free the wasm-side mesh after we've copied its arrays.
-      if (typeof partMesh.free === "function") {
-        try {
-          partMesh.free();
-        } catch (_) {}
+    } else {
+      // Legacy fallback — convert per-spawn + free.
+      const partMeshes = animEntry.partMeshes ?? [];
+      partGroups = [];
+      for (let p = 0; p < partCount; p += 1) {
+        const partMesh = partMeshes[p];
+        if (!partMesh) { partGroups.push({ groups: [], surfaceDids: [] }); continue; }
+        const conv = meshToGeometryGroups(partMesh);
+        partGroups.push(conv);
+        for (const did of conv.surfaceDids) allSurfaceDids.add(did >>> 0);
+        if (typeof partMesh.free === "function") { try { partMesh.free(); } catch (_) {} }
       }
     }
 

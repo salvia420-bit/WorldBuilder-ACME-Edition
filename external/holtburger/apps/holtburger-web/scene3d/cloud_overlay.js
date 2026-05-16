@@ -206,6 +206,19 @@ export class CloudOverlay {
     this.overlayMaterial = new THREE.ShaderMaterial({
       uniforms: {
         cloudTex: { value: null },
+        // 2026-05-16 cloud z-order fix — when present, the fragment
+        // shader samples this DepthTexture (the composer's world
+        // depth) and discards cloud fragments where world geometry
+        // beats the sky-distance threshold. Set via
+        // `setSceneDepthTexture(...)`; null leaves the shader on the
+        // legacy "no-depth-test" path (used in the direct-render path
+        // pre-atmosphere-K.2).
+        sceneDepthTex: { value: null },
+        // Threshold for "this fragment is sky distance" — anything
+        // strictly less than this counts as world geometry. NDC depth
+        // 1.0 is the far plane. Use a tiny epsilon so floating-point
+        // round-off at the horizon doesn't false-discard genuine sky.
+        sceneDepthThreshold: { value: 0.9999 },
       },
       vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -218,7 +231,23 @@ export class CloudOverlay {
         precision highp float;
         varying vec2 vUv;
         uniform sampler2D cloudTex;
+        uniform sampler2D sceneDepthTex;
+        uniform float sceneDepthThreshold;
         void main() {
+          // 2026-05-16 -- depth-aware discard. Sample the composer's
+          // world depth at this fragment's screen pos. Depth ~1.0 means
+          // far plane (sky); depth less than threshold means world
+          // geometry was drawn here, so the cloud must NOT paint over it.
+          // When sceneDepthTex is null (legacy direct-render path), the
+          // shader skips the discard via the sentinel-value branch:
+          // a texture sample of an unbound sampler returns 0.0 in WebGL2
+          // which would always trip the threshold check, so we
+          // explicitly fall back to "always pass" when the threshold
+          // is 0 (set by the JS side when no depth texture is wired).
+          if (sceneDepthThreshold > 0.0) {
+            float d = texture2D(sceneDepthTex, vUv).r;
+            if (d < sceneDepthThreshold) discard;
+          }
           vec4 c = texture2D(cloudTex, vUv);
           // Discard pixels that aren't a real cloud contribution. The
           // takram raymarch's haze pass fills the RT with uniform near-
@@ -250,6 +279,30 @@ export class CloudOverlay {
     // capture scripts can introspect.
     this.frameCount = 0;
     this.lastError = null;
+  }
+
+  /**
+   * 2026-05-16 -- wire a scene-depth texture (from the atmosphere
+   * composer's internal RT) so the overlay shader can discard cloud
+   * fragments behind world geometry. Call once after both the cloud
+   * overlay and the atmosphere pipeline are constructed. Passing null
+   * (or never calling this) leaves the shader on the legacy depth-
+   * unaware path -- cloud paints unconditionally over the framebuffer.
+   *
+   * The depth texture identity may change at runtime (the atmosphere
+   * pipeline rebuilds it on resize). Callers should re-call this on
+   * resize OR pass an accessor and have the overlay pull-through each
+   * frame -- we wire the simple set-once path here; the live-handle
+   * pull-through is a follow-on if a resize bug surfaces.
+   */
+  setSceneDepthTexture(depthTexture) {
+    if (!this.overlayMaterial) return;
+    this.overlayMaterial.uniforms.sceneDepthTex.value = depthTexture ?? null;
+    // Threshold=0 is the sentinel for "no depth provided" -- the
+    // shader's `if (sceneDepthThreshold > 0.0)` branch then skips the
+    // discard, preserving legacy depth-unaware behaviour.
+    this.overlayMaterial.uniforms.sceneDepthThreshold.value =
+      depthTexture ? 0.9999 : 0.0;
   }
 
   /**

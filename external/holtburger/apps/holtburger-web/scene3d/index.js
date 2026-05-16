@@ -386,7 +386,21 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
       camera.aspect = newW / newH;
       camera.updateProjectionMatrix();
       if (ssaoPipeline) ssaoPipeline.setSize(newW, newH);
-      if (atmospherePipeline) atmospherePipeline.setSize(newW, newH);
+      if (atmospherePipeline) {
+        atmospherePipeline.setSize(newW, newH);
+        // Re-wire the cloud overlay's depth-sampling uniform — the
+        // pipeline disposed the old depth texture on resize and built
+        // a fresh one of the new dimensions.
+        if (
+          liveScene3d?.cloudOverlay &&
+          typeof liveScene3d.cloudOverlay.setSceneDepthTexture === "function" &&
+          typeof atmospherePipeline.getSceneDepthTexture === "function"
+        ) {
+          liveScene3d.cloudOverlay.setSceneDepthTexture(
+            atmospherePipeline.getSceneDepthTexture()
+          );
+        }
+      }
     }, 150);
   });
 
@@ -749,7 +763,20 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     orthoCamera.right = halfW;
     orthoCamera.updateProjectionMatrix();
     if (ssaoPipeline) ssaoPipeline.setSize(cw, ch);
-    if (atmospherePipeline) atmospherePipeline.setSize(cw, ch);
+    if (atmospherePipeline) {
+      atmospherePipeline.setSize(cw, ch);
+      // Re-wire cloud overlay's depth uniform to the rebuilt depth
+      // texture (atmospherePipeline.setSize disposes the old).
+      if (
+        liveScene3d?.cloudOverlay &&
+        typeof liveScene3d.cloudOverlay.setSceneDepthTexture === "function" &&
+        typeof atmospherePipeline.getSceneDepthTexture === "function"
+      ) {
+        liveScene3d.cloudOverlay.setSceneDepthTexture(
+          atmospherePipeline.getSceneDepthTexture()
+        );
+      }
+    }
     // Clouds-D: keep the cloud effect's internal RTs in sync with the
     // canvas. The CloudsEffect resolution-scale machinery handles the
     // ratio internally.
@@ -1498,6 +1525,30 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
             if (typeof window !== "undefined") {
               // eslint-disable-next-line no-undef
               window.__atmospherePipeline = atmospherePipeline;
+            }
+
+            // 2026-05-16 cloud z-order fix -- plumb the composer's
+            // depth texture into the cloud overlay so its fragment
+            // shader can discard cloud pixels behind world geometry.
+            // Without this, clouds paint over buildings/NPCs in front
+            // of the sky (documented "follow-on cleanup" in the
+            // atmosphere_pipeline.js header). The setSize hook in the
+            // pipeline rebuilds the depth texture on resize -- we
+            // re-wire it in the resize handler below as well so the
+            // overlay never holds a stale (disposed) reference.
+            try {
+              if (
+                liveScene3d?.cloudOverlay &&
+                typeof liveScene3d.cloudOverlay.setSceneDepthTexture === "function" &&
+                typeof atmospherePipeline.getSceneDepthTexture === "function"
+              ) {
+                liveScene3d.cloudOverlay.setSceneDepthTexture(
+                  atmospherePipeline.getSceneDepthTexture()
+                );
+              }
+            } catch (e) {
+              // eslint-disable-next-line no-console
+              console.warn("[sky-k.2/clouds] depth-texture wire failed:", e);
             }
 
             // Sky-K.3 — physical sun + sky probe lights driven by the
