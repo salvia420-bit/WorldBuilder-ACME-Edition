@@ -102,8 +102,16 @@ const HOLTBURG_RING_RADIUS = 6;
 // enter the renderer's visible cell set. Net: ~85 % fewer initial
 // setup/surface fetches at boot for each (25/169 LBs) without
 // leaving the visible scene empty.
-const STATICS_RING_RADIUS = 2;
-const BUILDINGS_RING_RADIUS = 2;
+// Bumped 2→6 on 2026-05-16 (post-B.5 + RIC-shim) so the visible
+// horizon shows the full 13×13 ring of scenery placements (16,700
+// trees / rocks / props across 169 LBs) and buildings up-front,
+// instead of a sparse 5×5 with empty wilderness past ~480m. PVS
+// expansion via loop.js::tickPvsLoadExpansion still pulls anything
+// the player walks toward, but with radius=6 the initial bake covers
+// the full visible horizon at Holtburg spawn — matching the world-
+// completeness method's 13×13 oracle counts.
+const STATICS_RING_RADIUS = 6;
+const BUILDINGS_RING_RADIUS = 6;
 
 export async function init3D(canvas, sessionHandle, wasmExports) {
   // Phase X.1 — resolve the visual-fidelity quality preset from URL +
