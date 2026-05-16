@@ -296,6 +296,25 @@ export class SkyLightingController {
     // "controller never ran" from "controller ran but populator never
     // fired".
     this._nullStateTickCount = 0;
+    // Sky-K.3 hand-off flag. When AtmosphereLights takes over (Sky-K.3+
+    // physical sun + sky probe driven by the Bruneton lookups), this
+    // controller stops writing to the THREE.* lights + scene.fog. The
+    // skyBackgroundColor sink + _lastState publish keep firing so
+    // downstream (Sky-D parametric dome, etc.) still has data while
+    // the atmosphere migration is mid-flight.
+    this._atmosphereMode = false;
+  }
+
+  /**
+   * Sky-K.3 hand-off. Once AtmosphereLights is constructed and added
+   * to the scene, call this to silence this controller's writes to
+   * the parametric THREE.DirectionalLight + AmbientLight + Fog. The
+   * skyBackgroundColor publish + _lastState snapshot keep firing.
+   *
+   * Idempotent. Pass false to re-enable.
+   */
+  setAtmosphereMode(on) {
+    this._atmosphereMode = !!on;
   }
 
   /**
@@ -370,41 +389,40 @@ export class SkyLightingController {
    *   `snapshotSkyState` (or a hand-built equivalent for tests).
    */
   _applyState(state) {
-    // 1. Directional light — color, intensity, position.
-    const [, dr, dg, db] = decodeArgb(state.dirColorArgb);
-    this.dirLight.color.setRGB(dr / 255, dg / 255, db / 255);
-    this.dirLight.intensity = state.dirBright;
-    const [sx, sy, sz] = sunPositionFromHeadingPitch(
-      state.dirHeading,
-      state.dirPitch,
-      SUN_POSITION_DISTANCE
-    );
-    this.dirLight.position.set(sx, sy, sz);
-    if (this.dirLight.target && this.dirLight.target.position) {
-      this.dirLight.target.position.set(0, 0, 0);
+    // Sky-K.3 — when AtmosphereLights has taken over, skip the
+    // parametric THREE.* writes. The skyBackgroundColor sink +
+    // _lastState publish still fire so Sky-D parametric dome (still
+    // running until K.4) keeps getting horizon-tint data.
+    if (!this._atmosphereMode) {
+      // 1. Directional light — color, intensity, position.
+      const [, dr, dg, db] = decodeArgb(state.dirColorArgb);
+      this.dirLight.color.setRGB(dr / 255, dg / 255, db / 255);
+      this.dirLight.intensity = state.dirBright;
+      const [sx, sy, sz] = sunPositionFromHeadingPitch(
+        state.dirHeading,
+        state.dirPitch,
+        SUN_POSITION_DISTANCE
+      );
+      this.dirLight.position.set(sx, sy, sz);
+      if (this.dirLight.target && this.dirLight.target.position) {
+        this.dirLight.target.position.set(0, 0, 0);
+      }
+
+      // 2. Ambient — color, intensity.
+      const [, ar, ag, ab] = decodeArgb(state.ambColorArgb);
+      this.ambLight.color.setRGB(ar / 255, ag / 255, ab / 255);
+      this.ambLight.intensity = state.ambBright;
+
+      // 3. Fog — color, near, far.
+      const [, fr, fg, fb] = decodeArgb(state.fogColorArgb);
+      if (this.fog && this.fog.color) {
+        this.fog.color.setRGB(fr / 255, fg / 255, fb / 255);
+        this.fog.near = Math.max(0, state.fogMin);
+        this.fog.far = Math.max(this.fog.near + 1.0, state.fogMax, FOG_FAR_FLOOR);
+      }
     }
 
-    // 2. Ambient — color, intensity.
-    const [, ar, ag, ab] = decodeArgb(state.ambColorArgb);
-    this.ambLight.color.setRGB(ar / 255, ag / 255, ab / 255);
-    this.ambLight.intensity = state.ambBright;
-
-    // 3. Fog — color, near, far.
-    const [, fr, fg, fb] = decodeArgb(state.fogColorArgb);
-    if (this.fog && this.fog.color) {
-      this.fog.color.setRGB(fr / 255, fg / 255, fb / 255);
-      // Clamp negatives — `Fog.near < 0` doesn't error but is
-      // physically meaningless; max(0, ...) is a defensive floor.
-      this.fog.near = Math.max(0, state.fogMin);
-      // World-expand step 1 Objective 9 (2026-05-14): floor at
-      // FOG_FAR_FLOOR (2500 m) so the 13×13 ring stays visible even at
-      // night when Region 0x13's DayGroup `max_world_fog` lerps low.
-      // `state.fogMax` itself is unchanged so colour / density curves
-      // still drive correctly upstream.
-      this.fog.far = Math.max(this.fog.near + 1.0, state.fogMax, FOG_FAR_FLOOR);
-    }
-
-    // 4. skyBackgroundColor sink for Sky-D.
+    // 4. skyBackgroundColor sink for Sky-D — always publish.
     this.skyBackgroundColorArgb = state.fogColorArgb;
     if (this.liveScene3dRef) {
       this.liveScene3dRef.skyBackgroundColor = state.fogColorArgb;

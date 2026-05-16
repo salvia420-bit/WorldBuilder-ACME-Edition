@@ -102,11 +102,22 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   // the quality preset (shadows, CSM, POM, triplanar, etc.) stays on.
   try {
     // eslint-disable-next-line no-undef
-    const cloudsFlag = new URLSearchParams(window.location.search).get("clouds");
+    const params = new URLSearchParams(window.location.search);
+    const cloudsFlag = params.get("clouds");
+    // Sky-K.6 — atmosphere defaults ON. `?atmosphere=off` opts back to
+    // the parametric path (kept around for retail-comparison captures
+    // until the legacy files are deleted in a follow-on cleanup).
+    const atmosphereFlag = params.get("atmosphere");
+    const atmosphereOn = atmosphereFlag !== "off";
     if (cloudsFlag === "on" && quality?.flags?.ssao) {
       quality.flags.ssao = false;
       // eslint-disable-next-line no-console
       console.log("[clouds] SSAO auto-disabled (?clouds=on requires direct render path for depth-correct cloud occlusion)");
+    }
+    if (atmosphereOn && quality?.flags?.ssao) {
+      quality.flags.ssao = false;
+      // eslint-disable-next-line no-console
+      console.log("[sky-k] SSAO auto-disabled (atmosphere mode uses its own EffectComposer chain)");
     }
   } catch (_) { /* noop */ }
   // eslint-disable-next-line no-console
@@ -324,6 +335,10 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   // Forward-declared `let` so the resize handler below can null-check.
   let ssaoPipeline = null;
   const ssaoEnabled = !!quality?.flags?.ssao;
+  // Sky-K.2 — atmosphere pipeline (constructed below after AtmosphereRuntime's
+  // texture bake completes). Forward-declared like ssaoPipeline so the
+  // resize handler + render loop can null-check.
+  let atmospherePipeline = null;
 
   // Keep the canvas + renderer in sync with viewport resizes (the
   // 2D path lives with the static 512×512 attribute size, but the 3D
@@ -344,6 +359,7 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
       camera.aspect = newW / newH;
       camera.updateProjectionMatrix();
       if (ssaoPipeline) ssaoPipeline.setSize(newW, newH);
+      if (atmospherePipeline) atmospherePipeline.setSize(newW, newH);
     }, 150);
   });
 
@@ -697,6 +713,7 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     orthoCamera.right = halfW;
     orthoCamera.updateProjectionMatrix();
     if (ssaoPipeline) ssaoPipeline.setSize(cw, ch);
+    if (atmospherePipeline) atmospherePipeline.setSize(cw, ch);
     // Clouds-D: keep the cloud effect's internal RTs in sync with the
     // canvas. The CloudsEffect resolution-scale machinery handles the
     // ratio internally.
@@ -835,6 +852,38 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
         if (!liveScene3dRef._ssaoRenderWarned) {
           liveScene3dRef._ssaoRenderWarned = true;
           console.warn("[phase-3.2] ssaoPipeline.render threw:", e);
+        }
+      }
+      requestAnimationFrame(tick);
+      return;
+    }
+
+    // Sky-K.2 path: atmosphere composer owns sky + world + AerialPerspective
+    // + Dithering. Cloud overlay's pre/render hooks run AROUND composer.render
+    // (same depth-unaware-cloud limitation as the SSAO path — addressed in
+    // a follow-on cleanup).
+    if (atmospherePipeline) {
+      try {
+        atmospherePipeline.preFrameSkySync(
+          liveScene3dRef?.skyDome,
+          activeCam
+        );
+        const cloudOverlay = liveScene3dRef?.cloudOverlay;
+        const cloudActive =
+          cloudOverlay &&
+          !liveScene3dRef?.skyDome?._lastIsIndoor;
+        if (cloudActive) {
+          cloudOverlay.preRender(renderer);
+        }
+        atmospherePipeline.render(activeCam);
+        if (cloudActive) {
+          cloudOverlay.renderOverlay(renderer);
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        if (!liveScene3dRef._atmRenderWarned) {
+          liveScene3dRef._atmRenderWarned = true;
+          console.warn("[sky-k.2] atmospherePipeline.render threw:", e);
         }
       }
       requestAnimationFrame(tick);
@@ -1369,6 +1418,151 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn("[clouds-d] CloudOverlay init failed:", e);
+    }
+
+    // Sky-K.1 + K.2 — opt-in atmosphere stack via `?atmosphere=on`.
+    //
+    // K.1: bake the Bruneton precomputed-scattering lookup tables.
+    //      ~8s one-shot on a real GPU (per 2026-05-16 GTX 1070 smoke).
+    //      `liveScene3d.atmosphereRuntime.ready` flips true when done.
+    //      swiftshader silently zero-bakes 3D textures — validation
+    //      requires real hardware.
+    //
+    // K.2: once the bake completes, stand up `atmospherePipeline` — a
+    //      pmndrs EffectComposer wrapping sky pass + world pass +
+    //      EffectPass(AerialPerspectiveEffect, DitheringEffect). The
+    //      per-frame render loop below picks this up automatically
+    //      once it's non-null; until then, the direct render path is
+    //      used (no atmosphere; same look as `?atmosphere=off`).
+    try {
+      // Sky-K.6 — atmosphere defaults ON. `?atmosphere=off` opts out
+      // (parametric sky path; kept until legacy files deleted in
+      // follow-on cleanup).
+      // eslint-disable-next-line no-undef
+      const atmosphereFlag = new URLSearchParams(window.location.search).get("atmosphere");
+      if (atmosphereFlag !== "off") {
+        const { AtmosphereRuntime } = await import("./atmosphere_runtime.js");
+        const atmosphereRuntime = new AtmosphereRuntime({ renderer });
+        liveScene3d.atmosphereRuntime = atmosphereRuntime;
+        // eslint-disable-next-line no-undef
+        if (typeof window !== "undefined") {
+          // eslint-disable-next-line no-undef
+          window.__atmosphereRuntime = atmosphereRuntime;
+        }
+        atmosphereRuntime.whenReady().then(async () => {
+          try {
+            const { createAtmospherePipeline } = await import("./atmosphere_pipeline.js");
+            atmospherePipeline = createAtmospherePipeline(renderer, scene, camera, {
+              skyScene: skyDome?.skyScene,
+              skyCamera: skyDome?.skyCamera,
+              atmosphereRuntime,
+            });
+            liveScene3d.atmospherePipeline = atmospherePipeline;
+            // eslint-disable-next-line no-undef
+            if (typeof window !== "undefined") {
+              // eslint-disable-next-line no-undef
+              window.__atmospherePipeline = atmospherePipeline;
+            }
+
+            // Sky-K.3 — physical sun + sky probe lights driven by the
+            // Bruneton lookups. Hands off from sky_lighting.js's
+            // parametric writes via setAtmosphereMode(true). Tone
+            // mapping (AGX) in the pipeline collapses the resulting
+            // HDR back to displayable sRGB.
+            const { AtmosphereLights } = await import("./atmosphere_lights.js");
+            const atmosphereLights = new AtmosphereLights({
+              scene,
+              atmosphereRuntime,
+            });
+            liveScene3d.atmosphereLights = atmosphereLights;
+            // eslint-disable-next-line no-undef
+            if (typeof window !== "undefined") {
+              // eslint-disable-next-line no-undef
+              window.__atmosphereLights = atmosphereLights;
+            }
+
+            // Sky-K.4 — replace SkyDome's parametric dome with takram's
+            // SkyMaterial + stars. Hides skyDome.skyCell + parametric
+            // celestials; adds SkyMaterial quad + stars Points to the
+            // SAME skyDome.skyScene so the existing sky RenderPass
+            // wiring still works.
+            if (skyDome?.skyScene) {
+              const { AtmosphereSky } = await import("./atmosphere_sky.js");
+              const atmosphereSky = new AtmosphereSky({
+                skyScene: skyDome.skyScene,
+                skyDome,
+                atmosphereRuntime,
+              });
+              liveScene3d.atmosphereSky = atmosphereSky;
+              // eslint-disable-next-line no-undef
+              if (typeof window !== "undefined") {
+                // eslint-disable-next-line no-undef
+                window.__atmosphereSky = atmosphereSky;
+              }
+            }
+
+            // Hand off lighting authority: parametric SkyLightingController
+            // stops writing to THREE.DirectionalLight / AmbientLight /
+            // Fog. We also zero the existing lights here in case they
+            // had non-zero state from Phase 7.6 defaults pre-bake.
+            const slc = liveScene3d.skyLightingController;
+            if (slc && typeof slc.setAtmosphereMode === "function") {
+              slc.setAtmosphereMode(true);
+            }
+            if (liveScene3d.lighting?.sun) {
+              liveScene3d.lighting.sun.intensity = 0;
+            }
+            if (liveScene3d.lighting?.ambient) {
+              liveScene3d.lighting.ambient.intensity = 0;
+            }
+            if (scene.fog) {
+              scene.fog = null;
+            }
+
+            // Tone mapping: takram lights emit physical radiance in
+            // W/m²/sr — orders of magnitude over the [0,1] display
+            // range. NoToneMapping on the renderer (the composer's
+            // ToneMappingEffect does it) + bumped exposure makes the
+            // raw values land in AGX's input range.
+            renderer.toneMapping = THREE.NoToneMapping;
+            renderer.toneMappingExposure = 5;
+
+            // Sky-K.6 follow-on — bind real Bruneton tables on the
+            // cloud material. Replaces the 5 DayGroup uniforms with
+            // proper scattering/transmittance/irradiance lookups so
+            // clouds and atmosphere see the same physics model.
+            if (liveScene3d.cloudOverlay?.volume?.attachAtmosphere) {
+              const ok = liveScene3d.cloudOverlay.volume.attachAtmosphere(atmosphereRuntime);
+              if (ok) {
+                // eslint-disable-next-line no-console
+                console.log("[sky-k.6] CloudVolume.attachAtmosphere wired Bruneton tables onto the cloud material.");
+              }
+            }
+
+            // eslint-disable-next-line no-console
+            console.log(
+              `[sky-k.3] AtmosphereRuntime ready (bake ${atmosphereRuntime.bakeMs?.toFixed?.(1)}ms). ` +
+                "AerialPerspective + ToneMapping(AGX) + Dithering composer wired. " +
+                "SunDirectionalLight + SkyLightProbe added; parametric lights silenced. " +
+                "toneMappingExposure=5 — tune via __setExposure(v)."
+            );
+            // eslint-disable-next-line no-undef
+            if (typeof window !== "undefined") {
+              // eslint-disable-next-line no-undef
+              window.__setExposure = (v) => {
+                renderer.toneMappingExposure = +v;
+                return renderer.toneMappingExposure;
+              };
+            }
+          } catch (e2) {
+            // eslint-disable-next-line no-console
+            console.warn("[sky-k.2/k.3] atmospherePipeline/lights init failed:", e2);
+          }
+        });
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[sky-k.1] AtmosphereRuntime init failed:", e);
     }
 
     // Visual-fidelity Phase 3.2 — wire the SSAO composer NOW that

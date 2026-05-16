@@ -263,6 +263,41 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
       }
     }
   }
+  // Sky-K.3 — physical sun + sky probe. Reads heading/pitch from the
+  // SAME SkyState that skyLightingController just snapshotted (its
+  // _lastState), so the two stay in sync without a second wasm
+  // getSkyState() call. The probe tracks the active camera so its
+  // SH-irradiance computation reflects the camera's altitude in the
+  // atmosphere.
+  if (scene3d?.atmosphereLights) {
+    try {
+      const state = scene3d.skyLightingController?._lastState ?? null;
+      const cam = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera;
+      scene3d.atmosphereLights.tick(state, cam?.position);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      if (!scene3d._atmosphereLightsTickWarned) {
+        scene3d._atmosphereLightsTickWarned = true;
+        console.warn("[sky-k.3] atmosphereLights.tick threw:", e);
+      }
+    }
+  }
+  // Sky-K.4 — takram SkyMaterial + stars. Same SkyState source as the
+  // physical lights so sun position in the sky matches the sunlight
+  // direction. Stars are a fixed celestial backdrop (no per-frame
+  // motion); only sun direction needs updating.
+  if (scene3d?.atmosphereSky) {
+    try {
+      const state = scene3d.skyLightingController?._lastState ?? null;
+      scene3d.atmosphereSky.tick(state);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      if (!scene3d._atmosphereSkyTickWarned) {
+        scene3d._atmosphereSkyTickWarned = true;
+        console.warn("[sky-k.4] atmosphereSky.tick threw:", e);
+      }
+    }
+  }
   // Workstream Sky-D — sky dome + celestial body renderer. Runs AFTER
   // Sky-C so the freshly-written `skyBackgroundColor` (Sky-C's horizon
   // color sink) + `skyLightingController._lastState.ambColorArgb`

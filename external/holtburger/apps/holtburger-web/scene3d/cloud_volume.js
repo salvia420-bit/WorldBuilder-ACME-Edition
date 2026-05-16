@@ -39,69 +39,6 @@ import {
 // daygroup_weather.js + the rest of weather_state.js stay on disk —
 // opt-in via window.__applyCloudWeather() for experimentation.
 
-// Match sky_lighting.js's defaults so the cloud volume's initial
-// uniforms are sane even before the first SkyState arrives.
-const DEFAULT_FOG_MIN = 200.0;
-const DEFAULT_FOG_MAX = 2500.0;
-
-// fogDensity calibration: matches the exponential model in
-// brunetonStubs.glsl (`fogAmount = 1 - exp(-density * dist)`) against
-// the linear model the three.js `Fog` uses (`amount = (dist - near) /
-// (far - near)`). We choose density so fogAmount ≈ 0.5 at the half-
-// way point between near + far, which gives a perceptually similar
-// drop-off without making the exponential bottom out too hard.
-//
-// Solve `1 - exp(-d * halfRange) = 0.5` → `d = ln(2) / halfRange`.
-const FOG_HALF_LN2 = Math.LN2;
-
-function decodeArgbToRgb01(argb, /** out */ vec3) {
-  const r = ((argb >>> 16) & 0xff) / 255;
-  const g = ((argb >>> 8) & 0xff) / 255;
-  const b = (argb & 0xff) / 255;
-  vec3.set(r, g, b);
-}
-
-// Earth-realistic atmospheric color model. Inputs sun pitch in degrees
-// (0 = horizon, 90 = zenith). Returns RGB triples for:
-//   sunColor      — direct sunlight (warm white → orange → red as sun lowers)
-//   ambientColor  — Rayleigh-scattered sky tint at zenith
-//   horizonColor  — atmospheric haze at view-distance (orange at low sun)
-//
-// Not a full Bruneton scattering model — just a perceptual approximation
-// tuned to match real-Earth sky photography. Smooth across day/night
-// transitions to avoid pop. Used when `window.__naturalSky === true` to
-// override AC's parametric DayGroup colors so cloud appearance can be
-// evaluated against a natural-looking sky.
-function naturalSkyColors(sunPitchDeg, out) {
-  const sunAlt = Math.sin((sunPitchDeg * Math.PI) / 180); // -1..+1
-  const day = Math.max(0, sunAlt);            // 0 at horizon/below, 1 at zenith
-  const grazing = Math.max(0, 1 - Math.abs(sunAlt) * 4); // peaks near horizon, 0 beyond ±15°
-  const night = Math.max(0, -sunAlt * 2);      // 0 at horizon, 1 deep below
-
-  // Sun direct color: warm white at noon, orange at low angle, dark blue under horizon.
-  const sunR = (1.00 * day + 1.00 * grazing) * (1 - night) + 0.10 * night;
-  const sunG = (0.97 * day + 0.55 * grazing) * (1 - night) + 0.12 * night;
-  const sunB = (0.88 * day + 0.15 * grazing) * (1 - night) + 0.25 * night;
-
-  // Zenith ambient: clear blue at noon, DARKER blue at twilight (B
-  // dominant; the violet tint that bothered the user came from
-  // grazing R=0.30 > G=0.20 which gave purple). Twilight is BLUE
-  // (Earth's atmosphere absorbs red selectively when sun grazes).
-  const ambR = 0.30 * day + 0.10 * grazing + 0.02 * night;
-  const ambG = 0.55 * day + 0.18 * grazing + 0.03 * night;
-  const ambB = 0.95 * day + 0.42 * grazing + 0.10 * night;
-
-  // Horizon haze: pale near-white blue at noon, orange/red at dawn/dusk, dark at night.
-  const horR = 0.75 * day + 1.00 * grazing + 0.03 * night;
-  const horG = 0.85 * day + 0.55 * grazing + 0.04 * night;
-  const horB = 1.00 * day + 0.20 * grazing + 0.10 * night;
-
-  out.sun = [Math.min(1, sunR), Math.min(1, sunG), Math.min(1, sunB)];
-  out.amb = [Math.min(1, ambR), Math.min(1, ambG), Math.min(1, ambB)];
-  out.hor = [Math.min(1, horR), Math.min(1, horG), Math.min(1, horB)];
-  return out;
-}
-
 /**
  * Convert AC sun heading (deg from north, CW) + pitch (deg from
  * horizon) to a unit direction vector in three.js space (after the
@@ -205,6 +142,39 @@ export class CloudVolume {
     // construct-time defaults. tick() will overwrite as soon as state
     // arrives.
     this._lastState = null;
+    this._atmosphereAttached = false;
+  }
+
+  /**
+   * Sky-K.6 follow-on — bind takram's Bruneton precomputed-scattering
+   * lookup tables to the cloud material. Once attached, the cloud
+   * raymarch's irradiance/scattering queries hit the real tables
+   * (same data the AerialPerspectiveEffect uses) instead of the
+   * ARGB-decoded DayGroup stubs.
+   *
+   * Idempotent. Call once after `atmosphereRuntime.whenReady()`
+   * resolves. Texture refs are pulled live, so if the runtime
+   * re-bakes (rare), the cloud material picks up the new tables on
+   * the next frame.
+   *
+   * @param {import('./atmosphere_runtime.js').AtmosphereRuntime} atmosphereRuntime
+   */
+  attachAtmosphere(atmosphereRuntime) {
+    if (!atmosphereRuntime || this._atmosphereAttached) return false;
+    const tex = atmosphereRuntime.textures;
+    const u = this.material.uniforms;
+    // Texture sampler uniforms inherited from AtmosphereMaterialBase.
+    if (u.transmittance_texture) u.transmittance_texture.value = tex.transmittanceTexture;
+    if (u.scattering_texture) u.scattering_texture.value = tex.scatteringTexture;
+    if (u.irradiance_texture) u.irradiance_texture.value = tex.irradianceTexture;
+    if (u.single_mie_scattering_texture) {
+      u.single_mie_scattering_texture.value = tex.singleMieScatteringTexture ?? null;
+    }
+    if (u.higher_order_scattering_texture) {
+      u.higher_order_scattering_texture.value = tex.higherOrderScatteringTexture ?? null;
+    }
+    this._atmosphereAttached = true;
+    return true;
   }
 
   /**
@@ -221,41 +191,18 @@ export class CloudVolume {
     if (!state) return;
     const u = this.material.uniforms;
 
-    // 1. uSunColor / uAmbientColor / uHorizonColor — ARGB decode.
-    // Override with natural-Earth atmospheric colors when window.__naturalSky=true
-    // (for fair cloud appearance evaluation; AC retail DayGroups push
-    // unnatural purples/greens at certain times).
-    if (typeof window !== 'undefined' && window.__naturalSky === true) {
-      const colors = naturalSkyColors(state.dirPitch, this._naturalSkyOut || (this._naturalSkyOut = {}));
-      u.uSunColor.value.set(colors.sun[0], colors.sun[1], colors.sun[2]);
-      u.uAmbientColor.value.set(colors.amb[0], colors.amb[1], colors.amb[2]);
-      u.uHorizonColor.value.set(colors.hor[0], colors.hor[1], colors.hor[2]);
-    } else {
-      decodeArgbToRgb01(state.dirColorArgb, u.uSunColor.value);
-      decodeArgbToRgb01(state.ambColorArgb, u.uAmbientColor.value);
-      decodeArgbToRgb01(state.fogColorArgb, u.uHorizonColor.value);
-    }
+    // Sky-K.6 follow-on: clouds now sample the real Bruneton tables
+    // (wired via attachAtmosphere). The five DayGroup uniforms
+    // (uSunColor/uAmbientColor/uHorizonColor/uFogDensity/uSunIntensity)
+    // are gone from CloudsMaterial — physics-derived irradiance and
+    // aerial perspective in the real bruneton/runtime replaces them.
+    //
+    // The cameraHeight patch in cloud_overlay.js's preRender still
+    // runs (must run AFTER CloudsMaterial.copyCameraSettings each
+    // frame).
 
-    // 2. uSunIntensity — pass dirBright through. retail DayGroups
-    // typically have values in [0.5, 1.0]; stub fn caps via clamp().
-    u.uSunIntensity.value = Number.isFinite(state.dirBright) ? state.dirBright : 1.0;
-
-    // 3. uFogDensity — derive from fogMin/fogMax. Calibration: density
-    // s.t. fog amount = 0.5 at the midpoint between near + far,
-    // matching the perceptual midpoint of three.js's linear Fog. See
-    // FOG_HALF_LN2 comment above for the derivation.
-    const fogMin = Number.isFinite(state.fogMin) ? state.fogMin : DEFAULT_FOG_MIN;
-    const fogMax = Number.isFinite(state.fogMax) ? state.fogMax : DEFAULT_FOG_MAX;
-    const halfRange = Math.max(1.0, (fogMax - fogMin) * 0.5);
-    u.uFogDensity.value = FOG_HALF_LN2 / halfRange;
-
-    // (cameraHeight is patched in cloud_overlay.js's preRender — must run
-    // AFTER CloudsMaterial.copyCameraSettings overwrites it each frame.)
-
-    // 4. sunDirection (existing atmosphere uniform that
-    // brunetonStubs.glsl's GetSun*Irradiance fns read as the
-    // `sun_direction` arg via clouds.vert/frag's `sunDirection`
-    // uniform).
+    // sunDirection — still load-bearing for the cloud raymarch. Same
+    // conversion from AC heading/pitch as before.
     sunDirFromHeadingPitch(
       state.dirHeading,
       state.dirPitch,
@@ -470,9 +417,5 @@ if (typeof window !== 'undefined') {
 // Exported for direct testing without instantiating a CloudVolume
 // (cloud_bridge_test.html drives the conversion fns alone).
 export const _internals = {
-  decodeArgbToRgb01,
   sunDirFromHeadingPitch,
-  FOG_HALF_LN2,
-  DEFAULT_FOG_MIN,
-  DEFAULT_FOG_MAX,
 };

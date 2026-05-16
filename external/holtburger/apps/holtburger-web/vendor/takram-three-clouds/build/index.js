@@ -617,13 +617,9 @@ import {
 } from "@takram/three-atmosphere";
 import {
   common,
-  definitions
+  definitions,
+  runtime
 } from "@takram/three-atmosphere/shaders/bruneton";
-
-// raw-text:/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/vendor/takram-three-clouds/src/shaders/brunetonStubs.glsl
-var brunetonStubs_default = "// brunetonStubs.glsl \u2014 Clouds-B Bruneton runtime decouple.\n//\n// Drop-in replacement for the takram-three-atmosphere bruneton/runtime\n// shader chunk. Keeps the same 3 short-form function signatures that\n// clouds.frag + clouds.vert call (per the original runtime's #define\n// rewrites at lines 459-461), but drives them from our synthetic\n// uSunColor / uAmbientColor / uHorizonColor / uFogDensity / uSunIntensity\n// uniforms instead of Bruneton's precomputed atmospheric scattering\n// tables.\n//\n// The Bruneton `common.glsl` and `definitions.glsl` chunks remain in\n// place (still imported from takram-three-atmosphere) for their type\n// aliases (IrradianceSpectrum / RadianceSpectrum / Position / etc.) +\n// the AtmosphereParameters struct. The atmosphere-uniforms-and-textures\n// declared in clouds.vert (line 6-14) stay declared so the shader\n// compiles; they're left unbound by the TS side and our stub functions\n// don't read them.\n//\n// Wired into CloudsMaterial.ts's resolveIncludes() call as the\n// `atmosphere.bruneton.runtime` slot. See [[project_holtburger_clouds_a_done_2026-05-15]]\n// + docs/skybox-volumetric-clouds-handoff-2026-05-15.md for the bigger\n// volumetric-clouds plan.\n\nuniform vec3 uSunColor;       // DayGroup.dirColor (ARGB \u2192 RGB)\nuniform vec3 uAmbientColor;   // DayGroup.ambColor (ARGB \u2192 RGB)\nuniform vec3 uHorizonColor;   // DayGroup.fogColor (ARGB \u2192 RGB)\nuniform float uFogDensity;    // derived from DayGroup.fogMin/fogMax\nuniform float uSunIntensity;  // default 1.0\n\n// Scale constants for the stub radiance values. Bruneton's true output\n// is in physical W/m\xB2/sr (hundreds-to-thousands range); takram's cloud\n// raymarch then multiplies by phase/scattering coefficients that bring\n// it into displayable range. Empirically: 50x scale produces NaN/black\n// (likely overflows internally), 1x produces near-black (too dim). A\n// gentle ~3x scale gives reasonable mid-day cloud lighting without\n// breaking the math.\nconst float SUN_RADIANCE_SCALE = 3.0;\nconst float SKY_RADIANCE_SCALE = 1.5;\n\n\n// ---- Short-form lighting functions ----------------------------------\n// These are the names clouds.frag + clouds.vert call directly. The\n// upstream Bruneton runtime block had `#define`s that rewrote these to\n// `*Illuminance` variants \u2014 we don't redefine those macros, so the\n// preprocessor leaves the names alone and they bind to our stubs.\n\n// 4-arg form (sky_irradiance is out-param). Used by clouds.frag:426\n// inside the per-fragment cloud lighting evaluator.\nIrradianceSpectrum GetSunAndSkyIrradiance(\n    const Position p, const Direction normal, const Direction sun_direction,\n    out IrradianceSpectrum sky_irradiance) {\n  float sunCos = clamp(dot(normalize(normal), normalize(sun_direction)), 0.0, 1.0);\n  sky_irradiance = uAmbientColor * SKY_RADIANCE_SCALE;\n  return uSunColor * sunCos * uSunIntensity * SUN_RADIANCE_SCALE;\n}\n\n// 3-arg scalar form (no surface normal). Used by clouds.vert:47-64 as\n// vGroundIrradiance + vCloudsIrradiance varyings (min/maxSun pair),\n// and by clouds.frag:440 inside the per-fragment cloud lighting eval.\n//\n// Convention: takram's Bruneton precomputes a scalar irradiance that\n// assumes the sun comes from `sun_direction` and hits a point at `p`\n// in ECEF coordinates. We approximate: use the y-component (upward)\n// of the *position* as a \"how high above the horizon\" proxy, and the\n// y-component of sun_direction as \"how high is the sun above the\n// horizon\". Both feed a smooth ramp.\nIrradianceSpectrum GetSunAndSkyScalarIrradiance(\n    const Position p, const Direction sun_direction,\n    out IrradianceSpectrum sky_irradiance) {\n  // Sun elevation drives intensity (low sun = warm grazing, dusk-like).\n  // Bruneton's full model accounts for atmospheric absorption; here we\n  // just lerp via a smooth elevation curve.\n  float sunUp = clamp(normalize(sun_direction).y, 0.0, 1.0);\n  float dayMix = smoothstep(0.0, 0.3, sunUp);\n  sky_irradiance = uAmbientColor * SKY_RADIANCE_SCALE;\n  return uSunColor * uSunIntensity * (0.2 + 0.8 * dayMix) * SUN_RADIANCE_SCALE;\n}\n\n// 5-arg sky-radiance-to-point form. Used by clouds.frag:708 for the\n// atmospheric-perspective compositing pass that fades distant cloud\n// fragments into the horizon haze.\nRadianceSpectrum GetSkyRadianceToPoint(\n    const Position camera, const Position point, const Length shadow_length,\n    const Direction sun_direction, out DimensionlessSpectrum transmittance) {\n  float dist = length(camera - point);\n  float fogAmount = 1.0 - exp(-uFogDensity * dist);\n  transmittance = vec3(1.0 - fogAmount);\n  return uHorizonColor * fogAmount;\n}\n";
-
-// src/CloudsMaterial.ts
 import {
   define,
   defineExpression,
@@ -1833,7 +1829,7 @@ var CloudsMaterial = class extends AtmosphereMaterialBase {
             bruneton: {
               common,
               definitions,
-              runtime: brunetonStubs_default
+              runtime
             }
           },
           types: types_default
@@ -1854,7 +1850,7 @@ var CloudsMaterial = class extends AtmosphereMaterialBase {
               bruneton: {
                 common,
                 definitions,
-                runtime: brunetonStubs_default
+                runtime
               }
             },
             types: types_default,
@@ -1882,15 +1878,6 @@ var CloudsMaterial = class extends AtmosphereMaterialBase {
           targetUvScale: new Uniform(new Vector24()),
           mipLevelScale: new Uniform(1),
           stbnTexture: new Uniform(null),
-          // DayGroup lighting (Clouds-B). Replaces the precomputed-
-          // Bruneton irradiance path. Drives brunetonStubs.glsl's
-          // GetSun*Irradiance / GetSkyRadianceToPoint stubs. Wired
-          // from skyLightingController._lastState in Clouds-C.
-          uSunColor: new Uniform(new Vector33(1, 0.95, 0.85)),
-          uAmbientColor: new Uniform(new Vector33(0.55, 0.62, 0.78)),
-          uHorizonColor: new Uniform(new Vector33(0.85, 0.87, 0.94)),
-          uFogDensity: new Uniform(2e-3),
-          uSunIntensity: new Uniform(1),
           // Scattering
           skyLightScale: new Uniform(1),
           groundBounceScale: new Uniform(1),
@@ -3884,7 +3871,7 @@ var ProceduralTextureBase = class {
 };
 
 // raw-text:/home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/vendor/takram-three-clouds/src/shaders/localWeather.frag
-var localWeather_default = 'precision highp float;\nprecision highp int;\n\n#include "core/math"\n#include "perlin"\n#include "tileableNoise"\n\nin vec2 vUv;\n\nlayout(location = 0) out vec4 outputColor;\n\nfloat getWorleyFbm(\n  const vec3 point,\n  float frequency,\n  float amplitude,\n  const float lacunarity,\n  const float gain,\n  const int octaveCount\n) {\n  float noise = 0.0;\n  for (int i = 0; i < octaveCount; ++i) {\n    noise += amplitude * (1.0 - getWorleyNoise(point, frequency));\n    frequency *= lacunarity;\n    amplitude *= gain;\n  }\n  return noise;\n}\n\nvoid main() {\n  vec3 point = vec3(vUv.x, vUv.y, 0.0);\n\n  // Mid clouds\n  {\n    float worley = getWorleyFbm(\n      point + vec3(0.5),\n      8.0, // frequency\n      0.4, // amplitude\n      2.0, // lacunarity\n      0.95, // gain\n      4 // octaveCount\n    );\n    worley = smoothstep(1.0, 1.4, worley);\n    outputColor.g = worley;\n  }\n\n  // Low clouds\n  {\n    float worley = getWorleyFbm(\n      point,\n      16.0, // frequency\n      0.4, // amplitude\n      2.0, // lacunarity\n      0.95, // gain\n      4 // octaveCount\n    );\n    worley = smoothstep(0.8, 1.4, worley);\n    outputColor.r = saturate(worley - outputColor.g);\n  }\n\n  // High clouds\n  {\n    float perlin = getPerlinNoise(\n      point,\n      vec3(6.0, 12.0, 1.0), // frequency\n      8 // octaveCount\n    );\n    perlin = smoothstep(-0.5, 0.5, perlin);\n    outputColor.b = perlin;\n  }\n\n  // Extra\n  {\n    float perlin = getPerlinNoise(\n      point + vec3(-19.1, 33.4, 47.2),\n      32.0, // frequency\n      4 // octaveCount\n    );\n    perlin = smoothstep(-0.5, 0.5, perlin);\n    outputColor.a = perlin;\n  }\n\n  outputColor.a = 1.0;\n}\n';
+var localWeather_default = 'precision highp float;\nprecision highp int;\n\n#include "core/math"\n#include "perlin"\n#include "tileableNoise"\n\nin vec2 vUv;\n\nlayout(location = 0) out vec4 outputColor;\n\nfloat getWorleyFbm(\n  const vec3 point,\n  float frequency,\n  float amplitude,\n  const float lacunarity,\n  const float gain,\n  const int octaveCount\n) {\n  float noise = 0.0;\n  for (int i = 0; i < octaveCount; ++i) {\n    noise += amplitude * (1.0 - getWorleyNoise(point, frequency));\n    frequency *= lacunarity;\n    amplitude *= gain;\n  }\n  return noise;\n}\n\nvoid main() {\n  vec3 point = vec3(vUv.x, vUv.y, 0.0);\n\n  // Mid clouds\n  {\n    float worley = getWorleyFbm(\n      point + vec3(0.5),\n      8.0, // frequency\n      0.4, // amplitude\n      2.0, // lacunarity\n      0.95, // gain\n      4 // octaveCount\n    );\n    worley = smoothstep(1.0, 1.4, worley);\n    outputColor.g = worley;\n  }\n\n  // Low clouds\n  {\n    float worley = getWorleyFbm(\n      point,\n      16.0, // frequency\n      0.4, // amplitude\n      2.0, // lacunarity\n      0.95, // gain\n      4 // octaveCount\n    );\n    worley = smoothstep(0.8, 1.4, worley);\n    outputColor.r = saturate(worley - outputColor.g);\n  }\n\n  // High clouds\n  {\n    float perlin = getPerlinNoise(\n      point,\n      vec3(6.0, 12.0, 1.0), // frequency\n      8 // octaveCount\n    );\n    perlin = smoothstep(-0.5, 0.5, perlin);\n    outputColor.b = perlin;\n  }\n\n  // Extra\n  {\n    float perlin = getPerlinNoise(\n      point + vec3(-19.1, 33.4, 47.2),\n      32.0, // frequency\n      4 // octaveCount\n    );\n    perlin = smoothstep(-0.5, 0.5, perlin);\n    outputColor.a = perlin;\n  }\n\n  // Upstream had `outputColor.a = 1.0;` here, clobbering the perlin\n  // pattern above. Removed so channel \'a\' carries real spatial variation \u2014\n  // our 4th cloud layer (altocumulus, scene3d/cloud_overlay.js) samples\n  // it and was rendering as a uniform gray sheet across the whole sky.\n}\n';
 
 // src/LocalWeather.ts
 var LocalWeather = class extends ProceduralTextureBase {

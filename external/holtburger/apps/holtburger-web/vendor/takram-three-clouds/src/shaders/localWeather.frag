@@ -79,5 +79,8 @@ void main() {
     outputColor.a = perlin;
   }
 
-  outputColor.a = 1.0;
+  // Upstream had `outputColor.a = 1.0;` here, clobbering the perlin
+  // pattern above. Removed so channel 'a' carries real spatial variation —
+  // our 4th cloud layer (altocumulus, scene3d/cloud_overlay.js) samples
+  // it and was rendering as a uniform gray sheet across the whole sky.
 }
