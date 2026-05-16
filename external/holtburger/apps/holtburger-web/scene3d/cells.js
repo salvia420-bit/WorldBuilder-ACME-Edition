@@ -445,3 +445,65 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
     }
   }
 }
+
+/**
+ * Per-frame PVS-driven scenery expander (2026-05-16 bandwidth pass).
+ *
+ * The initial scenery bake covers a tight ring (radius=2 = 5×5 = 25 LBs
+ * at boot) instead of the previous 13×13 = 169 to cut F.41 surface-pixel
+ * fetches by ~85 %. This function fills the gap by reading the wasm
+ * renderSet each frame and triggering `loadStaticsForLandblock` for any
+ * LB whose cell is now visible but hasn't been baked. The hook is
+ * idempotent — `staticsBakedLbs.has(lbKey)` early-returns on re-fires —
+ * so calling it every rAF is cheap even at 60 Hz × dozens of visible
+ * cells.
+ *
+ * Complement to `handlePositionUpdate`'s per-LB-entry hook in
+ * `index.html`: that catches LBs the player is STANDING in; PVS catches
+ * LBs the player can SEE without standing in them yet (cross-LB
+ * line-of-sight, e.g. looking across a flat field at distant buildings).
+ *
+ * Cheap no-op when sessionHandle is null/missing or
+ * `loadStaticsForLandblock` is absent — capture-time setups without a
+ * live session continue to run the render loop unaffected.
+ */
+export function tickSceneryPvsLoad(scene3d, sessionHandle) {
+  if (!scene3d || !sessionHandle) return;
+  if (typeof sessionHandle.getRenderSet !== "function") return;
+  if (typeof scene3d.loadStaticsForLandblock !== "function") return;
+
+  let renderSetArr = null;
+  try {
+    renderSetArr = sessionHandle.getRenderSet(1);
+  } catch (_) {
+    return;
+  }
+  if (!renderSetArr || renderSetArr.length === 0) return;
+
+  // Extract unique LB keys (high 16 bits of cell ID) from the renderSet
+  // and fire the per-LB hook for each. Re-fires for already-baked LBs
+  // are no-ops via the existing staticsBakedLbs idempotency check.
+  const seen = scene3d._pvsSeenLbScratch || (scene3d._pvsSeenLbScratch = new Set());
+  seen.clear();
+  for (let i = 0; i < renderSetArr.length; i += 1) {
+    const cellId = renderSetArr[i] >>> 0;
+    const lbKey = cellId & 0xffff0000;
+    if (lbKey === 0) continue;
+    if (seen.has(lbKey)) continue;
+    seen.add(lbKey);
+    const lbX = (lbKey >>> 24) & 0xff;
+    const lbY = (lbKey >>> 16) & 0xff;
+    // Fire-and-forget — the hook resolves a Promise but we don't
+    // await it from the tick. The Set check in statics.js makes
+    // re-fires near-free.
+    try {
+      scene3d.loadStaticsForLandblock(lbX, lbY);
+    } catch (e) {
+      if (!scene3d._pvsLoadStaticsWarned) {
+        scene3d._pvsLoadStaticsWarned = true;
+        // eslint-disable-next-line no-console
+        console.warn("[scene3d.cells] tickSceneryPvsLoad threw:", e);
+      }
+    }
+  }
+}

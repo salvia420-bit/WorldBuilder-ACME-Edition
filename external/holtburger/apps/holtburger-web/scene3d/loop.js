@@ -35,7 +35,7 @@
 // `init3D`'s render loop calls this once per requestAnimationFrame
 // frame, BEFORE `renderer.render(scene, camera)`.
 
-import { tickCellVisibility3D } from "./cells.js";
+import { tickCellVisibility3D, tickSceneryPvsLoad } from "./cells.js";
 import { tickLightingForCellState } from "./lighting.js";
 
 // Entity-update kind constants — mirror the wasm `ENTITY_UPDATE_KIND_*`
@@ -220,6 +220,11 @@ function tickTerrainUTime(scene3d) {
 
 export function tickPerFrame(scene3d, sessionHandle, dt) {
   tickCellVisibility3D(scene3d, sessionHandle);
+  // 2026-05-16 — PVS-driven scenery expansion (paired with the
+  // STATICS_RING_RADIUS=2 boot ring in index.js). Reads the wasm
+  // renderSet and triggers `loadStaticsForLandblock` for any LB the
+  // player can see but hasn't entered yet. Idempotent + cheap.
+  tickSceneryPvsLoad(scene3d, sessionHandle);
   // Phase 2.2 — water/lava vertex displacement clock. Runs FIRST so the
   // displacement is current before any code reads terrain positions
   // this frame (e.g. nameplate projection sampling terrain Y). Wrapped

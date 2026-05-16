@@ -85,6 +85,14 @@ const HOLTBURG_Y = 0xb4;
 // out-of-scope (radius=1-hardcoded assertions move forward in their
 // own PR via Objective 10's `capture_world_expand_e2e.cjs`).
 const HOLTBURG_RING_RADIUS = 6;
+// Statics/scenery bake is the heaviest per-LB content (placements +
+// per-model setup/meshes/surface-pixels via F.41 batch). Decoupling
+// its ring from the terrain/buildings ring lets us load a small
+// neighborhood up-front, then PVS-driven expansion (in loop.js)
+// pulls additional LBs as they enter the renderer's visible cell
+// set. Net: ~85 % fewer initial setup/surface fetches at boot
+// (25/169 LBs) without leaving the visible scene empty.
+const STATICS_RING_RADIUS = 2;
 
 export async function init3D(canvas, sessionHandle, wasmExports) {
   // Phase X.1 — resolve the visual-fidelity quality preset from URL +
@@ -591,15 +599,21 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     }
     if (typeof wasmExports.fetch_model_meshes === "function") {
       try {
-        // World-expand step 1 Objective 8 — statics ring flip 1 → 6.
-        // Calling `bakeStaticsRing` directly (skipping the radius=1
-        // back-compat wrapper `buildHoltburgStatics`) so the same
-        // `HOLTBURG_RING_RADIUS` constant gates all three layers.
+        // 2026-05-16 bandwidth optimisation — statics ring decoupled
+        // from the terrain/buildings ring. Initial radius=2 (5×5=25
+        // LBs) keeps the immediate neighborhood loaded for the
+        // boot-time view; PVS-driven expansion in loop.js's
+        // tickPerFrame pulls any additional LBs whose cells enter
+        // the renderer's visible set. The per-LB hook
+        // `loadStaticsForLandblock` is idempotent so both paths
+        // (PVS-tick + handlePositionUpdate movement) safely
+        // converge. Net: ~85 % fewer setup/surface fetches at boot
+        // vs. the prior 13×13 (169 → 25).
         staticsSummary = await bakeStaticsRing(
           scene3dForBuilders,
           HOLTBURG_X,
           HOLTBURG_Y,
-          HOLTBURG_RING_RADIUS,
+          STATICS_RING_RADIUS,
           wasmExports
         );
         // eslint-disable-next-line no-console
