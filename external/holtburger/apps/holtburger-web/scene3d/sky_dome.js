@@ -1042,16 +1042,38 @@ export class SkyDome {
     // keyframe `amb_color`. When Sky-C hasn't ticked yet (pre-spawn),
     // both fall back to construction-time defaults.
     if (this.liveScene3dRef && this.dome.material?.uniforms) {
-      const horizonArgb =
-        this.liveScene3dRef.skyBackgroundColor >>> 0 || 0xff9cb3d9;
-      argbToColor(horizonArgb, this.dome.material.uniforms.uHorizonColor.value);
-
       const lastState = this.liveScene3dRef.skyLightingController?._lastState;
-      if (lastState && typeof lastState.ambColorArgb === "number") {
-        argbToColor(
-          lastState.ambColorArgb >>> 0,
-          this.dome.material.uniforms.uZenithColor.value
-        );
+
+      // Natural-Earth sky override: when window.__naturalSky=true,
+      // bypass AC's parametric DayGroup colors and compute zenith +
+      // horizon from sun elevation (Rayleigh approximation). Used to
+      // evaluate cloud appearance against a realistic sky.
+      if (typeof window !== "undefined" && window.__naturalSky === true && lastState) {
+        const pitchDeg = lastState.dirPitch ?? 45;
+        const sunAlt = Math.sin((pitchDeg * Math.PI) / 180);
+        const day = Math.max(0, sunAlt);
+        const grazing = Math.max(0, 1 - Math.abs(sunAlt) * 4);
+        const night = Math.max(0, -sunAlt * 2);
+        const horR = Math.min(1, 0.75 * day + 1.00 * grazing + 0.03 * night);
+        const horG = Math.min(1, 0.85 * day + 0.55 * grazing + 0.04 * night);
+        const horB = Math.min(1, 1.00 * day + 0.20 * grazing + 0.10 * night);
+        // Zenith stays BLUE-DOMINANT at all times. Twilight is blue
+        // (atmosphere absorbs red preferentially), not violet.
+        const ambR = Math.min(1, 0.30 * day + 0.10 * grazing + 0.02 * night);
+        const ambG = Math.min(1, 0.55 * day + 0.18 * grazing + 0.03 * night);
+        const ambB = Math.min(1, 0.95 * day + 0.42 * grazing + 0.10 * night);
+        this.dome.material.uniforms.uHorizonColor.value.setRGB(horR, horG, horB);
+        this.dome.material.uniforms.uZenithColor.value.setRGB(ambR, ambG, ambB);
+      } else {
+        const horizonArgb =
+          this.liveScene3dRef.skyBackgroundColor >>> 0 || 0xff9cb3d9;
+        argbToColor(horizonArgb, this.dome.material.uniforms.uHorizonColor.value);
+        if (lastState && typeof lastState.ambColorArgb === "number") {
+          argbToColor(
+            lastState.ambColorArgb >>> 0,
+            this.dome.material.uniforms.uZenithColor.value
+          );
+        }
       }
     }
 
@@ -1620,9 +1642,8 @@ export class SkyDome {
     // Clouds-D: composite the cloud buffer over the just-painted sky
     // pixels via a fullscreen overlay quad. Runs with depthTest=false
     // + transparent so cloud-free pixels keep the underlying sky
-    // color, and depth-aware-occlusion of clouds by world geometry
-    // happens implicitly when the caller's world pass overpaints
-    // with depthTest=LEQUAL (clouds at sky-depth lose to closer world).
+    // color. World overpaints with depthTest=LEQUAL afterward, so
+    // world geometry occludes clouds where it draws.
     if (this.cloudOverlay) {
       this.cloudOverlay.renderOverlay(renderer);
     }

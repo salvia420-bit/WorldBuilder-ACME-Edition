@@ -35,6 +35,7 @@ import { CloudVolume } from './cloud_volume.js';
 import {
   CloudShape, CloudShapeDetail, LocalWeather, Turbulence,
 } from '@takram/three-clouds';
+import { EffectComposer, EffectPass, RenderPass } from 'postprocessing';
 
 /**
  * @typedef {Object} CloudOverlayOptions
@@ -60,6 +61,7 @@ export class CloudOverlay {
     const {
       camera,
       sessionHandleAccessor,
+      sceneAccessor,
       cloudOptions,
       proceduralTextures = true,
     } = opts || {};
@@ -70,6 +72,12 @@ export class CloudOverlay {
       typeof sessionHandleAccessor === 'function'
         ? sessionHandleAccessor
         : () => null;
+    // sceneAccessor: returns the main world scene (terrain + buildings +
+    // entities). Used as the RenderPass scene so the composer's input
+    // buffer gets a real depth attachment → cloud raymarch clips at
+    // terrain depth instead of painting over land/player.
+    this.sceneAccessor =
+      typeof sceneAccessor === 'function' ? sceneAccessor : () => null;
 
     // The bridge. Owns the CloudsEffect + the 5 DayGroup uniforms.
     // CloudVolume's constructor sets the load-bearing ECEF transform
@@ -89,12 +97,95 @@ export class CloudOverlay {
       effect.shapeTexture = new CloudShape();
       effect.shapeDetailTexture = new CloudShapeDetail();
       effect.turbulenceTexture = new Turbulence();
+
+      // Add an altocumulus middle-étage layer. takram defaults only ship
+      // 3 channels (R/G cumulus 750-2200m, B cirrus 7500-8000m), leaving
+      // channel A unused — meteorologically, the middle étage (2-7km mid-
+      // lat) is missing. Use channel A as a thin alto deck at ~3500m
+      // with cirrus-class density (preserves transparency, no rings).
+      const A = effect.cloudLayers[3];
+      A.channel = 'a';
+      A.altitude = 3500;
+      A.height = 600;
+      A.densityScale = 0.004;
+      A.shapeAmount = 0.5;
+      A.shapeDetailAmount = 0;
+      A.weatherExponent = 1.0;
+      A.shapeAlteringBias = 0.35;
+      A.coverageFilterWidth = 0.5;
     }
+
+    // STBN (Spatial Temporal Blue Noise) substitute. The cloud shader's
+    // `getSTBN()` samples a 3D blue-noise texture to jitter ray samples
+    // — without it, every ray's samples land on the same grid and we
+    // get concentric-ring artifacts around the sun (forward-scattering
+    // banding) and rings on the cloud layer. takram's DEFAULT_STBN_URL
+    // points at an external blob not bundled with the package; we
+    // synthesize a 64³ random-noise R8 Data3DTexture instead. White
+    // noise has worse perceptual quality than true blue noise but
+    // completely eliminates the structured ring patterns.
+    const STBN_SIZE = 64;
+    const stbnData = new Uint8Array(STBN_SIZE * STBN_SIZE * STBN_SIZE);
+    for (let i = 0; i < stbnData.length; i++) stbnData[i] = Math.floor(Math.random() * 256);
+    const stbnTex = new THREE.Data3DTexture(stbnData, STBN_SIZE, STBN_SIZE, STBN_SIZE);
+    stbnTex.format = THREE.RedFormat;
+    stbnTex.type = THREE.UnsignedByteType;
+    stbnTex.minFilter = THREE.LinearFilter;
+    stbnTex.magFilter = THREE.LinearFilter;
+    stbnTex.wrapS = THREE.RepeatWrapping;
+    stbnTex.wrapT = THREE.RepeatWrapping;
+    stbnTex.wrapR = THREE.RepeatWrapping;
+    stbnTex.colorSpace = THREE.NoColorSpace;
+    stbnTex.generateMipmaps = false;
+    stbnTex.unpackAlignment = 1;
+    stbnTex.needsUpdate = true;
+    this.volume.effect.stbnTexture = stbnTex;
+    this._stbnTex = stbnTex;
+
+    // Size the cloud effect's internal RTs to the camera's render area.
+    // CloudsEffect defaults to 1x1 until `setSize` lands — without this
+    // call, the cloud RT stays 1x1, the overlay quad samples one pixel,
+    // and you get a uniform-colored sky overlay regardless of the rest.
+    // Pull initial size from the camera's drawing surface; resize tracker
+    // in scene3d/index.js's onResize keeps it current.
+    const w = (typeof window !== "undefined" && window.innerWidth) || 1280;
+    const h = (typeof window !== "undefined" && window.innerHeight) || 720;
+    this.volume.effect.setSize(w, h);
 
     // Per-frame dt source. The pmndrs Effect.update() contract wants
     // a deltaTime; we don't need exact accuracy (it drives temporal
     // jitter for TAA, not physics) so an internal clock is fine.
     this.clock = new THREE.Clock();
+
+    // === EffectComposer pipeline =====================================
+    //
+    // The takram CloudsEffect is designed to be driven by a pmndrs
+    // EffectPass inside an EffectComposer — not by calling
+    // effect.update() directly. EffectPass auto-wires:
+    //   - inputBuffer.depthTexture → effect.setDepthTexture(...)
+    //   - inputBuffer texture → input uniforms
+    //   - proper MRT draw-buffer setup for the cloud pass
+    // Without that wiring, the cloud pass's MRT draw call throws
+    // GL_INVALID_OPERATION on real GPU; the cloud RT stays at the
+    // renderer's clearColor and nothing visible renders.
+    //
+    // We create a SEPARATE composer with its own RTs so the cloud
+    // bake doesn't interfere with the main scene render. The
+    // RenderPass renders the MAIN world scene (terrain + buildings +
+    // entities) so the composer's input buffer gets a real depth
+    // attachment — that depth then occludes cloud rays in the
+    // EffectPass(CloudsEffect), so clouds don't paint over land.
+    //
+    // Cost: scene rendered twice per frame (once for composer's depth,
+    // once for the main canvas). Cheaper option (depth-only pass) is
+    // Clouds-G polish; this MVP doubles render work but is correct.
+    //
+    // Fallback to empty scene if sceneAccessor returns null (e.g.,
+    // pre-init). Empty scene → depth=1.0 → clouds paint everywhere
+    // (the pre-Clouds-E.4 behavior).
+    this._fallbackScene = new THREE.Scene();
+    this.composer = null;
+    this._composerSized = false;
 
     // === Fullscreen overlay scene ====================================
     //
@@ -122,8 +213,13 @@ export class CloudOverlay {
         uniform sampler2D cloudTex;
         void main() {
           vec4 c = texture2D(cloudTex, vUv);
-          // pmndrs Effect compositors typically write premultiplied
-          // alpha, so blend with NormalBlending + premultipliedAlpha.
+          // Discard pixels that aren't a real cloud contribution. The
+          // takram raymarch's haze pass fills the RT with uniform near-
+          // zero RGB at full alpha when no rays hit cloud volume —
+          // which would tint the sky uniformly black/dark. A real
+          // cloud pixel has both reasonable alpha AND non-trivial RGB.
+          float lum = max(c.r, max(c.g, c.b));
+          if (c.a < 0.05 || lum < 0.02) discard;
           gl_FragColor = c;
         }
       `,
@@ -138,11 +234,10 @@ export class CloudOverlay {
     this.overlayMesh.frustumCulled = false;
     this.overlayScene.add(this.overlayMesh);
 
-    // Set the cloud texture pointer once — CloudsPass.outputBuffer is
-    // a stable WebGLRenderTarget that's reused frame after frame, so
-    // we don't have to refresh this each tick.
-    this.overlayMaterial.uniforms.cloudTex.value =
-      this.volume.effect.cloudsPass.outputBuffer?.texture ?? null;
+    // Cloud texture pointer wired in preRender (after first composer
+    // render lands a real outputBuffer). Composer's outputBuffer is a
+    // WebGLRenderTarget; we sample `.texture`.
+    this.overlayMaterial.uniforms.cloudTex.value = null;
 
     // Telemetry — populated by tick/preRender/renderOverlay so
     // capture scripts can introspect.
@@ -184,13 +279,60 @@ export class CloudOverlay {
     try {
       const dt = this.clock.getDelta();
       const prevTarget = renderer.getRenderTarget();
-      // The effect.update() implementation re-binds setRenderTarget
-      // multiple times for each sub-pass; we don't pre-bind anything.
-      this.volume.effect.update(renderer, null, dt);
+      const prevAutoClear = renderer.autoClear;
+
+      // Lazy-init composer once we have the renderer (CloudOverlay
+      // is built in scene3d/index.js BEFORE the renderer reference
+      // is fully plumbed to preRender).
+      //
+      // Use the empty fallback scene as the RenderPass scene. The
+      // alternative (rendering the main scene for depth) broke
+      // visual blending and made clouds uniformly dark — clouds
+      // self-clip below horizon naturally because cloud rays going
+      // down don't hit the cloud layer above. Depth-aware occlusion
+      // for foreground geometry is a Clouds-G polish item.
+      if (!this.composer) {
+        this.composer = new EffectComposer(renderer);
+        this._renderPass = new RenderPass(this._fallbackScene, this.camera);
+        this.composer.addPass(this._renderPass);
+        this._cloudEffectPass = new EffectPass(this.camera, this.volume.effect);
+        this.composer.addPass(this._cloudEffectPass);
+      }
+      if (!this._composerSized && renderer.domElement) {
+        const w = renderer.domElement.width;
+        const h = renderer.domElement.height;
+        this.composer.setSize(w, h);
+        this._composerSized = true;
+      }
+
+      // Render the cloud pipeline. RenderPass clears the empty scene
+      // (depth → 1.0 far plane). EffectPass picks up that depth and
+      // runs the cloud raymarch with proper MRT wiring. Output lands
+      // in composer.outputBuffer.
+      this.composer.render(dt);
+
+      // Patch cameraHeight uniform AFTER the composer ran (which calls
+      // CloudsMaterial.copyCameraSettings, which sets cameraHeight via
+      // WGS-84 geodetic → wrong for our spherical setup). Override
+      // with the actual world Y (clamped ≥ 0). Takes effect on the
+      // NEXT frame's bake.
+      const camWorldY = this.camera?.position?.y ?? 0;
+      const matUniforms = this.volume.effect.cloudsPass.currentMaterial?.uniforms;
+      if (matUniforms?.cameraHeight) {
+        matUniforms.cameraHeight.value = Math.max(0, camWorldY);
+      }
+
+      // Restore renderer state (composer leaves it on its last RT).
       renderer.setRenderTarget(prevTarget);
-      // Re-sync the texture pointer in case CloudsPass resized + swapped
-      // the underlying RT (the resolution-scale machinery can do this).
-      const tex = this.volume.effect.cloudsPass.outputBuffer?.texture ?? null;
+      renderer.autoClear = prevAutoClear;
+
+      // Wire the cloud effect's `cloudsBuffer` uniform value to our
+      // overlay — that's the texture takram populates with the actual
+      // cloud raymarch output. (`composer.outputBuffer` is the
+      // EffectPass's fullscreen composition output which can drop
+      // alpha/RGB through its blend chain; sampling cloudsBuffer
+      // directly preserves the volumetric raymarch values.)
+      const tex = this.volume.effect.uniforms?.get?.('cloudsBuffer')?.value ?? null;
       if (tex !== this.overlayMaterial.uniforms.cloudTex.value) {
         this.overlayMaterial.uniforms.cloudTex.value = tex;
       }
@@ -238,6 +380,10 @@ export class CloudOverlay {
   setSize(width, height) {
     try {
       this.volume.effect.setSize(width, height);
+      if (this.composer) {
+        this.composer.setSize(width, height);
+      }
+      this._composerSized = true;
     } catch (err) {
       this.lastError = String(err);
     }
@@ -251,6 +397,8 @@ export class CloudOverlay {
     try {
       this.overlayMesh.geometry.dispose();
       this.overlayMaterial.dispose();
+      this._stbnTex?.dispose?.();
+      this.composer?.dispose?.();
       this.volume.dispose();
     } catch (err) {
       this.lastError = String(err);

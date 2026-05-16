@@ -27,6 +27,17 @@ uniform vec3 uHorizonColor;   // DayGroup.fogColor (ARGB → RGB)
 uniform float uFogDensity;    // derived from DayGroup.fogMin/fogMax
 uniform float uSunIntensity;  // default 1.0
 
+// Scale constants for the stub radiance values. Bruneton's true output
+// is in physical W/m²/sr (hundreds-to-thousands range); takram's cloud
+// raymarch then multiplies by phase/scattering coefficients that bring
+// it into displayable range. Empirically: 50x scale produces NaN/black
+// (likely overflows internally), 1x produces near-black (too dim). A
+// gentle ~3x scale gives reasonable mid-day cloud lighting without
+// breaking the math.
+const float SUN_RADIANCE_SCALE = 3.0;
+const float SKY_RADIANCE_SCALE = 1.5;
+
+
 // ---- Short-form lighting functions ----------------------------------
 // These are the names clouds.frag + clouds.vert call directly. The
 // upstream Bruneton runtime block had `#define`s that rewrote these to
@@ -39,8 +50,8 @@ IrradianceSpectrum GetSunAndSkyIrradiance(
     const Position p, const Direction normal, const Direction sun_direction,
     out IrradianceSpectrum sky_irradiance) {
   float sunCos = clamp(dot(normalize(normal), normalize(sun_direction)), 0.0, 1.0);
-  sky_irradiance = uAmbientColor;
-  return uSunColor * sunCos * uSunIntensity;
+  sky_irradiance = uAmbientColor * SKY_RADIANCE_SCALE;
+  return uSunColor * sunCos * uSunIntensity * SUN_RADIANCE_SCALE;
 }
 
 // 3-arg scalar form (no surface normal). Used by clouds.vert:47-64 as
@@ -61,8 +72,8 @@ IrradianceSpectrum GetSunAndSkyScalarIrradiance(
   // just lerp via a smooth elevation curve.
   float sunUp = clamp(normalize(sun_direction).y, 0.0, 1.0);
   float dayMix = smoothstep(0.0, 0.3, sunUp);
-  sky_irradiance = uAmbientColor;
-  return uSunColor * uSunIntensity * (0.2 + 0.8 * dayMix);
+  sky_irradiance = uAmbientColor * SKY_RADIANCE_SCALE;
+  return uSunColor * uSunIntensity * (0.2 + 0.8 * dayMix) * SUN_RADIANCE_SCALE;
 }
 
 // 5-arg sky-radiance-to-point form. Used by clouds.frag:708 for the

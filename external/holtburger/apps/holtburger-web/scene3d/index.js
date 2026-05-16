@@ -94,6 +94,21 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   // not gate any feature itself — every gate lives in its own phase.
   // Devtools: `window.__quality` mirrors the resolved object.
   const quality = installQualityOnWindow(getQuality());
+  // Force-disable SSAO when `?clouds=on`. The SSAO composer path
+  // composites the cloud overlay AFTER its OutputPass → clouds paint
+  // over world geometry. Until the cloud effect is plumbed inside
+  // the SSAO composer chain (Clouds-G work), the direct render path
+  // is the only depth-correct option for clouds. Everything else in
+  // the quality preset (shadows, CSM, POM, triplanar, etc.) stays on.
+  try {
+    // eslint-disable-next-line no-undef
+    const cloudsFlag = new URLSearchParams(window.location.search).get("clouds");
+    if (cloudsFlag === "on" && quality?.flags?.ssao) {
+      quality.flags.ssao = false;
+      // eslint-disable-next-line no-console
+      console.log("[clouds] SSAO auto-disabled (?clouds=on requires direct render path for depth-correct cloud occlusion)");
+    }
+  } catch (_) { /* noop */ }
   // eslint-disable-next-line no-console
   console.log(
     `[phase-x.1] quality preset=${quality.preset} source=${quality.source}`
@@ -1279,6 +1294,11 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
             (typeof window !== "undefined" ? window.__sessionHandle : null) ??
             sessionHandle ??
             null,
+          // sceneAccessor lets the composer's RenderPass render the main
+          // world scene each frame for its depth attachment, so the
+          // cloud raymarch occludes correctly at terrain/buildings/
+          // player. Without this, clouds paint over land + player.
+          sceneAccessor: () => scene,
         });
 
         // Apply URL knobs post-construction so the CloudOverlay's

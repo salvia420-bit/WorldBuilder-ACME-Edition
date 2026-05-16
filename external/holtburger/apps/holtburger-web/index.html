@@ -5589,7 +5589,12 @@ void main() {
         }
 
         const submitBtn = loginForm.querySelector("button[type=submit]");
-        submitBtn.disabled = true;
+        // Keep button clickable so retries are possible (bridge / ACE
+        // race conditions, transient session-already-active rejections,
+        // user just wants to spam Connect). Each click starts a fresh
+        // start_session — the latest handle wins.
+        submitBtn.dataset.connecting = "1";
+        submitBtn.textContent = "Connect (retry)";
         loginStatus.innerHTML = `Connecting to <code>${bridgeUrl}</code> (server <code>${serverHost}:${serverPort}</code>) and sending LoginRequest…`;
 
         try {
@@ -6849,6 +6854,8 @@ void main() {
             `<span class="fail">[FAIL]</span> Login failed: <code>${msg}</code>` +
             ` <span class="hint">Check that holtburger-wsbridge is listening at the configured URL and ACE is up.</span>`;
           submitBtn.disabled = false;
+          submitBtn.textContent = "Connect";
+          delete submitBtn.dataset.connecting;
           // eslint-disable-next-line no-console
           console.error("start_session failed:", err);
         }
