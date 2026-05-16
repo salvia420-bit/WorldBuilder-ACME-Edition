@@ -85,14 +85,16 @@ const HOLTBURG_Y = 0xb4;
 // out-of-scope (radius=1-hardcoded assertions move forward in their
 // own PR via Objective 10's `capture_world_expand_e2e.cjs`).
 const HOLTBURG_RING_RADIUS = 6;
-// Statics/scenery bake is the heaviest per-LB content (placements +
-// per-model setup/meshes/surface-pixels via F.41 batch). Decoupling
-// its ring from the terrain/buildings ring lets us load a small
-// neighborhood up-front, then PVS-driven expansion (in loop.js)
-// pulls additional LBs as they enter the renderer's visible cell
-// set. Net: ~85 % fewer initial setup/surface fetches at boot
-// (25/169 LBs) without leaving the visible scene empty.
+// Statics/scenery and buildings are the two heaviest per-LB content
+// streams (placements + per-model setup/meshes/surface-pixels via
+// F.41 batch). Decoupling their rings from the terrain ring lets us
+// load a small neighborhood up-front, then PVS-driven expansion
+// (in loop.js's `tickPvsLoadExpansion`) pulls additional LBs as they
+// enter the renderer's visible cell set. Net: ~85 % fewer initial
+// setup/surface fetches at boot for each (25/169 LBs) without
+// leaving the visible scene empty.
 const STATICS_RING_RADIUS = 2;
+const BUILDINGS_RING_RADIUS = 2;
 
 export async function init3D(canvas, sessionHandle, wasmExports) {
   // Phase X.1 — resolve the visual-fidelity quality preset from URL +
@@ -580,15 +582,18 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     typeof wasmExports.fetch_surfaces_pixels === "function"
   ) {
     try {
-      // World-expand step 1 Objective 8 — buildings ring flip 1 → 6.
-      // Calling `bakeBuildingsRing` directly (skipping the radius=1
-      // back-compat wrapper `buildHoltburgBuildings`) so the same
-      // `HOLTBURG_RING_RADIUS` constant gates all three layers.
+      // 2026-05-16 bandwidth optimisation — buildings ring decoupled
+      // from the terrain ring (radius=6) and shrunk to radius=2
+      // (5×5=25 LBs). Buildings own per-LB placement records,
+      // mesh fetches, and surface-pixels prewarm — same shape as
+      // scenery. PVS-driven expansion in loop.js's
+      // tickPvsLoadExpansion fires `loadBuildingsForLandblock`
+      // (idempotent) for any LB whose cell becomes visible.
       buildingsSummary = await bakeBuildingsRing(
         scene3dForBuilders,
         HOLTBURG_X,
         HOLTBURG_Y,
-        HOLTBURG_RING_RADIUS,
+        BUILDINGS_RING_RADIUS,
         wasmExports
       );
       // eslint-disable-next-line no-console
