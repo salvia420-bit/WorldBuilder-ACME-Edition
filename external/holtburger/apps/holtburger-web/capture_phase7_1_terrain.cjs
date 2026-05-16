@@ -195,16 +195,11 @@ try {
           const positionCount = lb.geometry?.attributes?.position?.count ?? 0;
           const indexCount = lb.geometry?.index?.count ?? 0;
           const ud = lb.userData || {};
-          // Detect a road-overlay child by name (set by the terrain
-          // builder). Tolerate the camel-case or hyphen-case
-          // variants — we set "road-overlay" in terrain.js.
-          let hasRoadOverlay = false;
-          for (const c of lb.children) {
-            if (c.name === "road-overlay") {
-              hasRoadOverlay = true;
-              break;
-            }
-          }
+          // Roads are now painted inside the terrain shader (G channel of
+          // uVertexTypes + uRoadTexture), no separate child mesh. The
+          // per-LB userData carries hasRoads flag set from roadCodes during
+          // bake; capture probes read that instead of scanning children.
+          const hasRoadOverlay = !!ud.hasRoads;
           lbInfos.push({
             index: i,
             isMesh,

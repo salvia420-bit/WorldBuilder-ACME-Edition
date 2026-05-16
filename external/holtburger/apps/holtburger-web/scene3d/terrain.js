@@ -278,7 +278,10 @@ precision highp sampler2DArray;
 
 uniform sampler2D uAtlas;             // 6×6 grid of 256×256 retail terrain tiles
 uniform vec2 uAtlasGridSize;          // (cols, rows) — typically (6, 6)
-uniform sampler2D uVertexTypes;       // 9×9 RGBA8: R = terrain type byte, A = 255
+uniform sampler2D uVertexTypes;       // 9×9 RGBA8: R = terrain code, G = roadCode*64, A = 255
+uniform sampler2D uRoadTexture;       // retail road tile (RepeatWrap)
+uniform float uRoadTileScale;         // road UV tile rate per LB unit
+uniform float uRoadEnabled;           // 0 = no road overlay (back-compat / disable)
 
 // Phase 1.2 — detail-normal array. 5 RGB normal maps (slice order:
 // 0 grass | 1 dirt | 2 sand | 3 stone | 4 snow). The shader looks up
@@ -337,6 +340,13 @@ int vertexTypeAt(int iu, int iv) {
   return int(texelFetch(uVertexTypes, ivec2(iu, iv), 0).r * 255.0 + 0.5);
 }
 
+// Per-vertex road bit, packed into G channel as roadCode*64. Any nonzero
+// (i.e. roadCode > 0) returns 1.0, else 0.0. Bilinear-blended across the
+// 4 cell corners in the main body to get a smooth road-presence mask.
+float vertexRoadAt(int iu, int iv) {
+  return texelFetch(uVertexTypes, ivec2(iu, iv), 0).g > 0.125 ? 1.0 : 0.0;
+}
+
 void main() {
   // vGridUv is [0, 8] across the 192 m LB. Bilinear 4-corner blend.
   vec2 grid = vGridUv;
@@ -393,6 +403,27 @@ void main() {
     vec3 tint = mix(vec3(0.9, 0.95, 1.05), vec3(1.0, 1.0, 1.0),
                     0.5 + 0.5 * sin(uTime * 0.3));
     result *= tint;
+  }
+
+  // Retail-style road painting. Roads in retail AC are a per-vertex bit
+  // (surface code bits 0-1), encoded into uVertexTypes.G during build.
+  // Sample the 4 corner road bits with the SAME bilinear weights we
+  // used for terrain colour blending — that produces a smooth 0..1
+  // road-presence mask across each cell. When the mask is non-zero,
+  // sample the retail road texture (tiled across the LB) and blend
+  // it into the terrain colour by the mask. This replaces the prior
+  // separate road-overlay quad mesh — same painted appearance retail
+  // had, naturally flush with the terrain surface.
+  if (uRoadEnabled > 0.5) {
+    float r00 = vertexRoadAt(iu,     iv    );
+    float r10 = vertexRoadAt(iu + 1, iv    );
+    float r01 = vertexRoadAt(iu,     iv + 1);
+    float r11 = vertexRoadAt(iu + 1, iv + 1);
+    float roadMask = r00 * w00 + r10 * w10 + r01 * w01 + r11 * w11;
+    if (roadMask > 0.001) {
+      vec3 roadColor = texture(uRoadTexture, vGridUv * uRoadTileScale).rgb;
+      result = mix(result, roadColor, roadMask);
+    }
   }
 
   // ---------------------------------------------------------------
@@ -564,149 +595,6 @@ export function computeCodeBitmask(codeSet) {
 export const PHASE_2_2_WATER_CODES = TERRAIN_WATER_CODES;
 export const PHASE_2_2_LAVA_CODES = TERRAIN_LAVA_CODES;
 
-/**
- * Build a thin triangle-strip road overlay mesh for one landblock.
- *
- * Mirrors the 2D vector-stroke pass at `index.html:2113-2176`. For
- * each vertex with `roadCode != 0`, emit a thin quad (two triangles)
- * to its E / N / NE / NW neighbour if that neighbour is also road.
- *
- * Quad construction: take the 3D segment from vertex A to vertex B
- * (xy from `positions`, z = height + 0.1 m to lift above terrain),
- * compute a 2D perpendicular in the xy plane, and emit two corner
- * pairs (A±perp*halfWidth, B±perp*halfWidth) as a 2-triangle quad.
- * Z lift dodges Z-fighting against the heightfield without needing
- * `polygonOffset` (which works but is fiddly per-driver).
- *
- * Returns null if the LB has no roads (skips the empty-mesh allocation
- * + draw-call cost). Holtburg has roads in every LB per the 2D
- * `render-preview` baseline, but neighbouring LBs may not.
- */
-function buildRoadOverlayMesh(positions, roadCodes, roadTexture) {
-  const halfWidth = 0.75; // 1.5 m total — matches 2D `width: 1.5`.
-  // Phase 2.1 carry-over + Phase 2.2 follow-on (2026-05-13): the road
-  // overlay walks the 9×9 control grid (NOT the subdivided heights), so
-  // when subdivLevel>=2 raises terrain vertices up to ±0.3 m via clamped
-  // noise (`terrain_subdiv.rs::VISUAL_VS_COLLISION_MAX_M`), the original
-  // 0.1 m lift was insufficient to clear z-fight on hilly LBs. Raised
-  // to 0.4 m so the road stays cleanly above the subdivision noise (the
-  // road is also rendered with polygonOffset as a belt-and-braces
-  // safety). Phase 2.2 water displacement adds another ±0.25 m envelope
-  // but only on water-typed cells; Holtburg roads don't cross water
-  // cells in retail, so the 0.4 m road lift suffices. Routing the road
-  // overlay THROUGH the subdivided heights would be cleaner (no fixed
-  // lift) but non-trivial — no per-grid-vertex correspondence in the
-  // subdivided mesh — and is deferred to a future phase.
-  const liftZ = 0.4;
-  const ROAD_DIRS = [
-    [1, 0],
-    [0, 1],
-    [1, 1],
-    [-1, 1],
-  ];
-
-  const verts = [];
-  const indices = [];
-  const uvs = [];
-
-  let edgeCount = 0;
-  // Tile the road texture every 6 m along each segment, mirroring the
-  // 2D path's `ROAD_TEXTURE_TILE_M = 6.0`. Native tile is sampled with
-  // RepeatWrapping in the caller; the V coord goes [0, halfWidth*2 / TILE]
-  // across the stroke width, U progresses by segment length / TILE.
-  const TILE_M = 6.0;
-  for (let vv = 0; vv < 9; vv += 1) {
-    for (let vu = 0; vu < 9; vu += 1) {
-      const idx = vv * 9 + vu;
-      if (!roadCodes[idx]) continue;
-      for (const [du, dv] of ROAD_DIRS) {
-        const nu = vu + du;
-        const nv = vv + dv;
-        if (nu < 0 || nu > 8 || nv < 0 || nv > 8) continue;
-        const nIdx = nv * 9 + nu;
-        if (!roadCodes[nIdx]) continue;
-
-        const ax = positions[idx * 3 + 0];
-        const ay = positions[idx * 3 + 1];
-        const az = positions[idx * 3 + 2] + liftZ;
-        const bx = positions[nIdx * 3 + 0];
-        const by = positions[nIdx * 3 + 1];
-        const bz = positions[nIdx * 3 + 2] + liftZ;
-
-        const dx = bx - ax;
-        const dy = by - ay;
-        const len = Math.hypot(dx, dy);
-        if (len < 1e-4) continue;
-
-        // 2D perpendicular in the xy plane. Rotate (dx, dy) by 90°.
-        const px = -dy / len;
-        const py = dx / len;
-        const ox = px * halfWidth;
-        const oy = py * halfWidth;
-
-        const base = (verts.length / 3) | 0;
-        // 4 corners: A-left, A-right, B-left, B-right.
-        verts.push(ax + ox, ay + oy, az);
-        verts.push(ax - ox, ay - oy, az);
-        verts.push(bx + ox, by + oy, bz);
-        verts.push(bx - ox, by - oy, bz);
-
-        const uMax = len / TILE_M;
-        const vMax = (halfWidth * 2) / TILE_M;
-        // UVs: U progresses along the segment, V across the stroke.
-        // Left edge V=0, right V=vMax.
-        uvs.push(0, 0, 0, vMax, uMax, 0, uMax, vMax);
-
-        // Two triangles, CCW from the +Z-up side (terrain side).
-        indices.push(base + 0, base + 1, base + 2);
-        indices.push(base + 1, base + 3, base + 2);
-
-        edgeCount += 1;
-      }
-    }
-  }
-
-  if (edgeCount === 0) return null;
-
-  const geom = new THREE.BufferGeometry();
-  geom.setAttribute(
-    "position",
-    new THREE.BufferAttribute(new Float32Array(verts), 3, false)
-  );
-  geom.setAttribute(
-    "uv",
-    new THREE.BufferAttribute(new Float32Array(uvs), 2, false)
-  );
-  geom.setIndex(
-    new THREE.BufferAttribute(new Uint32Array(indices), 1)
-  );
-  geom.computeBoundingSphere();
-
-  // Polygon offset belt-and-braces with the 0.1 m Z lift. polygonOffset
-  // handles cases where the lift gets compressed by clip-space depth
-  // precision at long view distances.
-  const mat = roadTexture
-    ? new THREE.MeshBasicMaterial({
-        map: roadTexture,
-        transparent: false,
-        depthTest: true,
-        polygonOffset: true,
-        polygonOffsetFactor: -1,
-        polygonOffsetUnits: -1,
-      })
-    : new THREE.MeshBasicMaterial({
-        color: 0xc8b888,
-        transparent: false,
-        depthTest: true,
-        polygonOffset: true,
-        polygonOffsetFactor: -1,
-        polygonOffsetUnits: -1,
-      });
-
-  const mesh = new THREE.Mesh(geom, mat);
-  mesh.name = "road-overlay";
-  return mesh;
-}
 
 // ----- world-expand step 1 — once-per-ring shader uniform constants
 //
@@ -1019,11 +907,9 @@ export async function bakeTerrainForLandblock(
   // immediately. Three.js mesh construction is sync from here on.
   scene3d.terrainBakedLbs.add(lbKey);
 
-  // 3. Snapshot what we need from the wasm mesh BEFORE freeing it. The
-  // adapter copies the buffers into BufferAttributes, but the road
-  // overlay needs raw `positions` + `roadCodes` to walk neighbours;
-  // copy those once here so we can free the wasm struct safely.
-  const positionsCopy = Float32Array.from(wasmMesh.positions);
+  // 3. Snapshot the per-vertex code arrays before freeing the wasm
+  // mesh. terrainCodes feeds uVertexTypes.R; roadCodes feeds .G for
+  // the in-shader road painting.
   const roadCodesCopy = Uint8Array.from(wasmMesh.roadCodes);
   const terrainCodesCopy = Uint8Array.from(wasmMesh.terrainCodes);
   const heightMin = wasmMesh.heightMin;
@@ -1043,7 +929,7 @@ export async function bakeTerrainForLandblock(
   } else {
     geom = landblockMeshToGeometry(wasmMesh);
   }
-  const vertexTypesTex = buildVertexTypesDataTexture(terrainCodesCopy);
+  const vertexTypesTex = buildVertexTypesDataTexture(terrainCodesCopy, roadCodesCopy);
 
   // 5. ShaderMaterial — verbatim port from the prior in-loop body.
   // Per-LB uniforms (uVertexTypes, uLbOriginXy) are bound here; the
@@ -1057,6 +943,18 @@ export async function bakeTerrainForLandblock(
       uAtlas: { value: opts.atlasTexture },
       uAtlasGridSize: { value: ATLAS_GRID_SIZE },
       uVertexTypes: { value: vertexTypesTex },
+      // Retail-style road painting (replaces the prior road-overlay
+      // mesh). The road texture is the same retail-DAT road tile we
+      // were previously stamping onto separate quads; now it's sampled
+      // directly in the terrain shader, bilinear-blended via the
+      // per-vertex road bit packed into uVertexTypes.G.
+      // uRoadTileScale = 1/6 means one tile per 6 m along vGridUv
+      // (matches the prior ROAD_TEXTURE_TILE_M = 6 from the overlay
+      // path). vGridUv is in cell units (1.0 per 24 m), so the scale
+      // factor here is 24 / 6 = 4 — four tile repeats per cell.
+      uRoadTexture: { value: opts.roadTexture ?? null },
+      uRoadTileScale: { value: 4.0 },
+      uRoadEnabled: { value: opts.roadTexture ? 1.0 : 0.0 },
       // Phase 1.2 — terrain detail-normal array + per-code slice
       // table + per-frame wind direction + quality gate. When
       // `detailNormalEnabled` is false the texture uniform is set
@@ -1151,6 +1049,14 @@ export async function bakeTerrainForLandblock(
   // player's terrain type for the Region → AmbientSTB chain. Storing
   // the raw bytes (not the DataTexture) keeps the runtime free of
   // GPU readback — sampling is a single byte fetch per tick.
+  // Has any vertex with a road bit set? Used by the post-bake summary
+  // counter; previously inferred from the road-overlay child mesh
+  // which no longer exists (roads are now painted in the terrain
+  // shader via uVertexTypes.G).
+  let hasRoads = false;
+  for (let i = 0; i < roadCodesCopy.length; i += 1) {
+    if (roadCodesCopy[i] !== 0) { hasRoads = true; break; }
+  }
   lbMesh.userData = {
     lbX,
     lbY,
@@ -1159,6 +1065,8 @@ export async function bakeTerrainForLandblock(
     heightMax,
     vertexTypesTexture: vertexTypesTex,
     terrainCodes: terrainCodesCopy,
+    roadCodes: roadCodesCopy,
+    hasRoads,
     // Phase 1.2 — capture probes inspect this to verify the detail-
     // normal patch is wired without a GL state pull.
     detailNormalEnabled: opts.detailNormalEnabled,
@@ -1183,19 +1091,12 @@ export async function bakeTerrainForLandblock(
     lavaCodeMask: opts.lavaCodeMask,
   };
 
-  // Group keeps the road overlay parented under the same lbMesh
-  // transform — simpler than a sibling group, and toggling
-  // `lbMesh.visible` still hides both atomically.
   scene3d.terrainGroup.add(lbMesh);
 
-  const roadMesh = buildRoadOverlayMesh(
-    positionsCopy,
-    roadCodesCopy,
-    opts.roadTexture
-  );
-  if (roadMesh) {
-    lbMesh.add(roadMesh);
-  }
+  // Roads are now painted inside the terrain shader via the G-channel
+  // of uVertexTypes + uRoadTexture (retail-style bilinear-blended,
+  // naturally flush with the terrain surface). The prior road-overlay
+  // mesh path is gone; see TERRAIN_FRAGMENT_GLSL's `uRoadEnabled` block.
 
   // Free the wasm mesh now that all needed data is copied. Skip if the
   // mesh came from the prefetch batch — the ring driver owns those and
@@ -1344,16 +1245,12 @@ export async function bakeTerrainRing(
   }
 
   // Count roads after the bake so the summary stays in sync with the
-  // prior `buildHoltburgTerrain` return shape.
+  // prior `buildHoltburgTerrain` return shape. Roads are painted in the
+  // terrain shader now (no separate overlay child); the per-mesh
+  // `userData.hasRoads` flag was set during bake from roadCodes.
   let lbWithRoads = 0;
   for (const m of lbMeshes) {
-    if (!m) continue;
-    for (const child of m.children) {
-      if (child?.name === "road-overlay") {
-        lbWithRoads += 1;
-        break;
-      }
-    }
+    if (m?.userData?.hasRoads) lbWithRoads += 1;
   }
 
   // Stash on the scene3d for later phases (Phase 7.5 camera, Phase 7.7

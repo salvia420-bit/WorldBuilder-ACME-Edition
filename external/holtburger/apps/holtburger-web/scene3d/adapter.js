@@ -284,11 +284,25 @@ export function buildTerrainAtlasCanvas(terrainTextures) {
  * are row-major. Without this transpose, Holtburg's water + road
  * network render diagonal-mirrored.
  *
- * Output layout: RGBA8, 9×9, `R = code, G = 0, B = 0, A = 255`. We
- * pack the code into the R channel and force A=255 (canvas → GL
- * upload premultiplies alpha; A=0 silently zeros R).
+ * Output layout: RGBA8, 9×9, `R = terrainCode, G = roadCode * 64,
+ * B = 0, A = 255`. R holds the terrain palette index (0–31). G holds
+ * the 2-bit AC road code (0–3) scaled by 64 so even with the texture
+ * sampled NearestFilter the value reads cleanly (0, 64, 128, 192) and
+ * a `> 0.5` test in the shader picks "any road" reliably regardless
+ * of byte rounding. retail roads are encoded as bits 0–1 of the
+ * per-vertex 16-bit surface word (see crates/holtburger-dat/src/
+ * landblock.rs); the wasm `roadCodes` getter already shifts/masks
+ * those out. This lets the terrain shader bilinear-blend a road
+ * texture over the base terrain at vertices where road != 0 — same
+ * physics-painting model retail used, no separate overlay mesh.
+ *
+ * `roadCodes` is optional for back-compat — when omitted G=0 so the
+ * shader's road bilinear weight stays 0 and behaviour matches the
+ * old terrain-only path. Same column-major source layout as
+ * terrainCodes (verified by `wasmMesh.roadCodes` against
+ * WB.Terminal `get-terrain-data`).
  */
-export function buildVertexTypesDataTexture(terrainCodes) {
+export function buildVertexTypesDataTexture(terrainCodes, roadCodes) {
   // Always copy: this byte block lives on for the lifetime of the
   // texture, well past wasm-memory growth.
   const bytes = new Uint8Array(9 * 9 * 4);
@@ -298,7 +312,7 @@ export function buildVertexTypesDataTexture(terrainCodes) {
       // Column-major source: terrainCodes[col * 9 + row].
       const src = col * 9 + row;
       bytes[dst + 0] = terrainCodes[src];
-      bytes[dst + 1] = 0;
+      bytes[dst + 1] = roadCodes ? roadCodes[src] * 64 : 0;
       bytes[dst + 2] = 0;
       bytes[dst + 3] = 255;
     }
