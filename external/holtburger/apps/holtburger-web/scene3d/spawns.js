@@ -66,6 +66,62 @@ let _wcidToSetupLoadFailed = false;    // sticky flag — set on any error
 const _spawnsInjectedLbs = new Set();
 const _spawnsInjectInFlight = new Set();
 
+// `?spawns=` URL flag — controls whether the pre-baked synthetic
+// JSONL spawn records get injected. Background:
+//
+// Synthetic spawns are loaded from `<dist>/spawns/0xXXXX.spawns.jsonl`
+// via wasm `fetch_landblock_spawns`. They give the renderer a populated
+// scene WITHOUT a live ACE wsbridge connection — pre-baked retail
+// presence for offline preview. Each record dispatches through the
+// SAME `__scene3dEntityHook` an ACE wire feed uses, so when a live
+// session IS connected, BOTH the synthetic injection AND the wire's
+// KIND_SPAWN messages add the same entity (with different GUIDs —
+// synthetic = FNV hash with high bit forced on; wire = ACE server-
+// assigned), bypassing EntityManager's guid-based idempotency check.
+// Result: every retail spawn appears twice at the same XYZ.
+//
+// Modes:
+//   "auto"  (default) — synthetic injected ONLY when `window.__sessionHandle`
+//                       is unset. Wire-active sessions skip synthetic.
+//                       Pre-login or offline pages still get the synthetic
+//                       offline-preview behaviour.
+//   "force"           — always inject synthetic regardless of session.
+//                       Legacy behaviour; use for testing the baked data
+//                       directly when you know the session won't double-spawn
+//                       (e.g. an ACE that's been wiped of spawns).
+//   "off"             — never inject synthetic. Wire-only.
+function readSpawnsMode() {
+  if (typeof window === "undefined") return "auto";
+  try {
+    const m = new URLSearchParams(window.location.search).get("spawns");
+    if (m === "force" || m === "auto" || m === "off") return m;
+  } catch (_) { /* noop */ }
+  return "auto";
+}
+const SPAWNS_MODE = readSpawnsMode();
+let _spawnsModeLogged = false;
+function logSpawnsModeOnce(sessionPresent) {
+  if (_spawnsModeLogged) return;
+  _spawnsModeLogged = true;
+  // eslint-disable-next-line no-console
+  console.log(
+    `[scene3d.spawns] mode=${SPAWNS_MODE}, sessionHandle=${sessionPresent ? "present" : "absent"} ` +
+      `→ synthetic injection ${(() => {
+        if (SPAWNS_MODE === "off") return "DISABLED (?spawns=off)";
+        if (SPAWNS_MODE === "force") return "ENABLED (?spawns=force)";
+        return sessionPresent
+          ? "SKIPPED (live session — wire feeds spawns; use ?spawns=force to override)"
+          : "ENABLED (no live session — synthetic provides offline-preview spawns)";
+      })()}`
+  );
+}
+function shouldInjectSynthetic() {
+  if (SPAWNS_MODE === "off") return false;
+  if (SPAWNS_MODE === "force") return true;
+  // auto
+  return typeof window === "undefined" || !window.__sessionHandle;
+}
+
 /**
  * Phase D.1 — fail-soft spawns base-URL init. Mirrors
  * `ensureSceneryInit` in statics.js. Called once per page on first
@@ -439,6 +495,16 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
       );
     }
     return null;
+  }
+
+  // `?spawns=` gate — skip synthetic when a live wire session is
+  // delivering the same entities (else every retail spawn renders
+  // twice with different GUIDs). See `readSpawnsMode` comment above.
+  const sessionPresent = typeof window !== "undefined" && !!window.__sessionHandle;
+  logSpawnsModeOnce(sessionPresent);
+  if (!shouldInjectSynthetic()) {
+    const skipKey = (((lbX & 0xff) << 24) | ((lbY & 0xff) << 16)) >>> 0;
+    return { lbKey: skipKey, modeGated: true, mode: SPAWNS_MODE };
   }
 
   const lbKey = (((lbX & 0xff) << 24) | ((lbY & 0xff) << 16)) >>> 0;
