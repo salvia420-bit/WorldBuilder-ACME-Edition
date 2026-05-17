@@ -943,56 +943,130 @@ export class EntityManager {
    * transition (false); remote players fire from the recv loop's
    * Z-velocity heuristic.
    *
-   * The retail jump pose (per user observation) is arms outstretched
-   * horizontally + legs slightly outstretched from walking. We don't
-   * have the SetupModel part-index conventions wired to address
-   * "right hand" / "left foot" specifically, so this is a
-   * vibe-coded approximation rather than a 1:1 reproduction:
+   * **Retail-ish per-part pose** for entities with the human
+   * SetupModel layout (>= 16 parts). Part-index map from community
+   * tools (parts[10/13] = upper arms, parts[1/5] = upper legs):
    *
-   *   - **Backward body tilt** (~12° on the X axis) — reads as
-   *     "leaping" / "launching upward". Applied as a quaternion
-   *     offset on `inst.root`, preserved across `setPose` calls via
-   *     `inst.airborneTilt` so position updates don't undo it.
-   *   - **Vertical stretch** (Z scale × 1.08) — squash-and-stretch
-   *     instinct from 2D animation; reads as "stretching upward in
-   *     mid-air".
+   *     0 ABDOMEN          17-20 TAIL_SEG1..4
+   *     1 LEFT_UPPER_LEG   21 HEAD_HAIR
+   *     2 LEFT_LOWER_LEG   22 HEAD_HELMET
+   *     3 LEFT_FOOT        23/24 SHOULDER_L/R
+   *     4 LEFT_TOE         25/26 KNEE_L/R
+   *     5 RIGHT_UPPER_LEG  27/28 ELBOW_L/R
+   *     6 RIGHT_LOWER_LEG  29-33 CLOAK_SEG1..5
+   *     7 RIGHT_FOOT
+   *     8 RIGHT_TOE
+   *     9 CHEST
+   *    10 LEFT_UPPER_ARM
+   *    11 LEFT_LOWER_ARM
+   *    12 LEFT_HAND
+   *    13 RIGHT_UPPER_ARM
+   *    14 RIGHT_LOWER_ARM
+   *    15 RIGHT_HAND
+   *    16 HEAD
    *
-   * Both effects clear on landing. Idempotent — re-applying when
-   * already airborne is a no-op (the tilt quat is identity-multiplied).
+   * Pose recipe:
+   *   - Upper arms (10, 13) rotated ±90° outward → arms horizontal
+   *   - Upper legs (1, 5) rotated ±15° outward → legs slightly spread
+   *   - Animation mixer paused so the walk-cycle doesn't fight our
+   *     rotations; resumed on landing
    *
-   * Future: when the SetupModel part-index map is wired (knowing
-   * which `parts[i]` is the right hand vs left foot etc.), this can
-   * upgrade to a real arms-out pose.
+   * Rotation axis is the part's local X — this is the best-guess
+   * forward-axis convention for AC's Z-up frame. If the in-game
+   * pose looks wrong (arms point forward/back instead of sideways),
+   * swap to Y or Z in the calls below and re-test. Easy to tune.
+   *
+   * Equipped gear is rendered via SetupModel part substitution
+   * (`fetch_entity_model_render`'s `model_changes` pairs), so a
+   * sword bound to parts[15] rotates with the right-hand rotation.
+   *
+   * Non-human entities (rats, golems, anything with < 16 parts)
+   * fall back to body-level tilt + stretch — same effect as before.
    */
   setAirborne(guid, airborne) {
     const inst = this.entityMap.get(guid >>> 0);
     if (!inst || !inst.root) return;
     const wantAirborne = !!airborne;
-    const currentlyAirborne = inst.airborneTilt != null;
+    const currentlyAirborne = !!inst._isAirborne;
     if (wantAirborne === currentlyAirborne) return; // idempotent
+    inst._isAirborne = wantAirborne;
+
+    const isHumanShape = inst.parts && inst.parts.length >= 16;
+
     if (wantAirborne) {
-      // Backward tilt around X axis (negative angle = lean back).
-      const tilt = new THREE.Quaternion().setFromAxisAngle(
-        new THREE.Vector3(1, 0, 0),
-        -Math.PI / 15, // ~12°
-      );
-      inst.airborneTilt = tilt;
-      // Apply immediately so stationary entities (no setPose stream)
-      // visibly tilt. Subsequent setPose calls multiply onto root
-      // and then re-apply via the stash.
-      inst.root.quaternion.multiply(tilt);
-      // Vertical stretch — Z is up in three.js scene space here
-      // (acQuatToThree's convention).
-      inst.root.scale.set(1.0, 1.0, 1.08);
-    } else {
-      // Undo the tilt by multiplying by its inverse.
-      if (inst.airborneTilt) {
-        const inv = inst.airborneTilt.clone().invert();
-        inst.root.quaternion.multiply(inv);
-        inst.airborneTilt = null;
+      if (isHumanShape) {
+        this._applyHumanJumpPose(inst);
+      } else {
+        this._applyGenericJumpPose(inst);
       }
-      inst.root.scale.set(1.0, 1.0, 1.0);
+    } else {
+      if (inst._jumpPoseStash) {
+        this._clearHumanJumpPose(inst);
+      } else if (inst.airborneTilt) {
+        this._clearGenericJumpPose(inst);
+      }
     }
+  }
+
+  /**
+   * Per-part jump pose for humanoid SetupModels. Stashes the
+   * pre-pose quaternions so landing can restore them; pauses the
+   * animation mixer so the walk-cycle doesn't fight our offsets.
+   */
+  _applyHumanJumpPose(inst) {
+    inst._jumpPoseStash = new Map();
+    const apply = (partIdx, axis, angle) => {
+      const p = inst.parts && inst.parts[partIdx];
+      if (!p) return;
+      inst._jumpPoseStash.set(partIdx, p.quaternion.clone());
+      const q = new THREE.Quaternion().setFromAxisAngle(axis, angle);
+      p.quaternion.multiply(q);
+    };
+    const X = new THREE.Vector3(1, 0, 0);
+    // Arms outstretched horizontally. Left negative, right positive
+    // (or vice versa — flip signs if the in-game pose looks mirrored).
+    apply(10, X, -Math.PI / 2); // LEFT_UPPER_ARM
+    apply(13, X, Math.PI / 2);  // RIGHT_UPPER_ARM
+    // Legs slightly outstretched (~15° from walking position).
+    apply(1, X, -Math.PI / 12); // LEFT_UPPER_LEG
+    apply(5, X, Math.PI / 12);  // RIGHT_UPPER_LEG
+    // Pause the mixer so the walk/run/idle clip doesn't overwrite
+    // our part quaternions on the next animation tick.
+    if (inst.currentAction) inst.currentAction.paused = true;
+  }
+
+  _clearHumanJumpPose(inst) {
+    if (!inst._jumpPoseStash) return;
+    for (const [partIdx, origQuat] of inst._jumpPoseStash) {
+      const p = inst.parts && inst.parts[partIdx];
+      if (p) p.quaternion.copy(origQuat);
+    }
+    inst._jumpPoseStash = null;
+    if (inst.currentAction) inst.currentAction.paused = false;
+  }
+
+  /**
+   * Body-level fallback for non-human entities. Same tilt + stretch
+   * the v1 used — reads as "leaping" without needing part-index
+   * knowledge.
+   */
+  _applyGenericJumpPose(inst) {
+    const tilt = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(1, 0, 0),
+      -Math.PI / 15, // ~12°
+    );
+    inst.airborneTilt = tilt;
+    inst.root.quaternion.multiply(tilt);
+    inst.root.scale.set(1.0, 1.0, 1.08);
+  }
+
+  _clearGenericJumpPose(inst) {
+    if (inst.airborneTilt) {
+      const inv = inst.airborneTilt.clone().invert();
+      inst.root.quaternion.multiply(inv);
+      inst.airborneTilt = null;
+    }
+    inst.root.scale.set(1.0, 1.0, 1.0);
   }
 
   /**
