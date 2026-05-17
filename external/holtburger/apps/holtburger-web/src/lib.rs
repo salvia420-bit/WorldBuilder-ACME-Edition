@@ -10807,15 +10807,19 @@ enum SessionCommand {
         turn: i8,
         run: bool,
     },
-    /// Player pressed the jump key (default: Space). Recv arm reads
-    /// the player's current Jump skill + a default burden + power=1.0,
-    /// computes `velocity_z` via the ACE
-    /// `MovementSystem.GetJumpHeight` cascade, stamps it onto
-    /// `world.player.vertical_velocity` (with `is_airborne = true`),
-    /// and sends a `GameAction::Jump` wire packet so ACE can validate
-    /// the airborne pose. No-op when already airborne (no
-    /// double-jump, matching ACE).
-    Jump,
+    /// Player pressed the jump key (default: Space). `power` is the
+    /// jump extent in `[0.0, 1.0]` — for retail-like variable-power
+    /// jumps the JS side maps `keydown→keyup` hold duration to
+    /// power on a ~500ms linear ramp (a guess; the exact retail
+    /// mapping isn't in `acclient.h` or ACE source). Recv arm reads
+    /// the player's current Jump skill + live burden, computes
+    /// `velocity_z` via the ACE `MovementSystem.GetJumpHeight`
+    /// cascade, stamps it onto `world.player.vertical_velocity` (with
+    /// `is_airborne = true`), deducts stamina, and sends a
+    /// `GameAction::Jump` wire packet so ACE can validate the
+    /// airborne pose. No-op when already airborne (no double-jump,
+    /// matching ACE).
+    Jump { power: f32 },
     /// Phase 4 step 3.6 — JS-driven physics tick. Fired by
     /// `requestAnimationFrame` from `index.html`'s drainEvents loop;
     /// the recv loop pulls the next `now` and calls
@@ -13037,15 +13041,25 @@ impl SessionHandle {
             })
     }
 
-    /// Player pressed the jump key. Routes through the recv loop so
-    /// the ballistic state stamp and the wire `GameAction::Jump`
-    /// packet are issued in a single serialized step. No-op when
-    /// already airborne (no double-jumps; ACE doesn't permit them).
+    /// Player pressed (and released) the jump key. `power` is in
+    /// `[0.0, 1.0]` — 1.0 for a full-charge jump, fractional for a
+    /// quick tap. JS-side hold tracking computes this from
+    /// keydown→keyup duration. Out-of-range values are clamped in
+    /// the recv arm; non-finite reject early here so the JS bug
+    /// surfaces cleanly.
+    ///
+    /// Routes through the recv loop so the ballistic state stamp,
+    /// stamina deduction, and wire `GameAction::Jump` packet are
+    /// issued in a single serialized step. No-op when already
+    /// airborne (no double-jumps; ACE doesn't permit them).
     #[wasm_bindgen(js_name = jump)]
-    pub fn jump(&self) -> Result<(), JsValue> {
+    pub fn jump(&self, power: f32) -> Result<(), JsValue> {
         use futures::channel::mpsc::TrySendError;
+        if !power.is_finite() {
+            return Err(JsValue::from_str("jump: power must be finite"));
+        }
         self.cmd_tx
-            .unbounded_send(SessionCommand::Jump)
+            .unbounded_send(SessionCommand::Jump { power })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("jump: cmd channel closed ({e})"))
             })
@@ -16596,7 +16610,7 @@ async fn recv_loop(
                             "[combat-mode] toggle: {current:?} → {target_mode:?}",
                         ));
                     }
-                    Some(SessionCommand::Jump) => {
+                    Some(SessionCommand::Jump { power }) => {
                         // Mirror ACE's jump pipeline:
                         //   1. Compute upward velocity via
                         //      MovementSystem.GetJumpHeight + sqrt(h*19.6)
@@ -16648,7 +16662,12 @@ async fn recv_loop(
                             .map(|s| s.current as u32)
                             .unwrap_or(100);
                         let burden = w.player_burden().unwrap_or(0.5);
-                        let power: f32 = 1.0;
+                        // Clamp the JS-supplied power to the wire-valid
+                        // range. ACE's HandleActionJump already clamps
+                        // server-side via `Math.Clamp(jump.Extent, 0, 1)`
+                        // but we mirror it client-side so the local
+                        // stamina deduction matches what ACE will compute.
+                        let power: f32 = power.clamp(0.0, 1.0);
                         // Stamina cost (ACE non-PK formula —
                         // `MovementSystem.JumpStaminaCost`). PK gate
                         // requires reading `PKTimerActive`, which we

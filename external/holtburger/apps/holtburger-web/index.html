@@ -5918,22 +5918,25 @@ void main() {
                 console.warn("[combat-mode] toggleCombatMode failed:", e);
               }
             }
-            // Jump — spacebar. ACE's GameAction::Jump (opcode 0xF61B).
-            // Wasm-side `handle.jump()` computes velocity via ACE's
-            // MovementSystem.GetJumpHeight formula, stamps ballistic
-            // state for local prediction, AND sends the wire packet so
-            // ACE validates the airborne pose. `ev.repeat` filters
-            // browser autorepeat — without it a held space would emit
-            // a stream of jump packets ACE rejects (no double-jumps).
-            // The wasm-side `is_airborne` gate is the canonical
-            // serializer; the repeat check just spares the cmd channel.
+            // Jump — spacebar. Variable-power model: keydown stashes
+            // a timestamp; keyup computes hold duration → power
+            // [0,1] and calls `handle.jump(power)`. `ev.repeat`
+            // filters browser autorepeat so the first-press
+            // timestamp wins. ACE's GameAction::Jump (opcode 0xF61B)
+            // accepts a 0–1 `extent` field; the JS→wasm side fills
+            // it from the computed power.
+            //
+            // Hold-to-power curve (UNKNOWN retail mapping —
+            // documented guess): `power = clamp(hold_ms / 500, 0, 1)`.
+            // A quick tap (≤25ms keypress) → power ≈ 0.05 → ACE
+            // height clamps to 0.35m (tiny hop). A 500ms hold →
+            // power = 1.0 → full skill-scaled height. Neither
+            // `acclient.h` (only `m_dragScrollJumpDistance` which is
+            // UI-side) nor ACE source documents the retail client's
+            // curve; this is a play-feel guess that can be retuned.
             if (ev.key === " " && handle && !ev.repeat) {
-              try {
-                handle.jump();
-                ev.preventDefault();
-              } catch (e) {
-                console.warn("[jump] handle.jump() failed:", e);
-              }
+              window.__jumpKeydownTs = performance.now();
+              ev.preventDefault();
             }
           });
           document.addEventListener("keyup", (ev) => {
@@ -5946,6 +5949,19 @@ void main() {
               keyState[k] = false;
             } else if (ev.key === "Shift") {
               keyState.shift = false;
+            } else if (ev.key === " " && handle && window.__jumpKeydownTs != null) {
+              // Variable-power jump release. See keydown handler for
+              // the curve rationale. Clear the timestamp regardless
+              // of whether the jump fires (handle.jump errors should
+              // not leave dangling state for the next press).
+              const holdMs = performance.now() - window.__jumpKeydownTs;
+              window.__jumpKeydownTs = null;
+              const power = Math.max(0, Math.min(1, holdMs / 500));
+              try {
+                handle.jump(power);
+              } catch (e) {
+                console.warn("[jump] handle.jump(power) failed:", e);
+              }
             }
           });
           // Clear keystate if the page loses focus mid-press — Chrome
@@ -5953,6 +5969,10 @@ void main() {
           // window blurs, which would leave the player walking forever.
           window.addEventListener("blur", () => {
             for (const k of Object.keys(keyState)) keyState[k] = false;
+            // Same rationale for the jump charge timestamp: a held
+            // space at blur shouldn't fire a stale jump when the
+            // window regains focus.
+            window.__jumpKeydownTs = null;
           });
 
           // ----- Virtual keypad wiring -----------------------------

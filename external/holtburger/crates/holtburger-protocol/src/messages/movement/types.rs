@@ -123,6 +123,37 @@ impl InterpretedMotionCommand {
     pub const SIDESTEP_RIGHT: Self = Self(0x000f);
     pub const SIDESTEP_LEFT: Self = Self(0x0010);
     pub const DEAD: Self = Self(0x0011);
+    /// Charging-up state while jump key is held. ACE
+    /// `MotionCommand.JumpCharging = 0x4000001d` — low 16 = `0x001d`.
+    /// Used by retail's variable-power jump (release sends a Jump
+    /// with extent scaled by hold duration). Not wired into our
+    /// outbound today — see [`Self::JUMP`].
+    pub const JUMP_CHARGING: Self = Self(0x001d);
+    /// One-shot jump release. ACE `MotionCommand.Jump = 0x2500003b` —
+    /// low 16 = `0x003b`. This is the transient motion the retail
+    /// client sends on jump release; ACE broadcasts an
+    /// `UpdateMotion(Invalid)` + `VectorUpdate` to surrounding
+    /// players so their animation rigs play the jump anim from the
+    /// MotionTable lookup (stance + Jump → clip).
+    ///
+    /// NOT WIRED INTO OUR OUTBOUND today. Reason: the existing
+    /// outbound motion path in `holtburger-core` is locomotion-
+    /// shaped (continuous forward/turn/strafe state), not transient
+    /// one-shot commands. Sending Jump via that path would require
+    /// either a new transient-motion channel or special-casing
+    /// inside the existing `MoveToState` / `UpdateMotion` builders
+    /// in `crates/holtburger-core/src/client/movement/`. The
+    /// `GameAction::Jump` wire packet (opcode `0xF61B`) we already
+    /// send carries the velocity, which is enough for ACE to apply
+    /// physics — the missing piece is the animation-replication
+    /// motion broadcast. Local player jump is currently visible via
+    /// the ballistic Z arc; rig animation is a follow-on.
+    pub const JUMP: Self = Self(0x003b);
+    /// Airborne pose. ACE `MotionCommand.Jumpup = 0x1000004b` —
+    /// low 16 = `0x004b`. Not yet known whether this is held during
+    /// the entire airborne arc or only sent at peak; would need
+    /// in-game packet capture against retail to confirm.
+    pub const JUMP_UP: Self = Self(0x004b);
 
     pub fn raw(self) -> u16 {
         self.0
