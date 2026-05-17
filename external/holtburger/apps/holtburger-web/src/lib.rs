@@ -10964,6 +10964,23 @@ enum SessionCommand {
         attack_height: holtburger_protocol::messages::AttackHeight,
         accuracy_level: f32,
     },
+    /// Phase F (combat-magic): JS-side requested a targeted spell-cast.
+    /// `target_guid` is the entity the spell lands on; `spell_id` is
+    /// the AC spell-table primary key. Sends
+    /// `GameAction::CastTargetedSpell` (sub-opcode 0x004A). ACE
+    /// validates mana + components + line-of-sight + range
+    /// server-side; failures surface via the usual chat / WeenieError
+    /// channels.
+    CastTargetedSpell {
+        target_guid: u32,
+        spell_id: u32,
+    },
+    /// Phase F (combat-magic): JS-side requested an untargeted
+    /// spell-cast (self-buffs, lifestone tie, recall, portal summons).
+    /// Sends `GameAction::CastUntargetedSpell` (sub-opcode 0x0048).
+    CastUntargetedSpell {
+        spell_id: u32,
+    },
 }
 
 /// Tagged-payload envelope for events the wasm bundle drains to JS via
@@ -13229,6 +13246,45 @@ impl SessionHandle {
             })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("missileAttack: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Phase F (combat-magic): cast `spell_id` on the entity identified
+    /// by `target_guid`. Sends `GameAction::CastTargetedSpell`
+    /// (sub-opcode 0x004A). ACE validates mana / components / range /
+    /// LOS / stance server-side and broadcasts the appropriate
+    /// failure via WeenieError if the cast can't proceed.
+    #[wasm_bindgen(js_name = castTargetedSpell)]
+    pub fn cast_targeted_spell(
+        &self,
+        target_guid: u32,
+        spell_id: u32,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::CastTargetedSpell {
+                target_guid,
+                spell_id,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!(
+                    "castTargetedSpell: cmd channel closed ({e})"
+                ))
+            })
+    }
+
+    /// Phase F (combat-magic): cast `spell_id` without a target
+    /// (self-buffs, lifestone tie, recall, summon-portal). Sends
+    /// `GameAction::CastUntargetedSpell` (sub-opcode 0x0048).
+    #[wasm_bindgen(js_name = castUntargetedSpell)]
+    pub fn cast_untargeted_spell(&self, spell_id: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::CastUntargetedSpell { spell_id })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!(
+                    "castUntargetedSpell: cmd channel closed ({e})"
+                ))
             })
     }
 
@@ -16922,6 +16978,69 @@ async fn recv_loop(
                         }
                         console_log_str(&format!(
                             "[combat-mode] toggle: {current:?} → {target_mode:?}",
+                        ));
+                    }
+                    Some(SessionCommand::CastTargetedSpell {
+                        target_guid,
+                        spell_id,
+                    }) => {
+                        // Phase F (combat-magic): build and send a
+                        // GameAction::CastTargetedSpell. ACE validates
+                        // everything server-side (mana cost, spell
+                        // known, LOS, range, stance, components).
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            CastTargetedSpellActionData, GameAction,
+                        };
+                        let action = GameAction::CastTargetedSpell(Box::new(
+                            CastTargetedSpellActionData {
+                                target: Guid(target_guid),
+                                spell_id,
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(CastTargetedSpell): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "cast_targeted_spell: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[cast_spell] target=0x{target_guid:08X} spell_id={spell_id}",
+                        ));
+                    }
+                    Some(SessionCommand::CastUntargetedSpell { spell_id }) => {
+                        use holtburger_protocol::messages::{
+                            CastUntargetedSpellActionData, GameAction,
+                        };
+                        let action = GameAction::CastUntargetedSpell(Box::new(
+                            CastUntargetedSpellActionData { spell_id },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(CastUntargetedSpell): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "cast_untargeted_spell: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[cast_spell] untargeted spell_id={spell_id}",
                         ));
                     }
                     Some(SessionCommand::TargetedMissileAttack {

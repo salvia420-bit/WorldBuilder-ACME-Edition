@@ -33,6 +33,15 @@ export function createClient(sessionHandle) {
     missileAttack(targetGuid, attackHeight = 2, accuracyLevel = 1.0) {
       sessionHandle.missileAttack(targetGuid, attackHeight, accuracyLevel);
     },
+    castSpell(spellId, targetGuid) {
+      // null/undefined targetGuid → untargeted (self-buff / recall /
+      // lifestone tie / portal-summon spells).
+      if (targetGuid == null) {
+        sessionHandle.castUntargetedSpell(spellId);
+      } else {
+        sessionHandle.castTargetedSpell(targetGuid, spellId);
+      }
+    },
     get pose() {
       return sessionHandle.getLocalPlayerPose();
     },

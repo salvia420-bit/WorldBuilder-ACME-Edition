@@ -4,7 +4,28 @@ const DEFAULTS = {
   attackHeight: 2, // MEDIUM
   powerLevel: 1.0,
   autoRepeat: true,
+  armedSpellId: 0, // 0 = no spell armed
 };
+
+// Phase F — starter spell list. Magic stance (0x0049, derived by ACE
+// when the player is wielding a wand / orb / magic staff and toggles
+// into combat mode) shows these in the spell picker. IDs verified
+// against external/LSD-Partial-2025-02-23_16-15/spells.json. Untargeted
+// spells (self-buffs, recall, lifestone tie, portal summons) fire
+// immediately from the picker; targeted spells arm for the next
+// viewport click.
+const STARTER_SPELLS = [
+  { id: 2,    name: "Strength Self I",    school: "Creature",  untargeted: true },
+  { id: 1349, name: "Endurance Self I",   school: "Creature",  untargeted: true },
+  { id: 1373, name: "Coordination Self I",school: "Creature",  untargeted: true },
+  { id: 1397, name: "Quickness Self I",   school: "Creature",  untargeted: true },
+  { id: 1421, name: "Focus Self I",       school: "Creature",  untargeted: true },
+  { id: 6,    name: "Heal Self I",        school: "Life",      untargeted: true },
+  { id: 209,  name: "Mana Renewal Other IV", school: "Life",   untargeted: false },
+  { id: 2023, name: "Recall the Sanctuary",  school: "Item",   untargeted: true },
+  { id: 2644, name: "Lifestone Tie",      school: "Item",      untargeted: true },
+  { id: 157,  name: "Summon Portal I",    school: "Item",      untargeted: true },
+];
 
 function loadState() {
   try {
@@ -30,6 +51,7 @@ function syncWindowState(state) {
     attackHeight: state.attackHeight,
     powerLevel: state.powerLevel,
     autoRepeat: state.autoRepeat,
+    armedSpellId: state.armedSpellId,
   };
 }
 
@@ -121,6 +143,64 @@ function ensureStyles() {
       color: rgba(255, 255, 255, 0.35);
       font-style: italic;
     }
+    .hb-cb-spells {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      margin-bottom: 8px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .hb-cb-spell {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 6px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.8);
+      font-family: inherit;
+      text-align: left;
+    }
+    .hb-cb-spell:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+    .hb-cb-spell.armed {
+      background: rgba(160, 110, 255, 0.4);
+      border-color: rgba(180, 130, 255, 0.7);
+      color: #fff;
+    }
+    .hb-cb-spell-action {
+      flex: 0 0 38px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      font-size: 9px;
+      color: rgba(255, 255, 255, 0.55);
+    }
+    .hb-cb-spell.armed .hb-cb-spell-action {
+      color: #fff;
+    }
+    .hb-cb-spell-name {
+      flex: 1;
+    }
+    .hb-cb-spell-tag {
+      flex: 0 0 auto;
+      font-size: 9px;
+      padding: 1px 5px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 3px;
+      color: rgba(255, 255, 255, 0.45);
+    }
+    .hb-cb-magic-hint {
+      margin-bottom: 8px;
+      font-size: 11px;
+      color: rgba(180, 130, 255, 0.85);
+    }
   `;
   document.head.appendChild(style);
 }
@@ -140,6 +220,15 @@ function currentStanceIsRanged() {
     return false;
   }
 }
+function currentStanceIsMagic() {
+  const fn = typeof window !== "undefined" ? window.__getCurrentStanceLow : null;
+  if (typeof fn !== "function") return false;
+  try {
+    return fn() === 0x0049; // Magic stance (wand / orb / magic staff + combat mode)
+  } catch {
+    return false;
+  }
+}
 
 // Seed window.__combatBarState at import time so picking.js reads
 // the persisted values (or DEFAULTS on a fresh session) even when
@@ -148,20 +237,11 @@ if (typeof window !== "undefined") {
   syncWindowState(loadState());
 }
 
-export const manifest = {
-  id: "combat-bar",
-  name: "Combat Bar",
-  icon: "⚒",
-  version: "0.0.1",
-  description: "Attack height + power + auto-repeat for melee combat",
-};
+// ── Render helpers ──────────────────────────────────────────────
+// Each render fn populates `bodyEl` with its stance-specific UI;
+// they share the damage-feed code at the bottom of activate().
 
-export function activate(bodyEl, ctx) {
-  ensureStyles();
-  const state = loadState();
-  syncWindowState(state);
-  const client = ctx?.client ?? window.__pluginClient ?? null;
-
+function renderAttackControls(bodyEl, state) {
   // Height picker
   const heightRow = document.createElement("div");
   heightRow.className = "hb-cb-row";
@@ -244,7 +324,104 @@ export function activate(bodyEl, ctx) {
   hint.textContent =
     "Settings apply to your next click-to-attack. ACE owns the auto-repeat loop server-side.";
   bodyEl.appendChild(hint);
+}
 
+function renderSpellPicker(bodyEl, state, client) {
+  // Banner naming the stance — magic combat with wand/orb/staff equipped.
+  const hint = document.createElement("div");
+  hint.className = "hb-cb-magic-hint";
+  hint.textContent =
+    "Magic stance — click a self-spell to cast on yourself, or arm a target spell then click an enemy.";
+  bodyEl.appendChild(hint);
+
+  const list = document.createElement("div");
+  list.className = "hb-cb-spells";
+  bodyEl.appendChild(list);
+
+  const rows = new Map();
+
+  function setArmed(spellId) {
+    state.armedSpellId = spellId;
+    saveState(state);
+    syncWindowState(state);
+    for (const [id, row] of rows) {
+      row.classList.toggle("armed", id === spellId && spellId !== 0);
+    }
+  }
+
+  for (const spell of STARTER_SPELLS) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "hb-cb-spell";
+    row.dataset.spellId = String(spell.id);
+    if (state.armedSpellId === spell.id && !spell.untargeted) {
+      row.classList.add("armed");
+    }
+
+    const action = document.createElement("span");
+    action.className = "hb-cb-spell-action";
+    action.textContent = spell.untargeted ? "Cast" : "Arm";
+    row.appendChild(action);
+
+    const name = document.createElement("span");
+    name.className = "hb-cb-spell-name";
+    name.textContent = spell.name;
+    row.appendChild(name);
+
+    const tag = document.createElement("span");
+    tag.className = "hb-cb-spell-tag";
+    tag.textContent = spell.untargeted ? "self" : spell.school;
+    row.appendChild(tag);
+
+    row.addEventListener("click", () => {
+      if (spell.untargeted) {
+        // Fire immediately through the facade. The picker doesn't
+        // "arm" untargeted spells since there's no target to wait
+        // for; clicking IS the cast.
+        try {
+          if (client?.player?.castSpell) {
+            client.player.castSpell(spell.id, null);
+          }
+        } catch (e) {
+          console.warn(`[combat-bar] cast(${spell.id}) failed: ${e?.message ?? e}`);
+        }
+      } else {
+        // Targeted spell — toggle arm state. The next viewport click
+        // in magic stance fires the cast against the clicked entity
+        // (picking.js reads window.__combatBarState.armedSpellId).
+        setArmed(state.armedSpellId === spell.id ? 0 : spell.id);
+      }
+    });
+
+    rows.set(spell.id, row);
+    list.appendChild(row);
+  }
+}
+
+export const manifest = {
+  id: "combat-bar",
+  name: "Combat Bar",
+  icon: "⚒",
+  version: "0.0.1",
+  description: "Attack settings + spell picker (stance-aware)",
+};
+
+export function activate(bodyEl, ctx) {
+  ensureStyles();
+  const state = loadState();
+  syncWindowState(state);
+  const client = ctx?.client ?? window.__pluginClient ?? null;
+
+  // Phase F — branch on local combat stance. Magic stance (wand / orb
+  // / magic staff in hand + combat mode) shows a spell picker;
+  // melee / missile / NonCombat show the attack-controls row.
+  if (currentStanceIsMagic()) {
+    renderSpellPicker(bodyEl, state, client);
+  } else {
+    renderAttackControls(bodyEl, state);
+  }
+
+  // ── Damage feed (shared across all stances) ──────────────────────
   // Live damage feed — subscribes to the facade combat events and
   // prepends the last few lines. Skipped gracefully when the facade
   // isn't available yet (pre-login).

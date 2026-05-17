@@ -944,6 +944,9 @@
       function isInRangedStance() {
         return RANGED_STANCES.has(currentStanceLow);
       }
+      function isInMagicStance() {
+        return currentStanceLow === 0x0049; // Magic
+      }
       function getCurrentStanceLow() {
         return currentStanceLow;
       }
@@ -5202,6 +5205,7 @@ void main() {
               sessionHandle: window.__sessionHandle,
               isInMeleeStance,
               isInRangedStance,
+              isInMagicStance,
               getLocalPlayerGuid,
             });
           }

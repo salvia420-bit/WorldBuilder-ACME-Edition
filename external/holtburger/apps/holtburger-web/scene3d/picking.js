@@ -9,6 +9,7 @@ export function setupClickPicking({
   sessionHandle,
   isInMeleeStance,
   isInRangedStance,
+  isInMagicStance,
   getLocalPlayerGuid,
 }) {
   if (!canvas || !liveScene3d || !sessionHandle) {
@@ -76,7 +77,19 @@ export function setupClickPicking({
           ? cb.powerLevel
           : ATTACK_POWER_FULL;
 
-      if (isInRangedStance?.() && typeof sessionHandle.missileAttack === "function") {
+      if (isInMagicStance?.() && typeof sessionHandle.castTargetedSpell === "function") {
+        // Phase F — magic stance + armed targeted spell → cast on the
+        // clicked entity. Untargeted self-spells fire directly from
+        // the combat-bar plugin (no viewport click needed) so we only
+        // act here when there's a spell armed via the picker.
+        const spellId =
+          cb && typeof cb.armedSpellId === "number" && cb.armedSpellId > 0
+            ? cb.armedSpellId
+            : 0;
+        if (spellId !== 0) {
+          sessionHandle.castTargetedSpell(guid, spellId);
+        }
+      } else if (isInRangedStance?.() && typeof sessionHandle.missileAttack === "function") {
         sessionHandle.missileAttack(guid, height, slider);
         // No swing pose on ranged — retail showed a draw/release on the
         // bow but our vibe-pose only animates the right arm forward,
