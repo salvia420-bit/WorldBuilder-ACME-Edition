@@ -1009,64 +1009,169 @@ export class EntityManager {
   }
 
   /**
-   * Per-part jump pose for humanoid SetupModels. Stashes the
-   * pre-pose quaternions so landing can restore them; pauses the
-   * animation mixer so the walk-cycle doesn't fight our offsets.
+   * Per-part jump pose for humanoid SetupModels. Sets up a 200ms
+   * slerp tween from current pose → outstretched pose; the per-frame
+   * `_tickJumpPoseTween` in `tick(dt)` advances it. The animation
+   * mixer is paused at tween-complete (not at tween-start) so the
+   * limbs ease into the airborne pose smoothly instead of snapping.
    */
   _applyHumanJumpPose(inst) {
-    inst._jumpPoseStash = new Map();
-    const apply = (partIdx, axis, angle) => {
-      const p = inst.parts && inst.parts[partIdx];
-      if (!p) return;
-      inst._jumpPoseStash.set(partIdx, p.quaternion.clone());
-      const q = new THREE.Quaternion().setFromAxisAngle(axis, angle);
-      p.quaternion.multiply(q);
-    };
     const X = new THREE.Vector3(1, 0, 0);
-    // Arms outstretched horizontally. Left negative, right positive
-    // (or vice versa — flip signs if the in-game pose looks mirrored).
-    apply(10, X, -Math.PI / 2); // LEFT_UPPER_ARM
-    apply(13, X, Math.PI / 2);  // RIGHT_UPPER_ARM
-    // Legs slightly outstretched (~15° from walking position).
-    apply(1, X, -Math.PI / 12); // LEFT_UPPER_LEG
-    apply(5, X, Math.PI / 12);  // RIGHT_UPPER_LEG
-    // Pause the mixer so the walk/run/idle clip doesn't overwrite
-    // our part quaternions on the next animation tick.
-    if (inst.currentAction) inst.currentAction.paused = true;
+    const HUMAN_AIRBORNE_OFFSETS = [
+      // [partIndex, axis, angle]
+      [10, X, -Math.PI / 2],  // LEFT_UPPER_ARM   — horizontal
+      [13, X, Math.PI / 2],   // RIGHT_UPPER_ARM  — horizontal
+      [1,  X, -Math.PI / 12], // LEFT_UPPER_LEG   — slight out
+      [5,  X, Math.PI / 12],  // RIGHT_UPPER_LEG  — slight out
+    ];
+    const from = new Map();
+    const to = new Map();
+    for (const [partIdx, axis, angle] of HUMAN_AIRBORNE_OFFSETS) {
+      const p = inst.parts && inst.parts[partIdx];
+      if (!p) continue;
+      const orig = p.quaternion.clone();
+      from.set(partIdx, orig);
+      const offset = new THREE.Quaternion().setFromAxisAngle(axis, angle);
+      to.set(partIdx, orig.clone().multiply(offset));
+    }
+    // Stash the pre-airborne quaternions so landing can tween back
+    // to them (and so a paranoid mixer-unpause restores to a known
+    // frame instead of whatever clip-time happens to be).
+    inst._jumpPoseStash = from;
+    inst._jumpPoseTween = {
+      startMs: performance.now(),
+      durationMs: 200,
+      from,
+      to,
+      isLanding: false,
+      kind: "human",
+    };
   }
 
   _clearHumanJumpPose(inst) {
     if (!inst._jumpPoseStash) return;
-    for (const [partIdx, origQuat] of inst._jumpPoseStash) {
+    // Reverse tween: from current (possibly mid-arc-pose) → stashed
+    // pre-airborne quaternions. `_jumpPoseStash` doubles as the
+    // landing target.
+    const from = new Map();
+    for (const [partIdx, _origQ] of inst._jumpPoseStash) {
       const p = inst.parts && inst.parts[partIdx];
-      if (p) p.quaternion.copy(origQuat);
+      if (p) from.set(partIdx, p.quaternion.clone());
     }
-    inst._jumpPoseStash = null;
-    if (inst.currentAction) inst.currentAction.paused = false;
+    inst._jumpPoseTween = {
+      startMs: performance.now(),
+      durationMs: 200,
+      from,
+      to: inst._jumpPoseStash,
+      isLanding: true,
+      kind: "human",
+    };
+    // `_jumpPoseStash` cleared and mixer resumed at tween-complete
+    // in `_tickJumpPoseTween`, not here.
   }
 
   /**
-   * Body-level fallback for non-human entities. Same tilt + stretch
-   * the v1 used — reads as "leaping" without needing part-index
-   * knowledge.
+   * Body-level fallback for non-human entities. Same shape as the
+   * human tween (slerps root.quaternion offset + lerps root.scale.z)
+   * so the per-frame tick can handle both paths uniformly.
    */
   _applyGenericJumpPose(inst) {
     const tilt = new THREE.Quaternion().setFromAxisAngle(
       new THREE.Vector3(1, 0, 0),
       -Math.PI / 15, // ~12°
     );
-    inst.airborneTilt = tilt;
-    inst.root.quaternion.multiply(tilt);
-    inst.root.scale.set(1.0, 1.0, 1.08);
+    inst._jumpPoseTween = {
+      startMs: performance.now(),
+      durationMs: 200,
+      fromTilt: new THREE.Quaternion(), // identity
+      toTilt: tilt,
+      fromScale: 1.0,
+      toScale: 1.08,
+      isLanding: false,
+      kind: "generic",
+    };
   }
 
   _clearGenericJumpPose(inst) {
-    if (inst.airborneTilt) {
-      const inv = inst.airborneTilt.clone().invert();
-      inst.root.quaternion.multiply(inv);
-      inst.airborneTilt = null;
+    // Reverse: tween back to identity tilt + scale 1.0.
+    inst._jumpPoseTween = {
+      startMs: performance.now(),
+      durationMs: 200,
+      fromTilt: inst.airborneTilt
+        ? inst.airborneTilt.clone()
+        : new THREE.Quaternion(),
+      toTilt: new THREE.Quaternion(), // identity
+      fromScale: inst.root.scale.z,
+      toScale: 1.0,
+      isLanding: true,
+      kind: "generic",
+    };
+  }
+
+  /**
+   * Per-frame advance of the jump-pose tween. Called from `tick`
+   * after `mixer.update` so our slerp wins for the locked parts.
+   * Ease-out cubic on the human path (snaps quickly out of walking
+   * pose, settles into airborne); same easing on generic for
+   * consistency.
+   */
+  _tickJumpPoseTween(inst, nowMs) {
+    const tween = inst._jumpPoseTween;
+    if (!tween) return;
+    const t = (nowMs - tween.startMs) / tween.durationMs;
+    const clampedT = Math.max(0, Math.min(1, t));
+    // Ease-out cubic: 1 - (1-t)^3. Snappier than linear, gentler
+    // than ease-out quintic.
+    const eased = 1 - (1 - clampedT) * (1 - clampedT) * (1 - clampedT);
+
+    if (tween.kind === "human") {
+      for (const [partIdx, fromQ] of tween.from) {
+        const toQ = tween.to.get(partIdx);
+        if (!toQ) continue;
+        const p = inst.parts && inst.parts[partIdx];
+        if (p) p.quaternion.slerpQuaternions(fromQ, toQ, eased);
+      }
+    } else if (tween.kind === "generic") {
+      // Tilt: slerp identity quat ↔ tilt quat, multiply into root.
+      // We re-derive root.quaternion from the position-frame quat
+      // every setPose call, so apply the tween every tick.
+      const tweenQ = new THREE.Quaternion().slerpQuaternions(
+        tween.fromTilt,
+        tween.toTilt,
+        eased,
+      );
+      // Store as airborneTilt so setPose can re-apply on position
+      // updates (read by `EntityInstance.setPose`).
+      inst.airborneTilt = tweenQ.equals(new THREE.Quaternion())
+        ? null
+        : tweenQ;
+      if (inst.airborneTilt) {
+        inst.root.quaternion.multiply(tweenQ);
+      }
+      // Scale: simple lerp.
+      const scaleZ = tween.fromScale + (tween.toScale - tween.fromScale) * eased;
+      inst.root.scale.set(1.0, 1.0, scaleZ);
     }
-    inst.root.scale.set(1.0, 1.0, 1.0);
+
+    if (clampedT >= 1) {
+      if (tween.isLanding) {
+        if (tween.kind === "human") {
+          inst._jumpPoseStash = null;
+          if (inst.currentAction) inst.currentAction.paused = false;
+        } else {
+          inst.airborneTilt = null;
+        }
+      } else {
+        // Tween-in complete. Lock the mixer for human path so the
+        // walk-cycle doesn't drift the parts while airborne.
+        if (tween.kind === "human") {
+          if (inst.currentAction) inst.currentAction.paused = true;
+        } else {
+          inst.airborneTilt = tween.toTilt.clone();
+        }
+      }
+      inst._jumpPoseTween = null;
+    }
   }
 
   /**
@@ -1666,6 +1771,24 @@ export class EntityManager {
             `[entities/task-E] hook tick failed for entity 0x${inst.guid.toString(16)}:`,
             e
           );
+        }
+      }
+      // Jump-pose tween advance. Runs AFTER mixer.update so our
+      // per-part slerp wins on the locked-out arm/leg quaternions
+      // for the duration of the airborne tween. No-op when no
+      // tween is active.
+      if (inst._jumpPoseTween) {
+        try {
+          this._tickJumpPoseTween(inst, performance.now());
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          if (!this._jumpTweenWarned) {
+            this._jumpTweenWarned = true;
+            console.warn(
+              `[entities/jump-tween] tick failed for entity 0x${inst.guid.toString(16)}:`,
+              e
+            );
+          }
         }
       }
     }
