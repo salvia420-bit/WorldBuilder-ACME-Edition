@@ -30,6 +30,9 @@ export function createClient(sessionHandle) {
     attack(targetGuid, attackHeight = 2, powerLevel = 1.0) {
       sessionHandle.attack(targetGuid, attackHeight, powerLevel);
     },
+    missileAttack(targetGuid, attackHeight = 2, accuracyLevel = 1.0) {
+      sessionHandle.missileAttack(targetGuid, attackHeight, accuracyLevel);
+    },
     get pose() {
       return sessionHandle.getLocalPlayerPose();
     },

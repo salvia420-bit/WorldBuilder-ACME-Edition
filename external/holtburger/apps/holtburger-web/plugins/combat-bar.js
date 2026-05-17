@@ -98,8 +98,47 @@ function ensureStyles() {
       margin-top: 6px;
       line-height: 1.4;
     }
+    .hb-cb-feed {
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255, 255, 255, 0.12);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      font-size: 11px;
+      line-height: 1.35;
+      max-height: 90px;
+      overflow-y: auto;
+    }
+    .hb-cb-feed-line {
+      color: rgba(255, 255, 255, 0.65);
+      font-variant-numeric: tabular-nums;
+    }
+    .hb-cb-feed-line.hb-cb-feed-hit { color: rgba(255, 200, 120, 0.9); }
+    .hb-cb-feed-line.hb-cb-feed-taken { color: rgba(255, 130, 130, 0.9); }
+    .hb-cb-feed-line.hb-cb-feed-miss { color: rgba(180, 180, 180, 0.7); font-style: italic; }
+    .hb-cb-feed-empty {
+      color: rgba(255, 255, 255, 0.35);
+      font-style: italic;
+    }
   `;
   document.head.appendChild(style);
+}
+
+// Stance enum values that mean "ranged combat" — used to flip the
+// slider label from Power → Accuracy. Mirrors RANGED_STANCES in
+// index.html.
+const RANGED_STANCES = new Set([
+  0x003f, 0x0041, 0x0043, 0x0047, 0x00e8, 0x00e9, 0x013b, 0x013c,
+]);
+function currentStanceIsRanged() {
+  const fn = typeof window !== "undefined" ? window.__getCurrentStanceLow : null;
+  if (typeof fn !== "function") return false;
+  try {
+    return RANGED_STANCES.has(fn());
+  } catch {
+    return false;
+  }
 }
 
 // Seed window.__combatBarState at import time so picking.js reads
@@ -117,10 +156,11 @@ export const manifest = {
   description: "Attack height + power + auto-repeat for melee combat",
 };
 
-export function activate(bodyEl) {
+export function activate(bodyEl, ctx) {
   ensureStyles();
   const state = loadState();
   syncWindowState(state);
+  const client = ctx?.client ?? window.__pluginClient ?? null;
 
   // Height picker
   const heightRow = document.createElement("div");
@@ -157,11 +197,11 @@ export function activate(bodyEl) {
   heightRow.appendChild(heightGroup);
   bodyEl.appendChild(heightRow);
 
-  // Power slider
+  // Power / Accuracy slider — label flips based on local combat stance.
   const powerRow = document.createElement("div");
   powerRow.className = "hb-cb-row hb-cb-power-row";
   const powerLabel = document.createElement("label");
-  powerLabel.textContent = "Power";
+  powerLabel.textContent = currentStanceIsRanged() ? "Accuracy" : "Power";
   powerRow.appendChild(powerLabel);
   const powerSlider = document.createElement("input");
   powerSlider.type = "range";
@@ -205,8 +245,72 @@ export function activate(bodyEl) {
     "Settings apply to your next click-to-attack. ACE owns the auto-repeat loop server-side.";
   bodyEl.appendChild(hint);
 
-  // No teardown needed — DOM is cleaned by the bar when the panel
-  // closes. Return undefined (the bar's openPanel only calls a
-  // returned function when it's a function).
-  return undefined;
+  // Live damage feed — subscribes to the facade combat events and
+  // prepends the last few lines. Skipped gracefully when the facade
+  // isn't available yet (pre-login).
+  const feedEl = document.createElement("div");
+  feedEl.className = "hb-cb-feed";
+  const feedEmpty = document.createElement("div");
+  feedEmpty.className = "hb-cb-feed-empty";
+  feedEmpty.textContent =
+    client ? "Combat feed — waiting for first hit…" : "Login to start the combat feed.";
+  feedEl.appendChild(feedEmpty);
+  bodyEl.appendChild(feedEl);
+
+  const FEED_LIMIT = 5;
+  const lines = [];
+  function pushLine(text, cls) {
+    if (feedEmpty.parentNode) feedEmpty.remove();
+    const line = document.createElement("div");
+    line.className = `hb-cb-feed-line ${cls}`;
+    line.textContent = text;
+    feedEl.insertBefore(line, feedEl.firstChild);
+    lines.unshift(line);
+    while (lines.length > FEED_LIMIT) {
+      const old = lines.pop();
+      if (old?.parentNode) old.remove();
+    }
+  }
+
+  const subs = [];
+  if (client?.events?.on) {
+    const onDealt = (ev) => {
+      const d = ev.detail ?? {};
+      const crit = d.criticalHit ? " (crit)" : "";
+      pushLine(
+        `→ ${d.defenderName ?? "?"}  ${d.damage ?? 0} ${d.damageType ?? ""}${crit}`,
+        "hb-cb-feed-hit",
+      );
+    };
+    const onTaken = (ev) => {
+      const d = ev.detail ?? {};
+      const crit = d.criticalHit ? " (crit)" : "";
+      pushLine(
+        `← ${d.attackerName ?? "?"}  ${d.damage ?? 0} ${d.damageType ?? ""} → ${d.damageLocation ?? ""}${crit}`,
+        "hb-cb-feed-taken",
+      );
+    };
+    const onEvadeTarget = (ev) => {
+      pushLine(`→ ${ev.detail?.defenderName ?? "?"} evaded`, "hb-cb-feed-miss");
+    };
+    const onEvadeAttacker = (ev) => {
+      pushLine(`← evaded ${ev.detail?.attackerName ?? "?"}`, "hb-cb-feed-miss");
+    };
+    client.events.on("damageDealt", onDealt);
+    client.events.on("damageTaken", onTaken);
+    client.events.on("evadedTarget", onEvadeTarget);
+    client.events.on("evadedAttacker", onEvadeAttacker);
+    subs.push(() => client.events.off("damageDealt", onDealt));
+    subs.push(() => client.events.off("damageTaken", onTaken));
+    subs.push(() => client.events.off("evadedTarget", onEvadeTarget));
+    subs.push(() => client.events.off("evadedAttacker", onEvadeAttacker));
+  }
+
+  // Return a teardown so the bar's openPanel can clean up our
+  // event subscriptions when the panel closes.
+  return () => {
+    for (const dispose of subs) {
+      try { dispose(); } catch {}
+    }
+  };
 }

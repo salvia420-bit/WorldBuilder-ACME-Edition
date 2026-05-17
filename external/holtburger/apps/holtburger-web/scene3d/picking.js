@@ -8,6 +8,7 @@ export function setupClickPicking({
   liveScene3d,
   sessionHandle,
   isInMeleeStance,
+  isInRangedStance,
   getLocalPlayerGuid,
 }) {
   if (!canvas || !liveScene3d || !sessionHandle) {
@@ -60,19 +61,29 @@ export function setupClickPicking({
     // Selection persists until another entity is picked.
     liveScene3d.entityManager?.setSelectedTarget?.(guid);
     try {
-      if (isInMeleeStance?.() && typeof sessionHandle.attack === "function") {
-        // Phase D — read attack parameters from the combat-bar plugin
-        // when present, fall back to the Phase C defaults otherwise.
-        const cb = window.__combatBarState;
-        const height =
-          cb && typeof cb.attackHeight === "number"
-            ? cb.attackHeight
-            : ATTACK_HEIGHT_MEDIUM;
-        const power =
-          cb && typeof cb.powerLevel === "number"
-            ? cb.powerLevel
-            : ATTACK_POWER_FULL;
-        sessionHandle.attack(guid, height, power);
+      // Phase D — read attack parameters from the combat-bar plugin
+      // when present, fall back to the Phase C defaults otherwise.
+      // (The melee `powerLevel` doubles as the missile `accuracyLevel`
+      // since the retail combat-bar slider serves both roles — its
+      // label flips Power ↔ Accuracy based on stance.)
+      const cb = window.__combatBarState;
+      const height =
+        cb && typeof cb.attackHeight === "number"
+          ? cb.attackHeight
+          : ATTACK_HEIGHT_MEDIUM;
+      const slider =
+        cb && typeof cb.powerLevel === "number"
+          ? cb.powerLevel
+          : ATTACK_POWER_FULL;
+
+      if (isInRangedStance?.() && typeof sessionHandle.missileAttack === "function") {
+        sessionHandle.missileAttack(guid, height, slider);
+        // No swing pose on ranged — retail showed a draw/release on the
+        // bow but our vibe-pose only animates the right arm forward,
+        // which would look wrong for a bowman. Defer to a real
+        // MotionTable-driven ranged anim in a later phase.
+      } else if (isInMeleeStance?.() && typeof sessionHandle.attack === "function") {
+        sessionHandle.attack(guid, height, slider);
         // Local-player swing pose for immediate visual feedback.
         // ACE owns the actual swing motion + damage; this is just
         // the click → "I did something" affordance.

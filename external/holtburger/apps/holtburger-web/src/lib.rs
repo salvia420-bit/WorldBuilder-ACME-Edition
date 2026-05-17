@@ -10952,6 +10952,18 @@ enum SessionCommand {
         attack_height: holtburger_protocol::messages::AttackHeight,
         power_level: f32,
     },
+    /// Phase E (combat-missile): JS-side requested a ranged swing
+    /// (bow / crossbow / atlatl / thrown). Mirrors TargetedMeleeAttack
+    /// at the wire level — same `target_guid` + `attack_height` +
+    /// `accuracy_level` (the missile-mode analogue of power, the
+    /// retail UI's "speed↔accuracy" slider). ACE re-fires via the
+    /// same ActionChain machinery; client sends one packet per
+    /// engagement.
+    TargetedMissileAttack {
+        target_guid: u32,
+        attack_height: holtburger_protocol::messages::AttackHeight,
+        accuracy_level: f32,
+    },
 }
 
 /// Tagged-payload envelope for events the wasm bundle drains to JS via
@@ -13179,6 +13191,44 @@ impl SessionHandle {
             })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("attack: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Phase E (combat-missile): request a ranged swing (bow / crossbow
+    /// / atlatl / thrown). Same shape as `attack` but routes to
+    /// `GameAction::TargetedMissileAttack` (sub-opcode 0x000A).
+    /// `accuracy_level` is the missile-mode analogue of melee power
+    /// (retail's "speed↔accuracy" slider) in `[0.0, 1.0]`. ACE owns
+    /// auto-repeat; out-of-ammo broadcasts via the usual chat / vital
+    /// channels and ACE drops the player back to NonCombat. Caller
+    /// should check stance before dispatching here.
+    #[wasm_bindgen(js_name = missileAttack)]
+    pub fn missile_attack(
+        &self,
+        target_guid: u32,
+        attack_height: u32,
+        accuracy_level: f32,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        use holtburger_protocol::messages::AttackHeight;
+        if !accuracy_level.is_finite() {
+            return Err(JsValue::from_str(
+                "missileAttack: accuracy_level must be finite",
+            ));
+        }
+        let attack_height = AttackHeight::from_repr(attack_height).ok_or_else(|| {
+            JsValue::from_str(&format!(
+                "missileAttack: invalid attack_height {attack_height} (expected 1=High, 2=Medium, 3=Low)"
+            ))
+        })?;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::TargetedMissileAttack {
+                target_guid,
+                attack_height,
+                accuracy_level,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("missileAttack: cmd channel closed ({e})"))
             })
     }
 
@@ -16872,6 +16922,43 @@ async fn recv_loop(
                         }
                         console_log_str(&format!(
                             "[combat-mode] toggle: {current:?} → {target_mode:?}",
+                        ));
+                    }
+                    Some(SessionCommand::TargetedMissileAttack {
+                        target_guid,
+                        attack_height,
+                        accuracy_level,
+                    }) => {
+                        // Phase E (combat-missile): mirror of the
+                        // melee arm — ACE owns target liveness,
+                        // ammo check, range, stance check, etc.
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            GameAction, TargetedMissileAttackActionData,
+                        };
+                        let accuracy_level = accuracy_level.clamp(0.0, 1.0);
+                        let action = GameAction::TargetedMissileAttack(Box::new(
+                            TargetedMissileAttackActionData {
+                                target_guid: Guid(target_guid),
+                                attack_height,
+                                accuracy_level,
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(TargetedMissileAttack): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("missile_attack: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[missile_attack] target=0x{target_guid:08X} height={attack_height:?} accuracy={accuracy_level:.2}",
                         ));
                     }
                     Some(SessionCommand::TargetedMeleeAttack {

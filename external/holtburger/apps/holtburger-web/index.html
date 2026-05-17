@@ -924,9 +924,31 @@
         0x0044, // TwoHandedSword
         0x0046, // DualWield
       ]);
+      // Phase E — ranged stances route clicks to missile_attack
+      // instead of attack. *NoAmmo variants drop us back to NonCombat
+      // server-side; we still treat them as ranged here so the
+      // dispatch is consistent (ACE rejects without ammo).
+      const RANGED_STANCES = new Set([
+        0x003f, // BowCombat
+        0x0041, // Crossbow
+        0x0043, // Sling
+        0x0047, // ThrownWeapon
+        0x00e8, // BowNoAmmo
+        0x00e9, // CrossbowNoAmmo
+        0x013b, // Atlatl
+        0x013c, // ThrownShield
+      ]);
       function isInMeleeStance() {
         return MELEE_STANCES.has(currentStanceLow);
       }
+      function isInRangedStance() {
+        return RANGED_STANCES.has(currentStanceLow);
+      }
+      function getCurrentStanceLow() {
+        return currentStanceLow;
+      }
+      // Expose for plugins/picking that need to react to stance.
+      window.__getCurrentStanceLow = getCurrentStanceLow;
       // Confirmed stance update — called from kind=5 dispatch when
       // the local player's motionStance lands. Strips the
       // hotkey-press "pending" italic styling and shows the
@@ -3538,15 +3560,20 @@ void main() {
           }
           const h = window.__sessionHandle;
           if (!h) return;
-          // Phase C — branch on local combat stance. In a melee
-          // stance (HandCombat / SwordCombat / etc) clicking a
-          // creature fires an attack; otherwise the existing
-          // useObject path runs (portal / vendor / door / etc).
-          // ACE owns auto-repeat so we send one attack packet per
-          // engagement.
+          // Phase C/E — branch on local combat stance. Melee →
+          // attack(guid); ranged → missileAttack(guid); else →
+          // useObject (portal / vendor / door / etc). ACE owns
+          // auto-repeat so we send one packet per engagement.
+          // Combat-bar plugin state (window.__combatBarState) drives
+          // height + slider; defaults to MEDIUM / 1.0 when unset.
+          const cb = window.__combatBarState;
+          const cbHeight = cb && typeof cb.attackHeight === "number" ? cb.attackHeight : 2;
+          const cbSlider = cb && typeof cb.powerLevel === "number" ? cb.powerLevel : 1.0;
           try {
-            if (cat === "creature" && isInMeleeStance() && typeof h.attack === "function") {
-              h.attack(guid, 2 /* MEDIUM */, 1.0);
+            if (cat === "creature" && isInRangedStance() && typeof h.missileAttack === "function") {
+              h.missileAttack(guid, cbHeight, cbSlider);
+            } else if (cat === "creature" && isInMeleeStance() && typeof h.attack === "function") {
+              h.attack(guid, cbHeight, cbSlider);
             } else if (typeof h.useObject === "function") {
               h.useObject(guid);
             }
@@ -5174,6 +5201,7 @@ void main() {
               liveScene3d: window.liveScene3d,
               sessionHandle: window.__sessionHandle,
               isInMeleeStance,
+              isInRangedStance,
               getLocalPlayerGuid,
             });
           }
