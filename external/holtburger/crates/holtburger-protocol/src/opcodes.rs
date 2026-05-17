@@ -395,8 +395,8 @@ pub enum GameActionOpcode {
     ChangeCombatMode = 0x0053,
     /// C2S: Cancel the current combat attack sequence.
     CancelAttack = 0x01B7,
-    // /// C2S: Remove a spell from the character's spellbook.
-    // RemoveSpellC2S = 0x01A8,
+    /// C2S: Remove a spell from the character's spellbook.
+    RemoveSpellFromBook = 0x01A8,
     // /// C2S: Mark a spell as a favorite in the spellbook.
     // AddSpellFavorite = 0x01E3,
     // /// C2S: Remove a spell from the favorites list.

@@ -72,6 +72,7 @@ pub enum GameAction {
     GiveObjectRequest(Box<GiveObjectRequestActionData>),
     CastTargetedSpell(Box<CastTargetedSpellActionData>),
     CastUntargetedSpell(Box<CastUntargetedSpellActionData>),
+    RemoveSpellFromBook(Box<RemoveSpellFromBookActionData>),
     ChangeCombatMode(Box<ChangeCombatModeActionData>),
     CancelAttack(Box<CancelAttackActionData>),
     Buy(Box<BuyActionData>),
@@ -250,6 +251,9 @@ impl ProtocolUnpack for GameActionMessage {
                 )),
                 GameActionOpcode::CastTargetedSpell => GameAction::CastTargetedSpell(Box::new(
                     CastTargetedSpellActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::RemoveSpellFromBook => GameAction::RemoveSpellFromBook(Box::new(
+                    RemoveSpellFromBookActionData::unpack(data, offset)?,
                 )),
                 GameActionOpcode::CastUntargetedSpell => GameAction::CastUntargetedSpell(Box::new(
                     CastUntargetedSpellActionData::unpack(data, offset)?,
@@ -557,6 +561,11 @@ impl ProtocolPack for GameActionMessage {
             }
             GameAction::CastUntargetedSpell(data) => {
                 buf.write_u32::<LittleEndian>(GameActionOpcode::CastUntargetedSpell as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::RemoveSpellFromBook(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::RemoveSpellFromBook as u32)
                     .unwrap();
                 data.pack(buf);
             }

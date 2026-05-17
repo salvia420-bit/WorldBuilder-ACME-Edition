@@ -10981,6 +10981,14 @@ enum SessionCommand {
     CastUntargetedSpell {
         spell_id: u32,
     },
+    /// Phase J: JS-side requested removal of `spell_id` from the
+    /// player's spellbook. Sends `GameAction::RemoveSpellFromBook`
+    /// (sub-opcode 0x01A8). ACE applies the removal server-side and
+    /// broadcasts `GameEventMagicRemoveSpell` (opcode 0x01A8) so the
+    /// spellbook UI can refresh.
+    RemoveSpellFromBook {
+        spell_id: u32,
+    },
 }
 
 /// Tagged-payload envelope for events the wasm bundle drains to JS via
@@ -13303,6 +13311,22 @@ impl SessionHandle {
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!(
                     "castUntargetedSpell: cmd channel closed ({e})"
+                ))
+            })
+    }
+
+    /// Phase J: request that `spell_id` be removed from the local
+    /// player's spellbook. Sends `GameAction::RemoveSpellFromBook`
+    /// (sub-opcode 0x01A8). Idempotent server-side (ACE silently
+    /// drops an unknown id).
+    #[wasm_bindgen(js_name = removeSpellFromBook)]
+    pub fn remove_spell_from_book(&self, spell_id: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::RemoveSpellFromBook { spell_id })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!(
+                    "removeSpellFromBook: cmd channel closed ({e})"
                 ))
             })
     }
@@ -17094,6 +17118,32 @@ async fn recv_loop(
                         }
                         console_log_str(&format!(
                             "[cast_spell] untargeted spell_id={spell_id}",
+                        ));
+                    }
+                    Some(SessionCommand::RemoveSpellFromBook { spell_id }) => {
+                        use holtburger_protocol::messages::{
+                            GameAction, RemoveSpellFromBookActionData,
+                        };
+                        let action = GameAction::RemoveSpellFromBook(Box::new(
+                            RemoveSpellFromBookActionData { spell_id },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(RemoveSpellFromBook): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!(
+                                    "remove_spell_from_book: {e}"
+                                )),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[remove_spell] spell_id={spell_id}",
                         ));
                     }
                     Some(SessionCommand::TargetedMissileAttack {

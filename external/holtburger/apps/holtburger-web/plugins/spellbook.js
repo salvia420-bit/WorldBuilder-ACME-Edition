@@ -17,6 +17,34 @@ function loadCatalog() {
   return catalogPromise;
 }
 
+// Phase J.2 — spell-component ID → name. Loaded once and shared.
+let componentNamesPromise = null;
+function loadComponentNames() {
+  if (!componentNamesPromise) {
+    componentNamesPromise = fetch("./data/spell-components.json", { cache: "force-cache" })
+      .then((r) => r.json())
+      .then((j) => j.components || {})
+      .catch(() => ({}));
+  }
+  return componentNamesPromise;
+}
+function resolveComponentName(comp, componentNames) {
+  // `comp` may be a numeric ID, a "Comp_<id>" string from the spell
+  // catalog, or already a resolved name. Returns the human label.
+  if (typeof comp === "number") {
+    return componentNames?.[String(comp)] ?? `Component #${comp}`;
+  }
+  if (typeof comp === "string") {
+    const m = comp.match(/^Comp_(\d+)$/);
+    if (m) {
+      const id = m[1];
+      return componentNames?.[id] ?? `Component #${id}`;
+    }
+    return comp;
+  }
+  return String(comp);
+}
+
 const SCHOOL_NAMES = {
   1: "War",
   2: "Life",
@@ -192,6 +220,14 @@ function ensureStyles() {
     .hb-sb-row.on-bar {
       border-color: rgba(160, 110, 255, 0.6);
     }
+    .hb-sb-row.selected {
+      background: rgba(160, 110, 255, 0.25);
+      border-color: rgba(180, 130, 255, 0.7);
+    }
+    .hb-sb-row.hb-sb-row-selected {
+      background: rgba(160, 110, 255, 0.25);
+      border-color: rgba(180, 130, 255, 0.85);
+    }
     .hb-sb-row-name { flex: 1; color: #fff; }
     .hb-sb-row-tag {
       font-size: 9px;
@@ -255,7 +291,7 @@ function closeDetail() {
   }
 }
 
-function showSpellDetail(meta, anchorX, anchorY) {
+function showSpellDetail(meta, anchorX, anchorY, componentNames) {
   closeDetail();
   const el = document.createElement("div");
   el.className = "hb-sb-detail";
@@ -286,7 +322,8 @@ function showSpellDetail(meta, anchorX, anchorY) {
   if (Array.isArray(meta.components) && meta.components.length > 0) {
     const comps = document.createElement("div");
     comps.className = "hb-sb-detail-comps";
-    comps.textContent = `Components: ${meta.components.length} required`;
+    const names = meta.components.map((c) => resolveComponentName(c, componentNames));
+    comps.textContent = `Components: ${names.join(", ")}`;
     el.appendChild(comps);
   }
 
@@ -384,7 +421,12 @@ export function activate(bodyEl, ctx) {
   bodyEl.appendChild(listEl);
 
   let catalog = null;
+  let componentNames = null;
   let knownIds = new Set();
+  // Phase J.1 — Delete-to-remove: when a row has focus and the user
+  // presses Delete, prompt to forget the spell. Tracked separately
+  // from the on-bar highlight.
+  let selectedRowId = 0;
 
   function rerenderList() {
     listEl.innerHTML = "";
@@ -446,6 +488,15 @@ export function activate(bodyEl, ctx) {
       manaTag.textContent = `${meta.mana}m`;
       row.appendChild(manaTag);
 
+      // Phase J.1 — single-click selects (highlights) the row.
+      row.addEventListener("click", () => {
+        selectedRowId = id;
+        for (const r of listEl.querySelectorAll(".hb-sb-row.selected")) {
+          r.classList.remove("selected");
+        }
+        row.classList.add("selected");
+      });
+
       row.addEventListener("dblclick", () => {
         const slot = addToFirstEmptySlot(id);
         row.classList.add("on-bar");
@@ -456,7 +507,7 @@ export function activate(bodyEl, ctx) {
 
       row.addEventListener("contextmenu", (ev) => {
         ev.preventDefault();
-        showSpellDetail(meta, ev.clientX, ev.clientY);
+        showSpellDetail(meta, ev.clientX, ev.clientY, componentNames);
       });
 
       listEl.appendChild(row);
@@ -482,6 +533,8 @@ export function activate(bodyEl, ctx) {
     catalog = c;
     refreshKnown();
   });
+  // Phase J.2 — fetch component names in parallel.
+  loadComponentNames().then((m) => { componentNames = m; });
 
   let statsHandler = null;
   if (client?.events?.on) {
@@ -491,11 +544,38 @@ export function activate(bodyEl, ctx) {
   const spellbarHandler = () => rerenderList();
   window.addEventListener("hb-spellbar-changed", spellbarHandler);
 
+  // Phase J.1 — Delete key removes the currently-selected spell from
+  // the spellbook. Confirms first so a stray keypress doesn't lose
+  // the spell.
+  function onDeleteKey(ev) {
+    if (ev.key !== "Delete") return;
+    if (!selectedRowId) return;
+    // Skip if user is typing in an input/textarea elsewhere.
+    const tag = ev.target?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA") return;
+    if (!bodyEl.isConnected) return; // panel closed
+    const meta = catalog?.[String(selectedRowId)];
+    const name = meta?.name ?? `spell ${selectedRowId}`;
+    if (!window.confirm(`Remove ${name} from your spellbook?`)) return;
+    try {
+      client?.player?.forgetSpell?.(selectedRowId);
+    } catch (e) {
+      console.warn(`[spellbook] forget(${selectedRowId}) failed: ${e?.message ?? e}`);
+    }
+    // Optimistic local refresh; ACE will broadcast MagicRemoveSpell
+    // which lands as a stats refresh and re-pulls knownSpells.
+    knownIds.delete(selectedRowId);
+    selectedRowId = 0;
+    rerenderList();
+  }
+  window.addEventListener("keydown", onDeleteKey);
+
   return () => {
     if (statsHandler && client?.events?.off) {
       client.events.off("playerStatsUpdated", statsHandler);
     }
     window.removeEventListener("hb-spellbar-changed", spellbarHandler);
+    window.removeEventListener("keydown", onDeleteKey);
   };
 }
 

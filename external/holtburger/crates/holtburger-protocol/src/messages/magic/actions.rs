@@ -49,6 +49,32 @@ impl ProtocolPack for CastUntargetedSpellActionData {
     }
 }
 
+/// Phase J — `GameAction::RemoveSpellFromBook` payload (C2S). The
+/// client tells ACE to drop `spell_id` from the player's spellbook.
+/// ACE handles the removal server-side and may broadcast a
+/// `GameEventMagicRemoveSpell` (opcode 0x01A8) back.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoveSpellFromBookActionData {
+    pub spell_id: u32,
+}
+
+impl ProtocolUnpack for RemoveSpellFromBookActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        if *offset + 4 > data.len() {
+            return None;
+        }
+        let spell_id = LittleEndian::read_u32(&data[*offset..*offset + 4]);
+        *offset += 4;
+        Some(RemoveSpellFromBookActionData { spell_id })
+    }
+}
+
+impl ProtocolPack for RemoveSpellFromBookActionData {
+    fn pack(&self, buf: &mut Vec<u8>) {
+        buf.write_u32::<LittleEndian>(self.spell_id).unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,0 +1,13 @@
+{
+  "_comment": "Spell component ID → display name. IDs are indices into the retail SpellComponentTable (DID 0x0E00000F in client_portal.dat). Phase J.2 covers only the canonical scarab IDs (1-7 power scarabs verified per DatReaderWriter test fixtures + public SpellComponentTable documentation). Future: extract the full 163-entry table via DatReaderWriter or our wasm-side DAT reader. Unknown IDs fall back to `Component #N` in the UI.",
+  "components": {
+    "1": "Lead Scarab",
+    "2": "Iron Scarab",
+    "3": "Copper Scarab",
+    "4": "Silver Scarab",
+    "5": "Gold Scarab",
+    "6": "Pyreal Scarab",
+    "7": "Platinum Scarab",
+    "8": "Mana Scarab"
+  }
+}

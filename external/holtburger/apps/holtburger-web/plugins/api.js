@@ -42,6 +42,13 @@ export function createClient(sessionHandle) {
         sessionHandle.castTargetedSpell(targetGuid, spellId);
       }
     },
+    forgetSpell(spellId) {
+      // Phase J.1 — wire `GameAction::RemoveSpellFromBook` (0x01A8).
+      sessionHandle.removeSpellFromBook(spellId);
+    },
+    forgetSpell(spellId) {
+      sessionHandle.removeSpellFromBook(spellId);
+    },
     get pose() {
       return sessionHandle.getLocalPlayerPose();
     },

@@ -179,6 +179,40 @@
       #panels-row > * { flex: 1 1 22rem; min-width: 18rem; }
       #panels-row #chat-panel { margin-top: 0; max-width: none; flex: 2 1 28rem; }
       #vitals-panel, #inventory-panel { border: 1px solid #ccc; border-radius: 4px; background: #fafafa; }
+      /* Phase J.3 — Selected Item Box at top of inventory panel. */
+      #selected-item-box {
+        padding: 6px 8px;
+        margin-bottom: 8px;
+        background: #fff8e0;
+        border: 1px solid #d4b800;
+        border-radius: 4px;
+        font-size: 0.85rem;
+      }
+      #selected-item-box[hidden] { display: none; }
+      #selected-item-box .selected-item-name {
+        font-weight: 600;
+        color: #1a1a1a;
+        margin-bottom: 4px;
+      }
+      #selected-item-box .selected-item-actions {
+        display: flex;
+        gap: 4px;
+      }
+      #selected-item-box button {
+        padding: 2px 8px;
+        font-size: 0.8rem;
+        background: #fff;
+        border: 1px solid #999;
+        border-radius: 3px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      #selected-item-box button:hover { background: #f0f0f0; }
+      #selected-item-box #selected-item-clear { margin-left: auto; }
+      #inv-equipped li.selected, #inv-pack li.selected {
+        background: #fff8e0;
+        border-left: 3px solid #d4b800;
+      }
       #vitals-panel header, #inventory-panel header { padding: 0.4rem 0.6rem; background: #f0f0f0; border-bottom: 1px solid #ddd; font-size: 0.92rem; }
       #vitals-panel header { display: flex; align-items: baseline; justify-content: space-between; gap: 0.4rem; }
       #vitals-panel header .name { font-weight: 600; color: #1a1a1a; }
@@ -475,6 +509,17 @@
         <div id="inventory-panel" hidden>
           <header>Inventory</header>
           <div class="body">
+            <!-- Phase J.3 — Selected Item Box (retail's persistent item-
+                 action panel). Hidden until the player clicks an
+                 inventory entry. -->
+            <div id="selected-item-box" hidden>
+              <div class="selected-item-name" id="selected-item-name">—</div>
+              <div class="selected-item-actions">
+                <button type="button" id="selected-item-use">Use</button>
+                <button type="button" id="selected-item-examine">Examine</button>
+                <button type="button" id="selected-item-clear" title="Deselect">×</button>
+              </div>
+            </div>
             <div class="empty" id="inventory-empty">No items in inventory yet.</div>
             <div class="section-h" id="inv-equipped-h" hidden>Equipped</div>
             <ul id="inv-equipped"></ul>
@@ -5485,6 +5530,61 @@ void main() {
       const invPackH = document.getElementById("inv-pack-h");
       const invEquipped = document.getElementById("inv-equipped");
       const invPack = document.getElementById("inv-pack");
+      // Phase J.3 — Selected Item Box DOM refs + state.
+      const selectedItemBox = document.getElementById("selected-item-box");
+      const selectedItemName = document.getElementById("selected-item-name");
+      const selectedItemUseBtn = document.getElementById("selected-item-use");
+      const selectedItemExamineBtn = document.getElementById("selected-item-examine");
+      const selectedItemClearBtn = document.getElementById("selected-item-clear");
+      let selectedItemGuid = 0;
+      window.getSelectedItemGuid = () => selectedItemGuid;
+      function setSelectedItem(guid, name) {
+        selectedItemGuid = guid >>> 0;
+        if (selectedItemGuid === 0) {
+          selectedItemBox.hidden = true;
+          for (const li of document.querySelectorAll("#inv-equipped li.selected, #inv-pack li.selected")) {
+            li.classList.remove("selected");
+          }
+          return;
+        }
+        selectedItemName.textContent = name || `Item 0x${selectedItemGuid.toString(16)}`;
+        selectedItemBox.hidden = false;
+        // Highlight the matching li.
+        for (const li of document.querySelectorAll("#inv-equipped li, #inv-pack li")) {
+          li.classList.toggle("selected", Number(li.dataset.guid) === selectedItemGuid);
+        }
+      }
+      selectedItemClearBtn.addEventListener("click", () => setSelectedItem(0));
+      selectedItemUseBtn.addEventListener("click", () => {
+        if (!selectedItemGuid) return;
+        const h = window.__sessionHandle;
+        try {
+          if (h && typeof h.useObject === "function") h.useObject(selectedItemGuid);
+        } catch (e) {
+          console.warn(`[selected-item] Use(0x${selectedItemGuid.toString(16)}): ${e?.message ?? e}`);
+        }
+      });
+      selectedItemExamineBtn.addEventListener("click", () => {
+        if (!selectedItemGuid) return;
+        // The wasm side auto-fires IdentifyObject on every ObjectCreate
+        // (see Phase B+ memory), so the appraisal data is already
+        // cached. A dedicated re-examine wire method would be Phase K.
+        // For now: log so the user has feedback the click registered.
+        console.log(`[selected-item] Examine 0x${selectedItemGuid.toString(16)} (appraisal already cached server-side)`);
+      });
+      // Click anywhere in an inv list → select that item.
+      function attachInventorySelection() {
+        for (const ul of [invEquipped, invPack]) {
+          ul.addEventListener("click", (ev) => {
+            const li = ev.target.closest("li[data-guid]");
+            if (!li) return;
+            const guid = Number(li.dataset.guid) >>> 0;
+            const name = li.querySelector(".name")?.textContent ?? "";
+            setSelectedItem(guid, name);
+          });
+        }
+      }
+      attachInventorySelection();
 
       // Vital colour-class lookup. Maps the wasm-side VitalType
       // numeric id (Health=1, Stamina=3, Mana=5) to the CSS class
