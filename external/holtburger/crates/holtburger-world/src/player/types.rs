@@ -323,6 +323,49 @@ impl PlayerState {
         }
     }
 
+    /// Compute the bludgeon-type damage a player would take landing
+    /// at vertical velocity `landing_vz` m/s (negative = downward).
+    /// Mirrors ACE's `Player_Move.HandleFallingDamage`:
+    ///
+    /// ```text
+    /// overspeed = 11.25434 + currVz + 4.5       // 11.25434 is the
+    ///                                              hardcoded "jump
+    ///                                              velocity" baseline
+    ///                                              in ACE Player_Move
+    /// ratio = -overspeed / 11.25434
+    /// damage = if ratio > 0 { ratio * 87.293810 } else { 0 }
+    /// ```
+    ///
+    /// Threshold: damage starts when `landing_vz < -15.75 m/s` (about
+    /// the velocity from a 12.6m free-fall). Normal jumps in this
+    /// client land at ~−4 to −10 m/s — well under the threshold, so
+    /// damage is 0. Damage applies when the player falls off a
+    /// cliff or from a high jump that descends past the launch level.
+    ///
+    /// **Client-side use is documentation only.** ACE applies fall
+    /// damage server-side from `PhysicsObj.Velocity` (set by our
+    /// `GameAction::Jump` packet's velocity field + server-side
+    /// gravity integration) and broadcasts the resulting health
+    /// update + chat message via the existing vital/chat channels —
+    /// the client's normal recv loop picks them up without any
+    /// jump-specific code. Predicting damage client-side risks
+    /// HUD desync if the server's velocity calc diverges from ours.
+    ///
+    /// Source: `~/ace-server/Source/ACE.Server/WorldObjects/Player_Move.cs`
+    /// (`HandleFallingDamage`).
+    pub fn compute_fall_damage(landing_vz: f32) -> f32 {
+        const JUMP_VELOCITY: f32 = 11.25434;
+        const LEEWAY: f32 = 4.5;
+        const DAMAGE_SCALE: f32 = 87.293810;
+        let overspeed = JUMP_VELOCITY + landing_vz + LEEWAY;
+        let ratio = -overspeed / JUMP_VELOCITY;
+        if ratio > 0.0 {
+            ratio * DAMAGE_SCALE
+        } else {
+            0.0
+        }
+    }
+
     /// Stamina cost for a jump. Mirrors ACE's
     /// `MovementSystem.JumpStaminaCost`:
     ///   - non-PK: `ceil((burden + 0.5) * power * 8 + 2)`
@@ -575,5 +618,34 @@ mod jump_tests {
             PlayerState::jump_stamina_cost(1.5, 0.5, false),
             PlayerState::jump_stamina_cost(1.0, 0.5, false)
         );
+    }
+
+    #[test]
+    fn fall_damage_below_threshold_is_zero() {
+        // Normal jump landing velocities: ~-4 to -10 m/s. All below
+        // ACE's threshold (-15.75 m/s, where overspeed crosses 0).
+        assert_eq!(PlayerState::compute_fall_damage(0.0), 0.0);
+        assert_eq!(PlayerState::compute_fall_damage(-5.0), 0.0);
+        assert_eq!(PlayerState::compute_fall_damage(-10.0), 0.0);
+        assert_eq!(PlayerState::compute_fall_damage(-15.7), 0.0);
+    }
+
+    #[test]
+    fn fall_damage_at_threshold_starts_climbing() {
+        // overspeed = 11.254 + (-20) + 4.5 = -4.246
+        // ratio = 4.246 / 11.254 ≈ 0.377
+        // damage = 0.377 * 87.29 ≈ 32.92
+        let d = PlayerState::compute_fall_damage(-20.0);
+        assert!((d - 32.92).abs() < 0.1, "got {d}");
+    }
+
+    #[test]
+    fn fall_damage_high_velocity_lethal_range() {
+        // Falling from a 50m+ cliff: vz ≈ -31 m/s
+        // overspeed = 11.254 + (-31) + 4.5 = -15.246
+        // ratio = 1.355
+        // damage = 1.355 * 87.29 ≈ 118.3 (likely lethal for low HP)
+        let d = PlayerState::compute_fall_damage(-31.0);
+        assert!((d - 118.3).abs() < 0.5, "got {d}");
     }
 }
