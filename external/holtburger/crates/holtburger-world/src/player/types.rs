@@ -265,6 +265,22 @@ pub struct PlayerState {
 
     /// Dirty tracking for emitted derived-stat snapshots.
     pub(crate) last_emitted_derived_stats: Option<LastSentStats>,
+
+    /// `true` while the local-prediction integrator should integrate
+    /// gravity on the player Z each tick instead of snapping to the
+    /// terrain / cell floor. Set by the recv-loop `Jump` arm; cleared
+    /// when the integrator detects landing (downward `vertical_velocity`
+    /// + Z below floor). Mirrors ACE's airborne handling in
+    /// `Player_Move.cs` (the integrator's gravity loop while no
+    /// floor contact is reported).
+    pub is_airborne: bool,
+    /// Player's local Z velocity in m/s while [`is_airborne`].
+    /// Initialized to the result of [`compute_jump_velocity_z`]
+    /// on `Jump` and decremented by `9.8 * dt` per tick (ACE
+    /// `MovementSystem.GetJumpHeight` derives height from this same
+    /// kinematic — `v = sqrt(h * 19.6)` → `g = 9.8 m/s²`). Reset to
+    /// 0.0 on landing or teleport.
+    pub vertical_velocity: f32,
 }
 
 impl Default for PlayerState {
@@ -302,7 +318,55 @@ impl PlayerState {
             inventory: HashSet::new(),
             equipment: HashMap::new(),
             last_emitted_derived_stats: None,
+            is_airborne: false,
+            vertical_velocity: 0.0,
         }
+    }
+
+    /// Compute the upward Z velocity for a jump with the given
+    /// power, burden, and Jump skill. Mirrors ACE's
+    /// `WeenieObject.InqJumpVelocity` chain:
+    ///   1. `MovementSystem.GetJumpHeight(burden, jumpSkill, power, 1.0)`
+    ///   2. `velocity_z = sqrt(height * 19.6)` (kinematic with g=9.8)
+    ///
+    /// `power` is the jump-press extent in `[0.0, 1.0]`. Burden mod
+    /// is 1.0 for burden < 1.0 (typical player), so a starter
+    /// character (jumpSkill=50) at full power lifts ≈ 0.87m
+    /// (≈4.13 m/s); jumpSkill=400 lifts ≈ 5.27m (≈10.16 m/s).
+    /// Source: `~/ace-server/Source/ACE.Server/Physics/Animation/MovementSystem.cs`.
+    pub fn compute_jump_velocity_z(power: f32, burden: f32, jump_skill: u32) -> f32 {
+        let power = power.clamp(0.0, 1.0);
+        let burden_mod = if burden < 1.0 {
+            1.0
+        } else if burden < 2.0 {
+            2.0 - burden
+        } else {
+            // ACE's > 2.0 branch returns 0; matched but never hit
+            // for normal play.
+            0.0
+        };
+        let skill = jump_skill as f32;
+        let height = burden_mod * (skill / (skill + 1300.0) * 22.2 + 0.05) * power;
+        let height = height.max(0.35); // ACE min clamp
+        (height * 19.6).sqrt()
+    }
+
+    /// Begin a jump locally. Sets [`is_airborne`] and stamps the
+    /// initial vertical velocity. No-op when already airborne — ACE
+    /// does not allow double-jumps; the recv-loop gate also enforces
+    /// this so the wire packet is only sent for grounded jumps.
+    pub fn begin_jump(&mut self, velocity_z: f32) {
+        if self.is_airborne {
+            return;
+        }
+        self.is_airborne = true;
+        self.vertical_velocity = velocity_z;
+    }
+
+    /// Clear the airborne state on landing or teleport.
+    pub fn land(&mut self) {
+        self.is_airborne = false;
+        self.vertical_velocity = 0.0;
     }
 
     pub fn vitae(&self) -> f32 {
@@ -382,5 +446,73 @@ impl PlayerState {
                 self.options2.set(flag, enabled);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod jump_tests {
+    use super::PlayerState;
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 0.05
+    }
+
+    #[test]
+    fn starter_character_jump_velocity_matches_ace_formula() {
+        // jumpSkill=50, burden=0.5 (mod 1.0), power=1.0:
+        //   height = 1.0 * (50/1350 * 22.2 + 0.05) = 0.872m
+        //   vz = sqrt(0.872 * 19.6) ≈ 4.13 m/s
+        let vz = PlayerState::compute_jump_velocity_z(1.0, 0.5, 50);
+        assert!(close(vz, 4.13), "expected ~4.13 m/s, got {vz}");
+    }
+
+    #[test]
+    fn skilled_jumper_velocity_matches_ace_formula() {
+        // jumpSkill=400, burden=0.5 (mod 1.0), power=1.0:
+        //   height = 1.0 * (400/1700 * 22.2 + 0.05) = 5.27m
+        //   vz = sqrt(5.27 * 19.6) ≈ 10.16 m/s
+        let vz = PlayerState::compute_jump_velocity_z(1.0, 0.5, 400);
+        assert!(close(vz, 10.16), "expected ~10.16 m/s, got {vz}");
+    }
+
+    #[test]
+    fn min_jump_height_clamp_floors_at_35cm() {
+        // power=0.0 + zero skill → ACE clamps to 0.35m floor
+        //   vz = sqrt(0.35 * 19.6) ≈ 2.62 m/s
+        let vz = PlayerState::compute_jump_velocity_z(0.0, 0.5, 0);
+        assert!(close(vz, 2.62), "min-clamp vz: {vz}");
+    }
+
+    #[test]
+    fn overburden_kills_jump_height() {
+        // burden > 2.0 → BurdenMod = 0 → height clamps to 0.35m floor.
+        let vz = PlayerState::compute_jump_velocity_z(1.0, 2.5, 100);
+        assert!(close(vz, 2.62), "overburden vz: {vz}");
+    }
+
+    #[test]
+    fn begin_jump_sets_airborne_and_velocity() {
+        let mut p = PlayerState::new();
+        assert!(!p.is_airborne);
+        p.begin_jump(5.0);
+        assert!(p.is_airborne);
+        assert_eq!(p.vertical_velocity, 5.0);
+    }
+
+    #[test]
+    fn begin_jump_is_noop_when_already_airborne() {
+        let mut p = PlayerState::new();
+        p.begin_jump(5.0);
+        p.begin_jump(99.0); // second press, mid-air
+        assert_eq!(p.vertical_velocity, 5.0, "double-jump must not retrigger");
+    }
+
+    #[test]
+    fn land_clears_airborne() {
+        let mut p = PlayerState::new();
+        p.begin_jump(5.0);
+        p.land();
+        assert!(!p.is_airborne);
+        assert_eq!(p.vertical_velocity, 0.0);
     }
 }

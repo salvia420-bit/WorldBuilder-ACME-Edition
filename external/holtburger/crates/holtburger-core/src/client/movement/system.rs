@@ -788,8 +788,27 @@ impl MovementSystem {
         // unbaked, same rationale as the lateral zero above —
         // sending an uncorrected Z drift would let ACE force-
         // reposition us back to spawn.
+        //
+        // Airborne integration. When `world.player.is_airborne`,
+        // the player is in mid-jump or mid-fall: integrate gravity
+        // into the vertical velocity, then add velocity * dt to
+        // pose.z. Mirrors ACE's airborne Player_Move handling.
+        // While airborne the per-tick floor snap below treats the
+        // floor as a *landing trigger* rather than a clamp, so the
+        // jump arc plays out cleanly.
+        //
+        // `9.8 m/s²` matches ACE's `MovementSystem.GetJumpHeight`
+        // kinematic (`v = sqrt(h * 19.6)` ⇒ `g = 9.8`). Step is
+        // first-order Euler — fine at 60Hz / 16ms ticks, the
+        // accumulated error over a typical 1-sec jump is < 1 cm.
         if !indoor_unbaked {
-            pose.coords.z += raw_delta.z;
+            if world.player.is_airborne {
+                let dt_s = dt.as_secs_f32();
+                world.player.vertical_velocity -= 9.8 * dt_s;
+                pose.coords.z += world.player.vertical_velocity * dt_s;
+            } else {
+                pose.coords.z += raw_delta.z;
+            }
         }
         // Floor-Z snap. Two paths:
         //   - Outdoor: bilinear-interp the cached 9×9 terrain
@@ -816,7 +835,19 @@ impl MovementSystem {
         if !pose.is_indoors() {
             let global = pose.global_coords();
             if let Some(z) = world.terrain_height_at(global.x, global.y) {
-                pose.coords.z = z;
+                if world.player.is_airborne {
+                    // Airborne outdoor: snap only on landing (falling
+                    // through the terrain plane). The terrain Z is the
+                    // canonical floor — when ballistic integration
+                    // takes us below it with downward velocity, that's
+                    // the touchdown.
+                    if world.player.vertical_velocity <= 0.0 && pose.coords.z <= z {
+                        pose.coords.z = z;
+                        world.player.land();
+                    }
+                } else {
+                    pose.coords.z = z;
+                }
             }
         } else if indoor_unbaked {
             // Pre-bake gate: skip floor-Z snap entirely. Without
@@ -858,6 +889,12 @@ impl MovementSystem {
                 let snap_z = floor + 0.005; // 5 mm headroom; matches AC
                 if pose.coords.z < snap_z {
                     pose.coords.z = snap_z;
+                    // Indoor landing: snap-up triggered while airborne
+                    // → touchdown. Outdoor analog above uses
+                    // `world.player.land()` likewise.
+                    if world.player.is_airborne {
+                        world.player.land();
+                    }
                 }
             }
             // Ceiling clamp — protect against the player being

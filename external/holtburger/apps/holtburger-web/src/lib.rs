@@ -10807,6 +10807,15 @@ enum SessionCommand {
         turn: i8,
         run: bool,
     },
+    /// Player pressed the jump key (default: Space). Recv arm reads
+    /// the player's current Jump skill + a default burden + power=1.0,
+    /// computes `velocity_z` via the ACE
+    /// `MovementSystem.GetJumpHeight` cascade, stamps it onto
+    /// `world.player.vertical_velocity` (with `is_airborne = true`),
+    /// and sends a `GameAction::Jump` wire packet so ACE can validate
+    /// the airborne pose. No-op when already airborne (no
+    /// double-jump, matching ACE).
+    Jump,
     /// Phase 4 step 3.6 — JS-driven physics tick. Fired by
     /// `requestAnimationFrame` from `index.html`'s drainEvents loop;
     /// the recv loop pulls the next `now` and calls
@@ -13025,6 +13034,20 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::ToggleCombatMode)
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("toggle_combat_mode: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Player pressed the jump key. Routes through the recv loop so
+    /// the ballistic state stamp and the wire `GameAction::Jump`
+    /// packet are issued in a single serialized step. No-op when
+    /// already airborne (no double-jumps; ACE doesn't permit them).
+    #[wasm_bindgen(js_name = jump)]
+    pub fn jump(&self) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::Jump)
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("jump: cmd channel closed ({e})"))
             })
     }
 
@@ -16571,6 +16594,95 @@ async fn recv_loop(
                         }
                         console_log_str(&format!(
                             "[combat-mode] toggle: {current:?} → {target_mode:?}",
+                        ));
+                    }
+                    Some(SessionCommand::Jump) => {
+                        // Mirror ACE's jump pipeline:
+                        //   1. Compute upward velocity via
+                        //      MovementSystem.GetJumpHeight + sqrt(h*19.6)
+                        //      using current Jump skill + default burden +
+                        //      power=1.0.
+                        //   2. Stamp ballistic state on world.player.
+                        //   3. Send GameAction::Jump (opcode 0xF61B) wire
+                        //      packet so ACE accepts the airborne pose
+                        //      and applies stamina cost.
+                        //
+                        // Wire shape: JumpActionData {
+                        //   extent, velocity, sequences x4, object_guid, spell_id
+                        // }. See ACE Network/Structure/JumpPack.cs.
+                        use holtburger_protocol::messages::{
+                            GameAction, movement::actions::JumpActionData,
+                        };
+                        use holtburger_common::Vector3;
+                        let Some(w) = world.as_mut() else {
+                            console_log_str(
+                                "[jump] before WorldState ready — dropping",
+                            );
+                            continue;
+                        };
+                        if !entity_seeded {
+                            console_log_str(
+                                "[jump] before player entity seeded — dropping",
+                            );
+                            continue;
+                        }
+                        if w.player.is_airborne {
+                            // ACE doesn't permit double-jumps.
+                            continue;
+                        }
+                        // Jump skill lookup — default to 100 when the
+                        // skill table hasn't loaded yet (early-spawn
+                        // case). TODO: pull live burden from inventory
+                        // weight once that's plumbed; for now 0.5 keeps
+                        // BurdenMod = 1.0 per ACE's `< 1.0` branch.
+                        use holtburger_common::stats::SkillType;
+                        let jump_skill = w
+                            .player
+                            .skills
+                            .get(&SkillType::Jump)
+                            .map(|s| s.current as u32)
+                            .unwrap_or(100);
+                        let burden: f32 = 0.5;
+                        let power: f32 = 1.0;
+                        let vz = holtburger_world::player::PlayerState::compute_jump_velocity_z(
+                            power, burden, jump_skill,
+                        );
+                        w.player.begin_jump(vz);
+                        // Read sequences + player guid + current pose
+                        // for the wire packet. ACE validates these in
+                        // HandleActionJump (Player.cs:866).
+                        let player_guid = w.player.guid;
+                        let instance_sequence = w.player.instance_sequence;
+                        let server_control_sequence = w.player.server_control_sequence;
+                        let teleport_sequence = w.player.teleport_sequence;
+                        let force_position_sequence = w.player.force_position_sequence;
+                        let lateral_velocity = w
+                            .local_player_runtime_kinematics()
+                            .map(|(_, v, _)| Vector3::new(v.x, v.y, vz))
+                            .unwrap_or(Vector3::new(0.0, 0.0, vz));
+                        let action = GameAction::Jump(Box::new(JumpActionData {
+                            extent: power,
+                            velocity: lateral_velocity,
+                            instance_sequence,
+                            server_control_sequence,
+                            teleport_sequence,
+                            force_position_sequence,
+                            object_guid: player_guid,
+                            spell_id: 0,
+                        }));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(Jump): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("jump: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[jump] skill={jump_skill} burden={burden:.2} → vz={vz:.2} m/s",
                         ));
                     }
                     Some(SessionCommand::SetMovementInput {

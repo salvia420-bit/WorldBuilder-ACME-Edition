@@ -5918,6 +5918,23 @@ void main() {
                 console.warn("[combat-mode] toggleCombatMode failed:", e);
               }
             }
+            // Jump — spacebar. ACE's GameAction::Jump (opcode 0xF61B).
+            // Wasm-side `handle.jump()` computes velocity via ACE's
+            // MovementSystem.GetJumpHeight formula, stamps ballistic
+            // state for local prediction, AND sends the wire packet so
+            // ACE validates the airborne pose. `ev.repeat` filters
+            // browser autorepeat — without it a held space would emit
+            // a stream of jump packets ACE rejects (no double-jumps).
+            // The wasm-side `is_airborne` gate is the canonical
+            // serializer; the repeat check just spares the cmd channel.
+            if (ev.key === " " && handle && !ev.repeat) {
+              try {
+                handle.jump();
+                ev.preventDefault();
+              } catch (e) {
+                console.warn("[jump] handle.jump() failed:", e);
+              }
+            }
           });
           document.addEventListener("keyup", (ev) => {
             // Don't gate keyup on enteredWorld — if the user was
