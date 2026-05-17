@@ -10617,6 +10617,22 @@ const CLIENT_EVENT_KIND_DOOR_STATE_CHANGED: u32 = 15;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_SOUND_TRIGGERED: u32 = 16;
 
+/// An entity's draw-gate flipped. ACE's retail client gates rendering
+/// on bits of `PhysicsState` from `~/ac-headers/acclient.h`:
+/// `HIDDEN = 0x4000`, `NO_DRAW = 0x20`, `CLOAKED = 0x100000`. The
+/// world layer derives this via [`Entity::should_draw`] and fires
+/// `WorldEvent::EntityVisibilityChanged` on every transition plus once
+/// at spawn for any entity already hidden.
+///
+/// JS-side handler in `index.html`'s `drainEvents` block toggles
+/// `EntityInstance.root.visible` on the matching THREE.Group; an
+/// invisible group skips its parts and children automatically.
+///
+/// `u32Payload` = entity GUID; `u32Payload2` = `1` (visible) or `0`
+/// (hidden).
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_ENTITY_VISIBILITY_CHANGED: u32 = 17;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -14134,6 +14150,15 @@ async fn recv_loop(
                                         string_payload: None,
                                         u32_payload: Some(u32::from(*guid)),
                                         u32_payload_2: Some(state_u32),
+                                        f32_payload: None,
+                                    });
+                                }
+                                WorldEvent::EntityVisibilityChanged { guid, visible } => {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_ENTITY_VISIBILITY_CHANGED,
+                                        string_payload: None,
+                                        u32_payload: Some(u32::from(*guid)),
+                                        u32_payload_2: Some(if *visible { 1 } else { 0 }),
                                         f32_payload: None,
                                     });
                                 }

@@ -155,6 +155,23 @@ pub enum WorldEvent {
         guid: Guid,
         state: crate::events::DoorState,
     },
+    /// An entity's draw-gate flipped: `Entity::should_draw()` returned
+    /// a different value than the previous tick. Derived from changes
+    /// to `PhysicsState::HIDDEN`, `NO_DRAW`, or `CLOAKED` — see
+    /// `acclient.h` enum `PhysicsState` and the gates ACE applies in
+    /// `Source/ACE.Server/Physics/PhysicsObj.cs` (17 references to
+    /// `Hidden`, 11 to `NoDraw`, 8 to `Cloaked`).
+    ///
+    /// Emitted from `apply_set_state_update` on every transition AND
+    /// from `upsert_entity_from_create` for any entity whose initial
+    /// state has `should_draw() == false` (so the render path is told
+    /// to hide it before the first frame). JS-side handler in
+    /// `apps/holtburger-web/index.html` toggles
+    /// `EntityInstance.root.visible`.
+    EntityVisibilityChanged {
+        guid: Guid,
+        visible: bool,
+    },
     // Keep the full protocol payload for now: a future 3D client will likely need
     // richer server-authored movement detail than the current core/TUI consumer.
     SelfServerControlledMotion(Box<MovementEventData>),

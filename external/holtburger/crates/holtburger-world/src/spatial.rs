@@ -1,7 +1,9 @@
+mod entity_collision;
 mod physics;
 mod scene;
 mod types;
 
+pub use entity_collision::{EntityCollider, clamp_delta_against_entities};
 pub use physics::{
     BasicSpatialPhysics, GenericSweptHit, NoopSpatialPhysics, PLAYER_CAPSULE_HEIGHT,
     PLAYER_CAPSULE_RADIUS, SpatialPhysics, SweptSphereHit, advance_body_kinematics,

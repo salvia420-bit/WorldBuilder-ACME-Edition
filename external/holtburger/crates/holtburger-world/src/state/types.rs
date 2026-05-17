@@ -73,6 +73,21 @@ pub struct WorldState {
     /// values are already in metres (the dat-side `* 2.0` is applied
     /// at populate time, not at lookup).
     pub(crate) terrain_heights: std::collections::HashMap<u32, [f32; 81]>,
+    /// Cylsphere radius for each loaded SetupModel id (`0x02xxxxxx`),
+    /// in metres. Populated by the wasm bundle via
+    /// [`WorldState::register_setup_radius`] as the renderer loads
+    /// SetupModel DAT records (`apps/holtburger-web/src/lib.rs` →
+    /// `SetupModel::unpack`). Read by the manual-drive integrator
+    /// when building [`crate::spatial::EntityCollider`] records to
+    /// size each entity's collision cylinder. ACE's analog is
+    /// `PhysicsObj.GetPhysicsRadius` in `ACE.Server/Physics/PhysicsObj.cs`
+    /// which pulls `PartArray.GetCylSphere()[0].Radius * Scale`.
+    ///
+    /// We use the first cyl-sphere radius when available, falling
+    /// back to the SetupModel `.radius` field. Misses fall back to
+    /// the player capsule radius (a reasonable default for unknown
+    /// humanoid-scale entities).
+    pub(crate) setup_radii: std::collections::HashMap<u32, f32>,
     pub(crate) entity_lifecycle: EntityLifecycleStore,
     pub(crate) self_movement_capabilities_override: Option<SelfMovementCapabilities>,
 }
@@ -411,6 +426,7 @@ impl WorldState {
             trade: None,
             open_containers: std::collections::HashSet::new(),
             terrain_heights: std::collections::HashMap::new(),
+            setup_radii: std::collections::HashMap::new(),
             entity_lifecycle: EntityLifecycleStore::default(),
             self_movement_capabilities_override: None,
         }
@@ -428,6 +444,45 @@ impl WorldState {
     /// `WorldPosition::landblock_id` packs into.
     pub fn populate_terrain_heights(&mut self, landblock_id: u32, heights: [f32; 81]) {
         self.terrain_heights.insert(landblock_id, heights);
+    }
+
+    /// Cache a SetupModel's collision radius. Called by the wasm
+    /// bundle when it loads a `0x02xxxxxx` SetupModel — the first
+    /// cyl-sphere's radius, or the SetupModel `.radius` field as a
+    /// fallback. Read by the manual-drive integrator to size each
+    /// entity's collision cylinder per ACE's
+    /// `PhysicsObj.GetPhysicsRadius` pattern.
+    pub fn register_setup_radius(&mut self, setup_id: u32, radius: f32) {
+        if radius.is_finite() && radius > 0.0 {
+            self.setup_radii.insert(setup_id, radius);
+        }
+    }
+
+    /// Best-known collision cylinder radius for an entity, in metres.
+    /// Returns the cached SetupModel cyl-sphere radius when the
+    /// entity's `gfx_id` is a `0x02xxxxxx` SetupModel and has been
+    /// loaded; otherwise falls back to
+    /// [`crate::spatial::PLAYER_CAPSULE_RADIUS`].
+    ///
+    /// Mirrors ACE's `PhysicsObj.GetPhysicsRadius` at
+    /// `Source/ACE.Server/Physics/PhysicsObj.cs:~590`. ACE returns
+    /// `0.0` for `HasPhysicsBSP` entities (caller uses BSP path
+    /// instead); we don't follow that today because the BSP path
+    /// isn't wired — see the TODO in
+    /// `crate::spatial::entity_collision`.
+    pub fn entity_collision_radius(&self, entity: &Entity) -> f32 {
+        const DEFAULT: f32 = crate::spatial::PLAYER_CAPSULE_RADIUS;
+        let Some(gfx_id) = entity.gfx_id else {
+            return DEFAULT;
+        };
+        // SetupModel ids are 0x02xxxxxx; GfxObj ids are 0x01xxxxxx.
+        // Cylinder radii live in the SetupModel; raw GfxObj entities
+        // don't expose a cylinder so they fall through to the
+        // default.
+        if (gfx_id >> 24) != 0x02 {
+            return DEFAULT;
+        }
+        self.setup_radii.get(&gfx_id).copied().unwrap_or(DEFAULT)
     }
 
     /// Number of landblocks currently cached. Diagnostic only;

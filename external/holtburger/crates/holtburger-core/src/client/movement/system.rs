@@ -716,6 +716,72 @@ impl MovementSystem {
                 )
             }
         };
+        // Entity collision pass. Mirrors ACE's
+        // `PhysicsObj.find_object_collisions`
+        // (`Source/ACE.Server/Physics/PhysicsObj.cs:~410`), which
+        // tests the moving object against every nearby world object
+        // and branches on `PhysicsState::HAS_PHYSICS_BSP` to pick
+        // BSP-polygon vs cylsphere collision. We only do the
+        // cylsphere fallback today; the BSP path is wired through
+        // `EntityCollider::has_physics_bsp` and is a follow-on.
+        //
+        // Filtering rules (caller-side, before reaching the math):
+        //   - Skip the local player itself.
+        //   - Skip `!Entity::is_collidable()` (entities with
+        //     `ETHEREAL` like open doors, or `IGNORE_COLLISIONS`).
+        //   - Spatial pre-filter: only consider entities within
+        //     `lateral.length() + (combined radii)` so we don't pay
+        //     the swept-circle math for entities we can't possibly
+        //     reach this tick.
+        //
+        // Per-entity radius: looked up from the SetupModel
+        // cyl-sphere cache (`WorldState::setup_radii`, populated
+        // wasm-side by the SetupModel loader). Misses fall back to
+        // the player capsule radius — a reasonable default for
+        // humanoid-scale entities whose SetupModel hasn't been
+        // loaded yet. Mirrors ACE's `PhysicsObj.GetPhysicsRadius` at
+        // `Source/ACE.Server/Physics/PhysicsObj.cs:~590`.
+        let lateral_clamped = {
+            let self_guid = world.player.guid;
+            let player_global = pose.global_coords();
+            let player_radius = holtburger_world::spatial::PLAYER_CAPSULE_RADIUS;
+            // Conservative pre-filter radius — assume the largest
+            // reasonable entity is ~2m wide (a small giant) so we
+            // don't miss large creatures. Tighter pre-filter would
+            // need to inspect each entity's resolved radius first,
+            // which is the work we're trying to avoid for far-away
+            // candidates.
+            let prefilter_dist = lateral_clamped.length() + player_radius + 2.0;
+            let prefilter_sq = prefilter_dist * prefilter_dist;
+            let colliders: Vec<_> = world
+                .entities
+                .iter()
+                .filter(|e| e.guid != self_guid && e.is_collidable())
+                .filter_map(|e| {
+                    let g = e.position.global_coords();
+                    let dx = g.x - player_global.x;
+                    let dy = g.y - player_global.y;
+                    if dx * dx + dy * dy >= prefilter_sq {
+                        return None;
+                    }
+                    Some(holtburger_world::spatial::EntityCollider {
+                        center_xy: (g.x, g.y),
+                        radius: world.entity_collision_radius(e),
+                        has_physics_bsp: e.has_physics_bsp(),
+                    })
+                })
+                .collect();
+            if colliders.is_empty() {
+                lateral_clamped
+            } else {
+                holtburger_world::spatial::clamp_delta_against_entities(
+                    &colliders,
+                    &pose,
+                    lateral_clamped,
+                    player_radius,
+                )
+            }
+        };
         pose.coords.x += lateral_clamped.x;
         pose.coords.y += lateral_clamped.y;
         // Pre-bake gate: zero Z delta when the indoor cell is

@@ -6465,6 +6465,31 @@ void main() {
                   `[phase6.E] door 0x${doorGuid.toString(16).toUpperCase().padStart(8, "0")} → ${doorState}`
                   + (matchedPart ? ` (building part rotated)` : ` (no building part match)`),
                 );
+              } else if (evt.kind === 17) {
+                // EntityVisibilityChanged — wasm detected that
+                // `Entity::should_draw()` flipped on a SetState
+                // update, or that the entity spawned already
+                // hidden. Driven by `PhysicsState::HIDDEN`,
+                // `NO_DRAW`, or `CLOAKED` bits per `acclient.h`
+                // enum `PhysicsState` (and ACE's matching gates in
+                // `ACE.Server/Physics/PhysicsObj.cs`).
+                //
+                // `u32Payload` = entity GUID; `u32Payload2` = 1
+                // (visible) or 0 (hidden). Forwards to the 3D
+                // EntityManager which toggles
+                // `inst.root.visible` on the matching
+                // THREE.Group. The 2D path is unaffected — it does
+                // not currently honor PhysicsState draw gates
+                // (a future ship can mirror this if needed).
+                const visGuid = evt.u32Payload >>> 0;
+                const visible = (evt.u32Payload2 >>> 0) === 1;
+                if (
+                  window.liveScene3d
+                  && window.liveScene3d.entityManager
+                  && typeof window.liveScene3d.entityManager.setVisibility === "function"
+                ) {
+                  window.liveScene3d.entityManager.setVisibility(visGuid, visible);
+                }
               } else if (evt.kind === 16) {
                 // Task F (ambient-sounds-chain 2026-05-12):
                 // SoundTriggered — ACE broadcast `GameMessageSound`

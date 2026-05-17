@@ -409,6 +409,15 @@ impl WorldState {
             self.clear_container_preview(guid);
         }
 
+        // Spawn-time hidden case: if the entity comes online with
+        // HIDDEN/NO_DRAW/CLOAKED set, emit EntityVisibilityChanged
+        // immediately so the renderer never draws a frame of the
+        // entity in its visible-by-default state. Cheap snapshot —
+        // most entities have NONE here so the gate is false and no
+        // event fires.
+        let spawn_hidden = !entity.should_draw();
+        let spawn_guid = entity.guid;
+
         if let Some(old_lb) = self
             .entities
             .get(guid)
@@ -424,10 +433,22 @@ impl WorldState {
                 crate::spatial::AuthoritativeBodySync::Snapshot,
             );
             events.push(WorldEvent::EntityReplaced(Box::new(entity)));
+            if spawn_hidden {
+                events.push(WorldEvent::EntityVisibilityChanged {
+                    guid: spawn_guid,
+                    visible: false,
+                });
+            }
             EntityUpsertKind::Replaced
         } else {
             self.add_entity(entity.clone());
             events.push(WorldEvent::EntitySpawned(Box::new(entity)));
+            if spawn_hidden {
+                events.push(WorldEvent::EntityVisibilityChanged {
+                    guid: spawn_guid,
+                    visible: false,
+                });
+            }
             EntityUpsertKind::Inserted
         }
     }

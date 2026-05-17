@@ -445,6 +445,67 @@ impl Entity {
         self.properties.hydrate_from_odd(data);
     }
 
+    /// Whether the renderer should draw this entity.
+    ///
+    /// Returns `false` when any of `HIDDEN`, `NO_DRAW`, or `CLOAKED`
+    /// is set. Mirrors retail behavior — see `acclient.h` enum
+    /// `PhysicsState` and ACE's draw-gate checks (e.g. 17 references
+    /// to `Hidden` and 11 to `NoDraw` across `ACE.Server/Physics/`).
+    pub fn should_draw(&self) -> bool {
+        !self.physics_state.intersects(
+            PhysicsState::HIDDEN | PhysicsState::NO_DRAW | PhysicsState::CLOAKED,
+        )
+    }
+
+    /// Whether this entity contributes a BSP tree to collision queries.
+    ///
+    /// Mirrors `State.HasFlag(PhysicsState.HasPhysicsBSP)` in ACE's
+    /// `PhysicsObj.find_object_collisions`, `GetPhysicsRadius`, and
+    /// `calc_cross_cells`. When `false`, callers should fall back to
+    /// cylsphere/sphere bounds instead of BSP-polygon queries.
+    pub fn has_physics_bsp(&self) -> bool {
+        self.physics_state.contains(PhysicsState::HAS_PHYSICS_BSP)
+    }
+
+    /// Whether collision logic should run against this entity.
+    ///
+    /// `ETHEREAL` (pass-through, e.g. open doors and ghosts) and
+    /// `IGNORE_COLLISIONS` both disable collision; either skips
+    /// physics interaction. ACE's `Door.cs` flips `Ethereal` on
+    /// open/close.
+    pub fn is_collidable(&self) -> bool {
+        !self.physics_state.intersects(
+            PhysicsState::ETHEREAL | PhysicsState::IGNORE_COLLISIONS,
+        )
+    }
+
+    /// Whether this is a static (non-moving) entity.
+    ///
+    /// ACE checks `PhysicsState.Static` in 30 places to skip physics
+    /// integration steps for fixed scenery and decorative objects.
+    pub fn is_static(&self) -> bool {
+        self.physics_state.contains(PhysicsState::STATIC)
+    }
+
+    /// Whether this entity is a missile (projectile).
+    ///
+    /// Missiles use a different physics path (no walk gravity, path
+    /// alignment, despawn-on-collision). ACE's `find_object_collisions`
+    /// branches on this flag at the top of the function.
+    pub fn is_missile(&self) -> bool {
+        self.physics_state.contains(PhysicsState::MISSILE)
+    }
+
+    /// Whether this entity emits particles.
+    ///
+    /// Particle update/spawn paths in ACE gate on this flag
+    /// (`PhysicsObj.cs:748, 1002, 1146`). Without the gate, the
+    /// renderer wastes work spawning particles on objects the retail
+    /// client wouldn't.
+    pub fn is_particle_emitter(&self) -> bool {
+        self.physics_state.contains(PhysicsState::PARTICLE_EMITTER)
+    }
+
     pub fn new(guid: Guid, name: String, position: WorldPosition) -> Self {
         let mut properties = WorldObjectProperties::default();
         properties.strings.insert(PropertyString::Name, name);
@@ -554,5 +615,53 @@ impl EntityManager {
 
     pub fn remove(&mut self, guid: impl Into<Guid>) -> Option<Entity> {
         self.entities.remove(&guid.into())
+    }
+}
+
+#[cfg(test)]
+mod physics_state_predicates_tests {
+    use super::*;
+
+    fn fixture(state: PhysicsState) -> Entity {
+        let mut e = Entity::new(Guid::from(0x5000_0001u32), "test".into(), WorldPosition::default());
+        e.physics_state = state;
+        e
+    }
+
+    #[test]
+    fn should_draw_gates_hidden_nodraw_cloaked() {
+        assert!(fixture(PhysicsState::NONE).should_draw());
+        assert!(fixture(PhysicsState::STATIC | PhysicsState::GRAVITY).should_draw());
+        assert!(!fixture(PhysicsState::HIDDEN).should_draw());
+        assert!(!fixture(PhysicsState::NO_DRAW).should_draw());
+        assert!(!fixture(PhysicsState::CLOAKED).should_draw());
+        assert!(!fixture(PhysicsState::STATIC | PhysicsState::HIDDEN).should_draw());
+    }
+
+    #[test]
+    fn collidable_gates_ethereal_and_ignore_collisions() {
+        assert!(fixture(PhysicsState::NONE).is_collidable());
+        assert!(fixture(PhysicsState::REPORT_COLLISIONS).is_collidable());
+        assert!(!fixture(PhysicsState::ETHEREAL).is_collidable());
+        assert!(!fixture(PhysicsState::IGNORE_COLLISIONS).is_collidable());
+    }
+
+    #[test]
+    fn single_flag_predicates() {
+        let e = fixture(
+            PhysicsState::STATIC
+                | PhysicsState::HAS_PHYSICS_BSP
+                | PhysicsState::MISSILE
+                | PhysicsState::PARTICLE_EMITTER,
+        );
+        assert!(e.is_static());
+        assert!(e.has_physics_bsp());
+        assert!(e.is_missile());
+        assert!(e.is_particle_emitter());
+        let none = fixture(PhysicsState::NONE);
+        assert!(!none.is_static());
+        assert!(!none.has_physics_bsp());
+        assert!(!none.is_missile());
+        assert!(!none.is_particle_emitter());
     }
 }

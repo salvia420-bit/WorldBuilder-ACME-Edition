@@ -903,6 +903,28 @@ export class EntityManager {
   }
 
   /**
+   * Toggle the entity's render visibility. Called from the kind=17
+   * EntityVisibilityChanged ClientEvent drain in index.html when the
+   * wasm side detects that `Entity::should_draw()` flipped — driven
+   * by `PhysicsState::HIDDEN`, `NO_DRAW`, or `CLOAKED` changes on a
+   * `SetState` packet, or by an entity's initial spawn already in
+   * one of those states. Mirrors the bits ACE checks at the
+   * `PhysicsObj.cs` draw gates (17 references to `Hidden`, 11 to
+   * `NoDraw`, 8 to `Cloaked` in `ACE.Server/Physics/`).
+   *
+   * THREE.js skips children of an invisible group automatically, so
+   * toggling the root is sufficient — no per-part walk needed.
+   * No-op when the entity isn't in `entityMap` yet (race with the
+   * spawn pipeline; the spawn-time visibility event reaches JS after
+   * the EntityInstance is built).
+   */
+  setVisibility(guid, visible) {
+    const inst = this.entityMap.get(guid >>> 0);
+    if (!inst || !inst.root) return;
+    inst.root.visible = !!visible;
+  }
+
+  /**
    * Update motion command/stance. Triggers async fetch + crossFade
    * to a new action when needed. Idempotent: already-playing
    * (cmd, stance) is a no-op.

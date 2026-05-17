@@ -39,6 +39,16 @@ bitflags! {
 }
 
 bitflags! {
+    /// Physics flag bitmask carried on every world object.
+    ///
+    /// Bit values verified bit-for-bit against retail `acclient.exe`
+    /// (IDA-recovered debug info, `~/ac-headers/acclient.h` enum
+    /// `PhysicsState`). ACE's port at `ACE.Entity/Enum/PhysicsState.cs`
+    /// uses identical bits with PascalCase names (`Static`, `NoDraw`).
+    ///
+    /// `NONE` is a Rust convenience for `empty()` and has no analog
+    /// in the retail binary. `UNUSED1` / `UNUSED2` are gaps the retail
+    /// enum left in place; they are reserved and should not be set.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
     pub struct PhysicsState: u32 {
         const NONE                          = 0x00000000;

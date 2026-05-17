@@ -1075,12 +1075,24 @@ impl WorldState {
 
         if let Some(entity) = self.entities.get_mut(data.guid) {
             let is_door = entity.flags.contains(ObjectDescriptionFlag::DOOR);
+            // Capture pre-mutation should_draw so we can detect a flip
+            // on the HIDDEN/NO_DRAW/CLOAKED gate after applying the new
+            // physics_state. Mirrors how ACE's `WorldObject_Networking`
+            // path watches PhysicsState diffs for visibility changes.
+            let was_drawable = entity.should_draw();
             entity.physics_state = data.physics_state;
+            let is_drawable = entity.should_draw();
             entity.properties.hydrate_from_set_state(data);
             events.push(WorldEvent::EntityStateUpdated {
                 guid: data.guid,
                 physics_state: data.physics_state,
             });
+            if was_drawable != is_drawable {
+                events.push(WorldEvent::EntityVisibilityChanged {
+                    guid: data.guid,
+                    visible: is_drawable,
+                });
+            }
             // Phase 6 step E: derive DoorState from ETHEREAL on SetState
             // updates for door-flagged entities. ACE's Door.cs::Open()
             // sets `Ethereal = true` and Door.cs::Close()/FinalizeClose()
