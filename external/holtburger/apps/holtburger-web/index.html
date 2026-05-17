@@ -625,18 +625,37 @@
       import * as PIXI from "pixi.js";
       import { createClient } from "./plugins/api.js";
       import { mountBar } from "./ui/bar.js";
+      import * as combatBarPlugin from "./plugins/combat-bar.js";
 
       let pluginClient = null;
       let barInstance = null;
 
+      // Phase D — combat-bar lives next to the RynthSuite slot. It
+      // owns its panel via the slot.activate(bodyEl) hook + persists
+      // settings to localStorage["holtburger_combat_bar_v1"] +
+      // mirrors them onto window.__combatBarState for picking.js to
+      // read at click time.
+      const barSlots = [
+        {
+          id: "rynthsuite",
+          name: "RynthSuite",
+          icon: "⚔",
+          panelBody: "RynthSuite — combat & navigation (stub)",
+        },
+        {
+          ...combatBarPlugin.manifest,
+          activate: combatBarPlugin.activate,
+        },
+      ];
+
       // Mount the bar immediately — it doesn't depend on session state.
       // The facade is created post-login and stored on window.__pluginClient.
       if (document.body) {
-        barInstance = mountBar({ client: null, root: document.body });
+        barInstance = mountBar({ client: null, root: document.body, slots: barSlots });
         window.__barInstance = barInstance;
       } else {
         window.addEventListener("DOMContentLoaded", () => {
-          barInstance = mountBar({ client: null, root: document.body });
+          barInstance = mountBar({ client: null, root: document.body, slots: barSlots });
           window.__barInstance = barInstance;
         });
       }
@@ -6787,6 +6806,23 @@ void main() {
                   const eventName = payload.type;
                   if (eventName && window.__pluginClient) {
                     window.__pluginClient.events.emit(eventName, payload);
+                  }
+                  // Phase D — visual response: when an attacker hits
+                  // us (damageTaken) play their swing pose if we can
+                  // resolve the attacker's GUID from their name. Names
+                  // are unique per-cell at any given time so the
+                  // case-sensitive linear lookup is reliable enough.
+                  const em = window.liveScene3d?.entityManager;
+                  if (em && typeof em.findGuidByName === "function") {
+                    if (eventName === "damageTaken" && payload.attackerName) {
+                      const g = em.findGuidByName(payload.attackerName);
+                      if (g !== 0) em.setSwingPose(g);
+                    } else if (eventName === "evadedAttacker" && payload.attackerName) {
+                      // Their swing missed — still show the wind-up so
+                      // the player sees something happened on their end.
+                      const g = em.findGuidByName(payload.attackerName);
+                      if (g !== 0) em.setSwingPose(g);
+                    }
                   }
                 } catch (e) {
                   console.warn(`[combat-event] bad JSON: ${e?.message ?? e}`);

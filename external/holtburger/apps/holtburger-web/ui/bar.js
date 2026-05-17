@@ -328,10 +328,14 @@ function makeIcon(slot) {
   return btn;
 }
 
-function makePanel(slot, anchorRect) {
+function makePanel(slot, anchorRect, hostState) {
   const panel = document.createElement("div");
   panel.className = PANEL_CLASS;
   panel.dataset.pluginId = slot.id;
+  // hostState is currently unused inside makePanel but threaded
+  // through so future plugin activate() calls can read host state
+  // (selected target, etc) without a global.
+  void hostState;
 
   const title = document.createElement("div");
   title.className = "hb-panel-title";
@@ -352,14 +356,20 @@ function makePanel(slot, anchorRect) {
   const body = document.createElement("div");
   body.className = "hb-panel-body";
   body.innerHTML = "";
-  const main = document.createElement("div");
-  main.textContent = slot.panelBody;
-  body.appendChild(main);
-  const note = document.createElement("div");
-  note.className = "hb-panel-note";
-  note.textContent =
-    "Plugin facade is wired but no plugin logic exists yet.";
-  body.appendChild(note);
+  // Slot may provide either a static `panelBody` string OR an
+  // `activate(bodyEl)` function (Phase D plugin pattern). When
+  // activate is provided the plugin owns the body's contents;
+  // when panelBody is provided we render the legacy stub layout.
+  if (typeof slot.activate !== "function") {
+    const main = document.createElement("div");
+    main.textContent = slot.panelBody ?? slot.name;
+    body.appendChild(main);
+    const note = document.createElement("div");
+    note.className = "hb-panel-note";
+    note.textContent =
+      "Plugin facade is wired but no plugin logic exists yet.";
+    body.appendChild(note);
+  }
 
   panel.appendChild(title);
   panel.appendChild(body);
@@ -430,7 +440,7 @@ function attachDrag(panel, handle) {
   };
 }
 
-export function mountBar({ client, root }) {
+export function mountBar({ client, root, slots: slotsOpt }) {
   if (!root) throw new Error("mountBar: root required");
   ensureStyle();
 
@@ -447,14 +457,16 @@ export function mountBar({ client, root }) {
   const save = makeSaver();
   const persist = () => save(state);
 
-  const slots = [
-    {
-      id: "rynthsuite",
-      name: "RynthSuite",
-      icon: "⚔",
-      panelBody: "RynthSuite — combat & navigation (stub)",
-    },
-  ];
+  const slots = Array.isArray(slotsOpt) && slotsOpt.length > 0
+    ? slotsOpt
+    : [
+        {
+          id: "rynthsuite",
+          name: "RynthSuite",
+          icon: "⚔",
+          panelBody: "RynthSuite — combat & navigation (stub)",
+        },
+      ];
 
   const bar = document.createElement("div");
   bar.className = BAR_CLASS;
@@ -841,6 +853,18 @@ export function mountBar({ client, root }) {
     const { panel, title, closeBtn } = makePanel(slot, anchorRect);
     root.appendChild(panel);
 
+    // Phase D — if the slot provides an activate function, hand it
+    // the panel body element so the plugin can populate its own UI.
+    let activatedDispose = null;
+    if (typeof slot.activate === "function") {
+      const bodyEl = panel.querySelector(".hb-panel-body");
+      try {
+        activatedDispose = slot.activate(bodyEl, { client, slot });
+      } catch (e) {
+        console.warn(`[bar] slot.activate threw for ${slot.id}:`, e);
+      }
+    }
+
     const detachDrag = attachDrag(panel, title);
     const onClose = () => closePanel();
     closeBtn.addEventListener("click", onClose);
@@ -855,6 +879,13 @@ export function mountBar({ client, root }) {
       cleanup: () => {
         detachDrag();
         closeBtn.removeEventListener("click", onClose);
+        if (typeof activatedDispose === "function") {
+          try {
+            activatedDispose();
+          } catch (e) {
+            console.warn(`[bar] slot.activate dispose threw for ${slot.id}:`, e);
+          }
+        }
       },
     };
   }

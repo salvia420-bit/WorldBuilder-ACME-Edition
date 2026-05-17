@@ -1109,6 +1109,69 @@ export class EntityManager {
   }
 
   /**
+   * Phase D — lookup the entity GUID for a given display name. Case-
+   * sensitive linear scan over entityMap. Returns 0 (a never-used
+   * GUID since ACE GUIDs are 32-bit and skip 0) when no match.
+   * Used by the recv-loop damageTaken dispatch to play setSwingPose
+   * on the attacker's rig.
+   */
+  findGuidByName(name) {
+    if (typeof name !== "string" || name.length === 0) return 0;
+    for (const [guid, inst] of this.entityMap) {
+      if (inst?.meta?.name === name) return guid >>> 0;
+    }
+    return 0;
+  }
+
+  /**
+   * Phase D — persistent selection indicator on the currently targeted
+   * entity. A flat ring is parented under the entity's root so it
+   * follows position/rotation automatically and is GC'd when the
+   * entity is removed from the scene. `guid = 0` (or any unknown
+   * GUID) clears the indicator.
+   */
+  setSelectedTarget(guid) {
+    const next = (guid >>> 0) || 0;
+    // Tear down the previous selection ring even if it's on the same
+    // entity — keeps the path idempotent.
+    if (this._selectedGuid && this._selectedGuid !== next) {
+      const prev = this.entityMap.get(this._selectedGuid);
+      if (prev?._selectionRing) {
+        prev.root.remove(prev._selectionRing);
+        prev._selectionRing.geometry.dispose();
+        prev._selectionRing.material.dispose();
+        prev._selectionRing = null;
+      }
+    }
+    this._selectedGuid = next;
+    if (next === 0) return;
+    const inst = this.entityMap.get(next);
+    if (!inst || !inst.root) {
+      this._selectedGuid = 0;
+      return;
+    }
+    if (inst._selectionRing) return; // already ringed
+    // 0.6m flat torus at the entity's feet, tilted so the ring lies
+    // in the local XY (AC ground) plane. Bright red, slight emissive
+    // hint so it reads even in shadow.
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.55, 0.06, 6, 24),
+      new THREE.MeshBasicMaterial({
+        color: 0xff3322,
+        transparent: true,
+        opacity: 0.85,
+        depthTest: false,
+      }),
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.position.set(0, 0, 0.02);
+    ring.renderOrder = 10;
+    ring.name = "selection-ring";
+    inst._selectionRing = ring;
+    inst.root.add(ring);
+  }
+
+  /**
    * Phase C — one-shot melee swing pose. Right upper arm sweeps
    * forward and back over ~300ms (triangle wave: 0→1→0 in part
    * rotation amplitude). Restarting before completion replaces the

@@ -55,9 +55,24 @@ export function setupClickPicking({
     if (guid == null) return;
     ev.stopPropagation();
     ev.preventDefault();
+    // Phase D — mark the clicked entity as the current target so
+    // subsequent clicks (or the future combat-bar HUD) can read it.
+    // Selection persists until another entity is picked.
+    liveScene3d.entityManager?.setSelectedTarget?.(guid);
     try {
       if (isInMeleeStance?.() && typeof sessionHandle.attack === "function") {
-        sessionHandle.attack(guid, ATTACK_HEIGHT_MEDIUM, ATTACK_POWER_FULL);
+        // Phase D — read attack parameters from the combat-bar plugin
+        // when present, fall back to the Phase C defaults otherwise.
+        const cb = window.__combatBarState;
+        const height =
+          cb && typeof cb.attackHeight === "number"
+            ? cb.attackHeight
+            : ATTACK_HEIGHT_MEDIUM;
+        const power =
+          cb && typeof cb.powerLevel === "number"
+            ? cb.powerLevel
+            : ATTACK_POWER_FULL;
+        sessionHandle.attack(guid, height, power);
         // Local-player swing pose for immediate visual feedback.
         // ACE owns the actual swing motion + damage; this is just
         // the click → "I did something" affordance.
