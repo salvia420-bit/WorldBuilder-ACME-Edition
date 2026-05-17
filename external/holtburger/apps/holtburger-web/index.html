@@ -623,6 +623,23 @@
       } from "./pkg/holtburger_web.js?v=h3-e1";
 
       import * as PIXI from "pixi.js";
+      import { createClient } from "./plugins/api.js";
+      import { mountBar } from "./ui/bar.js";
+
+      let pluginClient = null;
+      let barInstance = null;
+
+      // Mount the bar immediately — it doesn't depend on session state.
+      // The facade is created post-login and stored on window.__pluginClient.
+      if (document.body) {
+        barInstance = mountBar({ client: null, root: document.body });
+        window.__barInstance = barInstance;
+      } else {
+        window.addEventListener("DOMContentLoaded", () => {
+          barInstance = mountBar({ client: null, root: document.body });
+          window.__barInstance = barInstance;
+        });
+      }
 
       const root = document.getElementById("results");
       const lines = [];
@@ -5641,6 +5658,11 @@ void main() {
           // without going through the per-button click flow. Strictly
           // debug-only; not relied on by any production code path.
           window.__sessionHandle = handle;
+
+          if (!pluginClient) {
+            pluginClient = createClient(handle);
+            window.__pluginClient = pluginClient;
+          }
 
           // Step 2a: the recv loop signals the initial CharacterList
           // back via the oneshot inside start_session, so it arrives as
