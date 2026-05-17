@@ -197,6 +197,62 @@
       .vital-bar.health .fill { background: linear-gradient(180deg, #e64646, #b22222); }
       .vital-bar.stamina .fill { background: linear-gradient(180deg, #d4b330, #a88a14); }
       .vital-bar.mana .fill { background: linear-gradient(180deg, #4f8aff, #2c5fcc); }
+      /* Phase H.2 — top overlay HUD mirroring the 3 vital bars (retail-style). */
+      #vitals-hud-overlay {
+        position: fixed;
+        top: 8px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 50;
+        display: flex;
+        gap: 8px;
+        padding: 6px 10px;
+        background: rgba(20, 20, 24, 0.78);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 8px;
+        backdrop-filter: blur(4px);
+        font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+        pointer-events: none;
+      }
+      #vitals-hud-overlay[hidden] { display: none; }
+      #vitals-hud-overlay .hud-vital {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 11px;
+        color: #fff;
+        font-variant-numeric: tabular-nums;
+      }
+      #vitals-hud-overlay .hud-vital-label {
+        font-weight: 600;
+        font-size: 9px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: rgba(255, 255, 255, 0.7);
+        width: 12px;
+      }
+      #vitals-hud-overlay .hud-vital-bar {
+        position: relative;
+        width: 90px;
+        height: 10px;
+        background: rgba(0, 0, 0, 0.45);
+        border-radius: 2px;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+      }
+      #vitals-hud-overlay .hud-vital-fill {
+        position: absolute;
+        top: 0; left: 0; bottom: 0;
+        transition: width 120ms linear;
+      }
+      #vitals-hud-overlay .hud-vital.health .hud-vital-fill { background: linear-gradient(180deg, #e64646, #b22222); }
+      #vitals-hud-overlay .hud-vital.stamina .hud-vital-fill { background: linear-gradient(180deg, #d4b330, #a88a14); }
+      #vitals-hud-overlay .hud-vital.mana .hud-vital-fill { background: linear-gradient(180deg, #4f8aff, #2c5fcc); }
+      #vitals-hud-overlay .hud-vital-nums {
+        min-width: 60px;
+        font-size: 10px;
+        color: rgba(255, 255, 255, 0.85);
+      }
       /* Attribute table — six rows, current / base columns. */
       #vitals-panel .section-h { font-weight: 600; font-size: 0.78rem; color: #555; text-transform: uppercase; letter-spacing: 0.05em; margin: 0.7rem 0 0.25rem; padding-bottom: 0.15rem; border-bottom: 1px solid #e0e0e0; }
       #attribute-table, #skill-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
@@ -627,11 +683,16 @@
       import { mountBar } from "./ui/bar.js";
       import * as combatBarPlugin from "./plugins/combat-bar.js";
       import * as spellbookPlugin from "./plugins/spellbook.js";
+      import * as stanceTogglePlugin from "./plugins/stance-toggle.js";
 
       let pluginClient = null;
       let barInstance = null;
 
       const barSlots = [
+        {
+          ...stanceTogglePlugin.manifest,
+          activate: stanceTogglePlugin.activate,
+        },
         {
           id: "rynthsuite",
           name: "RynthSuite",
@@ -968,8 +1029,12 @@
       function getCurrentStanceLow() {
         return currentStanceLow;
       }
+      function getCurrentStanceLabel() {
+        return STANCE_LABELS[currentStanceLow] ?? `0x${currentStanceLow.toString(16)}`;
+      }
       // Expose for plugins/picking that need to react to stance.
       window.__getCurrentStanceLow = getCurrentStanceLow;
+      window.__getCurrentStanceLabel = getCurrentStanceLabel;
       // Confirmed stance update — called from kind=5 dispatch when
       // the local player's motionStance lands. Strips the
       // hotkey-press "pending" italic styling and shows the
@@ -5375,6 +5440,43 @@ void main() {
       const vitalsName = document.getElementById("vitals-name");
       const vitalsLevel = document.getElementById("vitals-level");
       const vitalsBars = document.getElementById("vitals-bars");
+      // Phase H.2 — top-of-screen vitals HUD overlay (retail had vitals
+      // bars persistent at the top). The compact mirror shows only HP /
+      // Stamina / Mana; the full vitals-panel keeps the attribute +
+      // skill tables for detail viewing.
+      let vitalsHudOverlay = document.getElementById("vitals-hud-overlay");
+      if (!vitalsHudOverlay) {
+        vitalsHudOverlay = document.createElement("div");
+        vitalsHudOverlay.id = "vitals-hud-overlay";
+        vitalsHudOverlay.hidden = true;
+        document.body.appendChild(vitalsHudOverlay);
+      }
+      function renderVitalsHud(vitals) {
+        if (!vitals || vitals.length === 0) {
+          vitalsHudOverlay.hidden = true;
+          return;
+        }
+        const rows = [];
+        for (let i = 0; i + 3 < vitals.length; i += 4) {
+          const type = vitals[i];
+          const current = vitals[i + 1];
+          const buffedMax = vitals[i + 3];
+          const cls = VITAL_CSS_CLASS[type] || "";
+          const short = type === 1 ? "HP" : type === 3 ? "ST" : type === 5 ? "MN" : "?";
+          const pct = buffedMax > 0
+            ? Math.max(0, Math.min(100, (current / buffedMax) * 100))
+            : 0;
+          rows.push(
+            `<div class="hud-vital ${cls}">` +
+              `<span class="hud-vital-label">${short}</span>` +
+              `<div class="hud-vital-bar"><div class="hud-vital-fill" style="width:${pct.toFixed(1)}%"></div></div>` +
+              `<span class="hud-vital-nums">${current} / ${buffedMax}</span>` +
+            `</div>`
+          );
+        }
+        vitalsHudOverlay.innerHTML = rows.join("");
+        vitalsHudOverlay.hidden = false;
+      }
       const attributeTable = document.getElementById("attribute-table").querySelector("tbody");
       const skillTable = document.getElementById("skill-table").querySelector("tbody");
       const inventoryPanel = document.getElementById("inventory-panel");
@@ -5420,6 +5522,8 @@ void main() {
 
         // Vitals bars. `vitals` packs `[type, current, base, buffed_max] × 3`.
         const vitals = stats.vitals;
+        // Phase H.2 — mirror into the top-of-screen HUD overlay.
+        renderVitalsHud(vitals);
         if (!vitals || vitals.length === 0) {
           vitalsBars.innerHTML = '<div class="empty">Waiting for player biota…</div>';
         } else {

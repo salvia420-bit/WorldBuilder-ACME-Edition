@@ -159,8 +159,105 @@ function ensureStyles() {
       padding: 8px;
       text-align: center;
     }
+    .hb-sb-detail {
+      position: fixed;
+      z-index: 200;
+      max-width: 280px;
+      padding: 8px 10px;
+      background: rgba(28, 28, 32, 0.96);
+      border: 1px solid rgba(160, 110, 255, 0.5);
+      border-radius: 6px;
+      color: #fff;
+      font-size: 11px;
+      line-height: 1.4;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+      backdrop-filter: blur(6px);
+    }
+    .hb-sb-detail-name {
+      font-weight: 600;
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+    .hb-sb-detail-meta {
+      color: rgba(255, 255, 255, 0.65);
+      margin-bottom: 6px;
+      font-size: 10px;
+    }
+    .hb-sb-detail-desc {
+      color: rgba(255, 255, 255, 0.85);
+      margin-bottom: 4px;
+    }
+    .hb-sb-detail-comps {
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 10px;
+    }
   `;
   document.head.appendChild(style);
+}
+
+let openDetail = null;
+function closeDetail() {
+  if (openDetail) {
+    openDetail.remove();
+    openDetail = null;
+  }
+}
+
+function showSpellDetail(meta, anchorX, anchorY) {
+  closeDetail();
+  const el = document.createElement("div");
+  el.className = "hb-sb-detail";
+
+  const name = document.createElement("div");
+  name.className = "hb-sb-detail-name";
+  name.textContent = meta.name;
+  el.appendChild(name);
+
+  const meta_str = document.createElement("div");
+  meta_str.className = "hb-sb-detail-meta";
+  const schoolName = SCHOOL_NAMES[meta.school] ?? "?";
+  const durStr = meta.duration && meta.duration > 0
+    ? ` · ${meta.duration >= 60 ? `${Math.round(meta.duration / 60)}m` : `${meta.duration}s`}`
+    : "";
+  meta_str.textContent =
+    `${schoolName} · Level ${meta.level} · ${meta.mana} mana${durStr}` +
+    (meta.untargeted ? " · self-cast" : " · targeted");
+  el.appendChild(meta_str);
+
+  if (meta.desc) {
+    const desc = document.createElement("div");
+    desc.className = "hb-sb-detail-desc";
+    desc.textContent = meta.desc;
+    el.appendChild(desc);
+  }
+
+  if (Array.isArray(meta.components) && meta.components.length > 0) {
+    const comps = document.createElement("div");
+    comps.className = "hb-sb-detail-comps";
+    comps.textContent = `Components: ${meta.components.length} required`;
+    el.appendChild(comps);
+  }
+
+  // Position near the click; clamp to viewport.
+  const W = 280, H = 120;
+  let left = anchorX + 8;
+  let top = anchorY + 8;
+  if (left + W > window.innerWidth) left = window.innerWidth - W - 8;
+  if (top + H > window.innerHeight) top = anchorY - H - 8;
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+  document.body.appendChild(el);
+  openDetail = el;
+}
+
+// Close popover on outside click or Esc.
+if (typeof window !== "undefined") {
+  window.addEventListener("mousedown", (ev) => {
+    if (openDetail && !openDetail.contains(ev.target)) closeDetail();
+  }, true);
+  window.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") closeDetail();
+  });
 }
 
 export const manifest = {
@@ -177,8 +274,7 @@ export function activate(bodyEl, ctx) {
 
   const filters = {
     schools: new Set([1, 2, 3, 4, 5]),
-    minLevel: 1,
-    maxLevel: 999,
+    levels: new Set([1, 2, 3, 4, 5, 6, 7, 8]),
   };
 
   const filterRow = document.createElement("div");
@@ -202,6 +298,29 @@ export function activate(bodyEl, ctx) {
   }
   filterRow.appendChild(schoolGroup);
   bodyEl.appendChild(filterRow);
+
+  // Phase H.3 — level filter check-bubbles (retail had I-VIII levels).
+  const levelRow = document.createElement("div");
+  levelRow.className = "hb-sb-filters";
+  const levelGroup = document.createElement("div");
+  levelGroup.className = "hb-sb-filter-group";
+  const ROMAN = { 1: "I", 2: "II", 3: "III", 4: "IV", 5: "V", 6: "VI", 7: "VII", 8: "VIII" };
+  for (const lv of [1, 2, 3, 4, 5, 6, 7, 8]) {
+    const lbl = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = true;
+    cb.addEventListener("change", () => {
+      if (cb.checked) filters.levels.add(lv);
+      else filters.levels.delete(lv);
+      rerenderList();
+    });
+    lbl.appendChild(cb);
+    lbl.appendChild(document.createTextNode(ROMAN[lv]));
+    levelGroup.appendChild(lbl);
+  }
+  levelRow.appendChild(levelGroup);
+  bodyEl.appendChild(levelRow);
 
   const hint = document.createElement("div");
   hint.className = "hb-sb-hint";
@@ -229,7 +348,7 @@ export function activate(bodyEl, ctx) {
       const id = Number(idStr);
       if (!knownIds.has(id)) continue;
       if (!filters.schools.has(meta.school)) continue;
-      if (meta.level < filters.minLevel || meta.level > filters.maxLevel) continue;
+      if (!filters.levels.has(meta.level)) continue;
       entries.push([id, meta]);
     }
     if (entries.length === 0) {
@@ -249,7 +368,16 @@ export function activate(bodyEl, ctx) {
       row.className = "hb-sb-row";
       if (slotsNow.has(id)) row.classList.add("on-bar");
       row.dataset.spellId = String(id);
+      row.draggable = true;
       row.title = `${meta.name} — ${meta.untargeted ? "self-cast" : "targeted"}, ${meta.mana} mana, lvl ${meta.level}`;
+      row.addEventListener("dragstart", (ev) => {
+        // Phase H.5 — drag spell to populate a combat-bar slot.
+        // dataTransfer carries the spell ID; combat-bar's row handlers
+        // read it from "application/x-hb-spell-id".
+        ev.dataTransfer.effectAllowed = "copy";
+        ev.dataTransfer.setData("application/x-hb-spell-id", String(id));
+        ev.dataTransfer.setData("text/plain", meta.name);
+      });
 
       const name = document.createElement("span");
       name.className = "hb-sb-row-name";
@@ -272,6 +400,11 @@ export function activate(bodyEl, ctx) {
         row.style.background = "rgba(160, 110, 255, 0.3)";
         setTimeout(() => { row.style.background = ""; }, 200);
         console.log(`[spellbook] added ${meta.name} (id=${id}) to slot ${slot}`);
+      });
+
+      row.addEventListener("contextmenu", (ev) => {
+        ev.preventDefault();
+        showSpellDetail(meta, ev.clientX, ev.clientY);
       });
 
       listEl.appendChild(row);

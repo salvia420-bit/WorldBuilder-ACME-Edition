@@ -1,4 +1,4 @@
-import { getSpellBarSlots, loadCatalog } from "./spellbook.js";
+import { getSpellBarSlots, setSpellBarSlot, loadCatalog } from "./spellbook.js";
 
 const STORAGE_KEY = "holtburger_combat_bar_v1";
 
@@ -185,6 +185,39 @@ function ensureStyles() {
       font-size: 11px;
       color: rgba(180, 130, 255, 0.85);
     }
+    .hb-cb-power-meter {
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255, 255, 255, 0.12);
+    }
+    .hb-cb-power-meter-label {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.55);
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .hb-cb-power-meter-bar {
+      position: relative;
+      height: 12px;
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .hb-cb-power-meter-fill {
+      position: absolute;
+      top: 0; left: 0; bottom: 0;
+      width: 0%;
+      background: linear-gradient(180deg, #ffaa44, #cc6622);
+      transition: width 100ms linear;
+    }
+    .hb-cb-power-meter.refilling .hb-cb-power-meter-fill {
+      background: linear-gradient(180deg, #ffaa44, #cc6622);
+    }
+    .hb-cb-power-meter.ready .hb-cb-power-meter-fill {
+      background: linear-gradient(180deg, #88ff88, #44cc44);
+    }
   `;
   document.head.appendChild(style);
 }
@@ -308,6 +341,77 @@ function renderAttackControls(bodyEl, state) {
   hint.textContent =
     "Settings apply to your next click-to-attack. ACE owns the auto-repeat loop server-side.";
   bodyEl.appendChild(hint);
+
+  // Phase H.6 — power-bar meter. Subscribes to combatCommenceAttack +
+  // attackDone events to animate the refill cycle. Refill duration is
+  // approximated from the current power slider (retail's
+  // nextRefillTime ≈ PowerLevel × ~1.5s for melee). We don't know the
+  // exact refillMod ACE uses; the visual feedback approximates it.
+  const meter = document.createElement("div");
+  meter.className = "hb-cb-power-meter ready";
+  const meterLabel = document.createElement("div");
+  meterLabel.className = "hb-cb-power-meter-label";
+  meterLabel.textContent = "Power Bar";
+  meter.appendChild(meterLabel);
+  const meterBar = document.createElement("div");
+  meterBar.className = "hb-cb-power-meter-bar";
+  const meterFill = document.createElement("div");
+  meterFill.className = "hb-cb-power-meter-fill";
+  meterFill.style.width = "100%";
+  meterBar.appendChild(meterFill);
+  meter.appendChild(meterBar);
+  bodyEl.appendChild(meter);
+
+  // Expose tween handle so the activate() teardown can clear it.
+  bodyEl.__powerMeterDispose = (function attachPowerMeter() {
+    const client = window.__pluginClient;
+    if (!client?.events?.on) return () => {};
+
+    let refillStartMs = 0;
+    let refillDurMs = 1500;
+    let rafId = 0;
+
+    function tick() {
+      const elapsed = performance.now() - refillStartMs;
+      const t = Math.min(1, elapsed / refillDurMs);
+      meterFill.style.width = `${(t * 100).toFixed(1)}%`;
+      if (t < 1) {
+        rafId = requestAnimationFrame(tick);
+      } else {
+        meter.classList.remove("refilling");
+        meter.classList.add("ready");
+        rafId = 0;
+      }
+    }
+
+    const onCommence = () => {
+      // Power slider drives expected refill duration.
+      const power = (window.__combatBarState?.powerLevel ?? 1.0);
+      refillDurMs = 600 + power * 1200; // ~0.6s low, ~1.8s full
+      refillStartMs = performance.now();
+      meter.classList.remove("ready");
+      meter.classList.add("refilling");
+      meterFill.style.width = "0%";
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(tick);
+    };
+    const onDone = () => {
+      // AttackDone — power refilled, ready for next swing.
+      meter.classList.remove("refilling");
+      meter.classList.add("ready");
+      meterFill.style.width = "100%";
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = 0;
+    };
+
+    client.events.on("combatCommenceAttack", onCommence);
+    client.events.on("attackDone", onDone);
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      client.events.off("combatCommenceAttack", onCommence);
+      client.events.off("attackDone", onDone);
+    };
+  })();
 }
 
 function renderSpellPicker(bodyEl, state, client) {
@@ -354,16 +458,72 @@ function renderSpellPicker(bodyEl, state, client) {
 
     for (let i = 0; i < slots.length; i++) {
       const spellId = slots[i];
-      if (spellId === 0) continue;
+      if (spellId === 0) {
+        // Phase H.5 — empty slot rendered as drop target so user can
+        // drop a dragged spell into a specific position. The slot
+        // appears as a thin dashed placeholder.
+        const placeholder = document.createElement("div");
+        placeholder.className = "hb-cb-spell hb-cb-spell-empty";
+        placeholder.dataset.slotIndex = String(i);
+        placeholder.style.borderStyle = "dashed";
+        placeholder.style.opacity = "0.4";
+        placeholder.style.cursor = "default";
+        const action = document.createElement("span");
+        action.className = "hb-cb-spell-action";
+        action.textContent = `${i + 1}`;
+        placeholder.appendChild(action);
+        const empty = document.createElement("span");
+        empty.className = "hb-cb-spell-name";
+        empty.textContent = "(empty — drop a spell here)";
+        empty.style.color = "rgba(255, 255, 255, 0.4)";
+        empty.style.fontStyle = "italic";
+        placeholder.appendChild(empty);
+        placeholder.addEventListener("dragover", (ev) => {
+          if (ev.dataTransfer.types.includes("application/x-hb-spell-id")) {
+            ev.preventDefault();
+            ev.dataTransfer.dropEffect = "copy";
+            placeholder.style.opacity = "1";
+            placeholder.style.borderColor = "rgba(160, 110, 255, 0.7)";
+          }
+        });
+        placeholder.addEventListener("dragleave", () => {
+          placeholder.style.opacity = "0.4";
+          placeholder.style.borderColor = "";
+        });
+        placeholder.addEventListener("drop", (ev) => {
+          ev.preventDefault();
+          const draggedId = parseInt(ev.dataTransfer.getData("application/x-hb-spell-id"), 10);
+          if (Number.isFinite(draggedId) && draggedId > 0) {
+            setSpellBarSlot(i, draggedId);
+          }
+        });
+        list.appendChild(placeholder);
+        continue;
+      }
       const meta = catalog ? catalog[String(spellId)] : null;
       const row = document.createElement("button");
       row.type = "button";
       row.className = "hb-cb-spell";
       row.dataset.spellId = String(spellId);
+      row.dataset.slotIndex = String(i);
       const isUntargeted = meta?.untargeted ?? true;
       if (state.armedSpellId === spellId && !isUntargeted) {
         row.classList.add("armed");
       }
+      // Phase H.5 — accept dragged spells from the Spellbook plugin.
+      row.addEventListener("dragover", (ev) => {
+        if (ev.dataTransfer.types.includes("application/x-hb-spell-id")) {
+          ev.preventDefault();
+          ev.dataTransfer.dropEffect = "copy";
+        }
+      });
+      row.addEventListener("drop", (ev) => {
+        ev.preventDefault();
+        const draggedId = parseInt(ev.dataTransfer.getData("application/x-hb-spell-id"), 10);
+        if (Number.isFinite(draggedId) && draggedId > 0) {
+          setSpellBarSlot(i, draggedId);
+        }
+      });
 
       const action = document.createElement("span");
       action.className = "hb-cb-spell-action";
@@ -517,6 +677,10 @@ export function activate(bodyEl, ctx) {
     // Phase G — spell-picker installs a window listener; clean it up.
     if (typeof bodyEl.__spellPickerDispose === "function") {
       try { bodyEl.__spellPickerDispose(); } catch {}
+    }
+    // Phase H.6 — power-meter rAF + event subscriptions.
+    if (typeof bodyEl.__powerMeterDispose === "function") {
+      try { bodyEl.__powerMeterDispose(); } catch {}
     }
   };
 }

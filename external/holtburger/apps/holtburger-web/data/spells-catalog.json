@@ -1,5 +1,5 @@
 {
-  "_comment": "Phase G spell catalog. School: 1=War 2=Life 3=Item 4=Creature 5=Void. level is the LSD 'power' field. untargeted=true means cast-on-self / no target. Trimmed subset of LSD-Partial-2025-02-23_16-15/spells.json \u2014 Phase H can expand.",
+  "_comment": "Phase G/H spell catalog. School: 1=War 2=Life 3=Item 4=Creature 5=Void. level is the retail spell tier (1-8 = I-VIII), parsed from the name suffix. untargeted=true means cast-on-self / no target. Trimmed subset of LSD-Partial-2025-02-23_16-15/spells.json \u2014 Phase H+ can expand.",
   "spells": {
     "58": {
       "name": "Acid Stream I",
@@ -7,7 +7,16 @@
       "level": 1,
       "untargeted": false,
       "mana": 5,
-      "icon": 100668334
+      "icon": 100668334,
+      "desc": "Shoots a stream of acid at the target. The stream does 16-31 points of acid damage to the first thing it hits.",
+      "duration": 0,
+      "components": [
+        "Comp_1",
+        "Comp_15",
+        "Comp_34",
+        "Comp_37",
+        "Comp_55"
+      ]
     },
     "27": {
       "name": "Flame Bolt I",
@@ -15,7 +24,16 @@
       "level": 1,
       "untargeted": false,
       "mana": 5,
-      "icon": 100668276
+      "icon": 100668276,
+      "desc": "Shoots a bolt of flame at the target.  The bolt does 16-31 points of fire damage to the first thing it hits.",
+      "duration": 0,
+      "components": [
+        "Comp_1",
+        "Comp_15",
+        "Comp_34",
+        "Comp_46",
+        "Comp_55"
+      ]
     },
     "86": {
       "name": "Force Bolt I",
@@ -23,7 +41,16 @@
       "level": 1,
       "untargeted": false,
       "mana": 5,
-      "icon": 100668343
+      "icon": 100668343,
+      "desc": "Shoots a bolt of force at the target. The bolt does 16-31 points of piercing damage to the first thing it hits.",
+      "duration": 0,
+      "components": [
+        "Comp_1",
+        "Comp_15",
+        "Comp_34",
+        "Comp_44",
+        "Comp_55"
+      ]
     },
     "28": {
       "name": "Frost Bolt I",
@@ -31,7 +58,16 @@
       "level": 1,
       "untargeted": false,
       "mana": 5,
-      "icon": 100668281
+      "icon": 100668281,
+      "desc": "Shoots a bolt of frost at the target. The bolt does 16-31 points of cold damage to the first thing it hits.",
+      "duration": 0,
+      "components": [
+        "Comp_1",
+        "Comp_15",
+        "Comp_34",
+        "Comp_41",
+        "Comp_55"
+      ]
     },
     "75": {
       "name": "Lightning Bolt I",
@@ -39,7 +75,16 @@
       "level": 1,
       "untargeted": false,
       "mana": 5,
-      "icon": 100668333
+      "icon": 100668333,
+      "desc": "Shoots a bolt of lighting at the target. The bolt does 16-31 points of electrical damage to the first thing it hits.",
+      "duration": 0,
+      "components": [
+        "Comp_1",
+        "Comp_15",
+        "Comp_34",
+        "Comp_40",
+        "Comp_55"
+      ]
     },
     "64": {
       "name": "Shock Wave I",
@@ -47,7 +92,16 @@
       "level": 1,
       "untargeted": false,
       "mana": 5,
-      "icon": 100668336
+      "icon": 100668336,
+      "desc": "Shoots a shock wave at the target. The wave does 16-31 points of bludgeoning damage to the first thing it hits.",
+      "duration": 0,
+      "components": [
+        "Comp_1",
+        "Comp_15",
+        "Comp_34",
+        "Comp_48",
+        "Comp_55"
+      ]
     },
     "92": {
       "name": "Whirling Blade I",
@@ -55,7 +109,16 @@
       "level": 1,
       "untargeted": false,
       "mana": 5,
-      "icon": 100668349
+      "icon": 100668349,
+      "desc": "Shoots a magical blade at the target. The bolt does 16-31 points of slashing damage to the first thing it hits.",
+      "duration": 0,
+      "components": [
+        "Comp_1",
+        "Comp_15",
+        "Comp_34",
+        "Comp_47",
+        "Comp_55"
+      ]
     },
     "7": {
       "name": "Harm Other I",
@@ -63,7 +126,16 @@
       "level": 1,
       "untargeted": false,
       "mana": 10,
-      "icon": 100674016
+      "icon": 100674016,
+      "desc": "Drains 4-6 points of the target's Health.",
+      "duration": 0,
+      "components": [
+        "Comp_1",
+        "Comp_8",
+        "Comp_26",
+        "Comp_41",
+        "Comp_52"
+      ]
     },
     "5": {
       "name": "Heal Other I",
@@ -71,7 +143,16 @@
       "level": 1,
       "untargeted": false,
       "mana": 10,
-      "icon": 100674018
+      "icon": 100674018,
+      "desc": "Restores 10-25 points of the target's Health.",
+      "duration": 0,
+      "components": [
+        "Comp_1",
+        "Comp_7",
+        "Comp_26",
+        "Comp_41",
+        "Comp_51"
+      ]
     },
     "6": {
       "name": "Heal Self I",
@@ -79,7 +160,16 @@
       "level": 1,
       "untargeted": true,
       "mana": 15,
-      "icon": 100674019
+      "icon": 100674019,
+      "desc": "Restores 10-25 points of the caster's Health.",
+      "duration": 0,
+      "components": [
+        "Comp_1",
+        "Comp_7",
+        "Comp_26",
+        "Comp_41",
+        "Comp_61"
+      ]
     },
     "9": {
       "name": "Infuse Mana Other I",
@@ -87,15 +177,33 @@
       "level": 1,
       "untargeted": false,
       "mana": 10,
-      "icon": 100668288
+      "icon": 100668288,
+      "desc": "Drains one-quarter of the caster's Mana and gives 75% of that to the target.",
+      "duration": 0,
+      "components": [
+        "Comp_1",
+        "Comp_9",
+        "Comp_26",
+        "Comp_42",
+        "Comp_53"
+      ]
     },
     "25": {
       "name": "Imperil Other I",
       "school": 2,
-      "level": 25,
+      "level": 1,
       "untargeted": false,
       "mana": 10,
-      "icon": 100668293
+      "icon": 100668293,
+      "desc": "Decreases the target's natural armor by 20 points.",
+      "duration": 60.0,
+      "components": [
+        "Comp_1",
+        "Comp_14",
+        "Comp_34",
+        "Comp_40",
+        "Comp_54"
+      ]
     },
     "49": {
       "name": "Aura of Swift Killer Self I",
@@ -103,31 +211,74 @@
       "level": 1,
       "untargeted": true,
       "mana": 10,
-      "icon": 100673991
+      "icon": 100673991,
+      "desc": "Improves a weapon's speed by 10 points.",
+      "duration": 1800.0,
+      "components": [
+        "Comp_1",
+        "Comp_7",
+        "Comp_36",
+        "Comp_45",
+        "Comp_60"
+      ]
     },
     "2644": {
       "name": "Lifestone Tie",
       "school": 3,
-      "level": 100,
+      "level": 1,
       "untargeted": true,
       "mana": 50,
-      "icon": 100672856
+      "icon": 100672856,
+      "desc": "Links the caster to a targeted Lifestone.",
+      "duration": 0,
+      "components": [
+        "Comp_3",
+        "Comp_65",
+        "Comp_21",
+        "Comp_66",
+        "Comp_32",
+        "Comp_46",
+        "Comp_59"
+      ]
     },
     "2023": {
       "name": "Recall the Sanctuary",
       "school": 3,
-      "level": 200,
+      "level": 1,
       "untargeted": true,
       "mana": 70,
-      "icon": 100674023
+      "icon": 100674023,
+      "desc": "Transports the caster to the Ithaenc Cathedral.",
+      "duration": 0,
+      "components": [
+        "Comp_3",
+        "Comp_72",
+        "Comp_23",
+        "Comp_73",
+        "Comp_65",
+        "Comp_40",
+        "Comp_63",
+        "Comp_60"
+      ]
     },
     "157": {
       "name": "Summon Primary Portal I",
       "school": 3,
-      "level": 200,
+      "level": 1,
       "untargeted": true,
       "mana": 70,
-      "icon": 100672859
+      "icon": 100672859,
+      "desc": "Summons a portal that goes to the destination of the caster's linked portal, set with Primary Portal Tie.",
+      "duration": 0,
+      "components": [
+        "Comp_4",
+        "Comp_69",
+        "Comp_24",
+        "Comp_66",
+        "Comp_32",
+        "Comp_42",
+        "Comp_60"
+      ]
     },
     "1373": {
       "name": "Coordination Self I",
@@ -135,7 +286,16 @@
       "level": 1,
       "untargeted": true,
       "mana": 15,
-      "icon": 100668268
+      "icon": 100668268,
+      "desc": "Increases the caster's Coordination by 10 points.",
+      "duration": 1800.0,
+      "components": [
+        "Comp_1",
+        "Comp_7",
+        "Comp_33",
+        "Comp_39",
+        "Comp_60"
+      ]
     },
     "1349": {
       "name": "Endurance Self I",
@@ -143,7 +303,16 @@
       "level": 1,
       "untargeted": true,
       "mana": 15,
-      "icon": 100668273
+      "icon": 100668273,
+      "desc": "Increases the caster's Endurance by 10 points.",
+      "duration": 1800.0,
+      "components": [
+        "Comp_1",
+        "Comp_7",
+        "Comp_33",
+        "Comp_48",
+        "Comp_60"
+      ]
     },
     "1421": {
       "name": "Focus Self I",
@@ -151,7 +320,16 @@
       "level": 1,
       "untargeted": true,
       "mana": 15,
-      "icon": 100668277
+      "icon": 100668277,
+      "desc": "Increases the caster's Focus by 10 points.",
+      "duration": 1800.0,
+      "components": [
+        "Comp_1",
+        "Comp_7",
+        "Comp_33",
+        "Comp_43",
+        "Comp_60"
+      ]
     },
     "17": {
       "name": "Invulnerability Other I",
@@ -159,7 +337,16 @@
       "level": 1,
       "untargeted": false,
       "mana": 10,
-      "icon": 100668331
+      "icon": 100668331,
+      "desc": "Increases the target's Melee Defense skill by 10 points.",
+      "duration": 1800.0,
+      "components": [
+        "Comp_1",
+        "Comp_7",
+        "Comp_30",
+        "Comp_44",
+        "Comp_49"
+      ]
     },
     "1397": {
       "name": "Quickness Self I",
@@ -167,7 +354,16 @@
       "level": 1,
       "untargeted": true,
       "mana": 15,
-      "icon": 100668294
+      "icon": 100668294,
+      "desc": "Increases the caster's Quickness by 10 points.",
+      "duration": 1800.0,
+      "components": [
+        "Comp_1",
+        "Comp_7",
+        "Comp_33",
+        "Comp_38",
+        "Comp_60"
+      ]
     },
     "1": {
       "name": "Strength Other I",
@@ -175,7 +371,16 @@
       "level": 1,
       "untargeted": false,
       "mana": 10,
-      "icon": 100668300
+      "icon": 100668300,
+      "desc": "Increases the target's Strength by 10 points.",
+      "duration": 1800.0,
+      "components": [
+        "Comp_1",
+        "Comp_7",
+        "Comp_33",
+        "Comp_44",
+        "Comp_49"
+      ]
     },
     "2": {
       "name": "Strength Self I",
@@ -183,7 +388,16 @@
       "level": 1,
       "untargeted": true,
       "mana": 15,
-      "icon": 100668300
+      "icon": 100668300,
+      "desc": "Increases the caster's Strength by 10 points.",
+      "duration": 1800.0,
+      "components": [
+        "Comp_1",
+        "Comp_7",
+        "Comp_33",
+        "Comp_44",
+        "Comp_60"
+      ]
     },
     "15": {
       "name": "Vulnerability Other I",
@@ -191,7 +405,16 @@
       "level": 1,
       "untargeted": false,
       "mana": 10,
-      "icon": 100668331
+      "icon": 100668331,
+      "desc": "Decrease the target's Melee Defense skill by 10 points.",
+      "duration": 60.0,
+      "components": [
+        "Comp_1",
+        "Comp_8",
+        "Comp_30",
+        "Comp_44",
+        "Comp_50"
+      ]
     },
     "3": {
       "name": "Weakness Other I",
@@ -199,7 +422,16 @@
       "level": 1,
       "untargeted": false,
       "mana": 10,
-      "icon": 100668300
+      "icon": 100668300,
+      "desc": "Decreases the target's Strength by 10 points.",
+      "duration": 60.0,
+      "components": [
+        "Comp_1",
+        "Comp_8",
+        "Comp_33",
+        "Comp_44",
+        "Comp_50"
+      ]
     },
     "1445": {
       "name": "Willpower Self I",
@@ -207,7 +439,16 @@
       "level": 1,
       "untargeted": true,
       "mana": 15,
-      "icon": 100668296
+      "icon": 100668296,
+      "desc": "Increases the caster's Self by 10 points.",
+      "duration": 1800.0,
+      "components": [
+        "Comp_1",
+        "Comp_7",
+        "Comp_33",
+        "Comp_40",
+        "Comp_60"
+      ]
     }
   }
 }
