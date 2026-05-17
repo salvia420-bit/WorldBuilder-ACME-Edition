@@ -323,6 +323,29 @@ impl PlayerState {
         }
     }
 
+    /// Stamina cost for a jump. Mirrors ACE's
+    /// `MovementSystem.JumpStaminaCost`:
+    ///   - non-PK: `ceil((burden + 0.5) * power * 8 + 2)`
+    ///   - PK: `(power + 1) * 100`
+    ///
+    /// Source: `~/ace-server/Source/ACE.Server/Physics/Animation/MovementSystem.cs`.
+    ///
+    /// ACE's `HandleActionJump` reads this and applies via
+    /// `UpdateVitalDelta(Stamina, -staminaCost)`. We mirror the cost
+    /// calc client-side so we can gate the jump on the player having
+    /// enough stamina (ACE would reduce velocity if stamina were
+    /// short, but the relevant branch is commented out — see
+    /// `Player.cs:866`) and so the visible stamina bar tracks the
+    /// expected deduction before the server confirms.
+    pub fn jump_stamina_cost(power: f32, burden: f32, pk: bool) -> u32 {
+        let power = power.clamp(0.0, 1.0);
+        if pk {
+            ((power + 1.0) * 100.0) as u32
+        } else {
+            ((burden + 0.5) * power * 8.0 + 2.0).ceil() as u32
+        }
+    }
+
     /// Compute the upward Z velocity for a jump with the given
     /// power, burden, and Jump skill. Mirrors ACE's
     /// `WeenieObject.InqJumpVelocity` chain:
@@ -514,5 +537,43 @@ mod jump_tests {
         p.land();
         assert!(!p.is_airborne);
         assert_eq!(p.vertical_velocity, 0.0);
+    }
+
+    #[test]
+    fn stamina_cost_non_pk_baseline() {
+        // ACE: ceil((0.5 + 0.5) * 1.0 * 8 + 2) = ceil(10) = 10
+        assert_eq!(PlayerState::jump_stamina_cost(1.0, 0.5, false), 10);
+    }
+
+    #[test]
+    fn stamina_cost_non_pk_heavy_burden() {
+        // burden=1.5: ceil((1.5+0.5)*1*8+2) = ceil(18) = 18
+        assert_eq!(PlayerState::jump_stamina_cost(1.0, 1.5, false), 18);
+    }
+
+    #[test]
+    fn stamina_cost_non_pk_low_power() {
+        // power=0.25: ceil((0.5+0.5)*0.25*8+2) = ceil(4) = 4
+        assert_eq!(PlayerState::jump_stamina_cost(0.25, 0.5, false), 4);
+    }
+
+    #[test]
+    fn stamina_cost_pk_full_power() {
+        // PK: (1.0 + 1.0) * 100 = 200
+        assert_eq!(PlayerState::jump_stamina_cost(1.0, 0.5, true), 200);
+    }
+
+    #[test]
+    fn stamina_cost_pk_zero_power() {
+        // PK: (0 + 1) * 100 = 100 (PK pays even for nothing)
+        assert_eq!(PlayerState::jump_stamina_cost(0.0, 0.5, true), 100);
+    }
+
+    #[test]
+    fn stamina_cost_clamps_power_to_unit() {
+        assert_eq!(
+            PlayerState::jump_stamina_cost(1.5, 0.5, false),
+            PlayerState::jump_stamina_cost(1.0, 0.5, false)
+        );
     }
 }

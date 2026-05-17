@@ -16630,24 +16630,64 @@ async fn recv_loop(
                             // ACE doesn't permit double-jumps.
                             continue;
                         }
-                        // Jump skill lookup — default to 100 when the
-                        // skill table hasn't loaded yet (early-spawn
-                        // case). TODO: pull live burden from inventory
-                        // weight once that's plumbed; for now 0.5 keeps
-                        // BurdenMod = 1.0 per ACE's `< 1.0` branch.
+                        // Burden, skill, and stamina are pulled live.
+                        // Burden flows from ACE's
+                        // `EncumbranceSystem.GetBurden(encumbrance,
+                        // capacity)` via holtburger's
+                        // `WorldContextExt::player_burden` (capacity is
+                        // 150*Str + 30*Str*augs, burden = enc/cap).
+                        // Fallback 0.5 keeps BurdenMod = 1.0 (ACE's
+                        // `< 1.0` branch) when the player hasn't
+                        // hydrated attributes yet.
                         use holtburger_common::stats::SkillType;
+                        use holtburger_world::context::WorldContextExt;
                         let jump_skill = w
                             .player
                             .skills
                             .get(&SkillType::Jump)
                             .map(|s| s.current as u32)
                             .unwrap_or(100);
-                        let burden: f32 = 0.5;
+                        let burden = w.player_burden().unwrap_or(0.5);
                         let power: f32 = 1.0;
+                        // Stamina cost (ACE non-PK formula —
+                        // `MovementSystem.JumpStaminaCost`). PK gate
+                        // requires reading `PKTimerActive`, which we
+                        // don't track yet; default to non-PK.
+                        let cost = holtburger_world::player::PlayerState::jump_stamina_cost(
+                            power, burden, false,
+                        );
+                        // Gate on stamina availability — ACE's
+                        // `HandleActionJump` has a commented-out
+                        // adjust-power branch; the active behavior
+                        // is "if no stamina, jumpSkill is treated as
+                        // 0 in InqJumpVelocity → min-clamp 0.35m
+                        // hop". Reproduce that fallback so an
+                        // exhausted player still pops a tiny jump.
+                        let stamina_current = w
+                            .player
+                            .vitals
+                            .get(&holtburger_common::stats::VitalType::Stamina)
+                            .map(|v| v.current)
+                            .unwrap_or(0);
+                        let exhausted = stamina_current == 0;
+                        let effective_skill = if exhausted { 0 } else { jump_skill };
                         let vz = holtburger_world::player::PlayerState::compute_jump_velocity_z(
-                            power, burden, jump_skill,
+                            power, burden, effective_skill,
                         );
                         w.player.begin_jump(vz);
+                        // Deduct stamina locally (server is canonical;
+                        // ACE will broadcast a vital update soon after).
+                        // `vital_id = 3` is VitalType::Stamina per
+                        // holtburger-common/stats.rs.
+                        if !exhausted {
+                            let new_current =
+                                (stamina_current as i32 - cost as i32).max(0) as u32;
+                            w.player.update_vital_current(
+                                holtburger_common::stats::VitalType::Stamina as u32,
+                                new_current,
+                                &mut Vec::new(),
+                            );
+                        }
                         // Read sequences + player guid + current pose
                         // for the wire packet. ACE validates these in
                         // HandleActionJump (Player.cs:866).
