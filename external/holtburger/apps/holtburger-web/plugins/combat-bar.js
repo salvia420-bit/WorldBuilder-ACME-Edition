@@ -1,4 +1,11 @@
-import { getSpellBarSlots, setSpellBarSlot, loadCatalog } from "./spellbook.js";
+import {
+  getSpellBarSlots,
+  setSpellBarSlot,
+  getActiveSpellBar,
+  setActiveSpellBar,
+  SPELL_BAR_TABS,
+  loadCatalog,
+} from "./spellbook.js";
 
 const STORAGE_KEY = "holtburger_combat_bar_v1";
 
@@ -6,6 +13,7 @@ const DEFAULTS = {
   attackHeight: 2, // MEDIUM
   powerLevel: 1.0,
   autoRepeat: true,
+  chargeAttack: true, // Phase I.1 — auto-pursue to attack range on click
   armedSpellId: 0, // 0 = no spell armed
   spellBarSlots: [], // populated by the Spellbook plugin (📖)
 };
@@ -34,6 +42,7 @@ function syncWindowState(state) {
     attackHeight: state.attackHeight,
     powerLevel: state.powerLevel,
     autoRepeat: state.autoRepeat,
+    chargeAttack: state.chargeAttack !== false,
     armedSpellId: state.armedSpellId,
     spellBarSlots: state.spellBarSlots || [],
   };
@@ -184,6 +193,33 @@ function ensureStyles() {
       margin-bottom: 8px;
       font-size: 11px;
       color: rgba(180, 130, 255, 0.85);
+    }
+    .hb-cb-tabs {
+      display: flex;
+      gap: 2px;
+      margin-bottom: 8px;
+    }
+    .hb-cb-tab {
+      flex: 1;
+      padding: 3px 0;
+      font-size: 11px;
+      font-family: inherit;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 3px;
+      color: rgba(255, 255, 255, 0.55);
+      cursor: pointer;
+      text-align: center;
+    }
+    .hb-cb-tab:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.85);
+    }
+    .hb-cb-tab.active {
+      background: rgba(160, 110, 255, 0.4);
+      border-color: rgba(180, 130, 255, 0.7);
+      color: #fff;
+      font-weight: 600;
     }
     .hb-cb-power-meter {
       margin-top: 10px;
@@ -336,6 +372,23 @@ function renderAttackControls(bodyEl, state) {
   repeatLabel.appendChild(repeatText);
   bodyEl.appendChild(repeatLabel);
 
+  // Phase I.1 — Charge Attack tickbox (retail's "Use Charge Attack").
+  const chargeLabel = document.createElement("label");
+  chargeLabel.className = "hb-cb-toggle";
+  const chargeBox = document.createElement("input");
+  chargeBox.type = "checkbox";
+  chargeBox.checked = state.chargeAttack !== false;
+  chargeBox.addEventListener("change", () => {
+    state.chargeAttack = chargeBox.checked;
+    saveState(state);
+    syncWindowState(state);
+  });
+  chargeLabel.appendChild(chargeBox);
+  const chargeText = document.createElement("span");
+  chargeText.textContent = "Charge to target (auto-pursue)";
+  chargeLabel.appendChild(chargeText);
+  bodyEl.appendChild(chargeLabel);
+
   const hint = document.createElement("div");
   hint.className = "hb-cb-hint";
   hint.textContent =
@@ -421,6 +474,62 @@ function renderSpellPicker(bodyEl, state, client) {
   hint.textContent =
     "Magic stance — click a self-spell to cast on yourself, or arm a target spell then click an enemy.";
   bodyEl.appendChild(hint);
+
+  // Phase I.2 — numbered tab strip (retail had 7).
+  const tabsEl = document.createElement("div");
+  tabsEl.className = "hb-cb-tabs";
+  const tabButtons = [];
+  for (let i = 0; i < SPELL_BAR_TABS; i++) {
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.className = "hb-cb-tab";
+    tab.textContent = String(i + 1);
+    tab.dataset.tabIndex = String(i);
+    tab.title = `Spell bar ${i + 1}`;
+    tab.addEventListener("click", () => {
+      setActiveSpellBar(i);
+      // Re-highlight; renderRows fires from the spellbar-changed event.
+      for (const t of tabButtons) {
+        t.classList.toggle("active", Number(t.dataset.tabIndex) === i);
+      }
+    });
+    // Phase I.2 — also accept dropped spells onto a tab to populate it.
+    tab.addEventListener("dragover", (ev) => {
+      if (ev.dataTransfer.types.includes("application/x-hb-spell-id")) {
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = "copy";
+        tab.style.background = "rgba(160, 110, 255, 0.5)";
+      }
+    });
+    tab.addEventListener("dragleave", () => {
+      tab.style.background = "";
+    });
+    tab.addEventListener("drop", (ev) => {
+      ev.preventDefault();
+      tab.style.background = "";
+      const draggedId = parseInt(ev.dataTransfer.getData("application/x-hb-spell-id"), 10);
+      if (!Number.isFinite(draggedId) || draggedId <= 0) return;
+      // Drop onto an inactive tab: switch to it, add to first empty slot.
+      const targetTab = Number(tab.dataset.tabIndex);
+      setActiveSpellBar(targetTab);
+      const slots = getSpellBarSlots(targetTab);
+      const empty = slots.findIndex((v) => v === 0);
+      setSpellBarSlot(empty === -1 ? slots.length - 1 : empty, draggedId, targetTab);
+      for (const t of tabButtons) {
+        t.classList.toggle("active", Number(t.dataset.tabIndex) === targetTab);
+      }
+    });
+    tabButtons.push(tab);
+    tabsEl.appendChild(tab);
+  }
+  function refreshTabActive() {
+    const active = getActiveSpellBar();
+    for (const t of tabButtons) {
+      t.classList.toggle("active", Number(t.dataset.tabIndex) === active);
+    }
+  }
+  refreshTabActive();
+  bodyEl.appendChild(tabsEl);
 
   const list = document.createElement("div");
   list.className = "hb-cb-spells";
@@ -566,8 +675,12 @@ function renderSpellPicker(bodyEl, state, client) {
     renderRows();
   });
 
-  // Re-render when the spellbook plugin updates the slots.
-  const onSpellbarChanged = () => renderRows();
+  // Re-render when the spellbook plugin updates the slots or
+  // when the user switches the active tab.
+  const onSpellbarChanged = () => {
+    refreshTabActive();
+    renderRows();
+  };
   window.addEventListener("hb-spellbar-changed", onSpellbarChanged);
 
   // (No teardown needed for the slot listener — bar.js calls our

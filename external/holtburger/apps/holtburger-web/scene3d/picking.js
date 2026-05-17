@@ -3,6 +3,39 @@ import * as THREE from "three";
 const ATTACK_HEIGHT_MEDIUM = 2;
 const ATTACK_POWER_FULL = 1.0;
 
+// Phase I.1 — charge-attack tuning. Retail melee range is ~2.5m, missile
+// range varies by weapon (we approximate at 25m). These constants
+// drive both the "in range now" gate and the auto-pursue stop condition.
+const MELEE_RANGE_M = 2.5;
+const MISSILE_RANGE_M = 25.0;
+const MAX_CHARGE_DURATION_MS = 10_000; // safety net so we don't pursue forever
+
+// Convert a Three.js entity position back to AC coords so we can compare
+// to the local player's pose (which is in AC coords from the wasm side).
+// Inverse of scene3d/adapter.js::acToThree(ax,ay,az) = [ax, az, -ay].
+function threeToAc(tx, ty, tz) {
+  return { x: tx, y: -tz, z: ty };
+}
+
+function entityAcPosition(entityManager, guid) {
+  const inst = entityManager?.entityMap?.get((guid >>> 0));
+  if (!inst?.root?.position) return null;
+  const p = inst.root.position;
+  return threeToAc(p.x, p.y, p.z);
+}
+
+function horizontalDistance(a, b) {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function normalizeAngle(a) {
+  while (a > Math.PI) a -= 2 * Math.PI;
+  while (a < -Math.PI) a += 2 * Math.PI;
+  return a;
+}
+
 export function setupClickPicking({
   canvas,
   liveScene3d,
@@ -18,6 +51,82 @@ export function setupClickPicking({
 
   const raycaster = new THREE.Raycaster();
   const ndc = new THREE.Vector2();
+
+  // Phase I.1 — charge-attack state machine. One pursuit in flight at
+  // a time; clicking a different target replaces the current charge.
+  let charge = null; // { guid, range, fireAttack, startMs, rafId }
+
+  function cancelCharge() {
+    if (!charge) return;
+    if (charge.rafId) cancelAnimationFrame(charge.rafId);
+    try {
+      sessionHandle.setMovementInput?.(0, 0, 0, false);
+    } catch {}
+    charge = null;
+  }
+
+  function chargeTick() {
+    if (!charge) return;
+
+    // Safety net — bail after a fixed wall-clock to prevent forever-pursuit.
+    if (performance.now() - charge.startMs > MAX_CHARGE_DURATION_MS) {
+      console.warn("[picking] charge attack timed out");
+      cancelCharge();
+      return;
+    }
+
+    // Abort if user left a combat stance while we were chasing.
+    const inMelee = !!isInMeleeStance?.();
+    const inRanged = !!isInRangedStance?.();
+    if (!inMelee && !inRanged) {
+      cancelCharge();
+      return;
+    }
+
+    // Read target + player positions in AC coords.
+    const targetAc = entityAcPosition(liveScene3d.entityManager, charge.guid);
+    const pose = sessionHandle.getLocalPlayerPose?.();
+    if (!targetAc || !pose) {
+      cancelCharge();
+      return;
+    }
+
+    const dist = horizontalDistance(targetAc, pose);
+    if (dist <= charge.range) {
+      // In range — stop, fire attack, clear state.
+      try { sessionHandle.setMovementInput(0, 0, 0, false); } catch {}
+      try { charge.fireAttack(); } catch (e) {
+        console.warn(`[picking] charge attack fire failed: ${e?.message ?? e}`);
+      }
+      charge = null;
+      return;
+    }
+
+    // Compute bearing from player to target; turn proportionally.
+    const dx = targetAc.x - pose.x;
+    const dy = targetAc.y - pose.y;
+    const bearing = Math.atan2(dy, dx);
+    const turnDelta = normalizeAngle(bearing - pose.heading);
+    let turn = 0;
+    if (Math.abs(turnDelta) > 0.05) turn = turnDelta > 0 ? 1 : -1;
+    try {
+      sessionHandle.setMovementInput(1 /* forward */, 0 /* strafe */, turn, true /* run */);
+    } catch {}
+
+    charge.rafId = requestAnimationFrame(chargeTick);
+  }
+
+  function startCharge(guid, range, fireAttack) {
+    cancelCharge();
+    charge = {
+      guid: guid >>> 0,
+      range,
+      fireAttack,
+      startMs: performance.now(),
+      rafId: 0,
+    };
+    chargeTick();
+  }
 
   function pickEntityAt(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
@@ -76,12 +185,11 @@ export function setupClickPicking({
         cb && typeof cb.powerLevel === "number"
           ? cb.powerLevel
           : ATTACK_POWER_FULL;
+      // Phase I.1 — chargeAttack option toggle (default on).
+      const chargeEnabled = cb?.chargeAttack !== false;
 
       if (isInMagicStance?.() && typeof sessionHandle.castTargetedSpell === "function") {
-        // Phase F — magic stance + armed targeted spell → cast on the
-        // clicked entity. Untargeted self-spells fire directly from
-        // the combat-bar plugin (no viewport click needed) so we only
-        // act here when there's a spell armed via the picker.
+        // Magic doesn't auto-charge — caster stands still to cast.
         const spellId =
           cb && typeof cb.armedSpellId === "number" && cb.armedSpellId > 0
             ? cb.armedSpellId
@@ -90,21 +198,33 @@ export function setupClickPicking({
           sessionHandle.castTargetedSpell(guid, spellId);
         }
       } else if (isInRangedStance?.() && typeof sessionHandle.missileAttack === "function") {
-        sessionHandle.missileAttack(guid, height, slider);
-        // No swing pose on ranged — retail showed a draw/release on the
-        // bow but our vibe-pose only animates the right arm forward,
-        // which would look wrong for a bowman. Defer to a real
-        // MotionTable-driven ranged anim in a later phase.
+        // Phase I.1 — charge to missile range (~25m) then fire.
+        const fire = () => sessionHandle.missileAttack(guid, height, slider);
+        const pose = sessionHandle.getLocalPlayerPose?.();
+        const targetAc = entityAcPosition(liveScene3d.entityManager, guid);
+        if (chargeEnabled && pose && targetAc && horizontalDistance(pose, targetAc) > MISSILE_RANGE_M) {
+          startCharge(guid, MISSILE_RANGE_M, fire);
+        } else {
+          fire();
+        }
       } else if (isInMeleeStance?.() && typeof sessionHandle.attack === "function") {
-        sessionHandle.attack(guid, height, slider);
-        // Local-player swing pose for immediate visual feedback.
-        // ACE owns the actual swing motion + damage; this is just
-        // the click → "I did something" affordance.
+        // Phase I.1 — charge to melee range (~2.5m) then swing.
         const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
-        if (localGuid !== 0) {
-          liveScene3d.entityManager?.setSwingPose?.(localGuid);
+        const fire = () => {
+          sessionHandle.attack(guid, height, slider);
+          if (localGuid !== 0) {
+            liveScene3d.entityManager?.setSwingPose?.(localGuid);
+          }
+        };
+        const pose = sessionHandle.getLocalPlayerPose?.();
+        const targetAc = entityAcPosition(liveScene3d.entityManager, guid);
+        if (chargeEnabled && pose && targetAc && horizontalDistance(pose, targetAc) > MELEE_RANGE_M) {
+          startCharge(guid, MELEE_RANGE_M, fire);
+        } else {
+          fire();
         }
       } else if (typeof sessionHandle.useObject === "function") {
+        cancelCharge();
         sessionHandle.useObject(guid);
       }
     } catch (e) {

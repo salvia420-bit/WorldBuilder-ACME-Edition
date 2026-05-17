@@ -1,5 +1,7 @@
 const COMBAT_BAR_STORAGE_KEY = "holtburger_combat_bar_v1";
 const SPELL_BAR_SLOTS = 8;
+// Phase I.2 — number of numbered spell-bar tabs (retail had 7).
+const SPELL_BAR_TABS = 7;
 
 let catalogPromise = null;
 function loadCatalog() {
@@ -37,46 +39,96 @@ function writeCombatBarState(merged) {
   try {
     localStorage.setItem(COMBAT_BAR_STORAGE_KEY, JSON.stringify(merged));
   } catch {}
+  // Mirror the ACTIVE tab's slots onto window state so picking.js
+  // (and the combat-bar's magic-mode renderer) sees the right list
+  // without knowing about tabs.
+  const activeSlots = getSpellBarSlots();
   if (window.__combatBarState) {
-    window.__combatBarState.spellBarSlots = merged.spellBarSlots || [];
+    window.__combatBarState.spellBarSlots = activeSlots;
+    window.__combatBarState.activeSpellBar = merged.activeSpellBar ?? 0;
   } else {
-    window.__combatBarState = { spellBarSlots: merged.spellBarSlots || [] };
+    window.__combatBarState = {
+      spellBarSlots: activeSlots,
+      activeSpellBar: merged.activeSpellBar ?? 0,
+    };
   }
   window.dispatchEvent(new CustomEvent("hb-spellbar-changed"));
 }
 
-function getSpellBarSlots() {
-  const state = readCombatBarState();
-  const slots = Array.isArray(state.spellBarSlots) ? state.spellBarSlots : [];
-  const padded = [];
+// Phase I.2 — pull the array-of-tabs out of localStorage, migrating
+// the old single-bar shape (`spellBarSlots: number[]`) into the new
+// shape (`spellBars: number[][]`) on first read.
+function readSpellBars(state) {
+  if (Array.isArray(state.spellBars) && state.spellBars.length > 0) {
+    // Pad each tab to SPELL_BAR_SLOTS for safety.
+    return state.spellBars.map((tab) => {
+      const t = Array.isArray(tab) ? tab : [];
+      const padded = [];
+      for (let i = 0; i < SPELL_BAR_SLOTS; i++) {
+        const v = t[i];
+        padded.push(typeof v === "number" && v > 0 ? v : 0);
+      }
+      return padded;
+    }).slice(0, SPELL_BAR_TABS);
+  }
+  // Legacy: a single `spellBarSlots` array becomes tab 0.
+  const legacy = Array.isArray(state.spellBarSlots) ? state.spellBarSlots : [];
+  const tab0 = [];
   for (let i = 0; i < SPELL_BAR_SLOTS; i++) {
-    const v = slots[i];
-    padded.push(typeof v === "number" && v > 0 ? v : 0);
+    const v = legacy[i];
+    tab0.push(typeof v === "number" && v > 0 ? v : 0);
   }
-  return padded;
+  return [tab0];
 }
 
-function setSpellBarSlot(index, spellId) {
-  if (index < 0 || index >= SPELL_BAR_SLOTS) return;
-  const slots = getSpellBarSlots();
-  slots[index] = spellId | 0;
+function getActiveSpellBar() {
   const state = readCombatBarState();
-  state.spellBarSlots = slots;
+  const idx = typeof state.activeSpellBar === "number" ? state.activeSpellBar : 0;
+  return Math.max(0, Math.min(SPELL_BAR_TABS - 1, idx));
+}
+
+function setActiveSpellBar(idx) {
+  const state = readCombatBarState();
+  state.activeSpellBar = Math.max(0, Math.min(SPELL_BAR_TABS - 1, idx));
+  // Ensure spellBars exists (migrating legacy if needed).
+  state.spellBars = readSpellBars(state);
+  delete state.spellBarSlots; // drop legacy field on first write
   writeCombatBarState(state);
 }
 
-function addToFirstEmptySlot(spellId) {
-  const slots = getSpellBarSlots();
+function getSpellBarSlots(barIdx) {
+  const state = readCombatBarState();
+  const bars = readSpellBars(state);
+  const idx = (typeof barIdx === "number")
+    ? Math.max(0, Math.min(SPELL_BAR_TABS - 1, barIdx))
+    : getActiveSpellBar();
+  return bars[idx] || new Array(SPELL_BAR_SLOTS).fill(0);
+}
+
+function setSpellBarSlot(slotIndex, spellId, barIdx) {
+  if (slotIndex < 0 || slotIndex >= SPELL_BAR_SLOTS) return;
+  const state = readCombatBarState();
+  const bars = readSpellBars(state);
+  const tab = (typeof barIdx === "number")
+    ? Math.max(0, Math.min(SPELL_BAR_TABS - 1, barIdx))
+    : getActiveSpellBar();
+  // Pad bars list out to `tab+1` if shorter.
+  while (bars.length <= tab) {
+    bars.push(new Array(SPELL_BAR_SLOTS).fill(0));
+  }
+  bars[tab][slotIndex] = spellId | 0;
+  state.spellBars = bars;
+  delete state.spellBarSlots;
+  writeCombatBarState(state);
+}
+
+function addToFirstEmptySlot(spellId, barIdx) {
+  const tab = (typeof barIdx === "number") ? barIdx : getActiveSpellBar();
+  const slots = getSpellBarSlots(tab);
   const empty = slots.findIndex((v) => v === 0);
-  if (empty === -1) {
-    slots[SPELL_BAR_SLOTS - 1] = spellId;
-  } else {
-    slots[empty] = spellId;
-  }
-  const state = readCombatBarState();
-  state.spellBarSlots = slots;
-  writeCombatBarState(state);
-  return empty === -1 ? SPELL_BAR_SLOTS - 1 : empty;
+  const writeIdx = empty === -1 ? SPELL_BAR_SLOTS - 1 : empty;
+  setSpellBarSlot(writeIdx, spellId, tab);
+  return writeIdx;
 }
 
 let stylesInjected = false;
@@ -447,4 +499,12 @@ export function activate(bodyEl, ctx) {
   };
 }
 
-export { getSpellBarSlots, setSpellBarSlot, SPELL_BAR_SLOTS, loadCatalog };
+export {
+  getSpellBarSlots,
+  setSpellBarSlot,
+  getActiveSpellBar,
+  setActiveSpellBar,
+  SPELL_BAR_SLOTS,
+  SPELL_BAR_TABS,
+  loadCatalog,
+};
