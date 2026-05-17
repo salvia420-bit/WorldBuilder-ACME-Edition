@@ -1109,6 +1109,58 @@ export class EntityManager {
   }
 
   /**
+   * Phase C — one-shot melee swing pose. Right upper arm sweeps
+   * forward and back over ~300ms (triangle wave: 0→1→0 in part
+   * rotation amplitude). Restarting before completion replaces the
+   * tween. Only animates humanoid rigs (16+ parts); other shapes
+   * are no-ops (an animated swing on a drudge would need a per-
+   * shape part-index map and isn't worth Phase C scope).
+   */
+  setSwingPose(guid) {
+    const inst = this.entityMap.get(guid >>> 0);
+    if (!inst || !inst.root) return;
+    const isHuman = inst.parts && inst.parts.length >= 16;
+    if (!isHuman) return;
+    const armIdx = 13; // RIGHT_UPPER_ARM (same index as jump pose)
+    const arm = inst.parts[armIdx];
+    if (!arm) return;
+    const baseQ = arm.quaternion.clone();
+    const swingQ = baseQ.clone().multiply(
+      new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(1, 0, 0),
+        -Math.PI / 2,
+      ),
+    );
+    inst._swingTween = {
+      startMs: performance.now(),
+      durationMs: 300,
+      armIdx,
+      baseQ,
+      swingQ,
+    };
+  }
+
+  _tickSwingTween(inst, nowMs) {
+    const tw = inst._swingTween;
+    if (!tw) return;
+    const t = (nowMs - tw.startMs) / tw.durationMs;
+    const p = inst.parts && inst.parts[tw.armIdx];
+    if (!p) {
+      inst._swingTween = null;
+      return;
+    }
+    if (t >= 1) {
+      p.quaternion.copy(tw.baseQ);
+      inst._swingTween = null;
+      return;
+    }
+    const clampedT = Math.max(0, t);
+    // Triangle wave: 0→1 over t=[0,0.5], then 1→0 over t=[0.5,1].
+    const triangle = clampedT < 0.5 ? clampedT * 2 : (1 - clampedT) * 2;
+    p.quaternion.slerpQuaternions(tw.baseQ, tw.swingQ, triangle);
+  }
+
+  /**
    * Per-frame advance of the jump-pose tween. Called from `tick`
    * after `mixer.update` so our slerp wins for the locked parts.
    * Ease-out cubic on the human path (snaps quickly out of walking
@@ -1786,6 +1838,22 @@ export class EntityManager {
             this._jumpTweenWarned = true;
             console.warn(
               `[entities/jump-tween] tick failed for entity 0x${inst.guid.toString(16)}:`,
+              e
+            );
+          }
+        }
+      }
+      // Phase C — swing-pose tween. Same post-mixer ordering as the
+      // jump pose so the arm rotation wins for the swing duration.
+      if (inst._swingTween) {
+        try {
+          this._tickSwingTween(inst, performance.now());
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          if (!this._swingTweenWarned) {
+            this._swingTweenWarned = true;
+            console.warn(
+              `[entities/swing-tween] tick failed for entity 0x${inst.guid.toString(16)}:`,
               e
             );
           }

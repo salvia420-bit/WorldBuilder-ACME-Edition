@@ -893,6 +893,21 @@
         0x013c: "ThrownShield",
       };
       const stanceLabelEl = document.getElementById("player-stance");
+      // Phase C — module-scope cache of the local player's confirmed
+      // motion stance. Read by click-to-attack dispatch (2D + 3D) to
+      // decide between client.player.attack(guid) and useObject(guid).
+      // Defaults to NonCombat (0x003D).
+      let currentStanceLow = 0x003d;
+      const MELEE_STANCES = new Set([
+        0x003c, // HandCombat (unarmed)
+        0x003e, // SwordCombat
+        0x0040, // SwordShield
+        0x0044, // TwoHandedSword
+        0x0046, // DualWield
+      ]);
+      function isInMeleeStance() {
+        return MELEE_STANCES.has(currentStanceLow);
+      }
       // Confirmed stance update — called from kind=5 dispatch when
       // the local player's motionStance lands. Strips the
       // hotkey-press "pending" italic styling and shows the
@@ -902,6 +917,7 @@
         const low = motionStance & 0xFFFF;
         // ACE emits motion-only updates with stance=0; preserve last confirmed label.
         if (low === 0) return;
+        currentStanceLow = low;
         const label = STANCE_LABELS[low] ?? `0x${low.toString(16)}`;
         stanceLabelEl.textContent = label;
         stanceLabelEl.classList.remove("pending");
@@ -3502,12 +3518,22 @@ void main() {
             ev.stopPropagation();
           }
           const h = window.__sessionHandle;
-          if (!h || typeof h.useObject !== "function") return;
+          if (!h) return;
+          // Phase C — branch on local combat stance. In a melee
+          // stance (HandCombat / SwordCombat / etc) clicking a
+          // creature fires an attack; otherwise the existing
+          // useObject path runs (portal / vendor / door / etc).
+          // ACE owns auto-repeat so we send one attack packet per
+          // engagement.
           try {
-            h.useObject(guid);
+            if (cat === "creature" && isInMeleeStance() && typeof h.attack === "function") {
+              h.attack(guid, 2 /* MEDIUM */, 1.0);
+            } else if (typeof h.useObject === "function") {
+              h.useObject(guid);
+            }
           } catch (e) {
             // eslint-disable-next-line no-console
-            console.warn(`useObject(0x${guid.toString(16)}): ${e?.message ?? e}`);
+            console.warn(`click(0x${guid.toString(16)}): ${e?.message ?? e}`);
           }
         });
       }
@@ -5118,6 +5144,20 @@ void main() {
           // wired by the login/spawn flow regardless of renderer.
           for (const m of meshes) m.free();
           for (const o of objects) o.free();
+          // Phase C — wire 3D click-to-entity picking. In a melee
+          // stance, a click on a remote entity sends a melee attack;
+          // otherwise falls back to useObject (portals / NPCs / etc).
+          // ACE owns auto-repeat so one click per engagement.
+          {
+            const { setupClickPicking } = await import("./scene3d/picking.js");
+            setupClickPicking({
+              canvas,
+              liveScene3d: window.liveScene3d,
+              sessionHandle: window.__sessionHandle,
+              isInMeleeStance,
+              getLocalPlayerGuid,
+            });
+          }
           stageInfo.innerHTML = `
             <dt>Renderer</dt><dd>three.js r184 (Phase 7.0 hello-world)</dd>
             <dt>Status</dt><dd>BoxGeometry cube at AC (0, 0, 5)</dd>
@@ -6735,6 +6775,21 @@ void main() {
                         );
                       });
                   }
+                }
+              } else if (evt.kind === 19) {
+                // Phase C — structured combat event for plugin
+                // subscribers. The recv loop also emits a kind=2 chat
+                // line for human display; this kind=19 event carries a
+                // JSON payload with discrete fields so a plugin can
+                // subscribe via client.events.on("damageDealt", ...).
+                try {
+                  const payload = JSON.parse(evt.stringPayload || "{}");
+                  const eventName = payload.type;
+                  if (eventName && window.__pluginClient) {
+                    window.__pluginClient.events.emit(eventName, payload);
+                  }
+                } catch (e) {
+                  console.warn(`[combat-event] bad JSON: ${e?.message ?? e}`);
                 }
               } else if (evt.kind === 0) {
                 // Re-fired CharacterListReceived (e.g. after CharacterCreate

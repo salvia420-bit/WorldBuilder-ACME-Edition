@@ -10767,6 +10767,25 @@ const CLIENT_EVENT_KIND_ENTITY_VISIBILITY_CHANGED: u32 = 17;
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_ENTITY_AIRBORNE_CHANGED: u32 = 18;
 
+/// Phase C (combat-melee) — structured combat-event payload, fired
+/// in addition to the existing `CLIENT_EVENT_KIND_CHAT_RECEIVED`
+/// human-readable line. Lets plugin authors subscribe to discrete
+/// combat events via `client.events.on("damageDealt", ...)` etc.
+///
+/// `string_payload` carries a JSON blob: `{ "type": "<event-name>", ... }`.
+/// Event names + extra fields:
+/// - `"damageDealt"`: `defenderName`, `damage`, `damageType`,
+///   `healthPercent`, `criticalHit`, `attackConditions`
+/// - `"damageTaken"`: `attackerName`, `damage`, `damageType`,
+///   `damageLocation`, `healthPercent`, `criticalHit`, `attackConditions`
+/// - `"evadedTarget"`: `defenderName` (you swung and missed)
+/// - `"evadedAttacker"`: `attackerName` (you dodged their swing)
+/// - `"attackDone"`: `error` (server-side reason, "None" on success)
+/// - `"combatCommenceAttack"`: (no extra fields; signals next swing
+///   is being scheduled by the server-driven auto-repeat loop)
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_COMBAT_EVENT: u32 = 19;
+
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
 /// `SessionCommand` values that the loop applies between
@@ -16014,6 +16033,24 @@ async fn recv_loop(
                                         u32_payload_2: Some(CHAT_CATEGORY_COMBAT),
                                         f32_payload: None,
                                     });
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_COMBAT_EVENT,
+                                        string_payload: Some(
+                                            serde_json::json!({
+                                                "type": "damageDealt",
+                                                "defenderName": data.defender_name,
+                                                "damage": data.damage,
+                                                "damageType": damage_type_label(data.damage_type),
+                                                "healthPercent": data.health_percent,
+                                                "criticalHit": data.critical_hit,
+                                                "attackConditions": data.attack_conditions.bits(),
+                                            })
+                                            .to_string(),
+                                        ),
+                                        u32_payload: None,
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
                                 }
                                 holtburger_protocol::messages::GameEvent::DefenderNotification(
                                     data,
@@ -16043,6 +16080,25 @@ async fn recv_loop(
                                         u32_payload_2: Some(CHAT_CATEGORY_COMBAT),
                                         f32_payload: None,
                                     });
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_COMBAT_EVENT,
+                                        string_payload: Some(
+                                            serde_json::json!({
+                                                "type": "damageTaken",
+                                                "attackerName": data.attacker_name,
+                                                "damage": data.damage,
+                                                "damageType": damage_type_label(data.damage_type),
+                                                "damageLocation": damage_location_label(data.damage_location),
+                                                "healthPercent": data.health_percent,
+                                                "criticalHit": data.critical_hit,
+                                                "attackConditions": data.attack_conditions.bits(),
+                                            })
+                                            .to_string(),
+                                        ),
+                                        u32_payload: None,
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
                                 }
                                 holtburger_protocol::messages::GameEvent::EvasionAttackerNotification(
                                     data,
@@ -16057,6 +16113,19 @@ async fn recv_loop(
                                         u32_payload_2: Some(CHAT_CATEGORY_COMBAT),
                                         f32_payload: None,
                                     });
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_COMBAT_EVENT,
+                                        string_payload: Some(
+                                            serde_json::json!({
+                                                "type": "evadedTarget",
+                                                "defenderName": data.defender_name,
+                                            })
+                                            .to_string(),
+                                        ),
+                                        u32_payload: None,
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
                                 }
                                 holtburger_protocol::messages::GameEvent::EvasionDefenderNotification(
                                     data,
@@ -16069,6 +16138,58 @@ async fn recv_loop(
                                         )),
                                         u32_payload: Some(0),
                                         u32_payload_2: Some(CHAT_CATEGORY_COMBAT),
+                                        f32_payload: None,
+                                    });
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_COMBAT_EVENT,
+                                        string_payload: Some(
+                                            serde_json::json!({
+                                                "type": "evadedAttacker",
+                                                "attackerName": data.attacker_name,
+                                            })
+                                            .to_string(),
+                                        ),
+                                        u32_payload: None,
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::AttackDone(data) => {
+                                    // ACE marks the end of a swing
+                                    // sequence — power bar can refill
+                                    // for the next swing. `data.error`
+                                    // is the WeenieError code (None on
+                                    // success, e.g. YoureTooBusy /
+                                    // YouCantDoThatWhileInTheAir on
+                                    // rejection).
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_COMBAT_EVENT,
+                                        string_payload: Some(
+                                            serde_json::json!({
+                                                "type": "attackDone",
+                                                "error": format!("{:?}", data.error),
+                                            })
+                                            .to_string(),
+                                        ),
+                                        u32_payload: None,
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::CombatCommenceAttack => {
+                                    // Server is about to fire the next
+                                    // auto-repeat swing — UI shows the
+                                    // hourglass / wind-up indicator.
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_COMBAT_EVENT,
+                                        string_payload: Some(
+                                            serde_json::json!({
+                                                "type": "combatCommenceAttack",
+                                            })
+                                            .to_string(),
+                                        ),
+                                        u32_payload: None,
+                                        u32_payload_2: None,
                                         f32_payload: None,
                                     });
                                 }
