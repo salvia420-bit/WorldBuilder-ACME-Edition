@@ -6190,6 +6190,75 @@ fn drain_pending_building_origins_into(scene: &mut holtburger_world::SpatialScen
     })
 }
 
+/// Pending SetupModel collision radii queued by `fetch_entity_model_render`
+/// after loading a SetupModel DAT record. Drained by the recv loop on
+/// each `SessionCommand::TickMovement` into `WorldState::setup_radii`.
+///
+/// Sibling to `BUILDING_AABB_PENDING` etc.; same rationale — wasm
+/// exports run on the JS-promise task and can't borrow
+/// `&mut WorldState` across awaits, so they stage records here and
+/// the recv-loop arm flushes them between integrator ticks.
+///
+/// Radius computation mirrors ACE's `PhysicsObj.GetPhysicsRadius`
+/// (`Source/ACE.Server/Physics/PhysicsObj.cs:~590`): prefer the
+/// first cyl-sphere radius, fall back to the first sphere radius,
+/// fall back to the SetupModel `.radius` field.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static SETUP_RADIUS_PENDING: std::cell::RefCell<Vec<(u32, f32)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Stage a `(setup_id, radius)` record for the next recv-loop drain.
+/// Called from `fetch_entity_model_render` after parsing a SetupModel.
+/// Non-finite or non-positive radii are dropped on the floor so we
+/// never poison the cache.
+#[cfg(target_arch = "wasm32")]
+fn record_setup_radius_pending(setup_id: u32, radius: f32) {
+    if !radius.is_finite() || radius <= 0.0 {
+        return;
+    }
+    SETUP_RADIUS_PENDING.with(|cell| {
+        cell.borrow_mut().push((setup_id, radius));
+    });
+}
+
+/// Drain pending SetupModel radii into `WorldState::setup_radii`.
+/// Returns the count inserted. Idempotent on an empty buffer.
+#[cfg(target_arch = "wasm32")]
+fn drain_pending_setup_radii_into(world: &mut holtburger_world::WorldState) -> usize {
+    SETUP_RADIUS_PENDING.with(|cell| {
+        let mut buf = cell.borrow_mut();
+        let count = buf.len();
+        for (setup_id, radius) in buf.drain(..) {
+            world.register_setup_radius(setup_id, radius);
+        }
+        count
+    })
+}
+
+/// Compute the collision radius for a SetupModel, mirroring ACE's
+/// `PhysicsObj.GetPhysicsRadius`. Returns `None` when the setup has
+/// no cyl-sphere, no sphere, and a zero `.radius` field (treat as
+/// "no usable cylinder" and let the cache miss fall back).
+#[cfg(target_arch = "wasm32")]
+fn setup_collision_radius(setup: &holtburger_dat::file_type::SetupModel) -> Option<f32> {
+    if let Some(cs) = setup.cyl_spheres.first() {
+        if cs.radius.is_finite() && cs.radius > 0.0 {
+            return Some(cs.radius);
+        }
+    }
+    if let Some(s) = setup.spheres.first() {
+        if s.radius.is_finite() && s.radius > 0.0 {
+            return Some(s.radius);
+        }
+    }
+    if setup.radius.is_finite() && setup.radius > 0.0 {
+        return Some(setup.radius);
+    }
+    None
+}
+
 /// Phase 6 step D: drain the pending cell-graph + cell-AABB pile
 /// into the spatial scene. Returns `(portals_inserted, aabbs_inserted)`.
 /// Called from the same `TickMovement` arm as the building-AABB
@@ -8947,6 +9016,31 @@ pub async fn fetch_entity_model_render(
             "fetch_entity_model_render: triangulate setup 0x{setup_id:08X} failed"
         ))
     })?;
+
+    // Stage the entity's collision radius for the recv loop to push
+    // into `WorldState::setup_radii` on the next TickMovement. The
+    // SetupModel bytes are already prefetched above; we re-parse the
+    // setup header (cheap, no allocations beyond the cyl/sphere vecs)
+    // to read the cyl-sphere / sphere / .radius cascade ACE uses in
+    // `PhysicsObj.GetPhysicsRadius`. Failures (parse, unknown id) are
+    // silently ignored — the integrator's miss-path falls back to
+    // PLAYER_CAPSULE_RADIUS which is a reasonable default for
+    // humanoid-scale entities.
+    if (setup_id >> 24) == 0x02 {
+        use holtburger_dat::ResourceSource;
+        if let Ok(bytes) = source.as_ref().get_file_by_key(
+            holtburger_dat::ResourceKey::new("eor/portal", setup_id),
+        ) {
+            if let Ok(setup) = holtburger_dat::file_type::SetupModel::unpack(
+                &mut std::io::Cursor::new(&bytes),
+            ) {
+                if let Some(r) = setup_collision_radius(&setup) {
+                    record_setup_radius_pending(setup_id, r);
+                }
+            }
+        }
+    }
+
     Ok(pack_model_mesh(tris))
 }
 
@@ -16532,6 +16626,15 @@ async fn recv_loop(
                         if !entity_seeded {
                             continue;
                         }
+                        // Drain pending SetupModel collision radii
+                        // queued by `fetch_entity_model_render`. Runs
+                        // before the integrator tick so the next
+                        // `entity_collision_radius` query for any
+                        // entity referencing this setup sees the real
+                        // cyl-sphere radius (ACE
+                        // `PhysicsObj.GetPhysicsRadius`) instead of
+                        // the PLAYER_CAPSULE_RADIUS fallback.
+                        let _drained_radii = drain_pending_setup_radii_into(w);
                         // Phase 6 step B follow-up: drain any
                         // building-AABB inserts queued by JS-side
                         // `populateBuildingAabbsForLandblock` calls.
