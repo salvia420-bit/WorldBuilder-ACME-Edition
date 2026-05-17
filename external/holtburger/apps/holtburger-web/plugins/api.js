@@ -27,6 +27,9 @@ export function createClient(sessionHandle) {
     toggleCombatMode() {
       sessionHandle.toggleCombatMode();
     },
+    attack(targetGuid, attackHeight = 2, powerLevel = 1.0) {
+      sessionHandle.attack(targetGuid, attackHeight, powerLevel);
+    },
     get pose() {
       return sessionHandle.getLocalPlayerPose();
     },
@@ -36,6 +39,15 @@ export function createClient(sessionHandle) {
     get inventory() {
       return sessionHandle.playerInventory();
     },
+  });
+
+  const AttackHeight = Object.freeze({ HIGH: 1, MEDIUM: 2, LOW: 3 });
+  const CombatMode = Object.freeze({
+    UNDEF: 0,
+    NON_COMBAT: 1,
+    MELEE: 2,
+    MISSILE: 4,
+    MAGIC: 8,
   });
 
   const movement = Object.freeze({
@@ -135,6 +147,8 @@ export function createClient(sessionHandle) {
     sky,
     ui,
     events: Object.freeze(events),
+    AttackHeight,
+    CombatMode,
     get account() {
       return sessionHandle.accountName;
     },

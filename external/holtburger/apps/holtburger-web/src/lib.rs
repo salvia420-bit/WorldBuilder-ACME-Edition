@@ -10911,6 +10911,28 @@ enum SessionCommand {
     /// `ClientCommand::SetCombatMode` → `GameAction::ChangeCombatMode`
     /// dispatch.
     ToggleCombatMode,
+    /// Phase B (combat-melee): JS-side requested a melee swing against a
+    /// specific target. The recv arm builds a `GameAction::TargetedMeleeAttack`
+    /// (sub-opcode 0x0008) wire packet carrying `{target_guid, attack_height,
+    /// power_level}` and sends it. ACE owns the auto-repeat loop — one
+    /// `Attack` command per engagement, ACE re-fires the swing via
+    /// `ActionChain` until target dies / leaves range / player cancels.
+    ///
+    /// `power_level` is clamped to `[0.0, 1.0]` in the recv arm; ACE
+    /// also clamps server-side. Heights are the retail enum values
+    /// (HIGH=1, MEDIUM=2, LOW=3) — see `AttackHeight` in
+    /// `holtburger-protocol/src/messages/combat/types.rs`.
+    ///
+    /// Pre-reqs the recv arm does NOT enforce client-side:
+    /// - Combat mode must be `Melee` — ACE returns `WeenieError` if not.
+    /// - Target must be a live, damageable Creature — ACE drops with
+    ///   `OnAttackDone()` if not.
+    /// We let ACE be authoritative rather than mirror its checks.
+    TargetedMeleeAttack {
+        target_guid: u32,
+        attack_height: holtburger_protocol::messages::AttackHeight,
+        power_level: f32,
+    },
 }
 
 /// Tagged-payload envelope for events the wasm bundle drains to JS via
@@ -13102,6 +13124,42 @@ impl SessionHandle {
             .unbounded_send(SessionCommand::Jump { power })
             .map_err(|e: TrySendError<_>| {
                 JsValue::from_str(&format!("jump: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Phase B (combat-melee): request a melee swing against the entity
+    /// identified by `target_guid`. `attack_height` is the retail enum
+    /// value (1=High, 2=Medium, 3=Low). `power_level` is in `[0.0, 1.0]`;
+    /// non-finite values reject early so a JS bug surfaces cleanly. The
+    /// recv arm clamps the range and sends the `GameAction::TargetedMeleeAttack`
+    /// (sub-opcode 0x0008) wire packet. ACE auto-repeats the swing
+    /// server-side; JS should call `attack` once per new engagement,
+    /// not per swing.
+    #[wasm_bindgen(js_name = attack)]
+    pub fn attack(
+        &self,
+        target_guid: u32,
+        attack_height: u32,
+        power_level: f32,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        use holtburger_protocol::messages::AttackHeight;
+        if !power_level.is_finite() {
+            return Err(JsValue::from_str("attack: power_level must be finite"));
+        }
+        let attack_height = AttackHeight::from_repr(attack_height).ok_or_else(|| {
+            JsValue::from_str(&format!(
+                "attack: invalid attack_height {attack_height} (expected 1=High, 2=Medium, 3=Low)"
+            ))
+        })?;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::TargetedMeleeAttack {
+                target_guid,
+                attack_height,
+                power_level,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("attack: cmd channel closed ({e})"))
             })
     }
 
@@ -16693,6 +16751,48 @@ async fn recv_loop(
                         }
                         console_log_str(&format!(
                             "[combat-mode] toggle: {current:?} → {target_mode:?}",
+                        ));
+                    }
+                    Some(SessionCommand::TargetedMeleeAttack {
+                        target_guid,
+                        attack_height,
+                        power_level,
+                    }) => {
+                        // Phase B (combat-melee): build a
+                        // GameAction::TargetedMeleeAttack (sub-opcode 0x0008)
+                        // and dispatch. ACE's HandleActionTargetedMeleeAttack
+                        // owns all validation (combat mode, target liveness,
+                        // CanDamage, range, busy state) — we just forward.
+                        // The server auto-repeats the swing via ActionChain
+                        // until target dies / leaves range / player cancels,
+                        // so this fires once per engagement, not per swing.
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            GameAction, TargetedMeleeAttackActionData,
+                        };
+                        let power_level = power_level.clamp(0.0, 1.0);
+                        let action = GameAction::TargetedMeleeAttack(Box::new(
+                            TargetedMeleeAttackActionData {
+                                target_guid: Guid(target_guid),
+                                attack_height,
+                                power_level,
+                            },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(TargetedMeleeAttack): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("attack: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[attack] target=0x{target_guid:08X} height={attack_height:?} power={power_level:.2}",
                         ));
                     }
                     Some(SessionCommand::Jump { power }) => {
