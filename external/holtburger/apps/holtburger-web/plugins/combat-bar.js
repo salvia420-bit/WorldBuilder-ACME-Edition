@@ -107,6 +107,29 @@ function ensureStyles() {
       color: rgba(255, 255, 255, 0.75);
       cursor: pointer;
     }
+    .hb-cb-stance-row {
+      margin-bottom: 6px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    }
+    .hb-cb-stance-val {
+      flex: 1;
+      font-weight: 600;
+      color: #fff;
+    }
+    .hb-cb-stance-btn {
+      padding: 4px 10px;
+      background: rgba(255, 255, 255, 0.10);
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 3px;
+      color: #fff;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .hb-cb-stance-btn:hover {
+      background: rgba(255, 255, 255, 0.18);
+    }
     .hb-cb-hint {
       font-size: 11px;
       color: rgba(255, 255, 255, 0.45);
@@ -264,6 +287,16 @@ function ensureStyles() {
 const RANGED_STANCES = new Set([
   0x003f, 0x0041, 0x0043, 0x0047, 0x00e8, 0x00e9, 0x013b, 0x013c,
 ]);
+// Melee stance enum values (HandCombat, SwordCombat, etc.) — needed
+// by `stanceWord()` after folding the standalone `stance-toggle`
+// plugin in here. Mirrors MELEE_STANCES in `plugins/stance-toggle.js`
+// (kept for symmetry with RANGED_STANCES). Pre-2026-05-17 this was
+// missing and `stanceWord()` threw a ReferenceError on the first
+// `MELEE_STANCES.has(low)` call, aborting the rest of `activate()` —
+// so the panel rendered only the stance row + empty button.
+const MELEE_STANCES = new Set([
+  0x003c, 0x003e, 0x0040, 0x0044, 0x0046,
+]);
 function currentStanceIsRanged() {
   const fn = typeof window !== "undefined" ? window.__getCurrentStanceLow : null;
   if (typeof fn !== "function") return false;
@@ -290,12 +323,89 @@ if (typeof window !== "undefined") {
   syncWindowState(loadState());
 }
 
+// Stance label — one-word descriptor read off the wasm-side stance.
+// Mirrors `plugins/stance-toggle.js`'s classifyStance + STANCE_LABELS
+// before that plugin was folded in here (2026-05-17).
+function stanceWord() {
+  const low = (typeof window !== "undefined" && typeof window.__getCurrentStanceLow === "function")
+    ? window.__getCurrentStanceLow()
+    : 0x003d;
+  if (low === 0x003d) return "Peace";
+  if (low === 0x0049) return "Magic";
+  if (RANGED_STANCES.has(low)) return "Missile";
+  if (MELEE_STANCES.has(low)) return "Melee";
+  return "Other";
+}
+
+// Header injected at the top of every stance-form (attack controls
+// AND spell picker). Folds the old `stance-toggle` plugin into the
+// combat-bar so one panel covers stance + attack settings + spell
+// picking. The bar slot for stance-toggle was removed from
+// index.html on the same change.
+function renderStanceHeader(bodyEl, client) {
+  const row = document.createElement("div");
+  row.className = "hb-cb-row hb-cb-stance-row";
+  const label = document.createElement("label");
+  label.textContent = "Stance";
+  row.appendChild(label);
+  const val = document.createElement("span");
+  val.className = "hb-cb-stance-val";
+  row.appendChild(val);
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "hb-cb-stance-btn";
+  row.appendChild(btn);
+  bodyEl.appendChild(row);
+
+  function refresh() {
+    const w = stanceWord();
+    val.textContent = w;
+    btn.textContent = w === "Peace" ? "Combat" : "Peace";
+  }
+  btn.addEventListener("click", () => {
+    try {
+      // Use the JS-side stance label as the source of truth for
+      // current state — ACE's `PrivateUpdatePropertyInt(CombatMode)`
+      // doesn't reliably hydrate `world.player.combat_mode` on the
+      // wasm side, so the older `toggleCombatMode()` path always
+      // sees `Undef` and only ever toggles to Melee. By computing
+      // the target mode here from `__getCurrentStanceLow()` (which
+      // IS authoritative — `applyConfirmedStance` updates it on
+      // every kind=5 UpdateMotion) and sending it explicitly via
+      // `setCombatMode`, the toggle works in both directions.
+      // CombatMode wire values: 1=NonCombat, 2=Melee.
+      const inCombat = stanceWord() !== "Peace";
+      const handle = window.__sessionHandle;
+      if (typeof handle?.setCombatMode === "function") {
+        handle.setCombatMode(inCombat ? 1 : 2);
+      } else if (typeof client?.player?.toggleCombatMode === "function") {
+        // Fallback for older wasm bundles without setCombatMode.
+        client.player.toggleCombatMode();
+      }
+    } catch (e) {
+      console.warn(`[combat-bar] setCombatMode failed: ${e?.message ?? e}`);
+    }
+    setTimeout(refresh, 250);
+  });
+  if (client?.events?.on) {
+    const onStats = () => refresh();
+    client.events.on("playerStatsUpdated", onStats);
+    bodyEl.__stanceHeaderDispose = () => {
+      try { client.events.off("playerStatsUpdated", onStats); } catch {}
+    };
+  } else {
+    bodyEl.__stanceHeaderDispose = () => {};
+  }
+  refresh();
+}
+
 // ── Render helpers ──────────────────────────────────────────────
 // Each render fn populates `bodyEl` with its stance-specific UI;
 // they share the damage-feed code at the bottom of activate().
 
 function renderAttackControls(bodyEl, state) {
-  // Height picker
+  // Height picker — one-word labels (Hi/Mid/Lo). Stance header is
+  // injected by activate() before this fn runs.
   const heightRow = document.createElement("div");
   heightRow.className = "hb-cb-row";
   const heightLabel = document.createElement("label");
@@ -304,9 +414,9 @@ function renderAttackControls(bodyEl, state) {
   const heightGroup = document.createElement("div");
   heightGroup.className = "hb-cb-heights";
   const HEIGHTS = [
-    { value: 1, label: "High" },
+    { value: 1, label: "Hi" },
     { value: 2, label: "Mid" },
-    { value: 3, label: "Low" },
+    { value: 3, label: "Lo" },
   ];
   const heightButtons = new Map();
   for (const h of HEIGHTS) {
@@ -368,7 +478,7 @@ function renderAttackControls(bodyEl, state) {
   });
   repeatLabel.appendChild(repeatBox);
   const repeatText = document.createElement("span");
-  repeatText.textContent = "Auto-repeat attacks";
+  repeatText.textContent = "Repeat";
   repeatLabel.appendChild(repeatText);
   bodyEl.appendChild(repeatLabel);
 
@@ -385,15 +495,9 @@ function renderAttackControls(bodyEl, state) {
   });
   chargeLabel.appendChild(chargeBox);
   const chargeText = document.createElement("span");
-  chargeText.textContent = "Charge to target (auto-pursue)";
+  chargeText.textContent = "Charge";
   chargeLabel.appendChild(chargeText);
   bodyEl.appendChild(chargeLabel);
-
-  const hint = document.createElement("div");
-  hint.className = "hb-cb-hint";
-  hint.textContent =
-    "Settings apply to your next click-to-attack. ACE owns the auto-repeat loop server-side.";
-  bodyEl.appendChild(hint);
 
   // Phase H.6 — power-bar meter. Subscribes to combatCommenceAttack +
   // attackDone events to animate the refill cycle. Refill duration is
@@ -402,10 +506,6 @@ function renderAttackControls(bodyEl, state) {
   // exact refillMod ACE uses; the visual feedback approximates it.
   const meter = document.createElement("div");
   meter.className = "hb-cb-power-meter ready";
-  const meterLabel = document.createElement("div");
-  meterLabel.className = "hb-cb-power-meter-label";
-  meterLabel.textContent = "Power Bar";
-  meter.appendChild(meterLabel);
   const meterBar = document.createElement("div");
   meterBar.className = "hb-cb-power-meter-bar";
   const meterFill = document.createElement("div");
@@ -698,10 +798,10 @@ function schoolName(s) {
 
 export const manifest = {
   id: "combat-bar",
-  name: "Combat Bar",
-  icon: "⚒",
-  version: "0.0.1",
-  description: "Attack settings + spell picker (stance-aware)",
+  name: "Combat",
+  icon: "⚔",
+  version: "0.1.0",
+  description: "Stance toggle + attack settings + spell picker",
 };
 
 export function activate(bodyEl, ctx) {
@@ -709,6 +809,11 @@ export function activate(bodyEl, ctx) {
   const state = loadState();
   syncWindowState(state);
   const client = ctx?.client ?? window.__pluginClient ?? null;
+
+  // Stance toggle header (was the separate `stance-toggle` plugin
+  // pre-2026-05-17). Shown above whichever stance-specific body
+  // renders below.
+  renderStanceHeader(bodyEl, client);
 
   // Phase F — branch on local combat stance. Magic stance (wand / orb
   // / magic staff in hand + combat mode) shows a spell picker;
@@ -727,8 +832,7 @@ export function activate(bodyEl, ctx) {
   feedEl.className = "hb-cb-feed";
   const feedEmpty = document.createElement("div");
   feedEmpty.className = "hb-cb-feed-empty";
-  feedEmpty.textContent =
-    client ? "Combat feed — waiting for first hit…" : "Login to start the combat feed.";
+  feedEmpty.textContent = client ? "" : "Log in to enable.";
   feedEl.appendChild(feedEmpty);
   bodyEl.appendChild(feedEl);
 
@@ -794,6 +898,10 @@ export function activate(bodyEl, ctx) {
     // Phase H.6 — power-meter rAF + event subscriptions.
     if (typeof bodyEl.__powerMeterDispose === "function") {
       try { bodyEl.__powerMeterDispose(); } catch {}
+    }
+    // Stance-header playerStatsUpdated subscription.
+    if (typeof bodyEl.__stanceHeaderDispose === "function") {
+      try { bodyEl.__stanceHeaderDispose(); } catch {}
     }
   };
 }

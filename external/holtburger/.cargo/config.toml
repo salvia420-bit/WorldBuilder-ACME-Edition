@@ -1,0 +1,19 @@
+# Wasm32 linker flags applied to every `cargo build --target
+# wasm32-unknown-unknown` (and `wasm-pack build`) invocation in this
+# workspace.
+#
+# `-zstack-size=8388608` — 8 MiB stack. The default lld wasm stack is
+# 1 MiB; the holtburger-session recv loop's `recv_ordered_packet`
+# holds two 128 KiB UDP buffers across `.await` points, and on top of
+# that the future state machine for the full client-message dispatch
+# pipeline accumulates several KiB of locals at each `.await`
+# boundary. The combined footprint overflowed the 1 MiB default
+# during normal login (CONNECT_REQUEST → CONNECT_RESPONSE → first
+# CharacterList), surfacing as `RuntimeError: memory access out of
+# bounds` at `holtburger_session::session::receive::Session::
+# recv_message::{{closure}}` (verified via CDP probe in K.1
+# validation on 2026-05-17). 8 MiB is enough headroom for the
+# foreseeable future without inflating the binary; the stack lives
+# in wasm linear memory and is allocated lazily by the engine.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=-zstack-size=8388608"]

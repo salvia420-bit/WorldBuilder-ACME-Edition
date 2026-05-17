@@ -77,6 +77,48 @@ const CMD_LOW_WALK_FORWARD = 0x0005;
 const CMD_LOW_WALK_BACKWARDS = 0x0006;
 const CMD_LOW_RUN_FORWARD = 0x0007;
 
+// One-shot motion commands — attacks (melee/missile), magic casts,
+// and the punch variants. ACE broadcasts these via UpdateMotion when
+// the player or a creature swings/casts/shoots; the client plays the
+// corresponding clip once and returns to the underlying locomotion
+// loop. Pre-2026-05-17 `classifyMotionCommand` returned `null` for
+// these, so they were silently dropped and combat used a vibe-coded
+// triangle-wave arm tween instead of the real motion-table clip.
+// Values come from `~/ace-server/Source/ACE.Entity/Enum/MotionCommand.cs`.
+const ATTACK_COMMANDS = new Set([
+  // Thrust  low / mid / high
+  0x0058, 0x0059, 0x005A,
+  // Slash high / mid / low
+  0x005B, 0x005C, 0x005D,
+  // Backhand high / mid / low
+  0x005E, 0x005F, 0x0060,
+  // Missile shoot
+  0x0061,
+  // Unarmed (variants 1, 2, 3) high / mid / low
+  0x0062, 0x0063, 0x0064,
+  0x0065, 0x0066, 0x0067,
+  0x0068, 0x0069, 0x006A,
+  // Missile attack 1 / 2 / 3
+  0x00D0, 0x00D1, 0x00D2,
+  // Punch fast/slow high/mid/low
+  0x018F, 0x0190, 0x0191,
+  0x0192, 0x0193, 0x0194,
+  // Jump + JumpCharging — same one-shot semantics as attacks.
+  // Pre-2026-05-17 these were dropped at classifyMotionCommand and
+  // `setAirbornePose` handled jump with a vibe-coded slerp; the real
+  // MotionTable clip (now resolvable through `setMotion`) wins if
+  // the entity's motion table has the entry.
+  0x003B, 0x001D,
+]);
+const CAST_COMMANDS = new Set([
+  // MagicBlast, MagicThrowMissile, MagicSelf* variants
+  0x002B, 0x002C, 0x002D, 0x002E, 0x002F, 0x0030, 0x0031, 0x0032,
+  // PowerUp01..10
+  0x006F, 0x0070, 0x0071, 0x0072, 0x0073, 0x0074, 0x0075, 0x0076, 0x0077, 0x0078,
+  // CastSpell
+  0x00D3,
+]);
+
 // Same 4-bake-per-setup ceiling the 2D path enforces
 // (`index.html:2992`). Without this, a creature flipping stances
 // rapidly would accrete unbounded mixer actions; the cap evicts
@@ -106,6 +148,8 @@ function classifyMotionCommand(cmd) {
   if (low === CMD_LOW_WALK_FORWARD || low === CMD_LOW_WALK_BACKWARDS)
     return "walk";
   if (low === CMD_LOW_RUN_FORWARD) return "run";
+  if (ATTACK_COMMANDS.has(low)) return "attack";
+  if (CAST_COMMANDS.has(low)) return "cast";
   return null;
 }
 
@@ -1359,8 +1403,23 @@ export class EntityManager {
       // Don't exceed the per-entity action cap. Evict before install.
       inst.evictOldestUnused();
       action = inst.mixer.clipAction(clip);
-      action.setLoop(THREE.LoopRepeat, Infinity);
-      action.clampWhenFinished = false;
+      // One-shot (attack / cast) — play once + return to the rest
+      // pose; the surrounding locomotion will re-resume on the next
+      // STOP / WalkForward / RunForward broadcast from ACE. Pre-2026-
+      // 05-17 these commands were dropped at `classifyMotionCommand`,
+      // so combat used a vibe-coded triangle-wave arm tween in
+      // `setSwingPose`. Now the real MotionTable clip plays for any
+      // attack-family or cast-family command. Clear the vibe-tween
+      // so the real clip wins (the tween's per-tick slerp runs AFTER
+      // mixer.update and would otherwise overwrite the clip's pose).
+      if (cls === "attack" || cls === "cast") {
+        action.setLoop(THREE.LoopOnce, 1);
+        action.clampWhenFinished = false;
+        inst._swingTween = null;
+      } else {
+        action.setLoop(THREE.LoopRepeat, Infinity);
+        action.clampWhenFinished = false;
+      }
       action.enabled = true;
       inst.actions.set(cacheKey, action);
       // Task E (2026-05-12): same hook-timeline stash as the spawn

@@ -162,6 +162,14 @@ export function setupClickPicking({
 
   function onPointerDown(ev) {
     if (ev.button !== 0) return;
+    // Phase I.1 follow-on: any left-click ends an in-flight charge.
+    // Without this, a click that misses the entity (clicking past
+    // it, clicking on terrain) silently leaves the rAF loop running
+    // and the player keeps walking toward the original target. Even
+    // a click that DOES hit an entity should cancel first, so the
+    // new target's charge starts from rest rather than overlapping
+    // the previous one.
+    cancelCharge();
     const guid = pickEntityAt(ev.clientX, ev.clientY);
     if (guid == null) return;
     ev.stopPropagation();
@@ -234,9 +242,33 @@ export function setupClickPicking({
 
   canvas.addEventListener("pointerdown", onPointerDown);
 
+  // Phase I.1 follow-on (handoff Tier 1): manual-input override.
+  // Any movement key during an active charge aborts the auto-pursue
+  // and hands control back to the player. Pre-fix the rAF loop
+  // would re-issue `setMovementInput(forward=1, turn=±1)` every
+  // frame, racing the keystate-driven movement and producing a
+  // "tug of war" — see handoff Tier 1 #4. Now any of WASD, Q/E,
+  // or Shift cancels the charge cleanly.
+  const ABORT_KEYS = new Set([
+    "w", "a", "s", "d", "q", "e", "shift",
+    "arrowup", "arrowdown", "arrowleft", "arrowright",
+  ]);
+  function onKeyDownAbortCharge(ev) {
+    if (!charge) return;
+    const k = (ev.key || "").toLowerCase();
+    if (!ABORT_KEYS.has(k)) return;
+    // Don't kill the charge if the user is typing in a form
+    // (chat input, login fields).
+    const tag = ev.target?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA") return;
+    cancelCharge();
+  }
+  document.addEventListener("keydown", onKeyDownAbortCharge);
+
   return {
     destroy() {
       canvas.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDownAbortCharge);
     },
   };
 }

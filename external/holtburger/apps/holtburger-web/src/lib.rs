@@ -10930,6 +10930,16 @@ enum SessionCommand {
     /// `ClientCommand::SetCombatMode` → `GameAction::ChangeCombatMode`
     /// dispatch.
     ToggleCombatMode,
+    /// Set the combat mode directly to `mode`. The JS plugin reads
+    /// the authoritative motion stance from `applyConfirmedStance`
+    /// and uses that to decide which mode to send — bypassing the
+    /// stale `world.player.combat_mode` cache that breaks
+    /// `ToggleCombatMode` (ACE's `PrivateUpdatePropertyInt(CombatMode)`
+    /// doesn't reliably land between toggles, so the wasm read
+    /// always sees `Undef`).
+    SetCombatMode {
+        mode: holtburger_protocol::messages::CombatMode,
+    },
     /// Phase B (combat-melee): JS-side requested a melee swing against a
     /// specific target. The recv arm builds a `GameAction::TargetedMeleeAttack`
     /// (sub-opcode 0x0008) wire packet carrying `{target_guid, attack_height,
@@ -13178,6 +13188,31 @@ impl SessionHandle {
             })
     }
 
+    /// Set the combat mode to a specific value, bypassing the
+    /// world-state derivation `toggleCombatMode` relies on. Needed
+    /// because `world.player.combat_mode` is sometimes stale (ACE's
+    /// `PrivateUpdatePropertyInt(CombatMode)` doesn't reliably land
+    /// in the world cache between toggles), so the JS plugin reads
+    /// the authoritative stance from `applyConfirmedStance` and
+    /// calls this with the desired mode directly. Values are the
+    /// `acclient.h eCombatMode` constants: 1=NonCombat, 2=Melee,
+    /// 4=Missile, 8=Magic. Invalid values reject early.
+    #[wasm_bindgen(js_name = setCombatMode)]
+    pub fn set_combat_mode(&self, mode: u32) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        use holtburger_protocol::messages::CombatMode;
+        let cm = CombatMode::from_repr(mode).ok_or_else(|| {
+            JsValue::from_str(&format!(
+                "setCombatMode: invalid mode {mode} (expected 1=NonCombat, 2=Melee, 4=Missile, 8=Magic)"
+            ))
+        })?;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SetCombatMode { mode: cm })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("set_combat_mode: cmd channel closed ({e})"))
+            })
+    }
+
     /// Player pressed (and released) the jump key. `power` is in
     /// `[0.0, 1.0]` — 1.0 for a full-charge jump, fractional for a
     /// quick tap. JS-side hold tracking computes this from
@@ -14220,11 +14255,32 @@ fn publish_player_known_spells_snapshot(
     world: &holtburger_world::WorldState,
     latest_known_spells: &std::rc::Rc<std::cell::RefCell<Vec<u32>>>,
 ) {
-    let spells: Vec<u32> = world
-        .player_entity()
-        .map(|entity| entity.spell_book.clone())
-        .unwrap_or_default();
-    *latest_known_spells.borrow_mut() = spells;
+    // K.1 follow-on (validation gap #5): merge both possible
+    // sources. Pre-fix this only read `Entity.spell_book` which is
+    // populated by `apply_identify_response` — but ACE never sends
+    // an IdentifyObject response for the local player on login.
+    // The actual source on login is the PlayerDescription event,
+    // which routes through `world::player::mutations::apply_player_
+    // description` and lands in `WorldState.player.spells`. Merge
+    // the two so the cache works regardless of which path arrived
+    // first.
+    use std::collections::BTreeSet;
+    let mut all: BTreeSet<u32> = world.player.spells.keys().copied().collect();
+    if let Some(entity) = world.player_entity() {
+        for &id in &entity.spell_book {
+            all.insert(id);
+        }
+    }
+    // Preserve the wasm-side cache's mid-session additions (the
+    // MagicUpdateSpell recv-arm appends straight to this Vec, NOT
+    // to world.player.spells or entity.spell_book).
+    {
+        let current = latest_known_spells.borrow();
+        for &id in current.iter() {
+            all.insert(id);
+        }
+    }
+    *latest_known_spells.borrow_mut() = all.into_iter().collect();
 }
 
 /// Phase 6 step D: refresh the cell-scene snapshot the rAF tick reads
@@ -16686,6 +16742,59 @@ async fn recv_loop(
                                         f32_payload: None,
                                     });
                                 }
+                                holtburger_protocol::messages::GameEvent::MagicUpdateSpell(
+                                    data,
+                                ) => {
+                                    // K.1 follow-on (handoff validation gap #5):
+                                    // ACE broadcasts this every time a spell is
+                                    // added to the player's spellbook (e.g. via
+                                    // `@addspell <id>`, scroll learning, or
+                                    // class progression). Pre-fix the wasm side
+                                    // dropped it to the catch-all, so the
+                                    // Spellbook plugin only saw spells from the
+                                    // initial PlayerDescription burst and
+                                    // showed "No spells known" after any
+                                    // mid-session learn. Append to the wasm-
+                                    // side cache + emit a stats-updated event
+                                    // so the spellbook plugin re-renders.
+                                    let spell_id = data.spell_id as u32;
+                                    {
+                                        let mut book = latest_known_spells.borrow_mut();
+                                        if !book.contains(&spell_id) {
+                                            book.push(spell_id);
+                                        }
+                                    }
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_PLAYER_STATS_UPDATED,
+                                        string_payload: None,
+                                        u32_payload: Some(spell_id),
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
+                                holtburger_protocol::messages::GameEvent::MagicRemoveSpell(
+                                    data,
+                                ) => {
+                                    // Phase J was C2S-only — ACE's matching
+                                    // S→C broadcast (this) wasn't wired here,
+                                    // so a successful remove silently left the
+                                    // client cache stale (the spell stayed in
+                                    // the spellbook even after ACE removed it).
+                                    // Symmetric fix to the MagicUpdateSpell
+                                    // arm above.
+                                    let spell_id = data.spell_id as u32;
+                                    {
+                                        let mut book = latest_known_spells.borrow_mut();
+                                        book.retain(|&id| id != spell_id);
+                                    }
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_PLAYER_STATS_UPDATED,
+                                        string_payload: None,
+                                        u32_payload: Some(spell_id),
+                                        u32_payload_2: None,
+                                        f32_payload: None,
+                                    });
+                                }
                                 _ => {
                                     // Non-chat GameEvents drop through
                                     // to the no-op outer catch-all.
@@ -17025,7 +17134,24 @@ async fn recv_loop(
                             continue;
                         }
                         let current = w.player_combat_mode();
-                        let target_mode = if current == CombatMode::NonCombat {
+                        // Pre-2026-05-17 the toggle only fired the
+                        // suggested-mode path on `NonCombat`. But
+                        // `WorldState.player.combat_mode` is `Undef`
+                        // before ACE has broadcast its first
+                        // PlayerDescription with `combat_mode`. That
+                        // races against the user clicking the bar's
+                        // `⚐ Enter Combat Mode` button — first click
+                        // sees `Undef` and (under the old logic) fell
+                        // through to "else → NonCombat", which is a
+                        // no-op since the player is already there.
+                        // Treat `Undef` the same as `NonCombat` here:
+                        // the user obviously wants to enter combat,
+                        // and ACE will reply with the right derived
+                        // mode either way.
+                        let target_mode = if matches!(
+                            current,
+                            CombatMode::NonCombat | CombatMode::Undef
+                        ) {
                             // Default the suggestion to Melee when no
                             // equipment is wielded (the cli helper
                             // returns Melee in that case via its
@@ -17055,6 +17181,33 @@ async fn recv_loop(
                         }
                         console_log_str(&format!(
                             "[combat-mode] toggle: {current:?} → {target_mode:?}",
+                        ));
+                    }
+                    Some(SessionCommand::SetCombatMode { mode }) => {
+                        // JS plugin computed the desired mode from
+                        // the authoritative motion stance. Just send
+                        // it — no world-state lookup.
+                        use holtburger_protocol::messages::{
+                            ChangeCombatModeActionData, GameAction,
+                        };
+                        let action = GameAction::ChangeCombatMode(Box::new(
+                            ChangeCombatModeActionData { mode },
+                        ));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!(
+                                "recv_loop: send_action(ChangeCombatMode {mode:?}): {e}"
+                            );
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("set_combat_mode: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[combat-mode] set: → {mode:?}",
                         ));
                     }
                     Some(SessionCommand::CastTargetedSpell {

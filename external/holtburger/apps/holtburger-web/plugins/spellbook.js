@@ -445,11 +445,34 @@ export function activate(bodyEl, ctx) {
       if (!filters.levels.has(meta.level)) continue;
       entries.push([id, meta]);
     }
+    // Spells the character knows but our 26-entry starter catalog
+    // doesn't have a name/school for (e.g. Harm Self I — SpellId
+    // variants beyond what Phase G shipped). Always show them with
+    // a placeholder so the user knows they're learned; school/level
+    // filters don't apply because we don't have metadata to filter
+    // on. Handoff Tier 2 item #7 ("Bigger spell catalog") will
+    // eventually backfill the real names.
+    const cataloguedIds = new Set(Object.keys(catalog).map((k) => Number(k)));
+    for (const id of knownIds) {
+      if (!cataloguedIds.has(id)) {
+        entries.push([
+          id,
+          { name: `Spell #${id}`, school: 0, level: 0, untargeted: true, mana: 0 },
+        ]);
+      }
+    }
     if (entries.length === 0) {
       const empty = document.createElement("div");
       empty.className = "hb-sb-empty";
+      // Note: `knownIds.size === 0` can happen for either of two
+      // very different reasons — (a) the character genuinely knows
+      // no spells, or (b) ACE's PlayerDescription hasn't landed
+      // yet (the wasm-side `spell_book` cache is empty until the
+      // first description fires). Either way "log in to populate"
+      // (the old text) is wrong: the player IS logged in. Stay
+      // descriptive but not misleading.
       empty.textContent = knownIds.size === 0
-        ? "No known spells yet — log in to populate."
+        ? "No spells known."
         : "No spells match the current filter.";
       listEl.appendChild(empty);
       return;

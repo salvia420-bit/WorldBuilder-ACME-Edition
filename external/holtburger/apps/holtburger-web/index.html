@@ -728,20 +728,17 @@
       import { mountBar } from "./ui/bar.js";
       import * as combatBarPlugin from "./plugins/combat-bar.js";
       import * as spellbookPlugin from "./plugins/spellbook.js";
-      import * as stanceTogglePlugin from "./plugins/stance-toggle.js";
 
       let pluginClient = null;
       let barInstance = null;
 
+      // 2026-05-17 — the standalone `⚐ stance-toggle` slot was
+      // merged into the Combat plugin; one slot instead of two.
       const barSlots = [
-        {
-          ...stanceTogglePlugin.manifest,
-          activate: stanceTogglePlugin.activate,
-        },
         {
           id: "rynthsuite",
           name: "RynthSuite",
-          icon: "⚔",
+          icon: "⚒",
           panelBody: "RynthSuite — combat & navigation (stub)",
         },
         {
@@ -1089,10 +1086,21 @@
         const low = motionStance & 0xFFFF;
         // ACE emits motion-only updates with stance=0; preserve last confirmed label.
         if (low === 0) return;
+        const changed = currentStanceLow !== low;
         currentStanceLow = low;
         const label = STANCE_LABELS[low] ?? `0x${low.toString(16)}`;
         stanceLabelEl.textContent = label;
         stanceLabelEl.classList.remove("pending");
+        // Notify plugins (stance-toggle, combat-bar) that the
+        // server-confirmed stance has changed. Without this the
+        // stance-toggle plugin's "Current stance: NonCombat" label
+        // never flips after a successful toggle — it only re-renders
+        // on `playerStatsUpdated`, and ACE's UpdateMotion arrives
+        // via the kind=5 channel which doesn't piggyback on the
+        // stats stream.
+        if (changed && window.__pluginClient?.events?.emit) {
+          window.__pluginClient.events.emit("playerStatsUpdated", {});
+        }
       }
       // Phase 5.0b — ASSET_URL was the legacy single-bundle path,
       // replaced by the manifest+shards delivery initialized above

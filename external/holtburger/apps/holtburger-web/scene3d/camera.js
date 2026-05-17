@@ -129,11 +129,17 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { PointerLockControls } from "three/addons/controls/PointerLockControls.js";
 import { acToThree } from "./adapter.js";
 
-/** Mode-cycle order on `C` press: follow → orbit → topDown → follow. */
-export const CAMERA_MODES = ["follow", "orbit", "topDown"];
+/**
+ * Mode-cycle order on `C` press: follow → topDown → orbit → follow.
+ *
+ * topDown is the de-facto minimap (camera looks straight down at the
+ * player), so the user gets it on the FIRST tap of `C` from the
+ * default follow mode. orbit is the rarely-used inspection mode and
+ * sits at the back of the cycle.
+ */
+export const CAMERA_MODES = ["follow", "topDown", "orbit"];
 
 /** Pitch clamp (radians) for follow camera. 0 = level horizon; +π/2 = straight down. */
 // Phase 3 (Cohere-D follow-on, 2026-05-12): widened pitch range so the
@@ -402,53 +408,53 @@ export class CameraSwitcher {
 
     this.mode = next;
     if (next === "follow") {
-      // PointerLockControls steers followYaw/followPitch on mousemove
-      // when the pointer is locked. We install onmousemove + lock on
-      // click manually because PointerLockControls' default behaviour
-      // (.lock() on click) sometimes races initial canvas focus.
+      // Retail Asheron's Call mouselook: cursor stays visible (no
+      // PointerLock), right-mouse-button HELD + dragged turns the
+      // camera (yaw + pitch on followYaw/followPitch). Left-click
+      // stays reserved for entity picking — see scene3d/picking.js.
+      // The browser context menu is suppressed on the canvas so
+      // right-drag can drive the camera unhindered.
       if (this.domElement) {
-        try {
-          const plc = new PointerLockControls(this.persp, this.domElement);
-          this.controls = plc;
-          // PointerLockControls fires a `mousemove`-equivalent via
-          // its own internal listener — but we want to steer
-          // followYaw/followPitch (not the camera object directly,
-          // since the per-tick positionCamera() recomputes from
-          // these). Hook into mousemove on document while locked.
-          const onMove = (ev) => {
-            if (!plc.isLocked) return;
-            const mx = ev.movementX || 0;
-            const my = ev.movementY || 0;
-            // Standard FPS mouse-look convention: mouse-right turns the
-            // camera right (yaw increases in our clockwise-from-north
-            // followYaw frame), mouse-down looks down (pitch increases).
-            // Inverted from Phase 7.5's original sign so users without
-            // the "invert X" preference get the expected feel.
-            this.followYaw += mx * POINTER_YAW_SENS;
-            this.followPitch += my * POINTER_PITCH_SENS;
-            // Clamp pitch to keep camera from flipping over.
-            if (this.followPitch < FOLLOW_PITCH_MIN)
-              this.followPitch = FOLLOW_PITCH_MIN;
-            if (this.followPitch > FOLLOW_PITCH_MAX)
-              this.followPitch = FOLLOW_PITCH_MAX;
-          };
-          if (typeof document !== "undefined") {
-            document.addEventListener("mousemove", onMove);
-            this._listeners.push(["mousemove", onMove, document]);
-          }
-          // Click-to-lock: grab pointer when user clicks the canvas.
-          const onClick = () => {
-            if (this.mode === "follow" && !plc.isLocked) {
-              try { plc.lock(); } catch (_) {}
-            }
-          };
-          if (this.domElement) {
-            this.domElement.addEventListener("click", onClick);
-            this._listeners.push(["click", onClick, this.domElement]);
-          }
-        } catch (e) {
-          // eslint-disable-next-line no-console
-          console.warn("[cameraSwitcher] PointerLockControls init failed:", e);
+        let dragging = false;
+        let lastX = 0;
+        let lastY = 0;
+        const onContextMenu = (ev) => {
+          ev.preventDefault();
+          return false;
+        };
+        const onMouseDown = (ev) => {
+          if (ev.button !== 2) return;
+          dragging = true;
+          lastX = ev.clientX;
+          lastY = ev.clientY;
+          ev.preventDefault();
+        };
+        const onMouseMove = (ev) => {
+          if (!dragging) return;
+          const mx = ev.clientX - lastX;
+          const my = ev.clientY - lastY;
+          lastX = ev.clientX;
+          lastY = ev.clientY;
+          this.followYaw += mx * POINTER_YAW_SENS;
+          this.followPitch += my * POINTER_PITCH_SENS;
+          if (this.followPitch < FOLLOW_PITCH_MIN)
+            this.followPitch = FOLLOW_PITCH_MIN;
+          if (this.followPitch > FOLLOW_PITCH_MAX)
+            this.followPitch = FOLLOW_PITCH_MAX;
+        };
+        const onMouseUp = (ev) => {
+          if (ev.button !== 2) return;
+          dragging = false;
+        };
+        this.domElement.addEventListener("contextmenu", onContextMenu);
+        this.domElement.addEventListener("mousedown", onMouseDown);
+        this._listeners.push(["contextmenu", onContextMenu, this.domElement]);
+        this._listeners.push(["mousedown", onMouseDown, this.domElement]);
+        if (typeof document !== "undefined") {
+          document.addEventListener("mousemove", onMouseMove);
+          document.addEventListener("mouseup", onMouseUp);
+          this._listeners.push(["mousemove", onMouseMove, document]);
+          this._listeners.push(["mouseup", onMouseUp, document]);
         }
       }
       this.activeCamera = this.persp;
