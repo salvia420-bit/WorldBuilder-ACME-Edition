@@ -51,6 +51,9 @@ export function createClient(sessionHandle) {
     get inventory() {
       return sessionHandle.playerInventory();
     },
+    knownSpells() {
+      return sessionHandle.playerKnownSpells();
+    },
   });
 
   const AttackHeight = Object.freeze({ HIGH: 1, MEDIUM: 2, LOW: 3 });

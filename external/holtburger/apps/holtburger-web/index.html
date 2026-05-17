@@ -626,15 +626,11 @@
       import { createClient } from "./plugins/api.js";
       import { mountBar } from "./ui/bar.js";
       import * as combatBarPlugin from "./plugins/combat-bar.js";
+      import * as spellbookPlugin from "./plugins/spellbook.js";
 
       let pluginClient = null;
       let barInstance = null;
 
-      // Phase D — combat-bar lives next to the RynthSuite slot. It
-      // owns its panel via the slot.activate(bodyEl) hook + persists
-      // settings to localStorage["holtburger_combat_bar_v1"] +
-      // mirrors them onto window.__combatBarState for picking.js to
-      // read at click time.
       const barSlots = [
         {
           id: "rynthsuite",
@@ -646,7 +642,29 @@
           ...combatBarPlugin.manifest,
           activate: combatBarPlugin.activate,
         },
+        {
+          ...spellbookPlugin.manifest,
+          activate: spellbookPlugin.activate,
+        },
       ];
+
+      // Phase G — F5 toggles the Spellbook panel (retail muscle memory).
+      // The keyboard listener finds the spellbook's bar icon by aria-label
+      // and clicks it, leveraging the bar's existing toggle behavior.
+      window.addEventListener("keydown", (ev) => {
+        if (ev.key === "F5" && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+          const target = ev.target;
+          // Don't intercept F5 if the user is typing in a text field.
+          if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) {
+            return;
+          }
+          const sbBtn = document.querySelector('[data-plugin-id="spellbook"]');
+          if (sbBtn) {
+            ev.preventDefault();
+            sbBtn.click();
+          }
+        }
+      });
 
       // Mount the bar immediately — it doesn't depend on session state.
       // The facade is created post-login and stored on window.__pluginClient.
@@ -6452,6 +6470,13 @@ void main() {
                 // because playerStats() is a clone of pre-built
                 // typed arrays.
                 renderVitalsPanel(handle);
+                // Phase G — also relay through the facade so plugins
+                // (spellbook) can refresh from playerKnownSpells()
+                // without polling. The wasm side piggybacks the
+                // known-spells snapshot on this same hook.
+                if (window.__pluginClient) {
+                  window.__pluginClient.events.emit("playerStatsUpdated", {});
+                }
               } else if (evt.kind === 11) {
                 // Phase 4 step 4 follow-on: InventoryUpdated.
                 // ObjectCreate / ObjectDelete / WieldObject /

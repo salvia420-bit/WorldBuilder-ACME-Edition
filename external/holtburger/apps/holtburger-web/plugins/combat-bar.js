@@ -1,3 +1,5 @@
+import { getSpellBarSlots, loadCatalog } from "./spellbook.js";
+
 const STORAGE_KEY = "holtburger_combat_bar_v1";
 
 const DEFAULTS = {
@@ -5,27 +7,8 @@ const DEFAULTS = {
   powerLevel: 1.0,
   autoRepeat: true,
   armedSpellId: 0, // 0 = no spell armed
+  spellBarSlots: [], // populated by the Spellbook plugin (📖)
 };
-
-// Phase F — starter spell list. Magic stance (0x0049, derived by ACE
-// when the player is wielding a wand / orb / magic staff and toggles
-// into combat mode) shows these in the spell picker. IDs verified
-// against external/LSD-Partial-2025-02-23_16-15/spells.json. Untargeted
-// spells (self-buffs, recall, lifestone tie, portal summons) fire
-// immediately from the picker; targeted spells arm for the next
-// viewport click.
-const STARTER_SPELLS = [
-  { id: 2,    name: "Strength Self I",    school: "Creature",  untargeted: true },
-  { id: 1349, name: "Endurance Self I",   school: "Creature",  untargeted: true },
-  { id: 1373, name: "Coordination Self I",school: "Creature",  untargeted: true },
-  { id: 1397, name: "Quickness Self I",   school: "Creature",  untargeted: true },
-  { id: 1421, name: "Focus Self I",       school: "Creature",  untargeted: true },
-  { id: 6,    name: "Heal Self I",        school: "Life",      untargeted: true },
-  { id: 209,  name: "Mana Renewal Other IV", school: "Life",   untargeted: false },
-  { id: 2023, name: "Recall the Sanctuary",  school: "Item",   untargeted: true },
-  { id: 2644, name: "Lifestone Tie",      school: "Item",      untargeted: true },
-  { id: 157,  name: "Summon Portal I",    school: "Item",      untargeted: true },
-];
 
 function loadState() {
   try {
@@ -52,6 +35,7 @@ function syncWindowState(state) {
     powerLevel: state.powerLevel,
     autoRepeat: state.autoRepeat,
     armedSpellId: state.armedSpellId,
+    spellBarSlots: state.spellBarSlots || [],
   };
 }
 
@@ -338,6 +322,7 @@ function renderSpellPicker(bodyEl, state, client) {
   list.className = "hb-cb-spells";
   bodyEl.appendChild(list);
 
+  let catalog = null;
   const rows = new Map();
 
   function setArmed(spellId) {
@@ -349,53 +334,93 @@ function renderSpellPicker(bodyEl, state, client) {
     }
   }
 
-  for (const spell of STARTER_SPELLS) {
-    const row = document.createElement("button");
-    row.type = "button";
-    row.className = "hb-cb-spell";
-    row.dataset.spellId = String(spell.id);
-    if (state.armedSpellId === spell.id && !spell.untargeted) {
-      row.classList.add("armed");
+  function renderRows() {
+    list.innerHTML = "";
+    rows.clear();
+
+    const slots = getSpellBarSlots();
+    const populated = slots.filter((v) => v > 0);
+
+    if (populated.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "hb-cb-hint";
+      empty.style.padding = "10px 4px";
+      empty.style.color = "rgba(255, 255, 255, 0.55)";
+      empty.textContent =
+        "No spells on the magic combat bar. Open the 📖 Spellbook and double-click known spells to add them here.";
+      list.appendChild(empty);
+      return;
     }
 
-    const action = document.createElement("span");
-    action.className = "hb-cb-spell-action";
-    action.textContent = spell.untargeted ? "Cast" : "Arm";
-    row.appendChild(action);
-
-    const name = document.createElement("span");
-    name.className = "hb-cb-spell-name";
-    name.textContent = spell.name;
-    row.appendChild(name);
-
-    const tag = document.createElement("span");
-    tag.className = "hb-cb-spell-tag";
-    tag.textContent = spell.untargeted ? "self" : spell.school;
-    row.appendChild(tag);
-
-    row.addEventListener("click", () => {
-      if (spell.untargeted) {
-        // Fire immediately through the facade. The picker doesn't
-        // "arm" untargeted spells since there's no target to wait
-        // for; clicking IS the cast.
-        try {
-          if (client?.player?.castSpell) {
-            client.player.castSpell(spell.id, null);
-          }
-        } catch (e) {
-          console.warn(`[combat-bar] cast(${spell.id}) failed: ${e?.message ?? e}`);
-        }
-      } else {
-        // Targeted spell — toggle arm state. The next viewport click
-        // in magic stance fires the cast against the clicked entity
-        // (picking.js reads window.__combatBarState.armedSpellId).
-        setArmed(state.armedSpellId === spell.id ? 0 : spell.id);
+    for (let i = 0; i < slots.length; i++) {
+      const spellId = slots[i];
+      if (spellId === 0) continue;
+      const meta = catalog ? catalog[String(spellId)] : null;
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "hb-cb-spell";
+      row.dataset.spellId = String(spellId);
+      const isUntargeted = meta?.untargeted ?? true;
+      if (state.armedSpellId === spellId && !isUntargeted) {
+        row.classList.add("armed");
       }
-    });
 
-    rows.set(spell.id, row);
-    list.appendChild(row);
+      const action = document.createElement("span");
+      action.className = "hb-cb-spell-action";
+      action.textContent = isUntargeted ? "Cast" : "Arm";
+      row.appendChild(action);
+
+      const name = document.createElement("span");
+      name.className = "hb-cb-spell-name";
+      name.textContent = meta?.name ?? `Spell 0x${spellId.toString(16)}`;
+      row.appendChild(name);
+
+      const tag = document.createElement("span");
+      tag.className = "hb-cb-spell-tag";
+      tag.textContent = isUntargeted ? "self" : (meta?.school ? schoolName(meta.school) : "target");
+      row.appendChild(tag);
+
+      row.addEventListener("click", () => {
+        if (isUntargeted) {
+          try {
+            if (client?.player?.castSpell) {
+              client.player.castSpell(spellId, null);
+            }
+          } catch (e) {
+            console.warn(`[combat-bar] cast(${spellId}) failed: ${e?.message ?? e}`);
+          }
+        } else {
+          setArmed(state.armedSpellId === spellId ? 0 : spellId);
+        }
+      });
+
+      rows.set(spellId, row);
+      list.appendChild(row);
+    }
   }
+
+  // Initial draw + load catalog → second draw with names.
+  renderRows();
+  loadCatalog().then((c) => {
+    catalog = c;
+    renderRows();
+  });
+
+  // Re-render when the spellbook plugin updates the slots.
+  const onSpellbarChanged = () => renderRows();
+  window.addEventListener("hb-spellbar-changed", onSpellbarChanged);
+
+  // (No teardown needed for the slot listener — bar.js calls our
+  // returned dispose; the damage-feed return-fn below adds + manages
+  // its own teardown chain.)
+  // We store this so the outer activate() can include it in dispose.
+  bodyEl.__spellPickerDispose = () => {
+    window.removeEventListener("hb-spellbar-changed", onSpellbarChanged);
+  };
+}
+
+function schoolName(s) {
+  return { 1: "War", 2: "Life", 3: "Item", 4: "Creature", 5: "Void" }[s] ?? "?";
 }
 
 export const manifest = {
@@ -488,6 +513,10 @@ export function activate(bodyEl, ctx) {
   return () => {
     for (const dispose of subs) {
       try { dispose(); } catch {}
+    }
+    // Phase G — spell-picker installs a window listener; clean it up.
+    if (typeof bodyEl.__spellPickerDispose === "function") {
+      try { bodyEl.__spellPickerDispose(); } catch {}
     }
   };
 }

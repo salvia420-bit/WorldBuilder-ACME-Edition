@@ -1,0 +1,213 @@
+{
+  "_comment": "Phase G spell catalog. School: 1=War 2=Life 3=Item 4=Creature 5=Void. level is the LSD 'power' field. untargeted=true means cast-on-self / no target. Trimmed subset of LSD-Partial-2025-02-23_16-15/spells.json \u2014 Phase H can expand.",
+  "spells": {
+    "58": {
+      "name": "Acid Stream I",
+      "school": 1,
+      "level": 1,
+      "untargeted": false,
+      "mana": 5,
+      "icon": 100668334
+    },
+    "27": {
+      "name": "Flame Bolt I",
+      "school": 1,
+      "level": 1,
+      "untargeted": false,
+      "mana": 5,
+      "icon": 100668276
+    },
+    "86": {
+      "name": "Force Bolt I",
+      "school": 1,
+      "level": 1,
+      "untargeted": false,
+      "mana": 5,
+      "icon": 100668343
+    },
+    "28": {
+      "name": "Frost Bolt I",
+      "school": 1,
+      "level": 1,
+      "untargeted": false,
+      "mana": 5,
+      "icon": 100668281
+    },
+    "75": {
+      "name": "Lightning Bolt I",
+      "school": 1,
+      "level": 1,
+      "untargeted": false,
+      "mana": 5,
+      "icon": 100668333
+    },
+    "64": {
+      "name": "Shock Wave I",
+      "school": 1,
+      "level": 1,
+      "untargeted": false,
+      "mana": 5,
+      "icon": 100668336
+    },
+    "92": {
+      "name": "Whirling Blade I",
+      "school": 1,
+      "level": 1,
+      "untargeted": false,
+      "mana": 5,
+      "icon": 100668349
+    },
+    "7": {
+      "name": "Harm Other I",
+      "school": 2,
+      "level": 1,
+      "untargeted": false,
+      "mana": 10,
+      "icon": 100674016
+    },
+    "5": {
+      "name": "Heal Other I",
+      "school": 2,
+      "level": 1,
+      "untargeted": false,
+      "mana": 10,
+      "icon": 100674018
+    },
+    "6": {
+      "name": "Heal Self I",
+      "school": 2,
+      "level": 1,
+      "untargeted": true,
+      "mana": 15,
+      "icon": 100674019
+    },
+    "9": {
+      "name": "Infuse Mana Other I",
+      "school": 2,
+      "level": 1,
+      "untargeted": false,
+      "mana": 10,
+      "icon": 100668288
+    },
+    "25": {
+      "name": "Imperil Other I",
+      "school": 2,
+      "level": 25,
+      "untargeted": false,
+      "mana": 10,
+      "icon": 100668293
+    },
+    "49": {
+      "name": "Aura of Swift Killer Self I",
+      "school": 3,
+      "level": 1,
+      "untargeted": true,
+      "mana": 10,
+      "icon": 100673991
+    },
+    "2644": {
+      "name": "Lifestone Tie",
+      "school": 3,
+      "level": 100,
+      "untargeted": true,
+      "mana": 50,
+      "icon": 100672856
+    },
+    "2023": {
+      "name": "Recall the Sanctuary",
+      "school": 3,
+      "level": 200,
+      "untargeted": true,
+      "mana": 70,
+      "icon": 100674023
+    },
+    "157": {
+      "name": "Summon Primary Portal I",
+      "school": 3,
+      "level": 200,
+      "untargeted": true,
+      "mana": 70,
+      "icon": 100672859
+    },
+    "1373": {
+      "name": "Coordination Self I",
+      "school": 4,
+      "level": 1,
+      "untargeted": true,
+      "mana": 15,
+      "icon": 100668268
+    },
+    "1349": {
+      "name": "Endurance Self I",
+      "school": 4,
+      "level": 1,
+      "untargeted": true,
+      "mana": 15,
+      "icon": 100668273
+    },
+    "1421": {
+      "name": "Focus Self I",
+      "school": 4,
+      "level": 1,
+      "untargeted": true,
+      "mana": 15,
+      "icon": 100668277
+    },
+    "17": {
+      "name": "Invulnerability Other I",
+      "school": 4,
+      "level": 1,
+      "untargeted": false,
+      "mana": 10,
+      "icon": 100668331
+    },
+    "1397": {
+      "name": "Quickness Self I",
+      "school": 4,
+      "level": 1,
+      "untargeted": true,
+      "mana": 15,
+      "icon": 100668294
+    },
+    "1": {
+      "name": "Strength Other I",
+      "school": 4,
+      "level": 1,
+      "untargeted": false,
+      "mana": 10,
+      "icon": 100668300
+    },
+    "2": {
+      "name": "Strength Self I",
+      "school": 4,
+      "level": 1,
+      "untargeted": true,
+      "mana": 15,
+      "icon": 100668300
+    },
+    "15": {
+      "name": "Vulnerability Other I",
+      "school": 4,
+      "level": 1,
+      "untargeted": false,
+      "mana": 10,
+      "icon": 100668331
+    },
+    "3": {
+      "name": "Weakness Other I",
+      "school": 4,
+      "level": 1,
+      "untargeted": false,
+      "mana": 10,
+      "icon": 100668300
+    },
+    "1445": {
+      "name": "Willpower Self I",
+      "school": 4,
+      "level": 1,
+      "untargeted": true,
+      "mana": 15,
+      "icon": 100668296
+    }
+  }
+}

@@ -12060,6 +12060,13 @@ pub struct SessionHandle {
     /// [`SessionHandle::player_inventory`] on each `kind=11
     /// InventoryUpdated` drain.
     latest_inventory: std::rc::Rc<std::cell::RefCell<Vec<InventoryItem>>>,
+    /// Phase G (spell book): the local player's known-spells list, a
+    /// `Vec<u32>` of spell IDs cloned from `Entity.spell_book` when an
+    /// IdentifyObject response lands on the player. Read by JS via
+    /// [`SessionHandle::player_known_spells`] — the magic-mode combat
+    /// bar's spell picker filters its catalogue to entries in this
+    /// list, so a player only sees spells they actually know.
+    latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>>,
     /// Phase 6 step D: latest cell-scene snapshot, refreshed by the
     /// recv loop on each `SessionCommand::TickMovement`. Carries the
     /// local player's current cell id (per `SpatialScene::current_cell`)
@@ -12438,6 +12445,18 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = playerInventory)]
     pub fn player_inventory(&self) -> Vec<InventoryItem> {
         self.latest_inventory.borrow().clone()
+    }
+
+    /// Phase G (spell book): the local player's known-spells list as a
+    /// Vec<u32> of spell IDs. Empty pre-spawn / before the player's
+    /// biota lands. Refreshed by the recv loop in the same hook that
+    /// updates `player_stats()` (piggybacks on `PlayerStatsUpdated`).
+    /// JS-side magic-mode combat bar filters its spell catalog to
+    /// entries in this list so a player can't put spells they don't
+    /// know on the bar.
+    #[wasm_bindgen(js_name = playerKnownSpells)]
+    pub fn player_known_spells(&self) -> Vec<u32> {
+        self.latest_known_spells.borrow().clone()
     }
 
     /// Phase 6 step D: cell id the local player is currently inside.
@@ -13577,6 +13596,10 @@ pub async fn start_session(
         std::rc::Rc::new(std::cell::RefCell::new(None));
     let latest_inventory: std::rc::Rc<std::cell::RefCell<Vec<InventoryItem>>> =
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    // Phase G: known-spells snapshot, refreshed alongside latest_stats
+    // when the player's biota / IdentifyObject response lands.
+    let latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     // Phase 6 step D: cell-scene snapshot, refreshed each TickMovement.
     let cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>> =
         std::rc::Rc::new(std::cell::RefCell::new(CellSceneSnapshot::default()));
@@ -13608,6 +13631,7 @@ pub async fn start_session(
         let world_bootstrap = world_bootstrap.clone();
         let latest_stats = latest_stats.clone();
         let latest_inventory = latest_inventory.clone();
+        let latest_known_spells_inner = latest_known_spells.clone();
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
         let local_player_pose = local_player_pose.clone();
@@ -13624,6 +13648,7 @@ pub async fn start_session(
                 world_bootstrap,
                 latest_stats,
                 latest_inventory,
+                latest_known_spells_inner,
                 cell_scene_snapshot,
                 door_part_snapshot,
                 local_player_pose,
@@ -13688,6 +13713,7 @@ pub async fn start_session(
         entity_updates,
         latest_stats,
         latest_inventory,
+        latest_known_spells,
         cell_scene_snapshot,
         door_part_snapshot,
         local_player_pose,
@@ -14160,6 +14186,23 @@ fn publish_player_inventory_snapshot(
     *latest_inventory.borrow_mut() = items;
 }
 
+/// Phase G: clone the local player's known-spells list into the
+/// shared cell so JS can read it via `player_known_spells()`. Pulls
+/// from `Entity.spell_book` which gets populated by the identify
+/// response handler (`holtburger_world::identify::apply_identify_response`).
+/// Empty until the player's biota lands.
+#[cfg(target_arch = "wasm32")]
+fn publish_player_known_spells_snapshot(
+    world: &holtburger_world::WorldState,
+    latest_known_spells: &std::rc::Rc<std::cell::RefCell<Vec<u32>>>,
+) {
+    let spells: Vec<u32> = world
+        .player_entity()
+        .map(|entity| entity.spell_book.clone())
+        .unwrap_or_default();
+    *latest_known_spells.borrow_mut() = spells;
+}
+
 /// Phase 6 step D: refresh the cell-scene snapshot the rAF tick reads
 /// each frame. Computes `current_cell` from the local player's pose +
 /// the BFS render set at depth=1, parks them in a shared cell. JS
@@ -14262,6 +14305,7 @@ async fn recv_loop(
     >,
     latest_stats: std::rc::Rc<std::cell::RefCell<Option<LatestStats>>>,
     latest_inventory: std::rc::Rc<std::cell::RefCell<Vec<InventoryItem>>>,
+    latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>>,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
     door_part_snapshot: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<u32, DoorPartSnapshot>>,
@@ -14558,6 +14602,15 @@ async fn recv_loop(
                     }
                     if stats_changed && let Some(w) = world.as_ref() {
                         publish_player_stats_snapshot(w, &latest_stats);
+                        // Phase G: piggyback known-spells refresh on
+                        // stats_changed. The local-player biota only
+                        // refreshes when stat events fire (after
+                        // PlayerDescription / IdentifyObject response),
+                        // so this is the right cadence.
+                        publish_player_known_spells_snapshot(
+                            w,
+                            &latest_known_spells,
+                        );
                         queued_events.borrow_mut().push(ClientEvent {
                             kind: CLIENT_EVENT_KIND_PLAYER_STATS_UPDATED,
                             string_payload: None,
