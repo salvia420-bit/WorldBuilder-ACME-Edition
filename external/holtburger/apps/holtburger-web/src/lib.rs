@@ -6190,6 +6190,24 @@ fn drain_pending_building_origins_into(scene: &mut holtburger_world::SpatialScen
     })
 }
 
+/// Per-remote-entity airborne state for the JS jump-pose pipeline.
+/// Indexed by entity GUID (u32). The recv-loop arm for
+/// `GameMessage::VectorUpdate` flips state when |velocity.z| crosses
+/// a threshold (jump start / landing settle) and fires a kind=18
+/// `CLIENT_EVENT_KIND_ENTITY_AIRBORNE_CHANGED` ClientEvent on the
+/// change. Local player is handled separately via the Jump cmd /
+/// TickMovement diff in `pump_session_commands`.
+///
+/// Not persisted across sessions; cleared implicitly when wasm
+/// reloads. Entities that despawn while airborne leave a stale
+/// `true` entry — harmless because the next time they spawn and
+/// move, the threshold transition will re-fire.
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static REMOTE_AIRBORNE_STATE: std::cell::RefCell<std::collections::HashMap<u32, bool>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
 /// Pending SetupModel collision radii queued by `fetch_entity_model_render`
 /// after loading a SetupModel DAT record. Drained by the recv loop on
 /// each `SessionCommand::TickMovement` into `WorldState::setup_radii`.
@@ -10726,6 +10744,28 @@ const CLIENT_EVENT_KIND_SOUND_TRIGGERED: u32 = 16;
 /// (hidden).
 #[cfg(target_arch = "wasm32")]
 const CLIENT_EVENT_KIND_ENTITY_VISIBILITY_CHANGED: u32 = 17;
+
+/// An entity transitioned between grounded and airborne. Local player
+/// fires from the Jump cmd arm (grounded→airborne via begin_jump) and
+/// from the TickMovement arm's post-integrator diff (airborne→grounded
+/// via land). Remote players fire from a Z-velocity heuristic in the
+/// recv loop's position-update handling — when an entity's Z rises
+/// faster than walking speed, we treat them as jumping. The retail
+/// client likely uses the MotionTable stance+Jump lookup; we don't
+/// have that pipe wired, so we use the simpler velocity-derived
+/// heuristic.
+///
+/// JS-side handler in `index.html`'s `drainEvents` block applies a
+/// "vibe-coded" jump pose to the matching entity rig: backward body
+/// tilt + slight vertical stretch. Not retail-accurate (the retail
+/// pose is arms-out + legs-out, requires per-part rotation we don't
+/// have part-index conventions for), but conveys "this entity is in
+/// the air" clearly enough to read.
+///
+/// `u32Payload` = entity GUID; `u32Payload2` = `1` (airborne) or `0`
+/// (grounded).
+#[cfg(target_arch = "wasm32")]
+const CLIENT_EVENT_KIND_ENTITY_AIRBORNE_CHANGED: u32 = 18;
 
 /// Internal command channel payload — the recv loop's only writeable
 /// surface. JS-facing methods on [`SessionHandle`] turn into
@@ -15579,6 +15619,51 @@ async fn recv_loop(
                             });
                         }
                         GameMessage::VectorUpdate(data) => {
+                            // Remote-airborne heuristic. ACE
+                            // broadcasts VectorUpdate immediately after
+                            // a player jumps (Player.cs:954
+                            // `EnqueueBroadcast(new GameMessageVectorUpdate(this))`)
+                            // with the jump velocity, and again on the
+                            // physics-state change when motion settles
+                            // back to ~zero vertical velocity. A
+                            // simple |vz| threshold turns that into a
+                            // grounded↔airborne signal for the JS-side
+                            // jump pose. Skips the local player
+                            // (authoritative state already wired in the
+                            // Jump cmd / TickMovement arms).
+                            //
+                            // Threshold is conservative — walking on
+                            // terrain produces vz ≈ 0; even up/down a
+                            // slope wouldn't reach 1.0 m/s vertical.
+                            let remote_guid = u32::from(data.guid);
+                            let local_guid = world.as_ref()
+                                .map(|w| u32::from(w.player.guid))
+                                .unwrap_or(0);
+                            if remote_guid != local_guid && remote_guid != 0 {
+                                const VZ_THRESHOLD: f32 = 1.0;
+                                let now_airborne = data.velocity.z.abs() > VZ_THRESHOLD;
+                                let fire = REMOTE_AIRBORNE_STATE.with(|m| {
+                                    let mut s = m.borrow_mut();
+                                    let was = *s.get(&remote_guid).unwrap_or(&false);
+                                    if was != now_airborne {
+                                        s.insert(remote_guid, now_airborne);
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                });
+                                if fire {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_ENTITY_AIRBORNE_CHANGED,
+                                        string_payload: None,
+                                        u32_payload: Some(remote_guid),
+                                        u32_payload_2: Some(
+                                            if now_airborne { 1 } else { 0 },
+                                        ),
+                                        f32_payload: None,
+                                    });
+                                }
+                            }
                             // Velocity-extrapolation polish: ACE
                             // broadcasts VectorUpdate whenever an
                             // entity's physics state changes
@@ -16693,7 +16778,22 @@ async fn recv_loop(
                         let vz = holtburger_world::player::PlayerState::compute_jump_velocity_z(
                             power, burden, effective_skill,
                         );
+                        let was_airborne = w.player.is_airborne;
                         w.player.begin_jump(vz);
+                        // Fire kind=18 EntityAirborneChanged when the
+                        // grounded→airborne transition actually fired
+                        // (begin_jump is a no-op when already airborne).
+                        // JS-side handler tilts + stretches the local
+                        // rig so the player can see they're jumping.
+                        if !was_airborne && w.player.is_airborne {
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_ENTITY_AIRBORNE_CHANGED,
+                                string_payload: None,
+                                u32_payload: Some(u32::from(w.player.guid)),
+                                u32_payload_2: Some(1),
+                                f32_payload: None,
+                            });
+                        }
                         // Deduct stamina locally (server is canonical;
                         // ACE will broadcast a vital update soon after).
                         // `vital_id = 3` is VitalType::Stamina per
@@ -17062,8 +17162,26 @@ async fn recv_loop(
                                 );
                             }
                         }
+                        // Pre-tick airborne snapshot; the diff after
+                        // movement.tick detects landing (the integrator
+                        // clears is_airborne when the player descends
+                        // past the floor while falling). Pair to the
+                        // grounded→airborne emit in the Jump arm above.
+                        let was_airborne_pre_tick = w.player.is_airborne;
+                        let player_guid_for_airborne = w.player.guid;
                         match movement.tick(now, w, &mut session).await {
                             Ok(_events) => {
+                                if was_airborne_pre_tick && !w.player.is_airborne {
+                                    queued_events.borrow_mut().push(ClientEvent {
+                                        kind: CLIENT_EVENT_KIND_ENTITY_AIRBORNE_CHANGED,
+                                        string_payload: None,
+                                        u32_payload: Some(u32::from(
+                                            player_guid_for_airborne,
+                                        )),
+                                        u32_payload_2: Some(0),
+                                        f32_payload: None,
+                                    });
+                                }
                                 // Phase 4 step 3.6 diagnostic — log pose
                                 // every ~60 ticks (~1s at 60Hz rAF) so we
                                 // can verify the local-pose integrator is

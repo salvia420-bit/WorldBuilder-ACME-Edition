@@ -179,6 +179,10 @@ class EntityInstance {
     // this entity's spawn — should be exactly 1 for entities with a
     // non-zero SoundTable. Capture-script reads via inst._prewarmCount.
     this._prewarmCount = 0;
+    // Airborne pose offset. Null when grounded; THREE.Quaternion when
+    // airborne. Multiplied onto root.quaternion in setPose so the
+    // jump tilt survives across position updates.
+    this.airborneTilt = null;
   }
 
   registerGeometry(geom) {
@@ -196,6 +200,13 @@ class EntityInstance {
   setPose(x, y, z, qw, qx, qy, qz) {
     this.root.position.set(x, y, z);
     this.root.quaternion.copy(acQuatToThree(qw, qx, qy, qz));
+    // Re-apply airborne tilt offset if active. setAirborne(true)
+    // stashes the tilt quaternion on the instance; this ensures
+    // every position update preserves it instead of snapping the
+    // entity back to upright mid-jump.
+    if (this.airborneTilt) {
+      this.root.quaternion.multiply(this.airborneTilt);
+    }
   }
 
   /**
@@ -922,6 +933,66 @@ export class EntityManager {
     const inst = this.entityMap.get(guid >>> 0);
     if (!inst || !inst.root) return;
     inst.root.visible = !!visible;
+  }
+
+  /**
+   * Apply or clear an "airborne" jump pose on the entity's rig.
+   * Called from the kind=18 EntityAirborneChanged ClientEvent drain
+   * in index.html. Local player fires on Jump cmd (true) and on
+   * landing-detected via the integrator's airborne→grounded
+   * transition (false); remote players fire from the recv loop's
+   * Z-velocity heuristic.
+   *
+   * The retail jump pose (per user observation) is arms outstretched
+   * horizontally + legs slightly outstretched from walking. We don't
+   * have the SetupModel part-index conventions wired to address
+   * "right hand" / "left foot" specifically, so this is a
+   * vibe-coded approximation rather than a 1:1 reproduction:
+   *
+   *   - **Backward body tilt** (~12° on the X axis) — reads as
+   *     "leaping" / "launching upward". Applied as a quaternion
+   *     offset on `inst.root`, preserved across `setPose` calls via
+   *     `inst.airborneTilt` so position updates don't undo it.
+   *   - **Vertical stretch** (Z scale × 1.08) — squash-and-stretch
+   *     instinct from 2D animation; reads as "stretching upward in
+   *     mid-air".
+   *
+   * Both effects clear on landing. Idempotent — re-applying when
+   * already airborne is a no-op (the tilt quat is identity-multiplied).
+   *
+   * Future: when the SetupModel part-index map is wired (knowing
+   * which `parts[i]` is the right hand vs left foot etc.), this can
+   * upgrade to a real arms-out pose.
+   */
+  setAirborne(guid, airborne) {
+    const inst = this.entityMap.get(guid >>> 0);
+    if (!inst || !inst.root) return;
+    const wantAirborne = !!airborne;
+    const currentlyAirborne = inst.airborneTilt != null;
+    if (wantAirborne === currentlyAirborne) return; // idempotent
+    if (wantAirborne) {
+      // Backward tilt around X axis (negative angle = lean back).
+      const tilt = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(1, 0, 0),
+        -Math.PI / 15, // ~12°
+      );
+      inst.airborneTilt = tilt;
+      // Apply immediately so stationary entities (no setPose stream)
+      // visibly tilt. Subsequent setPose calls multiply onto root
+      // and then re-apply via the stash.
+      inst.root.quaternion.multiply(tilt);
+      // Vertical stretch — Z is up in three.js scene space here
+      // (acQuatToThree's convention).
+      inst.root.scale.set(1.0, 1.0, 1.08);
+    } else {
+      // Undo the tilt by multiplying by its inverse.
+      if (inst.airborneTilt) {
+        const inv = inst.airborneTilt.clone().invert();
+        inst.root.quaternion.multiply(inv);
+        inst.airborneTilt = null;
+      }
+      inst.root.scale.set(1.0, 1.0, 1.0);
+    }
   }
 
   /**
