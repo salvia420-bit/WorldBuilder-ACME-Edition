@@ -1,3 +1,5 @@
+import { renderGraphicsTab } from "./graphics_settings.js";
+
 const STYLE_ID = "hb-bar-style";
 const BAR_CLASS = "hb-bar";
 const PANEL_CLASS = "hb-panel";
@@ -187,6 +189,8 @@ const CSS = `
   .hb-settings {
     position: fixed;
     width: 240px;
+    max-height: 80vh;
+    overflow-y: auto;
     background: rgba(28, 28, 32, 0.96);
     color: #fff;
     border: 1px solid rgba(255, 255, 255, 0.18);
@@ -198,6 +202,93 @@ const CSS = `
     padding: 10px 12px;
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
+  }
+  .hb-settings.hb-settings-wide { width: 320px; }
+  .hb-settings-tabs {
+    display: flex;
+    gap: 4px;
+    margin: -2px -2px 10px -2px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  }
+  .hb-settings-tab {
+    flex: 1 1 0;
+    padding: 5px 8px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    color: rgba(255, 255, 255, 0.7);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+  }
+  .hb-settings-tab:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+  }
+  .hb-settings-tab.active {
+    background: rgba(120, 170, 255, 0.22);
+    border-color: rgba(120, 170, 255, 0.55);
+    color: #fff;
+  }
+  .hb-graphics-section {
+    margin: 12px 0 6px 0;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(255, 255, 255, 0.55);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    padding-bottom: 3px;
+  }
+  .hb-graphics-section:first-child { margin-top: 2px; }
+  .hb-graphics-row label {
+    flex: 1 1 auto;
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 12px;
+  }
+  .hb-graphics-row input[type="checkbox"] {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: rgba(120, 170, 255, 0.85);
+  }
+  .hb-graphics-row input[type="range"] {
+    flex: 1 1 90px;
+    min-width: 0;
+  }
+  .hb-graphics-select {
+    flex: 0 0 auto;
+    background: rgba(255, 255, 255, 0.06);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 4px;
+    font-size: 12px;
+    padding: 2px 4px;
+    font-family: inherit;
+  }
+  .hb-graphics-tag {
+    flex: 0 0 auto;
+    color: rgba(120, 200, 255, 0.7);
+    font-size: 10px;
+    margin-left: 4px;
+  }
+  .hb-graphics-reload {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 10px;
+    padding: 6px 8px;
+    background: rgba(255, 200, 80, 0.12);
+    border: 1px solid rgba(255, 200, 80, 0.35);
+    border-radius: 4px;
+    color: rgba(255, 220, 150, 0.95);
+    font-size: 11px;
+  }
+  .hb-graphics-reload .hb-settings-btn {
+    flex: 0 0 auto;
+    padding: 3px 10px;
   }
   .hb-settings-row {
     display: flex;
@@ -640,94 +731,156 @@ export function mountBar({ client, root, slots: slotsOpt }) {
     el.setAttribute("role", "dialog");
     el.setAttribute("aria-label", "Bar settings");
 
-    el.innerHTML = `
-      <div class="hb-settings-row">
-        <label for="hb-set-color">Color</label>
-        <input id="hb-set-color" type="color" value="${state.color}">
-      </div>
-      <div class="hb-settings-row">
-        <label for="hb-set-size">Icon size</label>
-        <input id="hb-set-size" type="range" min="28" max="56" step="1" value="${state.iconSize}">
-        <span class="hb-settings-val" data-val="size">${state.iconSize}</span>
-      </div>
-      <div class="hb-settings-row">
-        <label for="hb-set-alpha">Transparency</label>
-        <input id="hb-set-alpha" type="range" min="0.3" max="1" step="0.05" value="${state.transparency}">
-        <span class="hb-settings-val" data-val="alpha">${state.transparency.toFixed(2)}</span>
-      </div>
-      <div class="hb-settings-row">
-        <label>Orientation</label>
-        <div class="hb-settings-btnrow" style="margin-top:0">
-          <button type="button" class="hb-settings-btn ${state.orientation === "h" ? "active" : ""}" data-orient="h">Horizontal</button>
-          <button type="button" class="hb-settings-btn ${state.orientation === "v" ? "active" : ""}" data-orient="v">Vertical</button>
-        </div>
-      </div>
-      <div class="hb-settings-btnrow">
-        <button type="button" class="hb-settings-btn" data-action="minimize">Minimize</button>
-        <button type="button" class="hb-settings-btn" data-action="reset-pos">Reset position</button>
-      </div>
-    `;
+    // Tab strip — defaults to the "Bar" tab so existing UX is unchanged.
+    const tabs = document.createElement("div");
+    tabs.className = "hb-settings-tabs";
+    const tabBar = document.createElement("button");
+    tabBar.type = "button";
+    tabBar.className = "hb-settings-tab active";
+    tabBar.textContent = "Bar";
+    const tabGraphics = document.createElement("button");
+    tabGraphics.type = "button";
+    tabGraphics.className = "hb-settings-tab";
+    tabGraphics.textContent = "Graphics";
+    tabs.appendChild(tabBar);
+    tabs.appendChild(tabGraphics);
 
+    // Content area — holds whichever tab is active. Per-tab subtrees
+    // are built lazily on first activation.
+    const content = document.createElement("div");
+    content.className = "hb-settings-content";
+
+    el.appendChild(tabs);
+    el.appendChild(content);
     root.appendChild(el);
     settingsEl = el;
     gearBtn.classList.add("active");
-    positionSettings(el);
 
-    const colorInput = el.querySelector("#hb-set-color");
-    const sizeInput = el.querySelector("#hb-set-size");
-    const alphaInput = el.querySelector("#hb-set-alpha");
-    const sizeVal = el.querySelector('[data-val="size"]');
-    const alphaVal = el.querySelector('[data-val="alpha"]');
+    // --- Bar tab body -----------------------------------------------------
+    function buildBarTab() {
+      content.innerHTML = `
+        <div class="hb-settings-row">
+          <label for="hb-set-color">Color</label>
+          <input id="hb-set-color" type="color" value="${state.color}">
+        </div>
+        <div class="hb-settings-row">
+          <label for="hb-set-size">Icon size</label>
+          <input id="hb-set-size" type="range" min="28" max="56" step="1" value="${state.iconSize}">
+          <span class="hb-settings-val" data-val="size">${state.iconSize}</span>
+        </div>
+        <div class="hb-settings-row">
+          <label for="hb-set-alpha">Transparency</label>
+          <input id="hb-set-alpha" type="range" min="0.3" max="1" step="0.05" value="${state.transparency}">
+          <span class="hb-settings-val" data-val="alpha">${state.transparency.toFixed(2)}</span>
+        </div>
+        <div class="hb-settings-row">
+          <label>Orientation</label>
+          <div class="hb-settings-btnrow" style="margin-top:0">
+            <button type="button" class="hb-settings-btn ${state.orientation === "h" ? "active" : ""}" data-orient="h">Horizontal</button>
+            <button type="button" class="hb-settings-btn ${state.orientation === "v" ? "active" : ""}" data-orient="v">Vertical</button>
+          </div>
+        </div>
+        <div class="hb-settings-btnrow">
+          <button type="button" class="hb-settings-btn" data-action="minimize">Minimize</button>
+          <button type="button" class="hb-settings-btn" data-action="reset-pos">Reset position</button>
+        </div>
+      `;
 
-    const onColor = (e) => { state.color = e.target.value; applyStyleVars(); persist(); };
-    const onSize = (e) => {
-      state.iconSize = Number(e.target.value);
-      sizeVal.textContent = String(state.iconSize);
-      applyStyleVars();
-      persist();
-    };
-    const onAlpha = (e) => {
-      state.transparency = Number(e.target.value);
-      alphaVal.textContent = state.transparency.toFixed(2);
-      applyStyleVars();
-      persist();
-    };
-    colorInput.addEventListener("input", onColor);
-    sizeInput.addEventListener("input", onSize);
-    alphaInput.addEventListener("input", onAlpha);
+      const colorInput = content.querySelector("#hb-set-color");
+      const sizeInput = content.querySelector("#hb-set-size");
+      const alphaInput = content.querySelector("#hb-set-alpha");
+      const sizeVal = content.querySelector('[data-val="size"]');
+      const alphaVal = content.querySelector('[data-val="alpha"]');
 
-    const orientBtns = el.querySelectorAll("[data-orient]");
-    const onOrient = (e) => {
-      const o = e.currentTarget.dataset.orient;
-      if (o === state.orientation) return;
-      state.orientation = o;
-      orientBtns.forEach((b) =>
-        b.classList.toggle("active", b.dataset.orient === o));
-      applyOrientation();
-      // Re-clamp explicit position after axis change.
-      if (state.left != null && state.top != null) {
-        requestAnimationFrame(() => {
-          const rect = bar.getBoundingClientRect();
-          const c = clampToViewport(state.left, state.top, rect.width, rect.height);
-          state.left = c.left;
-          state.top = c.top;
-          bar.style.left = `${state.left}px`;
-          bar.style.top = `${state.top}px`;
-          positionSettings(el);
-          persist();
-        });
-      } else {
+      const onColor = (e) => { state.color = e.target.value; applyStyleVars(); persist(); };
+      const onSize = (e) => {
+        state.iconSize = Number(e.target.value);
+        sizeVal.textContent = String(state.iconSize);
+        applyStyleVars();
         persist();
-      }
-    };
-    orientBtns.forEach((b) => b.addEventListener("click", onOrient));
+      };
+      const onAlpha = (e) => {
+        state.transparency = Number(e.target.value);
+        alphaVal.textContent = state.transparency.toFixed(2);
+        applyStyleVars();
+        persist();
+      };
+      colorInput.addEventListener("input", onColor);
+      sizeInput.addEventListener("input", onSize);
+      alphaInput.addEventListener("input", onAlpha);
 
-    const minBtn = el.querySelector('[data-action="minimize"]');
-    const resetBtn = el.querySelector('[data-action="reset-pos"]');
-    const onMinimize = () => { closeSettings(); minimize(); };
-    const onResetPos = () => { resetPosition(); positionSettings(el); };
-    minBtn.addEventListener("click", onMinimize);
-    resetBtn.addEventListener("click", onResetPos);
+      const orientBtns = content.querySelectorAll("[data-orient]");
+      const onOrient = (e) => {
+        const o = e.currentTarget.dataset.orient;
+        if (o === state.orientation) return;
+        state.orientation = o;
+        orientBtns.forEach((b) =>
+          b.classList.toggle("active", b.dataset.orient === o));
+        applyOrientation();
+        if (state.left != null && state.top != null) {
+          requestAnimationFrame(() => {
+            const rect = bar.getBoundingClientRect();
+            const c = clampToViewport(state.left, state.top, rect.width, rect.height);
+            state.left = c.left;
+            state.top = c.top;
+            bar.style.left = `${state.left}px`;
+            bar.style.top = `${state.top}px`;
+            positionSettings(el);
+            persist();
+          });
+        } else {
+          persist();
+        }
+      };
+      orientBtns.forEach((b) => b.addEventListener("click", onOrient));
+
+      const minBtn = content.querySelector('[data-action="minimize"]');
+      const resetBtn = content.querySelector('[data-action="reset-pos"]');
+      const onMinimize = () => { closeSettings(); minimize(); };
+      const onResetPos = () => { resetPosition(); positionSettings(el); };
+      minBtn.addEventListener("click", onMinimize);
+      resetBtn.addEventListener("click", onResetPos);
+
+      return () => {
+        // Listeners are on content's children which are about to be
+        // wiped by the next innerHTML assignment — nothing to clean up
+        // explicitly. Kept as a no-op so the activation contract is
+        // uniform across tabs.
+      };
+    }
+
+    // --- Graphics tab body ------------------------------------------------
+    function buildGraphicsTab() {
+      content.innerHTML = "";
+      const dispose = renderGraphicsTab(content, {
+        onAnyChange: () => { positionSettings(el); },
+      });
+      return dispose;
+    }
+
+    let activeTabDispose = null;
+    function activate(tab) {
+      if (activeTabDispose) {
+        try { activeTabDispose(); } catch (_e) {}
+        activeTabDispose = null;
+      }
+      tabBar.classList.toggle("active", tab === "bar");
+      tabGraphics.classList.toggle("active", tab === "graphics");
+      if (tab === "graphics") {
+        el.classList.add("hb-settings-wide");
+        activeTabDispose = buildGraphicsTab();
+      } else {
+        el.classList.remove("hb-settings-wide");
+        activeTabDispose = buildBarTab();
+      }
+      positionSettings(el);
+    }
+
+    tabBar.addEventListener("click", () => activate("bar"));
+    tabGraphics.addEventListener("click", () => activate("graphics"));
+    activate("bar");
+
+    positionSettings(el);
 
     const onDocDown = (ev) => {
       if (ev.target.closest(`.${SETTINGS_CLASS}`)) return;
@@ -739,12 +892,10 @@ export function mountBar({ client, root, slots: slotsOpt }) {
     window.addEventListener("keydown", onKey);
 
     settingsCleanup = () => {
-      colorInput.removeEventListener("input", onColor);
-      sizeInput.removeEventListener("input", onSize);
-      alphaInput.removeEventListener("input", onAlpha);
-      orientBtns.forEach((b) => b.removeEventListener("click", onOrient));
-      minBtn.removeEventListener("click", onMinimize);
-      resetBtn.removeEventListener("click", onResetPos);
+      if (activeTabDispose) {
+        try { activeTabDispose(); } catch (_e) {}
+        activeTabDispose = null;
+      }
       window.removeEventListener("mousedown", onDocDown, true);
       window.removeEventListener("keydown", onKey);
     };

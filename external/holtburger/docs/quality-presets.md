@@ -46,6 +46,7 @@ they accept the perf cost.
 
 | Flag | low | mid | high | ultra | Source phase |
 |---|---|---|---|---|---|
+| `antialias` | off | on | on | on | A1 (FPS plan) |
 | `shadows` | off | on | on | on | 0.1 |
 | `normalMaps` | on | on | on | on | 1.1 |
 | `detailFlag` | off | on | on | on | 0.2 |
@@ -59,6 +60,11 @@ they accept the perf cost.
 
 ### Flag glossary
 
+- **`antialias`** — FPS plan A1 (2026-05-18). Passed to
+  `WebGLRenderer({ antialias })` at construction. Off at `low`
+  saves ~25 % frametime on weaker GPUs (MSAA 4× cost). Toggling
+  this flag requires a page reload — the renderer's antialias state
+  is fixed at construction.
 - **`shadows`** — Phase 0.1. Enable three.js shadow maps (sun-cast
   building shadows). Free win, costs ~3–5 ms / frame.
 - **`normalMaps`** — Phase 1.1. Procedural normal maps derived from
@@ -91,8 +97,27 @@ they accept the perf cost.
 }
 ```
 
-`source` is `"url"` (preset explicitly requested), `"mobile-default"`
+`source` is `"url"` (preset explicitly requested), `"localstorage"`
+(set from the Graphics tab in the bar), `"mobile-default"`
 (downgraded from mid), or `"default"` (desktop default).
+
+## Graphics settings tab
+
+The bar's gear icon (⚙) now has a **Graphics** tab that persists a
+`holtburger_graphics_v1` localStorage payload:
+
+```js
+{
+  preset: "mid",                 // optional explicit preset
+  flags: { antialias: false },   // per-flag overrides (sanitized at read)
+  extras: { renderScale: 1.0 }   // UI controls not yet consumed by quality.flags
+}
+```
+
+`getQuality()` merges in this order (highest wins): URL params →
+localStorage overrides → mobile-UA default → desktop default. Most
+flag changes take effect on reload because consumers cache flag
+values at init.
 
 ## How later phases consume this
 

@@ -20,6 +20,7 @@
 // (c) read it from `liveScene3d.quality[<flag>]` at the phase's gate.
 export const PRESETS = {
     low: {
+        antialias: false,
         shadows: false,
         normalMaps: true,
         detailFlag: false,
@@ -34,6 +35,7 @@ export const PRESETS = {
         lightShafts: false,
     },
     mid: {
+        antialias: true,
         shadows: true,
         normalMaps: true,
         detailFlag: true,
@@ -48,6 +50,7 @@ export const PRESETS = {
         lightShafts: false,
     },
     high: {
+        antialias: true,
         shadows: true,
         normalMaps: true,
         detailFlag: true,
@@ -62,6 +65,7 @@ export const PRESETS = {
         lightShafts: true,
     },
     ultra: {
+        antialias: true,
         shadows: true,
         normalMaps: true,
         detailFlag: true,
@@ -82,6 +86,7 @@ export const PRESET_NAMES = ["low", "mid", "high", "ultra"];
 // Boolean-typed flags. Values "on"/"true"/"1" → true; "off"/"false"/"0"
 // → false. Used by parseOverrides to coerce per-feature URL params.
 const BOOL_FLAGS = new Set([
+    "antialias",
     "shadows",
     "normalMaps",
     "detailFlag",
@@ -135,14 +140,39 @@ export function isMobileUA(ua) {
     return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(ua);
 }
 
+// Read user overrides persisted by the Graphics settings tab. Returns
+// `null` when no localStorage entry exists, when localStorage is
+// unavailable (Node test harness), or when the payload is malformed.
+//
+// The shape mirrors `ui/graphics_settings.js` exactly:
+//   { preset?: "low"|..., flags?: { antialias: bool, ... }, extras?: {...} }
+function readLocalGraphicsOverrides() {
+    if (typeof localStorage === "undefined") return null;
+    try {
+        const raw = localStorage.getItem("holtburger_graphics_v1");
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object") return null;
+        return parsed;
+    } catch (_e) {
+        return null;
+    }
+}
+
 // Parse a `?quality=...` query string + per-feature overrides into a
 // resolved preset bag. Mobile UAs default mid→low.
+//
+// Merge precedence (highest → lowest):
+//   1. URL `?quality=` / per-flag `?antialias=on` overrides
+//   2. `localStorage.holtburger_graphics_v1` user overrides
+//   3. Mobile UA default ("low") / desktop default ("mid")
 //
 // Args (all optional; defaults read window/navigator when available):
 //   url:        URL string or URL instance.
 //   userAgent:  navigator.userAgent string.
 //
-// Returns: { preset: "low"|"mid"|"high"|"ultra", flags: {...}, source: "url"|"mobile-default"|"default" }
+// Returns: { preset: "low"|"mid"|"high"|"ultra", flags: {...},
+//            source: "url"|"localstorage"|"mobile-default"|"default" }
 //
 // The returned `flags` is a fresh object — callers can mutate without
 // affecting `PRESETS`.
@@ -167,12 +197,17 @@ export function getQuality(url, userAgent) {
 
     const requested = params.get("quality");
     const mobile = isMobileUA(resolvedUa);
+    const lsState = readLocalGraphicsOverrides();
 
     let preset;
     let source;
     if (requested && PRESET_NAMES.includes(requested)) {
         preset = requested;
         source = "url";
+    } else if (lsState && typeof lsState.preset === "string"
+        && PRESET_NAMES.includes(lsState.preset)) {
+        preset = lsState.preset;
+        source = "localstorage";
     } else if (mobile) {
         preset = "low";
         source = "mobile-default";
@@ -182,6 +217,21 @@ export function getQuality(url, userAgent) {
     }
 
     const flags = { ...PRESETS[preset] };
+
+    // localStorage flag overrides (sanitized — only known flag names
+    // with correct types are accepted; everything else is dropped).
+    if (lsState && lsState.flags && typeof lsState.flags === "object") {
+        for (const k of Object.keys(lsState.flags)) {
+            const v = lsState.flags[k];
+            if (BOOL_FLAGS.has(k) && typeof v === "boolean") {
+                flags[k] = v;
+            } else if (INT_FLAGS.has(k) && Number.isFinite(v)) {
+                flags[k] = v;
+            }
+        }
+    }
+
+    // URL per-flag overrides win.
     const overrides = parseOverrides(params);
     Object.assign(flags, overrides);
 

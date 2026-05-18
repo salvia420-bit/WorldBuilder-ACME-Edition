@@ -196,7 +196,13 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   canvas.width = cssW;
   canvas.height = cssH;
 
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  // A1 (perf plan 2026-05-18) — antialias is read from the quality
+  // preset (with optional Graphics-tab override). MSAA costs ~25% of
+  // frametime on weaker GPUs; off at `low`, on otherwise.
+  const renderer = new THREE.WebGLRenderer({
+    canvas,
+    antialias: !!quality.flags.antialias,
+  });
   // Cap DPR at 2 — beyond that the cost outpaces the visual gain on
   // a textured-mesh scene of this complexity.
   // 2026-05-18 — `?renderScale=N` lets the user dial back the
