@@ -106,6 +106,12 @@ uniform float uCloudIntensity;
 uniform float uCloudSpeed;
 uniform float uCityIntensity;
 uniform vec2  uCityPos;
+// Rez'arel "minor effects" knobs. Scintillation on bright crater
+// highlights, plus warm shift on brights + cool limb darkening.
+// Default 0.0 on Alb'arel (which has its own atmosphere); 1.0 on
+// Rez'arel where these mercury-style touches live.
+uniform float uScintEnabled;
+uniform float uScintIntensity;
 
 #define NUM_MICRO_LIGHTS 15
 // Per-light data: (uv.x, uv.y, brightness, pulsePeriodSec)
@@ -147,6 +153,35 @@ void main() {
 
   vec3 rgb = texture2D(map, vUv).rgb * uBrightness;
   float alpha = edge;
+
+  if (uScintEnabled > 0.5) {
+    // -- Crater-highlight scintillation -------------------------
+    // Pick out the brightest pixels (sunlit crater edges + impact
+    // flashes in the source texture) via luminance, then modulate
+    // them with a per-pixel time-stepped hash. floor(uTime * 5.0)
+    // makes the noise hold for ~200 ms before changing — that
+    // stutter mimics actual atmospheric twinkle vs a smooth ripple
+    // (which would read as the moon vibrating, not scintillating).
+    float lum = max(max(rgb.r, rgb.g), rgb.b);
+    float brightMask = smoothstep(0.55, 0.88, lum);
+    float scintNoise = mhash21(floor(vUv * 220.0) + floor(uTime * 5.0));
+    float scintMag = 0.30 * uScintIntensity;
+    float scint = 1.0 + (scintNoise - 0.5) * scintMag;
+    rgb *= mix(1.0, scint, brightMask);
+
+    // -- Warm shift on bright spots -----------------------------
+    // Tiny pull toward solar-illumination yellow-white so the
+    // sunlit faces of craters read as warmer than the shadowed
+    // walls. Lerp weighted by brightMask × 0.35.
+    rgb = mix(rgb, rgb * vec3(1.06, 1.02, 0.92), brightMask * 0.35);
+
+    // -- Cool limb darkening ------------------------------------
+    // Faint blue-grey shift toward the disc edge — visual interest
+    // only (Rez'arel has no atmosphere in canon). Keeps the moon
+    // from reading as a flat disc cut out of paper.
+    float limbMask = smoothstep(0.30, 0.46, d);
+    rgb = mix(rgb, rgb * vec3(0.85, 0.88, 1.02), limbMask * 0.30);
+  }
 
   if (uHasClouds > 0.5) {
     // -- Cloud swirl ----------------------------------------------
@@ -348,6 +383,12 @@ export class ACMoons {
         // ~(0.13, 0.49) UV. Devtools setter exposed below.
         uCityPos: { value: new THREE.Vector2(0.13, 0.49) },
         uMicroLights: { value: microLights },
+        // Rez'arel: scintillation + warm/cool tints on. Alb'arel
+        // skips this path — its atmosphere is the main visual
+        // story and a second layer of bright-pixel modulation
+        // would muddy the cloud band.
+        uScintEnabled: { value: hasClouds ? 0.0 : 1.0 },
+        uScintIntensity: { value: 0.85 },
       },
       vertexShader: MOON_VERT,
       fragmentShader: MOON_FRAG,
@@ -591,5 +632,16 @@ if (typeof window !== 'undefined') {
     if (!u?.uCityPos?.value?.set) return null;
     u.uCityPos.value.set(+x, +y);
     return [u.uCityPos.value.x, u.uCityPos.value.y];
+  };
+  // Rez'arel scintillation intensity.
+  const rezUniforms = () =>
+    // eslint-disable-next-line no-undef
+    window.liveScene3d?.acMoons?.rezMesh?.material?.uniforms ?? null;
+  // eslint-disable-next-line no-undef
+  window.__setMoonScintIntensity = (v) => {
+    const u = rezUniforms();
+    if (!u?.uScintIntensity) return null;
+    u.uScintIntensity.value = Math.max(0, +v);
+    return u.uScintIntensity.value;
   };
 }
