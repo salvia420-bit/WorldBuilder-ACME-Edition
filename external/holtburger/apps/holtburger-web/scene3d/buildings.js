@@ -62,6 +62,83 @@ const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
 const HOLTBURG_Y = 0xb4;
 
+// ---------------------------------------------------------------------
+// C5 (perf plan 2026-05-18) — material/geometry disposal helpers.
+//
+// These mirror the `__disposable` / `__cacheOwned` convention introduced
+// by B3 (commit `5f4b8a6` in entities.js:243-286 + materials.js). We
+// duplicate them locally rather than importing from entities.js to avoid
+// broadening that module's export surface for a 20-line helper pair.
+// The convention itself is shared verbatim — see entities.js's module
+// docstring for the canonical write-up; tracked-only change here is to
+// keep the buildings unload path independent of entities.js refactors.
+//
+// Convention recap:
+//   - `mat.userData.__cacheOwned === true`    → cache material; NEVER dispose.
+//   - `mat.userData.__disposable === true`    → per-rig clone; SAFE to dispose.
+//   - `geom.userData.__disposable === true`   → per-rig geometry; SAFE to dispose.
+//
+// `MaterialCache` install paths in materials.js tag every cache-resident
+// material with `__cacheOwned: true`; the assertion below catches a
+// programmer error where a clone site forgot to tag and a cache material
+// got mis-tagged.
+//
+// AUDIT RESULT (2026-05-18, C5 implementation):
+//   buildings.js contains ZERO `material.clone()` / `geometry.clone()`
+//   sites — every per-placement Mesh reads materials from
+//   `materialCache.getCached(did)` (cache-owned) and geometries from
+//   `bake.parts[].groups[].geometry` (cache-shared across placements of
+//   the same modelId via `opts.bakeCache: Map<modelId, bake>`). Both
+//   are NOT `__disposable`; the helpers below will no-op for buildings
+//   today. The helpers exist so the future unload path is correct from
+//   day one if/when per-placement clones are introduced (e.g. for
+//   per-instance material tints or per-instance geometry deformation).
+// ---------------------------------------------------------------------
+function _disposeMaterialIfOwned(mat) {
+  if (!mat) return;
+  const ud = mat.userData;
+  if (!ud) return;
+  if (ud.__cacheOwned === true && ud.__disposable === true) {
+    // Programmer error: a cache material was tagged disposable at some
+    // clone site that should have stayed cache-owned. Dispose would
+    // free the shared GPU resource other placements still reference.
+    // eslint-disable-next-line no-console
+    console.error(
+      "[buildings/C5] _disposeMaterialIfOwned: material is BOTH __cacheOwned and __disposable —" +
+        " refusing to dispose. Audit the clone site that produced it.",
+      { name: mat.name, userData: ud }
+    );
+    return;
+  }
+  if (ud.__disposable !== true) return;
+  try {
+    mat.dispose();
+  } catch (_) {}
+}
+
+function _disposeMeshChildren(root) {
+  if (!root) return;
+  root.traverse((obj) => {
+    if (!obj.isMesh) return;
+    // Geometry: building geometries are shared across placements of the
+    // same modelId via `opts.bakeCache`. Gate on `__disposable` rather
+    // than disposing unconditionally (which would crash the next
+    // placement that re-uses the cached bake). Matches the more
+    // conservative half of B3's convention; entities.js disposes
+    // unconditionally because entity geometries are per-rig.
+    if (obj.geometry?.userData?.__disposable === true) {
+      try {
+        obj.geometry.dispose();
+      } catch (_) {}
+    }
+    if (Array.isArray(obj.material)) {
+      for (const m of obj.material) _disposeMaterialIfOwned(m);
+    } else {
+      _disposeMaterialIfOwned(obj.material);
+    }
+  });
+}
+
 /**
  * Per-Setup-model bake: drains a `BuildingPlacement` returned by
  * `fetchBuildingPlacement(modelId)` into JS-owned data — one
@@ -771,3 +848,49 @@ export async function bakeBuildingsRing(
 export async function buildHoltburgBuildings(scene3d, wasmExports) {
   return bakeBuildingsRing(scene3d, HOLTBURG_X, HOLTBURG_Y, 1, wasmExports);
 }
+
+// TODO(C5): no unload path exists in buildings.js as of 2026-05-18.
+//
+// `bakeBuildingsForLandblock` only ADDS — `buildingsBakedLbs` is set
+// at L416 and never cleared; `buildingsGroup.add(group)` at L532 has
+// no corresponding `.remove(group)` anywhere in the webapp (verified
+// with `grep -rn 'unloadBuilding\|removeBuilding\|buildingsGroup.remove'`).
+// PVS-driven expansion only LOADS new LBs via the lazy hook in
+// `scene3d/index.js:1285` (`loadBuildingsForLandblock`). There is no
+// PVS-contraction step that removes building Groups when the player
+// walks away.
+//
+// **Consequence:** the C5 acceptance criterion ("PVS-cycle soak (walk
+// in/out of PVS 100 times) leaves `renderer.info.memory.textures` flat
+// (±5%)") is currently vacuously satisfied — textures don't grow on
+// PVS contraction because nothing contracts. Memory growth bound is
+// `lbCount × buildings-per-lb × materials-per-building`, not unbounded
+// growth per PVS cycle. Once a PVS-contraction step is added (likely
+// alongside terrain LB contraction in a future world-expand step), the
+// unload sequence should be:
+//
+//   1. Find the placement Group(s) for the LB being evicted via the
+//      `placementKey` → group entries in `scene3d.buildingMap3d`
+//      (filter by `landblockId === lbKey`).
+//   2. For each `group`: `_disposeMeshChildren(group)` (defined above)
+//      BEFORE `scene3d.buildingsGroup.remove(group)`. Order matters:
+//      `traverse` walks the live attached subtree; removing first
+//      drops the descendants beyond reach.
+//   3. Delete from `scene3d.buildingMap3d` and `window.buildingMap3d`
+//      so the door-rotation `findClosestBuildingPart` lookup doesn't
+//      return stale Groups.
+//   4. Clear the LB key from `scene3d.buildingsBakedLbs` so a later
+//      re-expansion re-bakes.
+//   5. DO NOT touch `opts.bakeCache` (per-Setup-model fused geometry)
+//      or `opts.materialCache` — both are shared singletons that other
+//      LBs still reference. Their lifetimes are page-scoped.
+//
+// The audit at C5 time confirmed buildings.js contains zero
+// `material.clone()` / `geometry.clone()` sites (every per-placement
+// Mesh reads cache-owned materials via `materialCache.getCached(did)`
+// and shared-bake geometries from `bake.parts[].groups[].geometry`).
+// Without per-placement clones the `_disposeMeshChildren` walk above is
+// effectively a no-op for the current topology — but the convention is
+// in place so a future per-placement tint/deform path will dispose
+// correctly out of the box (just remember to tag the clone with
+// `userData.__disposable = true` at the clone site).
