@@ -469,12 +469,37 @@ function renderAttackControls(bodyEl, state) {
   const powerVal = document.createElement("span");
   powerVal.className = "hb-cb-power-val";
   powerVal.textContent = `${powerSlider.value}%`;
+  // F1 — coalesce slider `input` syncs to one per animation frame.
+  // The label / numeric readout updates synchronously (cheap, and
+  // the user wants instant visual feedback), but `syncWindowState`
+  // (which writes window.__combatBarState and is polled by picking +
+  // wire dispatch) only fires once per frame at most. Drag at 60+ Hz
+  // → 60 Hz max writes instead of one per pointermove tick.
+  //
+  // F2 already uses a `rafId` inside the power-meter IIFE; that
+  // closure is separate so a unique name here (`_powerSyncRafId`)
+  // keeps the two coalescers clearly distinct.
+  let _powerSyncRafId = 0;
   powerSlider.addEventListener("input", () => {
     state.powerLevel = Number(powerSlider.value) / 100;
     powerVal.textContent = `${powerSlider.value}%`;
-    syncWindowState(state);
+    if (_powerSyncRafId !== 0) return; // already scheduled this frame
+    _powerSyncRafId = requestAnimationFrame(() => {
+      _powerSyncRafId = 0;
+      syncWindowState(state);
+    });
   });
-  powerSlider.addEventListener("change", () => saveState(state));
+  powerSlider.addEventListener("change", () => {
+    // Release — cancel any pending coalesced sync and flush the final
+    // value immediately so the wire-side state lands without waiting
+    // another frame, then persist to localStorage.
+    if (_powerSyncRafId !== 0) {
+      cancelAnimationFrame(_powerSyncRafId);
+      _powerSyncRafId = 0;
+    }
+    syncWindowState(state);
+    saveState(state);
+  });
   powerRow.appendChild(powerSlider);
   powerRow.appendChild(powerVal);
   bodyEl.appendChild(powerRow);
