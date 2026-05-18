@@ -209,11 +209,17 @@ export class CloudOverlay {
         // legacy "no-depth-test" path (used in the direct-render path
         // pre-atmosphere-K.2).
         sceneDepthTex: { value: null },
-        // Threshold for "this fragment is sky distance" — anything
-        // strictly less than this counts as world geometry. NDC depth
-        // 1.0 is the far plane. Use a tiny epsilon so floating-point
-        // round-off at the horizon doesn't false-discard genuine sky.
-        sceneDepthThreshold: { value: 0.9999 },
+        // Threshold sentinel. 0.0 = "no depth provided, render
+        // unconditionally" (matches `setSceneDepthTexture(null)`).
+        // setSceneDepthTexture(validTexture) upgrades this to 0.9999
+        // for depth-aware discard. Starting at 0.0 is load-bearing:
+        // a default of 0.9999 with sceneDepthTex=null causes the
+        // shader to sample an unbound texture (returns 0 in WebGL2),
+        // compare 0 < 0.9999, and discard every fragment — clouds
+        // vanish entirely until setSceneDepthTexture() lands. The
+        // 2026-05-18 cloud loop-fix: visible-over-everything is the
+        // SAFE failure mode for the depth wire, not invisible.
+        sceneDepthThreshold: { value: 0.0 },
       },
       vertexShader: /* glsl */ `
         varying vec2 vUv;
