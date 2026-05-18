@@ -475,9 +475,39 @@ export function mountBar({ client, root, slots: slotsOpt }) {
 
   const iconButtons = new Map();
   for (const slot of slots) {
+    // `iconHidden` slots register through the plugin system (and
+    // run their `mount` lifecycle below) but don't take up a bar
+    // icon. Used by always-on overlays like the vitals HUD whose
+    // presentation is the screen-edge widget itself, not a panel
+    // opened from a bar click. Pre-2026-05-17 the vitals HUD was
+    // bolted directly into index.html; the `mount` + `iconHidden`
+    // hooks let it move under the plugin framework without
+    // claiming bar real estate.
+    if (slot.iconHidden) continue;
     const btn = makeIcon(slot);
     iconButtons.set(slot.id, btn);
     bar.appendChild(btn);
+  }
+
+  // Per-slot mount lifecycle. Runs once at bar init for every slot
+  // (including iconHidden ones). Plugins that need an always-on
+  // presence — vitals overlay, ambient HUD chrome, compass — wire
+  // their DOM here. Activate() still fires later on panel-open for
+  // plugins that have an icon. The returned disposer is wired into
+  // the bar's teardown path (TODO: bar teardown not yet plumbed —
+  // mount-only plugins live for the lifetime of the page).
+  const slotMountDisposers = [];
+  for (const slot of slots) {
+    if (typeof slot.mount !== "function") continue;
+    try {
+      const dispose = slot.mount({ client, slot, root, bar });
+      if (typeof dispose === "function") {
+        slotMountDisposers.push(dispose);
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn(`[bar] slot.mount threw for ${slot.id}:`, e);
+    }
   }
 
   const sep = document.createElement("div");
