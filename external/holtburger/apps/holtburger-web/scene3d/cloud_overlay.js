@@ -314,11 +314,36 @@ export class CloudOverlay {
   setSceneDepthTexture(depthTexture) {
     if (!this.overlayMaterial) return;
     this.overlayMaterial.uniforms.sceneDepthTex.value = depthTexture ?? null;
-    // Threshold=0 is the sentinel for "no depth provided" -- the
-    // shader's `if (sceneDepthThreshold > 0.0)` branch then skips the
-    // discard, preserving legacy depth-unaware behaviour.
+    // 2026-05-18 — keep threshold at the no-discard sentinel even
+    // when a depth texture is wired. The depth-aware discard
+    // (`if (d < 0.9999) discard`) wipes clouds entirely on the
+    // AMD R9 290 — diag logs showed cloudTex populated and
+    // sceneDepthTex wired, every fragment discarded. Suspected
+    // cause: `texture2D(sceneDepthTex, vUv).r` returning unexpected
+    // values for THREE.DepthFormat+UnsignedIntType under that
+    // driver (WebGL warning in log: "Depth texture comparison
+    // requests LINEAR Filtering, behavior implementation-defined").
+    // Accept "clouds paint over geometry" (historical state) as
+    // the visible default. Opt back into depth-correct discard via
+    // `liveScene3d.cloudOverlay.setDepthDiscardEnabled(true)`.
     this.overlayMaterial.uniforms.sceneDepthThreshold.value =
-      depthTexture ? 0.9999 : 0.0;
+      this._depthDiscardOptedIn && depthTexture ? 0.9999 : 0.0;
+  }
+
+  /**
+   * Opt-in toggle for the depth-aware cloud discard. Default off
+   * (clouds visible over geometry). Toggle on when the AMD-driver
+   * depth-sampling quirk is resolved.
+   *
+   * @param {boolean} enabled
+   */
+  setDepthDiscardEnabled(enabled) {
+    this._depthDiscardOptedIn = !!enabled;
+    if (this.overlayMaterial?.uniforms?.sceneDepthThreshold) {
+      const hasTex = !!this.overlayMaterial.uniforms.sceneDepthTex.value;
+      this.overlayMaterial.uniforms.sceneDepthThreshold.value =
+        this._depthDiscardOptedIn && hasTex ? 0.9999 : 0.0;
+    }
   }
 
   /**
