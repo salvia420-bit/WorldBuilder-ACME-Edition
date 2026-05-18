@@ -162,6 +162,91 @@ export function isMobileUA(ua) {
     return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(ua);
 }
 
+// A5 — GPU tier classification heuristics.
+//
+// HIGH allowlist: modern desktop discrete cards + Apple-silicon GPUs
+// known to comfortably handle the `high` preset. Conservative on
+// purpose — we abstain to MID for anything we don't explicitly
+// recognise.
+//
+// LOW deny-list: integrated GPUs, older mobile GPUs, and embedded
+// chips that should run the `low` preset by default.
+//
+// Anything matched by neither list defaults to MID. We NEVER auto-
+// promote to ULTRA — that tier is a deliberate opt-in via
+// `?quality=ultra`.
+const GPU_HIGH_RE = /RTX 30\d\d|RTX 40\d\d|RTX 20[678]0|RX 7[890]\d\d|RX 6[89]\d\d|M[1-4]( Pro| Max| Ultra)?|Apple GPU|Radeon Pro/i;
+const GPU_LOW_RE = /Mali|Adreno [0-5]\d\d|PowerVR SGX|Intel\(R\) (HD|UHD|Iris Plus)|Intel\(R\) Atom|Tegra/i;
+
+// Detect coarse GPU tier via a throwaway 1×1 probe canvas.
+//
+// Creates a `<canvas>`, asks for a WebGL context, queries the
+// `WEBGL_debug_renderer_info` extension's unmasked renderer string,
+// then destroys both. Returns one of "high" | "low" or null when the
+// probe can't run (no document, no WebGL, no debug-renderer ext, or
+// renderer string was masked/unrecognised). MID is encoded as the
+// "unrecognised → fall through to existing default" path; we return
+// null for the unrecognised case so the caller's chain still gets a
+// chance to apply mobile-UA logic below.
+//
+// Browser-only. Guarded with a `typeof document` check so Node test
+// harnesses don't trip.
+export function detectGpuTier() {
+    if (typeof document === "undefined") return null;
+    let canvas = null;
+    let gl = null;
+    try {
+        canvas = document.createElement("canvas");
+        canvas.width = 1;
+        canvas.height = 1;
+        gl =
+            canvas.getContext("webgl") ||
+            canvas.getContext("experimental-webgl");
+        if (!gl) return null;
+        const ext = gl.getExtension("WEBGL_debug_renderer_info");
+        if (!ext) return null;
+        const renderer = String(
+            gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) || "",
+        );
+        if (!renderer) return null;
+        if (GPU_HIGH_RE.test(renderer)) {
+            return { tier: "high", renderer };
+        }
+        if (GPU_LOW_RE.test(renderer)) {
+            return { tier: "low", renderer };
+        }
+        // Unrecognised string (incl. Firefox-strict "Mozilla" /
+        // "WebGL Generic" masking) — abstain.
+        return { tier: null, renderer };
+    } catch (_e) {
+        return null;
+    } finally {
+        // Throwaway-context cleanup: browsers cap to ~16 live WebGL
+        // contexts, so we MUST release this one explicitly. Force a
+        // context loss where available, drop the DOM node, and null
+        // out our local references.
+        try {
+            if (gl) {
+                const loseExt = gl.getExtension("WEBGL_lose_context");
+                if (loseExt && typeof loseExt.loseContext === "function") {
+                    loseExt.loseContext();
+                }
+            }
+        } catch (_e) {
+            // ignore — best-effort
+        }
+        gl = null;
+        if (canvas) {
+            try {
+                canvas.remove();
+            } catch (_e) {
+                // ignore — best-effort
+            }
+            canvas = null;
+        }
+    }
+}
+
 // Read user overrides persisted by the Graphics settings tab. Returns
 // `null` when no localStorage entry exists, when localStorage is
 // unavailable (Node test harness), or when the payload is malformed.
@@ -187,14 +272,16 @@ function readLocalGraphicsOverrides() {
 // Merge precedence (highest → lowest):
 //   1. URL `?quality=` / per-flag `?antialias=on` overrides
 //   2. `localStorage.holtburger_graphics_v1` user overrides
-//   3. Mobile UA default ("low") / desktop default ("mid")
+//   3. GPU-tier probe via `WEBGL_debug_renderer_info` (A5)
+//   4. Mobile UA default ("low") / desktop default ("mid")
 //
 // Args (all optional; defaults read window/navigator when available):
 //   url:        URL string or URL instance.
 //   userAgent:  navigator.userAgent string.
 //
 // Returns: { preset: "low"|"mid"|"high"|"ultra", flags: {...},
-//            source: "url"|"localstorage"|"mobile-default"|"default" }
+//            source: "url"|"localstorage"|"gpu-probe"
+//                    |"mobile-default"|"default" }
 //
 // The returned `flags` is a fresh object — callers can mutate without
 // affecting `PRESETS`.
@@ -230,12 +317,34 @@ export function getQuality(url, userAgent) {
         && PRESET_NAMES.includes(lsState.preset)) {
         preset = lsState.preset;
         source = "localstorage";
-    } else if (mobile) {
-        preset = "low";
-        source = "mobile-default";
     } else {
-        preset = "mid";
-        source = "default";
+        // A5 — GPU-tier probe. Runs only in the browser; abstains
+        // (returns null) under Node, when WebGL is unavailable, when
+        // `WEBGL_debug_renderer_info` is stripped, or when the
+        // renderer string isn't on the HIGH allowlist or LOW
+        // deny-list. NEVER auto-promotes to ULTRA.
+        const probe = detectGpuTier();
+        if (probe && probe.tier === "high") {
+            preset = "high";
+            source = "gpu-probe";
+            // eslint-disable-next-line no-console
+            console.log(
+                `[quality] gpu-probe → high (renderer="${probe.renderer}")`,
+            );
+        } else if (probe && probe.tier === "low") {
+            preset = "low";
+            source = "gpu-probe";
+            // eslint-disable-next-line no-console
+            console.log(
+                `[quality] gpu-probe → low (renderer="${probe.renderer}")`,
+            );
+        } else if (mobile) {
+            preset = "low";
+            source = "mobile-default";
+        } else {
+            preset = "mid";
+            source = "default";
+        }
     }
 
     const flags = { ...PRESETS[preset] };
