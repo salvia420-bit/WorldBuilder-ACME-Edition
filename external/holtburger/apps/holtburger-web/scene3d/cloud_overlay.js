@@ -450,6 +450,26 @@ export class CloudOverlay {
       }
       this.frameCount++;
 
+      // 2026-05-18 cloud-invisible diagnostic: one-shot dump on first
+      // and 60th preRender so the user's console tells us whether the
+      // cloud raymarch is producing output and what state the wires
+      // are in.
+      if (this.frameCount === 1 || this.frameCount === 60) {
+        const u = this.overlayMaterial.uniforms;
+        const tx = tex;
+        // eslint-disable-next-line no-console
+        console.log(
+          `[clouds/diag frame=${this.frameCount}] cloudTex=${tx ? "set" : "null"} ` +
+            `cloudTexUUID=${tx?.uuid ?? "n/a"} ` +
+            `cloudTexImage=${tx?.image ? `${tx.image.width}x${tx.image.height}` : "n/a"} ` +
+            `cloudsBufferGetter=${typeof this.volume.effect.uniforms?.get} ` +
+            `sceneDepthTex=${u.sceneDepthTex.value ? "wired" : "null"} ` +
+            `sceneDepthThreshold=${u.sceneDepthThreshold.value} ` +
+            `mainCam=${this._lastActiveCam?.type ?? "null"} ` +
+            `camY=${this.camera?.position?.y?.toFixed(1)}`,
+        );
+      }
+
       // Depth-wire runtime assertion. After ~1 second of cloud-active
       // rendering, if sceneDepthTex is still null we're stuck on the
       // sentinel path — clouds visible but painting over geometry.
@@ -490,6 +510,19 @@ export class CloudOverlay {
    */
   renderOverlay(renderer) {
     if (!renderer) return;
+    // 2026-05-18 cloud-invisible diagnostic: log once on first call
+    // and once when we'd be skipping due to null cloudTex.
+    if (!this._renderOverlayDiagLogged) {
+      this._renderOverlayDiagLogged = true;
+      const u = this.overlayMaterial.uniforms;
+      // eslint-disable-next-line no-console
+      console.log(
+        `[clouds/diag renderOverlay first call] cloudTex=${u.cloudTex.value ? "set" : "null"} ` +
+          `sceneDepthTex=${u.sceneDepthTex.value ? "wired" : "null"} ` +
+          `sceneDepthThreshold=${u.sceneDepthThreshold.value} ` +
+          `willRender=${!!u.cloudTex.value}`,
+      );
+    }
     if (!this.overlayMaterial.uniforms.cloudTex.value) return;
     try {
       const prevAutoClear = renderer.autoClear;
