@@ -6,7 +6,6 @@ Working doc. We edit this in place as we resolve things and as we learn more.
 
 1. **Three independent time sources tick this scene.** Main loop's `dt` is bounded (≤100ms), terrain water uses raw `performance.now() * 0.001`, and the cloud overlay runs its own `THREE.Clock.getDelta()`. When the frame stalls (CSM frustum spike, async entity spawn, GC pause), the world freezes but terrain water and cloud noise/jitter keep advancing at wall-clock. Imperceptible at 60Hz, ugly under load.
 2. **The "minimap" is the C-key camera cycle.** Press C: follow → topDown (first "minimap") → orbit (second "minimap") → follow (`camera.js:1291-1302`). The orbit view used to work but currently sits in a broken state tied to clouds; fix path lives in memory.
-3. **Clicks bleed through plugin panels.** Only `#nameplate-layer-3d` sets `pointer-events: none`. `.hb-panel` / `.hb-settings` don't set `pointer-events: auto` — so clicking through a panel onto the canvas can fire a real attack while you're configuring the combat bar. This is the highest-severity finding.
 
 ## Frame anatomy at clouds=on + ultra
 
@@ -73,21 +72,24 @@ CSM shadow rendering is implicit (three.js inserts it during `renderer.render()`
 ## What to triage
 
 Low-effort, high-value:
-1. `pointer-events: auto` on `.hb-panel` and `.hb-settings` — closes the click-through gameplay bug.
-2. Disarm spell on death / zone exit — UI lies are corrosive.
-3. Centralize sun-direction computation in one utility used by all 4 consumers.
-4. Fix the orbit (C-key second-minimap) view — currently tied to a clouds state issue; fix path lives in memory.
+1. Disarm spell on death / zone exit — UI lies are corrosive.
+2. Centralize sun-direction computation in one utility used by all 4 consumers.
+3. Fix the orbit (C-key second-minimap) view — currently tied to a clouds state issue; fix path lives in memory.
 
 Medium-effort, structural:
-5. Wire `weather_state.updateFromPosition()` into the main tick loop — close the ghost module.
-6. Add `unloadLandblock(lbX, lbY)` on streaming exit — the only real memory bomb.
-7. Quality preset hot-swap or guard against runtime change (lock the URL param, force reload on change).
+4. Wire `weather_state.updateFromPosition()` into the main tick loop — close the ghost module.
+5. Add `unloadLandblock(lbX, lbY)` on streaming exit — the only real memory bomb.
+6. Quality preset hot-swap or guard against runtime change (lock the URL param, force reload on change).
 
 Investigative / unknown-cost:
-8. Unify the three time sources, or document explicitly why they differ.
-9. Add a depth-texture wiring assertion at construction; today a 1×1 stale default fails silently.
-10. Decide whether the direct render path is still reachable in practice — if not, delete it and remove the cloud-paint-over-geometry footgun.
+7. Unify the three time sources, or document explicitly why they differ.
+8. Add a depth-texture wiring assertion at construction; today a 1×1 stale default fails silently.
+9. Decide whether the direct render path is still reachable in practice — if not, delete it and remove the cloud-paint-over-geometry footgun.
 
 ## Resolved
 
 - **2026-05-18 — SSAO removed entirely.** Deleted `scene3d/postprocess.js`, `test_visfid_p32_ssao.mjs`, `capture_visfid_p32_ssao.cjs`. Stripped `ssao` flag from `quality.js` and `test_quality_preset.mjs` (32/32 pass). Removed SSAO import, auto-disable branches, forward-decl, resize hooks, render-path branch, cloud-overlay warning, and pipeline construction from `index.js`. Comment cleanup in `atmosphere_pipeline.js` and `sky_dome.js`. Closes the "ultra+clouds silently loses SSAO" hazard by removing both sides of the conflict — atmosphere path is now the canonical composer path.
+
+## Disproved findings
+
+- **2026-05-18 — "Clicks bleed through plugin panels" was wrong.** The original analysis claimed clicks on `.hb-panel` could fire canvas-side attacks. Investigation showed: `picking.js:243` attaches `pointerdown` to the canvas element (not document); `camera.js:449-450` attaches mousedown to the canvas; `.hb-panel` defaults to `pointer-events: auto`. DOM event flow guarantees panel clicks never reach the canvas listener. The agent had inverted the meaning of CSS defaults. No fix needed; no behavior change.
