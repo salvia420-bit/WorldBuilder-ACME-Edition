@@ -170,7 +170,13 @@ export class NameplateLayer {
     el.className = "nameplate-3d";
     el.textContent = name;
     el.style.position = "absolute";
-    el.style.transform = "translate(-50%, -100%)";
+    // Perf B6 — position via `translate3d` (composited, layout-free)
+    // instead of `style.left`/`top` (forces style recalc + layout). The
+    // anchor offset (`translate(-50%, -100%)` for bottom-centre anchor)
+    // is folded into the same `transform` string. The per-frame writer
+    // in `tick()` overwrites this once we've projected to pixel coords;
+    // setting it here just primes a sane starting transform.
+    el.style.transform = "translate3d(0px, 0px, 0) translate(-50%, -100%)";
     el.style.padding = "2px 6px";
     el.style.background = "rgba(0, 0, 0, 0.6)";
     el.style.color = "#ffffff";
@@ -183,7 +189,10 @@ export class NameplateLayer {
     el.style.top = "0px";
     el.style.display = "none"; // start hidden until first tick projects it
     this.domRoot.appendChild(el);
-    this.nodes.set(key, { el, follow: followObj3d, name });
+    // Perf B6 — stash last-written {left, top} on the record so the
+    // per-frame writer in `tick()` can skip identical transform writes.
+    // NaN seeds force a first-frame write regardless of projected coords.
+    this.nodes.set(key, { el, follow: followObj3d, name, _lastLeft: NaN, _lastTop: NaN });
   }
 
   /**
@@ -290,8 +299,26 @@ export class NameplateLayer {
       const py = -this._tmpVec.y * halfH + halfH;
       // Round to integer pixels so the nameplate doesn't blur via
       // subpixel positioning. Performance-neutral; visual win is real.
-      entry.el.style.left = `${px | 0}px`;
-      entry.el.style.top = `${py | 0}px`;
+      const pxInt = px | 0;
+      const pyInt = py | 0;
+      // Perf B6 — skip the transform write when the projected pixel
+      // hasn't moved more than 0.5 px since the last frame. With 100+
+      // visible nameplates this collapses ~100 style mutations / frame
+      // into the handful that actually moved. We also switched from
+      // `style.left`/`top` (forces style + layout recalc) to
+      // `style.transform = translate3d(...)` (composited; no layout).
+      // The bottom-centre anchor (`translate(-50%, -100%)`) is folded
+      // into the same transform string.
+      if (
+        Math.abs(pxInt - entry._lastLeft) >= 0.5 ||
+        Math.abs(pyInt - entry._lastTop) >= 0.5 ||
+        entry._lastLeft !== entry._lastLeft || // NaN seed → first write
+        entry._lastTop !== entry._lastTop
+      ) {
+        entry.el.style.transform = `translate3d(${pxInt}px, ${pyInt}px, 0) translate(-50%, -100%)`;
+        entry._lastLeft = pxInt;
+        entry._lastTop = pyInt;
+      }
       entry.el.style.display = "block";
       visible += 1;
     }
