@@ -81,17 +81,12 @@ export class AtmosphereSky {
     this.skyScene = skyScene;
     this.skyDome = skyDome ?? null;
 
-    // Hide the existing parametric sky machinery. The skyCell carries
-    // the gradient mesh; setParametricSkyObjectsVisible(false) covers
-    // sun/moon/particles/cloud bands.
-    if (this.skyDome) {
-      if (typeof this.skyDome.setParametricSkyObjectsVisible === "function") {
-        this.skyDome.setParametricSkyObjectsVisible(false);
-      }
-      if (this.skyDome.skyCell) {
-        this.skyDome.skyCell.visible = false;
-      }
-    }
+    // Sky-K.6 cleanup (2026-05-18): the parametric sky machinery
+    // (gradient dome, sun/moon/cloud-band rotators) was removed
+    // alongside sky_assets.js in this session — there's no longer
+    // anything to hide. SkyDome.setParametricSkyObjectsVisible
+    // survives as a no-op stub for source-compatibility; skyCell
+    // is an empty Group in the sky scene.
 
     // === SkyMaterial mesh =================================================
     this.skyMaterial = new SkyMaterial();
@@ -243,20 +238,14 @@ export class AtmosphereSky {
   }
 
   /**
-   * Reverse the hand-off — restore the parametric sky machinery. Used
-   * if the user toggles atmosphere off at runtime via devtools.
+   * Tear down the takram SkyMaterial mesh + stars Points. Post-K.6
+   * there's no parametric sky to "restore" — the atmosphere stack
+   * is the sole sky renderer — so detach() just removes the meshes
+   * from the sky scene.
    */
   detach() {
     if (this.skyMesh.parent) this.skyMesh.parent.remove(this.skyMesh);
     if (this.stars?.parent) this.stars.parent.remove(this.stars);
-    if (this.skyDome) {
-      if (typeof this.skyDome.setParametricSkyObjectsVisible === "function") {
-        this.skyDome.setParametricSkyObjectsVisible(true);
-      }
-      if (this.skyDome.skyCell) {
-        this.skyDome.skyCell.visible = true;
-      }
-    }
   }
 
   /**

@@ -55,7 +55,6 @@ import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
 import { SkyLightingController } from "./sky_lighting.js";
 import { SkyDome } from "./sky_dome.js";
 import { CloudOverlay } from "./cloud_overlay.js";
-import { resolveSkyAssets } from "./sky_assets.js";
 import {
   acToThree,
   loadDetailTileCache,
@@ -1314,29 +1313,26 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   // returning real SkyState the moment populateSkyDescFromRegion
   // resolves (post-EnteredWorld), without the controller needing a
   // post-hoc update path.
-  if (lighting && lighting.sun && lighting.ambient) {
-    try {
-      const skyLightingController = new SkyLightingController({
-        scene,
-        sun: lighting.sun,
-        ambient: lighting.ambient,
-        sessionHandleAccessor: () =>
-          // eslint-disable-next-line no-undef
-          (typeof window !== "undefined" ? window.__sessionHandle : null) ??
-          sessionHandle ??
-          null,
-        liveScene3dRef: liveScene3d,
-      });
-      liveScene3d.skyLightingController = skyLightingController;
-      // eslint-disable-next-line no-console
-      console.log(
-        "[sky-c] SkyLightingController attached; skyBackgroundColor sink " +
-          "= window.liveScene3d.skyBackgroundColor"
-      );
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn("[sky-c] SkyLightingController init failed:", e);
-    }
+  // Sky-K.6 cleanup (2026-05-18): SkyLightingController used to drive
+  // DirectionalLight/AmbientLight/Fog from per-frame SkyState. With
+  // atmosphere mode the sole runtime path, the controller is now
+  // just a SkyState cache — atmosphere_lights.tick + atmosphere_sky.tick
+  // read its _lastState as the canonical SkyState snapshot for the
+  // frame. Constructor no longer needs sun/ambient/scene args.
+  try {
+    const skyLightingController = new SkyLightingController({
+      sessionHandleAccessor: () =>
+        // eslint-disable-next-line no-undef
+        (typeof window !== "undefined" ? window.__sessionHandle : null) ??
+        sessionHandle ??
+        null,
+    });
+    liveScene3d.skyLightingController = skyLightingController;
+    // eslint-disable-next-line no-console
+    console.log("[sky-c] SkyLightingController attached as SkyState cache.");
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[sky-c] SkyLightingController init failed:", e);
   }
 
   // Workstream Sky-D — sky dome geometry + celestial body rendering.
@@ -1459,12 +1455,9 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
         skyDome.setCloudOverlay(cloudOverlay);
         liveScene3d.cloudOverlay = cloudOverlay;
 
-        // Clouds-D follow-up: when volumetric clouds are on, the
-        // retail parametric SkyObjects (cloud bands, moon mesh,
-        // weather streaks) clash visually. Hide them by default;
-        // opt back in with `?retroSky=on` for a "retro look".
-        const retroSky = params.get("retroSky") === "on";
-        skyDome.setParametricSkyObjectsVisible(retroSky);
+        // Sky-K.6 cleanup (2026-05-18): the parametric SkyObjects
+        // (cloud bands, moon mesh, weather streaks) and the
+        // `?retroSky=on` opt-in were removed alongside sky_assets.js.
 
         // Runtime ergonomics — let the user tweak from devtools without
         // re-navigating. Mirrors Sky-K's `__setSkyOpacity` pattern.
@@ -1496,11 +1489,9 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
         // eslint-disable-next-line no-console
         console.log(
           "[clouds-d] CloudOverlay wired into SkyDome (?clouds=on). " +
-            `coverage=${effect.clouds.coverage} qualityPreset=${effect.qualityPreset ?? "default"} ` +
-            `retroSky=${retroSky}. ` +
+            `coverage=${effect.clouds.coverage} qualityPreset=${effect.qualityPreset ?? "default"}. ` +
             "Visible clouds require a real GPU — swiftshader output is uniform. " +
-            "Live tweak: __setCloudCoverage(0..1), __setCloudQuality('low'|'medium'|'high'|'ultra'). " +
-            "Parametric sky toggle: liveScene3d.skyDome.setParametricSkyObjectsVisible(true/false)."
+            "Live tweak: __setCloudCoverage(0..1), __setCloudQuality('low'|'medium'|'high'|'ultra')."
         );
       }
     } catch (e) {
@@ -1570,12 +1561,12 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     //      once it's non-null; until then, the direct render path is
     //      used (no atmosphere; same look as `?atmosphere=off`).
     try {
-      // Sky-K.6 — atmosphere defaults ON. `?atmosphere=off` opts out
-      // (parametric sky path; kept until legacy files deleted in
-      // follow-on cleanup).
-      // eslint-disable-next-line no-undef
-      const atmosphereFlag = new URLSearchParams(window.location.search).get("atmosphere");
-      if (atmosphereFlag !== "off") {
+      // Sky-K.6 cleanup (2026-05-18): atmosphere is unconditional now.
+      // The `?atmosphere=off` opt-out was removed alongside the legacy
+      // parametric sky path (sky_assets.js + parametric celestials in
+      // sky_dome.js). Bare scope kept so the brace pair below balances
+      // without a costly re-indent.
+      {
         const { AtmosphereRuntime } = await import("./atmosphere_runtime.js");
         const atmosphereRuntime = new AtmosphereRuntime({ renderer });
         liveScene3d.atmosphereRuntime = atmosphereRuntime;
@@ -1670,14 +1661,12 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
               }
             }
 
-            // Hand off lighting authority: parametric SkyLightingController
-            // stops writing to THREE.DirectionalLight / AmbientLight /
-            // Fog. We also zero the existing lights here in case they
-            // had non-zero state from Phase 7.6 defaults pre-bake.
-            const slc = liveScene3d.skyLightingController;
-            if (slc && typeof slc.setAtmosphereMode === "function") {
-              slc.setAtmosphereMode(true);
-            }
+            // Sky-K.6 cleanup (2026-05-18): SkyLightingController no
+            // longer writes to parametric lights — the setAtmosphereMode
+            // handshake is gone. Phase 7.6's sun/ambient handles still
+            // exist on the scene from setupSceneLighting; zero their
+            // intensity so any leftover construction-time values don't
+            // double-up with atmosphere_lights' physical sun + sky probe.
             if (liveScene3d.lighting?.sun) {
               liveScene3d.lighting.sun.intensity = 0;
             }
@@ -1969,98 +1958,15 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     );
   }
 
-  // Workstream Sky-E + Sky-D bridge — poll for `hasSkyDesc() === true`
-  // (which fires when Sky-B's populateSkyDescFromRegion lands on
-  // kind=7 EnteredWorld), then call `resolveSkyAssets` with the 7
-  // SkyObject IDs from `getSkyObjectStates()` and pass the result to
-  // `skyDome.populateCelestialBodies`. Idempotent: once skyAssets is
-  // populated the poll exits. Bullet 12 (celestial bodies present
-  // at dawn) auto-flips PASS the frame after this resolves.
-  if (
-    wasmExports &&
-    typeof wasmExports.fetchBuildingPlacement === "function" &&
-    typeof wasmExports.fetch_surfaces_pixels === "function"
-  ) {
-    let resolveAttempted = false;
-    const skyAssetPollHandle = setInterval(async () => {
-      if (resolveAttempted) {
-        clearInterval(skyAssetPollHandle);
-        return;
-      }
-      // eslint-disable-next-line no-undef
-      const handle =
-        (typeof window !== "undefined" ? window.__sessionHandle : null) ??
-        sessionHandle ??
-        null;
-      if (!handle || typeof handle.hasSkyDesc !== "function") {
-        return;
-      }
-      let ready = false;
-      try {
-        ready = !!handle.hasSkyDesc();
-      } catch (_) {
-        return;
-      }
-      if (!ready) return;
-      resolveAttempted = true;
-      clearInterval(skyAssetPollHandle);
-      try {
-        const states = handle.getSkyObjectStates();
-        const ids = [];
-        for (let i = 0; i < states.length; i += 1) {
-          ids.push(states[i].gfxObjectId >>> 0);
-        }
-        // Workstream Sky-G: also pre-resolve every gfx_obj_id
-        // referenced by SkyObjectReplace entries across ALL DayGroups
-        // (not just the active one) so mesh swaps at keyframe
-        // boundaries are zero-network. In retail Dereth every
-        // replace.gfx_obj_id is 0x00000000 — `getSkyOverrideObjectIds`
-        // returns the union of SkyObject.default_gfx_object_id and any
-        // non-zero replace.gfx_obj_id, which collapses to just the
-        // defaults; for custom regions with real overrides the resolver
-        // bakes those too.
-        if (typeof handle.getSkyOverrideObjectIds === "function") {
-          try {
-            const overrideIds = handle.getSkyOverrideObjectIds();
-            if (overrideIds && typeof overrideIds.length === "number") {
-              for (let i = 0; i < overrideIds.length; i += 1) {
-                const id = overrideIds[i] >>> 0;
-                if (id !== 0 && !ids.includes(id)) ids.push(id);
-              }
-            }
-          } catch (e) {
-            // eslint-disable-next-line no-console
-            console.warn("[sky-g] getSkyOverrideObjectIds threw:", e);
-          }
-        }
-        const summary = await resolveSkyAssets(
-          scene3dForBuilders,
-          ids,
-          wasmExports
-        );
-        liveScene3d.skyAssets = scene3dForBuilders.skyAssets;
-        // eslint-disable-next-line no-console
-        console.log(
-          `[sky-d] resolveSkyAssets summary: resolved=${summary.resolved} ` +
-            `failed=${summary.failed} surfaces=${summary.uniqueSurfaceCount} ` +
-            `setupModels=${summary.setupModelCount} tris=${summary.totalTriangles}`
-        );
-        if (liveScene3d.skyDome && scene3dForBuilders.skyAssets) {
-          const added = liveScene3d.skyDome.populateCelestialBodies(
-            scene3dForBuilders.skyAssets,
-            scene3dForBuilders.materialCache
-          );
-          // eslint-disable-next-line no-console
-          console.log(
-            `[sky-d] populateCelestialBodies → ${added} bodies on scene root`
-          );
-        }
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn("[sky-d] resolveSkyAssets / populateCelestialBodies failed:", e);
-      }
-    }, 250);
-  }
+  // Sky-K.6 cleanup (2026-05-18): the Sky-E/Sky-D resolveSkyAssets +
+  // populateCelestialBodies bridge that fetched the 7 retail SkyObject
+  // GfxObj/SetupModel meshes (sun, moon, cloud bands, stars, etc.) and
+  // populated them under skyDome.skyCell is gone — the atmosphere stack
+  // (takram SkyMaterial + stars + ac_moons + volumetric clouds) renders
+  // those celestial elements physically, so the parametric DAT-driven
+  // meshes are no longer instantiated. liveScene3d.skyAssets stays as
+  // a stub on the live object for any external consumer that probes
+  // for its presence.
 
   // Phase 7.4b — install the shared-drain hook last so the
   // window-level hook references the final EntityManager instance.
