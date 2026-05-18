@@ -921,8 +921,20 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
       return;
     }
 
-    // Direct render path (atmosphere pipeline not yet constructed):
-    // pre-composer behavior verbatim.
+    // Direct render path. Reachable in three cases:
+    //   1. Pre-bake window — atmosphereRuntime.whenReady() takes
+    //      ~8 s on a real-GPU GTX 1070, ~43 s on the R9 290 per the
+    //      2026-05-18 cloudflare-tunnel session. atmospherePipeline
+    //      is null during that window so this branch renders.
+    //   2. `?atmosphere=off` — explicit opt-out for parametric-sky
+    //      capture flows.
+    //   3. Atmosphere init failure — defensive fallback.
+    // Cloud occlusion is depth-correct here too: the cloud overlay
+    // quad is attached to skyDome.skyScene by setCloudOverlay() (see
+    // sky_dome.js), so renderSkyPass paints sky+cloud color into
+    // the framebuffer; then renderer.clearDepth() + renderer.render
+    // overpaints world geometry at world pixels (same render-order
+    // logic as the atmosphere composer's clear=false/clearDepth=true).
     let skyRendered = false;
     if (liveScene3dRef?.skyDome) {
       try {
