@@ -886,6 +886,14 @@ export class MaterialCache {
       side: THREE.DoubleSide,
     });
     this.fallbackMaterial.name = "scene3d-fallback";
+    // Perf B3 (2026-05-18) — tag cache-owned so entity dispose chains
+    // (entities.js `_disposeMaterialIfOwned`) skip this shared
+    // singleton. See the `__disposable` convention block in
+    // entities.js's module docstring. C5 + E3 also consume this tag.
+    this.fallbackMaterial.userData = {
+      ...(this.fallbackMaterial.userData || {}),
+      __cacheOwned: true,
+    };
     if (this.csmState) {
       _installCsmShaderPatch(this.fallbackMaterial, this.csmState);
     }
@@ -1186,6 +1194,10 @@ export class MaterialCache {
         surfaceCategory: category,
         surfaceRoughnessOverride: overrides.roughness,
         surfaceNormalScaleOverride: overrides.normalScale,
+        // Perf B3 (2026-05-18) — cache-resident material; see
+        // `_installFromPixels` for the same tag and entities.js for
+        // the convention block.
+        __cacheOwned: true,
       };
       this.textures.set(did, tex);
       if (normalTex) this.normalTextures.set(did, normalTex);
@@ -1535,7 +1547,16 @@ export class MaterialCache {
       transparent: false,
     });
     mat.name = `entity-surface-${did.toString(16).padStart(8, "0")}`;
-    mat.userData = { surfaceTypeFlags: surfaceType, batchOrigin: "F.41" };
+    mat.userData = {
+      surfaceTypeFlags: surfaceType,
+      batchOrigin: "F.41",
+      // Perf B3 (2026-05-18) — entity-owned (not cache-installed —
+      // NOT placed in `this.materials`). When entities.js's
+      // preloadBatch consumer lands, `_disposeMaterialIfOwned` reads
+      // this tag and frees on entity dispose. See the `__disposable`
+      // convention block in entities.js's module docstring.
+      __disposable: true,
+    };
     return mat;
   }
 
@@ -1592,6 +1613,11 @@ export class MaterialCache {
       surfaceCategory: category,
       surfaceRoughnessOverride: roughnessOverride,
       surfaceNormalScaleOverride: normalScaleOverride,
+      // Perf B3 (2026-05-18) — cache-resident material. Entity dispose
+      // chains (entities.js `_disposeMaterialIfOwned`) skip these;
+      // `MaterialCache.dispose()` (page teardown) frees them. C5 +
+      // E3 read the same tag.
+      __cacheOwned: true,
     };
     this.textures.set(did, tex);
     if (normalTex) this.normalTextures.set(did, normalTex);

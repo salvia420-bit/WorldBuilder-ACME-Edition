@@ -43,6 +43,56 @@
 // Per-rAF tick(dt): walk every mixer, call mixer.update(dt). Cheap;
 // the heavy lifting is in the keyframe interpolators inside
 // AnimationMixer.
+//
+// ──────────────────────────────────────────────────────────────────────
+// Perf B3 (2026-05-18) — `__disposable` material/geometry tag convention
+// ──────────────────────────────────────────────────────────────────────
+//
+// B3, C5, and E3 all need to dispose cloned three.js Materials (and
+// occasionally Geometries) without crashing future renders by freeing
+// a shared cache reference. The convention:
+//
+//   - Every fresh Material / Geometry that is NOT installed into the
+//     shared `MaterialCache` (e.g. `new THREE.MeshBasicMaterial(...)` /
+//     `new THREE.TorusGeometry(...)` / `baseMaterial.clone()`) MUST be
+//     tagged at construction:
+//
+//         mat.userData.__disposable = true;
+//         geom.userData.__disposable = true;
+//
+//   - At dispose time, traverse the entity's root group with
+//     `_disposeMeshChildren(this.root)`. The helper dispatches to
+//     `_disposeMaterialIfOwned`, which:
+//       * disposes when `userData.__disposable === true`
+//       * asserts `userData.__cacheOwned !== true` (belt-and-braces —
+//         a cache material that escaped onto an entity rig would
+//         silently corrupt other entities; the assertion surfaces it
+//         as a console error at the call site instead).
+//       * else: no-op (assumed cache-owned / shared singleton).
+//
+// `MaterialCache._installFromPixels()` + the cache's `fallbackMaterial`
+// constructor tag cache-resident materials with `__cacheOwned = true`
+// so the assertion catches the corruption case. B3 introduces this
+// convention; C5 (`buildings.js` unload path) and E3
+// (`particles/particle_manager.js` clone site) build on it.
+//
+// Future material/geometry clone introductions inside entities.js MUST
+// follow the same tag pattern or the dispose path will quietly leak
+// them (under-dispose is preferable to over-dispose; the assertion
+// catches the over-dispose case).
+//
+// CAVEAT — geometries returned from `AnimationCache.get()` are SHARED
+// across all spawns of the same `setupId` (see animation.js:316-329).
+// `_disposeMeshChildren` follows the doc snippet and disposes
+// geometries unconditionally; the pre-existing `inst.geometries` loop
+// in `Entity.dispose()` already did this on the same refs. Three.js
+// `.dispose()` is idempotent so double-dispose is safe, BUT a second
+// spawn of the same `setupId` after a dispose may try to render
+// against a freed BufferGeometry. TODO(B3 follow-on): gate geometry
+// dispose by `__disposable` too — match the material guard — once we
+// confirm whether shared-cache-geometry-after-dispose actually
+// regresses (the pre-existing loop has shipped without an incident
+// report so far, but it deserves a soak validation).
 
 import * as THREE from "three";
 import {
@@ -177,6 +227,63 @@ const _IDENTITY_QUAT = new THREE.Quaternion();
 // `setParenting` across overlapping fire-and-forget chain walks.
 const _particleAttachScratchVec3 = new THREE.Vector3();
 const _particleAttachScratchQuat = new THREE.Quaternion();
+
+// Perf B3 (2026-05-18) — dispose helpers for `Entity.dispose()` to walk
+// the rig's mesh children and free Geometry/Material that aren't
+// shared cache references. See the `__disposable` tag convention in
+// the module docstring above. C5 + E3 consume the same tag.
+//
+// `_disposeMaterialIfOwned` disposes only when the material carries
+// `userData.__disposable === true`. As a safety net it also asserts
+// the material is NOT `__cacheOwned` — that combination indicates a
+// missing-`__disposable`-tag bug at the clone site, which the
+// assertion surfaces as a console error instead of producing a silent
+// "next render crashes" bug elsewhere. Both arrays-of-materials and
+// scalar materials are handled by the caller.
+function _disposeMaterialIfOwned(mat) {
+  if (!mat) return;
+  const ud = mat.userData;
+  if (!ud) return;
+  if (ud.__cacheOwned === true && ud.__disposable === true) {
+    // Programmer error: a cache material was tagged disposable at some
+    // clone site that should have stayed cache-owned. Dispose would
+    // free the shared GPU resource other entities still reference.
+    // eslint-disable-next-line no-console
+    console.error(
+      "[entities/B3] _disposeMaterialIfOwned: material is BOTH __cacheOwned and __disposable —" +
+        " refusing to dispose. Audit the clone site that produced it.",
+      { name: mat.name, userData: ud }
+    );
+    return;
+  }
+  if (ud.__disposable !== true) return;
+  try {
+    mat.dispose();
+  } catch (_) {}
+}
+
+// `_disposeMeshChildren` walks the rig with `.traverse()` and frees
+// per-Mesh geometry + materials. Geometry dispose is unconditional
+// (matches the existing legacy loop's behaviour — see the CAVEAT in
+// the module docstring); material dispose is gated by the
+// `__disposable` tag via `_disposeMaterialIfOwned`. Call BEFORE
+// `root.parent.remove(root)` so the traverse path is still intact.
+function _disposeMeshChildren(root) {
+  if (!root) return;
+  root.traverse((obj) => {
+    if (!obj.isMesh) return;
+    if (obj.geometry) {
+      try {
+        obj.geometry.dispose();
+      } catch (_) {}
+    }
+    if (Array.isArray(obj.material)) {
+      for (const m of obj.material) _disposeMaterialIfOwned(m);
+    } else {
+      _disposeMaterialIfOwned(obj.material);
+    }
+  });
+}
 
 // Convert AC's full motion command (u32) to a coarse category for
 // cycle selection. Returns one of "walk", "run", "stop", or null
@@ -432,6 +539,15 @@ class EntityInstance {
       this.mixer.stopAllAction();
       this.mixer.uncacheRoot(this.root);
     } catch (_) {}
+    // Perf B3 (2026-05-18) — walk the rig BEFORE detaching from the
+    // scene graph so traverse() still has the part-Mesh subtree
+    // attached. The helper disposes per-Mesh geometry unconditionally
+    // and per-Mesh materials only when tagged
+    // `userData.__disposable = true`. Legacy `inst.geometries` +
+    // `inst.ownedMaterials` loops below remain as a safety net (three.js
+    // `.dispose()` is idempotent so a second pass is a no-op). See the
+    // `__disposable` convention block in the module docstring.
+    _disposeMeshChildren(this.root);
     if (this.root.parent) this.root.parent.remove(this.root);
     for (const g of this.geometries) {
       try {
@@ -716,6 +832,12 @@ export class EntityManager {
               transparent: false,
             });
             mat.name = `entity-${guid.toString(16)}-surface-${did.toString(16)}`;
+            // Perf B3 (2026-05-18) — entity-owned recoloured surface
+            // material. NOT shared with MaterialCache (keyed by
+            // (entity, did) instead of just did). Free at entity
+            // dispose; tag so `_disposeMaterialIfOwned` lets it
+            // through.
+            mat.userData = { ...(mat.userData || {}), __disposable: true };
             inst.registerOwnedTexture(tex);
             inst.registerOwnedMaterial(mat);
             entityMaterials.set(did, mat);
@@ -1010,6 +1132,14 @@ export class EntityManager {
         metalness: 0.0,
         side: THREE.DoubleSide,
       });
+      // Perf B3 (2026-05-18) — manager-owned singleton (lifecycle =
+      // EntityManager.dispose at the bottom of this file). Mark as
+      // cache-owned so per-entity dispose chains skip it. See the
+      // `__disposable` convention block in the module docstring.
+      this._sharedFallback.userData = {
+        ...(this._sharedFallback.userData || {}),
+        __cacheOwned: true,
+      };
     }
     return this._sharedFallback;
   }
@@ -1275,15 +1405,21 @@ export class EntityManager {
     // 0.6m flat torus at the entity's feet, tilted so the ring lies
     // in the local XY (AC ground) plane. Bright red, slight emissive
     // hint so it reads even in shadow.
-    const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(0.55, 0.06, 6, 24),
-      new THREE.MeshBasicMaterial({
-        color: 0xff3322,
-        transparent: true,
-        opacity: 0.85,
-        depthTest: false,
-      }),
-    );
+    const ringGeom = new THREE.TorusGeometry(0.55, 0.06, 6, 24);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0xff3322,
+      transparent: true,
+      opacity: 0.85,
+      depthTest: false,
+    });
+    // Perf B3 (2026-05-18) — selection-ring resources are fresh per
+    // selection; tag both geometry + material so the
+    // `_disposeMeshChildren` traverse frees them when the entity is
+    // despawned WHILE selected (otherwise the explicit dispose at the
+    // setSelected swap-path above handles them).
+    ringGeom.userData = { ...(ringGeom.userData || {}), __disposable: true };
+    ringMat.userData = { ...(ringMat.userData || {}), __disposable: true };
+    const ring = new THREE.Mesh(ringGeom, ringMat);
     ring.rotation.x = Math.PI / 2;
     ring.position.set(0, 0, 0.02);
     ring.renderOrder = 10;
