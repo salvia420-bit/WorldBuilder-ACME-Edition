@@ -66,6 +66,7 @@ import { AudioManager } from "./audio/audio_manager.js";
 import { SoundTableCache } from "./audio/sound_table_cache.js";
 import { AmbientRuntime } from "./audio/ambient_runtime.js";
 import { getQuality, installQualityOnWindow } from "./quality.js";
+import { ACMoons } from "./ac_moons.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
@@ -829,6 +830,9 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
         // eslint-disable-next-line no-console
         console.warn("[scene3d.loop] tickPerFrame threw:", e);
       }
+      // AC moons — advance orbital positions for this frame. The
+      // tick() guards itself if textures haven't finished loading.
+      try { liveScene3dRef.acMoons?.tick(ts); } catch (_) {}
     }
     // H3 (2026-05-12): per-tick audio listener sync. PannerNode HRTF
     // panning uses the listener's world-space position + forward/up
@@ -1357,6 +1361,33 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
       "[sky-d] SkyDome attached; horizon←skyBackgroundColor, " +
         "zenith←skyLightingController._lastState.ambColorArgb"
     );
+
+    // 2026-05-18 — Asheron's Call canon: two moons in the night sky.
+    // Alb'arel (light) + Rez'arel (red). Loaded async from
+    // scene3d/assets/moons/, attached to skyDome.skyScene so the
+    // render-order semantics (sky pass → cloud overlay → world pass
+    // with clear=false/clearDepth=true) handle depth occlusion the
+    // same way as the cloud overlay. See ac_moons.js for the
+    // orbital + texture details.
+    try {
+      const acMoons = new ACMoons();
+      liveScene3d.acMoons = acMoons;
+      acMoons.load().then(() => {
+        acMoons.attachToSkyScene(skyDome.skyScene);
+        // eslint-disable-next-line no-console
+        console.log(
+          `[ac-moons] Alb'arel + Rez'arel attached to sky scene ` +
+            `(speedMul=${acMoons._speedMul}). Tweak motion via ` +
+            `?moonSpeed=N URL param.`
+        );
+      }).catch((e) => {
+        // eslint-disable-next-line no-console
+        console.warn("[ac-moons] texture load failed:", e);
+      });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[ac-moons] init failed:", e);
+    }
 
     // Clouds-D — opt-in volumetric clouds via `?clouds=on`. Default
     // off so the existing parametric skybox is the baseline. When on,
