@@ -2873,6 +2873,12 @@ void main() {
       let localPlayerGuid = null;
       function setLocalPlayerGuid(guid) { localPlayerGuid = guid >>> 0; }
       function getLocalPlayerGuid() { return localPlayerGuid; }
+      // Track the local player's landblock so handlePositionUpdate
+      // can emit a `landblockChanged` event on LB-boundary crossings.
+      // Plugins (combat-bar) use it to clear stale armed-spell state
+      // on zone change. Starts at 0 so the first known-LB capture
+      // (login / character select) also fires the event.
+      let lastLocalPlayerLb = 0;
       // Workstream A (3D camera/game-feel fix): hoist
       // `setLocalPlayerGuid` / `getLocalPlayerGuid` / `entityMap` onto
       // `window` at module scope so the `?renderer=3d` path picks them
@@ -4424,6 +4430,16 @@ void main() {
           && guid === (localPlayerGuid >>> 0)
         ) {
           const lbId = ((upd.landblockId >>> 16) << 16) >>> 0;
+          // Emit `landblockChanged` on the first known LB and on any
+          // subsequent LB transition. Plugins subscribe to clear
+          // zone-scoped state (e.g. combat-bar's armed spell).
+          if (lbId !== 0 && lbId !== lastLocalPlayerLb) {
+            const prevLb = lastLocalPlayerLb;
+            lastLocalPlayerLb = lbId;
+            if (window.__pluginClient) {
+              window.__pluginClient.events.emit("landblockChanged", { prevLb, lbId });
+            }
+          }
           if (lbId !== 0 && !terrainPrefetchedLbs.has(lbId)) {
             // Fire-and-forget; the integrator preserves pose Z on
             // cache miss until the prefetch lands.

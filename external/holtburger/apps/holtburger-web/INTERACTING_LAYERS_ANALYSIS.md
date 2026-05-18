@@ -53,7 +53,7 @@ Sun-direction is now centralised in `scene3d/sun_direction.js` — `sunDirFromHe
 
 ## State machines with quiet failure modes
 
-**Armed spell.** Persisted in localStorage. Survives death, zone change, logout. If you forget the spell in between, `castTargetedSpell(guid, spellId)` rejects silently on the wasm side; UI still shows "armed."
+**Armed spell.** Auto-disarms on death (HP=0) and zone change (`landblockChanged` event). The first known-LB capture after login also fires the event, so reloading the page with stale localStorage state clears immediately. Spell forget via the spellbook does NOT yet clear a matching armed spell — separate follow-on if it ever comes up.
 
 **Selection ring.** Created on click, removed only on next click. If you cancel a charge (movement key, stance flip, timeout), the red torus remains on the target — visually implies "still locked on" when the charge state machine has died.
 
@@ -72,20 +72,20 @@ CSM shadow rendering is implicit (three.js inserts it during `renderer.render()`
 ## What to triage
 
 Low-effort, high-value:
-1. Disarm spell on death / zone exit — UI lies are corrosive.
-2. Fix the orbit (C-key second-minimap) view — currently tied to a clouds state issue; fix path lives in memory.
+1. Fix the orbit (C-key second-minimap) view — currently tied to a clouds state issue; fix path lives in memory.
 
 Medium-effort, structural:
-3. Wire `weather_state.updateFromPosition()` into the main tick loop — close the ghost module.
-4. Add `unloadLandblock(lbX, lbY)` on streaming exit — the only real memory bomb.
-5. Quality preset hot-swap or guard against runtime change (lock the URL param, force reload on change).
+2. Wire `weather_state.updateFromPosition()` into the main tick loop — close the ghost module.
+3. Add `unloadLandblock(lbX, lbY)` on streaming exit — the only real memory bomb.
+4. Quality preset hot-swap or guard against runtime change (lock the URL param, force reload on change).
 
 Investigative / unknown-cost:
-6. Add a depth-texture wiring assertion at construction; today a 1×1 stale default fails silently.
-7. Decide whether the direct render path is still reachable in practice — if not, delete it and remove the cloud-paint-over-geometry footgun.
+5. Add a depth-texture wiring assertion at construction; today a 1×1 stale default fails silently.
+6. Decide whether the direct render path is still reachable in practice — if not, delete it and remove the cloud-paint-over-geometry footgun.
 
 ## Resolved
 
+- **2026-05-18 — Armed-spell auto-disarm on death + zone change.** `index.html` `handlePositionUpdate` now tracks the local player's landblock and emits `landblockChanged` via the plugin facade event bus when the LB transitions (including the first-known capture, which catches the log-in case). `plugins/combat-bar.js` gained a `mount()` lifecycle hook that subscribes to `landblockChanged` (calls `clearArmedSpell`) and `playerStatsUpdated` (calls `clearArmedSpell` when HP=0). New module-scope `clearArmedSpell()` mutates state + localStorage + `window.__combatBarState` without touching DOM, so the disarm works whether or not the combat-bar panel is open. UI no longer lies about armed state after a respawn or portal.
 - **2026-05-18 — Sun-direction centralised.** New `scene3d/sun_direction.js` exports `sunDirFromHeadingPitch(headingDeg, pitchDeg, outVec)` and `sunPositionFromHeadingPitch(headingDeg, pitchDeg, distance) → [x,y,z]`. Four prior sites (`sky_lighting.js`, `cloud_volume.js`, `atmosphere_lights.js`, `atmosphere_sky.js`) — three of which had named local copies, one inlined — now import from the shared module. Same formula, single source. `__internals` re-exports in `sky_lighting.js` and `cloud_volume.js` keep test imports working (they point to the imported binding by the same name).
 - **2026-05-18 — Wall-clock sources fully consolidated (Phases A + B).** `scene3d/index.js` tick callback stamps `liveScene3d.frameTime = { tsMs, tsSec, dt }` each rAF. `scene3d/loop.js` `tickTerrainUTime` reads `scene3d.frameTime.tsSec`. `scene3d/cloud_overlay.js` dropped its `THREE.Clock`; `preRender(renderer, dt)` now accepts `dt` from the caller, threaded from the rAF tick via `index.js` (atmosphere path) and `sky_dome.renderSkyPass(renderer, activeCam, dt)` (direct path). Three wall-clock sources collapsed to one. Side-effect: cloud TAA dt is now capped at 100ms — friendlier for temporal stability after stalls. AC game time (`atmosphere_sky.js` → `Date.now()` + 11.34× compression) is unchanged and remains the world clock; visual-effect time vs game-time stays a clean two-axis model.
 - **2026-05-18 — SSAO removed entirely.** Deleted `scene3d/postprocess.js`, `test_visfid_p32_ssao.mjs`, `capture_visfid_p32_ssao.cjs`. Stripped `ssao` flag from `quality.js` and `test_quality_preset.mjs` (32/32 pass). Removed SSAO import, auto-disable branches, forward-decl, resize hooks, render-path branch, cloud-overlay warning, and pipeline construction from `index.js`. Comment cleanup in `atmosphere_pipeline.js` and `sky_dome.js`. Closes the "ultra+clouds silently loses SSAO" hazard by removing both sides of the conflict — atmosphere path is now the canonical composer path.

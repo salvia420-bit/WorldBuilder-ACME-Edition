@@ -48,6 +48,20 @@ function syncWindowState(state) {
   };
 }
 
+// Module-scope disarm helper. Clears armedSpellId in localStorage +
+// window.__combatBarState without touching DOM. Used by the mount()
+// event subscribers (death / zone change) so the disarm works even
+// when the combat-bar panel is closed. When the panel IS open,
+// activate()'s local setArmed updates the row "armed" class; the
+// next renderRows after reopen reads the fresh state either way.
+function clearArmedSpell() {
+  const state = loadState();
+  if (state.armedSpellId === 0) return;
+  state.armedSpellId = 0;
+  saveState(state);
+  syncWindowState(state);
+}
+
 let stylesInjected = false;
 function ensureStyles() {
   if (stylesInjected) return;
@@ -803,6 +817,68 @@ export const manifest = {
   version: "0.1.0",
   description: "Stance toggle + attack settings + spell picker",
 };
+
+// Auto-disarm subscriptions. Mount runs at bar init (pre-login) so
+// the plugin keeps a live disarm hook even when the panel is closed.
+// Two trigger events:
+//   - `landblockChanged` — zone exit clears armed spell (matches
+//     retail AC's "armed spell cleared on portal / teleport")
+//   - `playerStatsUpdated` with HP=0 — death clears armed spell
+// The first emission of `landblockChanged` also catches the
+// log-in case (lastLocalPlayerLb starts at 0 in index.html), so
+// reloading the page with a stale armed spell no longer leaves the
+// UI lying to the user.
+export function mount(ctx) {
+  let pollTimer = null;
+  let unsubLb = null;
+  let unsubStats = null;
+
+  function tryHook() {
+    const client = ctx?.client ?? window.__pluginClient ?? null;
+    if (!client?.events?.on || !client?.player) {
+      return false;
+    }
+    const onZoneChange = () => clearArmedSpell();
+    const onStatsUpdated = () => {
+      try {
+        const stats = client.player.stats;
+        const vitals = stats?.vitals;
+        if (!vitals) return;
+        // vitals packs [type, current, base, buffed_max] × N — see
+        // plugins/vitals-hud.js for the same wire-layout reader.
+        // Type 1 = HP; current at offset +1.
+        for (let i = 0; i + 3 < vitals.length; i += 4) {
+          if (vitals[i] === 1 && vitals[i + 1] === 0) {
+            clearArmedSpell();
+            return;
+          }
+        }
+      } catch {
+        // Stats accessor can throw pre-biota; ignore.
+      }
+    };
+    client.events.on("landblockChanged", onZoneChange);
+    client.events.on("playerStatsUpdated", onStatsUpdated);
+    unsubLb = () => client.events.off("landblockChanged", onZoneChange);
+    unsubStats = () => client.events.off("playerStatsUpdated", onStatsUpdated);
+    return true;
+  }
+
+  if (!tryHook()) {
+    pollTimer = setInterval(() => {
+      if (tryHook()) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    }, 500);
+  }
+
+  return () => {
+    if (pollTimer) clearInterval(pollTimer);
+    if (unsubLb) unsubLb();
+    if (unsubStats) unsubStats();
+  };
+}
 
 export function activate(bodyEl, ctx) {
   ensureStyles();
