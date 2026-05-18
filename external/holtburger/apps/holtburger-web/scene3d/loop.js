@@ -48,6 +48,34 @@ const KIND_META_REFRESH = 3;
 const KIND_VELOCITY = 4;
 const KIND_MOTION = 5;
 
+// A2 (perf plan 2026-05-18) — module-scratch object passed to
+// `em.setVelocity` so we don't allocate a fresh `{guid,vx,vy,vz,omegaZ}`
+// on every KIND_VELOCITY event. `setVelocity` copies the fields into
+// `inst.lastVel` synchronously and does not retain a reference, so a
+// single shared scratch is safe across both drain paths.
+const _velScratch = { guid: 0, vx: 0, vy: 0, vz: 0, omegaZ: 0 };
+
+// A2 (perf plan 2026-05-18) — get-or-allocate the per-guid slot in
+// `window.__lastEntityWorldPos`. Mutates the slot in place on each
+// KIND_POSITION instead of allocating a fresh `{x,y,z,ts}` literal.
+// Consumers (camera.js#L806, entities.js#L1937) read fields
+// synchronously and don't retain a reference, so reusing the slot
+// is safe.
+function _getOrCreatePosSlot(map, guid) {
+  let slot = map.get(guid);
+  if (!slot) {
+    slot = { x: 0, y: 0, z: 0, ts: 0 };
+    map.set(guid, slot);
+  }
+  return slot;
+}
+
+function _nowMs() {
+  return (typeof performance !== "undefined" && performance.now)
+    ? performance.now()
+    : Date.now();
+}
+
 // Cohere-B follow-on (2026-05-12): the 2D path's academy-rubberband
 // fix (`index.html:4191-4214`) explicitly skips syncing the local
 // sprite to server `PublicUpdatePosition` / `PrivateUpdatePosition`
@@ -607,14 +635,13 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
         }
       } else if (kind === KIND_VELOCITY) {
         // Keep velocity hints around for future extrapolation; not
-        // currently consumed.
-        em.setVelocity({
-          guid: upd.guid >>> 0,
-          vx: upd.vx ?? 0,
-          vy: upd.vy ?? 0,
-          vz: upd.vz ?? 0,
-          omegaZ: upd.omegaZ ?? 0,
-        });
+        // currently consumed. A2: mutate-in-place scratch.
+        _velScratch.guid = upd.guid >>> 0;
+        _velScratch.vx = upd.vx ?? 0;
+        _velScratch.vy = upd.vy ?? 0;
+        _velScratch.vz = upd.vz ?? 0;
+        _velScratch.omegaZ = upd.omegaZ ?? 0;
+        em.setVelocity(_velScratch);
       } else if (kind === KIND_MOTION) {
         em.setMotion(
           upd.guid >>> 0,
@@ -701,12 +728,13 @@ export function installSharedDrainHook(scene3d) {
           if (!window.__lastEntityWorldPos) {
             window.__lastEntityWorldPos = new Map();
           }
-          window.__lastEntityWorldPos.set(g, {
-            x: wx, y: wy, z: wz,
-            ts: (typeof performance !== "undefined" && performance.now)
-              ? performance.now()
-              : Date.now(),
-          });
+          // A2: mutate the per-guid slot in place instead of allocating
+          // a fresh `{x,y,z,ts}` literal per KIND_POSITION event.
+          const _posSlot = _getOrCreatePosSlot(window.__lastEntityWorldPos, g);
+          _posSlot.x = wx;
+          _posSlot.y = wy;
+          _posSlot.z = wz;
+          _posSlot.ts = _nowMs();
           // Cohere-B follow-on (2026-05-12): skip the snap-to-server
           // for the local player here too — the per-rAF integrator
           // sync in `applyLocalPlayerPoseFromIntegrator` owns the
@@ -722,13 +750,13 @@ export function installSharedDrainHook(scene3d) {
             );
           }
         } else if (kind === KIND_VELOCITY) {
-          em.setVelocity({
-            guid: upd.guid >>> 0,
-            vx: upd.vx ?? 0,
-            vy: upd.vy ?? 0,
-            vz: upd.vz ?? 0,
-            omegaZ: upd.omegaZ ?? 0,
-          });
+          // A2: mutate-in-place scratch (same as the older drain path).
+          _velScratch.guid = upd.guid >>> 0;
+          _velScratch.vx = upd.vx ?? 0;
+          _velScratch.vy = upd.vy ?? 0;
+          _velScratch.vz = upd.vz ?? 0;
+          _velScratch.omegaZ = upd.omegaZ ?? 0;
+          em.setVelocity(_velScratch);
         } else if (kind === KIND_MOTION) {
           em.setMotion(
             upd.guid >>> 0,
