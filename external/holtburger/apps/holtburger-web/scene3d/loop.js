@@ -70,6 +70,74 @@ function _getOrCreatePosSlot(map, guid) {
   return slot;
 }
 
+// A6 (perf plan 2026-05-18) — per-spawn scratch Uint32Arrays for
+// `toMeta`'s three palette/model/texture vectors. The old code called
+// `Uint32Array.from(upd.modelChanges)` × 3 per spawn; during a PVS
+// burst (20+ simultaneous spawns from the academy ring or LB
+// expansion) that's 60+ typed-array allocations cluster-bombing the GC.
+//
+// Strategy:
+//   1. One shared `_emptyU32` sentinel returned for the (overwhelmingly
+//      common) empty-payload case — zero allocation vs. the prior
+//      `new Uint32Array(0)` literal per field.
+//   2. For non-empty payloads, copy the wasm-bindgen view into a
+//      generously-sized module scratch via `.set()` (a fast memcpy),
+//      then `.slice(0, len)` to hand a stable, right-sized buffer to
+//      the consumer. Slice is one allocation per field — same count as
+//      `Uint32Array.from` — but the underlying primitive is tighter
+//      (raw memcpy vs. iterator/length probe) and avoids a second
+//      round-trip into the wasm-bindgen view if the JS engine doesn't
+//      specialize.
+//   3. Grow path: if a spawn's vector exceeds the current scratch
+//      length, allocate a fresh scratch of size = nextPow2(needed).
+//      Grow allocations are rare (initial 32 covers typical entity
+//      payloads — palette substitutions in retail rarely exceed 8
+//      triples / 24 u32s).
+//
+// SLICE IS MANDATORY HERE (not pass-by-reference): `EntityInstance`
+// retains `meta` via `this.meta = meta;` (entities.js:205), and the
+// async `_spawnImpl` awaits `animationCache.get()` which passes the
+// typed arrays through to a wasm fetch. The next spawn would corrupt
+// the prior entity's retained palette substitutions if we shared the
+// scratch buffer directly.
+let _modelChangesScratch = new Uint32Array(32);
+let _textureChangesScratch = new Uint32Array(32);
+let _subPalettesScratch = new Uint32Array(32);
+const _emptyU32 = new Uint32Array(0);
+
+function _nextPow2(n) {
+  let p = 1;
+  while (p < n) p <<= 1;
+  return p;
+}
+
+// Copies a wasm-bindgen `Uint32Array` view (or any array-like with a
+// numeric `.length`) into the named scratch slot, growing the scratch
+// if necessary, and returns a freshly-sliced right-sized copy.
+// Returns the shared `_emptyU32` for null / zero-length sources.
+//
+// `slot` selects the module-level scratch: 0 = modelChanges,
+// 1 = textureChanges, 2 = subPalettes. We dispatch through this
+// integer + `let` rebinding rather than a holder object so the
+// scratch references stay JIT-friendly module bindings.
+function _sliceFromScratch(src, slot) {
+  if (!src) return _emptyU32;
+  const n = src.length | 0;
+  if (n === 0) return _emptyU32;
+  let scratch;
+  if (slot === 0) scratch = _modelChangesScratch;
+  else if (slot === 1) scratch = _textureChangesScratch;
+  else scratch = _subPalettesScratch;
+  if (n > scratch.length) {
+    scratch = new Uint32Array(_nextPow2(n));
+    if (slot === 0) _modelChangesScratch = scratch;
+    else if (slot === 1) _textureChangesScratch = scratch;
+    else _subPalettesScratch = scratch;
+  }
+  scratch.set(src);
+  return scratch.slice(0, n);
+}
+
 function _nowMs() {
   return (typeof performance !== "undefined" && performance.now)
     ? performance.now()
@@ -494,9 +562,6 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
  * `landblockToWorldXY` outside metaFromSpawn).
  */
 function toMeta(upd) {
-  const modelChanges = upd.modelChanges;
-  const textureChanges = upd.textureChanges;
-  const subPalettes = upd.subPalettes;
   return {
     guid: (upd.guid >>> 0),
     modelId: (upd.modelId >>> 0),
@@ -518,20 +583,16 @@ function toMeta(upd) {
     mtableId: (upd.mtableId >>> 0),
     motionCommand: (upd.motionCommand ?? 0) >>> 0,
     motionStance: (upd.motionStance ?? 0) >>> 0,
-    // Always copy typed arrays — wasm-bindgen Uint32Array views point
-    // at linear memory that grows on subsequent allocations.
-    modelChanges:
-      modelChanges && modelChanges.length > 0
-        ? Uint32Array.from(modelChanges)
-        : new Uint32Array(0),
-    textureChanges:
-      textureChanges && textureChanges.length > 0
-        ? Uint32Array.from(textureChanges)
-        : new Uint32Array(0),
-    subPalettes:
-      subPalettes && subPalettes.length > 0
-        ? Uint32Array.from(subPalettes)
-        : new Uint32Array(0),
+    // A6 (2026-05-18): copy via shared module scratches, slice to a
+    // right-sized retained buffer. The wasm-bindgen Uint32Array views
+    // point at linear memory that grows on subsequent allocations, so
+    // the copy is still mandatory — but `_sliceFromScratch` returns
+    // the shared `_emptyU32` for the (common) empty case to avoid a
+    // per-spawn `new Uint32Array(0)` literal, and uses a fast
+    // memcpy + slice for the non-empty case.
+    modelChanges: _sliceFromScratch(upd.modelChanges, 0),
+    textureChanges: _sliceFromScratch(upd.textureChanges, 1),
+    subPalettes: _sliceFromScratch(upd.subPalettes, 2),
     // H2 (2026-05-12): entity's PhysicsScript DID for in-world particle
     // effects. Used by entities.js::_spawnImpl to walk the Sky-J chain
     // and attach a per-entity ParticleManager emitter.
