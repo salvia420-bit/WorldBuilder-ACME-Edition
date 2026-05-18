@@ -97,7 +97,7 @@ The rest can run in parallel waves.
 **Risk.** Substring matching is brittle; ship a small allowlist of known-good GPUs as `high` and otherwise fall back to `mid`.
 
 ## A6 — Batch `Uint32Array.from` allocations during burst spawn
-**Severity** Med • **File** `scene3d/loop.js:468-517` (`toMeta`)
+**Severity** Med • **File** `scene3d/loop.js:468-517` (`toMeta`) • **Status** ✅ Done (commit `703f4fb` — slice-on-return mandatory because EntityInstance retains `meta`; empty-array sentinel `_emptyU32` shared)
 
 **Problem.** Three `Uint32Array.from(...)` calls per spawn × N batched spawns = stall during PVS expansion.
 
@@ -134,7 +134,7 @@ The rest can run in parallel waves.
 **Risk.** Animation snap on re-entry — mitigate by carrying mixer time forward via `dt` accumulation, or accept the snap if visually unnoticeable.
 
 ## B2 — Reuse Quat/Euler/Vec3 scratches in jump tween + particle attach
-**Severity** High • **File** `scene3d/entities.js:1297-1304` (jump tween), `1758-1768` (particle attach hook)
+**Severity** High • **File** `scene3d/entities.js:1297-1304` (jump tween), `1758-1768` (particle attach hook) • **Status** ✅ Done (commit `8466e59` — refused to pool `slerpQuaternions` result because it's retained via `inst.airborneTilt`; particle-attach scratch has narrow async race noted inline)
 
 **Problem.** `new Quaternion()` × 2 per airborne generic-rig per frame, plus `new Vector3()` + `new Quaternion()` per particle hook fire.
 
@@ -270,7 +270,7 @@ The rest can run in parallel waves.
 **Risk.** Lights popping in/out as the cap changes between sorts — mitigate by always-sort on cap-cross.
 
 ## C7 — Light clone deduplication
-**Severity** Med • **File** `scene3d/lighting.js:776`
+**Severity** Med • **File** `scene3d/lighting.js:776` • **Status** ⛔ Bailed — pooling is structurally unsafe given C6's per-light `.visible` toggling AND three.js's one-parent-per-Object3D rule. A pooled `Light` reference would yield ONE world position from its single parent chain (mis-ranking N-1 ghost placements in the C6 sort) and couldn't carry per-placement `.visible` state. Requires decoupling the cap/sort from the `Light` instance (per-placement metadata array with `{lightRef, parentRef, worldPosCache, visible}`) before pooling becomes viable. Statics are unaffected — they already share `lightObj` via `InstancedMesh` at the `attachedAny=false` path. Pressure is from buildings + entities.
 
 **Problem.** `Light.clone()` per placement; large model × N placements = hundreds of clones at load.
 
@@ -333,7 +333,7 @@ The rest can run in parallel waves.
 **Risk.** None if scratches stay module-private.
 
 ## E2 — Write `getRandomOffset/A/B/C` in-place
-**Severity** High • **File** `scene3d/particles/particle_emitter_info.js:151-191`
+**Severity** High • **File** `scene3d/particles/particle_emitter_info.js:151-191` • **Status** ✅ Done (commit `68e8480` — optional `out` Vector3 param; four new module scratches in `particle_emitter.js`; offset path also drops two internal Vector3 allocations via `subVectors`)
 
 **Problem.** Each helper `.clone()` a Vector3 per spawn.
 
@@ -436,7 +436,7 @@ The rest can run in parallel waves.
 **Risk.** None.
 
 ## F5 — Damage-feed: ring-buffer DOM nodes
-**Severity** Med • **File** `plugins/combat-bar.js:917-927`
+**Severity** Med • **File** `plugins/combat-bar.js:917-927` • **Status** ✅ Done (commit `4681e49` — lazy first-use; `insertBefore` move keeps newest-at-top; zero `createElement`/`remove`/`unshift`/`pop` in steady state)
 
 **Problem.** Each combat event creates / appends / removes a DOM node.
 
