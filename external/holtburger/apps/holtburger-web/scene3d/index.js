@@ -867,7 +867,7 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
         if (cloudActive) {
           cloudOverlay.preRender(renderer, dt, activeCam);
         }
-        atmospherePipeline.render(activeCam);
+        atmospherePipeline.render(activeCam, dt);
         if (cloudActive) {
           cloudOverlay.renderOverlay(renderer);
         }
