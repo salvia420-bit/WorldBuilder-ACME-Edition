@@ -37,10 +37,11 @@ import * as THREE from 'three';
 const SKY_RADIUS = 2000;
 
 // Angular half-radii (radians of half-angle subtended by the moon at
-// the viewer). 0.04 rad ≈ 2.3° — comparable to a "supermoon" in real
-// sky, which reads as a visible disc without being absurd at 60° FOV.
-const ALB_ANGULAR_RADIUS = 0.040; // Alb'arel — primary, larger
-const REZ_ANGULAR_RADIUS = 0.032; // Rez'arel — companion, smaller
+// the viewer). Bumped 2× from initial 0.04/0.032 because at 1080p
+// the original sizes were too easy to miss against the atmosphere
+// scatter — dialing them back later is a 1-line change.
+const ALB_ANGULAR_RADIUS = 0.080; // Alb'arel — primary, larger (~4.6°)
+const REZ_ANGULAR_RADIUS = 0.064; // Rez'arel — companion, smaller (~3.7°)
 
 // Orbital periods at speedMul=1, in milliseconds of wall time.
 // Picked so a 5-10 min play session shows visible motion. AC's
@@ -62,16 +63,22 @@ void main() {
 // radius (0.46 of UV space = 23% inset from each edge, matches the
 // padding the wiki screenshots have around the moon). Soft edge from
 // 0.44..0.46 hides the JPEG block boundary at the disc's edge.
+//
+// `uBrightness` multiplies the moon color before output — boosting
+// helps the disc punch through AerialPerspective scattering on the
+// way to the canvas. 2.0 is a starting point; live-tune via
+// `liveScene3d.acMoons.albMesh.material.uniforms.uBrightness.value`.
 const MOON_FRAG = /* glsl */ `
 precision highp float;
 varying vec2 vUv;
 uniform sampler2D map;
+uniform float uBrightness;
 void main() {
   vec2 c = vUv - 0.5;
   float d = length(c);
   if (d > 0.46) discard;
   float edge = 1.0 - smoothstep(0.44, 0.46, d);
-  vec3 rgb = texture2D(map, vUv).rgb;
+  vec3 rgb = texture2D(map, vUv).rgb * uBrightness;
   gl_FragColor = vec4(rgb, edge);
 }
 `;
@@ -111,6 +118,8 @@ export class ACMoons {
       : new URL('./assets/moons/', import.meta.url).toString();
     const albUrl = base + 'albarel.jpg';
     const rezUrl = base + 'rezarel.jpg';
+    // eslint-disable-next-line no-console
+    console.log(`[ac-moons] loading textures: ${albUrl} ${rezUrl}`);
     const [albTex, rezTex] = await Promise.all([
       loader.loadAsync(albUrl),
       loader.loadAsync(rezUrl),
@@ -119,6 +128,12 @@ export class ACMoons {
       albTex.colorSpace = THREE.SRGBColorSpace;
       rezTex.colorSpace = THREE.SRGBColorSpace;
     }
+    // eslint-disable-next-line no-console
+    console.log(
+      `[ac-moons] textures decoded: ` +
+        `alb=${albTex.image?.width}x${albTex.image?.height} ` +
+        `rez=${rezTex.image?.width}x${rezTex.image?.height}`,
+    );
     this.albMesh = this._buildMoonMesh(albTex, ALB_ANGULAR_RADIUS);
     this.rezMesh = this._buildMoonMesh(rezTex, REZ_ANGULAR_RADIUS);
     return this;
@@ -130,7 +145,10 @@ export class ACMoons {
     const size = 2 * SKY_RADIUS * angularRadius;
     const geo = new THREE.PlaneGeometry(size, size);
     const mat = new THREE.ShaderMaterial({
-      uniforms: { map: { value: texture } },
+      uniforms: {
+        map: { value: texture },
+        uBrightness: { value: 2.0 },
+      },
       vertexShader: MOON_VERT,
       fragmentShader: MOON_FRAG,
       transparent: true,
