@@ -138,6 +138,27 @@ const MAX_ACTIONS_PER_SETUP = 4;
 // true of cycle-to-cycle blends.
 const CROSSFADE_S = 0;
 
+// Perf B1 (2026-05-18) — tick-radius gate for `entityManager.tick`.
+// Entities further than `MAX_TICK_DIST` metres from the active camera
+// (world-space, three.js frame) skip mixer.update / hook execution /
+// tween processing. Local player and entities with active tweens are
+// always ticked regardless of distance. 120 m matches AC's typical
+// PVS visibility envelope for animated entities — beyond that, the
+// animation snap on re-entry is below perceptual threshold and the
+// time-budget win on Academy (~104 spawns) is the headline.
+//
+// TODO (B1 follow-on) — frustum culling. The MVP is distance-only;
+// adding a per-frame Frustum + Box3 test would skip more entities but
+// requires per-frame projection-matrix bookkeeping and per-entity
+// bounding spheres. Distance-only is well-defined and load-bearing
+// enough to ship first.
+const MAX_TICK_DIST = 120;
+const MAX_TICK_DIST_SQ = MAX_TICK_DIST * MAX_TICK_DIST; // 14400 m²
+// Module-private scratch Vector3 for entity world-position lookup in
+// `_shouldTickEntity`. Callers must NOT retain a reference — the next
+// `tick(dt)` reuses it.
+const _tickGateScratch = new THREE.Vector3();
+
 // Convert AC's full motion command (u32) to a coarse category for
 // cycle selection. Returns one of "walk", "run", "stop", or null
 // (unknown / non-locomotion command). Matches the 2D path's gate at
@@ -1999,12 +2020,113 @@ export class EntityManager {
   }
 
   /**
+   * Perf B1 (2026-05-18) — gate predicate for `tick(dt)`. Returns
+   * `true` when the entity should run its full per-frame update
+   * (mixer.update + hook fire + jump/swing tween advance), `false`
+   * when it can be safely skipped this tick.
+   *
+   * Force-tick exceptions (always returns `true`):
+   *   1. Local player — `window.getLocalPlayerGuid()` matches the
+   *      entity's guid. The local rig is visible to the user even in
+   *      top-down/free cams where the camera is far from the body, so
+   *      we never skip its mixer. Handles the function-missing case
+   *      (pre-spawn frames, unit-test path with no window) gracefully
+   *      by treating it as "not the local player" and falling through
+   *      to the distance check.
+   *   2. Active jump-pose tween — `inst._jumpPoseTween` truthy. The
+   *      tween needs every tick to complete its triangle-wave slerp;
+   *      pausing mid-air would leave the rig locked in the airborne
+   *      pose after landing.
+   *   3. Active swing-pose tween — `inst._swingTween` truthy. Same
+   *      reason: the 300 ms slerp needs every tick or the arm sticks
+   *      out after the visible swing window has passed.
+   *   4. Within tick radius — entity world-space position is within
+   *      `MAX_TICK_DIST` metres of the active camera.
+   *
+   * TODO (B1 follow-on) — additional "currently active" predicates:
+   *   - particle-attach hooks fired on this entity (need a hook-fire
+   *     timestamp on `inst`; the file doesn't track one today),
+   *   - spell-effect bind to a remote target (currently lives on the
+   *     particle runtime, not the entity),
+   *   - targeted-by-local-player (the picking layer holds the
+   *     selection guid; threading it through scene3d would let us
+   *     keep a stalker target ticking off-screen).
+   *   Each of these is a separate PR — the MVP keeps the predicate
+   *   coupled to state already on `inst`.
+   */
+  _shouldTickEntity(inst) {
+    // (1) Local player — always tick.
+    let localPlayerGuid = null;
+    try {
+      // eslint-disable-next-line no-undef
+      if (typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function") {
+        // eslint-disable-next-line no-undef
+        const lpg = window.getLocalPlayerGuid();
+        if (lpg !== null && lpg !== undefined) {
+          localPlayerGuid = lpg >>> 0;
+        }
+      }
+    } catch (_) {
+      // Function exists but threw — treat as "no local player resolved"
+      // and fall through to the other gates.
+    }
+    if (localPlayerGuid !== null && (inst.guid >>> 0) === localPlayerGuid) {
+      return true;
+    }
+    // (2) Active jump-pose tween — always tick to finish the slerp.
+    if (inst._jumpPoseTween) return true;
+    // (3) Active swing-pose tween — always tick to finish the slerp.
+    if (inst._swingTween) return true;
+    // (4) Distance gate — same camera-resolution convention as
+    // `capActiveLightsByDistance` in lighting.js (Phase 7.5 switcher
+    // first, fall back to `.camera`). Bail open (return `true` —
+    // preserve original behaviour) when no camera is resolvable so
+    // pre-camera-init frames don't silently freeze every animation.
+    const camera =
+      this.scene3d?.cameraSwitcher?.activeCamera ??
+      this.scene3d?.camera ??
+      null;
+    if (!camera || !camera.position || !inst.root) {
+      return true;
+    }
+    // Entity rigs live under worldRoot (which is rotated -π/2 around
+    // X) so we need the WORLD-space position — matches the lighting
+    // pattern at lighting.js:549-555. Use the scratch Vector3 so we
+    // don't allocate per-entity per-frame.
+    if (typeof inst.root.getWorldPosition === "function") {
+      inst.root.getWorldPosition(_tickGateScratch);
+    } else if (inst.root.position) {
+      _tickGateScratch.set(
+        inst.root.position.x,
+        inst.root.position.y,
+        inst.root.position.z
+      );
+    } else {
+      // No position to compare — bail open.
+      return true;
+    }
+    const dx = _tickGateScratch.x - camera.position.x;
+    const dy = _tickGateScratch.y - camera.position.y;
+    const dz = _tickGateScratch.z - camera.position.z;
+    const distSq = dx * dx + dy * dy + dz * dz;
+    return distSq <= MAX_TICK_DIST_SQ;
+  }
+
+  /**
    * Per-rAF tick. Advances every entity's mixer by dt seconds.
    * Called from loop.js#tickPerFrame.
    */
   tick(dt) {
     if (!(dt > 0)) return;
     for (const inst of this.entityMap.values()) {
+      // Perf B1 (2026-05-18) — distance + local-player + active-tween
+      // gate. When false, skip mixer.update, hook execution, and the
+      // jump/swing tween advances entirely. `inst.root.position`,
+      // `inst.lastVel`, etc., are written by setPose / setVelocity
+      // (not by tick), so skipping the tick body leaves them
+      // readable for downstream consumers. Animation snap on
+      // re-entry is the documented MVP trade.
+      if (!this._shouldTickEntity(inst)) continue;
       try {
         inst.mixer.update(dt);
       } catch (e) {
