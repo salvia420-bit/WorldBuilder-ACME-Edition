@@ -166,15 +166,21 @@ void main() {
     // disc center (UV.x in [0.50, 0.72]) at ~45% strength so the
     // band appears to wrap around the upper hemisphere from the
     // left, fading by the time it reaches the right limb.
-    float tlMask   = (1.0 - smoothstep(0.30, 0.55, vUv.x))
-                   * smoothstep(0.50, 0.70, vUv.y);
+    // Mask widened 2026-05-18 round 3 (user: "400% more cloud").
+    // TL extends further right (0.55→0.62) and lower (0.50→0.45);
+    // TR bleed pushed to ~65% strength and reaches further across.
+    float tlMask   = (1.0 - smoothstep(0.30, 0.62, vUv.x))
+                   * smoothstep(0.45, 0.65, vUv.y);
     float trBleed  = smoothstep(0.50, 0.55, vUv.x)
-                   * (1.0 - smoothstep(0.55, 0.72, vUv.x))
-                   * smoothstep(0.50, 0.65, vUv.y) * 0.45;
+                   * (1.0 - smoothstep(0.55, 0.80, vUv.x))
+                   * smoothstep(0.45, 0.65, vUv.y) * 0.65;
     float quadMask = max(tlMask, trBleed);
     float discMask = 1.0 - smoothstep(0.30, 0.46, d);
-    float cloudAmt = pow(cloud, 1.45) * quadMask * discMask;
-    cloudAmt = clamp(cloudAmt * 2.0 - 0.18, 0.0, 1.0);
+    // Power exponent dropped 1.45 → 1.0 so more of the fbm range
+    // qualifies as cloud; threshold offset relaxed so we stop
+    // chopping the soft edges.
+    float cloudAmt = pow(cloud, 1.0) * quadMask * discMask;
+    cloudAmt = clamp(cloudAmt * 2.4 + 0.05, 0.0, 1.0);
     // Ominous: storm-grey with a cool blue lean. Reads as brooding
     // overcast rather than fair-weather cumulus.
     vec3 cloudCol = vec3(0.42, 0.45, 0.52);
@@ -329,7 +335,7 @@ export class ACMoons {
         // Defaults tuned 2026-05-18 round 2: heavier cloud
         // coverage, slower drift (ominous read), grey-blue tint
         // baked in the shader.
-        uCloudIntensity: { value: 1.4 },
+        uCloudIntensity: { value: 5.0 },
         uCloudSpeed: { value: 0.45 },
         // uCityIntensity stays at 1.0 as a "scale everything"
         // knob. The main hotspot's -80% reduction is baked into
@@ -506,11 +512,14 @@ export class ACMoons {
     const rOut = 0.085;
     const lights = [];
     // Center — slightly brighter than the ring lights, medium pulse.
-    lights.push(new THREE.Vector4(cx, cy, 0.10, 5.0));
+    lights.push(new THREE.Vector4(cx, cy, 0.10, 25.0));
     // 6 spokes × 2 lights (mid ring + outer ring).
+    // Periods are 5× the original tune (user feedback round 3:
+    // "500% slower pulse"). Spans 9 s up to a full minute on the
+    // outermost slow throb.
     const angles = [30, 90, 150, 210, 270, 330];
-    const midPeriods = [1.8, 2.4, 3.1, 4.0, 5.5, 7.2];
-    const outPeriods = [2.0, 3.3, 4.5, 6.0, 8.0, 12.0];
+    const midPeriods = [9.0, 12.0, 15.5, 20.0, 27.5, 36.0];
+    const outPeriods = [10.0, 16.5, 22.5, 30.0, 40.0, 60.0];
     for (let i = 0; i < 6; i += 1) {
       const a = (angles[i] * Math.PI) / 180;
       const cos = Math.cos(a);
@@ -526,8 +535,8 @@ export class ACMoons {
     // the gap between main light and the 150° spoke, one lower-right
     // outside the 330° spoke). Keeps the cluster from looking too
     // mechanical.
-    lights.push(new THREE.Vector4(0.075, 0.43, 0.06, 9.0));
-    lights.push(new THREE.Vector4(0.220, 0.30, 0.06, 3.7));
+    lights.push(new THREE.Vector4(0.075, 0.43, 0.06, 45.0));
+    lights.push(new THREE.Vector4(0.220, 0.30, 0.06, 18.5));
     return lights;
   }
 
