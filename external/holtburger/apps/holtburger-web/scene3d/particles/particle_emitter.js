@@ -28,6 +28,23 @@ import { EmitterType } from "./particle_emitter_info.js";
 // particle.js. DO NOT export or retain references outside shouldEmitParticle().
 const _scratchVec3 = new THREE.Vector3();
 
+// E2 (2026-05-18): per-spawn scratches for the four `info.getRandom*(out)`
+// helpers. Filled by getRandomOffset/A/B/C and immediately consumed by
+// Particle.init(), which `.copy()`'s each into a persistent particle field
+// (see particle.js:178-251 — every branch ends in `this.{offset,a,b,c}.copy(...)`).
+// References do NOT escape past the init() call, so pooling is safe.
+//
+// NOTE: these are deliberately distinct from `_scratchVec3` (used in
+// shouldEmitParticle) — even though shouldEmitParticle() and emitParticle()
+// run sequentially in updateParticles(), keeping the four spawn scratches
+// dedicated makes lifetime reasoning local and protects against future
+// refactors that might call shouldEmitParticle() mid-emit. DO NOT export
+// or retain references outside emitParticle().
+const _offsetScratch = new THREE.Vector3();
+const _aScratch = new THREE.Vector3();
+const _bScratch = new THREE.Vector3();
+const _cScratch = new THREE.Vector3();
+
 export class ParticleEmitter {
   /**
    * @param {object} opts
@@ -206,10 +223,14 @@ export class ParticleEmitter {
     const firstParticle = this.info.totalParticles === 0
                        && this.info.totalSeconds === 0;
 
-    const randomOffset = this.info.getRandomOffset();
-    const randomA = this.info.getRandomA();
-    const randomB = this.info.getRandomB();
-    const randomC = this.info.getRandomC();
+    // E2 (2026-05-18): pass module-scratches so the four helpers write
+    // in-place instead of allocating a fresh Vector3 each. Particle.init()
+    // immediately `.copy()`'s each into a persistent particle field — the
+    // scratch references do not escape the init() call below.
+    const randomOffset = this.info.getRandomOffset(_offsetScratch);
+    const randomA = this.info.getRandomA(_aScratch);
+    const randomB = this.info.getRandomB(_bScratch);
+    const randomC = this.info.getRandomC(_cScratch);
 
     this.particles[idx].init(
       this.info,

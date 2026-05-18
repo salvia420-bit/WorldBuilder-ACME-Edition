@@ -19,6 +19,15 @@ import * as THREE from "three";
 import { currentTime, rng } from "./time_rng.js";
 import { normalizeCheckSmall } from "./particle.js";
 
+// E2 (2026-05-18): module-private scratches for `getRandomOffset()`'s
+// internal math (random unit vector, OffsetDir projection). Both are
+// consumed in-place inside getRandomOffset() and never leak — the result
+// is written to the caller-supplied `out` Vector3. Matches the `_scratch*`
+// convention from E1 (particle.js) and E4 (particle_emitter.js). DO NOT
+// export or retain references outside getRandomOffset().
+const _offsetR = new THREE.Vector3();
+const _offsetProj = new THREE.Vector3();
+
 /** EmitterType enum mirror — see external/ACE/Source/ACE.Entity/Enum/EmitterType.cs */
 export const EmitterType = Object.freeze({
   Unknown: 0,
@@ -146,18 +155,34 @@ export class ParticleEmitterInfo {
     return Math.max(0.0, r * this.lifespanRand + this.lifespan);
   }
 
-  /** Port of `GetRandomOffset` (ParticleEmitterInfo.cs:173-187). */
-  getRandomOffset() {
-    const r = new THREE.Vector3(
+  /**
+   * Port of `GetRandomOffset` (ParticleEmitterInfo.cs:173-187).
+   *
+   * E2 (2026-05-18): writes into caller-supplied `out` Vector3 instead of
+   * allocating. If `out` is omitted, allocates a fresh Vector3 (for
+   * back-compat with non-hot-path callers like test_particles.mjs).
+   *
+   * @param {THREE.Vector3} [out] Destination vector. If provided, the
+   *        result is written here and returned. RNG calls + math semantics
+   *        are unchanged from the allocating form.
+   * @returns {THREE.Vector3} `out` (or a fresh Vector3 if `out` was omitted).
+   */
+  getRandomOffset(out) {
+    const result = out || new THREE.Vector3();
+    // Build the random unit-cube point in a module-scratch — never escapes.
+    _offsetR.set(
       rng() * 2.0 - 1.0,
       rng() * 2.0 - 1.0,
       rng() * 2.0 - 1.0,
     );
     // randomAngle = r - OffsetDir * dot(OffsetDir, r);
-    const dot = this.offsetDir.dot(r);
-    const randomAngle = r.clone().sub(this.offsetDir.clone().multiplyScalar(dot));
-    if (normalizeCheckSmall(randomAngle)) {
-      return new THREE.Vector3(0, 0, 0);
+    const dot = this.offsetDir.dot(_offsetR);
+    // Build OffsetDir*dot in a second scratch, then write the difference
+    // into `result` directly via subVectors.
+    _offsetProj.copy(this.offsetDir).multiplyScalar(dot);
+    result.subVectors(_offsetR, _offsetProj);
+    if (normalizeCheckSmall(result)) {
+      return result.set(0, 0, 0);
     }
     // ACE: scaled = randomAngle * ((MaxOffset - MinOffset) + MinOffset)
     //               * ThreadSafeRandom.Next(0, 1);
@@ -167,28 +192,46 @@ export class ParticleEmitterInfo {
     // faithfully. Flagged for the report; do NOT fix here.
     const range = (this.maxOffset - this.minOffset) + this.minOffset;
     const t = rng();
-    return randomAngle.multiplyScalar(range * t);
+    return result.multiplyScalar(range * t);
   }
 
-  /** Port of `GetRandomA` (ParticleEmitterInfo.cs:189-195). */
-  getRandomA() {
+  /**
+   * Port of `GetRandomA` (ParticleEmitterInfo.cs:189-195).
+   *
+   * E2 (2026-05-18): writes into caller-supplied `out` Vector3 instead of
+   * allocating. `out` is optional for back-compat.
+   */
+  getRandomA(out) {
+    const result = out || new THREE.Vector3();
     const t = rng();
     const magnitude = (this.maxA - this.minA) * t + this.minA;
-    return this.a.clone().multiplyScalar(magnitude);
+    return result.copy(this.a).multiplyScalar(magnitude);
   }
 
-  /** Port of `GetRandomB` (ParticleEmitterInfo.cs:197-203). */
-  getRandomB() {
+  /**
+   * Port of `GetRandomB` (ParticleEmitterInfo.cs:197-203).
+   *
+   * E2 (2026-05-18): writes into caller-supplied `out` Vector3 instead of
+   * allocating. `out` is optional for back-compat.
+   */
+  getRandomB(out) {
+    const result = out || new THREE.Vector3();
     const t = rng();
     const magnitude = (this.maxB - this.minB) * t + this.minB;
-    return this.b.clone().multiplyScalar(magnitude);
+    return result.copy(this.b).multiplyScalar(magnitude);
   }
 
-  /** Port of `GetRandomC` (ParticleEmitterInfo.cs:205-211). */
-  getRandomC() {
+  /**
+   * Port of `GetRandomC` (ParticleEmitterInfo.cs:205-211).
+   *
+   * E2 (2026-05-18): writes into caller-supplied `out` Vector3 instead of
+   * allocating. `out` is optional for back-compat.
+   */
+  getRandomC(out) {
+    const result = out || new THREE.Vector3();
     const t = rng();
     const magnitude = (this.maxC - this.minC) * t + this.minC;
-    return this.c.clone().multiplyScalar(magnitude);
+    return result.copy(this.c).multiplyScalar(magnitude);
   }
 
   /**
