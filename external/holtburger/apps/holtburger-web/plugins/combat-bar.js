@@ -1006,19 +1006,38 @@ export function activate(bodyEl, ctx) {
   feedEl.appendChild(feedEmpty);
   bodyEl.appendChild(feedEl);
 
+  // F5 — damage-feed ring buffer. Pre-allocate FEED_LIMIT line nodes
+  // on first use; rotate text/class through them and move the recycled
+  // slot to the top via a single `insertBefore` (O(1) DOM op) on each
+  // event. Sustained 5 hits/s no longer creates+removes a DOM node per
+  // event. Visual order preserved: newest at top, oldest at bottom
+  // (matches the prior `insertBefore(line, feedEl.firstChild)` path).
+  //
+  // Closure state (named to avoid colliding with F1's `_powerSyncRafId`
+  // and F2's `rafId` / `pendingResume`):
+  //   _feedSlots   — recycled <div> nodes, length FEED_LIMIT
+  //   _feedRingHead — index of the slot to write next
+  //   _feedFilled  — count of slots that have been initialized + inserted
   const FEED_LIMIT = 5;
-  const lines = [];
+  const _feedSlots = new Array(FEED_LIMIT);
+  let _feedRingHead = 0;
+  let _feedFilled = 0;
   function pushLine(text, cls) {
     if (feedEmpty.parentNode) feedEmpty.remove();
-    const line = document.createElement("div");
-    line.className = `hb-cb-feed-line ${cls}`;
-    line.textContent = text;
-    feedEl.insertBefore(line, feedEl.firstChild);
-    lines.unshift(line);
-    while (lines.length > FEED_LIMIT) {
-      const old = lines.pop();
-      if (old?.parentNode) old.remove();
+    let slot = _feedSlots[_feedRingHead];
+    if (!slot) {
+      // Lazy init — create this slot's node the first time around the ring.
+      slot = document.createElement("div");
+      _feedSlots[_feedRingHead] = slot;
     }
+    slot.className = `hb-cb-feed-line ${cls}`;
+    slot.textContent = text;
+    // Move (or first-insert) this slot to the top of the feed. Calling
+    // `insertBefore` with a node already in the parent moves it — a
+    // single DOM op, not append+remove.
+    feedEl.insertBefore(slot, feedEl.firstChild);
+    if (_feedFilled < FEED_LIMIT) _feedFilled++;
+    _feedRingHead = (_feedRingHead + 1) % FEED_LIMIT;
   }
 
   const subs = [];
