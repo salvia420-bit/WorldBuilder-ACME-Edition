@@ -138,21 +138,38 @@ export function setupClickPicking({
     if (!camera) return null;
     raycaster.setFromCamera(ndc, camera);
 
+    // F7 — pick-time filter: raycast ONLY against entity roots, never the
+    // full scene tree (which would walk all ~16,700 Holtburg statics on
+    // every click). Statics aren't pickable entities — if static-picking
+    // ever becomes a requirement it needs its own list, not this one.
+    // TODO(F7-followon): static picking via a separate static-roots list.
     const em = liveScene3d.entityManager;
-    if (!em || !em.entityMap) return null;
+    if (!em || !em.entityMap) {
+      // Dev-mode signal — runtime init bug we don't want to crash on.
+      console.warn("[picking] entityManager missing at pick time; ignoring click");
+      return null;
+    }
     const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
 
-    const roots = [];
+    // Build a fresh flat list of entity roots per click — entities come
+    // and go, so caching would just invite the spawn/despawn maintenance
+    // bug that F7's full version exists to solve.
+    const roots = Array.from(em.entityMap.values()).map(inst => inst?.root).filter(Boolean);
+    if (roots.length === 0) return null;
+    // Parallel guid lookup so the hit-to-guid resolution below stays O(1).
+    // Excludes the local player so you can't pick yourself.
     const guidByRoot = new Map();
     for (const [guid, inst] of em.entityMap) {
       const g = guid >>> 0;
       if (g === localGuid) continue;
       if (!inst || !inst.root) continue;
-      roots.push(inst.root);
       guidByRoot.set(inst.root, g);
     }
-    if (roots.length === 0) return null;
 
+    // `recursive=true` is fine here: the flat list is small (≤ ~200
+    // entities typically in PVS) and each entity root may have child
+    // meshes (rig parts) that need to be tested. The key win is that
+    // statics are NOT in `roots` at all.
     const hits = raycaster.intersectObjects(roots, true);
     if (hits.length === 0) return null;
     let obj = hits[0].object;
