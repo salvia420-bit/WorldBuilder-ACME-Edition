@@ -85,32 +85,103 @@ function ensureStyles() {
   document.head.appendChild(style);
 }
 
+// Build a single row's DOM (one vital). Returns the row + direct
+// references to the mutable fields so subsequent updates can avoid
+// an innerHTML rebuild.
+function buildVitalRow(type) {
+  const cls = VITAL_CLASS[type] || "";
+  const short = VITAL_SHORT[type] || "?";
+
+  const rowEl = document.createElement("div");
+  rowEl.className = `hud-vital ${cls}`.trim();
+
+  const labelEl = document.createElement("span");
+  labelEl.className = "hud-vital-label";
+  labelEl.textContent = short;
+  rowEl.appendChild(labelEl);
+
+  const barEl = document.createElement("div");
+  barEl.className = "hud-vital-bar";
+  const fillEl = document.createElement("div");
+  fillEl.className = "hud-vital-fill";
+  fillEl.style.width = "0%";
+  barEl.appendChild(fillEl);
+  rowEl.appendChild(barEl);
+
+  const numsEl = document.createElement("span");
+  numsEl.className = "hud-vital-nums";
+  numsEl.textContent = "";
+  rowEl.appendChild(numsEl);
+
+  return {
+    rowEl,
+    fillEl,
+    numsEl,
+    // Track last-applied values so we can skip writes when unchanged.
+    // `null` sentinel forces the first paint to write.
+    lastPctStr: null,
+    lastNumsStr: null,
+  };
+}
+
+// Build-once / mutate-many. We stash a per-type Map of row refs on the
+// overlay element itself (`overlay.__vitalRefs`) so the renderer stays
+// pure-functional from the caller's perspective. Dynamic bar count is
+// handled by adding rows for new types and removing rows whose type
+// disappeared from the packet.
 function renderVitals(overlay, vitals) {
   if (!vitals || vitals.length === 0) {
     overlay.hidden = true;
     return;
   }
+
+  let refs = overlay.__vitalRefs;
+  if (!refs) {
+    refs = new Map();
+    overlay.__vitalRefs = refs;
+  }
+
   // Wire layout from `lib.rs`: vitals packs `[type, current, base,
-  // buffed_max] × N`. Same loop as the old index.html block.
-  const rows = [];
+  // buffed_max] × N`. Same loop as the old index.html block, but we
+  // mutate per-field instead of regenerating innerHTML.
+  const seen = new Set();
   for (let i = 0; i + 3 < vitals.length; i += 4) {
     const type = vitals[i];
     const current = vitals[i + 1];
     const buffedMax = vitals[i + 3];
-    const cls = VITAL_CLASS[type] || "";
-    const short = VITAL_SHORT[type] || "?";
     const pct = buffedMax > 0
       ? Math.max(0, Math.min(100, (current / buffedMax) * 100))
       : 0;
-    rows.push(
-      `<div class="hud-vital ${cls}">` +
-        `<span class="hud-vital-label">${short}</span>` +
-        `<div class="hud-vital-bar"><div class="hud-vital-fill" style="width:${pct.toFixed(1)}%"></div></div>` +
-        `<span class="hud-vital-nums">${current} / ${buffedMax}</span>` +
-      `</div>`,
-    );
+    const pctStr = `${pct.toFixed(1)}%`;
+    const numsStr = `${current} / ${buffedMax}`;
+
+    let entry = refs.get(type);
+    if (!entry) {
+      entry = buildVitalRow(type);
+      refs.set(type, entry);
+      overlay.appendChild(entry.rowEl);
+    }
+
+    if (entry.lastPctStr !== pctStr) {
+      entry.fillEl.style.width = pctStr;
+      entry.lastPctStr = pctStr;
+    }
+    if (entry.lastNumsStr !== numsStr) {
+      entry.numsEl.textContent = numsStr;
+      entry.lastNumsStr = numsStr;
+    }
+    seen.add(type);
   }
-  overlay.innerHTML = rows.join("");
+
+  // Drop rows whose type no longer appears in the packet. Cheap to
+  // walk — at most 3 entries in practice (HP/ST/MN).
+  for (const [type, entry] of refs) {
+    if (!seen.has(type)) {
+      entry.rowEl.remove();
+      refs.delete(type);
+    }
+  }
+
   overlay.hidden = false;
 }
 
