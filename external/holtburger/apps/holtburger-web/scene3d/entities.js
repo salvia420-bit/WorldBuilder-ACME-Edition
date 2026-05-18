@@ -1349,6 +1349,11 @@ export class EntityManager {
     const cls = classifyMotionCommand(cmd);
     if (cls === "stop" || cls === null) {
       inst.fadeOutCurrent(CROSSFADE_S);
+      // Remember the last non-stop command we played so a follow-up
+      // setMotion(...) can ask the wasm side for a link clip from
+      // the previous cycle into the next one.
+      // (`lastMotionCommand` stays sticky across STOP so e.g.
+      //  Walk → Stop → Walk replays the original link.)
       return;
     }
     // Locomotion. Build the cache key the same way the spawn path did
@@ -1360,6 +1365,29 @@ export class EntityManager {
     if (cacheKey === inst.currentActionKey) return; // already playing
     this.motionSwitchCount += 1;
     inst.actionLastUsedMs.set(cacheKey, performance.now());
+
+    // 2026-05-18 motion-link experiment. When we're transitioning
+    // from a known previous motion command (not the very first
+    // setMotion for this entity), ask the MotionTable for a link
+    // transition clip via `opts.fromMotion`. If one exists, play it
+    // once with LoopOnce + clampWhenFinished, then schedule the
+    // destination cycle as a follow-up so the rig flows
+    // (prev cycle frames) → (link clip frames once) → (next cycle).
+    const fromMotion = (inst.lastMotionCommand ?? 0) >>> 0;
+    if (
+      fromMotion !== 0 &&
+      fromMotion !== cmd &&
+      cls !== "attack" &&
+      cls !== "cast"
+    ) {
+      // Don't await — kick off the link fetch but immediately also
+      // start fetching the destination cycle below. If the link
+      // resolves we'll insert it as a quick overlay; if not (no
+      // link entry for this transition) we just play the cycle as
+      // before. Failure is silent — same visual as today.
+      this._tryPlayLink(inst, setupId, mtableId, fromMotion, cmd, stance);
+    }
+    inst.lastMotionCommand = cmd;
 
     let action = inst.actions.get(cacheKey);
     if (!action) {
@@ -1513,6 +1541,62 @@ export class EntityManager {
    * manager's scene is `entitiesGroup` so per-particle THREE.Meshes
    * are siblings of the entity rigs.
    */
+  /**
+   * 2026-05-18 motion-link experiment. Fetch a transition clip from
+   * the MotionTable's Links table for `(stance, fromCmd → toCmd)`.
+   * On hit, play it once (LoopOnce, clampWhenFinished=false) so the
+   * rig animates the transition before the destination cycle takes
+   * over. On miss, no-op — caller's existing crossfade-to-cycle
+   * path runs unchanged.
+   */
+  async _tryPlayLink(inst, setupId, mtableId, fromCmd, toCmd, stance) {
+    const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
+    if (typeof fetchKeyframes !== "function") return;
+    let entry;
+    try {
+      entry = await this.animationCache.get(
+        setupId,
+        mtableId,
+        toCmd,
+        stance,
+        fetchKeyframes,
+        {
+          modelChanges: inst.meta.modelChanges ?? new Uint32Array(0),
+          textureChanges: inst.meta.textureChanges ?? new Uint32Array(0),
+          paletteId: (inst.meta.paletteId ?? 0) >>> 0,
+          paletteSubsFlat: inst.meta.subPalettes ?? new Uint32Array(0),
+          fromMotion: fromCmd,
+        },
+      );
+    } catch (_) {
+      return;
+    }
+    if (!this.entityMap.has(inst.guid >>> 0)) return;
+    const clip = entry?.clip;
+    if (!clip) return; // No link registered for this transition.
+    // Use a stable cache key so repeated transitions reuse the same
+    // AnimationAction (mixer-bound bindings live per-entity).
+    const linkKey = `link:${fromCmd.toString(16)}->${toCmd.toString(16)}:${stance.toString(16)}`;
+    let action = inst.actions?.get(linkKey);
+    if (!action) {
+      inst.evictOldestUnused?.();
+      action = inst.mixer.clipAction(clip);
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = false;
+      action.enabled = true;
+      inst.actions?.set(linkKey, action);
+    }
+    try {
+      action.reset();
+      action.play();
+      console.log(
+        `[motion-link] 0x${(inst.guid >>> 0).toString(16)} ${fromCmd.toString(16)}→${toCmd.toString(16)} stance=${stance.toString(16)} (link clip played)`,
+      );
+    } catch (e) {
+      console.warn(`[motion-link] play failed: ${e?.message ?? e}`);
+    }
+  }
+
   async _attachParticleChainForEntity(guid, rig, pesId) {
     let ps;
     try {

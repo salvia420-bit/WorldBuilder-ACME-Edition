@@ -45,6 +45,27 @@ impl MotionTable {
         self.cycles.get(&cycle_key(stance, command))
     }
 
+    /// Lookup the transition (link) clip for `(stance, from_cmd) →
+    /// to_cmd`. The links table is a nested HashMap whose outer key
+    /// is encoded with `cycle_key(stance, from_cmd)` and whose inner
+    /// key is the raw `to_cmd & MOTION_KEY_MASK`. Used by the client
+    /// to play a one-shot transition animation between two cycles
+    /// (e.g. WalkForward → Ready plays a deceleration flourish).
+    /// Matches the schema in
+    /// `external/DatReaderWriter/DatReaderWriter/dats.xml:3746-3748`
+    /// ("style << 16 | from substate → sub-dict (to substate →
+    /// transition MotionData)").
+    pub fn motion_data_for_link(
+        &self,
+        stance: u32,
+        from_cmd: u32,
+        to_cmd: u32,
+    ) -> Option<&MotionData> {
+        let from_key = cycle_key(stance, from_cmd);
+        let to_key = to_cmd & MOTION_KEY_MASK;
+        self.links.get(&from_key)?.get(&to_key)
+    }
+
     pub fn movement_profile_for_stance(&self, stance: u32) -> MotionTableMovementProfile {
         MotionTableMovementProfile {
             motion_table_id: self.id,

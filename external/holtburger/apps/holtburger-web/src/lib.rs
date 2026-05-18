@@ -3902,6 +3902,78 @@ fn try_resolve_cycle_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     ))
 }
 
+/// 2026-05-18 motion-table-x-envcell experiment: resolve a transition
+/// (link) clip for `(stance, from_command) → to_command`. Same DAT-
+/// walk pattern as `try_resolve_cycle_frames` but uses
+/// `MotionTable::motion_data_for_link` instead of cycle lookup.
+///
+/// Per `external/DatReaderWriter/DatReaderWriter/dats.xml:3746-3748`
+/// the Links table is a nested dict whose outer key is
+/// `(style << 16 | from_substate)` and whose inner key is the raw
+/// `to_substate`. When a creature switches motion commands (e.g.
+/// WalkForward → Ready on coming to a stop), retail plays the link
+/// clip once before chaining into the destination cycle. Ours has
+/// been ignoring this and going straight to crossfade-to-rest.
+///
+/// Returns `None` when no link is registered for the transition,
+/// when the MotionTable can't be loaded, or when the resolved
+/// Animation has no frames. Caller falls back to its existing
+/// crossfade path (so a missing link is transparent — same visual
+/// as today).
+#[cfg(any(target_arch = "wasm32", test))]
+fn try_resolve_link_frames<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup: &holtburger_dat::file_type::SetupModel,
+    mtable_override: Option<u32>,
+    stance_override: u32,
+    from_command: u32,
+    to_command: u32,
+) -> Option<(
+    Vec<holtburger_dat::file_type::setup_model::AnimationFrame>,
+    f32,
+    u32,
+)> {
+    use holtburger_dat::file_type::{Animation, MotionTable};
+    use holtburger_dat::ResourceKey;
+
+    let mt_id = mtable_override
+        .filter(|&id| id != 0)
+        .or(setup.default_motion_table)?;
+    if (mt_id >> 24) != 0x09 { return None; }
+    let bytes = source.get_file_by_key(ResourceKey::new("eor/portal", mt_id)).ok()?;
+    let mtable = MotionTable::read(&mut std::io::Cursor::new(&bytes)).ok()?;
+
+    let resolved_stance = if stance_override == 0 {
+        mtable.default_style
+    } else {
+        stance_override
+    };
+
+    let motion_data = mtable.motion_data_for_link(resolved_stance, from_command, to_command)?;
+    let anim_data = motion_data.anims.first()?;
+    let anim_did = anim_data.anim_id;
+    let framerate = anim_data.framerate;
+    if (anim_did >> 24) != 0x03 { return None; }
+
+    let anim_bytes = source.get_file_by_key(ResourceKey::new("eor/portal", anim_did)).ok()?;
+    let anim = Animation::read(&mut std::io::Cursor::new(&anim_bytes)).ok()?;
+    if anim.part_frames.is_empty() { return None; }
+
+    let total = anim.part_frames.len();
+    let low = (anim_data.low_frame.max(0) as usize).min(total);
+    let high = if anim_data.high_frame < 0 {
+        total
+    } else {
+        ((anim_data.high_frame as usize).saturating_add(1)).min(total)
+    };
+    if low >= high { return None; }
+    Some((
+        anim.part_frames[low..high].to_vec(),
+        framerate,
+        resolved_stance,
+    ))
+}
+
 /// Phase 4 step 6 Phase C: resolve the idle pose for a SetupModel by
 /// walking `default_motion_table` → `cycles[(default_style << 16) |
 /// idleSubstate]` → first `AnimData.anim_id` → `Animation.part_frames[0]`.
@@ -9729,6 +9801,25 @@ pub(crate) fn build_entity_animation_data_inner<S: holtburger_dat::ResourceSourc
     motion_command: u32,
     stance: u32,
 ) -> Result<EntityAnimationKeyframesInner, String> {
+    // Back-compat shim — existing callers without a "from motion"
+    // hint fall through to the new 8-arg path with from_motion = 0
+    // which preserves the old cycle-lookup-only behaviour.
+    build_entity_animation_data_inner_v2(
+        source, setup_id, mc, tc, mt_override, motion_command, stance, 0,
+    )
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup_id: u32,
+    mc: &[(u8, u32)],
+    tc: &[(u8, u32, u32)],
+    mt_override: Option<u32>,
+    motion_command: u32,
+    stance: u32,
+    from_motion_command: u32,
+) -> Result<EntityAnimationKeyframesInner, String> {
     use holtburger_dat::file_type::SetupModel;
     use holtburger_dat::ResourceKey;
 
@@ -9789,14 +9880,32 @@ pub(crate) fn build_entity_animation_data_inner<S: holtburger_dat::ResourceSourc
     let setup = SetupModel::unpack(&mut std::io::Cursor::new(&setup_bytes))
         .map_err(|e| format!("build_entity_animation_data_inner: setup parse: {e}"))?;
 
-    let (frames, framerate, resolved_stance) =
-        match try_resolve_cycle_frames(source, &setup, mt_override, stance, motion_command) {
+    // 2026-05-18 motion-link experiment: when a `from_motion_command`
+    // is supplied AND a link clip exists in the MotionTable for the
+    // (stance, from → to) transition, prefer the link. The link is a
+    // one-shot transition (e.g. WalkForward → Ready plays a stop
+    // flourish), and the caller is expected to play it once and then
+    // fetch the destination cycle separately. Falls back to the
+    // cycle lookup when no link is registered, so callers passing
+    // `from_motion_command = 0` (or any pair without a link entry)
+    // see no change in behaviour.
+    let link_result = if from_motion_command != 0 {
+        try_resolve_link_frames(
+            source,
+            &setup,
+            mt_override,
+            stance,
+            from_motion_command,
+            motion_command,
+        )
+    } else {
+        None
+    };
+    let (frames, framerate, resolved_stance) = match link_result {
+        Some(triple) => triple,
+        None => match try_resolve_cycle_frames(source, &setup, mt_override, stance, motion_command) {
             Some(triple) => triple,
             None => {
-                // No cycle under this (stance, command). Caller renders
-                // rest pose only; the part-local meshes + rest pose
-                // survive the early return. Same semantics as the
-                // single-call path's mid-function return.
                 let fallback_stance = if stance != 0 { stance } else { 0 };
                 return Ok(EntityAnimationKeyframesInner {
                     part_tris: parts_tris,
@@ -9810,7 +9919,8 @@ pub(crate) fn build_entity_animation_data_inner<S: holtburger_dat::ResourceSourc
                     hooks: Vec::new(),
                 });
             }
-        };
+        },
+    };
 
     // Flatten keyframes (num_frames, part_count, 7) row-major in
     // frame-major order — identical layout to `EntityAnimationData
@@ -9903,6 +10013,14 @@ pub async fn fetch_entity_animation_keyframes(
     mtable_id: u32,
     motion_command: u32,
     stance: u32,
+    // 2026-05-18 motion-link experiment: when non-zero, the wasm
+    // first tries to resolve a one-shot link clip for the
+    // `(stance, from_motion_command → motion_command)` transition
+    // and returns those frames. When zero (the default for all
+    // existing call sites), falls through to the pre-link cycle
+    // lookup. Older bundles' JS callers that don't pass this arg
+    // see `0` via wasm-bindgen's `Option<u32>` Default coercion.
+    from_motion_command: u32,
 ) -> Result<EntityAnimationData, JsValue> {
     use holtburger_dat::file_type::SetupModel;
     use holtburger_dat::{ResourceKey, ResourceSource};
@@ -9960,7 +10078,7 @@ pub async fn fetch_entity_animation_keyframes(
             let _ = triangulate_model_per_part_buckets(s, setup_id);
         })
         .await?;
-        let inner = build_entity_animation_data_inner(
+        let inner = build_entity_animation_data_inner_v2(
             source.as_ref(),
             setup_id,
             &mc,
@@ -9968,6 +10086,7 @@ pub async fn fetch_entity_animation_keyframes(
             mt_override,
             motion_command,
             stance,
+            from_motion_command,
         )
         .map_err(|e| JsValue::from_str(&e))?;
         return Ok(inner_to_wasm_animation_data(inner));
@@ -10020,7 +10139,7 @@ pub async fn fetch_entity_animation_keyframes(
     })
     .await?;
 
-    let inner = build_entity_animation_data_inner(
+    let inner = build_entity_animation_data_inner_v2(
         source.as_ref(),
         setup_id,
         &mc,
@@ -10028,6 +10147,7 @@ pub async fn fetch_entity_animation_keyframes(
         mt_override,
         motion_command,
         stance,
+        from_motion_command,
     )
     .map_err(|e| JsValue::from_str(&e))?;
     Ok(inner_to_wasm_animation_data(inner))

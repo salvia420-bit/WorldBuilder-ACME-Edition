@@ -258,7 +258,17 @@ export class AnimationCache {
      * EntityAnimationData's struct doc in lib.rs.
      */
     async get(setupId, mtableId, motionCommand, stance, fetchKeyframes, opts = {}) {
-        const key = AnimationCache.makeKey(setupId, mtableId, motionCommand, stance);
+        // 2026-05-18 motion-link experiment: when `opts.fromMotion` is
+        // non-zero, fold it into the cache key so link-transition
+        // clips and the underlying cycles get separate slots, and
+        // pass it through to the wasm fetcher which will try the
+        // MotionTable's Links table for the
+        // `(stance, fromMotion → motionCommand)` transition before
+        // falling back to the cycle lookup.
+        const fromMotion = (opts.fromMotion ?? 0) >>> 0;
+        const key = fromMotion === 0
+            ? AnimationCache.makeKey(setupId, mtableId, motionCommand, stance)
+            : `${AnimationCache.makeKey(setupId, mtableId, motionCommand, stance)}:link:${fromMotion.toString(16)}`;
         const hit = this.entries.get(key);
         if (hit) return hit;
         const promise = (async () => {
@@ -276,6 +286,7 @@ export class AnimationCache {
                 mtableId,
                 motionCommand,
                 stance,
+                fromMotion,
             );
 
             const partCount = animData.partCount >>> 0;
