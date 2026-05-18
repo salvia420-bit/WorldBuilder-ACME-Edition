@@ -455,26 +455,39 @@ export function ensureNameplateForEntity(inst, scene3d) {
     } catch (_) {}
     inst._nameplateSprite = null;
   }
-  // Defensive cleanup: walk the root's children and drop any orphan
-  // nameplate sprites (children whose name starts with "nameplate_"
-  // but whose userData.nameplateText is set — the on-disk-sprite
-  // signature). Without this, a hot-reload that re-runs `_spawnImpl`
-  // before the previous sprite tear-down ran would leave a ghost
-  // nameplate parented to the same root. Cheap O(children) — typical
-  // entity has 0-19 part-children.
-  if (inst.root && Array.isArray(inst.root.children)) {
-    const stale = [];
-    for (const child of inst.root.children) {
-      if (
-        child &&
-        child.userData &&
-        typeof child.userData.nameplateText === "string"
-      ) {
-        stale.push(child);
+  // Perf task B5 (2026-05-18) — orphan scan replaced with a dev-mode
+  // assertion. The slot `inst._nameplateSprite` (set/cleared above and
+  // at attach below) is the single source of truth for the attached
+  // sprite; at spawn-burst the previous O(children) walk multiplied
+  // across every entity. The scan only ever caught a hot-reload
+  // edge case (re-running `_spawnImpl` before the previous tear-down
+  // ran left a ghost nameplate parented to the same root — see commit
+  // ad26b39 "Bug B"). That's a dev-only scenario; production spawn
+  // ordering is guarded by `EntityManager.spawnInFlight` +
+  // `remove(guid)` (entities.js:438-445).
+  //
+  // Trade: skip the scan in production; in dev mode (opt-in via
+  // `window.__debugNameplates`) walk the children once to detect
+  // orphans and warn loudly so hot-reload regressions still surface.
+  if (typeof window !== "undefined" && window.__debugNameplates) {
+    if (inst.root && Array.isArray(inst.root.children)) {
+      for (const child of inst.root.children) {
+        if (
+          child &&
+          child !== inst._nameplateSprite &&
+          child.userData &&
+          typeof child.userData.nameplateText === "string"
+        ) {
+          console.warn(
+            "[nameplate_sprite] orphan nameplate sprite detected on entity",
+            inst.guid,
+            "— this is the hot-reload race from commit ad26b39. " +
+              "Slot `inst._nameplateSprite` did not match `inst.root.children`.",
+            { orphan: child, expected: inst._nameplateSprite }
+          );
+          try { inst.root.remove(child); } catch (_) {}
+        }
       }
-    }
-    for (const s of stale) {
-      try { inst.root.remove(s); } catch (_) {}
     }
   }
 
