@@ -99,6 +99,26 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     scene3d.envCellLoadedLbs = new Set();
   }
 
+  // Perf C1 — flag-gated EnvCell surface-mesh fusion. When `?envcellFusion=1`
+  // is set, fuse all surface BufferGeometries within a cell into a single
+  // (or two — split when the cell mixes opaque + transparent) `THREE.Mesh`
+  // with a parallel materials array and `addGroup(start, count, materialIndex)`.
+  // Three.js binds the correct material per group automatically. Each cell
+  // drops from N draws to 1 (or 2) draws, killing the 96–832 per-frame
+  // material binds indoor measurements report at Academy PVS depth.
+  //
+  // Default OFF until SSIM-validated against the per-surface baseline. See
+  // `docs/fps-perf-plan-2026-05-18.md` § C1 for the briefing.
+  let envcellFusion = false;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
+      envcellFusion =
+        new URLSearchParams(globalThis.location.search).get("envcellFusion") === "1";
+    }
+  } catch (_) {
+    envcellFusion = false;
+  }
+
   const lbKey = (landblockId & 0xffff_0000) >>> 0;
   if (scene3d.envCellLoadedLbs.has(lbKey)) {
     return {
@@ -280,6 +300,11 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   // ---- Step D: instantiate each cell from snapshots -----------------
   let cellCount = 0;
   let staticObjectCount = 0;
+  // Perf C1 — telemetry for the validation pass. Counts how many cells
+  // had at least one transparent surface so we can validate the split
+  // policy against real Academy data in the A/B run.
+  let fusedCellsWithTransparent = 0;
+  let fusedCellsOpaqueOnly = 0;
   for (const snap of snapshots) {
     const cellContainer = new THREE.Group();
     cellContainer.name = `envcell-${snap.cellId.toString(16).padStart(8, "0")}`;
@@ -305,22 +330,154 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     // Phase 3.3 — CSM and Phase 0.1 are mutually exclusive paths but
     // share the caster/receiver tagging. Flip on for either.
     const cellsShadow = !!scene3d.shadowsEnabled || !!scene3d.csmEnabled;
-    for (const g of snap.surfaceGroups) {
-      const mat = scene3d.materialCache.getCached(g.surfaceDid);
-      const m = new THREE.Mesh(g.geometry, mat);
-      m.name = `surface-${(g.surfaceDid >>> 0).toString(16).padStart(8, "0")}`;
-      m.userData = {
-        cellId: snap.cellId,
-        surfaceDid: g.surfaceDid,
-      };
-      // Visual-fidelity Phase 0.1 — interior walls / floors / ceilings
-      // cast AND receive shadows from each other. Translucent /
-      // additive surfaces (windows, magical glows) skip casting.
-      if (cellsShadow) {
-        m.castShadow = materialCanCastShadow(mat);
-        m.receiveShadow = true;
+    if (envcellFusion) {
+      // Perf C1 — fused path. Build at most TWO meshes per cell: one
+      // for opaque surfaces, one for transparent. Splitting on the
+      // material's `.transparent` flag preserves Three.js's per-mesh
+      // transparent-queue gating; mixing both in a single Mesh breaks
+      // depth-sorting for the transparent triangles.
+      //
+      // Each surface group already has its own non-indexed
+      // BufferGeometry (position[N*9], uv[N*6], normal[N*9]) from
+      // `meshToGeometryGroups`. We concatenate per-bucket, then use
+      // `addGroup(vertexStart, vertexCount, materialIndex)` to map
+      // each surface's run of vertices to the materialIndex slot in
+      // the parallel materials array. Three.js will bind the correct
+      // material per group automatically at draw time.
+      //
+      // castShadow / receiveShadow are per-Mesh in Three.js, not
+      // per-group — under fused mode the cell's castShadow becomes
+      // the OR of contributing surfaces' shadow-cast flags
+      // (`materialCanCastShadow`). This is a deliberate semantic
+      // shift documented in § C1 of the perf plan; for translucent-
+      // bearing cells the artifact is shadow-on-glass, considered
+      // acceptable per the briefing. The opaque/transparent split
+      // limits the OR fold to within-bucket only — opaque cells stay
+      // exact; transparent cells lump glows together (rare in retail).
+      const opaqueGroups = [];
+      const transparentGroups = [];
+      for (const g of snap.surfaceGroups) {
+        const mat = scene3d.materialCache.getCached(g.surfaceDid);
+        if (mat && mat.transparent === true) {
+          transparentGroups.push({ group: g, material: mat });
+        } else {
+          opaqueGroups.push({ group: g, material: mat });
+        }
       }
-      meshGroup.add(m);
+      if (transparentGroups.length > 0) fusedCellsWithTransparent += 1;
+      else fusedCellsOpaqueOnly += 1;
+
+      const buildFusedMesh = (bucket, kind) => {
+        if (bucket.length === 0) return null;
+
+        // Materials parallel to addGroup's materialIndex slots. The
+        // `.filter(Boolean)` guards against the (unexpected) case
+        // where getCached returns null/undefined; the cache returns
+        // its fallbackMaterial for misses so this is belt-and-braces
+        // — but a `THREE.Mesh(geom, [undefined, m, ...])` silently
+        // paints with the default purple lambert at the undefined
+        // slot, which is a visually obvious regression we want to
+        // shout about, not absorb.
+        const materials = bucket.map((b) => b.material).filter(Boolean);
+        if (materials.length !== bucket.length) {
+          throw new Error(
+            `buildEnvCellsForLandblock: cell ${snap.cellId.toString(16)} ${kind} ` +
+              `bucket has ${bucket.length} groups but only ${materials.length} ` +
+              `non-null materials — refusing to construct fused Mesh with sparse holes`
+          );
+        }
+
+        // Compute total vertex count across the bucket. Each per-
+        // surface BufferGeometry has identical attribute layout
+        // (position[3]/uv[2]/normal[3]) — all non-indexed,
+        // 9-floats-per-tri for position+normal, 6-floats-per-tri
+        // for uv. We pre-allocate the merged Float32Arrays then
+        // copy each surface group's slabs into the right slot.
+        let totalVerts = 0;
+        for (const b of bucket) {
+          totalVerts += b.group.geometry.attributes.position.count;
+        }
+
+        const mergedPos = new Float32Array(totalVerts * 3);
+        const mergedUv = new Float32Array(totalVerts * 2);
+        const mergedNormal = new Float32Array(totalVerts * 3);
+
+        const fused = new THREE.BufferGeometry();
+        let vertexOffset = 0;
+        for (let i = 0; i < bucket.length; i += 1) {
+          const srcGeom = bucket[i].group.geometry;
+          const srcPos = srcGeom.attributes.position.array;
+          const srcUv = srcGeom.attributes.uv.array;
+          const srcNorm = srcGeom.attributes.normal.array;
+          const vertCount = srcGeom.attributes.position.count;
+
+          mergedPos.set(srcPos, vertexOffset * 3);
+          mergedUv.set(srcUv, vertexOffset * 2);
+          mergedNormal.set(srcNorm, vertexOffset * 3);
+
+          // addGroup is in *vertex* units for non-indexed
+          // geometry (the docs use "index/vertex" interchangeably
+          // depending on whether setIndex was called). Our source
+          // geometries are non-indexed → start/count count
+          // vertices, materialIndex picks the slot in `materials`.
+          fused.addGroup(vertexOffset, vertCount, i);
+          vertexOffset += vertCount;
+        }
+
+        fused.setAttribute("position", new THREE.BufferAttribute(mergedPos, 3, false));
+        fused.setAttribute("uv", new THREE.BufferAttribute(mergedUv, 2, false));
+        fused.setAttribute("normal", new THREE.BufferAttribute(mergedNormal, 3, false));
+        fused.computeBoundingSphere();
+
+        const m = new THREE.Mesh(fused, materials);
+        m.name = `surfaces-fused-${kind}-${snap.cellId.toString(16).padStart(8, "0")}`;
+        m.userData = {
+          cellId: snap.cellId,
+          fused: true,
+          fusedKind: kind,
+          surfaceCount: bucket.length,
+        };
+        if (cellsShadow) {
+          // OR of per-material cast flags within the bucket. Single
+          // transparent surface in the transparent bucket already
+          // returns false from `materialCanCastShadow` (Translucent
+          // bit), so the OR there is typically false — matching
+          // the per-surface gate's outcome for those surfaces.
+          let cast = false;
+          for (const b of bucket) {
+            if (materialCanCastShadow(b.material)) {
+              cast = true;
+              break;
+            }
+          }
+          m.castShadow = cast;
+          m.receiveShadow = true;
+        }
+        return m;
+      };
+
+      const opaqueMesh = buildFusedMesh(opaqueGroups, "opaque");
+      if (opaqueMesh) meshGroup.add(opaqueMesh);
+      const transparentMesh = buildFusedMesh(transparentGroups, "transparent");
+      if (transparentMesh) meshGroup.add(transparentMesh);
+    } else {
+      for (const g of snap.surfaceGroups) {
+        const mat = scene3d.materialCache.getCached(g.surfaceDid);
+        const m = new THREE.Mesh(g.geometry, mat);
+        m.name = `surface-${(g.surfaceDid >>> 0).toString(16).padStart(8, "0")}`;
+        m.userData = {
+          cellId: snap.cellId,
+          surfaceDid: g.surfaceDid,
+        };
+        // Visual-fidelity Phase 0.1 — interior walls / floors / ceilings
+        // cast AND receive shadows from each other. Translucent /
+        // additive surfaces (windows, magical glows) skip casting.
+        if (cellsShadow) {
+          m.castShadow = materialCanCastShadow(mat);
+          m.receiveShadow = true;
+        }
+        meshGroup.add(m);
+      }
     }
     cellContainer.add(meshGroup);
 
@@ -370,6 +527,12 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
     staticObjectCount,
     skippedZeroTri,
     skippedNoMesh,
+    // Perf C1 telemetry — populated only when `?envcellFusion=1`. Lets
+    // the validation pass compute the transparent-bearing-cell rate
+    // against real Academy data (briefing's 5% threshold).
+    fusedEnabled: envcellFusion,
+    fusedCellsWithTransparent: envcellFusion ? fusedCellsWithTransparent : 0,
+    fusedCellsOpaqueOnly: envcellFusion ? fusedCellsOpaqueOnly : 0,
   };
 }
 
