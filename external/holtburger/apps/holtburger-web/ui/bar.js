@@ -921,7 +921,13 @@ export function mountBar({ client, root, slots: slotsOpt }) {
   }
 
   for (const slot of slots) {
+    // 2026-05-18 fix: iconHidden slots have no bar button (the
+    // earlier loop skipped them), so iconButtons.get() returns
+    // undefined here and .setAttribute crashes the whole mount.
+    // Skip click-wire for them — they live entirely through their
+    // `mount` lifecycle.
     const btn = iconButtons.get(slot.id);
+    if (!btn) continue;
     btn.setAttribute("aria-expanded", "false");
     btn.addEventListener("click", (ev) => {
       ev.stopPropagation();
