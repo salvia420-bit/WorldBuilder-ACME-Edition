@@ -29,6 +29,9 @@ export const PRESETS = {
         hero: false,
         pom: false,
         csm: false,
+        bloom: false,
+        vignette: false,
+        lightShafts: false,
     },
     mid: {
         shadows: true,
@@ -40,6 +43,9 @@ export const PRESETS = {
         hero: false,
         pom: false,
         csm: false,
+        bloom: true,
+        vignette: false,
+        lightShafts: false,
     },
     high: {
         shadows: true,
@@ -51,6 +57,9 @@ export const PRESETS = {
         hero: true,
         pom: true,
         csm: true,
+        bloom: true,
+        vignette: true,
+        lightShafts: true,
     },
     ultra: {
         shadows: true,
@@ -62,6 +71,9 @@ export const PRESETS = {
         hero: true,
         pom: true,
         csm: true,
+        bloom: true,
+        vignette: true,
+        lightShafts: true,
     },
 };
 
@@ -78,6 +90,9 @@ const BOOL_FLAGS = new Set([
     "hero",
     "pom",
     "csm",
+    "bloom",
+    "vignette",
+    "lightShafts",
 ]);
 
 // Integer-typed flags.

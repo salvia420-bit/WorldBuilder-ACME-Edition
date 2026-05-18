@@ -31,11 +31,14 @@
 
 import * as THREE from "three";
 import {
+  BloomEffect,
   EffectComposer,
   EffectPass,
   RenderPass,
   ToneMappingEffect,
   ToneMappingMode,
+  VignetteEffect,
+  VignetteTechnique,
 } from "postprocessing";
 import { AerialPerspectiveEffect, AtmosphereParameters } from "@takram/three-atmosphere";
 import { DitheringEffect, LensFlareEffect } from "@takram/three-geospatial-effects";
@@ -65,6 +68,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     correctGeometricError = true,
     width: optW,
     height: optH,
+    bloom: bloomOpt = true,
+    vignette: vignetteOpt = false,
   } = opts ?? {};
   if (!atmosphereRuntime) {
     throw new Error("createAtmospherePipeline: atmosphereRuntime is required");
@@ -163,7 +168,42 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   const toneMapping = new ToneMappingEffect({ mode: ToneMappingMode.AGX });
   const dithering = new DitheringEffect();
 
-  const fxPass = new EffectPass(camera, aerialPerspective, lensFlare, toneMapping, dithering);
+  // Bloom — HDR halo around bright pixels (sun disc, lava, lit windows,
+  // magic flashes). Threshold 0.85 keeps the diffuse sky from blooming
+  // uniformly while the sun (well above 1.0 in HDR) lights up. mipmapBlur
+  // takes the GPU's mip chain for a cheap 5-level downsample (~1ms @ 1080p
+  // R9 290; ~0.5ms 1440p 1070) vs. ~3ms for the gaussian path. Disable by
+  // passing `bloom: false` in opts.
+  const bloom = bloomOpt
+    ? new BloomEffect({
+        intensity: 1.0,
+        luminanceThreshold: 0.85,
+        luminanceSmoothing: 0.1,
+        mipmapBlur: true,
+        radius: 0.85,
+      })
+    : null;
+
+  // Vignette — subtle dark frame edges. MUST run before tone mapping so
+  // darkened pixels are still in HDR before AGX collapses them; placing
+  // it after would crush the highlights twice. pmndrs defaults are 0.5/0.5;
+  // 0.5 offset + 0.3 darkness reads as a soft frame, not a peephole.
+  const vignette = vignetteOpt
+    ? new VignetteEffect({
+        technique: VignetteTechnique.DEFAULT,
+        offset: 0.5,
+        darkness: 0.3,
+      })
+    : null;
+
+  // EffectPass composition order: AerialPerspective → LensFlare → Bloom →
+  // Vignette → ToneMapping → Dithering. Everything except ToneMapping +
+  // Dithering operates in HDR space. `filter(Boolean)` drops the disabled
+  // slots without leaving holes in the pass.
+  const fxPass = new EffectPass(
+    camera,
+    ...[aerialPerspective, lensFlare, bloom, vignette, toneMapping, dithering].filter(Boolean),
+  );
   composer.addPass(fxPass);
 
   let activeCamera = camera;
@@ -172,6 +212,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     composer,
     aerialPerspective,
     lensFlare,
+    bloom,
+    vignette,
     toneMapping,
     dithering,
     skyRenderPass,
@@ -261,6 +303,8 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       composer.passes.forEach((p) => p.dispose?.());
       aerialPerspective.dispose?.();
       lensFlare.dispose?.();
+      bloom?.dispose?.();
+      vignette?.dispose?.();
       toneMapping.dispose?.();
       dithering.dispose?.();
     },

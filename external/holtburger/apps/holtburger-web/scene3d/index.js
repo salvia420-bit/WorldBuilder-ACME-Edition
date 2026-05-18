@@ -523,6 +523,16 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // scene3d directly in `buildHoltburgTerrain`.
     terrainDetailNormalArray,
     terrainGroup,
+    // Phase 2.2 — terrain ShaderMaterial registry (one entry per LB),
+    // populated by bakeTerrainForLandblock. Eagerly initialised here so
+    // the same array reference threads through scene3dForBuilders →
+    // liveScene3d → window.liveScene3d before any LB bakes run. Without
+    // this, terrain.js's lazy `scene3d.terrainMaterials = []` creates
+    // an array that liveScene3d never sees (the `?? []` below would
+    // have already minted a separate empty array), silently breaking
+    // cloud_volume.js's _pushCloudShadowsToTerrain → cloud shadows
+    // never reached terrain in-game.
+    terrainMaterials: [],
     buildingsGroup,
     staticsGroup,
     cellsGroup,
@@ -1093,8 +1103,10 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // `loop.js::tickPerFrame` iterates this each rAF and pushes the
     // shared `uTime` uniform for the water/lava displacement animation.
     // Surfaced on liveScene3d so capture scripts can probe per-LB
-    // uniform state without walking `terrainGroup.children`.
-    terrainMaterials: scene3dForBuilders.terrainMaterials ?? [],
+    // uniform state without walking `terrainGroup.children`. Initialized
+    // eagerly on scene3dForBuilders above so this reference is the same
+    // array that terrain.js pushes into — see the eager init comment.
+    terrainMaterials: scene3dForBuilders.terrainMaterials,
     // Phase 7.2 — buildings + statics summaries (null when the Phase
     // 7.2 wasm exports aren't supplied).
     buildings: buildingsSummary,
@@ -1437,6 +1449,12 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
         if (qualityParam && ["low", "medium", "high", "ultra"].includes(qualityParam)) {
           effect.qualityPreset = qualityParam;
         }
+        // takram's native crepuscular rays — physically driven by the
+        // existing cascaded cloud-shadow maps, routed through
+        // AerialPerspective. Cheaper and more correct than a separate
+        // pmndrs GodRaysEffect because it reuses passes the cloud volume
+        // already runs; the only cost is the extra shadowLength buffer.
+        effect.lightShafts = !!quality.flags.lightShafts;
 
         skyDome.setCloudOverlay(cloudOverlay);
         liveScene3d.cloudOverlay = cloudOverlay;
@@ -1467,6 +1485,11 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
               return p;
             }
             return null;
+          };
+          // eslint-disable-next-line no-undef
+          window.__setLightShafts = (on) => {
+            effect.lightShafts = !!on;
+            return effect.lightShafts;
           };
         }
 
@@ -1521,6 +1544,8 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
               skyScene: skyDome?.skyScene,
               skyCamera: skyDome?.skyCamera,
               atmosphereRuntime,
+              bloom: !!quality.flags.bloom,
+              vignette: !!quality.flags.vignette,
             });
             liveScene3d.atmospherePipeline = atmospherePipeline;
             // eslint-disable-next-line no-undef
@@ -1591,6 +1616,10 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
                 window.__setSunSize = (radians) => {
                   atmosphereSky.setSunAngularRadius(radians);
                 };
+                // eslint-disable-next-line no-undef
+                window.__setMoonSize = (radians) => {
+                  atmosphereSky.setMoonAngularRadius(radians);
+                };
               }
             }
 
@@ -1645,6 +1674,35 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
               window.__setExposure = (v) => {
                 renderer.toneMappingExposure = +v;
                 return renderer.toneMappingExposure;
+              };
+              // Bloom / Vignette live tweaks. Each effect is null when its
+              // preset flag is off; setters return null in that case so the
+              // caller knows the pipeline was built without them and a page
+              // reload with `?bloom=on` or `?vignette=on` is required.
+              // eslint-disable-next-line no-undef
+              window.__setBloomIntensity = (v) => {
+                if (!atmospherePipeline?.bloom) return null;
+                atmospherePipeline.bloom.intensity = +v;
+                return atmospherePipeline.bloom.intensity;
+              };
+              // eslint-disable-next-line no-undef
+              window.__setBloomThreshold = (v) => {
+                const b = atmospherePipeline?.bloom;
+                if (!b?.luminanceMaterial) return null;
+                b.luminanceMaterial.threshold = +v;
+                return b.luminanceMaterial.threshold;
+              };
+              // eslint-disable-next-line no-undef
+              window.__setVignetteDarkness = (v) => {
+                if (!atmospherePipeline?.vignette) return null;
+                atmospherePipeline.vignette.darkness = +v;
+                return atmospherePipeline.vignette.darkness;
+              };
+              // eslint-disable-next-line no-undef
+              window.__setVignetteOffset = (v) => {
+                if (!atmospherePipeline?.vignette) return null;
+                atmospherePipeline.vignette.offset = +v;
+                return atmospherePipeline.vignette.offset;
               };
             }
           } catch (e2) {

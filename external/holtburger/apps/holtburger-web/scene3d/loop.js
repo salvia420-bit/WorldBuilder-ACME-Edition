@@ -225,6 +225,40 @@ function tickTerrainUTime(scene3d) {
   }
 }
 
+/**
+ * Push the live AC-z-up sun direction into all terrain ShaderMaterials.
+ * Replaces the prior hardcoded literal in the terrain fragment shader so
+ * cloud shadows + NdotL track the actual SkyState dirHeading/dirPitch
+ * the rest of the atmosphere stack reads. Source of truth is
+ * `skyLightingController._lastState`, the same snapshot
+ * `atmosphereLights.tick` + `atmosphereSky.tick` already consume — no
+ * second wasm getSkyState() call.
+ *
+ * No-op pre-populator (state null) or pre-buildHoltburgTerrain (empty
+ * registry); the material uniform's default literal covers that frame.
+ */
+function tickTerrainSunDir(scene3d) {
+  if (!scene3d?.terrainMaterials || scene3d.terrainMaterials.length === 0) {
+    return;
+  }
+  const state = scene3d.skyLightingController?._lastState ?? null;
+  if (!state) return;
+  const heading = state.dirHeading;
+  const pitch = state.dirPitch;
+  if (!Number.isFinite(heading) || !Number.isFinite(pitch)) return;
+  const DEG = Math.PI / 180;
+  const cp = Math.cos(pitch * DEG);
+  const sx = cp * Math.sin(heading * DEG);
+  const sy = cp * Math.cos(heading * DEG);
+  const sz = Math.sin(pitch * DEG);
+  for (const mat of scene3d.terrainMaterials) {
+    const v = mat?.uniforms?.uSunDir?.value;
+    if (v && typeof v.set === "function") {
+      v.set(sx, sy, sz);
+    }
+  }
+}
+
 export function tickPerFrame(scene3d, sessionHandle, dt) {
   tickCellVisibility3D(scene3d, sessionHandle);
   // 2026-05-16 — PVS-driven scenery + buildings expansion (paired with
@@ -245,6 +279,15 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
     if (!scene3d._terrainUTimeTickWarned) {
       scene3d._terrainUTimeTickWarned = true;
       console.warn("[phase2.2] tickTerrainUTime threw:", e);
+    }
+  }
+  try {
+    tickTerrainSunDir(scene3d);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    if (!scene3d._terrainSunDirTickWarned) {
+      scene3d._terrainSunDirTickWarned = true;
+      console.warn("[terrain-sun] tickTerrainSunDir threw:", e);
     }
   }
   // Phase 7.6 — lighting tick AFTER cell visibility so it reads the

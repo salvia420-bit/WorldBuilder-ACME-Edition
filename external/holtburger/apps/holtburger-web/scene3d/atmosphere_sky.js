@@ -123,6 +123,25 @@ export class AtmosphereSky {
       }
     }
 
+    // Mirror the sun-disc bump for the moon. takram default 0.0045 rad
+    // (~15.5 arcminutes); 0.025 ~5.5× real puts it in roughly the same
+    // visual range as the AC billboard moons (renderOrder=800 in
+    // ac_moons.js) — only matters when those billboards are hidden via
+    // `?moons=off` debug path, but cheap to keep correct either way.
+    // Override via `?moonSize=N` (radians) or setMoonAngularRadius(N).
+    {
+      let moonR = 0.025;
+      try {
+        // eslint-disable-next-line no-undef
+        const sp = new URLSearchParams(window.location.search).get("moonSize");
+        const v = parseFloat(sp ?? "");
+        if (Number.isFinite(v) && v > 0) moonR = v;
+      } catch (_) { /* keep default */ }
+      if ("moonAngularRadius" in this.skyMaterial) {
+        this.skyMaterial.moonAngularRadius = moonR;
+      }
+    }
+
     // PlaneGeometry(2, 2) covers clip space; SkyMaterial overrides the
     // vertex shader to project view rays from the camera regardless of
     // mesh world transform. frustumCulled=false because the mesh sits
@@ -248,6 +267,17 @@ export class AtmosphereSky {
     if (!Number.isFinite(radians) || radians <= 0) return;
     if ("sunAngularRadius" in this.skyMaterial) {
       this.skyMaterial.sunAngularRadius = radians;
+    }
+  }
+
+  /**
+   * Live-tune the moon disc size. `radians` is the half-angle the moon
+   * subtends; takram default is ~0.0045, AC-look default here is 0.025.
+   */
+  setMoonAngularRadius(radians) {
+    if (!Number.isFinite(radians) || radians <= 0) return;
+    if ("moonAngularRadius" in this.skyMaterial) {
+      this.skyMaterial.moonAngularRadius = radians;
     }
   }
 

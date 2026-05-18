@@ -316,6 +316,12 @@ uniform sampler2DArray uCloudShadowMap;
 uniform mat4 uCloudShadowMatrix0;
 uniform float uCloudShadowStrength;
 
+// AC-z-up unit direction TO the sun. Pushed each frame from
+// loop.js (tickTerrainSunDir) off the same SkyState the rest of the
+// sky stack reads. Default literal kept for the no-state fallback
+// (pre-populator) so terrain is never lit from (0,0,0).
+uniform vec3 uSunDir;
+
 in vec2 vGridUv;
 in vec3 vWorldPos;
 flat in int vTerrainCode;             // provoking-vertex terrain code
@@ -444,12 +450,11 @@ void main() {
   //   r = normalize(t * dot(t, u) - u * t.z)
   // Then r is treated as the combined tangent-space normal.
 
-  // Sun-direction approximation — we don't yet expose the skybox's
-  // dir_heading/dir_pitch driver here; phase 2.x sky_lighting work
-  // owns the unified sun uniform. For now, fix a light-from-above-and-
-  // slightly-southwest direction so NdotL is non-trivial against a
-  // (0, 0, 1) surface normal.
-  vec3 sunDir = normalize(vec3(-0.4, -0.3, 1.0));
+  // Sun-direction: AC-z-up unit vector from uSunDir, pushed each frame
+  // by loop.js off the same SkyState that drives SkyMaterial /
+  // SunDirectionalLight / CloudsEffect. Pre-populator: default uniform
+  // value mirrors the original literal so first frames look identical.
+  vec3 sunDir = normalize(uSunDir);
 
   // Base surface normal in tangent space — terrain is flat-Z-up at the
   // grid level, so (0, 0, 1) is the canonical base. (Per-vertex
@@ -998,6 +1003,9 @@ export async function bakeTerrainForLandblock(
       uCloudShadowMap: { value: null },
       uCloudShadowMatrix0: { value: new THREE.Matrix4() },
       uCloudShadowStrength: { value: 2.0 },
+      // Initial sun direction = the prior hardcoded literal so the
+      // pre-populator fallback matches old behavior exactly.
+      uSunDir: { value: new THREE.Vector3(-0.4, -0.3, 1.0).normalize() },
     },
     vertexShader: TERRAIN_VERTEX_GLSL,
     fragmentShader: TERRAIN_FRAGMENT_GLSL,

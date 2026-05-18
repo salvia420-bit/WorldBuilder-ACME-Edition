@@ -60,6 +60,34 @@ export function sunDirFromHeadingPitch(headingDeg, pitchDeg, outVec) {
 }
 
 /**
+ * Convert AC sun heading + pitch (degrees) to a unit direction vector
+ * in AC z-up local space (NOT three.js y-up). Use this when the
+ * consumer hasn't been through the `worldRoot.rotation.x = -π/2` flip
+ * — e.g. the terrain ShaderMaterial sample direction, where the
+ * tangent-space normal is built from a z-up base and the normal-map
+ * encoding assumes z-up too.
+ *
+ * Mirrors the AC formula in the file header (lines 5–9). Writes into
+ * `outVec` in place; returns it for chaining.
+ *
+ * @param {number} headingDeg
+ * @param {number} pitchDeg
+ * @param {{set: (x: number, y: number, z: number) => any}} outVec
+ * @returns {typeof outVec}
+ */
+export function sunDirAcFromHeadingPitch(headingDeg, pitchDeg, outVec) {
+  const headingRad = headingDeg * DEG_TO_RAD;
+  const pitchRad = pitchDeg * DEG_TO_RAD;
+  const cp = Math.cos(pitchRad);
+  outVec.set(
+    cp * Math.sin(headingRad),
+    cp * Math.cos(headingRad),
+    Math.sin(pitchRad),
+  );
+  return outVec;
+}
+
+/**
  * Convert AC sun heading + pitch (degrees) to a three.js world-space
  * position at radius `distance`. Returns a fresh `[x, y, z]` array,
  * suitable for `light.position.set(...result)` destructuring.
