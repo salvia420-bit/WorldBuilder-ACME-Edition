@@ -355,6 +355,21 @@ export function tickPerFrame(scene3d, sessionHandle, dt) {
       }
     }
   }
+  // Aurora — camera-following sky overlay. tick() bumps uTime and
+  // copies the active camera's position so the polar-axis dome appears
+  // infinite (the standard sky-overlay trick). No-op when ?aurora=off.
+  if (scene3d?.aurora) {
+    try {
+      const cam = scene3d.cameraSwitcher?.activeCamera ?? scene3d.camera;
+      scene3d.aurora.tick(dt, cam);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      if (!scene3d._auroraTickWarned) {
+        scene3d._auroraTickWarned = true;
+        console.warn("[aurora] tick threw:", e);
+      }
+    }
+  }
   // Workstream Sky-D — sky dome + celestial body renderer. Runs AFTER
   // Sky-C so the freshly-written `skyBackgroundColor` (Sky-C's horizon
   // color sink) + `skyLightingController._lastState.ambColorArgb`

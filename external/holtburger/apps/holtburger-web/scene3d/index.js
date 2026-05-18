@@ -1508,6 +1508,53 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
       console.warn("[clouds-d] CloudOverlay init failed:", e);
     }
 
+    // Aurora borealis — opt-in via `?aurora=on` or `?aurora=N` (intensity).
+    // Final unshipped item from OPTICAL_EFFECTS_HANDOFF.md. Camera-following
+    // sphere shell with a nimitz-inspired curtain shader, additive
+    // blended onto the sky scene at renderOrder=900 (between AC moons
+    // at 800 and the cloud overlay at 999). Default off — AC has no
+    // aurora canon — but a satisfying "weather fan" sidequest.
+    try {
+      // eslint-disable-next-line no-undef
+      const auroraParams = new URLSearchParams(window.location.search);
+      const auroraFlag = auroraParams.get("aurora");
+      if (auroraFlag && auroraFlag !== "off" && auroraFlag !== "false" && auroraFlag !== "0") {
+        const auroraIntensity = (() => {
+          const n = parseFloat(auroraFlag);
+          return Number.isFinite(n) && n > 0 ? n : 1.0;
+        })();
+        const { createAurora } = await import("./aurora.js");
+        const aurora = createAurora({
+          camera,
+          intensity: auroraIntensity,
+          // Polar axis = world +Y; matches the project's ECEF setup
+          // (cloud_volume.js / atmosphere_pipeline.js shift the world
+          // origin by bottomRadius so ECEF Z aligns with world Y).
+          polarAxis: { x: 0, y: 1, z: 0 },
+        });
+        if (skyDome?.skyScene) {
+          skyDome.skyScene.add(aurora.mesh);
+          liveScene3d.aurora = aurora;
+          // eslint-disable-next-line no-undef
+          if (typeof window !== "undefined") {
+            // eslint-disable-next-line no-undef
+            window.__aurora = aurora;
+            // eslint-disable-next-line no-undef
+            window.__setAuroraIntensity = (v) => aurora.setIntensity(v);
+          }
+          // eslint-disable-next-line no-console
+          console.log(
+            `[aurora] Aurora overlay wired into skyScene (?aurora=${auroraFlag}). ` +
+              `intensity=${auroraIntensity}. ` +
+              "Live tweak: __setAuroraIntensity(0..4)."
+          );
+        }
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[aurora] init failed:", e);
+    }
+
     // Sky-K.1 + K.2 — opt-in atmosphere stack via `?atmosphere=on`.
     //
     // K.1: bake the Bruneton precomputed-scattering lookup tables.
