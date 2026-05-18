@@ -347,6 +347,54 @@ export class CloudOverlay {
   }
 
   /**
+   * 2026-05-18 — attach the overlay quad to a foreign scene (the sky
+   * scene) so it's rendered as part of that scene's render pass. This
+   * gives us depth-correct cloud-vs-world compositing for FREE,
+   * without depending on `texture2D(sceneDepthTex, ...).r` working
+   * correctly per-vendor.
+   *
+   * How it works:
+   *   1. Sky pass renders sky dome + this overlay quad → color buffer
+   *      ends up with sky color, then cloud color blended on top.
+   *   2. World render pass runs with `clear=false, clearDepth=true`:
+   *      sky+cloud color preserved, depth wiped. World geometry
+   *      writes color (overpainting cloud at world pixels) and depth.
+   *   3. Net: sky pixels keep the cloud color; world pixels show
+   *      world. No depth-texture sampling needed.
+   *
+   * The renderOverlay() call becomes a no-op once attached so we don't
+   * double-render. Caller's responsibility to dispose / detach if the
+   * sky scene goes away.
+   *
+   * @param {THREE.Scene} skyScene
+   * @param {number} [renderOrder=999] Higher = renders later in scene.
+   *   We want clouds AFTER sky dome but otherwise don't care.
+   */
+  attachToSkyScene(skyScene, renderOrder = 999) {
+    if (!skyScene || !this.overlayMesh) return;
+    if (this.overlayMesh.parent === skyScene) return;
+    if (this.overlayMesh.parent) {
+      this.overlayMesh.parent.remove(this.overlayMesh);
+    }
+    this.overlayMesh.renderOrder = renderOrder;
+    skyScene.add(this.overlayMesh);
+    this._attachedToSkyScene = skyScene;
+  }
+
+  /**
+   * Detach the overlay quad from the foreign scene. Used during
+   * disposal or if we need to revert to the separate-renderOverlay
+   * path.
+   */
+  detachFromSkyScene() {
+    if (!this._attachedToSkyScene || !this.overlayMesh) return;
+    this._attachedToSkyScene.remove(this.overlayMesh);
+    this._attachedToSkyScene = null;
+    // Re-attach to our own overlayScene so renderOverlay still works.
+    if (this.overlayScene) this.overlayScene.add(this.overlayMesh);
+  }
+
+  /**
    * Pull a fresh SkyState from the session handle and apply it to the
    * cloud volume's uniforms. No-op when there's no session yet.
    * Called from SkyDome.tick (per-rAF).
@@ -535,19 +583,10 @@ export class CloudOverlay {
    */
   renderOverlay(renderer) {
     if (!renderer) return;
-    // 2026-05-18 cloud-invisible diagnostic: log once on first call
-    // and once when we'd be skipping due to null cloudTex.
-    if (!this._renderOverlayDiagLogged) {
-      this._renderOverlayDiagLogged = true;
-      const u = this.overlayMaterial.uniforms;
-      // eslint-disable-next-line no-console
-      console.log(
-        `[clouds/diag renderOverlay first call] cloudTex=${u.cloudTex.value ? "set" : "null"} ` +
-          `sceneDepthTex=${u.sceneDepthTex.value ? "wired" : "null"} ` +
-          `sceneDepthThreshold=${u.sceneDepthThreshold.value} ` +
-          `willRender=${!!u.cloudTex.value}`,
-      );
-    }
+    // 2026-05-18 — if the overlay quad is attached to the sky scene
+    // (cf. attachToSkyScene), the sky pass renders it; calling
+    // renderOverlay here would double-paint. No-op cleanly.
+    if (this._attachedToSkyScene) return;
     if (!this.overlayMaterial.uniforms.cloudTex.value) return;
     try {
       const prevAutoClear = renderer.autoClear;

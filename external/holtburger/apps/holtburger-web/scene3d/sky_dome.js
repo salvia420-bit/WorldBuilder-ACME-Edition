@@ -960,6 +960,15 @@ export class SkyDome {
    */
   setCloudOverlay(cloudOverlay) {
     this.cloudOverlay = cloudOverlay;
+    // 2026-05-18 — attach the cloud overlay quad to the sky scene so
+    // it's rendered as part of the sky pass. The subsequent world pass
+    // runs with `clear=false, clearDepth=true` (atmosphere path) so
+    // sky+cloud color is preserved and world geometry naturally
+    // overpaints at world pixels. Avoids the depth-texture sampling
+    // path that was wiping clouds on the AMD R9 290.
+    if (cloudOverlay && typeof cloudOverlay.attachToSkyScene === "function") {
+      cloudOverlay.attachToSkyScene(this.skyScene);
+    }
   }
 
   /**
