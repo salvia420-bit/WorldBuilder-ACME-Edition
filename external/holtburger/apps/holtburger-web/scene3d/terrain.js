@@ -185,6 +185,16 @@ out vec3 vAcNormal;
 // Flat-interpolated alongside vTerrainCode so the fragment sees the
 // same provoking-vertex classification.
 flat out int vIsWater;
+// Perf D1 — vertex-side fold of the two water-modulation sines that
+// the fragment shader used to evaluate per-pixel.
+//   .x = sin(uTime * 0.3)                       -- water tint breath (constant per draw)
+//   .y = sin(uTime * 0.5 + worldXy.x * 0.1)     -- one term of the displacement wave
+// Per-vertex linear interpolation across a 24 m cell is visually
+// indistinguishable from per-pixel evaluation at these slow
+// frequencies (worldXy.x advances by 0.1 rad per 1 m, so a 24 m cell
+// spans ~2.4 rad; the curve is still smooth enough that linear
+// interpolation across the cell looks identical to a half-pixel eye).
+out vec2 vWaveModulation;
 
 // Phase 2.2 — 2D value-noise (Perlin-fade interp). Tiny port from
 // Phase 2.1's Rust impl at terrain_subdiv.rs::value_noise_2d. Reserved
@@ -212,6 +222,16 @@ void main() {
   vec3 displacedPos = position;
   int code = int(terrainCode + 0.5);
   int isWater = 0;
+  // World-frame XY = per-LB origin + LB-local position. Hoisted out of
+  // the displacement gate so Perf D1's vWaveModulation can read it
+  // unconditionally below.
+  vec2 worldXy = uLbOriginXy + position.xy;
+  // Perf D1 — compute both sine modulations at vertex rate (once per
+  // vertex instead of once per fragment). See varying declaration
+  // above for the rationale on interpolation fidelity.
+  float waveModX = sin(uTime * 0.3);
+  float waveModY = sin(uTime * 0.5 + worldXy.x * 0.1);
+  vWaveModulation = vec2(waveModX, waveModY);
   // Phase 2.2 — quality-gated time-varying displacement on water + lava
   // terrain. uDisplacementEnabled is 0.0 when subdivLevel < 2 (the
   // vertices are 24 m apart at level 1 and the wave wavelength would
@@ -221,16 +241,12 @@ void main() {
   // chains.
   if (uDisplacementEnabled > 0.5 && code >= 0 && code < 32) {
     int bit = 1 << code;
-    // World-frame XY = per-LB origin + LB-local position. Using the
-    // world frame (not LB-local) is what makes the wave continuous
-    // across LB seams when paired with the shared uTime: matching
-    // world coords on either side of the seam evaluate to the same
-    // wave phase.
-    vec2 worldXy = uLbOriginXy + position.xy;
     if ((uWaterCodeMask & bit) != 0) {
       // Two-wavelet sine sum at different frequencies + phases. Total
-      // envelope ~0.25 m, well under the 0.4 m plan-doc cap.
-      float wave = sin(uTime * 0.5 + worldXy.x * 0.1) * 0.15
+      // envelope ~0.25 m, well under the 0.4 m plan-doc cap. waveModY
+      // reuses Perf D1's vertex-rate sine for the first wavelet so we
+      // do not pay for the same evaluation twice on this vertex.
+      float wave = waveModY * 0.15
                  + sin(uTime * 0.7 + worldXy.y * 0.13) * 0.10;
       displacedPos.z += wave;
       isWater = 1;
@@ -397,6 +413,15 @@ flat in int vTerrainCode;             // provoking-vertex terrain code
 in vec3 vAcPos;                       // Phase 1.3 — LB-local AC pos (z=up)
 in vec3 vAcNormal;                    // Phase 1.3 — geometry normal (AC z-up)
 flat in int vIsWater;                 // Phase 2.2 — 1 if water, 0 otherwise
+// Perf D1 — water-modulation sines folded to vertex rate.
+//   .x = sin(uTime * 0.3)   tint breath (constant per draw, so this is
+//                           literally the same value at every vertex
+//                           and survives linear interpolation exactly)
+//   .y = sin(uTime * 0.5 + worldXy.x * 0.1) -- the displacement wave
+//                           term that the vertex shader already needs;
+//                           re-exported here so the tint path can read
+//                           it without re-evaluating sin() per pixel.
+in vec2 vWaveModulation;
 
 out vec4 fragColor;
 
@@ -474,9 +499,12 @@ void main() {
   // Phase 2.2 — water tint shift. Subtle bluish modulation that breathes
   // over time (period ~21 s at uTime * 0.3). Only applied on water-
   // flagged provoking vertices; non-water surfaces stay colour-stable.
+  // Perf D1 — read the pre-computed sin(uTime * 0.3) from the varying
+  // (constant across the cell since uTime is constant per draw call;
+  // linear interpolation of a constant is exact).
   if (uDisplacementEnabled > 0.5 && vIsWater == 1) {
     vec3 tint = mix(vec3(0.9, 0.95, 1.05), vec3(1.0, 1.0, 1.0),
-                    0.5 + 0.5 * sin(uTime * 0.3));
+                    0.5 + 0.5 * vWaveModulation.x);
     result *= tint;
   }
 
