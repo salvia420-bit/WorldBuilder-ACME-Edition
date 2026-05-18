@@ -20,6 +20,14 @@ import { currentTime } from "./time_rng.js";
 import { Particle } from "./particle.js";
 import { EmitterType } from "./particle_emitter_info.js";
 
+// E4 (2026-05-18): per-tick scratch for the BirthratePerMeter branch of
+// shouldEmitParticle(). The Vector3 is filled via subVectors(parent.position,
+// lastEmitOffset) and only `.lengthSq()` is read downstream by
+// ParticleEmitterInfo.shouldEmitParticle — the reference does not escape,
+// so pooling is safe. Matches the `_scratch*` convention from E1 in
+// particle.js. DO NOT export or retain references outside shouldEmitParticle().
+const _scratchVec3 = new THREE.Vector3();
+
 export class ParticleEmitter {
   /**
    * @param {object} opts
@@ -157,9 +165,9 @@ export class ParticleEmitter {
   shouldEmitParticle() {
     let offset;
     if (this.info.emitterType === EmitterType.BirthratePerMeter) {
-      offset = this.parent.position.clone().sub(this.lastEmitOffset);
+      offset = _scratchVec3.subVectors(this.parent.position, this.lastEmitOffset);
     } else {
-      offset = new THREE.Vector3(0, 0, 0);
+      offset = _scratchVec3.set(0, 0, 0);
     }
     return this.info.shouldEmitParticle(
       this.numParticles,
