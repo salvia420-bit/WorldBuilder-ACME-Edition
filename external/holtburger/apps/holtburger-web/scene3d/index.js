@@ -66,7 +66,6 @@ import { AudioManager } from "./audio/audio_manager.js";
 import { SoundTableCache } from "./audio/sound_table_cache.js";
 import { AmbientRuntime } from "./audio/ambient_runtime.js";
 import { getQuality, installQualityOnWindow } from "./quality.js";
-import { createSsaoPipeline } from "./postprocess.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
@@ -116,37 +115,11 @@ const BUILDINGS_RING_RADIUS = 6;
 export async function init3D(canvas, sessionHandle, wasmExports) {
   // Phase X.1 — resolve the visual-fidelity quality preset from URL +
   // UA before any subsystem inits. Stored on `liveScene3d.quality` so
-  // each later phase (POM, SSAO, CSM, terrain subdiv, hero assets)
+  // each later phase (POM, CSM, terrain subdiv, hero assets)
   // can gate off the same single source of truth. This phase does
   // not gate any feature itself — every gate lives in its own phase.
   // Devtools: `window.__quality` mirrors the resolved object.
   const quality = installQualityOnWindow(getQuality());
-  // Force-disable SSAO when `?clouds=on`. The SSAO composer path
-  // composites the cloud overlay AFTER its OutputPass → clouds paint
-  // over world geometry. Until the cloud effect is plumbed inside
-  // the SSAO composer chain (Clouds-G work), the direct render path
-  // is the only depth-correct option for clouds. Everything else in
-  // the quality preset (shadows, CSM, POM, triplanar, etc.) stays on.
-  try {
-    // eslint-disable-next-line no-undef
-    const params = new URLSearchParams(window.location.search);
-    const cloudsFlag = params.get("clouds");
-    // Sky-K.6 — atmosphere defaults ON. `?atmosphere=off` opts back to
-    // the parametric path (kept around for retail-comparison captures
-    // until the legacy files are deleted in a follow-on cleanup).
-    const atmosphereFlag = params.get("atmosphere");
-    const atmosphereOn = atmosphereFlag !== "off";
-    if (cloudsFlag === "on" && quality?.flags?.ssao) {
-      quality.flags.ssao = false;
-      // eslint-disable-next-line no-console
-      console.log("[clouds] SSAO auto-disabled (?clouds=on requires direct render path for depth-correct cloud occlusion)");
-    }
-    if (atmosphereOn && quality?.flags?.ssao) {
-      quality.flags.ssao = false;
-      // eslint-disable-next-line no-console
-      console.log("[sky-k] SSAO auto-disabled (atmosphere mode uses its own EffectComposer chain)");
-    }
-  } catch (_) { /* noop */ }
   // eslint-disable-next-line no-console
   console.log(
     `[phase-x.1] quality preset=${quality.preset} source=${quality.source}`
@@ -357,13 +330,8 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   camera.position.set(15, 15, 15);
   camera.lookAt(0, 0, 5);
 
-  // Visual-fidelity Phase 3.2 — SSAO pipeline (constructed below after
-  // SkyDome is initialised so the sky pass can wire into the composer).
-  // Forward-declared `let` so the resize handler below can null-check.
-  let ssaoPipeline = null;
-  const ssaoEnabled = !!quality?.flags?.ssao;
   // Sky-K.2 — atmosphere pipeline (constructed below after AtmosphereRuntime's
-  // texture bake completes). Forward-declared like ssaoPipeline so the
+  // texture bake completes). Forward-declared so the
   // resize handler + render loop can null-check.
   let atmospherePipeline = null;
 
@@ -385,7 +353,6 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
       renderer.setSize(newW, newH, false);
       camera.aspect = newW / newH;
       camera.updateProjectionMatrix();
-      if (ssaoPipeline) ssaoPipeline.setSize(newW, newH);
       if (atmospherePipeline) {
         atmospherePipeline.setSize(newW, newH);
         // Re-wire the cloud overlay's depth-sampling uniform — the
@@ -762,7 +729,6 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     orthoCamera.left = -halfW;
     orthoCamera.right = halfW;
     orthoCamera.updateProjectionMatrix();
-    if (ssaoPipeline) ssaoPipeline.setSize(cw, ch);
     if (atmospherePipeline) {
       atmospherePipeline.setSize(cw, ch);
       // Re-wire cloud overlay's depth uniform to the rebuilt depth
@@ -874,57 +840,9 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     // shader depth gymnastics, no per-material depthTest mutations,
     // and the celestial bodies sit naturally "behind" the world
     // like the rest of the sky.
-    // Phase 3.2: composer path (sky + world + SSAO + output) — taken
-    // when `quality.flags.ssao === true` AND the pipeline constructed
-    // successfully (constructed AFTER SkyDome init below). The composer
-    // bundles sky-then-world in its own pass chain so the depth /
-    // color-preserve gymnastics from the direct path live inside the
-    // RenderPass `clear` / `clearDepth` flags, not here.
-    if (liveScene3dRef?.ssaoPipeline) {
-      try {
-        liveScene3dRef.ssaoPipeline.preFrameSkySync(
-          liveScene3dRef.skyDome,
-          activeCam
-        );
-        // Clouds-D: the SSAO composer bypasses skyDome.renderSkyPass,
-        // so the cloudOverlay's preRender/renderOverlay don't fire
-        // automatically here. Drive them at the tick level instead.
-        // Pre-bake runs BEFORE composer.render (writes to its own RTs,
-        // doesn't touch the canvas). renderOverlay runs AFTER (composites
-        // onto the final tone-mapped canvas).
-        //
-        // Depth limitation: in the SSAO path the overlay composites AFTER
-        // OutputPass, so clouds appear OVER world geometry regardless of
-        // depth. The direct path (no SSAO) does it right by rendering
-        // clouds between sky + world passes. For the eye-test, use
-        // `?renderer=3d&clouds=on` and turn SSAO off (default off via
-        // quality flag) to see depth-correct occlusion.
-        const cloudOverlay = liveScene3dRef?.cloudOverlay;
-        const cloudActive =
-          cloudOverlay &&
-          !liveScene3dRef?.skyDome?._lastIsIndoor;
-        if (cloudActive) {
-          cloudOverlay.preRender(renderer);
-        }
-        liveScene3dRef.ssaoPipeline.render(activeCam);
-        if (cloudActive) {
-          cloudOverlay.renderOverlay(renderer);
-        }
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        if (!liveScene3dRef._ssaoRenderWarned) {
-          liveScene3dRef._ssaoRenderWarned = true;
-          console.warn("[phase-3.2] ssaoPipeline.render threw:", e);
-        }
-      }
-      requestAnimationFrame(tick);
-      return;
-    }
-
     // Sky-K.2 path: atmosphere composer owns sky + world + AerialPerspective
     // + Dithering. Cloud overlay's pre/render hooks run AROUND composer.render
-    // (same depth-unaware-cloud limitation as the SSAO path — addressed in
-    // a follow-on cleanup).
+    // (depth-unaware-cloud limitation — addressed in a follow-on cleanup).
     if (atmospherePipeline) {
       try {
         atmospherePipeline.preFrameSkySync(
@@ -953,8 +871,8 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
       return;
     }
 
-    // Direct render path (SSAO off OR pipeline not yet constructed):
-    // pre-Phase-3.2 behavior verbatim.
+    // Direct render path (atmosphere pipeline not yet constructed):
+    // pre-composer behavior verbatim.
     let skyRendered = false;
     if (liveScene3dRef?.skyDome) {
       try {
@@ -1464,19 +1382,6 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
             "Live tweak: __setCloudCoverage(0..1), __setCloudQuality('low'|'medium'|'high'|'ultra'). " +
             "Parametric sky toggle: liveScene3d.skyDome.setParametricSkyObjectsVisible(true/false)."
         );
-        // Heads-up if SSAO is on: in the SSAO composer path, my cloud
-        // overlay composites AFTER OutputPass (depth-unaware), so
-        // clouds appear OVER world geometry. For depth-correct
-        // occlusion, add `?ssao=off` (default for `?quality=mid`).
-        if (quality?.flags?.ssao) {
-          // eslint-disable-next-line no-console
-          console.warn(
-            "[clouds-d] SSAO is on (quality=high/ultra). Cloud composite " +
-              "is depth-UNAWARE on this path — clouds will appear over world " +
-              "geometry regardless of depth. Add `?ssao=off` to the URL for " +
-              "depth-correct clouds."
-          );
-        }
       }
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -1652,35 +1557,6 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
       console.warn("[sky-k.1] AtmosphereRuntime init failed:", e);
     }
 
-    // Visual-fidelity Phase 3.2 — wire the SSAO composer NOW that
-    // skyScene + skyCamera exist. Gated on `quality.flags.ssao`. The
-    // pipeline brings the existing sky-then-world render order into
-    // an `EffectComposer` (sky RenderPass → world RenderPass with
-    // clear=false/clearDepth=true → SSAOPass → OutputPass) and the
-    // per-frame `tick` swaps `composer.render()` in for the two
-    // direct `renderer.render` call sites. When `ssao=false`, this
-    // stays null and the render loop takes the original direct
-    // path verbatim.
-    if (ssaoEnabled) {
-      try {
-        ssaoPipeline = createSsaoPipeline(renderer, scene, camera, {
-          skyScene: skyDome.skyScene,
-          skyCamera: skyDome.skyCamera,
-        });
-        liveScene3d.ssaoPipeline = ssaoPipeline;
-        // eslint-disable-next-line no-console
-        console.log(
-          `[phase-3.2] SSAO on: kernelRadius=${ssaoPipeline.ssaoPass.kernelRadius} ` +
-            `kernelSize=${ssaoPipeline.ssaoPass.kernel?.length ?? "n/a"} ` +
-            `minDistance=${ssaoPipeline.ssaoPass.minDistance} ` +
-            `maxDistance=${ssaoPipeline.ssaoPass.maxDistance}`
-        );
-      } catch (ssaoErr) {
-        // eslint-disable-next-line no-console
-        console.warn("[phase-3.2] SSAO pipeline init failed:", ssaoErr);
-        ssaoPipeline = null;
-      }
-    }
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn("[sky-d] SkyDome init failed:", e);

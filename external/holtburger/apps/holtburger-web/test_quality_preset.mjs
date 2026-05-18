@@ -54,7 +54,6 @@ console.log("\nGroup 1: preset table integrity");
         "low preset: all heavy features off",
         PRESETS.low.shadows === false &&
             PRESETS.low.pom === false &&
-            PRESETS.low.ssao === false &&
             PRESETS.low.csm === false &&
             PRESETS.low.hero === false &&
             PRESETS.low.triplanar === false &&
@@ -67,7 +66,6 @@ console.log("\nGroup 1: preset table integrity");
             PRESETS.mid.terrainDetailNormal === true &&
             PRESETS.mid.subdivLevel === 2 &&
             PRESETS.mid.pom === false &&
-            PRESETS.mid.ssao === false &&
             PRESETS.mid.csm === false &&
             PRESETS.mid.hero === false
     );
@@ -75,7 +73,6 @@ console.log("\nGroup 1: preset table integrity");
         "high preset: all features on, subdivLevel=4",
         PRESETS.high.shadows === true &&
             PRESETS.high.pom === true &&
-            PRESETS.high.ssao === true &&
             PRESETS.high.csm === true &&
             PRESETS.high.hero === true &&
             PRESETS.high.subdivLevel === 4
@@ -84,7 +81,6 @@ console.log("\nGroup 1: preset table integrity");
         "ultra preset: all features on, subdivLevel=8",
         PRESETS.ultra.shadows === true &&
             PRESETS.ultra.pom === true &&
-            PRESETS.ultra.ssao === true &&
             PRESETS.ultra.csm === true &&
             PRESETS.ultra.subdivLevel === 8
     );
@@ -92,7 +88,7 @@ console.log("\nGroup 1: preset table integrity");
     // produces a render with all visual-fidelity features off. The
     // table here is the source for that — make sure no future edit
     // accidentally flips a "heavy" feature on at the low tier.
-    const heavy = ["shadows", "pom", "ssao", "csm", "hero", "triplanar", "terrainDetailNormal", "detailFlag"];
+    const heavy = ["shadows", "pom", "csm", "hero", "triplanar", "terrainDetailNormal", "detailFlag"];
     const allHeavyOffOnLow = heavy.every((f) => PRESETS.low[f] === false);
     check("low tier — every heavy feature flag is off", allHeavyOffOnLow);
 }
@@ -113,7 +109,6 @@ console.log("\nGroup 2: URL parsing");
         "?quality=high → preset=high, all heavy on",
         q2.preset === "high" &&
             q2.flags.pom === true &&
-            q2.flags.ssao === true &&
             q2.flags.csm === true &&
             q2.flags.subdivLevel === 4
     );
@@ -146,9 +141,8 @@ console.log("\nGroup 3: per-feature overrides (A/B testing)");
         "?quality=mid&pom=on → mid preset + pom flipped on",
         q1.preset === "mid" &&
             q1.flags.pom === true &&
-            q1.flags.ssao === false &&
             q1.flags.csm === false,
-        `pom=${q1.flags.pom} ssao=${q1.flags.ssao}`
+        `pom=${q1.flags.pom}`
     );
 
     const q2 = getQuality(
@@ -160,7 +154,6 @@ console.log("\nGroup 3: per-feature overrides (A/B testing)");
         q2.preset === "high" &&
             q2.flags.csm === false &&
             q2.flags.pom === false &&
-            q2.flags.ssao === true &&
             q2.flags.hero === true
     );
 
@@ -174,21 +167,21 @@ console.log("\nGroup 3: per-feature overrides (A/B testing)");
     );
 
     const q4 = getQuality(
-        "https://example.com/?quality=mid&pom=true&ssao=1&csm=yes",
+        "https://example.com/?quality=mid&pom=true&csm=yes",
         DESKTOP_UA
     );
     check(
         "boolean override aliases (true/1/yes) → all parse to true",
-        q4.flags.pom === true && q4.flags.ssao === true && q4.flags.csm === true
+        q4.flags.pom === true && q4.flags.csm === true
     );
 
     const q5 = getQuality(
-        "https://example.com/?quality=high&pom=false&ssao=0&csm=no",
+        "https://example.com/?quality=high&pom=false&csm=no",
         DESKTOP_UA
     );
     check(
         "boolean override aliases (false/0/no) → all parse to false",
-        q5.flags.pom === false && q5.flags.ssao === false && q5.flags.csm === false
+        q5.flags.pom === false && q5.flags.csm === false
     );
 
     const q6 = getQuality(
@@ -266,7 +259,6 @@ console.log("\nGroup 5: edge cases");
             q4.flags.pom === true &&
             q4.flags.shadows === true &&
             q4.flags.triplanar === true &&
-            q4.flags.ssao === false &&
             q4.flags.csm === false &&
             q4.flags.hero === false &&
             q4.flags.subdivLevel === 2

@@ -2,8 +2,7 @@
 //
 // Wraps the main world render in a pmndrs `EffectComposer` and inserts
 // takram's `AerialPerspectiveEffect` + a `DitheringEffect` between the
-// world RenderPass and the canvas output. Mirrors the SSAO pipeline
-// pattern in `scene3d/postprocess.js`, but uses pmndrs' postprocessing
+// world RenderPass and the canvas output. Uses pmndrs' postprocessing
 // package (AerialPerspectiveEffect extends pmndrs' Effect, not three's).
 //
 // Composer order:
@@ -17,11 +16,11 @@
 //        Bruneton lookup tables from AtmosphereRuntime
 //      - Dithering kills banding in the resulting gradients
 //
-// Cloud overlay coexistence: same as the SSAO path. Cloud overlay's
-// `preRender` runs BEFORE `composer.render`, and `renderOverlay`
-// AFTER. Clouds appear depth-UNAWARE relative to world geometry on
-// this path (overlay quad draws after the composer's final pass);
-// depth-correct cloud occlusion is a follow-on cleanup.
+// Cloud overlay coexistence: cloud overlay's `preRender` runs BEFORE
+// `composer.render`, and `renderOverlay` AFTER. Clouds appear
+// depth-UNAWARE relative to world geometry on this path (overlay
+// quad draws after the composer's final pass); depth-correct cloud
+// occlusion is a follow-on cleanup.
 //
 // ECEF setup: takram defaults to WGS-84 ellipsoid + `correctAltitude=true`
 // which doesn't match our spherical (bottomRadius=6.36M) setup — the
@@ -181,8 +180,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
 
     /**
      * Pre-frame: sync sky camera, flip sky enabled/world clear flags
-     * based on indoor state. Same contract as SSAO pipeline's same-named
-     * method (drop-in mental model).
+     * based on indoor state.
      */
     preFrameSkySync(skyDome, mainCamera) {
       if (!skyRenderPass) return;

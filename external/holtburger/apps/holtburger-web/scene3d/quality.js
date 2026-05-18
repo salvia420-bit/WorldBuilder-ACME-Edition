@@ -28,7 +28,6 @@ export const PRESETS = {
         subdivLevel: 1,
         hero: false,
         pom: false,
-        ssao: false,
         csm: false,
     },
     mid: {
@@ -40,7 +39,6 @@ export const PRESETS = {
         subdivLevel: 2,
         hero: false,
         pom: false,
-        ssao: false,
         csm: false,
     },
     high: {
@@ -52,7 +50,6 @@ export const PRESETS = {
         subdivLevel: 4,
         hero: true,
         pom: true,
-        ssao: true,
         csm: true,
     },
     ultra: {
@@ -64,7 +61,6 @@ export const PRESETS = {
         subdivLevel: 8,
         hero: true,
         pom: true,
-        ssao: true,
         csm: true,
     },
 };
@@ -81,7 +77,6 @@ const BOOL_FLAGS = new Set([
     "triplanar",
     "hero",
     "pom",
-    "ssao",
     "csm",
 ]);
 

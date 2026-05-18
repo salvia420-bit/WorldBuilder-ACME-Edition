@@ -1616,8 +1616,8 @@ export class SkyDome {
     }
 
     // Sync the sky camera with the main camera (extracted into
-    // `syncSkyCamera` so the SSAO composer path can call it without
-    // taking the render step).
+    // `syncSkyCamera` so the atmosphere composer path can call it
+    // without taking the render step).
     this.syncSkyCamera(mainCamera);
 
     // Clouds-D: bake the cloud raymarch into the CloudsPass output
@@ -1661,10 +1661,9 @@ export class SkyDome {
    * are at the main camera). Quaternion + fov + aspect mirror the
    * main camera so the projection matrices align.
    *
-   * Extracted from `renderSkyPass` (Phase 3.2 SSAO) so the composer
-   * path can call sync-only (no render) — the sky pass is then a
-   * RenderPass inside the EffectComposer, and the composer drives
-   * the actual draw call.
+   * Extracted from `renderSkyPass` so the composer path can call
+   * sync-only (no render) — the sky pass is then a RenderPass inside
+   * the EffectComposer, and the composer drives the actual draw call.
    *
    * Indoor short-circuit: callers should check
    * `wasSkyRenderedLastFrame()` (set after `renderSkyPass`) OR
