@@ -20,6 +20,36 @@ import * as THREE from "three";
 import { ParticleEmitter } from "./particle_emitter.js";
 import { ParticleEmitterInfo } from "./particle_emitter_info.js";
 
+// Perf E3 (2026-05-18) — dispose helper for `destroyParticleEmitter` to
+// free per-slot cloned materials. Mirrors the `__disposable` /
+// `__cacheOwned` tag convention introduced by B3 in entities.js (commit
+// 5f4b8a6); duplicated locally to keep particle_manager self-contained.
+// Only materials carrying `userData.__disposable === true` are freed —
+// cache-owned references (e.g. anything returned by the shared
+// MaterialCache) are skipped to avoid crashing other renderers that
+// still hold the same GPU resource.
+function _disposeMaterialIfOwned(mat) {
+  if (!mat) return;
+  const ud = mat.userData;
+  if (!ud) return;
+  if (ud.__cacheOwned === true && ud.__disposable === true) {
+    // Programmer error: a cache material was tagged disposable at some
+    // clone site that should have stayed cache-owned. Disposing would
+    // free the shared GPU resource other emitters still reference.
+    // eslint-disable-next-line no-console
+    console.error(
+      "[particle_manager/E3] _disposeMaterialIfOwned: material is BOTH __cacheOwned and __disposable —" +
+        " refusing to dispose. Audit the clone site that produced it.",
+      { name: mat.name, userData: ud }
+    );
+    return;
+  }
+  if (ud.__disposable !== true) return;
+  try {
+    mat.dispose();
+  } catch (_) {}
+}
+
 export class ParticleManager {
   /**
    * @param {object} opts
@@ -89,7 +119,16 @@ export class ParticleManager {
         const mat = baseMaterial ? baseMaterial.clone() : null;
         if (mat) {
           mat.transparent = true;
+          // Perf E3 (2026-05-18): tag the clone so destroyParticleEmitter()
+          // can dispose it. The base material from materialFactory may be
+          // cache-owned — only the per-slot CLONE is owned by this emitter.
+          mat.userData.__disposable = true;
         }
+        // NOTE: `geometry` is shared across all slots and originates from
+        // the caller-supplied `geometryFactory` (typically a DAT-backed
+        // cache, e.g. the sky-cell hwGfxObjId lookup). Per the B3
+        // convention, cache-owned geometries are NOT disposed by us; we
+        // leave them alone and let the cache outlive the emitter.
         const mesh = new THREE.Mesh(geometry, mat);
         mesh.frustumCulled = false; // sky-cell particles always render
         mesh.visible = false;
@@ -157,6 +196,24 @@ export class ParticleManager {
       for (let i = 0; i < e.parts.length; i++) {
         const m = e.parts[i];
         if (m && m.parent) m.parent.remove(m);
+      }
+    }
+    // Perf E3 (2026-05-18): dispose per-slot cloned materials before
+    // dropping the emitter from tracking. We walk `partStorage` (every
+    // allocated mesh) rather than `parts` (only currently-claimed slots,
+    // which may have been nulled by killParticle()) so that materials
+    // from never-emitted slots are also released. Geometry is shared
+    // across slots and cache-owned by the geometryFactory — we do NOT
+    // dispose it here.
+    //
+    // TODO(E3): the `tick()` auto-removal path (~line 121) drops dead
+    // emitters from the table without this disposal walk. Same leak
+    // pattern; scoped out of this PR. Follow-on welcome.
+    if (e.partStorage) {
+      for (let i = 0; i < e.partStorage.length; i++) {
+        const slotMesh = e.partStorage[i];
+        if (!slotMesh) continue;
+        _disposeMaterialIfOwned(slotMesh.material);
       }
     }
     return this.particleTable.delete(emitterId);
