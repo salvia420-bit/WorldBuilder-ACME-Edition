@@ -42,7 +42,7 @@ The rest can run in parallel waves.
 # Workstream A — Renderer init + main loop
 
 ## A1 — Gate antialias on quality preset
-**Severity** High • **File** `scene3d/index.js:199`
+**Severity** High • **File** `scene3d/index.js:199` • **Status** ✅ Done (commit `f45dd3c`)
 
 **Problem.** `new THREE.WebGLRenderer({ canvas, antialias: true })` forces MSAA unconditionally. On a GTX 1070 at 1080p, MSAA 4× adds ~4–6 ms / frame (≈25%).
 
@@ -53,7 +53,7 @@ The rest can run in parallel waves.
 **Risk.** Visible aliasing at `low` — that's the intended trade.
 
 ## A2 — Pool position / velocity event objects
-**Severity** High • **File** `scene3d/loop.js:701-731`
+**Severity** High • **File** `scene3d/loop.js:701-731` • **Status** ✅ Done (commit `966d71f`)
 
 **Problem.** Every `KIND_POSITION` allocates `{x,y,z,ts}`; every `KIND_VELOCITY` allocates `{guid,vx,vy,vz,omegaZ}`. With 50+ moving entities this is sustained GC pressure.
 
@@ -75,7 +75,7 @@ The rest can run in parallel waves.
 **Risk.** Low — pure rendering-side smoothing.
 
 ## A4 — Prune `__lastEntityWorldPos` on despawn
-**Severity** High (long-session) • **File** `scene3d/loop.js:702`
+**Severity** High (long-session) • **File** `scene3d/loop.js:702` • **Status** ✅ Done (commit `56879f3`)
 
 **Problem.** Map grows on every `KIND_POSITION` but no `KIND_REMOVE` handler deletes entries. Hours of NPC churn = unbounded growth.
 
@@ -178,7 +178,7 @@ The rest can run in parallel waves.
 **Risk.** If the scan was catching real orphan cases, we'll regress; check git log for the original incident before deleting.
 
 ## B6 — Cache nameplate transform writes (style-write dedup)
-**Severity** Low → Med (scales with nameplate count) • **File** `scene3d/hud.js:293-295`
+**Severity** Low → Med (scales with nameplate count) • **File** `scene3d/hud.js:293-295` • **Status** ✅ Done (commit `5242b8b`)
 
 **Problem.** `style.left`/`top` written every frame for every nameplate even when values are unchanged.
 
@@ -322,7 +322,7 @@ The rest can run in parallel waves.
 # Workstream E — Particles
 
 ## E1 — Module-scratch Euler/Quat in per-particle update
-**Severity** High • **File** `scene3d/particles/particle.js:338-339`
+**Severity** High • **File** `scene3d/particles/particle.js:338-339` • **Status** ✅ Done (commit `5b6ff4e`)
 
 **Problem.** `new THREE.Euler()` + `new THREE.Quaternion()` per particle per frame for rotation types.
 
@@ -403,7 +403,7 @@ The rest can run in parallel waves.
 **Risk.** None.
 
 ## F2 — Stop the power-meter rAF loop when panel is hidden
-**Severity** High • **File** `plugins/combat-bar.js:541-551`
+**Severity** High • **File** `plugins/combat-bar.js:541-551` • **Status** ✅ Done (commit `9cffce9`)
 
 **Problem.** rAF loop runs continuously during attack refill even if the combat-bar is collapsed or off-screen.
 
@@ -414,7 +414,7 @@ The rest can run in parallel waves.
 **Risk.** None.
 
 ## F3 — Replace vitals-hud `innerHTML` rebuild with field-level updates
-**Severity** High • **File** `plugins/vitals-hud.js:113`
+**Severity** High • **File** `plugins/vitals-hud.js:113` • **Status** ✅ Done (commit `0c10af9`)
 
 **Problem.** `overlay.innerHTML = rows.join('')` destroys + rebuilds the whole HUD on every stats event.
 
