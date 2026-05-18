@@ -463,12 +463,31 @@ export class CameraSwitcher {
       // drag/wheel internally. We tick `controls.update()` each frame
       // and set `.target` to the player's world pos so the camera
       // tracks when the player moves.
+      //
+      // 2026-05-18 — coord-space fix. Previously this branch:
+      //   oc.target.set(0, 0, 0)
+      //   this.persp.position.set(p.x + 8, p.y - 12, p.z + 8)
+      //   this.persp.lookAt(p.x, p.y, p.z)
+      // — the position/lookAt arguments are in AC coords (x east,
+      // y north, z up) but persp lives outside worldRoot and expects
+      // three.js coords (x east, y up, z south). So `p.y - 12` was
+      // burying the camera 12 m below the player, and the target
+      // (0,0,0) made OrbitControls orbit around the WORLD ORIGIN
+      // instead of the player. Net effect: in Holtburg the user saw
+      // sky + clearColor with no terrain, because the camera was
+      // below ground looking at empty space far from Holtburg.
+      // Fix: apply acToThree to every position/target value.
+      const p = this._safePlayerPos();
+      // Offset semantics preserved from prior code: 8 m east, 12 m
+      // south, 8 m up (back-and-above-the-player-ish view).
+      const camPos = acToThree(p.x + 8, p.y - 12, p.z + 8);
+      const lookTarget = acToThree(p.x, p.y, p.z + 1.0);
       if (this.domElement) {
         try {
           const oc = new OrbitControls(this.persp, this.domElement);
           oc.enableDamping = true;
           oc.dampingFactor = 0.08;
-          oc.target.set(0, 0, 0);
+          oc.target.set(...lookTarget);
           this.controls = oc;
         } catch (e) {
           // eslint-disable-next-line no-console
@@ -479,9 +498,8 @@ export class CameraSwitcher {
       // has a starting orientation. positionCamera() in the orbit
       // branch only updates `.target`; it does NOT overwrite
       // camera.position (so the user's drag isn't fought).
-      const p = this._safePlayerPos();
-      this.persp.position.set(p.x + 8, p.y - 12, p.z + 8);
-      this.persp.lookAt(p.x, p.y, p.z);
+      this.persp.position.set(...camPos);
+      this.persp.lookAt(...lookTarget);
       this.activeCamera = this.persp;
     } else if (next === "topDown") {
       // Ortho top-down. activeCamera flips to the ortho instance.
