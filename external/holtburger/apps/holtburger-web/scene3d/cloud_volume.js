@@ -36,9 +36,9 @@ import { CloudsEffect, CloudLayers } from '@takram/three-clouds';
 import { AtmosphereParameters } from '@takram/three-atmosphere';
 import {
   getWeatherState as wxGetState,
+  updateFromDayGroup as wxUpdateFromDayGroup,
 } from './weather_state.js';
-// daygroup_weather.js + the rest of weather_state.js stay on disk —
-// opt-in via window.__applyCloudWeather() for experimentation.
+import { weatherForState } from './daygroup_weather.js';
 
 /**
  * @typedef {Object} SkyState
@@ -195,10 +195,23 @@ export class CloudVolume {
     }
 
     this._lastState = state;
-    // Weather-driven layer config disabled — takram default layer
-    // altitudes (R cumulus 750m, G cumulus 1000m, B cirrus 7500m,
-    // A unused) gave the visually-correct soft cloud appearance.
-    // Opt-in via window.__applyCloudWeather() to experiment.
+
+    // Clouds-E.3 — WMO-anchored weather state is now live per-frame.
+    // Map SkyState + dayGroupIndex → meteorological profile (T, Td,
+    // pressure, is_storm); push into weather_state.js; apply to the
+    // takram CloudLayer altitudes/densities. The layer-apply tuning
+    // is "transparency-preserving" (probe 2026-05-16): WMO state can
+    // only RAISE cumulus base (never lower it below 600 m), and the
+    // mid/high étage layers use cirrus-class densities so they don't
+    // go opaque. window.__applyCloudWeather() remains as a devtools
+    // alias for callers that want to re-apply mid-session.
+    try {
+      const profile = weatherForState(state, state.dayGroupIndex);
+      wxUpdateFromDayGroup(profile);
+      this._applyWeatherToCloudLayers();
+    } catch (_) {
+      // Weather wiring must not block the cloud raymarch.
+    }
 
     // Clouds-L — push the cloud effect's cascade-0 shadow buffer +
     // matrix into all terrain materials so the terrain shader can

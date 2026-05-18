@@ -32,6 +32,7 @@
 
 import * as THREE from 'three';
 import { CloudVolume } from './cloud_volume.js';
+import { updateFromPosition as wxUpdateFromPosition } from './weather_state.js';
 import {
   CloudShape, CloudShapeDetail, LocalWeather, Turbulence,
 } from '@takram/three-clouds';
@@ -316,11 +317,20 @@ export class CloudOverlay {
    * Pull a fresh SkyState from the session handle and apply it to the
    * cloud volume's uniforms. No-op when there's no session yet.
    * Called from SkyDome.tick (per-rAF).
+   *
+   * Also updates the shared weather_state with the camera's current
+   * world XZ so latitude-dependent étage ranges stay current. The
+   * camera ref is the persp (stale in topDown), but the XZ component
+   * is approximately the player's XZ either way; weather doesn't need
+   * 60 Hz position precision.
    */
   tick() {
     try {
       const handle = this.sessionHandleAccessor();
       if (!handle) return;
+      if (this.camera?.position) {
+        wxUpdateFromPosition(this.camera.position.x, this.camera.position.z);
+      }
       const state = typeof handle.getSkyState === 'function'
         ? handle.getSkyState()
         : null;

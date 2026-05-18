@@ -43,7 +43,7 @@ Sun-direction is now centralised in `scene3d/sun_direction.js` — `sunDirFromHe
 
 **Camera height patch lands one frame late.** takram computes cameraHeight via WGS-84 ellipsoid (~18km wrong); `cloud_overlay.js:379-383` overrides the uniform *after* the composer has already rendered. Teleports / vertical jumps see a frame of wrong altitude → momentary cloud-altitude pop.
 
-**weather_state.js is a ghost module.** It compiles, has `updateFromPosition()` and `updateFromDayGroup()`, has 20 DayGroup profiles, has `_applyWeatherToCloudLayers()` ready to go — but nothing in the tick loop calls them. Activation is manual via `window.__applyCloudWeather()`. Given the memory note that you're a weather fan, this is probably the single most-misaligned piece between intent and current state.
+**weather_state is live.** `cloud_overlay.tick()` calls `updateFromPosition(camera.x, camera.z)` each frame; `cloud_volume.tick(state)` derives a DayGroup-driven profile via `weatherForState(state, state.dayGroupIndex)`, calls `updateFromDayGroup`, then `_applyWeatherToCloudLayers()`. Cloud layer altitudes/densities now track WMO étage classification + Espy's LCL formula. `window.__applyCloudWeather()` is kept as a devtools opt-in alias.
 
 **No landblock unload exists.** Teleport from Holtburg to anywhere else and the 13×13 ring (169 LBs of geometry, materials, AABBs, audio buffers) stays resident. `cellContainers3d`, `staticsBakedLbs`, `buildingsBakedLbs` grow monotonically across the session. A long-play tour across continents is a memory time bomb.
 
@@ -75,16 +75,16 @@ Low-effort, high-value:
 (none — last batch resolved)
 
 Medium-effort, structural:
-1. Wire `weather_state.updateFromPosition()` into the main tick loop — close the ghost module.
-2. Add `unloadLandblock(lbX, lbY)` on streaming exit — the only real memory bomb.
-3. Quality preset hot-swap or guard against runtime change (lock the URL param, force reload on change).
+1. Add `unloadLandblock(lbX, lbY)` on streaming exit — the only real memory bomb.
+2. Quality preset hot-swap or guard against runtime change (lock the URL param, force reload on change).
 
 Investigative / unknown-cost:
-4. Add a depth-texture wiring assertion at construction; today a 1×1 stale default fails silently.
-5. Decide whether the direct render path is still reachable in practice — if not, delete it and remove the cloud-paint-over-geometry footgun.
+3. Add a depth-texture wiring assertion at construction; today a 1×1 stale default fails silently.
+4. Decide whether the direct render path is still reachable in practice — if not, delete it and remove the cloud-paint-over-geometry footgun.
 
 ## Resolved
 
+- **2026-05-18 — weather_state wired into the cloud tick.** `cloud_overlay.tick()` now calls `updateFromPosition(camera.x, camera.z)` each frame so latitude tracks the player's world position. `cloud_volume.tick(state)` calls `weatherForState(state, state.dayGroupIndex)` → `updateFromDayGroup(profile)` → `_applyWeatherToCloudLayers()`, mapping AC's 20 DayGroups onto a (T, Td, pressure, is_storm) profile and rewriting takram CloudLayer altitudes/densities per WMO étage classification + Espy's LCL. The layer-apply tuning is "transparency-preserving" (probe 2026-05-16): WMO state can only raise cumulus base, never lower it below 600 m, and mid/high étage layers use cirrus-class densities so they stay translucent. Ghost module is closed; `window.__applyCloudWeather()` kept as a devtools opt-in for re-applying mid-session.
 - **2026-05-18 — Cloud overlay accepts active camera (topDown follow-on).** `cloud_overlay.preRender(renderer, dt, activeCam)` now takes the world-render's active camera and propagates it to `RenderPass.camera`, `EffectPass.mainCamera`, and `CloudsEffect.mainCamera` whenever it changes. Plus `cameraHeight` uniform now reflects the active camera's world Y. In topDown mode (C-once), the cloud raymarch matches the ortho's POV instead of using the stale persp reference from before the mode switch. Callers updated: `index.js` atmosphere path and `sky_dome.renderSkyPass`. Closes the loose end from the depth-sentinel fix below.
 - **2026-05-18 — Cloud depth-discard sentinel fixed (clouds-loop break).** Constructor default for `sceneDepthThreshold` in `scene3d/cloud_overlay.js` was 0.9999, but `sceneDepthTex` defaulted to null. Until `setSceneDepthTexture(validTexture)` ran, the shader sampled an unbound texture (returns 0 in WebGL2), compared `0 < 0.9999`, and discarded every fragment — clouds were invisible. The `setSceneDepthTexture` body already treated 0.0 as the "no depth provided, render unconditionally" sentinel; only the constructor disagreed. Changed the default to 0.0 so clouds appear by default and `setSceneDepthTexture(validTexture)` later upgrades to depth-aware discard. Historic loop pattern: agent fixes clouds → over-everything → next agent restores threshold → invisible → repeat. Now the failure mode is "visible but no occlusion" rather than "invisible" — easier to notice in screenshots, less likely to invite a panic-revert.
 - **2026-05-18 — Armed-spell auto-disarm on death + zone change.** `index.html` `handlePositionUpdate` now tracks the local player's landblock and emits `landblockChanged` via the plugin facade event bus when the LB transitions (including the first-known capture, which catches the log-in case). `plugins/combat-bar.js` gained a `mount()` lifecycle hook that subscribes to `landblockChanged` (calls `clearArmedSpell`) and `playerStatsUpdated` (calls `clearArmedSpell` when HP=0). New module-scope `clearArmedSpell()` mutates state + localStorage + `window.__combatBarState` without touching DOM, so the disarm works whether or not the combat-bar panel is open. UI no longer lies about armed state after a respawn or portal.
