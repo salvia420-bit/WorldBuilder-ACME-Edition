@@ -136,6 +136,12 @@ export class ACMoons {
       transparent: true,
       depthWrite: false,
       depthTest: false,
+      // DoubleSide: PlaneGeometry's front face is +Z, but `lookAt`
+      // orients the plane so its -Z points at the camera — i.e. the
+      // back face is what we see. FrontSide (default) would render
+      // nothing. DoubleSide makes the texture visible regardless of
+      // which face the camera is looking at.
+      side: THREE.DoubleSide,
     });
     const mesh = new THREE.Mesh(geo, mat);
     // Skip frustum culling — the mesh moves around the sky shell;
