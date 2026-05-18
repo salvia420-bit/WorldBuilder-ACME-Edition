@@ -465,6 +465,7 @@ function buildSingletonNode({
   mat,
   staticsShadow,
   staticsMatCastsShadow,
+  staticsReceiveShadow,
 }) {
   const modelKey = (modelId >>> 0).toString(16).padStart(8, "0");
   const lbX = (placement.landblockId >>> 24) & 0xff;
@@ -506,7 +507,12 @@ function buildSingletonNode({
   };
   if (staticsShadow) {
     mesh.castShadow = staticsMatCastsShadow;
-    mesh.receiveShadow = true;
+    // C2 (perf plan 2026-05-18) — at `low` quality preset every static
+    // skips CSM receive-shadow participation; at mid/high/ultra we keep
+    // today's all-receivers behaviour. TODO: distance-tier follow-on
+    // (foreground only) — gate distant statics off too per the audit's
+    // full fix.
+    mesh.receiveShadow = staticsReceiveShadow;
   }
 
   if (!degradedGeom) {
@@ -517,7 +523,8 @@ function buildSingletonNode({
   degradedMesh.name = `static-degraded-${placementKey}`;
   if (staticsShadow) {
     degradedMesh.castShadow = staticsMatCastsShadow;
-    degradedMesh.receiveShadow = true;
+    // C2 — same low-preset gate as the full-detail leaf above.
+    degradedMesh.receiveShadow = staticsReceiveShadow;
   }
   degradedMesh.position.copy(mesh.position);
   degradedMesh.quaternion.copy(mesh.quaternion);
@@ -581,6 +588,7 @@ function buildInstancedNode({
   placementMatrix,
   staticsShadow,
   staticsMatCastsShadow,
+  staticsReceiveShadow,
 }) {
   const modelKey = (modelId >>> 0).toString(16).padStart(8, "0");
   // Phase C.3 — track per-source counts so post-bake queries can
@@ -613,7 +621,11 @@ function buildInstancedNode({
   };
   if (staticsShadow) {
     instanced.castShadow = staticsMatCastsShadow;
-    instanced.receiveShadow = true;
+    // C2 (perf plan 2026-05-18) — `low` preset: receiveShadow off across
+    // all 16,700 placements; mid/high/ultra keep today's all-receivers
+    // behaviour. TODO: distance-tier follow-on (foreground only) — gate
+    // distant statics off too per the audit's full fix.
+    instanced.receiveShadow = staticsReceiveShadow;
   }
   for (let i = 0; i < group.length; i += 1) {
     const m4 = placementMatrix(group[i]);
@@ -640,7 +652,8 @@ function buildInstancedNode({
   degradedInstanced.name = `static-instanced-degraded-${modelKey}`;
   if (staticsShadow) {
     degradedInstanced.castShadow = staticsMatCastsShadow;
-    degradedInstanced.receiveShadow = true;
+    // C2 — same low-preset gate as the full-detail InstancedMesh above.
+    degradedInstanced.receiveShadow = staticsReceiveShadow;
   }
   for (let i = 0; i < group.length; i += 1) {
     const m4 = placementMatrix(group[i]);
@@ -831,6 +844,14 @@ export async function bakeStaticsForLandblock(
   // makes the InstancedMesh round-trip cost higher than the saved
   // draw calls.
   const staticsShadow = !!scene3d.shadowsEnabled || !!scene3d.csmEnabled;
+  // C2 (perf plan 2026-05-18) — at the `low` quality preset every
+  // static skips receiveShadow (CSM frustum-test cost scales linearly
+  // with receiver count, ~16,700 placements in Holtburg). mid/high/ultra
+  // keep today's all-receivers behaviour. Read mirrors the convention
+  // used elsewhere in scene3d (e.g. terrain.js `scene3d.quality?.flags`).
+  // TODO: distance-tier follow-on (foreground only) — gate distant
+  // statics off too per the audit's full fix.
+  const staticsReceiveShadow = scene3d.quality?.preset !== "low";
   let objectCount = 0;
   let singletonCount = 0;
   let lodCount = 0;
@@ -855,6 +876,7 @@ export async function bakeStaticsForLandblock(
       mat,
       staticsShadow,
       staticsMatCastsShadow,
+      staticsReceiveShadow,
     });
     scene3d.staticsGroup.add(node);
     objectCount += 1;
@@ -1113,6 +1135,14 @@ export async function bakeStaticsRing(
 
   const placementMatrix = makePlacementMatrixHelper();
   const staticsShadow = !!scene3d.shadowsEnabled || !!scene3d.csmEnabled;
+  // C2 (perf plan 2026-05-18) — at the `low` quality preset every
+  // static skips receiveShadow (CSM frustum-test cost scales linearly
+  // with receiver count, ~16,700 placements in Holtburg). mid/high/ultra
+  // keep today's all-receivers behaviour. Read mirrors the convention
+  // used elsewhere in scene3d (e.g. terrain.js `scene3d.quality?.flags`).
+  // TODO: distance-tier follow-on (foreground only) — gate distant
+  // statics off too per the audit's full fix.
+  const staticsReceiveShadow = scene3d.quality?.preset !== "low";
   let objectCount = 0;
   let skippedNoMesh = 0;
   let instancedGroupCount = 0;
@@ -1157,6 +1187,7 @@ export async function bakeStaticsRing(
         placementMatrix,
         staticsShadow,
         staticsMatCastsShadow,
+        staticsReceiveShadow,
       });
       scene3d.staticsGroup.add(node);
       instancedGroupCount += 1;
@@ -1177,6 +1208,7 @@ export async function bakeStaticsRing(
         mat,
         staticsShadow,
         staticsMatCastsShadow,
+        staticsReceiveShadow,
       });
       scene3d.staticsGroup.add(node);
       singletonCount += 1;
