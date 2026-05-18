@@ -1363,20 +1363,24 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     );
 
     // 2026-05-18 — Asheron's Call canon: two moons in the night sky.
-    // Alb'arel (light) + Rez'arel (red). Loaded async from
-    // scene3d/assets/moons/, attached to skyDome.skyScene so the
-    // render-order semantics (sky pass → cloud overlay → world pass
-    // with clear=false/clearDepth=true) handle depth occlusion the
-    // same way as the cloud overlay. See ac_moons.js for the
-    // orbital + texture details.
+    // Alb'arel (light) + Rez'arel (red). Attached to the MAIN scene
+    // (not skyDome.skyScene): the moon positions are updated each
+    // frame to `camera.position + sky-direction * SKY_RADIUS` so the
+    // moons appear at fixed angular positions regardless of the
+    // player's world position. Putting them in skyScene with absolute
+    // world coords doesn't work because the sky pass renders with
+    // skyCamera positioned at the player's world location — and for a
+    // player far from origin (Holtburg ~32k units east), a moon at
+    // sky-shell coord (~2000) is 45 km away and past the 5000-unit
+    // far plane.
     try {
       const acMoons = new ACMoons();
       liveScene3d.acMoons = acMoons;
       acMoons.load().then(() => {
-        acMoons.attachToSkyScene(skyDome.skyScene);
+        acMoons.attachToScene(scene);
         // eslint-disable-next-line no-console
         console.log(
-          `[ac-moons] Alb'arel + Rez'arel attached to sky scene ` +
+          `[ac-moons] Alb'arel + Rez'arel attached to main scene ` +
             `(speedMul=${acMoons._speedMul}). Tweak motion via ` +
             `?moonSpeed=N URL param.`
         );

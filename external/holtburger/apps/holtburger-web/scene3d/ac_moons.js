@@ -152,8 +152,12 @@ export class ACMoons {
       vertexShader: MOON_VERT,
       fragmentShader: MOON_FRAG,
       transparent: true,
+      // depthTest=true so terrain / buildings / mountains naturally
+      // occlude the moon when they sit between the camera and the
+      // sky-shell distance. depthWrite=false so the moon doesn't
+      // interfere with anything drawn after it (e.g. clouds).
+      depthTest: true,
       depthWrite: false,
-      depthTest: false,
       // DoubleSide: PlaneGeometry's front face is +Z, but `lookAt`
       // orients the plane so its -Z points at the camera — i.e. the
       // back face is what we see. FrontSide (default) would render
@@ -173,23 +177,33 @@ export class ACMoons {
   }
 
   /**
-   * Attach both moon meshes to the sky scene so they're rendered as
-   * part of the sky pass. Mirrors the cloud_overlay.attachToSkyScene
-   * pattern — render-order semantics give us depth-correct occlusion
-   * via the world pass that follows.
+   * Attach both moon meshes to the MAIN scene (not the sky scene).
+   *
+   * Sky scene's renderer (skyCamera) is positioned at the world
+   * camera each frame — but children of skyScene live in absolute
+   * world coords. For a player far from world origin (Holtburg ~32k
+   * units east, ~34k south), a moon at sky-shell position (~2000)
+   * is ~45 km from the camera and well past the 5000-unit far plane.
+   * The moon never reaches the GPU.
+   *
+   * Putting the moons in the main scene + updating their position
+   * each frame to `camera.position + direction * SKY_RADIUS` keeps
+   * them at a fixed apparent distance from the camera regardless of
+   * the player's world position. Same trick the parametric celestial
+   * bodies use via skyDome.skyCell.
    */
-  attachToSkyScene(skyScene) {
-    if (!skyScene) return;
-    if (this.albMesh) skyScene.add(this.albMesh);
-    if (this.rezMesh) skyScene.add(this.rezMesh);
-    this._inSkyScene = skyScene;
+  attachToScene(scene) {
+    if (!scene) return;
+    if (this.albMesh) scene.add(this.albMesh);
+    if (this.rezMesh) scene.add(this.rezMesh);
+    this._inScene = scene;
   }
 
-  detachFromSkyScene() {
-    if (!this._inSkyScene) return;
-    if (this.albMesh) this._inSkyScene.remove(this.albMesh);
-    if (this.rezMesh) this._inSkyScene.remove(this.rezMesh);
-    this._inSkyScene = null;
+  detachFromScene() {
+    if (!this._inScene) return;
+    if (this.albMesh) this._inScene.remove(this.albMesh);
+    if (this.rezMesh) this._inScene.remove(this.rezMesh);
+    this._inScene = null;
   }
 
   /**
@@ -201,6 +215,13 @@ export class ACMoons {
    */
   tick(nowMs) {
     if (!this.albMesh || !this.rezMesh) return;
+    // Look up the camera each tick via globals — avoids threading a
+    // camera arg through every caller and self-heals if the active
+    // camera changes mid-session (C-key cycle).
+    const cam = (typeof window !== 'undefined') ?
+      window.liveScene3d?.cameraSwitcher?.activeCamera : null;
+    if (!cam || !cam.position) return;
+
     const t = (typeof nowMs === 'number' ? nowMs : performance.now()) -
       this._startMs;
     const ms = t * this._speedMul;
@@ -211,39 +232,47 @@ export class ACMoons {
     // alt oscillates -0.6..0.6 rad (~±34°) — visible above and below
     // the horizon over the orbital period.
     const alt = Math.sin(ang + 0.5) * 0.6;
-    this._setMoonOnSphere(this.albMesh, az, alt);
+    this._setMoonOnSphere(this.albMesh, az, alt, cam);
 
     // Rez'arel — faster period, steeper inclination, phase offset
     // so the two moons aren't usually overlapping on the sky.
     const ang2 = (ms / REZ_PERIOD_MS) * Math.PI * 2 + 2.1;
     const az2 = ang2;
     const alt2 = Math.sin(ang2 + 1.2) * 0.7;
-    this._setMoonOnSphere(this.rezMesh, az2, alt2);
+    this._setMoonOnSphere(this.rezMesh, az2, alt2, cam);
   }
 
   /**
-   * Position the moon mesh on the sky shell at (azimuth, altitude)
-   * and orient it to face the sky camera (which sits at the sky
-   * scene origin since skyCell anchors to camera).
+   * Position the moon mesh at (azimuth, altitude) on a virtual sky
+   * shell anchored to the camera. Computes:
    *
-   * azimuth: 0 = three.js -Z (north after worldRoot rotation, but
-   *   the sky scene lives outside worldRoot so we use three.js
-   *   raw axes — z- is "north" of the sky scene).
+   *   moon_world = camera_world + offset
+   *
+   * where offset is the local sky-direction vector scaled to
+   * SKY_RADIUS. This keeps the moon at a fixed apparent angular
+   * position regardless of where the player walks — the classic
+   * "sky at infinity" illusion done with finite distance.
+   *
+   * azimuth: 0 = three.js -Z (north); increases east-then-south-
+   *   then-west (CW looking down from +Y).
    * altitude: -π/2 (nadir) .. +π/2 (zenith). 0 is on the horizon.
    */
-  _setMoonOnSphere(mesh, azimuthRad, altitudeRad) {
+  _setMoonOnSphere(mesh, azimuthRad, altitudeRad, camera) {
     const ca = Math.cos(altitudeRad);
-    const x = SKY_RADIUS * ca * Math.sin(azimuthRad);
-    const y = SKY_RADIUS * Math.sin(altitudeRad);
-    const z = -SKY_RADIUS * ca * Math.cos(azimuthRad);
-    mesh.position.set(x, y, z);
-    // Billboard — always face the origin (sky-scene-local camera
-    // position). Cheap because the moon mesh is just a plane.
-    mesh.lookAt(0, 0, 0);
+    const lx = SKY_RADIUS * ca * Math.sin(azimuthRad);
+    const ly = SKY_RADIUS * Math.sin(altitudeRad);
+    const lz = -SKY_RADIUS * ca * Math.cos(azimuthRad);
+    mesh.position.set(
+      camera.position.x + lx,
+      camera.position.y + ly,
+      camera.position.z + lz,
+    );
+    // Billboard — always face the camera.
+    mesh.lookAt(camera.position);
   }
 
   dispose() {
-    this.detachFromSkyScene();
+    this.detachFromScene();
     const meshes = [this.albMesh, this.rezMesh];
     for (const m of meshes) {
       if (!m) continue;
