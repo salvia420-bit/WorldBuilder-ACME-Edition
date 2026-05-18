@@ -283,14 +283,6 @@ export class CloudOverlay {
     // follow/orbit use persp, topDown uses ortho).
     this._lastActiveCam = null;
 
-    // One-shot warning if the depth wire never lands. preRender
-    // increments frameCount; after DEPTH_WIRE_GRACE_FRAMES of cloud-
-    // active rendering, if sceneDepthTex is still null we log once.
-    // Caught failure modes: `?atmosphere=off`, regressions that
-    // delete the wire block in index.js, getSceneDepthTexture
-    // returning null at construction time.
-    this._depthWireWarned = false;
-
     // Telemetry — populated by tick/preRender/renderOverlay so
     // capture scripts can introspect.
     this.frameCount = 0;
@@ -522,49 +514,6 @@ export class CloudOverlay {
         this.overlayMaterial.uniforms.cloudTex.value = tex;
       }
       this.frameCount++;
-
-      // 2026-05-18 cloud-invisible diagnostic: one-shot dump on first
-      // and 60th preRender so the user's console tells us whether the
-      // cloud raymarch is producing output and what state the wires
-      // are in.
-      if (this.frameCount === 1 || this.frameCount === 60) {
-        const u = this.overlayMaterial.uniforms;
-        const tx = tex;
-        // eslint-disable-next-line no-console
-        console.log(
-          `[clouds/diag frame=${this.frameCount}] cloudTex=${tx ? "set" : "null"} ` +
-            `cloudTexUUID=${tx?.uuid ?? "n/a"} ` +
-            `cloudTexImage=${tx?.image ? `${tx.image.width}x${tx.image.height}` : "n/a"} ` +
-            `cloudsBufferGetter=${typeof this.volume.effect.uniforms?.get} ` +
-            `sceneDepthTex=${u.sceneDepthTex.value ? "wired" : "null"} ` +
-            `sceneDepthThreshold=${u.sceneDepthThreshold.value} ` +
-            `mainCam=${this._lastActiveCam?.type ?? "null"} ` +
-            `camY=${this.camera?.position?.y?.toFixed(1)}`,
-        );
-      }
-
-      // Depth-wire runtime assertion. After ~1 second of cloud-active
-      // rendering, if sceneDepthTex is still null we're stuck on the
-      // sentinel path — clouds visible but painting over geometry.
-      // setSceneDepthTexture(atmospherePipeline.getSceneDepthTexture())
-      // should have run from index.js:~1455 by now; the wire block
-      // there is the place to look. Logged once per CloudOverlay
-      // instance to avoid console spam.
-      if (
-        !this._depthWireWarned &&
-        this.frameCount > 60 &&
-        this.overlayMaterial.uniforms.sceneDepthTex.value === null
-      ) {
-        this._depthWireWarned = true;
-        // eslint-disable-next-line no-console
-        console.warn(
-          "[clouds] sceneDepthTex still null after " + this.frameCount +
-            " frames — depth-aware discard not wired, clouds will paint " +
-            "over world geometry. Expected setSceneDepthTexture(" +
-            "atmospherePipeline.getSceneDepthTexture()) from index.js:~1455. " +
-            "Run with ?atmosphere=on (the default) to wire it.",
-        );
-      }
     } catch (err) {
       this.lastError = String(err);
     }

@@ -421,22 +421,6 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   // all hide when indoor. (Lights stay on; entities stay visible —
   // they're rendered separately.)
   const wantOutdoor = !isIndoor;
-  // 2026-05-18 diagnostic: terrain reported invisible over cloudflare
-  // tunnel even when ACE log shows outdoor cell. Print once on first
-  // visibility decision so we can see whether wasm's isIndoor is
-  // wrongly true OR whether the bug lives elsewhere. Removable once
-  // root cause lands.
-  if (!scene3d._visDiagLogged) {
-    scene3d._visDiagLogged = true;
-    // eslint-disable-next-line no-console
-    console.log(
-      `[cells/diag] first visibility decision: cellId=0x${cellId.toString(16).padStart(8, "0")} ` +
-        `isIndoor=${isIndoor} wantOutdoor=${wantOutdoor} ` +
-        `terrainGroupExists=${!!scene3d.terrainGroup} ` +
-        `terrainGroupVisibleBefore=${scene3d.terrainGroup?.visible} ` +
-        `terrainGroupChildren=${scene3d.terrainGroup?.children?.length ?? 0}`,
-    );
-  }
   if (scene3d.terrainGroup && scene3d.terrainGroup.visible !== wantOutdoor) {
     scene3d.terrainGroup.visible = wantOutdoor;
   }
