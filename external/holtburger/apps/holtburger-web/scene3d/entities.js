@@ -159,6 +159,25 @@ const MAX_TICK_DIST_SQ = MAX_TICK_DIST * MAX_TICK_DIST; // 14400 m²
 // `tick(dt)` reuses it.
 const _tickGateScratch = new THREE.Vector3();
 
+// Perf B2 (2026-05-18) — module-private scratches for the jump-pose
+// tween (`_tickJumpPoseTween`) and the particle-attach hook
+// (`_attachParticleChainForEntity`). Same convention as
+// `_tickGateScratch`: callers must NOT retain a reference.
+//
+// READ-ONLY: never mutate `_IDENTITY_QUAT`. It's the canonical (0,0,0,1)
+// reference used as the right-hand side of `.equals()` in the
+// generic-jump tilt-vs-identity test. Mutating it would silently break
+// every comparison downstream.
+const _IDENTITY_QUAT = new THREE.Quaternion();
+// Scratch Vector3 + Quaternion for the particle-attach offset frame
+// passed to `ParticleManager.addEmitter({ parentOffset })`. The manager
+// `.copy()`s these into its own `parentOffset` (see
+// `ParticleEmitter.setParenting`, particle_emitter.js:114-118). See the
+// call site for a CAVEAT about the await window between `.set()` and
+// `setParenting` across overlapping fire-and-forget chain walks.
+const _particleAttachScratchVec3 = new THREE.Vector3();
+const _particleAttachScratchQuat = new THREE.Quaternion();
+
 // Convert AC's full motion command (u32) to a coarse category for
 // cycle selection. Returns one of "walk", "run", "stop", or null
 // (unknown / non-locomotion command). Matches the 2D path's gate at
@@ -1315,6 +1334,14 @@ export class EntityManager {
       // Tilt: slerp identity quat ↔ tilt quat, multiply into root.
       // We re-derive root.quaternion from the position-frame quat
       // every setPose call, so apply the tween every tick.
+      //
+      // Perf B2 (2026-05-18): `tweenQ` is NOT pooled — it's assigned
+      // directly to `inst.airborneTilt` and read by `setPose` on every
+      // subsequent position update until the tween ends or the entity
+      // lands. Pooling the slerp result would corrupt the stored tilt
+      // the moment any other entity's tween advanced. The identity
+      // sentinel on the next line IS pooled (`_IDENTITY_QUAT`,
+      // read-only) since `.equals(...)` only reads it.
       const tweenQ = new THREE.Quaternion().slerpQuaternions(
         tween.fromTilt,
         tween.toTilt,
@@ -1322,7 +1349,7 @@ export class EntityManager {
       );
       // Store as airborneTilt so setPose can re-apply on position
       // updates (read by `EntityInstance.setPose`).
-      inst.airborneTilt = tweenQ.equals(new THREE.Quaternion())
+      inst.airborneTilt = tweenQ.equals(_IDENTITY_QUAT)
         ? null
         : tweenQ;
       if (inst.airborneTilt) {
@@ -1699,8 +1726,13 @@ export class EntityManager {
     }
 
     const THREE = (await import("three")).default ?? (await import("three"));
-    const Vector3 = THREE.Vector3;
-    const Quaternion = THREE.Quaternion;
+    // B2 (perf plan 2026-05-18): the per-hook `new Vector3(...)` /
+    // `new Quaternion(...)` allocations these locals used to back are
+    // now pooled into module-scope `_particleAttachScratch*` — the
+    // dynamic import stays in case future hook arms need a fresh
+    // class reference, but the locals it produced are no longer
+    // referenced anywhere in this function.
+    void THREE;
 
     const emitterIds = [];
     const timeoutIds = [];
@@ -1775,18 +1807,40 @@ export class EntityManager {
         continue;
       }
 
+      // Perf B2 (2026-05-18): scratch-pool the offset frame.
+      // `ParticleManager.addEmitter` eventually calls
+      // `ParticleEmitter.setParenting(partIdx, offsetFrame)` which
+      // `.copy()`s position + quaternion into the emitter's persistent
+      // `parentOffset` (particle_emitter.js:114-118). Within a single
+      // `_attachParticleChainForEntity` call the for-loop awaits each
+      // `addEmitter` before iterating, so the scratches are safe to
+      // reuse across hook entries in the same chain walk.
+      //
+      // CAVEAT: addEmitter is async and has multiple awaits
+      // (geometryFactory, materialFactory, setInfo) BEFORE setParenting
+      // runs. If two `_attachParticleChainForEntity` calls overlap (the
+      // outer call site is fire-and-forget at entities.js:912), caller
+      // B can overwrite the scratch values between caller A's `.set()`
+      // here and caller A's eventual `setParenting`. The race window
+      // is narrow and the visual effect is a wrong particle offset on
+      // one emitter — not catastrophic, but worth a follow-on if
+      // overlapping bulk spawns produce visible artifacts. A safer
+      // long-term fix would be a per-call scratch pair or changing the
+      // `addEmitter` contract to consume the offset synchronously.
+      _particleAttachScratchVec3.set(
+        e.createParticleOffsetX,
+        e.createParticleOffsetY,
+        e.createParticleOffsetZ,
+      );
+      _particleAttachScratchQuat.set(
+        e.createParticleOffsetQX,
+        e.createParticleOffsetQY,
+        e.createParticleOffsetQZ,
+        e.createParticleOffsetQW,
+      );
       const offset = {
-        position: new Vector3(
-          e.createParticleOffsetX,
-          e.createParticleOffsetY,
-          e.createParticleOffsetZ
-        ),
-        quaternion: new Quaternion(
-          e.createParticleOffsetQX,
-          e.createParticleOffsetQY,
-          e.createParticleOffsetQZ,
-          e.createParticleOffsetQW
-        ),
+        position: _particleAttachScratchVec3,
+        quaternion: _particleAttachScratchQuat,
       };
 
       const partIndex = (e.createParticlePartIndex === 0xffffffff)
