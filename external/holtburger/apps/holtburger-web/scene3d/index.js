@@ -1587,6 +1587,10 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
               if (typeof window !== "undefined") {
                 // eslint-disable-next-line no-undef
                 window.__atmosphereSky = atmosphereSky;
+                // eslint-disable-next-line no-undef
+                window.__setSunSize = (radians) => {
+                  atmosphereSky.setSunAngularRadius(radians);
+                };
               }
             }
 

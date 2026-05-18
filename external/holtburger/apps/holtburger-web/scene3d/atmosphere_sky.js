@@ -103,6 +103,26 @@ export class AtmosphereSky {
     }
     Object.assign(this.skyMaterial, tex);
 
+    // Bump sun angular radius to match AC's chunkier sun disc. Real-world
+    // sun is ~0.00465 rad half-angle (0.53° diameter); AC reference
+    // screenshots (e.g. Wardiel02.jpg) show the sun as a clearly visible
+    // disc several degrees across with a strong halo. ~6.5× real puts
+    // the disc at ~3.4° diameter — bigger than physical but still in
+    // "sun, not sticker" territory. Override via `?sunSize=N` (radians)
+    // or `liveScene3d.atmosphereSky.setSunAngularRadius(N)`.
+    {
+      let sunR = 0.03;
+      try {
+        // eslint-disable-next-line no-undef
+        const sp = new URLSearchParams(window.location.search).get("sunSize");
+        const v = parseFloat(sp ?? "");
+        if (Number.isFinite(v) && v > 0) sunR = v;
+      } catch (_) { /* keep default */ }
+      if ("sunAngularRadius" in this.skyMaterial) {
+        this.skyMaterial.sunAngularRadius = sunR;
+      }
+    }
+
     // PlaneGeometry(2, 2) covers clip space; SkyMaterial overrides the
     // vertex shader to project view rays from the camera regardless of
     // mesh world transform. frustumCulled=false because the mesh sits
@@ -217,6 +237,17 @@ export class AtmosphereSky {
       if (this.skyDome.skyCell) {
         this.skyDome.skyCell.visible = true;
       }
+    }
+  }
+
+  /**
+   * Live-tune the sun disc size. `radians` is the half-angle the sun
+   * subtends; takram default is ~0.00465, AC-look default here is 0.03.
+   */
+  setSunAngularRadius(radians) {
+    if (!Number.isFinite(radians) || radians <= 0) return;
+    if ("sunAngularRadius" in this.skyMaterial) {
+      this.skyMaterial.sunAngularRadius = radians;
     }
   }
 
