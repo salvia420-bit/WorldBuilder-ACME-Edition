@@ -194,9 +194,15 @@ function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
  * Phase 2.2 — push the shared wall-clock seconds onto every terrain
  * ShaderMaterial's `uTime` uniform. Single time source means matched
  * wave motion across LB seams (water animations stay phase-locked at
- * neighbouring landblock boundaries). Driven by `performance.now()`
- * (or `Date.now()` fallback) so the displacement is consistent across
- * tab-throttled rAF deltas.
+ * neighbouring landblock boundaries).
+ *
+ * Reads `scene3d.frameTime.tsSec`, the per-frame wall-clock snapshot
+ * stamped by the rAF callback in scene3d/index.js. Same numeric value
+ * as a fresh `performance.now() * 0.001` but sourced from the shared
+ * snapshot so we don't grow a multi-clock zoo (cf. "three time sources"
+ * in INTERACTING_LAYERS_ANALYSIS.md). Fallback to a fresh now() lets
+ * capture scripts and tests that call this outside the rAF loop still
+ * work.
  *
  * No-op when the registry is empty (pre-buildHoltburgTerrain) or when
  * subdivLevel < 2 (the material was built with uDisplacementEnabled=0
@@ -208,9 +214,10 @@ function tickTerrainUTime(scene3d) {
     return;
   }
   const tSec =
-    (typeof performance !== "undefined" && performance.now)
+    scene3d.frameTime?.tsSec ??
+    ((typeof performance !== "undefined" && performance.now)
       ? performance.now() * 0.001
-      : Date.now() * 0.001;
+      : Date.now() * 0.001);
   for (const mat of scene3d.terrainMaterials) {
     if (mat?.uniforms?.uTime) {
       mat.uniforms.uTime.value = tSec;

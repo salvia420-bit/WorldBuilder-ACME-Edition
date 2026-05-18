@@ -773,6 +773,17 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
         : Math.min((ts - lastFrameTs) / 1000, 0.1);
     lastFrameTs = ts;
     if (liveScene3dRef) {
+      // Single per-frame wall-clock snapshot. Consumers that need
+      // tsSec / dt read from here instead of calling performance.now()
+      // themselves — see scene3d/loop.js tickTerrainUTime and the
+      // "three time sources" hazard in INTERACTING_LAYERS_ANALYSIS.md.
+      // AC game time (Date.now() + 11.34× compression) stays in
+      // atmosphere_sky.js — that's the world clock, separate axis.
+      liveScene3dRef.frameTime = {
+        tsMs: ts,
+        tsSec: ts * 0.001,
+        dt,
+      };
       try {
         tickPerFrame(liveScene3dRef, liveScene3dRef.sessionHandle, dt);
       } catch (e) {
