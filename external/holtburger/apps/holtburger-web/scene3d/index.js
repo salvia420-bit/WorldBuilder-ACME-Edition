@@ -813,6 +813,19 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   // lighting updates inside the same `tickPerFrame`.
   let running = true;
   let lastFrameTs = null;
+  // A3 (2026-05-18) — dt-recovery after tab unfocus. Raw dt after a
+  // 5 s alt-tab is ~5000 ms; the Math.min(..., 0.1) cap below clamps
+  // it to 100 ms, but feeding a 100 ms step into physics/animation
+  // still snaps the world forward visibly. When we detect a large
+  // raw dt, we enter a recovery window and force `dt = 0` for the
+  // next N frames so simulation stays frozen while the camera and
+  // render path keep ticking normally. Option (a) — skip simulation
+  // — was chosen over the ramp variant because it's simpler and
+  // strictly conservative: nothing advances during recovery, so we
+  // can't introduce stutter from a partially-correct dt ramp.
+  const DT_RECOVERY_RAW_THRESHOLD_S = 0.5; // ~5+ frames of lost time
+  const DT_RECOVERY_FRAMES = 10;
+  let dtRecoveryFramesRemaining = 0;
   // `liveScene3d` is referenced inside tick before it's constructed
   // below, so we forward-declare and patch the reference after
   // construction. The session handle attached to `liveScene3d` is the
@@ -822,10 +835,24 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   function tick(nowTs) {
     if (!running) return;
     const ts = typeof nowTs === "number" ? nowTs : performance.now();
-    const dt =
-      lastFrameTs === null
-        ? 0.016
-        : Math.min((ts - lastFrameTs) / 1000, 0.1);
+    // Raw dt (no cap) so we can detect post-unfocus recovery; the
+    // Math.min(..., 0.1) cap below is the per-frame safety net and
+    // stays in place. See A3 comment above the tick fn.
+    const rawDt = lastFrameTs === null ? 0.016 : (ts - lastFrameTs) / 1000;
+    let dt;
+    if (lastFrameTs === null) {
+      dt = 0.016;
+    } else if (rawDt > DT_RECOVERY_RAW_THRESHOLD_S) {
+      // First frame after a long gap — arm recovery and freeze sim.
+      dtRecoveryFramesRemaining = DT_RECOVERY_FRAMES;
+      dt = 0;
+    } else if (dtRecoveryFramesRemaining > 0) {
+      // Mid-recovery — keep sim frozen for the remaining frames.
+      dtRecoveryFramesRemaining -= 1;
+      dt = 0;
+    } else {
+      dt = Math.min(rawDt, 0.1);
+    }
     lastFrameTs = ts;
     if (liveScene3dRef) {
       // Single per-frame wall-clock snapshot. Consumers that need
