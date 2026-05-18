@@ -85,6 +85,16 @@ void main() {
 // uCloudIntensity / uCloudSpeed / uCityIntensity / uCityPos:
 // live-tunable knobs for the Alb'arel atmosphere. Each has a
 // `window.__set*` setter (see bottom of file).
+// Secondary "rune" lights below the main alien-city hotspot on
+// Alb'arel form a Hagol (Younger Futhark Hagall ᚼ) snowflake-
+// asterisk pattern — 1 center + 6 mid-ring + 6 outer-ring + 2
+// asymmetry accents = 15. Each light has its own pulse period and
+// a deterministic phase offset, so they flicker out of sync.
+// NUM_MICRO_LIGHTS is the GLSL constant (declared inside the shader
+// template literal below); ALB_NUM_MICRO_LIGHTS is the JS-side
+// mirror used to size the uniform array on construction.
+const ALB_NUM_MICRO_LIGHTS = 15;
+
 const MOON_FRAG = /* glsl */ `
 precision highp float;
 varying vec2 vUv;
@@ -96,6 +106,10 @@ uniform float uCloudIntensity;
 uniform float uCloudSpeed;
 uniform float uCityIntensity;
 uniform vec2  uCityPos;
+
+#define NUM_MICRO_LIGHTS 15
+// Per-light data: (uv.x, uv.y, brightness, pulsePeriodSec)
+uniform vec4  uMicroLights[NUM_MICRO_LIGHTS];
 
 float mhash21(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -136,35 +150,43 @@ void main() {
 
   if (uHasClouds > 0.5) {
     // -- Cloud swirl ----------------------------------------------
-    // Domain-warped fbm to mimic the prior albarel JPEG's storm
-    // pattern (a hurricane-like band wrapping the upper part of the
-    // disc). Two-rate drift so the cloud appears to slowly evolve.
+    // Domain-warped fbm storm. 2026-05-18 tuning pass: confined
+    // mostly to the top-left quadrant with a slight bleed toward
+    // the top-right near the disc center, drifting slowly for an
+    // ominous look (darker grey-blue tint, lower default speed).
     float tSlow = uTime * 0.018 * uCloudSpeed;
     vec2 cloudUv = vUv * 3.2;
     float warpX = mvnoise(cloudUv * 0.55 + vec2(tSlow, 0.0)) - 0.5;
     float warpY = mvnoise(cloudUv * 0.55 + vec2(17.0, tSlow)) - 0.5;
     vec2 warped = cloudUv + vec2(warpX, warpY) * 1.3;
     float cloud = mfbm(warped + vec2(tSlow * 0.5, 0.0));
-    // Upper-band bias matches where the prior cloud streak sat.
-    float upBias = smoothstep(0.35, 0.85, vUv.y);
-    // Keep the cloud inside the surface disc (no painting off-moon).
+
+    // Quadrant mask: top-left dominant, soft taper out to (0.55,
+    // 0.50). A secondary lobe bleeds into the top-right NEAR the
+    // disc center (UV.x in [0.50, 0.72]) at ~45% strength so the
+    // band appears to wrap around the upper hemisphere from the
+    // left, fading by the time it reaches the right limb.
+    float tlMask   = (1.0 - smoothstep(0.30, 0.55, vUv.x))
+                   * smoothstep(0.50, 0.70, vUv.y);
+    float trBleed  = smoothstep(0.50, 0.55, vUv.x)
+                   * (1.0 - smoothstep(0.55, 0.72, vUv.x))
+                   * smoothstep(0.50, 0.65, vUv.y) * 0.45;
+    float quadMask = max(tlMask, trBleed);
     float discMask = 1.0 - smoothstep(0.30, 0.46, d);
-    float cloudAmt = pow(cloud, 1.6) * upBias * discMask;
-    cloudAmt = clamp(cloudAmt * 1.8 - 0.25, 0.0, 1.0);
-    vec3 cloudCol = vec3(0.88, 0.84, 0.78);
+    float cloudAmt = pow(cloud, 1.45) * quadMask * discMask;
+    cloudAmt = clamp(cloudAmt * 2.0 - 0.18, 0.0, 1.0);
+    // Ominous: storm-grey with a cool blue lean. Reads as brooding
+    // overcast rather than fair-weather cumulus.
+    vec3 cloudCol = vec3(0.42, 0.45, 0.52);
     rgb = mix(rgb, cloudCol, cloudAmt * uCloudIntensity);
 
-    // -- Alien-city emission --------------------------------------
-    // Hotspot at uCityPos (Alb'arel left side by default). Two
-    // exponential falloffs: tight core + soft wide halo. Halo is
-    // allowed to extend beyond the surface disc up to d=0.50 so
-    // the glow reads as light "emanating".
+    // -- Main alien-city hotspot ----------------------------------
+    // 2026-05-18: brightness baked-down to 0.20 of the prior value
+    // (user feedback: -80%). Tight exp core + soft wide halo. Halo
+    // extends past the disc edge so the light emanates.
     float cityDist = distance(vUv, uCityPos);
     float core = exp(-cityDist * 28.0);
     float halo = exp(-cityDist *  9.0) * 0.35;
-    // Sparkle: layered sines (different periods, no rational ratio)
-    // plus a per-pixel hash mod-time so adjacent fragments scintillate
-    // out of phase — gives the "many little lights" impression.
     float t = uTime;
     float sparkle =
         0.55
@@ -175,16 +197,45 @@ void main() {
       + 0.22 * (mhash21(floor(vUv * 90.0) + floor(t * 6.0)) - 0.5);
     sparkle = clamp(sparkle, 0.25, 1.6);
     vec3 neon = vec3(0.18, 1.05, 0.42);
-    vec3 emission = neon * (core * 2.6 + halo) * sparkle * uCityIntensity;
-    // Fade emission as it crosses the disc boundary into open sky.
+    // Disc-boundary fade — shared by main hotspot + micro-lights.
     float emissionEdge = 1.0 - smoothstep(0.48, 0.50, d);
-    rgb += emission * emissionEdge;
+    vec3 mainEmission = neon * (core * 2.6 + halo) * sparkle * 0.20 * uCityIntensity;
+
+    // -- Hagol micro-light array ----------------------------------
+    // 15 secondary lights forming a Younger-Futhark Hagall ᚼ
+    // snowflake-asterisk centered below the main hotspot. Each
+    // light pulses at its own period (uMicroLights[i].w) with a
+    // deterministic phase derived from its UV position so the
+    // cluster never throbs in unison. Brightness per light is
+    // ~5-10% of the prior baseline (user feedback: -90 to -95%).
+    vec3 microEmission = vec3(0.0);
+    float microAlphaAcc = 0.0;
+    for (int i = 0; i < NUM_MICRO_LIGHTS; i++) {
+      vec4 ml = uMicroLights[i];
+      vec2 mlPos   = ml.xy;
+      float mlBri  = ml.z;
+      float mlPer  = max(ml.w, 0.1);
+      float mlDist = distance(vUv, mlPos);
+      // Per-light glow: tighter than the main hotspot (smaller dots).
+      float mlCore = exp(-mlDist * 80.0);
+      float mlHalo = exp(-mlDist * 22.0) * 0.30;
+      // Per-light pulse phase from position hash, scaled to a full
+      // cycle so the asterisk lights start out of sync.
+      float mlPhase   = mhash21(mlPos * 31.7) * 6.2831853;
+      float mlPulse   = 0.45 + 0.55 * sin(t * 6.2831853 / mlPer + mlPhase);
+      float mlTwinkle = 0.80 + 0.30 * sin(t * 11.0 + mlPhase * 2.1);
+      float mlScale   = mlBri * mlPulse * mlTwinkle * uCityIntensity;
+      microEmission += neon * (mlCore * 1.4 + mlHalo) * mlScale;
+      microAlphaAcc  = max(microAlphaAcc, (mlCore * 0.8 + mlHalo) * mlScale);
+    }
+
+    rgb += (mainEmission + microEmission) * emissionEdge;
 
     // Halo contributes its own alpha outside the disc so the
     // emission isn't clipped to the surface mask.
-    float haloAlpha = clamp(halo * 0.9 + core * 1.4, 0.0, 1.0)
-                    * sparkle * uCityIntensity * emissionEdge;
-    alpha = max(alpha, haloAlpha);
+    float mainHaloAlpha = clamp(halo * 0.9 + core * 1.4, 0.0, 1.0)
+                        * sparkle * 0.20 * uCityIntensity * emissionEdge;
+    alpha = max(alpha, max(mainHaloAlpha, microAlphaAcc * emissionEdge));
   }
 
   gl_FragColor = vec4(rgb, alpha);
@@ -262,20 +313,35 @@ export class ACMoons {
     // small angles tan(θ) ≈ θ; using θ directly is fine here.
     const size = 2 * SKY_RADIUS * angularRadius;
     const geo = new THREE.PlaneGeometry(size, size);
+    // Build the 15-light Hagol micro-array. Alb'arel uses the real
+    // layout; Rez'arel passes zero-brightness entries so the shader
+    // loop is a no-op (the uniform must still be bound — WebGL
+    // doesn't allow leaving array uniforms unbound).
+    const microLights = hasClouds
+      ? ACMoons._buildHagolLayout()
+      : ACMoons._zeroMicroLights();
     const mat = new THREE.ShaderMaterial({
       uniforms: {
         map: { value: texture },
         uBrightness: { value: 2.0 },
         uTime: { value: 0.0 },
         uHasClouds: { value: hasClouds ? 1.0 : 0.0 },
-        uCloudIntensity: { value: 0.75 },
-        uCloudSpeed: { value: 1.0 },
+        // Defaults tuned 2026-05-18 round 2: heavier cloud
+        // coverage, slower drift (ominous read), grey-blue tint
+        // baked in the shader.
+        uCloudIntensity: { value: 1.4 },
+        uCloudSpeed: { value: 0.45 },
+        // uCityIntensity stays at 1.0 as a "scale everything"
+        // knob. The main hotspot's -80% reduction is baked into
+        // the shader (×0.20 multiplier) so it survives a knob
+        // change; micro-lights carry their own per-light
+        // brightness (0.05–0.10) in the uMicroLights array.
         uCityIntensity: { value: 1.0 },
         // City light cluster sits at the LEFT of Alb'arel's disc.
-        // Sampled from the new 1024x1024 source: green dots cluster
-        // at ~(0.13, 0.49) in UV space. Devtools setter exposed
-        // below so the user can nudge if the texture changes again.
+        // Sampled from the 1024x1024 source: green dots cluster at
+        // ~(0.13, 0.49) UV. Devtools setter exposed below.
         uCityPos: { value: new THREE.Vector2(0.13, 0.49) },
+        uMicroLights: { value: microLights },
       },
       vertexShader: MOON_VERT,
       fragmentShader: MOON_FRAG,
@@ -420,6 +486,63 @@ export class ACMoons {
     }
     this.albMesh = null;
     this.rezMesh = null;
+  }
+
+  /**
+   * Build the 15-light Hagol (Younger Futhark Hagall ᚼ) micro-light
+   * layout for Alb'arel's alien city. 3 lines crossing at a center
+   * below the main hotspot → 6 spokes, 60° apart. Each spoke has a
+   * mid-ring + outer-ring light. 2 off-axis accents add organic
+   * asymmetry. All UVs are below 0.49 (the user-requested cap so
+   * nothing exceeds the existing main light's height) AND inside
+   * the moon disc radius (0.46 from disc center).
+   *
+   * vec4 layout: (uv.x, uv.y, brightness, pulsePeriodSec).
+   */
+  static _buildHagolLayout() {
+    const cx = 0.165;
+    const cy = 0.36;
+    const rMid = 0.045;
+    const rOut = 0.085;
+    const lights = [];
+    // Center — slightly brighter than the ring lights, medium pulse.
+    lights.push(new THREE.Vector4(cx, cy, 0.10, 5.0));
+    // 6 spokes × 2 lights (mid ring + outer ring).
+    const angles = [30, 90, 150, 210, 270, 330];
+    const midPeriods = [1.8, 2.4, 3.1, 4.0, 5.5, 7.2];
+    const outPeriods = [2.0, 3.3, 4.5, 6.0, 8.0, 12.0];
+    for (let i = 0; i < 6; i += 1) {
+      const a = (angles[i] * Math.PI) / 180;
+      const cos = Math.cos(a);
+      const sin = Math.sin(a);
+      lights.push(
+        new THREE.Vector4(cx + rMid * cos, cy + rMid * sin, 0.075, midPeriods[i]),
+      );
+      lights.push(
+        new THREE.Vector4(cx + rOut * cos, cy + rOut * sin, 0.070, outPeriods[i]),
+      );
+    }
+    // 2 asymmetry accents off the main axes (one upper-left toward
+    // the gap between main light and the 150° spoke, one lower-right
+    // outside the 330° spoke). Keeps the cluster from looking too
+    // mechanical.
+    lights.push(new THREE.Vector4(0.075, 0.43, 0.06, 9.0));
+    lights.push(new THREE.Vector4(0.220, 0.30, 0.06, 3.7));
+    return lights;
+  }
+
+  /**
+   * Zero-brightness placeholder array — same length as the real
+   * layout. Used for Rez'arel (and any future cloud-less moon) so
+   * the uMicroLights uniform has a bound value but the shader loop
+   * contributes nothing.
+   */
+  static _zeroMicroLights() {
+    const out = [];
+    for (let i = 0; i < ALB_NUM_MICRO_LIGHTS; i += 1) {
+      out.push(new THREE.Vector4(0, 0, 0, 1));
+    }
+    return out;
   }
 }
 
