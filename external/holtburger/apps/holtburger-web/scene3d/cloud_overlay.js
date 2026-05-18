@@ -499,6 +499,19 @@ export class CloudOverlay {
         matUniforms.cameraHeight.value = Math.max(0, camWorldY);
       }
 
+      // Cloud-shadow push to terrain materials. Moved here from
+      // CloudVolume.tick so it runs AFTER composer.render has filled
+      // the cascade shadow buffer + matrices for THIS frame — the
+      // terrain pass reads them right after this preRender returns.
+      // Pushing in tick() copied last-frame's matrices into the
+      // terrain uniform, producing a one-frame lag visible as shadow
+      // drift on fast time-of-day changes.
+      try {
+        this.volume._pushCloudShadowsToTerrain();
+      } catch (_) {
+        // Cloud-shadow push must not block the cloud render.
+      }
+
       // Restore renderer state (composer leaves it on its last RT).
       renderer.setRenderTarget(prevTarget);
       renderer.autoClear = prevAutoClear;

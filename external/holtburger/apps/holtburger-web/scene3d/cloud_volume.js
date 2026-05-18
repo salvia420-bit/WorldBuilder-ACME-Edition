@@ -212,11 +212,11 @@ export class CloudVolume {
       // Weather wiring must not block the cloud raymarch.
     }
 
-    // Clouds-L — push the cloud effect's cascade-0 shadow buffer +
-    // matrix into all terrain materials so the terrain shader can
-    // sample cloud occlusion. takram's cloud raymarch already
-    // produces these for self-shadowing; we just borrow them.
-    this._pushCloudShadowsToTerrain();
+    // Cloud-shadow push to terrain moved to CloudOverlay.preRender so
+    // it runs AFTER composer.render fills the cascade matrices for
+    // THIS frame. Pushing here would copy last-frame's matrix into
+    // the terrain uniform, producing a one-frame lag visible as
+    // shadow drift on fast time-of-day changes.
   }
 
   _pushCloudShadowsToTerrain() {

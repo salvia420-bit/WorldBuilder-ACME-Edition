@@ -169,6 +169,7 @@ uniform vec2 uLbOriginXy;             // Phase 2.2 — per-LB world-frame origin
 
 out vec2 vGridUv;
 out vec3 vWorldPos;  // Clouds-L: terrain world-space position for cloud-shadow projection
+out float vViewDepth; // CSM-on-terrain: view-space depth (positive = in front of camera) for cascade selection
 flat out int vTerrainCode;            // Phase 1.2 — passed flat-int to FS
 // Phase 1.3 — AC-space LB-local position + interpolated geometry
 // normal, used by the fragment shader for slope-gated triplanar
@@ -243,7 +244,9 @@ void main() {
   vIsWater = isWater;
 
   vWorldPos = (modelMatrix * vec4(displacedPos, 1.0)).xyz;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(displacedPos, 1.0);
+  vec4 mvPos = modelViewMatrix * vec4(displacedPos, 1.0);
+  vViewDepth = -mvPos.z;
+  gl_Position = projectionMatrix * mvPos;
   // Per-vertex grid coordinate in [0, 8] across the 192 m landblock
   // (8 cells × 24 m each). Fragment splits into integer cell index
   // + intra-cell UV, looks up the cell's 4 corner terrain types
@@ -322,8 +325,66 @@ uniform float uCloudShadowStrength;
 // (pre-populator) so terrain is never lit from (0,0,0).
 uniform vec3 uSunDir;
 
+// CSM-on-terrain. Mirror of materials.js's MeshStandardMaterial patch
+// at materials.js:267-445. Three cascade shadow maps, view-space-depth
+// selection, blend zones at boundaries. uCsmEnabled gates the whole
+// block off so terrain renders correctly when ?shadows=off or quality
+// preset has csm:false. Uniforms refreshed each frame by
+// csm.refreshCsmUniforms (registered alongside other materialCache
+// patched materials in terrain bake).
+uniform float uCsmEnabled;
+uniform sampler2D uCsmShadowMap0;
+uniform sampler2D uCsmShadowMap1;
+uniform sampler2D uCsmShadowMap2;
+uniform mat4 uCsmMatrix0;
+uniform mat4 uCsmMatrix1;
+uniform mat4 uCsmMatrix2;
+uniform vec2 uCsmSplits;
+uniform float uCsmFar;
+uniform float uCsmBlend;
+
+float csmSampleCascade(sampler2D sm, mat4 m, vec3 worldPos) {
+  vec4 sc = m * vec4(worldPos, 1.0);
+  sc.xyz /= max(sc.w, 1e-6);
+  if (sc.x < 0.0 || sc.x > 1.0 ||
+      sc.y < 0.0 || sc.y > 1.0 ||
+      sc.z > 1.0) {
+    return 1.0;
+  }
+  float bias = 0.0005;
+  float ref = sc.z - bias;
+  float stored = texture(sm, sc.xy).r;
+  return stored < ref ? 0.0 : 1.0;
+}
+
+float csmShadowFactor(vec3 worldPos, float viewDepth) {
+  float blendW0 = uCsmSplits.x * uCsmBlend;
+  float blendW1 = uCsmSplits.y * uCsmBlend;
+  if (viewDepth > uCsmFar) return 1.0;
+  if (viewDepth < uCsmSplits.x - blendW0) {
+    return csmSampleCascade(uCsmShadowMap0, uCsmMatrix0, worldPos);
+  }
+  if (viewDepth < uCsmSplits.x) {
+    float s0 = csmSampleCascade(uCsmShadowMap0, uCsmMatrix0, worldPos);
+    float s1 = csmSampleCascade(uCsmShadowMap1, uCsmMatrix1, worldPos);
+    float t = (viewDepth - (uCsmSplits.x - blendW0)) / blendW0;
+    return mix(s0, s1, clamp(t, 0.0, 1.0));
+  }
+  if (viewDepth < uCsmSplits.y - blendW1) {
+    return csmSampleCascade(uCsmShadowMap1, uCsmMatrix1, worldPos);
+  }
+  if (viewDepth < uCsmSplits.y) {
+    float s1 = csmSampleCascade(uCsmShadowMap1, uCsmMatrix1, worldPos);
+    float s2 = csmSampleCascade(uCsmShadowMap2, uCsmMatrix2, worldPos);
+    float t = (viewDepth - (uCsmSplits.y - blendW1)) / blendW1;
+    return mix(s1, s2, clamp(t, 0.0, 1.0));
+  }
+  return csmSampleCascade(uCsmShadowMap2, uCsmMatrix2, worldPos);
+}
+
 in vec2 vGridUv;
 in vec3 vWorldPos;
+in float vViewDepth;                  // CSM-on-terrain: view-space depth for cascade selection
 flat in int vTerrainCode;             // provoking-vertex terrain code
 in vec3 vAcPos;                       // Phase 1.3 — LB-local AC pos (z=up)
 in vec3 vAcNormal;                    // Phase 1.3 — geometry normal (AC z-up)
@@ -556,7 +617,18 @@ void main() {
     }
   }
 
-  fragColor = vec4(result * ndotl * cloudShadow, 1.0);
+  // CSM-on-terrain — building / static cast shadows now actually land
+  // on the ground. csmShadowFactor returns 0.0 (fully shadowed) or
+  // 1.0 (fully lit); mix with a 0.45 floor so shadowed terrain keeps
+  // ambient lift, matching the MeshStandardMaterial CSM patch in
+  // materials.js (same visual feel for cast shadows across surfaces).
+  float csmShadow = 1.0;
+  if (uCsmEnabled > 0.5) {
+    float s = csmShadowFactor(vWorldPos, vViewDepth);
+    csmShadow = mix(0.45, 1.0, s);
+  }
+
+  fragColor = vec4(result * ndotl * cloudShadow * csmShadow, 1.0);
 }
 `;
 
@@ -1006,6 +1078,45 @@ export async function bakeTerrainForLandblock(
       // Initial sun direction = the prior hardcoded literal so the
       // pre-populator fallback matches old behavior exactly.
       uSunDir: { value: new THREE.Vector3(-0.4, -0.3, 1.0).normalize() },
+      // CSM-on-terrain. Mirrors materials.js's MeshStandardMaterial
+      // patch. Texture refs + matrices refreshed each frame by
+      // csm.refreshCsmUniforms once the material is registered on
+      // csmState.patchedMaterials below. uCsmEnabled stays 0.0 when
+      // csmState is absent (low/mid quality presets, ?shadows=off);
+      // shader branch around the sampling cost.
+      uCsmEnabled: {
+        value: scene3d?.csmState ? 1.0 : 0.0,
+      },
+      uCsmShadowMap0: {
+        value: scene3d?.csmState?.lights?.[0]?.shadow?.map?.texture ?? null,
+      },
+      uCsmShadowMap1: {
+        value: scene3d?.csmState?.lights?.[1]?.shadow?.map?.texture ?? null,
+      },
+      uCsmShadowMap2: {
+        value: scene3d?.csmState?.lights?.[2]?.shadow?.map?.texture ?? null,
+      },
+      uCsmMatrix0: {
+        value: scene3d?.csmState?.lights?.[0]?.shadow?.matrix?.clone() ?? new THREE.Matrix4(),
+      },
+      uCsmMatrix1: {
+        value: scene3d?.csmState?.lights?.[1]?.shadow?.matrix?.clone() ?? new THREE.Matrix4(),
+      },
+      uCsmMatrix2: {
+        value: scene3d?.csmState?.lights?.[2]?.shadow?.matrix?.clone() ?? new THREE.Matrix4(),
+      },
+      uCsmSplits: {
+        value: new THREE.Vector2(
+          scene3d?.csmState?.splits?.[0] ?? 30,
+          scene3d?.csmState?.splits?.[1] ?? 100,
+        ),
+      },
+      uCsmFar: {
+        value: scene3d?.csmState?.splits?.[2] ?? 300,
+      },
+      uCsmBlend: {
+        value: scene3d?.csmState?.blendFrac ?? 0.1,
+      },
     },
     vertexShader: TERRAIN_VERTEX_GLSL,
     fragmentShader: TERRAIN_FRAGMENT_GLSL,
@@ -1026,17 +1137,29 @@ export async function bakeTerrainForLandblock(
   // disposal/rebuild the caller should null out scene3d.terrainMaterials.
   scene3d.terrainMaterials.push(material);
 
+  // CSM-on-terrain — register the material on csmState.patchedMaterials
+  // so csm.refreshCsmUniforms walks it each frame and pushes fresh
+  // shadow.matrix + shadow.map.texture refs onto our uniforms. Mirrors
+  // materials.js's MeshStandardMaterial patch but for our raw GLSL3
+  // shader. `csmShaderUniforms = material.uniforms` works because
+  // ShaderMaterial's uniforms ARE the shader's uniforms (no
+  // onBeforeCompile copy).
+  if (scene3d.csmState?.patchedMaterials) {
+    material.userData = {
+      ...(material.userData || {}),
+      csmShaderUniforms: material.uniforms,
+    };
+    scene3d.csmState.patchedMaterials.add(material);
+  }
+
   const lbMesh = new THREE.Mesh(geom, material);
   lbMesh.name = `terrain-lb-${lbX.toString(16)}-${lbY.toString(16)}`;
   // Visual-fidelity Phase 0.1 + 3.3 — flag the terrain mesh as a shadow
   // receiver under EITHER the single-shadow path (shadowsEnabled) OR
-  // the CSM path (csmEnabled). Note: the terrain's custom GLSL3
-  // ShaderMaterial does NOT currently honour the flag (it skips three's
-  // shadow chunks); this is documented in the Phase 0.1 plan as
-  // deferred to Phase 1.* / 2.*. Phase 3.3 inherits the same gap — to
-  // render shadows on terrain, the custom shader needs explicit CSM
-  // sampling injected. Out of scope for the initial Phase 3.3 push;
-  // tracked in the report doc.
+  // the CSM path (csmEnabled). CSM sampling is now injected directly
+  // into the terrain ShaderMaterial above (the "deferred to Phase
+  // 1.* / 2.*" gap is closed); building/static cast shadows land on
+  // terrain when ?quality=high or ultra (csm flag on).
   if (scene3d.shadowsEnabled || scene3d.csmEnabled) {
     lbMesh.receiveShadow = true;
   }
