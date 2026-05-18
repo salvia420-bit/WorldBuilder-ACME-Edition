@@ -403,7 +403,7 @@ Plus a 30-minute populated-zone soak (run `capture_audio_heap.cjs` or similar lo
 # Workstream C — Cells + statics + buildings + CSM + lighting
 
 ## C1 — Fuse EnvCell per-surface meshes
-**Severity** High • **File** `scene3d/cells.js:308-323` • **Status** Open — **HIGHEST BLAST RADIUS** in the plan; flag-gate mandatory
+**Severity** High • **File** `scene3d/cells.js:308-323` • **Status** ✅ Done (commit `bd38a54` — flag-gated `?envcellFusion=1`, default OFF; per-cell opaque + transparent buckets each fuse into one Mesh with multi-material array; diagnostic counters for the transparent-cell rate; SSIM diff + frametime measurement deferred as A/B validation step)
 
 **Problem.** Each EnvCell creates one `THREE.Mesh` + Material per surface DID. The Academy alone (568 cells) at typical PVS depth shows 24–104 visible cells × 4–8 surface DIDs each = 96–832 material binds per frame indoors. Three.js batches by material so this proliferation directly maps to bind-state overhead. On a GTX 1070 this is ~2–3 ms of frametime lost to state-machine overhead, separate from the actual draw work.
 
@@ -524,7 +524,7 @@ cd /home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburge
 - Coordinate with C5 if both run concurrently — different concerns (`receiveShadow` vs dispose) but same file.
 
 ## C5 — Building materials disposal on cell unload
-**Severity** Med (long-session) • **File** `scene3d/buildings.js` (unload path) • **Status** Open — **DEPENDS ON B3**
+**Severity** Med (long-session) • **File** `scene3d/buildings.js` (unload path) • **Status** ✅ Done (commit `c5a9353` — audit found zero `.clone()` sites AND no PVS-contraction unload path exists today; premise vacuously satisfied. Dormant helpers + `TODO(C5)` breadcrumb landed ready for the day either lands)
 
 **Problem.** PVS contraction removes building Groups from the scene but cloned materials (per-placement `material.clone()` from `MaterialCache`) stay live in WebGL. Walk in/out of PVS 100 times → texture count grows by ~hundreds.
 
@@ -656,7 +656,7 @@ Each step (C7-prereq, C7-real) is its own PR. C6's distance sort needs careful p
 # Workstream D — Terrain + materials shaders
 
 ## D1 — Verify water fragment cost is acceptable
-**Severity** Low (audit / no-op probable) • **File** `scene3d/terrain.js:428-438, 469-472` • **Status** Open (procedural — measurement first)
+**Severity** Low (audit / no-op probable) • **File** `scene3d/terrain.js:428-438, 469-472` • **Status** ✅ Done (commit `1630d04` — Path A landed; vertex `vec2 vWaveModulation` varying carries both sin() results; vertex displacement reuses the same value bonus-free; visual diff exact since `sin(uTime*0.3)` has no spatial term)
 
 **Problem.** Water tiles use per-fragment `sin(uTime * 0.3)` and `sin(uTime * 0.5 + worldXy.x * 0.1)` for displacement modulation + tint. Magnitude is fine on a 1070 (terrain shader is simple enough that this is negligible) but the audit flagged it for measurement.
 
@@ -740,7 +740,7 @@ cd /home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburge
 **Risk.** Caller-retention — same caveat. Search call sites.
 
 ## E3 — Dispose cloned particle materials on emitter destroy
-**Severity** Med (long-session) • **File** `scene3d/particles/particle_manager.js:89-96` • **Status** Open — **DEPENDS ON B3**
+**Severity** Med (long-session) • **File** `scene3d/particles/particle_manager.js:89-96` • **Status** ✅ Done (commit `1c49c8f` — consumes B3's `__disposable` tag; walks `partStorage` not just active `parts` so freed slots also get cleaned; `tick()` auto-removal path noted as TODO follow-on)
 
 **Problem.** `destroyParticleEmitter` (in particle_manager.js) doesn't dispose the cloned material per slot. Each `baseMaterial.clone()` lives forever in WebGL. Over a session with many spell-effect spawns + despawns, particle materials accumulate.
 
@@ -989,7 +989,7 @@ cd /home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburge
 Click-once-per-second; no perf issue. **Close as no-action.**
 
 ## F9 — Remove duplicate `forgetSpell` definition
-**Severity** Cosmetic • **File** `plugins/api.js:49-50` • **Status** Open (trivial)
+**Severity** Cosmetic • **File** `plugins/api.js:49-50` • **Status** ✅ Done (commit `178c00e` — shadowed earlier copy deleted; only spellbook.js:646 references the export and uses field access)
 
 **Problem.** `plugins/api.js` has two `forgetSpell` definitions; the second shadows the first. The first is dead code (memorialised in the audit at api.js:49-50).
 
