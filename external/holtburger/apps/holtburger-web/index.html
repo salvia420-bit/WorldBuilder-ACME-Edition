@@ -325,6 +325,49 @@
         </div>
         <div class="row"><label><span>Server host</span><input type="text" name="server_host" value="127.0.0.1" required placeholder="hostname or IP" /></label></div>
         <div class="row"><label><span>Server port</span><input type="number" name="server_port" value="9000" min="1" max="65535" required /></label></div>
+        <!--
+          Render-scale dropdown. Lowers the framebuffer resolution
+          without shrinking the CSS canvas size — drops GPU load
+          quadratically with scale. The selected value is mirrored
+          into the URL (`?renderScale=N`) so reloads preserve it,
+          and live-applied via window.__setRenderScale() if init3D
+          has already run. Useful when 4K + ultra preset starves a
+          mid-range GPU like the R9 290.
+        -->
+        <div class="row">
+          <label>
+            <span>Render scale</span>
+            <select name="render_scale" id="render-scale">
+              <option value="1">Native (100%)</option>
+              <option value="0.75">75%</option>
+              <option value="0.5">50%</option>
+              <option value="0.25">25%</option>
+            </select>
+          </label>
+        </div>
+        <script>
+          // Wire the render-scale dropdown: pre-select from URL,
+          // update URL on change, live-apply if init3D is up.
+          (function () {
+            const sel = document.getElementById("render-scale");
+            if (!sel) return;
+            const urlInitial =
+              new URLSearchParams(window.location.search).get("renderScale");
+            if (urlInitial) {
+              const opt = sel.querySelector(`option[value="${urlInitial}"]`);
+              if (opt) opt.selected = true;
+            }
+            sel.addEventListener("change", function (e) {
+              const v = e.target.value;
+              const u = new URL(window.location.href);
+              u.searchParams.set("renderScale", v);
+              history.replaceState(null, "", u.toString());
+              if (typeof window.__setRenderScale === "function") {
+                window.__setRenderScale(parseFloat(v));
+              }
+            });
+          })();
+        </script>
         <div id="server-meta" class="hint" hidden></div>
         <!-- disabled by default so the user gets visual feedback
              that the page isn't ready yet; the script enables it

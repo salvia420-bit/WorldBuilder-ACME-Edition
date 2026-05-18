@@ -199,7 +199,46 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   // Cap DPR at 2 — beyond that the cost outpaces the visual gain on
   // a textured-mesh scene of this complexity.
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  // 2026-05-18 — `?renderScale=N` lets the user dial back the
+  // framebuffer resolution without changing the canvas's CSS size.
+  // pixelRatio = clamp(devicePixelRatio, 1..2) × scale. A 4K monitor
+  // running at scale=0.5 renders at 1920x1080 internally and upscales
+  // via the canvas's CSS size — same image area, ~1/4 the GPU pixels.
+  // Live-tunable: `window.__setRenderScale(0.5)`.
+  let _renderScale = 1;
+  try {
+    const _params = new URLSearchParams(window.location.search);
+    const _raw = parseFloat(_params.get("renderScale") ?? "");
+    if (Number.isFinite(_raw) && _raw > 0 && _raw <= 2) _renderScale = _raw;
+  } catch (_) { /* default 1 */ }
+  const _basePixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+  renderer.setPixelRatio(_basePixelRatio * _renderScale);
+  // Expose a live setter so the user can sweep render scale from
+  // devtools without reloading. Re-applies pixel ratio and re-fires
+  // setSize on the renderer + atmosphere pipeline + cloud overlay so
+  // every RT in the chain rebuilds at the new resolution.
+  if (typeof window !== "undefined") {
+    window.__setRenderScale = (scale) => {
+      const n = Number(scale);
+      if (!Number.isFinite(n) || n <= 0 || n > 2) {
+        // eslint-disable-next-line no-console
+        console.warn(`[render-scale] invalid value ${scale}; expected (0, 2]`);
+        return;
+      }
+      _renderScale = n;
+      const pr = Math.min(window.devicePixelRatio || 1, 2) * n;
+      renderer.setPixelRatio(pr);
+      // Re-size at the current CSS size so the RTs rebuild.
+      const cssW = canvas.clientWidth || canvas.width;
+      const cssH = canvas.clientHeight || canvas.height;
+      renderer.setSize(cssW, cssH, false);
+      const lp = (typeof window !== "undefined") ? window.liveScene3d : null;
+      try { lp?.atmospherePipeline?.setSize?.(cssW, cssH); } catch (_) {}
+      try { lp?.cloudOverlay?.setSize?.(cssW, cssH); } catch (_) {}
+      // eslint-disable-next-line no-console
+      console.log(`[render-scale] applied scale=${n} → pixelRatio=${pr}`);
+    };
+  }
   renderer.setSize(cssW, cssH, false);
   renderer.setClearColor(0x101418, 1);
 
