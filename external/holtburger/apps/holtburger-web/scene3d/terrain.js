@@ -102,16 +102,17 @@ const DEFAULT_DETAIL_SCALE = 16.0;
 // ----- Phase 1.3 — triplanar mapping on terrain slopes --------------
 //
 // Slope is computed in AC-space (Z-up): `slope = 1.0 - normal.z`.
-// Below `TRIPLANAR_SLOPE_LO`, pure grid-UV sampling. Above
+// Below the LO slope threshold, pure grid-UV sampling. Above
 // `TRIPLANAR_SLOPE_HI`, pure triplanar. Between, `smoothstep` lerp.
-// 0.2 / 0.5 mirrors the hand-off-note recommendation; 0.2 ≈ 11° from
-// horizontal (treats gentle rises as flat), 0.5 ≈ 30° (point at which
-// stretching becomes objectionable).
+// HI=0.5 ≈ 30° (point at which UV stretching becomes objectionable).
+// LO was 0.2 ≈ 11° from horizontal; Perf D3 moves the LO end into the
+// quality preset (`triplanarSlopeThresholdPct`, 0..100 → 0.0..1.0) so
+// `mid` can raise it to 0.6 (steep cliffs only) and `high`/`ultra`
+// keep the 0.3 audit value.
 //
 // Triplanar sharpness 6.0 is the centre of the 4-8 sweet spot per the
 // hand-off note. Lower values produce muddy blends; higher values
 // produce hard seams at 45°.
-const TRIPLANAR_SLOPE_LO = 0.2;
 const TRIPLANAR_SLOPE_HI = 0.5;
 const DEFAULT_TRIPLANAR_SHARPNESS = 6.0;
 
@@ -302,6 +303,13 @@ uniform float uDetailNormalEnabled;   // 0.0 OFF / 1.0 ON (quality gate)
 // DEFAULT_TRIPLANAR_SHARPNESS comment on the JS side).
 uniform float uTriplanarEnabled;
 uniform float uTriplanarSharpness;
+// Perf D3 — slope threshold (LO end of the smoothstep). Driven by the
+// quality preset's triplanarSlopeThresholdPct (0..100 -> 0.0..1.0).
+// low/100 effectively keeps triBlend at 0; mid/60 restricts triplanar
+// to the steepest cliffs; high+ultra/30 matches the legacy 0.3 gate.
+// HI end remains the JS constant TRIPLANAR_SLOPE_HI baked into the
+// shader source — only the LO end varies per quality.
+uniform float uTriplanarSlopeLo;
 // Phase 2.2 — shared wall-clock seconds + water flag for UV scroll +
 // tint modulation. uDisplacementEnabled gates both effects so they
 // stay quiet at subdivLevel=1 (matches the vertex-shader gate).
@@ -542,7 +550,7 @@ void main() {
       vec3 n = normalize(vAcNormal);
       float slope = 1.0 - n.z;
       float triBlend = uTriplanarEnabled > 0.5
-        ? smoothstep(${TRIPLANAR_SLOPE_LO.toFixed(3)}, ${TRIPLANAR_SLOPE_HI.toFixed(3)}, slope)
+        ? smoothstep(uTriplanarSlopeLo, ${TRIPLANAR_SLOPE_HI.toFixed(3)}, slope)
         : 0.0;
       vec2 detailUvXy = vGridUv * uDetailScale;
       // Slice 2 = sand. Rotate the sample UV by uWindDir = (cos θ, sin θ)
@@ -719,6 +727,14 @@ async function resolveTerrainRingOpts(
   // wired (no point triplanar-sampling a no-op).
   const triplanarEnabled =
     !!scene3d.quality?.flags?.triplanar && detailNormalEnabled;
+  // Perf D3 — slope LO threshold derived from the quality preset
+  // (0..100 int → 0.0..1.0 float). Defensive fallback to 30 (= 0.3)
+  // mirrors the high/ultra preset and the audit's documented gate.
+  const triplanarSlopeThresholdPct =
+    Number.isFinite(scene3d?.quality?.flags?.triplanarSlopeThresholdPct)
+      ? scene3d.quality.flags.triplanarSlopeThresholdPct
+      : 30;
+  const triplanarSlopeLo = triplanarSlopeThresholdPct / 100.0;
   // Per-ring codeToSlice uniform array — int[32] keyed by terrain
   // code. Built once and shared by reference across every LB material.
   const codeToSliceArr = Array.from(TERRAIN_CODE_TO_DETAIL_SLICE).map(
@@ -814,6 +830,7 @@ async function resolveTerrainRingOpts(
     detailNormalEnabled,
     detailNormalArrayTex,
     triplanarEnabled,
+    triplanarSlopeLo,
     codeToSliceArr,
     subdivLevel,
     canSubdivide,
@@ -1049,6 +1066,10 @@ export async function bakeTerrainForLandblock(
       // detail-normal falls back to the XY-only Phase 1.2 path.
       uTriplanarEnabled: { value: opts.triplanarEnabled ? 1.0 : 0.0 },
       uTriplanarSharpness: { value: DEFAULT_TRIPLANAR_SHARPNESS },
+      // Perf D3 — per-quality slope LO threshold. `opts.triplanarSlopeLo`
+      // is resolved from `quality.flags.triplanarSlopeThresholdPct / 100`
+      // in resolveTerrainRingOpts (defensive fallback 30 → 0.3).
+      uTriplanarSlopeLo: { value: opts.triplanarSlopeLo },
       // Phase 2.2 — animated displacement uniforms. uTime is pushed
       // from `loop.js::tickPerFrame` once per rAF via the shared
       // `scene3d.terrainMaterials` registry below. uWaterCodeMask /
@@ -1208,7 +1229,10 @@ export async function bakeTerrainForLandblock(
     // any given fragment without re-reading the shader source.
     triplanarEnabled: opts.triplanarEnabled,
     triplanarSharpness: opts.triplanarEnabled ? DEFAULT_TRIPLANAR_SHARPNESS : 0,
-    triplanarSlopeLo: TRIPLANAR_SLOPE_LO,
+    // Perf D3 — opts-driven LO (per-quality) replaces the prior constant.
+    // HI end is still the JS-side TRIPLANAR_SLOPE_HI baked into the
+    // shader source.
+    triplanarSlopeLo: opts.triplanarSlopeLo,
     triplanarSlopeHi: TRIPLANAR_SLOPE_HI,
     // Phase 2.1 — actual subdivision factor used for this LB.
     // 1 = no subdivision (legacy 9×9 path); 2/4/8 = subdivided.

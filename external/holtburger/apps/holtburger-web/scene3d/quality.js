@@ -26,6 +26,7 @@ export const PRESETS = {
         detailFlag: false,
         terrainDetailNormal: false,
         triplanar: false,
+        triplanarSlopeThresholdPct: 100,
         subdivLevel: 1,
         hero: false,
         pom: false,
@@ -43,6 +44,7 @@ export const PRESETS = {
         detailFlag: true,
         terrainDetailNormal: true,
         triplanar: true,
+        triplanarSlopeThresholdPct: 60,
         subdivLevel: 2,
         hero: false,
         pom: false,
@@ -60,6 +62,7 @@ export const PRESETS = {
         detailFlag: true,
         terrainDetailNormal: true,
         triplanar: true,
+        triplanarSlopeThresholdPct: 30,
         subdivLevel: 4,
         hero: true,
         pom: true,
@@ -77,6 +80,7 @@ export const PRESETS = {
         detailFlag: true,
         terrainDetailNormal: true,
         triplanar: true,
+        triplanarSlopeThresholdPct: 30,
         subdivLevel: 8,
         hero: true,
         pom: true,
@@ -109,7 +113,12 @@ const BOOL_FLAGS = new Set([
 ]);
 
 // Integer-typed flags.
-const INT_FLAGS = new Set(["subdivLevel", "pomStepsPrimary", "pomStepsSelfShadow"]);
+const INT_FLAGS = new Set([
+    "subdivLevel",
+    "pomStepsPrimary",
+    "pomStepsSelfShadow",
+    "triplanarSlopeThresholdPct",
+]);
 
 function parseBool(raw) {
     const v = String(raw).toLowerCase();
