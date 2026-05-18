@@ -156,7 +156,7 @@ The rest can run in parallel waves.
 **Risk.** High. Disposing a cached material crashes future renders. Lean on the `_disposable` tag pattern; add a unit test or assertion.
 
 ## B4 — Index name→guid for `findGuidByName`
-**Severity** High • **File** `scene3d/entities.js:1162-1167`
+**Severity** High • **File** `scene3d/entities.js:1162-1167` • **Status** ✅ Done (commit `b0469a4` — Map<name, Set<guid>> indexed at spawn/remove; "first match wins" preserved via Set insertion order)
 
 **Problem.** Linear scan of `entityMap` for every remote-swing dispatch.
 
@@ -167,7 +167,7 @@ The rest can run in parallel waves.
 **Risk.** Stale entries after rename — ensure the rename path (if any) updates the index.
 
 ## B5 — Pre-allocate `nameplate_sprite.js` child-scan
-**Severity** Med • **File** `scene3d/nameplate_sprite.js:465-479`
+**Severity** Med • **File** `scene3d/nameplate_sprite.js:465-479` • **Status** ✅ Done (commit `cf23191` — scan now gated on `window.__debugNameplates` for the Vite-hot-reload race; production trusts the `inst._nameplateSprite` slot)
 
 **Problem.** Defensive O(children) scan per nameplate creation. Cheap individually, multiplies at spawn-burst.
 
@@ -189,7 +189,7 @@ The rest can run in parallel waves.
 **Risk.** None.
 
 ## B7 — Spawns: collapse double-snapshot pattern
-**Severity** Low • **File** `scene3d/spawns.js:529-575`
+**Severity** Low • **File** `scene3d/spawns.js:529-575` • **Status** ✅ Done (commit `65d6c2e` — single `buildUpd(rec, ...)` eagerly; 427 × 2 → 427 × 1 allocations on cold start)
 
 **Problem.** Synthetic spawn injection takes one snapshot in the loop and another in dispatch.
 
@@ -377,7 +377,7 @@ The rest can run in parallel waves.
 **Risk.** Visual diff — alpha-edged sprites will harden at the alphaTest threshold.
 
 ## E6 — Runtime particle-count cap
-**Severity** Low • **File** `scene3d/particles/particle_emitter.js:268`
+**Severity** Low • **File** `scene3d/particles/particle_emitter.js:268` • **Status** ✅ Done (commit `805b9ab` — `maxParticlesPerEmitter` INT_FLAG; low=64/mid=256/high=1024/ultra=2048; one-time warn per emitter DID)
 
 **Problem.** AC ParticleEmitter can request unbounded particle counts; the slot-search loop silently drops.
 
@@ -425,7 +425,7 @@ The rest can run in parallel waves.
 **Risk.** None.
 
 ## F4 — Spellbook list: diffed render
-**Severity** Med • **File** `plugins/spellbook.js:431-482`
+**Severity** Med • **File** `plugins/spellbook.js:431-482` • **Status** ✅ Done (commit `60942c9` — `Map<spellId, {row, meta}>` keeps rows; filter toggles `display`; listeners stay attached)
 
 **Problem.** `rerenderList()` clears `innerHTML` and rewires drag listeners on every filter change.
 
