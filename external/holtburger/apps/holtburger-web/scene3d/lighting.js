@@ -307,6 +307,20 @@ export function updateShadowCameraTarget(lighting, targetThreePos) {
 // change, so a fixed cap keeps shader-variance low.
 const MAX_ACTIVE_LIGHTS = 32;
 
+// Perf C6 — throttle the per-frame light distance sort. We only re-
+// sort `scene3d.activeLights` every Nth call to `capActiveLightsByDistance`
+// (unless the active light count has changed, in which case we sort
+// immediately so a fresh light doesn't sit invisible behind the cap).
+// N=4 trades up to 3 frames of staleness on the .visible top-32 set
+// for ~75% fewer sorts (a 0.5–1 ms win at ~200-light dungeon density).
+// The trade-off: a light that crosses the cap boundary by moving (player
+// or light translating) may pop in/out one tick late, visible only at
+// the very edge of the 32-light radius. The cap-cross handler (light
+// count delta) is always honoured so genuine spawn/despawn isn't
+// throttled. Bump higher (8) if frametime audits show more headroom
+// is wanted at the cost of more boundary pop.
+const LIGHT_SORT_INTERVAL = 4;
+
 // Clamp on per-light intensity. AC's `LightInfo.intensity` field has
 // no documented upper bound; capping at 8 keeps headroom for
 // gamma-corrected tone mapping without one rogue 9999.0 entry blowing
@@ -486,6 +500,27 @@ function capActiveLightsByDistance(scene3d) {
     // No camera to sort against. Leave .visible flags as-is.
     return;
   }
+
+  // Perf C6 — throttle: increment per-scene3d frame counter, then
+  // decide whether to skip the sort + .visible toggle this tick. We
+  // skip when both (a) we sorted recently (< LIGHT_SORT_INTERVAL
+  // frames ago) AND (b) the active light count is unchanged since the
+  // last sort. Any count delta (a spawn / despawn from
+  // `attachSetupModelLights` or cell unload) forces a fresh sort so a
+  // newly-attached light doesn't sit invisible behind the cap. The
+  // previous-frame .visible flags survive untouched, which IS the win
+  // — the toggle loop also gets skipped, not just the sort.
+  const frameCounter = (scene3d._lightSortFrameCounter ?? 0) + 1;
+  scene3d._lightSortFrameCounter = frameCounter;
+  const lastSortFrame = scene3d._lightSortLastFrame ?? 0;
+  const lastSortCount = scene3d._lightSortLastCount ?? -1;
+  if (
+    lastSortCount === lights.length &&
+    frameCounter - lastSortFrame < LIGHT_SORT_INTERVAL
+  ) {
+    return;
+  }
+
   const camX = camera.position.x;
   const camY = camera.position.y;
   const camZ = camera.position.z;
@@ -542,6 +577,11 @@ function capActiveLightsByDistance(scene3d) {
       light.visible = want;
     }
   }
+
+  // Perf C6 — record this sort so the next LIGHT_SORT_INTERVAL-1
+  // frames can early-out at the gate above.
+  scene3d._lightSortLastFrame = frameCounter;
+  scene3d._lightSortLastCount = lights.length;
 }
 
 function sortByDistSq(a, b) { return a.distSq - b.distSq; }
