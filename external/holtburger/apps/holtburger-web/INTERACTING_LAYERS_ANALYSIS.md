@@ -35,7 +35,7 @@ Render (atmosphere path — now the only composer path; SSAO removed 2026-05-18)
   → cloud_volume.tick           → sun dir #4 (CloudsEffect)
 ```
 
-Note sun-direction is computed **four** times, identical formula each. And there's a real ordering invariant nobody guards: `setSceneDepthTexture()` must be re-called after any composer rebuild, or the cloud overlay's depth-discard test reads garbage and clouds paint over geometry.
+Sun-direction is now centralised in `scene3d/sun_direction.js` — `sunDirFromHeadingPitch(headingDeg, pitchDeg, outVec)` for unit-vec consumers (clouds, atmosphere lights, sky/stars material) and `sunPositionFromHeadingPitch(headingDeg, pitchDeg, distance) → [x,y,z]` for the directional-light position consumer. There's still a real ordering invariant nobody guards: `setSceneDepthTexture()` must be re-called after any composer rebuild, or the cloud overlay's depth-discard test reads garbage and clouds paint over geometry.
 
 ## Cross-cutting hazards
 
@@ -73,20 +73,20 @@ CSM shadow rendering is implicit (three.js inserts it during `renderer.render()`
 
 Low-effort, high-value:
 1. Disarm spell on death / zone exit — UI lies are corrosive.
-2. Centralize sun-direction computation in one utility used by all 4 consumers.
-3. Fix the orbit (C-key second-minimap) view — currently tied to a clouds state issue; fix path lives in memory.
+2. Fix the orbit (C-key second-minimap) view — currently tied to a clouds state issue; fix path lives in memory.
 
 Medium-effort, structural:
-4. Wire `weather_state.updateFromPosition()` into the main tick loop — close the ghost module.
-5. Add `unloadLandblock(lbX, lbY)` on streaming exit — the only real memory bomb.
-6. Quality preset hot-swap or guard against runtime change (lock the URL param, force reload on change).
+3. Wire `weather_state.updateFromPosition()` into the main tick loop — close the ghost module.
+4. Add `unloadLandblock(lbX, lbY)` on streaming exit — the only real memory bomb.
+5. Quality preset hot-swap or guard against runtime change (lock the URL param, force reload on change).
 
 Investigative / unknown-cost:
-7. Add a depth-texture wiring assertion at construction; today a 1×1 stale default fails silently.
-8. Decide whether the direct render path is still reachable in practice — if not, delete it and remove the cloud-paint-over-geometry footgun.
+6. Add a depth-texture wiring assertion at construction; today a 1×1 stale default fails silently.
+7. Decide whether the direct render path is still reachable in practice — if not, delete it and remove the cloud-paint-over-geometry footgun.
 
 ## Resolved
 
+- **2026-05-18 — Sun-direction centralised.** New `scene3d/sun_direction.js` exports `sunDirFromHeadingPitch(headingDeg, pitchDeg, outVec)` and `sunPositionFromHeadingPitch(headingDeg, pitchDeg, distance) → [x,y,z]`. Four prior sites (`sky_lighting.js`, `cloud_volume.js`, `atmosphere_lights.js`, `atmosphere_sky.js`) — three of which had named local copies, one inlined — now import from the shared module. Same formula, single source. `__internals` re-exports in `sky_lighting.js` and `cloud_volume.js` keep test imports working (they point to the imported binding by the same name).
 - **2026-05-18 — Wall-clock sources fully consolidated (Phases A + B).** `scene3d/index.js` tick callback stamps `liveScene3d.frameTime = { tsMs, tsSec, dt }` each rAF. `scene3d/loop.js` `tickTerrainUTime` reads `scene3d.frameTime.tsSec`. `scene3d/cloud_overlay.js` dropped its `THREE.Clock`; `preRender(renderer, dt)` now accepts `dt` from the caller, threaded from the rAF tick via `index.js` (atmosphere path) and `sky_dome.renderSkyPass(renderer, activeCam, dt)` (direct path). Three wall-clock sources collapsed to one. Side-effect: cloud TAA dt is now capped at 100ms — friendlier for temporal stability after stalls. AC game time (`atmosphere_sky.js` → `Date.now()` + 11.34× compression) is unchanged and remains the world clock; visual-effect time vs game-time stays a clean two-axis model.
 - **2026-05-18 — SSAO removed entirely.** Deleted `scene3d/postprocess.js`, `test_visfid_p32_ssao.mjs`, `capture_visfid_p32_ssao.cjs`. Stripped `ssao` flag from `quality.js` and `test_quality_preset.mjs` (32/32 pass). Removed SSAO import, auto-disable branches, forward-decl, resize hooks, render-path branch, cloud-overlay warning, and pipeline construction from `index.js`. Comment cleanup in `atmosphere_pipeline.js` and `sky_dome.js`. Closes the "ultra+clouds silently loses SSAO" hazard by removing both sides of the conflict — atmosphere path is now the canonical composer path.
 

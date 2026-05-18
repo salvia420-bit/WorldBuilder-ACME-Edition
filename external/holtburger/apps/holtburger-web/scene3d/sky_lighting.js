@@ -75,6 +75,7 @@
 // uses this path).
 
 import * as THREE from "three";
+import { sunPositionFromHeadingPitch } from "./sun_direction.js";
 
 // ---- Default values used pre-Sky-B-population ----------------------
 // These approximate Phase 7.6's defaults but add a fog so the controller
@@ -118,40 +119,6 @@ function decodeArgb(u32) {
   const g = (u32 >>> 8) & 0xff;
   const b = u32 & 0xff;
   return [a, r, g, b];
-}
-
-/**
- * Project (heading, pitch) in DEGREES into a three.js Y-up world-
- * space position vector at radius `distance`. AC's convention is
- * heading measured on the world XY plane from +Y (north) CW, pitch
- * measured above the horizon. The AC unit vector is
- *
- *     (cos(pitch) * sin(heading),  // AC east
- *      cos(pitch) * cos(heading),  // AC north
- *      sin(pitch))                 // AC up
- *
- * Then the AC→three transform `(ax, ay, az) → (ax, az, -ay)` (same
- * rotation `worldRoot.rotation.x = -π/2` applies to its children)
- * gives:
- *
- *     three_x =  cos(pitch) * sin(heading)         [east]
- *     three_y =  sin(pitch)                        [up]
- *     three_z = -cos(pitch) * cos(heading)         [south]
- *
- * Returns `[x, y, z]` multiplied by `distance`. The directional
- * light's `.position` is in three.js world coords; with target at
- * origin, light shines FROM this position TOWARD origin (i.e. from
- * heading + pitch above the horizon, into the scene).
- */
-function sunPositionFromHeadingPitch(headingDeg, pitchDeg, distance) {
-  const headingRad = (headingDeg * Math.PI) / 180.0;
-  const pitchRad = (pitchDeg * Math.PI) / 180.0;
-  const cp = Math.cos(pitchRad);
-  const sp = Math.sin(pitchRad);
-  const x = distance * cp * Math.sin(headingRad);
-  const y = distance * sp;
-  const z = -distance * cp * Math.cos(headingRad);
-  return [x, y, z];
 }
 
 /**

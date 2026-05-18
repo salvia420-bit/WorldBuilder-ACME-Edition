@@ -13,8 +13,8 @@
 //
 // And the existing `sunDirection` uniform (a unit vec3 in the
 // post-`worldRoot.rotation.x = -π/2` three.js space) is updated from
-// state.dirHeading + state.dirPitch via the same conversion Sky-C
-// uses in `sky_lighting.js::sunPositionFromHeadingPitch`.
+// state.dirHeading + state.dirPitch via the shared
+// `./sun_direction.js::sunDirFromHeadingPitch` utility.
 //
 // **Not wired into loop.js yet.** That's Clouds-D — when the cloud
 // volume actually attaches to skyCell and renders. This module is
@@ -31,6 +31,7 @@
 //    Clouds-C in the overall volumetric-clouds plan
 
 import * as THREE from 'three';
+import { sunDirFromHeadingPitch } from './sun_direction.js';
 import { CloudsEffect, CloudLayers } from '@takram/three-clouds';
 import { AtmosphereParameters } from '@takram/three-atmosphere';
 import {
@@ -38,30 +39,6 @@ import {
 } from './weather_state.js';
 // daygroup_weather.js + the rest of weather_state.js stay on disk —
 // opt-in via window.__applyCloudWeather() for experimentation.
-
-/**
- * Convert AC sun heading (deg from north, CW) + pitch (deg from
- * horizon) to a unit direction vector in three.js space (after the
- * scene's `worldRoot.rotation.x = -π/2` flip that's already applied
- * to other lighting in `sky_lighting.js`).
- *
- * Returns the existing `outVec3` for chaining.
- */
-function sunDirFromHeadingPitch(headingDeg, pitchDeg, outVec3) {
-  const headingRad = (headingDeg * Math.PI) / 180;
-  const pitchRad = (pitchDeg * Math.PI) / 180;
-  const cp = Math.cos(pitchRad);
-  const sp = Math.sin(pitchRad);
-  // (sin(h)*cos(p), sin(p), -cos(h)*cos(p)) — derived in Sky-C, verified
-  // empirically by Sky-I-C's sun_visibility_probe (NE→ENE→N→W→SW arc
-  // across t∈[0.04, 0.18] matches canonical east-to-west sky path).
-  outVec3.set(
-    cp * Math.sin(headingRad),
-    sp,
-    -cp * Math.cos(headingRad)
-  );
-  return outVec3;
-}
 
 /**
  * @typedef {Object} SkyState

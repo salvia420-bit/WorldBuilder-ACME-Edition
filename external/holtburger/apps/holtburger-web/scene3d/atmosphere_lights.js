@@ -22,34 +22,12 @@
 // would push the camera 18 km underground in our spherical setup.)
 
 import * as THREE from "three";
+import { sunDirFromHeadingPitch } from "./sun_direction.js";
 import {
   SunDirectionalLight,
   SkyLightProbe,
   AtmosphereParameters,
 } from "@takram/three-atmosphere";
-
-/**
- * AC sun heading (deg from north, CW) + pitch (deg above horizon)
- * → unit vec3 in three.js post-`worldRoot.rotation.x=-π/2` space.
- *
- * Mirrors the same conversion in:
- *   - sky_lighting.js::sunPositionFromHeadingPitch
- *   - cloud_volume.js::sunDirFromHeadingPitch
- *
- * Kept inline rather than imported to avoid a hard dep on either of
- * those modules (atmosphere_lights is meant to OUTLIVE sky_lighting.js
- * after K.6 cleanup).
- *
- * @returns the SAME vec3 (for chaining)
- */
-function sunDirFromHeadingPitch(headingDeg, pitchDeg, outVec3) {
-  const headingRad = (headingDeg * Math.PI) / 180.0;
-  const pitchRad = (pitchDeg * Math.PI) / 180.0;
-  const cp = Math.cos(pitchRad);
-  const sp = Math.sin(pitchRad);
-  outVec3.set(cp * Math.sin(headingRad), sp, -cp * Math.cos(headingRad));
-  return outVec3;
-}
 
 /**
  * Owns the takram SunDirectionalLight + SkyLightProbe and updates them

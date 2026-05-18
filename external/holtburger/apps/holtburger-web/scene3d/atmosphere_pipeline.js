@@ -204,8 +204,9 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
 
     /**
      * Per-frame sun direction update. Caller pulls heading/pitch from
-     * AC's SkyState and supplies the unit-vec3 here. Same conversion
-     * as cloud_volume.js's sunDirFromHeadingPitch.
+     * AC's SkyState and supplies the unit-vec3 here. Use the shared
+     * `./sun_direction.js::sunDirFromHeadingPitch` utility to derive
+     * the vec3 from heading/pitch.
      */
     setSunDirection(vec3) {
       aerialPerspective.sunDirection.copy(vec3);

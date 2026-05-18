@@ -23,6 +23,7 @@
 //     just now its contents are takram's instead of the dome's.
 
 import * as THREE from "three";
+import { sunDirFromHeadingPitch } from "./sun_direction.js";
 import {
   SkyMaterial,
   StarsMaterial,
@@ -179,16 +180,8 @@ export class AtmosphereSky {
   tick(state) {
     if (!state) return;
 
-    // Sun direction from AC heading/pitch.
-    const headingRad = (state.dirHeading * Math.PI) / 180.0;
-    const pitchRad = (state.dirPitch * Math.PI) / 180.0;
-    const cp = Math.cos(pitchRad);
-    const sp = Math.sin(pitchRad);
-    this._sunDirScratch.set(
-      cp * Math.sin(headingRad),
-      sp,
-      -cp * Math.cos(headingRad)
-    );
+    // Sun direction from AC heading/pitch (shared utility).
+    sunDirFromHeadingPitch(state.dirHeading, state.dirPitch, this._sunDirScratch);
     this.skyMaterial.sunDirection.copy(this._sunDirScratch);
     if (this.starsMaterial) {
       this.starsMaterial.sunDirection.copy(this._sunDirScratch);
