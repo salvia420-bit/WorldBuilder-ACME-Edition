@@ -43,7 +43,7 @@ Sun-direction is now centralised in `scene3d/sun_direction.js` — `sunDirFromHe
 
 **Camera height patch lands one frame late.** takram computes cameraHeight via WGS-84 ellipsoid (~18km wrong); `cloud_overlay.js:379-383` overrides the uniform *after* the composer has already rendered. Teleports / vertical jumps see a frame of wrong altitude → momentary cloud-altitude pop.
 
-**weather_state is live.** `cloud_overlay.tick()` calls `updateFromPosition(camera.x, camera.z)` each frame; `cloud_volume.tick(state)` derives a DayGroup-driven profile via `weatherForState(state, state.dayGroupIndex)`, calls `updateFromDayGroup`, then `_applyWeatherToCloudLayers()`. Cloud layer altitudes/densities now track WMO étage classification + Espy's LCL formula. `window.__applyCloudWeather()` is kept as a devtools opt-in alias.
+**weather_state is partly live.** `cloud_overlay.tick()` calls `updateFromPosition(camera.x, camera.z)` each frame; `cloud_volume.tick(state)` derives a DayGroup profile and calls `updateFromDayGroup(profile)`. So `weather_state.getState()` returns live values (latitude, temperature, dewpoint, étage ranges, LCL). The corresponding `_applyWeatherToCloudLayers()` is NOT auto-called — pushing CloudLayer property writes per frame breaks terrain (invisible after the regression observed 2026-05-18). Layer apply remains opt-in via `window.__applyCloudWeather()` until the per-frame interaction with takram is root-caused.
 
 **No landblock unload exists.** Teleport from Holtburg to anywhere else and the 13×13 ring (169 LBs of geometry, materials, AABBs, audio buffers) stays resident. `cellContainers3d`, `staticsBakedLbs`, `buildingsBakedLbs` grow monotonically across the session. A long-play tour across continents is a memory time bomb.
 

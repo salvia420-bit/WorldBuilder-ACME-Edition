@@ -196,19 +196,18 @@ export class CloudVolume {
 
     this._lastState = state;
 
-    // Clouds-E.3 — WMO-anchored weather state is now live per-frame.
-    // Map SkyState + dayGroupIndex → meteorological profile (T, Td,
-    // pressure, is_storm); push into weather_state.js; apply to the
-    // takram CloudLayer altitudes/densities. The layer-apply tuning
-    // is "transparency-preserving" (probe 2026-05-16): WMO state can
-    // only RAISE cumulus base (never lower it below 600 m), and the
-    // mid/high étage layers use cirrus-class densities so they don't
-    // go opaque. window.__applyCloudWeather() remains as a devtools
-    // alias for callers that want to re-apply mid-session.
+    // Clouds-E.3 — WMO-anchored weather state is updated from the
+    // active DayGroup so downstream readers (weather_state.getState,
+    // future weather HUD) see live values. We do NOT auto-call
+    // `_applyWeatherToCloudLayers()` from the tick — rewriting takram
+    // CloudLayer channel/altitude/density per frame appears to break
+    // the cloud-shadow → terrain pipeline (terrain reads invisible).
+    // The state update alone is cheap and side-effect-free; the layer
+    // apply stays opt-in via `window.__applyCloudWeather()` until the
+    // per-frame regression is root-caused.
     try {
       const profile = weatherForState(state, state.dayGroupIndex);
       wxUpdateFromDayGroup(profile);
-      this._applyWeatherToCloudLayers();
     } catch (_) {
       // Weather wiring must not block the cloud raymarch.
     }
