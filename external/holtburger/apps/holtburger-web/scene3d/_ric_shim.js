@@ -38,15 +38,27 @@
 
 if (typeof window !== "undefined") {
   const original = window.requestIdleCallback;
+  // A7 (2026-05-18): conservative advertised budget. The takram generator
+  // checks `deadline.timeRemaining()` multiple times per iteration and
+  // runs heavy work when it sees a large slice still available. Under
+  // host load (Discord screen-share, OBS, VS Code) actual main-thread
+  // idle is more like 5–10 ms; advertising 50 ms produced visible
+  // main-thread tasks > 100 ms. 30 ms is conservative enough that the
+  // generator yields sooner, while still being well above any single
+  // Bruneton inner-iteration cost so the bake still completes in
+  // roughly the same wall-clock (~700 ms in-game on the 1070).
+  const ACTUAL_BUDGET_MS = 30;
+  // One-time-warn rate limit for budget overruns (> 50 ms actually
+  // elapsed inside a single microtask). Closure-scoped so it persists
+  // across all shim invocations on this page load, but resets on reload.
+  let _ricShimOverrunWarned = false;
   // Replace unconditionally. Even if the host provides a native rIC,
   // the takram generator's per-iteration latency dominates the bake's
   // ~700 ms runtime — microtask scheduling is the safer default.
   window.requestIdleCallback = function (cb /* opts unused — see header */) {
     // Mirror the deadline shape the takram code reads
-    // (`{didTimeout, timeRemaining()}`). The 50 ms budget is large
-    // enough that takram won't preemptively yield mid-iteration even
-    // for the multipleScattering precompute (Bruneton's slowest pass).
-    const start =
+    // (`{didTimeout, timeRemaining()}`).
+    const microtaskStart =
       typeof performance !== "undefined" ? performance.now() : Date.now();
     // Use microtask via Promise.resolve().then so the iteration runs
     // on the next tick without waiting for an idle slot. setTimeout(0)
@@ -55,13 +67,30 @@ if (typeof window !== "undefined") {
       cb({
         didTimeout: false,
         timeRemaining: function () {
-          const elapsed =
-            (typeof performance !== "undefined"
+          const now =
+            typeof performance !== "undefined"
               ? performance.now()
-              : Date.now()) - start;
-          return Math.max(0, 50 - elapsed);
+              : Date.now();
+          return Math.max(0, ACTUAL_BUDGET_MS - (now - microtaskStart));
         },
       });
+      // Track actual elapsed at end-of-callback (after the user loop
+      // returns). Stash for devtools + FPS validator. If we overshot
+      // 50 ms, emit a one-time warn so dev sessions notice host stalls.
+      const actualElapsed =
+        (typeof performance !== "undefined"
+          ? performance.now()
+          : Date.now()) - microtaskStart;
+      window.__ricShimLastBudgetMs = actualElapsed;
+      if (actualElapsed > 50 && !_ricShimOverrunWarned) {
+        _ricShimOverrunWarned = true;
+        console.warn(
+          "[_ric_shim] microtask overran 50 ms budget (actual " +
+            actualElapsed.toFixed(1) +
+            " ms). Host is under load; takram bake may produce long tasks. " +
+            "This warning fires once per page load."
+        );
+      }
     });
     // Return a non-zero handle so callers that store + cancelIdleCallback
     // it don't get tripped up by 0/undefined.
