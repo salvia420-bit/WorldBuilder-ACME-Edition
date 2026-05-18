@@ -604,7 +604,10 @@ function drainEntityEvents3D(scene3d, sessionHandle) {
         const meta = toMeta(upd);
         em.spawn(meta);
       } else if (kind === KIND_REMOVE) {
-        em.remove(upd.guid >>> 0);
+        // A4 (2026-05-18): prune __lastEntityWorldPos on despawn to bound Map growth.
+        const g = upd.guid >>> 0;
+        em.remove(g);
+        if (window.__lastEntityWorldPos) window.__lastEntityWorldPos.delete(g);
       } else if (kind === KIND_POSITION) {
         // The 2D path translates LB-local → world; the 3D path's
         // setPose takes world coords already (rig.position is world,
@@ -700,7 +703,10 @@ export function installSharedDrainHook(scene3d) {
         if (kind === KIND_SPAWN) {
           em.spawn(toMeta(upd));
         } else if (kind === KIND_REMOVE) {
-          em.remove(upd.guid >>> 0);
+          // A4 (2026-05-18): prune __lastEntityWorldPos on despawn to bound Map growth.
+          const g = upd.guid >>> 0;
+          em.remove(g);
+          if (window.__lastEntityWorldPos) window.__lastEntityWorldPos.delete(g);
         } else if (kind === KIND_POSITION) {
           const lbId = upd.landblockId >>> 0;
           const lbX = (lbId >>> 24) & 0xff;
