@@ -537,8 +537,32 @@ function renderAttackControls(bodyEl, state) {
     let refillStartMs = 0;
     let refillDurMs = 1500;
     let rafId = 0;
+    // F2: when the bar / panel is hidden mid-refill we stop scheduling
+    // rAFs and remember to resume on the next visible frame so the
+    // power slider, refill duration, and elapsed time all stay correct.
+    let pendingResume = false;
+    let visibilityObserver = null;
+
+    function isHidden() {
+      // offsetParent === null catches display:none on any ancestor and
+      // detachment from the DOM. It's the cheapest layout-free check
+      // (no getBoundingClientRect → no forced reflow).
+      return meterFill.offsetParent === null;
+    }
 
     function tick() {
+      // F2 gate — bail without scheduling another frame if the meter
+      // (or any ancestor) is display:none / detached. The next
+      // combatCommenceAttack will reset state + restart; the
+      // visibilityObserver below picks up "becomes visible again with
+      // refill still in flight" so the meter resumes from where it
+      // would have been.
+      if (isHidden()) {
+        pendingResume = true;
+        rafId = 0;
+        return;
+      }
+      pendingResume = false;
       const elapsed = performance.now() - refillStartMs;
       const t = Math.min(1, elapsed / refillDurMs);
       meterFill.style.width = `${(t * 100).toFixed(1)}%`;
@@ -551,6 +575,31 @@ function renderAttackControls(bodyEl, state) {
       }
     }
 
+    // F2 restart path — watch the panel subtree for attribute changes
+    // (display / class toggles on any ancestor of the meter). When the
+    // meter flips back to visible while a refill is still pending,
+    // re-enter tick() so the loop picks up from where it left off
+    // (refillStartMs is preserved across the hidden interval, so the
+    // first visible frame snaps to the correct elapsed position).
+    if (typeof MutationObserver === "function") {
+      visibilityObserver = new MutationObserver(() => {
+        if (pendingResume && !isHidden() && rafId === 0) {
+          rafId = requestAnimationFrame(tick);
+        }
+      });
+      // Walk up to the nearest containing panel root (or body) and
+      // watch style/class mutations on each ancestor. attributeFilter
+      // keeps the observer cheap.
+      let node = meterFill.parentElement;
+      while (node && node !== document.body) {
+        visibilityObserver.observe(node, {
+          attributes: true,
+          attributeFilter: ["style", "class", "hidden"],
+        });
+        node = node.parentElement;
+      }
+    }
+
     const onCommence = () => {
       // Power slider drives expected refill duration.
       const power = (window.__combatBarState?.powerLevel ?? 1.0);
@@ -560,6 +609,15 @@ function renderAttackControls(bodyEl, state) {
       meter.classList.add("refilling");
       meterFill.style.width = "0%";
       if (rafId) cancelAnimationFrame(rafId);
+      // F2: if the bar is hidden right now, mark pending so the
+      // visibilityObserver picks it up when we become visible again.
+      // Don't schedule a frame we'd immediately bail on.
+      if (isHidden()) {
+        pendingResume = true;
+        rafId = 0;
+        return;
+      }
+      pendingResume = false;
       rafId = requestAnimationFrame(tick);
     };
     const onDone = () => {
@@ -569,12 +627,23 @@ function renderAttackControls(bodyEl, state) {
       meterFill.style.width = "100%";
       if (rafId) cancelAnimationFrame(rafId);
       rafId = 0;
+      pendingResume = false;
     };
 
     client.events.on("combatCommenceAttack", onCommence);
     client.events.on("attackDone", onDone);
+    // F2 open-path restart: if attachPowerMeter is re-entered while a
+    // refill is in flight (e.g. the panel was reopened mid-refill in
+    // a future architecture that retains meter state across opens),
+    // start the loop straight away. In the current code each activate()
+    // creates a fresh closure so this is a no-op, but the check makes
+    // the gate self-contained.
+    if (meter.classList.contains("refilling") && rafId === 0 && !isHidden()) {
+      rafId = requestAnimationFrame(tick);
+    }
     return () => {
       if (rafId) cancelAnimationFrame(rafId);
+      if (visibilityObserver) visibilityObserver.disconnect();
       client.events.off("combatCommenceAttack", onCommence);
       client.events.off("attackDone", onDone);
     };
