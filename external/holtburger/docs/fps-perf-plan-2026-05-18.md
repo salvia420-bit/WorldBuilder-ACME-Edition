@@ -215,7 +215,7 @@ The rest can run in parallel waves.
 **Risk.** High blast radius — touches indoor rendering. Stage behind a `?envcellFusion=1` flag during shakedown.
 
 ## C2 — Gate statics `receiveShadow` on distance / tier
-**Severity** High • **File** `scene3d/statics.js:508-520`
+**Severity** High • **File** `scene3d/statics.js:508-520` • **Status** ✅ Done (commit `8ceafa0` — `low`-preset gate only; distance-tier follow-on remains open)
 
 **Problem.** All 16,700 placements set `receiveShadow=true`; CSM frustum-test cost scales linearly.
 
@@ -237,7 +237,7 @@ The rest can run in parallel waves.
 **Risk.** Same as C2.
 
 ## C4 — CSM skip-rebuild when camera + sun unchanged
-**Severity** High • **File** `scene3d/csm.js:388-413`
+**Severity** High • **File** `scene3d/csm.js:388-413` • **Status** ✅ Done (commit `b089c6d`)
 
 **Problem.** All 3 cascades re-fit every frame (corner transforms, AABB, texel snap, matrix updates).
 
@@ -259,7 +259,7 @@ The rest can run in parallel waves.
 **Risk.** Same caveat as B3 — disposing a shared cache material crashes.
 
 ## C6 — Throttle the per-frame light distance sort
-**Severity** Med • **File** `scene3d/lighting.js:534`
+**Severity** Med • **File** `scene3d/lighting.js:534` • **Status** ✅ Done (commit `cb8527f`)
 
 **Problem.** `scratch.sort(sortByDistSq)` over 100–300+ lights every frame is ~0.5–1 ms.
 
@@ -296,7 +296,7 @@ The rest can run in parallel waves.
 **Risk.** None — measurement first.
 
 ## D2 — POM step-count quality knob
-**Severity** Med • **File** `scene3d/materials.js:519-521, 524-525`
+**Severity** Med • **File** `scene3d/materials.js:519-521, 524-525` • **Status** ✅ Done (commit `fede972`)
 
 **Problem.** Stone/brick/tile POM is 16 primary + 8 self-shadow steps at close range; close-up walls = expensive per-pixel.
 
@@ -458,7 +458,7 @@ The rest can run in parallel waves.
 **Risk.** Slight delay on first paint after a resize — acceptable.
 
 ## F7 — Pre-filter picking raycast targets
-**Severity** Med • **File** `scene3d/picking.js:145-156`
+**Severity** Med • **File** `scene3d/picking.js:145-156` • **Status** ✅ Done (commit `9c64bdb`)
 
 **Problem.** Raycast walks the entire `entityManager.entityMap` on every click. With 16,700 statics that's a click-stall risk if `recursive=true`.
 
