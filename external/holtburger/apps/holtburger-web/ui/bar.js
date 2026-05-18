@@ -627,6 +627,52 @@ export function mountBar({ client, root, slots: slotsOpt }) {
 
   root.appendChild(bar);
 
+  // F6 — Avoid forced sync layout on bar repositioning.
+  // Cache the bar's content-box size; refresh via ResizeObserver instead of
+  // re-reading getBoundingClientRect() inside a rAF after every style write.
+  // One synchronous read at init seeds the cache so applyPosition() (called
+  // a few lines below at the initial-apply block) has real numbers; the
+  // observer then keeps `cachedBounds` current and drives re-clamps after
+  // orientation flips and other size-changing edits without a sync layout.
+  const initRect = bar.getBoundingClientRect();
+  const cachedBounds = { width: initRect.width, height: initRect.height };
+  let observedAtLeastOnce = false;
+  const barResizeObserver = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      // Prefer borderBoxSize so we include padding+border like getBoundingClientRect does.
+      const box = entry.borderBoxSize && entry.borderBoxSize[0];
+      if (box) {
+        cachedBounds.width = box.inlineSize;
+        cachedBounds.height = box.blockSize;
+      } else {
+        cachedBounds.width = entry.contentRect.width;
+        cachedBounds.height = entry.contentRect.height;
+      }
+    }
+    // Skip the very first observer fire — it just reports the same bounds
+    // we already seeded synchronously, and re-clamping here would race with
+    // applyPosition() during init.
+    if (!observedAtLeastOnce) {
+      observedAtLeastOnce = true;
+      return;
+    }
+    // Bounds changed (e.g. orientation flip, icon count, settings tab swap):
+    // re-clamp the explicit position against the new size and keep the
+    // settings popover anchored to the bar.
+    if (state.left != null && state.top != null) {
+      const c = clampToViewport(state.left, state.top, cachedBounds.width, cachedBounds.height);
+      if (c.left !== state.left || c.top !== state.top) {
+        state.left = c.left;
+        state.top = c.top;
+        bar.style.left = `${state.left}px`;
+        bar.style.top = `${state.top}px`;
+        persist();
+      }
+    }
+    if (settingsEl) positionSettings(settingsEl);
+  });
+  barResizeObserver.observe(bar);
+
   // Pill (minimized state) — created lazily.
   let pill = null;
 
@@ -667,18 +713,18 @@ export function mountBar({ client, root, slots: slotsOpt }) {
       bar.style.left = `${state.left}px`;
       bar.style.top = `${state.top}px`;
       bar.style.bottom = "auto";
-      // Re-clamp on next frame once layout is known.
-      requestAnimationFrame(() => {
-        const rect = bar.getBoundingClientRect();
-        const c = clampToViewport(state.left, state.top, rect.width, rect.height);
-        if (c.left !== state.left || c.top !== state.top) {
-          state.left = c.left;
-          state.top = c.top;
-          bar.style.left = `${state.left}px`;
-          bar.style.top = `${state.top}px`;
-          persist();
-        }
-      });
+      // F6 — re-clamp using cached bounds maintained by the ResizeObserver
+      // installed at bar mount. No rAF, no fresh getBoundingClientRect read;
+      // a subsequent observer fire will catch any size change that happened
+      // between writes (e.g. icon count) and run the re-clamp from there.
+      const c = clampToViewport(state.left, state.top, cachedBounds.width, cachedBounds.height);
+      if (c.left !== state.left || c.top !== state.top) {
+        state.left = c.left;
+        state.top = c.top;
+        bar.style.left = `${state.left}px`;
+        bar.style.top = `${state.top}px`;
+        persist();
+      }
     } else {
       bar.style.transform = "translateX(-50%)";
       bar.style.left = "50%";
@@ -817,20 +863,12 @@ export function mountBar({ client, root, slots: slotsOpt }) {
         orientBtns.forEach((b) =>
           b.classList.toggle("active", b.dataset.orient === o));
         applyOrientation();
-        if (state.left != null && state.top != null) {
-          requestAnimationFrame(() => {
-            const rect = bar.getBoundingClientRect();
-            const c = clampToViewport(state.left, state.top, rect.width, rect.height);
-            state.left = c.left;
-            state.top = c.top;
-            bar.style.left = `${state.left}px`;
-            bar.style.top = `${state.top}px`;
-            positionSettings(el);
-            persist();
-          });
-        } else {
-          persist();
-        }
+        // F6 — orientation flip changes the bar's box size; the
+        // ResizeObserver installed at mount fires and runs the re-clamp +
+        // settings-popover reposition from cached bounds. No rAF + sync
+        // layout read here. We still need to persist the new orientation,
+        // and the observer only persists when clamping moved the bar.
+        persist();
       };
       orientBtns.forEach((b) => b.addEventListener("click", onOrient));
 
@@ -1106,6 +1144,7 @@ export function mountBar({ client, root, slots: slotsOpt }) {
     destroy() {
       closePanel();
       closeSettings();
+      barResizeObserver.disconnect();
       window.removeEventListener("mousemove", onBarMouseMove);
       window.removeEventListener("mouseup", onBarMouseUp);
       bar.removeEventListener("mousedown", onBarMouseDown);
