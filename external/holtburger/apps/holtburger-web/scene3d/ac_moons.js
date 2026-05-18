@@ -40,8 +40,8 @@ const SKY_RADIUS = 2000;
 // the viewer). Tuned 2026-05-18 against the AC reference screenshot
 // (Alb'arel ~13.5% of screen height at 60° FOV); user requested
 // another 25% on top to compensate for the modern display.
-const ALB_ANGULAR_RADIUS = 0.100; // Alb'arel — primary, larger (~5.7°, ~11° dia)
-const REZ_ANGULAR_RADIUS = 0.080; // Rez'arel — companion, smaller (~4.6°, ~9° dia)
+const ALB_ANGULAR_RADIUS = 0.115; // Alb'arel — primary, larger (~6.6°, ~13° dia)
+const REZ_ANGULAR_RADIUS = 0.092; // Rez'arel — companion, smaller (~5.3°, ~10.5° dia)
 
 // Orbital periods at speedMul=1, in milliseconds of wall time.
 // Picked so a 5-10 min play session shows visible motion. AC's
