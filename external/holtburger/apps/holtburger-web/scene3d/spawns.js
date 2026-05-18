@@ -25,7 +25,10 @@
 // PIXI path stays a no-op in 3D mode because ensureEntitySprite
 // returns null when `liveScene` isn't set).
 
-const METERS_PER_LANDBLOCK = 192.0;
+// METERS_PER_LANDBLOCK was used by the previous double-snapshot
+// dispatch path; B7's collapse to a single object construction
+// removed the only reader. Re-introduce if a future dispatch path
+// needs the constant.
 
 // Phase D.1 — base URL for the staged ACE spawn JSONL files. Mirrors
 // `scene3d/statics.js`'s SCENERY_BASE_URL. The dev server's
@@ -547,32 +550,31 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
     // walk drops that to one prefetch loop's worth of round-trips
     // total (~3 rounds × ~1 RTT) — the JS-side cache fills lazily
     // via the existing AnimationCache.get path on first spawn.
+    //
+    // B7 (2026-05-18) — collapse the double-snapshot pattern. Earlier
+    // revisions built a JS-side `snapshot` here just to capture `rec`'s
+    // fields before `rec.free()`, then re-shaped that snapshot into an
+    // `upd` via `buildUpd` in the dispatch loop below. With 427 Holtburg
+    // spawns at cold-start that was 854 object literals for a single
+    // logical event. We now build `upd` directly from `rec` (the only
+    // wire-shape consumer is `dispatchSpawnUpd`); the snapshot is gone.
+    // `buildUpd` only reads — it never mutates — so calling it eagerly
+    // before `rec.free()` is safe. `setupDid` is kept as a sibling field
+    // on the pending entry so the F.40/F.41 pre-warm loops below stay
+    // O(1) lookups instead of fishing `upd.modelId` back out per pass.
     const pendingDispatches = [];
     for (const rec of records || []) {
       const wcid = rec.wcid >>> 0;
       const resolved = resolveSetup(wcidToSetup, wcid);
       if (resolved.placeholder) placeholdersCount += 1;
-      const snapshot = {
-        wcid,
-        weenieType: rec.weenieType >>> 0,
-        name: rec.name || "",
-        category: rec.isServerManaged ? "Object" : "Object",
-        landblockId: (rec.landblockId >>> 16) & 0xffff,
-        cell: rec.cell >>> 0,
-        x: rec.x,
-        y: rec.y,
-        z: rec.z,
-        qw: rec.qw,
-        qx: rec.qx,
-        qy: rec.qy,
-        qz: rec.qz,
-        isServerManaged: !!rec.isServerManaged,
-      };
-      // Free the wasm EntitySpawnJs handle now that we've snapshotted.
+      const upd = buildUpd(rec, resolved.setupDid, resolved.placeholder);
+      // Free the wasm EntitySpawnJs handle now that `upd` has captured
+      // every field `buildUpd` reads. `buildUpd` is pure read; `upd`
+      // holds its own scalars + freshly-allocated Uint32Arrays.
       if (typeof rec.free === "function") {
         try { rec.free(); } catch (_) { /* ignore */ }
       }
-      pendingDispatches.push({ snapshot, setupDid: resolved.setupDid, placeholder: resolved.placeholder });
+      pendingDispatches.push({ upd, setupDid: resolved.setupDid });
     }
 
     // F.40 pre-warm: collect unique setupDids and call the batched
@@ -718,8 +720,9 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
     // materialCache.preload / fetchEntitySurfacesPixels call there
     // short-circuits ITS prefetch loop too.
     for (const pending of pendingDispatches) {
-      const upd = buildUpd(pending.snapshot, pending.setupDid, pending.placeholder);
-      const result = dispatchSpawnUpd(upd);
+      // B7 (2026-05-18) — `upd` was constructed in the collection loop
+      // above (one allocation per spawn instead of snapshot+upd = two).
+      const result = dispatchSpawnUpd(pending.upd);
       if (result?.injected) {
         injected += 1;
         dispatchedGuids.push(result.guid);
