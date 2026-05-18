@@ -1377,10 +1377,10 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
       const acMoons = new ACMoons();
       liveScene3d.acMoons = acMoons;
       acMoons.load().then(() => {
-        acMoons.attachToScene(scene);
+        acMoons.attachToSkyScene(skyDome.skyScene);
         // eslint-disable-next-line no-console
         console.log(
-          `[ac-moons] Alb'arel + Rez'arel attached to main scene ` +
+          `[ac-moons] Alb'arel + Rez'arel attached to sky scene ` +
             `(speedMul=${acMoons._speedMul}). Tweak motion via ` +
             `?moonSpeed=N URL param.`
         );

@@ -37,11 +37,11 @@ import * as THREE from 'three';
 const SKY_RADIUS = 2000;
 
 // Angular half-radii (radians of half-angle subtended by the moon at
-// the viewer). Bumped 2× from initial 0.04/0.032 because at 1080p
-// the original sizes were too easy to miss against the atmosphere
-// scatter — dialing them back later is a 1-line change.
-const ALB_ANGULAR_RADIUS = 0.080; // Alb'arel — primary, larger (~4.6°)
-const REZ_ANGULAR_RADIUS = 0.064; // Rez'arel — companion, smaller (~3.7°)
+// the viewer). Tuned 2026-05-18 against the AC reference screenshot
+// (Alb'arel ~13.5% of screen height at 60° FOV); user requested
+// another 25% on top to compensate for the modern display.
+const ALB_ANGULAR_RADIUS = 0.100; // Alb'arel — primary, larger (~5.7°, ~11° dia)
+const REZ_ANGULAR_RADIUS = 0.080; // Rez'arel — companion, smaller (~4.6°, ~9° dia)
 
 // Orbital periods at speedMul=1, in milliseconds of wall time.
 // Picked so a 5-10 min play session shows visible motion. AC's
@@ -152,11 +152,12 @@ export class ACMoons {
       vertexShader: MOON_VERT,
       fragmentShader: MOON_FRAG,
       transparent: true,
-      // depthTest=true so terrain / buildings / mountains naturally
-      // occlude the moon when they sit between the camera and the
-      // sky-shell distance. depthWrite=false so the moon doesn't
-      // interfere with anything drawn after it (e.g. clouds).
-      depthTest: true,
+      // Sky-pass material: no depth test needed because the world
+      // pass that follows uses `clear=false, clearDepth=true` —
+      // world geometry naturally overpaints us at world pixels
+      // via the color buffer, and the cloud overlay (renderOrder
+      // 999) composites OVER us at sky pixels.
+      depthTest: false,
       depthWrite: false,
       // DoubleSide: PlaneGeometry's front face is +Z, but `lookAt`
       // orients the plane so its -Z points at the camera — i.e. the
@@ -169,37 +170,36 @@ export class ACMoons {
     // Skip frustum culling — the mesh moves around the sky shell;
     // its bounding sphere doesn't track its position cheaply.
     mesh.frustumCulled = false;
-    // Render BEFORE the cloud overlay (which is at 999) so clouds
-    // can composite over the moons. Higher than typical scene
-    // objects (default 0) so we're definitely sky-pass material.
-    mesh.renderOrder = 900;
+    // Sky-pass render order: AFTER SkyMaterial (-1) and stars (-1)
+    // so moons paint over sky background, BEFORE the cloud overlay
+    // (999) so clouds composite over moons.
+    mesh.renderOrder = 800;
     return mesh;
   }
 
   /**
-   * Attach both moon meshes to the MAIN scene (not the sky scene).
+   * Attach both moon meshes to skyDome.skyScene so they render in
+   * the sky pass — between SkyMaterial / stars (renderOrder -1) and
+   * the cloud overlay (renderOrder 999).
    *
-   * Sky scene's renderer (skyCamera) is positioned at the world
-   * camera each frame — but children of skyScene live in absolute
-   * world coords. For a player far from world origin (Holtburg ~32k
-   * units east, ~34k south), a moon at sky-shell position (~2000)
-   * is ~45 km from the camera and well past the 5000-unit far plane.
-   * The moon never reaches the GPU.
-   *
-   * Putting the moons in the main scene + updating their position
-   * each frame to `camera.position + direction * SKY_RADIUS` keeps
-   * them at a fixed apparent distance from the camera regardless of
-   * the player's world position. Same trick the parametric celestial
-   * bodies use via skyDome.skyCell.
+   * Why this works despite skyScene having its own camera (skyCamera
+   * positioned at the main camera each frame): tick() updates each
+   * moon's WORLD position to `mainCamera.position + sky-direction
+   * × SKY_RADIUS`. Since skyCamera is at mainCamera.position, the
+   * moon's position relative to skyCamera is always the same offset
+   * (camera-relative sky illusion). The earlier attempt with
+   * absolute sky-shell coords failed because for a player at ~32k
+   * world units (Holtburg), a moon at (2000, ...) is 45 km away,
+   * past the 5000-unit far plane.
    */
-  attachToScene(scene) {
-    if (!scene) return;
-    if (this.albMesh) scene.add(this.albMesh);
-    if (this.rezMesh) scene.add(this.rezMesh);
-    this._inScene = scene;
+  attachToSkyScene(skyScene) {
+    if (!skyScene) return;
+    if (this.albMesh) skyScene.add(this.albMesh);
+    if (this.rezMesh) skyScene.add(this.rezMesh);
+    this._inScene = skyScene;
   }
 
-  detachFromScene() {
+  detachFromSkyScene() {
     if (!this._inScene) return;
     if (this.albMesh) this._inScene.remove(this.albMesh);
     if (this.rezMesh) this._inScene.remove(this.rezMesh);
@@ -272,7 +272,7 @@ export class ACMoons {
   }
 
   dispose() {
-    this.detachFromScene();
+    this.detachFromSkyScene();
     const meshes = [this.albMesh, this.rezMesh];
     for (const m of meshes) {
       if (!m) continue;
