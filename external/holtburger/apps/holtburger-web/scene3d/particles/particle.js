@@ -32,6 +32,15 @@ import * as THREE from "three";
 
 import { currentTime, rng } from "./time_rng.js";
 
+// Module-private scratches for the rotation-type branch in `Particle.update()`
+// (ParabolicLVGAGR / ParabolicLVLALR / ParabolicGVGAGR). The Euler is
+// consumed in-place by `Quaternion.setFromEuler()` and the Quaternion is
+// consumed in-place by `mesh.quaternion.copy(parent.quaternion).multiply(q)`
+// — neither escapes the rotation branch, so pooling is safe. DO NOT export
+// these or retain references to them outside `update()`.
+const _scratchEuler = new THREE.Euler(0, 0, 0, "YXZ");
+const _scratchQuat = new THREE.Quaternion();
+
 /**
  * `ACE.Entity.Enum.ParticleType` — frozen enum mirror.
  * Source: external/ACE/Source/ACE.Entity/Enum/ParticleType.cs
@@ -335,11 +344,11 @@ export class Particle {
         //   rotation.X, rotation.Y, rotation.Z); then normalize.
         // YawPitchRoll in System.Numerics is (yaw=Y, pitch=X, roll=Z) per
         // .NET docs. three.js Euler default order is "XYZ".
-        const e = new THREE.Euler(lt * this.c.x, lt * this.c.y, lt * this.c.z, "YXZ");
-        const q = new THREE.Quaternion().setFromEuler(e);
+        _scratchEuler.set(lt * this.c.x, lt * this.c.y, lt * this.c.z, "YXZ");
+        _scratchQuat.setFromEuler(_scratchEuler);
         // Start from parent's orientation each tick (ACE: `new AFrame(parent)`
         // copies the orientation, then Rotate multiplies into it).
-        mesh.quaternion.copy(parent.quaternion).multiply(q).normalize();
+        mesh.quaternion.copy(parent.quaternion).multiply(_scratchQuat).normalize();
         break;
       }
       case ParticleType.Swarm: {
