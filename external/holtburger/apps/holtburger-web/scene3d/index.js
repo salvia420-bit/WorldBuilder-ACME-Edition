@@ -865,7 +865,7 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
           cloudOverlay &&
           !liveScene3dRef?.skyDome?._lastIsIndoor;
         if (cloudActive) {
-          cloudOverlay.preRender(renderer);
+          cloudOverlay.preRender(renderer, dt);
         }
         atmospherePipeline.render(activeCam);
         if (cloudActive) {
@@ -887,7 +887,7 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
     let skyRendered = false;
     if (liveScene3dRef?.skyDome) {
       try {
-        liveScene3dRef.skyDome.renderSkyPass(renderer, activeCam);
+        liveScene3dRef.skyDome.renderSkyPass(renderer, activeCam, dt);
         skyRendered = liveScene3dRef.skyDome.wasSkyRenderedLastFrame();
       } catch (e) {
         // eslint-disable-next-line no-console

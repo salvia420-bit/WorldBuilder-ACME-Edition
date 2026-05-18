@@ -4,7 +4,7 @@ Working doc. We edit this in place as we resolve things and as we learn more.
 
 ## Headlines
 
-1. **Wall-clock sources consolidated to two** (was three). Main loop stamps `scene3d.frameTime = { tsMs, tsSec, dt }` each rAF (`dt` capped at 100ms); terrain water reads from there. Cloud overlay still runs its own `THREE.Clock.getDelta()` (uncapped) — pending decision on whether to merge (Phase B). AC game time is a separate axis by design — `Date.now()` + 11.34× compression in `atmosphere_sky.js` for sun/moon/stars; that's the world clock and predominates for game-time decisions. Under frame stalls, terrain + main share the same (capped) advancement; clouds still advance at uncapped wall-clock until Phase B lands.
+1. **One wall-clock source for visual-effect time** (was three). Main loop stamps `scene3d.frameTime = { tsMs, tsSec, dt }` each rAF (`dt` capped at 100ms); terrain water reads `tsSec`, cloud overlay receives `dt` as a parameter threaded through the render call. AC game time stays a separate axis by design — `Date.now()` + 11.34× compression in `atmosphere_sky.js` for sun/moon/stars; that's the world clock and predominates for game-time decisions.
 2. **The "minimap" is the C-key camera cycle.** Press C: follow → topDown (first "minimap") → orbit (second "minimap") → follow (`camera.js:1291-1302`). The orbit view used to work but currently sits in a broken state tied to clouds; fix path lives in memory.
 
 ## Frame anatomy at clouds=on + ultra
@@ -82,13 +82,12 @@ Medium-effort, structural:
 6. Quality preset hot-swap or guard against runtime change (lock the URL param, force reload on change).
 
 Investigative / unknown-cost:
-7. Consolidate the remaining wall-clock source — cloud overlay's `THREE.Clock.getDelta()`. Switch to `scene3d.frameTime.dt`? Capping at 100ms is friendlier for TAA stability after stalls but changes the time-step semantics the cloud effect sees.
-8. Add a depth-texture wiring assertion at construction; today a 1×1 stale default fails silently.
-9. Decide whether the direct render path is still reachable in practice — if not, delete it and remove the cloud-paint-over-geometry footgun.
+7. Add a depth-texture wiring assertion at construction; today a 1×1 stale default fails silently.
+8. Decide whether the direct render path is still reachable in practice — if not, delete it and remove the cloud-paint-over-geometry footgun.
 
 ## Resolved
 
-- **2026-05-18 — Wall-clock sources consolidated (Phase A).** `scene3d/index.js` tick callback now stamps `liveScene3d.frameTime = { tsMs, tsSec, dt }` each rAF. `scene3d/loop.js` `tickTerrainUTime` reads `scene3d.frameTime.tsSec` instead of calling its own `performance.now()`. Same numeric value, single source. Cloud overlay's `THREE.Clock` is the remaining wall-clock source (triage item #7) — semantic change to TAA dt wants a deliberate decision before applying. AC game time (`atmosphere_sky.js` → `Date.now()` + 11.34× compression) is unchanged and remains the world clock; visual-effect time vs game-time stays a clean two-axis model.
+- **2026-05-18 — Wall-clock sources fully consolidated (Phases A + B).** `scene3d/index.js` tick callback stamps `liveScene3d.frameTime = { tsMs, tsSec, dt }` each rAF. `scene3d/loop.js` `tickTerrainUTime` reads `scene3d.frameTime.tsSec`. `scene3d/cloud_overlay.js` dropped its `THREE.Clock`; `preRender(renderer, dt)` now accepts `dt` from the caller, threaded from the rAF tick via `index.js` (atmosphere path) and `sky_dome.renderSkyPass(renderer, activeCam, dt)` (direct path). Three wall-clock sources collapsed to one. Side-effect: cloud TAA dt is now capped at 100ms — friendlier for temporal stability after stalls. AC game time (`atmosphere_sky.js` → `Date.now()` + 11.34× compression) is unchanged and remains the world clock; visual-effect time vs game-time stays a clean two-axis model.
 - **2026-05-18 — SSAO removed entirely.** Deleted `scene3d/postprocess.js`, `test_visfid_p32_ssao.mjs`, `capture_visfid_p32_ssao.cjs`. Stripped `ssao` flag from `quality.js` and `test_quality_preset.mjs` (32/32 pass). Removed SSAO import, auto-disable branches, forward-decl, resize hooks, render-path branch, cloud-overlay warning, and pipeline construction from `index.js`. Comment cleanup in `atmosphere_pipeline.js` and `sky_dome.js`. Closes the "ultra+clouds silently loses SSAO" hazard by removing both sides of the conflict — atmosphere path is now the canonical composer path.
 
 ## Disproved findings

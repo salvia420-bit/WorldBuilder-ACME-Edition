@@ -159,11 +159,6 @@ export class CloudOverlay {
     const h = (typeof window !== "undefined" && window.innerHeight) || 720;
     this.volume.effect.setSize(w, h);
 
-    // Per-frame dt source. The pmndrs Effect.update() contract wants
-    // a deltaTime; we don't need exact accuracy (it drives temporal
-    // jitter for TAA, not physics) so an internal clock is fine.
-    this.clock = new THREE.Clock();
-
     // === EffectComposer pipeline =====================================
     //
     // The takram CloudsEffect is designed to be driven by a pmndrs
@@ -326,18 +321,22 @@ export class CloudOverlay {
   /**
    * Run the cloud effect's raymarch into its internal render targets.
    * MUST be called before `renderOverlay()` so the overlay samples a
-   * fresh cloud buffer. Called from SkyDome.renderSkyPass, before the
-   * sky scene's render call.
+   * fresh cloud buffer. Called from SkyDome.renderSkyPass (direct
+   * path) and from scene3d/index.js's tick (atmosphere path).
    *
    * Saves + restores the renderer's render-target binding so the
    * caller doesn't get surprised by side-effects.
    *
    * @param {THREE.WebGLRenderer} renderer
+   * @param {number} [dt=0] Wall-clock seconds since last frame,
+   *   threaded from `scene3d.frameTime.dt` (capped at 100ms). Drives
+   *   the cloud effect's TAA temporal jitter. Default 0 for callers
+   *   that lack a dt (TAA simply doesn't advance that frame, which is
+   *   harmless).
    */
-  preRender(renderer) {
+  preRender(renderer, dt = 0) {
     if (!renderer) return;
     try {
-      const dt = this.clock.getDelta();
       const prevTarget = renderer.getRenderTarget();
       const prevAutoClear = renderer.autoClear;
 

@@ -48,7 +48,7 @@
 //
 //   - **Render pass.** `init3D`'s tick calls `skyDome.tick(dt,
 //     activeCam)` first (for per-frame updates), then calls
-//     `skyDome.renderSkyPass(renderer, activeCam)` AFTER the main
+//     `skyDome.renderSkyPass(renderer, activeCam, dt)` AFTER the main
 //     `renderer.render(scene, activeCam)`. The sky pass does:
 //
 //         renderer.autoClear = false;
@@ -944,7 +944,7 @@ export class SkyDome {
    *
    * After all tick functions complete, `init3D`'s render loop:
    *   a. `renderer.render(scene, activeCam)` — main world pass.
-   *   b. `skyDome.renderSkyPass(renderer, activeCam)` — sky pass.
+   *   b. `skyDome.renderSkyPass(renderer, activeCam, dt)` — sky pass.
    *
    * This method handles per-frame updates (skyCell anchoring, per-
    * object rotation, material updates); `renderSkyPass` handles the
@@ -1605,7 +1605,7 @@ export class SkyDome {
    * EnvCell renders its own walls; no sky needed). We expose
    * `wasSkyRenderedLastFrame()` so the caller can decide.
    */
-  renderSkyPass(renderer, mainCamera) {
+  renderSkyPass(renderer, mainCamera, dt = 0) {
     if (!renderer || !mainCamera) {
       this._lastSkyRendered = false;
       return;
@@ -1626,7 +1626,7 @@ export class SkyDome {
     // framebuffer is untouched. preRender saves/restores the
     // renderer's render-target binding.
     if (this.cloudOverlay) {
-      this.cloudOverlay.preRender(renderer);
+      this.cloudOverlay.preRender(renderer, dt);
     }
 
     // Clear color + depth, then render the sky. After this call the
