@@ -516,11 +516,26 @@ const POM_UNIFORM_DEFAULTS = Object.freeze({
 
 function _installPomShaderPatch(material, heightTexture, opts = {}) {
   if (!heightTexture) return;
-  const steps = opts.steps ?? POM_UNIFORM_DEFAULTS.steps;
+  // Perf D2: pull primary + self-shadow step counts from the quality
+  // preset (`pomStepsPrimary`, `pomStepsSelfShadow`) so `mid` can run
+  // POM at ~50% the cost of `high`. Per-call `opts.steps` still wins
+  // if explicitly passed (test harness, A/B). Falls through to the
+  // POM_UNIFORM_DEFAULTS (16/8) when liveScene3d.quality isn't on
+  // window yet (Node test harness, very-early init).
+  const _qFlags =
+    typeof window !== "undefined" ? window.liveScene3d?.quality?.flags : null;
+  const _qPrimary = Number.isFinite(_qFlags?.pomStepsPrimary)
+    ? _qFlags.pomStepsPrimary
+    : null;
+  const _qShadow = Number.isFinite(_qFlags?.pomStepsSelfShadow)
+    ? _qFlags.pomStepsSelfShadow
+    : null;
+  const steps = opts.steps ?? _qPrimary ?? POM_UNIFORM_DEFAULTS.steps;
   const depth = opts.depth ?? POM_UNIFORM_DEFAULTS.depth;
   const lodNear = opts.lodNear ?? POM_UNIFORM_DEFAULTS.lodNear;
   const lodFar = opts.lodFar ?? POM_UNIFORM_DEFAULTS.lodFar;
-  const shadowSteps = opts.shadowSteps ?? POM_UNIFORM_DEFAULTS.shadowSteps;
+  const shadowSteps =
+    opts.shadowSteps ?? _qShadow ?? POM_UNIFORM_DEFAULTS.shadowSteps;
   const shadowDarkness =
     opts.shadowDarkness ?? POM_UNIFORM_DEFAULTS.shadowDarkness;
   // Mark on userData BEFORE _chainBeforeCompile so the test harness can

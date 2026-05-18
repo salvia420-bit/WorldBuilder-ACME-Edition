@@ -29,6 +29,8 @@ export const PRESETS = {
         subdivLevel: 1,
         hero: false,
         pom: false,
+        pomStepsPrimary: 0,
+        pomStepsSelfShadow: 0,
         csm: false,
         bloom: false,
         vignette: false,
@@ -44,6 +46,8 @@ export const PRESETS = {
         subdivLevel: 2,
         hero: false,
         pom: false,
+        pomStepsPrimary: 8,
+        pomStepsSelfShadow: 4,
         csm: false,
         bloom: true,
         vignette: false,
@@ -59,6 +63,8 @@ export const PRESETS = {
         subdivLevel: 4,
         hero: true,
         pom: true,
+        pomStepsPrimary: 16,
+        pomStepsSelfShadow: 8,
         csm: true,
         bloom: true,
         vignette: true,
@@ -74,6 +80,8 @@ export const PRESETS = {
         subdivLevel: 8,
         hero: true,
         pom: true,
+        pomStepsPrimary: 24,
+        pomStepsSelfShadow: 12,
         csm: true,
         bloom: true,
         vignette: true,
@@ -101,7 +109,7 @@ const BOOL_FLAGS = new Set([
 ]);
 
 // Integer-typed flags.
-const INT_FLAGS = new Set(["subdivLevel"]);
+const INT_FLAGS = new Set(["subdivLevel", "pomStepsPrimary", "pomStepsSelfShadow"]);
 
 function parseBool(raw) {
     const v = String(raw).toLowerCase();
