@@ -81,6 +81,32 @@ const NDC_CORNERS = [
   [-1, -1, +1], [+1, -1, +1], [+1, +1, +1], [-1, +1, +1], // far plane
 ];
 
+// Perf C4 — thresholds for skipping the per-cascade refit when neither
+// the camera nor the sun have meaningfully moved since last frame. Both
+// are SQUARED magnitudes (avoid the sqrt in the hot path).
+//
+// Camera: 1e-4 m² ≈ 1 cm of player movement. At 60 FPS this is ~0.6 m/s,
+//   so a stationary or near-stationary player skips, but any actual
+//   walk-input (run speed ~6 m/s = 0.1 m/frame = 0.01 m² delta) rebuilds
+//   on every frame. The far cascade's texel size is 29.3 cm/texel, so
+//   a 1 cm budget is well below visible texel drift.
+//
+// Sun: 1e-6 (dimensionless on a unit-ish direction vector). The sun
+//   direction unit vector traverses 2π over a full AC day (7620 s of
+//   real time = 11.34× compressed), so per-frame change is ~9e-7 rad
+//   at 60 FPS — JUST below the threshold for the standing-still case.
+//   The texel-snap step in _fitCascade is the load-bearing anti-shimmer
+//   guard, so a tiny under-budget drift in sun direction can't manifest
+//   as visible swim until the threshold is crossed.
+//
+// Retune downward if shadow swim becomes visible on slow camera pans or
+// at solar zenith/horizon transitions. Retune upward (more aggressive
+// skipping) only if perf demands it AND the texel snap is doing its
+// job — bump cautiously, validate against the texel size of the LARGEST
+// cascade (300 m / 1024 = 0.293 m).
+const CAM_DELTA_SQ_EPS = 1e-4; // m²
+const SUN_DELTA_SQ_EPS = 1e-6; // unit-vector²
+
 /**
  * Construct the CSM bundle and attach the shadow-only cascade lights
  * to `scene`. The caller is responsible for:
@@ -175,7 +201,38 @@ export function setupCsm(scene, opts = {}) {
     // Receivers' materials register here once patched, so we can refresh
     // uniforms after each `updateCsm` without re-walking the scene.
     patchedMaterials: new Set(),
+    // Perf C4 — skip-rebuild cache. `updateCsm` compares the camera
+    // position + sun direction against these and bails out of the
+    // (3 × _fitCascade) work if both deltas are below threshold. The
+    // sentinel `NaN` here forces the FIRST `updateCsm` call after setup
+    // to always rebuild (NaN compared to anything is false → delta > eps).
+    _lastCamX: NaN,
+    _lastCamY: NaN,
+    _lastCamZ: NaN,
+    _lastSunX: NaN,
+    _lastSunY: NaN,
+    _lastSunZ: NaN,
+    /**
+     * Force the next `updateCsm` call to rebuild all cascades regardless
+     * of how small the camera / sun deltas are. Call this when:
+     *   - The quality flag toggles CSM on/off mid-session.
+     *   - The splits or mapSizes are mutated externally.
+     *   - The camera is teleported (rare; but safest to invalidate).
+     *   - Anything else has invalidated the cached cascade fit.
+     */
+    invalidate() {
+      this._lastCamX = NaN;
+      this._lastCamY = NaN;
+      this._lastCamZ = NaN;
+      this._lastSunX = NaN;
+      this._lastSunY = NaN;
+      this._lastSunZ = NaN;
+    },
     dispose() {
+      // Reset the skip-rebuild cache too, so a future re-setup that
+      // happens to reuse the same object reference (defensive — current
+      // factory always allocates fresh) starts with a forced rebuild.
+      this.invalidate();
       for (const l of lights) {
         if (l.shadow?.map?.dispose) {
           try { l.shadow.map.dispose(); } catch (_) {}
@@ -186,6 +243,20 @@ export function setupCsm(scene, opts = {}) {
   };
 
   return state;
+}
+
+/**
+ * Perf C4 — public helper for resetting the skip-rebuild cache without
+ * holding a direct reference to the state's private fields. Exported so
+ * the lighting / quality layer can invalidate on quality-flag toggle
+ * without coupling to the cache field names.
+ *
+ * @param {Object} csmState - bundle returned by `setupCsm`.
+ */
+export function invalidateCsm(csmState) {
+  if (csmState && typeof csmState.invalidate === "function") {
+    csmState.invalidate();
+  }
 }
 
 /**
@@ -231,6 +302,33 @@ export function updateCsm(csmState, camera, sunDir) {
   const ly = dir.y / lightDirLen;
   const lz = dir.z / lightDirLen;
 
+  // Perf C4 — skip the per-cascade refit when neither the camera nor
+  // the sun moved meaningfully since last frame. The cascade lights'
+  // shadow.matrix / shadow.map references stay valid across the skipped
+  // frame, so the caller's subsequent `refreshCsmUniforms` upload still
+  // pushes correct (unchanged) values to receivers. NaN sentinels in
+  // the cache force the first frame after setup to always rebuild.
+  //
+  // We cache the NORMALISED light direction (lx,ly,lz), not the raw
+  // input `dir` — because that's what _fitCascade actually consumes,
+  // and the raw input may have an arbitrary magnitude (e.g. sun
+  // position vector before normalisation).
+  const camPos = camera.position;
+  const dCamX = camPos.x - csmState._lastCamX;
+  const dCamY = camPos.y - csmState._lastCamY;
+  const dCamZ = camPos.z - csmState._lastCamZ;
+  const dSunX = lx - csmState._lastSunX;
+  const dSunY = ly - csmState._lastSunY;
+  const dSunZ = lz - csmState._lastSunZ;
+  const camDeltaSq = dCamX * dCamX + dCamY * dCamY + dCamZ * dCamZ;
+  const sunDeltaSq = dSunX * dSunX + dSunY * dSunY + dSunZ * dSunZ;
+  // NaN propagates through subtraction, so on first call (cached NaNs)
+  // both deltaSq will be NaN, NaN < eps is false → we fall through to
+  // the rebuild path. Subsequent frames compare real numbers.
+  if (camDeltaSq < CAM_DELTA_SQ_EPS && sunDeltaSq < SUN_DELTA_SQ_EPS) {
+    return;
+  }
+
   const cameraNear = camera.near;
   // For each cascade, the visible sub-frustum is between previous split
   // and this split (cascade 0: near…split[0]; cascade 1: split[0]…split[1]; etc).
@@ -247,6 +345,16 @@ export function updateCsm(csmState, camera, sunDir) {
     );
     prevSplit = splitFar;
   }
+
+  // Cache the inputs we just rebuilt against. Must happen AFTER the
+  // rebuild so an exception thrown inside _fitCascade doesn't poison
+  // the cache (next frame will retry, not silently skip).
+  csmState._lastCamX = camPos.x;
+  csmState._lastCamY = camPos.y;
+  csmState._lastCamZ = camPos.z;
+  csmState._lastSunX = lx;
+  csmState._lastSunY = ly;
+  csmState._lastSunZ = lz;
 }
 
 /**
