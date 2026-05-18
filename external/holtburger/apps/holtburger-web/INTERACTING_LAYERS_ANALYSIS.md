@@ -28,14 +28,15 @@ rAF → dt (bounded)
   ├─ applyLocalPlayerPoseFromIntegrator
   └─ nameplateLayer.tick
 
-Render (atmosphere path — now the only composer path; SSAO removed 2026-05-18):
-  preFrameSkySync → cloudOverlay.preRender → atmospherePipeline.render
-                                              (Sky→World→AerialPerspective+LensFlare+ToneMapping+Dithering)
-  → cloudOverlay.renderOverlay (samples effect.cloudsBuffer + shared depth)
+Render (atmosphere path — now the only composer path; SSAO removed):
+  preFrameSkySync → cloudOverlay.preRender(activeCam, dt) → atmospherePipeline.render(activeCam, dt)
+                    (raymarch into cloudsBuffer)             (Sky+CloudOverlayQuad → World → AerialPerspective+LensFlare+ToneMapping+Dithering)
   → cloud_volume.tick           → sun dir #4 (CloudsEffect)
 ```
 
-Sun-direction is now centralised in `scene3d/sun_direction.js` — `sunDirFromHeadingPitch(headingDeg, pitchDeg, outVec)` for unit-vec consumers (clouds, atmosphere lights, sky/stars material) and `sunPositionFromHeadingPitch(headingDeg, pitchDeg, distance) → [x,y,z]` for the directional-light position consumer. The cloud overlay's `setSceneDepthTexture()` must be re-called after any composer rebuild, or the depth-discard test reads stale handles — but the 2026-05-18 sentinel fix (see Resolved) makes the failure mode "visible without occlusion" instead of "invisible", which breaks the historic fix-break loop.
+Cloud overlay's quad is attached to the sky scene (`SkyDome.setCloudOverlay` auto-attaches via `cloudOverlay.attachToSkyScene`), so the sky pass renders sky-dome + cloud overlay together. The world pass's `clear=false, clearDepth=true` preserves sky+cloud color and lets world geometry overpaint at world pixels. No depth-texture sampling needed — render-order does the occlusion.
+
+Sun-direction is centralised in `scene3d/sun_direction.js`. Depth-correct cloud occlusion lives in render-order (cloud quad in sky scene, world pass overpaints) rather than shader-side depth-discard — the shader-side path was vendor-fragile (broken on AMD R9 290) and is retained only as an opt-in via `setDepthDiscardEnabled(true)` for future investigation.
 
 ## Cross-cutting hazards
 
@@ -61,14 +62,6 @@ Sun-direction is now centralised in `scene3d/sun_direction.js` — `sunDirFromHe
 
 **vitals-hud polls for `window.__pluginClient` every 500ms** (vitals-hud.js:141-172). First `playerStatsUpdated` after login can fire before the subscriber wires up.
 
-## Cloud + shadow interaction
-
-Two render paths handle clouds and depth differently:
-- **Atmosphere path** (your active path): cloud overlay samples `effect.cloudsBuffer` directly (not `composer.outputBuffer`). If anything reorders the EffectPass (AerialPerspective → LensFlare → ToneMapping → Dithering), clouds will read pre-tone-mapped HDR instead of final sRGB.
-- **Direct path** (no composer): cloud overlay has no depth texture wired at all — clouds paint unconditionally over geometry.
-
-CSM shadow rendering is implicit (three.js inserts it during `renderer.render()` because `shadowMap.enabled=true`). The cloud overlay's depth-discard test reads *scene* depth, not shadow-camera depth, which is correct — but there's no test exercising clouds + CSM-shadowed terrain together.
-
 ## What to triage
 
 Low-effort, high-value:
@@ -83,6 +76,10 @@ Investigative / unknown-cost:
 
 ## Resolved
 
+- **2026-05-18 — Orbit camera (C-key twice) coord-space fix.** `camera.js` orbit-mode init was using AC coords (x east, y north, z up) where three.js expected its own (x east, y up, z south). Lines `oc.target.set(0,0,0)`, `persp.position.set(p.x+8, p.y-12, p.z+8)`, `persp.lookAt(p.x, p.y, p.z)` all bypassed `acToThree`. Result on Holtburg: camera was buried 5m below ground at the wrong place; OrbitControls orbited the world origin (~125m from the player), so the user saw clouds + clearColor where terrain should be. Wrapped every position/target in `acToThree`. Orbit camera now correctly orbits the player.
+- **2026-05-18 — Render-scale URL knob + login dropdown.** `?renderScale=N` (0..2) multiplies `min(devicePixelRatio,2)` to dial back framebuffer resolution without shrinking the canvas's CSS size. Login form has a dropdown (100/75/50/25%). `window.__setRenderScale(n)` re-applies live, re-firing `setSize` on renderer + atmospherePipeline + cloudOverlay so every RT rebuilds. Lets a 4K monitor on a mid-range GPU (R9 290) render at 1080p internally for ~1/4 the GPU pixel cost.
+- **2026-05-18 — Clouds via render-order, not shader-side depth.** Replaced the shader's depth-discard approach (which AMD R9 290 sampled wrong: every fragment discarded) with attaching the cloud overlay quad to the sky scene. `SkyDome.setCloudOverlay` auto-attaches via `cloudOverlay.attachToSkyScene(skyScene)` with `renderOrder=999`. Sky pass renders sky-dome+cloud-quad → color buffer. World pass with `clear=false, clearDepth=true` preserves cloud color but clears depth → world geometry naturally overpaints at world pixels. Depth-correct without sampling any depth texture. The shader-side discard still exists behind `setDepthDiscardEnabled(true)` for future debugging.
+- **2026-05-18 — `dt` threaded to `atmospherePipeline.render` — terrain restored.** `atmospherePipeline.render(activeCam)` was being called without `dt` → `composer.render(undefined)` → some pass in the chain (DitheringEffect or AerialPerspective accumulating `time += undefined`) produced NaN-poisoned uniforms → GPU rendered nothing visible for world geometry. Pass `dt` properly and terrain comes back.
 - **2026-05-18 — Cloud depth-wire runtime assertion.** `cloud_overlay.preRender` now warns once after 60 frames of cloud-active rendering if `sceneDepthTex` is still null — flagging the "depth-aware discard never landed" silent failure. Catches: `?atmosphere=off` runs (the wire site lives inside the atmosphere init), future regressions that delete the wire block (`index.js:~1455`), or `getSceneDepthTexture()` returning null at construction. Warning text points at the wire site. Complements the constructor sentinel fix from earlier today — together they make depth-discard's failure modes loud (warning) AND graceful (sentinel keeps clouds visible).
 - **2026-05-18 — weather_state wired into the cloud tick.** `cloud_overlay.tick()` now calls `updateFromPosition(camera.x, camera.z)` each frame so latitude tracks the player's world position. `cloud_volume.tick(state)` calls `weatherForState(state, state.dayGroupIndex)` → `updateFromDayGroup(profile)` → `_applyWeatherToCloudLayers()`, mapping AC's 20 DayGroups onto a (T, Td, pressure, is_storm) profile and rewriting takram CloudLayer altitudes/densities per WMO étage classification + Espy's LCL. The layer-apply tuning is "transparency-preserving" (probe 2026-05-16): WMO state can only raise cumulus base, never lower it below 600 m, and mid/high étage layers use cirrus-class densities so they stay translucent. Ghost module is closed; `window.__applyCloudWeather()` kept as a devtools opt-in for re-applying mid-session.
 - **2026-05-18 — Cloud overlay accepts active camera (topDown follow-on).** `cloud_overlay.preRender(renderer, dt, activeCam)` now takes the world-render's active camera and propagates it to `RenderPass.camera`, `EffectPass.mainCamera`, and `CloudsEffect.mainCamera` whenever it changes. Plus `cameraHeight` uniform now reflects the active camera's world Y. In topDown mode (C-once), the cloud raymarch matches the ortho's POV instead of using the stale persp reference from before the mode switch. Callers updated: `index.js` atmosphere path and `sky_dome.renderSkyPass`. Closes the loose end from the depth-sentinel fix below.
