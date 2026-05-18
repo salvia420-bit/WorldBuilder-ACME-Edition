@@ -230,8 +230,8 @@ export class CloudVolume {
     for (const m of terrainMats) {
       const u = m?.uniforms;
       if (!u?.uCloudShadowEnabled) continue;
-      u.uCloudShadowEnabled.value = 1.0;
-      u.uCloudShadowMap.value = shadowTex;
+      if (u.uCloudShadowEnabled.value !== 1.0) u.uCloudShadowEnabled.value = 1.0;
+      if (u.uCloudShadowMap.value !== shadowTex) u.uCloudShadowMap.value = shadowTex;
       u.uCloudShadowMatrix0.value.copy(mats[0]);
     }
   }

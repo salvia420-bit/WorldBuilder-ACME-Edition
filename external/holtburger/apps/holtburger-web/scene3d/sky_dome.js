@@ -1031,7 +1031,8 @@ export class SkyDome {
     // indoor (no GPU work, just object copies). renderSkyPass already
     // gates the actual cloud raymarch + composite on `!isIndoor`.
     if (this.cloudOverlay) {
-      this.cloudOverlay.tick();
+      const cachedState = this.liveScene3dRef?.skyLightingController?._lastState ?? null;
+      this.cloudOverlay.tick(cachedState);
     }
 
     if (isIndoor) {

@@ -287,6 +287,7 @@ export class CloudOverlay {
     // capture scripts can introspect.
     this.frameCount = 0;
     this.lastError = null;
+    this._cloudsBufferUniform = null;
   }
 
   /**
@@ -397,16 +398,16 @@ export class CloudOverlay {
    * is approximately the player's XZ either way; weather doesn't need
    * 60 Hz position precision.
    */
-  tick() {
+  tick(stateOverride) {
     try {
       const handle = this.sessionHandleAccessor();
-      if (!handle) return;
       if (this.camera?.position) {
         wxUpdateFromPosition(this.camera.position.x, this.camera.position.z);
       }
-      const state = typeof handle.getSkyState === 'function'
-        ? handle.getSkyState()
-        : null;
+      const state = stateOverride
+        ?? (handle && typeof handle.getSkyState === 'function'
+              ? handle.getSkyState()
+              : null);
       if (state) this.volume.tick(state, null);
     } catch (err) {
       this.lastError = String(err);
@@ -522,7 +523,11 @@ export class CloudOverlay {
       // EffectPass's fullscreen composition output which can drop
       // alpha/RGB through its blend chain; sampling cloudsBuffer
       // directly preserves the volumetric raymarch values.)
-      const tex = this.volume.effect.uniforms?.get?.('cloudsBuffer')?.value ?? null;
+      if (!this._cloudsBufferUniform) {
+        this._cloudsBufferUniform =
+          this.volume.effect.uniforms?.get?.('cloudsBuffer') ?? null;
+      }
+      const tex = this._cloudsBufferUniform?.value ?? null;
       if (tex !== this.overlayMaterial.uniforms.cloudTex.value) {
         this.overlayMaterial.uniforms.cloudTex.value = tex;
       }

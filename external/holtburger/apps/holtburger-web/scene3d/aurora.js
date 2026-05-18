@@ -227,7 +227,7 @@ export function createAurora(opts = {}) {
   // sky-scene geometry; the radius doesn't matter for the visual since
   // we early-out by view direction, but it must be large enough that
   // the back face isn't clipped by the sky camera's far plane.
-  const geom = new THREE.SphereGeometry(5000, 24, 16);
+  const geom = new THREE.SphereGeometry(5000, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.55);
   geom.computeBoundingSphere();
   const mesh = new THREE.Mesh(geom, material);
   mesh.name = "aurora";

@@ -234,7 +234,7 @@ export class AtmosphereSky {
     getMoonDirectionECEF(gameDate, this._moonDir);
     this.skyMaterial.moonDirection.copy(this._moonDir);
     if (this.stars) {
-      this._eciToEcefMatrix.copy(getECIToECEFRotationMatrix(gameDate));
+      getECIToECEFRotationMatrix(gameDate, this._eciToEcefMatrix);
       this.stars.setRotationFromMatrix(this._eciToEcefMatrix);
     }
 
