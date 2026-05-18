@@ -43,10 +43,6 @@ export function createClient(sessionHandle) {
       }
     },
     forgetSpell(spellId) {
-      // Phase J.1 — wire `GameAction::RemoveSpellFromBook` (0x01A8).
-      sessionHandle.removeSpellFromBook(spellId);
-    },
-    forgetSpell(spellId) {
       sessionHandle.removeSpellFromBook(spellId);
     },
     get pose() {
