@@ -219,7 +219,19 @@ void main() {
     // Ominous: storm-grey with a cool blue lean. Reads as brooding
     // overcast rather than fair-weather cumulus.
     vec3 cloudCol = vec3(0.42, 0.45, 0.52);
-    rgb = mix(rgb, cloudCol, cloudAmt * uCloudIntensity);
+    // 2026-05-18 round 4: prior code passed cloudAmt * uCloudIntensity
+    // straight to mix(), which at uCloudIntensity=5.0 routinely
+    // exceeded 1.0 in the densest spots. GLSL mix() doesn't clamp —
+    // it linearly EXTRAPOLATES past cloudCol, producing saturated
+    // blue artifacts in the cloud body. Fix: clamp the blend AND
+    // taper opacity back down past t=1.0 so the would-be-blue
+    // densest spots read as the cloud thinning into transparency,
+    // matching user feedback "if those could just be transparent
+    // then that would be perfectly".
+    float t = cloudAmt * uCloudIntensity;
+    float opacity = (t < 1.0) ? t : (1.0 - (t - 1.0) * 0.4);
+    opacity = clamp(opacity, 0.0, 0.92);
+    rgb = mix(rgb, cloudCol, opacity);
 
     // -- Main alien-city hotspot ----------------------------------
     // 2026-05-18: brightness baked-down to 0.20 of the prior value
@@ -371,7 +383,9 @@ export class ACMoons {
         // coverage, slower drift (ominous read), grey-blue tint
         // baked in the shader.
         uCloudIntensity: { value: 5.0 },
-        uCloudSpeed: { value: 0.45 },
+        // Drift halved 2026-05-18 round 4 (was 0.45) — user
+        // wanted the cloud's motion across the sky slower.
+        uCloudSpeed: { value: 0.22 },
         // uCityIntensity stays at 1.0 as a "scale everything"
         // knob. The main hotspot's -80% reduction is baked into
         // the shader (×0.20 multiplier) so it survives a knob
