@@ -152,7 +152,7 @@ The rest can run in parallel waves.
 **Risk.** None.
 
 ## A5 — Detect GPU tier in quality preset selection
-**Severity** Med • **File** `scene3d/quality.js` (probe added) • **Status** Open
+**Severity** Med • **File** `scene3d/quality.js` (probe added) • **Status** ✅ Done (commit `7bdb099` — `detectGpuTier()` throwaway probe; new `"gpu-probe"` source slotted between localStorage and mobile-UA; HIGH+LOW regex classification; `WEBGL_lose_context` cleanup)
 
 **Problem.** `getQuality()` resolves the preset from URL + UA only — same `mid` default for a GTX 1050 (2.5 TF) and an RTX 4090 (165 TF). Mobile UA gets the `low` downshift; weak desktop GPUs do not. `WEBGL_debug_renderer_info` exposes a renderer string usable for coarse tier classification.
 
@@ -222,7 +222,7 @@ The probe path is browser-only; the Node smoke just verifies parse + URL/UA fall
 **Risk.** Low; ensure no reader retains a reference to the scratch buffer.
 
 ## A7 — `_ric_shim.js` time-remaining sanity check
-**Severity** Low • **File** `scene3d/_ric_shim.js:54-65` • **Status** Open
+**Severity** Low • **File** `scene3d/_ric_shim.js:54-65` • **Status** ✅ Done (commit `ed3bb34` — `ACTUAL_BUDGET_MS=30`; `window.__ricShimLastBudgetMs` telemetry; one-time overrun warn)
 
 **Problem.** The shim provides a microtask-driven fallback for `window.requestIdleCallback` so takram's atmosphere precompute can yield work across frames. It currently advertises a 50 ms time budget per microtask callback. Under host load (Discord screen-share, OBS, VS Code, etc.) actual main-thread idle time is more like 5–10 ms. The takram generator's inner loop checks `deadline.timeRemaining()`, sees 50 ms remaining, runs heavy work, overshoots — produces visible main-thread tasks > 100 ms.
 
@@ -283,7 +283,7 @@ cd /home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburge
 **Risk.** Caller-retention bug — search for any code that captures the result of the affected functions by reference.
 
 ## B3 — Complete `Entity.dispose()` to release child Geometry/Material
-**Severity** High (long-session) • **File** `scene3d/entities.js:390-410` • **Status** Open — **DO THIS FIRST** (load-bearing for C5 + E3)
+**Severity** High (long-session) • **File** `scene3d/entities.js:390-410` + `scene3d/materials.js` • **Status** ✅ Done (commit `5f4b8a6` — `__disposable` + `__cacheOwned` convention defined; helpers in entities.js; cache-install tagging in materials.js; AnimationCache shared-geometry caveat flagged as TODO follow-on)
 
 **Problem.** `Entity.dispose()` removes the rig's root group from the scene but doesn't traverse children to call `.dispose()` on geometries + materials. Over a long session of NPC spawn/despawn the page accumulates orphan geometries and materials in WebGL — `renderer.info.memory.geometries` and `.textures` grow monotonically. After ~30 minutes of populated-zone play this manifests as GPU memory pressure, then driver-side stalls.
 
@@ -485,7 +485,7 @@ Specific regression vectors to watch:
 **Risk.** Distant terrain darkening looks wrong if CSM range was tuned around all-receivers — sanity-check the cascade splits.
 
 ## C3 — Statics receiveShadow audit also covers buildings
-**Severity** Low • **File** `scene3d/buildings.js:255-258` • **Status** Open (small follow-on to C2)
+**Severity** Low • **File** `scene3d/buildings.js:255-258` • **Status** ✅ Done (commit `ac89f08` — `buildingsReceiveShadow` predicate mirrors C2's `staticsReceiveShadow`; threaded via `resolveBuildingsOpts`; one touch-point covers both ring-bake and per-LB lazy-hook paths)
 
 **Problem.** Buildings set `receiveShadow=true` per-surface (correctly — translucent surfaces get the per-material gate). Holtburg has ~46 building placements at radius=1 × ~8 parts × ~2–3 meshes/part ≈ 460+ receiver meshes. Each is individually testable in the CSM frustum-cull pass. Less impactful than the 16,700-static C2 win, but the same pattern applies.
 
@@ -918,7 +918,7 @@ cd /home/wbterminal/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburge
 **Risk.** None.
 
 ## F6 — Replace forced-sync layout in bar positioning
-**Severity** Med • **File** `ui/bar.js:580, 709` • **Status** Open (read fresh — file has recent prelude work)
+**Severity** Med • **File** `ui/bar.js:580, 709` • **Status** ✅ Done (commit `d904c5b` — option (b): synchronous seed + `ResizeObserver(bar)` thereafter; `observedAtLeastOnce` guard prevents init-race; observer disconnect added to `destroy()`; bonus: auto-reclamps on icon-size slider changes)
 
 **Problem.** Two sites in `ui/bar.js` schedule a `requestAnimationFrame(() => bar.getBoundingClientRect())` after style writes. This pattern forces a synchronous layout flush — even when the layout hasn't actually changed in a way that requires it. Bar repositioning + orientation toggles produce "Forced reflow" warnings in Chrome devtools.
 
