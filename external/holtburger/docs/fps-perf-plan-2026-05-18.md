@@ -64,7 +64,7 @@ The rest can run in parallel waves.
 **Risk.** Any downstream code that captured the old object literal by reference will break — grep for `__lastEntityWorldPos` and `KIND_POSITION` consumers first.
 
 ## A3 — Add dt-recovery lerp after tab unfocus
-**Severity** Med • **File** `scene3d/index.js:820-825`
+**Severity** Med • **File** `scene3d/index.js:820-825` • **Status** ✅ Done (commit `936d54d` — "skip simulation" rather than ramp; 0.5 s trigger, 10-frame recovery)
 
 **Problem.** `dt = Math.min((ts - lastFrameTs)/1000, 0.1)` caps at 100 ms but applies that full 100 ms instantly on the first post-unfocus frame, producing a visible snap.
 
@@ -123,7 +123,7 @@ The rest can run in parallel waves.
 # Workstream B — Entities + animation + dispose
 
 ## B1 — Frustum + distance gate on `entities.tick()`
-**Severity** High • **File** `scene3d/entities.js:2005-2083`
+**Severity** High • **File** `scene3d/entities.js:2005-2083` • **Status** ✅ Done (commit `8d71b7f` — distance-only MVP; frustum cull is the follow-on)
 
 **Problem.** `for (const e of this.entityMap.values())` updates mixers, hooks, tweens for every entity regardless of camera visibility or distance. Academy has 104 spawns; typically ~20 are in PVS + frustum.
 
@@ -307,7 +307,7 @@ The rest can run in parallel waves.
 **Risk.** Visual diff vs `high` — expected.
 
 ## D3 — Triplanar slope gate audit
-**Severity** Med • **File** `scene3d/terrain.js:542-582`
+**Severity** Med • **File** `scene3d/terrain.js:542-582` • **Status** ✅ Done (commit `8664218` — new `triplanarSlopeThresholdPct` int flag; mid=60 / high+ultra=30; note shifts shader-baked 0.2 → uniform default 0.3 at high/ultra)
 
 **Problem.** Triplanar = 3× detail-normal samples on slopes. Activates at slope ≥ 0.3.
 
@@ -355,7 +355,7 @@ The rest can run in parallel waves.
 **Risk.** Same dispose-shared-material caveat as B3/C5.
 
 ## E4 — Drop per-frame `Vector3.clone()` in birthrate-per-meter
-**Severity** Med • **File** `scene3d/particles/particle_emitter.js:160`
+**Severity** Med • **File** `scene3d/particles/particle_emitter.js:160` • **Status** ✅ Done (commit `80e9812`)
 
 **Problem.** BirthratePerMeter allocates a fresh Vector3 per tick.
 
@@ -392,7 +392,7 @@ The rest can run in parallel waves.
 # Workstream F — UI plugins + HUD + picking
 
 ## F1 — Debounce / coalesce combat-bar power-slider syncs
-**Severity** High • **File** `plugins/combat-bar.js:472-476`
+**Severity** High • **File** `plugins/combat-bar.js:472-476` • **Status** ✅ Done (commit `e3c4204`)
 
 **Problem.** `syncWindowState()` fires on every slider input tick (60+/s on drag).
 
