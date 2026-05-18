@@ -276,6 +276,12 @@ export class CloudOverlay {
     // WebGLRenderTarget; we sample `.texture`.
     this.overlayMaterial.uniforms.cloudTex.value = null;
 
+    // Track which camera the cloud raymarch was last set up for, so
+    // preRender can swap the RenderPass + EffectPass + CloudsEffect
+    // camera references on activeCamera switches (C-key cycle:
+    // follow/orbit use persp, topDown uses ortho).
+    this._lastActiveCam = null;
+
     // Telemetry — populated by tick/preRender/renderOverlay so
     // capture scripts can introspect.
     this.frameCount = 0;
@@ -339,10 +345,18 @@ export class CloudOverlay {
    *   the cloud effect's TAA temporal jitter. Default 0 for callers
    *   that lack a dt (TAA simply doesn't advance that frame, which is
    *   harmless).
+   * @param {THREE.Camera|null} [activeCam=null] The camera the world
+   *   is being rendered with this frame. In follow/orbit modes this
+   *   is the same persp passed at construction; in topDown it's the
+   *   ortho camera. The cloud raymarch's view-rays + cameraHeight
+   *   must match the world render's POV or the cloud texture is
+   *   composited at the wrong screen positions. Passing null falls
+   *   back to the constructor-time camera.
    */
-  preRender(renderer, dt = 0) {
+  preRender(renderer, dt = 0, activeCam = null) {
     if (!renderer) return;
     try {
+      const cam = activeCam ?? this.camera;
       const prevTarget = renderer.getRenderTarget();
       const prevAutoClear = renderer.autoClear;
 
@@ -358,16 +372,30 @@ export class CloudOverlay {
       // for foreground geometry is a Clouds-G polish item.
       if (!this.composer) {
         this.composer = new EffectComposer(renderer);
-        this._renderPass = new RenderPass(this._fallbackScene, this.camera);
+        this._renderPass = new RenderPass(this._fallbackScene, cam);
         this.composer.addPass(this._renderPass);
-        this._cloudEffectPass = new EffectPass(this.camera, this.volume.effect);
+        this._cloudEffectPass = new EffectPass(cam, this.volume.effect);
         this.composer.addPass(this._cloudEffectPass);
+        this._lastActiveCam = cam;
       }
       if (!this._composerSized && renderer.domElement) {
         const w = renderer.domElement.width;
         const h = renderer.domElement.height;
         this.composer.setSize(w, h);
         this._composerSized = true;
+      }
+
+      // C-key cycle support: when activeCam differs from the camera
+      // the composer was set up for, swap the RenderPass, EffectPass,
+      // and CloudsEffect camera references. takram's CloudsEffect
+      // exposes a `mainCamera` setter that propagates to shadowPass +
+      // cloudsPass; pmndrs' EffectPass likewise. RenderPass.camera is
+      // a plain assignable property.
+      if (cam !== this._lastActiveCam) {
+        if (this._renderPass) this._renderPass.camera = cam;
+        if (this._cloudEffectPass) this._cloudEffectPass.mainCamera = cam;
+        if (this.volume?.effect) this.volume.effect.mainCamera = cam;
+        this._lastActiveCam = cam;
       }
 
       // Render the cloud pipeline. RenderPass clears the empty scene
@@ -379,9 +407,10 @@ export class CloudOverlay {
       // Patch cameraHeight uniform AFTER the composer ran (which calls
       // CloudsMaterial.copyCameraSettings, which sets cameraHeight via
       // WGS-84 geodetic → wrong for our spherical setup). Override
-      // with the actual world Y (clamped ≥ 0). Takes effect on the
-      // NEXT frame's bake.
-      const camWorldY = this.camera?.position?.y ?? 0;
+      // with the actual world Y (clamped ≥ 0) of the ACTIVE camera so
+      // topDown's elevated ortho POV is reflected in the raymarch
+      // origin. Takes effect on the NEXT frame's bake.
+      const camWorldY = cam?.position?.y ?? 0;
       const matUniforms = this.volume.effect.cloudsPass.currentMaterial?.uniforms;
       if (matUniforms?.cameraHeight) {
         matUniforms.cameraHeight.value = Math.max(0, camWorldY);

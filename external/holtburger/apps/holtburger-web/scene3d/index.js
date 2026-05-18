@@ -865,7 +865,7 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
           cloudOverlay &&
           !liveScene3dRef?.skyDome?._lastIsIndoor;
         if (cloudActive) {
-          cloudOverlay.preRender(renderer, dt);
+          cloudOverlay.preRender(renderer, dt, activeCam);
         }
         atmospherePipeline.render(activeCam);
         if (cloudActive) {

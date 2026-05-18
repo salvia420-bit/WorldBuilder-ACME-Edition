@@ -1626,7 +1626,7 @@ export class SkyDome {
     // framebuffer is untouched. preRender saves/restores the
     // renderer's render-target binding.
     if (this.cloudOverlay) {
-      this.cloudOverlay.preRender(renderer, dt);
+      this.cloudOverlay.preRender(renderer, dt, mainCamera);
     }
 
     // Clear color + depth, then render the sky. After this call the
