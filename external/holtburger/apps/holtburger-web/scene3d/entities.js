@@ -502,6 +502,16 @@ export class EntityManager {
     /** @type {Set<number>} */
     this._particleChainsAttached = new Set();
     this._worldParticleManager = null;
+    // B4 (2026-05-18): name → Set<guid> index so `findGuidByName` is
+    // O(1) instead of an O(N) entityMap scan. Names aren't unique
+    // (multiple "Drudge") so the value is a Set; callers that want
+    // "first match" read `[...set][0]`. Maintained on spawn / remove
+    // (the only two name-touching paths in this file — `inst.meta` is
+    // set once at construction and never reassigned, so no rename
+    // path exists in entities.js; re-spawn goes through remove() →
+    // _spawnImpl() which naturally re-indexes).
+    /** @type {Map<string, Set<number>>} */
+    this._nameToGuid = new Map();
   }
 
   /**
@@ -862,6 +872,22 @@ export class EntityManager {
       this.scene3d.entitiesGroup.add(root);
     }
     this.entityMap.set(guid, inst);
+    // B4 (2026-05-18): index `name → Set<guid>` for O(1) lookup in
+    // `findGuidByName`. Only adds when the entity carries a non-empty
+    // string name (matches the nameplate-attach guard just below).
+    if (
+      inst.meta &&
+      typeof inst.meta.name === "string" &&
+      inst.meta.name.length > 0
+    ) {
+      const nm = inst.meta.name;
+      let bucket = this._nameToGuid.get(nm);
+      if (!bucket) {
+        bucket = new Set();
+        this._nameToGuid.set(nm, bucket);
+      }
+      bucket.add(guid);
+    }
 
     // Task E (2026-05-12): prewarm the SoundTableCache for this entity.
     // The first cache.get() per DID kicks the wasm fetchSoundTable; we
@@ -1194,17 +1220,28 @@ export class EntityManager {
 
   /**
    * Phase D — lookup the entity GUID for a given display name. Case-
-   * sensitive linear scan over entityMap. Returns 0 (a never-used
-   * GUID since ACE GUIDs are 32-bit and skip 0) when no match.
-   * Used by the recv-loop damageTaken dispatch to play setSwingPose
-   * on the attacker's rig.
+   * sensitive. Returns 0 (a never-used GUID since ACE GUIDs are 32-bit
+   * and skip 0) when no match. Used by the recv-loop damageTaken /
+   * evadedAttacker dispatch to play setSwingPose on the attacker's
+   * rig.
+   *
+   * B4 (2026-05-18) — O(1) via the `_nameToGuid` index maintained on
+   * spawn/remove. Names aren't unique (e.g. multiple "Drudge"), so the
+   * index holds a Set<guid> per name; we return the first guid via
+   * iterator (matches the previous "first match wins" semantics — the
+   * old linear scan stopped at the first hit too). Iterator order is
+   * insertion order, so the oldest still-alive entity with that name
+   * wins, which is what the linear scan over an insertion-ordered Map
+   * also did.
    */
   findGuidByName(name) {
     if (typeof name !== "string" || name.length === 0) return 0;
-    for (const [guid, inst] of this.entityMap) {
-      if (inst?.meta?.name === name) return guid >>> 0;
-    }
-    return 0;
+    const bucket = this._nameToGuid.get(name);
+    if (!bucket || bucket.size === 0) return 0;
+    // Set iteration is insertion-order — first value is the
+    // oldest-still-alive guid with this name.
+    const first = bucket.values().next().value;
+    return (first >>> 0) || 0;
   }
 
   /**
@@ -1536,6 +1573,16 @@ export class EntityManager {
     const g = guid >>> 0;
     const inst = this.entityMap.get(g);
     if (!inst) return;
+    // B4 (2026-05-18): drop the name→guid index entry BEFORE dispose
+    // so we still have access to `inst.meta.name`. Removes the bucket
+    // entirely once empty to avoid a long-session leak of empty Sets.
+    if (inst.meta && typeof inst.meta.name === "string" && inst.meta.name.length > 0) {
+      const bucket = this._nameToGuid.get(inst.meta.name);
+      if (bucket) {
+        bucket.delete(g);
+        if (bucket.size === 0) this._nameToGuid.delete(inst.meta.name);
+      }
+    }
     inst.dispose();
     this.entityMap.delete(g);
     this.removeCount += 1;
@@ -2496,6 +2543,9 @@ export class EntityManager {
       inst.dispose();
     }
     this.entityMap.clear();
+    // B4 (2026-05-18): drop the name→guid index in lockstep with
+    // entityMap so a re-init starts from a clean state.
+    this._nameToGuid.clear();
     this.spawnInFlight.clear();
     this.animationCache.dispose();
     if (this._sharedFallback) {
