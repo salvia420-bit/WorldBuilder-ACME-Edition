@@ -72,7 +72,7 @@ Medium-effort, structural:
 2. Quality preset hot-swap or guard against runtime change (lock the URL param, force reload on change).
 
 Investigative / unknown-cost:
-3. Decide whether the direct render path is still reachable in practice — if not, delete it and remove the cloud-paint-over-geometry footgun.
+(none — last batch resolved)
 
 ## Resolved
 
