@@ -7,13 +7,18 @@
 //     greenish dot cluster visible on the left of the source image.
 //   - Rez'arel (red) — the smaller, cratered companion.
 //
-// Source images: fandom wiki imagedump (2020-03 snapshot) at
-// scene3d/assets/moons/{albarel.jpg, rezarel.jpg}. Both are 256x256
-// JPEGs of the moon centered on a dark navy background (NOT pure
-// black). Background-removal is done shader-side via a circular
-// alpha mask — the moons are clearly centered circular disks, so
-// `discard` outside a UV-distance threshold is the cleanest path
-// (no pre-processing of the source images, no chroma-key fragility).
+// Source images: 1024x1024 RGBA PNGs at
+// scene3d/assets/moons/{albarel.png, rezarel.png}, swapped in
+// 2026-05-18 from the prior 256x256 JPGs. Both are PNGs of the moon
+// centered on dark background — background removal is shader-side
+// via a circular alpha mask (no pre-processing of the source images,
+// no chroma-key fragility).
+//
+// Alb'arel gets a procedural cloud swirl + a sparkling neon-green
+// emission from the alien-city light cluster on the disc's left
+// side. The new high-res Alb'arel image has the cloud layer
+// REMOVED (vs the original cloud-swirl JPEG), so we generate the
+// clouds in-shader to recreate the look of the prior asset.
 //
 // Each moon is a billboard plane attached to skyDome.skyScene with
 // the same render-order semantics as cloud_overlay (renderOrder
@@ -40,8 +45,12 @@ const SKY_RADIUS = 2000;
 // the viewer). Tuned 2026-05-18 against the AC reference screenshot
 // (Alb'arel ~13.5% of screen height at 60° FOV); user requested
 // another 25% on top to compensate for the modern display.
-const ALB_ANGULAR_RADIUS = 0.115; // Alb'arel — primary, larger (~6.6°, ~13° dia)
-const REZ_ANGULAR_RADIUS = 0.092; // Rez'arel — companion, smaller (~5.3°, ~10.5° dia)
+//
+// 2026-05-18 second pass: Rez'arel further shrunk 20% (0.092 → 0.0736)
+// per user feedback that the companion was reading too large relative
+// to Alb'arel in the new high-res textures.
+const ALB_ANGULAR_RADIUS = 0.115;  // Alb'arel — primary, larger (~6.6°, ~13° dia)
+const REZ_ANGULAR_RADIUS = 0.0736; // Rez'arel — companion, smaller (~4.2°, ~8.4° dia)
 
 // Orbital periods at speedMul=1, in milliseconds of wall time.
 // Picked so a 5-10 min play session shows visible motion. AC's
@@ -59,27 +68,126 @@ void main() {
 `;
 
 // Circular alpha mask + soft edge. The moon image is a centered disk
-// against a dark-navy background — we just discard outside the disc
-// radius (0.46 of UV space = 23% inset from each edge, matches the
-// padding the wiki screenshots have around the moon). Soft edge from
-// 0.44..0.46 hides the JPEG block boundary at the disc's edge.
+// against a dark background — we discard outside the disc radius
+// (0.46 of UV space = 23% inset from each edge). Soft edge from
+// 0.44..0.46 hides any compression boundary at the disc's edge.
+// The Alb'arel green-light halo is allowed to bleed out to 0.50 so
+// the alien city's glow extends slightly off the disc.
 //
 // `uBrightness` multiplies the moon color before output — boosting
 // helps the disc punch through AerialPerspective scattering on the
 // way to the canvas. 2.0 is a starting point; live-tune via
 // `liveScene3d.acMoons.albMesh.material.uniforms.uBrightness.value`.
+//
+// uHasClouds: 1.0 only for Alb'arel. Toggles the in-shader cloud
+// swirl + alien-city-light sparkle. Rez'arel stays bare (0.0).
+//
+// uCloudIntensity / uCloudSpeed / uCityIntensity / uCityPos:
+// live-tunable knobs for the Alb'arel atmosphere. Each has a
+// `window.__set*` setter (see bottom of file).
 const MOON_FRAG = /* glsl */ `
 precision highp float;
 varying vec2 vUv;
 uniform sampler2D map;
 uniform float uBrightness;
+uniform float uTime;
+uniform float uHasClouds;
+uniform float uCloudIntensity;
+uniform float uCloudSpeed;
+uniform float uCityIntensity;
+uniform vec2  uCityPos;
+
+float mhash21(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+float mfade(float t) { return t * t * t * (t * (t * 6.0 - 15.0) + 10.0); }
+float mvnoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  float a = mhash21(i);
+  float b = mhash21(i + vec2(1.0, 0.0));
+  float c = mhash21(i + vec2(0.0, 1.0));
+  float dd = mhash21(i + vec2(1.0, 1.0));
+  float u = mfade(f.x);
+  float v = mfade(f.y);
+  return mix(mix(a, b, u), mix(c, dd, u), v);
+}
+float mfbm(vec2 p) {
+  float sum = 0.0;
+  float amp = 0.5;
+  for (int i = 0; i < 5; i++) {
+    sum += mvnoise(p) * amp;
+    p *= 2.07;
+    amp *= 0.5;
+  }
+  return sum;
+}
+
 void main() {
   vec2 c = vUv - 0.5;
   float d = length(c);
-  if (d > 0.46) discard;
+  // Allow the city halo to bleed past the disc edge (cap at 0.50).
+  // The surface itself still uses the tighter 0.46 cutoff for edge.
+  if (d > 0.50) discard;
   float edge = 1.0 - smoothstep(0.44, 0.46, d);
+
   vec3 rgb = texture2D(map, vUv).rgb * uBrightness;
-  gl_FragColor = vec4(rgb, edge);
+  float alpha = edge;
+
+  if (uHasClouds > 0.5) {
+    // -- Cloud swirl ----------------------------------------------
+    // Domain-warped fbm to mimic the prior albarel JPEG's storm
+    // pattern (a hurricane-like band wrapping the upper part of the
+    // disc). Two-rate drift so the cloud appears to slowly evolve.
+    float tSlow = uTime * 0.018 * uCloudSpeed;
+    vec2 cloudUv = vUv * 3.2;
+    float warpX = mvnoise(cloudUv * 0.55 + vec2(tSlow, 0.0)) - 0.5;
+    float warpY = mvnoise(cloudUv * 0.55 + vec2(17.0, tSlow)) - 0.5;
+    vec2 warped = cloudUv + vec2(warpX, warpY) * 1.3;
+    float cloud = mfbm(warped + vec2(tSlow * 0.5, 0.0));
+    // Upper-band bias matches where the prior cloud streak sat.
+    float upBias = smoothstep(0.35, 0.85, vUv.y);
+    // Keep the cloud inside the surface disc (no painting off-moon).
+    float discMask = 1.0 - smoothstep(0.30, 0.46, d);
+    float cloudAmt = pow(cloud, 1.6) * upBias * discMask;
+    cloudAmt = clamp(cloudAmt * 1.8 - 0.25, 0.0, 1.0);
+    vec3 cloudCol = vec3(0.88, 0.84, 0.78);
+    rgb = mix(rgb, cloudCol, cloudAmt * uCloudIntensity);
+
+    // -- Alien-city emission --------------------------------------
+    // Hotspot at uCityPos (Alb'arel left side by default). Two
+    // exponential falloffs: tight core + soft wide halo. Halo is
+    // allowed to extend beyond the surface disc up to d=0.50 so
+    // the glow reads as light "emanating".
+    float cityDist = distance(vUv, uCityPos);
+    float core = exp(-cityDist * 28.0);
+    float halo = exp(-cityDist *  9.0) * 0.35;
+    // Sparkle: layered sines (different periods, no rational ratio)
+    // plus a per-pixel hash mod-time so adjacent fragments scintillate
+    // out of phase — gives the "many little lights" impression.
+    float t = uTime;
+    float sparkle =
+        0.55
+      + 0.30 * sin(t * 3.17)
+      + 0.20 * sin(t * 7.71 + 1.1)
+      + 0.18 * sin(t * 13.9 + 0.4)
+      + 0.18 * (mvnoise(vec2(t * 4.0, 0.7)) - 0.5)
+      + 0.22 * (mhash21(floor(vUv * 90.0) + floor(t * 6.0)) - 0.5);
+    sparkle = clamp(sparkle, 0.25, 1.6);
+    vec3 neon = vec3(0.18, 1.05, 0.42);
+    vec3 emission = neon * (core * 2.6 + halo) * sparkle * uCityIntensity;
+    // Fade emission as it crosses the disc boundary into open sky.
+    float emissionEdge = 1.0 - smoothstep(0.48, 0.50, d);
+    rgb += emission * emissionEdge;
+
+    // Halo contributes its own alpha outside the disc so the
+    // emission isn't clipped to the surface mask.
+    float haloAlpha = clamp(halo * 0.9 + core * 1.4, 0.0, 1.0)
+                    * sparkle * uCityIntensity * emissionEdge;
+    alpha = max(alpha, haloAlpha);
+  }
+
+  gl_FragColor = vec4(rgb, alpha);
 }
 `;
 
@@ -116,8 +224,8 @@ export class ACMoons {
     const base = baseHref
       ? baseHref
       : new URL('./assets/moons/', import.meta.url).toString();
-    const albUrl = base + 'albarel.jpg';
-    const rezUrl = base + 'rezarel.jpg';
+    const albUrl = base + 'albarel.png';
+    const rezUrl = base + 'rezarel.png';
     // eslint-disable-next-line no-console
     console.log(`[ac-moons] loading textures: ${albUrl} ${rezUrl}`);
     const [albTex, rezTex] = await Promise.all([
@@ -128,18 +236,28 @@ export class ACMoons {
       albTex.colorSpace = THREE.SRGBColorSpace;
       rezTex.colorSpace = THREE.SRGBColorSpace;
     }
+    // 1024x1024 sources — bump filter quality so the disc edge is
+    // crisp at the angular sizes we render. Aniso 8 is supported by
+    // every desktop GPU; the texture loader doesn't auto-set it.
+    for (const t of [albTex, rezTex]) {
+      t.minFilter = THREE.LinearMipmapLinearFilter;
+      t.magFilter = THREE.LinearFilter;
+      t.anisotropy = 8;
+      t.generateMipmaps = true;
+      t.needsUpdate = true;
+    }
     // eslint-disable-next-line no-console
     console.log(
       `[ac-moons] textures decoded: ` +
         `alb=${albTex.image?.width}x${albTex.image?.height} ` +
         `rez=${rezTex.image?.width}x${rezTex.image?.height}`,
     );
-    this.albMesh = this._buildMoonMesh(albTex, ALB_ANGULAR_RADIUS);
-    this.rezMesh = this._buildMoonMesh(rezTex, REZ_ANGULAR_RADIUS);
+    this.albMesh = this._buildMoonMesh(albTex, ALB_ANGULAR_RADIUS, true);
+    this.rezMesh = this._buildMoonMesh(rezTex, REZ_ANGULAR_RADIUS, false);
     return this;
   }
 
-  _buildMoonMesh(texture, angularRadius) {
+  _buildMoonMesh(texture, angularRadius, hasClouds) {
     // Diameter on the sky shell = 2 * R * tan(half-angle), but for
     // small angles tan(θ) ≈ θ; using θ directly is fine here.
     const size = 2 * SKY_RADIUS * angularRadius;
@@ -148,6 +266,16 @@ export class ACMoons {
       uniforms: {
         map: { value: texture },
         uBrightness: { value: 2.0 },
+        uTime: { value: 0.0 },
+        uHasClouds: { value: hasClouds ? 1.0 : 0.0 },
+        uCloudIntensity: { value: 0.75 },
+        uCloudSpeed: { value: 1.0 },
+        uCityIntensity: { value: 1.0 },
+        // City light cluster sits at the LEFT of Alb'arel's disc.
+        // Sampled from the new 1024x1024 source: green dots cluster
+        // at ~(0.13, 0.49) in UV space. Devtools setter exposed
+        // below so the user can nudge if the texture changes again.
+        uCityPos: { value: new THREE.Vector2(0.13, 0.49) },
       },
       vertexShader: MOON_VERT,
       fragmentShader: MOON_FRAG,
@@ -225,6 +353,16 @@ export class ACMoons {
     const t = (typeof nowMs === 'number' ? nowMs : performance.now()) -
       this._startMs;
     const ms = t * this._speedMul;
+    // Shader time in seconds (drives cloud drift + city sparkle on
+    // Alb'arel). Independent of speedMul — cloud animation should
+    // run at wall-clock pace even when orbits are sped up for debug.
+    const tSec = t * 0.001;
+    if (this.albMesh?.material?.uniforms?.uTime) {
+      this.albMesh.material.uniforms.uTime.value = tSec;
+    }
+    if (this.rezMesh?.material?.uniforms?.uTime) {
+      this.rezMesh.material.uniforms.uTime.value = tSec;
+    }
 
     // Alb'arel — slower period, inclined ~30° to the horizon plane.
     const ang = (ms / ALB_PERIOD_MS) * Math.PI * 2;
@@ -283,4 +421,43 @@ export class ACMoons {
     this.albMesh = null;
     this.rezMesh = null;
   }
+}
+
+// Devtools setters for Alb'arel's cloud + city-light knobs. The
+// material uniforms are also reachable via
+// `liveScene3d.acMoons.albMesh.material.uniforms.<name>.value` but
+// these mirror the pattern used by the cloud overlay / atmosphere
+// stack so they're discoverable from the console.
+if (typeof window !== 'undefined') {
+  const albUniforms = () =>
+    // eslint-disable-next-line no-undef
+    window.liveScene3d?.acMoons?.albMesh?.material?.uniforms ?? null;
+  // eslint-disable-next-line no-undef
+  window.__setMoonCloudIntensity = (v) => {
+    const u = albUniforms();
+    if (!u?.uCloudIntensity) return null;
+    u.uCloudIntensity.value = Math.max(0, +v);
+    return u.uCloudIntensity.value;
+  };
+  // eslint-disable-next-line no-undef
+  window.__setMoonCloudSpeed = (v) => {
+    const u = albUniforms();
+    if (!u?.uCloudSpeed) return null;
+    u.uCloudSpeed.value = Math.max(0, +v);
+    return u.uCloudSpeed.value;
+  };
+  // eslint-disable-next-line no-undef
+  window.__setMoonCityIntensity = (v) => {
+    const u = albUniforms();
+    if (!u?.uCityIntensity) return null;
+    u.uCityIntensity.value = Math.max(0, +v);
+    return u.uCityIntensity.value;
+  };
+  // eslint-disable-next-line no-undef
+  window.__setMoonCityPos = (x, y) => {
+    const u = albUniforms();
+    if (!u?.uCityPos?.value?.set) return null;
+    u.uCityPos.value.set(+x, +y);
+    return [u.uCityPos.value.x, u.uCityPos.value.y];
+  };
 }
