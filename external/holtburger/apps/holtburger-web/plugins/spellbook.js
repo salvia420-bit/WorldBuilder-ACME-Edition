@@ -428,22 +428,97 @@ export function activate(bodyEl, ctx) {
   // from the on-bar highlight.
   let selectedRowId = 0;
 
+  // Perf F4 (2026-05-18) — diffed render. Build each row ONCE per
+  // spell id, keep refs in `rowMap`, and on filter/spellbar change
+  // toggle `display` + `on-bar` rather than tearing the list down
+  // and re-wiring drag/click/dblclick/contextmenu listeners. The
+  // persistent empty-state element below is reused too; we just
+  // swap its textContent + display.
+  const rowMap = new Map(); // id (number) -> { row, meta }
+  const emptyEl = document.createElement("div");
+  emptyEl.className = "hb-sb-empty";
+  emptyEl.style.display = "none";
+  listEl.appendChild(emptyEl);
+
+  function buildRow(id, meta) {
+    const row = document.createElement("div");
+    row.className = "hb-sb-row";
+    row.dataset.spellId = String(id);
+    row.draggable = true;
+    row.title = `${meta.name} — ${meta.untargeted ? "self-cast" : "targeted"}, ${meta.mana} mana, lvl ${meta.level}`;
+    row.addEventListener("dragstart", (ev) => {
+      // Phase H.5 — drag spell to populate a combat-bar slot.
+      // dataTransfer carries the spell ID; combat-bar's row handlers
+      // read it from "application/x-hb-spell-id".
+      ev.dataTransfer.effectAllowed = "copy";
+      ev.dataTransfer.setData("application/x-hb-spell-id", String(id));
+      ev.dataTransfer.setData("text/plain", meta.name);
+    });
+
+    const name = document.createElement("span");
+    name.className = "hb-sb-row-name";
+    name.textContent = meta.name;
+    row.appendChild(name);
+
+    const schoolTag = document.createElement("span");
+    schoolTag.className = `hb-sb-row-tag school-${meta.school}`;
+    schoolTag.textContent = SCHOOL_NAMES[meta.school] ?? "?";
+    row.appendChild(schoolTag);
+
+    const manaTag = document.createElement("span");
+    manaTag.className = "hb-sb-row-tag";
+    manaTag.textContent = `${meta.mana}m`;
+    row.appendChild(manaTag);
+
+    // Phase J.1 — single-click selects (highlights) the row.
+    row.addEventListener("click", () => {
+      selectedRowId = id;
+      for (const r of listEl.querySelectorAll(".hb-sb-row.selected")) {
+        r.classList.remove("selected");
+      }
+      row.classList.add("selected");
+    });
+
+    row.addEventListener("dblclick", () => {
+      const slot = addToFirstEmptySlot(id);
+      row.classList.add("on-bar");
+      row.style.background = "rgba(160, 110, 255, 0.3)";
+      setTimeout(() => { row.style.background = ""; }, 200);
+      console.log(`[spellbook] added ${meta.name} (id=${id}) to slot ${slot}`);
+    });
+
+    row.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      // Read the latest meta from the closure-captured slot so
+      // detail popover uses fresh component names.
+      const slot = rowMap.get(id);
+      showSpellDetail(slot ? slot.meta : meta, ev.clientX, ev.clientY, componentNames);
+    });
+
+    return row;
+  }
+
   function rerenderList() {
-    listEl.innerHTML = "";
     if (!catalog) {
-      const empty = document.createElement("div");
-      empty.className = "hb-sb-empty";
-      empty.textContent = "Loading spell catalog…";
-      listEl.appendChild(empty);
+      // Loading state — clear any rows we may have created on a
+      // prior render (shouldn't happen since catalog only flips
+      // null→object once, but keep it tidy) and show the loader.
+      for (const { row } of rowMap.values()) row.style.display = "none";
+      emptyEl.textContent = "Loading spell catalog…";
+      emptyEl.style.display = "";
       return;
     }
-    const entries = [];
+
+    // 1) Materialize the desired set: catalogued + known, plus
+    //    uncatalogued-but-known placeholders. We pass through
+    //    filters here only to count visibles for the empty-state
+    //    message; the actual display toggle happens in pass (3).
+    const cataloguedIds = new Set(Object.keys(catalog).map((k) => Number(k)));
+    const desired = new Map(); // id -> meta
     for (const [idStr, meta] of Object.entries(catalog)) {
       const id = Number(idStr);
       if (!knownIds.has(id)) continue;
-      if (!filters.schools.has(meta.school)) continue;
-      if (!filters.levels.has(meta.level)) continue;
-      entries.push([id, meta]);
+      desired.set(id, meta);
     }
     // Spells the character knows but our 26-entry starter catalog
     // doesn't have a name/school for (e.g. Harm Self I — SpellId
@@ -452,18 +527,62 @@ export function activate(bodyEl, ctx) {
     // filters don't apply because we don't have metadata to filter
     // on. Handoff Tier 2 item #7 ("Bigger spell catalog") will
     // eventually backfill the real names.
-    const cataloguedIds = new Set(Object.keys(catalog).map((k) => Number(k)));
     for (const id of knownIds) {
       if (!cataloguedIds.has(id)) {
-        entries.push([
-          id,
-          { name: `Spell #${id}`, school: 0, level: 0, untargeted: true, mana: 0 },
-        ]);
+        desired.set(id, {
+          name: `Spell #${id}`,
+          school: 0,
+          level: 0,
+          untargeted: true,
+          mana: 0,
+          _uncatalogued: true,
+        });
       }
     }
-    if (entries.length === 0) {
-      const empty = document.createElement("div");
-      empty.className = "hb-sb-empty";
+
+    // 2) Drop rows that no longer belong (e.g. spell forgotten).
+    for (const [id, slot] of rowMap) {
+      if (!desired.has(id)) {
+        slot.row.remove();
+        rowMap.delete(id);
+      }
+    }
+
+    // 3) Build any new rows; toggle display on existing ones.
+    //    `slotsNow` reflects the active spell-bar tab.
+    const slotsNow = new Set(getSpellBarSlots().filter((v) => v > 0));
+    let visibleCount = 0;
+    for (const [id, meta] of desired) {
+      let slot = rowMap.get(id);
+      if (!slot) {
+        const row = buildRow(id, meta);
+        slot = { row, meta };
+        rowMap.set(id, slot);
+        listEl.appendChild(row);
+      } else {
+        // Refresh the captured meta so the contextmenu handler and
+        // any future re-checks see current values (catalog data is
+        // immutable today, but uncatalogued placeholders are not).
+        slot.meta = meta;
+      }
+      const { row } = slot;
+
+      // Filter pass — uncatalogued placeholders bypass school/level
+      // (school=0/level=0 wouldn't match any active filter set).
+      const passes = meta._uncatalogued
+        ? true
+        : (filters.schools.has(meta.school) && filters.levels.has(meta.level));
+
+      row.style.display = passes ? "" : "none";
+      if (passes) visibleCount++;
+
+      // on-bar class follows the live spell-bar contents.
+      if (slotsNow.has(id)) row.classList.add("on-bar");
+      else row.classList.remove("on-bar");
+    }
+
+    // 4) Empty-state message.
+    if (visibleCount === 0) {
       // Note: `knownIds.size === 0` can happen for either of two
       // very different reasons — (a) the character genuinely knows
       // no spells, or (b) ACE's PlayerDescription hasn't landed
@@ -471,69 +590,12 @@ export function activate(bodyEl, ctx) {
       // first description fires). Either way "log in to populate"
       // (the old text) is wrong: the player IS logged in. Stay
       // descriptive but not misleading.
-      empty.textContent = knownIds.size === 0
+      emptyEl.textContent = knownIds.size === 0
         ? "No spells known."
         : "No spells match the current filter.";
-      listEl.appendChild(empty);
-      return;
-    }
-
-    const slotsNow = new Set(getSpellBarSlots().filter((v) => v > 0));
-
-    for (const [id, meta] of entries) {
-      const row = document.createElement("div");
-      row.className = "hb-sb-row";
-      if (slotsNow.has(id)) row.classList.add("on-bar");
-      row.dataset.spellId = String(id);
-      row.draggable = true;
-      row.title = `${meta.name} — ${meta.untargeted ? "self-cast" : "targeted"}, ${meta.mana} mana, lvl ${meta.level}`;
-      row.addEventListener("dragstart", (ev) => {
-        // Phase H.5 — drag spell to populate a combat-bar slot.
-        // dataTransfer carries the spell ID; combat-bar's row handlers
-        // read it from "application/x-hb-spell-id".
-        ev.dataTransfer.effectAllowed = "copy";
-        ev.dataTransfer.setData("application/x-hb-spell-id", String(id));
-        ev.dataTransfer.setData("text/plain", meta.name);
-      });
-
-      const name = document.createElement("span");
-      name.className = "hb-sb-row-name";
-      name.textContent = meta.name;
-      row.appendChild(name);
-
-      const schoolTag = document.createElement("span");
-      schoolTag.className = `hb-sb-row-tag school-${meta.school}`;
-      schoolTag.textContent = SCHOOL_NAMES[meta.school] ?? "?";
-      row.appendChild(schoolTag);
-
-      const manaTag = document.createElement("span");
-      manaTag.className = "hb-sb-row-tag";
-      manaTag.textContent = `${meta.mana}m`;
-      row.appendChild(manaTag);
-
-      // Phase J.1 — single-click selects (highlights) the row.
-      row.addEventListener("click", () => {
-        selectedRowId = id;
-        for (const r of listEl.querySelectorAll(".hb-sb-row.selected")) {
-          r.classList.remove("selected");
-        }
-        row.classList.add("selected");
-      });
-
-      row.addEventListener("dblclick", () => {
-        const slot = addToFirstEmptySlot(id);
-        row.classList.add("on-bar");
-        row.style.background = "rgba(160, 110, 255, 0.3)";
-        setTimeout(() => { row.style.background = ""; }, 200);
-        console.log(`[spellbook] added ${meta.name} (id=${id}) to slot ${slot}`);
-      });
-
-      row.addEventListener("contextmenu", (ev) => {
-        ev.preventDefault();
-        showSpellDetail(meta, ev.clientX, ev.clientY, componentNames);
-      });
-
-      listEl.appendChild(row);
+      emptyEl.style.display = "";
+    } else {
+      emptyEl.style.display = "none";
     }
   }
 
