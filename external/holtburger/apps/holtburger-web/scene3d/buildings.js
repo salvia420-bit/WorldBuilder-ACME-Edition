@@ -180,7 +180,14 @@ async function bakeBuildingPlacement(modelId, fetchBuildingPlacement) {
  * so future phases can address by part for door rotation, AABB lookup,
  * etc.
  */
-function buildOneBuilding(placement, bake, materialCache, worldOffset, shadowsEnabled) {
+function buildOneBuilding(
+  placement,
+  bake,
+  materialCache,
+  worldOffset,
+  shadowsEnabled,
+  buildingsReceiveShadow
+) {
   const placementKey =
     `${(placement.landblockId >>> 0).toString(16).padStart(8, "0")}_` +
     `${placement.x.toFixed(2)}_${placement.y.toFixed(2)}_` +
@@ -254,7 +261,14 @@ function buildOneBuilding(placement, bake, materialCache, worldOffset, shadowsEn
       // material-flag check is centralised in materials.js.
       if (shadowsEnabled) {
         mesh.castShadow = materialCanCastShadow(mat);
-        mesh.receiveShadow = true;
+        // C3 (perf plan 2026-05-18) — at `low` quality preset every
+        // building surface skips CSM receive-shadow participation;
+        // mid/high/ultra keep today's all-receivers behaviour.
+        // Translucent surfaces already get receiveShadow=false via the
+        // per-material gate in materials.js (separate code path).
+        // TODO: distance-tier follow-on (foreground only) — gate distant
+        // building surfaces off too per the audit's full fix.
+        mesh.receiveShadow = buildingsReceiveShadow;
       }
       hingeWrapper.add(mesh);
       partsAdded += 1;
@@ -308,6 +322,16 @@ function resolveBuildingsOpts(scene3d) {
     // two paths share the same caster/receiver tagging — only the
     // shadow-map projection differs. Captured once at ring entry.
     shadowsEnabled: !!scene3d.shadowsEnabled || !!scene3d.csmEnabled,
+    // C3 (perf plan 2026-05-18) — at the `low` quality preset every
+    // building surface skips receiveShadow (CSM frustum-test cost
+    // scales linearly with receiver count; ~46 buildings × ~8 parts
+    // × ~2-3 meshes/part ≈ 460+ receiver meshes at radius=1). mid/
+    // high/ultra keep today's all-receivers behaviour. Mirrors C2's
+    // `staticsReceiveShadow` convention (commit 8ceafa0). Captured
+    // once at ring entry and threaded into `buildOneBuilding`.
+    // TODO: distance-tier follow-on (foreground only) — gate distant
+    // building surfaces off too per the audit's full fix.
+    buildingsReceiveShadow: scene3d.quality?.preset !== "low",
   };
 }
 
@@ -502,7 +526,8 @@ export async function bakeBuildingsForLandblock(
       bake,
       opts.materialCache,
       worldOffset,
-      opts.shadowsEnabled
+      opts.shadowsEnabled,
+      opts.buildingsReceiveShadow
     );
     scene3d.buildingsGroup.add(group);
     partCount += bake.parts.length;
