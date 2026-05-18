@@ -36,6 +36,7 @@ export const PRESETS = {
         bloom: false,
         vignette: false,
         lightShafts: false,
+        maxParticlesPerEmitter: 64,
     },
     mid: {
         antialias: true,
@@ -54,6 +55,7 @@ export const PRESETS = {
         bloom: true,
         vignette: false,
         lightShafts: false,
+        maxParticlesPerEmitter: 256,
     },
     high: {
         antialias: true,
@@ -72,6 +74,7 @@ export const PRESETS = {
         bloom: true,
         vignette: true,
         lightShafts: true,
+        maxParticlesPerEmitter: 1024,
     },
     ultra: {
         antialias: true,
@@ -90,6 +93,7 @@ export const PRESETS = {
         bloom: true,
         vignette: true,
         lightShafts: true,
+        maxParticlesPerEmitter: 2048,
     },
 };
 
@@ -118,6 +122,7 @@ const INT_FLAGS = new Set([
     "pomStepsPrimary",
     "pomStepsSelfShadow",
     "triplanarSlopeThresholdPct",
+    "maxParticlesPerEmitter",
 ]);
 
 function parseBool(raw) {

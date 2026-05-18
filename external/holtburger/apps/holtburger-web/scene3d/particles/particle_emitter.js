@@ -45,6 +45,21 @@ const _aScratch = new THREE.Vector3();
 const _bScratch = new THREE.Vector3();
 const _cScratch = new THREE.Vector3();
 
+// E6 (2026-05-18): per-emitter-record one-time warn guard for the runtime
+// particle-count cap. The cap comes from
+// `liveScene3d.quality.flags.maxParticlesPerEmitter` (preset table in
+// scene3d/quality.js) and clamps `info.maxParticles` at setInfo() time.
+//
+// We warn at most once per emitter DID (info.id) — NOT per frame, per
+// slot, or per emitter-instance. Many in-world spawns can share one
+// ParticleEmitter DID (e.g. a popular spell effect cast 50× over a
+// session); we only want devs to see the cap-hit message once so it
+// stays useful for auditing. `_e6` prefix avoids collision with the
+// `_scratch*` and `_offsetScratch`/`_aScratch`/`_bScratch`/`_cScratch`
+// pool names from E4 and E2.
+const _e6WarnedEmitterIds = new Set();
+const _E6_FALLBACK_CAP = 1024;
+
 export class ParticleEmitter {
   /**
    * @param {object} opts
@@ -106,7 +121,41 @@ export class ParticleEmitter {
     }
     this.lastEmitOffset.copy(this.parent.position);
 
-    const n = info.maxParticles;
+    // E6 (2026-05-18): runtime particle-count cap from the quality preset.
+    // AC ParticleEmitter records can request unbounded counts; a pathological
+    // effect with maxParticles=10_000 would allocate that many slots + meshes
+    // and silently blow up frametime. Clamp to the preset's
+    // `maxParticlesPerEmitter` (low:64 / mid:256 / high:1024 / ultra:2048),
+    // falling back to 1024 if liveScene3d.quality isn't on window yet
+    // (Node test harness, very-early init). Emit a one-time `console.warn`
+    // per emitter DID so devs can audit which effects trip the cap.
+    //
+    // We mutate `info.maxParticles` in-place because ParticleEmitterInfo
+    // is constructed per `ParticleManager.addEmitter()` call (see
+    // particle_manager.js:75-77 — `new ParticleEmitterInfo(emitterInfo)`),
+    // so the info object is NOT shared across emitter instances. The
+    // updateParticles() loop bound (`this.info.maxParticles`) then matches
+    // the actual allocated slot count, avoiding out-of-bounds reads.
+    const _qFlags =
+      typeof window !== "undefined" ? window.liveScene3d?.quality?.flags : null;
+    const qualityCap = Number.isFinite(_qFlags?.maxParticlesPerEmitter)
+      ? _qFlags.maxParticlesPerEmitter
+      : _E6_FALLBACK_CAP;
+    const effectiveMax = Math.min(info.maxParticles, qualityCap);
+    if (info.maxParticles > qualityCap && !_e6WarnedEmitterIds.has(info.id)) {
+      _e6WarnedEmitterIds.add(info.id);
+      console.warn(
+        `[particle_emitter E6] capping emitter id=0x${(info.id >>> 0).toString(16)}` +
+        ` hwGfxObjId=0x${(info.hwGfxObjId >>> 0).toString(16)}` +
+        ` requested=${info.maxParticles} cap=${qualityCap}` +
+        ` (set ?maxParticlesPerEmitter=N to override)`,
+      );
+    }
+    if (effectiveMax < info.maxParticles) {
+      info.maxParticles = effectiveMax;
+    }
+
+    const n = effectiveMax;
     this.parts = new Array(n).fill(null);
     this.partStorage = new Array(n).fill(null);
     this.particles = new Array(n).fill(null);
