@@ -140,6 +140,35 @@ export class ParticleManager {
     const geometry = await this._geometryFactory(info.hwGfxObjId);
     const baseMaterial = await this._materialFactory(info.hwGfxObjId);
 
+    // Perf FU4 (2026-05-18) — classify additive-vs-alpha BEFORE the
+    // per-slot clone loop so all slots of one emitter take the same
+    // branch. The signal lives on the upstream baseMaterial produced by
+    // MaterialCache._materialFromFlags (scene3d/materials.js:960), which
+    // decodes AC's `Surface.surface_type` bitfield:
+    //   - Bit 0x10000 (Additive) → `material.blending = AdditiveBlending`
+    //     + `transparent=true` + `depthWrite=false` (materials.js:998-1003)
+    //   - All other paths leave `material.blending` at the default
+    //     (`THREE.NormalBlending`).
+    // `.clone()` preserves `material.blending`, so the primary probe is
+    // simply `baseMaterial.blending === THREE.AdditiveBlending`. We also
+    // accept the fallback path of reading `userData.surfaceTypeFlags`
+    // (tagged on every cache material at materials.js:1191-1201 and
+    // :1550 and :1610) and AND-ing the Additive bit — this catches the
+    // hypothetical case where a clone upstream of us reset `blending`
+    // but preserved userData. Either signal flips the branch.
+    let baseIsAdditive = false;
+    if (baseMaterial) {
+      if (baseMaterial.blending === THREE.AdditiveBlending) {
+        baseIsAdditive = true;
+      } else {
+        const flags = (baseMaterial.userData?.surfaceTypeFlags ?? 0) >>> 0;
+        // SURFACE_TYPE.Additive = 0x10000 (scene3d/materials.js:65).
+        if ((flags & 0x10000) !== 0) {
+          baseIsAdditive = true;
+        }
+      }
+    }
+
     const emitter = new ParticleEmitter({
       parent,
       scene: this._scene,
@@ -148,32 +177,34 @@ export class ParticleManager {
         // opacity lerps don't stomp neighbors.
         const mat = baseMaterial ? baseMaterial.clone() : null;
         if (mat) {
-          // Perf E5 (2026-05-18) — material-flag classification by AC
-          // BlendMode. Neither `holtburger_dat::ParticleEmitter` (the DAT
-          // struct) nor the wasm `ParticleEmitterJs` getter surface (see
-          // src/lib.rs:18315) carry a blend-mode field — AC determines
-          // particle blending from the referenced GfxObj's material, not
-          // from the emitter record. Per the E5 briefing, that means the
-          // JS particle layer has no per-emitter classification to branch
-          // on, so we ship the agreed conservative middle ground for ALL
-          // particles: `transparent=true` + `alphaTest=0.1` + `depthWrite
-          // =true`. The alphaTest catches near-zero alpha and enables
-          // depth-write for those pixels, which is most of the depth-write
-          // win even on soft-edged sprites. Default blending remains
-          // `THREE.NormalBlending` (cloned from baseMaterial).
-          //
-          // TODO(E5): per-emitter BlendMode classification (Additive vs
-          // Alpha) requires `particle_emitter_info.js` (and upstream
-          // `ParticleEmitterJs` in src/lib.rs + the `holtburger_dat`
-          // `ParticleEmitter` struct) to expose a blend-mode field. The
-          // intended branch when that lands:
-          //   - Additive (BlendMode::Add): transparent=true,
-          //     blending=THREE.AdditiveBlending, depthWrite=false, no
-          //     alphaTest.
-          //   - Alpha (BlendMode::Alpha): the current conservative path.
-          mat.transparent = true;
-          mat.alphaTest = 0.1;
-          mat.depthWrite = true;
+          // Perf FU4 (2026-05-18) — per-emitter Additive vs Alpha branch.
+          // E5 (e1339af) shipped a single conservative middle ground for
+          // ALL particles because the wasm `ParticleEmitterJs` getter
+          // (src/lib.rs:18315) and `holtburger_dat::ParticleEmitter` (the
+          // DAT struct) don't expose a blend-mode field. FU4 lifts that
+          // limit by reading the signal off the GfxObj's surface
+          // material, which IS available here via `baseMaterial`. See
+          // the `baseIsAdditive` probe above for the decision path.
+          if (baseIsAdditive) {
+            // Additive blend (flames, sparks, the moon's crimson-star
+            // particle). depthWrite=false so additive sprites don't
+            // occlude later-drawn additive sprites — that's the visual
+            // bug E5's "alpha for everything" path produced. No
+            // alphaTest: additive sprites legitimately have low-alpha
+            // halo pixels that contribute energy and must not be culled.
+            mat.transparent = true;
+            mat.blending = THREE.AdditiveBlending;
+            mat.depthWrite = false;
+          } else {
+            // Alpha path — keep E5's conservative middle ground. The
+            // alphaTest catches near-zero alpha and enables depth-write
+            // for those pixels, which is most of the depth-write win
+            // even on soft-edged sprites. Default `mat.blending` stays
+            // at `THREE.NormalBlending` from the clone.
+            mat.transparent = true;
+            mat.alphaTest = 0.1;
+            mat.depthWrite = true;
+          }
           // Perf E3 (2026-05-18): tag the clone so destroyParticleEmitter()
           // can dispose it. The base material from materialFactory may be
           // cache-owned — only the per-slot CLONE is owned by this emitter.
