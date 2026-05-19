@@ -81,18 +81,18 @@
 // them (under-dispose is preferable to over-dispose; the assertion
 // catches the over-dispose case).
 //
-// CAVEAT — geometries returned from `AnimationCache.get()` are SHARED
-// across all spawns of the same `setupId` (see animation.js:316-329).
-// `_disposeMeshChildren` follows the doc snippet and disposes
-// geometries unconditionally; the pre-existing `inst.geometries` loop
-// in `Entity.dispose()` already did this on the same refs. Three.js
-// `.dispose()` is idempotent so double-dispose is safe, BUT a second
-// spawn of the same `setupId` after a dispose may try to render
-// against a freed BufferGeometry. TODO(B3 follow-on): gate geometry
-// dispose by `__disposable` too — match the material guard — once we
-// confirm whether shared-cache-geometry-after-dispose actually
-// regresses (the pre-existing loop has shipped without an incident
-// report so far, but it deserves a soak validation).
+// FU3 (2026-05-18) — geometries returned from `AnimationCache.get()`
+// are SHARED across all spawns of the same `setupId` (see
+// animation.js:316-329: "Multiple spawns of the same setupId all see
+// the SAME BufferGeometry refs"). Disposing them on the first entity's
+// despawn would free GPU buffers that surviving entities still
+// reference — those next render against a disposed geometry. The B3
+// `_disposeMeshChildren` originally disposed unconditionally and
+// shipped a CAVEAT to gate it; FU3 closes that gate. The helper now
+// disposes geometry only when `userData.__disposable === true`,
+// matching the material path. AnimationCache geometries stay untagged
+// → never disposed by this helper; entity-owned geometries (selection
+// ring TorusGeometry, etc.) carry the tag at their construction site.
 
 import * as THREE from "three";
 import {
@@ -263,16 +263,20 @@ function _disposeMaterialIfOwned(mat) {
 }
 
 // `_disposeMeshChildren` walks the rig with `.traverse()` and frees
-// per-Mesh geometry + materials. Geometry dispose is unconditional
-// (matches the existing legacy loop's behaviour — see the CAVEAT in
-// the module docstring); material dispose is gated by the
-// `__disposable` tag via `_disposeMaterialIfOwned`. Call BEFORE
-// `root.parent.remove(root)` so the traverse path is still intact.
+// per-Mesh geometry + materials. FU3 (2026-05-18) — both dispose paths
+// are now gated by `userData.__disposable === true`: geometry via an
+// inline check (no shared "cache-owned" assertion needed because
+// AnimationCache doesn't tag, so a missing tag is the expected
+// "shared" signal), material via `_disposeMaterialIfOwned`. Call
+// BEFORE `root.parent.remove(root)` so the traverse path is still
+// intact.
 function _disposeMeshChildren(root) {
   if (!root) return;
   root.traverse((obj) => {
     if (!obj.isMesh) return;
-    if (obj.geometry) {
+    // FU3: only dispose __disposable-tagged geometries to avoid
+    // freeing shared cached geometries from AnimationCache.
+    if (obj.geometry?.userData?.__disposable === true) {
       try {
         obj.geometry.dispose();
       } catch (_) {}
@@ -541,15 +545,24 @@ class EntityInstance {
     } catch (_) {}
     // Perf B3 (2026-05-18) — walk the rig BEFORE detaching from the
     // scene graph so traverse() still has the part-Mesh subtree
-    // attached. The helper disposes per-Mesh geometry unconditionally
-    // and per-Mesh materials only when tagged
-    // `userData.__disposable = true`. Legacy `inst.geometries` +
-    // `inst.ownedMaterials` loops below remain as a safety net (three.js
-    // `.dispose()` is idempotent so a second pass is a no-op). See the
-    // `__disposable` convention block in the module docstring.
+    // attached. The helper disposes per-Mesh geometry + materials only
+    // when tagged `userData.__disposable = true`. FU3 (2026-05-18)
+    // closes the geometry gate too — see the `__disposable` convention
+    // block in the module docstring. `inst.ownedMaterials` loop below
+    // remains as a safety net (three.js `.dispose()` is idempotent so a
+    // second pass is a no-op).
     _disposeMeshChildren(this.root);
     if (this.root.parent) this.root.parent.remove(this.root);
+    // FU3 (2026-05-18) — `inst.geometries` holds the AnimationCache's
+    // SHARED BufferGeometry refs (registerGeometry at the spawn site
+    // pushes the cache's `g.geometry` directly). Disposing them here
+    // would crash the next render of any surviving entity with the
+    // same setupId. The traverse above already disposes any
+    // entity-OWNED geometries that carry the `__disposable` tag (e.g.
+    // the selection-ring TorusGeometry); the cache geometries stay
+    // alive as long as the cache holds them.
     for (const g of this.geometries) {
+      if (g?.userData?.__disposable !== true) continue;
       try {
         g.dispose();
       } catch (_) {}
