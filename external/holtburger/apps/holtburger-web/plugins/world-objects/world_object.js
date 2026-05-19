@@ -17,12 +17,14 @@ export class WorldObject {
    * @param {number} classId     wcid (weenie class id)
    * @param {object} taxonomy    WorldObjectTaxonomy instance (for inheritance queries)
    * @param {object} enums       ChoriziteEnums instance (for symbol lookup)
+   * @param {object|null} manager  WorldObjectManager reference (for client.player dispatch)
    */
-  constructor(id, classId, taxonomy, enums) {
+  constructor(id, classId, taxonomy, enums, manager = null) {
     this.id = id;
     this.classId = classId;
     this.taxonomy = taxonomy;
     this.enums = enums;
+    this.manager = manager;
     this.createdAt = new Date();
     this.lastAccessTime = this.createdAt;
 
@@ -114,7 +116,33 @@ export class WorldObject {
       classId: this.classId,
       name: this.name,
       itemType: this.itemTypeName,
+      canonicalObjectClass: this.canonicalObjectClass ?? null,
+      classificationSource: this.classificationSource ?? null,
       hasAppraisalData: this.hasAppraisalData,
     };
+  }
+
+  /**
+   * Dispatch a "use" interaction on this object via the wire. In retail
+   * AC this is the click/double-click gesture — server interprets the
+   * action per-object (containers open, doors toggle, portals teleport,
+   * food gets eaten, weapons get equipped, etc.).
+   *
+   * Subclasses provide type-named wrappers (Door.use, Vendor.openTrade,
+   * Portal.enter, Lifestone.tie, Food.eat, Equippable.equip) that all
+   * funnel back here. Use the subclass wrapper for type-safety; this
+   * base method is the fallback for generic objects or for
+   * WorldObject-sentinel instances.
+   *
+   * @returns {boolean} true if dispatched, false if no client is wired
+   */
+  examine() {
+    const client = this.manager?.client;
+    if (!client?.player?.useObject) {
+      console.warn(`[wom] examine(0x${this.id.toString(16)}): no client.player.useObject — manager not wired?`);
+      return false;
+    }
+    client.player.useObject(this.id);
+    return true;
   }
 }

@@ -1,15 +1,26 @@
-/**
- * Stub for Container — extends Item.
+/** Container — extends Item.
  *
- * Mirrors Chorizite/ACPlugin/API/WorldObjects/Container.cs.
- *
- * Behaviors to add in follow-on PRs (per ACPlugin source):
- *   - Type-specific accessors (e.g. Vendor.openContainer, Door.isOpen)
- *   - Event handlers from the §3.4 event taxonomy
- *
- * Today this is the empty extension — typed dispatch + identity only.
+ * AC retail behavior: clicking a container (chest, pack, sack) opens it
+ * server-side; ACE responds with `ContainerOpened` + a list of contents.
  */
-
 import { Item } from './item.js';
 
-export class Container extends Item {}
+const PROP_ITEMS_CAPACITY      = 81;
+const PROP_CONTAINERS_CAPACITY = 82;
+
+export class Container extends Item {
+  /** Open this container. */
+  open() {
+    return this.examine();
+  }
+
+  /** Maximum inventory slot count, or 0 if not yet known. */
+  get itemsCapacity() {
+    return this.intValue(PROP_ITEMS_CAPACITY, 0);
+  }
+
+  /** Maximum nested-container slot count, or 0 if not yet known. */
+  get containersCapacity() {
+    return this.intValue(PROP_CONTAINERS_CAPACITY, 0);
+  }
+}

@@ -1,15 +1,17 @@
-/**
- * Stub for Vendor — extends NPC.
+/** Vendor — extends NPC.
  *
- * Mirrors Chorizite/ACPlugin/API/WorldObjects/Vendor.cs.
- *
- * Behaviors to add in follow-on PRs (per ACPlugin source):
- *   - Type-specific accessors (e.g. Vendor.openContainer, Door.isOpen)
- *   - Event handlers from the §3.4 event taxonomy
- *
- * Today this is the empty extension — typed dispatch + identity only.
+ * AC retail behavior: clicking a vendor opens the trade UI; ACE sends
+ * an `OpenContainer` carrying the vendor's stock.
  */
-
 import { NPC } from './npc.js';
 
-export class Vendor extends NPC {}
+export class Vendor extends NPC {
+  /**
+   * Open the vendor's trade window. Server responds with a
+   * `kind=12 ContainerOpened` event (per CHORIZITE_PORTING_PLAN.md
+   * §3.4) carrying the vendor's stock.
+   */
+  openTrade() {
+    return this.examine();
+  }
+}

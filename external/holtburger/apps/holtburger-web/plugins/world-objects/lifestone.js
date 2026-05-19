@@ -1,15 +1,13 @@
-/**
- * Stub for Lifestone — extends Static.
+/** Lifestone — extends Static.
  *
- * Mirrors Chorizite/ACPlugin/API/WorldObjects/Lifestone.cs.
- *
- * Behaviors to add in follow-on PRs (per ACPlugin source):
- *   - Type-specific accessors (e.g. Vendor.openContainer, Door.isOpen)
- *   - Event handlers from the §3.4 event taxonomy
- *
- * Today this is the empty extension — typed dispatch + identity only.
+ * AC retail behavior: clicking a lifestone binds the player's respawn
+ * point to that lifestone. Server handles the bind + announces via chat.
  */
-
 import { Static } from './static.js';
 
-export class Lifestone extends Static {}
+export class Lifestone extends Static {
+  /** Bind the player's respawn point to this lifestone. */
+  tie() {
+    return this.examine();
+  }
+}

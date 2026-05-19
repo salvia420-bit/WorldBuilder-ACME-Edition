@@ -57,12 +57,33 @@ const CONSTRUCTOR_BY_NAME = {
 };
 
 export class WorldObjectManager extends EventTarget {
-  constructor() {
+  /**
+   * @param {object} options
+   * @param {object} [options.client]  The pluginClient from `createClient(sessionHandle)`.
+   *   When set, typed WorldObject instances can dispatch wire actions
+   *   via their `examine()` / `use()` / etc. methods. Optional — the
+   *   manager works without it (typed dispatch + snapshot still work),
+   *   but action methods log a warning and no-op.
+   */
+  constructor(options = {}) {
     super();
     this.taxonomy = new WorldObjectTaxonomy();
     this.enums = new ChoriziteEnums();
     this.objects = new Map();
     this.loaded = false;
+    this.client = options.client ?? null;
+  }
+
+  /**
+   * Late-attach a client (when the manager was constructed before
+   * createClient resolved). After this call, instances created via
+   * onObjectCreated AND any already-live instances pick up the client
+   * for dispatch.
+   */
+  attachClient(client) {
+    this.client = client;
+    // Note: existing WorldObject instances reach back through
+    // `this.manager?.client`, so no per-instance rebinding needed.
   }
 
   async load(taxonomyUrl, enumsUrl) {
@@ -107,7 +128,7 @@ export class WorldObjectManager extends EventTarget {
       Constructor = Item;
       classificationSource = 'canonical-item-fallback';
     }
-    const wo = new Constructor(guid, classId, this.taxonomy, this.enums);
+    const wo = new Constructor(guid, classId, this.taxonomy, this.enums, this);
     wo.objDescFlags = objDescFlags;
     wo.weenieFlags = weenieFlags;
     wo.canonicalObjectClass = objectClassName; // preserved even when Constructor is Item-fallback
