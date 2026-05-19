@@ -69,6 +69,59 @@ const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
 const HOLTBURG_Y = 0xb4;
 
+// FU2 (perf follow-on 2026-05-18) — distance-tier follow-on for C2's
+// `low`-preset receiveShadow gate. At mid/high/ultra a placement gets
+// `receiveShadow = true` only when its world-space distance to the
+// spawn point (Holtburg LB centre) is under SHADOW_RECEIVE_RANGE_M.
+// Beyond that it falls back to `receiveShadow = false`. Reasoning:
+//
+//   - CSM frustum-test cost scales linearly with receiver count; the
+//     audit measured a meaningful win when distant statics were
+//     dropped (~16,700 placements over a 13×13 ring with most >60 m
+//     from spawn).
+//   - 60 m is a conservative half-LB radius — well inside the
+//     near-field where shadow receivers visually matter.
+//   - **Static reference, not player-tracking.** We compare against
+//     the spawn point at bake time; we don't re-bake on movement.
+//     The world-expand step 1 ring is ≤6 LBs around Holtburg (≤576 m
+//     radius), so the spawn-point distance is a stable proxy for
+//     "near the player" at session start. TODO(FU2-future): player-
+//     tracking gate that updates `receiveShadow` on LB-cross would
+//     need a per-frame walk of `staticsGroup` children — defer until
+//     we have movement-driven re-bake infrastructure.
+const SHADOW_RECEIVE_RANGE_M = 60.0;
+const SHADOW_RECEIVE_RANGE_SQ_M = SHADOW_RECEIVE_RANGE_M * SHADOW_RECEIVE_RANGE_M;
+// Spawn point = Holtburg LB centre. Matches the convention used by
+// scene3d/index.js to seed the initial camera at session start.
+const SPAWN_REF_X = HOLTBURG_X * METERS_PER_LANDBLOCK + METERS_PER_LANDBLOCK / 2;
+const SPAWN_REF_Y = HOLTBURG_Y * METERS_PER_LANDBLOCK + METERS_PER_LANDBLOCK / 2;
+
+/**
+ * FU2 — per-placement receive-shadow predicate. Extends C2's
+ * `staticsReceiveShadow` (the low-preset gate) with a distance check
+ * against the spawn point. Applied ONLY to plain `THREE.Mesh`
+ * singletons (and their degraded LOD leaves). `InstancedMesh` keeps the
+ * simple low-preset gate per the audit's option (b) — per-instance
+ * `receiveShadow` isn't a thing in three.js, and splitting each
+ * InstancedMesh by tier is deferred.
+ *
+ *   staticsReceiveShadow: the C2 low-preset bool — already false at low.
+ *   worldX, worldY: placement world-space position (LB origin + local).
+ *
+ * Returns false at low (matches C2 behaviour), false beyond the range,
+ * true within the range at mid/high/ultra.
+ */
+function staticsReceiveShadowForPlacement(
+  staticsReceiveShadow,
+  worldX,
+  worldY
+) {
+  if (!staticsReceiveShadow) return false;
+  const dx = worldX - SPAWN_REF_X;
+  const dy = worldY - SPAWN_REF_Y;
+  return dx * dx + dy * dy < SHADOW_RECEIVE_RANGE_SQ_M;
+}
+
 // F#5 — distance at which the renderer swaps from full to degraded
 // geometry. AC retail used ~100m for distant-scenery LOD (trees, hill
 // foliage). The exact retail threshold isn't preserved in the DAT, so
@@ -486,6 +539,15 @@ function buildSingletonNode({
       : 1;
   const source = placement.source || "landblockinfo";
 
+  // FU2 — per-placement receive-shadow decision. Singleton path uses
+  // the distance-tier predicate; falls back to false at `low` preset
+  // (C2) OR beyond SHADOW_RECEIVE_RANGE_M from spawn.
+  const placementReceiveShadow = staticsReceiveShadowForPlacement(
+    staticsReceiveShadow,
+    worldX,
+    worldY
+  );
+
   const mesh = new THREE.Mesh(geom, mat);
   mesh.name = `static-${placementKey}`;
   mesh.position.set(worldX, worldY, placement.z);
@@ -507,12 +569,13 @@ function buildSingletonNode({
   };
   if (staticsShadow) {
     mesh.castShadow = staticsMatCastsShadow;
-    // C2 (perf plan 2026-05-18) — at `low` quality preset every static
-    // skips CSM receive-shadow participation; at mid/high/ultra we keep
-    // today's all-receivers behaviour. TODO: distance-tier follow-on
-    // (foreground only) — gate distant statics off too per the audit's
-    // full fix.
-    mesh.receiveShadow = staticsReceiveShadow;
+    // FU2 (perf follow-on 2026-05-18) — distance-tier gate on top of
+    // C2's low-preset gate. Foreground (<60 m from spawn) at mid/high/
+    // ultra keeps receiveShadow=true; everything else (low preset OR
+    // >=60 m) gets false. Spawn-anchored at bake time, not player-
+    // tracked. TODO(FU2-future): per-frame walk on LB-cross to update
+    // when we have movement-driven re-bake infra.
+    mesh.receiveShadow = placementReceiveShadow;
   }
 
   if (!degradedGeom) {
@@ -523,8 +586,11 @@ function buildSingletonNode({
   degradedMesh.name = `static-degraded-${placementKey}`;
   if (staticsShadow) {
     degradedMesh.castShadow = staticsMatCastsShadow;
-    // C2 — same low-preset gate as the full-detail leaf above.
-    degradedMesh.receiveShadow = staticsReceiveShadow;
+    // FU2 — same per-placement distance gate as the full-detail leaf
+    // above. Both LOD levels share the placement's spawn-distance so
+    // the gate decision is identical; reusing the cached predicate
+    // result keeps the two leaves consistent.
+    degradedMesh.receiveShadow = placementReceiveShadow;
   }
   degradedMesh.position.copy(mesh.position);
   degradedMesh.quaternion.copy(mesh.quaternion);
@@ -623,8 +689,14 @@ function buildInstancedNode({
     instanced.castShadow = staticsMatCastsShadow;
     // C2 (perf plan 2026-05-18) — `low` preset: receiveShadow off across
     // all 16,700 placements; mid/high/ultra keep today's all-receivers
-    // behaviour. TODO: distance-tier follow-on (foreground only) — gate
-    // distant statics off too per the audit's full fix.
+    // behaviour. FU2 (perf follow-on) — InstancedMesh deliberately KEEPS
+    // the simple low-preset gate; `THREE.InstancedMesh.receiveShadow`
+    // is per-mesh (not per-instance) so the distance-tier gate can't
+    // discriminate between foreground + background instances under the
+    // same draw call. The audit's option (a) — splitting each
+    // InstancedMesh by tier — is deferred until the singleton-path win
+    // (FU2 (b)) demonstrably falls short. See FU2 in
+    // docs/fps-perf-followon-2026-05-18.md.
     instanced.receiveShadow = staticsReceiveShadow;
   }
   for (let i = 0; i < group.length; i += 1) {
@@ -652,7 +724,10 @@ function buildInstancedNode({
   degradedInstanced.name = `static-instanced-degraded-${modelKey}`;
   if (staticsShadow) {
     degradedInstanced.castShadow = staticsMatCastsShadow;
-    // C2 — same low-preset gate as the full-detail InstancedMesh above.
+    // C2 + FU2 — same low-preset gate as the full-detail InstancedMesh
+    // above. InstancedMesh is excluded from the distance-tier gate by
+    // design (per-mesh, not per-instance); see the comment block on
+    // the full-detail leaf for the full audit reasoning.
     degradedInstanced.receiveShadow = staticsReceiveShadow;
   }
   for (let i = 0; i < group.length; i += 1) {
@@ -849,8 +924,12 @@ export async function bakeStaticsForLandblock(
   // with receiver count, ~16,700 placements in Holtburg). mid/high/ultra
   // keep today's all-receivers behaviour. Read mirrors the convention
   // used elsewhere in scene3d (e.g. terrain.js `scene3d.quality?.flags`).
-  // TODO: distance-tier follow-on (foreground only) — gate distant
-  // statics off too per the audit's full fix.
+  // FU2 (perf follow-on 2026-05-18) — this is the C2 low-preset bool;
+  // the per-placement distance-tier predicate
+  // (`staticsReceiveShadowForPlacement`) consumes it inside
+  // `buildSingletonNode` for plain `THREE.Mesh` singletons + LOD leaves.
+  // InstancedMesh (not on this path — the per-LB baker only emits
+  // singletons) keeps the simple low-preset gate.
   const staticsReceiveShadow = scene3d.quality?.preset !== "low";
   let objectCount = 0;
   let singletonCount = 0;
@@ -1140,8 +1219,13 @@ export async function bakeStaticsRing(
   // with receiver count, ~16,700 placements in Holtburg). mid/high/ultra
   // keep today's all-receivers behaviour. Read mirrors the convention
   // used elsewhere in scene3d (e.g. terrain.js `scene3d.quality?.flags`).
-  // TODO: distance-tier follow-on (foreground only) — gate distant
-  // statics off too per the audit's full fix.
+  // FU2 (perf follow-on 2026-05-18) — the per-placement distance-tier
+  // predicate (`staticsReceiveShadowForPlacement`) consumes this bool
+  // inside `buildSingletonNode` for plain `THREE.Mesh` singletons
+  // (group.length === 1 + the LOD leaf). `InstancedMesh` (group.length
+  // >= 2, via `buildInstancedNode`) keeps the simple low-preset gate
+  // because `THREE.InstancedMesh.receiveShadow` is per-mesh, not
+  // per-instance — see the comment block in `buildInstancedNode`.
   const staticsReceiveShadow = scene3d.quality?.preset !== "low";
   let objectCount = 0;
   let skippedNoMesh = 0;

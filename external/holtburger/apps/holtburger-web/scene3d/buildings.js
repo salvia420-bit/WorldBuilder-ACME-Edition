@@ -62,6 +62,52 @@ const METERS_PER_LANDBLOCK = 192.0;
 const HOLTBURG_X = 0xa9;
 const HOLTBURG_Y = 0xb4;
 
+// FU2 (perf follow-on 2026-05-18) — distance-tier follow-on for C3's
+// `low`-preset receiveShadow gate. At mid/high/ultra a building gets
+// `receiveShadow = true` only when its world-space distance to the
+// spawn point (Holtburg LB centre) is under SHADOW_RECEIVE_RANGE_M.
+// Beyond that it falls back to `receiveShadow = false`.
+//
+// Mirrors statics.js's FU2 predicate (commit-pair w/ C2). 60 m is the
+// half-LB radius — well inside the near-field where shadow receivers
+// visually matter. Static reference (spawn-anchored at bake time), not
+// player-tracked. The world-expand step 1 ring is ≤6 LBs around
+// Holtburg (≤576 m radius) so the spawn distance is a stable proxy for
+// "near the player" at session start. TODO(FU2-future): player-tracking
+// gate that walks `buildingsGroup` on LB-cross to flip
+// `receiveShadow` — defer until movement-driven re-bake exists.
+const SHADOW_RECEIVE_RANGE_M = 60.0;
+const SHADOW_RECEIVE_RANGE_SQ_M = SHADOW_RECEIVE_RANGE_M * SHADOW_RECEIVE_RANGE_M;
+const SPAWN_REF_X = HOLTBURG_X * METERS_PER_LANDBLOCK + METERS_PER_LANDBLOCK / 2;
+const SPAWN_REF_Y = HOLTBURG_Y * METERS_PER_LANDBLOCK + METERS_PER_LANDBLOCK / 2;
+
+/**
+ * FU2 — per-placement receive-shadow predicate. Extends C3's
+ * `buildingsReceiveShadow` (the low-preset gate) with a distance check
+ * against the spawn point. Applied at the per-placement granularity
+ * inside `buildOneBuilding` (every surface mesh under that placement
+ * shares the same world position, so one predicate per placement).
+ *
+ *   buildingsReceiveShadow: the C3 low-preset bool — already false at low.
+ *   worldX, worldY: placement world-space position (LB origin + local).
+ *
+ * Returns false at low (matches C3 behaviour), false beyond the range,
+ * true within the range at mid/high/ultra. Building meshes are always
+ * plain `THREE.Mesh` under a `THREE.Group` (NOT `InstancedMesh` — the
+ * per-placement door-rotation contract precludes instancing; see the
+ * module-doc header), so the per-placement gate applies cleanly.
+ */
+function buildingsReceiveShadowForPlacement(
+  buildingsReceiveShadow,
+  worldX,
+  worldY
+) {
+  if (!buildingsReceiveShadow) return false;
+  const dx = worldX - SPAWN_REF_X;
+  const dy = worldY - SPAWN_REF_Y;
+  return dx * dx + dy * dy < SHADOW_RECEIVE_RANGE_SQ_M;
+}
+
 // ---------------------------------------------------------------------
 // C5 (perf plan 2026-05-18) — material/geometry disposal helpers.
 //
@@ -275,10 +321,19 @@ function buildOneBuilding(
   // World position = landblock NW + placement-local. AC's
   // `ObjectPlacement.x/y/z` is metres relative to the LB NW corner
   // (per `lib.rs:600-602`).
-  placementGroup.position.set(
-    worldOffset.x + placement.x,
-    worldOffset.y + placement.y,
-    placement.z
+  const worldX = worldOffset.x + placement.x;
+  const worldY = worldOffset.y + placement.y;
+  placementGroup.position.set(worldX, worldY, placement.z);
+  // FU2 — per-placement distance-tier predicate; computed once per
+  // building so all surface meshes under this Group share the same
+  // shadow-receive decision (they're all at the same world position).
+  // False at C3's `low` preset OR when this building is beyond
+  // SHADOW_RECEIVE_RANGE_M from spawn; true within range at mid/high/
+  // ultra.
+  const placementReceiveShadow = buildingsReceiveShadowForPlacement(
+    buildingsReceiveShadow,
+    worldX,
+    worldY
   );
   // Yaw-only rotation around AC +Z. The 2D path negates this
   // (`buildingContainer.rotation = -obj.rotationZ`) because PIXI flips
@@ -343,9 +398,15 @@ function buildOneBuilding(
         // mid/high/ultra keep today's all-receivers behaviour.
         // Translucent surfaces already get receiveShadow=false via the
         // per-material gate in materials.js (separate code path).
-        // TODO: distance-tier follow-on (foreground only) — gate distant
-        // building surfaces off too per the audit's full fix.
-        mesh.receiveShadow = buildingsReceiveShadow;
+        // FU2 (perf follow-on 2026-05-18) — distance-tier gate on top
+        // of C3's low-preset gate. Foreground (<60 m from spawn) at
+        // mid/high/ultra keeps receiveShadow=true; everything else
+        // (low preset OR >=60 m) gets false. Spawn-anchored at bake
+        // time, not player-tracked. TODO(FU2-future): per-frame walk
+        // on LB-cross to update when we have movement-driven re-bake
+        // infra. Per-placement (not per-surface) since every surface
+        // mesh under this Group shares the same world position.
+        mesh.receiveShadow = placementReceiveShadow;
       }
       hingeWrapper.add(mesh);
       partsAdded += 1;
@@ -406,8 +467,13 @@ function resolveBuildingsOpts(scene3d) {
     // high/ultra keep today's all-receivers behaviour. Mirrors C2's
     // `staticsReceiveShadow` convention (commit 8ceafa0). Captured
     // once at ring entry and threaded into `buildOneBuilding`.
-    // TODO: distance-tier follow-on (foreground only) — gate distant
-    // building surfaces off too per the audit's full fix.
+    // FU2 (perf follow-on 2026-05-18) — this is the C3 low-preset
+    // bool; the per-placement distance-tier predicate
+    // (`buildingsReceiveShadowForPlacement`) consumes it inside
+    // `buildOneBuilding`. Buildings are always plain `THREE.Mesh`
+    // under per-placement Groups (NOT InstancedMesh — see the
+    // module-doc header on door-rotation), so the gate applies per-
+    // placement cleanly.
     buildingsReceiveShadow: scene3d.quality?.preset !== "low",
   };
 }
