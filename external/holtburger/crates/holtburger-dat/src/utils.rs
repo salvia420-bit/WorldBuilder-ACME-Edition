@@ -306,6 +306,38 @@ pub fn get_portal_dat_path() -> Option<std::path::PathBuf> {
     None
 }
 
+/// AC string-key hash. Used as the key for StringTable / EnumMapper /
+/// DBObj name lookups in retail DAT files. Per-byte 4-bit shift-fold into
+/// a 28-bit accumulator, with input treated as Windows-1252 (sign-extended
+/// per byte).
+///
+/// **NOT** the same as [`holtburger_protocol::crypto::Hash32::compute`] —
+/// that's the packet checksum (length-prefix + 32-bit chunk accumulator).
+/// See `external/chorizite/DatReaderWriter.Extensions/StringHashExtensions.cs`
+/// + the DRW.Extensions reading guide §5 for the parity history. Cross-port
+/// parity with the WB.Terminal `chorizite-hash-string` command is asserted
+/// in [`tests::cross_port_parity_with_wb_terminal_chorizite_hash_string`].
+///
+/// # Example
+/// ```
+/// use holtburger_dat::utils::string_hash;
+/// assert_eq!(string_hash("A"), 0x00000041);
+/// assert_eq!(string_hash("WalkForward"), 0x0085473E);
+/// ```
+pub fn string_hash(input: &str) -> u32 {
+    // Encode as Windows-1252 (matches the C# Encoding.GetEncoding(1252)).
+    // For ASCII inputs (motion command names, enum names — the AC norm)
+    // this is a no-op identity mapping.
+    let (encoded, _, _) = encoding_rs::WINDOWS_1252.encode(input);
+    let mut h: u32 = 0;
+    for &b in encoded.iter() {
+        // Sign-extend per byte (mirrors the C# `(sbyte)b` cast).
+        let signed = b as i8 as i32;
+        h = ((h << 4) | (h >> 28)) ^ (signed as u32);
+    }
+    h & 0x0FFF_FFFF
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,5 +426,40 @@ mod tests {
         let value = read_dotnet_string(&mut reader).unwrap();
 
         assert_eq!(value, "Hello");
+    }
+
+    /// Golden vectors for `string_hash`. Output values asserted against
+    /// the C# port at WorldBuilder.Terminal `chorizite-hash-string` (which
+    /// is itself a port of Chorizite/DatReaderWriter.Extensions/
+    /// StringHashExtensions.cs::ComputeHash). If either port drifts, this
+    /// test catches it.
+    ///
+    /// To regenerate the golden values:
+    ///   $DOTNET_ROOT/dotnet WorldBuilder.Terminal/bin/Release/net8.0/WorldBuilder.Terminal.dll --stdin
+    ///   {"command":"chorizite-hash-string","input":"<your-string>"}
+    #[test]
+    fn string_hash_golden_vectors() {
+        // Empty + single-char baselines.
+        assert_eq!(string_hash(""), 0x00000000);
+        assert_eq!(string_hash("A"), 0x00000041);
+        assert_eq!(string_hash("a"), 0x00000061);
+
+        // MotionCommand names (per Chorizite.Common/Enums/MotionCommand.cs).
+        // Generated via:
+        //   {"command":"chorizite-hash-string","input":"WalkForward"} → 0x0085473E
+        //   {"command":"chorizite-hash-string","input":"NonCombat"}   → 0x0A59B42C
+        assert_eq!(string_hash("WalkForward"), 0x0085473E);
+        assert_eq!(string_hash("NonCombat"), 0x0A59B42C);
+    }
+
+    /// Verify the algorithm matches retail behaviour for inputs containing
+    /// non-ASCII (Windows-1252-specific) characters. AC's StringTable
+    /// occasionally carries Latin-1 supplement chars in NPC names.
+    #[test]
+    fn string_hash_handles_windows_1252_high_bytes() {
+        // "é" (Windows-1252 0xE9) — sign-extends to -0x17 = 0xFFFFFFE9.
+        // Recompute by hand: h=0, then b=0xE9 → signed=-23 → ((0<<4)|0)^0xFFFFFFE9 = 0xFFFFFFE9.
+        // Mask 0x0FFFFFFF → 0x0FFFFFE9.
+        assert_eq!(string_hash("é"), 0x0FFF_FFE9);
     }
 }
