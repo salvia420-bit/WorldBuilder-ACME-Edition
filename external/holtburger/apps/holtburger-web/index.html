@@ -719,6 +719,7 @@
       import * as combatBarPlugin from "./plugins/combat-bar.js";
       import * as spellbookPlugin from "./plugins/spellbook.js";
       import * as vitalsHudPlugin from "./plugins/vitals-hud.js";
+      import * as vendorUiPlugin from "./plugins/vendor-ui.js";
       import { WorldObjectManager } from "./plugins/world-objects/world_object_manager.js";
 
       let pluginClient = null;
@@ -754,6 +755,13 @@
         {
           ...spellbookPlugin.manifest,
           activate: spellbookPlugin.activate,
+        },
+        {
+          // Vendor Window — event-driven (auto-pops on kind=12 VendorOpened),
+          // iconHidden so it doesn't claim bar space. Per acpedia "Trading"
+          // article: shows vendor's stock + buy/sell rates + prices.
+          ...vendorUiPlugin.manifest,
+          mount: vendorUiPlugin.mount,
         },
       ];
 
@@ -6720,17 +6728,28 @@ void main() {
                 // owned by the player.
                 renderInventoryPanel(handle);
               } else if (evt.kind === 12) {
-                // Phase 4 step 5: VendorOpened. The wasm side already
-                // pushed a kind=2 chat line into the [Trade] tab so
-                // the user sees vendor approached + item count
-                // without needing a vendor-window UI yet. Future
-                // vendor-window work hooks here to pop a modal
-                // listing the items + buy/sell buttons.
+                // Phase 4 step 5: VendorOpened. The wasm side cached the
+                // full vendor state (items + multipliers + alt currency)
+                // BEFORE pushing this event, so plugins can fetch via
+                // `handle.getVendorState(vendorGuid)`.
+                //
+                // 2026-05-19: emit `vendorOpened` on the plugin bus so
+                // plugins/vendor-ui.js (the Vendor Window) can render.
+                // The event payload mirrors the wasm ClientEvent fields
+                // 1:1; consumers re-fetch full state via wasm.
                 const vendorName = evt.stringPayload || "Vendor";
-                const vendorGuid = (evt.u32Payload >>> 0).toString(16).toUpperCase().padStart(8, "0");
+                const vendorGuidU32 = evt.u32Payload >>> 0;
+                const vendorGuidHex = vendorGuidU32.toString(16).toUpperCase().padStart(8, "0");
                 const itemCount = evt.u32Payload2 >>> 0;
                 // eslint-disable-next-line no-console
-                console.log(`[step 5] VendorOpened ${vendorName} guid=0x${vendorGuid} items=${itemCount}`);
+                console.log(`[step 5] VendorOpened ${vendorName} guid=0x${vendorGuidHex} items=${itemCount}`);
+                if (window.__pluginClient && window.__pluginClient.events) {
+                  window.__pluginClient.events.emit("vendorOpened", {
+                    stringPayload: vendorName,
+                    u32Payload: vendorGuidU32,
+                    u32Payload2: itemCount,
+                  });
+                }
               } else if (evt.kind === 13) {
                 // Phase 4 step 5: UseFailed (WeenieError /
                 // WeenieErrorWithString). Already mirrored as a

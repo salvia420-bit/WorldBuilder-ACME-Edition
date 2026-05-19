@@ -11952,6 +11952,169 @@ impl InventoryItem {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────
+//  Vendor UI (2026-05-19): per-vendor cached state + JS-facing struct
+// ─────────────────────────────────────────────────────────────────────
+
+/// Internal cache shape for `latest_vendor_state`. Mirrors the most
+/// useful fields from `ApproachVendorEventData` for the JS-side trade
+/// panel — vendor identity, buy/sell pricing multipliers, alternate
+/// currency info, plus a flattened item list keyed by guid (with
+/// each item's name, wcid, value, stack size, item type, icon DID).
+///
+/// Snapshotted (cloned) into [`VendorStateJs`] by `get_vendor_state`
+/// so JS reads a stable snapshot per call (no live-update aliasing).
+#[derive(Debug, Clone)]
+struct VendorState {
+    vendor_guid: u32,
+    vendor_name: String,
+    buy_multiplier: f32,
+    sell_multiplier: f32,
+    alternate_currency_wcid: u32,
+    alternate_currency_amount: u32,
+    alternate_currency_name: String,
+    items: Vec<VendorStateItem>,
+}
+
+#[derive(Debug, Clone)]
+struct VendorStateItem {
+    item_guid: u32,
+    wcid: u32,
+    name: String,
+    value: u32,
+    stack_size: u32,
+    item_type: u32,
+    icon_id: u32,
+}
+
+/// JS-facing snapshot of one vendor's trade state. Returned by
+/// [`SessionHandle::get_vendor_state`]; consumed by
+/// `plugins/vendor-ui.js`.
+///
+/// Prices on the UI side are computed as `item.value * buyMultiplier`
+/// (buy) and `item.value * sellMultiplier` (sell) — kept here as
+/// independent fields so the UI doesn't have to hardcode the
+/// retail formula.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub struct VendorStateJs {
+    vendor_guid: u32,
+    vendor_name: String,
+    buy_multiplier: f32,
+    sell_multiplier: f32,
+    alternate_currency_wcid: u32,
+    alternate_currency_amount: u32,
+    alternate_currency_name: String,
+    items: Vec<VendorItemJs>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl VendorStateJs {
+    fn from_cached(cache: &VendorState) -> Self {
+        Self {
+            vendor_guid: cache.vendor_guid,
+            vendor_name: cache.vendor_name.clone(),
+            buy_multiplier: cache.buy_multiplier,
+            sell_multiplier: cache.sell_multiplier,
+            alternate_currency_wcid: cache.alternate_currency_wcid,
+            alternate_currency_amount: cache.alternate_currency_amount,
+            alternate_currency_name: cache.alternate_currency_name.clone(),
+            items: cache
+                .items
+                .iter()
+                .map(|i| VendorItemJs {
+                    item_guid: i.item_guid,
+                    wcid: i.wcid,
+                    name: i.name.clone(),
+                    value: i.value,
+                    stack_size: i.stack_size,
+                    item_type: i.item_type,
+                    icon_id: i.icon_id,
+                })
+                .collect(),
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl VendorStateJs {
+    /// Vendor entity GUID.
+    #[wasm_bindgen(getter, js_name = vendorGuid)]
+    pub fn vendor_guid(&self) -> u32 { self.vendor_guid }
+    /// Display name (e.g. "Lin the Trader"). Resolved server-side from
+    /// the vendor entity's PropertyString.Name.
+    #[wasm_bindgen(getter, js_name = vendorName)]
+    pub fn vendor_name(&self) -> String { self.vendor_name.clone() }
+    /// Multiplier applied to item.value for the BUY price (player → vendor).
+    /// Typically > 1.0 (vendors charge more than item value).
+    #[wasm_bindgen(getter, js_name = buyMultiplier)]
+    pub fn buy_multiplier(&self) -> f32 { self.buy_multiplier }
+    /// Multiplier applied to item.value for the SELL price (vendor → player).
+    /// Typically < 1.0 (vendors pay less than item value).
+    #[wasm_bindgen(getter, js_name = sellMultiplier)]
+    pub fn sell_multiplier(&self) -> f32 { self.sell_multiplier }
+    /// Alternate currency (e.g. trade tokens) wcid, or 0 if the vendor only deals in pyreals.
+    #[wasm_bindgen(getter, js_name = alternateCurrencyWcid)]
+    pub fn alternate_currency_wcid(&self) -> u32 { self.alternate_currency_wcid }
+    /// Per-unit alt-currency cost when applicable.
+    #[wasm_bindgen(getter, js_name = alternateCurrencyAmount)]
+    pub fn alternate_currency_amount(&self) -> u32 { self.alternate_currency_amount }
+    /// Alt-currency display name (e.g. "Trade Token").
+    #[wasm_bindgen(getter, js_name = alternateCurrencyName)]
+    pub fn alternate_currency_name(&self) -> String { self.alternate_currency_name.clone() }
+    /// Stocked items. Each carries its own guid + metadata; click-to-buy
+    /// dispatches via a separate `buyItem(vendorGuid, itemGuid)` action
+    /// (not yet wired — see vendor-ui.js follow-on).
+    #[wasm_bindgen(getter)]
+    pub fn items(&self) -> Vec<VendorItemJs> { self.items.clone() }
+}
+
+/// One item in a vendor's stock. Cloneable for JS-side iteration via
+/// `VendorStateJs.items` getter (wasm-bindgen vec clones per access).
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct VendorItemJs {
+    item_guid: u32,
+    wcid: u32,
+    name: String,
+    value: u32,
+    stack_size: u32,
+    item_type: u32,
+    icon_id: u32,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl VendorItemJs {
+    /// Per-instance GUID assigned by the server when the vendor enumerated stock.
+    #[wasm_bindgen(getter, js_name = itemGuid)]
+    pub fn item_guid(&self) -> u32 { self.item_guid }
+    /// Weenie class id — for icon lookup or vendor-cycle identity.
+    #[wasm_bindgen(getter)]
+    pub fn wcid(&self) -> u32 { self.wcid }
+    /// Display name. Empty string when the vendor sent the item without a
+    /// name property (rare — usually vendors send fully-named stock).
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String { self.name.clone() }
+    /// Base Pyreal value before vendor markup.
+    /// UI computes display price = `value * vendor.buyMultiplier`.
+    #[wasm_bindgen(getter)]
+    pub fn value(&self) -> u32 { self.value }
+    /// Stack size (1 for non-stackable). Vendors typically expose a single
+    /// stack-of-N entry for stackable goods (arrows, scrolls, components).
+    #[wasm_bindgen(getter, js_name = stackSize)]
+    pub fn stack_size(&self) -> u32 { self.stack_size }
+    /// ItemType bitfield — drives icon/category filtering.
+    #[wasm_bindgen(getter, js_name = itemType)]
+    pub fn item_type(&self) -> u32 { self.item_type }
+    /// Icon DID (`PublicWeenieDescription.icon_id`). Future inventory-style
+    /// icon rendering reuses the same atlas/lookup as the inventory panel.
+    #[wasm_bindgen(getter, js_name = iconId)]
+    pub fn icon_id(&self) -> u32 { self.icon_id }
+}
+
 /// Phase 4 step 4 follow-on: human-readable label for a `SkillType`
 /// numeric id. Mirrors the `Display` impl on
 /// `holtburger_common::stats::SkillType` (which uses strum's
@@ -12227,6 +12390,14 @@ pub struct SessionHandle {
     /// [`SessionHandle::player_inventory`] on each `kind=11
     /// InventoryUpdated` drain.
     latest_inventory: std::rc::Rc<std::cell::RefCell<Vec<InventoryItem>>>,
+    /// **Vendor UI (2026-05-19).** Per-vendor cache of the most recent
+    /// `ApproachVendor` payload, keyed by vendor GUID. Populated by the
+    /// recv loop when ACE responds to `useObject(vendor_guid)` with a
+    /// `GameEvent::ApproachVendor`. JS reads via [`SessionHandle::get_vendor_state`]
+    /// on each `kind=12 VendorOpened` drain to render the trade panel.
+    /// Multi-vendor: each vendor's state lives independently so opening
+    /// a second vendor doesn't clobber the first.
+    latest_vendor_state: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u32, VendorState>>>,
     /// Phase G (spell book): the local player's known-spells list, a
     /// `Vec<u32>` of spell IDs cloned from `Entity.spell_book` when an
     /// IdentifyObject response lands on the player. Read by JS via
@@ -12612,6 +12783,25 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = playerInventory)]
     pub fn player_inventory(&self) -> Vec<InventoryItem> {
         self.latest_inventory.borrow().clone()
+    }
+
+    /// **Vendor UI (2026-05-19).** Pull the cached vendor state for a
+    /// given vendor GUID — populated by the recv loop on
+    /// `GameEvent::ApproachVendor` (which fires after `useObject(guid)`
+    /// when `guid` is a Vendor). Returns `None` (JS `null`) when no
+    /// vendor state has been observed for this GUID yet.
+    ///
+    /// Consumed by `plugins/vendor-ui.js` on each `kind=12 VendorOpened`
+    /// event to render the trade panel. The full item list (each with
+    /// stack size + PublicWeenieDescription-derived metadata) plus the
+    /// buy/sell multipliers + alternate-currency info are surfaced as a
+    /// [`VendorStateJs`] wasm-bindgen struct.
+    #[wasm_bindgen(js_name = getVendorState)]
+    pub fn get_vendor_state(&self, vendor_guid: u32) -> Option<VendorStateJs> {
+        self.latest_vendor_state
+            .borrow()
+            .get(&vendor_guid)
+            .map(VendorStateJs::from_cached)
     }
 
     /// Phase G (spell book): the local player's known-spells list as a
@@ -13804,6 +13994,11 @@ pub async fn start_session(
         std::rc::Rc::new(std::cell::RefCell::new(None));
     let latest_inventory: std::rc::Rc<std::cell::RefCell<Vec<InventoryItem>>> =
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    // Vendor UI (2026-05-19): per-vendor cached state, refreshed by the
+    // ApproachVendor handler. Multi-vendor (each lives independently).
+    let latest_vendor_state: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, VendorState>>,
+    > = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
     // Phase G: known-spells snapshot, refreshed alongside latest_stats
     // when the player's biota / IdentifyObject response lands.
     let latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>> =
@@ -13839,6 +14034,7 @@ pub async fn start_session(
         let world_bootstrap = world_bootstrap.clone();
         let latest_stats = latest_stats.clone();
         let latest_inventory = latest_inventory.clone();
+        let latest_vendor_state_inner = latest_vendor_state.clone();
         let latest_known_spells_inner = latest_known_spells.clone();
         let cell_scene_snapshot = cell_scene_snapshot.clone();
         let door_part_snapshot = door_part_snapshot.clone();
@@ -13856,6 +14052,7 @@ pub async fn start_session(
                 world_bootstrap,
                 latest_stats,
                 latest_inventory,
+                latest_vendor_state_inner,
                 latest_known_spells_inner,
                 cell_scene_snapshot,
                 door_part_snapshot,
@@ -13921,6 +14118,7 @@ pub async fn start_session(
         entity_updates,
         latest_stats,
         latest_inventory,
+        latest_vendor_state,
         latest_known_spells,
         cell_scene_snapshot,
         door_part_snapshot,
@@ -14534,6 +14732,9 @@ async fn recv_loop(
     >,
     latest_stats: std::rc::Rc<std::cell::RefCell<Option<LatestStats>>>,
     latest_inventory: std::rc::Rc<std::cell::RefCell<Vec<InventoryItem>>>,
+    latest_vendor_state: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<u32, VendorState>>,
+    >,
     latest_known_spells: std::rc::Rc<std::cell::RefCell<Vec<u32>>>,
     cell_scene_snapshot: std::rc::Rc<std::cell::RefCell<CellSceneSnapshot>>,
     door_part_snapshot: std::rc::Rc<
@@ -16782,6 +16983,62 @@ async fn recv_loop(
                                 holtburger_protocol::messages::GameEvent::ApproachVendor(
                                     data,
                                 ) => {
+                                    // Vendor UI (2026-05-19): cache the
+                                    // full vendor state (items + multipliers
+                                    // + alt currency) so JS can pull it via
+                                    // SessionHandle::get_vendor_state(guid)
+                                    // when plugins/vendor-ui.js renders the
+                                    // trade panel. Multi-vendor: keyed by
+                                    // vendor guid so opening a second
+                                    // doesn't clobber the first.
+                                    {
+                                        let vendor_guid_u32 = u32::from(data.vendor_guid);
+                                        let vendor_name_for_cache = world
+                                            .as_ref()
+                                            .and_then(|w| {
+                                                w.entities.get(data.vendor_guid).map(|entity| {
+                                                    use holtburger_common::properties::WorldObjectExt as _;
+                                                    entity.name().to_string()
+                                                })
+                                            })
+                                            .unwrap_or_else(|| "Vendor".to_string());
+                                        let items: Vec<VendorStateItem> = data
+                                            .items
+                                            .iter()
+                                            .map(|item| {
+                                                let desc = &item.description;
+                                                VendorStateItem {
+                                                    item_guid: u32::from(desc.guid),
+                                                    wcid: desc.wcid,
+                                                    name: desc
+                                                        .name
+                                                        .clone()
+                                                        .unwrap_or_default(),
+                                                    value: desc.value.unwrap_or(0),
+                                                    stack_size: desc.stack_size.unwrap_or(1),
+                                                    item_type: desc.item_type,
+                                                    icon_id: desc.icon_id,
+                                                }
+                                            })
+                                            .collect();
+                                        latest_vendor_state.borrow_mut().insert(
+                                            vendor_guid_u32,
+                                            VendorState {
+                                                vendor_guid: vendor_guid_u32,
+                                                vendor_name: vendor_name_for_cache,
+                                                buy_multiplier: data.buy_multiplier,
+                                                sell_multiplier: data.sell_multiplier,
+                                                alternate_currency_wcid: data
+                                                    .alternate_currency_wcid,
+                                                alternate_currency_amount: data
+                                                    .alternate_currency_amount,
+                                                alternate_currency_name: data
+                                                    .alternate_currency_name
+                                                    .clone(),
+                                                items,
+                                            },
+                                        );
+                                    }
                                     // Phase 4 step 5 (interactive
                                     // entities): the player clicked a
                                     // vendor (a Creature weenie with
