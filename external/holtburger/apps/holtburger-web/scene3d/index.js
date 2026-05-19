@@ -300,6 +300,14 @@ export async function init3D(canvas, sessionHandle, wasmExports) {
 
   const scene = new THREE.Scene();
 
+  // FU1 (perf followon 2026-05-18) — honour ?particleSortObjects=off
+  // URL flag. E5 (e1339af) plumbs the flag onto window; we read it
+  // here once at scene construction. Default true preserves
+  // existing transparent-particle sort behaviour.
+  if (typeof window !== "undefined" && window.__particleSortObjects === false) {
+    scene.sortObjects = false;
+  }
+
   // worldRoot carries the AC-Z-up→three-Y-up correction. Every
   // subsequent group attaches under it so child positions can be set
   // in raw AC coordinates and three.js handles the rotation once at
