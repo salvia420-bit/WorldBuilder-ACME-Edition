@@ -1,0 +1,296 @@
+{
+  "success": true,
+  "command": "chorizite-dump-world-object-taxonomy",
+  "sourceRoot": "/home/wbterminal/WorldBuilder-ACME-Edition/external/chorizite",
+  "vendoredHead": "1341660",
+  "count": 31,
+  "classes": [
+    {
+      "name": "Armor",
+      "baseClass": "Equippable",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Armor.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Bindstone",
+      "baseClass": "Static",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Bindstone.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Character",
+      "baseClass": "Container",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Character.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Clothing",
+      "baseClass": "Equippable",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Clothing.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Container",
+      "baseClass": "Item",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Container.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Corpse",
+      "baseClass": "Static",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Corpse.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Creature",
+      "baseClass": "Container",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Creature.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Door",
+      "baseClass": "Static",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Door.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Equippable",
+      "baseClass": "Item",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Equippable.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Foci",
+      "baseClass": "Container",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Foci.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Food",
+      "baseClass": "Item",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Food.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Gem",
+      "baseClass": "Item",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Gem.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Item",
+      "baseClass": "WorldObject",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Item.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Jewelry",
+      "baseClass": "Equippable",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Jewelry.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Key",
+      "baseClass": "Item",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Key.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Lifestone",
+      "baseClass": "Static",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Lifestone.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "ManaStone",
+      "baseClass": "Item",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/ManaStone.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "MeleeWeapon",
+      "baseClass": "Equippable",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/MeleeWeapon.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "MissileWeapon",
+      "baseClass": "Equippable",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/MissileWeapon.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Monster",
+      "baseClass": "Creature",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Monster.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "NPC",
+      "baseClass": "Creature",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/NPC.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Player",
+      "baseClass": "Creature",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Player.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Portal",
+      "baseClass": "Static",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Portal.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Scroll",
+      "baseClass": "Item",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Scroll.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "SpellComponent",
+      "baseClass": "Item",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/SpellComponent.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Static",
+      "baseClass": "WorldObject",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Static.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "TradeNote",
+      "baseClass": "Item",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/TradeNote.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Ust",
+      "baseClass": "Item",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Ust.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Vendor",
+      "baseClass": "NPC",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Vendor.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "Wand",
+      "baseClass": "Equippable",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObjects/Wand.cs",
+      "itemTypeTags": [],
+      "objectClassTags": []
+    },
+    {
+      "name": "WorldObject",
+      "relativePath": "external/chorizite/ACPlugin/API/WorldObject.cs",
+      "itemTypeTags": [
+        "Armor",
+        "Caster",
+        "Clothing",
+        "Container",
+        "CraftAlchemyBase",
+        "CraftCookingBase",
+        "CraftFletchingBase",
+        "CraftFletchingIntermediate",
+        "Creature",
+        "Food",
+        "Gem",
+        "Jewelry",
+        "Key",
+        "MagicWieldable",
+        "ManaStone",
+        "MeleeWeapon",
+        "Misc",
+        "MissileWeapon",
+        "Money",
+        "Portal",
+        "PromissoryNote",
+        "Service",
+        "SpellComponents",
+        "TinkeringMaterial",
+        "TinkeringTool",
+        "Useless",
+        "Writable"
+      ],
+      "objectClassTags": [
+        "Armor",
+        "BaseAlchemy",
+        "BaseCooking",
+        "BaseFletching",
+        "Bindstone",
+        "Book",
+        "Bundle",
+        "Clothing",
+        "Container",
+        "Corpse",
+        "CraftedFletching",
+        "Door",
+        "Foci",
+        "Food",
+        "Gem",
+        "HealingKit",
+        "Jewelry",
+        "Journal",
+        "Key",
+        "Lifestone",
+        "Lockpick",
+        "ManaStone",
+        "MeleeWeapon",
+        "Misc",
+        "MissileWeapon",
+        "Money",
+        "Monster",
+        "Npc",
+        "Plant",
+        "Player",
+        "Portal",
+        "Salvage",
+        "Scroll",
+        "Services",
+        "Sign",
+        "SpellComponent",
+        "Static",
+        "TradeNote",
+        "Unknown",
+        "Ust",
+        "Vendor",
+        "WandStaffOrb"
+      ]
+    }
+  ]
+}

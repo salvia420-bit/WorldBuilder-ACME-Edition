@@ -296,8 +296,65 @@ public class JsonCommandProcessor {
             ["emit-static-site"] = CmdEmitStaticSite,
             ["emit-render-gallery"] = CmdEmitRenderGallery,
             ["serve-render-gallery"] = CmdServeRenderGallery,
+            ["chorizite-dump-enum-values"] = CmdChoriziteDumpEnumValues,
+            ["chorizite-dump-world-object-taxonomy"] = CmdChoriziteDumpWorldObjectTaxonomy,
+            ["chorizite-hash-string"] = CmdChoriziteHashString,
             ["help"] = _ => CmdHelp(),
         };
+
+    private string CmdChoriziteDumpEnumValues(System.Text.Json.Nodes.JsonNode node) {
+        string? enumName = node["enumName"]?.GetValue<string>();
+        var dumps = _engine.ChoriziteDumpEnumValues(enumName);
+        return Serialize(new {
+            success = true,
+            command = "chorizite-dump-enum-values",
+            requestedEnum = enumName,
+            count = dumps.Count,
+            enums = dumps.Select(d => new {
+                name = d.EnumName,
+                underlyingType = d.UnderlyingType,
+                isFlags = d.IsFlags,
+                memberCount = d.Members.Count,
+                members = d.Members.Select(m => new {
+                    name = m.Name,
+                    valueHex = m.ValueHex,
+                    valueDecimal = m.ValueDecimal
+                })
+            })
+        });
+    }
+
+    private string CmdChoriziteDumpWorldObjectTaxonomy(System.Text.Json.Nodes.JsonNode node) {
+        string? sourceRoot = node["sourceRoot"]?.GetValue<string>();
+        var tax = _engine.ChoriziteDumpWorldObjectTaxonomy(sourceRoot);
+        return Serialize(new {
+            success = true,
+            command = "chorizite-dump-world-object-taxonomy",
+            sourceRoot = tax.SourceRoot,
+            vendoredHead = tax.VendoredHead,
+            count = tax.Classes.Count,
+            classes = tax.Classes.Select(c => new {
+                name = c.Name,
+                baseClass = c.BaseClass,
+                relativePath = c.RelativePath,
+                itemTypeTags = c.ItemTypeTags,
+                objectClassTags = c.ObjectClassTags
+            })
+        });
+    }
+
+    private string CmdChoriziteHashString(System.Text.Json.Nodes.JsonNode node) {
+        string s = node["input"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'input' field");
+        var r = _engine.ChoriziteHashString(s);
+        return Serialize(new {
+            success = true,
+            command = "chorizite-hash-string",
+            input = r.Input,
+            hashHex = r.HashHex,
+            hashDecimal = r.HashDecimal
+        });
+    }
 
     private string CmdEmitStaticSite(System.Text.Json.Nodes.JsonNode node) {
         string slug = node["projectSlug"]?.GetValue<string>()

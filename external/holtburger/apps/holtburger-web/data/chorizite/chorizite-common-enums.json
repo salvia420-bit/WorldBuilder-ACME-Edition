@@ -1,0 +1,809 @@
+{
+  "generatedBy": "WorldBuilder.Terminal chorizite-dump-enum-values",
+  "generatedAt": "2026-05-19T09:53:21-02:30",
+  "source": "Chorizite.Common assembly (vendored at external/chorizite/Chorizite.Common/)",
+  "enums": {
+    "AttackHeight": {
+      "name": "AttackHeight",
+      "underlyingType": "UInt32",
+      "isFlags": false,
+      "memberCount": 3,
+      "members": [
+        {
+          "name": "High",
+          "valueHex": "0x00000001",
+          "valueDecimal": 1
+        },
+        {
+          "name": "Medium",
+          "valueHex": "0x00000002",
+          "valueDecimal": 2
+        },
+        {
+          "name": "Low",
+          "valueHex": "0x00000003",
+          "valueDecimal": 3
+        }
+      ]
+    },
+    "AttackType": {
+      "name": "AttackType",
+      "underlyingType": "UInt32",
+      "isFlags": false,
+      "memberCount": 16,
+      "members": [
+        {
+          "name": "None",
+          "valueHex": "0x00000000",
+          "valueDecimal": 0
+        },
+        {
+          "name": "Punch",
+          "valueHex": "0x00000001",
+          "valueDecimal": 1
+        },
+        {
+          "name": "Thrust",
+          "valueHex": "0x00000002",
+          "valueDecimal": 2
+        },
+        {
+          "name": "Slash",
+          "valueHex": "0x00000004",
+          "valueDecimal": 4
+        },
+        {
+          "name": "Kick",
+          "valueHex": "0x00000008",
+          "valueDecimal": 8
+        },
+        {
+          "name": "OffhandPunch",
+          "valueHex": "0x00000010",
+          "valueDecimal": 16
+        },
+        {
+          "name": "DoubleSlash",
+          "valueHex": "0x00000020",
+          "valueDecimal": 32
+        },
+        {
+          "name": "TripleSlash",
+          "valueHex": "0x00000040",
+          "valueDecimal": 64
+        },
+        {
+          "name": "DoubleThrust",
+          "valueHex": "0x00000080",
+          "valueDecimal": 128
+        },
+        {
+          "name": "TripleThrust",
+          "valueHex": "0x00000100",
+          "valueDecimal": 256
+        },
+        {
+          "name": "OffhandThrust",
+          "valueHex": "0x00000200",
+          "valueDecimal": 512
+        },
+        {
+          "name": "OffhandSlash",
+          "valueHex": "0x00000400",
+          "valueDecimal": 1024
+        },
+        {
+          "name": "OffhandDoubleSlash",
+          "valueHex": "0x00000800",
+          "valueDecimal": 2048
+        },
+        {
+          "name": "OffhandTripleSlash",
+          "valueHex": "0x00001000",
+          "valueDecimal": 4096
+        },
+        {
+          "name": "OffhandDoubleThrust",
+          "valueHex": "0x00002000",
+          "valueDecimal": 8192
+        },
+        {
+          "name": "OffhandTripleThrust",
+          "valueHex": "0x00004000",
+          "valueDecimal": 16384
+        }
+      ]
+    },
+    "ItemType": {
+      "name": "ItemType",
+      "underlyingType": "UInt32",
+      "isFlags": true,
+      "memberCount": 31,
+      "members": [
+        {
+          "name": "MeleeWeapon",
+          "valueHex": "0x00000001",
+          "valueDecimal": 1
+        },
+        {
+          "name": "Armor",
+          "valueHex": "0x00000002",
+          "valueDecimal": 2
+        },
+        {
+          "name": "Clothing",
+          "valueHex": "0x00000004",
+          "valueDecimal": 4
+        },
+        {
+          "name": "Jewelry",
+          "valueHex": "0x00000008",
+          "valueDecimal": 8
+        },
+        {
+          "name": "Creature",
+          "valueHex": "0x00000010",
+          "valueDecimal": 16
+        },
+        {
+          "name": "Food",
+          "valueHex": "0x00000020",
+          "valueDecimal": 32
+        },
+        {
+          "name": "Money",
+          "valueHex": "0x00000040",
+          "valueDecimal": 64
+        },
+        {
+          "name": "Misc",
+          "valueHex": "0x00000080",
+          "valueDecimal": 128
+        },
+        {
+          "name": "MissileWeapon",
+          "valueHex": "0x00000100",
+          "valueDecimal": 256
+        },
+        {
+          "name": "Container",
+          "valueHex": "0x00000200",
+          "valueDecimal": 512
+        },
+        {
+          "name": "Useless",
+          "valueHex": "0x00000400",
+          "valueDecimal": 1024
+        },
+        {
+          "name": "Gem",
+          "valueHex": "0x00000800",
+          "valueDecimal": 2048
+        },
+        {
+          "name": "SpellComponents",
+          "valueHex": "0x00001000",
+          "valueDecimal": 4096
+        },
+        {
+          "name": "Writable",
+          "valueHex": "0x00002000",
+          "valueDecimal": 8192
+        },
+        {
+          "name": "Key",
+          "valueHex": "0x00004000",
+          "valueDecimal": 16384
+        },
+        {
+          "name": "Caster",
+          "valueHex": "0x00008000",
+          "valueDecimal": 32768
+        },
+        {
+          "name": "Portal",
+          "valueHex": "0x00010000",
+          "valueDecimal": 65536
+        },
+        {
+          "name": "Lockable",
+          "valueHex": "0x00020000",
+          "valueDecimal": 131072
+        },
+        {
+          "name": "PromissoryNote",
+          "valueHex": "0x00040000",
+          "valueDecimal": 262144
+        },
+        {
+          "name": "ManaStone",
+          "valueHex": "0x00080000",
+          "valueDecimal": 524288
+        },
+        {
+          "name": "Service",
+          "valueHex": "0x00100000",
+          "valueDecimal": 1048576
+        },
+        {
+          "name": "MagicWieldable",
+          "valueHex": "0x00200000",
+          "valueDecimal": 2097152
+        },
+        {
+          "name": "CraftCookingBase",
+          "valueHex": "0x00400000",
+          "valueDecimal": 4194304
+        },
+        {
+          "name": "CraftAlchemyBase",
+          "valueHex": "0x00800000",
+          "valueDecimal": 8388608
+        },
+        {
+          "name": "CraftFletchingBase",
+          "valueHex": "0x02000000",
+          "valueDecimal": 33554432
+        },
+        {
+          "name": "CraftAlchemyIntermediate",
+          "valueHex": "0x04000000",
+          "valueDecimal": 67108864
+        },
+        {
+          "name": "CraftFletchingIntermediate",
+          "valueHex": "0x08000000",
+          "valueDecimal": 134217728
+        },
+        {
+          "name": "LifeStone",
+          "valueHex": "0x10000000",
+          "valueDecimal": 268435456
+        },
+        {
+          "name": "TinkeringTool",
+          "valueHex": "0x20000000",
+          "valueDecimal": 536870912
+        },
+        {
+          "name": "TinkeringMaterial",
+          "valueHex": "0x40000000",
+          "valueDecimal": 1073741824
+        },
+        {
+          "name": "Gameboard",
+          "valueHex": "0x80000000",
+          "valueDecimal": 2147483648
+        }
+      ]
+    },
+    "ObjectClass": {
+      "name": "ObjectClass",
+      "underlyingType": "Int32",
+      "isFlags": false,
+      "memberCount": 45,
+      "members": [
+        {
+          "name": "Unknown",
+          "valueHex": "0x00000000",
+          "valueDecimal": 0
+        },
+        {
+          "name": "MeleeWeapon",
+          "valueHex": "0x00000001",
+          "valueDecimal": 1
+        },
+        {
+          "name": "Armor",
+          "valueHex": "0x00000002",
+          "valueDecimal": 2
+        },
+        {
+          "name": "Clothing",
+          "valueHex": "0x00000003",
+          "valueDecimal": 3
+        },
+        {
+          "name": "Jewelry",
+          "valueHex": "0x00000004",
+          "valueDecimal": 4
+        },
+        {
+          "name": "Monster",
+          "valueHex": "0x00000005",
+          "valueDecimal": 5
+        },
+        {
+          "name": "Food",
+          "valueHex": "0x00000006",
+          "valueDecimal": 6
+        },
+        {
+          "name": "Money",
+          "valueHex": "0x00000007",
+          "valueDecimal": 7
+        },
+        {
+          "name": "Misc",
+          "valueHex": "0x00000008",
+          "valueDecimal": 8
+        },
+        {
+          "name": "MissileWeapon",
+          "valueHex": "0x00000009",
+          "valueDecimal": 9
+        },
+        {
+          "name": "Container",
+          "valueHex": "0x0000000A",
+          "valueDecimal": 10
+        },
+        {
+          "name": "Gem",
+          "valueHex": "0x0000000B",
+          "valueDecimal": 11
+        },
+        {
+          "name": "SpellComponent",
+          "valueHex": "0x0000000C",
+          "valueDecimal": 12
+        },
+        {
+          "name": "Key",
+          "valueHex": "0x0000000D",
+          "valueDecimal": 13
+        },
+        {
+          "name": "Portal",
+          "valueHex": "0x0000000E",
+          "valueDecimal": 14
+        },
+        {
+          "name": "TradeNote",
+          "valueHex": "0x0000000F",
+          "valueDecimal": 15
+        },
+        {
+          "name": "ManaStone",
+          "valueHex": "0x00000010",
+          "valueDecimal": 16
+        },
+        {
+          "name": "Plant",
+          "valueHex": "0x00000011",
+          "valueDecimal": 17
+        },
+        {
+          "name": "BaseCooking",
+          "valueHex": "0x00000012",
+          "valueDecimal": 18
+        },
+        {
+          "name": "BaseAlchemy",
+          "valueHex": "0x00000013",
+          "valueDecimal": 19
+        },
+        {
+          "name": "BaseFletching",
+          "valueHex": "0x00000014",
+          "valueDecimal": 20
+        },
+        {
+          "name": "CraftedCooking",
+          "valueHex": "0x00000015",
+          "valueDecimal": 21
+        },
+        {
+          "name": "CraftedAlchemy",
+          "valueHex": "0x00000016",
+          "valueDecimal": 22
+        },
+        {
+          "name": "CraftedFletching",
+          "valueHex": "0x00000017",
+          "valueDecimal": 23
+        },
+        {
+          "name": "Player",
+          "valueHex": "0x00000018",
+          "valueDecimal": 24
+        },
+        {
+          "name": "Vendor",
+          "valueHex": "0x00000019",
+          "valueDecimal": 25
+        },
+        {
+          "name": "Door",
+          "valueHex": "0x0000001A",
+          "valueDecimal": 26
+        },
+        {
+          "name": "Corpse",
+          "valueHex": "0x0000001B",
+          "valueDecimal": 27
+        },
+        {
+          "name": "Lifestone",
+          "valueHex": "0x0000001C",
+          "valueDecimal": 28
+        },
+        {
+          "name": "HealingKit",
+          "valueHex": "0x0000001D",
+          "valueDecimal": 29
+        },
+        {
+          "name": "Lockpick",
+          "valueHex": "0x0000001E",
+          "valueDecimal": 30
+        },
+        {
+          "name": "WandStaffOrb",
+          "valueHex": "0x0000001F",
+          "valueDecimal": 31
+        },
+        {
+          "name": "Bundle",
+          "valueHex": "0x00000020",
+          "valueDecimal": 32
+        },
+        {
+          "name": "Book",
+          "valueHex": "0x00000021",
+          "valueDecimal": 33
+        },
+        {
+          "name": "Journal",
+          "valueHex": "0x00000022",
+          "valueDecimal": 34
+        },
+        {
+          "name": "Sign",
+          "valueHex": "0x00000023",
+          "valueDecimal": 35
+        },
+        {
+          "name": "Housing",
+          "valueHex": "0x00000024",
+          "valueDecimal": 36
+        },
+        {
+          "name": "Npc",
+          "valueHex": "0x00000025",
+          "valueDecimal": 37
+        },
+        {
+          "name": "Foci",
+          "valueHex": "0x00000026",
+          "valueDecimal": 38
+        },
+        {
+          "name": "Salvage",
+          "valueHex": "0x00000027",
+          "valueDecimal": 39
+        },
+        {
+          "name": "Ust",
+          "valueHex": "0x00000028",
+          "valueDecimal": 40
+        },
+        {
+          "name": "Services",
+          "valueHex": "0x00000029",
+          "valueDecimal": 41
+        },
+        {
+          "name": "Scroll",
+          "valueHex": "0x0000002A",
+          "valueDecimal": 42
+        },
+        {
+          "name": "Bindstone",
+          "valueHex": "0x0000002B",
+          "valueDecimal": 43
+        },
+        {
+          "name": "Static",
+          "valueHex": "0x0000002C",
+          "valueDecimal": 44
+        }
+      ]
+    },
+    "SpellType": {
+      "name": "SpellType",
+      "underlyingType": "UInt32",
+      "isFlags": false,
+      "memberCount": 16,
+      "members": [
+        {
+          "name": "None",
+          "valueHex": "0x00000000",
+          "valueDecimal": 0
+        },
+        {
+          "name": "Enchantment",
+          "valueHex": "0x00000001",
+          "valueDecimal": 1
+        },
+        {
+          "name": "Projectile",
+          "valueHex": "0x00000002",
+          "valueDecimal": 2
+        },
+        {
+          "name": "Boost",
+          "valueHex": "0x00000003",
+          "valueDecimal": 3
+        },
+        {
+          "name": "Transfer",
+          "valueHex": "0x00000004",
+          "valueDecimal": 4
+        },
+        {
+          "name": "PortalLink",
+          "valueHex": "0x00000005",
+          "valueDecimal": 5
+        },
+        {
+          "name": "PortalRecall",
+          "valueHex": "0x00000006",
+          "valueDecimal": 6
+        },
+        {
+          "name": "PortalSummon",
+          "valueHex": "0x00000007",
+          "valueDecimal": 7
+        },
+        {
+          "name": "PortalSending",
+          "valueHex": "0x00000008",
+          "valueDecimal": 8
+        },
+        {
+          "name": "Dispel",
+          "valueHex": "0x00000009",
+          "valueDecimal": 9
+        },
+        {
+          "name": "LifeProjectile",
+          "valueHex": "0x0000000A",
+          "valueDecimal": 10
+        },
+        {
+          "name": "FellowBoost",
+          "valueHex": "0x0000000B",
+          "valueDecimal": 11
+        },
+        {
+          "name": "FellowEnchantment",
+          "valueHex": "0x0000000C",
+          "valueDecimal": 12
+        },
+        {
+          "name": "FellowPortalSending",
+          "valueHex": "0x0000000D",
+          "valueDecimal": 13
+        },
+        {
+          "name": "FellowDispel",
+          "valueHex": "0x0000000E",
+          "valueDecimal": 14
+        },
+        {
+          "name": "EnchantmentProjectile",
+          "valueHex": "0x0000000F",
+          "valueDecimal": 15
+        }
+      ]
+    },
+    "SpellFlags": {
+      "name": "SpellFlags",
+      "underlyingType": "UInt32",
+      "isFlags": true,
+      "memberCount": 18,
+      "members": [
+        {
+          "name": "Resistable",
+          "valueHex": "0x00000001",
+          "valueDecimal": 1
+        },
+        {
+          "name": "PKSensitive",
+          "valueHex": "0x00000002",
+          "valueDecimal": 2
+        },
+        {
+          "name": "Beneficial",
+          "valueHex": "0x00000004",
+          "valueDecimal": 4
+        },
+        {
+          "name": "SelfTargeted",
+          "valueHex": "0x00000008",
+          "valueDecimal": 8
+        },
+        {
+          "name": "Reversed",
+          "valueHex": "0x00000010",
+          "valueDecimal": 16
+        },
+        {
+          "name": "NotIndoor",
+          "valueHex": "0x00000020",
+          "valueDecimal": 32
+        },
+        {
+          "name": "NotOutdoor",
+          "valueHex": "0x00000040",
+          "valueDecimal": 64
+        },
+        {
+          "name": "NotResearchable",
+          "valueHex": "0x00000080",
+          "valueDecimal": 128
+        },
+        {
+          "name": "Projectile",
+          "valueHex": "0x00000100",
+          "valueDecimal": 256
+        },
+        {
+          "name": "CreatureSpell",
+          "valueHex": "0x00000200",
+          "valueDecimal": 512
+        },
+        {
+          "name": "ExcludedFromItemDescriptions",
+          "valueHex": "0x00000400",
+          "valueDecimal": 1024
+        },
+        {
+          "name": "IgnoresManaConversion",
+          "valueHex": "0x00000800",
+          "valueDecimal": 2048
+        },
+        {
+          "name": "NonTrackingProjectile",
+          "valueHex": "0x00001000",
+          "valueDecimal": 4096
+        },
+        {
+          "name": "FellowshipSpell",
+          "valueHex": "0x00002000",
+          "valueDecimal": 8192
+        },
+        {
+          "name": "FastCast",
+          "valueHex": "0x00004000",
+          "valueDecimal": 16384
+        },
+        {
+          "name": "IndoorLongRange",
+          "valueHex": "0x00008000",
+          "valueDecimal": 32768
+        },
+        {
+          "name": "DamageOverTime",
+          "valueHex": "0x00010000",
+          "valueDecimal": 65536
+        },
+        {
+          "name": "UNKNOWN",
+          "valueHex": "0x00020000",
+          "valueDecimal": 131072
+        }
+      ]
+    },
+    "DamageType": {
+      "name": "DamageType",
+      "underlyingType": "UInt32",
+      "isFlags": true,
+      "memberCount": 7,
+      "members": [
+        {
+          "name": "Slashing",
+          "valueHex": "0x00000001",
+          "valueDecimal": 1
+        },
+        {
+          "name": "Piercing",
+          "valueHex": "0x00000002",
+          "valueDecimal": 2
+        },
+        {
+          "name": "Bludgeoning",
+          "valueHex": "0x00000004",
+          "valueDecimal": 4
+        },
+        {
+          "name": "Cold",
+          "valueHex": "0x00000008",
+          "valueDecimal": 8
+        },
+        {
+          "name": "Fire",
+          "valueHex": "0x00000010",
+          "valueDecimal": 16
+        },
+        {
+          "name": "Acid",
+          "valueHex": "0x00000020",
+          "valueDecimal": 32
+        },
+        {
+          "name": "Electric",
+          "valueHex": "0x00000040",
+          "valueDecimal": 64
+        }
+      ]
+    },
+    "MagicSchool": {
+      "name": "MagicSchool",
+      "underlyingType": "Int32",
+      "isFlags": false,
+      "memberCount": 6,
+      "members": [
+        {
+          "name": "None",
+          "valueHex": "0x00000000",
+          "valueDecimal": 0
+        },
+        {
+          "name": "WarMagic",
+          "valueHex": "0x00000001",
+          "valueDecimal": 1
+        },
+        {
+          "name": "LifeMagic",
+          "valueHex": "0x00000002",
+          "valueDecimal": 2
+        },
+        {
+          "name": "ItemEnchantment",
+          "valueHex": "0x00000003",
+          "valueDecimal": 3
+        },
+        {
+          "name": "CreatureEnchantment",
+          "valueHex": "0x00000004",
+          "valueDecimal": 4
+        },
+        {
+          "name": "VoidMagic",
+          "valueHex": "0x00000005",
+          "valueDecimal": 5
+        }
+      ]
+    },
+    "CombatMode": {
+      "name": "CombatMode",
+      "underlyingType": "UInt32",
+      "isFlags": true,
+      "memberCount": 4,
+      "members": [
+        {
+          "name": "NonCombat",
+          "valueHex": "0x00000001",
+          "valueDecimal": 1
+        },
+        {
+          "name": "Melee",
+          "valueHex": "0x00000002",
+          "valueDecimal": 2
+        },
+        {
+          "name": "Missile",
+          "valueHex": "0x00000004",
+          "valueDecimal": 4
+        },
+        {
+          "name": "Magic",
+          "valueHex": "0x00000008",
+          "valueDecimal": 8
+        }
+      ]
+    }
+  }
+}

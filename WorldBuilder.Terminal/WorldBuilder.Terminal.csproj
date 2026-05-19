@@ -18,6 +18,8 @@
 	<ItemGroup Condition="'$(UseLocalReferenceBuild)'!='true'">
 		<PackageReference Include="Chorizite.DatReaderWriter" Version="2.1.2" />
 		<PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+		<!-- Required to use Encoding.GetEncoding(1252) in chorizite-hash-string. -->
+		<PackageReference Include="System.Text.Encoding.CodePages" Version="9.0.0" />
 		<PackageReference Include="MemoryPack" Version="1.21.4" />
 		<PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.9" />
 		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.9" />
@@ -30,6 +32,9 @@
 	<ItemGroup Condition="'$(UseLocalReferenceBuild)'!='true'">
 		<ProjectReference Include="..\WorldBuilder.Shared\WorldBuilder.Shared.csproj" />
 		<ProjectReference Include="..\DatReaderWriter.Extensions\DatReaderWriter.Extensions\DatReaderWriter.Extensions.csproj" />
+		<!-- Chorizite.Common: enums + EventArgs. Lean deps (MS.Logging.Abstractions, System.Text.Json). -->
+		<!-- Vendored at external/chorizite/Chorizite.Common/ per external/chorizite/VENDORED.md. -->
+		<ProjectReference Include="..\external\chorizite\Chorizite.Common\Chorizite.Common.csproj" />
 	</ItemGroup>
 
 	<ItemGroup Condition="'$(UseLocalReferenceBuild)'=='true'">
