@@ -211,6 +211,41 @@ impl SoundTable {
     pub fn entries_for(&self, sound_enum: u32) -> Option<&[SoundEntry]> {
         self.sounds.get(&sound_enum).map(|sd| sd.entries.as_slice())
     }
+
+    /// Deterministic 1:1 port of retail `SoundManager::GetSound` with
+    /// `rand=0` (canonical cross-port semantics). Resolves a `Sound`
+    /// enum value to one `Wave` DID, or `None` if the table has no
+    /// mapping for that enum (or has the mapping but with zero entries).
+    ///
+    /// Retail behavior (`acclient.c:383433` `SoundManager::GetSound`):
+    ///   1. `CSoundTable::Lookup(stype, &stdata)` — hash-lookup the
+    ///      `SoundData` for this Sound enum. Empty → return null.
+    ///   2. `idx = (uint64)((num_entries - 1) * rand_0_1)` — uniform
+    ///      pick across `[0, num_entries - 1]`. (Yes, retail has the
+    ///      off-by-one — the last entry can only be picked if rand
+    ///      returns exactly 1.0, which `Random::RollDice` never does.)
+    ///   3. Read `data_[idx].sound_id_` — must be non-zero or the call
+    ///      drops to the `else result = 0` branch.
+    ///
+    /// With `rand = 0.0` the index is always 0 regardless of count, so
+    /// the deterministic resolution = `entries[0].wave_did` (gated on
+    /// `wave_did != 0` per retail's final non-null check). Sites with
+    /// non-deterministic semantics (the JS weighted-random picker in
+    /// `sound_table_cache.js::resolveSound`) pass `rng=() => 0` for
+    /// parity tests; for actual runtime they keep `Math.random`.
+    ///
+    /// This is the canonical cross-port oracle — WB.Terminal's
+    /// `chorizite-resolve-sound` command and the wasm-exported
+    /// `resolveSoundFirst` JS API both delegate to this same algorithm.
+    pub fn resolve_sound(&self, sound_enum: u32) -> Option<u32> {
+        let entries = self.entries_for(sound_enum)?;
+        let first = entries.first()?;
+        if first.wave_did == 0 {
+            None
+        } else {
+            Some(first.wave_did)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -468,6 +503,56 @@ mod tests {
                 e.wave_did, e.priority, e.probability, e.volume
             );
         }
+    }
+
+    /// Cross-port parity: pin canonical resolved Wave DIDs against
+    /// retail SoundTables 0x20000001 and 0x200000A8. These exact
+    /// values are also asserted by:
+    ///
+    ///   - C#  via WB.Terminal `chorizite-resolve-sound`
+    ///   - JS  via the wasm-exported `resolveSoundFirst` on `SoundTableJs`
+    ///
+    /// If any of the three ports drift from these goldens, ONE of them
+    /// has broken the 1:1 retail (`acclient.c:383433`
+    /// `SoundManager::GetSound`) port. Re-read the source and fix the
+    /// drifter; don't change the test.
+    ///
+    /// 0x20000001 goldens cross-checked against
+    /// `DatReaderWriter.Tests/DBObjs/SoundTableTests.cs:84-93`.
+    /// 0x200000A8 goldens cross-checked against the same file:108.
+    #[test]
+    fn resolve_sound_pinned_goldens_retail() {
+        let Some(dat) = open_retail_dat() else { return };
+
+        // 0x20000001 — Sound.ShieldUp (0x58), Sound.EnchantDown (0x5B).
+        let st_a = SoundTable::unpack(&dat.get_file(0x20000001).expect("0x20000001"))
+            .expect("parse 0x20000001");
+        assert_eq!(st_a.resolve_sound(0x58), Some(0x0A000262), "ShieldUp");
+        assert_eq!(st_a.resolve_sound(0x5B), Some(0x0A000274), "EnchantDown");
+        assert_eq!(
+            st_a.resolve_sound(0xFFFF_FFFF),
+            None,
+            "Unmapped enum returns None"
+        );
+
+        // 0x200000A8 — Sound.Swoosh2 (0xCD) has 2 entries; first is
+        // 0x0A000519 per the EOR test reference.
+        let st_b = SoundTable::unpack(&dat.get_file(0x200000A8).expect("0x200000A8"))
+            .expect("parse 0x200000A8");
+        // Sound.Swoosh2 = 0x1F per ACE.Entity.Enum/Sound.cs and
+        // Chorizite.Common/Enums/Sound.cs. Cross-checked against the
+        // DatReaderWriter EOR test which expects
+        // `Sounds[Sound.Swoosh2].Entries.First().Id == 0xA000519`.
+        let swoosh2_key = 0x1Fu32;
+        assert_eq!(
+            st_b.resolve_sound(swoosh2_key),
+            Some(0x0A000519),
+            "Swoosh2 first entry"
+        );
+
+        // Also confirm the unmapped-enum invariant on a Sound enum value
+        // that's intentionally absent from this table.
+        assert_eq!(st_b.resolve_sound(0x46), None, "Ambient1 not in 0x200000A8");
     }
 
     /// Sweep every 0x20000000..=0x2000FFFF record in the retail DAT

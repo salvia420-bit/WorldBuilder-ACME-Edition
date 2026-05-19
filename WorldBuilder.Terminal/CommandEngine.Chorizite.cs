@@ -604,4 +604,205 @@ public partial class CommandEngine {
         }
         return sb.ToString();
     }
+
+    // ─────────────────────────────────────────────────────────────────
+    //  chorizite-resolve-sound (TASK 1C — SoundTable.resolveSound parity)
+    // ─────────────────────────────────────────────────────────────────
+
+    public sealed record ChoriziteResolveSoundResult(
+        uint SoundTableDid,
+        uint SoundEnumValue,
+        string? SoundEnumName,
+        uint? WaveDid,
+        float? Priority,
+        float? Probability,
+        float? Volume,
+        int EntryCount,
+        string Source
+    );
+
+    /// <summary>
+    /// Deterministic 1:1 port of retail
+    /// <c>SoundManager::GetSound</c> (<c>acclient.c:383433</c>) with
+    /// <c>rand=0</c>. Resolves a <c>(SoundTable DID, Sound enum)</c> pair
+    /// to one Wave DID, or null if the table has no mapping for that
+    /// enum (or the entry list is empty / the leading <c>wave_did</c>
+    /// is zero — both of which retail treats as "no sound").
+    ///
+    /// The retail algorithm (paraphrased from acclient.c:383443-383461):
+    ///   1. <c>CSoundTable::Lookup(stype, &amp;stdata)</c> — hash-lookup
+    ///      the SoundData for this Sound enum. If absent → return null.
+    ///   2. <c>idx = (uint64)((num_entries - 1) * Random::RollDice(0, 1))</c>
+    ///   3. Pick <c>data_[idx]</c>; final non-zero gate on
+    ///      <c>sound_id_</c> or fall to <c>result = 0</c>.
+    /// With <c>rand=0</c> the index is always 0, so the deterministic
+    /// resolution = first entry's WaveDid.
+    ///
+    /// This is the canonical oracle the cross-port test harness pipes
+    /// every Sound enum value through; the Rust
+    /// <c>SoundTable::resolve_sound</c> and JS
+    /// <c>resolveSoundFirst</c> (wasm export on <c>SoundTableJs</c>)
+    /// must return byte-identical Wave DIDs for every input.
+    ///
+    /// Parses <paramref name="soundEnumInput"/> as either an integer
+    /// (decimal or <c>0x</c>-prefixed hex) or a name from
+    /// <c>Chorizite.Common.Enums.Sound</c> (case-insensitive).
+    /// </summary>
+    public ChoriziteResolveSoundResult ChoriziteResolveSound(
+        uint soundTableDid,
+        string soundEnumInput,
+        string? datPath) {
+        // ── Parse the Sound enum input ──
+        // Accept integer (dec or 0xHEX), or a Chorizite.Common.Enums.Sound member name.
+        uint soundEnumValue;
+        string? soundEnumName = null;
+        var trimmed = (soundEnumInput ?? "").Trim();
+        if (string.IsNullOrEmpty(trimmed)) {
+            throw new ArgumentException(
+                "soundEnumInput must be an integer (dec or 0xHEX) or a Chorizite Sound enum name");
+        }
+        // First try parsing as an integer (0x…, decimal).
+        bool parsedNum;
+        if (trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) {
+            parsedNum = uint.TryParse(
+                trimmed.Substring(2),
+                System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out soundEnumValue);
+        } else {
+            parsedNum = uint.TryParse(
+                trimmed,
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out soundEnumValue);
+        }
+        if (!parsedNum) {
+            // Fall back to name lookup on Chorizite.Common.Enums.Sound.
+            var soundType = typeof(ChorCommon.Sound);
+            if (Enum.TryParse(soundType, trimmed, ignoreCase: true, out var parsedEnum)
+                && parsedEnum != null) {
+                soundEnumValue = Convert.ToUInt32(parsedEnum);
+                soundEnumName = parsedEnum.ToString();
+            } else {
+                throw new ArgumentException(
+                    $"soundEnumInput '{soundEnumInput}' is neither a valid integer nor a Chorizite.Common.Enums.Sound member name");
+            }
+        }
+        // If we parsed numerically, still attach the symbolic name when
+        // the value is a known Sound enum member — useful for the JSON output.
+        if (soundEnumName == null) {
+            var defined = Enum.GetValues(typeof(ChorCommon.Sound))
+                .Cast<object>()
+                .FirstOrDefault(v => Convert.ToUInt32(v) == soundEnumValue);
+            if (defined != null) soundEnumName = defined.ToString();
+        }
+
+        // ── Resolve a DAT path ──
+        var resolvedDatPath = ResolveDatPath(datPath);
+
+        // ── Open the DAT + load SoundTable + resolve via the retail algorithm ──
+        using var dat = new DatReaderWriter.DatDatabase(o => {
+            o.FilePath = resolvedDatPath;
+            o.AccessType = DatReaderWriter.Options.DatAccessType.Read;
+            o.IndexCachingStrategy = DatReaderWriter.Options.IndexCachingStrategy.Never;
+        });
+
+        if (!dat.TryGet<DatReaderWriter.DBObjs.SoundTable>(soundTableDid, out var stb) || stb == null) {
+            return new ChoriziteResolveSoundResult(
+                SoundTableDid: soundTableDid,
+                SoundEnumValue: soundEnumValue,
+                SoundEnumName: soundEnumName,
+                WaveDid: null,
+                Priority: null,
+                Probability: null,
+                Volume: null,
+                EntryCount: 0,
+                Source: $"acclient.c:383433 SoundManager::GetSound (rand=0); table 0x{soundTableDid:X8} not found in {resolvedDatPath}");
+        }
+
+        // The DatReaderWriter Sounds dictionary is keyed by `Sound`
+        // (an int-backed enum). Cast our u32 to the strongly-typed key.
+        var soundKey = (DatReaderWriter.Enums.Sound)(int)soundEnumValue;
+        if (!stb.Sounds.TryGetValue(soundKey, out var soundData) || soundData == null) {
+            return new ChoriziteResolveSoundResult(
+                SoundTableDid: soundTableDid,
+                SoundEnumValue: soundEnumValue,
+                SoundEnumName: soundEnumName,
+                WaveDid: null,
+                Priority: null,
+                Probability: null,
+                Volume: null,
+                EntryCount: 0,
+                Source: $"acclient.c:383433 SoundManager::GetSound (rand=0); Sound enum 0x{soundEnumValue:X2} absent from table 0x{soundTableDid:X8}");
+        }
+
+        int entryCount = soundData.Entries?.Count ?? 0;
+        if (entryCount == 0) {
+            return new ChoriziteResolveSoundResult(
+                SoundTableDid: soundTableDid,
+                SoundEnumValue: soundEnumValue,
+                SoundEnumName: soundEnumName,
+                WaveDid: null,
+                Priority: null,
+                Probability: null,
+                Volume: null,
+                EntryCount: 0,
+                Source: "acclient.c:383433 SoundManager::GetSound (rand=0); SoundData.Entries empty");
+        }
+
+        // rand=0 → idx 0; first entry. Retail's final non-null gate on
+        // `sound_id_` translates to: a zero WaveDid is treated as "no sound"
+        // (matches the `else result = 0` branch).
+        var first = soundData.Entries!.First();
+        if (first.Id == 0) {
+            return new ChoriziteResolveSoundResult(
+                SoundTableDid: soundTableDid,
+                SoundEnumValue: soundEnumValue,
+                SoundEnumName: soundEnumName,
+                WaveDid: null,
+                Priority: first.Priority,
+                Probability: first.Probability,
+                Volume: first.Volume,
+                EntryCount: entryCount,
+                Source: "acclient.c:383433 SoundManager::GetSound (rand=0); first entry WaveDid==0 (retail null-gate)");
+        }
+
+        return new ChoriziteResolveSoundResult(
+            SoundTableDid: soundTableDid,
+            SoundEnumValue: soundEnumValue,
+            SoundEnumName: soundEnumName,
+            WaveDid: first.Id,
+            Priority: first.Priority,
+            Probability: first.Probability,
+            Volume: first.Volume,
+            EntryCount: entryCount,
+            Source: "acclient.c:383433 SoundManager::GetSound (rand=0); first entry");
+    }
+
+    /// <summary>
+    /// Resolve a path to a portal DAT. Caller-supplied path wins;
+    /// otherwise probe the canonical retail locations memory documents:
+    ///   1. <c>~/ac_base_dats/client_portal.dat</c> (base bake oracle)
+    ///   2. <c>dats/base/client_portal.dat</c> under the repo root
+    /// Throws if nothing's findable so the JSON response reports a
+    /// clear blocker instead of a deeper DatDatabase error.
+    /// </summary>
+    private static string ResolveDatPath(string? datPath) {
+        if (!string.IsNullOrWhiteSpace(datPath)) {
+            if (!File.Exists(datPath)) {
+                throw new FileNotFoundException($"datPath not found: {datPath}");
+            }
+            return datPath!;
+        }
+        var candidates = new[] {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                         "ac_base_dats", "client_portal.dat"),
+            "/home/wbterminal/ac_base_dats/client_portal.dat",
+        };
+        foreach (var c in candidates) {
+            if (File.Exists(c)) return c;
+        }
+        throw new FileNotFoundException(
+            "No client_portal.dat found. Pass `datPath` or place a base DAT at ~/ac_base_dats/client_portal.dat per memory feedback_base_dats_only_for_bake.");
+    }
 }

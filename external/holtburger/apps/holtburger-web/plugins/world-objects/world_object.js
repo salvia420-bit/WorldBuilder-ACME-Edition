@@ -72,6 +72,12 @@ export class WorldObject {
   intValue(prop, fallback = 0) {
     return this.intValues.has(prop) ? this.intValues.get(prop) : fallback;
   }
+  // Per WorldObject.cs:251 — Value(PropertyInt64 key, long @default = 0).
+  // We use BigInt for the 64-bit slot so callers can store ACE's full
+  // int64 ranges (e.g. PropertyInt64.TotalExperience) without precision loss.
+  int64Value(prop, fallback = 0n) {
+    return this.int64Values.has(prop) ? this.int64Values.get(prop) : fallback;
+  }
   floatValue(prop, fallback = 0.0) {
     return this.floatValues.has(prop) ? this.floatValues.get(prop) : fallback;
   }
@@ -86,6 +92,11 @@ export class WorldObject {
   }
   instanceValue(prop, fallback = 0) {
     return this.instanceValues.has(prop) ? this.instanceValues.get(prop) : fallback;
+  }
+  // Per WorldObject.cs:335 — Value(PropertyPosition key, Position? position = null).
+  // C# returns null when the key is absent and no default is supplied.
+  positionValue(prop, fallback = null) {
+    return this.positionValues.has(prop) ? this.positionValues.get(prop) : fallback;
   }
 
   /** Convenience: the object's name from PropertyString.Name (== 1). */

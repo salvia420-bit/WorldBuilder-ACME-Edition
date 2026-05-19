@@ -301,6 +301,7 @@ public class JsonCommandProcessor {
             ["chorizite-hash-string"] = CmdChoriziteHashString,
             ["chorizite-classify"] = CmdChoriziteClassify,
             ["chorizite-dump-opcodes"] = CmdChoriziteDumpOpcodes,
+            ["chorizite-resolve-sound"] = CmdChoriziteResolveSound,
             ["help"] = _ => CmdHelp(),
         };
 
@@ -397,6 +398,47 @@ public class JsonCommandProcessor {
             fileSizeBytes = r.FileSizeBytes,
             enumCount = r.Enums.Count,
             enumCounts = r.Enums.ToDictionary(kv => kv.Key, kv => kv.Value.Count)
+        });
+    }
+
+    private string CmdChoriziteResolveSound(System.Text.Json.Nodes.JsonNode node) {
+        // Accept soundTableDid as hex (0x…) or decimal, either as string or integer JSON node.
+        uint ParseDid(string fieldName) {
+            var v = node[fieldName] ?? throw new ArgumentException($"Missing '{fieldName}' field");
+            if (v.GetValueKind() == System.Text.Json.JsonValueKind.String) {
+                var s = v.GetValue<string>();
+                if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) {
+                    return Convert.ToUInt32(s.Substring(2), 16);
+                }
+                return Convert.ToUInt32(s);
+            }
+            return v.GetValue<uint>();
+        }
+        uint soundTableDid = ParseDid("soundTableDid");
+        // sound can be a name string or an integer.
+        var soundNode = node["sound"] ?? throw new ArgumentException("Missing 'sound' field");
+        string soundInput;
+        if (soundNode.GetValueKind() == System.Text.Json.JsonValueKind.String) {
+            soundInput = soundNode.GetValue<string>();
+        } else {
+            soundInput = soundNode.GetValue<uint>().ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        string? datPath = node["datPath"]?.GetValue<string>();
+        var r = _engine.ChoriziteResolveSound(soundTableDid, soundInput, datPath);
+        return Serialize(new {
+            success = true,
+            command = "chorizite-resolve-sound",
+            input = new {
+                soundTableDid = $"0x{r.SoundTableDid:X8}",
+                soundEnumValue = $"0x{r.SoundEnumValue:X2}",
+                soundEnumName = r.SoundEnumName,
+            },
+            waveDid = r.WaveDid.HasValue ? $"0x{r.WaveDid.Value:X8}" : null,
+            priority = r.Priority,
+            probability = r.Probability,
+            volume = r.Volume,
+            entryCount = r.EntryCount,
+            source = r.Source,
         });
     }
 

@@ -19126,6 +19126,32 @@ impl SoundTableJs {
             None => Vec::new(),
         }
     }
+
+    /// TASK 1C: Deterministic 1:1 port of retail
+    /// `SoundManager::GetSound` (`acclient.c:383433`) with `rand=0`.
+    /// Returns the first entry's `waveDid` for `sound_enum`, or `0` if
+    /// no mapping exists (or the entries are empty / first wave is 0).
+    ///
+    /// This is the canonical oracle that matches:
+    ///   - Rust `SoundTable::resolve_sound` in `holtburger-dat`
+    ///   - C# `ChoriziteResolveSound` in `WB.Terminal`
+    ///
+    /// JS callers can also keep using `entriesForSound(enum)` +
+    /// `SoundTableCache.resolveSound`'s probability-weighted picker for
+    /// runtime behavior; this method exists for the cross-port parity
+    /// harness, which needs a deterministic "first entry" oracle.
+    ///
+    /// Returns `0` (not `null`) so the wasm signature stays a primitive
+    /// `u32` — the JS harness treats `0` as "unresolved" since Wave
+    /// DID 0 is never valid retail data (Wave IDs are 0x0Axxxxxx).
+    #[wasm_bindgen(js_name = resolveSoundFirst)]
+    pub fn resolve_sound_first(&self, sound_enum: u32) -> u32 {
+        let Some(entries) = self.sounds.get(&sound_enum) else {
+            return 0;
+        };
+        let Some(first) = entries.first() else { return 0 };
+        first.wave_did
+    }
 }
 
 /// Task B: fetch + parse a SoundTable (0x20xxxxxx) from the global
