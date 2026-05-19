@@ -24,6 +24,7 @@ pub struct GameActionMessage {
 pub enum GameAction {
     Jump(Box<JumpActionData>),
     AutonomousPosition(Box<AutonomousPositionActionData>),
+    AutonomyLevel(Box<AutonomyLevelActionData>),
     MoveToState(Box<MoveToStateActionData>),
     TargetedMeleeAttack(Box<TargetedMeleeAttackActionData>),
     TargetedMissileAttack(Box<TargetedMissileAttackActionData>),
@@ -112,6 +113,9 @@ impl ProtocolUnpack for GameActionMessage {
                 ),
                 GameActionOpcode::AutonomousPosition => GameAction::AutonomousPosition(Box::new(
                     AutonomousPositionActionData::unpack(data, offset)?,
+                )),
+                GameActionOpcode::AutonomyLevel => GameAction::AutonomyLevel(Box::new(
+                    AutonomyLevelActionData::unpack(data, offset)?,
                 )),
                 GameActionOpcode::MoveToState => {
                     GameAction::MoveToState(Box::new(MoveToStateActionData::unpack(data, offset)?))
@@ -331,6 +335,11 @@ impl ProtocolPack for GameActionMessage {
             }
             GameAction::AutonomousPosition(data) => {
                 buf.write_u32::<LittleEndian>(GameActionOpcode::AutonomousPosition as u32)
+                    .unwrap();
+                data.pack(buf);
+            }
+            GameAction::AutonomyLevel(data) => {
+                buf.write_u32::<LittleEndian>(GameActionOpcode::AutonomyLevel as u32)
                     .unwrap();
                 data.pack(buf);
             }

@@ -188,6 +188,28 @@ impl ProtocolPack for AutonomousPositionActionData {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct AutonomyLevelActionData {
+    pub level: u32,
+}
+
+impl ProtocolUnpack for AutonomyLevelActionData {
+    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
+        if *offset + 4 > data.len() {
+            return None;
+        }
+        let level = LittleEndian::read_u32(&data[*offset..*offset + 4]);
+        *offset += 4;
+        Some(Self { level })
+    }
+}
+
+impl ProtocolPack for AutonomyLevelActionData {
+    fn pack(&self, buf: &mut Vec<u8>) {
+        buf.write_u32::<LittleEndian>(self.level).unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,6 +219,20 @@ mod tests {
     use crate::messages::movement::types::{MotionItem, RawMotionState};
     use crate::test_fixtures;
     use crate::test_helpers::assert_pack_unpack_parity;
+
+    #[test]
+    fn test_autonomy_level_action_fixture() {
+        // GameAction-wrapped AutonomyLevel: [B1 F7 00 00] outer opcode (0xF7B1
+        // GameAction) + [01 00 00 00] sequence + [52 F7 00 00] inner action
+        // opcode (0xF752 AutonomyLevel) + [02 00 00 00] level u32.
+        let hex = "B1F7000001000000\
+                   52F7000002000000";
+        let expected = GameMessage::GameAction(Box::new(GameActionMessage {
+            sequence: 1,
+            action: GameAction::AutonomyLevel(Box::new(AutonomyLevelActionData { level: 2 })),
+        }));
+        assert_pack_unpack_parity(&hex::decode(hex).unwrap(), &expected);
+    }
 
     #[test]
     fn test_jump_data_fixture() {

@@ -165,24 +165,9 @@ impl ProtocolPack for ServerAutonomousPositionData {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AutonomyLevelData {
-    pub level: u32,
-}
-
-impl ProtocolUnpack for AutonomyLevelData {
-    fn unpack(data: &[u8], offset: &mut usize) -> Option<Self> {
-        if *offset + 4 > data.len() {
-            return None;
-        }
-        let level = LittleEndian::read_u32(&data[*offset..*offset + 4]);
-        *offset += 4;
-        Some(AutonomyLevelData { level })
-    }
-}
-
-impl ProtocolPack for AutonomyLevelData {
-    fn pack(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.level.to_le_bytes());
-    }
-}
+// AutonomyLevelData (top-level GameMessage flavor) removed — 0xF752 is a
+// GameActionType-only opcode per retail (acclient.c
+// CM_Movement::Event_AutonomyLevel @ 712866 writes 0xF752 inside an
+// OrderHdr-wrapped GameAction payload) and ACE-Server
+// GameActionType.AutonomyLevel. The action-side struct is
+// `AutonomyLevelActionData` in movement::actions.

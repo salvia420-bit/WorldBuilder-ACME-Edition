@@ -207,11 +207,6 @@ impl ProtocolPack for GameMessage {
                     .unwrap();
                 data.pack(buf);
             }
-            GameMessage::AutonomyLevel(data) => {
-                buf.write_u32::<LittleEndian>(GameOpcode::AutonomyLevel as u32)
-                    .unwrap();
-                data.pack(buf);
-            }
             GameMessage::ParentEvent(data) => {
                 buf.write_u32::<LittleEndian>(GameOpcode::ParentEvent as u32)
                     .unwrap();

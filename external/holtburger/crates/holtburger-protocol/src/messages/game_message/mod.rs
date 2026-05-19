@@ -68,7 +68,6 @@ pub enum GameMessage {
     UpdateMotion(Box<MovementEventData>),
     PlayerTeleport(Box<PlayerTeleportData>),
     AutonomousPosition(Box<ServerAutonomousPositionData>),
-    AutonomyLevel(Box<AutonomyLevelData>),
 
     PrivateUpdatePropertyInt(Box<PrivateUpdatePropertyIntData>),
     PublicUpdatePropertyInt(Box<PublicUpdatePropertyIntData>),

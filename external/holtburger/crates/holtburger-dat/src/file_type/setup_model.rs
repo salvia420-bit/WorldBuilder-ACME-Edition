@@ -83,6 +83,14 @@ impl AnimationHook {
             18 => read_exact_payload(reader, 4)?,  // DefaultScriptPart (_part_index: u32)
             19 => read_exact_payload(reader, 8)?,  // CallPES (pes u32 + pause f32)
             20 => read_exact_payload(reader, 12)?, // Transparent (3 f32)
+            // NOTE: DRW dats.xml labels `SoundTweakedHook` fields as
+            // `Priority, Probability, Volume`, retail UnPack reads them
+            // as `prob, prio, vol`. Cite: acclient.c:343123
+            // (SoundTweakedHook::UnPack). No on-wire impact (still 16
+            // bytes / 3 floats) — we store the payload as opaque bytes,
+            // so this cite is for any future code that slots the floats
+            // into named fields. Trusting DRW's order would swap prob↔prio.
+            // See [[feedback_dat_parser_mislabels]] memory for the full pattern.
             21 => read_exact_payload(reader, 16)?, // SoundTweaked (gid + 3 f32)
             22 => read_exact_payload(reader, 12)?, // SetOmega (Vector3)
             23 => read_exact_payload(reader, 8)?,  // TextureVelocity (2 f32)
@@ -142,11 +150,17 @@ impl AnimationHook {
     /// The struct declaration in `acclient.h` ("/* 6324 */ struct __cppobj
     /// CreateParticleHook ... { IDClass<_tagDataID,32,0> emitter_info_id;
     /// unsigned int part_index; Frame offset; unsigned int emitter_id; }")
-    /// matches this Pack/UnPack ordering byte-for-byte. Note: `dats.xml`
-    /// labels `EmitterInfoId` as a `<vector>` of `QualifiedDataId`, but the
-    /// retail Pack writes a single 4-byte scalar — the schema's `<vector>`
-    /// tag is misleading (see also memory note
-    /// `reference_ac_particle_emitter_format.md`).
+    /// matches this Pack/UnPack ordering byte-for-byte.
+    ///
+    // NOTE: DRW dats.xml labels `CreateParticleHook.EmitterInfoId` as a
+    // `<vector>` of `QualifiedDataId`, retail packs scalar u32.
+    // Cite: acclient.c:343190 (CreateParticleHook::Pack at offset
+    // `0x00527850`) + acclient.h:57526 (`IDClass<_tagDataID,32,0>` is a
+    // single 4-byte id). Trusting DRW's `<vector>` tag would read a
+    // bogus length prefix and explode the next 36 bytes of payload.
+    // Same family of trap as GfxObjId/HwGfxObjId in ParticleEmitterInfo
+    // (0x32 file_type). See [[feedback_dat_parser_mislabels]] and
+    // [[reference_ac_particle_emitter_format]] memories.
     pub fn as_create_particle(&self) -> Option<CreateParticleHookPayload> {
         if self.hook_type != 13 && self.hook_type != 26 {
             return None;
@@ -206,9 +220,12 @@ fn read_exact_payload<R: Read + Seek>(reader: &mut R, payload_size: usize) -> Bi
 fn read_replace_object_payload<R: Read + Seek>(reader: &mut R) -> BinResult<Vec<u8>> {
     let mut data = Vec::with_capacity(5);
 
-    // Retail `AnimPartChange::UnPack` (acclient.c:471699) reads ONE byte
-    // for `part_index`, NOT a u16. The dats.xml schema's `<field
-    // name="PartIndex" type="ushort"/>` is misleading on this point.
+    // NOTE: DRW dats.xml labels `ReplaceObjectHook.PartIndex` as `ushort`
+    // (2 bytes), retail packs scalar u8 (1 byte).
+    // Cite: acclient.c:471699 (AnimPartChange::UnPack). Trusting DRW's
+    // `ushort` label would over-read by 1 byte and silently desync every
+    // AnimFrame/PhysicsScript containing a ReplaceObject hook.
+    // See [[feedback_dat_parser_mislabels]] memory for the full pattern.
     let part_index = u8::read(reader)?;
     data.push(part_index);
 

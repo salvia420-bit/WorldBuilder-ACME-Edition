@@ -75,12 +75,10 @@ fn test_vector_update_fixture() {
     assert_pack_unpack_parity(&hex::decode(hex).unwrap(), &expected);
 }
 
-#[test]
-fn test_autonomy_level_fixture() {
-    let hex = "52F7000002000000";
-    let expected = GameMessage::AutonomyLevel(Box::new(AutonomyLevelData { level: 2 }));
-    assert_pack_unpack_parity(&hex::decode(hex).unwrap(), &expected);
-}
+// AutonomyLevel fixture moved to messages/movement/actions.rs — 0xF752 is a
+// GameActionType (C2S only), not a top-level GameMessage. See
+// acclient.c CM_Movement::Event_AutonomyLevel @ 712866 and ACE-Server
+// GameActionType.AutonomyLevel.
 
 #[test]
 fn test_autonomous_position_fixture() {

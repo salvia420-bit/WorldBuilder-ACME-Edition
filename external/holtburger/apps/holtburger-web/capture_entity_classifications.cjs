@@ -98,12 +98,9 @@ try {
   const MIN_SPAWNS         = Number(process.env.ECF_MIN_SPAWNS         || 5);
   const MAX_UNKNOWN_TOL    = Number(process.env.ECF_MAX_UNKNOWN_TOL    || 10);
 
-  // LB 0xA9B4 = Holtburg per memory `project_holtburg_h2_h3_done_2026-05-12.md`.
-  // Reserved for future explicit LB-stability gate; spawn-to-Holtburg is the
-  // default character-creation destination so we don't need to assert today.
-  // eslint-disable-next-line no-unused-vars
-  const HOLTBURG_LB_KEY = 0xA9B40000 >>> 0;
-
+  // Future LB-stability gate would key on `0xA9B40000 >>> 0` (Holtburg LB
+  // 0xA9B4 per memory `project_holtburg_h2_h3_done_2026-05-12.md`); reintroduce
+  // when drift detection on character-creation spawn-LB becomes necessary.
   const TS = Date.now();
   const CAP_DIR = process.env.ECF_CAP_DIR || "/mnt/wbterminal1/holtburger-captures";
   fs.mkdirSync(CAP_DIR, { recursive: true });

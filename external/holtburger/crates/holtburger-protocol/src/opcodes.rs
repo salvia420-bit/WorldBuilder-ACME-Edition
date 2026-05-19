@@ -74,10 +74,17 @@ pub enum GameOpcode {
     /// S2C: Update object movement vector.
     /// Used for objects in flight (missiles) or performing continuous turns.
     VectorUpdate = 0xF74E,
-    /// S2C: Set the client's autonomy level (how much gravity/collision to trust client for).
-    AutonomyLevel = 0xF752,
+    // /// S2C: Set the client's autonomy level (how much gravity/collision to trust
+    // /// client for). NOT a top-level opcode in retail — moved to
+    // /// `GameActionOpcode::AutonomyLevel`. Per acclient.c
+    // /// CM_Movement::Event_AutonomyLevel @ 712866 (writes 0xF752 inside
+    // /// OrderHdr-wrapped GameAction) + ACE-Server GameActionType.AutonomyLevel
+    // /// = 0xF752 (no GameMessageOpcode equivalent), this is C2S only.
+    // AutonomyLevel = 0xF752,
     /// S2C: Sync player's own position (Server-forced resync).
     /// Used for resetting the player's position or confirming client-reported coordinates.
+    /// Bidirectional: C2S placement is `GameActionOpcode::AutonomousPosition`
+    /// (per ACE-Server GameActionType.AutonomousPosition + GameMessageOpcode.AutonomousPosition).
     AutonomousPosition = 0xF753,
     /// S2C: Force player to teleport.
     /// Triggers the teleport screen and moves player to a new landblock.
@@ -386,6 +393,11 @@ pub enum GameActionOpcode {
     Jump = 0xF61B,
     /// C2S: Periodic position pulse (Heartbeat).
     AutonomousPosition = 0xF753,
+    /// C2S: Tell the server how much movement physics the client is currently
+    /// running autonomously (0 = server controlled, 2 = full client-side).
+    /// Per acclient.c CM_Movement::Event_AutonomyLevel @ 712866 (writes 0xF752
+    /// inside OrderHdr-wrapped GameAction) + ACE-Server GameActionType.AutonomyLevel.
+    AutonomyLevel = 0xF752,
     // --- Combat & Spells ---
     /// C2S: Cast a spell on a specific target.
     CastTargetedSpell = 0x004A,

@@ -100,28 +100,17 @@ import {
   surfacePixelsToTexture,
   acQuatToThree,
 } from "./adapter.js";
-import { AnimationCache, buildAnimationClip } from "./animation.js";
+import { AnimationCache } from "./animation.js";
 import { ensureNameplateForEntity } from "./nameplate_sprite.js";
 import { materialCanCastShadow } from "./materials.js";
 
-// AC InterpretedMotionCommand low-16 constants. The wasm export
-// returns the full u32 (`0x4500_xxxx` for forward locomotion, etc.),
-// so we compare full values. Mirrors `index.html:4377-4380`'s
-// MOTION_CMD_* constants (those are u16; we extend to u32 here so
-// the wasm-side full command code lines up cleanly).
-//
-// 0x4500_0005 = motion category 0x45 (NonCombat) + command 0x05
-//   (WalkForward). 0x4400_0007 = combat-style RunForward. We accept
-// either category for the same motion family — a creature's combat-
-// stance walk forward (e.g. 0x4500_0006 / 0x4500_000a) all map to
-// "walking" for cycle selection.
-const MOTION_CMD_WALK_FORWARD_NC = 0x4500_0005;
-const MOTION_CMD_RUN_FORWARD_NC = 0x4400_0007;
-const MOTION_CMD_STOP_NC = 0x4500_0004;
-// Bare command codes (low 16 bits) — used for category-agnostic
-// classification. The wasm export packs the category into the high
-// 16 bits; here we mask to compare against retail's
-// InterpretedMotionCommand enum.
+// AC InterpretedMotionCommand low-16 constants — used for
+// category-agnostic classification. The wasm export returns the full
+// u32 (`0x4500_xxxx` NonCombat / `0x4400_xxxx` combat / etc.); we mask
+// to the low 16 bits and compare against retail's
+// InterpretedMotionCommand enum so any stance's walk/run/stop maps to
+// the same locomotion family. Mirrors `index.html:4377-4380`'s
+// MOTION_CMD_* constants.
 const CMD_LOW_STOP = 0x0004;
 const CMD_LOW_WALK_FORWARD = 0x0005;
 const CMD_LOW_WALK_BACKWARDS = 0x0006;

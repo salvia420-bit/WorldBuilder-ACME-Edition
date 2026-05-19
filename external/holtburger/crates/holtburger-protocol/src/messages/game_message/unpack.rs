@@ -162,9 +162,6 @@ impl ProtocolUnpack for GameMessage {
             GameOpcode::AutonomousPosition => Some(GameMessage::AutonomousPosition(Box::new(
                 ServerAutonomousPositionData::unpack(data, offset)?,
             ))),
-            GameOpcode::AutonomyLevel => Some(GameMessage::AutonomyLevel(Box::new(
-                AutonomyLevelData::unpack(data, offset)?,
-            ))),
             GameOpcode::ParentEvent => Some(GameMessage::ParentEvent(Box::new(
                 ParentEventData::unpack(data, offset)?,
             ))),
