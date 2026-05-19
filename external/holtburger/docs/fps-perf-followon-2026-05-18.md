@@ -116,13 +116,23 @@ Use the existing capture-script pattern in `capture_phase6_step_c_envcells.cjs` 
 
 ---
 
-## Validation work (procedural, not code — out of agent scope)
+## Validation harnesses
 
-These are runtime activities, not agent work, but worth listing for completeness:
+All three runtime probes now have automated harnesses. Run on the real
+GTX 1070 (`desktop-4anudo2`, Tailscale `100.127.215.75`) where they're
+staged at `D:\andrew\claudecode2\` (`README.md` there documents the
+pre-flight + invocation).
 
-- **C7 light-template soak**: 30-minute populated-zone session; watch `renderer.info.memory.geometries` + `.textures` stay flat.
-- **C1 A/B run**: execute FU5's harness once it lands.
-- **Telemetry probes**: scrape `window.__ricShimLastBudgetMs` (A7), `scene3d._lightSortFrameCounter` (C6) across 10-minute sessions to validate the gates do what we expect.
+- **C1 A/B run** — `capture_envcell_fusion_ab.cjs` (commit `4bc44a6`).
+  Baseline vs `?envcellFusion=1` over 6 Academy waypoints. Pass:
+  SSIM > 0.995 + draw-call ratio ≥ 3×.
+- **C7 light-template soak** — `capture_c7_lighttemplate_soak.cjs`.
+  30-min populated-zone session polling `renderer.info.memory` every
+  30 s. Pass: geometries + textures stay within +10% of baseline.
+- **A7 + C6 telemetry probe** — `capture_fps_telemetry_probe.cjs`.
+  10-min poll of `window.__ricShimLastBudgetMs` + `_lightSortFrameCounter`.
+  Pass: `ricBudgetMs.p95 ≤ 50` AND `lightSortGap.p95 ≤ 4` AND zero
+  console errors.
 
 ## Out of scope (deferred)
 
