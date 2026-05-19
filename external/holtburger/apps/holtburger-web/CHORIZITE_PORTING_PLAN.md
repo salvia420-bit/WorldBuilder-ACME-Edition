@@ -122,7 +122,7 @@ Our current `plugins/api.js` (`createClient(sessionHandle)`) is solving the same
 | `API/WorldObjects/Monster.cs` | Port | `plugins/world-objects/monster.js` | — | High | Subclass of Creature. |
 | `API/WorldObjects/NPC.cs` | Port | `plugins/world-objects/npc.js` | — | High | Subclass of Creature. |
 | `API/WorldObjects/Player.cs` | Port | `plugins/world-objects/player.js` | — | High | Subclass of Creature. |
-| `API/WorldObjects/Vendor.cs` | Port | `plugins/world-objects/vendor.js` + `plugins/vendor-ui.js` | Wire to `kind=12 VendorOpened`. Memory says vendor item list isn't yet on the wire — flag for follow-up. | Medium | Coverage gap on our side: see §10. |
+| `API/WorldObjects/Vendor.cs` | **Shipped** (vendor-ui v0.2.0, commit 6eeaf8c) | `plugins/world-objects/vendor.js` + `plugins/vendor-ui.js` | Wired to `kind=12 VendorOpened` + `VendorStateJs` cache. Buy + sell + icons + AC-aesthetic. See §14. | Medium | — |
 | `API/WorldObjects/Door.cs` | Port | `plugins/world-objects/door.js` | Wire to existing hinge-frame tree (per memory: 2026-05-13 door work in progress). | Medium | We have static placement; dynamic open/close state still partly stubbed. |
 | `API/WorldObjects/Item.cs` (and the 14 subclasses: Armor, Bindstone, Clothing, Corpse, Equippable, Foci, Food, Gem, Jewelry, Key, Lifestone, ManaStone, MeleeWeapon, MissileWeapon, Portal, Scroll, SpellComponent, Static, TradeNote, Ust, Wand) | Port | `plugins/world-objects/items/*.js` | Mostly thin subclasses that gate certain property accessors. | High | The class taxonomy itself is the value; the implementations are small. |
 | `API/WorldObjectManager.cs` | Port | `plugins/world-object-manager.js` | Owns the `Map<guid, WorldObject>`, dispatches creation, hands out typed objects via `GetObjectClass(itemType, behavior, header)`. | High | Important: this is where the typed-class dispatch logic lives. We currently do flat entities; the typed dispatch is a significant upgrade. |
@@ -446,7 +446,7 @@ Once the foundation from PRs 1–3 is in:
 
 | PR | Subject | Source | Target | Hard? |
 |---|---|---|---|---|
-| 4 | Vendor UI | `ACPlugin/API/WorldObjects/Vendor.cs` + `OnContainerOpened/Closed` event handlers | `plugins/vendor-ui.js` | Medium — need wasm-side to surface vendor item list |
+| 4 | ~~Vendor UI~~ **SHIPPED 2026-05-19** (commit 6eeaf8c — see §14) | `ACPlugin/API/WorldObjects/Vendor.cs` + `OnContainerOpened/Closed` event handlers | `plugins/vendor-ui.js` v0.2.0 + `VendorStateJs` wasm cache + `buyFromVendor`/`sellToVendor` | Done |
 | 5 | Buff/debuff HUD | `ACPlugin/API/Enchantment.cs` + `OnEnchantmentChanged` | `plugins/buffs-debuffs-hud.js` | Medium — backing data exists per memory; just needs the JS view |
 | 6 | Identify/appraisal panel | `ACPlugin/API/WorldObject.cs` HasAppraisalData + memory's `identify.rs` (already in `holtburger-world`) | `plugins/identify-panel.js` + Right-click → Examine wiring | Medium |
 | 7 | Skill / attribute / training panel | `ACPlugin/API/SkillFormula.cs` + `SkillInfo.cs` + `AttributeInfo.cs` | `plugins/character-panel.js` | Medium |
@@ -729,4 +729,49 @@ Acceptance test for the wiring PR: log in, walk to a vendor in Holtburg academy,
 
 ---
 
-*End of plan. Last updated 2026-05-19 (revision 3: WB.Terminal absorption + browser skeleton landed; strategic shift recorded in §12). Owner: open. Status: shipped first brick; ready for follow-on (wire WorldObjectManager into plugins/api.js event stream, then iterate per-class behaviors).*
+## 14. Vendor UI (shipped 2026-05-19 — commits e86f23d + 6eeaf8c)
+
+### 14.1 What landed
+
+PR-4 of §8 ("Vendor UI") jumped the queue ahead of the typed-class wiring follow-on (§13.3) — usefulness-first. The shipped plugin uses `kind=12 VendorOpened` and the `VendorStateJs` wasm cache directly. When the WorldObjectManager wiring lands, `wom.get(vendorGuid)` will be a `Vendor` instance and the existing UI keeps working unchanged.
+
+**Commit e86f23d (v0.1.0) — vendor state cache + read-only panel**
+- Wasm: `VendorState { vendorGuid, vendorName, buyMultiplier, sellMultiplier, alternateCurrency*, items: Vec<VendorItem> }` populated by the `ApproachVendor` recv arm. Stored in `latest_vendor_state: Rc<RefCell<HashMap<u32, VendorState>>>` threaded through the recv loop.
+- `SessionHandle.getVendorState(vendor_guid) -> VendorStateJs` getter (per-access clone).
+- `VendorItemJs` exposes `{ itemGuid, wcid, name, value, stackSize, itemType, iconId }`.
+- `plugins/vendor-ui.js` listens for `vendorOpened` / `kind:12` / `VendorOpened` on the plugin event bus, fetches via `handle.getVendorState`, renders a read-only `hb-panel`.
+
+**Commit 6eeaf8c (v0.2.0) — buy + sell + icons + AC-aesthetic**
+- **Icons** — `window.__hbWasm.fetch_surface_pixels(iconId)` exposes the existing surface decoder (DAT type 0x06 = RenderSurface). Plugin renders each `iconId` to a 32×32 `<img>` via offscreen canvas; `itemType→emoji` fallback for `iconId=0` or fetch failure. Cache keyed by `iconId`.
+- **Buy** — `SessionHandle.buyFromVendor(vendor_guid, item_wcid, amount)` → `SessionCommand::BuyFromVendor` → `GameAction::Buy` (opcode 0x005F) with single `ItemProfileActionData { amount, object_guid: Guid(wcid) }`. Click a row to buy `currentQty` (toolbar input default 1). Shift-click buys `item.stackSize`.
+- **Sell** — `SessionHandle.sellToVendor(vendor_guid, item_guid, amount)` → `GameAction::Sell` (opcode 0x0060). Inventory `<li>` nodes get `draggable="true"` (equipped items excluded; ACE rejects sells of equipped items). `dragstart` writes `text/x-hb-item-guid` to the dataTransfer. Vendor panel accepts drops on a styled "Drop inventory items here to sell" zone.
+- **Visual polish** — dark parchment gradient + #8a7544 gold accent border, brass-gradient header, slide-in animation, two-line item rows (name + itemType label), pixelated icon rendering, Toast notifications (success-green + error-red), Escape to close.
+
+### 14.2 Wire-layer reuse
+
+All of the protocol primitives already existed in `crates/holtburger-protocol/src/messages/trade/actions.rs`:
+
+```rust
+pub struct ItemProfileActionData { pub amount: i32, pub object_guid: Guid }
+pub struct BuyActionData  { pub vendor_guid: Guid, pub items: Vec<ItemProfileActionData> }
+pub struct SellActionData { pub vendor_guid: Guid, pub items: Vec<ItemProfileActionData> }
+```
+
+…and `crates/holtburger-core/src/client/commands.rs` already had `ClientCommand::Buy` / `::Sell` arms wired through `send_game_action(GameAction::Buy(...))` with `BusyOperationKind::Buy/Sell` throttling. The wasm side just needed the SessionCommand → GameAction bridge (lib.rs:17805–17889).
+
+The `object_guid` field semantics differ by direction: **Buy** carries the vendor item's **wcid** (ACE looks it up against the vendor's stock list); **Sell** carries the player's **item GUID**. Documented in the `SessionCommand` doc comments.
+
+### 14.3 Debug helper
+
+`window.__vendorUiDebug()` pops the panel with a 7-item synthetic stock + 1.55/0.9 multipliers — useful for CSS tweaking without a live ACE. Pass a state object to override.
+
+### 14.4 Follow-ons
+
+- **Inventory-icon parity** — apply the same `iconId → <img>` rendering to inventory `<li>` rows so equipped/pack items look consistent with the vendor window. Same `fetchIconDataUrl` helper is reusable.
+- **Multi-select buy** — `BuyActionData.items: Vec<...>` already supports N-at-a-time; the wasm export currently sends a single-item vec. UI would need shift+click multi-select then a "Buy selected" button.
+- **Stack split on sell** — drop a stack item → prompt for sell quantity rather than selling the whole stack. ACE handles split server-side if the wire carries `amount < stackSize`.
+- **Close-vendor wire** — ACE's `Item_StopViewingObjectContents` (no opcode in our protocol crate yet) when the panel closes. Currently a client-only hide; revisits will re-pop.
+
+---
+
+*End of plan. Last updated 2026-05-19 (revision 4: vendor-ui v0.2.0 shipped — §14. Owner: open. Status: PRs 1+4 shipped; ready for PR 2 (WorldObjectManager wiring into api.js event stream) and PR 5+ (buff/debuff HUD).*
