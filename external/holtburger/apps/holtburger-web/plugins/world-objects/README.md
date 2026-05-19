@@ -63,11 +63,21 @@ client.events.on("kind:11", (e) => wom.onInventoryUpdate(e.detail)); // Inventor
 
 The wiring is the next PR. Acceptance test: open the browser, walk to a vendor in the academy, confirm `wom.get(vendorGuid)` returns a `Vendor` instance (not a generic `WorldObject`).
 
+## Classification contract (Entity-Completeness E.B, 2026-05-19)
+
+The typed-class dispatch is **canonical**, not heuristic. It runs `canonicalClassify(itemType, objDescFlags, weenieFlags)` in `canonical_classify.js` — a 1:1 port of ACPlugin's `WorldObject.GetObjectClass(itemType, objDescFlags, createFlags)` at `external/chorizite/ACPlugin/API/WorldObject.cs:344-411`. Same wire inputs → same `ObjectClass` output every other AC client implementation produces.
+
+If the classifier returns `Unknown`, the manager instantiates the `WorldObject` base sentinel and tags `classificationSource = 'unknown'` (vs `'canonical'` for normal dispatch). It logs an info-level message with all three input bitfields so the Phase E.D validator can count Unknown coverage.
+
+**The old `get_object_class.js` heuristic is DELETED from the normal flow** — see the file's docstring. New code MUST import from `canonical_classify.js`. Anything calling the removed `resolveClassName` is using the deleted heuristic and will produce drift.
+
+Full contract: [`docs/entity-completeness-method.md`](../../../../../docs/entity-completeness-method.md).
+
 ## Known limitations + open questions
 
-- **`GetObjectClass` dispatch ports the C# heuristic** but uses ItemType/Behavior numeric values. Verify these line up with what ACE sends. The agent-found bug ([[../../../docs/chorizite/READING_GUIDE.md]] for ACPlugin, §3.2): C#'s `World.cs:622-706` switch is MISSING the `Lifestone` case (objects with `ObjectClass.Lifestone` fall through to `Item` or `Static`). Our port FIXES this — we add the explicit case.
-- **`SkillFormula.HasAttribute2` has a confirmed C# bug** (`Attribute2 == 0` returns true when Attribute2 is NOT set). Our future port inverts it.
 - **The 8 typed-property dicts** match retail wire format but require us to populate them from kind=10 ObjectCreated events. Wasm side: surface property-write events as discrete typed updates. Not yet wired.
+- **`SkillFormula.HasAttribute2` has a confirmed C# bug** (`Attribute2 == 0` returns true when Attribute2 is NOT set). Our future port inverts it.
+- **Validator (Phase E.D) not yet built.** The classifier is correct under unit tests but hasn't been cross-validated against C# `ACPlugin.WorldObject.GetObjectClass` on real wire captures. See entity-completeness method §E.D.
 
 ## Cross-links
 

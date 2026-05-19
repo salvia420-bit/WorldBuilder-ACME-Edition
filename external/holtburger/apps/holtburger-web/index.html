@@ -7154,23 +7154,21 @@ void main() {
                   deferredSpawns.push(cloneEntitySpawn(upd));
                 }
                 // Chorizite WorldObjectManager dispatch (rev 3, 2026-05-19).
-                // Independent of the 2D / 3D render path — feeds the typed-
-                // class hierarchy at plugins/world-objects/. Read-only over
-                // upd; no .free() or mutation. Loaded-guard inside the
-                // manager (so pre-load spawns are silently dropped — that
-                // matches the existing deferredSpawns fallback for the
-                // liveScene race).
+                // Entity-Completeness E.B (2026-05-19): now feeds the three
+                // canonical-classifier inputs (item_type + obj_desc_flags +
+                // weenie_flags) per docs/entity-completeness-method.md §3.
+                // The manager runs canonicalClassify() to derive the typed
+                // class — same algorithm as ACPlugin / retail acclient.exe.
+                // Read-only over upd; no .free() or mutation. Pre-load
+                // spawns silently dropped per manager's loaded-guard.
                 if (worldObjectManager) {
                   worldObjectManager.onObjectCreated({
                     guid: upd.guid >>> 0,
                     classId: upd.wcid >>> 0,
                     itemType: upd.itemType >>> 0,
+                    objDescFlags: upd.objDescFlags >>> 0,
+                    weenieFlags: upd.weenieFlags >>> 0,
                     name: upd.name || null,
-                    // objectClass + behavior aren't on the entity-update
-                    // wire today; the manager's dispatch correctly falls
-                    // through to ItemType heuristics (producing Creature
-                    // for all creatures — Vendor/NPC/Monster discrimination
-                    // is a follow-on).
                   });
                 }
               }

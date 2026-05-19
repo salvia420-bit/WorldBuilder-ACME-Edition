@@ -11522,6 +11522,18 @@ pub struct EntityUpdate {
     /// entity has no SoundTable (most non-sound-emitting placements) and
     /// for non-Spawn updates.
     sound_table_did: u32,
+    /// **Entity-Completeness E.B (2026-05-19).** `ObjectDescriptionFlag`
+    /// bitfield from `PublicWeenieDescription.obj_desc_flags`. Input #2
+    /// of 3 to the canonical `WorldObject.GetObjectClass` classifier (see
+    /// `docs/entity-completeness-method.md` §3). Carries Player/Vendor/
+    /// Door/Corpse/Lifestone/Foci/Bindstone/Attackable/Stuck bits the
+    /// classifier needs beyond ItemType. `0` for non-Spawn.
+    obj_desc_flags: u32,
+    /// **Entity-Completeness E.B (2026-05-19).** `WeenieHeaderFlag`
+    /// bitfield from `PublicWeenieDescription.weenie_flags`. Input #3 of
+    /// 3 to the canonical classifier (Scroll discrimination needs the
+    /// `Spell` bit). `0` for non-Spawn.
+    weenie_flags: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -11710,6 +11722,23 @@ impl EntityUpdate {
     #[wasm_bindgen(getter, js_name = soundTableDid)]
     pub fn sound_table_did(&self) -> u32 {
         self.sound_table_did
+    }
+
+    /// **Entity-Completeness E.B (2026-05-19).** `ObjectDescriptionFlag`
+    /// bitfield input to the canonical `WorldObject.GetObjectClass`
+    /// classifier. See `docs/entity-completeness-method.md` §3.
+    /// `0` for non-Spawn updates.
+    #[wasm_bindgen(getter, js_name = objDescFlags)]
+    pub fn obj_desc_flags(&self) -> u32 {
+        self.obj_desc_flags
+    }
+
+    /// **Entity-Completeness E.B (2026-05-19).** `WeenieHeaderFlag`
+    /// bitfield input to the canonical classifier.
+    /// `0` for non-Spawn updates.
+    #[wasm_bindgen(getter, js_name = weenieFlags)]
+    pub fn weenie_flags(&self) -> u32 {
+        self.weenie_flags
     }
 
     /// Velocity-hint x component (m/s, world frame). Meaningful only
@@ -14719,6 +14748,8 @@ async fn recv_loop(
                                                 motion_stance: 0,
                                                 physics_script_did: 0,
                                                 sound_table_did: 0,
+                                                obj_desc_flags: 0,
+                                                weenie_flags: 0,
                                             });
                                         }
                                     }
@@ -15390,6 +15421,8 @@ async fn recv_loop(
                                 motion_stance: 0,
                                 physics_script_did: 0,
                                 sound_table_did: 0,
+                                obj_desc_flags: 0,
+                                weenie_flags: 0,
                             });
                         }
                         GameMessage::PrivateUpdatePosition(data) => {
@@ -15518,6 +15551,8 @@ async fn recv_loop(
                                     motion_stance: 0,
                                     physics_script_did: 0,
                                     sound_table_did: 0,
+                                    obj_desc_flags: 0,
+                                    weenie_flags: 0,
                                 });
                             }
                         }
@@ -15563,6 +15598,8 @@ async fn recv_loop(
                                 motion_stance: 0,
                                 physics_script_did: 0,
                                 sound_table_did: 0,
+                                obj_desc_flags: 0,
+                                weenie_flags: 0,
                             });
                         }
                         GameMessage::ObjectCreate(data) => {
@@ -15840,6 +15877,19 @@ async fn recv_loop(
                                     // animation Sound/SoundTable hooks resolve
                                     // synchronously after the first frame.
                                     sound_table_did: data.stable_id.unwrap_or(0),
+                                    // Entity-Completeness E.B (2026-05-19):
+                                    // canonical-classifier inputs. WorldObjectManager
+                                    // pipes these through canonicalClassify(item_type,
+                                    // obj_desc_flags, weenie_flags) to derive the JS
+                                    // typed class. See docs/entity-completeness-method.md.
+                                    obj_desc_flags: data
+                                        .public_weenie_desc
+                                        .obj_desc_flags
+                                        .bits(),
+                                    weenie_flags: data
+                                        .public_weenie_desc
+                                        .weenie_flags
+                                        .bits(),
                                 });
                                 if is_local_player {
                                     local_player_spawn_emitted = true;
@@ -15966,6 +16016,8 @@ async fn recv_loop(
                                 motion_stance: 0,
                                 physics_script_did: 0,
                                 sound_table_did: 0,
+                                obj_desc_flags: 0,
+                                weenie_flags: 0,
                             });
                         }
                         GameMessage::UpdateMotion(data) => {
@@ -16052,6 +16104,8 @@ async fn recv_loop(
                                 motion_stance: u32::from(data.current_style),
                                 physics_script_did: 0,
                                 sound_table_did: 0,
+                                obj_desc_flags: 0,
+                                weenie_flags: 0,
                             });
                         }
                         GameMessage::VectorUpdate(data) => {
@@ -16153,6 +16207,8 @@ async fn recv_loop(
                                 motion_stance: 0,
                                 physics_script_did: 0,
                                 sound_table_did: 0,
+                                obj_desc_flags: 0,
+                                weenie_flags: 0,
                             });
                         }
                         // Phase 4 step 4: chat-bearing surfaces. Each
@@ -17904,6 +17960,8 @@ async fn recv_loop(
                                     motion_stance: 0,
                                     physics_script_did: 0,
                                     sound_table_did: 0,
+                                    obj_desc_flags: 0,
+                                    weenie_flags: 0,
                                 });
                             }
                         }

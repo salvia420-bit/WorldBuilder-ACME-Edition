@@ -11,7 +11,7 @@
 import { WorldObjectTaxonomy } from './taxonomy.js';
 import { ChoriziteEnums } from './enums.js';
 import { WorldObject } from './world_object.js';
-import { resolveClassName } from './get_object_class.js';
+import { canonicalClassify } from './canonical_classify.js';
 
 import { Item } from './item.js';
 import { Equippable } from './equippable.js';
@@ -44,10 +44,13 @@ import { SpellComponent } from './spell_component.js';
 import { TradeNote } from './trade_note.js';
 import { Ust } from './ust.js';
 
+// Keys match the canonical ObjectClass enum members (Chorizite.Common
+// ObjectClass.cs). Note `Npc` (not `NPC`) to mirror the C# casing — the
+// JS `NPC` class is aliased under both for migration safety.
 const CONSTRUCTOR_BY_NAME = {
   WorldObject,
   Item, Equippable, Container, Static,
-  Character, Creature, NPC, Vendor, Monster, Player,
+  Character, Creature, NPC, Npc: NPC, Vendor, Monster, Player,
   Door, Portal, Lifestone, Bindstone, Corpse, Foci,
   Armor, Clothing, Jewelry, MeleeWeapon, MissileWeapon, Wand,
   Food, Gem, Key, ManaStone, Scroll, SpellComponent, TradeNote, Ust,
@@ -68,26 +71,46 @@ export class WorldObjectManager extends EventTarget {
     this.loaded = true;
   }
 
-  /** Called on a kind=10 ObjectCreated event (per CHORIZITE_PORTING_PLAN.md §3.4). */
+  /**
+   * Called on a kind=10 ObjectCreated event (per CHORIZITE_PORTING_PLAN.md §3.4).
+   *
+   * Dispatches via the canonical classifier per the entity-completeness
+   * contract (docs/entity-completeness-method.md §3). Three wire inputs
+   * → one ObjectClass via the 1:1 port of ACPlugin's GetObjectClass.
+   * No heuristic fallback — if canonical returns 'Unknown', we
+   * instantiate the WorldObject sentinel and tag classificationSource.
+   */
   onObjectCreated(event) {
     if (!this.loaded) {
       console.warn('WorldObjectManager: onObjectCreated before load()');
       return null;
     }
-    const { guid, classId, itemType, objectClass, behavior } = this.#normalizeCreationPayload(event);
-    const itemTypeName = itemType ? this.enums.nameOf('ItemType', itemType) : null;
-    // Only resolve objectClass if it was actually set; 0 == Unknown which we
-    // want to treat as 'not specified, fall through to ItemType heuristic.'
-    const objectClassName = objectClass ? this.enums.nameOf('ObjectClass', objectClass) : null;
-    const targetName = resolveClassName({ itemTypeName, objectClassName, behavior });
-    const Constructor = CONSTRUCTOR_BY_NAME[targetName] ?? WorldObject;
+    const { guid, classId, itemType, objDescFlags, weenieFlags } = this.#normalizeCreationPayload(event);
+    const objectClassName = canonicalClassify(itemType, objDescFlags, weenieFlags);
+    const Constructor = CONSTRUCTOR_BY_NAME[objectClassName] ?? WorldObject;
     const wo = new Constructor(guid, classId, this.taxonomy, this.enums);
-    wo.behavior = behavior;
-    // Seed itemType / class fields so subclasses can introspect.
+    wo.objDescFlags = objDescFlags;
+    wo.weenieFlags = weenieFlags;
+    // Entity-completeness §5 fallback discipline: tag classification source
+    // so the validator (Phase E.D) can count Unknown instances.
+    wo.classificationSource = (objectClassName === 'Unknown') ? 'unknown' : 'canonical';
+    if (wo.classificationSource === 'unknown') {
+      console.info(
+        `[wom] canonical classifier returned Unknown for guid=0x${guid.toString(16).padStart(8, '0')} ` +
+        `wcid=0x${classId.toString(16).padStart(8, '0')} ` +
+        `itemType=0x${itemType.toString(16).padStart(8, '0')} ` +
+        `objDescFlags=0x${objDescFlags.toString(16).padStart(8, '0')} ` +
+        `weenieFlags=0x${weenieFlags.toString(16).padStart(8, '0')} ` +
+        `— instantiating WorldObject sentinel`
+      );
+    }
+    // Seed itemType / name property slots so subclasses can introspect.
     if (itemType !== undefined) wo.intValues.set(1, itemType);
     if (event.name) wo.stringValues.set(1, event.name);
     this.objects.set(guid, wo);
-    this.dispatchEvent(new CustomEvent('created', { detail: { object: wo, resolved: targetName } }));
+    this.dispatchEvent(new CustomEvent('created', {
+      detail: { object: wo, resolved: objectClassName, source: wo.classificationSource },
+    }));
     return wo;
   }
 
@@ -118,14 +141,16 @@ export class WorldObjectManager extends EventTarget {
 
   /** Normalize the event payload coming from session-handle event shape variants. */
   #normalizeCreationPayload(event) {
-    // The wire layer may surface fields differently; accept multiple aliases.
+    // The wire layer surfaces the three canonical-classifier inputs as:
+    //   itemType, objDescFlags, weenieFlags (per docs/entity-completeness-method.md)
+    // Aliases tolerated for ad-hoc test drivers.
     return {
-      guid:         event.guid        ?? event.objectId   ?? event.id        ?? 0,
-      classId:      event.classId     ?? event.wcid       ?? 0,
-      itemType:     event.itemType    ?? 0,
-      objectClass:  event.objectClass ?? 0,
-      behavior:     event.behavior    ?? event.behaviour  ?? 0,
-      name:         event.name        ?? null,
+      guid:         event.guid          ?? event.objectId    ?? event.id          ?? 0,
+      classId:      event.classId       ?? event.wcid        ?? 0,
+      itemType:     event.itemType      ?? 0,
+      objDescFlags: event.objDescFlags  ?? event.behavior    ?? 0,
+      weenieFlags:  event.weenieFlags   ?? 0,
+      name:         event.name          ?? null,
     };
   }
 }
