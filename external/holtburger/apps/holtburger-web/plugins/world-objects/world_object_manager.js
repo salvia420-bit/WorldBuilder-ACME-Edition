@@ -130,6 +130,47 @@ export class WorldObjectManager extends EventTarget {
   exists(guid) { return this.objects.has(guid); }
   count() { return this.objects.size; }
 
+  /**
+   * Emit a serializable snapshot of every live object's classification.
+   * Consumed by `capture_entity_classifications.cjs` (Phase E.F live
+   * validator). Includes the three wire inputs + the canonical output +
+   * classificationSource so Unknown sentinels can be counted + audited.
+   *
+   * Shape:
+   *   { capturedAt, loaded, total, byClass: {class → count},
+   *     unknownCount, objects: [{guid, classId, className,
+   *       classificationSource, itemType, objDescFlags, weenieFlags,
+   *       name}, ...] }
+   */
+  snapshot() {
+    const objects = [];
+    const byClass = new Map();
+    let unknownCount = 0;
+    for (const wo of this.objects.values()) {
+      const cls = wo.constructor.name;
+      byClass.set(cls, (byClass.get(cls) ?? 0) + 1);
+      if (wo.classificationSource === 'unknown') unknownCount++;
+      objects.push({
+        guid: wo.id,
+        classId: wo.classId,
+        className: cls,
+        classificationSource: wo.classificationSource ?? null,
+        itemType: wo.intValues.get(1) ?? 0,
+        objDescFlags: wo.objDescFlags ?? 0,
+        weenieFlags: wo.weenieFlags ?? 0,
+        name: wo.stringValues.get(1) ?? '',
+      });
+    }
+    return {
+      capturedAt: new Date().toISOString(),
+      loaded: this.loaded,
+      total: objects.length,
+      unknownCount,
+      byClass: Object.fromEntries([...byClass.entries()].sort((a, b) => b[1] - a[1])),
+      objects,
+    };
+  }
+
   /** Iterate all live world objects. */
   *all() { yield* this.objects.values(); }
 

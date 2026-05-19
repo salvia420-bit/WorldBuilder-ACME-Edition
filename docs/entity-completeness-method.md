@@ -165,10 +165,41 @@ The validator IS the source of truth. If parity fails, the renderer's port is wr
 | **E.A** Investigate | Confirm parser populates obj_desc_flags + weenie_flags in EntityUpdate construction sites; verify ObjectDescriptionFlag + WeenieHeaderFlag enum tables in Chorizite.Common; sample wire payloads | ✓ done (in §1.5) |
 | **E.B** Surface | Wasm getters for obj_desc_flags + weenie_flags; index.html pass-through; faithful port of GetObjectClass in JS (replaces get_object_class.js); bitflag constant files | ✓ shipped (commit `509abef`) |
 | **E.C** Wire | WorldObjectManager dispatch uses canonicalClassify; WorldObject sentinel + classificationSource tag | ✓ shipped (commit `509abef`) |
-| **E.D** Validate | validate_entity_classification.cjs — 56-case branch-coverage validator over canonicalClassify; reports class distribution + coverage gap if any of 42 ObjectClass values goes untested | ✓ shipped — 56/56 pass, 42/42 ObjectClass values exercised |
+| **E.D** Validate (synthetic) | validate_entity_classification.cjs — 56-case branch-coverage validator over canonicalClassify; reports class distribution + coverage gap if any of 42 ObjectClass values goes untested | ✓ shipped — 56/56 pass, 42/42 ObjectClass values exercised |
 | **E.E** Cross-port | `chorizite-classify` WB.Terminal command (1:1 C# port of same algorithm); `scripts/cross_port_parity.cjs` pipes 48 cases through both ports, asserts byte-identical output | ✓ shipped — 48/48 parity |
+| **E.F** Validate (live capture) | `capture_entity_classifications.cjs` — Playwright/CDP capture against live ACE; spawns into Holtburg, drains the ObjectCreate burst, captures `window.__wom.snapshot()`, asserts class distribution + Unknown count ≤ tolerance | ✓ shipped (script ready); awaiting operator run against live ACE |
 
-CI hook for the validator + cross-port harness: not yet wired into automated CI. Both are runnable today via `node validate_entity_classification.cjs` and `node scripts/cross_port_parity.cjs`. A future hook could invoke both on any commit that touches `plugins/world-objects/`, `apps/holtburger-web/src/lib.rs::EntityUpdate`, `WorldBuilder.Terminal/CommandEngine.Chorizite.cs`, or the vendored ACPlugin source.
+CI hook for the three validators (E.D synthetic, E.E cross-port, E.F live) is not yet automated. E.D and E.E run without external dependencies and can be wired into any pre-commit / CI workflow today (`node validate_entity_classification.cjs` + `node scripts/cross_port_parity.cjs`). E.F requires the holtburger-web dev server + a live ACE; suited to a periodic / nightly job rather than per-commit.
+
+### E.F probe scenario (operator-driven, deterministic)
+
+The capture script's default scenario:
+1. Boot `index.html?renderer=3d` against a live local ACE (env-overridable: account, password, bridge URL, server IP/port).
+2. Login → create test character if needed → spawn into Holtburg (the character creation default).
+3. `/godly` to prevent fall damage during drain.
+4. Wait `ECF_ENTITY_DRAIN_MS` (default 60 s) for the ObjectCreate burst to plateau, sampling `window.__wom.count()` every 5 s.
+5. Call `window.__wom.snapshot()` and persist to `/mnt/wbterminal1/holtburger-captures/entity-class-<ts>.json`.
+6. Assert `total ≥ ECF_MIN_SPAWNS` (default 5) AND `unknownCount ≤ ECF_MAX_UNKNOWN_TOL` (default 0).
+7. Print class distribution + sample-by-class to stdout; full JSON snapshot to disk; screenshot to disk.
+
+The script exits 0 on PASS, 1 on coverage/Unknown failure, 2 on infra error.
+
+### Operator run recipe
+
+```bash
+# Pre-reqs (existing capture infrastructure):
+#   - Live ACE on 100.116.47.66:9000
+#   - holtburger-wsbridge on ws://127.0.0.1:8080/
+#   - python3 -m http.server 8765 from external/holtburger/
+#   - Manifest + shards baked under dist/
+
+cd external/holtburger/apps/holtburger-web
+NODE_PATH=/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules \
+  node capture_entity_classifications.cjs
+# → /mnt/wbterminal1/holtburger-captures/entity-class-<ts>.json
+```
+
+Tightening over time: as `unknownCount` consistently drops to 0 on a populated zone, the `ECF_MAX_UNKNOWN_TOL` default can stay at 0 (the strictest interpretation of the contract). Any future Unknown is a coverage gap in `canonical_classify.js` — port the missing branch from `ACPlugin/API/WorldObject.cs`.
 
 ## Scope limits — what's NOT covered
 
