@@ -9,5 +9,7 @@ repository.workspace = true
 [dependencies]
 holtburger-dat.workspace = true
 holtburger-common.workspace = true
+binrw.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]

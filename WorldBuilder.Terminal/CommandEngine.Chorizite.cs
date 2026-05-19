@@ -77,38 +77,110 @@ public partial class CommandEngine {
     public sealed record ChoriziteEnumMember(string Name, string ValueHex, long ValueDecimal);
 
     /// <summary>
-    /// Dump int → name for one or all enums in <c>Chorizite.Common.Enums</c>.
-    /// If <paramref name="enumName"/> is null/empty, returns all enums.
+    /// Curated allowlist of enums emitted by <c>chorizite-dump-enum-values</c>
+    /// when called without an explicit <c>enumName</c>. These are the enums
+    /// the holtburger-web entity-completeness validators + world-objects
+    /// canonical classifier consume; expanding the allowlist is the only
+    /// surface that needs touching when a new enum joins the contract.
+    ///
+    /// Names are matched against the Chorizite.Common.Enums namespace via
+    /// reflection EXCEPT <c>ObjectDescriptionFlag</c>, which lives in
+    /// <c>Chorizite.ACProtocol.Enums</c> and is sourced via regex-parse of
+    /// the .generated.cs file (mirrors the ChoriziteDumpOpcodes pattern —
+    /// see that method's class-level remarks for why we avoid taking a
+    /// ProjectReference on Chorizite.ACProtocol).
+    /// </summary>
+    private static readonly string[] CuratedEnumAllowlist = new[] {
+        "AttackHeight",
+        "AttackType",
+        "ItemType",
+        "ObjectClass",
+        "SpellType",
+        "SpellFlags",
+        "DamageType",
+        "MagicSchool",
+        "CombatMode",
+        "ObjectDescriptionFlag",
+        "WeenieHeaderFlag",
+    };
+
+    /// <summary>
+    /// Dump int → name for one or all enums in the curated set
+    /// (<see cref="CuratedEnumAllowlist"/>). If <paramref name="enumName"/>
+    /// is null/empty, returns every entry in the allowlist; otherwise
+    /// returns the one matching member (case-insensitive). Reflection
+    /// pulls from <c>Chorizite.Common.Enums</c>; <c>ObjectDescriptionFlag</c>
+    /// is regex-parsed from the vendored ACProtocol .generated.cs source.
     /// </summary>
     public IReadOnlyList<ChoriziteEnumDump> ChoriziteDumpEnumValues(string? enumName) {
         // Find all public enums in the Chorizite.Common assembly.
         var assembly = typeof(ChorCommon.AttackHeight).Assembly;
         var allEnums = assembly.GetTypes()
             .Where(t => t.IsEnum && t.Namespace == "Chorizite.Common.Enums")
-            .OrderBy(t => t.Name)
-            .ToList();
+            .ToDictionary(t => t.Name, t => t, StringComparer.OrdinalIgnoreCase);
 
-        IEnumerable<Type> targets;
+        IEnumerable<string> targetNames;
         if (string.IsNullOrWhiteSpace(enumName)) {
-            targets = allEnums;
+            targetNames = CuratedEnumAllowlist;
         } else {
-            targets = allEnums.Where(t => string.Equals(t.Name, enumName, StringComparison.OrdinalIgnoreCase));
+            targetNames = CuratedEnumAllowlist.Where(n => string.Equals(n, enumName, StringComparison.OrdinalIgnoreCase));
+            // Single-enum lookups also accept any Chorizite.Common enum
+            // outside the curated allowlist — preserves the original
+            // "query any vendored enum by name" affordance.
+            if (!targetNames.Any() && allEnums.ContainsKey(enumName!)) {
+                targetNames = new[] { allEnums[enumName!].Name };
+            }
         }
 
         var result = new List<ChoriziteEnumDump>();
-        foreach (var t in targets) {
-            var underlying = Enum.GetUnderlyingType(t);
-            var isFlags = t.GetCustomAttribute<FlagsAttribute>() != null;
-            var members = new List<ChoriziteEnumMember>();
-            foreach (var (name, value) in Enum.GetNames(t).Zip(Enum.GetValues(t).Cast<object>())) {
-                long longVal = Convert.ToInt64(value);
-                members.Add(new ChoriziteEnumMember(name, $"0x{longVal:X8}", longVal));
+        foreach (var name in targetNames) {
+            if (allEnums.TryGetValue(name, out var t)) {
+                var underlying = Enum.GetUnderlyingType(t);
+                var isFlags = t.GetCustomAttribute<FlagsAttribute>() != null;
+                var members = new List<ChoriziteEnumMember>();
+                foreach (var (memberName, value) in Enum.GetNames(t).Zip(Enum.GetValues(t).Cast<object>())) {
+                    long longVal = Convert.ToInt64(value);
+                    members.Add(new ChoriziteEnumMember(memberName, $"0x{longVal:X8}", longVal));
+                }
+                members.Sort((a, b) => a.ValueDecimal.CompareTo(b.ValueDecimal));
+                result.Add(new ChoriziteEnumDump(t.Name, underlying.Name, isFlags, members));
+            } else if (string.Equals(name, "ObjectDescriptionFlag", StringComparison.OrdinalIgnoreCase)) {
+                // ACProtocol-sourced enum — regex-parse the .generated.cs.
+                var dump = ParseAcProtocolFlagsEnum(
+                    enumName: "ObjectDescriptionFlag",
+                    relativeSourcePath: Path.Combine("Chorizite.ACProtocol", "Chorizite.ACProtocol", "Enums", "ObjectDescriptionFlag.generated.cs"));
+                if (dump != null) result.Add(dump);
             }
-            // Sort by numeric value for stable diffing
-            members.Sort((a, b) => a.ValueDecimal.CompareTo(b.ValueDecimal));
-            result.Add(new ChoriziteEnumDump(t.Name, underlying.Name, isFlags, members));
         }
         return result;
+    }
+
+    /// <summary>
+    /// Parse a [Flags] enum out of a Chorizite.ACProtocol .generated.cs file
+    /// without taking a ProjectReference on Chorizite.ACProtocol (which
+    /// targets netstandard2.0 and pulls non-trivial transitive deps).
+    /// Mirrors the regex pattern used by <see cref="ChoriziteDumpOpcodes"/>.
+    /// Returns null when the source file is absent so the caller can skip
+    /// gracefully (e.g. CI without the ACProtocol clone vendored).
+    /// </summary>
+    private static ChoriziteEnumDump? ParseAcProtocolFlagsEnum(string enumName, string relativeSourcePath) {
+        var sourcePath = Path.Combine(DefaultChoriziteSourceRoot, relativeSourcePath);
+        if (!File.Exists(sourcePath)) return null;
+        var src = File.ReadAllText(sourcePath);
+        var memberRe = new Regex(
+            @"^\s*(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*0x(?<hex>[0-9A-Fa-f]+)\s*,?\s*$",
+            RegexOptions.Compiled | RegexOptions.Multiline);
+        var members = new List<ChoriziteEnumMember>();
+        foreach (Match m in memberRe.Matches(src)) {
+            var memberName = m.Groups["name"].Value;
+            long value = Convert.ToInt64(m.Groups["hex"].Value, 16);
+            members.Add(new ChoriziteEnumMember(memberName, $"0x{value:X8}", value));
+        }
+        if (members.Count == 0) return null;
+        members.Sort((a, b) => a.ValueDecimal.CompareTo(b.ValueDecimal));
+        // ACProtocol generated enums declare `: uint` underlying type;
+        // the source file emit is canonical.
+        return new ChoriziteEnumDump(enumName, "UInt32", IsFlags: true, members);
     }
 
     // ─────────────────────────────────────────────────────────────────

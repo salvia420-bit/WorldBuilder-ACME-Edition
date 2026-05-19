@@ -1,0 +1,251 @@
+{
+  "$schema": "Synthetic dispatch fixtures for GetObjectClass parity (TASK 2B).",
+  "purpose": "20 synthetic tuples (plus 5 boundary extensions) exercising every named algorithmic branch in WorldObject.GetObjectClass (Chorizite/ACPlugin/API/WorldObject.cs:344-411). Used by dispatch-cases.cjs to assert byte-equal C# (WB.Terminal chorizite-classify) ≡ JS (canonicalClassify) output.",
+  "source": "external/chorizite/ACPlugin/API/WorldObject.cs:344-411",
+  "ports": [
+    "JS:  apps/holtburger-web/plugins/world-objects/canonical_classify.js",
+    "C#:  WorldBuilder.Terminal::ChoriziteClassify (CommandEngine.Chorizite.cs)"
+  ],
+  "enumSources": [
+    "ItemType bits: data/chorizite/chorizite-common-enums.json .enums.ItemType.members[].valueHex",
+    "ObjectClass enum names: data/chorizite/chorizite-common-enums.json .enums.ObjectClass.members[].name",
+    "ObjectDescriptionFlag bits: external/chorizite/Chorizite.Common/Enums/ObjectDescriptionFlag.cs (inlined in canonical_classify.js header)",
+    "WeenieHeaderFlag bits: external/chorizite/Chorizite.Common/Enums/WeenieHeaderFlag.cs (only WHF.Spell needed by classifier)"
+  ],
+  "cases": [
+    {
+      "name": "MeleeWeapon",
+      "branch": "PASS-1 ItemType cascade — MeleeWeapon",
+      "csLine": 347,
+      "itemType":     "0x00000001",
+      "objDescFlags": "0x00000000",
+      "weenieFlags":  "0x00000000",
+      "expected": "MeleeWeapon"
+    },
+    {
+      "name": "Armor",
+      "branch": "PASS-1 ItemType cascade — Armor",
+      "csLine": 348,
+      "itemType":     "0x00000002",
+      "objDescFlags": "0x00000000",
+      "weenieFlags":  "0x00000000",
+      "expected": "Armor"
+    },
+    {
+      "name": "Clothing",
+      "branch": "PASS-1 ItemType cascade — Clothing",
+      "csLine": 349,
+      "itemType":     "0x00000004",
+      "objDescFlags": "0x00000000",
+      "weenieFlags":  "0x00000000",
+      "expected": "Clothing"
+    },
+    {
+      "name": "Jewelry",
+      "branch": "PASS-1 ItemType cascade — Jewelry",
+      "csLine": 350,
+      "itemType":     "0x00000008",
+      "objDescFlags": "0x00000000",
+      "weenieFlags":  "0x00000000",
+      "expected": "Jewelry"
+    },
+    {
+      "name": "Creature_Attackable_Monster",
+      "branch": "PASS-1 Creature → PASS-3c retains Monster (Attackable set, no SecondHeader)",
+      "csLine": 351,
+      "itemType":     "0x00000010",
+      "objDescFlags": "0x00000010",
+      "weenieFlags":  "0x00000000",
+      "expected": "Monster"
+    },
+    {
+      "name": "Creature_Player_override",
+      "branch": "PASS-2 ObjDesc.Player overrides Monster — Player branch (boundary vs Creature_Attackable_Monster)",
+      "csLine": 375,
+      "itemType":     "0x00000010",
+      "objDescFlags": "0x00000008",
+      "weenieFlags":  "0x00000000",
+      "expected": "Player"
+    },
+    {
+      "name": "Vendor",
+      "branch": "PASS-2 ObjDesc.Vendor",
+      "csLine": 376,
+      "itemType":     "0x00000010",
+      "objDescFlags": "0x00000210",
+      "weenieFlags":  "0x00000000",
+      "expected": "Vendor"
+    },
+    {
+      "name": "Food_ItemType",
+      "branch": "PASS-1 ItemType cascade — Food",
+      "csLine": 352,
+      "itemType":     "0x00000020",
+      "objDescFlags": "0x00000000",
+      "weenieFlags":  "0x00000000",
+      "expected": "Food"
+    },
+    {
+      "name": "MissileWeapon",
+      "branch": "PASS-1 ItemType cascade — MissileWeapon",
+      "csLine": 355,
+      "itemType":     "0x00000100",
+      "objDescFlags": "0x00000000",
+      "weenieFlags":  "0x00000000",
+      "expected": "MissileWeapon"
+    },
+    {
+      "name": "Container",
+      "branch": "PASS-1 ItemType cascade — Container",
+      "csLine": 356,
+      "itemType":     "0x00000200",
+      "objDescFlags": "0x00000000",
+      "weenieFlags":  "0x00000000",
+      "expected": "Container"
+    },
+    {
+      "name": "Gem",
+      "branch": "PASS-1 ItemType cascade — Gem",
+      "csLine": 358,
+      "itemType":     "0x00000800",
+      "objDescFlags": "0x00000000",
+      "weenieFlags":  "0x00000000",
+      "expected": "Gem"
+    },
+    {
+      "name": "SpellComponent",
+      "branch": "PASS-1 ItemType cascade — SpellComponents",
+      "csLine": 359,
+      "itemType":     "0x00001000",
+      "objDescFlags": "0x00000000",
+      "weenieFlags":  "0x00000000",
+      "expected": "SpellComponent"
+    },
+    {
+      "name": "Key",
+      "branch": "PASS-1 ItemType cascade — Key (also covers duplicate :373)",
+      "csLine": 360,
+      "itemType":     "0x00004000",
+      "objDescFlags": "0x00000000",
+      "weenieFlags":  "0x00000000",
+      "expected": "Key"
+    },
+    {
+      "name": "WandStaffOrb",
+      "branch": "PASS-1 ItemType cascade — Caster → WandStaffOrb (the Wand)",
+      "csLine": 361,
+      "itemType":     "0x00008000",
+      "objDescFlags": "0x00000000",
+      "weenieFlags":  "0x00000000",
+      "expected": "WandStaffOrb"
+    },
+    {
+      "name": "Portal_ItemType",
+      "branch": "PASS-1 ItemType cascade — Portal",
+      "csLine": 362,
+      "itemType":     "0x00010000",
+      "objDescFlags": "0x00000000",
+      "weenieFlags":  "0x00000000",
+      "expected": "Portal"
+    },
+    {
+      "name": "ManaStone",
+      "branch": "PASS-1 ItemType cascade — ManaStone",
+      "csLine": 364,
+      "itemType":     "0x00080000",
+      "objDescFlags": "0x00000000",
+      "weenieFlags":  "0x00000000",
+      "expected": "ManaStone"
+    },
+    {
+      "name": "Door",
+      "branch": "PASS-2 ObjDesc.Door",
+      "csLine": 377,
+      "itemType":     "0x00000000",
+      "objDescFlags": "0x00001000",
+      "weenieFlags":  "0x00000000",
+      "expected": "Door"
+    },
+    {
+      "name": "Lifestone",
+      "branch": "PASS-2 ObjDesc.LifeStone",
+      "csLine": 379,
+      "itemType":     "0x00000000",
+      "objDescFlags": "0x00004000",
+      "weenieFlags":  "0x00000000",
+      "expected": "Lifestone"
+    },
+    {
+      "name": "Scroll",
+      "branch": "PASS-3b Writable + WHF.Spell → Scroll",
+      "csLine": 394,
+      "itemType":     "0x00002000",
+      "objDescFlags": "0x00000000",
+      "weenieFlags":  "0x00100000",
+      "expected": "Scroll"
+    },
+    {
+      "name": "Bindstone",
+      "branch": "PASS-2 ObjDesc.BindStone",
+      "csLine": 386,
+      "itemType":     "0x00000000",
+      "objDescFlags": "0x08000000",
+      "weenieFlags":  "0x00000000",
+      "expected": "Bindstone"
+    },
+    {
+      "name": "TradeNote",
+      "branch": "PASS-1 ItemType cascade — PromissoryNote → TradeNote (utility group)",
+      "csLine": 363,
+      "itemType":     "0x00040000",
+      "objDescFlags": "0x00000000",
+      "weenieFlags":  "0x00000000",
+      "expected": "TradeNote"
+    },
+    {
+      "name": "Foci",
+      "branch": "PASS-2 ObjDesc.RequiresPackSlot → Foci (utility group)",
+      "csLine": 384,
+      "itemType":     "0x00000000",
+      "objDescFlags": "0x00800000",
+      "weenieFlags":  "0x00000000",
+      "expected": "Foci"
+    },
+    {
+      "name": "Ust",
+      "branch": "PASS-1 ItemType cascade — TinkeringTool → Ust (utility group)",
+      "csLine": 371,
+      "itemType":     "0x20000000",
+      "objDescFlags": "0x00000000",
+      "weenieFlags":  "0x00000000",
+      "expected": "Ust"
+    },
+    {
+      "name": "Money_ItemFallback",
+      "branch": "PASS-1 ItemType cascade — Money (Item-fallback group)",
+      "csLine": 353,
+      "itemType":     "0x00000040",
+      "objDescFlags": "0x00000000",
+      "weenieFlags":  "0x00000000",
+      "expected": "Money"
+    },
+    {
+      "name": "Misc_to_Static",
+      "branch": "PASS-1 Misc → PASS-3d Misc+Stuck rewrites to Static (Item-fallback + Static group)",
+      "csLine": 401,
+      "itemType":     "0x00000080",
+      "objDescFlags": "0x00000004",
+      "weenieFlags":  "0x00000000",
+      "expected": "Static"
+    },
+    {
+      "name": "Unknown_sentinel",
+      "branch": "No rule matches → ObjectClass.Unknown sentinel (algorithm 'all else' path)",
+      "csLine": 345,
+      "itemType":     "0x00000000",
+      "objDescFlags": "0x00000000",
+      "weenieFlags":  "0x00000000",
+      "expected": "Unknown"
+    }
+  ]
+}

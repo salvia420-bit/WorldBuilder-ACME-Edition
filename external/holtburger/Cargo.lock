@@ -1518,8 +1518,10 @@ dependencies = [
 name = "holtburger-event-bake"
 version = "0.1.0"
 dependencies = [
+ "binrw",
  "holtburger-common",
  "holtburger-dat",
+ "serde_json",
 ]
 
 [[package]]

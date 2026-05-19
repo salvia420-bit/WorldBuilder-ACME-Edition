@@ -1,7 +1,7 @@
 {
   "generatedBy": "WorldBuilder.Terminal chorizite-dump-enum-values",
-  "generatedAt": "2026-05-19T09:53:21-02:30",
-  "source": "Chorizite.Common assembly (vendored at external/chorizite/Chorizite.Common/)",
+  "generatedAt": "2026-05-19T18:50:28+00:00",
+  "source": "Chorizite.Common assembly (vendored at external/chorizite/Chorizite.Common/) + Chorizite.ACProtocol/Enums/ObjectDescriptionFlag.generated.cs",
   "enums": {
     "AttackHeight": {
       "name": "AttackHeight",
@@ -802,6 +802,337 @@
           "name": "Magic",
           "valueHex": "0x00000008",
           "valueDecimal": 8
+        }
+      ]
+    },
+    "ObjectDescriptionFlag": {
+      "name": "ObjectDescriptionFlag",
+      "underlyingType": "UInt32",
+      "isFlags": true,
+      "memberCount": 30,
+      "members": [
+        {
+          "name": "Openable",
+          "valueHex": "0x00000001",
+          "valueDecimal": 1
+        },
+        {
+          "name": "Inscribable",
+          "valueHex": "0x00000002",
+          "valueDecimal": 2
+        },
+        {
+          "name": "Stuck",
+          "valueHex": "0x00000004",
+          "valueDecimal": 4
+        },
+        {
+          "name": "Player",
+          "valueHex": "0x00000008",
+          "valueDecimal": 8
+        },
+        {
+          "name": "Attackable",
+          "valueHex": "0x00000010",
+          "valueDecimal": 16
+        },
+        {
+          "name": "PlayerKiller",
+          "valueHex": "0x00000020",
+          "valueDecimal": 32
+        },
+        {
+          "name": "HiddenAdmin",
+          "valueHex": "0x00000040",
+          "valueDecimal": 64
+        },
+        {
+          "name": "UiHidden",
+          "valueHex": "0x00000080",
+          "valueDecimal": 128
+        },
+        {
+          "name": "Book",
+          "valueHex": "0x00000100",
+          "valueDecimal": 256
+        },
+        {
+          "name": "Vendor",
+          "valueHex": "0x00000200",
+          "valueDecimal": 512
+        },
+        {
+          "name": "PkSwitch",
+          "valueHex": "0x00000400",
+          "valueDecimal": 1024
+        },
+        {
+          "name": "NpkSwitch",
+          "valueHex": "0x00000800",
+          "valueDecimal": 2048
+        },
+        {
+          "name": "Door",
+          "valueHex": "0x00001000",
+          "valueDecimal": 4096
+        },
+        {
+          "name": "Corpse",
+          "valueHex": "0x00002000",
+          "valueDecimal": 8192
+        },
+        {
+          "name": "LifeStone",
+          "valueHex": "0x00004000",
+          "valueDecimal": 16384
+        },
+        {
+          "name": "Food",
+          "valueHex": "0x00008000",
+          "valueDecimal": 32768
+        },
+        {
+          "name": "Healer",
+          "valueHex": "0x00010000",
+          "valueDecimal": 65536
+        },
+        {
+          "name": "Lockpick",
+          "valueHex": "0x00020000",
+          "valueDecimal": 131072
+        },
+        {
+          "name": "Portal",
+          "valueHex": "0x00040000",
+          "valueDecimal": 262144
+        },
+        {
+          "name": "Admin",
+          "valueHex": "0x00100000",
+          "valueDecimal": 1048576
+        },
+        {
+          "name": "FreePkStatus",
+          "valueHex": "0x00200000",
+          "valueDecimal": 2097152
+        },
+        {
+          "name": "ImmuneCellRestrictions",
+          "valueHex": "0x00400000",
+          "valueDecimal": 4194304
+        },
+        {
+          "name": "RequiresPackSlot",
+          "valueHex": "0x00800000",
+          "valueDecimal": 8388608
+        },
+        {
+          "name": "Retained",
+          "valueHex": "0x01000000",
+          "valueDecimal": 16777216
+        },
+        {
+          "name": "PkLiteStatus",
+          "valueHex": "0x02000000",
+          "valueDecimal": 33554432
+        },
+        {
+          "name": "IncludesSecondHeader",
+          "valueHex": "0x04000000",
+          "valueDecimal": 67108864
+        },
+        {
+          "name": "BindStone",
+          "valueHex": "0x08000000",
+          "valueDecimal": 134217728
+        },
+        {
+          "name": "VolatileRare",
+          "valueHex": "0x10000000",
+          "valueDecimal": 268435456
+        },
+        {
+          "name": "WieldOnUse",
+          "valueHex": "0x20000000",
+          "valueDecimal": 536870912
+        },
+        {
+          "name": "WieldLeft",
+          "valueHex": "0x40000000",
+          "valueDecimal": 1073741824
+        }
+      ]
+    },
+    "WeenieHeaderFlag": {
+      "name": "WeenieHeaderFlag",
+      "underlyingType": "UInt32",
+      "isFlags": true,
+      "memberCount": 33,
+      "members": [
+        {
+          "name": "None",
+          "valueHex": "0x00000000",
+          "valueDecimal": 0
+        },
+        {
+          "name": "PluralName",
+          "valueHex": "0x00000001",
+          "valueDecimal": 1
+        },
+        {
+          "name": "ItemsCapacity",
+          "valueHex": "0x00000002",
+          "valueDecimal": 2
+        },
+        {
+          "name": "ContainersCapacity",
+          "valueHex": "0x00000004",
+          "valueDecimal": 4
+        },
+        {
+          "name": "Value",
+          "valueHex": "0x00000008",
+          "valueDecimal": 8
+        },
+        {
+          "name": "Usable",
+          "valueHex": "0x00000010",
+          "valueDecimal": 16
+        },
+        {
+          "name": "UseRadius",
+          "valueHex": "0x00000020",
+          "valueDecimal": 32
+        },
+        {
+          "name": "Monarch",
+          "valueHex": "0x00000040",
+          "valueDecimal": 64
+        },
+        {
+          "name": "UiEffects",
+          "valueHex": "0x00000080",
+          "valueDecimal": 128
+        },
+        {
+          "name": "AmmoType",
+          "valueHex": "0x00000100",
+          "valueDecimal": 256
+        },
+        {
+          "name": "CombatUse",
+          "valueHex": "0x00000200",
+          "valueDecimal": 512
+        },
+        {
+          "name": "Uses",
+          "valueHex": "0x00000400",
+          "valueDecimal": 1024
+        },
+        {
+          "name": "MaxUses",
+          "valueHex": "0x00000800",
+          "valueDecimal": 2048
+        },
+        {
+          "name": "StackSize",
+          "valueHex": "0x00001000",
+          "valueDecimal": 4096
+        },
+        {
+          "name": "MaxStackSize",
+          "valueHex": "0x00002000",
+          "valueDecimal": 8192
+        },
+        {
+          "name": "Container",
+          "valueHex": "0x00004000",
+          "valueDecimal": 16384
+        },
+        {
+          "name": "Wielder",
+          "valueHex": "0x00008000",
+          "valueDecimal": 32768
+        },
+        {
+          "name": "ValidEquipLocations",
+          "valueHex": "0x00010000",
+          "valueDecimal": 65536
+        },
+        {
+          "name": "CurrentlyWieldedLocation",
+          "valueHex": "0x00020000",
+          "valueDecimal": 131072
+        },
+        {
+          "name": "Coverage",
+          "valueHex": "0x00040000",
+          "valueDecimal": 262144
+        },
+        {
+          "name": "TargetType",
+          "valueHex": "0x00080000",
+          "valueDecimal": 524288
+        },
+        {
+          "name": "RadarBlipColor",
+          "valueHex": "0x00100000",
+          "valueDecimal": 1048576
+        },
+        {
+          "name": "Burden",
+          "valueHex": "0x00200000",
+          "valueDecimal": 2097152
+        },
+        {
+          "name": "Spell",
+          "valueHex": "0x00400000",
+          "valueDecimal": 4194304
+        },
+        {
+          "name": "RadarBehavior",
+          "valueHex": "0x00800000",
+          "valueDecimal": 8388608
+        },
+        {
+          "name": "Workmanship",
+          "valueHex": "0x01000000",
+          "valueDecimal": 16777216
+        },
+        {
+          "name": "Owner",
+          "valueHex": "0x02000000",
+          "valueDecimal": 33554432
+        },
+        {
+          "name": "HouseRestrictions",
+          "valueHex": "0x04000000",
+          "valueDecimal": 67108864
+        },
+        {
+          "name": "PhysicsScript",
+          "valueHex": "0x08000000",
+          "valueDecimal": 134217728
+        },
+        {
+          "name": "HookableOn",
+          "valueHex": "0x10000000",
+          "valueDecimal": 268435456
+        },
+        {
+          "name": "HookType",
+          "valueHex": "0x20000000",
+          "valueDecimal": 536870912
+        },
+        {
+          "name": "IconOverlay",
+          "valueHex": "0x40000000",
+          "valueDecimal": 1073741824
+        },
+        {
+          "name": "MaterialType",
+          "valueHex": "0x80000000",
+          "valueDecimal": 2147483648
         }
       ]
     }

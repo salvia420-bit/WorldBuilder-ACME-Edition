@@ -56,10 +56,15 @@
 
 pub mod ambient;
 pub mod anim_sound;
+pub mod landblock;
 pub mod particle;
 pub mod sky_chain;
 
 pub use ambient::{AmbientSoundRecord, AmbientTrigger, bake_ambient_manifest};
 pub use anim_sound::{AnimSoundTrigger, bake_anim_sound_manifest};
+pub use landblock::{
+    BakeError, BakeInputs, DEFAULT_REGION_DID, EntitySource, LandblockEventBake,
+    bake_landblock_events, bake_landblock_events_simple,
+};
 pub use particle::{PhysicsScriptParticleTrigger, bake_particle_manifest};
 pub use sky_chain::{ScriptSource, SkyParticleTrigger, enumerate_sky_particle_chain};

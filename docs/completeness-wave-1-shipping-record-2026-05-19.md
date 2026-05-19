@@ -52,26 +52,41 @@ Three documentation-only mislabels in `external/DatReaderWriter/DatReaderWriter/
 - **ACE C# `RegionDesc.cs` is a stub.** Full parser shape for Region 0x13 sound_info lives in DRW `dats.xml:2856-2871` + PhatSDK `SoundDesc.cpp:27-85`. Memory note: when DRW schema and PhatSDK agree and acclient.c confirms, the schema is authoritative for shape but check retail for scalar widths.
 - **`0x33000455` is a 2-hook script, not a multi-CreateParticle.** The "Sky-J chain" framing in memory `project_holtburger_sky_particles_probe_2026-05-12` refers to a sky-particle subsystem, not to that DID having many emit hooks.
 
-## Pending (Wave 2 — 7 work units)
+## Wave 2 — completed (6/6 PASS)
 
-Dispatched after this docket commit. Acceptance: cargo test green / Node test green / pytest green; no visual checks.
+| Item | Surface | Verification | Status |
+|---|---|---|---|
+| **1C** SoundTable.resolveSound cross-port | new WB.Terminal `chorizite-resolve-sound` cmd + Rust `SoundTable::resolve_sound` + wasm `SoundTableJs::resolveSoundFirst` + new `tests/resolve_sound_parity.rs` | cargo test: 410 Rust↔C# parity pairs across 2 retail tables × 205 Sound enum values. Algorithm cited from `acclient.c:383433` (`SoundManager::GetSound` deterministic rand=0 → first entry). Wave DIDs cross-checked vs DRW `SoundTableTests.cs` | DONE |
+| **2A** Event taxonomy audit | `apps/holtburger-web/plugins/api.js` (doc-only, +78 lines) | 18 Chorizite events audited; counts: **1 IMPL / 6 PARTIAL / 8 MISSING / 3 N/A**. 14 inline TODOs added at dispatch sites. node-syntax-check PASS | DONE |
+| **2C** WorldObject property-dict audit | `apps/holtburger-web/plugins/world-objects/world_object.js` + new `tests/world_object_property_dict.test.cjs` | **2 missing accessors found and added**: `int64Value` (BigInt default `0n`, cite `WorldObject.cs:251`), `positionValue` (null default, cite `:335`). 24 assertions across 8/8 dicts | DONE |
+| **2F** Enum table sync | `WorldBuilder.Terminal/CommandEngine.Chorizite.cs` + regen `data/chorizite/chorizite-common-enums.json` | Added ObjectDescriptionFlag (30 members from `Chorizite.ACProtocol`, regex-parsed to avoid cross-project dep) + WeenieHeaderFlag (33 members from `Chorizite.Common.Enums`, reflection). JSON keys: 9 → 11. dotnet build clean | DONE |
+| **3A** F.35 prefetch dedup | `crates/holtburger-resource-http/src/inflight.rs` | **Already shipped pre-Wave-1** (commit `37f9c02`). Verified existing 8 dedup tests pass including 119-spawn × 50-URL stress (asserts 50 fetches, would be 5,950 without dedup) | DONE (no-op) |
+| **3B** SoA wasm export hash parity | new `apps/holtburger-web/tests/soa_aos_parity.test.cjs` | 169 LBs × 3 exports = **507 sha256 comparisons all equal**. 785 objects / 16,700 scenery / 427 spawns. **Documented finding**: AoS `rotationZ` (f32) → SoA yaw-quat → recovered yaw has f32-precision drift; test canonicalizes both to f32-quat hex before sha256 (not a bug) | DONE |
+| **3D** Spawn-stager determinism | new `scripts/world-completeness/tests/test_stage_ring_spawns.py` | 4 unittest cases: shuffle byte-equality, ring filtering, empty-input contract, within-LB sort order on `(cell, x, y, z, wcid)`. pytest-compatible (unittest.TestCase since pytest not in env) | DONE |
 
-| # | Item | Stream |
-|---|---|---|
-| **1C** | SoundTable.resolveSound cross-port (WB.Terminal + Rust + JS) | Event |
-| **2A** | Event taxonomy audit (`ACPlugin/*EventArgs.cs` → `plugins/api.js`) | Chorizite |
-| **2C** | WorldObject property-dict audit (8 typed accessors) | Chorizite |
-| **2F** | Enum table sync (add ObjectDescriptionFlag + WeenieHeaderFlag) | Chorizite |
-| **3A** | F.35 prefetch dedup (`manifest_source.rs::prefetch`) | World |
-| **3B** | SoA wasm export hash parity (169 LBs) | World |
-| **3D** | Spawn-stager determinism (pytest on shuffle) | World |
+### Additional Wave 2 findings
 
-## Pending (Wave 3 — 2 work units, depend on Wave 2)
+- **2C missing accessors:** `int64Value` and `positionValue` were missing from the typed-accessor surface in `world_object.js`. They would have silently returned `undefined` when called via the typed `value()` dispatch on `Int64Values` or `PositionValues` dicts. Now wired.
+- **3A already-shipped:** F.35 dedup landed pre-Wave-1 (37f9c02) but wasn't documented in the docket survey. Agent verified the existing impl rather than re-implementing. Closed as no-op.
+- **3B f32 lossiness:** The AoS scalar-yaw vs SoA yaw-quaternion paths exhibit f32-precision drift in the recovered angle. Test handles this by canonicalizing both sides to the f32-quaternion hex representation before sha256. Documented inline in the test.
 
-| # | Item | Depends on |
-|---|---|---|
-| **1E** | Event-bake prototype (new `holtburger-event-bake` crate) | 1A + 1B + 1C |
-| **2B** | Dispatch parity test (20 synthetic GetObjectClass tuples) | 2C |
+## Wave 3 — completed (2/2 PASS) + Wave 2.5 (1/1 PASS)
+
+| Item | Surface | Verification | Status |
+|---|---|---|---|
+| **1E** Event-bake prototype | new `crates/holtburger-event-bake/src/landblock.rs` (845 LoC) + new `tests/determinism_100x.rs` | **`bake_landblock_events(lb_id, dat_dir) -> LandblockEventBake`** with 4 event categories (ambient_terrain, anim_hook, physics_particle, sky_particle). **100-iteration determinism gate: PASS** — byte-identical JSONL across all 100 bakes. For Holtburg LB 0xA9B4: 9 ambient + 0 anim_hook + 3-20 physics_particle + 82 sky_particle = 94-111 events / 50KB JSONL | DONE |
+| **2B** Dispatch parity test | new `apps/holtburger-web/scripts/chorizite-parity/dispatch-cases.{json,cjs}` | 26 synthetic `(itemType, objDescFlags, weenieFlags)` tuples covering each algorithmic branch; **C# (WB.Terminal `chorizite-classify`) ≡ JS (`canonicalClassify`) ≡ expected** byte-for-byte. No divergences | DONE |
+
+### Wave 3 / 2.5 findings
+
+- **1E pre-existing crate:** `crates/holtburger-event-bake/` already existed on baa1f2c with 4 sub-bake primitives (ambient, anim_sound, particle, sky_chain) shipped earlier. What was missing: the unified `bake_landblock_events()` wrapper + the 100-iter determinism gate. Both added.
+- **1E Holtburg has zero anim_hook events:** For LB 0xA9B4, the agent walked all 25 unique SetupModel DIDs from the spawns file; only 1 (Bind Stone) has a MotionTable, and it carries no Sound/SoundTweaked hooks. **This is real retail behavior**, not a parser bug — doors / portals / shops / monster generators simply don't carry animation Sound hooks. Documented inline.
+- **1E moon chain matches retail memory:** Sky particle events include moon's PhysicsScript `0x330007DB` emitting 3 CreateParticle hooks (emitter_ids `0x32000455/456/457`) — matches the Sky-J chain memo from `project_holtburger_sky_particles_probe_2026-05-12`.
+- **2B no parity bugs:** All 26 dispatch branches agree. Entity-completeness classifier remains at the 95% parity baseline from the existing 48-case and 56-case validators; this 26-case set is a lower-overhead CI gate complement.
+
+## All waves shipped
+
+15 verifiable work units across 3 waves. Commits: `9c35cf0` (Wave 1) → `baa1f2c` (Wave 2) → (this commit, Wave 2.5 + 3).
 
 ## Verification evidence
 
