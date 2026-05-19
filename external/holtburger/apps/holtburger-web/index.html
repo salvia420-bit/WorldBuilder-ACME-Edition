@@ -658,6 +658,7 @@
         init_spawns_base_url,
         fetch_object_colours,
         fetch_model_meshes,
+        fetch_surface_pixels,
         fetch_surfaces_pixels,
         fetchEntityModelRender,
         fetchEntityCycleFrames,
@@ -818,6 +819,17 @@
         // wasm-stuck from manifest-stuck.
         root.innerHTML = "<p class=\"hint\">Initializing wasm bundle (1.5 MB)…</p>";
         await init();
+
+        // Expose a small surface of named wasm exports under
+        // `window.__hbWasm` for plugins that need to call into the
+        // dat-fetch graph (vendor-ui needs `fetch_surface_pixels` for
+        // icon resolution). Plugins access wasm via this curated
+        // surface, not the whole module — keeps the contract explicit.
+        window.__hbWasm = {
+          fetch_surface_pixels: (id) => fetch_surface_pixels(id >>> 0),
+          fetch_surfaces_pixels,
+          hash32,
+        };
 
         // Phase 5.0 obj 7 — register the service worker that does
         // IndexedDB-backed shard caching. Fail-soft: if SW is
@@ -5580,6 +5592,9 @@ void main() {
         console.log(`[selected-item] Examine 0x${selectedItemGuid.toString(16)} (appraisal already cached server-side)`);
       });
       // Click anywhere in an inv list → select that item.
+      // Drag from pack list → exposes the item GUID via
+      // `text/x-hb-item-guid` dataTransfer for plugins (vendor-ui
+      // accepts this as a sell drop).
       function attachInventorySelection() {
         for (const ul of [invEquipped, invPack]) {
           ul.addEventListener("click", (ev) => {
@@ -5588,6 +5603,15 @@ void main() {
             const guid = Number(li.dataset.guid) >>> 0;
             const name = li.querySelector(".name")?.textContent ?? "";
             setSelectedItem(guid, name);
+          });
+          ul.addEventListener("dragstart", (ev) => {
+            const li = ev.target.closest("li[data-guid]");
+            if (!li || !li.draggable) return;
+            const guid = Number(li.dataset.guid) >>> 0;
+            const name = li.querySelector(".name")?.textContent ?? "";
+            ev.dataTransfer.setData("text/x-hb-item-guid", String(guid));
+            ev.dataTransfer.setData("text/plain", name);
+            ev.dataTransfer.effectAllowed = "copy";
           });
         }
       }
@@ -5748,8 +5772,13 @@ void main() {
           const meta = item.stackSize > 1
             ? `<span class="stack">×${item.stackSize}</span>`
             : (item.value > 0 ? `${item.value} pyreals` : "");
+          // Pack items are draggable so the vendor-ui plugin can
+          // accept them as a sell drop. Equipped items aren't draggable
+          // (would need an unequip wire first; ACE rejects sells of
+          // equipped items anyway).
+          const draggable = item.equipMask === 0 ? "draggable=\"true\"" : "";
           const row =
-            `<li data-guid="${item.guid}" data-type-bit="0x${typeBit.toString(16)}">` +
+            `<li data-guid="${item.guid}" data-type-bit="0x${typeBit.toString(16)}" ${draggable}>` +
               `<span class="name">${escapeHtml(item.name || "(unnamed)")}</span>` +
               `<span class="meta">${meta}</span>` +
             `</li>`;

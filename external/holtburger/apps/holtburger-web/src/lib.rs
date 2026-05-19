@@ -11119,6 +11119,26 @@ enum SessionCommand {
     RemoveSpellFromBook {
         spell_id: u32,
     },
+    /// Vendor-UI: JS-side requested purchase of `amount` × wcid
+    /// (`item_or_wcid`) from `vendor_guid`. Sends `GameAction::Buy`
+    /// (sub-opcode 0x005F) with a single `ItemProfileActionData`.
+    /// ACE owns price validation, inventory bulk/encumbrance checks,
+    /// and pyreal/alt-currency deduction; this is fire-and-forget.
+    BuyFromVendor {
+        vendor_guid: u32,
+        item_wcid: u32,
+        amount: i32,
+    },
+    /// Vendor-UI: JS-side requested sale of `amount` × player item
+    /// (`item_guid`) to `vendor_guid`. Sends `GameAction::Sell`
+    /// (sub-opcode 0x0060) with a single `ItemProfileActionData`.
+    /// The `object_guid` field on the wire here is the *player's*
+    /// item GUID (not the vendor's wcid like Buy).
+    SellToVendor {
+        vendor_guid: u32,
+        item_guid: u32,
+        amount: i32,
+    },
 }
 
 /// Tagged-payload envelope for events the wasm bundle drains to JS via
@@ -13702,6 +13722,56 @@ impl SessionHandle {
                 JsValue::from_str(&format!(
                     "removeSpellFromBook: cmd channel closed ({e})"
                 ))
+            })
+    }
+
+    /// Vendor-UI: buy `amount` × wcid from `vendor_guid`. The wire-side
+    /// `ItemProfileActionData.object_guid` here is the **vendor item's
+    /// wcid** (per ACE's `Vendor_ValidateTransaction` lookup, which
+    /// resolves it server-side against the vendor's stock list).
+    /// Amount defaults to 1 if `amount <= 0`. Fire-and-forget; ACE
+    /// pushes a fresh inventory delta on success.
+    #[wasm_bindgen(js_name = buyFromVendor)]
+    pub fn buy_from_vendor(
+        &self,
+        vendor_guid: u32,
+        item_wcid: u32,
+        amount: i32,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        let amount = if amount <= 0 { 1 } else { amount };
+        self.cmd_tx
+            .unbounded_send(SessionCommand::BuyFromVendor {
+                vendor_guid,
+                item_wcid,
+                amount,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("buyFromVendor: cmd channel closed ({e})"))
+            })
+    }
+
+    /// Vendor-UI: sell `amount` × player-owned item (`item_guid`) to
+    /// `vendor_guid`. ACE validates the item is in the player's
+    /// inventory + not equipped + tradeable; failures surface via
+    /// chat / WeenieError. Amount defaults to 1 if `amount <= 0`.
+    #[wasm_bindgen(js_name = sellToVendor)]
+    pub fn sell_to_vendor(
+        &self,
+        vendor_guid: u32,
+        item_guid: u32,
+        amount: i32,
+    ) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        let amount = if amount <= 0 { 1 } else { amount };
+        self.cmd_tx
+            .unbounded_send(SessionCommand::SellToVendor {
+                vendor_guid,
+                item_guid,
+                amount,
+            })
+            .map_err(|e: TrySendError<_>| {
+                JsValue::from_str(&format!("sellToVendor: cmd channel closed ({e})"))
             })
     }
 
@@ -17730,6 +17800,68 @@ async fn recv_loop(
                         }
                         console_log_str(&format!(
                             "[remove_spell] spell_id={spell_id}",
+                        ));
+                    }
+                    Some(SessionCommand::BuyFromVendor {
+                        vendor_guid,
+                        item_wcid,
+                        amount,
+                    }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            BuyActionData, GameAction, ItemProfileActionData,
+                        };
+                        let action = GameAction::Buy(Box::new(BuyActionData {
+                            vendor_guid: Guid(vendor_guid),
+                            items: vec![ItemProfileActionData {
+                                amount,
+                                object_guid: Guid(item_wcid),
+                            }],
+                        }));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(Buy): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("buy_from_vendor: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[buy] vendor=0x{vendor_guid:08X} wcid=0x{item_wcid:08X} amount={amount}",
+                        ));
+                    }
+                    Some(SessionCommand::SellToVendor {
+                        vendor_guid,
+                        item_guid,
+                        amount,
+                    }) => {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::{
+                            GameAction, ItemProfileActionData, SellActionData,
+                        };
+                        let action = GameAction::Sell(Box::new(SellActionData {
+                            vendor_guid: Guid(vendor_guid),
+                            items: vec![ItemProfileActionData {
+                                amount,
+                                object_guid: Guid(item_guid),
+                            }],
+                        }));
+                        if let Err(e) = session.send_action(action).await {
+                            log::warn!("recv_loop: send_action(Sell): {e}");
+                            queued_events.borrow_mut().push(ClientEvent {
+                                kind: CLIENT_EVENT_KIND_DISCONNECTED,
+                                string_payload: Some(format!("sell_to_vendor: {e}")),
+                                u32_payload: None,
+                                u32_payload_2: None,
+                                f32_payload: None,
+                            });
+                            return;
+                        }
+                        console_log_str(&format!(
+                            "[sell] vendor=0x{vendor_guid:08X} item=0x{item_guid:08X} amount={amount}",
                         ));
                     }
                     Some(SessionCommand::TargetedMissileAttack {
