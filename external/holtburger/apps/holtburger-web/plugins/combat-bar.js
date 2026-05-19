@@ -291,6 +291,19 @@ function ensureStyles() {
     .hb-cb-power-meter.ready .hb-cb-power-meter-fill {
       background: linear-gradient(180deg, #88ff88, #44cc44);
     }
+    /* AttackHook strike-frame pulse — flashes the meter when the
+       LOCAL player's swing reaches its hookType=3 AttackHook (the
+       retail strike-frame moment, ~halfway through the swing clip).
+       Subscriber lives in attachPowerMeter; class auto-removes after
+       the 220ms animation completes. */
+    @keyframes hb-cb-strike-pulse {
+      0%   { box-shadow: 0 0 0 0 rgba(255, 220, 120, 0); transform: scaleY(1); }
+      40%  { box-shadow: 0 0 8px 2px rgba(255, 220, 120, 0.95); transform: scaleY(1.35); }
+      100% { box-shadow: 0 0 0 0 rgba(255, 220, 120, 0); transform: scaleY(1); }
+    }
+    .hb-cb-power-meter.strike-pulse .hb-cb-power-meter-bar {
+      animation: hb-cb-strike-pulse 220ms ease-out;
+    }
   `;
   document.head.appendChild(style);
 }
@@ -447,6 +460,19 @@ function renderAttackControls(bodyEl, state) {
       }
       saveState(state);
       syncWindowState(state);
+      // Retail UX (2026-05-19) — clicking Hi/Med/Lo also FIRES the
+      // attack on the currently selected target. The fire helper
+      // (set on `window` by `scene3d/picking.js::setupClickPicking`)
+      // reads the selected target + power + chargeAttack flag and
+      // routes through the same lockout/charge path the click handler
+      // used to. No-op if no target selected, wrong stance, or
+      // attack still in flight.
+      try {
+        window.__fireAttackOnTarget?.(h.value);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(`[combat-bar] fire-on-height click: ${e?.message ?? e}`);
+      }
     });
     heightButtons.set(h.value, btn);
     heightGroup.appendChild(btn);
@@ -625,6 +651,19 @@ function renderAttackControls(bodyEl, state) {
       }
     }
 
+    // Lockout safety timeout id — set in onCommence, cleared in
+    // onDone. If `attackDone` is dropped (ACE error, packet loss,
+    // disconnect mid-swing), the timeout still releases the lockout
+    // so the player can fire again.
+    let lockoutTimeoutId = 0;
+    const clearLockout = () => {
+      const cb = window.__combatBarState;
+      if (cb) cb.attackInProgress = false;
+      if (lockoutTimeoutId) {
+        clearTimeout(lockoutTimeoutId);
+        lockoutTimeoutId = 0;
+      }
+    };
     const onCommence = () => {
       // Power slider drives expected refill duration.
       const power = (window.__combatBarState?.powerLevel ?? 1.0);
@@ -633,6 +672,13 @@ function renderAttackControls(bodyEl, state) {
       meter.classList.remove("ready");
       meter.classList.add("refilling");
       meterFill.style.width = "0%";
+      // Lockout fallback: if attackDone doesn't arrive within
+      // refillDurMs + 1s, release the flag so the bar isn't stuck.
+      // The lockout is also driven from picking.js's
+      // `cb.attackInProgress = true` on fire, so the flag is set
+      // either path. This timer is the ack-loss safety net.
+      if (lockoutTimeoutId) clearTimeout(lockoutTimeoutId);
+      lockoutTimeoutId = setTimeout(clearLockout, refillDurMs + 1000);
       if (rafId) cancelAnimationFrame(rafId);
       // F2: if the bar is hidden right now, mark pending so the
       // visibilityObserver picks it up when we become visible again.
@@ -646,17 +692,50 @@ function renderAttackControls(bodyEl, state) {
       rafId = requestAnimationFrame(tick);
     };
     const onDone = () => {
-      // AttackDone — power refilled, ready for next swing.
+      // AttackDone — power refilled, ready for next swing. Release
+      // the lockout flag so picking.js will accept the next click.
       meter.classList.remove("refilling");
       meter.classList.add("ready");
       meterFill.style.width = "100%";
       if (rafId) cancelAnimationFrame(rafId);
       rafId = 0;
       pendingResume = false;
+      clearLockout();
+    };
+
+    // Strike-frame pulse: the kind=19→`combatStrikeFrame` event fires
+    // when our swing animation reaches its retail AttackHook
+    // (hookType=3) timestamp — the actual strike moment. Pulse the
+    // meter so the visual lands on the hit, not on swing-start.
+    // Filter to OUR swings only (`attackerGuid === localPlayerGuid`)
+    // so an enemy hitting us doesn't trigger our recovery meter.
+    let pulseTimeoutId = 0;
+    const onStrike = (ev) => {
+      const detail = ev?.detail ?? {};
+      const attackerGuid = (detail.attackerGuid >>> 0);
+      if (attackerGuid === 0) return;
+      let localGuid = 0;
+      try {
+        localGuid = (window.getLocalPlayerGuid?.() ?? 0) >>> 0;
+      } catch (_) {}
+      if (localGuid === 0 || attackerGuid !== localGuid) return;
+      // Animation is on a CSS class — restart it cleanly even if a
+      // previous pulse is still running by removing + reflowing +
+      // re-adding. `void offsetWidth` is the canonical force-reflow
+      // trick that resets the keyframe playhead.
+      if (pulseTimeoutId) clearTimeout(pulseTimeoutId);
+      meter.classList.remove("strike-pulse");
+      void meter.offsetWidth;
+      meter.classList.add("strike-pulse");
+      pulseTimeoutId = setTimeout(() => {
+        meter.classList.remove("strike-pulse");
+        pulseTimeoutId = 0;
+      }, 240);
     };
 
     client.events.on("combatCommenceAttack", onCommence);
     client.events.on("attackDone", onDone);
+    client.events.on("combatStrikeFrame", onStrike);
     // F2 open-path restart: if attachPowerMeter is re-entered while a
     // refill is in flight (e.g. the panel was reopened mid-refill in
     // a future architecture that retains meter state across opens),
@@ -668,9 +747,18 @@ function renderAttackControls(bodyEl, state) {
     }
     return () => {
       if (rafId) cancelAnimationFrame(rafId);
+      if (lockoutTimeoutId) clearTimeout(lockoutTimeoutId);
+      if (pulseTimeoutId) clearTimeout(pulseTimeoutId);
+      meter.classList.remove("strike-pulse");
+      // Don't leave the lockout flag set if the bar tears down
+      // mid-swing — a panel close followed by re-open would otherwise
+      // start with the flag still true and gate the first click.
+      const cb = window.__combatBarState;
+      if (cb) cb.attackInProgress = false;
       if (visibilityObserver) visibilityObserver.disconnect();
       client.events.off("combatCommenceAttack", onCommence);
       client.events.off("attackDone", onDone);
+      client.events.off("combatStrikeFrame", onStrike);
     };
   })();
 }

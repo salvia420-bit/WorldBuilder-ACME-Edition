@@ -126,6 +126,17 @@ const CMD_LOW_STOP = 0x0004;
 const CMD_LOW_WALK_FORWARD = 0x0005;
 const CMD_LOW_WALK_BACKWARDS = 0x0006;
 const CMD_LOW_RUN_FORWARD = 0x0007;
+// Ready (0x41000003 — low 0x0003) is the stance-aware base pose:
+// "weapon stowed" in NonCombat, "fists up" in HandCombat, "drawn"
+// in SwordCombat, etc. Each stance defines its own Ready cycle in
+// `MotionTable.cycles[(stance, Ready)]`. ACE broadcasts an
+// UpdateMotion with cmd=Ready when the player toggles combat
+// stance from idle, so the rig needs to swap to the new stance's
+// Ready cycle to show the weapon-drawn pose. Pre-fix this command
+// fell through `classifyMotionCommand` → null → setMotion treated
+// it as STOP → fadeOutCurrent, and the stance change was tracked
+// statefully (UI label updated) but never visualized on the rig.
+const CMD_LOW_READY = 0x0003;
 
 // One-shot motion commands — attacks (melee/missile), magic casts,
 // and the punch variants. ACE broadcasts these via UpdateMotion when
@@ -168,6 +179,14 @@ const CAST_COMMANDS = new Set([
   // CastSpell
   0x00D3,
 ]);
+
+// Per swing-classification spec (`docs/swing-classification-spec-
+// 2026-05-19.md`) §1, §8: swings + casts live in
+// `MotionTable.links[(stance, Ready)][swingCmd]`, NOT in `cycles`.
+// Validated across all 436 retail motion tables (5,455 entries;
+// 100 % share `from_substate == Ready`). Routes through `_tryPlayLink`
+// in `setMotion` when `classifyMotionCommand` returns `"attack"`/`"cast"`.
+const READY_SUBSTATE = 0x0003;
 
 // Same 4-bake-per-setup ceiling the 2D path enforces
 // (`index.html:2992`). Without this, a creature flipping stances
@@ -301,6 +320,11 @@ function classifyMotionCommand(cmd) {
   if (low === CMD_LOW_RUN_FORWARD) return "run";
   if (ATTACK_COMMANDS.has(low)) return "attack";
   if (CAST_COMMANDS.has(low)) return "cast";
+  // Ready: stance-aware base pose. Caller (setMotion) treats this
+  // exactly like "walk"/"run" — fetch the cycle and play LoopRepeat.
+  // It's the cycle ACE broadcasts on combat-mode toggle so the rig
+  // can show the weapon-drawn / fists-up pose for the new stance.
+  if (low === CMD_LOW_READY) return "idle";
   return null;
 }
 
@@ -1394,6 +1418,10 @@ export class EntityManager {
    * entity is removed from the scene. `guid = 0` (or any unknown
    * GUID) clears the indicator.
    */
+  getSelectedTarget() {
+    return (this._selectedGuid ?? 0) >>> 0;
+  }
+
   setSelectedTarget(guid) {
     const next = (guid >>> 0) || 0;
     // Tear down the previous selection ring even if it's on the same
@@ -1578,8 +1606,34 @@ export class EntityManager {
   async setMotion(guid, motionCommand, motionStance) {
     const inst = this.entityMap.get(guid >>> 0);
     if (!inst) return;
-    const cmd = (motionCommand >>> 0);
-    const stance = (motionStance >>> 0);
+    // ACE broadcasts cmd=Stop (0x0004) or cmd=Invalid (0x0000) when a
+    // moving entity comes to rest. With no override we'd fall through
+    // classifyMotionCommand → null → fadeOutCurrent → bare SetupModel
+    // rest pose, dropping the stance-aware idle (combat pose
+    // disappears on releasing W). Substitute to Ready (0x0003) so the
+    // locomotion-cache path fetches `cycles[(stance, Ready)]` — the
+    // weapons-drawn pose for HandCombat, normal stand for NonCombat,
+    // etc. Preserve the high bits of the wire u32 so MotionTable's
+    // cycle_key masking is unchanged.
+    let cmd = (motionCommand >>> 0);
+    const cmdLow = cmd & 0xFFFF;
+    if (cmdLow === CMD_LOW_STOP || cmdLow === 0x0000) {
+      cmd = (cmd & 0xFFFF0000) | CMD_LOW_READY;
+    }
+    let stance = (motionStance >>> 0);
+    // ACE emits UpdateMotion with stance=0 for "motion-only" broadcasts
+    // (the wire shorthand for "keep current stance"). Without
+    // substitution our cycle_key resolves to `MotionTable.default_style`
+    // (NonCombat for humans), so e.g. a HandCombat-stanced player who
+    // starts walking would visibly drop out of the combat pose and
+    // play the NonCombat walk cycle. `applyConfirmedStance` in
+    // index.html already preserves the last label on stance=0; mirror
+    // that behaviour here for the rig pose.
+    if (stance === 0 && inst.lastStance) {
+      stance = inst.lastStance;
+    } else if (stance !== 0) {
+      inst.lastStance = stance;
+    }
     const cls = classifyMotionCommand(cmd);
     if (cls === "stop" || cls === null) {
       inst.fadeOutCurrent(CROSSFADE_S);
@@ -1590,11 +1644,46 @@ export class EntityManager {
       //  Walk → Stop → Walk replays the original link.)
       return;
     }
-    // Locomotion. Build the cache key the same way the spawn path did
-    // (resolvedStance falls back to the entity's first-bake stance).
     const setupId =
       (inst.meta.modelId ?? inst.meta.setupId ?? 0) >>> 0;
     const mtableId = (inst.meta.mtableId ?? 0) >>> 0;
+
+    // Swings + magic casts live in `MotionTable.links[(stance,
+    // Ready)][swingCmd]` — never in `cycles[(stance, swingCmd)]`.
+    // Empirically validated across all 436 retail motion tables
+    // (5,455 link entries, 0 cycle entries) — see
+    // `docs/swing-classification-spec-2026-05-19.md` §1, §8.
+    //
+    // Route attack/cast through `_tryPlayLink` with from = Ready =
+    // 0x0003 and OVERLAY the swing on top of the active locomotion
+    // cycle (no crossFadeTo). The walk/run continues to animate the
+    // legs while the swing animates the arms; when LoopOnce ends
+    // with `clampWhenFinished=false`, the swing weight drops to 0
+    // and the cycle resumes the affected parts.
+    //
+    // Stance-agnostic per spec §8.2 finding A — monster motion
+    // tables put swings in `NonCombat`; the link lookup either has
+    // an entry or it doesn't, we pass `stance` straight through.
+    //
+    // Pre-fix: attack/cast went through the cycle path, which
+    // returned a null clip (swings aren't in cycles) and the
+    // `if (!clip) fadeOutCurrent` branch then silently faded out
+    // the underlying locomotion. Net effect: no swing visible AND
+    // the walk cycle stopped.
+    if (cls === "attack" || cls === "cast") {
+      // Clear any in-flight vibe-coded tween (`setSwingPose`'s
+      // triangle wave). It applies in `_tickSwingTween` AFTER
+      // `mixer.update`, so it would otherwise overwrite the real
+      // motion-table clip's arm pose for the ~300ms tween duration.
+      inst._swingTween = null;
+      this._tryPlayLink(inst, setupId, mtableId, READY_SUBSTATE, cmd, stance);
+      // Don't update `lastMotionCommand` — the next locomotion
+      // broadcast should resolve its link transition from the
+      // PREVIOUS locomotion cmd, not from this swing.
+      return;
+    }
+    // Locomotion. Build the cache key the same way the spawn path did
+    // (resolvedStance falls back to the entity's first-bake stance).
     const cacheKey = AnimationCache.makeKey(setupId, mtableId, cmd, stance);
     if (cacheKey === inst.currentActionKey) return; // already playing
     this.motionSwitchCount += 1;
@@ -1830,11 +1919,28 @@ export class EntityManager {
       action.enabled = true;
       inst.actions?.set(linkKey, action);
     }
+    // Register / refresh the hook timeline for this overlay clip so
+    // `_tickAnimationHooks` fires Sound (sword swoosh, magic chime),
+    // SoundTable, CreateParticle, and AttackHook strike-frame events
+    // during the swing/cast. Without this the hook executor would
+    // skip the overlay (it walks every running action, but `get(key)`
+    // misses if no timeline was registered).
+    //
+    // Reset `actionLastHookTime` to 0 on every play() so a rapid
+    // replay (spam-click attack) fires hooks from the top — the
+    // following `action.reset()` rewinds `.time` to 0, and without
+    // matching the lastTime reset the first tick would see
+    // `currentTime=0 < lastTime=high` and trigger the wrap-around
+    // re-fire branch.
+    if (Array.isArray(entry.hooks) && entry.hooks.length > 0) {
+      inst.hookTimelines.set(linkKey, entry.hooks);
+    }
+    inst.actionLastHookTime.set(linkKey, 0);
     try {
       action.reset();
       action.play();
       console.log(
-        `[motion-link] 0x${(inst.guid >>> 0).toString(16)} ${fromCmd.toString(16)}→${toCmd.toString(16)} stance=${stance.toString(16)} (link clip played)`,
+        `[motion-link] 0x${(inst.guid >>> 0).toString(16)} ${fromCmd.toString(16)}→${toCmd.toString(16)} stance=${stance.toString(16)} (link clip played, ${entry.hooks?.length ?? 0} hooks)`,
       );
     } catch (e) {
       console.warn(`[motion-link] play failed: ${e?.message ?? e}`);
@@ -2493,50 +2599,51 @@ export class EntityManager {
    *     the diag script can verify the handler reaches them.
    */
   _tickAnimationHooks(inst) {
-    const action = inst.currentAction;
-    if (!action) return;
-    const key = inst.currentActionKey;
-    if (!key) return;
-    const timeline = inst.hookTimelines.get(key);
-    if (!timeline || timeline.length === 0) return;
-
-    // three.js exposes `AnimationAction.time` as time-in-clip
-    // (seconds within the action's clip; for LoopRepeat actions, it
-    // wraps to 0 at duration each pass). Clip duration is on the
-    // bound AnimationClip.
-    let currentTime = 0;
-    let clipDuration = 0;
-    try {
-      currentTime = +action.time;
-      const clip = action.getClip();
-      clipDuration = clip ? +clip.duration : 0;
-    } catch (_) {
-      return;
-    }
-    if (!(clipDuration > 0)) return;
-
-    let lastTime = inst.actionLastHookTime.get(key);
-    if (lastTime === undefined) lastTime = 0;
-
+    // Walk EVERY running action on the mixer — `inst.currentAction`
+    // (the locomotion cycle) AND any one-shot overlay actions like
+    // the swing/cast link clips played via `_tryPlayLink`. The
+    // pre-fix version only inspected `currentAction`, so combat
+    // overlays' hooks (sword swoosh on type=1 Sound, magic chime
+    // resolved through type=2 SoundTable, future AttackHook
+    // strike-frame events) never fired.
+    //
+    // For an action that finished (LoopOnce past duration,
+    // `isRunning() === false`) we skip — three.js stops advancing
+    // `.time` so re-firing trailing hooks would be a bug.
+    if (!inst.actions || inst.actions.size === 0) return;
     const audioMgr = this.scene3d?.audioManager ?? null;
     const cache = this.scene3d?.soundTableCache ?? null;
-
-    if (currentTime >= lastTime) {
-      // Common case: monotonic advance within one loop pass.
-      this._fireHooksInRange(inst, timeline, lastTime, currentTime, audioMgr, cache);
-    } else {
-      // Wrap-around: the clip looped. Fire [lastTime, clipDuration)
-      // then [0, currentTime]. We use clipDuration as the upper bound
-      // (inclusive of hooks AT clipDuration — three.js's loop semantics
-      // mean a hook at exactly duration would have been baked at the
-      // last frame's time, but we include it to be safe; idempotent
-      // since hook times come from `frame_index * (1/fps)` and the
-      // last frame is at `(numFrames - 1) / fps < duration`).
-      this._fireHooksInRange(inst, timeline, lastTime, clipDuration, audioMgr, cache);
-      this._fireHooksInRange(inst, timeline, -Infinity, currentTime, audioMgr, cache);
+    for (const [key, action] of inst.actions) {
+      if (!action || !action.isRunning()) continue;
+      const timeline = inst.hookTimelines.get(key);
+      if (!timeline || timeline.length === 0) continue;
+      // three.js exposes `AnimationAction.time` as time-in-clip
+      // (seconds within the action's clip; for LoopRepeat actions, it
+      // wraps to 0 at duration each pass).
+      let currentTime = 0;
+      let clipDuration = 0;
+      try {
+        currentTime = +action.time;
+        const clip = action.getClip();
+        clipDuration = clip ? +clip.duration : 0;
+      } catch (_) {
+        continue;
+      }
+      if (!(clipDuration > 0)) continue;
+      let lastTime = inst.actionLastHookTime.get(key);
+      if (lastTime === undefined) lastTime = 0;
+      if (currentTime >= lastTime) {
+        // Common case: monotonic advance within one loop pass.
+        this._fireHooksInRange(inst, timeline, lastTime, currentTime, audioMgr, cache);
+      } else {
+        // Wrap-around: a LoopRepeat cycle wrapped past clip end. Fire
+        // (lastTime, clipDuration] then (-Inf, currentTime]. LoopOnce
+        // overlays don't wrap, so this branch fires for locomotion only.
+        this._fireHooksInRange(inst, timeline, lastTime, clipDuration, audioMgr, cache);
+        this._fireHooksInRange(inst, timeline, -Infinity, currentTime, audioMgr, cache);
+      }
+      inst.actionLastHookTime.set(key, currentTime);
     }
-
-    inst.actionLastHookTime.set(key, currentTime);
   }
 
   /**
@@ -2662,6 +2769,46 @@ export class EntityManager {
         })
         .catch(() => {});
       this._soundTableHookFires = (this._soundTableHookFires | 0) + 1;
+      return;
+    }
+    if (hookType === 3) {
+      // AttackHook — retail's strike-frame trigger. The DAT payload
+      // carries an AttackCone (part_index, left/right Vec2D, radius,
+      // height) and acclient.c:342282 (`AttackHook::Execute`) calls
+      // `CPhysicsObj::attack` to do hit-detection. Server is the
+      // authority for hit/damage resolution on our side (see ACE
+      // `Player_Melee.cs:51` → `Attack(target)` → damage), so the
+      // client just needs the *timing* to sync visual feedback (UI
+      // pulse, future hit-marker, future impact-sound boost) to the
+      // strike moment instead of swing-start.
+      //
+      // Emit a `combatStrikeFrame` event carrying the attacker's
+      // entity GUID + the hook time-in-clip. Plugins (combat-bar
+      // pulse, damage-feed timing) subscribe via
+      // `client.events.on("combatStrikeFrame", ...)`.
+      try {
+        window.__pluginClient?.events?.emit?.("combatStrikeFrame", {
+          attackerGuid: (inst.guid >>> 0),
+          hookTimeInClipS: +hook.time,
+        });
+      } catch (_) {}
+      // Phase F.C — runtime event log probe symmetry with sound hooks.
+      if (pushEventRecord) {
+        pushEventRecord({
+          type: "combat_strike_frame",
+          parent_entity_guid: (inst.guid >>> 0),
+          world_pos: [+pos.x, +pos.y, +pos.z],
+          t_wall_ms: typeof performance !== "undefined" ? performance.now() : 0,
+          source: "AnimationHook",
+          source_meta: {
+            entity_guid: (inst.guid >>> 0),
+            motion_command: (inst.currentActionKey ?? null),
+            hook_type: 3,
+            hook_time: +hook.time,
+          },
+        });
+      }
+      this._attackHookFires = (this._attackHookFires | 0) + 1;
       return;
     }
     // Other hook types — debug-log + count, leave handler as TODO.

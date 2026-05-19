@@ -10,18 +10,26 @@ const MELEE_RANGE_M = 2.5;
 const MISSILE_RANGE_M = 25.0;
 const MAX_CHARGE_DURATION_MS = 10_000; // safety net so we don't pursue forever
 
-// Convert a Three.js entity position back to AC coords so we can compare
-// to the local player's pose (which is in AC coords from the wasm side).
-// Inverse of scene3d/adapter.js::acToThree(ax,ay,az) = [ax, az, -ay].
-function threeToAc(tx, ty, tz) {
-  return { x: tx, y: -tz, z: ty };
-}
-
+// Entity world position in AC coords. Pre-2026-05-19 this routed
+// through a `threeToAc` inverse, but that was load-bearing wrong:
+// `EntityInstance.setPose` writes `inst.root.position.set(wx, wy, wz)`
+// directly from the AC world coords delivered by loop.js
+// (`wx = lbX*192 + upd.x`, etc.) — the visual rendering is correct
+// only because `worldRoot.rotation.x = -π/2` swaps z-up at the
+// parent. So `inst.root.position` is ALREADY in AC frame; calling
+// threeToAc again garbled it. With the bug, picking.js computed
+// target bearings against (x, -z, y) — a position the entity isn't
+// at — and charge-to-target ran the player consistently north
+// regardless of where the monster was. The renderer puts terrain /
+// statics / buildings / entities under worldRoot per the world-
+// completeness convention, so this also matches how the placement
+// validator reads positions (see world-completeness §"World-frame
+// convention").
 function entityAcPosition(entityManager, guid) {
   const inst = entityManager?.entityMap?.get((guid >>> 0));
   if (!inst?.root?.position) return null;
   const p = inst.root.position;
-  return threeToAc(p.x, p.y, p.z);
+  return { x: p.x, y: p.y, z: p.z };
 }
 
 function horizontalDistance(a, b) {
@@ -34,6 +42,35 @@ function normalizeAngle(a) {
   while (a > Math.PI) a -= 2 * Math.PI;
   while (a < -Math.PI) a += 2 * Math.PI;
   return a;
+}
+
+// Convert the wasm-side LocalPlayerPose (which carries landblock-local
+// x/y and a separate landblockId) into AC world coords so it can be
+// compared against entity world positions (which are world-frame per
+// `EntityInstance.setPose` writing `wx = lbX*192 + upd.x` directly).
+// `pose.z` is already world altitude and passes through. `heading`
+// is left as-is — it's a rotation in radians, not a position.
+//
+// Pre-fix the chargeTick computed `dx = entity.x - pose.x` against
+// landblock-local pose x (range 0..192) and world entity x (range
+// ~32000-34000 at Holtburg), so `dx` was dominated by the landblock
+// offset (~32000) and bearings always pointed NE-ish regardless of
+// where the entity actually was. Player charged in a fixed wrong
+// direction and never reached range → attack never fired. See the
+// landblockId getter at `lib.rs:12714` for the wire format.
+function playerWorldPose(sessionHandle) {
+  const pose = sessionHandle.getLocalPlayerPose?.();
+  if (!pose) return null;
+  const lbId = (pose.landblockId ?? 0) >>> 0;
+  const lbX = (lbId >>> 24) & 0xff;
+  const lbY = (lbId >>> 16) & 0xff;
+  return {
+    x: pose.x + lbX * 192,
+    y: pose.y + lbY * 192,
+    z: pose.z,
+    heading: pose.heading,
+    landblockId: lbId,
+  };
 }
 
 export function setupClickPicking({
@@ -83,9 +120,12 @@ export function setupClickPicking({
       return;
     }
 
-    // Read target + player positions in AC coords.
+    // Read target + player positions — both must be in world coords.
+    // `entityAcPosition` returns world coords directly (entities are
+    // stored in AC world frame; see entities.js:420 setPose). The
+    // player pose needs landblock offset added via `playerWorldPose`.
     const targetAc = entityAcPosition(liveScene3d.entityManager, charge.guid);
-    const pose = sessionHandle.getLocalPlayerPose?.();
+    const pose = playerWorldPose(sessionHandle);
     if (!targetAc || !pose) {
       cancelCharge();
       return;
@@ -102,13 +142,35 @@ export function setupClickPicking({
       return;
     }
 
-    // Compute bearing from player to target; turn proportionally.
+    // Compute compass bearing from player to target — `pose.heading`
+    // is in COMPASS convention (`yaw=0 → +Y north`, `yaw=π/2 → +X east`
+    // per `lib.rs:12706`). For compass bearings, `atan2(dx, dy)` (note
+    // the swap from the math-convention `atan2(dy, dx)`) gives
+    // `0 = north`, `π/2 = east`. Subtracting `pose.heading` then yields
+    // the correct local turn delta.
     const dx = targetAc.x - pose.x;
     const dy = targetAc.y - pose.y;
-    const bearing = Math.atan2(dy, dx);
+    const bearing = Math.atan2(dx, dy);
     const turnDelta = normalizeAngle(bearing - pose.heading);
     let turn = 0;
     if (Math.abs(turnDelta) > 0.05) turn = turnDelta > 0 ? 1 : -1;
+    // 2026-05-19 — one-shot debug log on the first tick of each
+    // charge so we can verify the math after the entityAcPosition
+    // coord fix. If `bearing - pose.heading` doesn't produce a
+    // turn that actually faces the player toward `targetAc`, there
+    // may be a `pose.heading` convention mismatch (compass vs math)
+    // that needs a π/2 + sign-flip correction.
+    if (!charge._debugLogged) {
+      charge._debugLogged = true;
+      console.log(
+        `[charge/debug] target=0x${charge.guid.toString(16)} ` +
+        `playerAc=(${pose.x.toFixed(1)}, ${pose.y.toFixed(1)}, ${pose.z.toFixed(1)}) ` +
+        `targetAc=(${targetAc.x.toFixed(1)}, ${targetAc.y.toFixed(1)}, ${targetAc.z.toFixed(1)}) ` +
+        `dist=${dist.toFixed(2)}m range=${charge.range}m ` +
+        `bearing=${bearing.toFixed(3)} heading=${pose.heading?.toFixed?.(3) ?? "?"} ` +
+        `turnDelta=${turnDelta.toFixed(3)} turn=${turn}`
+      );
+    }
     try {
       sessionHandle.setMovementInput(1 /* forward */, 0 /* strafe */, turn, true /* run */);
     } catch {}
@@ -196,25 +258,12 @@ export function setupClickPicking({
     // Selection persists until another entity is picked.
     liveScene3d.entityManager?.setSelectedTarget?.(guid);
     try {
-      // Phase D — read attack parameters from the combat-bar plugin
-      // when present, fall back to the Phase C defaults otherwise.
-      // (The melee `powerLevel` doubles as the missile `accuracyLevel`
-      // since the retail combat-bar slider serves both roles — its
-      // label flips Power ↔ Accuracy based on stance.)
       const cb = window.__combatBarState;
-      const height =
-        cb && typeof cb.attackHeight === "number"
-          ? cb.attackHeight
-          : ATTACK_HEIGHT_MEDIUM;
-      const slider =
-        cb && typeof cb.powerLevel === "number"
-          ? cb.powerLevel
-          : ATTACK_POWER_FULL;
-      // Phase I.1 — chargeAttack option toggle (default on).
-      const chargeEnabled = cb?.chargeAttack !== false;
 
       if (isInMagicStance?.() && typeof sessionHandle.castTargetedSpell === "function") {
         // Magic doesn't auto-charge — caster stands still to cast.
+        // Click on entity with an armed spell fires the cast directly
+        // (retail's "arm spell, click target" flow).
         const spellId =
           cb && typeof cb.armedSpellId === "number" && cb.armedSpellId > 0
             ? cb.armedSpellId
@@ -222,32 +271,13 @@ export function setupClickPicking({
         if (spellId !== 0) {
           sessionHandle.castTargetedSpell(guid, spellId);
         }
-      } else if (isInRangedStance?.() && typeof sessionHandle.missileAttack === "function") {
-        // Phase I.1 — charge to missile range (~25m) then fire.
-        const fire = () => sessionHandle.missileAttack(guid, height, slider);
-        const pose = sessionHandle.getLocalPlayerPose?.();
-        const targetAc = entityAcPosition(liveScene3d.entityManager, guid);
-        if (chargeEnabled && pose && targetAc && horizontalDistance(pose, targetAc) > MISSILE_RANGE_M) {
-          startCharge(guid, MISSILE_RANGE_M, fire);
-        } else {
-          fire();
-        }
-      } else if (isInMeleeStance?.() && typeof sessionHandle.attack === "function") {
-        // Phase I.1 — charge to melee range (~2.5m) then swing.
-        const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
-        const fire = () => {
-          sessionHandle.attack(guid, height, slider);
-          if (localGuid !== 0) {
-            liveScene3d.entityManager?.setSwingPose?.(localGuid);
-          }
-        };
-        const pose = sessionHandle.getLocalPlayerPose?.();
-        const targetAc = entityAcPosition(liveScene3d.entityManager, guid);
-        if (chargeEnabled && pose && targetAc && horizontalDistance(pose, targetAc) > MELEE_RANGE_M) {
-          startCharge(guid, MELEE_RANGE_M, fire);
-        } else {
-          fire();
-        }
+      } else if (isInMeleeStance?.() || isInRangedStance?.()) {
+        // Retail UX — click on the monster only TARGETS it. Firing
+        // happens via the combat-bar Hi/Med/Lo buttons (which call
+        // `window.__fireAttackOnTarget(height)` below). Lets the
+        // player swap heights mid-fight (helmet knocked off → Hi for
+        // crit) without re-clicking the monster.
+        // `setSelectedTarget` already fired above; nothing more to do.
       } else if (typeof sessionHandle.useObject === "function") {
         cancelCharge();
         sessionHandle.useObject(guid);
@@ -258,6 +288,92 @@ export function setupClickPicking({
   }
 
   canvas.addEventListener("pointerdown", onPointerDown);
+
+  // Retail UX — combat-bar Hi/Med/Lo buttons call this to fire on the
+  // currently selected target at the chosen height. Click on a monster
+  // selects it (in `onPointerDown` above); subsequent height-button
+  // clicks swing/shoot. Lets the player swap attack height mid-fight
+  // (e.g. helmet off → Hi for crit) without re-targeting. Magic
+  // stance still uses click-on-entity to release armed spells; it
+  // does NOT route through this helper.
+  //
+  // Out-of-range = auto-pursue via the existing `startCharge` rAF
+  // loop, then fire on arrival. In-range = fire immediately. The
+  // lockout (`cb.attackInProgress`) gates rapid clicks; the
+  // `combatCommenceAttack` event seeds the combat-bar power meter.
+  function fireAttackOnSelectedTarget(height) {
+    const targetGuid = (liveScene3d.entityManager?.getSelectedTarget?.() ?? 0) >>> 0;
+    if (targetGuid === 0) {
+      console.log("[fire-attack] no target selected — click a monster first");
+      return;
+    }
+    const cb = window.__combatBarState;
+    const safeHeight = Number.isFinite(height) ? height : (cb?.attackHeight ?? ATTACK_HEIGHT_MEDIUM);
+    const slider =
+      cb && typeof cb.powerLevel === "number" ? cb.powerLevel : ATTACK_POWER_FULL;
+    const attackPending = !!cb?.attackInProgress;
+    const fireOnce = (cmd) => {
+      if (attackPending) {
+        console.log("[fire-attack] attack still pending (server hasn't sent attackDone) — gated");
+        return false;
+      }
+      cmd();
+      if (cb) cb.attackInProgress = true;
+      try {
+        window.__pluginClient?.events?.emit?.("combatCommenceAttack", {});
+      } catch (_) {}
+      return true;
+    };
+
+    // 2026-05-19 — charge re-enabled now that `entityAcPosition` no
+    // longer double-transforms the target's position. If still out
+    // of range after manual walking, the rAF chargeTick takes over
+    // (auto-pursues until in range, then fires). chargeAttack=false
+    // in the bar disables the auto-pursue per-click.
+    const chargeEnabled = cb?.chargeAttack !== false;
+    const inMelee = !!isInMeleeStance?.();
+    const inRanged = !!isInRangedStance?.();
+    // Both world-coord — see playerWorldPose comment above for the
+    // landblock-local → world conversion. Without this, `dist` would
+    // be dominated by the landblock offset (~32000m) and every target
+    // would look out-of-range.
+    const pose = playerWorldPose(sessionHandle);
+    const targetAc = entityAcPosition(liveScene3d.entityManager, targetGuid);
+    const dist = (pose && targetAc) ? horizontalDistance(pose, targetAc) : -1;
+    if (inRanged && typeof sessionHandle.missileAttack === "function") {
+      console.log(`[fire-attack] missile height=${safeHeight} target=0x${targetGuid.toString(16)} slider=${slider.toFixed(2)} dist=${dist.toFixed(2)}m (range=${MISSILE_RANGE_M}m)`);
+      const fire = () => fireOnce(() => sessionHandle.missileAttack(targetGuid, safeHeight, slider));
+      if (chargeEnabled && dist > MISSILE_RANGE_M) {
+        startCharge(targetGuid, MISSILE_RANGE_M, fire);
+      } else {
+        fire();
+      }
+      return;
+    }
+    if (inMelee && typeof sessionHandle.attack === "function") {
+      console.log(`[fire-attack] melee height=${safeHeight} target=0x${targetGuid.toString(16)} slider=${slider.toFixed(2)} dist=${dist.toFixed(2)}m (range=${MELEE_RANGE_M}m)`);
+      const localGuid = (getLocalPlayerGuid?.() ?? 0) >>> 0;
+      const fire = () => fireOnce(() => {
+        sessionHandle.attack(targetGuid, safeHeight, slider);
+        if (localGuid !== 0) {
+          liveScene3d.entityManager?.setSwingPose?.(localGuid);
+        }
+      });
+      if (chargeEnabled && dist > MELEE_RANGE_M) {
+        startCharge(targetGuid, MELEE_RANGE_M, fire);
+      } else {
+        fire();
+      }
+      return;
+    }
+    console.log(`[fire-attack] not in melee/missile stance — currentStanceLow=0x${(window.__getCurrentStanceLow?.() ?? 0).toString(16)}`);
+  }
+
+  // Expose for combat-bar.js's Hi/Med/Lo height-button click handlers.
+  // Namespace prefix matches `window.__combatBarState` / `__pluginClient`.
+  if (typeof window !== "undefined") {
+    window.__fireAttackOnTarget = fireAttackOnSelectedTarget;
+  }
 
   // Phase I.1 follow-on (handoff Tier 1): manual-input override.
   // Any movement key during an active charge aborts the auto-pursue
