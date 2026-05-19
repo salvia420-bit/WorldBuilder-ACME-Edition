@@ -2,15 +2,29 @@
 
 Companion to [`world-completeness-method.md`](world-completeness-method.md) (placements) and [`event-completeness-method.md`](event-completeness-method.md) (sounds + particles). This doc covers the third axis: **typed entity classification** — answering "what *kind* of WorldObject is this?" without inventing the answer on the client.
 
-Status: **brief, pending execution.** Written 2026-05-19 in response to a conflict surfaced by the `WorldObjectManager` wire-in (commit `4849864`). If this method captures the architecture and the phase plan looks right, mark it verified; I'll start E.A. If anything looks wrong — especially the fallback discipline or the validator's tolerance — flag it before code starts.
+Status: **brief, pending execution.** Written 2026-05-19 in response to a conflict surfaced by the `WorldObjectManager` wire-in (commit `4849864`). Revised the same day after reading the actual wire format — see §1.5 below for what changed.
+
+If this method captures the architecture and the phase plan looks right, mark it verified; I'll start E.B. If anything looks wrong — especially the **algorithm-as-source** framing or the **fallback discipline** — flag it before code starts.
 
 ## The conflict that motivated this doc
 
-The `WorldObjectManager` (commit `c7f9fbd`, wired in `4849864`) consumes `pollEntityUpdates()` kind=1 spawn payloads and dispatches them into typed JS classes (Vendor, NPC, Door, MeleeWeapon, etc.) for plugin authors. Today the wasm `EntityUpdate` surface only exposes `itemType`, stripping `objectClass + behavior` that ACE actually ships in `PublicWeenieDesc.Header`. So the JS-side dispatch falls back to a hand-coded ItemType-only heuristic in `plugins/world-objects/get_object_class.js`. All creatures collapse to the generic `Creature` class; Vendor/NPC/Monster discrimination is lost.
+The `WorldObjectManager` (commit `c7f9fbd`, wired in `4849864`) consumes `pollEntityUpdates()` kind=1 spawn payloads and dispatches them into typed JS classes (Vendor, NPC, Door, MeleeWeapon, etc.) for plugin authors. Today the wasm `EntityUpdate` surface only exposes `itemType`, stripping the other two classification inputs that ACE actually ships in `PublicWeenieDescription`. So the JS-side dispatch falls back to a hand-coded ItemType-only heuristic in `plugins/world-objects/get_object_class.js`. All creatures collapse to the generic `Creature` class; Vendor/NPC/Player/Monster/Door/Lifestone/Corpse discrimination is lost.
 
-That fallback is a **client-side classification of an entity the server already classified**. It's the structural analog of computing scenery from a noise function on the client — the thing `world-completeness-method.md` explicitly rejects as "Procedural-on-client is the bug. Explicit-everywhere is the fix."
+That heuristic is **client-side classification using a simplified subset of the canonical algorithm**, not a faithful port of what every other AC client implementation does. It's the structural analog of computing scenery from a noise function on the client when there's a canonical, deterministic algorithm available — the thing `world-completeness-method.md` rejects as "Procedural-on-client is the bug. Explicit-everywhere is the fix."
 
-This doc defines the contract that resolves the conflict: the renderer's typed class for any entity must trace to authoritative wire (or DAT-baked) data, never to client-side invention.
+This doc defines the contract that resolves the conflict: typed classification is a **canonical, deterministic algorithm** taking authoritative wire inputs and producing the same output every other AC client produces.
+
+## 1.5. What changed in revision 2 (2026-05-19, same day)
+
+The first draft of this doc was wrong on a structural point. I claimed `PublicWeenieDescription.Header.ObjectClass` is "a field on the wire" and Phase E.B was "surfacing it." Reading the actual parser (`crates/holtburger-protocol/src/messages/object/messages/description.rs:PublicWeenieDescription`) and ACPlugin's classifier (`external/chorizite/ACPlugin/API/WorldObject.cs:344-411`) revealed:
+
+- The wire carries **three discrete inputs**: `item_type` (`ItemType` bitfield), `obj_desc_flags` (`ObjectDescriptionFlag` bitfield), `weenie_flags` (`WeenieHeaderFlag` bitfield).
+- `ObjectClass` itself is **NOT on the wire**. It's computed client-side by `WorldObject.GetObjectClass(itemType, objDescFlags, createFlags)` — a 67-line deterministic algorithm.
+- ACPlugin caches it in `_objectClass` (lazily computed). Retail acclient.exe computes it the same way per its own internal classifier (which ACPlugin's algorithm mirrors).
+
+This is structurally **identical** to world-completeness's scenery bake — there is NO scenery field "on the wire" either; ACE computes scenery placements server-side via `Scenery.Load()`, which we port deterministically into Rust as our bake. The "source" is `algorithm + inputs`, not "a value on the wire." Same pattern here: source = `GetObjectClass + (item_type, obj_desc_flags, weenie_flags)`.
+
+The contract below is restated under this correct framing.
 
 ## The contract
 
@@ -18,139 +32,169 @@ For any entity `e` spawned at any time:
 
 ```
 typed_class(e) ≡ {
-    server_explicit_class(e)        when PublicWeenieDesc.Header.ObjectClass is non-zero
-  ∪ dat_baked_class(e)              when ObjectClass is zero AND the Weenie defines ObjectClass deterministically
-  ∪ WorldObject                     otherwise (the explicit-unknown sentinel; logged + validator-counted)
+    canonical_classify(item_type(e), obj_desc_flags(e), weenie_flags(e))
+      where canonical_classify ≡ ACPlugin.WorldObject.GetObjectClass
+      (a faithful 1:1 port; same inputs → same output as ACPlugin / retail acclient.exe)
+  ∪ WorldObject sentinel
+      when canonical_classify returns ObjectClass.Unknown
+      (logged + validator-counted; not a silent fallback)
 }
 ```
 
-There is **no fourth source**. There is **no heuristic dispatch path** that fires silently. The current `get_object_class.js` heuristic dispatch is **explicitly removed** from the normal flow and either deleted or demoted to a debugger-only utility (see §5).
+**One source of truth**: the canonical classifier + its three wire inputs. **No heuristic dispatch.** The simplified `get_object_class.js` heuristic that's in the tree today is **deleted from the normal flow** — replaced by a faithful port of `ACPlugin.WorldObject.GetObjectClass`. Either the canonical algorithm returns a known `ObjectClass`, or we instantiate the `WorldObject` sentinel and log it.
 
-This mirrors the world-completeness contract's three-source rule plus its "no procedural fallback" disciplinary. The renderer/plugin author can rely on `wo.constructor.name === 'Vendor'` matching what the server thinks `wo` is, or get an explicit `WorldObject` they know is unclassified.
+Determinism: same wire inputs → same `ObjectClass` → same JS class on every client running this codebase. Two clients running against the same ACE server see identical typed classes for the same entity GUIDs.
 
-## The two classification sources
+## The classifier algorithm (the load-bearing piece)
 
-### C1 — Wire-explicit (server-authoritative `PublicWeenieDesc.Header`)
+Source: `external/chorizite/ACPlugin/API/WorldObject.cs:344-411`. Verbatim shape:
 
-ACE wire frame: every `CreateObject` / `Item_CreateObject` packet carries a `PublicWeenieDesc` bundle. The bundle's `Header` bitfield contains `ObjectClass` (an enum value matching `Chorizite.Common.Enums.ObjectClass`) and `Behavior` (an `ObjectDescriptionFlag` bitfield). For 99% of entities ACE sends, `ObjectClass` is non-zero.
+```text
+GetObjectClass(itemType, objDescFlags, createFlags) -> ObjectClass {
+  // PASS 1 — ItemType bitfield (first-match cascade)
+  if itemType has MeleeWeapon       -> MeleeWeapon
+  else if Armor                     -> Armor
+  else if Clothing                  -> Clothing
+  else if Jewelry                   -> Jewelry
+  else if Creature                  -> Monster   // refined in PASS 3
+  else if Food                      -> Food
+  else if Money                     -> Money
+  ... (26 cases total) ...
 
-Source: `~/ace-server/Source/ACE.Server/Network/Structure/PublicWeenieDesc.cs` (the server-side packer) + `~/ac-headers/acclient.c` `PublicWeenieDesc` (the client-side unpacker).
+  // PASS 2 — ObjectDescriptionFlag bitfield (overrides PASS 1 where set)
+  if objDescFlags has Player        -> Player
+  else if Vendor                    -> Vendor
+  else if Door                      -> Door
+  else if Corpse                    -> Corpse
+  else if LifeStone                 -> Lifestone
+  ... (12 cases total) ...
 
-Our parser: `holtburger_protocol::messages::object::PublicWeenieDesc` — the fields are parsed today, just not surfaced to JS. Phase E.B's job is to add the wasm getter.
+  // PASS 3 — special cases
+  if Unknown && itemType.Writable && objDescFlags.Book:
+    if Inscribable                  -> Journal
+    elif Stuck                      -> Sign
+    else                            -> Book
 
-Deterministic given: the server's published Weenie definition for the entity's `wcid`. Two clients connecting to the same ACE world database see identical `ObjectClass` values for the same `wcid`.
+  if itemType.Writable && createFlags.Spell -> Scroll
 
-### C2 — DAT-baked (Weenie definition classification)
+  if class == Monster:
+    if !objDescFlags.Attackable     -> Npc        // NPC discrimination!
+    if objDescFlags.IncludesSecondHeader -> Npc   // same
 
-When the wire payload arrives with `ObjectClass = 0` (which ACE permits for some categories of in-DAT scenery), the Weenie's static definition in `client_portal.dat` (`weenie:*`) carries enough information to derive the class deterministically. The derivation is the same algorithm ACE itself uses server-side to populate `ObjectClass` when it pre-classifies Weenies for spawning.
+  if class in (Misc, Unknown):
+    if objDescFlags.Stuck           -> Static
 
-Algorithm: the same logic in ACE's `~/ace-server/Source/ACE.Server/Factories/WeenieClassFactory.cs` (or equivalent — needs E.A confirmation) that maps `(WeenieType, BehaviorFlags, ItemType)` → `ObjectClass`.
+  return class
+}
+```
 
-Our path: WB.Terminal commands generate a per-Weenie `ObjectClass` JSON catalog from the DAT, similar to how `world-object-taxonomy.json` is generated today. The renderer consumes it as a lookup table keyed by `wcid`. Idempotent + version-controlled — same DAT release → same catalog → same dispatch.
+Critical points:
+- **Monster→NPC discrimination** happens via `!Attackable` flag in PASS 3 — that's how we get NPC vs Monster distinction.
+- **Vendor discrimination** happens via `objDescFlags.Vendor` in PASS 2 — wire-explicit.
+- **Door / Lifestone / Corpse / Foci / Bindstone** all come from PASS 2 obj-desc flags.
+- **Scroll vs Book vs Journal** requires both `itemType.Writable` AND specific obj-desc / weenie flags.
 
-Deterministic given: the DAT release (provable via the existing `bake-source.sha256` mechanism).
+A faithful port of this algorithm is the entirety of the entity-completeness contract.
 
-### Why no third source
+## Why "algorithm-as-source" is consistent with world-completeness
 
-World-completeness has three sources because placements have three orthogonal channels (DAT-explicit, DAT-baked-from-algorithm, ACE-runtime-pushed). Classification has two because:
-- "DAT-explicit" classification and "DAT-baked" classification collapse into one (the Weenie definition IS the explicit classification; there's no separate algorithmic-bake step). Both go through C2.
-- The runtime-pushed channel is C1.
+World-completeness §3.2 lists "DAT baked" as one of its three sources. The full description: *"Computed by a deterministic Rust port of `~/ace-server/Source/ACE.Server/Entity/Scenery.cs` (198 LoC). Inputs: the LB's `CellLandblock.terrain[81]` 16-bit terrain words + canonical Region's TerrainInfo + SceneInfo + Scene files. Output: a Vec of `{obj_id, x, y, z, qw, qx, qy, qz, scale, ...}` per LB."*
 
-A third channel — "client-side heuristic" — is what we're explicitly rejecting. The fallback that exists today is moved to the explicit-unknown sentinel `WorldObject` (the base class), with appropriate logging so the validator can count + flag it.
+The "source" there is the algorithm + inputs, not a stored value. Same shape here: the source is `GetObjectClass + (item_type, obj_desc_flags, weenie_flags)`, not a stored `ObjectClass` field. Determinism comes from the algorithm being a faithful 1:1 port + the inputs being canonical wire data.
+
+The C# `GetObjectClass` IS the canonical source the same way `ACE.Server.Entity.Scenery.Load` IS the canonical source for placements. ACPlugin's port matches retail acclient.exe; ours matches ACPlugin via cross-test (same inputs → same output, asserted byte-by-byte across a representative payload set).
 
 ## The fallback discipline
 
-When neither C1 nor C2 produces a class, we instantiate the base `WorldObject` and:
+The classifier returns `ObjectClass.Unknown` for entities none of its 26+12+5 rules match. When that happens, we instantiate the base `WorldObject` class and:
 
-1. **Log it.** `[wom] no authoritative class for guid=0x… wcid=0x… itemType=… objectClass=0 — instantiating WorldObject (sentinel)`.
-2. **Tag it.** The instance carries `wo.classificationSource = 'unknown'` (vs `'wire'` or `'dat-baked'` for the authoritative paths).
-3. **Validator counts it.** The Phase E.D validator reports `N entities of K total had no authoritative class — manifest is incomplete`.
+1. **Log it.** `[wom] canonical classifier returned Unknown for guid=0x… wcid=0x… itemType=0x… objDescFlags=0x… weenieFlags=0x… — instantiating WorldObject (sentinel)`.
+2. **Tag it.** The instance carries `wo.classificationSource = 'unknown'` (vs `'canonical'` for the normal path).
+3. **Validator counts it.** The Phase E.D validator reports `N entities of K total returned Unknown — canonical classifier coverage incomplete`.
 
-This is structurally identical to how world-completeness handles "renderer drew a placement that isn't in the manifest" — the validator flags it as a bug, not a feature. Over time, every fallback case should be either:
-- Fixed by surfacing more wire data (extending C1), OR
-- Fixed by adding the entry to the DAT-baked catalog (extending C2)
+Returning Unknown is not a sin — it just means the entity's input combination wasn't in the 43 rules. Over time, each Unknown either:
+- Reveals a rule we missed when porting the C# algorithm (fix the port; coverage grows), OR
+- Reveals a wire payload combination ACPlugin itself doesn't handle (matches their gap; document)
 
-**The current `get_object_class.js` heuristic dispatch table is REMOVED from the normal flow.** It may survive as a `plugins/world-objects/debug_classify.js` debugger utility for ad-hoc testing, BUT it is never invoked by `WorldObjectManager.onObjectCreated()` in the normal path. The presence of the heuristic in the dispatch is the bug; its absence is the contract.
+Either way, the path is to extend coverage of the canonical algorithm, never to add a side-channel heuristic. The 80-LOC `get_object_class.js` heuristic in the tree today is deleted entirely; nothing replaces it.
 
 ## How this resolves the current WorldObjectManager conflict
 
-Concrete steps (Phase E.B / E.C below):
+Concrete steps (Phase E.B/E.C below):
 
-1. **`apps/holtburger-web/src/lib.rs`** — extend the wasm-bindgen `EntityUpdate` struct with `pub fn object_class(&self) -> u32` and `pub fn behavior(&self) -> u32` (or `behaviour` — match retail spelling). The parser side already has these from `PublicWeenieDesc`; this is pure surfacing.
-2. **`apps/holtburger-web/index.html`** drainEvents kind=1 dispatch — pass `objectClass: upd.objectClass, behavior: upd.behavior` into `wom.onObjectCreated()`.
-3. **`plugins/world-objects/world_object_manager.js`** — the dispatch already prefers `objectClass` when set (line 71-74); no logic change needed once the wire is surfaced.
-4. **`plugins/world-objects/get_object_class.js`** — delete the heuristic dispatch (move to a separate `debug_classify.js` if we want to keep it for ad-hoc debugging). The `WorldObjectManager` calls `resolveClassName({objectClassName})` only; if it's null, it returns the `WorldObject` sentinel.
-5. **`plugins/world-objects/world_object.js`** — add `this.classificationSource = source` field, populated by the manager.
+1. **`apps/holtburger-web/src/lib.rs`** — extend the wasm-bindgen `EntityUpdate` struct with two getters:
+   - `pub fn obj_desc_flags(&self) -> u32` (renamed from the conventional `behavior` to match the C# `ObjectDescriptionFlag` type)
+   - `pub fn weenie_flags(&self) -> u32` (the `WeenieHeaderFlag` bitfield)
+   The parser side already extracts these from `PublicWeenieDescription`; this is pure surfacing.
+2. **`apps/holtburger-web/index.html`** drainEvents kind=1 dispatch — pass `objDescFlags: upd.objDescFlags, weenieFlags: upd.weenieFlags` into `wom.onObjectCreated()` alongside the existing `itemType`.
+3. **`plugins/world-objects/get_object_class.js`** — REPLACE entirely with a faithful port of `ACPlugin.WorldObject.GetObjectClass(itemType, objDescFlags, createFlags)`. ~70 LOC, mirrors the C# line-for-line. Comments cite the C# source line numbers so the port is auditable.
+4. **`plugins/world-objects/object_description_flags.js`** + **`weenie_header_flags.js`** (new) — JS bitflag constants for the `ObjectDescriptionFlag` + `WeenieHeaderFlag` enums (the inputs the classifier consumes). Sourced from `Chorizite.Common/Enums/`.
+5. **`plugins/world-objects/world_object.js`** — add `this.classificationSource = source` field.
+6. **`plugins/world-objects/world_object_manager.js`** — replace the current `resolveClassName({objectClassName})` call with `canonicalClassify(itemType, objDescFlags, weenieFlags)`; instantiate `WorldObject` sentinel when result is `Unknown`.
 
-Cost: ~50 LOC of Rust + ~30 LOC of JS + delete ~80 LOC of obsolete heuristic. Net negative LOC, much stronger contract.
+Cost: ~70 LOC JS classifier (replacing the existing 80 LOC heuristic — net negative) + ~30 LOC Rust wasm getters + ~20 LOC of new bit-flag constants.
 
-For C2 (the DAT-baked catalog) — that's a Phase E follow-on, not blocking the wire-side fix. Catalogue lands once the manifest schema is agreed.
+## Determinism contract
 
-## Determinism contract for classification
+Two clients running the same codebase against the same wire payload must produce **identical** `ObjectClass` outputs from `canonicalClassify`. The classifier is a pure function of three bitfields; no time, no random, no environment.
 
-Two clients running the same DAT against the same ACE world DB must produce **identical classification logs** for the same entity GUIDs over the same observation window. No tolerance — classification is a discrete enum, not a continuous quantity.
-
-Drift detection: the validator (E.D) periodically replays a known set of spawns through both implementations (live runtime + offline manifest) and asserts every classification matches.
+Cross-validation: Phase E.D runs a Node-side test that drives a representative payload set (one entry per ObjectClass value, sourced from real wire captures) through BOTH the C# `ACPlugin.WorldObject.GetObjectClass` (via dotnet test runner) AND our JS port (via `node`). Asserts byte-by-byte identity. If they ever diverge, our port is wrong — fix the port, don't change the test.
 
 ## Base DATs only — same rule as placements + events
 
-The DAT-baked classification catalog (C2) **must** be generated from canonical retail DATs. Same `bake-source.sha256` mechanism as placements. Same pre-flight rejection of modder-allocated IDs (`0x__FFxxxx`) and sibling `custom_textures/` / `iter-*/` / `*.wbproj` markers.
-
-A consumer renderer verifies the catalog's sha256 against its own DAT contents before honouring the classifications.
+Wire payloads depend on the ACE server's loaded Weenies, which depend on the DAT release. Same `bake-source.sha256` discipline as the placement bake applies indirectly: a Coldeve / Drake / GDLE server loading non-retail Weenies sends different `(item_type, obj_desc_flags, weenie_flags)` tuples for the same `wcid`. The classifier still produces a valid `ObjectClass`; the *manifest* the validator checks against in Phase E.D should know what server build it's checking.
 
 ## The validator (Phase E.D)
 
-`apps/holtburger-web/validate_entity_classification.cjs` (planned). For a target session it:
+`apps/holtburger-web/validate_entity_classification.cjs` (planned). Two checks, neither tolerance-based (this is a discrete enum, not a continuous quantity):
 
-1. Builds the expected manifest from `wcid → ObjectClass` lookups against C1 (wire) + C2 (DAT-baked catalog).
-2. Walks the live `WorldObjectManager.objects` map (or replays a captured event log) and emits one `(guid, wcid, instanceClass, classificationSource)` record per entity.
-3. Matches by `wcid → ObjectClass`. Reports:
-   - Drift: `instanceClass !== manifestClass` for some entity (renderer chose wrong class).
-   - Unknown: `classificationSource === 'unknown'` (no manifest entry — manifest is incomplete OR wire payload was missing fields).
-   - Spurious: instance exists but no `wcid` known to the manifest (renderer instantiated something the manifest doesn't cover).
+1. **Cross-port parity check.** Pipes a representative payload set through both C# `ACPlugin.WorldObject.GetObjectClass` and JS `canonicalClassify`. Asserts byte-by-byte identity. Detects any drift in our port.
 
-The validator IS the source of truth. If it finds drift, the renderer is wrong (or the manifest is incomplete) — don't change the validator.
+2. **Coverage check.** Walks `WorldObjectManager.objects` over a known route (e.g. Holtburg square → Lin the Vendor → academy entrance → an interior NPC) and counts:
+   - `wo.classificationSource === 'canonical'` instances by class.
+   - `wo.classificationSource === 'unknown'` instances by `(wcid, item_type, obj_desc_flags, weenie_flags)`.
 
-### A note on the WorldObjectManager's role
+   Unknown count > 0 means the canonical algorithm's coverage has gaps. Each unknown tuple becomes a follow-on to extend the port.
 
-The manager is NOT a renderer. The existing PIXI / scene3d render path stays intact. The manager is the **typed-API layer** for plugin authors. Validator-enforced classification is what lets plugin code rely on `if (wo instanceof Vendor)` without worrying that two different code paths classify the same entity differently.
+The validator IS the source of truth. If parity fails, the renderer's port is wrong — don't change the validator.
 
 ## Phase plan (mirrors A-E for placements + F.A-F.E for events)
 
 | Phase | What | Estimated effort |
 |---|---|---|
-| **E.A** Investigate | Inventory `PublicWeenieDesc.Header.ObjectClass` usage in ACE source; sample wire payloads for representative wcids (NPC, Vendor, Monster, Portal, Door, Lifestone, Static, MeleeWeapon, Container); identify any entity where ACE sends `ObjectClass = 0` and the DAT-baked path must take over; confirm Weenie→ObjectClass derivation algorithm | hours, read-only |
-| **E.B** Surface | Extend wasm `EntityUpdate` with `object_class()` + `behavior()` getters; pass through in index.html drainEvents kind=1 dispatch; delete `get_object_class.js` heuristic dispatch from the normal path | ~80 LOC net negative |
-| **E.C** Wire | `WorldObjectManager` dispatch path becomes strict: only C1 + C2 + `WorldObject` sentinel. Each instance carries `classificationSource` field | trivial |
-| **E.D** Validate | `validate_entity_classification.cjs` — Playwright capture that walks a known route (e.g. Holtburg square → Lin the Vendor → academy entrance → an interior NPC), captures `wom.objects`, asserts every classification matches manifest; reports `unknown` count | 1-2 days |
-| **E.E** Stage + verify | Generate `wcid → ObjectClass` catalog from ACE DB (Phase C2); stage under `data/chorizite/wcid-classification.json`; CI gate the validator | 1 day |
+| **E.A** Investigate | Confirm parser populates obj_desc_flags + weenie_flags in EntityUpdate construction sites; verify ObjectDescriptionFlag + WeenieHeaderFlag enum tables in Chorizite.Common; sample wire payloads | hours, read-only |
+| **E.B** Surface | Wasm getters for obj_desc_flags + weenie_flags; index.html pass-through; faithful port of GetObjectClass in JS (replaces get_object_class.js); bitflag constant files | ~120 LOC net (-80 + 200) |
+| **E.C** Wire | WorldObjectManager dispatch uses canonicalClassify; WorldObject sentinel + classificationSource tag | trivial |
+| **E.D** Validate | validate_entity_classification.cjs — cross-port parity + coverage check | 1-2 days |
+| **E.E** Stage | CI gate the validator on every PR; add `chorizite-classify` WB.Terminal command exposing the C# classifier for parity comparison | 1 day |
 
 ## Scope limits — what's NOT covered
 
 - **Per-entity behavior** (Vendor.openContainer(), Door.isOpen) — that's plugin-author surface, not classification. Once classification is correct, behaviors live in the typed subclasses.
 - **Entity equipment / appearance** (ObjDesc / PhysicsDesc bundles) — handled by the existing render path. Classification of the entity itself is orthogonal.
-- **Wcid catalog completeness** — if a wcid isn't in the catalog, the entity gets `WorldObject` + a log. We don't pretend completeness; we measure it.
+- **Coverage perfection** — if the canonical algorithm returns Unknown for some real wire payload, we acknowledge it and extend the port. We don't pretend completeness; we measure it via Unknown count.
 - **Combat / magic resolution** — the typed class doesn't drive damage / cast resolution. Those are server-authoritative via separate wire messages.
+- **Vendor-vs-NPC discrimination via wcid table** — explicitly REJECTED as a side-channel heuristic that drifts from wire data. The canonical algorithm produces Vendor when `objDescFlags.Vendor` is set; if ACE sends an entity without that flag, we get NPC and that matches retail.
 
 ## Provenance + dependencies on shipped work
 
 Already exists (foundation for this method):
-- `holtburger_protocol::messages::object::PublicWeenieDesc` — the parser; ObjectClass + Behavior fields parsed today but not surfaced
+- `holtburger_protocol::messages::object::PublicWeenieDescription` (`crates/holtburger-protocol/src/messages/object/messages/description.rs`) — parses `item_type`, `obj_desc_flags`, `weenie_flags`; fields populated, not yet surfaced to wasm
 - `apps/holtburger-web/plugins/world-objects/` — the typed-class skeleton (commit `c7f9fbd`)
 - `apps/holtburger-web/index.html` drainEvents kind=1 path — the wire-in (commit `4849864`)
-- `external/chorizite/Chorizite.Common/Enums/ObjectClass.cs` — the canonical enum (Phase E.B's data source for the wasm getter's return type)
-- `apps/holtburger-web/data/chorizite/chorizite-common-enums.json` — already contains the ObjectClass enum table (Phase E.C consumes this for dispatch)
-- `WorldBuilder.Terminal/CommandEngine.Chorizite.cs` — Phase E.E will add `chorizite-dump-wcid-classification` here
+- `external/chorizite/ACPlugin/API/WorldObject.cs:344-411` — the canonical algorithm we port
+- `external/chorizite/Chorizite.Common/Enums/{ObjectDescriptionFlag,WeenieHeaderFlag,ItemType,ObjectClass}.cs` — the input + output enum tables
+- `WorldBuilder.Terminal/CommandEngine.Chorizite.cs::ChoriziteDumpEnumValues` — generates the JSON enum tables (currently dumps 9 enums; needs ObjectDescriptionFlag + WeenieHeaderFlag added)
 
 Pending (this method's work):
-- E.B: wasm getter for ObjectClass + Behavior (~30 LOC Rust)
-- E.C: dispatch tightening + heuristic removal (~30 LOC JS, net negative)
-- E.D: validator (~500 LOC Playwright)
-- E.E: classification catalog command + CI hook (~150 LOC + glue)
+- E.B: wasm getters + JS canonical port (~120 LOC net)
+- E.C: dispatch tightening (~30 LOC)
+- E.D: cross-port parity validator (~500 LOC Playwright + dotnet runner)
+- E.E: CI hook + WB.Terminal classifier command (~150 LOC)
 
-## Why this is one method, not three
+## Why this method is one piece, not three
 
-You could imagine splitting "wire classification" (E.B/E.C) from "DAT-baked catalog" (E.E) from "validator" (E.D) into three separate methods. The reason they're one: they're three facets of the same contract — every typed-class instance is server-authoritative or DAT-baked or explicit-unknown. Splitting the contract into pieces invites the gap that motivated this doc to begin with (one side trusts the wire, the other side heuristically guesses, drift goes silent).
+You could imagine splitting "canonical port" (E.B/E.C) from "cross-port validator" (E.D) from "CI staging" (E.E) into three separate methods. Reason they're one: they're three facets of the same contract — every typed-class instance traces to the canonical algorithm's deterministic output. Splitting the contract into pieces invites the failure mode that motivated this doc to begin with (one side trusts the wire, the other side heuristically guesses, drift goes silent).
 
 ## Cross-references
 
@@ -158,7 +202,13 @@ You could imagine splitting "wire classification" (E.B/E.C) from "DAT-baked cata
 - [`event-completeness-method.md`](event-completeness-method.md) — events (the sibling contract)
 - [`../external/holtburger/apps/holtburger-web/CHORIZITE_PORTING_PLAN.md`](../external/holtburger/apps/holtburger-web/CHORIZITE_PORTING_PLAN.md) §3 + §12 + §13 — the WorldObject typed-class layer this method classifies
 - [`../external/holtburger/apps/holtburger-web/plugins/world-objects/README.md`](../external/holtburger/apps/holtburger-web/plugins/world-objects/README.md) — the runtime that consumes the classification
+- [`../external/chorizite/ACPlugin/API/WorldObject.cs`](../external/chorizite/ACPlugin/API/WorldObject.cs) lines 344-411 — the canonical algorithm we port
 
-## Sign-off line
+## Sign-off
 
-If this method accurately captures the contract and the phase plan looks right, mark it verified; I'll start E.A (read-only investigation of `PublicWeenieDesc.Header` wire-side coverage). If anything looks wrong — especially the **fallback discipline** (is `WorldObject` sentinel + log the right escape valve, or should we be stricter and throw?), the **two-sources-only** decision (do you want a third source like a hand-curated override table?), or the **`get_object_class.js` removal** (is the heuristic worth keeping as a fallback rather than removing?) — flag before code starts.
+This is revision 2 (2026-05-19). The first revision was wrong on a structural point (claimed `ObjectClass` is on the wire); see §1.5. If revision 2 captures the contract and the phase plan looks right, mark it verified; I'll proceed with E.B (surface obj_desc_flags + weenie_flags + port GetObjectClass).
+
+The three signoff questions stand:
+1. **Fallback discipline.** Is the `WorldObject` sentinel + log + validator count the right escape valve? Or should the renderer throw / refuse to dispatch when canonical returns Unknown?
+2. **Algorithm source.** Is ACPlugin's `GetObjectClass` the right canonical reference, or should we mirror retail acclient.exe directly (which would require RE'ing the relevant Hex-Rays decomp)? The two should be equivalent; picking one as canonical avoids ambiguity.
+3. **`get_object_class.js` deletion.** Delete the heuristic entirely, or keep as `debug_classify.js` for ad-hoc testing? Doc favors deletion; either is defensible.
