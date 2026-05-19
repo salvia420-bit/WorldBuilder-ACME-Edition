@@ -598,7 +598,7 @@ Plus a scripted PVS-cycle smoke test (5-minute walk script).
 **Risk.** Lights popping in/out as the cap changes between sorts — mitigate by always-sort on cap-cross.
 
 ## C7 — Light clone deduplication (re-open after architecture restructure)
-**Severity** Med • **File** `scene3d/lighting.js:776` • **Status** ⛔ Blocked on C7-prereq; see split below
+**Severity** Med • **File** `scene3d/lighting.js:776` • **Status** ✅ Done (commit `69f315a` — Option A "shared parameters, separate instances": `lightTemplateCache` WeakMap + `createLightFromTemplate(template, transform)` helper; preconditions verified; C6 throttle + `.visible` toggling preserved unchanged)
 
 ### Original problem
 `Light.clone()` per placement; large model × N placements = hundreds of clones at load.
@@ -807,7 +807,7 @@ Plus a scripted spell-cast loop running 200 × spell-effect with `manager.destro
 **Risk.** None.
 
 ## E5 — Material flags: alphaTest gating + sortObjects toggle
-**Severity** Low • **File** `scene3d/particles/particle_manager.js:91` • **Status** Open
+**Severity** Low • **File** `scene3d/particles/particle_manager.js:91` • **Status** ✅ Done (commit `e1339af` — conservative fallback path: `transparent=true` + `alphaTest=0.1` + `depthWrite=true` for all particles, since neither wasm `ParticleEmitterJs` nor the Rust DAT struct exposes a blend-mode field; `?particleSortObjects=off` URL flag plumbed with a TODO for scene-construction to consume it)
 
 **Problem.** All particle materials default to `transparent: true` with no `alphaTest`. This forces Three.js to add every particle to the transparent queue, sort by depth (O(N log N) on 1000 particles), and disable depth-write (so particles can't occlude each other or write depth for subsequent passes). For binary-masked particles (where the alpha channel is mostly 0 or 255), `alphaTest=0.5` + `transparent=false` lets the particle render in the opaque queue, skip the sort, and write depth.
 
