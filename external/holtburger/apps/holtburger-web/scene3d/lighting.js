@@ -809,11 +809,28 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
       // two instances of the same building light independently.
       const targetPartIndex = sl.partIndex >>> 0;
       let attachedAny = false;
+      // Perf C7 — template is built lazily on the first 2nd-placement
+      // (i.e. when we'd otherwise call `lightObj.clone()`). One-
+      // placement setups never pay the template cost.
+      /** @type {ReturnType<typeof getOrBuildLightTemplate>|null} */
+      let template = null;
       for (const { partIndex, object3D } of partEntries) {
         if (partIndex !== targetPartIndex) continue;
-        // Clone per instance — three.js Light.clone() preserves
-        // intensity / distance / decay / color.
-        const inst = (attachedAny ? lightObj.clone() : lightObj);
+        // Per-placement instance. First placement reuses the source
+        // light (zero allocation beyond what `makeThreeLightForSetupLight`
+        // already paid); subsequent placements construct a fresh
+        // Light from the shared template — drops the `Light.clone()`
+        // recursive-structured-clone cost without breaking C6's
+        // per-light `.visible` (each placement still owns its own
+        // Object3D + parent) or three.js's one-parent-per-Object3D
+        // rule.
+        let inst;
+        if (!attachedAny) {
+          inst = lightObj;
+        } else {
+          if (template === null) template = getOrBuildLightTemplate(lightObj);
+          inst = createLightFromTemplate(template, null);
+        }
         attachedAny = true;
         object3D.add(inst);
         scene3d.activeLights.push(inst);
@@ -835,6 +852,129 @@ export async function attachSetupModelLights(scene3d, wasmExports) {
   }
 
   return summary;
+}
+
+// Perf C7 — per-source light template cache. Keyed off the source
+// THREE.Light returned by `makeThreeLightForSetupLight`. Each unique
+// source builds its template once; every placement past the first
+// reads from the cached template + constructs a fresh Light instance
+// via `createLightFromTemplate` (cheap direct property copy) instead
+// of `Object.clone()` (recursive structured clone, JSON deep-copies
+// `userData`, walks the children array, etc.).
+//
+// Why a WeakMap on the source light? The source is itself an
+// allocation we already pay for (the first placement uses it
+// directly); keying templates off it lets us GC both together when
+// the attach pass finishes. We never need to look up by setup id —
+// the call site already has the source light in scope from the outer
+// `for (const sl of setupLights)` loop.
+//
+// Why one template per source (not one per setupId)? Each `sl` in a
+// setup's lights table is its own distinct light (different position,
+// possibly different color/intensity/cone). One source → one
+// template; multiple placements of the same building → multiple
+// instances of that template.
+//
+// Why is "Option A" safe here? Each `sl` produces a single source
+// light via `makeThreeLightForSetupLight`. EVERY placement of that
+// setup (matching `partIndex`) uses that exact same `sl` — so color,
+// intensity, distance, decay, angle, penumbra, and the part-local
+// position are constant across placements. Only the parent (and
+// therefore the world-space position) varies. That makes the
+// "shared parameters, separate instances" precondition true.
+/** @type {WeakMap<any, { type: string, color: any, intensity: number, distance: number, decay: number, angle: number, penumbra: number, posX: number, posY: number, posZ: number, userData: any }>} */
+const lightTemplateCache = new WeakMap();
+
+/**
+ * Build (or return cached) per-source-light template carrying the
+ * constant render parameters + part-local position. Used by
+ * `createLightFromTemplate` to allocate fresh Light Object3Ds
+ * without paying `Object3D.clone()`'s deep-copy cost.
+ *
+ * The template's `userData` is the source light's `userData` by
+ * reference — every placement shares the same diagnostic bag. Safe
+ * because the only consumer (capture scripts) treats it as
+ * read-only.
+ */
+function getOrBuildLightTemplate(sourceLight) {
+  let template = lightTemplateCache.get(sourceLight);
+  if (template) return template;
+  // SpotLight has angle + penumbra; PointLight doesn't. We carry
+  // both fields anyway and `createLightFromTemplate` picks based on
+  // `type` — keeps the template shape uniform.
+  template = {
+    type: sourceLight.isSpotLight ? "SpotLight" : "PointLight",
+    color: sourceLight.color,
+    intensity: sourceLight.intensity,
+    distance: sourceLight.distance,
+    decay: sourceLight.decay,
+    angle: sourceLight.isSpotLight ? sourceLight.angle : 0,
+    penumbra: sourceLight.isSpotLight ? sourceLight.penumbra : 0,
+    posX: sourceLight.position.x,
+    posY: sourceLight.position.y,
+    posZ: sourceLight.position.z,
+    userData: sourceLight.userData,
+  };
+  lightTemplateCache.set(sourceLight, template);
+  return template;
+}
+
+/**
+ * Perf C7 — construct a fresh `THREE.PointLight` / `THREE.SpotLight`
+ * from a shared `lightInfo` template. Replaces `Object3D.clone()` at
+ * the per-placement hot path.
+ *
+ * Each call yields its OWN Object3D (its own `.parent`, its own
+ * `.visible`, its own `getWorldPosition` chain), so:
+ *   - C6's distance-sort still toggles `.visible` per-Light.
+ *   - Three.js's one-parent-per-Object3D rule is satisfied (every
+ *     placement parents its own instance).
+ *   - C6's throttle state (`_lightSortFrameCounter`,
+ *     `_lightSortLastFrame`, `_lightSortLastCount`) is untouched.
+ *
+ * @param {Object} template - from `getOrBuildLightTemplate`.
+ * @param {{x: number, y: number, z: number}|null} transform - part-
+ *   local position. `null` to use the template's cached position
+ *   (the common case — all placements of one `sl` share its
+ *   part-local origin).
+ */
+function createLightFromTemplate(template, transform) {
+  let light;
+  if (template.type === "SpotLight") {
+    light = new THREE.SpotLight(
+      template.color,
+      template.intensity,
+      template.distance,
+      template.angle,
+      template.penumbra,
+      template.decay
+    );
+  } else {
+    light = new THREE.PointLight(
+      template.color,
+      template.intensity,
+      template.distance,
+      template.decay
+    );
+  }
+  const px = transform ? transform.x : template.posX;
+  const py = transform ? transform.y : template.posY;
+  const pz = transform ? transform.z : template.posZ;
+  light.position.set(px, py, pz);
+  // Shallow-copy userData so each placement carries its own bag
+  // (mirrors three.js `Object3D.clone()`'s JSON deep-copy semantics
+  // without the JSON cost — userData is one nested object deep here).
+  const srcUd = template.userData;
+  if (srcUd) {
+    const ud = {};
+    for (const k in srcUd) {
+      if (Object.prototype.hasOwnProperty.call(srcUd, k)) {
+        ud[k] = srcUd[k];
+      }
+    }
+    light.userData = ud;
+  }
+  return light;
 }
 
 /**
