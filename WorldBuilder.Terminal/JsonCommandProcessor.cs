@@ -300,6 +300,7 @@ public class JsonCommandProcessor {
             ["chorizite-dump-world-object-taxonomy"] = CmdChoriziteDumpWorldObjectTaxonomy,
             ["chorizite-hash-string"] = CmdChoriziteHashString,
             ["chorizite-classify"] = CmdChoriziteClassify,
+            ["chorizite-dump-opcodes"] = CmdChoriziteDumpOpcodes,
             ["help"] = _ => CmdHelp(),
         };
 
@@ -380,6 +381,22 @@ public class JsonCommandProcessor {
             objDescFlags = $"0x{r.ObjDescFlags:X8}",
             weenieFlags = $"0x{r.WeenieFlags:X8}",
             objectClass = r.ObjectClass
+        });
+    }
+
+    private string CmdChoriziteDumpOpcodes(System.Text.Json.Nodes.JsonNode node) {
+        string? sourceRoot = node["sourceRoot"]?.GetValue<string>();
+        string? outputPath = node["outputPath"]?.GetValue<string>();
+        var r = _engine.ChoriziteDumpOpcodes(sourceRoot, outputPath);
+        return Serialize(new {
+            success = true,
+            command = "chorizite-dump-opcodes",
+            sourceRoot = r.SourceRoot,
+            vendoredHead = r.VendoredHead,
+            outputPath = r.OutputPath,
+            fileSizeBytes = r.FileSizeBytes,
+            enumCount = r.Enums.Count,
+            enumCounts = r.Enums.ToDictionary(kv => kv.Key, kv => kv.Value.Count)
         });
     }
 

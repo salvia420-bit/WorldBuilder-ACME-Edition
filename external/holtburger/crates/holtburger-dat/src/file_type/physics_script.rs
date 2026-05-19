@@ -29,8 +29,8 @@
 
 use crate::file_type::setup_model::AnimationHook;
 use binrw::{
-    BinRead, BinResult,
-    io::{Read, Seek},
+    BinRead, BinResult, BinWrite,
+    io::{Read, Seek, Write},
 };
 
 #[derive(Debug, Clone)]
@@ -44,6 +44,12 @@ impl PhysicsScriptData {
         let start_time = f64::read_le(reader)?;
         let hook = AnimationHook::read(reader)?;
         Ok(Self { start_time, hook })
+    }
+
+    pub fn write<W: Write + Seek>(&self, writer: &mut W) -> BinResult<()> {
+        self.start_time.write_le(writer)?;
+        self.hook.write(writer)?;
+        Ok(())
     }
 }
 
@@ -67,6 +73,28 @@ impl PhysicsScript {
     pub fn unpack(data: &[u8]) -> Result<Self, binrw::Error> {
         let mut cursor = std::io::Cursor::new(data);
         Self::read(&mut cursor)
+    }
+
+    /// Serialize this PhysicsScript back into the canonical DAT body
+    /// layout — `[id u32][count u32][PhysicsScriptData × count]` —
+    /// matching `PhysicsScript::Pack` / `PhysicsScriptData::Pack` in
+    /// retail (`acclient.c`, see `CreateParticleHook::Pack` at offset
+    /// `0x00527850` for the per-hook trailer).
+    pub fn write<W: Write + Seek>(&self, writer: &mut W) -> BinResult<()> {
+        self.id.write_le(writer)?;
+        (self.script_data.len() as u32).write_le(writer)?;
+        for entry in &self.script_data {
+            entry.write(writer)?;
+        }
+        Ok(())
+    }
+
+    /// Pack into a freshly allocated `Vec<u8>` — for byte-equal
+    /// round-trip parity tests against retail PhysicsScripts.
+    pub fn pack(&self) -> Result<Vec<u8>, binrw::Error> {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        self.write(&mut buf)?;
+        Ok(buf.into_inner())
     }
 }
 

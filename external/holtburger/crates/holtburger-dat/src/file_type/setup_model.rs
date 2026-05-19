@@ -5,6 +5,7 @@ use binrw::{
 };
 use holtburger_common::{Sphere, Vector3};
 use std::collections::HashMap;
+use std::io::Cursor;
 
 #[derive(Debug, Clone, BinRead, BinWrite)]
 #[br(little)]
@@ -34,6 +35,19 @@ pub struct LightInfo {
     pub cone_angle: f32,
 }
 
+/// Wire-level AnimationHook: `[u32 hook_type][i32 direction][variant payload][0..3 align pad]`.
+///
+/// `data` holds the variant payload PLUS the trailing 0..3 alignment-pad
+/// bytes that retail's `PackObj::ALIGN_PTR(addr, &size)` emits after every
+/// hook (acclient.c:296286 / 300284, called from `CAnimHook::UnPackHook`
+/// at acclient.c:343027 and `CAnimHook::PackHook` at acclient.c:342168).
+/// `write()` dumps `data` verbatim, so the round-trip is byte-equal.
+///
+/// Variant payload sizes match the 27-case `CAnimHook::UnPackHook` switch
+/// (acclient.c:342737–343026). The `ReplaceObject` variant follows
+/// `AnimPartChange::UnPack` (acclient.c:471699): 1 byte `part_index` then
+/// `Unpack_AsDataIDOfKnownType(0x01000000)` for the GfxObj part-id
+/// (acclient.c:667732).
 #[derive(Debug, Clone)]
 pub struct AnimationHook {
     pub hook_type: u32,
@@ -46,34 +60,35 @@ impl AnimationHook {
         let hook_type = u32::read_le(reader)?;
         let direction = i32::read_le(reader)?;
 
-        let data = match hook_type {
-            0 => Vec::new(),                      // NoOp
-            1 => read_exact_payload(reader, 4)?,  // Sound (Id)
-            2 => read_exact_payload(reader, 4)?,  // SoundTable (SoundType)
-            3 => read_exact_payload(reader, 28)?, // Attack (AttackCone)
-            4 => Vec::new(),                      // AnimationDone
+        let payload_start = reader.stream_position()?;
+        let mut data = match hook_type {
+            0 => Vec::new(),                       // NoOp
+            1 => read_exact_payload(reader, 4)?,   // Sound (gid_: u32)
+            2 => read_exact_payload(reader, 4)?,   // SoundTable (sound_type_: u32)
+            3 => read_exact_payload(reader, 28)?,  // Attack (AttackCone: i32 + 4 f32 + 2 f32)
+            4 => Vec::new(),                       // AnimationDone
             5 => read_replace_object_payload(reader)?,
-            6 => read_exact_payload(reader, 4)?, // Ethereal (Ethereal: i32)
-            7 => read_exact_payload(reader, 16)?, // TransparentPart
-            8 => read_exact_payload(reader, 12)?, // Luminous
-            9 => read_exact_payload(reader, 16)?, // LuminousPart
-            10 => read_exact_payload(reader, 12)?, // Diffuse
-            11 => read_exact_payload(reader, 16)?, // DiffusePart
-            12 => read_exact_payload(reader, 8)?, // Scale
-            13 => read_exact_payload(reader, 40)?, // CreateParticle
-            14 => read_exact_payload(reader, 4)?, // DestroyParticle
-            15 => read_exact_payload(reader, 4)?, // StopParticle
-            16 => read_exact_payload(reader, 4)?, // NoDraw
-            17 => Vec::new(),                    // DefaultScript
-            18 => read_exact_payload(reader, 4)?, // DefaultScriptPart
-            19 => read_exact_payload(reader, 8)?, // CallPES
-            20 => read_exact_payload(reader, 12)?, // Transparent
-            21 => read_exact_payload(reader, 16)?, // SoundTweaked
-            22 => read_exact_payload(reader, 12)?, // SetOmega
-            23 => read_exact_payload(reader, 8)?, // TextureVelocity
-            24 => read_exact_payload(reader, 12)?, // TextureVelocityPart
-            25 => read_exact_payload(reader, 4)?, // SetLight
-            26 => read_exact_payload(reader, 40)?, // CreateBlockingParticle
+            6 => read_exact_payload(reader, 4)?,   // Ethereal (ethereal: i32)
+            7 => read_exact_payload(reader, 16)?,  // TransparentPart (part u32 + 3 f32)
+            8 => read_exact_payload(reader, 12)?,  // Luminous (3 f32)
+            9 => read_exact_payload(reader, 16)?,  // LuminousPart (part u32 + 3 f32)
+            10 => read_exact_payload(reader, 12)?, // Diffuse (3 f32)
+            11 => read_exact_payload(reader, 16)?, // DiffusePart (part u32 + 3 f32)
+            12 => read_exact_payload(reader, 8)?,  // Scale (2 f32)
+            13 => read_exact_payload(reader, 40)?, // CreateParticle (gid + part + Frame + emitter_id)
+            14 => read_exact_payload(reader, 4)?,  // DestroyParticle (emitter_id u32)
+            15 => read_exact_payload(reader, 4)?,  // StopParticle (emitter_id u32)
+            16 => read_exact_payload(reader, 4)?,  // NoDraw (_no_draw: i32)
+            17 => Vec::new(),                      // DefaultScript
+            18 => read_exact_payload(reader, 4)?,  // DefaultScriptPart (_part_index: u32)
+            19 => read_exact_payload(reader, 8)?,  // CallPES (pes u32 + pause f32)
+            20 => read_exact_payload(reader, 12)?, // Transparent (3 f32)
+            21 => read_exact_payload(reader, 16)?, // SoundTweaked (gid + 3 f32)
+            22 => read_exact_payload(reader, 12)?, // SetOmega (Vector3)
+            23 => read_exact_payload(reader, 8)?,  // TextureVelocity (2 f32)
+            24 => read_exact_payload(reader, 12)?, // TextureVelocityPart (part u32 + 2 f32)
+            25 => read_exact_payload(reader, 4)?,  // SetLight (_lights_on: i32)
+            26 => read_exact_payload(reader, 40)?, // CreateBlockingParticle (same as CreateParticle)
             _ => {
                 return Err(binrw::Error::Custom {
                     pos: reader.stream_position()?,
@@ -84,6 +99,20 @@ impl AnimationHook {
                 });
             }
         };
+
+        // Mirror retail `PackObj::ALIGN_PTR(addr, &size)` — pad to a
+        // 4-byte boundary after each hook's variant payload. Only
+        // ReplaceObject (3 or 5 bytes) naturally requires padding; all
+        // other variants already end on a 4-byte boundary, so the loop
+        // is a no-op for them.
+        let payload_end = reader.stream_position()?;
+        let bytes_read = payload_end - payload_start;
+        let pad_len = ((4 - (bytes_read % 4)) % 4) as usize;
+        if pad_len > 0 {
+            let mut pad_buf = vec![0u8; pad_len];
+            reader.read_exact(&mut pad_buf)?;
+            data.extend_from_slice(&pad_buf);
+        }
 
         Ok(Self {
             hook_type,
@@ -98,6 +127,72 @@ impl AnimationHook {
         writer.write_all(&self.data)?;
         Ok(())
     }
+
+    /// If this hook is a `CreateParticle` (type 13) or `CreateBlockingParticle`
+    /// (type 26), decode the 40-byte payload into named fields.
+    ///
+    /// Retail wire layout, verbatim from `CreateParticleHook::UnPack`
+    /// (`acclient.c` decomp, offset `0x005278A0`):
+    /// ```text
+    ///   uint32 emitter_info_id     // ParticleEmitter (0x32xxxxxx) DID
+    ///   uint32 part_index          // Setup part this emitter attaches to
+    ///   Frame  offset              // Vector3 origin + Quaternion (w,x,y,z)
+    ///   uint32 emitter_id          // Per-script handle (Stop/Destroy keying)
+    /// ```
+    /// The struct declaration in `acclient.h` ("/* 6324 */ struct __cppobj
+    /// CreateParticleHook ... { IDClass<_tagDataID,32,0> emitter_info_id;
+    /// unsigned int part_index; Frame offset; unsigned int emitter_id; }")
+    /// matches this Pack/UnPack ordering byte-for-byte. Note: `dats.xml`
+    /// labels `EmitterInfoId` as a `<vector>` of `QualifiedDataId`, but the
+    /// retail Pack writes a single 4-byte scalar — the schema's `<vector>`
+    /// tag is misleading (see also memory note
+    /// `reference_ac_particle_emitter_format.md`).
+    pub fn as_create_particle(&self) -> Option<CreateParticleHookPayload> {
+        if self.hook_type != 13 && self.hook_type != 26 {
+            return None;
+        }
+        if self.data.len() != 40 {
+            return None;
+        }
+        let mut cursor = Cursor::new(&self.data[..]);
+        CreateParticleHookPayload::read(&mut cursor).ok()
+    }
+}
+
+/// Parsed view of a CreateParticle / CreateBlockingParticle hook payload.
+///
+/// Fields are in **wire order** (matches `CreateParticleHook::Pack` /
+/// `UnPack` at `0x00527850` / `0x005278A0` in retail). Pack with
+/// `write` to round-trip back to the original 40-byte slice.
+#[derive(Debug, Clone, BinRead, BinWrite, PartialEq)]
+#[br(little)]
+#[bw(little)]
+pub struct CreateParticleHookPayload {
+    /// ParticleEmitter DID (file_type prefix `0x32`). Single scalar uint
+    /// despite `dats.xml`'s `<vector>` tag — see `as_create_particle`
+    /// for the cite.
+    pub emitter_info_id: u32,
+    /// Index into the parent `SetupModel.parts` table — which part of
+    /// the model the emitter attaches to (`0xFFFFFFFF` for "root").
+    pub part_index: u32,
+    /// Local-space spawn transform (origin xyz + orientation wxyz).
+    pub offset: Frame,
+    /// Per-script handle. `DestroyParticleHook` / `StopParticleHook`
+    /// reference this id to tear the emitter down.
+    pub emitter_id: u32,
+}
+
+impl CreateParticleHookPayload {
+    /// Pack into a fresh 40-byte buffer (mirrors retail
+    /// `CreateParticleHook::Pack`).
+    pub fn to_bytes(&self) -> [u8; 40] {
+        let mut buf = [0u8; 40];
+        {
+            let mut cursor = Cursor::new(&mut buf[..]);
+            self.write_le(&mut cursor).expect("40-byte buffer is sufficient");
+        }
+        buf
+    }
 }
 
 fn read_exact_payload<R: Read + Seek>(reader: &mut R, payload_size: usize) -> BinResult<Vec<u8>> {
@@ -109,13 +204,17 @@ fn read_exact_payload<R: Read + Seek>(reader: &mut R, payload_size: usize) -> Bi
 }
 
 fn read_replace_object_payload<R: Read + Seek>(reader: &mut R) -> BinResult<Vec<u8>> {
-    let mut data = Vec::with_capacity(6);
+    let mut data = Vec::with_capacity(5);
 
-    let part_index = u16::read_le(reader)?;
-    data.extend_from_slice(&part_index.to_le_bytes());
+    // Retail `AnimPartChange::UnPack` (acclient.c:471699) reads ONE byte
+    // for `part_index`, NOT a u16. The dats.xml schema's `<field
+    // name="PartIndex" type="ushort"/>` is misleading on this point.
+    let part_index = u8::read(reader)?;
+    data.push(part_index);
 
-    // ACE reads the replacement part as ReadAsDataIDOfKnownType(0x01000000),
-    // which is stored as either a 2-byte or 4-byte packed suffix.
+    // `Unpack_AsDataIDOfKnownType(0x01000000)` (acclient.c:667732):
+    //   read u16 hi; if (hi & 0x8000) read another u16 lo.
+    // Total packed-id is either 2 or 4 bytes.
     let upper = u16::read_le(reader)?;
     data.extend_from_slice(&upper.to_le_bytes());
     if (upper & 0x8000) != 0 {
@@ -535,34 +634,64 @@ mod tests {
 
     #[test]
     fn animation_hook_replace_object_reads_compact_known_type_payload_without_desync() {
+        // Retail layout (acclient.c:471699 + 667732): 1 byte part_index,
+        // then u16 packed-id (high bit clear → "compact"). Total payload
+        // = 3 bytes, so PackObj::ALIGN_PTR emits 1 pad byte to reach the
+        // next 4-byte boundary.
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&5u32.to_le_bytes());
         bytes.extend_from_slice(&0i32.to_le_bytes());
-        bytes.extend_from_slice(&7u16.to_le_bytes());
-        bytes.extend_from_slice(&0x1234u16.to_le_bytes());
+        bytes.push(7u8);                              // part_index = 7
+        bytes.extend_from_slice(&0x1234u16.to_le_bytes()); // packed id (compact)
+        bytes.push(0u8);                              // align pad
 
         let hook = AnimationHook::read(&mut Cursor::new(bytes))
             .expect("replace-object hook with compact part id should parse");
 
         assert_eq!(hook.hook_type, 5);
         assert_eq!(hook.direction, 0);
-        assert_eq!(hook.data, vec![0x07, 0x00, 0x34, 0x12]);
+        // 1 byte part + 2 byte compact id + 1 byte pad
+        assert_eq!(hook.data, vec![0x07, 0x34, 0x12, 0x00]);
     }
 
     #[test]
     fn animation_hook_replace_object_reads_extended_known_type_payload_without_desync() {
+        // Extended packed id (upper word has 0x8000 set → 4-byte form).
+        // Total payload = 1 + 4 = 5 bytes → 3 pad bytes.
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&5u32.to_le_bytes());
         bytes.extend_from_slice(&1i32.to_le_bytes());
-        bytes.extend_from_slice(&9u16.to_le_bytes());
-        bytes.extend_from_slice(&0x8001u16.to_le_bytes());
-        bytes.extend_from_slice(&0x2345u16.to_le_bytes());
+        bytes.push(9u8);                              // part_index = 9
+        bytes.extend_from_slice(&0x8001u16.to_le_bytes()); // packed id high (extended)
+        bytes.extend_from_slice(&0x2345u16.to_le_bytes()); // packed id low
+        bytes.extend_from_slice(&[0u8, 0u8, 0u8]);    // align pad (3 bytes)
 
         let hook = AnimationHook::read(&mut Cursor::new(bytes))
             .expect("replace-object hook with extended part id should parse");
 
         assert_eq!(hook.hook_type, 5);
         assert_eq!(hook.direction, 1);
-        assert_eq!(hook.data, vec![0x09, 0x00, 0x01, 0x80, 0x45, 0x23]);
+        // 1 byte part + 4 byte extended id + 3 byte pad
+        assert_eq!(hook.data, vec![0x09, 0x01, 0x80, 0x45, 0x23, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn animation_hook_round_trips_byte_equal_with_replace_object_padding() {
+        // ReplaceObject is the one variant whose payload is non-aligned;
+        // verify the round-trip explicitly so a regression in the
+        // padding logic surfaces immediately.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&5u32.to_le_bytes());
+        bytes.extend_from_slice(&(-1i32).to_le_bytes());
+        bytes.push(3u8);
+        bytes.extend_from_slice(&0x4242u16.to_le_bytes());
+        bytes.push(0u8);
+
+        let hook = AnimationHook::read(&mut Cursor::new(&bytes[..])).expect("parse");
+
+        let mut out = Vec::new();
+        let mut cursor = Cursor::new(&mut out);
+        hook.write(&mut cursor).expect("write");
+        assert_eq!(out, bytes, "byte-equal round trip");
     }
 }

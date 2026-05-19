@@ -16,7 +16,7 @@ namespace WorldBuilder.Terminal;
 /// at <c>external/holtburger/apps/holtburger-web/CHORIZITE_PORTING_PLAN.md</c>
 /// §12 for the strategic context.
 ///
-/// Three classes of command live here:
+/// Commands in this file:
 ///
 ///   - <c>chorizite-dump-enum-values</c> — reflect over the
 ///     <c>Chorizite.Common.Enums</c> namespace; emit int → name JSON for any
@@ -31,6 +31,13 @@ namespace WorldBuilder.Terminal;
 ///     Windows-1252, 28-bit accumulator). Used as DAT EnumMapper / StringTable
 ///     key. NOT the same as the packet checksum (Hash32). See the
 ///     DatReaderWriter.Extensions reading guide §5 for why these are distinct.
+///   - <c>chorizite-dump-opcodes</c> — file-system parse the
+///     <c>Chorizite.ACProtocol/Enums/{C2S,S2C}MessageType.generated.cs</c> and
+///     <c>{GameAction,GameEvent}Type.generated.cs</c> + <c>GameMessageGroup</c>
+///     enums. Emit a canonical { enumName: { "0xHEX": "name" } } JSON used by
+///     the <c>holtburger-protocol</c> opcode_parity test to gate drift between
+///     Chorizite.ACProtocol (upstream protocol oracle) and our Rust
+///     <c>GameOpcode</c> / <c>GameActionOpcode</c> / <c>GameEventOpcode</c> enums.
 /// </summary>
 public partial class CommandEngine {
 
@@ -389,5 +396,212 @@ public partial class CommandEngine {
         }
 
         return new ChoriziteClassifyResult(itemType, objDescFlags, weenieFlags, objectClass);
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    //  chorizite-dump-opcodes (TASK 2E — ACProtocol vs holtburger parity)
+    // ─────────────────────────────────────────────────────────────────
+
+    public sealed record ChoriziteOpcodeDumpResult(
+        string SourceRoot,
+        string VendoredHead,
+        string OutputPath,
+        long FileSizeBytes,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> Enums
+    );
+
+    /// <summary>
+    /// Parse Chorizite.ACProtocol opcode enums by regex over the .generated.cs
+    /// source files. We DO NOT take a hard ProjectReference on
+    /// <c>Chorizite.ACProtocol.csproj</c> because its <c>netstandard2.0</c>
+    /// target adds non-trivial transitive deps (Medo.PcapRW, System.CodeDom)
+    /// to the WB.Terminal binary; the source files themselves are stable
+    /// canonical-form generated code from the upstream <c>protocol.xml</c>,
+    /// and a regex extractor mirrors the file-walking pattern already in
+    /// <see cref="ChoriziteDumpWorldObjectTaxonomy"/>.
+    ///
+    /// Targets five opcode enums:
+    ///   - <c>C2SMessageType</c>     — C2S top-level opcodes
+    ///   - <c>S2CMessageType</c>     — S2C top-level opcodes
+    ///   - <c>GameActionType</c>     — C2S Ordered (0xF7B1) sub-opcodes
+    ///   - <c>GameEventType</c>      — S2C Ordered (0xF7B0) sub-opcodes
+    ///   - <c>GameMessageGroup</c>   — protocol fragment-group categories
+    ///
+    /// The JSON shape is intentionally flatter than
+    /// <c>chorizite-dump-enum-values</c> — value-as-hex-string keys, name as
+    /// scalar value — because the parity test asserts on (enum, hex, name)
+    /// triples and doesn't need the underlyingType/isFlags metadata.
+    /// </summary>
+    public ChoriziteOpcodeDumpResult ChoriziteDumpOpcodes(string? sourceRoot, string? outputPath) {
+        var root = string.IsNullOrWhiteSpace(sourceRoot) ? DefaultChoriziteSourceRoot : sourceRoot;
+        var enumsDir = Path.Combine(root, "Chorizite.ACProtocol", "Chorizite.ACProtocol", "Enums");
+        if (!Directory.Exists(enumsDir)) {
+            throw new DirectoryNotFoundException(
+                $"Chorizite.ACProtocol/Enums not found at {enumsDir}. Verify external/chorizite/Chorizite.ACProtocol is vendored.");
+        }
+
+        // Look up vendored HEAD via git rev-parse on the ACProtocol .git dir
+        // if present, else fall back to the chorizite-root .git.
+        string vendoredHead = "unknown";
+        var gitDirCandidates = new[] {
+            Path.Combine(root, "Chorizite.ACProtocol", ".git"),
+            Path.Combine(root, ".git"),
+        };
+        foreach (var gitDir in gitDirCandidates) {
+            if (!Directory.Exists(gitDir)) continue;
+            var headFile = Path.Combine(gitDir, "HEAD");
+            if (!File.Exists(headFile)) continue;
+            var content = File.ReadAllText(headFile).Trim();
+            if (content.StartsWith("ref:")) {
+                var refPath = Path.Combine(gitDir, content.Substring(4).Trim());
+                if (File.Exists(refPath)) {
+                    var sha = File.ReadAllText(refPath).Trim();
+                    vendoredHead = sha.Length >= 7 ? sha.Substring(0, 7) : sha;
+                    break;
+                }
+            } else {
+                vendoredHead = content.Length >= 7 ? content.Substring(0, 7) : content;
+                break;
+            }
+        }
+
+        // Regex: capture "Name = 0xHEX," entries inside an enum body.
+        // The .generated.cs files have one entry per stanza separated by
+        // blank lines, all of the form:
+        //     Identifier_Name = 0xABCD,
+        var memberRe = new Regex(
+            @"^\s*(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*0x(?<hex>[0-9A-Fa-f]+)\s*,\s*$",
+            RegexOptions.Compiled | RegexOptions.Multiline);
+
+        var targetEnums = new[] {
+            "C2SMessageType",
+            "S2CMessageType",
+            "GameActionType",
+            "GameEventType",
+            "GameMessageGroup",
+        };
+
+        // Use OrderedDictionary semantics — preserve target order in output.
+        var enums = new Dictionary<string, IReadOnlyDictionary<string, string>>(
+            capacity: targetEnums.Length);
+
+        foreach (var enumName in targetEnums) {
+            var file = Path.Combine(enumsDir, $"{enumName}.generated.cs");
+            if (!File.Exists(file)) {
+                throw new FileNotFoundException(
+                    $"Expected ACProtocol enum source not found: {file}");
+            }
+            var src = File.ReadAllText(file);
+
+            // Sort members by numeric value for stable diffing. Note: a few
+            // enums (notably GameMessageGroup) have duplicate values — those
+            // are folded by JSON key (last write wins on the hex key), which
+            // is the correct behavior for an opcode→name lookup table.
+            // We capture all values though, then resolve dupes by ordering.
+            var captured = memberRe.Matches(src);
+            var byHex = new SortedDictionary<long, (string Hex, string Name)>();
+            foreach (Match m in captured) {
+                var name = m.Groups["name"].Value;
+                var hex = m.Groups["hex"].Value;
+                long value = Convert.ToInt64(hex, 16);
+                // Pad to 4 hex digits for opcodes < 0x10000; 8 for larger.
+                // Pick width based on max value range — but the canonical
+                // form used elsewhere (canonical_classify.js etc) zero-pads
+                // to 4 for game opcodes since they fit in u16 visually.
+                // Spec says "4-digit hex string keys" — so use 4-digit form
+                // for values <= 0xFFFF, 8-digit for larger (xFFxxxx).
+                string hexKey = value <= 0xFFFF
+                    ? $"0x{value:X4}"
+                    : $"0x{value:X8}";
+                // If duplicate value, prefer the first name we saw (matches
+                // C# enum reflection: Enum.GetName returns the FIRST member
+                // with that value).
+                if (!byHex.ContainsKey(value)) {
+                    byHex[value] = (hexKey, name);
+                }
+            }
+            if (byHex.Count == 0) {
+                throw new InvalidDataException(
+                    $"No enum members parsed from {file}. Check regex/sources.");
+            }
+            var membersByHex = new Dictionary<string, string>(byHex.Count);
+            foreach (var kv in byHex.Values) {
+                membersByHex[kv.Hex] = kv.Name;
+            }
+            enums[enumName] = membersByHex;
+        }
+
+        // Default output path matches the conventions for other chorizite-* JSON
+        // dumps under the holtburger-web/data/chorizite/ tree.
+        if (string.IsNullOrWhiteSpace(outputPath)) {
+            // Walk up from sourceRoot two parents (external/chorizite/..) to
+            // reach the repo root, then join the canonical holtburger data path.
+            var repoRoot = Path.GetFullPath(Path.Combine(root, "..", ".."));
+            outputPath = Path.Combine(repoRoot,
+                "external", "holtburger", "apps", "holtburger-web",
+                "data", "chorizite", "chorizite-acprotocol-opcodes.json");
+        }
+
+        // Serialize with stable formatting. We hand-write the JSON so the
+        // output is deterministic (System.Text.Json reorders dictionary keys
+        // alphabetically; we want enums in target order and hex keys in
+        // numeric order). Keep it tidy with 2-space indent.
+        var sb = new StringBuilder();
+        sb.Append("{\n");
+        sb.Append("  \"generatedBy\": \"WorldBuilder.Terminal chorizite-dump-opcodes\",\n");
+        sb.Append("  \"source\": \"Chorizite.ACProtocol/Enums/*.generated.cs (vendored at external/chorizite/Chorizite.ACProtocol/)\",\n");
+        sb.Append("  \"vendoredHead\": \"" + EscapeJson(vendoredHead) + "\",\n");
+        sb.Append("  \"enums\": {\n");
+        bool firstEnum = true;
+        foreach (var enumName in targetEnums) {
+            if (!firstEnum) sb.Append(",\n");
+            firstEnum = false;
+            sb.Append("    \"" + enumName + "\": {");
+            var members = enums[enumName];
+            // Re-sort the keys numerically for deterministic write order.
+            var ordered = members.OrderBy(kv => Convert.ToInt64(kv.Key.Substring(2), 16)).ToList();
+            bool firstMember = true;
+            foreach (var kv in ordered) {
+                if (!firstMember) sb.Append(",");
+                firstMember = false;
+                sb.Append("\n      \"" + kv.Key + "\": \"" + EscapeJson(kv.Value) + "\"");
+            }
+            sb.Append("\n    }");
+        }
+        sb.Append("\n  }\n}\n");
+
+        var jsonText = sb.ToString();
+        // Ensure the output directory exists.
+        var outDir = Path.GetDirectoryName(outputPath);
+        if (!string.IsNullOrEmpty(outDir) && !Directory.Exists(outDir)) {
+            Directory.CreateDirectory(outDir);
+        }
+        File.WriteAllText(outputPath, jsonText);
+        var fileSize = new FileInfo(outputPath).Length;
+
+        return new ChoriziteOpcodeDumpResult(
+            SourceRoot: root,
+            VendoredHead: vendoredHead,
+            OutputPath: outputPath,
+            FileSizeBytes: fileSize,
+            Enums: enums);
+    }
+
+    /// <summary>JSON-escape a string. Inputs here are enum-member names and
+    /// short git SHAs, so we only need the minimal escapes.</summary>
+    private static string EscapeJson(string s) {
+        if (s.IndexOfAny(new[] { '\\', '"', '\n', '\r', '\t' }) < 0) return s;
+        var sb = new StringBuilder(s.Length + 4);
+        foreach (var c in s) {
+            switch (c) {
+                case '\\': sb.Append("\\\\"); break;
+                case '"': sb.Append("\\\""); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                default: sb.Append(c); break;
+            }
+        }
+        return sb.ToString();
     }
 }

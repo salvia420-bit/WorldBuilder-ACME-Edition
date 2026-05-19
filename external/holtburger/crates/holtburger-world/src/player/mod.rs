@@ -1,6 +1,7 @@
 pub mod magic;
 pub mod movement;
 pub mod mutations;
+pub mod skill_formula;
 pub mod stats_calc;
 pub mod types;
 

@@ -361,6 +361,22 @@ impl AmbientSoundDesc {
         })
     }
 
+    /// Reverse of [`AmbientSoundDesc::unpack`] — writes the 5 little-endian
+    /// scalar fields in wire order. `is_continuous` is NOT emitted (it is
+    /// derived from `base_chance == 0.0` client-side per
+    /// `external/GDL/PhatSDK/SoundDesc.cpp:78`).
+    ///
+    /// Mirrors ACE/DatReaderWriter `dats.xml:2865-2871` and PhatSDK
+    /// `AmbientSoundDesc::UnPack` (no separate Pack — `DEFINE_PACK` is
+    /// `UNFINISHED()` in PhatSDK; this is the inverse of UnPack).
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.s_type.to_le_bytes());
+        out.extend_from_slice(&self.volume.to_le_bytes());
+        out.extend_from_slice(&self.base_chance.to_le_bytes());
+        out.extend_from_slice(&self.min_rate.to_le_bytes());
+        out.extend_from_slice(&self.max_rate.to_le_bytes());
+    }
+
     /// Derived "continuous loop" flag — `true` iff `base_chance` is
     /// exactly `0.0`. Mirrors PhatSDK's
     /// `sound->is_continuous = sound->base_chance == 0.0f` in
@@ -392,6 +408,18 @@ impl AmbientSTBDesc {
             ambient_sounds,
         })
     }
+
+    /// Reverse of [`AmbientSTBDesc::unpack`] — writes `stb_id`, length-prefixed
+    /// list of `AmbientSoundDesc`s. Mirrors PhatSDK
+    /// `AmbientSTBDesc::UnPack` in `external/GDL/PhatSDK/SoundDesc.cpp:65-85`
+    /// and ACE/DatReaderWriter `dats.xml:2860-2864`.
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.stb_id.to_le_bytes());
+        out.extend_from_slice(&(self.ambient_sounds.len() as u32).to_le_bytes());
+        for s in &self.ambient_sounds {
+            s.pack(out);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -407,6 +435,20 @@ impl SoundDesc {
             stb_descs.push(AmbientSTBDesc::unpack(reader)?);
         }
         Ok(SoundDesc { stb_descs })
+    }
+
+    /// Reverse of [`SoundDesc::unpack`] — emits the canonical wire
+    /// representation: `u32 num_stb_descs` followed by that many
+    /// [`AmbientSTBDesc`] records. Mirrors PhatSDK
+    /// `CSoundDesc::UnPack` in `external/GDL/PhatSDK/SoundDesc.cpp:27-41`
+    /// and ACE/DatReaderWriter `dats.xml:2856-2859`. Used by the
+    /// `region_sound_info_parity` test to round-trip retail
+    /// `client_portal.dat` bytes.
+    pub fn pack(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&(self.stb_descs.len() as u32).to_le_bytes());
+        for stb in &self.stb_descs {
+            stb.pack(out);
+        }
     }
 }
 
