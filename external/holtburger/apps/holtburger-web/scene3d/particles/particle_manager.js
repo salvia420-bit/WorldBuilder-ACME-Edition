@@ -20,6 +20,36 @@ import * as THREE from "three";
 import { ParticleEmitter } from "./particle_emitter.js";
 import { ParticleEmitterInfo } from "./particle_emitter_info.js";
 
+// Perf E5 (2026-05-18) — URL escape hatch `?particleSortObjects=off`.
+// Read once at module-load; stash on `window.__particleSortObjects` so the
+// scene-construction site (scene3d/index.js:301, `new THREE.Scene()`) can
+// pick it up and set `scene.sortObjects = false`. Default ON (existing
+// behaviour). This is intentionally a window-globals handoff: this file
+// has no reference to the THREE.Scene root (we only see `opts.scene` per
+// emitter, which is typically a child Group like worldRoot, not the root).
+//
+// TODO(E5): scene3d/index.js (where `new THREE.Scene()` lives) should
+// honour `window.__particleSortObjects === false` immediately after
+// constructing the Scene. One-line wiring:
+//   if (window.__particleSortObjects === false) scene.sortObjects = false;
+{
+  let sortObjects = true;
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      const params = new URLSearchParams(window.location.search);
+      const v = params.get("particleSortObjects");
+      if (v != null && v.toLowerCase() === "off") {
+        sortObjects = false;
+      }
+    }
+  } catch (_) {
+    // SSR / non-browser context (tests): leave default ON.
+  }
+  if (typeof window !== "undefined") {
+    window.__particleSortObjects = sortObjects;
+  }
+}
+
 // Perf E3 (2026-05-18) — dispose helper for `destroyParticleEmitter` to
 // free per-slot cloned materials. Mirrors the `__disposable` /
 // `__cacheOwned` tag convention introduced by B3 in entities.js (commit
@@ -118,7 +148,32 @@ export class ParticleManager {
         // opacity lerps don't stomp neighbors.
         const mat = baseMaterial ? baseMaterial.clone() : null;
         if (mat) {
+          // Perf E5 (2026-05-18) — material-flag classification by AC
+          // BlendMode. Neither `holtburger_dat::ParticleEmitter` (the DAT
+          // struct) nor the wasm `ParticleEmitterJs` getter surface (see
+          // src/lib.rs:18315) carry a blend-mode field — AC determines
+          // particle blending from the referenced GfxObj's material, not
+          // from the emitter record. Per the E5 briefing, that means the
+          // JS particle layer has no per-emitter classification to branch
+          // on, so we ship the agreed conservative middle ground for ALL
+          // particles: `transparent=true` + `alphaTest=0.1` + `depthWrite
+          // =true`. The alphaTest catches near-zero alpha and enables
+          // depth-write for those pixels, which is most of the depth-write
+          // win even on soft-edged sprites. Default blending remains
+          // `THREE.NormalBlending` (cloned from baseMaterial).
+          //
+          // TODO(E5): per-emitter BlendMode classification (Additive vs
+          // Alpha) requires `particle_emitter_info.js` (and upstream
+          // `ParticleEmitterJs` in src/lib.rs + the `holtburger_dat`
+          // `ParticleEmitter` struct) to expose a blend-mode field. The
+          // intended branch when that lands:
+          //   - Additive (BlendMode::Add): transparent=true,
+          //     blending=THREE.AdditiveBlending, depthWrite=false, no
+          //     alphaTest.
+          //   - Alpha (BlendMode::Alpha): the current conservative path.
           mat.transparent = true;
+          mat.alphaTest = 0.1;
+          mat.depthWrite = true;
           // Perf E3 (2026-05-18): tag the clone so destroyParticleEmitter()
           // can dispose it. The base material from materialFactory may be
           // cache-owned — only the per-slot CLONE is owned by this emitter.
