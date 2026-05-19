@@ -14,7 +14,7 @@ Same as the main plan — see the "Lessons & conventions from waves 1–5" secti
 ## Tasks
 
 ### FU1 — Wire `?particleSortObjects` flag into scene
-**Severity** Low • **File** `scene3d/index.js` • **Status** Open
+**Severity** Low • **File** `scene3d/index.js` • **Status** ✅ Done (commit `221fa1c`)
 
 **Problem.** E5 (`e1339af`) plumbed the URL flag to `window.__particleSortObjects` but left the scene-construction read site as a TODO.
 
@@ -32,7 +32,7 @@ if (typeof window !== "undefined" && window.__particleSortObjects === false) {
 ---
 
 ### FU2 — Distance-tier follow-on for statics + buildings receiveShadow
-**Severity** Med • **Files** `scene3d/statics.js`, `scene3d/buildings.js` • **Status** Open
+**Severity** Med • **Files** `scene3d/statics.js`, `scene3d/buildings.js` • **Status** ✅ Done (commit `87f2d12` — singleton Mesh path gets per-placement distSq < 60² gate; InstancedMesh keeps low-preset-only gate per option (b); spawn-point reference = Holtburg LB centre)
 
 **Problem.** C2 (`8ceafa0`) and C3 (`ac89f08`) shipped the `low`-preset gate but left the full audit recommendation as TODOs at multiple sites. The audit's full fix: at `mid`/`high`/`ultra`, foreground statics + buildings within ~60 m get `receiveShadow=true`; beyond → `false`.
 
@@ -53,7 +53,7 @@ if (typeof window !== "undefined" && window.__particleSortObjects === false) {
 ---
 
 ### FU3 — AnimationCache shared-geometry gate in `_disposeMeshChildren`
-**Severity** Low (B3 TODO follow-on) • **File** `scene3d/entities.js` • **Status** Open
+**Severity** Low (B3 TODO follow-on) • **File** `scene3d/entities.js` • **Status** ✅ Done (commit `caa74b8` — confirmed AnimationCache returns by reference; both `_disposeMeshChildren` AND the legacy `inst.geometries[]` loop in `Entity.dispose()` now gated on `__disposable`; selection-ring TorusGeometry already tagged by B3)
 
 **Problem.** B3 (`5f4b8a6`) shipped `_disposeMeshChildren` with unconditional `geometry.dispose()`. The doc-comment caveat at the top of entities.js flags that `AnimationCache` shares `BufferGeometry` across spawns of the same `setupId` — so unconditional dispose could free shared cached geometry, breaking other entities.
 
@@ -71,7 +71,7 @@ Either way, the dispose helper becomes consistent: only tagged resources get fre
 ---
 
 ### FU4 — Per-emitter BlendMode classification for E5's Additive/Alpha branch
-**Severity** Low • **Files** `scene3d/particles/particle_manager.js` (+ maybe `particle_emitter_info.js`) • **Status** Open
+**Severity** Low • **Files** `scene3d/particles/particle_manager.js` • **Status** ✅ Done (commit `897f7cb` — signal IS in upstream materials: `baseMaterial.blending===THREE.AdditiveBlending` (materials.js:1001) + fallback via `userData.surfaceTypeFlags & 0x10000`; per-emitter branch hoisted out of meshFactory so all slots take the same path)
 
 **Problem.** E5 (`e1339af`) shipped the conservative fallback (`transparent=true` + `alphaTest=0.1` + `depthWrite=true`) for ALL particles because the wasm/Rust DAT layer doesn't expose blend mode. But AC reads blend mode from the **referenced GfxObj's surface material** — not from the emitter record itself — and that material IS already accessible at JS-side material setup time.
 
@@ -94,7 +94,7 @@ If NO signal is available after the audit, leave a `TODO(FU4)` breadcrumb explai
 ---
 
 ### FU5 — C1 envcell-fusion A/B capture harness
-**Severity** Med • **New file** `apps/holtburger-web/capture_envcell_fusion_ab.cjs` • **Status** Open
+**Severity** Med • **New file** `apps/holtburger-web/capture_envcell_fusion_ab.cjs` • **Status** ✅ Done (commit `4bc44a6` — 848-line Playwright-based harness; 6 indoor waypoints lifted from `capture_academy_tour.cjs:185-192`; inline 8×8 luma-windowed SSIM fallback since `ssim.js` isn't installed; pass criteria SSIM > 0.995 AND draw-call ratio ≥ 3×; outputs to `/mnt/wbterminal1/tmp/claude-scratch/fps-followon/envcell-fusion-ab/`)
 
 **Problem.** C1 (`bd38a54`) shipped behind `?envcellFusion=1` with diagnostic counters but no automated A/B comparison. The headline indoor frametime win is gated on someone running the comparison; this harness automates it.
 
