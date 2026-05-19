@@ -87,14 +87,32 @@ export class WorldObjectManager extends EventTarget {
     }
     const { guid, classId, itemType, objDescFlags, weenieFlags } = this.#normalizeCreationPayload(event);
     const objectClassName = canonicalClassify(itemType, objDescFlags, weenieFlags);
-    const Constructor = CONSTRUCTOR_BY_NAME[objectClassName] ?? WorldObject;
+
+    // Three-way dispatch (entity-completeness §5 + ACPlugin behavior at
+    // World.cs:622-706 — for ObjectClass values our 30-class JS roster
+    // doesn't model, ACPlugin instantiates `Item` as the catch-all rather
+    // than the WorldObject sentinel). Preserves more taxonomy info than
+    // collapsing every gap to WorldObject.
+    //   canonicalClass in roster → that constructor, source='canonical'
+    //   canonicalClass not in roster AND not Unknown → Item, source='canonical-item-fallback'
+    //   Unknown → WorldObject sentinel, source='unknown'
+    let Constructor, classificationSource;
+    if (objectClassName === 'Unknown') {
+      Constructor = WorldObject;
+      classificationSource = 'unknown';
+    } else if (CONSTRUCTOR_BY_NAME[objectClassName]) {
+      Constructor = CONSTRUCTOR_BY_NAME[objectClassName];
+      classificationSource = 'canonical';
+    } else {
+      Constructor = Item;
+      classificationSource = 'canonical-item-fallback';
+    }
     const wo = new Constructor(guid, classId, this.taxonomy, this.enums);
     wo.objDescFlags = objDescFlags;
     wo.weenieFlags = weenieFlags;
-    // Entity-completeness §5 fallback discipline: tag classification source
-    // so the validator (Phase E.D) can count Unknown instances.
-    wo.classificationSource = (objectClassName === 'Unknown') ? 'unknown' : 'canonical';
-    if (wo.classificationSource === 'unknown') {
+    wo.canonicalObjectClass = objectClassName; // preserved even when Constructor is Item-fallback
+    wo.classificationSource = classificationSource;
+    if (classificationSource === 'unknown') {
       console.info(
         `[wom] canonical classifier returned Unknown for guid=0x${guid.toString(16).padStart(8, '0')} ` +
         `wcid=0x${classId.toString(16).padStart(8, '0')} ` +
@@ -109,7 +127,7 @@ export class WorldObjectManager extends EventTarget {
     if (event.name) wo.stringValues.set(1, event.name);
     this.objects.set(guid, wo);
     this.dispatchEvent(new CustomEvent('created', {
-      detail: { object: wo, resolved: objectClassName, source: wo.classificationSource },
+      detail: { object: wo, resolved: objectClassName, source: classificationSource },
     }));
     return wo;
   }
@@ -145,15 +163,21 @@ export class WorldObjectManager extends EventTarget {
   snapshot() {
     const objects = [];
     const byClass = new Map();
+    const byCanonical = new Map();
     let unknownCount = 0;
+    let itemFallbackCount = 0;
     for (const wo of this.objects.values()) {
       const cls = wo.constructor.name;
       byClass.set(cls, (byClass.get(cls) ?? 0) + 1);
+      const canonical = wo.canonicalObjectClass ?? '(unset)';
+      byCanonical.set(canonical, (byCanonical.get(canonical) ?? 0) + 1);
       if (wo.classificationSource === 'unknown') unknownCount++;
+      if (wo.classificationSource === 'canonical-item-fallback') itemFallbackCount++;
       objects.push({
         guid: wo.id,
         classId: wo.classId,
         className: cls,
+        canonicalObjectClass: wo.canonicalObjectClass ?? null,
         classificationSource: wo.classificationSource ?? null,
         itemType: wo.intValues.get(1) ?? 0,
         objDescFlags: wo.objDescFlags ?? 0,
@@ -166,7 +190,9 @@ export class WorldObjectManager extends EventTarget {
       loaded: this.loaded,
       total: objects.length,
       unknownCount,
+      itemFallbackCount,
       byClass: Object.fromEntries([...byClass.entries()].sort((a, b) => b[1] - a[1])),
+      byCanonical: Object.fromEntries([...byCanonical.entries()].sort((a, b) => b[1] - a[1])),
       objects,
     };
   }

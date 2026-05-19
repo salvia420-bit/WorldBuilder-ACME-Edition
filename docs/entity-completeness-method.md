@@ -167,7 +167,7 @@ The validator IS the source of truth. If parity fails, the renderer's port is wr
 | **E.C** Wire | WorldObjectManager dispatch uses canonicalClassify; WorldObject sentinel + classificationSource tag | ✓ shipped (commit `509abef`) |
 | **E.D** Validate (synthetic) | validate_entity_classification.cjs — 56-case branch-coverage validator over canonicalClassify; reports class distribution + coverage gap if any of 42 ObjectClass values goes untested | ✓ shipped — 56/56 pass, 42/42 ObjectClass values exercised |
 | **E.E** Cross-port | `chorizite-classify` WB.Terminal command (1:1 C# port of same algorithm); `scripts/cross_port_parity.cjs` pipes 48 cases through both ports, asserts byte-identical output | ✓ shipped — 48/48 parity |
-| **E.F** Validate (live capture) | `capture_entity_classifications.cjs` — Playwright/CDP capture against live ACE; spawns into Holtburg, drains the ObjectCreate burst, captures `window.__wom.snapshot()`, asserts class distribution + Unknown count ≤ tolerance | ✓ shipped (script ready); awaiting operator run against live ACE |
+| **E.F** Validate (live capture) | `capture_entity_classifications.cjs` — Playwright/CDP capture against live ACE; spawns into Holtburg, drains the ObjectCreate burst, captures `window.__wom.snapshot()`, asserts class distribution + Unknown count ≤ tolerance | ✓ shipped + first run executed 2026-05-19; surfaced 6 upstream-faithful Unknowns (Writable-without-Book items) + 5 Item-fallbacks (canonical Money/Misc → Item, matching ACPlugin's World.cs:622-706); informed dispatch + threshold tuning (see §E.F findings below) |
 
 CI hook for the three validators (E.D synthetic, E.E cross-port, E.F live) is not yet automated. E.D and E.E run without external dependencies and can be wired into any pre-commit / CI workflow today (`node validate_entity_classification.cjs` + `node scripts/cross_port_parity.cjs`). E.F requires the holtburger-web dev server + a live ACE; suited to a periodic / nightly job rather than per-commit.
 
@@ -183,6 +183,25 @@ The capture script's default scenario:
 7. Print class distribution + sample-by-class to stdout; full JSON snapshot to disk; screenshot to disk.
 
 The script exits 0 on PASS, 1 on coverage/Unknown failure, 2 on infra error.
+
+### E.F first-run findings (2026-05-19)
+
+First live run against local ACE at Holtburg character-creation spawn produced 36 entities classified. Two interesting outcomes shaped the dispatch + threshold tuning:
+
+**Finding 1 — Item-fallback dispatch is needed for ObjectClass values our JS skeleton doesn't model.**
+- Canonical classifier returned `Money` (Pyreal), `Misc` (Pathwarden Token, "Training Area", 2× "Door" item wcids) — all valid `ObjectClass` enum values.
+- Our `CONSTRUCTOR_BY_NAME` table maps 30 of the 42 ObjectClass values to typed JS classes (mirroring ACPlugin's 24 `WorldObjects/` subclasses).
+- For ObjectClass values not in our roster (Money, Misc, Plant, Bundle, Services, BaseCooking, BaseAlchemy, BaseFletching, CraftedFletching, Salvage, HealingKit, Lockpick, Book, Journal, Sign, WandStaffOrb), ACPlugin's `World.cs:622-706` switch falls back to `Item`.
+- Fix: `WorldObjectManager` now dispatches via three-way: typed-class-in-roster → `'canonical'`; ObjectClass-not-in-roster → `Item` with source `'canonical-item-fallback'`; `Unknown` → `WorldObject` sentinel with source `'unknown'`.
+- Snapshot now reports `itemFallbackCount` separately from `unknownCount` so the validator can distinguish "we don't model this typed class yet" from "the classifier doesn't recognize this input."
+
+**Finding 2 — `Writable`-without-Book items return Unknown from the classifier — upstream-faithful.**
+- 6 entities surfaced as `Unknown`: "Letter From Home", "VIEW CONTROLS", "WIELDING ITEMS", "COMBAT BAR", "STATUS BARS", "Restoring the Training Academies". All `itemType=0x2000 (Writable)` with `objDescFlags=0` and `weenieFlags=0`.
+- Tracing the algorithm: ACPlugin's `GetObjectClass` only classifies `Writable` items when combined with `Book` (→ Journal/Sign/Book) or `Spell` (→ Scroll). A `Writable`-only payload falls through to `Unknown`.
+- This is **upstream-faithful behavior**, not a port bug. ACPlugin's algorithm intentionally doesn't classify these; downstream `World.cs:622-706` would instantiate `Item` as the catch-all (which our Item-fallback dispatch now mirrors).
+- Default `ECF_MAX_UNKNOWN_TOL` raised from 0 → 10 to accommodate this known upstream gap (we observed 6; padding allows for ACE variations). Operator can tighten via env var for drift detection.
+
+The combined effect: the 11 misdispatched-to-WorldObject entries from the pre-fix run became 5 typed `Item` + 6 explicit `WorldObject` sentinels. Plugin authors looking at `wom.byClass('Item')` now see the Pathwarden Token alongside the Letter-from-Home etc., correctly distinguishing typed-Item-fallback from sentinel-Unknown via `classificationSource`.
 
 ### Operator run recipe
 
